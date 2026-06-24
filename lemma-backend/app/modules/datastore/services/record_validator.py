@@ -75,9 +75,17 @@ class RecordValidator:
         data: dict[str, Any],
         *,
         is_creation: bool = False,
-    ) -> tuple[bool, list[str]]:
+    ) -> tuple[bool, list[str], list[dict[str, Any]]]:
+        """Validate ``data`` against the table schema.
+
+        Returns ``(is_valid, error_messages, error_details)`` where
+        ``error_messages`` are human-readable strings and ``error_details``
+        is a list of structured dicts suitable for the ``details`` field of
+        :class:`DatastoreValidationError`.
+        """
         ctx = self.ctx
         errors: list[str] = []
+        details: list[dict[str, Any]] = []
         column_map = {col.name: col for col in ctx.columns}
         pk_col = ctx.get_primary_key_schema() if is_creation else None
         pk_auto_capable = (
@@ -87,6 +95,7 @@ class RecordValidator:
         for col in ctx.columns:
             if col.computed and col.name in data:
                 errors.append(f"Cannot provide value for computed column '{col.name}'")
+                details.append({"field": col.name, "reason": "computed"})
             if (
                 is_creation
                 and col.auto
@@ -97,6 +106,7 @@ class RecordValidator:
                     continue
                 kind = "system-managed" if col.system else "auto-generated"
                 errors.append(f"Cannot provide value for {kind} column '{col.name}'")
+                details.append({"field": col.name, "reason": kind})
             if (
                 col.required
                 and col.name not in data
@@ -106,14 +116,17 @@ class RecordValidator:
                 and col.default is None
             ):
                 errors.append(f"Missing required column '{col.name}'")
+                details.append({"field": col.name, "reason": "required"})
 
         if is_creation and ctx.primary_key_column not in data and not pk_auto_capable:
             errors.append(f"Missing primary key column '{ctx.primary_key_column}'")
+            details.append({"field": ctx.primary_key_column, "reason": "primary_key"})
 
         for key, value in data.items():
             col = column_map.get(key)
             if col is not None and value is None and col.required and col.default is None:
                 errors.append(f"Column '{key}' cannot be null")
+                details.append({"field": key, "reason": "not_null"})
 
             if (
                 col is not None
@@ -127,5 +140,11 @@ class RecordValidator:
                     f"Value '{value}' is not allowed for column '{key}'. "
                     f"Allowed values: {allowed}"
                 )
+                details.append({
+                    "field": key,
+                    "reason": "enum",
+                    "value": value,
+                    "allowed_values": col.options,
+                })
 
-        return (len(errors) == 0, errors)
+        return (len(errors) == 0, errors, details)

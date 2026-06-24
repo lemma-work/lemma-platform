@@ -2,11 +2,16 @@ from __future__ import annotations
 
 import json
 
+from pydantic import ValidationError
+
 from app.modules.datastore.api.schemas.datastore_schemas import (
     RecordFilter,
+    RecordFilterOperator,
     RecordSort,
 )
 from app.modules.datastore.domain.errors import DatastoreValidationError
+
+_ALLOWED_FILTER_OPS = [op.value for op in RecordFilterOperator]
 
 
 def _parse_record_filter_item(item: str) -> tuple[str, str, object]:
@@ -30,8 +35,28 @@ def parse_record_filters(
         try:
             for item in filter:
                 parsed_filters.append(_parse_record_filter_item(item))
-        except (json.JSONDecodeError, ValueError) as exc:
-            raise DatastoreValidationError("Invalid filter parameter") from exc
+        except json.JSONDecodeError as exc:
+            raise DatastoreValidationError(
+                f"Invalid filter parameter: {exc}",
+            ) from exc
+        except ValidationError as exc:
+            op_value = None
+            for err in exc.errors():
+                if "op" in err.get("loc", ()):
+                    op_value = err.get("input")
+                    break
+            if op_value is not None:
+                raise DatastoreValidationError(
+                    f"Unsupported filter operator '{op_value}'. "
+                    f"Allowed values: {', '.join(_ALLOWED_FILTER_OPS)}",
+                    details={
+                        "operator": op_value,
+                        "allowed_operators": _ALLOWED_FILTER_OPS,
+                    },
+                ) from exc
+            raise DatastoreValidationError(
+                f"Invalid filter parameter: {exc}",
+            ) from exc
 
     return parsed_filters
 

@@ -130,20 +130,44 @@ class RecordService:
         data: dict[str, Any],
     ) -> None:
         errors: list[str] = []
+        error_details: list[dict[str, Any]] = []
 
-        for key in data:
+        for key, value in data.items():
             column = ctx.get_column(key)
             if column is None:
                 continue
             if key == ctx.primary_key_column:
                 errors.append(f"Cannot modify primary key column '{key}'")
+                error_details.append({"field": key, "reason": "primary_key"})
             elif column.computed:
                 errors.append(f"Cannot provide value for computed column '{key}'")
+                error_details.append({"field": key, "reason": "computed"})
             elif column.system and not RecordValidator.allows_creation_override(column):
                 errors.append(f"Cannot provide value for system-managed column '{key}'")
+                error_details.append({"field": key, "reason": "system_managed"})
+            elif (
+                column.type == DatastoreDataType.ENUM
+                and column.options
+                and value is not None
+                and value not in column.options
+            ):
+                allowed = ", ".join(column.options)
+                errors.append(
+                    f"Value '{value}' is not allowed for column '{key}'. "
+                    f"Allowed values: {allowed}"
+                )
+                error_details.append({
+                    "field": key,
+                    "reason": "enum",
+                    "value": value,
+                    "allowed_values": column.options,
+                })
 
         if errors:
-            raise DatastoreValidationError(f"Invalid record data: {'; '.join(errors)}")
+            raise DatastoreValidationError(
+                f"Invalid record data: {'; '.join(errors)}",
+                details={"errors": error_details},
+            )
 
     async def _validate_user_reference_columns(
         self,
@@ -187,9 +211,12 @@ class RecordService:
         validator = RecordValidator(ctx)
         sanitized_data = validator.strip_system_write_overrides(data)
 
-        is_valid, errors = validator.validate(sanitized_data, is_creation=True)
+        is_valid, errors, error_details = validator.validate(sanitized_data, is_creation=True)
         if not is_valid:
-            raise DatastoreValidationError(f"Invalid record data: {'; '.join(errors)}")
+            raise DatastoreValidationError(
+                f"Invalid record data: {'; '.join(errors)}",
+                details={"errors": error_details},
+            )
 
         await self._validate_user_reference_columns(ctx, sanitized_data)
         record = await self.record_repository.create_record(ctx, sanitized_data, user_id)
@@ -397,10 +424,11 @@ class RecordService:
         ]
 
         for record in sanitized_records:
-            is_valid, errors = validator.validate(record, is_creation=True)
+            is_valid, errors, error_details = validator.validate(record, is_creation=True)
             if not is_valid:
                 raise DatastoreValidationError(
-                    f"Invalid record data: {'; '.join(errors)}"
+                    f"Invalid record data: {'; '.join(errors)}",
+                    details={"errors": error_details},
                 )
             await self._validate_user_reference_columns(ctx, record)
 

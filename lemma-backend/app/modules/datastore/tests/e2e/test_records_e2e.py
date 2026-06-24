@@ -647,8 +647,10 @@ class TestDatastoreRecordErrorMessages:
         assert "allowed" in body["message"].lower()
         details = body.get("details")
         assert details is not None
-        assert details["field"] == "status"
-        assert set(details["allowed_values"]) == {"planned", "active", "done"}
+        assert "errors" in details
+        enum_err = next(e for e in details["errors"] if e.get("reason") == "enum")
+        assert enum_err["field"] == "status"
+        assert set(enum_err["allowed_values"]) == {"planned", "active", "done"}
 
     @pytest.mark.asyncio
     async def test_enum_violation_on_update_returns_allowed_values(
@@ -670,7 +672,8 @@ class TestDatastoreRecordErrorMessages:
         assert "archived" in body["message"]
         details = body.get("details")
         assert details is not None
-        assert details["field"] == "status"
+        enum_err = next(e for e in details["errors"] if e.get("reason") == "enum")
+        assert enum_err["field"] == "status"
 
     @pytest.mark.asyncio
     async def test_foreign_key_violation_returns_clean_message(
