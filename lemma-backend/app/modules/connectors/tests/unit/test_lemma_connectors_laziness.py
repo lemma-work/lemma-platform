@@ -28,9 +28,11 @@ def _ensure_lemma_connectors_on_path() -> None:
 @pytest.fixture(autouse=True)
 def _isolate_sys_modules():
     _ensure_lemma_connectors_on_path()
-    snapshot = set(sys.modules.keys())
+    for mod_name in list(sys.modules.keys()):
+        if mod_name.startswith("lemma_connectors"):
+            del sys.modules[mod_name]
     yield
-    for mod_name in list(sys.modules.keys() - snapshot):
+    for mod_name in list(sys.modules.keys()):
         if mod_name.startswith("lemma_connectors"):
             del sys.modules[mod_name]
 
