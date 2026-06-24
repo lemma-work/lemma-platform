@@ -101,6 +101,7 @@ def start_real_daemon_process(
     backend_server,
     fixed_test_user,
     tmp_path: Path,
+    background: bool = False,
 ) -> subprocess.Popen[str]:
     config_path = tmp_path / f"lemma-config-{uuid4().hex}.json"
     config_path.write_text(
@@ -124,16 +125,23 @@ def start_real_daemon_process(
     if env.get("PYTHONPATH"):
         python_paths.append(env["PYTHONPATH"])
     env["PYTHONPATH"] = os.pathsep.join(python_paths)
+    # Isolate daemon state (pid/config/logs) per test so background mode
+    # doesn't clobber a developer's real ~/.lemma/daemon.
+    daemon_dir = tmp_path / "daemon-state"
+    env["LEMMA_DAEMON_DIR"] = str(daemon_dir)
+    command = [
+        sys.executable,
+        "-m",
+        "lemma_cli.cli_app.main",
+        "--config-file",
+        str(config_path),
+        "daemon",
+        "start",
+    ]
+    if background:
+        command.append("--background")
     return subprocess.Popen(  # noqa: S603
-        [
-            sys.executable,
-            "-m",
-            "lemma_cli.cli_core.app",
-            "--config-file",
-            str(config_path),
-            "daemon",
-            "start",
-        ],
+        command,
         cwd=repo_root,
         env=env,
         stdout=None,
@@ -142,15 +150,24 @@ def start_real_daemon_process(
     )
 
 
-def stop_process(process: subprocess.Popen[str]) -> None:
-    if process.poll() is not None:
-        return
-    process.terminate()
-    try:
-        process.communicate(timeout=10)
-    except subprocess.TimeoutExpired:
-        process.kill()
-        process.communicate(timeout=10)
+def stop_process(process: subprocess.Popen[str], *, daemon_dir: Path | None = None) -> None:
+    if process.poll() is None:
+        process.terminate()
+        try:
+            process.communicate(timeout=10)
+        except subprocess.TimeoutExpired:
+            process.kill()
+            process.communicate(timeout=10)
+    # For background mode, the parent has already exited; kill the child by pid.
+    if daemon_dir is not None:
+        pid_file = daemon_dir / "daemon.pid"
+        if pid_file.exists():
+            try:
+                status = json.loads(pid_file.read_text())
+                pid = status["pid"]
+                os.kill(pid, 15)
+            except (OSError, json.JSONDecodeError, KeyError):
+                pass
 
 
 async def wait_for_daemon_harness(
@@ -159,11 +176,12 @@ async def wait_for_daemon_harness(
     harness_kind: str,
     process: subprocess.Popen[str],
     timeout: float = 45,
+    background: bool = False,
 ) -> dict:
     deadline = asyncio.get_running_loop().time() + timeout
     last_payload: dict | None = None
     while asyncio.get_running_loop().time() < deadline:
-        if process.poll() is not None:
+        if not background and process.poll() is not None:
             stdout, _ = process.communicate(timeout=2)
             raise AssertionError(
                 f"Daemon process exited before {harness_kind} became available.\n{stdout}"
@@ -339,22 +357,26 @@ async def run_real_daemon_harness_flow(
     backend_server,
     tmp_path,
     worker,
+    background: bool = False,
 ) -> None:
     del worker
     binary = BINARY[harness_kind]
     if shutil.which(binary) is None:
         pytest.skip(f"{binary} CLI is not installed")
 
+    daemon_dir = tmp_path / "daemon-state"
     process = start_real_daemon_process(
         backend_server=backend_server,
         fixed_test_user=fixed_test_user,
         tmp_path=tmp_path,
+        background=background,
     )
     try:
         harness = await wait_for_daemon_harness(
             authenticated_client,
             harness_kind=harness_kind,
             process=process,
+            background=background,
         )
         profile_id, model_name = await create_daemon_profile(
             authenticated_client,
@@ -456,4 +478,4 @@ async def run_real_daemon_harness_flow(
         if stop_events[-1]["type"] == "completed":
             assert stop_events[-1]["data"]["status"] == AgentRunStatus.STOPPED.value
     finally:
-        stop_process(process)
+        stop_process(process, daemon_dir=daemon_dir if background else None)

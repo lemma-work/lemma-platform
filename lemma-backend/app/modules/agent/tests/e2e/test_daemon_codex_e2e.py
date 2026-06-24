@@ -10,7 +10,9 @@ pytestmark = [pytest.mark.e2e, pytest.mark.slow, pytest.mark.local_cli, pytest.m
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("start_mode", ["foreground", "background"])
 async def test_real_codex_daemon_harness_full_flow(
+    start_mode,
     authenticated_client,
     fixed_test_org,
     fixed_test_user,
@@ -28,4 +30,5 @@ async def test_real_codex_daemon_harness_full_flow(
         backend_server=backend_server,
         tmp_path=tmp_path,
         worker=worker,
+        background=(start_mode == "background"),
     )

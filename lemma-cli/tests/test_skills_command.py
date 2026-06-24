@@ -1,8 +1,11 @@
 from __future__ import annotations
 
 import json
+import os
+import sys
 from pathlib import Path
 
+import pytest
 from typer.testing import CliRunner
 
 from lemma_cli.cli_core.app import app
@@ -130,3 +133,131 @@ def test_uninstall_removes_installed_skill(tmp_path):
     result = _invoke(["--json", "skills", "uninstall", "--dir", str(dest), "lemma-user"], tmp_path)
     assert json.loads(result.output)["items"][0]["action"] == "removed"
     assert not (dest / "lemma-user").exists()
+
+
+# --------------------------------------------------------------------------- #
+# Symlink target handling                                                      #
+# --------------------------------------------------------------------------- #
+# os.symlink needs privilege on Windows; skip there. The install/uninstall
+# logic must handle symlinks without crashing shutil.rmtree.
+
+
+_skip_windows = pytest.mark.skipif(
+    sys.platform == "win32", reason="os.symlink requires privilege on Windows"
+)
+
+
+@_skip_windows
+def test_install_overwrites_symlinked_target(tmp_path):
+    dest = tmp_path / "dest"
+    dest.mkdir()
+    real_skill = tmp_path / "real-lemma-user"
+    real_skill.mkdir()
+    (real_skill / "SKILL.md").write_text("stale")
+    link = dest / "lemma-user"
+    os.symlink(real_skill, link)
+
+    result = _invoke(
+        ["--json", "skills", "install", "--dir", str(dest), "lemma-user", "--yes"], tmp_path
+    )
+    assert result.exit_code == 0, result.output
+    assert json.loads(result.output)["items"][0]["action"] == "updated"
+    # The symlink is gone, replaced by a real directory matching the bundle.
+    assert not link.is_symlink()
+    assert (link / "SKILL.md").is_file()
+    assert "stale" not in (link / "SKILL.md").read_text()
+    # The symlink's original target is untouched.
+    assert (real_skill / "SKILL.md").read_text() == "stale"
+
+
+@_skip_windows
+def test_install_symlink_noninteractive_without_yes_fails(tmp_path):
+    dest = tmp_path / "dest"
+    dest.mkdir()
+    real_skill = tmp_path / "real-lemma-user"
+    real_skill.mkdir()
+    (real_skill / "SKILL.md").write_text("stale")
+    os.symlink(real_skill, dest / "lemma-user")
+
+    # CliRunner is non-interactive (stdin not a TTY), so confirm_destructive
+    # must fail with a non-zero exit instead of hanging or proceeding.
+    result = _invoke(
+        ["--json", "skills", "install", "--dir", str(dest), "lemma-user"], tmp_path
+    )
+    assert result.exit_code != 0
+    assert "--yes" in result.stdout or "non-interactive" in result.stdout
+    # The symlink is untouched — nothing was written.
+    assert (dest / "lemma-user").is_symlink()
+
+
+@_skip_windows
+def test_install_symlink_dry_run_no_prompt(tmp_path):
+    dest = tmp_path / "dest"
+    dest.mkdir()
+    real_skill = tmp_path / "real-lemma-user"
+    real_skill.mkdir()
+    (real_skill / "SKILL.md").write_text("stale")
+    os.symlink(real_skill, dest / "lemma-user")
+
+    result = _invoke(
+        ["--json", "skills", "install", "--dir", str(dest), "lemma-user", "--dry-run"],
+        tmp_path,
+    )
+    assert result.exit_code == 0, result.output
+    assert json.loads(result.output)["items"][0]["action"] == "would update"
+    # Dry run must not touch the symlink.
+    assert (dest / "lemma-user").is_symlink()
+
+
+@_skip_windows
+def test_install_symlink_reported_as_updated_even_if_identical(tmp_path):
+    dest = tmp_path / "dest"
+    dest.mkdir()
+    # Install the real bundle first, then symlink to it.
+    _invoke(["skills", "install", "--dir", str(dest), "lemma-user"], tmp_path)
+    real_dir = dest / "lemma-user"
+    _invoke(["skills", "uninstall", "--dir", str(dest), "lemma-user"], tmp_path)
+    os.symlink(real_dir, dest / "lemma-user")
+    # Can't easily make identical content without copying, so just verify a
+    # symlink always reports "updated" regardless of content.
+    result = _invoke(
+        ["--json", "skills", "install", "--dir", str(dest), "lemma-user", "--dry-run"],
+        tmp_path,
+    )
+    assert result.exit_code == 0, result.output
+    assert json.loads(result.output)["items"][0]["action"] == "would update"
+
+
+@_skip_windows
+def test_install_overwrites_broken_symlink(tmp_path):
+    dest = tmp_path / "dest"
+    dest.mkdir()
+    # A dangling symlink (target does not exist).
+    os.symlink(tmp_path / "nonexistent", dest / "lemma-user")
+
+    result = _invoke(
+        ["--json", "skills", "install", "--dir", str(dest), "lemma-user", "--yes"], tmp_path
+    )
+    assert result.exit_code == 0, result.output
+    assert json.loads(result.output)["items"][0]["action"] == "updated"
+    assert not (dest / "lemma-user").is_symlink()
+    assert (dest / "lemma-user" / "SKILL.md").is_file()
+
+
+@_skip_windows
+def test_uninstall_removes_symlinked_skill(tmp_path):
+    dest = tmp_path / "dest"
+    dest.mkdir()
+    real_skill = tmp_path / "real-lemma-user"
+    real_skill.mkdir()
+    (real_skill / "SKILL.md").write_text("stale")
+    os.symlink(real_skill, dest / "lemma-user")
+
+    result = _invoke(
+        ["--json", "skills", "uninstall", "--dir", str(dest), "lemma-user"], tmp_path
+    )
+    assert result.exit_code == 0, result.output
+    assert json.loads(result.output)["items"][0]["action"] == "removed"
+    # Only the link is removed; the target is untouched.
+    assert not (dest / "lemma-user").exists()
+    assert (real_skill / "SKILL.md").read_text() == "stale"

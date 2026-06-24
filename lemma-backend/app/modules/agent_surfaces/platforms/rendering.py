@@ -18,7 +18,6 @@ import re
 
 # Characters MarkdownV2 reserves in normal text; each must be backslash-escaped.
 _MD_V2_RESERVED = set(r"_*[]()~`>#+-=|{}.!\\")
-
 # Ordered alternation: fenced code and inline code first (so their contents are
 # protected), then bold/strikethrough before italic (so ``**`` is not mistaken
 # for two italics), then links.
@@ -136,3 +135,38 @@ def chunk_text(text: str, *, limit: int) -> list[str]:
     if remaining:
         chunks.append(remaining)
     return chunks
+
+
+# --- Thinking / reasoning token stripping ------------------------------------
+#
+# Some OpenAI-compatible models (e.g. Fireworks MiniMax M3) emit chain-of-
+# thought reasoning inline in the text content as ``<think>…</think>`` tags
+# rather than as a separate reasoning/thinking part. Without stripping, these
+# tags leak to surfaces as normal chat messages. The regex below removes:
+#
+#   - self-closing tags: ``<think/>``, ``<thinking foo="bar"/>``
+#   - closed blocks:     ``<think>reasoning</think>``
+#   - unclosed blocks:   ``<think>reasoning`` (model forgot to close — strip
+#                         everything from the open tag to end of string)
+#
+# Case-insensitive to handle ``<THINK>``, ``<Think>``, etc.
+_THINK_TAG_RE = re.compile(
+    r"<think(?:ing)?[^>]*/>"  # self-closing (empty)
+    r"|<think(?:ing)?[^>]*>.*?</think(?:ing)?>"  # closed block (non-greedy)
+    r"|<think(?:ing)?[^>]*>.*",  # unclosed open tag to end (greedy)
+    re.DOTALL | re.IGNORECASE,
+)
+
+
+def strip_thinking_tokens(text: str) -> str:
+    """Remove ``<think>…</think>`` reasoning blocks from model output.
+
+    Returns the text with all thinking/reasoning blocks removed and
+    surrounding whitespace collapsed. If the text contains no thinking tags it
+    is returned unchanged (after stripping). An empty/whitespace-only result
+    after stripping returns ``""``.
+    """
+    if not text:
+        return ""
+    stripped = _THINK_TAG_RE.sub("", text)
+    return stripped.strip()

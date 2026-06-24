@@ -16,6 +16,7 @@ from pathlib import Path
 
 import typer
 
+from ..confirm import confirm_destructive
 from ..io import emit
 from ..skills_bundle import (
     CURATED_SKILLS,
@@ -179,6 +180,9 @@ def install_skills(
         False, "--all-skills", help="Include browser and liteparse-documents (workspace-runtime skills)."
     ),
     dry_run: bool = typer.Option(False, "--dry-run", help="Show what would be written, write nothing."),
+    yes: bool = typer.Option(
+        False, "--yes", "-y", help="Skip the confirmation prompt when replacing symlinked skill targets."
+    ),
 ) -> None:
     """Install (upsert) bundled skills into your coding agent.
 
@@ -195,6 +199,23 @@ def install_skills(
 
     rows: list[dict[str, object]] = []
     written_labels: set[str] = set()
+
+    # Symlinked skill targets crash shutil.rmtree; confirm before replacing them.
+    if not dry_run:
+        symlinked = [
+            dest_dir / skill.name
+            for _label, dest_dir in destinations
+            if dest_dir is not None
+            for skill in skills
+            if (dest_dir / skill.name).is_symlink()
+        ]
+        if symlinked:
+            confirm_destructive(
+                f"{len(symlinked)} skill target(s) are symlinks and will be replaced with "
+                "real directories (only the links are removed, not their targets).",
+                yes,
+            )
+
     for dest_label, dest_dir in destinations:
         if dest_dir is None:
             rows.append(_unsupported_row(dest_label, scope))
@@ -250,7 +271,7 @@ def uninstall_skills(
             target_dir = dest_dir / name
             removed = (target_dir / "SKILL.md").is_file()
             if removed:
-                shutil.rmtree(target_dir)
+                _remove_existing(target_dir)
             rows.append(
                 {
                     "skill": name,
@@ -294,6 +315,8 @@ def _resolve_destinations(
 
 def _upsert_action(source: Path, target_dir: Path) -> str:
     """installed (new), unchanged (identical), or updated (differs → overwrite)."""
+    if target_dir.is_symlink():
+        return "updated"
     if not target_dir.exists():
         return "installed"
     return "unchanged" if _dirs_identical(source, target_dir) else "updated"
@@ -308,11 +331,27 @@ def _dirs_identical(a: Path, b: Path) -> bool:
 
 
 def _copy_skill(source: Path, target_dir: Path) -> None:
-    """Upsert: replace any existing skill dir with the bundled copy."""
-    if target_dir.exists():
-        shutil.rmtree(target_dir)
+    """Upsert: replace any existing skill dir (or symlink) with the bundled copy."""
+    _remove_existing(target_dir)
     target_dir.parent.mkdir(parents=True, exist_ok=True)
     shutil.copytree(source, target_dir)
+
+
+def _remove_existing(path: Path) -> None:
+    """Remove a path whether it is a symlink, directory, or stray file.
+
+    ``unlink`` on a symlink removes only the pointer — the link's target is
+    left untouched. ``is_symlink`` is checked first because ``exists``/
+    ``is_dir`` follow the link.
+    """
+    if path.is_symlink():
+        path.unlink()
+        return
+    if path.is_dir():
+        shutil.rmtree(path)
+        return
+    if path.exists():
+        path.unlink()
 
 
 def _unsupported_row(label: str, scope: str) -> dict[str, object]:

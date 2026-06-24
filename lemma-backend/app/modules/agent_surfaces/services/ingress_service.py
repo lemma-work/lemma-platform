@@ -19,6 +19,7 @@ from app.modules.agent.tools.user_interaction.models import (
     DisplayResourceType,
 )
 from app.modules.agent_surfaces.platforms.attachment_limits import fits_inline
+from app.modules.agent_surfaces.platforms.rendering import strip_thinking_tokens
 from app.modules.datastore.api.dependencies import build_file_service
 from app.modules.agent_surfaces.domain.entities import (
     AgentSurfaceConversationLink,
@@ -179,17 +180,24 @@ class AgentSurfaceIngressService:
 
         surfaces = await self.surface_repository.list_active_by_type(platform)
 
-        # Text-based mention fallback for Telegram: if the bot's @username
-        # appears in the message text but no entity was created (e.g. the user
-        # typed the name manually rather than picking it from the popup), treat
-        # it as a mention. Must run before allows_inbound_event so the event
-        # isn't filtered out before we get a chance to check.
+        # Mention verification for Telegram groups: the parser records any
+        # @username / text_mention entities but does NOT set mentioned_agent for
+        # generic mentions (a `mention` entity is just a plain @username and
+        # doesn't indicate *which* user was mentioned). Here we verify whether
+        # the mention actually targets this bot by resolving the bot's
+        # @username / user id via getMe and comparing. Must run before
+        # allows_inbound_event so the event isn't filtered out before we get a
+        # chance to check.
         if (
             platform == SurfacePlatform.TELEGRAM.value
             and not parsed.is_dm
             and not parsed.mentioned_agent
-            and "@" in (parsed.message_text or "")
             and surfaces
+            and (
+                (parsed.metadata or {}).get("mentioned_usernames")
+                or (parsed.metadata or {}).get("text_mention_user_ids")
+                or "@" in (parsed.message_text or "")
+            )
         ):
             parsed = await self._telegram_text_mention_enrich(parsed, surfaces[0])
 
@@ -687,11 +695,17 @@ class AgentSurfaceIngressService:
         target = await self._resolve_egress_target(conversation_id)
         if target is None:
             return False
+        # Safety net: never deliver model reasoning/thinking tokens
+        # (``<tool_call>…``) as a chat message to any surface. Some
+        # OpenAI-compatible models emit these inline in the text content.
+        clean_message = strip_thinking_tokens(message)
+        if not clean_message:
+            return False
         message_metadata = await self._egress_metadata_with_agent_name(target, metadata)
         await target.adapter.send_message(
             credentials=target.credentials,
             event=target.event,
-            message=message,
+            message=clean_message,
             metadata=message_metadata,
         )
         return True
@@ -1191,21 +1205,61 @@ class AgentSurfaceIngressService:
         parsed: ParsedInboundSurfaceEvent,
         surface: AgentSurfaceEntity,
     ) -> ParsedInboundSurfaceEvent:
-        """Upgrade mentioned_agent when the bot's @username appears in message
-        text but Telegram didn't produce a mention entity (e.g. manual typing).
+        """Upgrade mentioned_agent when a Telegram group message actually
+        targets this bot.
+
+        The parser records @username / text_mention entities without claiming
+        they mention the bot (a `mention` entity is just a plain @username and
+        doesn't identify the user). Here we resolve the bot's @username and
+        numeric user id via getMe and check:
+
+        - whether ``@{bot_username}`` appears in the mention entities (precise),
+        - whether the bot's user id is in the text_mention entities (precise),
+        - whether ``@{bot_username}`` appears in the message text (fallback for
+          a manually typed name that produced no entity).
+
         Best-effort; returns the event unchanged on any failure."""
         try:
             from app.modules.agent_surfaces.platforms.telegram.service import (
                 TelegramPlatformService,
             )
             credentials = await self._resolve_credentials(surface)
-            bot_username = await TelegramPlatformService(credentials).get_bot_username()
-            if bot_username and f"@{bot_username.lower()}" in (parsed.message_text or "").lower():
+            service = TelegramPlatformService(credentials)
+            bot_username = (await service.get_bot_username() or "").lower()
+            bot_user_id = await service.get_bot_user_id()
+            metadata = parsed.metadata or {}
+            mentioned_usernames = {
+                str(name).lower() for name in metadata.get("mentioned_usernames") or []
+            }
+            text_mention_user_ids = {
+                str(uid) for uid in metadata.get("text_mention_user_ids") or []
+            }
+            text = (parsed.message_text or "").lower()
+
+            matched = False
+            if bot_username and bot_username in mentioned_usernames:
+                logger.info(
+                    "Telegram mention matched bot @%s via entity chat=%s",
+                    bot_username,
+                    parsed.external_channel_id,
+                )
+                matched = True
+            elif bot_user_id and bot_user_id in text_mention_user_ids:
+                logger.info(
+                    "Telegram text_mention matched bot id=%s chat=%s",
+                    bot_user_id,
+                    parsed.external_channel_id,
+                )
+                matched = True
+            elif bot_username and f"@{bot_username}" in text:
                 logger.info(
                     "Telegram text-mention fallback: @%s found in message text chat=%s",
                     bot_username,
                     parsed.external_channel_id,
                 )
+                matched = True
+
+            if matched:
                 return parsed.model_copy(update={"mentioned_agent": True})
         except Exception as exc:
             logger.debug("Telegram text-mention enrich failed: %s", exc)

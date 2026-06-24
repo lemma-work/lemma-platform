@@ -428,7 +428,12 @@ class FakeTelegramServer:
         return web.json_response(
             {
                 "ok": True,
-                "result": {"id": 12345, "is_bot": True, "first_name": "LemmaBot"},
+                "result": {
+                    "id": 12345,
+                    "is_bot": True,
+                    "first_name": "LemmaBot",
+                    "username": "lemmabot",
+                },
             }
         )
 

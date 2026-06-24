@@ -252,6 +252,45 @@ def test_telegram_parse_group_message():
     assert event.mentioned_agent is True
 
 
+def test_telegram_parse_group_mention_of_other_user_does_not_mention_bot():
+    """A `mention` entity is just a plain @username — it does NOT indicate which
+    user was mentioned. The parser must not set mentioned_agent for a mention of
+    another user; it records the username for later bot-identity verification."""
+    payload = _telegram_text_payload()
+    payload["message"]["chat"] = {"id": -1001234567890, "type": "supergroup"}
+    payload["message"]["text"] = "@otherperson can you check this?"
+    payload["message"]["entities"] = [
+        {"type": "mention", "offset": 0, "length": 13},
+    ]
+
+    parser = TelegramMessageParser()
+    event = parser.parse(payload)
+    assert event is not None
+    assert event.is_dm is False
+    assert event.mentioned_agent is False
+    assert event.metadata["mentioned_usernames"] == ["otherperson"]
+    assert event.metadata["text_mention_user_ids"] == []
+
+
+def test_telegram_parse_group_text_mention_records_user_id():
+    """A `text_mention` entity links to a user/bot by id. The parser records the
+    user id for verification but does not assume it is this bot."""
+    payload = _telegram_text_payload()
+    payload["message"]["chat"] = {"id": -1001234567890, "type": "supergroup"}
+    payload["message"]["text"] = "LemmaBot help me"
+    payload["message"]["entities"] = [
+        {"type": "text_mention", "offset": 0, "length": 8, "user": {"id": 99999, "is_bot": True}},
+    ]
+
+    parser = TelegramMessageParser()
+    event = parser.parse(payload)
+    assert event is not None
+    assert event.is_dm is False
+    assert event.mentioned_agent is False
+    assert event.metadata["text_mention_user_ids"] == ["99999"]
+    assert event.metadata["mentioned_usernames"] == []
+
+
 def test_telegram_parse_empty():
     parser = TelegramMessageParser()
     assert parser.parse({}) is None

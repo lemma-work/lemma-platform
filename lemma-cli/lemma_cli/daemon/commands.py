@@ -10,11 +10,13 @@ import typer
 from .catalog import discover_harness_catalog
 from .config import (
     DAEMON_LOG_PATH,
-    DAEMON_PID_PATH,
     DAEMON_CONFIG_PATH,
+    clear_daemon_status,
     ensure_config,
     process_is_running,
+    read_daemon_status,
     read_pid,
+    write_daemon_status,
 )
 
 # NOTE: asyncio and .runner are imported inside `start_daemon` — this module is
@@ -52,13 +54,17 @@ def discover_daemon() -> None:
 @app.command("status")
 def status_daemon() -> None:
     config = ensure_config()
-    pid = read_pid()
+    status = read_daemon_status() or {}
+    pid = status.get("pid")
     running = pid is not None and process_is_running(pid)
     _console().print_json(
         data={
             "device_key": config["device_key"],
             "pid": pid,
             "running": running,
+            "base_url": status.get("base_url"),
+            "server": status.get("server"),
+            "started_at": status.get("started_at"),
             "config_path": str(DAEMON_CONFIG_PATH),
             "log_path": str(DAEMON_LOG_PATH),
         }
@@ -80,26 +86,31 @@ def start_daemon(
     except ValueError as exc:
         _fail(f"Unable to refresh Lemma session: {exc}. Run `lemma auth login`.")
     import asyncio  # noqa: PLC0415
+    import os  # noqa: PLC0415
 
     from lemma_sdk.config import resolve_base_url, resolve_token, resolve_verify_ssl  # noqa: PLC0415
 
     from .runner import run_daemon  # noqa: PLC0415
-    asyncio.run(
-        run_daemon(
-            base_url=resolve_base_url(
-                state.base_url,
-                state.config,
-                use_env=state.server_source == "env",
-            ),
-            token=resolve_token(
-                state.token,
-                state.config,
-                use_env=state.server_source == "env",
-            ),
-            verify_ssl=resolve_verify_ssl(state.no_verify_ssl),
-            debug=debug,
-        )
+
+    resolved_base_url = resolve_base_url(
+        state.base_url, state.config, use_env=state.server_source == "env",
     )
+    write_daemon_status(os.getpid(), base_url=resolved_base_url, server=state.server)
+    try:
+        asyncio.run(
+            run_daemon(
+                base_url=resolved_base_url,
+                token=resolve_token(
+                    state.token,
+                    state.config,
+                    use_env=state.server_source == "env",
+                ),
+                verify_ssl=resolve_verify_ssl(state.no_verify_ssl),
+                debug=debug,
+            )
+        )
+    finally:
+        clear_daemon_status()
 
 
 @app.command("stop")
@@ -112,7 +123,7 @@ def stop_daemon() -> None:
         os.kill(pid, signal.SIGTERM)
     except OSError as exc:
         _fail(f"Unable to stop daemon {pid}: {exc}")
-    DAEMON_PID_PATH.unlink(missing_ok=True)
+    clear_daemon_status()
     _console().print(f"Stopped daemon {pid}.")
 
 
@@ -156,6 +167,6 @@ def start_background(ctx: typer.Context, *, debug: bool = False) -> None:
             stderr=subprocess.STDOUT,
             start_new_session=True,
         )
-    DAEMON_PID_PATH.write_text(str(process.pid))
+    write_daemon_status(process.pid, base_url=resolved_base_url, server=state.server)
     _console().print(f"Started daemon in background with pid {process.pid}.")
     _console().print(f"Logs: {DAEMON_LOG_PATH}")

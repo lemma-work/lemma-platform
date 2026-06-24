@@ -51,6 +51,9 @@ from lemma_cli.daemon.config import (
     daemon_ws_url,
     read_pid,
     process_is_running,
+    read_daemon_status,
+    write_daemon_status,
+    clear_daemon_status,
 )
 
 # ── Catalog ───────────────────────────────────────────────────────────────────
@@ -150,6 +153,9 @@ __all__ = [
     "daemon_ws_url",
     "read_pid",
     "process_is_running",
+    "read_daemon_status",
+    "write_daemon_status",
+    "clear_daemon_status",
     # catalog
     "HARNESS_BINARIES",
     "discover_harness_catalog",

@@ -309,6 +309,80 @@ async def test_progress_observer_refreshes_telegram_typing_in_process(monkeypatc
     }
 
 
+async def test_progress_observer_strips_inline_thinking_tags_from_text():
+    """Some models emit thinking inline in TextPart as think tags. The observer
+    must strip them so they never get buffered or delivered to a surface."""
+    service = _SurfaceService()
+    observer = _observer(service)
+    conversation = SimpleNamespace(id=uuid4(), metadata={"surface_platform": "TELEGRAM"})
+
+    # Build the message with literal thinking tags (constructed programmatically
+    # so the tags survive in source without being stripped as markup).
+    open_tag = chr(60) + "think" + chr(62)
+    close_tag = chr(60) + "/think" + chr(62)
+    raw_text = f"Let me check that. {open_tag}internal reasoning{close_tag} Here is your answer."
+
+    # The model emitted thinking tags inside a TEXT part (not a ThinkingPart).
+    await observer.on_event(
+        _assistant(MessageDraft.of_text(raw_text)),
+        conversation,
+        SimpleNamespace(),
+    )
+
+    await observer.on_run_finished(conversation, SimpleNamespace())
+
+    assert len(service.messages) == 1
+    delivered = service.messages[0]["message"]
+    assert "<think" not in delivered.lower()
+    assert "internal reasoning" not in delivered
+    assert "Here is your answer." in delivered
+    assert "Let me check that." in delivered
+
+
+async def test_progress_observer_strips_thinking_tags_and_resets_on_tool():
+    """Inline thinking tags in intermediate narration are stripped, and the
+    pre-tool narration is still discarded when a tool runs."""
+    service = _SurfaceService()
+    observer = _observer(service)
+    conversation = SimpleNamespace(id=uuid4(), metadata={"surface_platform": "SLACK"})
+
+    open_tag = chr(60) + "think" + chr(62)
+    close_tag = chr(60) + "/think" + chr(62)
+
+    # Pre-tool narration with inline thinking tags.
+    await observer.on_event(
+        _assistant(
+            MessageDraft.of_text(
+                f"Let me look that up. {open_tag}reasoning{close_tag} Searching now."
+            )
+        ),
+        conversation,
+        SimpleNamespace(),
+    )
+    # Tool call resets the buffer.
+    await observer.on_event(
+        _assistant(
+            MessageDraft.of_tool_call(
+                tool_name="web_search", tool_call_id="t1", tool_args={}
+            )
+        ),
+        conversation,
+        SimpleNamespace(),
+    )
+    # Final answer (no thinking tags).
+    await observer.on_event(
+        _assistant(MessageDraft.of_text("The answer is 42.")),
+        conversation,
+        SimpleNamespace(),
+    )
+
+    await observer.on_run_finished(conversation, SimpleNamespace())
+
+    assert service.messages == [
+        {"conversation_id": conversation.id, "message": "The answer is 42."}
+    ]
+
+
 async def test_progress_observer_stops_when_indicator_cannot_be_sent(monkeypatch):
     service = _SurfaceService(send_result=False)
     observer = _observer(service)

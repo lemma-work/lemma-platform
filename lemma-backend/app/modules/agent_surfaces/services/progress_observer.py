@@ -18,6 +18,7 @@ from app.modules.agent.domain.value_objects import (
 )
 from app.modules.agent.tools.context import ConversationContext
 from app.modules.agent_surfaces.domain.entities import SurfacePlatform
+from app.modules.agent_surfaces.platforms.rendering import strip_thinking_tokens
 from app.modules.agent_surfaces.services.ingress_service import (
     AgentSurfaceIngressService,
 )
@@ -446,7 +447,11 @@ def _assistant_text_from_event(event: AgentEvent) -> str | None:
         return None
     if data.kind != MessageKind.TEXT:
         return None
-    text = (data.text or "").strip()
+    # Strip inline reasoning/thinking tags (e.g. ``…``) that some
+    # OpenAI-compatible models emit inside the text content. Without this the
+    # thinking block would be buffered as assistant text and delivered to the
+    # surface as a normal message.
+    text = strip_thinking_tokens(data.text or "")
     return text or None
 
 
