@@ -99,7 +99,9 @@ class TableService:
         except DatastoreDomainError:
             raise
         except Exception as exc:
-            raise DatastoreInfrastructureError(f"Failed to create table: {exc}") from exc
+            raise DatastoreInfrastructureError(
+                f"Failed to create table '{table_name}'"
+            ) from exc
 
         if ctx is not None:
             refreshed = await self.table_repository.get_by_datastore_and_name(
@@ -151,7 +153,7 @@ class TableService:
                 raise
             except Exception as exc:
                 raise DatastoreInfrastructureError(
-                    f"Failed to toggle row-level security: {exc}"
+                    "Failed to toggle row-level security"
                 ) from exc
             table.enable_rls = enable_rls
             # Re-derive system columns so the stored schema matches the physical
@@ -272,7 +274,7 @@ class TableService:
             raise
         except Exception as exc:
             raise DatastoreInfrastructureError(
-                f"Failed to drop table schema: {exc}"
+                f"Failed to drop table '{table_name}'"
             ) from exc
 
         table.mark_deleted(requester_user_id)
@@ -317,7 +319,7 @@ class TableService:
             raise
         except Exception as exc:
             raise DatastoreInfrastructureError(
-                f"Failed to add column to table schema: {exc}"
+                f"Failed to add column '{column.name}' to table '{table_name}'"
             ) from exc
         return await self.table_repository.update(table)
 
@@ -352,7 +354,7 @@ class TableService:
             raise
         except Exception as exc:
             raise DatastoreInfrastructureError(
-                f"Failed to remove column from table schema: {exc}"
+                f"Failed to remove column '{column_name}' from table '{table_name}'"
             ) from exc
         return await self.table_repository.update(table)
 

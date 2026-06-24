@@ -5,8 +5,10 @@ from typing import Any, Optional, Sequence
 from uuid import UUID
 
 from app.core.authorization.context import Context
+from app.core.log.log import get_logger
 from app.modules.datastore.domain.errors import (
     DatastoreFileNotFoundError,
+    DatastoreInfrastructureError,
     DatastoreObjectNotFoundError,
     DatastoreValidationError,
 )
@@ -31,6 +33,8 @@ from app.modules.datastore.services.files.path_resolver import PathResolver
 from app.modules.datastore.services.files.projection import datastore_storage_key
 from app.modules.datastore.services.files.skills_overlay import SkillsOverlay
 from app.modules.datastore.services.system_skill_files import SystemSkillFileProvider
+
+logger = get_logger(__name__)
 
 
 class FileReader:
@@ -439,7 +443,12 @@ class FileReader:
                 )
             )
             return json.loads(raw.decode("utf-8"))
+        except DatastoreObjectNotFoundError:
+            return None
         except Exception:
+            logger.warning(
+                "Failed to load child manifest for %s", file_entity.path, exc_info=True
+            )
             return None
 
     async def get_document_markdown(
@@ -462,9 +471,13 @@ class FileReader:
                     file_entity.pod_id, file_entity.path
                 )
             )
-        except Exception as exc:
+        except DatastoreObjectNotFoundError:
             raise DatastoreFileNotFoundError(
                 f"Converted markdown for {file_entity.path} not found"
+            )
+        except Exception as exc:
+            raise DatastoreInfrastructureError(
+                f"Failed to download converted markdown for {file_entity.path}"
             ) from exc
         full_md = content.decode("utf-8", errors="replace")
         offsets = parse_page_offsets(full_md)

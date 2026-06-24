@@ -69,12 +69,18 @@ def map_datastore_db_error(
     exc: Exception,
     table_name: str | None = None,
     column_name: str | None = None,
+    columns: list | None = None,
 ) -> Exception:
     """Translate a raw DB driver error into a typed datastore domain error.
 
     Shared by ``SchemaManager`` (DDL) and the record repository (DML) so that
     unique/already-exists violations consistently surface as
     :class:`DatastoreConflictError` (409) rather than a generic 500/400.
+
+    Constraint violations (check, FK, not-null, type) are mapped to
+    :class:`DatastoreValidationError` (400) with clean messages and structured
+    ``details`` via :mod:`db_error_parser`. Only true infrastructure failures
+    (connection, timeout) remain as :class:`DatastoreInfrastructureError` (500).
     """
     raw = str(getattr(exc, "orig", exc))
     lower = raw.lower()
@@ -97,9 +103,15 @@ def map_datastore_db_error(
             return DatastoreConflictError(f"Column '{column_name}' already exists")
         return DatastoreConflictError("Column already exists")
 
-    if "duplicate key value" in lower or "unique constraint" in lower:
-        return DatastoreConflictError(
-            f"Conflict during {operation}: a record with these values already exists"
-        )
+    # Use the shared parser for constraint violations + fallback.
+    from app.modules.datastore.infrastructure.db_error_parser import parse_db_error
 
-    return DatastoreInfrastructureError(f"Failed to {operation}: {raw}")
+    message, details, error_cls = parse_db_error(
+        exc,
+        table_name=table_name,
+        columns=columns,
+        operation=operation,
+    )
+    if details is not None:
+        return error_cls(message, details)
+    return error_cls(message)

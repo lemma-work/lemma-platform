@@ -15,7 +15,7 @@ from uuid import UUID
 from app.core.authorization.context import Context
 from app.modules.datastore.config import datastore_settings
 from app.core.log.log import get_logger
-from app.modules.datastore.domain.errors import DatastoreValidationError
+from app.modules.datastore.domain.errors import DatastoreObjectNotFoundError, DatastoreValidationError
 from app.modules.datastore.domain.file_entities import DatastoreFileEntity
 from app.modules.datastore.domain.ports import DatastoreStoragePort, DocumentProcessorPort
 from app.modules.datastore.infrastructure.storage_paths import (
@@ -108,9 +108,13 @@ class FilePageRenderer:
     async def _load_cached(self, key: str) -> bytes | None:
         try:
             return await self.storage.download_file(key)
+        except DatastoreObjectNotFoundError:
+            return None
         except Exception:
-            # Treat any miss/read error as "not cached"; a real problem surfaces
-            # when we then try to render.
+            logger.debug(
+                "Failed to load cached page image; will re-render",
+                exc_info=True,
+            )
             return None
 
     async def _store_cached(

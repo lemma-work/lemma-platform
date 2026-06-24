@@ -199,12 +199,14 @@ class SchemaManager:
         exc: Exception,
         table_name: str | None = None,
         column_name: str | None = None,
+        columns: list | None = None,
     ) -> Exception:
         return map_datastore_db_error(
             operation=operation,
             exc=exc,
             table_name=table_name,
             column_name=column_name,
+            columns=columns,
         )
 
     async def create_datastore_schema(self, pod_id: UUID) -> None:
@@ -426,6 +428,7 @@ class SchemaManager:
                 exc=exc,
                 table_name=table_name,
                 column_name=column.name,
+                columns=[column],
             ) from exc
 
     async def drop_column(

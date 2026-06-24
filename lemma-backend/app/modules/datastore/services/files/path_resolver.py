@@ -100,7 +100,11 @@ class PathResolver:
         try:
             normalized = ResourceVisibility(raw.upper())
         except ValueError as exc:
-            raise DatastoreValidationError(f"Unsupported file visibility: {visibility}") from exc
+            allowed = [v.value for v in ResourceVisibility]
+            raise DatastoreValidationError(
+                f"Unsupported file visibility '{visibility}'. Allowed values: {', '.join(allowed)}",
+                details={"value": visibility, "allowed_values": allowed},
+            ) from exc
         return normalized.value
 
     def _personal_root_path(self, requester_user_id: UUID) -> str:

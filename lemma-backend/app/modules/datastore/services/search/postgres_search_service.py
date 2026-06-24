@@ -144,11 +144,19 @@ class PostgresSearchService:
                     )
                 )
         except Exception as exc:
-            logger.info(
-                "Skipping halfvec vector index for %s: %s",
-                self.schema_name,
-                exc,
-            )
+            lower_msg = str(exc).lower()
+            if "extension" in lower_msg and ("does not exist" in lower_msg or "not installed" in lower_msg):
+                logger.info(
+                    "Skipping halfvec vector index for %s: extension not available",
+                    self.schema_name,
+                )
+            else:
+                logger.warning(
+                    "Failed to create halfvec vector index for %s; vector search "
+                    "will use sequential scan: %s",
+                    self.schema_name,
+                    exc,
+                )
 
     async def index_file_chunks(
         self,

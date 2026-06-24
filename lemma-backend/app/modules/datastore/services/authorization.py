@@ -6,9 +6,12 @@ from app.core.authorization.context import Context, ResourceRef, ResourceType
 from app.core.authorization.current import get_current_context
 from app.core.authorization.permissions import Permissions
 from app.core.authorization.context import ResourceVisibility
+from app.core.log.log import get_logger
 from app.modules.datastore.domain.errors import DatastoreAccessDeniedError
 from app.modules.datastore.domain.file_entities import DatastoreFileEntity
 from app.modules.datastore.services.table_context import TableContext
+
+logger = get_logger(__name__)
 
 
 class DatastoreAuthorization:
@@ -321,6 +324,13 @@ class DatastoreAuthorization:
                         resource_id=pod_id,
                     )
         except Exception:
+            logger.warning(
+                "Authorization check failed for is_document_admin (user=%s, pod=%s); "
+                "failing closed (denying)",
+                user_id,
+                pod_id,
+                exc_info=True,
+            )
             return False
         return True
 

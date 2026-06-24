@@ -582,6 +582,13 @@ class KreuzbergHelper:
                 await self._raise_for_status(response)
                 data = await response.json()
         except Exception:
+            logger.warning(
+                "Chunking request failed for text (chunker=%s, max_chars=%s); "
+                "proceeding without chunks",
+                chunker_type,
+                max_chars,
+                exc_info=True,
+            )
             return []
 
         return self._normalize_chunk_response(data)

@@ -622,3 +622,113 @@ class TestDatastoreRlsRows:
             expected_status=status.HTTP_400_BAD_REQUEST,
         )
         assert rejected["code"] == "DATASTORE_QUERY_ERROR"
+
+
+class TestDatastoreRecordErrorMessages:
+    """E2E tests for clean, agent-readable error messages on record write failures."""
+
+    @pytest.mark.asyncio
+    async def test_enum_violation_returns_allowed_values_in_details(
+        self,
+        project_workspace: DatastoreApi,
+        fixed_test_user,
+    ):
+        """Creating a record with an invalid ENUM value returns a 400 with
+        ``details.allowed_values`` so the agent can self-correct."""
+        resp = await project_workspace.request(
+            "POST",
+            f"/pods/{project_workspace.pod_id}/datastore/tables/projects/records",
+            json={"data": {"name": "Bad Status", "status": "draft"}},
+        )
+        assert resp.status_code == status.HTTP_400_BAD_REQUEST, resp.text
+        body = resp.json()
+        assert body["code"] == "DATASTORE_VALIDATION_ERROR"
+        assert "draft" in body["message"]
+        assert "allowed" in body["message"].lower()
+        details = body.get("details")
+        assert details is not None
+        assert details["field"] == "status"
+        assert set(details["allowed_values"]) == {"planned", "active", "done"}
+
+    @pytest.mark.asyncio
+    async def test_enum_violation_on_update_returns_allowed_values(
+        self,
+        project_workspace: DatastoreApi,
+        fixed_test_user,
+    ):
+        """Updating a record with an invalid ENUM value also returns allowed values."""
+        rows = await _seed_projects(project_workspace, fixed_test_user["id"])
+        apollo = rows["apollo"]
+        resp = await project_workspace.request(
+            "PATCH",
+            f"/pods/{project_workspace.pod_id}/datastore/tables/projects/records/{apollo['id']}",
+            json={"data": {"status": "archived"}},
+        )
+        assert resp.status_code == status.HTTP_400_BAD_REQUEST
+        body = resp.json()
+        assert body["code"] == "DATASTORE_VALIDATION_ERROR"
+        assert "archived" in body["message"]
+        details = body.get("details")
+        assert details is not None
+        assert details["field"] == "status"
+
+    @pytest.mark.asyncio
+    async def test_foreign_key_violation_returns_clean_message(
+        self,
+        project_workspace: DatastoreApi,
+        fixed_test_user,
+    ):
+        """Creating a milestone with a non-existent project_id returns a clean 400
+        — no raw SQL or parameter leak."""
+        resp = await project_workspace.request(
+            "POST",
+            f"/pods/{project_workspace.pod_id}/datastore/tables/milestones/records",
+            json={"data": {"project_id": str(uuid4()), "title": "Orphan"}},
+        )
+        assert resp.status_code == status.HTTP_400_BAD_REQUEST, resp.text
+        body = resp.json()
+        assert body["code"] == "DATASTORE_VALIDATION_ERROR"
+        assert "project_id" in body["message"]
+        assert "non-existent" in body["message"].lower()
+        assert "INSERT" not in body["message"]
+        assert "SQL" not in body["message"]
+
+    @pytest.mark.asyncio
+    async def test_not_null_violation_returns_clean_message(
+        self,
+        project_workspace: DatastoreApi,
+        fixed_test_user,
+    ):
+        """Creating a record missing a required column returns a clean 400."""
+        resp = await project_workspace.request(
+            "POST",
+            f"/pods/{project_workspace.pod_id}/datastore/tables/projects/records",
+            json={"data": {"status": "active"}},
+        )
+        assert resp.status_code == status.HTTP_400_BAD_REQUEST, resp.text
+        body = resp.json()
+        assert body["code"] == "DATASTORE_VALIDATION_ERROR"
+        assert "name" in body["message"]
+        assert "required" in body["message"].lower()
+
+    @pytest.mark.asyncio
+    async def test_bad_filter_operator_returns_allowed_operators(
+        self,
+        project_workspace: DatastoreApi,
+        fixed_test_user,
+    ):
+        """An unsupported filter operator returns 400 with ``details.allowed_operators``."""
+        await _seed_projects(project_workspace, fixed_test_user["id"])
+        resp = await project_workspace.request(
+            "GET",
+            f"/pods/{project_workspace.pod_id}/datastore/tables/projects/records",
+            params={"filter": '{"field":"name","op":"contains","value":"Apollo"}'},
+        )
+        assert resp.status_code == status.HTTP_400_BAD_REQUEST
+        body = resp.json()
+        assert body["code"] == "DATASTORE_VALIDATION_ERROR"
+        assert "contains" in body["message"]
+        details = body.get("details")
+        assert details is not None
+        assert "eq" in details["allowed_operators"]
+        assert "like" in details["allowed_operators"]

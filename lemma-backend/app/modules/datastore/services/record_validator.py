@@ -115,4 +115,17 @@ class RecordValidator:
             if col is not None and value is None and col.required and col.default is None:
                 errors.append(f"Column '{key}' cannot be null")
 
+            if (
+                col is not None
+                and col.type == DatastoreDataType.ENUM
+                and col.options
+                and value is not None
+                and value not in col.options
+            ):
+                allowed = ", ".join(col.options)
+                errors.append(
+                    f"Value '{value}' is not allowed for column '{key}'. "
+                    f"Allowed values: {allowed}"
+                )
+
         return (len(errors) == 0, errors)

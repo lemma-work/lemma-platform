@@ -9,23 +9,26 @@ class DatastoreDomainError(DomainError):
         message: str,
         code: str = "DATASTORE_ERROR",
         status_code: int = 400,
+        details: object | None = None,
     ):
-        super().__init__(message, code=code, status_code=status_code)
+        super().__init__(message, code=code, status_code=status_code, details=details)
 
 
 class DatastoreValidationError(DatastoreDomainError):
-    def __init__(self, message: str):
-        super().__init__(message, code="DATASTORE_VALIDATION_ERROR", status_code=400)
+    def __init__(self, message: str, details: object | None = None):
+        super().__init__(
+            message, code="DATASTORE_VALIDATION_ERROR", status_code=400, details=details
+        )
 
 
 class DatastoreAccessDeniedError(DatastoreDomainError):
-    def __init__(self, message: str = "Access denied"):
-        super().__init__(message, code="DATASTORE_ACCESS_DENIED", status_code=403)
+    def __init__(self, message: str = "Access denied", details: object | None = None):
+        super().__init__(message, code="DATASTORE_ACCESS_DENIED", status_code=403, details=details)
 
 
 class DatastoreConflictError(DatastoreDomainError):
-    def __init__(self, message: str):
-        super().__init__(message, code="DATASTORE_CONFLICT", status_code=409)
+    def __init__(self, message: str, details: object | None = None):
+        super().__init__(message, code="DATASTORE_CONFLICT", status_code=409, details=details)
 
 
 class DatastoreNotFoundError(DatastoreDomainError):
@@ -67,8 +70,8 @@ class DatastoreReservedResourceError(DatastoreDomainError):
 
 
 class DatastoreQueryError(DatastoreDomainError):
-    def __init__(self, message: str):
-        super().__init__(message, code="DATASTORE_QUERY_ERROR", status_code=400)
+    def __init__(self, message: str, details: object | None = None):
+        super().__init__(message, code="DATASTORE_QUERY_ERROR", status_code=400, details=details)
 
 
 class DatastoreInfrastructureError(DatastoreDomainError):

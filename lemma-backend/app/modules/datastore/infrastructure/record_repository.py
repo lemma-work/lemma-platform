@@ -21,20 +21,56 @@ from app.modules.datastore.domain.ports import (
     DatastoreSchemaPort,
 )
 from app.modules.datastore.domain.record_entities import RecordEntity
+from app.modules.datastore.infrastructure.db_error_parser import parse_db_error, raise_from_db_error
 from app.modules.datastore.infrastructure.sql_identifiers import sanitize_identifier
 from app.modules.datastore.services.record_validator import convert_record
 from app.modules.datastore.services.table_context import TableContext
 
 
-def _raise_record_write_error(exc: DBAPIError, *, operation: str) -> None:
-    """Map a write-path DB error: unique violations -> 409, else 400."""
-    raw = str(getattr(exc, "orig", exc))
-    lower = raw.lower()
-    if "duplicate key value" in lower or "unique constraint" in lower:
-        raise DatastoreConflictError(
-            f"Conflict during {operation}: a record with these values already exists"
-        ) from exc
-    raise DatastoreValidationError(f"Database error during {operation}: {raw}") from exc
+def _raise_record_write_error(
+    exc: DBAPIError,
+    *,
+    operation: str,
+    ctx: TableContext | None = None,
+) -> None:
+    """Map a write-path DB error into a clean, agent-readable domain error.
+
+    Uses :mod:`db_error_parser` to detect check/FK/not-null/type/unique
+    violations and produce focused messages with structured ``details`` (e.g.
+    allowed ENUM values), instead of leaking the raw SQL + parameters.
+    """
+    raise_from_db_error(
+        exc,
+        table_name=ctx.table_name if ctx else None,
+        columns=ctx.columns if ctx else None,
+        operation=operation,
+    )
+
+
+def _raise_record_read_error(
+    exc: DBAPIError,
+    *,
+    operation: str,
+    table_name: str | None = None,
+    columns: list | None = None,
+) -> None:
+    """Map a read-path DB error into a ``DatastoreQueryError`` (400) or
+    ``DatastoreInfrastructureError`` (500), with a clean message + details.
+
+    Read-path client errors (bad filter values, type mismatches) are always
+    ``DATASTORE_QUERY_ERROR`` regardless of the underlying constraint type,
+    because the caller sent a query, not a record to validate.
+    """
+    message, details, error_cls = parse_db_error(
+        exc, table_name=table_name, columns=columns, operation=operation
+    )
+    if error_cls is DatastoreInfrastructureError:
+        if details is not None:
+            raise DatastoreInfrastructureError(message, details) from exc
+        raise DatastoreInfrastructureError(message) from exc
+    if details is not None:
+        raise DatastoreQueryError(message, details) from exc
+    raise DatastoreQueryError(message) from exc
 from app.modules.datastore.services.value_converter import ValueConverter
 from app.core.log.log import get_logger
 
@@ -160,7 +196,7 @@ class DatastoreRecordRepository(DatastoreRecordRepositoryPort):
                 return len(prepared_records)
         except DBAPIError as exc:
             logger.error("DB Error while bulk writing records: %s", exc)
-            _raise_record_write_error(exc, operation="bulk write records")
+            _raise_record_write_error(exc, operation="bulk write records", ctx=ctx)
 
     async def create_record(
         self,
@@ -197,7 +233,7 @@ class DatastoreRecordRepository(DatastoreRecordRepositoryPort):
                 return self._row_to_entity(dict(row._mapping), ctx)
         except DBAPIError as exc:
             logger.error("DB Error while creating record: %s", exc)
-            _raise_record_write_error(exc, operation="create record")
+            _raise_record_write_error(exc, operation="create record", ctx=ctx)
 
     async def bulk_create_records(
         self,
@@ -312,7 +348,7 @@ class DatastoreRecordRepository(DatastoreRecordRepositoryPort):
                 return rows, len(rows)
         except DBAPIError as exc:
             logger.error("Query Error: %s", exc)
-            raise DatastoreQueryError(f"Query execution failed: {exc}") from exc
+            _raise_record_read_error(exc, operation="query execution")
 
     async def _reject_if_too_expensive(self, session, query: str) -> None:
         """Reject a query whose planned cost or row estimate exceeds the ceiling.
@@ -326,7 +362,7 @@ class DatastoreRecordRepository(DatastoreRecordRepositoryPort):
             plan_json = explain.scalar_one()
         except DBAPIError as exc:
             logger.error("Query plan error: %s", exc)
-            raise DatastoreQueryError(f"Query could not be planned: {exc}") from exc
+            _raise_record_read_error(exc, operation="query planning")
 
         if isinstance(plan_json, str):
             plan_json = json.loads(plan_json)
@@ -390,7 +426,15 @@ class DatastoreRecordRepository(DatastoreRecordRepositoryPort):
                 elif op == "ilike":
                     where_clauses.append(f'"{field}" ILIKE :{param_name}')
                 else:
-                    raise DatastoreValidationError(f"Unsupported filter operator: {op}")
+                    raise DatastoreValidationError(
+                        f"Unsupported filter operator '{op}'",
+                        details={
+                            "operator": op,
+                            "allowed_operators": [
+                                "eq", "ne", "gt", "gte", "lt", "lte", "like", "ilike",
+                            ],
+                        },
+                    )
 
                 if col:
                     try:
@@ -445,7 +489,12 @@ class DatastoreRecordRepository(DatastoreRecordRepositoryPort):
                 return [self._row_to_entity(dict(row._mapping), ctx) for row in rows], total
         except DBAPIError as exc:
             logger.error("List records error: %s", exc)
-            raise DatastoreQueryError(f"Failed to list records: {exc}") from exc
+            _raise_record_read_error(
+                exc,
+                operation="list records",
+                table_name=ctx.table_name,
+                columns=ctx.columns,
+            )
 
     async def update_record(
         self,
@@ -520,7 +569,7 @@ class DatastoreRecordRepository(DatastoreRecordRepositoryPort):
                 await session.commit()
                 return self._row_to_entity(dict(row._mapping), ctx)
         except DBAPIError as exc:
-            _raise_record_write_error(exc, operation="update record")
+            _raise_record_write_error(exc, operation="update record", ctx=ctx)
 
     async def delete_record(
         self,

@@ -50,7 +50,14 @@ class ObstoreDatastoreStorage:
         Used for large originals (e.g. a PDF being shipped to Kreuzberg for page
         rendering) so peak memory is one chunk, not the whole file.
         """
-        response = await obs.get_async(self.store, source_blob_name)
+        try:
+            response = await obs.get_async(self.store, source_blob_name)
+        except Exception as exc:
+            if self._is_missing_object_error(exc):
+                raise DatastoreObjectNotFoundError(
+                    f"Storage object not found: {source_blob_name}"
+                ) from exc
+            raise
         async for chunk in response.stream():
             yield bytes(chunk)
 
@@ -68,7 +75,7 @@ class ObstoreDatastoreStorage:
                 logger.info("Skipping delete for missing datastore object %s", blob_name)
                 return False
             logger.error("Error deleting datastore file: %s", exc)
-            raise DatastoreInfrastructureError(f"Failed to delete file: {str(exc)}")
+            raise DatastoreInfrastructureError("Failed to delete file")
 
     async def delete_prefix(self, prefix: str) -> int:
         deleted_paths: list[str] = []
@@ -88,9 +95,7 @@ class ObstoreDatastoreStorage:
                 logger.info("Skipping delete for missing datastore prefix %s", prefix)
                 return 0
             logger.error("Error deleting datastore prefix: %s", exc)
-            raise DatastoreInfrastructureError(
-                f"Failed to delete folder contents: {str(exc)}"
-            )
+            raise DatastoreInfrastructureError("Failed to delete folder contents")
 
     def _is_missing_object_error(self, exc: Exception) -> bool:
         try:

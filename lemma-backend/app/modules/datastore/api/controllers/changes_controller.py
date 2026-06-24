@@ -201,6 +201,10 @@ async def datastore_changes_ws(
         )
         return
     except Exception:
+        logger.warning(
+            "Session resolution failed for datastore changes websocket",
+            exc_info=True,
+        )
         await websocket.close(
             code=status.WS_1008_POLICY_VIOLATION,
             reason="Unauthorized datastore changes websocket.",
@@ -244,8 +248,8 @@ async def datastore_changes_ws(
             exc_info=True,
         )
         await websocket.close(
-            code=status.WS_1008_POLICY_VIOLATION,
-            reason="Forbidden datastore changes websocket.",
+            code=status.WS_1011_INTERNAL_ERROR,
+            reason="Internal error while authorizing datastore changes websocket.",
         )
         return
 

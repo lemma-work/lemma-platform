@@ -85,6 +85,20 @@ class DatastoreFileProcessingService:
         mime_type = self._base_mime_type(file_entity)
         return mime_type in _CONVERTED_MARKDOWN_MIME_TYPES if mime_type else False
 
+    @staticmethod
+    def _sanitize_error(exc: Exception) -> str:
+        """Return a safe, user-facing error string for storage in the DB.
+
+        The full exception (with HTTP bodies, object keys, SQL) is logged at
+        error level; only a short class-based summary is persisted so file-status
+        queries don't leak internal infrastructure details.
+        """
+        exc_name = type(exc).__name__
+        message = str(exc).split("\n")[0].strip()
+        if len(message) > 200:
+            message = message[:200] + "..."
+        return f"{exc_name}: {message}" if message else exc_name
+
     async def process_file_async(
         self,
         file_id: UUID,
@@ -118,7 +132,7 @@ class DatastoreFileProcessingService:
             try:
                 await self.search_service.remove_file(file_id)
             except Exception:
-                logger.warning("Failed removing search projection for %s", file_id)
+                logger.warning("Failed removing search projection for %s", file_id, exc_info=True)
             await self._file_projection.delete_child_artifacts(
                 self.pod_id, file_entity.path
             )
@@ -182,7 +196,7 @@ class DatastoreFileProcessingService:
                 )
         except Exception as exc:
             logger.error("Search processing failed for %s: %s", file_id, exc)
-            if not await self._files.mark_failed(file_id, error=str(exc)):
+            if not await self._files.mark_failed(file_id, error=self._sanitize_error(exc)):
                 logger.info(
                     "Skipped marking %s as FAILED because a newer update already reset it",
                     file_id,

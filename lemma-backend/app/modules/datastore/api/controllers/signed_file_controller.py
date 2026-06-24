@@ -16,6 +16,7 @@ import mimetypes
 from fastapi import APIRouter, HTTPException
 from fastapi.responses import StreamingResponse
 
+from app.modules.datastore.domain.errors import DatastoreObjectNotFoundError
 from app.modules.datastore.infrastructure.storage import create_datastore_storage
 from app.modules.datastore.services.files.signed_url import (
     SignedUrlExhausted,
@@ -46,8 +47,10 @@ async def serve_signed_url(code: str) -> StreamingResponse:
         first_chunk = await iterator.__anext__()
     except StopAsyncIteration:
         first_chunk = b""
-    except Exception as exc:
-        raise HTTPException(status_code=404, detail="File not found") from exc
+    except DatastoreObjectNotFoundError:
+        raise HTTPException(status_code=404, detail="File not found")
+    except Exception:
+        raise HTTPException(status_code=500, detail="Failed to stream file")
 
     async def _stream():
         if first_chunk:

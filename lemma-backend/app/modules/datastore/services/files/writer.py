@@ -5,7 +5,7 @@ from uuid import UUID
 
 from app.core.authorization.context import Context
 from app.core.log.log import get_logger
-from app.modules.datastore.domain.errors import DatastoreValidationError
+from app.modules.datastore.domain.errors import DatastoreInfrastructureError, DatastoreValidationError
 from app.modules.datastore.domain.file_entities import (
     DatastoreFileEntity,
     DatastoreFileUpdateEntity,
@@ -130,8 +130,8 @@ class FileWriter:
             await self.storage.upload_file(storage_path, file_content)
         except Exception as exc:
             await self.file_repository.delete(file_entity.id)
-            raise DatastoreValidationError(
-                f"Failed to upload file content: {exc}"
+            raise DatastoreInfrastructureError(
+                "Failed to upload file content"
             ) from exc
 
         if self.paths._should_sync_projections(True, file_entity):
@@ -352,8 +352,8 @@ class FileWriter:
                     self.projection.storage_key(file_entity), update_entity.content
                 )
             except Exception as exc:
-                raise DatastoreValidationError(
-                    f"Failed to upload updated file content: {exc}"
+                raise DatastoreInfrastructureError(
+                    "Failed to upload updated file content"
                 ) from exc
             file_entity.size_bytes = len(update_entity.content)
             should_sync = True
@@ -369,8 +369,8 @@ class FileWriter:
                 )
                 await self.storage.delete_file(previous_storage_key)
             except Exception as exc:
-                raise DatastoreValidationError(
-                    f"Failed to move file content after rename: {exc}"
+                raise DatastoreInfrastructureError(
+                    "Failed to move file content after rename"
                 ) from exc
             should_sync = True
         elif (
