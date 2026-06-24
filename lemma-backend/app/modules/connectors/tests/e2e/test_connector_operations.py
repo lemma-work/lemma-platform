@@ -111,10 +111,10 @@ TEST_GOOGLE_CALENDAR_COMPOSIO_ACCOUNT_ID_ENV = (
     "TEST_GOOGLE_CALENDAR_COMPOSIO_ACCOUNT_ID"
 )
 _IMPORTER_MODULE_PATH = (
-    Path(__file__).resolve().parents[5] / "scripts" / "import_composio_catalog.py"
+    Path(__file__).resolve().parents[5] / "scripts" / "import_connector_catalog.py"
 )
 _IMPORTER_SPEC = importlib.util.spec_from_file_location(
-    "import_composio_catalog", _IMPORTER_MODULE_PATH
+    "import_connector_catalog", _IMPORTER_MODULE_PATH
 )
 assert _IMPORTER_SPEC and _IMPORTER_SPEC.loader
 importer = importlib.util.module_from_spec(_IMPORTER_SPEC)

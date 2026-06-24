@@ -18,8 +18,8 @@ from app.modules.connectors.domain.connector import (
     LemmaProviderCapability,
 )
 
-_MODULE_PATH = Path(__file__).resolve().parents[5] / "scripts" / "import_composio_catalog.py"
-_SPEC = importlib.util.spec_from_file_location("import_composio_catalog", _MODULE_PATH)
+_MODULE_PATH = Path(__file__).resolve().parents[5] / "scripts" / "import_connector_catalog.py"
+_SPEC = importlib.util.spec_from_file_location("import_connector_catalog", _MODULE_PATH)
 assert _SPEC and _SPEC.loader
 importer = importlib.util.module_from_spec(_SPEC)
 _SPEC.loader.exec_module(importer)

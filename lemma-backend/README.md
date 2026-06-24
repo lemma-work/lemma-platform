@@ -70,6 +70,51 @@ make docker-build
 | Dependency mgmt | uv |
 | Python | 3.14 |
 
+## Connector App Catalog
+
+The connector catalog (apps, operations, and triggers) is managed via
+[`scripts/import_connector_catalog.py`](scripts/import_connector_catalog.py).
+
+### How it works
+
+- **Native (Lemma) apps** are always imported. These include apps defined in
+  `scripts/lemma_apps_config.json` (Slack, Jira, Confluence) and the
+  `lemma-connectors` package (Gmail, Google Calendar, Google Drive, etc.).
+- **Composio apps** are imported only when `COMPOSIO_API_KEY` is set. Without
+  it, the Composio portion is skipped gracefully.
+
+### Common operations
+
+```bash
+# Import everything (native + Composio if key is set, native-only otherwise)
+uv run python scripts/import_connector_catalog.py
+
+# Native apps only
+uv run python scripts/import_connector_catalog.py --provider native
+
+# Composio apps only (requires COMPOSIO_API_KEY)
+uv run python scripts/import_connector_catalog.py --provider composio
+
+# Import specific apps only
+uv run python scripts/import_connector_catalog.py --app gmail --app slack
+
+# Dry run — fetch and log without committing to the database
+uv run python scripts/import_connector_catalog.py --dry-run
+
+# Generate skill docs after syncing (requires FIREWORKS_API_KEY)
+uv run python scripts/import_connector_catalog.py --generate-skills
+```
+
+### Adding Composio apps
+
+Set `COMPOSIO_API_KEY` in your `.env` and run the import. The curated allowlist
+of Composio apps is defined in the script (`DEFAULT_COMPOSIO_CONNECTOR_IDS`).
+To add extra apps, set the `COMPOSIO_EXTRA_APP_IDS` env var:
+
+```bash
+COMPOSIO_EXTRA_APP_IDS=linear,notion uv run python scripts/import_connector_catalog.py
+```
+
 ## Migrations
 
 ```bash

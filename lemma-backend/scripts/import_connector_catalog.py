@@ -1,3 +1,34 @@
+"""Import the connector app catalog into the database.
+
+This script syncs connector apps, their operations, and triggers into the
+connector catalog. It supports two providers:
+
+1. **Lemma native apps** — always imported. These are defined in
+   ``scripts/lemma_apps_config.json`` (Slack, Jira, Confluence, etc.) and
+   in the ``lemma-connectors`` package (Gmail, Google Calendar, etc.).
+
+2. **Composio apps** — imported only when ``COMPOSIO_API_KEY`` is set.
+   Without a key, the Composio portion is skipped gracefully and only native
+   apps are synced.
+
+Usage::
+
+    # Import everything (native + Composio if key is set, native-only otherwise)
+    python scripts/import_connector_catalog.py
+
+    # Native apps only
+    python scripts/import_connector_catalog.py --provider native
+
+    # Composio apps only (requires COMPOSIO_API_KEY)
+    python scripts/import_connector_catalog.py --provider composio
+
+    # Import a single app
+    python scripts/import_connector_catalog.py --app gmail --app slack
+
+    # Dry run — fetch and log without committing
+    python scripts/import_connector_catalog.py --dry-run
+"""
+
 from __future__ import annotations
 
 # ruff: noqa: E402
@@ -210,7 +241,11 @@ get_native_info_client = create_lemma_info_client
 
 def _parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
-        description="Import native and Composio connectors into the connector catalog."
+        description=(
+            "Import the connector app catalog into the database. "
+            "Native (Lemma) apps are always synced. "
+            "Composio apps are synced only when COMPOSIO_API_KEY is set."
+        ),
     )
     parser.add_argument(
         "--provider",
@@ -1025,7 +1060,11 @@ async def _sync_composio_catalog(
 ) -> tuple[int, int, int]:
     api_key = connector_settings.composio_api_key or os.getenv("COMPOSIO_API_KEY")
     if not api_key:
-        raise SystemExit("COMPOSIO_API_KEY is required to import the Composio catalog.")
+        logger.info(
+            "Skipping Composio catalog sync — COMPOSIO_API_KEY is not set. "
+            "Only native apps will be imported."
+        )
+        return 0, 0, 0
 
     composio = Composio(api_key=api_key)
     toolkit_items = _list_composio_toolkits(
@@ -1238,7 +1277,11 @@ async def _sync_composio_catalog_batched(
 ) -> tuple[int, int, int]:
     api_key = connector_settings.composio_api_key or os.getenv("COMPOSIO_API_KEY")
     if not api_key:
-        raise SystemExit("COMPOSIO_API_KEY is required to import the Composio catalog.")
+        logger.info(
+            "Skipping Composio catalog sync — COMPOSIO_API_KEY is not set. "
+            "Only native apps will be imported."
+        )
+        return 0, 0, 0
 
     composio = Composio(api_key=api_key)
     toolkit_items = _list_composio_toolkits(
