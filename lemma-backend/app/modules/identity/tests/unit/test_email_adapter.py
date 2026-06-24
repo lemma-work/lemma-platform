@@ -18,9 +18,9 @@ async def test_pod_invitation_email_uses_pod_layout(monkeypatch):
     monkeypatch.setattr(adapter, "_send", capture_send)
 
     result = await adapter.send_invitation_email(
-        to_email="pc@gappy.ai",
+        to_email="pc@example.com",
         organization_name="LEDflex",
-        inviter_email="anukul@gappy.ai",
+        inviter_email="lemma@lemma.work",
         role=OrganizationRole.ORG_MEMBER,
         accept_url="https://lemma.work/invitations/test/accept",
         pod_name="LEDflex Support AI",
@@ -35,11 +35,11 @@ async def test_pod_invitation_email_uses_pod_layout(monkeypatch):
     assert sent["subject"] == "Invitation to join pod LEDflex Support AI"
     assert "Pod invitation" in html
     assert "Use LEDflex Support AI." in html
-    assert "<strong" in html and "Anukul" in html
+    assert "<strong" in html and "Lemma" in html
     assert "Open LEDflex Support AI" in html
     assert "Ask product questions" in html
     assert "This invite was sent to" in html
-    assert "pc@gappy.ai" in html
+    assert "pc@example.com" in html
 
 
 @pytest.mark.asyncio
@@ -54,7 +54,7 @@ async def test_workspace_invitation_email_uses_shared_layout(monkeypatch):
     monkeypatch.setattr(adapter, "_send", capture_send)
 
     await adapter.send_invitation_email(
-        to_email="pc@gappy.ai",
+        to_email="pc@example.com",
         organization_name="Acme",
         inviter_email="owner@acme.test",
         role=OrganizationRole.ORG_MEMBER,

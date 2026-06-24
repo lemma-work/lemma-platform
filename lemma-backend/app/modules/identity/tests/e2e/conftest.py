@@ -36,7 +36,7 @@ scenario = e2e_fixtures.scenario
 @pytest_asyncio.fixture(scope="function")
 async def signup_user(async_client: "AsyncClient"):
     async def _signup(email: str | None = None, password: str = "TestPassword@123"):
-        resolved_email = email or f"anukul+identity-e2e-{uuid4().hex[:10]}@gappy.ai"
+        resolved_email = email or f"test+identity-e2e-{uuid4().hex[:10]}@example.com"
         payload = {
             "formFields": [
                 {"id": "email", "value": resolved_email},

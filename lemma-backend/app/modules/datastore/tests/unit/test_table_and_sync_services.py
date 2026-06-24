@@ -285,7 +285,7 @@ async def test_pod_member_sync_added_creates_reserved_table_and_record():
         pod_id=pod_id,
         user_id=uuid4(),
         role="POD_VIEWER",
-        email="anukul+user@gappy.ai",
+        email="test+user@example.com",
     )
 
     await service.sync_member_added(event)

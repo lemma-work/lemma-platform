@@ -20,7 +20,7 @@ from app.modules.pod.domain.pod_entities import PodEntity, PodMemberEntity, PodR
 from app.modules.pod.services.pod_member_service import PodMemberService
 
 
-def _make_user(email: str = "anukul+u@gappy.ai") -> UserEntity:
+def _make_user(email: str = "test+u@example.com") -> UserEntity:
     return UserEntity(email=email)
 
 
@@ -93,7 +93,7 @@ async def test_assign_member_success_adds_event(
 
     assert created == member_to_add
     assert created.user_id == target_user_id
-    assert created.user_email == "anukul+u@gappy.ai"
+    assert created.user_email == "test+u@example.com"
     assert created.user_name is None
     create_arg = pod_member_repository_mock.create.await_args.args[0]
     assert create_arg.has_pending_events() is True
@@ -288,7 +288,7 @@ async def test_update_member_role_sets_role(
         organization_member_id=uuid4(),
         role=PodRole.VIEWER,
         user_id=uuid4(),
-        user_email="anukul+u@gappy.ai",
+        user_email="test+u@example.com",
     )
 
     pod_member_repository_mock.get_by_pod_and_id.return_value = member
@@ -336,7 +336,7 @@ async def test_get_pod_member_returns_member_by_user_id(
         organization_member_id=uuid4(),
         role=PodRole.VIEWER,
         user_id=target_user_id,
-        user_email="anukul+u@gappy.ai",
+        user_email="test+u@example.com",
     )
 
     pod_repository_mock.get.return_value = pod
@@ -372,7 +372,7 @@ async def test_get_pod_member_by_id_returns_member(
         organization_member_id=uuid4(),
         role=PodRole.VIEWER,
         user_id=uuid4(),
-        user_email="anukul+u@gappy.ai",
+        user_email="test+u@example.com",
     )
 
     pod_repository_mock.get.return_value = pod
@@ -410,7 +410,7 @@ async def test_get_pod_member_by_email_returns_member(
         organization_member_id=uuid4(),
         role=PodRole.VIEWER,
         user_id=uuid4(),
-        user_email="anukul+u@gappy.ai",
+        user_email="test+u@example.com",
     )
 
     pod_repository_mock.get.return_value = pod
@@ -423,14 +423,14 @@ async def test_get_pod_member_by_email_returns_member(
 
     result = await pod_member_service.get_pod_member_by_user_email(
         pod.id,
-        "anukul+u@gappy.ai",
+        "test+u@example.com",
         requester_id,
     )
 
     assert result == member
     pod_member_repository_mock.get_by_pod_and_user_email.assert_awaited_once_with(
         pod.id,
-        "anukul+u@gappy.ai",
+        "test+u@example.com",
     )
 
 

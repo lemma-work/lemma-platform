@@ -11,7 +11,7 @@ def auth_headers(user: dict[str, str]) -> dict[str, str]:
 
 
 async def signup_user(async_client: AsyncClient, prefix: str) -> dict[str, str]:
-    email = f"anukul+{prefix}-{uuid4().hex[:8]}@gappy.ai"
+    email = f"test+{prefix}-{uuid4().hex[:8]}@example.com"
     response = await async_client.post(
         "/st/auth/signup",
         json={

@@ -36,7 +36,7 @@ def _member(
         user_id=user_id,
         organization_id=organization_id,
         role=role,
-        user=UserEntity(email="anukul+owner@gappy.ai") if with_user else None,
+        user=UserEntity(email="test+owner@example.com") if with_user else None,
     )
 
 
@@ -145,7 +145,7 @@ async def test_create_invitation_requires_editor_or_owner(
 ):
     org = OrganizationEntity(name="Acme", slug="acme")
     invitation = OrganizationInvitationEntity(
-        email="anukul+new@gappy.ai",
+        email="test+new@example.com",
         organization_id=org.id,
         role=OrganizationRole.ORG_MEMBER,
     )
@@ -169,7 +169,7 @@ async def test_create_invitation_raises_member_conflict(
     inviter_id = uuid4()
     org = OrganizationEntity(name="Acme", slug="acme")
     invitation = OrganizationInvitationEntity(
-        email="anukul+new@gappy.ai",
+        email="test+new@example.com",
         organization_id=org.id,
         role=OrganizationRole.ORG_MEMBER,
     )
@@ -198,7 +198,7 @@ async def test_create_invitation_raises_existing_invitation_conflict(
     inviter_id = uuid4()
     org = OrganizationEntity(name="Acme", slug="acme")
     invitation = OrganizationInvitationEntity(
-        email="anukul+new@gappy.ai",
+        email="test+new@example.com",
         organization_id=org.id,
         role=OrganizationRole.ORG_MEMBER,
     )
@@ -224,7 +224,7 @@ async def test_create_invitation_emits_event_with_accept_url(
     inviter_id = uuid4()
     org = OrganizationEntity(name="Acme", slug="acme")
     invitation = OrganizationInvitationEntity(
-        email="anukul+new@gappy.ai",
+        email="test+new@example.com",
         organization_id=org.id,
         role=OrganizationRole.ORG_MEMBER,
     )
@@ -275,7 +275,7 @@ async def test_list_user_invitations_uses_user_email(
     user_repository_mock: AsyncMock,
 ):
     user_id = uuid4()
-    user_repository_mock.get.return_value = UserEntity(email="anukul+invitee@gappy.ai")
+    user_repository_mock.get.return_value = UserEntity(email="test+invitee@example.com")
     organization_repository_mock.list_user_invitations.return_value = ([], None)
 
     await organization_service.list_user_invitations(
@@ -286,7 +286,7 @@ async def test_list_user_invitations_uses_user_email(
 
     user_repository_mock.get.assert_awaited_once_with(user_id)
     organization_repository_mock.list_user_invitations.assert_awaited_once_with(
-        user_email="anukul+invitee@gappy.ai",
+        user_email="test+invitee@example.com",
         status=OrganizationInvitationStatus.PENDING,
         limit=25,
         cursor="cursor-token",
@@ -302,7 +302,7 @@ async def test_get_invitation_denies_non_invitee_non_manager(
     org_id = uuid4()
     requester_id = uuid4()
     invitation = OrganizationInvitationEntity(
-        email="anukul+invitee@gappy.ai",
+        email="test+invitee@example.com",
         organization_id=org_id,
         role=OrganizationRole.ORG_MEMBER,
     )
@@ -312,7 +312,7 @@ async def test_get_invitation_denies_non_invitee_non_manager(
         organization_id=org_id,
         role=OrganizationRole.ORG_MEMBER,
     )
-    user_repository_mock.get.return_value = UserEntity(email="anukul+other@gappy.ai")
+    user_repository_mock.get.return_value = UserEntity(email="test+other@example.com")
 
     with pytest.raises(IdentityAccessDeniedError):
         await organization_service.get_invitation(
@@ -330,12 +330,12 @@ async def test_get_invitation_allows_invitee_user(
 ):
     requester_id = uuid4()
     invitation = OrganizationInvitationEntity(
-        email="anukul+invitee@gappy.ai",
+        email="test+invitee@example.com",
         organization_id=uuid4(),
         role=OrganizationRole.ORG_MEMBER,
     )
     organization_repository_mock.get_invitation_by_id.return_value = invitation
-    user_repository_mock.get.return_value = UserEntity(email="anukul+invitee@gappy.ai")
+    user_repository_mock.get.return_value = UserEntity(email="test+invitee@example.com")
 
     found = await organization_service.get_invitation(
         invitation_id=invitation.id,
@@ -353,12 +353,12 @@ async def test_get_invitation_validates_org_in_path(
     user_repository_mock: AsyncMock,
 ):
     invitation = OrganizationInvitationEntity(
-        email="anukul+invitee@gappy.ai",
+        email="test+invitee@example.com",
         organization_id=uuid4(),
         role=OrganizationRole.ORG_MEMBER,
     )
     organization_repository_mock.get_invitation_by_id.return_value = invitation
-    user_repository_mock.get.return_value = UserEntity(email="anukul+invitee@gappy.ai")
+    user_repository_mock.get.return_value = UserEntity(email="test+invitee@example.com")
 
     with pytest.raises(IdentityValidationError):
         await organization_service.get_invitation(
@@ -386,7 +386,7 @@ async def test_accept_invitation_user_not_found(
     user_repository_mock: AsyncMock,
 ):
     invitation = OrganizationInvitationEntity(
-        email="anukul+invitee@gappy.ai",
+        email="test+invitee@example.com",
         organization_id=uuid4(),
         role=OrganizationRole.ORG_MEMBER,
     )
@@ -404,11 +404,11 @@ async def test_accept_invitation_email_mismatch(
     user_repository_mock: AsyncMock,
 ):
     invitation = OrganizationInvitationEntity(
-        email="anukul+invitee@gappy.ai",
+        email="test+invitee@example.com",
         organization_id=uuid4(),
         role=OrganizationRole.ORG_MEMBER,
     )
-    user = UserEntity(email="anukul+other@gappy.ai")
+    user = UserEntity(email="test+other@example.com")
 
     organization_repository_mock.get_invitation_by_id.return_value = invitation
     user_repository_mock.get.return_value = user
@@ -424,9 +424,9 @@ async def test_accept_invitation_raises_conflict_when_member_exists(
     user_repository_mock: AsyncMock,
 ):
     org = OrganizationEntity(name="Acme", slug="acme")
-    user = UserEntity(email="anukul+invitee@gappy.ai")
+    user = UserEntity(email="test+invitee@example.com")
     invitation = OrganizationInvitationEntity(
-        email="anukul+invitee@gappy.ai",
+        email="test+invitee@example.com",
         organization_id=org.id,
         role=OrganizationRole.ORG_MEMBER,
     )
@@ -451,9 +451,9 @@ async def test_accept_invitation_adds_member_and_emits_event(
     user_repository_mock: AsyncMock,
 ):
     org = OrganizationEntity(name="Acme", slug="acme")
-    user = UserEntity(email="anukul+invitee@gappy.ai")
+    user = UserEntity(email="test+invitee@example.com")
     invitation = OrganizationInvitationEntity(
-        email="anukul+invitee@gappy.ai",
+        email="test+invitee@example.com",
         organization_id=org.id,
         role=OrganizationRole.ORG_MEMBER,
     )
@@ -487,7 +487,7 @@ async def test_revoke_invitation_validates_org_in_path(
     organization_repository_mock: AsyncMock,
 ):
     invitation = OrganizationInvitationEntity(
-        email="anukul+invitee@gappy.ai",
+        email="test+invitee@example.com",
         organization_id=uuid4(),
         role=OrganizationRole.ORG_MEMBER,
     )
@@ -509,7 +509,7 @@ async def test_revoke_invitation_updates_status(
     requester_id = uuid4()
     org_id = uuid4()
     invitation = OrganizationInvitationEntity(
-        email="anukul+invitee@gappy.ai",
+        email="test+invitee@example.com",
         organization_id=org_id,
         role=OrganizationRole.ORG_MEMBER,
     )
@@ -654,7 +654,7 @@ async def test_create_invitation_with_pod_id_validates_pod_belongs_to_org(
     org = OrganizationEntity(name="Acme", slug="acme")
     pod_id = uuid4()
     invitation = OrganizationInvitationEntity(
-        email="anukul+new@gappy.ai",
+        email="test+new@example.com",
         organization_id=org.id,
         role=OrganizationRole.ORG_MEMBER,
         pod_id=pod_id,
@@ -692,7 +692,7 @@ async def test_create_invitation_with_pod_id_raises_when_pod_not_found(
     org = OrganizationEntity(name="Acme", slug="acme")
     pod_id = uuid4()
     invitation = OrganizationInvitationEntity(
-        email="anukul+new@gappy.ai",
+        email="test+new@example.com",
         organization_id=org.id,
         role=OrganizationRole.ORG_MEMBER,
         pod_id=pod_id,
@@ -722,7 +722,7 @@ async def test_create_invitation_with_pod_id_succeeds_when_pod_in_same_org(
     org = OrganizationEntity(name="Acme", slug="acme")
     pod_id = uuid4()
     invitation = OrganizationInvitationEntity(
-        email="anukul+new@gappy.ai",
+        email="test+new@example.com",
         organization_id=org.id,
         role=OrganizationRole.ORG_MEMBER,
         pod_id=pod_id,
@@ -761,10 +761,10 @@ async def test_accept_invitation_adds_to_pod_when_pod_id_set(
     pod_membership_port_mock: AsyncMock,
 ):
     org = OrganizationEntity(name="Acme", slug="acme")
-    user = UserEntity(email="anukul+invitee@gappy.ai")
+    user = UserEntity(email="test+invitee@example.com")
     pod_id = uuid4()
     invitation = OrganizationInvitationEntity(
-        email="anukul+invitee@gappy.ai",
+        email="test+invitee@example.com",
         organization_id=org.id,
         role=OrganizationRole.ORG_MEMBER,
         pod_id=pod_id,
@@ -803,10 +803,10 @@ async def test_accept_invitation_defaults_pod_role_to_POD_USER(
     pod_membership_port_mock: AsyncMock,
 ):
     org = OrganizationEntity(name="Acme", slug="acme")
-    user = UserEntity(email="anukul+invitee@gappy.ai")
+    user = UserEntity(email="test+invitee@example.com")
     pod_id = uuid4()
     invitation = OrganizationInvitationEntity(
-        email="anukul+invitee@gappy.ai",
+        email="test+invitee@example.com",
         organization_id=org.id,
         role=OrganizationRole.ORG_MEMBER,
         pod_id=pod_id,
@@ -840,10 +840,10 @@ async def test_accept_invitation_skips_pod_when_pod_deleted(
     pod_membership_port_mock: AsyncMock,
 ):
     org = OrganizationEntity(name="Acme", slug="acme")
-    user = UserEntity(email="anukul+invitee@gappy.ai")
+    user = UserEntity(email="test+invitee@example.com")
     pod_id = uuid4()
     invitation = OrganizationInvitationEntity(
-        email="anukul+invitee@gappy.ai",
+        email="test+invitee@example.com",
         organization_id=org.id,
         role=OrganizationRole.ORG_MEMBER,
         pod_id=pod_id,
@@ -876,9 +876,9 @@ async def test_accept_invitation_without_pod_id_does_not_call_pod_port(
     pod_membership_port_mock: AsyncMock,
 ):
     org = OrganizationEntity(name="Acme", slug="acme")
-    user = UserEntity(email="anukul+invitee@gappy.ai")
+    user = UserEntity(email="test+invitee@example.com")
     invitation = OrganizationInvitationEntity(
-        email="anukul+invitee@gappy.ai",
+        email="test+invitee@example.com",
         organization_id=org.id,
         role=OrganizationRole.ORG_MEMBER,
     )

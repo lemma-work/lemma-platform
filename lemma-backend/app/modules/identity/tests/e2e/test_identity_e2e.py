@@ -117,7 +117,7 @@ async def test_signup_does_not_create_personal_org(
     async_client: AsyncClient,
     signup_user,
 ):
-    user = await signup_user(email=f"anukul+no-personal-{uuid4().hex[:8]}@gmail.com")
+    user = await signup_user(email=f"test+no-personal-{uuid4().hex[:8]}@gmail.com")
     headers = _auth_headers(user["token"])
 
     list_org_resp = await async_client.get("/organizations", headers=headers)
@@ -455,7 +455,7 @@ async def test_email_signup_is_blocked_for_existing_google_user(
     google_signinup,
     mock_google_provider,
 ):
-    email = "anukul+google-signup-conflict@gappy.ai"
+    email = "test+google-signup-conflict@example.com"
 
     google_response = await google_signinup(
         email,
@@ -483,7 +483,7 @@ async def test_email_signin_is_blocked_for_existing_google_user(
     google_signinup,
     mock_google_provider,
 ):
-    email = "anukul+google-signin-conflict@gappy.ai"
+    email = "test+google-signin-conflict@example.com"
 
     google_response = await google_signinup(
         email,
@@ -510,7 +510,7 @@ async def test_existing_google_user_can_signinup_again(
     google_signinup,
     mock_google_provider,
 ):
-    email = "anukul+google-repeat@gappy.ai"
+    email = "test+google-repeat@example.com"
 
     first_response = await google_signinup(
         email,
@@ -737,7 +737,7 @@ async def test_invite_with_pod_id_from_different_org_is_rejected(
         f"/organizations/{org_a_id}/invitations",
         headers=owner_headers,
         json={
-            "email": "anukul+cross-org-pod@gappy.ai",
+            "email": "test+cross-org-pod@example.com",
             "role": "ORG_MEMBER",
             "pod_id": pod_b_id,
         },

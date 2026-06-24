@@ -16,7 +16,7 @@ async def test_create_user_emits_signup_event_without_personal_org(
     user_repository_mock: AsyncMock,
     organization_repository_mock: AsyncMock,
 ):
-    user = UserEntity(email="anukul+user@gappy.ai")
+    user = UserEntity(email="test+user@example.com")
 
     user_repository_mock.get_by_email.return_value = None
     user_repository_mock.create.return_value = user
@@ -38,10 +38,10 @@ async def test_create_user_raises_conflict_when_email_exists(
     user_service: UserService,
     user_repository_mock: AsyncMock,
 ):
-    user_repository_mock.get_by_email.return_value = UserEntity(email="anukul+user@gappy.ai")
+    user_repository_mock.get_by_email.return_value = UserEntity(email="test+user@example.com")
 
     with pytest.raises(UserConflictError):
-        await user_service.create_user(UserEntity(email="anukul+user@gappy.ai"))
+        await user_service.create_user(UserEntity(email="test+user@example.com"))
 
 
 @pytest.mark.asyncio
@@ -61,7 +61,7 @@ async def test_get_user_returns_entity(
     user_repository_mock: AsyncMock,
     user_cache_mock: AsyncMock,
 ):
-    user = UserEntity(email="anukul+user@gappy.ai")
+    user = UserEntity(email="test+user@example.com")
     user_cache_mock.get.return_value = None
     user_repository_mock.get.return_value = user
 
@@ -77,7 +77,7 @@ async def test_get_user_returns_cached_entity_without_db_hit(
     user_repository_mock: AsyncMock,
     user_cache_mock: AsyncMock,
 ):
-    user = UserEntity(email="anukul+cached@gappy.ai")
+    user = UserEntity(email="test+cached@example.com")
     user_cache_mock.get.return_value = user
 
     result = await user_service.get_user(user.id)
@@ -91,10 +91,10 @@ async def test_get_user_by_email_returns_optional(
     user_service: UserService,
     user_repository_mock: AsyncMock,
 ):
-    user = UserEntity(email="anukul+user@gappy.ai")
+    user = UserEntity(email="test+user@example.com")
     user_repository_mock.get_by_email.return_value = user
 
-    assert await user_service.get_user_by_email("anukul+user@gappy.ai") == user
+    assert await user_service.get_user_by_email("test+user@example.com") == user
 
 
 @pytest.mark.asyncio
@@ -103,7 +103,7 @@ async def test_update_user_delegates_to_repository(
     user_repository_mock: AsyncMock,
     user_cache_mock: AsyncMock,
 ):
-    user = UserEntity(email="anukul+user@gappy.ai")
+    user = UserEntity(email="test+user@example.com")
     user_repository_mock.update.return_value = user
 
     updated = await user_service.update_user(user)

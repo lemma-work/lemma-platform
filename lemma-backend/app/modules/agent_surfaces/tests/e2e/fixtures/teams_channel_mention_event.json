@@ -15,7 +15,7 @@
   "serviceUrl": "__FAKE_TEAMS_SERVICE_URL__",
   "from": {
     "id": "29:1hLbQp0J8ngmMqDR33A1Lf6TGFrOdjSLWDAz9pfFRQhnuxgP2WNqGIjgNdAwYG3enpobRJ3AmSDj0do8Po1NYVw",
-    "name": "Anukul Kumar",
+    "name": "Test User",
     "aadObjectId": "b20e77ef-bd6b-4636-9f5b-20dd28beba24"
   },
   "conversation": {

@@ -599,7 +599,7 @@ def test_gmail_parse_sender_string_and_attachments():
             "data": {
                 "thread_id": "gmail-thread-1",
                 "message_id": "gmail-message-1",
-                "sender": "Anukul Kumar <jha.anukul@gmail.com>",
+                "sender": "Test User <user@example.com>",
                 "to": "assistant@gmail.test",
                 "subject": "Need help",
                 "body_text": "Please review the file.",
@@ -616,9 +616,9 @@ def test_gmail_parse_sender_string_and_attachments():
     )
 
     assert event is not None
-    assert event.sender_email == "jha.anukul@gmail.com"
-    assert event.sender_external_user_id == "jha.anukul@gmail.com"
-    assert event.sender_display_name == "Anukul Kumar"
+    assert event.sender_email == "user@example.com"
+    assert event.sender_external_user_id == "user@example.com"
+    assert event.sender_display_name == "Test User"
     assert event.external_channel_id == "assistant@gmail.test"
     assert event.metadata["attachments"][0]["id"] == "att-1"
     assert event.metadata["attachments"][0]["message_id"] == "gmail-message-1"
@@ -645,7 +645,7 @@ def test_gmail_parse_composio_payload_shape():
                     "headers": [
                         {
                             "name": "From",
-                            "value": "Anukul Kumar <jha.anukul@gmail.com>",
+                            "value": "Test User <user@example.com>",
                         },
                         {
                             "name": "Reply-To",
@@ -675,7 +675,7 @@ def test_gmail_parse_composio_payload_shape():
     )
 
     assert event is not None
-    assert event.sender_email == "jha.anukul@gmail.com"
+    assert event.sender_email == "user@example.com"
     assert event.external_thread_id == "gmail-thread-42"
     assert event.external_message_id == "gmail-provider-message-42"
     assert event.reply_target["recipient_email"] == "reply@example.com"

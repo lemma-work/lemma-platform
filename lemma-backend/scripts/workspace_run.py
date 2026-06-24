@@ -6,10 +6,10 @@ executes commands via the workspace session API.
 
 Usage:
     # Run an arbitrary shell command
-    uv run scripts/workspace_run.py --user anukul@gappy.ai --command "ls /workspace"
+    uv run scripts/workspace_run.py --user lemma@lemma.work --command "ls /workspace"
 
     # Start a long-running process in the sandbox
-    uv run scripts/workspace_run.py --user anukul@gappy.ai --command "python -m http.server 8888"
+    uv run scripts/workspace_run.py --user lemma@lemma.work --command "python -m http.server 8888"
 """
 
 from __future__ import annotations

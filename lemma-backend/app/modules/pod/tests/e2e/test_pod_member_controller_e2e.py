@@ -9,7 +9,7 @@ pytestmark = pytest.mark.e2e
 
 
 async def _signup_user(async_client: AsyncClient) -> tuple[str, str]:
-    email = f"anukul+pod-member-{uuid4().hex[:10]}@gappy.ai"
+    email = f"test+pod-member-{uuid4().hex[:10]}@example.com"
     password = "TestPassword@123"
 
     response = await async_client.post(
@@ -162,7 +162,7 @@ async def test_pod_member_lifecycle(
 
     missing_lookup_response = await authenticated_client.get(
         f"/pods/{pod_id}/members/lookup/by-email",
-        params={"email": "missing@gappy.ai"},
+        params={"email": "missing@example.com"},
     )
     assert missing_lookup_response.status_code == 404, missing_lookup_response.text
 

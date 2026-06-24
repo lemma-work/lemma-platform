@@ -22,7 +22,7 @@ from app.modules.pod.domain.pod_entities import (
 from app.modules.pod.services.pod_service import PodService
 
 
-def _make_user(email: str = "anukul+u@gappy.ai") -> UserEntity:
+def _make_user(email: str = "test+u@example.com") -> UserEntity:
     return UserEntity(email=email)
 
 

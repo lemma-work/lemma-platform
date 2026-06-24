@@ -49,7 +49,7 @@ async def _create_pod(client: AsyncClient, org_id: str, name: str) -> str:
 
 
 async def _signup_user(async_client: AsyncClient, index: int) -> dict:
-    email = f"anukul+{index}@gappy.ai"
+    email = f"test+{index}@example.com"
     password = "TestPassword@123"
     response = await async_client.post(
         "/st/auth/signup",

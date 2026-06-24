@@ -57,7 +57,7 @@ async def test_verify_token_returns_user_context():
     service = _FakeUserService(
         UserEntity(
             id=user_id,
-            email="anukul@gappy.ai",
+            email="lemma@lemma.work",
         )
     )
 
@@ -66,7 +66,7 @@ async def test_verify_token_returns_user_context():
     response = await verify_token(request=request, user_service=service, uow=uow)
 
     assert response.user_id == user_id
-    assert response.email == "anukul@gappy.ai"
+    assert response.email == "lemma@lemma.work"
     assert response.pod_id is None
     assert response.organization_id is None
     assert response.function_id is None
@@ -97,7 +97,7 @@ async def test_verify_token_returns_function_delegation_claims():
     service = _FakeUserService(
         UserEntity(
             id=user_id,
-            email="anukul@gappy.ai",
+            email="lemma@lemma.work",
         )
     )
 

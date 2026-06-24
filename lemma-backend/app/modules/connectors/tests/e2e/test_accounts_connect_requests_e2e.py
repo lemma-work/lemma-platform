@@ -46,8 +46,8 @@ async def test_connect_request_and_accounts_lifecycle(
                     "supports_org_custom_oauth": True,
                     "oauth2_defaults": {
                         "default_scopes": ["openid"],
-                        "authorization_url": "https://mock.gappy.ai/auth",
-                        "token_url": "https://mock.gappy.ai/token",
+                        "authorization_url": "https://mock.example.com/auth",
+                        "token_url": "https://mock.example.com/token",
                     },
                 }
             ],
@@ -80,7 +80,7 @@ async def test_connect_request_and_accounts_lifecycle(
 
     async def _fake_get_authorization_url(self, connector, user_id, state, redirect_uri):
         assert connector.oauth2_config.client_secret == "client-secret"
-        return ("https://mock.gappy.ai/authorize", "provider_state")
+        return ("https://mock.example.com/authorize", "provider_state")
 
     async def _fake_exchange_code_for_credentials(
         self, connector, redirect_uri, user_id, state=None
@@ -203,8 +203,8 @@ async def test_lemma_system_default_requires_configured_env_credentials(
                     "supports_org_custom_oauth": True,
                     "oauth2_defaults": {
                         "default_scopes": ["openid"],
-                        "authorization_url": "https://mock.gappy.ai/auth",
-                    "token_url": "https://mock.gappy.ai/token",
+                        "authorization_url": "https://mock.example.com/auth",
+                    "token_url": "https://mock.example.com/token",
                 },
                 "system_oauth": {
                         "client_id_env": client_id_env,

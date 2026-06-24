@@ -55,7 +55,7 @@ from app.modules.agent.services.serialization import message_to_payload
 from app.modules.identity.infrastructure.models.user_models import User
 from app.modules.pod.infrastructure.models.pod_models import Pod
 
-DEFAULT_USER_EMAIL = "anukul@gappy.ai"
+DEFAULT_USER_EMAIL = "lemma@lemma.work"
 DEFAULT_POD_NAME = "local-test"
 DEFAULT_AGENT_NAME = "sample_local_agent"
 DEFAULT_MODEL_NAME = "KIMI_K2"

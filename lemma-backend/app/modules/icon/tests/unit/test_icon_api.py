@@ -25,7 +25,7 @@ def icon_app(monkeypatch: pytest.MonkeyPatch, tmp_path) -> FastAPI:
     app.include_router(router)
 
     def _current_user() -> UserEntity:
-        return UserEntity(id=TEST_USER_ID, email="icon-user@gappy.ai")
+        return UserEntity(id=TEST_USER_ID, email="icon-user@example.com")
 
     app.dependency_overrides[get_current_user] = _current_user
     return app

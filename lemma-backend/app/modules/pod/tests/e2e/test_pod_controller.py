@@ -156,7 +156,7 @@ async def _add_org_member(
 
     Returns ``(bearer_token, organization_member_id)``.
     """
-    email = f"anukul+pod-del-{uuid4().hex[:10]}@gappy.ai"
+    email = f"test+pod-del-{uuid4().hex[:10]}@example.com"
     password = "TestPassword@123"
     signup = await async_client.post(
         "/st/auth/signup",
@@ -376,7 +376,7 @@ async def test_list_pods_by_organization_only_returns_member_pods(
     org_id = fixed_test_org["id"]
     pod = await _create_pod(authenticated_client, org_id, name="Visible To Creator")
 
-    outsider_email = f"anukul+pod-list-{uuid4().hex[:10]}@gappy.ai"
+    outsider_email = f"test+pod-list-{uuid4().hex[:10]}@example.com"
     password = "TestPassword@123"
     signup_response = await async_client.post(
         "/st/auth/signup",

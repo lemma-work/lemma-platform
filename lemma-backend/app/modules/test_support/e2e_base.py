@@ -465,7 +465,7 @@ async def async_client(test_app) -> AsyncGenerator["AsyncClient", None]:
 
 @pytest_asyncio.fixture(scope="function")
 async def fixed_test_user(async_client: "AsyncClient"):
-    email = f"anukul+module-e2e-{uuid4().hex[:10]}@gappy.ai"
+    email = f"test+module-e2e-{uuid4().hex[:10]}@example.com"
     password = "TestPassword@123"
 
     signup_data = {

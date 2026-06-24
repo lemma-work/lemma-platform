@@ -9,7 +9,7 @@ pytestmark = pytest.mark.e2e
 
 
 async def _signup_user(async_client: AsyncClient) -> tuple[dict, str]:
-    email = f"anukul+pod-join-{uuid4().hex[:10]}@gappy.ai"
+    email = f"test+pod-join-{uuid4().hex[:10]}@example.com"
     password = "TestPassword@123"
 
     response = await async_client.post(
@@ -83,8 +83,8 @@ async def test_pod_join_request_lifecycle(
     assert listed is not None
     # The list surfaces the requesting user so admins know who is asking.
     assert listed["user_email"]
-    assert listed["user_email"].endswith("@gappy.ai")
-    assert "anukul+pod-join-" in listed["user_email"]
+    assert listed["user_email"].endswith("@example.com")
+    assert "test+pod-join-" in listed["user_email"]
 
     approve_response = await authenticated_client.post(
         f"/pods/{pod['id']}/join-requests/{join_request['id']}/approve",

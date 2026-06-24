@@ -596,9 +596,9 @@ async def test_handle_oauth_callback_populates_email_via_profile_operation():
 
     operation_gateway = AsyncMock()
     operation_gateway.execute_operation.return_value = {
-        "displayName": "Anukul Kumar",
-        "mail": "anukul@lemma.work",
-        "userPrincipalName": "anukul@lemma.work",
+        "displayName": "Test User",
+        "mail": "user@lemma.work",
+        "userPrincipalName": "user@lemma.work",
     }
     operation_repository = AsyncMock()
     operation_repository.get_by_connector_provider_and_name.return_value = (
@@ -636,7 +636,7 @@ async def test_handle_oauth_callback_populates_email_via_profile_operation():
             state="state-outlook",
         )
 
-    assert account.email == "anukul@lemma.work"
+    assert account.email == "user@lemma.work"
     operation_repository.get_by_connector_provider_and_name.assert_awaited_with(
         "outlook", "COMPOSIO", "OUTLOOK_GET_PROFILE"
     )

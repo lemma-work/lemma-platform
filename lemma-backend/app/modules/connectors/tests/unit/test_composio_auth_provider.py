@@ -68,7 +68,7 @@ async def test_exchange_code_uses_composio_expires_in_for_google_accounts():
 
     credentials = await provider.exchange_code_for_credentials(
         connector=_connector(),
-        redirect_uri="https://app.gappy.ai/callback?connectedAccountId=ca_test_connection",
+        redirect_uri="https://app.example.com/callback?connectedAccountId=ca_test_connection",
         user_id=uuid4(),
     )
 
