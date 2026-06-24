@@ -21,7 +21,7 @@ from lemma_stack.output import AdminError, info
 from lemma_stack.paths import LocalPaths
 
 SCHEMA_VERSION = 1
-DEFAULT_REPO = "lemma-work/lemma-app"
+DEFAULT_REPO = "lemma-work/lemma-platform"
 MANIFEST_ASSET = "lemma-local.json"
 APP_IMAGE_KEYS = ("backend", "frontend", "agentbox", "agentbox_runtime")
 
