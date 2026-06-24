@@ -76,7 +76,7 @@ lemma daemon start            # serves pod-assigned runs via your local Claude C
 curl -fsSL https://raw.githubusercontent.com/lemma-work/lemma-platform/main/install.sh | bash
 ```
 
-This installs the `lemma-stack` tool and runs at app `http://localhost:3711`, API `http://localhost:8711` (docs at `/scalar`). Manage it with `lemma-stack start|stop|status|logs|config|uninstall`. Point the CLI at it:
+This installs the `lemma-stack` tool and runs the app at `http://127-0-0-1.sslip.io:3711` and the API at `http://127-0-0-1.sslip.io:8711` (docs at `/scalar`). Use that `127-0-0-1.sslip.io` host — it resolves to `127.0.0.1`, but sign-in is scoped to it, so `localhost` / `127.0.0.1` won't authenticate. Manage it with `lemma-stack start|stop|status|logs|config|uninstall`. Point the CLI at it:
 
 ```bash
 lemma servers select local

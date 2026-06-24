@@ -11,10 +11,14 @@ curl -fsSL https://raw.githubusercontent.com/lemma-work/lemma-platform/main/inst
 recommended runtime), pulls the released images, and starts everything with
 all persistent state under `~/.lemma/local`:
 
-- frontend: http://localhost:3711
-- backend API: http://localhost:8711 (docs at /scalar)
+- frontend: http://127-0-0-1.sslip.io:3711
+- backend API: http://127-0-0-1.sslip.io:8711 (docs at /scalar)
 - infra (postgres/redis/supertokens/kreuzberg) stays on the private
   `lemma-local-net` container network — no host ports, no collisions.
+
+Use the `127-0-0-1.sslip.io` host (wildcard DNS that resolves to `127.0.0.1`),
+not `localhost` / `127.0.0.1` directly: sign-in cookies and per-desk subdomains
+are scoped to it, so the app only authenticates on this host.
 
 ## Commands
 

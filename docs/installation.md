@@ -37,9 +37,11 @@ After install, the stack is running at:
 
 | Service | URL |
 |---------|-----|
-| Frontend | http://localhost:3711 |
-| Backend API | http://localhost:8711 |
-| API docs (Scalar) | http://localhost:8711/scalar |
+| Frontend | http://127-0-0-1.sslip.io:3711 |
+| Backend API | http://127-0-0-1.sslip.io:8711 |
+| API docs (Scalar) | http://127-0-0-1.sslip.io:8711/scalar |
+
+> **Use the `127-0-0-1.sslip.io` host, not `localhost` / `127.0.0.1`.** It's wildcard DNS that resolves to `127.0.0.1`, and sign-in cookies (and per-desk subdomains) are scoped to it — opening the app on `localhost` or `127.0.0.1` won't authenticate.
 
 Infrastructure (Postgres, Redis, SuperTokens, Kreuzberg) stays on a private container network — no host ports, no collisions with other projects.
 
@@ -205,4 +207,4 @@ The dev stack and the `lemma-stack` install stack run on different ports (3710/8
 - Read the [CLI overview](../lemma-cli/README.md) to build and operate pods.
 - Read the [TypeScript SDK](../lemma-typescript/README.md) to build app frontends.
 - Read the [Python SDK](../lemma-python/README.md) to write pod function code.
-- Browse the [frontend docs](http://localhost:3711/docs) for the full platform documentation.
+- Browse the [frontend docs](http://127-0-0-1.sslip.io:3711/docs) for the full platform documentation.
