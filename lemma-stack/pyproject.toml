@@ -36,3 +36,6 @@ target-version = "py311"
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+markers = [
+  "install_experience: Docker-based cross-platform install tests (slow, need Docker for some)",
+]

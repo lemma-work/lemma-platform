@@ -42,6 +42,9 @@ jobs:
               - 'lemma-python/**'
               - 'lemma-cli/**'
               - 'lemma-skills/**'
+              - 'lemma-stack/**'
+              - 'install.sh'
+              - 'install.ps1'
               - '.github/workflows/ci.yml'
             typescript:
               - 'lemma-typescript/**'
@@ -252,6 +255,68 @@ jobs:
       - name: E2E tests (fast API suite, parallel)
         run: make test-e2e-fast E2E_WORKERS=2
 
+  install-experience:
+    name: Install experience (Linux Docker)
+    needs: changes
+    if: needs.changes.outputs.python_sdk == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+      - name: Run install experience tests
+        working-directory: lemma-stack
+        run: uv run python -m pytest tests/test_install_experience.py -v
+
+  windows-cli:
+    name: Windows CLI smoke test
+    needs: changes
+    if: needs.changes.outputs.python_sdk == 'true'
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install uv
+        run: pip install uv
+      - name: Install lemma-cli from local checkout
+        run: uv tool install --force ./lemma-cli
+      - name: lemma --version
+        run: |
+          $ErrorActionPreference = "Stop"
+          $lemmaBin = uv tool dir --bin
+          $env:PATH = "$lemmaBin;$env:PATH"
+          $ver = lemma --version 2>&1
+          Write-Host $ver
+          $ver | Select-String "lemma 0\." | Out-Null
+          if (-not $?) { Write-Error "lemma --version failed"; exit 1 }
+      - name: lemma --help
+        run: |
+          $ErrorActionPreference = "Stop"
+          $lemmaBin = uv tool dir --bin
+          $env:PATH = "$lemmaBin;$env:PATH"
+          $help = lemma --help 2>&1
+          Write-Host $help
+          $help | Select-String "Usage:" | Out-Null
+          if (-not $?) { Write-Error "lemma --help failed"; exit 1 }
+      - name: lemma doctor
+        run: |
+          $lemmaBin = uv tool dir --bin
+          $env:PATH = "$lemmaBin;$env:PATH"
+          lemma doctor 2>&1
+          # doctor may exit 1 if no server; just verify it doesn't crash
+      - name: Validate install.ps1
+        shell: pwsh
+        run: |
+          # Static validation of the PowerShell install script
+          $content = Get-Content install.ps1 -Raw
+          if ($content -notmatch "uv tool install") { Write-Error "install.ps1 missing uv tool install"; exit 1 }
+          if ($content -notmatch "lemma-stack") { Write-Error "install.ps1 missing lemma-stack"; exit 1 }
+          if ($content -notmatch "ErrorActionPreference") { Write-Error "install.ps1 missing error handling"; exit 1 }
+          Write-Host "install.ps1 validation passed"
+
   ci:
     name: CI passed
     if: always()
@@ -263,6 +328,8 @@ jobs:
       - codegen-drift
       - frontend-check
       - frontend-build
+      - install-experience
+      - windows-cli
     runs-on: ubuntu-latest
     steps:
       - name: Fail if any required suite failed
