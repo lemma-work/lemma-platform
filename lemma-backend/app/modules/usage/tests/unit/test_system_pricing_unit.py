@@ -12,7 +12,6 @@ from uuid import uuid4
 
 import pytest
 
-from app.core.config import Settings
 from app.modules.agent.domain.value_objects import AgentRunUsage
 from app.modules.agent.services.runtime_profile_service import (
     _openai_compat_provider_model_name,
@@ -83,17 +82,20 @@ def _ctx() -> UsageExecutionContext:
 
 
 def _default_openai_catalog() -> list[tuple[str, str | None]]:
-    """The shipped system:lemma catalog from config *field defaults* (not the
-    live env), so the coverage gate is deterministic across environments."""
-    csv = Settings.model_fields["lemma_openai_model_names"].default
-    default_model = Settings.model_fields["lemma_openai_default_model"].default
-    names: list[str] = []
-    for raw in csv.split(","):
-        name = raw.strip()
-        if name and name not in names:
-            names.append(name)
-    if default_model and default_model not in names:
-        names.insert(0, default_model)
+    """The Fireworks system:lemma catalog the pricing table must cover.
+
+    Pinned explicitly rather than read from the config field defaults: in the
+    public OSS repo those defaults are provider-agnostic (OpenAI), so the
+    metering coverage gate targets the models we actually price (Fireworks),
+    deterministically across environments."""
+    names = [
+        "minimax-m3",
+        "glm-5.2",
+        "kimi-k2.7-code",
+        "kimi-k2.6",
+        "deepseek-v4-pro",
+        "deepseek-v4-flash",
+    ]
     return [(name, _openai_compat_provider_model_name(name)) for name in names]
 
 
@@ -118,7 +120,18 @@ def test_coverage_invariant_reports_unpriced_models():
     assert uncovered == ["brand-new-model"]
 
 
-def test_live_catalog_helper_includes_glm_and_is_priced():
+def test_live_catalog_helper_includes_glm_and_is_priced(monkeypatch):
+    from app.core.config import settings
+
+    # Pin the Fireworks catalog (shipped OSS defaults are provider-agnostic now).
+    monkeypatch.setattr(
+        settings,
+        "lemma_openai_model_names",
+        "minimax-m3,glm-5.2,kimi-k2.7-code,kimi-k2.6,deepseek-v4-pro,deepseek-v4-flash",
+    )
+    monkeypatch.setattr(settings, "lemma_openai_default_model", "minimax-m3")
+    monkeypatch.delenv("LEMMA_OPENAI_MODEL_NAMES", raising=False)
+    monkeypatch.delenv("LEMMA_OPENAI_DEFAULT_MODEL", raising=False)
     catalog = system_lemma_openai_catalog_model_names()
     assert ("glm-5.2", "accounts/fireworks/models/glm-5p2") in catalog
     assert assert_system_pricing_covers_catalog(catalog) == []
