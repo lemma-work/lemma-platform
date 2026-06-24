@@ -45,13 +45,42 @@ Infrastructure (Postgres, Redis, SuperTokens, Kreuzberg) stays on a private cont
 
 ### Configure
 
-Configuration lives in `~/.lemma/local/config.toml`. Set API keys and backend env vars:
+Configuration lives in `~/.lemma/local/config.toml`. Bare UPPER_SNAKE keys route
+straight to the backend environment. The ones you usually need to set:
+
+| Variable | What it's for |
+|----------|---------------|
+| `LEMMA_ANTHROPIC_API_KEY` | Anthropic-compatible key (or any Anthropic-compatible endpoint) so pod agents can run. |
+| `LEMMA_OPENAI_API_KEY` | OpenAI-compatible key. Also backs Fireworks embeddings/reranking when those are enabled. |
+| `SECRET_ENCRYPTION_KEY` | Fernet key for secrets at rest (connector creds, webhook secrets). In local/testing a dev seed is used; **set this for any real data**. Generate one: `python -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"`. Falls back to the legacy `CONNECTOR_ENCRYPTION_KEY`. |
 
 ```bash
-lemma-stack config set LEMMA_OPENAI_API_KEY fw-...
 lemma-stack config set LEMMA_ANTHROPIC_API_KEY sk-ant-...
+lemma-stack config set LEMMA_OPENAI_API_KEY fw-...
+lemma-stack config set SECRET_ENCRYPTION_KEY <fernet-key>
 lemma-stack restart
 ```
+
+List what's set with `lemma-stack config list`, or edit the file directly with
+`lemma-stack config edit`.
+
+#### Optional: daemon model overrides
+
+`lemma daemon start` auto-discovers models from your local Claude Code / Codex /
+OpenCode. To override what's advertised to the pod, set (JSON array or
+comma-separated):
+
+- `LEMMA_DAEMON_MODELS` — applies to every harness.
+- `LEMMA_DAEMON_CODEX_MODELS`, `LEMMA_DAEMON_CLAUDE_CODE_MODELS`,
+  `LEMMA_DAEMON_OPENCODE_MODELS` — per harness.
+
+#### Optional: CLI environment variables
+
+For scripts and agents that don't use stored server state — flags take
+precedence over these:
+
+- `LEMMA_SERVER`, `LEMMA_BASE_URL`, `LEMMA_AUTH_URL`, `LEMMA_TOKEN`
+- `LEMMA_ORG_ID`, `LEMMA_POD_ID`, `LEMMA_CONVERSATION_ID`
 
 ### Commands
 
@@ -91,6 +120,19 @@ npm install lemma-sdk
 # Python (pod function code)
 uv pip install lemma-sdk
 ```
+
+### Use it from your coding agent
+
+Drop Lemma's skills into the coding agent you already use, or run that agent
+inside the pod via the daemon:
+
+```bash
+lemma skills install              # install skills into Claude Code / Codex / OpenCode / Cursor
+lemma daemon start                # serve pod-assigned runs via local Claude Code / Codex / OpenCode
+```
+
+See the [CLI overview](../lemma-cli/README.md) for skills targets/scopes and
+daemon subcommands (`status`, `stop`, `logs`, `discover`).
 
 ### Uninstall
 

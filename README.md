@@ -10,7 +10,7 @@ Agents hold roles, own tasks, and follow your permissions — right alongside yo
 
 Runs on your machine — or on **[lemma.work](https://lemma.work)** when you'd rather not host. Powered by the Claude or ChatGPT subscription you already pay for, your own keys, or any compatible endpoint. AGPLv3 core, Apache-2.0 SDKs.
 
-[Quickstart](#quickstart) · [Templates](#start-from-a-pod-not-a-blank-page) · [Why Lemma](#chat-is-not-where-work-lives) · [Surfaces](#use-it-from-anywhere) · [Coding agents](#the-back-layer-for-your-coding-agents) · [Docs](https://lemma.work/docs)
+[Quickstart](#quickstart) · [Pods](#start-from-a-pod-not-a-blank-page) · [Why Lemma](#chat-is-not-where-work-lives) · [Surfaces](#use-it-from-anywhere) · [Coding agents](#the-back-layer-for-your-coding-agents) · [Docs](https://lemma.work/docs)
 
 **Website → [lemma.work](https://lemma.work)**
 
@@ -45,37 +45,53 @@ The breakout AI products already point this way. Gamma turns a prompt into an ed
 
 ## Quickstart
 
-**On a Mac:** download the Lemma app, open it, and pick local or cloud at first run. Done.
+**Easiest — use it with the coding agent you already have.** Sign up at **[lemma.work/start](https://lemma.work/start)**, install the CLI, and drop Lemma's skills into your agent:
 
-<!-- TODO(launch): Mac app download link + a one-line note on auto-updates. -->
+```bash
+uv tool install lemma-terminal
+lemma skills install          # auto-detects Claude Code / Codex / OpenCode / Cursor
+```
 
-**On any machine:** install and run the stack with one command (Docker or Podman; the installer can set up Podman for you):
+Now your agent can build and operate pods. Authenticate, create one, and start working:
+
+```bash
+lemma auth login
+lemma pod create my-team --with-starter   # scaffolds a working starter (table + agent) and imports it
+lemma chat "what can you do in this pod?"
+```
+
+To run your coding agent *inside* Lemma — picking up tasks from a shared queue, streamed back through the pod — start the daemon:
+
+```bash
+lemma daemon start            # serves pod-assigned runs via your local Claude Code / Codex / OpenCode
+```
+
+**Run it locally — two ways.**
+
+- **The Mac app.** Download Lemma, open it, and pick local or cloud at first run.
+  <!-- TODO(launch): Mac app download link + a one-line note on auto-updates. -->
+- **From source / raw GitHub.** One command brings the full stack up (Docker or Podman; the installer can set up Podman for you):
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/lemma-work/lemma-platform/main/install.sh | bash
 ```
 
-This installs the `lemma-stack` tool and brings the stack up at:
-
-- App: `http://localhost:3711`
-- API: `http://localhost:8711` (API reference at `/scalar`)
-
-Manage it with `lemma-stack start|stop|status|logs|config|uninstall`.
-
-Install the CLI and log in:
+This installs the `lemma-stack` tool and runs at app `http://localhost:3711`, API `http://localhost:8711` (docs at `/scalar`). Manage it with `lemma-stack start|stop|status|logs|config|uninstall`. Point the CLI at it:
 
 ```bash
-uv tool install lemma-terminal
 lemma servers select local
 lemma auth login
 ```
 
-Create a pod and start working:
+Set model keys and backend env in `~/.lemma/local/config.toml`:
 
 ```bash
-lemma pod create my-team --with-starter   # scaffolds a working starter (table + agent) and imports it
-lemma chat "what can you do in this pod?"
+lemma-stack config set LEMMA_ANTHROPIC_API_KEY sk-ant-...
+lemma-stack config set LEMMA_OPENAI_API_KEY fw-...
+lemma-stack restart
 ```
+
+See [`docs/installation.md`](docs/installation.md) for the full env list and setup guide.
 
 ## Start from a pod, not a blank page
 
@@ -85,19 +101,6 @@ A pod is a directory of plain files — tables, agents, workflows, permissions, 
 lemma pod export ./my-team       # the whole system, as files
 lemma pod import ./my-team       # ship it back — or to another machine
 ```
-
-Templates are complete, working pods you can import and have running in minutes:
-
-<!-- TODO(launch): template gallery table — name, one-line pitch, import command, link to a live public read-only pod for each. Hero set: Chief of Staff, Agent Dev Team, Launch Pod, Job Hunt, Invoice Chaser. -->
-
-- **A chief of staff** — your inbox triaged into a queue, a daily brief on WhatsApp, an agent that asks before it replies to anyone. A personal assistant whose memory is tables and searchable notes, not a scrollback.
-- **A support app** — inbound email becomes a ticket, an agent classifies it and drafts the reply, a human approves the send.
-- **A lead app** — a rep clicks *Qualify* on a row; an agent enriches, scores, and routes it, and the columns fill in.
-- **A bug triage operator** — issues from GitHub and Slack get deduped, prioritized, and linked; release notes drafted on tag.
-- **A field-ops log** — a WhatsApp photo and voice note from the floor become a structured inspection record with a drafted work order.
-- **A meeting-to-execution board** — a transcript becomes decisions and action items with owners, some human, some agent.
-
-The same primitives build all of them. None of them are special cases.
 
 ## Inside a pod
 
@@ -129,7 +132,24 @@ This isn't only for teams. A pod of one human and a few agents — with WhatsApp
 
 You don't have to make Lemma your front door. It can simply be **where your agents' work lands.**
 
-Claude Code, Codex, Cursor, or your own agent can operate a pod directly through the CLI: pick up a task from a shared queue, update records, run workflows, and get stopped by the same approvals as everyone else. Two agents working the same pod see the same state — a task queue, not a terminal session that evaporates.
+**Install Lemma's skills into the agent you already use** — Claude Code, Codex, OpenCode, or Cursor — and it can build and operate pods directly:
+
+```bash
+lemma skills install             # auto-detects Claude Code / Codex / OpenCode / Cursor
+lemma skills install --target claude --all-skills   # or pick a target and include extras
+```
+
+Skills ship in [`lemma-skills/`](lemma-skills/). Restart your coding agent after installing, then ask it to build a pod.
+
+**Or run your agent inside Lemma.** `lemma daemon start` connects your local Claude Code, Codex, or OpenCode to the pod: it picks up tasks from a shared queue, streams its work back through the pod, and gets stopped by the same approvals as everyone else. Two agents working the same pod see the same state — a task queue, not a terminal session that evaporates.
+
+```bash
+lemma daemon start               # your local agent serves pod-assigned runs
+lemma daemon status              # pid, running state, log path
+lemma daemon stop
+```
+
+Any agent can also operate a pod directly through the CLI:
 
 ```bash
 lemma table list                 # inspect the data model
@@ -139,9 +159,7 @@ lemma workflow start follow-up   # pauses at human approval steps
 lemma chat "what's left in the queue?"
 ```
 
-If you're reading this inside a coding agent session: that agent can work a pod right now. Agent-facing skills for operating and building pods ship in [`lemma-skills/`](lemma-skills/).
-
-<!-- TODO(launch): Claude Code / Codex plugin install one-liners when the plugins ship. -->
+If you're reading this inside a coding agent session: that agent can work a pod right now.
 
 ## Build one with a coding agent
 
