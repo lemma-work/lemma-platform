@@ -6,6 +6,8 @@ from datetime import datetime
 from typing import Protocol
 from uuid import UUID
 
+import anyio
+
 from pydantic_ai import UsageLimits
 
 from openinference.semconv.trace import OpenInferenceSpanKindValues, SpanAttributes
@@ -406,21 +408,31 @@ class AgentRunnerService:
                                     agent_run_id,
                                     exc,
                                 )
-        except Exception as exc:
-            logger.error("Agent run failed: %s", exc, exc_info=True)
-            await self._finish_agent_run(
-                conversation_id=conversation.id,
-                agent_run_id=agent_run_id,
-                status=AgentRunStatus.FAILED,
-                error=str(exc),
-                organization_id=conversation.organization_id,
-                pod_id=conversation.pod_id,
-                user_id=user_id,
-                agent_id=conversation.agent_id,
-                started_at=agent_run.started_at,
-                runtime_profile=runtime_profile_snapshot,
-                usage_reservation=usage_reservation,
-            )
+        except BaseException as exc:
+            if isinstance(exc, Exception):
+                logger.error("Agent run failed: %s", exc, exc_info=True)
+            else:
+                logger.warning(
+                    "Agent run cancelled (timeout or shutdown): run=%s", agent_run_id
+                )
+            # Shield so the DB write succeeds even when we're inside a cancelled
+            # anyio cancel scope (e.g. streaq task timeout or worker shutdown).
+            with anyio.CancelScope(shield=True):
+                await self._finish_agent_run(
+                    conversation_id=conversation.id,
+                    agent_run_id=agent_run_id,
+                    status=AgentRunStatus.FAILED,
+                    error=str(exc) if isinstance(exc, Exception) else "Agent run was interrupted (timeout or shutdown)",
+                    organization_id=conversation.organization_id,
+                    pod_id=conversation.pod_id,
+                    user_id=user_id,
+                    agent_id=conversation.agent_id,
+                    started_at=agent_run.started_at,
+                    runtime_profile=runtime_profile_snapshot,
+                    usage_reservation=usage_reservation,
+                )
+            if not isinstance(exc, Exception):
+                raise
 
     async def _resolve_agent_runtime(
         self,

@@ -7,6 +7,7 @@ from collections.abc import Awaitable, Callable
 from typing import AsyncIterator, Iterable, Sequence
 from uuid import UUID
 
+import anyio
 import pydantic_core
 from pydantic_ai import Agent as PydanticAIAgent
 from pydantic_ai import BinaryContent, FunctionToolCallEvent, FunctionToolResultEvent
@@ -231,7 +232,17 @@ class PydanticAIHarness:
             else pydantic_agent.iter(user_prompt, **iter_kwargs)
         )
 
-        async with run_context as run:
+        # Manual async-with to shield pydantic-graph cleanup from anyio cancellation.
+        # When a streaq task times out (or the worker shuts down), a CancelledError
+        # propagates into this generator while pydantic-graph's Graph.iter / Agent.iter
+        # are still running inside anyio cancel scopes.  Letting `async with` call
+        # __aexit__ normally causes "aclose(): asynchronous generator is already
+        # running" + "Attempted to exit a cancel scope that isn't the current task's
+        # current cancel scope", which propagates as an ExceptionGroup and crashes the
+        # entire streaq worker.  Shielding __aexit__ lets the inner generators close
+        # cleanly before we re-raise.
+        run = await run_context.__aenter__()
+        try:
             async for node in run:
                 if PydanticAIAgent.is_model_request_node(node):
                     terminal_event_seen = False
@@ -346,6 +357,15 @@ class PydanticAIHarness:
                 ),
                 agent_run_id=agent_run_id,
             )
+        except BaseException as exc:
+            with anyio.CancelScope(shield=True):
+                try:
+                    await run_context.__aexit__(type(exc), exc, exc.__traceback__)
+                except Exception:
+                    logger.debug("Error cleaning up pydantic-ai run context after cancellation")
+            raise
+        else:
+            await run_context.__aexit__(None, None, None)
 
     async def _stream_model_request(
         self,
@@ -1187,5 +1207,5 @@ def _usage_value(usage: object, field: str) -> int:
         return 0
     try:
         return int(value)
-    except TypeError, ValueError:
+    except (TypeError, ValueError):
         return 0
