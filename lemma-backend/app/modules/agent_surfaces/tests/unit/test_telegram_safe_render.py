@@ -10,6 +10,7 @@ from __future__ import annotations
 from app.modules.agent_surfaces.platforms.rendering import (
     chunk_text,
     escape_markdown_v2,
+    strip_thinking_tokens,
     to_markdown_v2,
 )
 from app.modules.agent_surfaces.platforms.telegram.client import TelegramApiError
@@ -148,3 +149,90 @@ async def test_send_message_sets_forum_topic_thread_id():
 
     _, payload = recorder.calls[0]
     assert payload["message_thread_id"] == 99
+
+
+# --- thinking token stripping -----------------------------------------------
+
+# Construct thinking tags programmatically so they survive in source (writing
+# them literally causes the tags to be stripped as markup by editors/tools).
+_T_OPEN = chr(60) + "think" + chr(62)
+_T_CLOSE = chr(60) + "/think" + chr(62)
+_THINKING_OPEN = chr(60) + "thinking" + chr(62)
+_THINKING_CLOSE = chr(60) + "/thinking" + chr(62)
+
+
+def test_strip_thinking_tokens_removes_closed_block():
+    text = f"Let me think. {_T_OPEN}I should help the user.{_T_CLOSE} Here is your answer."
+    result = strip_thinking_tokens(text)
+    assert "<think" not in result.lower()
+    assert "I should help the user." not in result
+    assert "Let me think." in result
+    assert "Here is your answer." in result
+
+
+def test_strip_thinking_tokens_removes_unclosed_block():
+    text = f"Here is your answer. {_T_OPEN}Let me continue thinking"
+    result = strip_thinking_tokens(text)
+    assert "<think" not in result.lower()
+    assert "Let me continue thinking" not in result
+    assert "Here is your answer." in result
+
+
+def test_strip_thinking_tokens_removes_self_closing_tag():
+    self_closing = chr(60) + "think/" + chr(62)
+    assert strip_thinking_tokens(f"Hello {self_closing} world") == "Hello  world".strip()
+
+
+def test_strip_thinking_tokens_removes_thinking_variant():
+    text = f"Reasoning here {_THINKING_OPEN}internal{_THINKING_CLOSE} Answer"
+    result = strip_thinking_tokens(text)
+    assert "<thinking" not in result.lower()
+    assert "internal" not in result
+    assert "Answer" in result
+
+
+def test_strip_thinking_tokens_handles_attributes():
+    open_with_attr = chr(60) + 'think key="val"' + chr(62)
+    text = f"Reasoning {open_with_attr}internal{_T_CLOSE} Answer"
+    result = strip_thinking_tokens(text)
+    assert "<think" not in result.lower()
+    assert "internal" not in result
+    assert "Answer" in result
+
+
+def test_strip_thinking_tokens_case_insensitive():
+    upper_open = chr(60) + "THINK" + chr(62)
+    upper_close = chr(60) + "/THINK" + chr(62)
+    text = f"REASONING {upper_open}internal{upper_close} Answer"
+    result = strip_thinking_tokens(text)
+    assert "<think" not in result.lower()
+    assert "internal" not in result
+    assert "Answer" in result
+
+
+def test_strip_thinking_tokens_multiple_blocks():
+    text = f"First reasoning {_T_OPEN}r1{_T_CLOSE} Continue {_T_OPEN}r2{_T_CLOSE} Final answer"
+    result = strip_thinking_tokens(text)
+    assert "<think" not in result.lower()
+    assert "r1" not in result
+    assert "r2" not in result
+    assert "Final answer" in result
+
+
+def test_strip_thinking_tokens_no_tags_returns_unchanged():
+    assert strip_thinking_tokens("Just a normal message") == "Just a normal message"
+
+
+def test_strip_thinking_tokens_only_thinking_returns_empty():
+    assert strip_thinking_tokens(f"{_T_OPEN}All thinking, no answer{_T_CLOSE}") == ""
+
+
+def test_strip_thinking_tokens_empty_string():
+    assert strip_thinking_tokens("") == ""
+
+
+def test_strip_thinking_tokens_preserves_code_blocks():
+    text = 'Check this code:\n```python\nx = 1  # not a think tag\n```\nDone'
+    result = strip_thinking_tokens(text)
+    assert "```python" in result
+    assert "Done" in result

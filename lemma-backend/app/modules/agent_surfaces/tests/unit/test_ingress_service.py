@@ -818,6 +818,81 @@ async def test_send_agent_message_for_conversation_sends_surface_message():
     assert adapter.send_message.await_args.kwargs["message"] == "assistant update"
 
 
+async def test_send_agent_message_strips_thinking_tokens_before_delivery():
+    """Model reasoning/thinking tags must never reach a surface as a chat
+    message. The ingress service strips them as a final safety net."""
+    surface = _slack_surface()
+    conversation_id = uuid4()
+    parsed_event = _slack_event()
+    link = AgentSurfaceConversationLink(
+        surface_id=surface.id,
+        conversation_id=conversation_id,
+        platform="SLACK",
+        external_channel_id=parsed_event.external_channel_id,
+        external_thread_id=parsed_event.external_thread_id,
+        external_user_id=parsed_event.sender_external_user_id,
+        last_event=parsed_event.model_dump(mode="json"),
+    )
+    adapter = AsyncMock()
+    service = _build_service(
+        adapter=adapter,
+        surfaces=[surface],
+        existing_link=link,
+    )
+    service.conversation_link_repository.get_by_conversation_id.return_value = link
+
+    # Build the message with literal thinking tags (constructed programmatically
+    # so the tags survive in source without being stripped as markup).
+    open_tag, close_tag = chr(60) + "think" + chr(62), chr(60) + "/think" + chr(62)
+    raw_message = f"Let me check that. {open_tag}internal reasoning{close_tag} Here is your answer."
+
+    sent = await service.send_agent_message_for_conversation(
+        conversation_id=conversation_id,
+        message=raw_message,
+    )
+
+    assert sent is True
+    delivered = adapter.send_message.await_args.kwargs["message"]
+    assert "<think" not in delivered.lower()
+    assert "internal reasoning" not in delivered
+    assert "Here is your answer." in delivered
+    assert "Let me check that." in delivered
+
+
+async def test_send_agent_message_returns_false_when_only_thinking_tokens():
+    """If the entire message is thinking content, nothing is sent."""
+    surface = _slack_surface()
+    conversation_id = uuid4()
+    parsed_event = _slack_event()
+    link = AgentSurfaceConversationLink(
+        surface_id=surface.id,
+        conversation_id=conversation_id,
+        platform="SLACK",
+        external_channel_id=parsed_event.external_channel_id,
+        external_thread_id=parsed_event.external_thread_id,
+        external_user_id=parsed_event.sender_external_user_id,
+        last_event=parsed_event.model_dump(mode="json"),
+    )
+    adapter = AsyncMock()
+    service = _build_service(
+        adapter=adapter,
+        surfaces=[surface],
+        existing_link=link,
+    )
+    service.conversation_link_repository.get_by_conversation_id.return_value = link
+
+    open_tag, close_tag = chr(60) + "think" + chr(62), chr(60) + "/think" + chr(62)
+    raw_message = f"{open_tag}All reasoning, no answer{close_tag}"
+
+    sent = await service.send_agent_message_for_conversation(
+        conversation_id=conversation_id,
+        message=raw_message,
+    )
+
+    assert sent is False
+    adapter.send_message.assert_not_awaited()
+
+
 async def test_send_display_resource_for_conversation_sends_render_plan():
     surface = _slack_surface()
     conversation_id = uuid4()

@@ -19,6 +19,7 @@ from app.modules.agent.tools.user_interaction.models import (
     DisplayResourceType,
 )
 from app.modules.agent_surfaces.platforms.attachment_limits import fits_inline
+from app.modules.agent_surfaces.platforms.rendering import strip_thinking_tokens
 from app.modules.datastore.api.dependencies import build_file_service
 from app.modules.agent_surfaces.domain.entities import (
     AgentSurfaceConversationLink,
@@ -694,11 +695,17 @@ class AgentSurfaceIngressService:
         target = await self._resolve_egress_target(conversation_id)
         if target is None:
             return False
+        # Safety net: never deliver model reasoning/thinking tokens
+        # (``<tool_call>…``) as a chat message to any surface. Some
+        # OpenAI-compatible models emit these inline in the text content.
+        clean_message = strip_thinking_tokens(message)
+        if not clean_message:
+            return False
         message_metadata = await self._egress_metadata_with_agent_name(target, metadata)
         await target.adapter.send_message(
             credentials=target.credentials,
             event=target.event,
-            message=message,
+            message=clean_message,
             metadata=message_metadata,
         )
         return True
