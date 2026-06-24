@@ -1,15 +1,8 @@
 from __future__ import annotations
 
 from ..openapi_client.api.agent_tools import (
-    agent_tool_connector_helper_agent,
     agent_tool_report_feedback,
     agent_tool_web_search,
-)
-from ..openapi_client.models.connector_helper_agent_request import (
-    ConnectorHelperAgentRequest,
-)
-from ..openapi_client.models.connector_helper_agent_response import (
-    ConnectorHelperAgentResponse,
 )
 from ..openapi_client.models.report_feedback_request import ReportFeedbackRequest
 from ..openapi_client.models.report_feedback_response import ReportFeedbackResponse
@@ -24,18 +17,6 @@ class Tools(Resource):
             agent_tool_web_search,
             body={"query": query, "max_results": max_results},
             body_model=WebSearchRequest,
-        )
-
-    def connector_helper_agent(
-        self,
-        *,
-        app_names: list[str],
-        goal: str,
-    ) -> ConnectorHelperAgentResponse:
-        return self._call(
-            agent_tool_connector_helper_agent,
-            body={"app_names": app_names, "goal": goal},
-            body_model=ConnectorHelperAgentRequest,
         )
 
     def report_feedback(

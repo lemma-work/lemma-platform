@@ -2178,37 +2178,6 @@ def test_tools_run_web_search_dispatches_tool_api(monkeypatch):
     assert captured == {"query": "docs", "max_results": 2}
 
 
-def test_tools_connector_helper_shortcut_requires_apps(monkeypatch):
-    captured: dict[str, object] = {}
-
-    class FakeTools:
-        def connector_helper_agent(self, *, app_names, goal):
-            captured["app_names"] = app_names
-            captured["goal"] = goal
-            return {"success": True, "operations_by_app": {"gmail": ["messages_send"]}}
-
-    fake_client = SimpleNamespace(tools=FakeTools())
-
-    def fake_run_with_client(ctx, fn):
-        return fn(fake_client, SimpleNamespace(config={}))
-
-    monkeypatch.setattr(tools, "run_with_client", fake_run_with_client)
-
-    result = runner.invoke(
-        app,
-        [
-            "tools",
-            "connector-helper-agent",
-            "send email summary",
-            "--app",
-            "gmail",
-        ],
-    )
-
-    assert result.exit_code == 0, result.stdout
-    assert captured == {"app_names": ["gmail"], "goal": "send email summary"}
-
-
 def test_apps_init_rejects_non_empty_directory(tmp_path):
     target = tmp_path / "existing"
     target.mkdir()

@@ -2,7 +2,6 @@ import type { GeneratedClientAdapter } from "../generated.js";
 import type { HttpClient } from "../http.js";
 import type { ConnectRequestInitiateSchema } from "../openapi_client/models/ConnectRequestInitiateSchema.js";
 import type { ConnectRequestResponseSchema } from "../openapi_client/models/ConnectRequestResponseSchema.js";
-import type { ConnectorHelperAgentRequest } from "../openapi_client/models/ConnectorHelperAgentRequest.js";
 import type { OperationDetailsBatchRequest } from "../openapi_client/models/OperationDetailsBatchRequest.js";
 import type { OperationExecutionRequest } from "../openapi_client/models/OperationExecutionRequest.js";
 import type { AccountCreateSchema } from "../openapi_client/models/AccountCreateSchema.js";
@@ -13,7 +12,6 @@ import type { AuthConfigCreateSchema } from "../openapi_client/models/AuthConfig
 import type { AuthConfigListResponseSchema } from "../openapi_client/models/AuthConfigListResponseSchema.js";
 import type { AuthConfigResponseSchema } from "../openapi_client/models/AuthConfigResponseSchema.js";
 import type { MessageResponseSchema } from "../openapi_client/models/MessageResponseSchema.js";
-import { AgentToolsService } from "../openapi_client/services/AgentToolsService.js";
 import { ConnectorsService } from "../openapi_client/services/ConnectorsService.js";
 
 export type {
@@ -90,17 +88,6 @@ export class ConnectorsNamespace {
       ));
     },
   };
-
-  helperAgent(
-    goal: string,
-    appNames: string[],
-  ) {
-    const body: ConnectorHelperAgentRequest = {
-      app_names: appNames,
-      goal,
-    };
-    return this.client.request(() => AgentToolsService.agentToolConnectorHelperAgent(body));
-  }
 
   readonly triggers = {
     list: (scope: OperationScope, options: { search?: string; limit?: number } = {}) =>

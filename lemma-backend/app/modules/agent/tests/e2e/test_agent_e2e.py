@@ -2926,15 +2926,6 @@ class TestAgentToolApis:
         assert web_search.status_code == 200, web_search.text
         assert "success" in web_search.json()
 
-        connector_helper = await authenticated_client.post(
-            "/tools/connector-helper-agent",
-            json={"app_names": ["gmail"], "goal": "Send a short status update email."},
-            timeout=180,
-        )
-        assert connector_helper.status_code == 200, connector_helper.text
-        assert connector_helper.json()["success"] is True
-        assert "gmail" in connector_helper.json()["operations_by_app"]
-
         feedback = await authenticated_client.post(
             "/tools/report-feedback",
             json={

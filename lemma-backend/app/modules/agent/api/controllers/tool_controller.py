@@ -12,13 +12,6 @@ from app.modules.agent.tools.feedback.models import (
     ReportFeedbackRequest,
     ReportFeedbackResponse,
 )
-from app.modules.agent.tools.connectors.connectors import (
-    connector_helper_agent_internal,
-)
-from app.modules.agent.tools.connectors.models import (
-    ConnectorHelperAgentRequest,
-    ConnectorHelperAgentResponse,
-)
 from app.modules.agent.tools.web.web import (
     web_search_internal,
 )
@@ -49,23 +42,6 @@ async def web_search(
     data: WebSearchRequest,
 ) -> WebSearchResponse:
     return await web_search_internal(None, data)
-
-
-@router.post(
-    "/connector-helper-agent",
-    response_model=ConnectorHelperAgentResponse,
-    status_code=status.HTTP_200_OK,
-    operation_id="agent.tool.connector_helper_agent",
-    summary="Agent Connector Helper Agent",
-    description=(
-        "Plan how to use one or more connectors for a goal and "
-        "return recommended operations."
-    ),
-)
-async def connector_helper_agent(
-    data: ConnectorHelperAgentRequest,
-) -> ConnectorHelperAgentResponse:
-    return await connector_helper_agent_internal(data)
 
 
 @router.post(

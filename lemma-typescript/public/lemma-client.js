@@ -12225,64 +12225,6 @@ var LemmaClient = (() => {
     }
   };
 
-  // src/openapi_client/services/AgentToolsService.ts
-  var AgentToolsService = class {
-    /**
-     * Agent Connector Helper Agent
-     * Plan how to use one or more connectors for a goal and return recommended operations.
-     * @param requestBody
-     * @returns ConnectorHelperAgentResponse Successful Response
-     * @throws ApiError
-     */
-    static agentToolConnectorHelperAgent(requestBody) {
-      return request(OpenAPI, {
-        method: "POST",
-        url: "/tools/connector-helper-agent",
-        body: requestBody,
-        mediaType: "application/json",
-        errors: {
-          422: `Validation Error`
-        }
-      });
-    }
-    /**
-     * Agent Report Feedback
-     * Record a maintainer-facing feedback report about system issues, skill issues, incorrect knowledge, or other unexpected behavior.
-     * @param requestBody
-     * @returns ReportFeedbackResponse Successful Response
-     * @throws ApiError
-     */
-    static agentToolReportFeedback(requestBody) {
-      return request(OpenAPI, {
-        method: "POST",
-        url: "/tools/report-feedback",
-        body: requestBody,
-        mediaType: "application/json",
-        errors: {
-          422: `Validation Error`
-        }
-      });
-    }
-    /**
-     * Agent Web Search
-     * Run a raw web search and return structured results.
-     * @param requestBody
-     * @returns WebSearchResponse Successful Response
-     * @throws ApiError
-     */
-    static agentToolWebSearch(requestBody) {
-      return request(OpenAPI, {
-        method: "POST",
-        url: "/tools/web-search",
-        body: requestBody,
-        mediaType: "application/json",
-        errors: {
-          422: `Validation Error`
-        }
-      });
-    }
-  };
-
   // src/openapi_client/services/ConnectorsService.ts
   var ConnectorsService = class {
     /**
@@ -12898,13 +12840,6 @@ var LemmaClient = (() => {
     }
     get(connectorId) {
       return this.client.request(() => ConnectorsService.connectorGet(connectorId));
-    }
-    helperAgent(goal, appNames) {
-      const body = {
-        app_names: appNames,
-        goal
-      };
-      return this.client.request(() => AgentToolsService.agentToolConnectorHelperAgent(body));
     }
     async enableApp(organizationId, connectorId, options = {}) {
       var _a, _b;

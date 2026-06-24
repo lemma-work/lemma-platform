@@ -10,10 +10,6 @@ from app.modules.agent.tools.feedback.models import (
     FeedbackCategory,
     ReportFeedbackRequest,
 )
-from app.modules.agent.tools.connectors.models import (
-    ConnectorHelperAgentRequest,
-    ConnectorHelperAgentResponse,
-)
 from app.core.web_search.web_search import WebSearchRequest, WebSearchResponse
 
 
@@ -35,36 +31,6 @@ async def test_agent_web_search_controller_delegates_to_internal(monkeypatch):
 
     assert response.success is True
     assert response.message == "ok"
-
-
-@pytest.mark.asyncio
-async def test_agent_connector_helper_agent_controller_delegates(monkeypatch):
-    async def fake_connector_helper_agent_internal(
-        request: ConnectorHelperAgentRequest,
-    ) -> ConnectorHelperAgentResponse:
-        assert request.app_names == ["gmail"]
-        return ConnectorHelperAgentResponse(
-            success=True,
-            answer_markdown="Use Gmail send.",
-            operations_by_app={"gmail": ["messages_send"]},
-            message="ok",
-        )
-
-    monkeypatch.setattr(
-        tool_controller,
-        "connector_helper_agent_internal",
-        fake_connector_helper_agent_internal,
-    )
-
-    response = await tool_controller.connector_helper_agent(
-        data=ConnectorHelperAgentRequest(
-            app_names=["gmail"],
-            goal="send a summary email",
-        ),
-    )
-
-    assert response.success is True
-    assert response.operations_by_app["gmail"] == ["messages_send"]
 
 
 @pytest.mark.asyncio

@@ -13,7 +13,6 @@ app = typer.Typer(help="Standalone Lemma tool commands.")
 
 TOOL_NAMES = {
     "web-search",
-    "connector-helper-agent",
     "report-feedback",
 }
 
@@ -30,11 +29,6 @@ def list_tools(ctx: typer.Context) -> None:
                     "name": "web-search",
                     "description": "Run a raw web search and return structured results.",
                     "payload": {"query": "string", "max_results": "integer?"},
-                },
-                {
-                    "name": "connector-helper-agent",
-                    "description": "Plan app operations for a connector goal.",
-                    "payload": {"app_names": ["string"], "goal": "string"},
                 },
                 {
                     "name": "report-feedback",
@@ -86,25 +80,6 @@ def web_search(
     )
 
 
-@app.command("connector-helper-agent")
-def connector_helper_agent(
-    ctx: typer.Context,
-    goal: str = typer.Argument(...),
-    app_name: list[str] = typer.Option(
-        [],
-        "--app",
-        "--app-name",
-        help="Connector id/name. Repeat for multiple apps.",
-    ),
-) -> None:
-    """Ask the connector helper agent for guidance."""
-    _emit_tool_result(
-        ctx,
-        tool="connector-helper-agent",
-        payload={"goal": goal, "app_names": app_name},
-    )
-
-
 @app.command("report-feedback")
 def report_feedback(
     ctx: typer.Context,
@@ -149,17 +124,6 @@ def _run_tool(client: Any, tool: str, payload: dict[str, Any]) -> dict[str, Any]
         return client.tools.web_search(
             query=query,
             max_results=int(payload.get("max_results") or payload.get("limit") or 10),
-        )
-    if tool == "connector-helper-agent":
-        goal = str(payload.get("goal") or "")
-        app_names = payload.get("app_names") or payload.get("apps") or []
-        if not goal:
-            raise ValueError("connector-helper-agent requires payload.goal.")
-        if not isinstance(app_names, list) or not app_names:
-            raise ValueError("connector-helper-agent requires payload.app_names.")
-        return client.tools.connector_helper_agent(
-            app_names=[str(name) for name in app_names],
-            goal=goal,
         )
     return client.tools.report_feedback(
         category=str(payload.get("category") or ""),

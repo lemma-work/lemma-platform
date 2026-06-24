@@ -60,8 +60,6 @@ export type { ColumnSchema } from './models/ColumnSchema.js';
 export type { ComposioProviderCapabilityResponseSchema } from './models/ComposioProviderCapabilityResponseSchema.js';
 export type { ConnectedAccountSummary } from './models/ConnectedAccountSummary.js';
 export type { ConnectorDetailResponseSchema } from './models/ConnectorDetailResponseSchema.js';
-export type { ConnectorHelperAgentRequest } from './models/ConnectorHelperAgentRequest.js';
-export type { ConnectorHelperAgentResponse } from './models/ConnectorHelperAgentResponse.js';
 export type { ConnectorListResponseSchema } from './models/ConnectorListResponseSchema.js';
 export type { ConnectorResponseSchema } from './models/ConnectorResponseSchema.js';
 export type { ConnectorSkillResponse } from './models/ConnectorSkillResponse.js';

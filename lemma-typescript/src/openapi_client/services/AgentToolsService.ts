@@ -2,8 +2,6 @@
 /* istanbul ignore file */
 /* tslint:disable */
 /* eslint-disable */
-import type { ConnectorHelperAgentRequest } from '../models/ConnectorHelperAgentRequest.js';
-import type { ConnectorHelperAgentResponse } from '../models/ConnectorHelperAgentResponse.js';
 import type { ReportFeedbackRequest } from '../models/ReportFeedbackRequest.js';
 import type { ReportFeedbackResponse } from '../models/ReportFeedbackResponse.js';
 import type { WebSearchRequest } from '../models/WebSearchRequest.js';
@@ -12,26 +10,6 @@ import type { CancelablePromise } from '../core/CancelablePromise.js';
 import { OpenAPI } from '../core/OpenAPI.js';
 import { request as __request } from '../core/request.js';
 export class AgentToolsService {
-    /**
-     * Agent Connector Helper Agent
-     * Plan how to use one or more connectors for a goal and return recommended operations.
-     * @param requestBody
-     * @returns ConnectorHelperAgentResponse Successful Response
-     * @throws ApiError
-     */
-    public static agentToolConnectorHelperAgent(
-        requestBody: ConnectorHelperAgentRequest,
-    ): CancelablePromise<ConnectorHelperAgentResponse> {
-        return __request(OpenAPI, {
-            method: 'POST',
-            url: '/tools/connector-helper-agent',
-            body: requestBody,
-            mediaType: 'application/json',
-            errors: {
-                422: `Validation Error`,
-            },
-        });
-    }
     /**
      * Agent Report Feedback
      * Record a maintainer-facing feedback report about system issues, skill issues, incorrect knowledge, or other unexpected behavior.
