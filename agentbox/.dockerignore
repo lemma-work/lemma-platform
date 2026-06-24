@@ -1,0 +1,10 @@
+# Build context is the agentbox/ dir; keep host-only artifacts out of the image.
+**/.venv
+**/__pycache__
+**/*.py[cod]
+**/.pytest_cache
+**/.ruff_cache
+**/.mypy_cache
+**/*.egg-info
+**/.git
+**/.DS_Store
