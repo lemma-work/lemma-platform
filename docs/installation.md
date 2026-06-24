@@ -13,11 +13,10 @@ The fastest way to get the full stack running: backend, frontend, Postgres, Redi
 
 ### Prerequisites
 
-- macOS or Linux
-- `curl`
-- A container runtime: **Podman** (recommended) or Docker. If neither is installed, the installer offers to install Podman for you.
+- macOS, Linux, or Windows 10/11
+- A container runtime: **Docker Desktop** (Windows) or **Podman** / **Docker** (macOS/Linux). If neither is installed on macOS/Linux, the installer offers to install Podman for you.
 
-### Install
+### Install — macOS / Linux
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/lemma-work/lemma-platform/main/install.sh | bash
@@ -30,6 +29,26 @@ To pass arguments through:
 ```bash
 curl -fsSL https://raw.githubusercontent.com/lemma-work/lemma-platform/main/install.sh | bash -s -- --runtime podman -y
 ```
+
+### Install — Windows
+
+Requires **PowerShell 5.1+** (built in to Windows 10/11) and **Docker Desktop** running.
+
+```powershell
+iwr https://raw.githubusercontent.com/lemma-work/lemma-platform/main/install.ps1 | iex
+```
+
+Or download and run explicitly (avoids execution-policy prompts):
+
+```powershell
+Invoke-WebRequest https://raw.githubusercontent.com/lemma-work/lemma-platform/main/install.ps1 -OutFile install.ps1
+Set-ExecutionPolicy -Scope Process Bypass
+.\install.ps1
+```
+
+> **Note:** Podman on Windows requires WSL 2 and is not detected automatically by the installer. Use Docker Desktop with WSL 2 backend for the smoothest experience.
+
+This installs [uv](https://docs.astral.sh/uv/) (if missing), installs `lemma-stack` as a uv tool, and runs `lemma-stack install`.
 
 ### What you get
 

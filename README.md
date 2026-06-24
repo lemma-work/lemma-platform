@@ -72,8 +72,14 @@ lemma daemon start            # serves pod-assigned runs via your local Claude C
   <!-- TODO(launch): Mac app download link + a one-line note on auto-updates. -->
 - **From source / raw GitHub.** One command brings the full stack up (Docker or Podman; the installer can set up Podman for you):
 
+**macOS / Linux:**
 ```bash
 curl -fsSL https://raw.githubusercontent.com/lemma-work/lemma-platform/main/install.sh | bash
+```
+
+**Windows** (PowerShell, Docker Desktop required):
+```powershell
+iwr https://raw.githubusercontent.com/lemma-work/lemma-platform/main/install.ps1 | iex
 ```
 
 This installs the `lemma-stack` tool and runs the app at `http://127-0-0-1.sslip.io:3711` and the API at `http://127-0-0-1.sslip.io:8711` (docs at `/scalar`). Use that `127-0-0-1.sslip.io` host — it resolves to `127.0.0.1`, but sign-in is scoped to it, so `localhost` / `127.0.0.1` won't authenticate. Manage it with `lemma-stack start|stop|status|logs|config|uninstall`. Point the CLI at it:

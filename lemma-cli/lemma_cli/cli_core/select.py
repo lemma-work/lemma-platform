@@ -1,8 +1,6 @@
 from __future__ import annotations
 
 import sys
-import termios
-import tty
 from typing import Any
 
 import typer
@@ -16,6 +14,16 @@ def item_label(item: dict[str, Any], fallback: str = "") -> str:
     return f"{name} ({subtitle})" if subtitle and subtitle != name else str(name)
 
 
+def _arrows_available() -> bool:
+    try:
+        import termios  # noqa: F401
+        import tty  # noqa: F401
+
+        return True
+    except ImportError:
+        return False
+
+
 def select_from_items(
     items: list[dict[str, Any]],
     *,
@@ -26,7 +34,7 @@ def select_from_items(
         fail(f"No {label}s found.")
     if len(items) == 1:
         return items[0]
-    if sys.stdin.isatty() and sys.stdout.isatty():
+    if sys.stdin.isatty() and sys.stdout.isatty() and _arrows_available():
         return _select_with_arrows(items, label=label, current_id=current_id)
     return _select_by_number(items, label=label)
 
@@ -48,6 +56,9 @@ def _select_with_arrows(
     label: str,
     current_id: str | None,
 ) -> dict[str, Any]:
+    import termios
+    import tty
+
     selected = _initial_index(items, current_id)
     fd = sys.stdin.fileno()
     old_settings = termios.tcgetattr(fd)
