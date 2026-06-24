@@ -76,12 +76,17 @@ def _detect_cli_source() -> str | None:
 def install_lemma_cli() -> bool:
     """Best-effort install of the `lemma` CLI as a uv tool. Never fatal — the
     server is registered regardless, so the CLI works once present."""
-    if shutil.which("lemma") is not None and not os.environ.get("LEMMA_CLI_SOURCE"):
-        return True
     if shutil.which("uv") is None:
         warn("uv not found; install the lemma CLI yourself: uv tool install lemma-cli")
         return False
-    source = _detect_cli_source() or "lemma-cli"
+    source = _detect_cli_source()
+    if source is None:
+        # End-user install: always force the latest PyPI release, replacing any
+        # previous installation (including one from a git source).
+        source = "lemma-cli"
+    elif shutil.which("lemma") is not None:
+        # Dev environment with a local checkout already on PATH — leave it alone.
+        return True
     info(f"installing the lemma CLI from {source}")
     proc = subprocess.run(
         ["uv", "tool", "install", "--force", source],
