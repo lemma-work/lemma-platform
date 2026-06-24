@@ -25,7 +25,7 @@ RUN groupadd --gid 10001 appuser \
     && useradd --uid 10001 --gid 10001 -d /home/appuser -m appuser
 
 COPY agentbox ./agentbox
-COPY agentbox/pyproject.toml ./
+COPY pyproject.toml ./
 RUN pip install --no-cache-dir .
 
 USER 10001:10001
