@@ -448,6 +448,10 @@ class TeamsMessageParser:
         recipient_name = str(recipient.get("name") or "")
         entities = payload.get("entities")
         if isinstance(entities, list):
+            # When an entities array is present, trust it: only a mention entity
+            # whose `mentioned` id/name matches this bot counts. Returning True
+            # for any <at> tag here would wake the bot on @mentions of other
+            # users in a channel.
             for entity in entities:
                 if not isinstance(entity, dict):
                     continue
@@ -458,6 +462,9 @@ class TeamsMessageParser:
                     return True
                 if recipient_name and str(mentioned.get("name") or "") == recipient_name:
                     return True
+            return False
+        # Legacy payload shape with no entities array: fall back to an <at> tag
+        # presence check (the only signal available).
         text = str(payload.get("text") or "")
         return "<at>" in text.lower()
 

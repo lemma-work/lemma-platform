@@ -38,8 +38,9 @@ from app.core.log.log import get_logger
 
 logger = get_logger(__name__)
 
-# Process-level cache: bot_token → @username (fetched once via getMe).
-_BOT_USERNAME_CACHE: dict[str, str] = {}
+# Process-level cache: bot_token → getMe result dict (username + id), fetched
+# once per token so mention verification doesn't hit the API on every message.
+_BOT_INFO_CACHE: dict[str, dict[str, Any]] = {}
 
 
 class TelegramPlatformService:
@@ -49,23 +50,34 @@ class TelegramPlatformService:
         self._bot_token = self._client._bot_token
         self._retry_policy = RetryPolicy()
 
-    async def get_bot_username(self) -> str | None:
-        """Return this bot's @username, cached per process by token."""
+    async def _get_bot_info(self) -> dict[str, Any] | None:
+        """Return this bot's getMe result, cached per process by token."""
         token = self._bot_token
         if not token:
             return None
-        cached = _BOT_USERNAME_CACHE.get(token)
+        cached = _BOT_INFO_CACHE.get(token)
         if cached:
             return cached
         try:
             result = await self._client.call("getMe", {})
-            username = str((result.get("result") or {}).get("username") or "").strip()
-            if username:
-                _BOT_USERNAME_CACHE[token] = username
-                return username
+            info = (result.get("result") or {}) if isinstance(result, dict) else {}
+            if info:
+                _BOT_INFO_CACHE[token] = info
+                return info
         except Exception as exc:
-            logger.debug("getMe failed while resolving bot username: %s", exc)
+            logger.debug("getMe failed while resolving bot info: %s", exc)
         return None
+
+    async def get_bot_username(self) -> str | None:
+        """Return this bot's @username (without the leading @)."""
+        info = await self._get_bot_info()
+        return str((info or {}).get("username") or "").strip() or None
+
+    async def get_bot_user_id(self) -> str | None:
+        """Return this bot's numeric user id (for text_mention verification)."""
+        info = await self._get_bot_info()
+        bot_id = (info or {}).get("id")
+        return str(bot_id).strip() if bot_id is not None else None
 
     async def fetch_sender_profile(
         self, event: ParsedInboundSurfaceEvent

@@ -62,13 +62,34 @@ class TelegramMessageParser:
         # username-less user/bot (`text_mention`), or a slash command
         # (`bot_command`). Mentions also live in `caption_entities` for media
         # messages with a caption, so check both entity lists.
+        #
+        # IMPORTANT: a `mention` entity is just a plain @username — it does NOT
+        # indicate *which* user was mentioned. Treating every mention as a bot
+        # mention makes the bot wake up whenever anyone @-mentions anyone else in
+        # a group. So here we only record that a mention entity exists (and
+        # capture the @username / text_mention user id for later verification
+        # against the bot's identity in the ingress enrichment step). Only
+        # `bot_command` entities are unambiguously directed at this bot.
         _mention_entities = list(message.get("entities") or []) + list(
             message.get("caption_entities") or []
         )
-        mentioned = any(
-            e.get("type") in ("mention", "bot_command", "text_mention")
-            for e in _mention_entities
-        )
+        mentioned_usernames: list[str] = []
+        text_mention_user_ids: list[str] = []
+        has_bot_command = False
+        source_text = message_text or ""
+        for entity in _mention_entities:
+            entity_type = entity.get("type")
+            if entity_type == "bot_command":
+                has_bot_command = True
+            elif entity_type == "mention":
+                username = self._extract_mention_username(entity, source_text)
+                if username:
+                    mentioned_usernames.append(username)
+            elif entity_type == "text_mention":
+                user = entity.get("user") or {}
+                user_id = str(user.get("id") or "").strip()
+                if user_id:
+                    text_mention_user_ids.append(user_id)
         # A reply to one of the bot's own messages continues the conversation in
         # a group without re-@mentioning. Telegram privacy mode only delivers
         # replies to THIS bot's messages, so reply_to_message.from.is_bot is a
@@ -90,7 +111,12 @@ class TelegramMessageParser:
             sender_display_name=sender_display or sender_username,
             message_text=message_text,
             is_dm=is_dm,
-            mentioned_agent=mentioned or is_dm or is_reply_to_bot,
+            # Only bot commands and DM/reply-to-bot unambiguously address this
+            # bot. Generic @username / text_mention mentions are verified
+            # against the bot's identity in the ingress enrichment step
+            # (_telegram_text_mention_enrich) so the bot doesn't wake up on
+            # @mentions of other users in a group.
+            mentioned_agent=has_bot_command or is_dm or is_reply_to_bot,
             should_start_conversation=True,
             reply_target={
                 "chat_id": chat_id,
@@ -110,12 +136,37 @@ class TelegramMessageParser:
                 "contact_shared_by_sender": contact_details["contact_shared_by_sender"],
                 "shared_contact_phone": contact_details["shared_contact_phone"],
                 "attachments": attachments,
+                # Carried for the ingress enrichment step to verify against the
+                # bot's actual @username / user id.
+                "mentioned_usernames": mentioned_usernames,
+                "text_mention_user_ids": text_mention_user_ids,
             },
             raw_payload=payload,
         )
 
     def _extract_text(self, message: dict[str, Any]) -> str:
         return message.get("text") or message.get("caption") or ""
+
+    @staticmethod
+    def _extract_mention_username(
+        entity: dict[str, Any], text: str
+    ) -> str | None:
+        """Pull the @username out of a `mention` entity using its offset/length.
+
+        Telegram `mention` entities point at a substring like ``@lemmabot`` in
+        the message text/caption. The entity itself carries no user id, so the
+        only way to know *who* was mentioned is to slice the text.
+        """
+        offset = entity.get("offset")
+        length = entity.get("length")
+        if not isinstance(offset, int) or not isinstance(length, int):
+            return None
+        if offset < 0 or length <= 0 or offset + length > len(text):
+            return None
+        substring = text[offset : offset + length]
+        if not substring.startswith("@"):
+            return None
+        return substring[1:].strip().lower() or None
 
     def _parse_attachments(self, message: dict[str, Any]) -> list[dict[str, Any]]:
         attachments = []

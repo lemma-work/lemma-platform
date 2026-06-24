@@ -330,7 +330,12 @@ class TelegramPollingReceiverRunner:
         offset: int | None = None
         conflict_deadline: float | None = None
 
-        async with httpx.AsyncClient(timeout=35.0) as client:
+        # Long-poll timeout is 30s; give the HTTP read 60s so transient
+        # network latency or a slow Telegram response doesn't surface as a
+        # noisy ReadTimeout warning. Connect timeout stays short.
+        async with httpx.AsyncClient(
+            timeout=httpx.Timeout(timeout=60.0, connect=10.0)
+        ) as client:
             await self._telegram_api(
                 client,
                 base_url,
@@ -411,6 +416,15 @@ class TelegramPollingReceiverRunner:
                         return
                     logger.warning("Telegram polling receiver error: %s", exc, exc_info=True)
                     await asyncio.sleep(5)
+                except httpx.ReadTimeout:
+                    # Expected during long polling: the 30s long-poll can
+                    # occasionally exceed the read timeout due to network
+                    # latency. Retry quietly without a noisy traceback.
+                    logger.debug(
+                        "Telegram polling getUpdates read timeout; retrying "
+                        "key=%s", self._candidate.key,
+                    )
+                    await asyncio.sleep(1)
                 except Exception as exc:
                     logger.warning("Telegram polling receiver error: %s", exc, exc_info=True)
                     await asyncio.sleep(5)

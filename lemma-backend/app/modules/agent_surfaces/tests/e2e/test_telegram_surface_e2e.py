@@ -346,6 +346,54 @@ async def test_telegram_group_without_mention_is_ignored(
     assert message_store.get_all("TELEGRAM") == []
 
 
+async def test_telegram_group_mention_of_other_user_is_ignored(
+    authenticated_client: AsyncClient,
+    db_session: AsyncSession,
+    test_pod,
+    fixed_test_user,
+    fake_telegram,
+    message_store,
+    monkeypatch,
+):
+    """A group message that @mentions ANOTHER user (not the bot) must not wake
+    the bot. The `mention` entity is just a plain @username and doesn't identify
+    the mentioned user, so the parser records it for bot-identity verification
+    and the ingress enrichment confirms it is not the bot before ignoring."""
+    from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
+    from app.modules.agent_surfaces.events.handlers import (
+        provide_surface_event_handler,
+    )
+
+    _wire_native_telegram(monkeypatch, fake_telegram)
+    pod_id = test_pod["id"]
+    await _create_surface(authenticated_client, pod_id, config={"type": "TELEGRAM"})
+    await _set_user_mobile_number(
+        db_session,
+        user_id=fixed_test_user["id"],
+        mobile_number="+15559990005",
+        telegram_username="surfaceuser",
+    )
+
+    payload = _telegram_group_payload(
+        text="@otherperson can you check this?",
+        message_id=80,
+        sender_id=900100,
+        chat_id=-1007777777777,
+        mention=True,
+    )
+    # Override the default mention entity to point at "@otherperson" (13 chars)
+    # so the parser extracts "otherperson" rather than the default "@lemmabot".
+    payload["message"]["entities"] = [
+        {"type": "mention", "offset": 0, "length": 13},
+    ]
+    handler = provide_surface_event_handler(SqlAlchemyUnitOfWork(db_session))
+    context = await handler.prepare_ingress(
+        SurfacePlatformWebhookIngress(source="telegram", payload=payload, headers={})
+    )
+    assert context is None
+    assert message_store.get_all("TELEGRAM") == []
+
+
 async def test_telegram_username_resolves_user_without_contact_share(
     authenticated_client: AsyncClient,
     db_session: AsyncSession,
