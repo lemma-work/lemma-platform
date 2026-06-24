@@ -2,7 +2,7 @@
 
 Revision ID: 0001_baseline
 Revises: 
-Create Date: 2026-06-24 13:23:00.399643
+Create Date: 2026-06-24 15:05:38.160706
 
 """
 
@@ -80,6 +80,74 @@ def schema_upgrades() -> None:
     op.create_index(op.f('ix_organizations_id'), 'organizations', ['id'], unique=False)
     op.create_index(op.f('ix_organizations_name'), 'organizations', ['name'], unique=True)
     op.create_index(op.f('ix_organizations_slug'), 'organizations', ['slug'], unique=True)
+    op.create_table('usage_limit_counters',
+    sa.Column('organization_id', sa.Uuid(), nullable=True),
+    sa.Column('user_id', sa.Uuid(), nullable=True),
+    sa.Column('window_kind', sa.String(length=32), nullable=False),
+    sa.Column('window_start', sa.DateTime(timezone=True), nullable=False),
+    sa.Column('window_end', sa.DateTime(timezone=True), nullable=False),
+    sa.Column('used_usd', sa.Float(), nullable=False),
+    sa.Column('reserved_usd', sa.Float(), nullable=False),
+    sa.Column('id', sa.Uuid(), nullable=False),
+    sa.Column('created_at', sa.DateTime(timezone=True), nullable=False),
+    sa.Column('updated_at', sa.DateTime(timezone=True), nullable=False),
+    sa.PrimaryKeyConstraint('id')
+    )
+    op.create_index(op.f('ix_usage_limit_counters_id'), 'usage_limit_counters', ['id'], unique=False)
+    op.create_index(op.f('ix_usage_limit_counters_organization_id'), 'usage_limit_counters', ['organization_id'], unique=False)
+    op.create_index(op.f('ix_usage_limit_counters_user_id'), 'usage_limit_counters', ['user_id'], unique=False)
+    op.create_index(op.f('ix_usage_limit_counters_window_kind'), 'usage_limit_counters', ['window_kind'], unique=False)
+    op.create_index('uq_usage_limit_counter_window', 'usage_limit_counters', ['organization_id', 'user_id', 'window_kind', 'window_start'], unique=True)
+    op.create_table('usage_records',
+    sa.Column('organization_id', sa.Uuid(), nullable=True),
+    sa.Column('pod_id', sa.Uuid(), nullable=True),
+    sa.Column('user_id', sa.Uuid(), nullable=False),
+    sa.Column('agent_id', sa.Uuid(), nullable=True),
+    sa.Column('conversation_id', sa.Uuid(), nullable=True),
+    sa.Column('agent_run_id', sa.Uuid(), nullable=True),
+    sa.Column('parent_agent_run_id', sa.Uuid(), nullable=True),
+    sa.Column('source_type', sa.String(length=60), nullable=False),
+    sa.Column('source_id', sa.String(length=120), nullable=True),
+    sa.Column('profile_id', sa.String(length=120), nullable=False),
+    sa.Column('profile_scope', sa.String(length=32), nullable=False),
+    sa.Column('model_name', sa.String(length=160), nullable=False),
+    sa.Column('usage_kind', sa.String(length=40), nullable=False),
+    sa.Column('input_tokens', sa.Integer(), nullable=False),
+    sa.Column('output_tokens', sa.Integer(), nullable=False),
+    sa.Column('units', sa.Float(), nullable=False),
+    sa.Column('cost_usd', sa.Float(), nullable=True),
+    sa.Column('status', sa.String(length=32), nullable=True),
+    sa.Column('metadata', postgresql.JSONB(astext_type=sa.Text()), nullable=True),
+    sa.Column('occurred_at', sa.DateTime(timezone=True), nullable=False),
+    sa.Column('id', sa.Uuid(), nullable=False),
+    sa.Column('created_at', sa.DateTime(timezone=True), nullable=False),
+    sa.Column('updated_at', sa.DateTime(timezone=True), nullable=False),
+    sa.PrimaryKeyConstraint('id')
+    )
+    op.create_index('ix_usage_agent_run_time', 'usage_records', ['agent_run_id', 'occurred_at'], unique=False)
+    op.create_index('ix_usage_agent_time', 'usage_records', ['agent_id', 'occurred_at'], unique=False)
+    op.create_index('ix_usage_org_profile_scope_time', 'usage_records', ['organization_id', 'profile_scope', 'occurred_at'], unique=False)
+    op.create_index('ix_usage_org_profile_time', 'usage_records', ['organization_id', 'profile_id', 'occurred_at'], unique=False)
+    op.create_index('ix_usage_org_time', 'usage_records', ['organization_id', 'occurred_at'], unique=False)
+    op.create_index('ix_usage_org_user_profile_scope_time', 'usage_records', ['organization_id', 'user_id', 'profile_scope', 'occurred_at'], unique=False)
+    op.create_index('ix_usage_pod_time', 'usage_records', ['pod_id', 'occurred_at'], unique=False)
+    op.create_index(op.f('ix_usage_records_agent_id'), 'usage_records', ['agent_id'], unique=False)
+    op.create_index(op.f('ix_usage_records_agent_run_id'), 'usage_records', ['agent_run_id'], unique=False)
+    op.create_index(op.f('ix_usage_records_conversation_id'), 'usage_records', ['conversation_id'], unique=False)
+    op.create_index(op.f('ix_usage_records_id'), 'usage_records', ['id'], unique=False)
+    op.create_index(op.f('ix_usage_records_model_name'), 'usage_records', ['model_name'], unique=False)
+    op.create_index(op.f('ix_usage_records_occurred_at'), 'usage_records', ['occurred_at'], unique=False)
+    op.create_index(op.f('ix_usage_records_organization_id'), 'usage_records', ['organization_id'], unique=False)
+    op.create_index(op.f('ix_usage_records_parent_agent_run_id'), 'usage_records', ['parent_agent_run_id'], unique=False)
+    op.create_index(op.f('ix_usage_records_pod_id'), 'usage_records', ['pod_id'], unique=False)
+    op.create_index(op.f('ix_usage_records_profile_id'), 'usage_records', ['profile_id'], unique=False)
+    op.create_index(op.f('ix_usage_records_profile_scope'), 'usage_records', ['profile_scope'], unique=False)
+    op.create_index(op.f('ix_usage_records_source_id'), 'usage_records', ['source_id'], unique=False)
+    op.create_index(op.f('ix_usage_records_source_type'), 'usage_records', ['source_type'], unique=False)
+    op.create_index(op.f('ix_usage_records_usage_kind'), 'usage_records', ['usage_kind'], unique=False)
+    op.create_index(op.f('ix_usage_records_user_id'), 'usage_records', ['user_id'], unique=False)
+    op.create_index('ix_usage_source_time', 'usage_records', ['source_type', 'source_id', 'occurred_at'], unique=False)
+    op.create_index('ix_usage_user_time', 'usage_records', ['user_id', 'occurred_at'], unique=False)
     op.create_table('users',
     sa.Column('email', sa.String(length=255), nullable=False),
     sa.Column('is_verified', sa.Boolean(), nullable=False),
@@ -1179,6 +1247,37 @@ def schema_downgrades() -> None:
     op.drop_index(op.f('ix_users_id'), table_name='users')
     op.drop_index(op.f('ix_users_email'), table_name='users')
     op.drop_table('users')
+    op.drop_index('ix_usage_user_time', table_name='usage_records')
+    op.drop_index('ix_usage_source_time', table_name='usage_records')
+    op.drop_index(op.f('ix_usage_records_user_id'), table_name='usage_records')
+    op.drop_index(op.f('ix_usage_records_usage_kind'), table_name='usage_records')
+    op.drop_index(op.f('ix_usage_records_source_type'), table_name='usage_records')
+    op.drop_index(op.f('ix_usage_records_source_id'), table_name='usage_records')
+    op.drop_index(op.f('ix_usage_records_profile_scope'), table_name='usage_records')
+    op.drop_index(op.f('ix_usage_records_profile_id'), table_name='usage_records')
+    op.drop_index(op.f('ix_usage_records_pod_id'), table_name='usage_records')
+    op.drop_index(op.f('ix_usage_records_parent_agent_run_id'), table_name='usage_records')
+    op.drop_index(op.f('ix_usage_records_organization_id'), table_name='usage_records')
+    op.drop_index(op.f('ix_usage_records_occurred_at'), table_name='usage_records')
+    op.drop_index(op.f('ix_usage_records_model_name'), table_name='usage_records')
+    op.drop_index(op.f('ix_usage_records_id'), table_name='usage_records')
+    op.drop_index(op.f('ix_usage_records_conversation_id'), table_name='usage_records')
+    op.drop_index(op.f('ix_usage_records_agent_run_id'), table_name='usage_records')
+    op.drop_index(op.f('ix_usage_records_agent_id'), table_name='usage_records')
+    op.drop_index('ix_usage_pod_time', table_name='usage_records')
+    op.drop_index('ix_usage_org_user_profile_scope_time', table_name='usage_records')
+    op.drop_index('ix_usage_org_time', table_name='usage_records')
+    op.drop_index('ix_usage_org_profile_time', table_name='usage_records')
+    op.drop_index('ix_usage_org_profile_scope_time', table_name='usage_records')
+    op.drop_index('ix_usage_agent_time', table_name='usage_records')
+    op.drop_index('ix_usage_agent_run_time', table_name='usage_records')
+    op.drop_table('usage_records')
+    op.drop_index('uq_usage_limit_counter_window', table_name='usage_limit_counters')
+    op.drop_index(op.f('ix_usage_limit_counters_window_kind'), table_name='usage_limit_counters')
+    op.drop_index(op.f('ix_usage_limit_counters_user_id'), table_name='usage_limit_counters')
+    op.drop_index(op.f('ix_usage_limit_counters_organization_id'), table_name='usage_limit_counters')
+    op.drop_index(op.f('ix_usage_limit_counters_id'), table_name='usage_limit_counters')
+    op.drop_table('usage_limit_counters')
     op.drop_index(op.f('ix_organizations_slug'), table_name='organizations')
     op.drop_index(op.f('ix_organizations_name'), table_name='organizations')
     op.drop_index(op.f('ix_organizations_id'), table_name='organizations')

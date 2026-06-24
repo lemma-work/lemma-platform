@@ -38,6 +38,9 @@ from app.modules.apps.infrastructure import models as app_models  # noqa: F401
 from app.modules.workflow.infrastructure import models as workflow_models  # noqa: F401
 from app.modules.agent_surfaces.infrastructure import models as surface_models  # noqa: F401
 
+# Usage / metering (usage_records, usage_limit_counters)
+from app.modules.usage.infrastructure import models as usage_models  # noqa: F401
+
 config = context.config
 
 # Interpret the config file for Python logging.
