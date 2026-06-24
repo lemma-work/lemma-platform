@@ -6,19 +6,25 @@ import {
   Boxes,
   Check,
   CheckCircle2,
+  KeyRound,
+  Loader2,
   Mail,
   PackageOpen,
   Pencil,
+  RefreshCw,
   ShieldCheck,
   Sparkles,
+  Terminal,
   UserRound,
   UsersRound,
 } from "lucide-react";
 
 import { LoadingState } from "@/components/brand/loader";
 import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
+import { HarnessKind } from "lemma-sdk";
 import {
   type Organization,
   type OrganizationInvitation,
@@ -30,6 +36,17 @@ import {
   type KitDefinition,
 } from "@/lib/kits/catalog";
 import { RECIPE_BUILDS_LABEL, type Recipe } from "@/lib/recipes/recipes";
+import { cn } from "@/lib/utils";
+import { useAvailableAgentRuntimeHarnesses } from "@/lib/hooks/use-agent-runtime";
+import {
+  availableHarnessKey,
+  CUSTOM_PROVIDER_OPTIONS,
+  firstHarnessModelName,
+  HARNESS_LOGOS,
+  isHarnessAvailable,
+  splitModelNames,
+  type CustomProviderKind,
+} from "@/components/agents/agent-runtime-helpers";
 
 import {
   SetupPanel,
@@ -46,7 +63,61 @@ import {
   splitGraphemes,
   type Audience,
   type BuildPath,
+  type ConnectChoice,
 } from "./account-onboarding-helpers";
+
+const DAEMON_SETUP_STEPS: Array<{ label: string; command: string }> = [
+  { label: "Install the Lemma terminal", command: "uv tool install lemma-terminal" },
+  { label: "Sign in", command: "lemma auth login" },
+  { label: "Start the daemon", command: "lemma daemon start --background" },
+];
+
+type ProviderPreset = {
+  id: string;
+  title: string;
+  providerKind: CustomProviderKind;
+  baseUrl: string;
+  name: string;
+  defaultModelName?: string;
+};
+
+const PROVIDER_PRESETS: ProviderPreset[] = [
+  {
+    id: "openai",
+    title: "OpenAI",
+    providerKind: "openai",
+    baseUrl: "https://api.openai.com/v1",
+    name: "OpenAI",
+  },
+  {
+    id: "anthropic",
+    title: "Anthropic",
+    providerKind: "anthropic",
+    baseUrl: "https://api.anthropic.com",
+    name: "Anthropic",
+  },
+  {
+    id: "openrouter",
+    title: "OpenRouter",
+    providerKind: "openai",
+    baseUrl: "https://openrouter.ai/api/v1",
+    name: "OpenRouter",
+  },
+  {
+    id: "fireworks",
+    title: "Fireworks",
+    providerKind: "openai",
+    baseUrl: "https://api.fireworks.ai/inference/v1",
+    name: "Fireworks",
+  },
+  {
+    id: "custom",
+    title: "Custom",
+    providerKind: "openai",
+    baseUrl: "",
+    name: "",
+  },
+];
 
 export function InvitationsStep({
   invitations,
@@ -261,6 +332,429 @@ export function AudienceStep({
   );
 }
 
+export function ConnectStep({
+  isSaving,
+  onContinue,
+}: {
+  isSaving: boolean;
+  onContinue: (choice: ConnectChoice) => void;
+}) {
+  const [selectedOption, setSelectedOption] = useState<
+    "lemma" | "daemon" | "provider"
+  >("lemma");
+  const {
+    data: harnessesData,
+    isLoading: isLoadingHarnesses,
+    refetch: refetchHarnesses,
+    isRefetching: isRefetchingHarnesses,
+  } = useAvailableAgentRuntimeHarnesses();
+  const harnesses = harnessesData?.items ?? [];
+  const availableLocalHarnesses = harnesses.filter(
+    (h) => h.harness_kind !== HarnessKind.LEMMA && isHarnessAvailable(h),
+  );
+
+  const [selectedHarnessKey, setSelectedHarnessKey] = useState<string | null>(
+    null,
+  );
+  const [selectedModel, setSelectedModel] = useState<string | null>(null);
+
+  const [providerKind, setProviderKind] = useState<CustomProviderKind>("openai");
+  const [providerName, setProviderName] = useState("");
+  const [baseUrl, setBaseUrl] = useState("");
+  const [apiKey, setApiKey] = useState("");
+  const [modelNames, setModelNames] = useState("");
+  const [defaultModelName, setDefaultModelName] = useState("");
+
+  const handleContinue = () => {
+    if (selectedOption === "lemma") {
+      onContinue({ kind: "lemma" });
+      return;
+    }
+
+    if (selectedOption === "daemon") {
+      const harness = availableLocalHarnesses.find(
+        (h) => availableHarnessKey(h) === selectedHarnessKey,
+      );
+      if (!harness || !harness.daemon_id) return;
+      onContinue({
+        kind: "daemon",
+        daemonId: harness.daemon_id,
+        harnessKind: harness.harness_kind,
+        displayName: harness.display_name,
+        modelName: selectedModel ?? firstHarnessModelName(harness) ?? null,
+      });
+      return;
+    }
+
+    const name = providerName.trim();
+    const url = baseUrl.trim();
+    const key = apiKey.trim();
+    const models = splitModelNames(modelNames);
+    const defaultModel = defaultModelName.trim() || models[0];
+    if (!name || !key || (providerKind === "openai" && !url)) return;
+    onContinue({
+      kind: "provider",
+      providerKind,
+      name,
+      baseUrl: url,
+      apiKey: key,
+      modelNames: models,
+      defaultModelName: defaultModel || undefined,
+    });
+  };
+
+  const daemonCanContinue =
+    selectedOption !== "daemon" ||
+    Boolean(
+      availableLocalHarnesses.find(
+        (h) => availableHarnessKey(h) === selectedHarnessKey,
+      )?.daemon_id,
+    );
+  const providerCanContinue =
+    selectedOption !== "provider" ||
+    (Boolean(providerName.trim()) &&
+      Boolean(apiKey.trim()) &&
+      (providerKind === "anthropic" || Boolean(baseUrl.trim())));
+  const continueDisabled = isSaving || !daemonCanContinue || !providerCanContinue;
+
+  return (
+    <SetupPanel
+      title="Connect your AI"
+      subtitle="Choose how Lemma runs AI for you. You can change this anytime in settings."
+    >
+      <div className="mx-auto mt-8 w-full max-w-2xl space-y-3 text-left">
+        <ConnectOptionCard
+          selected={selectedOption === "daemon"}
+          onClick={() => setSelectedOption("daemon")}
+          icon={<Terminal className="h-4 w-4" />}
+          title="Connect a local harness"
+          subtitle="Codex, Claude Code, or OpenCode via the Lemma daemon."
+        />
+
+        {selectedOption === "daemon" ? (
+          <div className="rounded-md border border-[var(--border-subtle)] bg-[var(--surface-2)] px-4 py-4">
+            {availableLocalHarnesses.length > 0 ? (
+              <div className="space-y-2">
+                <p className="text-sm font-semibold text-[var(--text-primary)]">
+                  Detected harnesses
+                </p>
+                {availableLocalHarnesses.map((harness) => {
+                  const key = availableHarnessKey(harness);
+                  const isSelected = selectedHarnessKey === key;
+                  const models = harness.models ?? [];
+                  return (
+                    <div key={key}>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setSelectedHarnessKey(key);
+                          setSelectedModel(models[0] ?? null);
+                        }}
+                        className={cn(
+                          "flex w-full items-center gap-2 rounded-md border px-3 py-2.5 text-left transition",
+                          isSelected
+                            ? "border-[var(--action-primary)] bg-[var(--action-primary-soft)]"
+                            : "border-[var(--border-subtle)] hover:bg-[var(--surface-1)]",
+                        )}
+                      >
+                        {HARNESS_LOGOS[harness.harness_kind] ? (
+                          <Image
+                            src={HARNESS_LOGOS[harness.harness_kind]!}
+                            alt=""
+                            width={16}
+                            height={16}
+                            className="h-4 w-4 object-contain"
+                          />
+                        ) : null}
+                        <span className="min-w-0 flex-1">
+                          <span className="block truncate text-sm font-medium text-[var(--text-primary)]">
+                            {harness.display_name}
+                          </span>
+                          {models.length > 0 ? (
+                            <span className="block truncate font-mono text-xs text-[var(--text-tertiary)]">
+                              {models.length} model{models.length > 1 ? "s" : ""}
+                            </span>
+                          ) : null}
+                        </span>
+                        {isSelected ? (
+                          <Check className="h-4 w-4 shrink-0 text-[var(--action-primary)]" />
+                        ) : null}
+                      </button>
+                      {isSelected && models.length > 1 ? (
+                        <div className="mt-1.5 flex flex-wrap gap-1.5 px-1">
+                          {models.map((model) => (
+                            <button
+                              key={model}
+                              type="button"
+                              onClick={() => setSelectedModel(model)}
+                              className={cn(
+                                "rounded-full border px-2.5 py-1 text-xs transition",
+                                selectedModel === model
+                                  ? "border-[var(--action-primary)] bg-[var(--action-primary-soft)] text-[var(--action-primary)]"
+                                  : "border-[var(--border-subtle)] text-[var(--text-tertiary)] hover:text-[var(--text-secondary)]",
+                              )}
+                            >
+                              {model}
+                            </button>
+                          ))}
+                        </div>
+                      ) : null}
+                    </div>
+                  );
+                })}
+              </div>
+            ) : (
+              <div>
+                <div className="flex items-start gap-3">
+                  <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-md border border-[var(--border-subtle)] bg-[var(--surface-1)] text-[var(--text-tertiary)]">
+                    <Terminal className="h-4 w-4" />
+                  </span>
+                  <div className="min-w-0 flex-1">
+                    <p className="text-sm font-semibold text-[var(--text-primary)]">
+                      {isLoadingHarnesses
+                        ? "Checking for local harnesses…"
+                        : "No harness detected yet"}
+                    </p>
+                    <p className="mt-1 text-sm leading-6 text-[var(--text-secondary)]">
+                      Open a terminal and run these commands, then recheck.
+                    </p>
+                  </div>
+                  <Button
+                    type="button"
+                    variant="secondary"
+                    size="sm"
+                    className="h-7 shrink-0 gap-1.5 px-2"
+                    onClick={() => void refetchHarnesses()}
+                    disabled={isRefetchingHarnesses}
+                  >
+                    {isRefetchingHarnesses ? (
+                      <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                    ) : (
+                      <RefreshCw className="h-3.5 w-3.5" />
+                    )}
+                    Recheck
+                  </Button>
+                </div>
+                <div className="mt-4 space-y-3">
+                  {DAEMON_SETUP_STEPS.map((step, index) => (
+                    <div key={step.command}>
+                      <p className="mb-1 text-xs font-medium text-[var(--text-tertiary)]">
+                        {index + 1}. {step.label}
+                      </p>
+                      <code className="block rounded-md border border-[var(--border-subtle)] bg-[var(--surface-1)] px-3 py-2 font-mono text-xs leading-5 text-[var(--text-primary)]">
+                        {step.command}
+                      </code>
+                    </div>
+                  ))}
+                </div>
+                <p className="mt-4 text-sm leading-6 text-[var(--text-tertiary)]">
+                  Once a harness appears above, pick it and continue.
+                </p>
+              </div>
+            )}
+          </div>
+        ) : null}
+
+        <ConnectOptionCard
+          selected={selectedOption === "provider"}
+          onClick={() => {
+            setSelectedOption("provider");
+            const preset = PROVIDER_PRESETS.find((p) => p.id !== "custom");
+            if (!providerName && preset) setProviderName(preset.name);
+            if (!baseUrl && preset) setBaseUrl(preset.baseUrl);
+          }}
+          icon={<KeyRound className="h-4 w-4" />}
+          title="Paste an API key"
+          subtitle="Bring your own OpenAI, Anthropic, OpenRouter, Fireworks, or other key."
+        />
+
+        {selectedOption === "provider" ? (
+          <div className="space-y-3 rounded-md border border-[var(--border-subtle)] bg-[var(--surface-2)] px-4 py-4">
+            <div>
+              <p className="mb-2 text-xs font-medium text-[var(--text-tertiary)]">
+                Quick picks
+              </p>
+              <div className="flex flex-wrap gap-2">
+                {PROVIDER_PRESETS.map((preset) => {
+                  const isActive =
+                    preset.id !== "custom" &&
+                    providerName === preset.name &&
+                    baseUrl === preset.baseUrl &&
+                    providerKind === preset.providerKind;
+                  return (
+                    <button
+                      key={preset.id}
+                      type="button"
+                      onClick={() => {
+                        setProviderKind(preset.providerKind);
+                        setProviderName(preset.name);
+                        setBaseUrl(preset.baseUrl);
+                      }}
+                      className={cn(
+                        "rounded-full border px-3 py-1.5 text-xs font-medium transition",
+                        isActive
+                          ? "border-[var(--action-primary)] bg-[var(--action-primary-soft)] text-[var(--action-primary)]"
+                          : "border-[var(--border-subtle)] text-[var(--text-tertiary)] hover:text-[var(--text-secondary)]",
+                      )}
+                    >
+                      {preset.title}
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
+            <div className="flex gap-2">
+              {CUSTOM_PROVIDER_OPTIONS.map((option) => (
+                <button
+                  key={option.kind}
+                  type="button"
+                  onClick={() => {
+                    setProviderKind(option.kind);
+                  }}
+                  className={cn(
+                    "flex-1 rounded-md border px-3 py-2 text-sm font-medium transition",
+                    providerKind === option.kind
+                      ? "border-[var(--action-primary)] bg-[var(--action-primary-soft)] text-[var(--action-primary)]"
+                      : "border-[var(--border-subtle)] text-[var(--text-tertiary)] hover:text-[var(--text-secondary)]",
+                  )}
+                >
+                  {option.title}
+                </button>
+              ))}
+            </div>
+            <div className="settings-field">
+              <Label className="text-[var(--text-secondary)]">Name</Label>
+              <Input
+                value={providerName}
+                onChange={(e) => setProviderName(e.target.value)}
+                placeholder={providerKind === "openai" ? "OpenRouter" : "Anthropic"}
+              />
+            </div>
+            <div className="settings-field">
+              <Label className="text-[var(--text-secondary)]">Base URL</Label>
+              <Input
+                value={baseUrl}
+                onChange={(e) => setBaseUrl(e.target.value)}
+                placeholder={providerKind === "openai" ? "https://openrouter.ai/api/v1" : "https://api.anthropic.com"}
+              />
+            </div>
+            <div className="settings-field">
+              <Label className="text-[var(--text-secondary)]">API key</Label>
+              <Input
+                type="password"
+                value={apiKey}
+                onChange={(e) => setApiKey(e.target.value)}
+                placeholder="sk-..."
+              />
+            </div>
+            <div className="settings-field">
+              <Label className="text-[var(--text-secondary)]">
+                Models{" "}
+                <span className="font-normal text-[var(--text-tertiary)]">
+                  (optional)
+                </span>
+              </Label>
+              <textarea
+                value={modelNames}
+                onChange={(e) => setModelNames(e.target.value)}
+                placeholder="one model per line"
+                className="form-field-control min-h-20 w-full resize-y px-3 py-2 text-sm leading-5 text-[var(--text-primary)] outline-none placeholder:text-[var(--text-tertiary)]"
+              />
+            </div>
+            <div className="settings-field">
+              <Label className="text-[var(--text-secondary)]">
+                Default model{" "}
+                <span className="font-normal text-[var(--text-tertiary)]">
+                  (optional)
+                </span>
+              </Label>
+              <Input
+                value={defaultModelName}
+                onChange={(e) => setDefaultModelName(e.target.value)}
+                placeholder="First listed model is used by default"
+              />
+            </div>
+          </div>
+        ) : null}
+
+        <ConnectOptionCard
+          selected={selectedOption === "lemma"}
+          onClick={() => setSelectedOption("lemma")}
+          icon={<Sparkles className="h-4 w-4" />}
+          title="Use Lemma"
+          subtitle="Fastest — no setup. AI runs on Lemma's built-in models."
+        />
+
+        <Button
+          type="button"
+          onClick={handleContinue}
+          loading={isSaving}
+          loadingLabel="Connecting"
+          disabled={continueDisabled}
+          className="setup-primary-action !flex mx-auto mt-6 h-11 min-w-44 gap-2 px-6 text-sm font-medium"
+        >
+          Continue
+          <ArrowRight className="h-4 w-4" />
+        </Button>
+
+        {selectedOption === "lemma" ? (
+          <button
+            type="button"
+            onClick={() => onContinue({ kind: "lemma" })}
+            className="mx-auto mt-1 block text-xs text-[var(--text-tertiary)] underline-offset-4 transition hover:text-[var(--text-secondary)] hover:underline"
+          >
+            Skip for now
+          </button>
+        ) : null}
+      </div>
+    </SetupPanel>
+  );
+}
+
+function ConnectOptionCard({
+  selected,
+  onClick,
+  icon,
+  title,
+  subtitle,
+}: {
+  selected: boolean;
+  onClick: () => void;
+  icon: React.ReactNode;
+  title: string;
+  subtitle: string;
+}) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      data-active={selected}
+      className={[
+        "setup-path-choice flex w-full items-start gap-3 px-4 py-4 text-left",
+        selected ? "is-active" : "",
+      ].join(" ")}
+    >
+      <span
+        className={[
+          "setup-path-choice-icon flex h-9 w-9 shrink-0 items-center justify-center",
+          selected ? "is-active" : "",
+        ].join(" ")}
+      >
+        {icon}
+      </span>
+      <span className="min-w-0 flex-1">
+        <span className="flex items-center gap-2 text-sm font-semibold text-[var(--text-primary)]">
+          {title}
+          {selected ? <Check className="h-4 w-4" /> : null}
+        </span>
+        <span className="mt-1 block text-xs leading-5 text-[var(--text-secondary)]">
+          {subtitle}
+        </span>
+      </span>
+    </button>
+  );
+}
+
 export function StartStep({
   audience,
   recipes,
@@ -270,6 +764,7 @@ export function StartStep({
   onSelectRecipe,
   onCustomIntentChange,
   onContinue,
+  onSkip,
 }: {
   audience: Audience;
   recipes: Recipe[];
@@ -279,6 +774,7 @@ export function StartStep({
   onSelectRecipe: (id: string) => void;
   onCustomIntentChange: (value: string) => void;
   onContinue: () => void;
+  onSkip: () => void;
 }) {
   const personal = audience === "personal";
   const hasIntent = Boolean(customIntent.trim());
@@ -365,6 +861,15 @@ export function StartStep({
           {personal ? "Create my space" : "Create pod"}
           <ArrowRight className="h-4 w-4" />
         </Button>
+
+        <button
+          type="button"
+          onClick={onSkip}
+          disabled={isCreating}
+          className="mx-auto mt-3 block text-xs text-[var(--text-tertiary)] underline-offset-4 transition hover:text-[var(--text-secondary)] hover:underline disabled:opacity-50"
+        >
+          I&apos;ll set this up later
+        </button>
       </div>
     </SetupPanel>
   );

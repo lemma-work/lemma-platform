@@ -6,17 +6,21 @@ import {
   UsersRound,
 } from "lucide-react";
 
+import { HarnessKind } from "lemma-sdk";
+
 import {
   buildKitAssistantOpeningMessage,
   type KitDefinition,
 } from "@/lib/kits/catalog";
 import { getRecipeById, type Recipe } from "@/lib/recipes/recipes";
+import type { CustomProviderKind } from "@/components/agents/agent-runtime-helpers";
 
 export type SetupStep =
   | "boot"
   | "identity"
   | "audience"
   | "workspace"
+  | "connect"
   | "start";
 export type BuildPath = "ai" | "template" | "code";
 
@@ -30,6 +34,7 @@ export const SETUP_STEPS: SetupStep[] = [
   "identity",
   "audience",
   "workspace",
+  "connect",
   "start",
 ];
 
@@ -38,10 +43,32 @@ export const SETUP_STEPS: SetupStep[] = [
 // the path the user is actually on.
 export function setupStepsForAudience(audience: Audience | null): SetupStep[] {
   if (audience === "personal") {
-    return ["boot", "identity", "audience", "start"];
+    return ["boot", "identity", "audience", "connect", "start"];
   }
   return SETUP_STEPS;
 }
+
+// The AI connection a user picks during onboarding. "lemma" keeps the built-in
+// system profile; "daemon" saves a discovered local harness; "provider" stores
+// a pasted API key against an OpenAI- or Anthropic-compatible route.
+export type ConnectChoice =
+  | { kind: "lemma" }
+  | {
+      kind: "daemon";
+      daemonId: string;
+      harnessKind: HarnessKind;
+      displayName: string;
+      modelName?: string | null;
+    }
+  | {
+      kind: "provider";
+      providerKind: CustomProviderKind;
+      name: string;
+      baseUrl: string;
+      apiKey: string;
+      modelNames: string[];
+      defaultModelName?: string;
+    };
 
 export const AUDIENCE_OPTIONS: Array<{
   id: Audience;

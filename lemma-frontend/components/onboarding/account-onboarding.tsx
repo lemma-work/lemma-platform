@@ -14,6 +14,11 @@ import {
   subscribeToLastOpenedPodId,
 } from "@/lib/pods/last-opened-pod";
 import {
+  readOnboardingSkippedFirstPod,
+  subscribeToOnboardingSkippedFirstPod,
+  markOnboardingSkippedFirstPod,
+} from "@/lib/pods/onboarding-skip";
+import {
   useCreateOrganization,
   useJoinSuggestedOrganization,
   useMyOrganizationInvitations,
@@ -22,6 +27,11 @@ import {
 } from "@/lib/hooks/use-organizations";
 import { useAccessiblePods } from "@/lib/hooks/use-pods";
 import { useProfile, useUpdateProfile } from "@/lib/hooks/use-user";
+import {
+  useCreateAgentRuntime,
+  useUpdatePodDefaultAgentRuntime,
+} from "@/lib/hooks/use-agent-runtime";
+import { RuntimeProfileScope } from "lemma-sdk";
 import {
   OrganizationInvitationStatus,
   OrganizationJoinPolicy,
@@ -54,11 +64,13 @@ import {
   splitName,
   startRecipesForAudience,
   type Audience,
+  type ConnectChoice,
   type SetupStep,
 } from "./account-onboarding-helpers";
 import {
   AudienceStep,
   BootStep,
+  ConnectStep,
   IdentityStep,
   IntroSkylines,
   InvitationsStep,
@@ -89,8 +101,14 @@ export function AccountOnboarding({
     () => null,
   );
   const hasLastOpenedPod = requireFirstPod && Boolean(lastOpenedPodId);
+  const skippedFirstPod = useSyncExternalStore(
+    subscribeToOnboardingSkippedFirstPod,
+    readOnboardingSkippedFirstPod,
+    () => null,
+  );
+  const hasSkippedFirstPod = requireFirstPod && Boolean(skippedFirstPod);
   const { data: podsData, isLoading: isLoadingPods } = useAccessiblePods({
-    enabled: requireFirstPod && !hasLastOpenedPod,
+    enabled: requireFirstPod && !hasLastOpenedPod && !hasSkippedFirstPod,
   });
   const pods = podsData?.items || [];
   const { data: invitationsData, isLoading: isLoadingInvitations } =
@@ -105,6 +123,7 @@ export function AccountOnboarding({
   const needsFirstPod =
     requireFirstPod &&
     !hasLastOpenedPod &&
+    !hasSkippedFirstPod &&
     isProfileComplete &&
     !needsOrganization &&
     !isLoadingPods &&
@@ -196,6 +215,8 @@ function SetupAssistant({
   const updateProfile = useUpdateProfile();
   const createOrganization = useCreateOrganization();
   const joinSuggestedOrganization = useJoinSuggestedOrganization();
+  const createAgentRuntime = useCreateAgentRuntime();
+  const updatePodDefaultRuntime = useUpdatePodDefaultAgentRuntime();
   const suggestedOrganizations = useSuggestedOrganizations({
     enabled: Boolean(profile?.email) && organizations.length === 0,
   });
@@ -208,6 +229,10 @@ function SetupAssistant({
   const [createdOrganization, setCreatedOrganization] =
     useState<Organization | null>(null);
   const [isCreatingPod, setIsCreatingPod] = useState(false);
+  const [isConnectingAi, setIsConnectingAi] = useState(false);
+  const [connectedProfileId, setConnectedProfileId] = useState<string | null>(
+    null,
+  );
   const [identityName, setIdentityName] = useState(inferredName);
   const [workspaceName, setWorkspaceName] = useState(
     defaultWorkspaceName(inferredName),
@@ -280,7 +305,7 @@ function SetupAssistant({
     setSelectedRecipeId(startRecipesForAudience(value)[0]?.id ?? "");
     // Solo users skip workspace setup entirely — their workspace is created
     // silently when the first pod lands.
-    goTo(value === "team" ? "workspace" : "start");
+    goTo(value === "team" ? "workspace" : "connect");
   };
 
   const handleJoinSuggested = () => {
@@ -317,7 +342,7 @@ function SetupAssistant({
           toast.success(`${organization.name} created`);
           setCreatedOrganization(organization);
           onOrganizationReady(organization);
-          goTo("start");
+          goTo("connect");
         },
         onError: (error) =>
           toast.error(`Failed to create workspace: ${error.message}`),
@@ -338,6 +363,76 @@ function SetupAssistant({
     setCreatedOrganization(organization);
     onOrganizationReady(organization);
     return organization;
+  };
+
+  const handleConnectContinue = async (choice: ConnectChoice) => {
+    if (choice.kind === "lemma") {
+      goTo("start");
+      return;
+    }
+
+    setIsConnectingAi(true);
+    try {
+      const organization = await ensureOrganization();
+      if (!organization) {
+        toast.error("Could not prepare your workspace");
+        return;
+      }
+
+      if (choice.kind === "daemon") {
+        const profile = await createAgentRuntime.mutateAsync({
+          organizationId: organization.id,
+          request: {
+            source: "USER_DAEMON",
+            daemon_id: choice.daemonId,
+            harness_kind: choice.harnessKind,
+            scope: RuntimeProfileScope.PERSONAL,
+            name: `${choice.displayName} daemon`,
+            default_model_name: choice.modelName || undefined,
+          },
+        });
+        setConnectedProfileId(profile.id);
+        toast.success(`${choice.displayName} connected`);
+      } else {
+        const profile = await createAgentRuntime.mutateAsync({
+          organizationId: organization.id,
+          request:
+            choice.providerKind === "openai"
+              ? {
+                  source: "OPENAI_COMPATIBLE",
+                  name: choice.name,
+                  base_url: choice.baseUrl,
+                  api_key: choice.apiKey || null,
+                  default_model_name: choice.defaultModelName,
+                  model_names: choice.modelNames,
+                }
+              : {
+                  source: "ANTHROPIC_COMPATIBLE",
+                  name: choice.name,
+                  base_url: choice.baseUrl || null,
+                  api_key: choice.apiKey,
+                  default_model_name: choice.defaultModelName,
+                  model_names: choice.modelNames,
+                },
+        });
+        setConnectedProfileId(profile.id);
+        toast.success(`${choice.name} saved`);
+      }
+      goTo("start");
+    } catch (error) {
+      const message =
+        error instanceof Error && error.message
+          ? error.message
+          : "Failed to connect AI";
+      toast.error(message);
+    } finally {
+      setIsConnectingAi(false);
+    }
+  };
+
+  const handleSkipFirstPod = () => {
+    markOnboardingSkippedFirstPod();
+    router.replace("/home");
   };
 
   const handleCreateFromStart = async () => {
@@ -365,6 +460,12 @@ function SetupAssistant({
         });
         toast.success(`${pod.name} created`);
         queryClient.invalidateQueries({ queryKey: ["pods"] });
+        if (connectedProfileId) {
+          await updatePodDefaultRuntime.mutateAsync({
+            podId: pod.id,
+            agentRuntimeId: connectedProfileId,
+          });
+        }
         router.push(
           buildRecipeConversationHref(pod.id, recipe, {
             podName: pod.name,
@@ -382,6 +483,12 @@ function SetupAssistant({
       });
       toast.success(`${pod.name} created`);
       queryClient.invalidateQueries({ queryKey: ["pods"] });
+      if (connectedProfileId) {
+        await updatePodDefaultRuntime.mutateAsync({
+          podId: pod.id,
+          agentRuntimeId: connectedProfileId,
+        });
+      }
       const params = new URLSearchParams({
         assistantMessage: buildPromptFromIntent(intentText),
         conversationInstructions: [
@@ -414,7 +521,7 @@ function SetupAssistant({
         {step === "boot" ? <IntroSkylines /> : null}
         <div className="relative z-10 min-h-[min(680px,calc(100vh-80px))] px-5 py-5 sm:px-7 sm:py-6">
           <SetupChrome intro={step === "boot"} />
-          <div className="mx-auto flex min-h-[min(570px,calc(100vh-190px))] max-w-4xl flex-col items-center justify-center py-8">
+          <div className="mx-auto flex min-h-[min(570px,calc(100vh-190px))] max-w-4xl flex-col items-center justify-center pt-8 pb-16">
             {step === "boot" ? (
               <BootStep onBegin={handleBegin} />
             ) : step === "identity" ? (
@@ -441,6 +548,11 @@ function SetupAssistant({
                 onJoinSuggested={handleJoinSuggested}
                 onCreateWorkspace={handleCreateWorkspace}
               />
+            ) : step === "connect" ? (
+              <ConnectStep
+                isSaving={isConnectingAi}
+                onContinue={handleConnectContinue}
+              />
             ) : (
               <StartStep
                 audience={audience ?? "personal"}
@@ -460,6 +572,7 @@ function SetupAssistant({
                   );
                 }}
                 onContinue={handleCreateFromStart}
+                onSkip={handleSkipFirstPod}
               />
             )}
           </div>
