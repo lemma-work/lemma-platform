@@ -2,7 +2,7 @@
 
 `lemma-sdk` is the Python client library for Lemma. It wraps a generated OpenAPI
 client with a pod-first, ergonomic surface for tables, files, functions, agents,
-workflows, schedules, surfaces, desks, and integrations.
+workflows, schedules, surfaces, desks, and connectors.
 
 It is the same SDK that runs **inside Lemma functions** (where the runtime injects
 auth automatically) and in **standalone application code** (where you supply a
@@ -29,7 +29,7 @@ python -c "from lemma_sdk import Pod, Lemma; print(Pod, Lemma)"
 | Class | Scope | Use for |
 | --- | --- | --- |
 | `Pod` | one pod | almost everything — data, files, functions, agents, workflows, app operations |
-| `Lemma` | org / global | org & pod discovery, org-level integration setup, tools, runtime profiles |
+| `Lemma` | org / global | org & pod discovery, org-level connector setup, tools, runtime profiles |
 
 ```python
 from lemma_sdk import Pod, Lemma
@@ -104,7 +104,7 @@ then unwrap:
 | `records.list`, `table.list` | `{"items": [...], "total": N, "limit": N, "next_page_token": ...}` | `["items"]` |
 | `bulk_create / bulk_update / bulk_delete` | `{"count": N}` | `["count"]` |
 | `query(sql)` | `{"items": [...], "total": N}` | `["items"]` |
-| `integrations.execute` | `{"result": ...}` | `["result"]` |
+| `connectors.execute` | `{"result": ...}` | `["result"]` |
 | `functions.run` | `{"status": ..., "output_data": ..., "logs": ...}` | top-level |
 
 Single-record create/get/update return the record directly — there is **no**
@@ -116,7 +116,7 @@ helpers return the integer `count` directly.
 
 `pod.tables` · `pod.records` · `pod.queries` · `pod.files` · `pod.functions` ·
 `pod.agents` · `pod.workflows` · `pod.schedules` · `pod.conversations` ·
-`pod.members` · `pod.desks` · `pod.surfaces` · `pod.integrations`
+`pod.members` · `pod.apps` · `pod.surfaces` · `pod.connectors`
 
 Plus helpers: `pod.table(name)` (bound single-table helper), `pod.query(sql)`,
 `pod.generated` (raw OpenAPI client escape hatch).
@@ -239,23 +239,23 @@ wf_run = pod.workflows.create_run("nightly_review").to_dict()
 # pod.workflows.submit_form(wf_run["id"], node_id="<form_node>", inputs={"limit": 10})
 ```
 
-### Integrations (calling external apps)
+### Connectors (calling external apps)
 
-`pod.integrations.execute(auth_config, operation, payload)` runs a third-party
+`pod.connectors.execute(auth_config, operation, payload)` runs a third-party
 operation. The first argument is the **auth config name** (often the app id), the
 operation id and payload come from discovery, and the response is under
 `["result"]`.
 
 ```python
-sent = pod.integrations.execute(
+sent = pod.connectors.execute(
     "workspace-gmail",          # auth config name
     "GMAIL_SEND_EMAIL",         # operation id from discovery
     {"recipient_email": "a@example.com", "subject": "Hi", "body": "..."},
 ).to_dict()["result"]
 
 # discover before you call:
-matches = pod.integrations.operations.search("workspace-gmail", "send email")
-schema  = pod.integrations.operations.get("workspace-gmail", "GMAIL_SEND_EMAIL")
+matches = pod.connectors.operations.search("workspace-gmail", "send email")
+schema  = pod.connectors.operations.get("workspace-gmail", "GMAIL_SEND_EMAIL")
 ```
 
 Operation ids and payload keys differ between the `lemma` and `composio`
@@ -273,16 +273,16 @@ pods  = lemma.pods.list()
 pod   = lemma.pod("pod-id")          # -> Pod sharing this transport
 me    = lemma.user.profile()
 
-# org-level integration setup
-auth_configs = lemma.integrations.auth_configs.list()
-accounts     = lemma.integrations.accounts.list(app="gmail")
+# org-level connector setup
+auth_configs = lemma.connectors.auth_configs.list()
+accounts     = lemma.connectors.accounts.list(app="gmail")
 
 # first-party tools
 results = lemma.tools.web_search("vendor SLA policy", max_results=5)
 ```
 
 Facades: `lemma.orgs` · `lemma.org` · `lemma.pods` · `lemma.user` ·
-`lemma.integrations` · `lemma.tools` · `lemma.runtime` · `lemma.org_runtime`.
+`lemma.connectors` · `lemma.tools` · `lemma.runtime` · `lemma.org_runtime`.
 
 ## Writing a function
 
@@ -361,15 +361,15 @@ Then from `lemma-python`:
 
 ```bash
 export LEMMA_TOKEN="<access-token>"
-LEMMA_RUN_INTEGRATION=1 uv run --with pytest --with pytest-asyncio \
+LEMMA_RUN_CONNECTOR=1 uv run --with pytest --with pytest-asyncio \
   pytest tests/integration -m integration -s
 ```
 
 It defaults to `http://127.0.0.1:8711` (the local API) and falls back to the CLI
 auth session if `LEMMA_TOKEN` is unset. Point elsewhere with
-`LEMMA_INTEGRATION_BASE_URL` / `LEMMA_INTEGRATION_TOKEN`. The scenario creates a
+`LEMMA_CONNECTOR_BASE_URL` / `LEMMA_CONNECTOR_TOKEN`. The scenario creates a
 fresh org and pod, exercises tables/records/query/files/functions/agents/
-workflows/integrations, prints a summary, and deletes the pod.
+workflows/connectors, prints a summary, and deletes the pod.
 
 ## Regenerate the SDK
 

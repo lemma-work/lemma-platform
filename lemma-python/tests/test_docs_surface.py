@@ -12,7 +12,7 @@ from lemma_sdk.resources import (
 
 
 def test_workflow_run_surface_matches_docs():
-    # README/SDK_REDESIGN document create_run / run / submit_form.
+    # README documents create_run / run / submit_form.
     assert hasattr(PodWorkflows, "create_run")
     assert hasattr(PodWorkflows, "run")
     assert hasattr(PodWorkflows, "submit_form")
