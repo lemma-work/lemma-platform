@@ -14,9 +14,9 @@ SHELL := /bin/bash
 
 .PHONY: help init dev stop stop-all logs \
         test test-backend test-backend-unit test-backend-e2e \
-        test-frontend test-cli test-python \
+        test-frontend test-cli test-cli-unit test-cli-e2e test-python \
         coverage coverage-backend coverage-backend-unit coverage-backend-e2e \
-        coverage-backend-module coverage-cli coverage-frontend \
+        coverage-backend-module coverage-cli coverage-cli-unit coverage-cli-e2e coverage-frontend \
         lint migrate
 
 # ── Configuration ─────────────────────────────────────────────────────────────
@@ -55,7 +55,9 @@ help:
 	@echo "    make test-backend-unit  backend unit tests only"
 	@echo "    make test-backend-e2e   backend fast e2e (E2E_WORKERS=$(E2E_WORKERS))"
 	@echo "    make test-frontend      frontend vitest suite"
-	@echo "    make test-cli           lemma-cli pytest suite"
+	@echo "    make test-cli           lemma-cli unit + e2e tests"
+	@echo "    make test-cli-unit      lemma-cli unit tests only (no docker)"
+	@echo "    make test-cli-e2e       lemma-cli e2e (real backend + docker; needs docker)"
 	@echo "    make test-python        lemma-python SDK tests (non-integration)"
 	@echo ""
 	@echo "  Coverage"
@@ -64,7 +66,9 @@ help:
 	@echo "    make coverage-backend-unit    backend unit coverage"
 	@echo "    make coverage-backend-e2e     backend e2e coverage"
 	@echo "    make coverage-backend-module MODULE=agent  per-module backend coverage"
-	@echo "    make coverage-cli             lemma-cli coverage"
+	@echo "    make coverage-cli             lemma-cli unit + e2e coverage"
+	@echo "    make coverage-cli-unit        lemma-cli unit coverage (no docker)"
+	@echo "    make coverage-cli-e2e         lemma-cli e2e coverage (needs docker)"
 	@echo "    make coverage-frontend        frontend vitest coverage"
 	@echo ""
 	@echo "  Other"
@@ -213,9 +217,20 @@ test-frontend:
 	@echo "→ Frontend tests…"
 	@cd $(FRONTEND_DIR) && npm test
 
-test-cli:
-	@echo "→ lemma-cli tests…"
-	@cd $(CLI_DIR) && uv run pytest tests/ -q
+# lemma-cli: unit tests use fake SDK clients (no network/docker); e2e tests spin
+# up the real backend + docker infra (postgres/redis/supertokens) and drive the
+# CLI over TCP. `test-cli` runs both; use the split targets for faster loops.
+test-cli: test-cli-unit test-cli-e2e
+	@echo ""
+	@echo "✓ lemma-cli unit + e2e tests complete."
+
+test-cli-unit:
+	@echo "→ lemma-cli unit tests…"
+	@cd $(CLI_DIR) && uv run pytest -m "not e2e" -q
+
+test-cli-e2e:
+	@echo "→ lemma-cli e2e tests (real backend + docker)…"
+	@cd $(CLI_DIR) && uv run pytest -m e2e -q
 
 test-python:
 	@echo "→ lemma-python SDK tests (non-integration)…"
@@ -249,9 +264,18 @@ coverage-backend-module:
 	@cd $(BACKEND_DIR) && uv run pytest app/modules/$(MODULE) \
 		--cov=app/modules/$(MODULE) --cov-report=term-missing --cov-fail-under=0 -q
 
-coverage-cli:
-	@echo "→ lemma-cli coverage…"
-	@cd $(CLI_DIR) && uv run --with pytest-cov pytest tests/ \
+coverage-cli: coverage-cli-unit
+	@echo ""
+	@echo "✓ lemma-cli coverage complete."
+
+coverage-cli-unit:
+	@echo "→ lemma-cli unit coverage…"
+	@cd $(CLI_DIR) && uv run --with pytest-cov pytest -m "not e2e" \
+		--cov=lemma_cli --cov-report=term-missing -q
+
+coverage-cli-e2e:
+	@echo "→ lemma-cli e2e coverage (real backend + docker)…"
+	@cd $(CLI_DIR) && uv run --with pytest-cov pytest -m e2e \
 		--cov=lemma_cli --cov-report=term-missing -q
 
 coverage-frontend:

@@ -10,6 +10,16 @@ build/
 .env.*
 !.env.example
 
+# Coverage reports
+.coverage
+.coverage.*
+coverage.xml
+coverage-*.xml
+htmlcov/
+coverage/
+lcov.info
+*.lcov
+
 # Python bytecode
 __pycache__/
 *.py[cod]
