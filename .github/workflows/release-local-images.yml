@@ -58,10 +58,14 @@ jobs:
         shell: bash
         run: |
           if [[ "${GITHUB_REF}" == refs/tags/v* ]]; then
-            echo "version=${GITHUB_REF#refs/tags/v}" >> "$GITHUB_OUTPUT"
+            version="${GITHUB_REF#refs/tags/v}"
           else
-            echo "version=${{ inputs.version }}" >> "$GITHUB_OUTPUT"
+            version="${{ inputs.version }}"
           fi
+          # Tolerate a leading "v" in the workflow_dispatch input (e.g. "v0.5.0")
+          # so tags resolve to "v<version>", not "vv<version>".
+          version="${version#v}"
+          echo "version=${version}" >> "$GITHUB_OUTPUT"
 
       - name: Set up QEMU
         uses: docker/setup-qemu-action@v3
@@ -114,10 +118,14 @@ jobs:
         shell: bash
         run: |
           if [[ "${GITHUB_REF}" == refs/tags/v* ]]; then
-            echo "version=${GITHUB_REF#refs/tags/v}" >> "$GITHUB_OUTPUT"
+            version="${GITHUB_REF#refs/tags/v}"
           else
-            echo "version=${{ inputs.version }}" >> "$GITHUB_OUTPUT"
+            version="${{ inputs.version }}"
           fi
+          # Tolerate a leading "v" in the workflow_dispatch input (e.g. "v0.5.0")
+          # so tags resolve to "v<version>", not "vv<version>".
+          version="${version#v}"
+          echo "version=${version}" >> "$GITHUB_OUTPUT"
 
       - name: Download digests
         uses: actions/download-artifact@v4
