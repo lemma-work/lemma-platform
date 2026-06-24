@@ -1,0 +1,111 @@
+name: Release Lemma Desktop
+
+# Builds the Tauri macOS app (arm64) and attaches the DMG to the GitHub
+# release. The DMG contains the thin Rust shell + the compiled lemma-stack
+# supervisor sidecar (PyInstaller). Signing/notarization happens only when
+# the APPLE_* secrets are present; otherwise the DMG is built unsigned
+# (still hardened-runtime, just not notarized).
+
+on:
+  release:
+    types:
+      - published
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Version to build, for example 0.2.1 or v0.2.1"
+        required: true
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release-desktop-${{ github.event.release.tag_name || inputs.version }}
+  cancel-in-progress: false
+
+jobs:
+  build-dmg:
+    runs-on: macos-14
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+
+      - name: Resolve version
+        id: version
+        shell: bash
+        env:
+          RELEASE_VERSION: ${{ github.event.release.tag_name || inputs.version }}
+        run: |
+          version="${RELEASE_VERSION#v}"
+          if [[ ! "${version}" =~ ^[0-9]+[.][0-9]+[.][0-9]+([-.][0-9A-Za-z.-]+)?$ ]]; then
+            echo "Invalid semver release tag: ${RELEASE_VERSION}" >&2
+            exit 1
+          fi
+          echo "version=${version}" >> "$GITHUB_OUTPUT"
+
+      - name: Set version in tauri.conf.json and Cargo.toml
+        shell: bash
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          python3 - <<'PY'
+          import json, os, pathlib, re
+          version = os.environ["VERSION"]
+
+          # tauri.conf.json — Tauri reads the bundle version from here.
+          conf = pathlib.Path("desktop/tauri.conf.json")
+          data = json.loads(conf.read_text())
+          data["version"] = version
+          conf.write_text(json.dumps(data, indent=2) + "\n")
+
+          # Cargo.toml — keep the crate version in sync.
+          cargo = pathlib.Path("desktop/Cargo.toml")
+          text, n = re.subn(r'(?m)^version = "[^"]+"',
+                            f'version = "{version}"', cargo.read_text(), count=1)
+          if n != 1:
+              raise SystemExit("Could not set version in desktop/Cargo.toml")
+          cargo.write_text(text)
+          PY
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v5
+        with:
+          node-version: 22
+
+      - name: Setup uv
+        uses: astral-sh/setup-uv@v6
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache cargo
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            desktop/target
+          key: desktop-cargo-${{ runner.os }}-${{ hashFiles('desktop/Cargo.lock') }}
+          restore-keys: desktop-cargo-${{ runner.os }}-
+
+      - name: Bake splash concepts
+        run: node desktop/scripts/extract-concepts.mjs
+
+      - name: Build supervisor sidecar
+        run: desktop/scripts/build-sidecar.sh
+
+      - name: Build DMG
+        working-directory: desktop
+        run: npx -y @tauri-apps/cli@latest build --config tauri.dist.conf.json
+        env:
+          # Signing/notarization only when secrets are present.
+          APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+
+      - name: Upload DMG to release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: desktop/target/release/bundle/dmg/Lemma_*_aarch64.dmg
