@@ -213,7 +213,7 @@ class Settings(BaseSettings):
     smtp_user: Optional[str] = Field(default=None, description="SMTP username")
     smtp_password: Optional[str] = Field(default=None, description="SMTP password")
     smtp_from_email: Optional[str] = Field(
-        default="noreply@example.com", description="From email address"
+        default=None, description="From email address"
     )
     smtp_from_name: str = Field(default="Lemma", description="From name")
     smtp_use_tls: bool = Field(default=True, description="Use TLS for SMTP")
