@@ -13,14 +13,31 @@ import pytest_asyncio
 from sqlalchemy import select
 
 from app.core.infrastructure.db.uow_factory import SessionUnitOfWorkFactory
+from app.core.test_utils import shared_kreuzberg
+
+
+@pytest_asyncio.fixture(scope="session")
+def kreuzberg_url(tmp_path_factory, worker_id):
+    """URL of the single Kreuzberg shared across all xdist workers.
+
+    These tests index datastore files in-process and search them, so they need a
+    real Kreuzberg. They use the base e2e_settings (not the datastore module's,
+    which wires Kreuzberg), so set it up here rather than relying on a datastore
+    test happening to run first on the same worker.
+    """
+    with shared_kreuzberg(tmp_path_factory.getbasetemp().parent, worker_id) as url:
+        yield url
 
 
 @pytest_asyncio.fixture(scope="function")
-async def index_datastore_file(db_manager):
+async def index_datastore_file(db_manager, kreuzberg_url):
+    from app.modules.datastore.config import datastore_settings
     from app.modules.datastore.infrastructure.models import DatastoreFile
     from app.modules.datastore.services.file_processing_service import (
         DatastoreFileProcessingService,
     )
+
+    datastore_settings.kreuzberg_url = kreuzberg_url
 
     async def _index(pod_id, file_id):
         async with db_manager.session_factory() as session:
