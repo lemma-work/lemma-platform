@@ -24,19 +24,24 @@ class Settings(BaseSettings):
         description="Database connection URL",
     )
     db_pool_size: int = Field(
-        default=20,
+        default=10,
         description=(
             "Primary SQLAlchemy connection pool size PER PROCESS. Each API or "
             "worker pod opens up to db_pool_size + db_max_overflow connections. "
             "With N replicas total, the ceiling is N × (db_pool_size + "
             "db_max_overflow + datastore_db_pool_size + "
             "datastore_db_max_overflow). This MUST stay under Postgres "
-            "max_connections (default 100). Scale down when adding replicas."
+            "max_connections (default 100). Scale down when adding replicas. "
+            "Default 10 is safe for 1 API + 1 worker (60 total with defaults). "
+            "Standalone dev can set DB_POOL_SIZE=20 DB_MAX_OVERFLOW=30."
         ),
     )
     db_max_overflow: int = Field(
-        default=30,
-        description="Overflow connections beyond db_pool_size before checkout blocks.",
+        default=10,
+        description=(
+            "Overflow connections beyond db_pool_size before checkout blocks. "
+            "Default 10 keeps per-process main pool at 20 max."
+        ),
     )
     db_pool_timeout_seconds: float = Field(
         default=10.0,
@@ -63,24 +68,28 @@ class Settings(BaseSettings):
         ),
     )
     datastore_db_pool_size: int = Field(
-        default=10,
+        default=5,
         description=(
             "Datastore SQLAlchemy connection pool size PER PROCESS. Each API "
             "or worker pod opens up to datastore_db_pool_size + "
             "datastore_db_max_overflow connections to the datastore database. "
-            "Scale down when adding replicas."
+            "Scale down when adding replicas. Default 5 keeps per-process "
+            "datastore pool at 10 max."
         ),
     )
     datastore_db_max_overflow: int = Field(
-        default=20,
-        description="Overflow connections beyond datastore_db_pool_size.",
+        default=5,
+        description=(
+            "Overflow connections beyond datastore_db_pool_size. "
+            "Default 5 keeps per-process datastore pool at 10 max."
+        ),
     )
     worker_concurrency: int = Field(
-        default=50,
+        default=20,
         description=(
             "Maximum concurrent streaq tasks per worker process. Should not "
-            "exceed db_pool_size + db_max_overflow, since each task that "
-            "opens a DB session consumes one pooled connection."
+            "exceed db_pool_size + db_max_overflow (default 20), since each "
+            "task that opens a DB session consumes one pooled connection."
         ),
     )
     postgres_max_connections: int = Field(
@@ -371,16 +380,18 @@ class Settings(BaseSettings):
             "http://127.0.0.1:4173",
             "http://localhost:5173",
             "http://127.0.0.1:5173",
-            # Tauri webview origins for the Lemma OS desktop app. The macOS WKWebView serves
-# the app from tauri://localhost; Windows/Linux use http://tauri.localhost.
-            "tauri://localhost", 
+            "tauri://localhost",
             "http://tauri.localhost"
         ],
         description="Allowed CORS origins",
     )
     cors_origin_regex: Optional[str] = Field(
-        default=None,
-        description="Optional regex for allowing dynamic frontend origins in CORS",
+        default=r"https?://(localhost|127\.0\.0\.\d+|127\.\d+\.\d+\.\d+|127-0-0-\d+\.sslip\.io|[\w-]+\.nip\.io)(:\d+)?",
+        description=(
+            "Permissive regex matched against request Origin for dev convenience "
+            "(loopback + sslip.io/nip.io wildcards); override via env var to lock "
+            "down. Combine with explicit cors_origins for production builds."
+        ),
     )
     session_cookie_domain: Optional[str] = Field(
         default=None,

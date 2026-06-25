@@ -23,7 +23,7 @@ def json_serial(obj):
     raise TypeError(f"Object of type {type(obj)} is not JSON serializable")
 
 
-def _set_idle_in_transaction_timeout(conn):
+def _set_idle_in_transaction_timeout(dbapi_conn, connection_record=None):
     """Set idle_in_transaction_session_timeout on each new raw DB connection.
 
     This is a server-side guard: Postgres automatically aborts any transaction
@@ -32,10 +32,12 @@ def _set_idle_in_transaction_timeout(conn):
     SQLAlchemy's rollback-on-checkin. This catches the "session held open
     during external I/O" anti-pattern at the database level, preventing a
     single leaked session from monopolizing a pooled connection indefinitely.
+
+    SQLAlchemy's PoolEvents.connect passes (dbapi_connection, connection_record).
     """
     timeout_ms = int(settings.db_idle_in_transaction_timeout_seconds * 1000)
     if timeout_ms > 0:
-        conn.execute(f"SET idle_in_transaction_session_timeout = {timeout_ms}")
+        dbapi_conn.execute(f"SET idle_in_transaction_session_timeout = {timeout_ms}")
 
 
 def _log_pool_utilization(pool):

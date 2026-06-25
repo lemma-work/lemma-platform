@@ -22,10 +22,10 @@ def _json_serial(obj):
     raise TypeError(f"Object of type {type(obj)} is not JSON serializable")
 
 
-def _set_datastore_idle_in_transaction_timeout(conn):
+def _set_datastore_idle_in_transaction_timeout(dbapi_conn, connection_record=None):
     timeout_ms = int(settings.db_idle_in_transaction_timeout_seconds * 1000)
     if timeout_ms > 0:
-        conn.execute(f"SET idle_in_transaction_session_timeout = {timeout_ms}")
+        dbapi_conn.execute(f"SET idle_in_transaction_session_timeout = {timeout_ms}")
 
 
 def get_datastore_engine():
