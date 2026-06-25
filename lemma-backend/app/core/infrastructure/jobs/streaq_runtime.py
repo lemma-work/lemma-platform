@@ -166,6 +166,35 @@ async def _safe_shutdown_step(
         logger.warning("Worker shutdown step failed", step=name, error=str(exc))
 
 
+async def _ensure_consumer_groups_once() -> None:
+    """Create every registered Redis consumer group once, before broker start.
+
+    Closes the broker-start race where a subscriber polls a not-yet-created
+    group, gets NOGROUP, and stops permanently. Idempotent (BUSYGROUP is a
+    no-op) and never raises — group plumbing must not block worker startup.
+    """
+    import redis.asyncio as redis
+
+    from app.core.infrastructure.events.stream_subscriber import (
+        ensure_consumer_groups,
+        registered_stream_groups,
+    )
+
+    client = redis.from_url(settings.redis_url, decode_responses=False)
+    try:
+        registered = len(registered_stream_groups())
+        created = await ensure_consumer_groups(client, warn_on_create=False)
+        logger.info(
+            "Pre-created Redis consumer groups before broker start",
+            registered=registered,
+            created=created,
+        )
+    except Exception as exc:  # pragma: no cover - defensive
+        logger.warning("Initial consumer group ensure failed", error=str(exc))
+    finally:
+        await client.aclose()
+
+
 async def _consumer_group_reconcile_loop() -> None:
     """Periodically re-ensure Redis consumer groups exist.
 
@@ -202,6 +231,13 @@ async def worker_lifespan() -> AsyncGenerator[AppWorkerContext]:
     )
     init_telemetry(service_name="gappy-worker")
     instrument_database_engine(get_engine())
+    # Pre-create Redis consumer groups BEFORE the broker starts its subscribers.
+    # Several subscribers share a stream (e.g. workflow + surface both consume
+    # `schedule_events`); at broker.start FastStream races to create each group,
+    # and any subscriber that polls before its group exists gets NOGROUP and
+    # stops permanently — the reconcile loop cannot revive a stopped subscriber.
+    # Pre-creating closes that race so every subscriber attaches to a live group.
+    await _ensure_consumer_groups_once()
     await broker.start()
     await channel_service.connect()
     job_queue = get_streaq_job_queue()
