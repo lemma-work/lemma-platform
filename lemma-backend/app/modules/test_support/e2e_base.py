@@ -502,19 +502,42 @@ async def db_manager(e2e_settings) -> AsyncGenerator[DatabaseManager, None]:
         pod_role_models,
     )
 
-    async with manager.engine.begin() as conn:
-        # Serialize with the worker's PostgresSearchService.ensure_schema(), which
-        # also runs CREATE EXTENSION under this advisory key. Two concurrent
-        # CREATE EXTENSION on the shared pg_extension catalog otherwise deadlock
-        # (the worker indexes datastore files in parallel with per-test setup).
-        # Key must match _ENSURE_SCHEMA_LOCK_KEY in postgres_search_service.
-        await conn.execute(text("SELECT pg_advisory_xact_lock(:key)"), {"key": 0x6C656D6D61})
-        await conn.execute(text("CREATE EXTENSION IF NOT EXISTS vector"))
+    import asyncio as _asyncio
 
-    # Idempotent (checkfirst) — creates the schema on the first test, no-ops after.
-    await manager.create_tables()
-    # Start each test from a clean slate without dropping the schema.
-    await manager.truncate_all()
+    from sqlalchemy.exc import DBAPIError
+
+    # The shared session worker runs agent/datastore transactions concurrently
+    # with this per-test setup; its row writes can deadlock the truncation DELETE
+    # (or the advisory-locked CREATE EXTENSION), and Postgres aborts one side as
+    # the victim. Retry the whole setup — the conflicting transaction clears
+    # within a beat — instead of failing a random test's setup each run.
+    last_exc: BaseException | None = None
+    for _attempt in range(6):
+        try:
+            async with manager.engine.begin() as conn:
+                # Serialize with PostgresSearchService.ensure_schema(), which also
+                # runs CREATE EXTENSION under this advisory key (concurrent
+                # CREATE EXTENSION on pg_extension otherwise deadlocks). Key must
+                # match _ENSURE_SCHEMA_LOCK_KEY in postgres_search_service.
+                await conn.execute(
+                    text("SELECT pg_advisory_xact_lock(:key)"), {"key": 0x6C656D6D61}
+                )
+                await conn.execute(text("CREATE EXTENSION IF NOT EXISTS vector"))
+            # Idempotent (checkfirst) — creates schema on the first test, no-ops after.
+            await manager.create_tables()
+            # Start each test from a clean slate without dropping the schema.
+            await manager.truncate_all()
+            break
+        except DBAPIError as exc:
+            message = str(exc).lower()
+            if "deadlock" not in message and "lock" not in message:
+                raise
+            last_exc = exc
+            await _asyncio.sleep(0.3 * (_attempt + 1))
+    else:
+        assert last_exc is not None
+        raise last_exc
+
     yield manager
     await manager.close()
 
