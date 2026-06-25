@@ -91,6 +91,13 @@ services:
       DATASTORE_DB_POOL_SIZE: "5"
       DATASTORE_DB_MAX_OVERFLOW: "5"
       WORKER_CONCURRENCY: "20"
+      # Mock LLM: deterministic in-process pydantic-ai FunctionModel — no real
+      # model, API key, or agentbox. The journey scripts each response via
+      # conversation.metadata.mock_llm_script (text deltas + a write_todos call).
+      # Placeholder key so default runtime-profile resolution succeeds; the mock
+      # short-circuits model construction before it is ever used.
+      E2E_LLM_MODE: "mock"
+      LEMMA_OPENAI_API_KEY: "EMPTY"
     ports:
       - "8000:8000"
     depends_on:
@@ -137,6 +144,10 @@ services:
       DATASTORE_DB_POOL_SIZE: "5"
       DATASTORE_DB_MAX_OVERFLOW: "5"
       WORKER_CONCURRENCY: "20"
+      # Mock LLM (see api service above): the worker runs the real agent harness
+      # but with the deterministic FunctionModel instead of a real provider.
+      E2E_LLM_MODE: "mock"
+      LEMMA_OPENAI_API_KEY: "EMPTY"
     depends_on:
       db:
         condition: service_healthy

@@ -1,0 +1,4 @@
+# Generated load-test run artifacts
+.env.load_test
+journey_summary.json
+*.csv
