@@ -3,6 +3,7 @@ from __future__ import annotations
 from datetime import datetime, timezone
 
 from sqlalchemy import func, select
+from sqlalchemy.exc import IntegrityError
 
 from app.core.domain.uow import IUnitOfWork
 from app.modules.agent_surfaces.domain.entities import ExternalSurfaceUserEntity
@@ -64,9 +65,26 @@ class ExternalSurfaceUserRepository:
                 resolved_user_id=resolved_user_id,
                 last_seen_at=datetime.now(timezone.utc),
             )
-            self.session.add(model)
-            await self.session.flush()
-            return model.to_entity()
+            try:
+                # SAVEPOINT: a concurrent ingress for the same identity (the same
+                # user messaging via DM and a channel, or two webhook deliveries)
+                # races this check-then-insert and violates the
+                # (platform, tenant, external_user) unique constraint. Isolate the
+                # failed insert so it rolls back to the savepoint instead of
+                # poisoning the surrounding transaction, then fall through to load
+                # and update the row the other writer created.
+                async with self.session.begin_nested():
+                    self.session.add(model)
+                    await self.session.flush()
+                return model.to_entity()
+            except IntegrityError:
+                existing = await self.get_by_identity(
+                    platform=platform,
+                    tenant_id=tenant_id,
+                    external_user_id=external_user_id,
+                )
+                if existing is None:
+                    raise
 
         instance = await self.session.get(AgentSurfaceExternalUser, existing.id)
         if instance is None:
