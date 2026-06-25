@@ -64,6 +64,34 @@ from app.core.log.log import get_logger
 logger = get_logger(__name__)
 StopChecker = Callable[[], Awaitable[bool]]
 
+
+def _user_facing_error_message(exc: Exception) -> str:
+    """Return a sanitized, actionable message for the UI.
+
+    Never forward raw provider exception text (which may contain API keys,
+    request headers, or model-internal details) into user-visible payloads.
+    """
+    if isinstance(exc, ModelHTTPError):
+        return (
+            f"The model provider returned an error (HTTP {exc.status_code}). "
+            "Please check the agent runtime configuration."
+        )
+    if isinstance(exc, UnexpectedModelBehavior):
+        return (
+            "A tool failed repeatedly after several attempts and the run was "
+            "stopped. Please check the agent configuration."
+        )
+    if isinstance(exc, UsageLimitExceeded):
+        return (
+            "The agent run hit a usage limit. "
+            "Please check the agent runtime configuration."
+        )
+    return (
+        "The model provider returned an error. "
+        "Please check the agent runtime configuration."
+    )
+
+
 # Per-tool retry budget for the in-process agent. pydantic-ai defaults to 1, which
 # turns a single bad/invalid tool call (e.g. arguments that fail schema validation)
 # into a fatal run. 5 gives the model several chances to self-correct from the
@@ -113,7 +141,7 @@ class PydanticAIHarness:
             logger.error("Model provider rejected agent request: %s", exc)
             yield AgentEvent(
                 type=AgentEventType.ERROR,
-                data=str(exc),
+                data=_user_facing_error_message(exc),
                 agent_run_id=agent_run_id,
             )
             return
@@ -124,10 +152,7 @@ class PydanticAIHarness:
             logger.warning("Agent run ended after repeated tool failures: %s", exc)
             yield AgentEvent(
                 type=AgentEventType.ERROR,
-                data=(
-                    "A tool failed repeatedly after several attempts and the run was "
-                    f"stopped: {exc}"
-                ),
+                data=_user_facing_error_message(exc),
                 agent_run_id=agent_run_id,
             )
             return
@@ -135,7 +160,7 @@ class PydanticAIHarness:
             logger.warning("Agent run hit a usage limit: %s", exc)
             yield AgentEvent(
                 type=AgentEventType.ERROR,
-                data=str(exc),
+                data=_user_facing_error_message(exc),
                 agent_run_id=agent_run_id,
             )
             return
@@ -159,7 +184,7 @@ class PydanticAIHarness:
             logger.error("PydanticAI harness execution failed: %s", exc, exc_info=True)
             yield AgentEvent(
                 type=AgentEventType.ERROR,
-                data=str(exc),
+                data=_user_facing_error_message(exc),
                 agent_run_id=agent_run_id,
             )
             return

@@ -417,20 +417,35 @@ class AgentRunnerService:
                 )
             # Shield so the DB write succeeds even when we're inside a cancelled
             # anyio cancel scope (e.g. streaq task timeout or worker shutdown).
+            # Any finalization error is swallowed and logged; the important thing
+            # is that the worker task does not crash because of a shutdown-time
+            # cancellation or a transient DB error.
             with anyio.CancelScope(shield=True):
-                await self._finish_agent_run(
-                    conversation_id=conversation.id,
-                    agent_run_id=agent_run_id,
-                    status=AgentRunStatus.FAILED,
-                    error=str(exc) if isinstance(exc, Exception) else "Agent run was interrupted (timeout or shutdown)",
-                    organization_id=conversation.organization_id,
-                    pod_id=conversation.pod_id,
-                    user_id=user_id,
-                    agent_id=conversation.agent_id,
-                    started_at=agent_run.started_at,
-                    runtime_profile=runtime_profile_snapshot,
-                    usage_reservation=usage_reservation,
-                )
+                try:
+                    await self._finish_agent_run(
+                        conversation_id=conversation.id,
+                        agent_run_id=agent_run_id,
+                        status=AgentRunStatus.FAILED,
+                        error=(
+                            "Agent run failed. Please check the agent runtime configuration."
+                            if isinstance(exc, Exception)
+                            else "Agent run was interrupted (timeout or shutdown)"
+                        ),
+                        organization_id=conversation.organization_id,
+                        pod_id=conversation.pod_id,
+                        user_id=user_id,
+                        agent_id=conversation.agent_id,
+                        started_at=agent_run.started_at,
+                        runtime_profile=runtime_profile_snapshot,
+                        usage_reservation=usage_reservation,
+                    )
+                except Exception as finalize_exc:
+                    logger.error(
+                        "Agent run finalization failed after error run=%s: %s",
+                        agent_run_id,
+                        finalize_exc,
+                        exc_info=True,
+                    )
             if not isinstance(exc, Exception):
                 raise
 
@@ -706,61 +721,75 @@ class AgentRunnerService:
         runtime_profile: dict[str, object | None] | None = None,
         usage_reservation: UsageReservation | None = None,
     ) -> None:
-        async with self.uow_factory() as uow:
-            finish_result = await ConversationRepository(uow).finish_agent_run(
-                agent_run_id=agent_run_id,
-                status=status,
-                conversation_status=conversation_status,
-                error=error,
-                output_data=output_data,
-            )
-        if finish_result is None or not finish_result.updated:
-            await self.usage_recorder.release(usage_reservation)
-            return
-        status = finish_result.status
-        conversation_status = finish_result.conversation_status
-        if status == AgentRunStatus.STOPPED:
-            error = None
-        event_data: JsonObject = {}
-        if error:
-            event_data["error"] = error
-        if output_data is not None:
-            event_data["output_data"] = output_data
-        event_data["conversation_status"] = conversation_status.value
-        event = AgentRunCompletedEvent(
-            conversation_id=conversation_id,
-            agent_run_id=agent_run_id,
-            status=status,
-            data=event_data or None,
-        )
-        if status == AgentRunStatus.FAILED:
-            await publish_conversation_event(
-                conversation_id,
-                error_payload(agent_run_id, error or "Agent run failed"),
-            )
-        await publish_conversation_event(
-            conversation_id,
-            completed_payload(
+        try:
+            async with self.uow_factory() as uow:
+                finish_result = await ConversationRepository(uow).finish_agent_run(
+                    agent_run_id=agent_run_id,
+                    status=status,
+                    conversation_status=conversation_status,
+                    error=error,
+                    output_data=output_data,
+                )
+            if finish_result is None or not finish_result.updated:
+                await self.usage_recorder.release(usage_reservation)
+                return
+            status = finish_result.status
+            conversation_status = finish_result.conversation_status
+            if status == AgentRunStatus.STOPPED:
+                error = None
+            event_data: JsonObject = {}
+            if error:
+                event_data["error"] = error
+            if output_data is not None:
+                event_data["output_data"] = output_data
+            event_data["conversation_status"] = conversation_status.value
+            event = AgentRunCompletedEvent(
                 conversation_id=conversation_id,
                 agent_run_id=agent_run_id,
-                status=status.value,
+                status=status,
                 data=event_data or None,
-            ),
-        )
-        await self._publish_lifecycle_event(event)
-        await self._publish_usage_event(
-            conversation_id=conversation_id,
-            agent_run_id=agent_run_id,
-            status=status,
-            usage_data=usage_data,
-            organization_id=organization_id,
-            pod_id=pod_id,
-            user_id=user_id,
-            agent_id=agent_id,
-            started_at=started_at,
-            runtime_profile=runtime_profile,
-            usage_reservation=usage_reservation,
-        )
+            )
+            if status == AgentRunStatus.FAILED:
+                await publish_conversation_event(
+                    conversation_id,
+                    error_payload(agent_run_id, error or "Agent run failed"),
+                )
+            await publish_conversation_event(
+                conversation_id,
+                completed_payload(
+                    conversation_id=conversation_id,
+                    agent_run_id=agent_run_id,
+                    status=status.value,
+                    data=event_data or None,
+                ),
+            )
+            await self._publish_lifecycle_event(event)
+            await self._publish_usage_event(
+                conversation_id=conversation_id,
+                agent_run_id=agent_run_id,
+                status=status,
+                usage_data=usage_data,
+                organization_id=organization_id,
+                pod_id=pod_id,
+                user_id=user_id,
+                agent_id=agent_id,
+                started_at=started_at,
+                runtime_profile=runtime_profile,
+                usage_reservation=usage_reservation,
+            )
+        except Exception as exc:
+            logger.error(
+                "Failed to finalize agent run run=%s: %s", agent_run_id, exc, exc_info=True
+            )
+            try:
+                await self.usage_recorder.release(usage_reservation)
+            except Exception as release_exc:
+                logger.warning(
+                    "Failed to release usage reservation run=%s: %s",
+                    agent_run_id,
+                    release_exc,
+                )
+            return
 
     async def _publish_lifecycle_event(self, event: object) -> None:
         await EventPublisher.publish(AGENT_EVENTS_STREAM, event)
