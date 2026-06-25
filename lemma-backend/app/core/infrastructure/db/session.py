@@ -85,7 +85,51 @@ def get_engine():
         if settings.environment != "testing":
             event.listen(engine.sync_engine, "connect", _set_idle_in_transaction_timeout)
             event.listen(engine.sync_engine.pool, "checkout", _log_pool_utilization)
+            _log_connection_budget()
     return engine
+
+
+def _log_connection_budget() -> None:
+    """Log the per-process DB connection ceiling and warn about multi-pod math.
+
+    Each process (API or worker pod) can open up to:
+      (db_pool_size + db_max_overflow) + (datastore_db_pool_size + datastore_db_max_overflow)
+
+    With N replicas, the cluster-wide ceiling is N × per_process_max.
+    This must stay under Postgres max_connections (default 100).
+    """
+    main_max = settings.db_pool_size + settings.db_max_overflow
+    datastore_max = settings.datastore_db_pool_size + settings.datastore_db_max_overflow
+    per_process = main_max + datastore_max
+    pg_max = settings.postgres_max_connections
+
+    logger.info(
+        "DB connection pool budget",
+        extra={
+            "main_pool_max": main_max,
+            "datastore_pool_max": datastore_max,
+            "per_process_max": per_process,
+            "postgres_max_connections": pg_max,
+        },
+    )
+
+    if per_process >= pg_max:
+        logger.warning(
+            "Per-process DB connection ceiling (%d) >= Postgres max_connections (%d). "
+            "Even a single process can exhaust the server. Reduce pool sizes or "
+            "increase Postgres max_connections.",
+            per_process,
+            pg_max,
+        )
+    elif per_process * 2 > pg_max:
+        logger.warning(
+            "Two processes (API + worker) would open up to %d connections "
+            "(%d each), exceeding Postgres max_connections (%d). "
+            "Scale pool sizes down or increase Postgres max_connections.",
+            per_process * 2,
+            per_process,
+            pg_max,
+        )
 
 
 def get_session_maker():

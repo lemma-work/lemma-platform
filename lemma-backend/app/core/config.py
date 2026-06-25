@@ -26,16 +26,17 @@ class Settings(BaseSettings):
     db_pool_size: int = Field(
         default=20,
         description=(
-            "Primary SQLAlchemy connection pool size. The single-process dev app "
-            "(standalone_app) runs the HTTP API and the embedded agent worker on "
-            "one engine, and agents' in-container CLI calls re-enter the backend, "
-            "so the SQLAlchemy default of 5 is far too small and causes "
-            "pool-checkout hangs."
+            "Primary SQLAlchemy connection pool size PER PROCESS. Each API or "
+            "worker pod opens up to db_pool_size + db_max_overflow connections. "
+            "With N replicas total, the ceiling is N × (db_pool_size + "
+            "db_max_overflow + datastore_db_pool_size + "
+            "datastore_db_max_overflow). This MUST stay under Postgres "
+            "max_connections (default 100). Scale down when adding replicas."
         ),
     )
     db_max_overflow: int = Field(
         default=30,
-        description="Overflow connections allowed beyond db_pool_size before checkout blocks.",
+        description="Overflow connections beyond db_pool_size before checkout blocks.",
     )
     db_pool_timeout_seconds: float = Field(
         default=10.0,
@@ -61,12 +62,33 @@ class Settings(BaseSettings):
             "during external I/O' anti-pattern at the database level."
         ),
     )
+    datastore_db_pool_size: int = Field(
+        default=10,
+        description=(
+            "Datastore SQLAlchemy connection pool size PER PROCESS. Each API "
+            "or worker pod opens up to datastore_db_pool_size + "
+            "datastore_db_max_overflow connections to the datastore database. "
+            "Scale down when adding replicas."
+        ),
+    )
+    datastore_db_max_overflow: int = Field(
+        default=20,
+        description="Overflow connections beyond datastore_db_pool_size.",
+    )
     worker_concurrency: int = Field(
         default=50,
         description=(
             "Maximum concurrent streaq tasks per worker process. Should not "
             "exceed db_pool_size + db_max_overflow, since each task that "
             "opens a DB session consumes one pooled connection."
+        ),
+    )
+    postgres_max_connections: int = Field(
+        default=100,
+        description=(
+            "PostgreSQL max_connections setting. Used at startup to warn if "
+            "the per-process pool ceiling could exceed the server limit. "
+            "Set to the actual value in your Postgres config."
         ),
     )
     redis_url: str = Field(

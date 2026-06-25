@@ -36,8 +36,8 @@ def get_datastore_engine():
         if settings.environment == "testing":
             engine_kwargs["poolclass"] = NullPool
         else:
-            engine_kwargs["pool_size"] = 10
-            engine_kwargs["max_overflow"] = 20
+            engine_kwargs["pool_size"] = settings.datastore_db_pool_size
+            engine_kwargs["max_overflow"] = settings.datastore_db_max_overflow
             engine_kwargs["pool_recycle"] = settings.db_pool_recycle_seconds
         _engine = create_async_engine(
             url,
