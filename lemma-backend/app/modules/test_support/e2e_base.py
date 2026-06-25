@@ -236,6 +236,13 @@ def e2e_settings(test_database_url, test_redis_url, supertokens_container):
     os.environ["E2E_LLM_MODE"] = llm_mode
     os.environ["E2E_SANDBOX_MODE"] = sandbox_mode
 
+    # A single Kreuzberg is shared across all xdist workers (see datastore
+    # conftest); under concurrent indexing load it can briefly stall or be
+    # OOM-restarted by host memory pressure. Allow more transient retries than
+    # the prod default (5) so extraction rides that out instead of failing.
+    # Set on os.environ so the worker subprocess (which indexes) inherits it.
+    os.environ.setdefault("KREUZBERG_TRANSIENT_RETRY_ATTEMPTS", "8")
+
     if sandbox_mode == "fake":
         _start_fake_agentbox(agentbox_port)
 

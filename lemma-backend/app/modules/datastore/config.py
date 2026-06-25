@@ -91,6 +91,18 @@ class DatastoreSettings(BaseSettings):
         default=180.0,
         description="HTTP timeout (seconds) for Kreuzberg extract and chunk requests",
     )
+    kreuzberg_transient_retry_attempts: int = Field(
+        default=5,
+        description=(
+            "Attempts for transient (connection/timeout) Kreuzberg failures before "
+            "giving up. Bump in resource-constrained CI/e2e where a single shared "
+            "Kreuzberg can briefly stall under concurrent load."
+        ),
+    )
+    kreuzberg_transient_retry_base_delay_seconds: float = Field(
+        default=0.5,
+        description="Base delay (seconds) for exponential backoff between Kreuzberg retries.",
+    )
 
     # PDF page rendering (on-demand, in-backend via pypdfium2 + Pillow)
     pdf_render_dpi: int = Field(

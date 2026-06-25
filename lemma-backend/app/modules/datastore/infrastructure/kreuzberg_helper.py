@@ -26,9 +26,11 @@ logger = get_logger(__name__)
 # outright (which would mark the file FAILED and wait on the recovery cron).
 # HTTP 4xx/5xx responses are NOT retried here; those are handled by the
 # config-fallback layer.
-# 5 attempts with 0.5s base ⇒ backoff 0.5+1+2+4 = 7.5s of waiting, enough to
-# ride out a Kreuzberg container restart (e.g. after an OOM kill under burst
-# load) instead of failing the extraction outright.
+# Defaults: 5 attempts with 0.5s base ⇒ backoff 0.5+1+2+4 = 7.5s of waiting,
+# enough to ride out a Kreuzberg container restart (e.g. after an OOM kill under
+# burst load). Both are overridable via datastore_settings (read at call time)
+# so resource-constrained CI/e2e — where a single shared Kreuzberg serves several
+# parallel workers — can wait longer instead of failing the extraction outright.
 _TRANSIENT_RETRY_ATTEMPTS = 5
 _TRANSIENT_RETRY_BASE_DELAY_SECONDS = 0.5
 
@@ -523,7 +525,16 @@ class KreuzbergHelper:
                 content_type="application/json",
             )
 
-        for attempt in range(_TRANSIENT_RETRY_ATTEMPTS):
+        max_attempts = (
+            datastore_settings.kreuzberg_transient_retry_attempts
+            or _TRANSIENT_RETRY_ATTEMPTS
+        )
+        base_delay = (
+            datastore_settings.kreuzberg_transient_retry_base_delay_seconds
+            or _TRANSIENT_RETRY_BASE_DELAY_SECONDS
+        )
+
+        for attempt in range(max_attempts):
             try:
                 async with session.post(
                     f"{self.base_url}/extract",
@@ -540,14 +551,14 @@ class KreuzbergHelper:
             except (aiohttp.ClientConnectionError, asyncio.TimeoutError, TimeoutError) as exc:
                 # Transient: the service was briefly unreachable. Retry the same
                 # request with backoff before giving up.
-                if attempt < _TRANSIENT_RETRY_ATTEMPTS - 1:
-                    delay = _TRANSIENT_RETRY_BASE_DELAY_SECONDS * (2**attempt)
+                if attempt < max_attempts - 1:
+                    delay = base_delay * (2**attempt)
                     logger.warning(
                         "Kreuzberg extract connection failed for %s (attempt %d/%d); "
                         "retrying in %.1fs",
                         filename,
                         attempt + 1,
-                        _TRANSIENT_RETRY_ATTEMPTS,
+                        max_attempts,
                         delay,
                     )
                     await asyncio.sleep(delay)

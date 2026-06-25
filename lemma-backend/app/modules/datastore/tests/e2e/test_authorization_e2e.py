@@ -23,6 +23,17 @@ from app.modules.test_support.e2e_authz import create_role_visibility_context
 
 pytestmark = pytest.mark.e2e
 
+# pod-member-sync asynchronously creates this internal table the first time a pod
+# has members. It is not the subject of these role-visibility checks and its
+# creation races the assertions under parallel load, so exclude it from table
+# name comparisons.
+_RESERVED_USERS_TABLE = "reserved_users"
+
+
+def _table_names(listing: dict) -> set[str]:
+    """Table names in a list response, minus the internal reserved_users table."""
+    return {item["name"] for item in listing["items"]} - {_RESERVED_USERS_TABLE}
+
 
 class TestDatastoreAuthorizationBoundaries:
     @pytest.mark.asyncio
@@ -232,12 +243,10 @@ class TestDatastoreAuthorizationBoundaries:
         )
 
         viewer_tables = await viewer_api.list_tables(limit=20)
-        assert {item["name"] for item in viewer_tables["items"]} == {
-            table_names["default"]
-        }
+        assert _table_names(viewer_tables) == {table_names["default"]}
 
         editor_tables = await editor_api.list_tables(limit=20)
-        assert {item["name"] for item in editor_tables["items"]} == {
+        assert _table_names(editor_tables) == {
             table_names["default"],
             table_names["editor"],
         }
@@ -266,7 +275,7 @@ class TestDatastoreAuthorizationBoundaries:
         }
 
         custom_tables = await custom_api.list_tables(limit=20)
-        assert {item["name"] for item in custom_tables["items"]} == {
+        assert _table_names(custom_tables) == {
             table_names["default"],
             table_names["custom"],
         }
