@@ -21,6 +21,12 @@ EXPECTED = [
     ("pdf_ocr_detection_min_chars_per_page", "PDF_OCR_DETECTION_MIN_CHARS_PER_PAGE", 100),
     ("kreuzberg_url", "KREUZBERG_URL", "http://localhost:8002"),
     ("kreuzberg_request_timeout_seconds", "KREUZBERG_REQUEST_TIMEOUT_SECONDS", 180.0),
+    ("kreuzberg_transient_retry_attempts", "KREUZBERG_TRANSIENT_RETRY_ATTEMPTS", 5),
+    (
+        "kreuzberg_transient_retry_base_delay_seconds",
+        "KREUZBERG_TRANSIENT_RETRY_BASE_DELAY_SECONDS",
+        0.5,
+    ),
     ("pdf_render_dpi", "PDF_RENDER_DPI", 150),
     ("pdf_render_max_long_edge", "PDF_RENDER_MAX_LONG_EDGE", 1568),
     ("pdf_render_jpeg_quality", "PDF_RENDER_JPEG_QUALITY", 80),

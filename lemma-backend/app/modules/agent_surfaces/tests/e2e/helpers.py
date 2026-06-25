@@ -43,6 +43,7 @@ from app.modules.agent.infrastructure.models import (
     ConversationModel,
 )
 from app.modules.agent.services.agent_runner_service import AgentRunnerService
+from app.modules.agent.services.conversation_service import suppress_agent_run_enqueue
 from app.modules.agent_surfaces.domain.ingress_context import (
     SurfaceChatContext,
     SurfaceReplyContext,
@@ -510,7 +511,12 @@ async def _process_ingress_and_emulate_reply(
     assert context is not None
     await uow.commit()
 
-    await handler.execute_chat(context)
+    # Run the agent inline below (so its reply is delivered via the in-test fake
+    # platform servers); suppress the worker-dispatch event so the shared session
+    # worker doesn't also run it and race a duplicate (mock) reply onto the
+    # conversation.
+    with suppress_agent_run_enqueue():
+        await handler.execute_chat(context)
     if isinstance(context, SurfaceChatContext):
         await _run_agent_and_deliver_surface_reply(
             db_session=db_session,
