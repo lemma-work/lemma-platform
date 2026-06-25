@@ -7,8 +7,9 @@ current cancel scope") — and the interrupted run must be finalized to a termin
 status rather than left stuck in RUNNING.
 
 This validates:
-  * AgentRunnerService.execute / PydanticAIHarness shielding finalization with
-    asyncio.shield (not anyio.CancelScope) and swallowing CancelledError, and
+  * PydanticAIHarness running agent.iter() in a child task so its anyio cancel
+    scopes never corrupt streaq's, plus AgentRunnerService.execute finalizing in
+    a same-task anyio shield and swallowing CancelledError, and
   * the worker grace_period that lets that finalization commit before the engine
     is disposed.
 
@@ -28,7 +29,6 @@ from uuid import UUID, uuid4
 
 import pytest
 import pytest_asyncio
-import redis.asyncio as redis
 from streaq.task import TaskStatus
 
 from app.core.infrastructure.db.session import async_session_maker
@@ -37,7 +37,6 @@ from app.core.infrastructure.jobs.streaq_job_queue import create_streaq_client
 from app.modules.agent.domain.events import AgentRunStartedEvent
 from app.modules.agent.domain.value_objects import (
     AgentRuntimeConfig,
-    AgentRunStatus,
     MessageDraft,
     MessageRole,
     TERMINAL_AGENT_RUN_STATUSES,
@@ -69,11 +68,11 @@ async def cancellable_worker(e2e_settings):
 
     Mirrors the shared session ``worker`` fixture but function-scoped, and yields
     ``(proc, log_path)`` so the test drives the process lifecycle itself.
-    """
-    redis_client = redis.from_url(e2e_settings.redis_url, decode_responses=False)
-    await redis_client.flushdb()
-    await redis_client.aclose()
 
+    Deliberately does NOT flush Redis: flushing would delete the shared session
+    worker's consumer groups and trigger the very supervisor retry-storm this
+    suite guards against. The run is targeted by a unique job id instead.
+    """
     log_path = f"/tmp/gappy_cancel_worker_{uuid4().hex}.log"
     backend_root = Path(__file__).resolve().parents[5]
     log_file = open(log_path, "w+")
@@ -137,9 +136,6 @@ async def cancellable_worker(e2e_settings):
             except subprocess.TimeoutExpired:
                 proc.kill()
         log_file.close()
-        redis_client = redis.from_url(e2e_settings.redis_url, decode_responses=False)
-        await redis_client.flushdb()
-        await redis_client.aclose()
 
 
 async def _create_pod(authenticated_client, fixed_test_org) -> str:

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 from collections.abc import AsyncGenerator, Awaitable, Callable
 from contextlib import AsyncExitStack, asynccontextmanager
 from dataclasses import dataclass
@@ -165,6 +166,32 @@ async def _safe_shutdown_step(
         logger.warning("Worker shutdown step failed", step=name, error=str(exc))
 
 
+async def _consumer_group_reconcile_loop() -> None:
+    """Periodically re-ensure Redis consumer groups exist.
+
+    Self-heals the FastStream supervisor retry-storm: if a consumer group is lost
+    (flush / failover / eviction / trim), the subscriber's consume loop spins on
+    NOGROUP forever. Recreating the group lets the next retry succeed and the
+    subscriber resume — no manual restart. Cheap (one Redis connection, a handful
+    of idempotent XGROUP CREATE calls per tick).
+    """
+    import redis.asyncio as redis
+
+    from app.core.infrastructure.events.stream_subscriber import ensure_consumer_groups
+
+    interval = settings.consumer_group_reconcile_interval_seconds
+    client = redis.from_url(settings.redis_url, decode_responses=False)
+    try:
+        while True:
+            try:
+                await ensure_consumer_groups(client)
+            except Exception as exc:  # pragma: no cover - defensive
+                logger.warning("Consumer group reconcile failed", error=str(exc))
+            await asyncio.sleep(interval)
+    finally:
+        await client.aclose()
+
+
 @asynccontextmanager
 async def worker_lifespan() -> AsyncGenerator[AppWorkerContext]:
     setup_logging(
@@ -192,6 +219,10 @@ async def worker_lifespan() -> AsyncGenerator[AppWorkerContext]:
     from app.core.registry.assembly import enter_worker_lifespans
     from app.core.registry.installed import OSS_MODULES
 
+    reconcile_task: asyncio.Task[None] | None = None
+    if settings.consumer_group_reconcile_interval_seconds > 0:
+        reconcile_task = asyncio.create_task(_consumer_group_reconcile_loop())
+
     try:
         # Module-contributed worker lifespans (e.g. agent_surfaces native event
         # receiver + dedupe-store close; datastore reindex-queue close). Entered
@@ -200,6 +231,12 @@ async def worker_lifespan() -> AsyncGenerator[AppWorkerContext]:
             await enter_worker_lifespans(module_stack, OSS_MODULES, context)
             yield context
     finally:
+        if reconcile_task is not None and not reconcile_task.done():
+            reconcile_task.cancel()
+            try:
+                await reconcile_task
+            except BaseException:
+                pass
         await _safe_shutdown_step("broker.stop", broker.stop)
         await _safe_shutdown_step("close_streaq_job_queue", close_streaq_job_queue)
         await _safe_shutdown_step("close_message_bus", close_message_bus)

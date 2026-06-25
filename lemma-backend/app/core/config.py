@@ -151,6 +151,16 @@ class Settings(BaseSettings):
             "Higher values reduce idle XREAD/XREADGROUP volume at the cost of slightly higher event pickup latency."
         ),
     )
+    consumer_group_reconcile_interval_seconds: float = Field(
+        default=30.0,
+        description=(
+            "How often the worker re-ensures Redis consumer groups exist. Bounds "
+            "the FastStream supervisor retry-storm if a group is lost (flush / "
+            "failover / eviction): the lost group is recreated within this window "
+            "and the subscriber resumes instead of spinning forever. Set to 0 to "
+            "disable the background reconcile loop."
+        ),
+    )
     local_agent_runtime_config_path: str = Field(
         default_factory=lambda: str(
             _default_local_root() / "lemma" / "agent-runtime.json"
