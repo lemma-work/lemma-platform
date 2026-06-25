@@ -23,3 +23,9 @@ lcov.info
 # Python bytecode
 __pycache__/
 *.py[cod]
+
+# Dev stack pid files (written by `make dev` / `make stop`)
+/.dev-pids
+*.dev-backend.pid
+*.dev-frontend.pid
+*.dev-infra.pid

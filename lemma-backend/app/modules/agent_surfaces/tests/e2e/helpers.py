@@ -52,7 +52,7 @@ from app.modules.agent_surfaces.domain.ingress_request import (
     SurfacePlatformWebhookIngress,
     SurfaceScheduleIngress,
 )
-from app.modules.agent_surfaces.events.handlers import provide_surface_event_handler
+from app.modules.agent_surfaces.events.handlers import build_surface_event_handler
 from app.modules.agent_surfaces.services.progress_observer import (
     SurfaceAgentRunProgressObserver,
 )
@@ -505,7 +505,7 @@ async def _process_ingress_and_emulate_reply(
     harness: EmulatedAgentHarness,
 ) -> SurfaceContext:
     uow = SqlAlchemyUnitOfWork(db_session)
-    handler = provide_surface_event_handler(uow)
+    handler = build_surface_event_handler(uow)
     context = await handler.prepare_ingress(request)
     assert context is not None
     await uow.commit()
@@ -555,7 +555,7 @@ async def _run_agent_and_deliver_surface_reply(
         agent_name=context.agent_name,
         observer=SurfaceAgentRunProgressObserver(
             uow_factory=SessionUnitOfWorkFactory(async_session_maker),
-            service_factory=provide_surface_event_handler,
+            service_factory=build_surface_event_handler,
         ),
     )
 

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from contextlib import asynccontextmanager
 from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, Mock
@@ -742,6 +743,112 @@ async def test_execute_chat_starts_agent_run_with_surface_metadata():
     assert kwargs["message_metadata"]["external_message_id"] == "1700000000.000100"
 
 
+async def test_execute_chat_factory_mode_holds_no_session_during_io(monkeypatch):
+    """In worker (uow_factory) mode, execute_chat holds NO DB session during the
+    external I/O (processing indicator, file ingest); the connection is taken
+    only for the credential read and the message-write tail."""
+    surface = _slack_surface(agent_id=None)
+    conversation = _conversation(surface, uuid4())
+    parsed_event = _slack_event()
+    adapter = AsyncMock()
+    adapter.fetch_thread_context = AsyncMock(return_value=[])
+
+    class _RecordingFactory:
+        def __init__(self) -> None:
+            self.active = 0
+            self.opened = 0
+
+        @asynccontextmanager
+        async def __call__(self):
+            self.active += 1
+            self.opened += 1
+            try:
+                yield SimpleNamespace(session=SimpleNamespace())
+            finally:
+                self.active -= 1
+
+    factory = _RecordingFactory()
+
+    # Stub credential resolution + auth so the short UoWs do no real DB work.
+    class _StubResolver:
+        def __init__(self, *, session, connector_service) -> None:
+            pass
+
+        async def for_platform(self, platform, account_id):
+            return {}
+
+    monkeypatch.setattr(
+        "app.modules.agent_surfaces.services.ingress_service.SurfaceCredentialResolver",
+        _StubResolver,
+    )
+    monkeypatch.setattr(
+        "app.modules.agent_surfaces.services.ingress_service.create_authorization_data_service",
+        lambda uow: SimpleNamespace(build_user_context=AsyncMock(return_value=SimpleNamespace())),
+    )
+
+    indicator_active: list[int] = []
+    ingest_active: list[int] = []
+    write_active: list[int] = []
+
+    async def _record_indicator(**_kwargs):
+        indicator_active.append(factory.active)
+
+    async def _record_ingest(**_kwargs):
+        ingest_active.append(factory.active)
+        return []
+
+    adapter.add_processing_indicator.side_effect = _record_indicator
+
+    conversation_service = AsyncMock()
+    conversation_service.get_pending_user_interaction.return_value = None
+
+    async def _record_write(**_kwargs):
+        write_active.append(factory.active)
+
+    conversation_service.add_user_message_and_start_run.side_effect = _record_write
+
+    service = AgentSurfaceIngressService(
+        uow_factory=factory,
+        conversation_service_factory=lambda uow: conversation_service,
+        connector_service_factory=lambda uow: AsyncMock(),
+        adapter_registry=_registry(adapter),
+        file_ingest_service=SimpleNamespace(ingest_attachments=_record_ingest),
+    )
+
+    context = SurfaceChatContext(
+        platform="SLACK",
+        pod_id=surface.pod_id,
+        agent_name=None,
+        conversation_id=conversation.id,
+        user_id=conversation.user_id,
+        surface_id=surface.id,
+        surface_config=surface.config,
+        agent_display_name="Lemma",
+        message_text="Hello from Slack",
+        message_metadata=SurfaceMessageMetadata(
+            surface_platform="SLACK",
+            sender_display_name="New User",
+            event_metadata={},
+        ),
+        message_user_id=conversation.user_id,
+        message_external_user_id="U123",
+        message_external_message_id="1700000000.000100",
+        event=parsed_event,
+    )
+
+    await service.execute_chat(context)
+
+    # External I/O ran with NO open DB session.
+    assert indicator_active == [0]
+    assert ingest_active == [0]
+    # The message write ran INSIDE a short UoW.
+    assert write_active == [1]
+    conversation_service.add_user_message_and_start_run.assert_awaited_once()
+    # Two short UoWs total: credential read + message-write tail.
+    assert factory.opened == 2
+    assert factory.active == 0
+
+
 async def test_send_processing_indicator_for_conversation_uses_last_surface_event():
     surface = _teams_surface()
     conversation_id = uuid4()
@@ -1092,7 +1199,9 @@ async def test_maybe_resume_pending_interaction_handles_request_approval_approve
     }
 
     ctx = SimpleNamespace(conversation_id=conversation_id, user_id=uuid4(), pod_id=surface.pod_id)
-    resumed = await service._maybe_resume_pending_interaction(ctx, "approve")
+    resumed = await service._maybe_resume_pending_interaction(
+        ctx, "approve", conversation_service=service.conversation_service
+    )
     assert resumed is True
     kwargs = service.conversation_service.resolve_user_approval_internal.await_args.kwargs
     assert kwargs["approval_id"] == "tool-2"
@@ -1118,7 +1227,9 @@ async def test_maybe_resume_pending_interaction_handles_request_approval_deny():
     }
 
     ctx = SimpleNamespace(conversation_id=conversation_id, user_id=uuid4(), pod_id=surface.pod_id)
-    resumed = await service._maybe_resume_pending_interaction(ctx, "no")
+    resumed = await service._maybe_resume_pending_interaction(
+        ctx, "no", conversation_service=service.conversation_service
+    )
     assert resumed is True
     kwargs = service.conversation_service.resolve_user_approval_internal.await_args.kwargs
     assert kwargs["decision"] == AgentRunApprovalDecision.DENY
@@ -1144,7 +1255,9 @@ async def test_maybe_resume_pending_interaction_parses_numbered_ask_user_option(
 
     ctx = SimpleNamespace(conversation_id=conversation_id, user_id=uuid4(), pod_id=surface.pod_id)
     # "2" → second option label "Blue"
-    resumed = await service._maybe_resume_pending_interaction(ctx, "2")
+    resumed = await service._maybe_resume_pending_interaction(
+        ctx, "2", conversation_service=service.conversation_service
+    )
     assert resumed is True
     kwargs = service.conversation_service.resolve_user_approval_internal.await_args.kwargs
     assert kwargs["decision"] == AgentRunApprovalDecision.APPROVE_ONCE

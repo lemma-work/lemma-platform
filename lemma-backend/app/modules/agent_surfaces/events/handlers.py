@@ -1,15 +1,14 @@
 from __future__ import annotations
 
 import logging
-from typing import AsyncGenerator
 
 from faststream import Depends, Logger
 from faststream.redis import RedisRouter
 
 from app.core.infrastructure.db.session import async_session_maker
-from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
 from app.core.infrastructure.db.uow_factory import (
-    create_uow_from_session_maker,
+    SessionUnitOfWorkFactory,
+    UnitOfWorkFactory,
 )
 from app.core.infrastructure.events.stream_subscriber import redis_stream_sub
 from app.core.infrastructure.jobs.streaq_job_queue import (
@@ -23,7 +22,6 @@ from app.modules.agent_surfaces.api.dependencies import (
     surface_repository_factory,
 )
 from app.modules.agent_surfaces.domain.events import SurfaceWebhookReceivedEvent
-from app.modules.agent_surfaces.domain.ingress_context import SurfaceChatContext
 from app.modules.agent_surfaces.domain.ingress_request import (
     SurfaceDirectWebhookIngress,
     SurfacePlatformWebhookIngress,
@@ -50,14 +48,15 @@ logger = logging.getLogger(__name__)
 router = RedisRouter()
 
 
-async def provide_uow() -> AsyncGenerator[SqlAlchemyUnitOfWork, None]:
-    async with create_uow_from_session_maker(async_session_maker) as uow:
-        yield uow
+def provide_uow_factory() -> UnitOfWorkFactory:
+    return SessionUnitOfWorkFactory(async_session_maker)
 
 
-def provide_surface_event_handler(
-    uow: SqlAlchemyUnitOfWork = Depends(provide_uow),
-) -> AgentSurfaceIngressService:
+def provide_job_queue() -> SharedStreaqJobQueue:
+    return get_streaq_job_queue()
+
+
+def build_surface_event_handler(uow):
     return AgentSurfaceIngressService(
         uow=uow,
         surface_repository=surface_repository_factory(uow),
@@ -68,16 +67,11 @@ def provide_surface_event_handler(
     )
 
 
-def provide_job_queue() -> SharedStreaqJobQueue:
-    return get_streaq_job_queue()
-
-
 @router.subscriber(stream=redis_stream_sub("surface_events"))
 async def handle_surface_webhook(
     event: SurfaceWebhookReceivedEvent,
     fs_logger: Logger,
-    uow: SqlAlchemyUnitOfWork = Depends(provide_uow),
-    handler: AgentSurfaceIngressService = Depends(provide_surface_event_handler),
+    uow_factory: UnitOfWorkFactory = Depends(provide_uow_factory),
     job_queue: SharedStreaqJobQueue = Depends(provide_job_queue),
 ) -> None:
     try:
@@ -96,37 +90,28 @@ async def handle_surface_webhook(
                 headers=event.headers or {},
             )
 
-        # Native-form submissions (Slack block_actions / Teams Action.Submit) are
-        # routed back into their conversation as a new user message, not the
-        # normal message ingress path.
-        if await handler.try_handle_interaction(ingress_request):
-            await uow.commit()
-            fs_logger.info(
-                "Handled surface interaction for webhook source=%s", event.source
-            )
-            return
+        async with uow_factory() as uow:
+            handler = build_surface_event_handler(uow)
+            if await handler.try_handle_interaction(ingress_request):
+                fs_logger.info(
+                    "Handled surface interaction for webhook source=%s", event.source
+                )
+                return
 
-        context = await handler.prepare_ingress(ingress_request)
+            context = await handler.prepare_ingress(ingress_request)
 
         if not context:
             return
 
-        if isinstance(context, SurfaceChatContext):
-            await handler.start_agent_chat(context)
-            # start_agent_chat commits the shared UoW internally; commit again
-            # defensively so the conversation link persists even if that changes.
-            await uow.commit()
-            fs_logger.info("Started agent run for surface webhook source=%s", event.source)
-            return
-
-        await uow.commit()
         await job_queue.enqueue(
             "process_surface_message",
             payload=SurfaceProcessMessageTaskPayload(context=context).model_dump(
                 mode="json"
             ),
         )
-        fs_logger.info("Enqueued direct surface reply for webhook source=%s", event.source)
+        fs_logger.info(
+            "Enqueued process_surface_message for webhook source=%s", event.source
+        )
     except Exception as exc:
         fs_logger.error(f"Failed to process webhook event: {exc}", exc_info=True)
 
@@ -135,32 +120,25 @@ async def handle_surface_webhook(
 async def handle_surface_schedule_event(
     event: ScheduleFired,
     fs_logger: Logger,
-    uow: SqlAlchemyUnitOfWork = Depends(provide_uow),
-    handler: AgentSurfaceIngressService = Depends(provide_surface_event_handler),
+    uow_factory: UnitOfWorkFactory = Depends(provide_uow_factory),
     job_queue: SharedStreaqJobQueue = Depends(provide_job_queue),
 ) -> None:
     try:
-        context = await handler.prepare_ingress(
-            SurfaceScheduleIngress(
-                schedule_id=event.schedule_id,
-                payload=event.payload,
-                account_id=event.account_id,
-                pod_id=event.pod_id,
-                user_id=event.user_id,
+        async with uow_factory() as uow:
+            handler = build_surface_event_handler(uow)
+            context = await handler.prepare_ingress(
+                SurfaceScheduleIngress(
+                    schedule_id=event.schedule_id,
+                    payload=event.payload,
+                    account_id=event.account_id,
+                    pod_id=event.pod_id,
+                    user_id=event.user_id,
+                )
             )
-        )
+
         if not context:
             return
-        if isinstance(context, SurfaceChatContext):
-            await handler.start_agent_chat(context)
-            await uow.commit()
-            fs_logger.info(
-                "Started agent run for surface schedule source=%s",
-                event.schedule_id,
-            )
-            return
 
-        await uow.commit()
         await job_queue.enqueue(
             "process_surface_message",
             payload=SurfaceProcessMessageTaskPayload(context=context).model_dump(
@@ -179,7 +157,7 @@ async def handle_surface_schedule_event(
 async def on_pod_deleted(
     event: dict,
     fs_logger: Logger,
-    uow: SqlAlchemyUnitOfWork = Depends(provide_uow),
+    uow_factory: UnitOfWorkFactory = Depends(provide_uow_factory),
 ) -> None:
     """Remove all surfaces for a deleted pod so its accounts become free."""
     if event.get("event_type") != PodDeletedEvent.get_event_type():
@@ -188,7 +166,8 @@ async def on_pod_deleted(
     parsed = PodDeletedEvent.model_validate(event)
     fs_logger.info("Processing PodDeletedEvent for surface cleanup pod=%s", parsed.pod_id)
 
-    count = await get_surface_service(uow).delete_all_surfaces_for_pod(parsed.pod_id)
+    async with uow_factory() as uow:
+        count = await get_surface_service(uow).delete_all_surfaces_for_pod(parsed.pod_id)
     fs_logger.info("Removed %s surfaces for deleted pod %s", count, parsed.pod_id)
 
 
@@ -204,9 +183,12 @@ async def process_surface_message(
         task_ctx.task_id,
         getattr(task_payload.context, "conversation_id", None),
     )
-    async with worker_ctx.uow() as uow:
-        service = worker_ctx.build_surface_event_handler(uow)
-        await service.execute_chat(task_payload.context)
+    # The service scopes its own short UoWs (credential read + message-write
+    # tail) around the long external I/O inside execute_chat — platform API
+    # calls, file ingestion, and voice transcription — so no pooled DB
+    # connection is held during that I/O.
+    service = worker_ctx.build_surface_event_handler_with_factory()
+    await service.execute_chat(task_payload.context)
     logger.info(
         "Finished process_surface_message job %s for conversation %s",
         task_ctx.task_id,

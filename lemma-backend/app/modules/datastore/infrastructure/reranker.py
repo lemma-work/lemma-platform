@@ -16,7 +16,7 @@ from __future__ import annotations
 
 import httpx
 
-from app.core.config import settings
+from app.core.config import reveal_secret, settings
 from app.core.log.log import get_logger
 from app.modules.datastore.domain.file_entities import DatastoreFileSearchResult
 
@@ -95,7 +95,7 @@ class OpenAICompatReranker:
     ) -> list[DatastoreFileSearchResult]:
         if not results:
             return []
-        api_key = settings.lemma_openai_api_key
+        api_key = reveal_secret(settings.lemma_openai_api_key)
         if not api_key:
             logger.warning(
                 "openai_compat reranking requires LEMMA_OPENAI_API_KEY; "

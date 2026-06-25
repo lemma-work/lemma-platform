@@ -318,7 +318,7 @@ async def test_telegram_group_without_mention_is_ignored(
     so the bot only speaks when addressed."""
     from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
     from app.modules.agent_surfaces.events.handlers import (
-        provide_surface_event_handler,
+        build_surface_event_handler,
     )
 
     _wire_native_telegram(monkeypatch, fake_telegram)
@@ -338,7 +338,7 @@ async def test_telegram_group_without_mention_is_ignored(
         chat_id=-1001234567890,
         mention=False,
     )
-    handler = provide_surface_event_handler(SqlAlchemyUnitOfWork(db_session))
+    handler = build_surface_event_handler(SqlAlchemyUnitOfWork(db_session))
     context = await handler.prepare_ingress(
         SurfacePlatformWebhookIngress(source="telegram", payload=payload, headers={})
     )
@@ -361,7 +361,7 @@ async def test_telegram_group_mention_of_other_user_is_ignored(
     and the ingress enrichment confirms it is not the bot before ignoring."""
     from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
     from app.modules.agent_surfaces.events.handlers import (
-        provide_surface_event_handler,
+        build_surface_event_handler,
     )
 
     _wire_native_telegram(monkeypatch, fake_telegram)
@@ -386,7 +386,7 @@ async def test_telegram_group_mention_of_other_user_is_ignored(
     payload["message"]["entities"] = [
         {"type": "mention", "offset": 0, "length": 13},
     ]
-    handler = provide_surface_event_handler(SqlAlchemyUnitOfWork(db_session))
+    handler = build_surface_event_handler(SqlAlchemyUnitOfWork(db_session))
     context = await handler.prepare_ingress(
         SurfacePlatformWebhookIngress(source="telegram", payload=payload, headers={})
     )

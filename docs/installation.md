@@ -93,7 +93,14 @@ lemma-stack config set LEMMA_OPENAI_API_KEY <key>
 lemma-stack config set LEMMA_OPENAI_BASE_URL https://api.openai.com/v1   # your provider's endpoint
 lemma-stack config set LEMMA_OPENAI_DEFAULT_MODEL gpt-4o                 # a model your key can use
 lemma-stack config set LEMMA_OPENAI_MODEL_NAMES gpt-4o,gpt-4o-mini       # models to expose in the picker
+lemma-stack config set LEMMA_OPENAI_VISION_MODEL_NAMES gpt-4o            # subset that accepts image input (enables view_image)
 ```
+
+> `LEMMA_OPENAI_VISION_MODEL_NAMES` is a subset of `LEMMA_OPENAI_MODEL_NAMES`. The
+> OpenAI `/models` endpoint doesn't report modalities, so list image-capable
+> models here to enable the `view_image` tool — a text-only model breaks if it
+> receives image content. Leave empty if none of your models accept images.
+> (Anthropic-compatible models are all multimodal, so this isn't needed there.)
 
 > Defaults are OpenAI/Anthropic, not any specific gateway — point `*_BASE_URL` and
 > `*_MODEL*` at whatever provider your key is for.

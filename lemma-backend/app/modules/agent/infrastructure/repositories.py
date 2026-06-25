@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from enum import Enum
 from uuid import UUID
 
@@ -35,6 +35,7 @@ from app.modules.agent.domain.runtime_profiles import (
     AgentRuntimeProfile,
     RuntimeProfileScope,
     RuntimeProfileStatus,
+    reveal_credentials,
 )
 from app.modules.agent.domain.value_objects import (
     ACTIVE_AGENT_RUN_STATUSES,
@@ -128,8 +129,11 @@ class AgentRuntimeProfileRepository:
                 item.model_dump(mode="json") for item in entity.model_catalog
             ],
             config=self._serialize_json(entity.config) or {},
+            # reveal_credentials (not _serialize_json) so SecretStr fields persist
+            # as their plaintext before encryption — model_dump(mode="json") would
+            # otherwise store the masked "**********" and lose the real key.
             credentials=self.encryption.encrypt_json(
-                self._serialize_json(entity.credentials)
+                reveal_credentials(entity.credentials)
             ),
             status=entity.status.value,
             profile_metadata=entity.metadata,
@@ -825,6 +829,31 @@ class ConversationRepository:
         )
         model = result.scalar_one_or_none()
         return model.to_entity() if model else None
+
+    async def list_stale_active_runs(
+        self,
+        *,
+        cutoff_seconds: int,
+        limit: int = 200,
+    ) -> list[AgentRunEntity]:
+        """List non-terminal agent runs whose ``started_at`` predates the cutoff.
+
+        These are runs whose worker task died (crash/OOM/forced shutdown) without
+        finalizing them — they would otherwise sit in RUNNING forever. The cutoff
+        must exceed the streaq task timeout so legitimately long-running agents
+        are never swept up.
+        """
+        cutoff = datetime.now(timezone.utc) - timedelta(seconds=cutoff_seconds)
+        result = await self.session.execute(
+            select(AgentRunModel)
+            .where(
+                AgentRunModel.status.in_(_ACTIVE_AGENT_RUN_STATUS_VALUES),
+                AgentRunModel.started_at < cutoff,
+            )
+            .order_by(AgentRunModel.started_at.asc())
+            .limit(limit)
+        )
+        return [model.to_entity() for model in result.scalars().all()]
 
     async def lock_conversation(self, conversation_id: UUID) -> None:
         await self.session.execute(

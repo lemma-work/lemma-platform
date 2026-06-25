@@ -12,14 +12,6 @@ from app.modules.datastore.events import handlers
 from app.modules.datastore.domain.events import DatastoreFileUpdatedEvent
 
 
-class _FakeUowContext:
-    async def __aenter__(self):
-        return SimpleNamespace(session=None)
-
-    async def __aexit__(self, exc_type, exc, tb):
-        return None
-
-
 @pytest.mark.asyncio
 async def test_process_datastore_file_task_limits_document_processing_concurrency(
     monkeypatch,
@@ -30,7 +22,7 @@ async def test_process_datastore_file_task_limits_document_processing_concurrenc
         current = 0
         max_seen = 0
 
-        def __init__(self, pod_id, uow):
+        def __init__(self, pod_id, *, uow_factory):
             self.search_service = SimpleNamespace(engine=None)
 
         async def process_file_async(self, file_id, metadata):
@@ -41,11 +33,6 @@ async def test_process_datastore_file_task_limits_document_processing_concurrenc
             await asyncio.sleep(0.01)
             type(self).current -= 1
 
-    monkeypatch.setattr(
-        handlers,
-        "create_uow_from_session_maker",
-        lambda _session_maker: _FakeUowContext(),
-    )
     monkeypatch.setattr(handlers, "DatastoreFileProcessingService", _FakeProcessingService)
     monkeypatch.setattr(
         handlers.datastore_settings,

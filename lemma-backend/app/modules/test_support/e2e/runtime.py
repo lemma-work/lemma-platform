@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import hashlib
 import os
 import socket
 import subprocess
@@ -44,24 +45,100 @@ def _read_root_env_value(key: str) -> str | None:
     return None
 
 
-@pytest.fixture(scope="module")
-def workspace_image(e2e_settings) -> Generator[str, None, None]:
-    """Ensure the docker workspace runtime image exists locally."""
+# Source paths the runtime image is built from (Dockerfile.runtime COPYs these).
+# A change to any of them must invalidate the cached image — see
+# _agentbox_image_fingerprint.
+_AGENTBOX_BUILD_INPUTS = (
+    "agentbox",
+    "lemma-python",
+    "lemma-cli",
+    "lemma-typescript",
+    "lemma-skills",
+)
 
-    configured_image = os.getenv("WORKSPACE_E2E_IMAGE")
-    image = configured_image or "agentbox-runtime:e2e"
-    should_build = True
-    if configured_image:
-        inspect = subprocess.run(
-            ["docker", "image", "inspect", image],
-            check=False,
+
+def _agentbox_image_fingerprint(repo_root: Path) -> str | None:
+    """Short content hash of the agentbox runtime image's build inputs.
+
+    Combines the committed git tree/blob hashes of the relevant paths with the
+    current uncommitted diff and any untracked files, so the fingerprint changes
+    exactly when the image would build differently — committed or not. Returns
+    None when git can't be used (then the caller falls back to always building).
+    """
+    paths = list(_AGENTBOX_BUILD_INPUTS)
+    try:
+        rev = subprocess.run(
+            ["git", "-C", str(repo_root), "rev-parse", *[f"HEAD:{p}" for p in paths]],
+            check=True,
             capture_output=True,
             text=True,
+        ).stdout
+        diff = subprocess.run(
+            ["git", "-C", str(repo_root), "diff", "HEAD", "--", *paths],
+            check=True,
+            capture_output=True,
+            text=True,
+        ).stdout
+        untracked = subprocess.run(
+            [
+                "git", "-C", str(repo_root), "ls-files",
+                "--others", "--exclude-standard", "--", *paths,
+            ],
+            check=True,
+            capture_output=True,
+            text=True,
+        ).stdout
+    except (subprocess.CalledProcessError, FileNotFoundError):
+        return None
+
+    digest = hashlib.sha256()
+    digest.update(rev.encode())
+    digest.update(diff.encode())
+    digest.update(untracked.encode())
+    # `git diff` doesn't include untracked file contents — fold them in too.
+    for rel in untracked.splitlines():
+        candidate = repo_root / rel.strip()
+        if candidate.is_file():
+            with contextlib.suppress(OSError):
+                digest.update(candidate.read_bytes())
+    return digest.hexdigest()[:12]
+
+
+@pytest.fixture(scope="module")
+def workspace_image(e2e_settings) -> Generator[str, None, None]:
+    """Ensure the docker workspace runtime image exists locally.
+
+    Uses a content-addressed tag (``agentbox-runtime:e2e-<fingerprint>``) so the
+    image is reused when agentbox + the bundled SDKs are unchanged, and rebuilt
+    automatically when they change — no per-run rebuild (the build context is the
+    whole monorepo, which is slow to transfer) and no stale pinned image. Set
+    WORKSPACE_E2E_IMAGE to pin an explicit image (e.g. in CI).
+    """
+    repo_root = Path(__file__).resolve().parents[5]
+    configured_image = os.getenv("WORKSPACE_E2E_IMAGE")
+    if configured_image:
+        image = configured_image
+    else:
+        fingerprint = _agentbox_image_fingerprint(repo_root)
+        image = (
+            f"agentbox-runtime:e2e-{fingerprint}"
+            if fingerprint
+            else "agentbox-runtime:e2e"
         )
-        should_build = inspect.returncode != 0
+
+    inspect = subprocess.run(
+        ["docker", "image", "inspect", image],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    image_present = inspect.returncode == 0
+    # Fall back to always-build only when we couldn't fingerprint (floating tag).
+    should_build = not image_present or (
+        not configured_image and image == "agentbox-runtime:e2e"
+    )
 
     if should_build:
-        repo_root = Path(__file__).resolve().parents[5]
         dockerfile = repo_root / "agentbox" / "Dockerfile.runtime"
         build = subprocess.run(
             [

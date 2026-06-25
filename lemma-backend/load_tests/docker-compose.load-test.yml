@@ -1,27 +1,33 @@
-# Load-test stack for the lemma-backend WebSocket endpoint.
+# Load-test stack for the lemma-backend.
 #
-# Runs all required infrastructure services plus the app itself with hard
-# resource limits that simulate a 2 CPU / 2 GB RAM production server, so
-# the measured WS capacity and memory consumption reflect real constraints.
+# Runs all required infrastructure services plus the API and worker as
+# separate services (matching prod topology) with hard resource limits
+# that simulate a 2 CPU / 2 GB RAM production server.
 #
 # Usage (see also `make load-test` in lemma-backend/Makefile):
 #
-#   # 1. Bring up infrastructure + app:
+#   # 1. Build the image (from repo root):
+#   docker build -t lemma-backend:load-test -f lemma-backend/Dockerfile .
+#
+#   # 2. Bring up infrastructure + API + worker:
 #   docker compose -f load_tests/docker-compose.load-test.yml up -d
 #
-#   # 2. Provision test data (requires uv / Python on the host):
+#   # 3. Provision test data (requires uv / Python on the host):
 #   uv run python load_tests/setup.py
 #
-#   # 3. Run k6 (reads creds from the generated .env.load_test):
+#   # 4. Start the DB connection monitor (in a separate terminal):
+#   uv run python load_tests/db_monitor.py --interval 5
+#
+#   # 5. Run k6 (reads creds from the generated .env.load_test):
 #   docker run --rm --network host \
 #     --env-file load_tests/.env.load_test \
 #     -v ./load_tests:/scripts \
 #     grafana/k6:latest run /scripts/ws_concurrent.js
 #
-#   # 4. During/after the run, check memory & CPU:
-#   docker stats lemma-load-app --no-stream
+#   # 6. During/after the run, check memory & CPU:
+#   docker stats lemma-load-api lemma-load-worker --no-stream
 #
-#   # 5. Tear down when finished:
+#   # 7. Tear down when finished:
 #   docker compose -f load_tests/docker-compose.load-test.yml down -v
 
 services:
@@ -66,26 +72,25 @@ services:
     networks:
       - load_test_net
 
-  app:
-    # Build from the monorepo root: docker build -f lemma-backend/Dockerfile .
-    # If you have not built the image yet, run:
-    #   docker build -t lemma-backend:load-test -f lemma-backend/Dockerfile .
-    # from the repo root, then set LEMMA_IMAGE=lemma-backend:load-test below.
+  # ── API service (matches prod: separate pod) ──────────────────────────────
+  api:
     image: ${LEMMA_IMAGE:-lemma-backend:load-test}
-    container_name: lemma-load-app
+    container_name: lemma-load-api
+    command: ["uvicorn", "app.app:app", "--host", "0.0.0.0", "--port", "8000"]
     environment:
       DATABASE_URL: postgresql+asyncpg://postgres:postgres@db:5432/lemma
       DATASTORE_DATABASE_URL: postgresql+asyncpg://postgres:postgres@db:5432/lemma_datastore
       REDIS_URL: redis://redis:6379
       SUPERTOKENS_CORE_URL: http://supertokens:3567
       ENVIRONMENT: local
-      # Writable paths for the non-root appuser (defaults resolve to /.local
-      # inside the container, which is not writable).
       LOCAL_OBJECT_STORAGE_ROOT: /home/appuser/.local/object-storage
       LOCAL_FILE_STORAGE_ROOT: /home/appuser/.local/files
-      # Tighten Redis polling for lower latency during the load test.
-      # Default is 500 ms; 200 ms keeps p95 event latency under 500 ms idle.
       REDIS_STREAM_POLLING_INTERVAL_MS: 200
+      DB_POOL_SIZE: "10"
+      DB_MAX_OVERFLOW: "10"
+      DATASTORE_DB_POOL_SIZE: "5"
+      DATASTORE_DB_MAX_OVERFLOW: "5"
+      WORKER_CONCURRENCY: "20"
     ports:
       - "8000:8000"
     depends_on:
@@ -103,16 +108,49 @@ services:
       start_period: 20s
     networks:
       - load_test_net
-    # ── Resource limits ──────────────────────────────────────────────────────
-    # Mirror the target production constraint: 2 vCPU, 2 GB RAM.
-    # Adjust these to test different server tiers.
     deploy:
       resources:
         limits:
           cpus: "2.0"
           memory: 2G
-    # Increase the default open-file limit so the OS can sustain hundreds of
-    # concurrent sockets (default Docker ulimit is 1024).
+    ulimits:
+      nofile:
+        soft: 65536
+        hard: 65536
+
+  # ── Worker service (matches prod: separate pod) ───────────────────────────
+  worker:
+    image: ${LEMMA_IMAGE:-lemma-backend:load-test}
+    container_name: lemma-load-worker
+    command: ["streaq", "run", "app.events:streaq_worker"]
+    environment:
+      DATABASE_URL: postgresql+asyncpg://postgres:postgres@db:5432/lemma
+      DATASTORE_DATABASE_URL: postgresql+asyncpg://postgres:postgres@db:5432/lemma_datastore
+      REDIS_URL: redis://redis:6379
+      SUPERTOKENS_CORE_URL: http://supertokens:3567
+      ENVIRONMENT: local
+      LOCAL_OBJECT_STORAGE_ROOT: /home/appuser/.local/object-storage
+      LOCAL_FILE_STORAGE_ROOT: /home/appuser/.local/files
+      REDIS_STREAM_POLLING_INTERVAL_MS: 200
+      DB_POOL_SIZE: "10"
+      DB_MAX_OVERFLOW: "10"
+      DATASTORE_DB_POOL_SIZE: "5"
+      DATASTORE_DB_MAX_OVERFLOW: "5"
+      WORKER_CONCURRENCY: "20"
+    depends_on:
+      db:
+        condition: service_healthy
+      supertokens:
+        condition: service_healthy
+      redis:
+        condition: service_started
+    networks:
+      - load_test_net
+    deploy:
+      resources:
+        limits:
+          cpus: "2.0"
+          memory: 2G
     ulimits:
       nofile:
         soft: 65536

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 from uuid import UUID
 
 from faststream import Depends, Logger
@@ -19,7 +20,13 @@ from app.core.infrastructure.jobs.streaq_job_queue import (
     SharedStreaqJobQueue,
     get_streaq_job_queue,
 )
-from app.core.infrastructure.jobs.streaq_runtime import AppWorkerContext, streaq_task, streaq_worker
+from app.core.infrastructure.jobs.streaq_runtime import (
+    JOB_TIMEOUT_SECONDS,
+    AppWorkerContext,
+    streaq_cron,
+    streaq_task,
+    streaq_worker,
+)
 from app.modules.agent.domain.events import (
     AGENT_EVENTS_STREAM,
     AgentRunCompletedEvent,
@@ -39,6 +46,9 @@ from app.modules.agent.services.realtime import (
     completed_payload,
     publish_conversation_event,
 )
+from app.core.log.log import get_logger
+
+logger = get_logger(__name__)
 
 router = RedisRouter()
 
@@ -198,16 +208,26 @@ async def process_agent_run(
         SurfaceAgentRunProgressObserver,
     )
 
-    await runner.execute(
-        agent_run_id=agent_run_id,
-        user_id=user_id,
-        pod_id=pod_id,
-        agent_name=agent_name,
-        observer=SurfaceAgentRunProgressObserver(
-            uow_factory=worker_ctx.uow_factory,
-            service_factory=worker_ctx.build_surface_event_handler,
-        ),
-    )
+    # Safety net: if a cancellation arrives before/during runner.execute (e.g.
+    # streaq task timeout, worker shutdown) and propagates as CancelledError
+    # past execute's own handler, swallow it here. Re-raising CancelledError
+    # into streaq's `with scope:` block triggers
+    # "Attempted to exit a cancel scope that isn't the current task's current
+    # cancel scope" — a RuntimeError that crashes the entire worker. The run
+    # is already finalized inside execute; there is nothing useful to do here.
+    try:
+        await runner.execute(
+            agent_run_id=agent_run_id,
+            user_id=user_id,
+            pod_id=pod_id,
+            agent_name=agent_name,
+            observer=SurfaceAgentRunProgressObserver(
+                uow_factory=worker_ctx.uow_factory,
+                service_factory=worker_ctx.build_surface_event_handler,
+            ),
+        )
+    except asyncio.CancelledError:
+        logger.warning("process_agent_run cancelled run=%s", agent_run_id)
 
 
 @streaq_task(name="generate_conversation_title")
@@ -223,3 +243,79 @@ async def process_conversation_title(
     await ConversationTitleService(
         uow_factory=worker_ctx.uow_factory
     ).generate_title_if_absent(conversation_id)
+
+
+# Sweep stale runs only well after the streaq task timeout, so a legitimately
+# long-running agent (up to JOB_TIMEOUT_SECONDS) is never swept; by then the
+# task is definitively gone (crash/OOM/forced shutdown losing the finalization
+# race) and the run must be failed so it doesn't sit in RUNNING forever.
+_ORPHANED_RUN_CUTOFF_SECONDS = JOB_TIMEOUT_SECONDS + 300
+
+
+@streaq_cron("*/10 * * * *", name="reconcile_orphaned_agent_runs")
+async def reconcile_orphaned_agent_runs() -> None:
+    """Self-heal agent runs stuck non-terminal after a worker crash/restart.
+
+    The grace_period on the worker lets a SIGTERM-interrupted run finalize
+    itself; this cron is the backstop for hard crashes (SIGKILL/OOM) and any
+    residual race where finalization lost to engine disposal. Marking the run
+    FAILED here publishes the same lifecycle + SSE events a normal finish does,
+    so the UI updates and any waiting workflow is unblocked.
+    """
+    worker_ctx: AppWorkerContext = streaq_worker.context
+    try:
+        async with worker_ctx.uow() as uow:
+            repo = ConversationRepository(uow)
+            stale = await repo.list_stale_active_runs(
+                cutoff_seconds=_ORPHANED_RUN_CUTOFF_SECONDS,
+            )
+            finalized: list[tuple[UUID, UUID, AgentRunStatus]] = []
+            for run in stale:
+                finish_result = await repo.finish_agent_run(
+                    agent_run_id=run.id,
+                    status=AgentRunStatus.FAILED,
+                    error="Agent run was interrupted (worker restart or crash)",
+                )
+                if finish_result is not None and finish_result.updated:
+                    finalized.append(
+                        (run.conversation_id, run.id, finish_result.status)
+                    )
+    except Exception as exc:
+        logger.error("reconcile_orphaned_agent_runs cron failed: %s", exc)
+        return
+
+    if not finalized:
+        return
+
+    logger.warning(
+        "Reconciled %d orphaned agent run(s) to FAILED", len(finalized)
+    )
+    # Publish outside the UoW (mirrors handle_agent_control_event's stop path)
+    # so SSE clients refresh and workflow waits resume promptly.
+    for conversation_id, agent_run_id, status in finalized:
+        event_data = {"error": "Agent run was interrupted (worker restart or crash)"}
+        try:
+            await publish_conversation_event(
+                conversation_id,
+                completed_payload(
+                    conversation_id=conversation_id,
+                    agent_run_id=agent_run_id,
+                    status=status.value,
+                    data=event_data,
+                ),
+            )
+            await EventPublisher.publish(
+                AGENT_EVENTS_STREAM,
+                AgentRunCompletedEvent(
+                    conversation_id=conversation_id,
+                    agent_run_id=agent_run_id,
+                    status=status,
+                    data=event_data,
+                ),
+            )
+        except Exception as exc:
+            logger.error(
+                "Failed publishing reconciled-run events run=%s: %s",
+                agent_run_id,
+                exc,
+            )

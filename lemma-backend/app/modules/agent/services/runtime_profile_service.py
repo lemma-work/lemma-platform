@@ -15,7 +15,7 @@ import httpx
 from dotenv import load_dotenv
 from pydantic import HttpUrl
 
-from app.core.config import settings
+from app.core.config import reveal_secret, settings
 from app.core.domain.errors import DomainError
 from app.modules.agent.domain.runtime_profiles import (
     AnthropicCompatibleRuntimeConfig,
@@ -28,6 +28,7 @@ from app.modules.agent.domain.runtime_profiles import (
     RuntimeProfileProtocol,
     RuntimeProfileScope,
     RuntimeProfileStatus,
+    reveal_credentials,
 )
 from app.modules.agent.domain.value_objects import AgentRuntimeConfig, HarnessKind
 from app.modules.agent.infrastructure.repositories import (
@@ -40,45 +41,45 @@ DEFAULT_SYSTEM_AGENT_RUNTIME_PROFILE_ID = SYSTEM_LEMMA_PROFILE_ID
 
 
 @dataclass(frozen=True, slots=True)
-class OpenAICompatModelEntry:
-    """An OpenAI-compatible model entry: its provider-side model ID plus
-    the capabilities that differ from the TEXT+TOOLS baseline.
+class DiscoveredModel:
+    """A model returned by a provider's ``/models`` endpoint.
 
-    ``vision`` gates the agent's image-returning tools (e.g. ``view_image``) —
-    a text-only model breaks when image content enters its message history.
-    Register provider-specific models via ``register_openai_compat_models()``.
+    ``supports_vision`` is best-effort: it is ``True`` only when the provider
+    advertises image input for the model (OpenRouter-style
+    ``architecture.input_modalities``). Most OpenAI-compatible ``/models``
+    payloads carry no modality data, so this stays ``False`` and vision must be
+    declared via configuration instead.
     """
 
-    provider_model_name: str
-    vision: bool = False
+    name: str
+    supports_vision: bool = False
 
 
-_openai_compat_model_registry: dict[str, OpenAICompatModelEntry] = {}
+def _openai_compat_vision_model_names() -> set[str]:
+    """Model names the operator declared as image-capable for the system
+    OpenAI-compatible profile (``LEMMA_OPENAI_VISION_MODEL_NAMES``).
 
-
-def register_openai_compat_models(models: dict[str, OpenAICompatModelEntry]) -> None:
-    """Register additional OpenAI-compatible model entries (e.g. from a cloud module).
-
-    Merges into the module-level registry; call at application startup before
-    any agent runs. The registry drives provider-model-name translation and
-    per-model capability inference (vision, etc.) for the system:lemma profile.
+    The standard OpenAI ``/models`` endpoint does not report modalities, so the
+    image-returning tools (``view_image``) can only be enabled safely when the
+    operator opts a model in here. A text-only model that receives image content
+    breaks the conversation, so the default is empty (no vision).
     """
-    _openai_compat_model_registry.update(models)
-
-
-def _openai_compat_provider_model_name(model_name: str) -> str:
-    entry = _openai_compat_model_registry.get(model_name)
-    return entry.provider_model_name if entry is not None else model_name
+    raw = os.getenv("LEMMA_OPENAI_VISION_MODEL_NAMES")
+    if raw is None:
+        raw = settings.lemma_openai_vision_model_names
+    return {name.strip() for name in (raw or "").split(",") if name.strip()}
 
 
 def system_lemma_openai_catalog_model_names() -> list[tuple[str, str | None]]:
     """``(public_name, provider_model_name)`` for the configured system:lemma
-    OpenAI-compatible (Fireworks) catalog.
+    OpenAI-compatible catalog.
 
-    Mirrors the catalog built by ``_system_lemma_openai_profile`` (configured
-    model list plus the default model) but does NOT require credentials, so it
-    can drive the usage-pricing coverage invariant at import/startup. Honors the
-    same ``LEMMA_OPENAI_MODEL_NAMES`` / ``LEMMA_OPENAI_DEFAULT_MODEL`` overrides.
+    The system profile uses model names verbatim — the operator configures the
+    exact provider model IDs via ``LEMMA_OPENAI_MODEL_NAMES`` — so the public and
+    provider names are identical. Mirrors the catalog built by
+    ``_system_lemma_openai_profile`` (configured model list plus the default
+    model) without requiring credentials, so it can drive the usage-pricing
+    coverage invariant at import/startup.
     """
     _load_runtime_env()
     model_names = _csv_setting(
@@ -89,18 +90,15 @@ def system_lemma_openai_catalog_model_names() -> list[tuple[str, str | None]]:
     ).strip()
     if default_model_name and default_model_name not in model_names:
         model_names.insert(0, default_model_name)
-    return [
-        (model_name, _openai_compat_provider_model_name(model_name))
-        for model_name in model_names
-    ]
+    return [(model_name, model_name) for model_name in model_names]
 
 
 def _openai_compat_model_capabilities(
     model_name: str,
+    vision_model_names: set[str],
 ) -> list[RuntimeModelCapability]:
     capabilities = [RuntimeModelCapability.TEXT, RuntimeModelCapability.TOOLS]
-    entry = _openai_compat_model_registry.get(model_name)
-    if entry is not None and entry.vision:
+    if model_name in vision_model_names:
         capabilities.append(RuntimeModelCapability.VISION)
     return capabilities
 
@@ -258,6 +256,7 @@ class AgentRuntimeProfileService:
         description: str | None = None,
         default_model_name: str | None = None,
         model_names: list[str] | None = None,
+        vision_model_names: list[str] | None = None,
         headers: dict[str, str] | None = None,
         model_settings: dict[str, object] | None = None,
     ) -> AgentRuntimeProfile:
@@ -265,14 +264,17 @@ class AgentRuntimeProfileService:
             raise RuntimeError("Runtime profile repository is required")
         normalized_name = _normalize_profile_name(name)
         normalized_headers = _normalized_headers(headers)
-        discovered_model_names = await _discover_openai_compatible_models(
+        discovered_models = await _discover_openai_compatible_models(
             base_url=str(base_url),
             api_key=api_key,
             headers=normalized_headers,
         )
         catalog = _provider_model_catalog(
-            discovered_model_names=discovered_model_names,
+            discovered_models=discovered_models,
             fallback_model_names=model_names or [],
+            explicit_vision_model_names={
+                name.strip() for name in (vision_model_names or []) if name.strip()
+            },
         )
         selected_default_model = _select_provider_default_model(
             requested_model_name=default_model_name,
@@ -301,7 +303,7 @@ class AgentRuntimeProfileService:
             status=RuntimeProfileStatus.ACTIVE,
             metadata={
                 "source": "openai_compatible",
-                "catalog_discovered": bool(discovered_model_names),
+                "catalog_discovered": bool(discovered_models),
             },
         )
         return await _create_profile(self.repository, profile, name=normalized_name)
@@ -323,14 +325,17 @@ class AgentRuntimeProfileService:
             raise RuntimeError("Runtime profile repository is required")
         normalized_name = _normalize_profile_name(name)
         normalized_headers = _normalized_headers(headers)
-        discovered_model_names = await _discover_anthropic_compatible_models(
+        discovered_models = await _discover_anthropic_compatible_models(
             base_url=str(base_url or "https://api.anthropic.com"),
             api_key=api_key,
             headers=normalized_headers,
         )
         catalog = _provider_model_catalog(
-            discovered_model_names=discovered_model_names,
+            discovered_models=discovered_models,
             fallback_model_names=model_names or [],
+            # Anthropic/Claude models are uniformly multimodal, so every model in
+            # an Anthropic-compatible profile keeps the vision tools.
+            default_vision=True,
         )
         selected_default_model = _select_provider_default_model(
             requested_model_name=default_model_name,
@@ -355,7 +360,7 @@ class AgentRuntimeProfileService:
             status=RuntimeProfileStatus.ACTIVE,
             metadata={
                 "source": "anthropic_compatible",
-                "catalog_discovered": bool(discovered_model_names),
+                "catalog_discovered": bool(discovered_models),
             },
         )
         return await _create_profile(self.repository, profile, name=normalized_name)
@@ -390,7 +395,7 @@ class AgentRuntimeProfileService:
             raise RuntimeError(
                 f"Agent runtime profile {profile_id!r} has no selectable model"
             )
-        credentials = _credentials_dict(profile.credentials)
+        credentials = reveal_credentials(profile.credentials)
         return ResolvedAgentRuntime(
             profile=profile,
             harness_kind=profile.derived_harness_kind(),
@@ -443,6 +448,7 @@ def _system_lemma_openai_profile() -> AgentRuntimeProfile | None:
     ).strip()
     if default_model_name and default_model_name not in model_names:
         model_names.insert(0, default_model_name)
+    vision_model_names = _openai_compat_vision_model_names()
     return AgentRuntimeProfile(
         id=SYSTEM_LEMMA_PROFILE_ID,
         scope=RuntimeProfileScope.SYSTEM,
@@ -455,8 +461,12 @@ def _system_lemma_openai_profile() -> AgentRuntimeProfile | None:
             RuntimeModelCatalogEntry(
                 name=model_name,
                 display_name=_display_model_name(model_name),
-                provider_model_name=_openai_compat_provider_model_name(model_name),
-                capabilities=_openai_compat_model_capabilities(model_name),
+                # The operator configures the exact provider model IDs, so the
+                # public name is the provider name (no translation layer).
+                provider_model_name=model_name,
+                capabilities=_openai_compat_model_capabilities(
+                    model_name, vision_model_names
+                ),
             )
             for model_name in model_names
         ],
@@ -521,8 +531,8 @@ def _system_profile_by_id(profile_id: str) -> AgentRuntimeProfile | None:
     return None
 
 
-def _env_or_setting(env_name: str, setting_value: str | None) -> str | None:
-    value = os.getenv(env_name) or setting_value
+def _env_or_setting(env_name: str, setting_value: object | None) -> str | None:
+    value = os.getenv(env_name) or reveal_secret(setting_value)
     if value is None:
         return None
     normalized = value.strip()
@@ -615,30 +625,52 @@ async def _create_profile(
 
 def _provider_model_catalog(
     *,
-    discovered_model_names: list[str],
+    discovered_models: list[DiscoveredModel],
     fallback_model_names: list[str],
+    explicit_vision_model_names: set[str] | None = None,
+    default_vision: bool = False,
 ) -> list[RuntimeModelCatalogEntry]:
-    model_names: list[str] = []
-    for model_name in [*discovered_model_names, *fallback_model_names]:
-        normalized = model_name.strip()
-        if normalized and normalized not in model_names:
-            model_names.append(normalized)
-    if not model_names:
+    """Build a model catalog, marking each model VISION-capable when the
+    provider advertised image input (``DiscoveredModel.supports_vision``), the
+    caller declared it (``explicit_vision_model_names``), or the protocol is
+    universally multimodal (``default_vision`` — e.g. Anthropic/Claude).
+
+    Caller-supplied ``fallback_model_names`` (used when discovery yields nothing)
+    carry no modality data, so they get vision only via the explicit override or
+    ``default_vision``.
+    """
+    explicit = explicit_vision_model_names or set()
+    vision_by_name: dict[str, bool] = {}
+    order: list[str] = []
+    for discovered in discovered_models:
+        name = discovered.name.strip()
+        if name and name not in vision_by_name:
+            order.append(name)
+            vision_by_name[name] = discovered.supports_vision
+    for model_name in fallback_model_names:
+        name = model_name.strip()
+        if name and name not in vision_by_name:
+            order.append(name)
+            vision_by_name[name] = False
+    if not order:
         raise ValueError(
             "Provider model catalog could not be discovered; provide model_names"
         )
-    return [
-        RuntimeModelCatalogEntry(
-            name=model_name,
-            display_name=model_name,
-            provider_model_name=model_name,
-            capabilities=[
-                RuntimeModelCapability.TEXT,
-                RuntimeModelCapability.TOOLS,
-            ],
+    catalog: list[RuntimeModelCatalogEntry] = []
+    for name in order:
+        supports_vision = default_vision or vision_by_name[name] or name in explicit
+        capabilities = [RuntimeModelCapability.TEXT, RuntimeModelCapability.TOOLS]
+        if supports_vision:
+            capabilities.append(RuntimeModelCapability.VISION)
+        catalog.append(
+            RuntimeModelCatalogEntry(
+                name=name,
+                display_name=name,
+                provider_model_name=name,
+                capabilities=capabilities,
+            )
         )
-        for model_name in model_names
-    ]
+    return catalog
 
 
 def _select_provider_default_model(
@@ -662,7 +694,7 @@ async def _discover_openai_compatible_models(
     base_url: str,
     api_key: str | None,
     headers: dict[str, str],
-) -> list[str]:
+) -> list[DiscoveredModel]:
     request_headers = dict(headers)
     if api_key:
         request_headers.setdefault("Authorization", f"Bearer {api_key}")
@@ -678,7 +710,7 @@ async def _discover_anthropic_compatible_models(
     base_url: str,
     api_key: str,
     headers: dict[str, str],
-) -> list[str]:
+) -> list[DiscoveredModel]:
     request_headers = {
         "x-api-key": api_key,
         "anthropic-version": "2023-06-01",
@@ -745,7 +777,7 @@ async def _discover_models(
     url: str,
     headers: dict[str, str],
     parser,
-) -> list[str]:
+) -> list[DiscoveredModel]:
     await _validate_public_base_url(url)
     try:
         async with httpx.AsyncClient(timeout=10) as client:
@@ -760,24 +792,49 @@ async def _discover_models(
     return parser(payload)
 
 
-def _parse_openai_compatible_models(payload: object) -> list[str]:
+def _parse_openai_compatible_models(payload: object) -> list[DiscoveredModel]:
     if not isinstance(payload, dict):
         return []
     data = payload.get("data")
     if not isinstance(data, list):
         return []
-    model_names: list[str] = []
+    models: list[DiscoveredModel] = []
+    seen: set[str] = set()
     for item in data:
         model_name: object
+        supports_vision = False
         if isinstance(item, dict):
             model_name = item.get("id") or item.get("name")
+            supports_vision = _payload_advertises_image_input(item)
         else:
             model_name = item
         if isinstance(model_name, str):
             normalized = model_name.strip()
-            if normalized and normalized not in model_names:
-                model_names.append(normalized)
-    return model_names
+            if normalized and normalized not in seen:
+                seen.add(normalized)
+                models.append(
+                    DiscoveredModel(name=normalized, supports_vision=supports_vision)
+                )
+    return models
+
+
+def _payload_advertises_image_input(item: dict) -> bool:
+    """Best-effort image-input detection from an OpenAI-compatible ``/models``
+    entry. Honors OpenRouter-style ``architecture.input_modalities`` /
+    ``architecture.modality``; absent that metadata (the standard OpenAI schema),
+    returns ``False`` so vision falls back to explicit configuration.
+    """
+    architecture = item.get("architecture")
+    if not isinstance(architecture, dict):
+        return False
+    modalities = architecture.get("input_modalities")
+    if isinstance(modalities, list) and any(
+        isinstance(modality, str) and modality.strip().lower() == "image"
+        for modality in modalities
+    ):
+        return True
+    modality = architecture.get("modality")
+    return isinstance(modality, str) and "image" in modality.lower()
 
 
 def _join_url(base_url: str, path: str) -> str:
@@ -807,17 +864,6 @@ def _selected_model(
         )
     if profile.model_catalog:
         return profile.model_catalog[0]
-    return None
-
-
-def _credentials_dict(credentials: object | None) -> dict[str, object] | None:
-    if credentials is None:
-        return None
-    model_dump = getattr(credentials, "model_dump", None)
-    if callable(model_dump):
-        return model_dump(mode="json")
-    if isinstance(credentials, dict):
-        return credentials
     return None
 
 

@@ -1,11 +1,14 @@
 import json
 from contextlib import asynccontextmanager
+from functools import partial
 from types import SimpleNamespace
+from unittest.mock import AsyncMock
 from uuid import uuid4
 
 import pytest
 from fastapi import HTTPException
 
+from app.modules.agent.api.controllers import conversation_controller
 from app.modules.agent.api.controllers.conversation_controller import (
     _parse_metadata_filters,
     send_message,
@@ -96,8 +99,18 @@ async def _failing_iterator():
         yield None
 
 
+@asynccontextmanager
+async def _mock_uow_factory(uow_mock):
+    yield uow_mock
+
+
+def _make_uow_factory():
+    uow_mock = AsyncMock()
+    return partial(_mock_uow_factory, uow_mock), uow_mock
+
+
 @pytest.mark.asyncio
-async def test_send_message_starts_run_before_stream_body_is_consumed() -> None:
+async def test_send_message_starts_run_before_stream_body_is_consumed(monkeypatch) -> None:
     result = AgentRunStartResult(
         conversation_id=uuid4(),
         agent_run_id=uuid4(),
@@ -105,15 +118,19 @@ async def test_send_message_starts_run_before_stream_body_is_consumed() -> None:
     )
     service = _ConversationService(result)
     channel_service = _ChannelService(_empty_iterator())
+    uow_factory, _ = _make_uow_factory()
+    monkeypatch.setattr(
+        conversation_controller, "_build_conversation_service", lambda uow: service
+    )
 
     response = await send_message(
         pod_id=uuid4(),
         conversation_id=result.conversation_id,
         data=SimpleNamespace(content="say ok", metadata=None),
         user=SimpleNamespace(id=uuid4()),
-        service=service,
         channel_service=channel_service,
         ctx=allow_all_context(),
+        uow_factory=uow_factory,
     )
 
     assert response.media_type == "text/event-stream"
@@ -121,7 +138,7 @@ async def test_send_message_starts_run_before_stream_body_is_consumed() -> None:
 
 
 @pytest.mark.asyncio
-async def test_send_message_encodes_stream_failures_as_sse_errors() -> None:
+async def test_send_message_encodes_stream_failures_as_sse_errors(monkeypatch) -> None:
     result = AgentRunStartResult(
         conversation_id=uuid4(),
         agent_run_id=uuid4(),
@@ -129,15 +146,19 @@ async def test_send_message_encodes_stream_failures_as_sse_errors() -> None:
     )
     service = _ConversationService(result)
     channel_service = _ChannelService(_failing_iterator())
+    uow_factory, _ = _make_uow_factory()
+    monkeypatch.setattr(
+        conversation_controller, "_build_conversation_service", lambda uow: service
+    )
 
     response = await send_message(
         pod_id=uuid4(),
         conversation_id=result.conversation_id,
         data=SimpleNamespace(content="say ok", metadata=None),
         user=SimpleNamespace(id=uuid4()),
-        service=service,
         channel_service=channel_service,
         ctx=allow_all_context(),
+        uow_factory=uow_factory,
     )
     chunks = [chunk async for chunk in response.body_iterator]
     payload = json.loads(chunks[0].removeprefix("data: ").strip())
@@ -151,10 +172,14 @@ async def test_send_message_encodes_stream_failures_as_sse_errors() -> None:
 
 
 @pytest.mark.asyncio
-async def test_send_message_raises_usage_limit_before_stream_starts() -> None:
+async def test_send_message_raises_usage_limit_before_stream_starts(monkeypatch) -> None:
     channel_service = _ChannelService(_empty_iterator())
     service = _ConversationService(
         exc=UsageLimitExceededError("LLM usage limit exceeded for this account")
+    )
+    uow_factory, _ = _make_uow_factory()
+    monkeypatch.setattr(
+        conversation_controller, "_build_conversation_service", lambda uow: service
     )
 
     with pytest.raises(UsageLimitExceededError) as exc_info:
@@ -163,9 +188,9 @@ async def test_send_message_raises_usage_limit_before_stream_starts() -> None:
             conversation_id=uuid4(),
             data=SimpleNamespace(content="say ok", metadata=None),
             user=SimpleNamespace(id=uuid4()),
-            service=service,
             channel_service=channel_service,
             ctx=allow_all_context(),
+            uow_factory=uow_factory,
         )
 
     assert exc_info.value.status_code == 429

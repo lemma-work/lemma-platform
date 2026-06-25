@@ -137,7 +137,7 @@ async def test_say_delivers_native_voice_note_on_telegram(
     from app.core.authorization.factory import create_authorization_data_service
     from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
     from app.modules.agent_surfaces.events.handlers import (
-        provide_surface_event_handler,
+        build_surface_event_handler,
     )
     from app.modules.datastore.api.dependencies import build_file_service
 
@@ -184,7 +184,7 @@ async def test_say_delivers_native_voice_note_on_telegram(
     finally:
         reset_current_context(token)
 
-    handler = provide_surface_event_handler(SqlAlchemyUnitOfWork(db_session))
+    handler = build_surface_event_handler(SqlAlchemyUnitOfWork(db_session))
     delivered = await handler.send_voice_note_for_conversation(
         conversation_id=context.conversation_id, path=entity.path
     )

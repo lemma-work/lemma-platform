@@ -29,7 +29,7 @@ from app.modules.agent.domain.value_objects import (
 from app.modules.agent.infrastructure.harnesses.registry import HarnessRegistry
 from app.modules.agent.infrastructure.models import AgentRunModel
 from app.modules.agent.services.agent_runner_service import AgentRunnerService
-from app.modules.agent_surfaces.events.handlers import provide_surface_event_handler
+from app.modules.agent_surfaces.events.handlers import build_surface_event_handler
 from app.modules.agent_surfaces.services.progress_observer import (
     SurfaceAgentRunProgressObserver,
 )
@@ -238,7 +238,7 @@ async def run_latest_agent_run(
         agent_name=agent_name,
         observer=SurfaceAgentRunProgressObserver(
             uow_factory=SessionUnitOfWorkFactory(async_session_maker),
-            service_factory=provide_surface_event_handler,
+            service_factory=build_surface_event_handler,
         ),
     )
     db_session.expire_all()

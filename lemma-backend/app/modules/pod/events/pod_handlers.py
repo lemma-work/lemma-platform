@@ -2,14 +2,14 @@
 
 from __future__ import annotations
 
-from typing import AsyncGenerator
-
 from faststream import Depends, Logger
 from faststream.redis import RedisRouter
 
 from app.core.infrastructure.db.session import async_session_maker
-from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
-from app.core.infrastructure.db.uow_factory import create_uow_from_session_maker
+from app.core.infrastructure.db.uow_factory import (
+    SessionUnitOfWorkFactory,
+    UnitOfWorkFactory,
+)
 from app.core.infrastructure.events.stream_subscriber import redis_stream_sub
 from app.modules.datastore.infrastructure.schema_manager import SchemaManager
 from app.modules.identity.domain.ports import IdentityEmailPort
@@ -35,10 +35,8 @@ from app.modules.pod.infrastructure.pod_repositories import (
 router = RedisRouter()
 
 
-async def provide_uow() -> AsyncGenerator[SqlAlchemyUnitOfWork, None]:
-    """Provide UoW with commit/rollback lifecycle for event handlers."""
-    async with create_uow_from_session_maker(async_session_maker) as uow:
-        yield uow
+def provide_uow_factory() -> UnitOfWorkFactory:
+    return SessionUnitOfWorkFactory(async_session_maker)
 
 
 def provide_identity_email_port() -> IdentityEmailPort:
@@ -49,7 +47,6 @@ def provide_identity_email_port() -> IdentityEmailPort:
 async def on_pod_created(
     event: dict,
     fs_logger: Logger,
-    uow: SqlAlchemyUnitOfWork = Depends(provide_uow),
 ):
     """Handle pod creation event by provisioning pod-scoped data storage.
 
@@ -70,14 +67,13 @@ async def on_pod_created(
         fs_logger.info(f"Created pod data schema for pod {parsed.pod_id}")
     except Exception as e:
         fs_logger.error(f"Failed to create pod data schema: {e}")
-        await uow.session.rollback()
 
 
 @router.subscriber(stream=redis_stream_sub(PodEvents.STREAM))
 async def on_pod_join_requested(
     event: dict,
     fs_logger: Logger,
-    uow: SqlAlchemyUnitOfWork = Depends(provide_uow),
+    uow_factory: UnitOfWorkFactory = Depends(provide_uow_factory),
     email_port: IdentityEmailPort = Depends(provide_identity_email_port),
 ):
     """Notify pod admins by email when a user requests to join a pod."""
@@ -90,38 +86,41 @@ async def on_pod_join_requested(
         f"(request {parsed.join_request_id})"
     )
 
-    pod_repository = PodRepository(uow)
-    pod_member_repository = PodMemberRepository(uow)
-    user_repository = UserRepository(uow)
-    organization_repository = OrganizationRepository(uow)
+    async with uow_factory() as uow:
+        pod_repository = PodRepository(uow)
+        pod_member_repository = PodMemberRepository(uow)
+        user_repository = UserRepository(uow)
+        organization_repository = OrganizationRepository(uow)
 
-    pod = await pod_repository.get(parsed.pod_id)
-    if not pod:
-        fs_logger.warning(f"Pod {parsed.pod_id} not found; skipping notification")
-        return
+        pod = await pod_repository.get(parsed.pod_id)
+        if not pod:
+            fs_logger.warning(f"Pod {parsed.pod_id} not found; skipping notification")
+            return
 
-    requester = await user_repository.get(parsed.requester_user_id)
-    if not requester:
-        fs_logger.warning(
-            f"Requester {parsed.requester_user_id} not found; skipping notification"
+        requester = await user_repository.get(parsed.requester_user_id)
+        if not requester:
+            fs_logger.warning(
+                f"Requester {parsed.requester_user_id} not found; skipping notification"
+            )
+            return
+        requester_name = (
+            " ".join(part for part in [requester.first_name, requester.last_name] if part)
+            or ""
         )
-        return
-    requester_name = (
-        " ".join(part for part in [requester.first_name, requester.last_name] if part)
-        or ""
-    )
 
-    organization = await organization_repository.get(parsed.organization_id)
-    organization_name = organization.name if organization else ""
+        organization = await organization_repository.get(parsed.organization_id)
+        organization_name = organization.name if organization else ""
 
-    # Pods normally have few members; a high limit captures every admin.
-    members, _ = await pod_member_repository.list_pod_members(parsed.pod_id, limit=1000)
-    admin_emails = [
-        member.user_email
-        for member in members
-        if member.user_email
-        and roles_allow_required(member.roles, PodRole.ADMIN)
-    ]
+        members, _ = await pod_member_repository.list_pod_members(
+            parsed.pod_id, limit=1000
+        )
+        admin_emails = [
+            member.user_email
+            for member in members
+            if member.user_email
+            and roles_allow_required(member.roles, PodRole.ADMIN)
+        ]
+
     if not admin_emails:
         fs_logger.info(f"No pod admins to notify for pod {parsed.pod_id}")
         return

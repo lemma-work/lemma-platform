@@ -4,15 +4,16 @@ from __future__ import annotations
 
 import asyncio
 from datetime import datetime
-from typing import AsyncGenerator
 from uuid import UUID
 
 from faststream import Depends, Logger
 from faststream.redis import RedisRouter
 
 from app.core.infrastructure.db.session import async_session_maker
-from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
-from app.core.infrastructure.db.uow_factory import create_uow_from_session_maker
+from app.core.infrastructure.db.uow_factory import (
+    SessionUnitOfWorkFactory,
+    UnitOfWorkFactory,
+)
 from app.core.infrastructure.events.publisher import EventPublisher
 from app.core.infrastructure.events.stream_subscriber import redis_stream_sub
 from app.core.infrastructure.jobs.streaq_job_queue import (
@@ -42,13 +43,12 @@ logger = get_logger(__name__)
 router = RedisRouter()
 
 
-async def provide_uow() -> AsyncGenerator[SqlAlchemyUnitOfWork, None]:
-    async with create_uow_from_session_maker(async_session_maker) as uow:
-        yield uow
-
-
 def provide_job_queue() -> SharedStreaqJobQueue:
     return get_streaq_job_queue()
+
+
+def provide_uow_factory() -> UnitOfWorkFactory:
+    return SessionUnitOfWorkFactory(async_session_maker)
 
 
 @router.subscriber(
@@ -61,11 +61,10 @@ def provide_job_queue() -> SharedStreaqJobQueue:
 async def handle_function_run_event(
     event: dict,
     fs_logger: Logger,
-    uow: SqlAlchemyUnitOfWork = Depends(provide_uow),
+    uow_factory: UnitOfWorkFactory = Depends(provide_uow_factory),
     job_queue: SharedStreaqJobQueue = Depends(provide_job_queue),
 ) -> None:
     """Project function run lifecycle events into persistence and jobs."""
-    run_repository = FunctionRunRepository(uow)
     event_type = event.get("event_type")
 
     if event_type == FunctionRunExecutionRequestedEvent.get_event_type():
@@ -82,51 +81,60 @@ async def handle_function_run_event(
             or getattr(job, "id", None)
         )
         if job_id is not None:
-            await run_repository.update_run(parsed.run_id, job_id=str(job_id))
+            async with uow_factory() as uow:
+                await FunctionRunRepository(uow).update_run(
+                    parsed.run_id, job_id=str(job_id)
+                )
         return
 
     if event_type == FunctionRunStartedEvent.get_event_type():
         parsed = FunctionRunStartedEvent.model_validate(event)
-        await run_repository.update_run(
-            parsed.run_id,
-            status=FunctionRunStatus.RUNNING,
-            started_at=parsed.started_at,
-            user_email=parsed.user_email,
-            workspace_session_id=parsed.workspace_session_id,
-            workspace_process_id=parsed.workspace_process_id,
-        )
+        async with uow_factory() as uow:
+            await FunctionRunRepository(uow).update_run(
+                parsed.run_id,
+                status=FunctionRunStatus.RUNNING,
+                started_at=parsed.started_at,
+                user_email=parsed.user_email,
+                workspace_session_id=parsed.workspace_session_id,
+                workspace_process_id=parsed.workspace_process_id,
+            )
         return
 
     if event_type == FunctionRunLogsUpdatedEvent.get_event_type():
         parsed = FunctionRunLogsUpdatedEvent.model_validate(event)
-        await run_repository.update_run(parsed.run_id, logs=parsed.logs)
+        async with uow_factory() as uow:
+            await FunctionRunRepository(uow).update_run(
+                parsed.run_id, logs=parsed.logs
+            )
         return
 
     if event_type == FunctionRunCompletedEvent.get_event_type():
         parsed = FunctionRunCompletedEvent.model_validate(event)
-        await run_repository.update_run(
-            parsed.run_id,
-            status=FunctionRunStatus.COMPLETED,
-            output_data=parsed.output_data,
-            error=None,
-            logs=parsed.logs,
-            completed_at=parsed.completed_at,
-            workspace_session_id=parsed.workspace_session_id,
-            workspace_process_id=parsed.workspace_process_id,
-        )
+        async with uow_factory() as uow:
+            await FunctionRunRepository(uow).update_run(
+                parsed.run_id,
+                status=FunctionRunStatus.COMPLETED,
+                output_data=parsed.output_data,
+                error=None,
+                logs=parsed.logs,
+                completed_at=parsed.completed_at,
+                workspace_session_id=parsed.workspace_session_id,
+                workspace_process_id=parsed.workspace_process_id,
+            )
         return
 
     if event_type == FunctionRunFailedEvent.get_event_type():
         parsed = FunctionRunFailedEvent.model_validate(event)
-        await run_repository.update_run(
-            parsed.run_id,
-            status=FunctionRunStatus.FAILED,
-            error=parsed.error,
-            logs=parsed.logs,
-            completed_at=parsed.completed_at,
-            workspace_session_id=parsed.workspace_session_id,
-            workspace_process_id=parsed.workspace_process_id,
-        )
+        async with uow_factory() as uow:
+            await FunctionRunRepository(uow).update_run(
+                parsed.run_id,
+                status=FunctionRunStatus.FAILED,
+                error=parsed.error,
+                logs=parsed.logs,
+                completed_at=parsed.completed_at,
+                workspace_session_id=parsed.workspace_session_id,
+                workspace_process_id=parsed.workspace_process_id,
+            )
 
 
 @streaq_task(name="process_function_run")
@@ -158,12 +166,11 @@ async def process_function_run(
                 if function is None:
                     raise FunctionNotFoundError(f"Function {run.function_id} not found")
 
-            async with worker_ctx.uow() as uow:
-                service = worker_ctx.build_function_service(uow)
-                await service.execute_run_by_id(
-                    parsed_run_id,
-                    timeout_seconds=_JOB_FUNCTION_TIMEOUT_SECONDS,
-                )
+            service = worker_ctx.build_function_service_with_factory()
+            await service.execute_run_by_id(
+                parsed_run_id,
+                timeout_seconds=_JOB_FUNCTION_TIMEOUT_SECONDS,
+            )
             logger.info(
                 "Finished process_function_run job %s for run %s",
                 task_ctx.task_id,

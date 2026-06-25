@@ -2763,9 +2763,16 @@ class TestAgentRuntimeConfigApis:
         fixed_test_user,
         monkeypatch,
     ):
+        from app.modules.agent.services.runtime_profile_service import (
+            DiscoveredModel,
+        )
+
         async def fake_openai_discovery(*, base_url, **_kwargs):
             if base_url == "https://openrouter.ai/api/v1":
-                return ["openai/gpt-5.1", "deepseek/deepseek-chat-v3.2"]
+                return [
+                    DiscoveredModel("openai/gpt-5.1", supports_vision=True),
+                    DiscoveredModel("deepseek/deepseek-chat-v3.2"),
+                ]
             return []
 
         monkeypatch.setattr(
@@ -2802,32 +2809,30 @@ class TestAgentRuntimeConfigApis:
             "catalog_discovered": True,
         }
 
-        fireworks = await authenticated_client.post(
+        vendor = await authenticated_client.post(
             f"/organizations/{fixed_test_org['id']}/agent-runtime/profiles",
             json={
                 "source": "OPENAI_COMPATIBLE",
-                "name": f"Fireworks {uuid4().hex[:8]}",
-                "base_url": "https://api.fireworks.ai/inference/v1",
-                "api_key": "fireworks-secret",
-                "default_model_name": "accounts/fireworks/models/kimi-k2p6",
-                "model_names": ["accounts/fireworks/models/kimi-k2p6"],
+                "name": f"Custom provider {uuid4().hex[:8]}",
+                "base_url": "https://api.vendor.test/v1",
+                "api_key": "vendor-secret",
+                "default_model_name": "vendor/model-pro",
+                "model_names": ["vendor/model-pro"],
             },
         )
-        assert fireworks.status_code == 201, fireworks.text
-        fireworks_payload = fireworks.json()
-        assert fireworks_payload["metadata"] == {
+        assert vendor.status_code == 201, vendor.text
+        vendor_payload = vendor.json()
+        assert vendor_payload["metadata"] == {
             "source": "openai_compatible",
             "catalog_discovered": False,
         }
-        assert fireworks_payload["default_model_name"] == (
-            "accounts/fireworks/models/kimi-k2p6"
-        )
+        assert vendor_payload["default_model_name"] == "vendor/model-pro"
 
         runner = AgentRunnerService(
             uow_factory=SessionUnitOfWorkFactory(async_session_maker),
             harness_registry=object(),  # type: ignore[arg-type]
         )
-        for payload in (openrouter_payload, fireworks_payload):
+        for payload in (openrouter_payload, vendor_payload):
             resolved = await runner._resolve_agent_runtime(
                 AgentRuntimeConfig(profile_id=payload["id"]),
                 user_id=UUID(fixed_test_user["id"]),
@@ -2839,7 +2844,7 @@ class TestAgentRuntimeConfigApis:
                 "api_key": (
                     "openrouter-secret"
                     if payload["id"] == openrouter_payload["id"]
-                    else "fireworks-secret"
+                    else "vendor-secret"
                 )
             }
 
@@ -3062,16 +3067,25 @@ async def _wait_for_conversation_title(
 
 
 class TestConversationTitleGeneration:
+    @pytest.mark.slow
+    @pytest.mark.workspace
     @pytest.mark.skipif(not system_lemma_available(), reason=SYSTEM_LEMMA_SKIP_REASON)
     async def test_first_run_generates_title_with_real_worker_model(
         self,
         authenticated_client,
         fixed_test_org,
         worker,
+        local_agentbox_server,
     ):
         """After the first run completes, the worker auto-generates a title from
-        the opening exchange, and a second turn does not overwrite it."""
+        the opening exchange, and a second turn does not overwrite it.
+
+        Runs against a live agentbox: the pod assistant carries the workspace
+        toolset and the system model reaches for it, so the run only completes
+        when those tool calls can actually execute.
+        """
         _ = worker
+        _ = local_agentbox_server
         pod_id = await _create_test_pod(authenticated_client, fixed_test_org)
 
         # Pod-assistant conversation created WITHOUT a title -> eligible.

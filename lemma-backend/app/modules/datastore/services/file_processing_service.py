@@ -2,10 +2,12 @@ from __future__ import annotations
 
 import json
 import mimetypes
+from collections.abc import AsyncIterator
+from contextlib import asynccontextmanager
 from datetime import datetime, timezone
 from uuid import UUID
 
-from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
+from app.core.infrastructure.db.uow_factory import UnitOfWorkFactory
 from app.modules.datastore.domain.document_processing import DocumentExtraction
 from app.modules.datastore.domain.file_entities import FileStatus
 from app.modules.datastore.domain.ports import DocumentProcessorPort
@@ -55,17 +57,28 @@ class DatastoreFileProcessingService:
     def __init__(
         self,
         pod_id: UUID,
-        uow: SqlAlchemyUnitOfWork,
+        *,
+        uow_factory: UnitOfWorkFactory,
         search_service: PostgresSearchService | None = None,
         storage: DatastoreStoragePort | None = None,
         document_processor: DocumentProcessorPort | None = None,
     ):
         self.pod_id = pod_id
-        self.uow = uow
-        self._files = DatastoreFileRepository(uow)
+        self._uow_factory = uow_factory
         self.search_service = search_service or PostgresSearchService(pod_id)
         self.storage = storage or create_datastore_storage()
         self.document_processor = document_processor or create_document_processor()
+
+    @asynccontextmanager
+    async def _file_repo(self) -> AsyncIterator[DatastoreFileRepository]:
+        """Yield a file repository scoped to a short-lived DB session.
+
+        Each call opens a fresh UoW that commits and releases its pooled
+        connection on exit — so no main DB connection is held during the slow
+        storage/extraction I/O between repository calls.
+        """
+        async with self._uow_factory() as uow:
+            yield DatastoreFileRepository(uow)
 
     @property
     def _file_projection(self) -> FileProjection:
@@ -107,28 +120,35 @@ class DatastoreFileProcessingService:
         await self._process(file_id, metadata or {})
 
     async def _process(self, file_id, metadata):
-        file_entity = await self._files.get_model(file_id)
-        if file_entity is None:
-            logger.warning("File %s not found for processing", file_id)
-            return
+        # Load + early-exit decisions in one short UoW. The returned model is
+        # read-only hereafter; with expire_on_commit=False its loaded columns
+        # stay readable after the session closes, so the slow I/O below holds no
+        # DB connection.
+        async with self._file_repo() as files:
+            file_entity = await files.get_model(file_id)
+            if file_entity is None:
+                logger.warning("File %s not found for processing", file_id)
+                return
 
-        if file_entity.status != FileStatus.PENDING.value:
-            logger.info(
-                "Skipping processing for %s because status is %s",
-                file_id,
-                file_entity.status,
-            )
-            return
+            if file_entity.status != FileStatus.PENDING.value:
+                logger.info(
+                    "Skipping processing for %s because status is %s",
+                    file_id,
+                    file_entity.status,
+                )
+                return
 
-        if file_entity.kind != "FILE":
-            await self._files.mark_not_required(file_id)
-            return
+            if file_entity.kind != "FILE":
+                await files.mark_not_required(file_id)
+                return
+
+            search_enabled = bool(file_entity.search_enabled)
 
         # Safety net: the indexing-eligibility policy is applied early (at write
         # time) and the reindex queue only enqueues PENDING + search_enabled
         # files, so a non-indexable file never reaches here as PENDING. This
         # branch only fires if search was disabled after the job was enqueued.
-        if not file_entity.search_enabled:
+        if not search_enabled:
             try:
                 await self.search_service.remove_file(file_id)
             except Exception:
@@ -136,16 +156,24 @@ class DatastoreFileProcessingService:
             await self._file_projection.delete_child_artifacts(
                 self.pod_id, file_entity.path
             )
-            await self._files.mark_not_required(file_id)
+            async with self._file_repo() as files:
+                await files.mark_not_required(file_id)
+            return
+
+        # Claim PENDING -> PROCESSING in its own committed transaction so the
+        # claim is durable before the long extraction begins. A crash mid-work
+        # then leaves a recoverable PROCESSING row for recover_stuck_processing_files.
+        async with self._file_repo() as files:
+            claimed = await files.claim_for_processing(file_id)
+        if not claimed:
+            logger.info(
+                "Skipping processing for %s because another worker already claimed it",
+                file_id,
+            )
             return
 
         try:
-            if not await self._files.claim_for_processing(file_id):
-                logger.info(
-                    "Skipping processing for %s because another worker already claimed it",
-                    file_id,
-                )
-                return
+            # --- External I/O: NO DB connection held across any of this. ---
             current_metadata = dict(metadata or {})
             current_metadata.update(file_entity.file_metadata or {})
             search_metadata = await self._build_search_metadata(file_entity, current_metadata)
@@ -187,22 +215,26 @@ class DatastoreFileProcessingService:
                 "page_count": page_count,
                 "has_markdown": has_markdown,
             }
-            if not await self._files.mark_completed(
-                file_id, file_metadata=merged_metadata
-            ):
+            async with self._file_repo() as files:
+                completed = await files.mark_completed(
+                    file_id, file_metadata=merged_metadata
+                )
+            if not completed:
                 logger.info(
                     "Skipped marking %s as COMPLETED because a newer update already reset it",
                     file_id,
                 )
         except Exception as exc:
             logger.error("Search processing failed for %s: %s", file_id, exc)
-            if not await self._files.mark_failed(file_id, error=self._sanitize_error(exc)):
+            async with self._file_repo() as files:
+                failed = await files.mark_failed(
+                    file_id, error=self._sanitize_error(exc)
+                )
+            if not failed:
                 logger.info(
                     "Skipped marking %s as FAILED because a newer update already reset it",
                     file_id,
                 )
-            if hasattr(self.uow, "commit"):
-                await self.uow.commit()
             raise
 
     def _chunks_for_index(self, extraction: DocumentExtraction) -> list[dict]:

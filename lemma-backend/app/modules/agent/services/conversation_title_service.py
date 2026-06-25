@@ -1,10 +1,16 @@
-"""Auto-generate a short title for a conversation using a cheap model.
+"""Auto-generate a short title for a conversation.
 
 Triggered after the first agent run completes (see
 ``app/modules/agent/events/handlers.py``). Generation is idempotent: it only
 runs while ``conversation.title`` is unset, so a user-supplied title is never
-overwritten. Failures are swallowed and logged — titling must never break the
-worker that invokes it.
+overwritten.
+
+By default the title is derived directly from the user's first message — no LLM
+call, so titling is instant and adds no model load or DB-connection pressure.
+A deployment can opt into LLM-generated titles by setting
+``CONVERSATION_TITLE_MODEL`` to a model its provider actually serves; if that
+call fails we still fall back to the first-message title. Failures are swallowed
+and logged — titling must never break the worker that invokes it.
 """
 
 from __future__ import annotations
@@ -13,6 +19,7 @@ from uuid import UUID
 
 from pydantic_ai import Agent as PydanticAIAgent
 
+from app.core.config import settings
 from app.core.infrastructure.db.uow_factory import UnitOfWorkFactory
 from app.core.log.log import get_logger
 from app.modules.agent.domain.value_objects import (
@@ -39,10 +46,6 @@ from app.modules.usage.services.pydantic_ai_tracking import (
 from app.modules.usage.services.usage_context import UsageExecutionContext
 
 logger = get_logger(__name__)
-
-# Cheap, fast model for one-off title generation. Falls back to the profile
-# default if a deployment's catalog doesn't include it.
-TITLE_MODEL_NAME = "deepseek-v4-flash"
 
 _MAX_TITLE_LEN = 80
 
@@ -80,13 +83,28 @@ class ConversationTitleService:
                 return None
             reply_text = _first_text(messages, MessageRole.ASSISTANT.value)
 
-            title = await self._generate(
-                user_id=conversation.user_id,
-                organization_id=conversation.organization_id,
-                pod_id=conversation.pod_id,
-                user_text=user_text,
-                reply_text=reply_text,
-            )
+            # Default: derive the title from the user's first message — no LLM
+            # call. Opt into LLM titles by setting CONVERSATION_TITLE_MODEL to a
+            # model the provider actually serves; on any failure we still fall
+            # back to the first-message title rather than leaving it blank.
+            title: str | None = None
+            if settings.conversation_title_model:
+                try:
+                    title = await self._generate(
+                        user_id=conversation.user_id,
+                        organization_id=conversation.organization_id,
+                        pod_id=conversation.pod_id,
+                        user_text=user_text,
+                        reply_text=reply_text,
+                    )
+                except Exception as exc:
+                    logger.warning(
+                        "LLM title generation failed for %s, using first message: %s",
+                        conversation_id,
+                        exc,
+                    )
+            if not title:
+                title = _title_from_user_message(user_text)
             if not title:
                 return None
 
@@ -180,7 +198,7 @@ class ConversationTitleService:
             return await service.resolve(
                 runtime=AgentRuntimeConfig(
                     profile_id=DEFAULT_SYSTEM_AGENT_RUNTIME_PROFILE_ID,
-                    model_name=TITLE_MODEL_NAME,
+                    model_name=settings.conversation_title_model,
                 ),
                 organization_id=organization_id,
                 user_id=user_id,
@@ -194,6 +212,15 @@ class ConversationTitleService:
                 organization_id=organization_id,
                 user_id=user_id,
             )
+
+
+def _title_from_user_message(user_text: str) -> str:
+    """Derive a title from the user's first message: collapse whitespace and
+    truncate to a sentence-ish length, mirroring the surface ingress titling."""
+    title = " ".join((user_text or "").split())
+    if len(title) > _MAX_TITLE_LEN:
+        title = f"{title[: _MAX_TITLE_LEN - 1].rstrip()}…"
+    return title
 
 
 def _first_text(messages, role: str) -> str | None:

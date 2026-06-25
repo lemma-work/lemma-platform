@@ -22,7 +22,7 @@ LOAD_TEST_ENV     := load_tests/.env.load_test
 MAX_SUBSCRIBERS   ?= 100
 WRITER_VUS        ?= 2
 
-.PHONY: help test test-unit test-e2e test-e2e-fast test-e2e-runtime test-module coverage coverage-unit coverage-e2e test-collect lint migrate docker-build docker-build-cloud docker-build-arm64 docker-build-amd64 agentbox-build teams-manifest-zip load-test-build load-test-up load-test-migrate load-test-setup load-test-run load-test-down load-test
+.PHONY: help test test-unit test-e2e test-e2e-fast test-e2e-runtime test-module coverage coverage-unit coverage-e2e test-collect lint migrate docker-build docker-build-cloud docker-build-arm64 docker-build-amd64 agentbox-build teams-manifest-zip load-test-build load-test-up load-test-migrate load-test-setup load-test-run load-test-sse load-test-monitor load-test-down load-test
 
 help:
 	@echo "Lemma backend:"
@@ -47,10 +47,12 @@ help:
 	@echo "Load testing (WebSocket capacity on a simulated 2 CPU / 2 GB server):"
 	@echo "  make load-test         # full end-to-end: build → up → setup → run → stats"
 	@echo "  make load-test-build   # build lemma-backend:load-test Docker image"
-	@echo "  make load-test-up      # start infra + app with resource limits"
-	@echo "  make load-test-migrate # run alembic migrations inside the app container"
+	@echo "  make load-test-up      # start infra + API + worker with resource limits"
+	@echo "  make load-test-migrate # run alembic migrations inside the API container"
 	@echo "  make load-test-setup   # provision test user / pod / table, write .env.load_test"
 	@echo "  make load-test-run     # run k6 WebSocket load test (reads .env.load_test)"
+	@echo "  make load-test-sse     # run k6 SSE streaming load test"
+	@echo "  make load-test-monitor # monitor DB connections (pg_stat_activity poller)"
 	@echo "  make load-test-down    # tear down containers and clean up"
 	@echo "  Override: MAX_SUBSCRIBERS=200 WRITER_VUS=4 make load-test"
 	@echo ""
@@ -134,15 +136,15 @@ load-test-build:
 
 load-test-up:
 	docker compose -f $(LOAD_TEST_COMPOSE) up -d
-	@echo "Waiting for app health check…"
-	@until docker compose -f $(LOAD_TEST_COMPOSE) exec -T app python -c "import urllib.request; urllib.request.urlopen('http://localhost:8000/health')" > /dev/null 2>&1; do \
+	@echo "Waiting for API health check…"
+	@until docker compose -f $(LOAD_TEST_COMPOSE) exec -T api python -c "import urllib.request; urllib.request.urlopen('http://localhost:8000/health')" > /dev/null 2>&1; do \
 		printf '.'; sleep 3; \
 	done
-	@echo " App is ready."
+	@echo " API is ready."
 
 load-test-migrate:
 	@echo "Running database migrations…"
-	docker compose -f $(LOAD_TEST_COMPOSE) exec -T app alembic upgrade head
+	docker compose -f $(LOAD_TEST_COMPOSE) exec -T api alembic upgrade head
 	@echo "Migrations complete."
 
 load-test-setup: load-test-migrate
@@ -159,8 +161,26 @@ load-test-run:
 		grafana/k6:latest run /scripts/ws_concurrent.js
 	@echo ""
 	@echo "Container resource snapshot at test end:"
-	docker stats lemma-load-app --no-stream --format \
+	docker stats lemma-load-api lemma-load-worker --no-stream --format \
 		"table {{.Name}}\t{{.CPUPerc}}\t{{.MemUsage}}\t{{.MemPerc}}"
+
+load-test-sse:
+	@test -f $(LOAD_TEST_ENV) || (echo "$(LOAD_TEST_ENV) not found — run 'make load-test-setup' first" && exit 1)
+	@echo "Running k6 SSE load test (MAX_STREAMERS=$(MAX_STREAMERS), WRITER_VUS=$(WRITER_VUS))…"
+	docker run --rm --network host \
+		--env-file $(LOAD_TEST_ENV) \
+		-e MAX_STREAMERS=$(MAX_STREAMERS) \
+		-e WRITER_VUS=$(WRITER_VUS) \
+		-v "$$(pwd)/load_tests:/scripts" \
+		grafana/k6:latest run /scripts/sse_concurrent.js
+	@echo ""
+	@echo "Container resource snapshot at test end:"
+	docker stats lemma-load-api lemma-load-worker --no-stream --format \
+		"table {{.Name}}\t{{.CPUPerc}}\t{{.MemUsage}}\t{{.MemPerc}}"
+
+load-test-monitor:
+	@echo "Monitoring DB connections (Ctrl+C to stop)…"
+	uv run python load_tests/db_monitor.py --interval 5
 
 load-test-down:
 	docker compose -f $(LOAD_TEST_COMPOSE) down -v

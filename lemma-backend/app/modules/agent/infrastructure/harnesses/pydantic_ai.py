@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
 from collections.abc import Awaitable, Callable
 from typing import AsyncIterator, Iterable, Sequence
@@ -64,6 +65,34 @@ from app.core.log.log import get_logger
 logger = get_logger(__name__)
 StopChecker = Callable[[], Awaitable[bool]]
 
+
+def _user_facing_error_message(exc: Exception) -> str:
+    """Return a sanitized, actionable message for the UI.
+
+    Never forward raw provider exception text (which may contain API keys,
+    request headers, or model-internal details) into user-visible payloads.
+    """
+    if isinstance(exc, ModelHTTPError):
+        return (
+            f"The model provider returned an error (HTTP {exc.status_code}). "
+            "Please check the agent runtime configuration."
+        )
+    if isinstance(exc, UnexpectedModelBehavior):
+        return (
+            "A tool failed repeatedly after several attempts and the run was "
+            "stopped. Please check the agent configuration."
+        )
+    if isinstance(exc, UsageLimitExceeded):
+        return (
+            "The agent run hit a usage limit. "
+            "Please check the agent runtime configuration."
+        )
+    return (
+        "The model provider returned an error. "
+        "Please check the agent runtime configuration."
+    )
+
+
 # Per-tool retry budget for the in-process agent. pydantic-ai defaults to 1, which
 # turns a single bad/invalid tool call (e.g. arguments that fail schema validation)
 # into a fatal run. 5 gives the model several chances to self-correct from the
@@ -113,7 +142,7 @@ class PydanticAIHarness:
             logger.error("Model provider rejected agent request: %s", exc)
             yield AgentEvent(
                 type=AgentEventType.ERROR,
-                data=str(exc),
+                data=_user_facing_error_message(exc),
                 agent_run_id=agent_run_id,
             )
             return
@@ -124,10 +153,7 @@ class PydanticAIHarness:
             logger.warning("Agent run ended after repeated tool failures: %s", exc)
             yield AgentEvent(
                 type=AgentEventType.ERROR,
-                data=(
-                    "A tool failed repeatedly after several attempts and the run was "
-                    f"stopped: {exc}"
-                ),
+                data=_user_facing_error_message(exc),
                 agent_run_id=agent_run_id,
             )
             return
@@ -135,7 +161,7 @@ class PydanticAIHarness:
             logger.warning("Agent run hit a usage limit: %s", exc)
             yield AgentEvent(
                 type=AgentEventType.ERROR,
-                data=str(exc),
+                data=_user_facing_error_message(exc),
                 agent_run_id=agent_run_id,
             )
             return
@@ -159,7 +185,7 @@ class PydanticAIHarness:
             logger.error("PydanticAI harness execution failed: %s", exc, exc_info=True)
             yield AgentEvent(
                 type=AgentEventType.ERROR,
-                data=str(exc),
+                data=_user_facing_error_message(exc),
                 agent_run_id=agent_run_id,
             )
             return
@@ -232,140 +258,202 @@ class PydanticAIHarness:
             else pydantic_agent.iter(user_prompt, **iter_kwargs)
         )
 
-        # Manual async-with to shield pydantic-graph cleanup from anyio cancellation.
-        # When a streaq task times out (or the worker shuts down), a CancelledError
-        # propagates into this generator while pydantic-graph's Graph.iter / Agent.iter
-        # are still running inside anyio cancel scopes.  Letting `async with` call
-        # __aexit__ normally causes "aclose(): asynchronous generator is already
-        # running" + "Attempted to exit a cancel scope that isn't the current task's
-        # current cancel scope", which propagates as an ExceptionGroup and crashes the
-        # entire streaq worker.  Shielding __aexit__ lets the inner generators close
-        # cleanly before we re-raise.
-        run = await run_context.__aenter__()
-        try:
-            async for node in run:
-                if PydanticAIAgent.is_model_request_node(node):
-                    terminal_event_seen = False
-                    async for event in self._stream_model_request(
-                        node,
-                        run,
-                        agent_run_id=agent_run_id,
-                        malformed_tool_call_ids=malformed_tool_call_ids,
-                        should_stop=should_stop,
-                    ):
-                        yield event
-                        if event.type in {
-                            AgentEventType.ERROR,
-                            AgentEventType.STOPPED,
-                        }:
-                            terminal_event_seen = True
-                    if terminal_event_seen:
-                        return
-                elif PydanticAIAgent.is_call_tools_node(node):
-                    terminal_event_seen = False
-                    async for event in self._stream_tool_calls(
-                        node,
-                        run,
-                        conversation_id=ctx.conversation_id,
-                        agent_run_id=agent_run_id,
-                        malformed_tool_call_ids=malformed_tool_call_ids,
-                        emitted_tool_response_ids=emitted_tool_response_ids,
-                        should_stop=should_stop,
-                    ):
-                        yield event
-                        if event.type in {
-                            AgentEventType.ERROR,
-                            AgentEventType.STOPPED,
-                        }:
-                            terminal_event_seen = True
-                    if terminal_event_seen:
-                        return
-                elif PydanticAIAgent.is_end_node(node):
-                    if node.data.tool_call_id:
-                        if node.data.tool_call_id not in emitted_tool_response_ids:
-                            yield AgentEvent(
-                                type=AgentEventType.MESSAGE,
-                                data=MessageDraft.of_tool_return(
-                                    tool_name=node.data.tool_name or "unknown_tool",
+        # pydantic-ai's agent.iter() enters anyio cancel scopes that are bound to
+        # the TASK they're created in. We drive the whole iteration in a CHILD
+        # task so those scopes live entirely within it. When a streaq task
+        # timeout / worker shutdown cancels us, we cancel the child and
+        # pydantic-graph unwinds its scopes *inside the child task* — never
+        # touching streaq's own cancel scope in the parent task. Doing the
+        # cleanup in the parent (whether via anyio.CancelScope or asyncio.shield)
+        # corrupts that shared scope stack and crashes the whole worker with
+        # "Attempted to exit a cancel scope that isn't the current task's current
+        # cancel scope". Events stream out through a queue.
+        queue: asyncio.Queue[tuple[str, object]] = asyncio.Queue()
+
+        async def _drive() -> None:
+            try:
+                async with run_context as run:
+                    async for node in run:
+                        if PydanticAIAgent.is_model_request_node(node):
+                            async for event in self._stream_model_request(
+                                node,
+                                run,
+                                agent_run_id=agent_run_id,
+                                malformed_tool_call_ids=malformed_tool_call_ids,
+                                should_stop=should_stop,
+                            ):
+                                await queue.put(("event", event))
+                                if event.type in {
+                                    AgentEventType.ERROR,
+                                    AgentEventType.STOPPED,
+                                }:
+                                    return
+                        elif PydanticAIAgent.is_call_tools_node(node):
+                            async for event in self._stream_tool_calls(
+                                node,
+                                run,
+                                conversation_id=ctx.conversation_id,
+                                agent_run_id=agent_run_id,
+                                malformed_tool_call_ids=malformed_tool_call_ids,
+                                emitted_tool_response_ids=emitted_tool_response_ids,
+                                should_stop=should_stop,
+                            ):
+                                await queue.put(("event", event))
+                                if event.type in {
+                                    AgentEventType.ERROR,
+                                    AgentEventType.STOPPED,
+                                }:
+                                    return
+                        elif PydanticAIAgent.is_end_node(node):
+                            if node.data.tool_call_id:
+                                if (
+                                    node.data.tool_call_id
+                                    not in emitted_tool_response_ids
+                                ):
+                                    await queue.put(
+                                        (
+                                            "event",
+                                            AgentEvent(
+                                                type=AgentEventType.MESSAGE,
+                                                data=MessageDraft.of_tool_return(
+                                                    tool_name=node.data.tool_name
+                                                    or "unknown_tool",
+                                                    tool_call_id=node.data.tool_call_id,
+                                                    tool_result=to_json_value(
+                                                        node.data.output
+                                                    ),
+                                                    metadata={
+                                                        "tool_name": node.data.tool_name
+                                                        or "unknown_tool"
+                                                    },
+                                                ),
+                                                agent_run_id=agent_run_id,
+                                            ),
+                                        )
+                                    )
+                                    if await self._should_stop(should_stop):
+                                        await queue.put(
+                                            ("event", self._stopped_event(agent_run_id))
+                                        )
+                                        return
+                                final_message = self._final_output_message(
+                                    output=node.data.output,
+                                    tool_name=node.data.tool_name,
                                     tool_call_id=node.data.tool_call_id,
-                                    tool_result=to_json_value(node.data.output),
+                                )
+                                if final_message is not None:
+                                    await queue.put(
+                                        (
+                                            "event",
+                                            AgentEvent(
+                                                type=AgentEventType.MESSAGE,
+                                                data=final_message,
+                                                agent_run_id=agent_run_id,
+                                            ),
+                                        )
+                                    )
+                                    if await self._should_stop(should_stop):
+                                        await queue.put(
+                                            ("event", self._stopped_event(agent_run_id))
+                                        )
+                                        return
+
+                            elif options.output_type is not None:
+                                final_message = self._final_output_message(
+                                    output=node.data.output,
+                                    tool_name=None,
+                                    tool_call_id=None,
+                                )
+                                if final_message is not None:
+                                    await queue.put(
+                                        (
+                                            "event",
+                                            AgentEvent(
+                                                type=AgentEventType.MESSAGE,
+                                                data=final_message,
+                                                agent_run_id=agent_run_id,
+                                            ),
+                                        )
+                                    )
+                                    if await self._should_stop(should_stop):
+                                        await queue.put(
+                                            ("event", self._stopped_event(agent_run_id))
+                                        )
+                                        return
+
+                    run_usage = run.usage
+                    await queue.put(
+                        (
+                            "event",
+                            AgentEvent(
+                                type=AgentEventType.USAGE,
+                                data=AgentRunUsage(
+                                    model_name=options.model_name,
+                                    usage_kind="llm",
+                                    input_tokens=_usage_value(run_usage, "input_tokens"),
+                                    output_tokens=_usage_value(
+                                        run_usage, "output_tokens"
+                                    ),
+                                    request_count=_usage_value(run_usage, "requests"),
+                                    tool_call_count=_usage_value(
+                                        run_usage, "tool_calls"
+                                    ),
                                     metadata={
-                                        "tool_name": node.data.tool_name
-                                        or "unknown_tool"
+                                        "cache_write_tokens": _usage_value(
+                                            run_usage, "cache_write_tokens"
+                                        ),
+                                        "cache_read_tokens": _usage_value(
+                                            run_usage, "cache_read_tokens"
+                                        ),
+                                        "input_audio_tokens": _usage_value(
+                                            run_usage, "input_audio_tokens"
+                                        ),
+                                        "output_audio_tokens": _usage_value(
+                                            run_usage, "output_audio_tokens"
+                                        ),
                                     },
                                 ),
                                 agent_run_id=agent_run_id,
-                            )
-                            if await self._should_stop(should_stop):
-                                yield self._stopped_event(agent_run_id)
-                                return
-                        final_message = self._final_output_message(
-                            output=node.data.output,
-                            tool_name=node.data.tool_name,
-                            tool_call_id=node.data.tool_call_id,
+                            ),
                         )
-                        if final_message is not None:
-                            yield AgentEvent(
-                                type=AgentEventType.MESSAGE,
-                                data=final_message,
-                                agent_run_id=agent_run_id,
-                            )
-                            if await self._should_stop(should_stop):
-                                yield self._stopped_event(agent_run_id)
-                                return
+                    )
+            except BaseException as exc:  # noqa: BLE001 — relayed to parent below
+                # Includes CancelledError from our own task.cancel(). pydantic's
+                # scopes are unwound by the `async with` above, in THIS task.
+                await queue.put(("error", exc))
+            finally:
+                await queue.put(("done", None))
 
-                    elif options.output_type is not None:
-                        final_message = self._final_output_message(
-                            output=node.data.output,
-                            tool_name=None,
-                            tool_call_id=None,
-                        )
-                        if final_message is not None:
-                            yield AgentEvent(
-                                type=AgentEventType.MESSAGE,
-                                data=final_message,
-                                agent_run_id=agent_run_id,
-                            )
-                            if await self._should_stop(should_stop):
-                                yield self._stopped_event(agent_run_id)
-                                return
-
-            run_usage = run.usage
-            yield AgentEvent(
-                type=AgentEventType.USAGE,
-                data=AgentRunUsage(
-                    model_name=options.model_name,
-                    usage_kind="llm",
-                    input_tokens=_usage_value(run_usage, "input_tokens"),
-                    output_tokens=_usage_value(run_usage, "output_tokens"),
-                    request_count=_usage_value(run_usage, "requests"),
-                    tool_call_count=_usage_value(run_usage, "tool_calls"),
-                    metadata={
-                        "cache_write_tokens": _usage_value(
-                            run_usage, "cache_write_tokens"
-                        ),
-                        "cache_read_tokens": _usage_value(
-                            run_usage, "cache_read_tokens"
-                        ),
-                        "input_audio_tokens": _usage_value(
-                            run_usage, "input_audio_tokens"
-                        ),
-                        "output_audio_tokens": _usage_value(
-                            run_usage, "output_audio_tokens"
-                        ),
-                    },
-                ),
-                agent_run_id=agent_run_id,
-            )
-        except BaseException as exc:
+        task = asyncio.create_task(_drive())
+        pending_error: BaseException | None = None
+        try:
+            while True:
+                kind, payload = await queue.get()
+                if kind == "done":
+                    break
+                if kind == "error":
+                    pending_error = payload  # type: ignore[assignment]
+                    continue
+                yield payload  # type: ignore[misc]
+        finally:
+            if not task.done():
+                task.cancel()
+            # Let the child finish unwinding pydantic's scopes (in its own task),
+            # shielded so our own cancellation doesn't abandon that cleanup.
             with anyio.CancelScope(shield=True):
                 try:
-                    await run_context.__aexit__(type(exc), exc, exc.__traceback__)
-                except Exception:
-                    logger.debug("Error cleaning up pydantic-ai run context after cancellation")
-            raise
-        else:
-            await run_context.__aexit__(None, None, None)
+                    await task
+                except BaseException:
+                    pass
+
+        # On normal completion, re-raise a real error from the driver so run()'s
+        # handlers (ModelHTTPError, UsageLimitExceeded, AgentInputRequired, …)
+        # still fire. A CancelledError relayed here is dropped: the parent's own
+        # cancellation (if any) already propagated out of the loop above.
+        if pending_error is not None and not isinstance(
+            pending_error, asyncio.CancelledError
+        ):
+            raise pending_error
 
     async def _stream_model_request(
         self,

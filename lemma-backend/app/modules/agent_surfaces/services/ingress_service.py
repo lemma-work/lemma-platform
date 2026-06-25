@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from typing import Any
@@ -11,6 +12,7 @@ from pydantic import TypeAdapter
 from app.core.authorization.current import reset_current_context, set_current_context
 from app.core.authorization.factory import create_authorization_data_service
 from app.core.config import settings
+from app.core.infrastructure.db.uow_factory import UnitOfWorkFactory
 from app.modules.agent.domain.value_objects import AgentRunApprovalDecision
 from app.modules.agent.services.conversation_service import ConversationService
 from app.modules.agent.tools.user_interaction.models import (
@@ -118,17 +120,34 @@ class AgentSurfaceIngressService:
     def __init__(
         self,
         *,
-        uow,
-        surface_repository: SurfaceInstallationRepositoryPort,
-        conversation_link_repository: SurfaceConversationLinkRepository,
-        conversation_service: ConversationService,
-        connector_service: ConnectorService,
+        uow=None,
+        uow_factory: UnitOfWorkFactory | None = None,
+        surface_repository: SurfaceInstallationRepositoryPort | None = None,
+        conversation_link_repository: SurfaceConversationLinkRepository | None = None,
+        conversation_service: ConversationService | None = None,
+        connector_service: ConnectorService | None = None,
         adapter_registry: SurfacePlatformAdapterRegistry | None = None,
         event_dedup_store: SurfaceEventDedupStorePort | None = None,
         pod_membership_port: SurfacePodMembershipPort | None = None,
         file_ingest_service: SurfaceFileIngestService | None = None,
+        conversation_service_factory: Callable[[Any], ConversationService] | None = None,
+        connector_service_factory: Callable[[Any], ConnectorService] | None = None,
     ):
+        # Two modes:
+        #  - uow mode (request/egress/ingress callers): collaborators are bound
+        #    to one request-scoped session — fine for short HTTP/event handlers.
+        #  - uow_factory mode (the worker's execute_chat): the long external I/O
+        #    (platform APIs, file ingest, transcription) must NOT pin a pooled
+        #    connection, so the credential read and the message-write tail each
+        #    open their own short UoW via the factories.
+        if uow is None and uow_factory is None:
+            raise ValueError(
+                "AgentSurfaceIngressService requires either uow or uow_factory"
+            )
         self.uow = uow
+        self._uow_factory = uow_factory
+        self._conversation_service_factory = conversation_service_factory
+        self._connector_service_factory = connector_service_factory
         self.surface_repository = surface_repository
         self.conversation_link_repository = conversation_link_repository
         self.conversation_service = conversation_service
@@ -137,16 +156,23 @@ class AgentSurfaceIngressService:
         self.file_ingest_service = file_ingest_service or SurfaceFileIngestService(
             adapter_registry=self.adapter_registry
         )
-        self.external_user_repository = ExternalSurfaceUserRepository(uow)
         self.event_dedup_store = event_dedup_store or get_surface_event_dedup_store()
-        self.identity_service = SurfaceIdentityResolutionService(
-            uow, self.external_user_repository
-        )
         self.pod_membership_port = pod_membership_port
-        self.credential_resolver = SurfaceCredentialResolver(
-            session=uow.session,
-            connector_service=connector_service,
-        )
+        # uow-bound collaborators are only used by the request/egress/ingress
+        # paths; the worker execute_chat path opens its own short UoWs instead.
+        if uow is not None:
+            self.external_user_repository = ExternalSurfaceUserRepository(uow)
+            self.identity_service = SurfaceIdentityResolutionService(
+                uow, self.external_user_repository
+            )
+            self.credential_resolver = SurfaceCredentialResolver(
+                session=uow.session,
+                connector_service=connector_service,
+            )
+        else:
+            self.external_user_repository = None
+            self.identity_service = None
+            self.credential_resolver = None
 
     async def prepare_ingress(
         self, request: SurfaceIngressRequest
@@ -325,9 +351,6 @@ class AgentSurfaceIngressService:
         if adapter is None:
             return
 
-        credentials = await self._resolve_credentials_from_context(parsed_context)
-        event = parsed_context.event
-
         raw_event_metadata = (
             parsed_context.message_metadata.event_metadata
             if isinstance(parsed_context, SurfaceChatContext)
@@ -341,13 +364,15 @@ class AgentSurfaceIngressService:
         )
 
         if isinstance(parsed_context, SurfaceReplyContext):
+            # Credentials are needed only to send the signup/reply message.
+            credentials = await self._resolve_credentials_from_context(parsed_context)
             try:
                 reply_metadata = dict(
                     getattr(parsed_context, "reply_metadata", {}) or {}
                 )
                 await adapter.send_message(
                     credentials=credentials,
-                    event=event,
+                    event=parsed_context.event,
                     message=parsed_context.reply_message or self._signup_message(),
                     metadata={
                         "agent_display_name": parsed_context.agent_display_name,
@@ -423,7 +448,38 @@ class AgentSurfaceIngressService:
             original_text=context.message_text,
             metadata=metadata,
         )
-        auth_ctx = await create_authorization_data_service(self.uow).build_user_context(
+        # The only DB writes happen here, AFTER all the external I/O above — so
+        # in worker (factory) mode a pooled connection is held just for this
+        # short tail, not across the platform/file/transcription calls.
+        await self._commit_inbound_message(context, message_text, metadata)
+
+    async def _commit_inbound_message(
+        self,
+        context: SurfaceChatContext,
+        message_text: str,
+        metadata: dict[str, Any],
+    ) -> None:
+        """Persist the inbound message / resume the paused run in a short UoW."""
+        if self._uow_factory is not None:
+            async with self._uow_factory() as uow:
+                conversation_service = self._conversation_service_factory(uow)
+                await self._write_inbound_message(
+                    context, message_text, metadata, uow, conversation_service
+                )
+        else:
+            await self._write_inbound_message(
+                context, message_text, metadata, self.uow, self.conversation_service
+            )
+
+    async def _write_inbound_message(
+        self,
+        context: SurfaceChatContext,
+        message_text: str,
+        metadata: dict[str, Any],
+        uow,
+        conversation_service: ConversationService,
+    ) -> None:
+        auth_ctx = await create_authorization_data_service(uow).build_user_context(
             user_id=context.user_id,
             pod_id=context.pod_id,
         )
@@ -433,8 +489,10 @@ class AgentSurfaceIngressService:
             # answer and resume — rather than starting a new message/run. This is
             # how the formatted-text fallback (and any "type your own" reply) gets
             # back into the run as a structured answer.
-            if not await self._maybe_resume_pending_interaction(context, message_text):
-                await self.conversation_service.add_user_message_and_start_run(
+            if not await self._maybe_resume_pending_interaction(
+                context, message_text, conversation_service=conversation_service
+            ):
+                await conversation_service.add_user_message_and_start_run(
                     conversation_id=context.conversation_id,
                     user_id=context.user_id,
                     content=message_text,
@@ -558,7 +616,11 @@ class AgentSurfaceIngressService:
         return combined
 
     async def _maybe_resume_pending_interaction(
-        self, context: SurfaceChatContext, message_text: str
+        self,
+        context: SurfaceChatContext,
+        message_text: str,
+        *,
+        conversation_service: ConversationService,
     ) -> bool:
         """Resume a paused ask_user or request_approval from a typed surface reply.
 
@@ -575,14 +637,14 @@ class AgentSurfaceIngressService:
         if not text:
             return False
         try:
-            pending = await self.conversation_service.get_pending_user_interaction(
+            pending = await conversation_service.get_pending_user_interaction(
                 conversation_id=context.conversation_id
             )
             if not isinstance(pending, dict):
                 return False
             kind = str(pending.get("kind") or "")
             conversation = (
-                await self.conversation_service.conversation_repository.get_conversation(
+                await conversation_service.conversation_repository.get_conversation(
                     context.conversation_id
                 )
             )
@@ -605,7 +667,7 @@ class AgentSurfaceIngressService:
                 decision = _parse_approval_decision(text)
                 response = {}
 
-            await self.conversation_service.resolve_user_approval_internal(
+            await conversation_service.resolve_user_approval_internal(
                 conversation=conversation,
                 approval_id=str(pending.get("tool_call_id") or ""),
                 user_id=context.user_id,
@@ -1274,6 +1336,18 @@ class AgentSurfaceIngressService:
     async def _resolve_credentials_from_context(
         self, context: AgentSurfaceContext
     ) -> dict[str, Any]:
+        if self._uow_factory is not None:
+            # Worker path: read credentials in a short UoW and return the plain
+            # dict, so no connection is held during the platform I/O that follows.
+            async with self._uow_factory() as uow:
+                resolver = SurfaceCredentialResolver(
+                    session=uow.session,
+                    connector_service=self._connector_service_factory(uow),
+                )
+                return await resolver.for_platform(
+                    context.platform,
+                    context.surface_account_id,
+                )
         return await self.credential_resolver.for_platform(
             context.platform,
             context.surface_account_id,

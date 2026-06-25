@@ -39,7 +39,7 @@ def build_agent_surface_ingress_service(
     """Construct the ingress service from a unit of work.
 
     Mirrors ``AppWorkerContext.build_surface_event_handler`` and the FastAPI
-    ``provide_surface_event_handler`` dependency; kept here so the tool delivery
+    ``build_surface_event_handler`` dependency; kept here so the tool delivery
     path does not depend on the worker/request context.
     """
     from app.modules.agent.api.dependencies import get_conversation_service

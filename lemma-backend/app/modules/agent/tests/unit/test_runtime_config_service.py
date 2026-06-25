@@ -22,31 +22,11 @@ from app.modules.agent.agent_runtime_defaults import (
 from app.modules.agent.services.runtime_profile_service import (
     DEFAULT_SYSTEM_AGENT_RUNTIME_PROFILE_ID,
     AgentRuntimeProfileService,
-    OpenAICompatModelEntry,
-    _openai_compat_model_registry,
-    register_openai_compat_models,
+    DiscoveredModel,
 )
 from app.modules.agent.infrastructure.harnesses.pydantic_ai import (
     _runtime_profile_model,
 )
-
-_FIREWORKS_MODELS = {
-    "minimax-m3": OpenAICompatModelEntry("accounts/fireworks/models/minimax-m3", vision=True),
-    "glm-5.2": OpenAICompatModelEntry("accounts/fireworks/models/glm-5p2"),
-    "kimi-k2.7-code": OpenAICompatModelEntry("accounts/fireworks/models/kimi-k2p7-code", vision=True),
-    "kimi-k2.6": OpenAICompatModelEntry("accounts/fireworks/models/kimi-k2p6", vision=True),
-    "deepseek-v4-pro": OpenAICompatModelEntry("accounts/fireworks/models/deepseek-v4-pro"),
-    "deepseek-v4-flash": OpenAICompatModelEntry("accounts/fireworks/models/deepseek-v4-flash"),
-}
-
-
-@pytest.fixture()
-def fireworks_registry():
-    """Register Fireworks models in the OSS registry for tests that need them."""
-    register_openai_compat_models(_FIREWORKS_MODELS)
-    yield
-    for key in _FIREWORKS_MODELS:
-        _openai_compat_model_registry.pop(key, None)
 
 
 def _test_profile(
@@ -195,6 +175,89 @@ async def test_runtime_resolves_org_profile_model_override():
     assert resolved_override.model_name_for_harness == "provider/org-default/deepseek"
 
 
+def test_runtime_credentials_are_redacted_in_repr_but_revealable():
+    """API keys are SecretStr, so they never appear in repr()/logs/tracebacks
+    (the leak that exposed a key in pytest's --showlocals dump), yet
+    reveal_credentials still returns the plaintext for harness auth."""
+    from app.modules.agent.domain.runtime_profiles import (
+        ApiKeyRuntimeCredentials,
+        reveal_credentials,
+    )
+
+    creds = ApiKeyRuntimeCredentials(api_key="super-secret-key")
+
+    assert "super-secret-key" not in repr(creds)
+    assert "super-secret-key" not in str(creds)
+
+    profile = _test_profile(
+        scope=RuntimeProfileScope.ORGANIZATION,
+        organization_id=uuid4(),
+        name="org-default",
+    ).model_copy(update={"credentials": creds})
+    # A profile that carries credentials must not leak them via repr either.
+    assert "super-secret-key" not in repr(profile)
+    # public_dict already drops credentials entirely.
+    assert "credentials" not in profile.public_dict()
+
+    # The one place the plaintext is recovered — for harness authentication.
+    assert reveal_credentials(creds) == {"api_key": "super-secret-key"}
+    assert reveal_credentials(None) is None
+
+
+@pytest.mark.asyncio
+async def test_resolve_unwraps_credentials_for_harness():
+    from app.modules.agent.domain.runtime_profiles import ApiKeyRuntimeCredentials
+
+    org_id = uuid4()
+    profile = _test_profile(
+        scope=RuntimeProfileScope.ORGANIZATION,
+        organization_id=org_id,
+        name="org-default",
+    ).model_copy(update={"credentials": ApiKeyRuntimeCredentials(api_key="real-key")})
+    service = AgentRuntimeProfileService(_ProfileRepository([profile]))
+
+    resolved = await service.resolve(
+        runtime=AgentRuntimeConfig(profile_id=profile.id),
+        organization_id=org_id,
+        user_id=uuid4(),
+    )
+
+    # The harness needs the real key, so resolve unwraps the SecretStr...
+    assert resolved.credentials == {"api_key": "real-key"}
+    # ...while the underlying profile object still masks it.
+    assert "real-key" not in repr(resolved.profile)
+
+
+def test_credentials_survive_persist_load_round_trip():
+    """Mirrors the repository's persist (reveal_credentials -> encrypt) and load
+    (decrypt -> model_validate) path. The real key must survive — serializing
+    credentials with model_dump(mode='json') would have stored the masked
+    '**********' and silently corrupted the key on save."""
+    from app.modules.agent.domain.runtime_profiles import (
+        AgentRuntimeProfile,
+        ApiKeyRuntimeCredentials,
+        reveal_credentials,
+    )
+
+    profile = _test_profile(
+        scope=RuntimeProfileScope.ORGANIZATION,
+        organization_id=uuid4(),
+        name="org-default",
+    ).model_copy(update={"credentials": ApiKeyRuntimeCredentials(api_key="persist-key")})
+
+    # Persist side: what the repository hands to encrypt_json.
+    stored = reveal_credentials(profile.credentials)
+    assert stored == {"api_key": "persist-key"}
+
+    # Load side: rebuild the entity from the decrypted plaintext dict.
+    data = profile.model_dump(mode="json", exclude={"credentials"})
+    data["credentials"] = stored
+    reloaded = AgentRuntimeProfile.model_validate(data)
+
+    assert reveal_credentials(reloaded.credentials) == {"api_key": "persist-key"}
+    assert "persist-key" not in repr(reloaded)
+
+
 @pytest.mark.asyncio
 async def test_runtime_lists_configured_system_org_and_owned_personal_profiles(
     monkeypatch,
@@ -284,24 +347,27 @@ def test_system_runtime_profiles_return_empty_without_server_credentials(monkeyp
     assert AgentRuntimeProfileService().system_profiles() == []
 
 
-def test_system_runtime_profiles_only_include_configured_system_lemma(
-    monkeypatch, fireworks_registry
-):
+def test_system_runtime_profiles_only_include_configured_system_lemma(monkeypatch):
     from app.core.config import settings
+    from app.modules.agent.services import runtime_profile_service
 
-    monkeypatch.setattr(settings, "lemma_openai_api_key", "lemma-secret")
+    # Keep hermetic: the profile builder reloads the local ``.env`` and prefers
+    # ``os.getenv`` over ``settings``, which would otherwise leak the developer's
+    # real model list/credentials into this test. Neutralize the reload and clear
+    # the env so the monkeypatched ``settings`` win.
+    monkeypatch.setattr(runtime_profile_service, "_load_runtime_env", lambda: None)
     monkeypatch.delenv("LEMMA_DEFAULT_MODEL_TYPE", raising=False)
     monkeypatch.delenv("LEMMA_OPENAI_API_KEY", raising=False)
-    # Pin the Fireworks catalog explicitly: the shipped OSS defaults are now
-    # provider-agnostic (OpenAI), so this exercises the model registry directly.
-    monkeypatch.setattr(settings, "lemma_openai_default_model", "minimax-m3")
+    monkeypatch.delenv("LEMMA_OPENAI_DEFAULT_MODEL", raising=False)
+    monkeypatch.delenv("LEMMA_OPENAI_MODEL_NAMES", raising=False)
+    monkeypatch.delenv("LEMMA_OPENAI_VISION_MODEL_NAMES", raising=False)
+    monkeypatch.setattr(settings, "lemma_openai_api_key", "lemma-secret")
+    monkeypatch.setattr(settings, "lemma_openai_default_model", "model-fast")
     monkeypatch.setattr(
         settings,
         "lemma_openai_model_names",
-        "minimax-m3,glm-5.2,kimi-k2.7-code,kimi-k2.6,deepseek-v4-pro,deepseek-v4-flash",
+        "model-fast,model-pro,model-vision",
     )
-    monkeypatch.delenv("LEMMA_OPENAI_DEFAULT_MODEL", raising=False)
-    monkeypatch.delenv("LEMMA_OPENAI_MODEL_NAMES", raising=False)
 
     profiles = AgentRuntimeProfileService().system_profiles()
 
@@ -311,52 +377,58 @@ def test_system_runtime_profiles_only_include_configured_system_lemma(
     assert all(profile.scope is RuntimeProfileScope.SYSTEM for profile in profiles)
     lemma_profile = profiles[0]
     assert lemma_profile.name == "Lemma"
-    assert lemma_profile.default_model_name == "minimax-m3"
+    assert lemma_profile.default_model_name == "model-fast"
     assert lemma_profile.credentials is not None
+    # The system profile uses model names verbatim — public name == provider name.
     system_catalog = [
         (model.name, model.provider_model_name)
         for model in lemma_profile.model_catalog
     ]
     assert system_catalog == [
-        ("minimax-m3", "accounts/fireworks/models/minimax-m3"),
-        ("glm-5.2", "accounts/fireworks/models/glm-5p2"),
-        ("kimi-k2.7-code", "accounts/fireworks/models/kimi-k2p7-code"),
-        ("kimi-k2.6", "accounts/fireworks/models/kimi-k2p6"),
-        ("deepseek-v4-pro", "accounts/fireworks/models/deepseek-v4-pro"),
-        ("deepseek-v4-flash", "accounts/fireworks/models/deepseek-v4-flash"),
+        ("model-fast", "model-fast"),
+        ("model-pro", "model-pro"),
+        ("model-vision", "model-vision"),
     ]
     public_profile = lemma_profile.public_dict()
     assert public_profile["config"] == {}
     assert [
         model["provider_model_name"] for model in public_profile["model_catalog"]
     ] == [
-        "minimax-m3",
-        "glm-5.2",
-        "kimi-k2.7-code",
-        "kimi-k2.6",
-        "deepseek-v4-pro",
-        "deepseek-v4-flash",
+        "model-fast",
+        "model-pro",
+        "model-vision",
     ]
 
 
-def test_system_openai_catalog_declares_vision_per_model(monkeypatch, fireworks_registry):
-    """Image support is maintained against each model in the profile: m3 + kimi
-    accept images (VISION), glm + deepseek do not, so view_image is withheld there."""
+def test_system_openai_catalog_declares_vision_per_model(monkeypatch):
+    """view_image is gated per model. The standard OpenAI /models endpoint does
+    not report modalities, so the operator opts image-capable models in via
+    LEMMA_OPENAI_VISION_MODEL_NAMES; everything else stays text-only and the
+    image tools are withheld there."""
     from app.core.config import settings
     from app.modules.agent.domain.runtime_profiles import RuntimeModelCapability
+    from app.modules.agent.services import runtime_profile_service
 
-    monkeypatch.setattr(settings, "lemma_openai_api_key", "lemma-secret")
+    # Hermetic: neutralize the .env reload and clear env so the monkeypatched
+    # ``settings`` drive the catalog (see the sibling test above).
+    monkeypatch.setattr(runtime_profile_service, "_load_runtime_env", lambda: None)
     monkeypatch.delenv("LEMMA_DEFAULT_MODEL_TYPE", raising=False)
     monkeypatch.delenv("LEMMA_OPENAI_API_KEY", raising=False)
-    # Pin the Fireworks catalog explicitly (shipped defaults are OpenAI now).
+    monkeypatch.delenv("LEMMA_OPENAI_DEFAULT_MODEL", raising=False)
+    monkeypatch.delenv("LEMMA_OPENAI_MODEL_NAMES", raising=False)
+    monkeypatch.delenv("LEMMA_OPENAI_VISION_MODEL_NAMES", raising=False)
+    monkeypatch.setattr(settings, "lemma_openai_api_key", "lemma-secret")
     monkeypatch.setattr(
         settings,
         "lemma_openai_model_names",
-        "minimax-m3,glm-5.2,kimi-k2.7-code,kimi-k2.6,deepseek-v4-pro,deepseek-v4-flash",
+        "model-vision-a,model-text-a,model-vision-b,model-text-b",
     )
-    monkeypatch.setattr(settings, "lemma_openai_default_model", "minimax-m3")
-    monkeypatch.delenv("LEMMA_OPENAI_DEFAULT_MODEL", raising=False)
-    monkeypatch.delenv("LEMMA_OPENAI_MODEL_NAMES", raising=False)
+    monkeypatch.setattr(settings, "lemma_openai_default_model", "model-vision-a")
+    monkeypatch.setattr(
+        settings,
+        "lemma_openai_vision_model_names",
+        "model-vision-a,model-vision-b",
+    )
 
     profile = AgentRuntimeProfileService().system_profiles()[0]
     vision_by_model = {
@@ -364,12 +436,10 @@ def test_system_openai_catalog_declares_vision_per_model(monkeypatch, fireworks_
         for model in profile.model_catalog
     }
     assert vision_by_model == {
-        "minimax-m3": True,
-        "kimi-k2.7-code": True,
-        "kimi-k2.6": True,
-        "glm-5.2": False,
-        "deepseek-v4-pro": False,
-        "deepseek-v4-flash": False,
+        "model-vision-a": True,
+        "model-vision-b": True,
+        "model-text-a": False,
+        "model-text-b": False,
     }
     # Structured output is not tracked per-model (universal), so the catalog only
     # ever carries TEXT/TOOLS plus VISION where supported.
@@ -563,8 +633,15 @@ async def test_create_user_daemon_profile_rejects_unknown_model():
 
 @pytest.mark.asyncio
 async def test_create_openai_compatible_profile_discovers_provider_models(monkeypatch):
+    from app.modules.agent.domain.runtime_profiles import RuntimeModelCapability
+
     async def fake_discover(**_kwargs):
-        return ["openrouter/deepseek/deepseek-chat", "openai/gpt-5.1"]
+        # OpenRouter-style discovery reports image input per model, so vision is
+        # auto-detected without any explicit configuration.
+        return [
+            DiscoveredModel("openrouter/deepseek/deepseek-chat"),
+            DiscoveredModel("openai/gpt-5.1", supports_vision=True),
+        ]
 
     monkeypatch.setattr(
         "app.modules.agent.services.runtime_profile_service._discover_openai_compatible_models",
@@ -600,6 +677,14 @@ async def test_create_openai_compatible_profile_discovers_provider_models(monkey
         "openrouter/deepseek/deepseek-chat",
         "openai/gpt-5.1",
     ]
+    vision_by_model = {
+        model.name: RuntimeModelCapability.VISION in model.capabilities
+        for model in profile.model_catalog
+    }
+    assert vision_by_model == {
+        "openrouter/deepseek/deepseek-chat": False,
+        "openai/gpt-5.1": True,
+    }
     assert profile.has_credentials is True
     public = profile.public_dict()
     assert public["has_credentials"] is True
@@ -632,17 +717,15 @@ async def test_create_openai_compatible_profile_uses_supplied_models_when_discov
 
     profile = await service.create_openai_compatible_profile(
         organization_id=uuid4(),
-        name="Fireworks custom",
-        base_url="https://api.fireworks.ai/inference/v1",
-        api_key="fireworks-secret",
-        default_model_name="accounts/fireworks/models/kimi-k2p6",
-        model_names=["accounts/fireworks/models/kimi-k2p6"],
+        name="Custom provider",
+        base_url="https://api.vendor.test/v1",
+        api_key="vendor-secret",
+        default_model_name="vendor/model-pro",
+        model_names=["vendor/model-pro"],
     )
 
-    assert profile.default_model_name == "accounts/fireworks/models/kimi-k2p6"
-    assert profile.model_catalog[0].provider_model_name == (
-        "accounts/fireworks/models/kimi-k2p6"
-    )
+    assert profile.default_model_name == "vendor/model-pro"
+    assert profile.model_catalog[0].provider_model_name == "vendor/model-pro"
     assert profile.metadata["catalog_discovered"] is False
 
 
@@ -692,8 +775,10 @@ async def test_create_openai_compatible_profile_rejects_ssrf_base_url(base_url):
 async def test_create_anthropic_compatible_profile_discovers_provider_models(
     monkeypatch,
 ):
+    from app.modules.agent.domain.runtime_profiles import RuntimeModelCapability
+
     async def fake_discover(**_kwargs):
-        return ["claude-sonnet-4-5-20250929"]
+        return [DiscoveredModel("claude-sonnet-4-5-20250929")]
 
     monkeypatch.setattr(
         "app.modules.agent.services.runtime_profile_service._discover_anthropic_compatible_models",
@@ -710,17 +795,23 @@ async def test_create_anthropic_compatible_profile_discovers_provider_models(
     assert profile.protocol is RuntimeProfileProtocol.ANTHROPIC_COMPATIBLE
     assert profile.default_model_name == "claude-sonnet-4-5-20250929"
     assert profile.has_credentials is True
+    # Anthropic/Claude models are uniformly multimodal, so every catalog entry
+    # keeps VISION regardless of what discovery reports.
+    assert all(
+        RuntimeModelCapability.VISION in model.capabilities
+        for model in profile.model_catalog
+    )
 
 
 def test_lemma_harness_builds_dynamic_openai_compatible_model():
     model = _runtime_profile_model(
         HarnessOptions(
-            model_name="accounts/fireworks/models/kimi-k2p6",
+            model_name="vendor/model-pro",
             extra={
                 "runtime_profile": {
                     "protocol": "OPENAI_COMPATIBLE",
                     "config": {
-                        "base_url": "https://api.fireworks.ai/inference/v1",
+                        "base_url": "https://api.vendor.test/v1",
                         "headers": {"X-Test": "yes"},
                     },
                 },

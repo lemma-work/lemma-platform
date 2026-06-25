@@ -175,3 +175,66 @@ async def test_stop_requested_for_running_run_is_left_for_cooperative_stop() -> 
     )
 
     assert job_queue.abort_called is False
+
+
+def test_reconcile_orphaned_agent_runs_cron_registered() -> None:
+    from app.core.infrastructure.jobs.streaq_runtime import streaq_worker
+
+    assert "reconcile_orphaned_agent_runs" in streaq_worker.registry
+
+
+@pytest.mark.asyncio
+async def test_reconcile_orphaned_agent_runs_finalizes_and_publishes(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The reconciler marks stale runs FAILED and publishes lifecycle + SSE
+    events only for runs it actually transitioned (idempotent under races)."""
+    conv1, run1 = uuid4(), uuid4()
+    conv2, run2 = uuid4(), uuid4()
+    stale = [
+        SimpleNamespace(id=run1, conversation_id=conv1),
+        SimpleNamespace(id=run2, conversation_id=conv2),
+    ]
+    finished: list[object] = []
+    published: list[tuple[str, object]] = []
+    realtime: list[tuple[object, dict]] = []
+
+    class _Repo:
+        def __init__(self, uow) -> None:
+            self.uow = uow
+
+        async def list_stale_active_runs(self, *, cutoff_seconds, limit=200):
+            return stale
+
+        async def finish_agent_run(self, *, agent_run_id, status, error=None):
+            finished.append(agent_run_id)
+            # run2 was already terminal (race) -> not updated -> no events.
+            return SimpleNamespace(updated=agent_run_id == run1, status=status)
+
+    async def publish(stream: str, event: object) -> None:
+        published.append((stream, event))
+
+    async def publish_realtime(conversation_id, payload) -> None:
+        realtime.append((conversation_id, payload))
+
+    monkeypatch.setattr(handlers, "ConversationRepository", _Repo)
+    monkeypatch.setattr(handlers.EventPublisher, "publish", publish)
+    monkeypatch.setattr(handlers, "publish_conversation_event", publish_realtime)
+    monkeypatch.setattr(
+        handlers,
+        "streaq_worker",
+        SimpleNamespace(context=SimpleNamespace(uow=lambda: _UowFactory())),
+    )
+
+    await handlers.reconcile_orphaned_agent_runs()
+
+    # Both stale runs were attempted...
+    assert finished == [run1, run2]
+    # ...but only the one that actually transitioned publishes events.
+    assert len(published) == 1
+    stream, event = published[0]
+    assert stream == AGENT_EVENTS_STREAM
+    assert isinstance(event, AgentRunCompletedEvent)
+    assert event.agent_run_id == run1
+    assert event.status == AgentRunStatus.FAILED
+    assert [cid for cid, _ in realtime] == [conv1]

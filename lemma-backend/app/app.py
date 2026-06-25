@@ -145,6 +145,9 @@ async def lifespan(app: FastAPI):
             await close_message_bus()
             await close_engine()
             await channel_service.disconnect()
+            from app.modules.datastore.infrastructure.session import close_datastore_engine
+
+            await close_datastore_engine()
 
 
 class RequestIdMiddleware:

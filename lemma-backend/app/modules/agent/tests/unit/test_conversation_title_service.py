@@ -103,6 +103,13 @@ def _patch_llm(
     async def _publish(conversation_id, payload):
         capture["published"].append((conversation_id, payload))  # type: ignore[union-attr]
 
+    # LLM titling is opt-in via CONVERSATION_TITLE_MODEL; enable it for the
+    # LLM-path tests regardless of the ambient .env value.
+    monkeypatch.setattr(
+        cts.settings,
+        "conversation_title_model",
+        "accounts/fireworks/models/test-title-model",
+    )
     monkeypatch.setattr(cts, "PydanticAIAgent", _FakeLLMAgent)
     monkeypatch.setattr(cts, "AgentRuntimeProfileService", _FakeProfileService)
     monkeypatch.setattr(
@@ -207,7 +214,9 @@ async def test_skips_when_no_user_message(monkeypatch: pytest.MonkeyPatch) -> No
 
 
 @pytest.mark.asyncio
-async def test_llm_error_is_swallowed(monkeypatch: pytest.MonkeyPatch) -> None:
+async def test_llm_error_falls_back_to_first_message(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     capture = _patch_llm(monkeypatch, raise_on_run=True)
     conv = _conversation()
     uow = _FakeUow(conv)
@@ -217,10 +226,38 @@ async def test_llm_error_is_swallowed(monkeypatch: pytest.MonkeyPatch) -> None:
         conv.id
     )
 
-    assert title is None  # no raise
+    # LLM failed but titling still succeeds via the first-message fallback.
+    assert title == "Help me plan a 5-day trip to Japan in spring."
     assert capture["usage"] == ["FAILED"]  # failure still metered
-    assert uow.updated_with is None
-    assert capture["published"] == []
+    assert uow.updated_with is not None
+    assert uow.updated_with.title == title
+    assert capture["published"] == [
+        (conv.id, title_updated_payload(conv.id, title))
+    ]
+
+
+@pytest.mark.asyncio
+async def test_no_model_configured_uses_first_message_without_llm(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    capture = _patch_llm(monkeypatch, output="Should Not Be Used")
+    # Opt OUT of LLM titling: no model configured.
+    monkeypatch.setattr(cts.settings, "conversation_title_model", None)
+    conv = _conversation()
+    uow = _FakeUow(conv)
+    monkeypatch.setattr(cts, "ConversationRepository", _FakeRepo)
+
+    title = await ConversationTitleService(uow_factory=uow).generate_title_if_absent(
+        conv.id
+    )
+
+    assert title == "Help me plan a 5-day trip to Japan in spring."
+    assert capture["run_calls"] == 0  # LLM never invoked
+    assert uow.updated_with is not None
+    assert uow.updated_with.title == title
+    assert capture["published"] == [
+        (conv.id, title_updated_payload(conv.id, title))
+    ]
 
 
 @pytest.mark.asyncio

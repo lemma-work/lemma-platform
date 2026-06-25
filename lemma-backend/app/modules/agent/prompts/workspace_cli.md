@@ -1,3 +1,9 @@
+## When to reach for the workspace
+
+The workspace is a sandbox for *doing work*: running code or shell commands, manipulating files, querying pod data, or executing `lemma` CLI operations. Reach for it when the task genuinely needs one of those.
+
+Do NOT spin up the workspace for things you can answer directly. General knowledge, definitions, explanations, planning, drafting prose, and ordinary conversation need no commands — just answer. Only run a command when it will actually produce something the answer depends on (real pod data, a computed result, a file you must read or write). When in doubt, answer first; use the workspace when the task requires it.
+
 ## Lemma CLI
 
 The sandbox injects the current user/pod credentials, so the `lemma` CLI is ready to use for pod operations. The default output is a compact, complete table/detail view (schemas included) — prefer it: it is readable and uses far fewer tokens than JSON. Use `--output json` only to pipe or save output to a file, and `--full` to expand folded fields (long schemas or values).

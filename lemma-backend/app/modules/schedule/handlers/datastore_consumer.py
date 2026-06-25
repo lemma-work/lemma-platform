@@ -1,11 +1,8 @@
 from __future__ import annotations
 
-from typing import AsyncGenerator
-
 from faststream import Depends, Logger
 from faststream.redis import RedisRouter
 
-from app.core.infrastructure.db.uow_factory import create_uow_from_session_maker
 from app.core.infrastructure.events.message_bus import get_message_bus
 from app.core.infrastructure.events.stream_subscriber import redis_stream_sub
 from app.modules.datastore.domain.events import (
@@ -16,34 +13,25 @@ from app.modules.schedule.repositories.schedule_repository import ScheduleReposi
 from app.modules.schedule.services.datastore_event_handler import DatastoreEventHandler
 from app.modules.schedule.services.schedule_processor import ScheduleProcessor
 from app.core.infrastructure.db.session import async_session_maker
-from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
+from app.core.infrastructure.db.uow_factory import (
+    SessionUnitOfWorkFactory,
+    UnitOfWorkFactory,
+)
 from app.core.log.log import get_logger
 
 router = RedisRouter()
 logger = get_logger(__name__)
 
 
-async def provide_uow() -> AsyncGenerator[SqlAlchemyUnitOfWork, None]:
-    """Provide UoW for schedule datastore event handlers."""
-    async with create_uow_from_session_maker(async_session_maker) as uow:
-        yield uow
-
-
-def provide_datastore_event_handler(
-    uow: SqlAlchemyUnitOfWork = Depends(provide_uow),
-) -> DatastoreEventHandler:
-    message_bus = get_message_bus()
-    return DatastoreEventHandler(
-        schedule_repository=ScheduleRepository(uow=uow, message_bus=message_bus),
-        schedule_processor=ScheduleProcessor(),
-    )
+def provide_uow_factory() -> UnitOfWorkFactory:
+    return SessionUnitOfWorkFactory(async_session_maker)
 
 
 @router.subscriber(stream=redis_stream_sub(DATASTORE_EVENTS_STREAM))
 async def handle_datastore_event(
     event: dict,
     fs_logger: Logger,
-    handler: DatastoreEventHandler = Depends(provide_datastore_event_handler),
+    uow_factory: UnitOfWorkFactory = Depends(provide_uow_factory),
 ):
     """Handle datastore record events and fire matching schedules.
 
@@ -61,6 +49,13 @@ async def handle_datastore_event(
         f"on {record_event.table_name}"
     )
 
-    schedule_ids = await handler.handle_datastore_event(record_event)
+    async with uow_factory() as uow:
+        handler = DatastoreEventHandler(
+            schedule_repository=ScheduleRepository(
+                uow=uow, message_bus=get_message_bus()
+            ),
+            schedule_processor=ScheduleProcessor(),
+        )
+        schedule_ids = await handler.handle_datastore_event(record_event)
     if schedule_ids:
         fs_logger.info(f"Fired {len(schedule_ids)} DATASTORE schedules")

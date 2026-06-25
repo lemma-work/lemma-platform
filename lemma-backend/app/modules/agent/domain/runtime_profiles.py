@@ -11,6 +11,7 @@ from pydantic import (
     ConfigDict,
     Field,
     HttpUrl,
+    SecretStr,
     field_validator,
     model_validator,
 )
@@ -90,16 +91,40 @@ class RuntimeModelCatalogEntry(BaseModel):
 
 
 class ApiKeyRuntimeCredentials(BaseModel):
-    api_key: str = Field(min_length=1)
+    # SecretStr so the key never leaks via repr()/logs/tracebacks; read the
+    # plaintext only through ``reveal_credentials`` at the point of use.
+    api_key: SecretStr = Field(min_length=1)
 
 
 class OAuthRuntimeCredentials(BaseModel):
-    access_token: str = Field(min_length=1)
-    refresh_token: str | None = None
+    access_token: SecretStr = Field(min_length=1)
+    refresh_token: SecretStr | None = None
     expires_at: str | None = None
 
 
 RuntimeCredentials = ApiKeyRuntimeCredentials | OAuthRuntimeCredentials | JsonObject
+
+
+def reveal_credentials(credentials: object | None) -> dict[str, object] | None:
+    """Plaintext dict form of runtime credentials for actual use.
+
+    This is the single place secrets are unwrapped: ``SecretStr`` fields become
+    plain strings here, so the result must only flow to a consumer that truly
+    needs the value (harness authentication, encrypted persistence) — never to a
+    log, response body, or repr. Everywhere else, keep the typed credential
+    object, which masks its secrets.
+    """
+    if credentials is None:
+        return None
+    model_dump = getattr(credentials, "model_dump", None)
+    if callable(model_dump):
+        return {
+            key: (value.get_secret_value() if isinstance(value, SecretStr) else value)
+            for key, value in model_dump().items()
+        }
+    if isinstance(credentials, dict):
+        return dict(credentials)
+    return None
 
 
 class OpenAICompatibleRuntimeConfig(BaseModel):

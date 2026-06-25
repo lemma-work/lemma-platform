@@ -163,6 +163,7 @@ class FunctionService:
         job_queue: JobQueuePort | None = None,
         icon_service: IconService | None = None,
         function_executor_client_factory=None,
+        uow_factory=None,
     ):
         self.repository = function_repository
         self.run_repository = run_repository
@@ -172,6 +173,7 @@ class FunctionService:
         self.icon_service = icon_service
         self.authorization_service = authorization_service
         self.function_executor_client_factory = function_executor_client_factory
+        self._uow_factory = uow_factory
 
     async def _require_pod_permission(
         self,
@@ -747,6 +749,31 @@ class FunctionService:
         *,
         timeout_seconds: int = _JOB_FUNCTION_TIMEOUT_SECONDS,
     ) -> FunctionRunEntity:
+        if self._uow_factory is not None:
+            async with self._uow_factory() as uow:
+                from app.modules.function.infrastructure.repositories import (
+                    FunctionRepository,
+                    FunctionRunRepository,
+                )
+                from app.core.infrastructure.events.message_bus import get_message_bus
+
+                message_bus = get_message_bus()
+                run_repo = FunctionRunRepository(uow, message_bus=message_bus)
+                fn_repo = FunctionRepository(uow, message_bus=message_bus)
+                run = await run_repo.get_run(run_id)
+                if run is None:
+                    raise FunctionRunNotFoundError(f"Run {run_id} not found")
+                function = await fn_repo.get(run.function_id)
+                if function is None:
+                    raise FunctionNotFoundError(f"Function {run.function_id} not found")
+
+            return await self._execute_run(
+                function=function,
+                run=run,
+                user_email=run.user_email,
+                timeout_seconds=timeout_seconds,
+            )
+
         run = await self.run_repository.get_run(run_id)
         if run is None:
             raise FunctionRunNotFoundError(f"Run {run_id} not found")
@@ -820,6 +847,20 @@ class FunctionService:
             run.status = FunctionRunStatus.RUNNING
             run.started_at = started_at
 
+        async def _update_run_status(**kwargs):
+            if self._uow_factory is not None:
+                async with self._uow_factory() as uow:
+                    from app.modules.function.infrastructure.repositories import (
+                        FunctionRunRepository,
+                    )
+                    from app.core.infrastructure.events.message_bus import get_message_bus
+
+                    await FunctionRunRepository(
+                        uow, message_bus=get_message_bus()
+                    ).update_run(run.id, **kwargs)
+            else:
+                await self.run_repository.update_run(run.id, **kwargs)
+
         async def _attempt() -> FunctionInvokeResponse:
             session = await self.workspace_service.get_session(
                 user_id=run.user_id,
@@ -833,8 +874,7 @@ class FunctionService:
                 workload_name=function.name,
             )
             try:
-                await self.run_repository.update_run(
-                    run.id,
+                await _update_run_status(
                     status=run.status,
                     started_at=run.started_at,
                     user_email=user_email,
@@ -842,10 +882,6 @@ class FunctionService:
                     workspace_process_id=None,
                 )
                 run.workspace_session_id = session.session_id
-                # A JOB runs through the in-sandbox function_executor app and holds
-                # no runtime session, so nothing else keeps the sandbox off the idle
-                # reaper. Heartbeat it for the whole execute+poll window so a run
-                # that outlives the sandbox idle timeout is not killed mid-flight.
                 async with self._keep_sandbox_alive(session):
                     executor_response = await self._execute_via_function_executor(
                         function=function,
@@ -1180,6 +1216,25 @@ class FunctionService:
         transitions; non-terminal status updates stay on plain ``update_run``.
         """
         run.add_event(self._terminal_run_event(function, run))
+        if self._uow_factory is not None:
+            async with self._uow_factory() as uow:
+                from app.modules.function.infrastructure.repositories import (
+                    FunctionRunRepository,
+                )
+                from app.core.infrastructure.events.message_bus import get_message_bus
+
+                return await FunctionRunRepository(
+                    uow, message_bus=get_message_bus()
+                ).update_run_and_collect(
+                    run,
+                    status=run.status,
+                    output_data=run.output_data,
+                    error=run.error,
+                    logs=run.logs,
+                    completed_at=run.completed_at,
+                    workspace_session_id=run.workspace_session_id,
+                    workspace_process_id=run.workspace_process_id,
+                )
         return await self.run_repository.update_run_and_collect(
             run,
             status=run.status,

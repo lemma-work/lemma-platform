@@ -102,7 +102,7 @@ async def test_small_file_attaches_natively_on_telegram(
     monkeypatch,
 ):
     from app.modules.agent_surfaces.events.handlers import (
-        provide_surface_event_handler,
+        build_surface_event_handler,
     )
     from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
 
@@ -116,7 +116,7 @@ async def test_small_file_attaches_natively_on_telegram(
         db_session, user_id=user_id, pod_id=pod_id, name="small.pdf", content=b"%PDF-small"
     )
 
-    handler = provide_surface_event_handler(SqlAlchemyUnitOfWork(db_session))
+    handler = build_surface_event_handler(SqlAlchemyUnitOfWork(db_session))
     delivered = await handler.send_display_resource_for_conversation(
         conversation_id=context.conversation_id,
         request={"type": "FILE", "path": path},
@@ -138,7 +138,7 @@ async def test_large_file_falls_back_to_link_card_on_telegram(
 ):
     from app.core.config import settings as app_settings
     from app.modules.agent_surfaces.events.handlers import (
-        provide_surface_event_handler,
+        build_surface_event_handler,
     )
     from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
 
@@ -155,7 +155,7 @@ async def test_large_file_falls_back_to_link_card_on_telegram(
         db_session, user_id=user_id, pod_id=pod_id, name="big.bin", content=big
     )
 
-    handler = provide_surface_event_handler(SqlAlchemyUnitOfWork(db_session))
+    handler = build_surface_event_handler(SqlAlchemyUnitOfWork(db_session))
     delivered = await handler.send_display_resource_for_conversation(
         conversation_id=context.conversation_id,
         request={"type": "FILE", "path": path},

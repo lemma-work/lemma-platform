@@ -58,7 +58,7 @@ async def test_slack_identity_policy_blocks_then_allows_sender_domain(
     from app.core.config import settings as app_settings
     from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
     from app.modules.agent_surfaces.events.handlers import (
-        provide_surface_event_handler,
+        build_surface_event_handler,
     )
 
     monkeypatch.setattr(app_settings, "api_url", "https://api.example.test")
@@ -94,7 +94,7 @@ async def test_slack_identity_policy_blocks_then_allows_sender_domain(
         ts="1700000000.300300",
     )
     uow = SqlAlchemyUnitOfWork(db_session)
-    handler = provide_surface_event_handler(uow)
+    handler = build_surface_event_handler(uow)
     blocked_context = await handler.prepare_ingress(
         SurfacePlatformWebhookIngress(
             source="slack", payload=blocked_payload, headers={}
@@ -301,7 +301,7 @@ async def test_slack_ask_user_renders_natively_then_resumes_with_answer(
     from app.core.config import settings as app_settings
     from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
     from app.modules.agent_surfaces.events.handlers import (
-        provide_surface_event_handler,
+        build_surface_event_handler,
     )
 
     monkeypatch.setattr(app_settings, "api_url", "https://api.example.test")
@@ -380,7 +380,7 @@ async def test_slack_ask_user_renders_natively_then_resumes_with_answer(
     # Drive the interaction handler directly (no FastStream worker in e2e). This
     # resumes via the approval path, synthesizing the AskUserResponse.
     uow = SqlAlchemyUnitOfWork(db_session)
-    handler = provide_surface_event_handler(uow)
+    handler = build_surface_event_handler(uow)
     handled = await handler.try_handle_interaction(
         SurfacePlatformWebhookIngress(source="slack", payload=submission, headers={})
     )

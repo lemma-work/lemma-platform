@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 from collections.abc import AsyncGenerator, Awaitable, Callable
 from contextlib import AsyncExitStack, asynccontextmanager
 from dataclasses import dataclass
@@ -34,7 +35,7 @@ JOB_TIMEOUT_SECONDS = 1800
 JOB_MAX_RETRIES = 3
 # Keep completed task metadata around long enough for the UI to be useful.
 JOB_RESULT_TTL_SECONDS = 60 * 60 * 24
-WORKER_CONCURRENCY = 100
+WORKER_CONCURRENCY = settings.worker_concurrency
 
 
 broker = RedisBroker(settings.redis_url)
@@ -84,6 +85,30 @@ class AppWorkerContext:
             authorization_service=create_authorization_service(uow),
         )
 
+    def build_function_service_with_factory(self):
+        """Build a FunctionService that uses uow_factory for scoped DB sessions.
+
+        Unlike ``build_function_service(uow)``, this does not hold a DB session
+        for the service's entire lifetime. The service opens short UoWs around
+        each DB operation, releasing connections between them — critical for
+        long-running tasks (e.g. function execution) that must not hold pooled
+        connections idle during external I/O.
+        """
+        from app.modules.function.services.function_service import FunctionService
+        from app.modules.workspace.services.workspace_tool_runtime import (
+            get_function_workspace_runtime,
+        )
+
+        return FunctionService(
+            function_repository=None,
+            run_repository=None,
+            workspace_service=get_function_workspace_runtime(),
+            storage_factory=self.build_function_storage_factory(),
+            job_queue=self.job_queue,
+            authorization_service=None,
+            uow_factory=self.uow_factory,
+        )
+
     def build_surface_event_handler(self, uow: SqlAlchemyUnitOfWork):
         from app.modules.agent.api.dependencies import get_conversation_service
         from app.modules.agent_surfaces.api.dependencies import (
@@ -111,6 +136,26 @@ class AppWorkerContext:
             pod_membership_port=SqlAlchemySurfaceRoutingResolutionAdapter(uow),
         )
 
+    def build_surface_event_handler_with_factory(self):
+        """Build an AgentSurfaceIngressService that scopes its own short UoWs.
+
+        Used by the process_surface_message worker task: execute_chat runs long
+        external I/O (platform APIs, file ingest, voice transcription) that must
+        NOT hold a pooled DB connection. The service resolves credentials and
+        writes the inbound message in separate short UoWs from this factory.
+        """
+        from app.modules.agent.api.dependencies import get_conversation_service
+        from app.modules.connectors.api.dependencies import get_connector_service
+        from app.modules.agent_surfaces.services.ingress_service import (
+            AgentSurfaceIngressService,
+        )
+
+        return AgentSurfaceIngressService(
+            uow_factory=self.uow_factory,
+            conversation_service_factory=get_conversation_service,
+            connector_service_factory=get_connector_service,
+        )
+
 
 async def _safe_shutdown_step(
     name: str, fn: Callable[[], Awaitable[None]]
@@ -119,6 +164,32 @@ async def _safe_shutdown_step(
         await fn()
     except Exception as exc:  # pragma: no cover
         logger.warning("Worker shutdown step failed", step=name, error=str(exc))
+
+
+async def _consumer_group_reconcile_loop() -> None:
+    """Periodically re-ensure Redis consumer groups exist.
+
+    Self-heals the FastStream supervisor retry-storm: if a consumer group is lost
+    (flush / failover / eviction / trim), the subscriber's consume loop spins on
+    NOGROUP forever. Recreating the group lets the next retry succeed and the
+    subscriber resume — no manual restart. Cheap (one Redis connection, a handful
+    of idempotent XGROUP CREATE calls per tick).
+    """
+    import redis.asyncio as redis
+
+    from app.core.infrastructure.events.stream_subscriber import ensure_consumer_groups
+
+    interval = settings.consumer_group_reconcile_interval_seconds
+    client = redis.from_url(settings.redis_url, decode_responses=False)
+    try:
+        while True:
+            try:
+                await ensure_consumer_groups(client)
+            except Exception as exc:  # pragma: no cover - defensive
+                logger.warning("Consumer group reconcile failed", error=str(exc))
+            await asyncio.sleep(interval)
+    finally:
+        await client.aclose()
 
 
 @asynccontextmanager
@@ -148,6 +219,10 @@ async def worker_lifespan() -> AsyncGenerator[AppWorkerContext]:
     from app.core.registry.assembly import enter_worker_lifespans
     from app.core.registry.installed import OSS_MODULES
 
+    reconcile_task: asyncio.Task[None] | None = None
+    if settings.consumer_group_reconcile_interval_seconds > 0:
+        reconcile_task = asyncio.create_task(_consumer_group_reconcile_loop())
+
     try:
         # Module-contributed worker lifespans (e.g. agent_surfaces native event
         # receiver + dedupe-store close; datastore reindex-queue close). Entered
@@ -156,11 +231,21 @@ async def worker_lifespan() -> AsyncGenerator[AppWorkerContext]:
             await enter_worker_lifespans(module_stack, OSS_MODULES, context)
             yield context
     finally:
+        if reconcile_task is not None and not reconcile_task.done():
+            reconcile_task.cancel()
+            try:
+                await reconcile_task
+            except BaseException:
+                pass
         await _safe_shutdown_step("broker.stop", broker.stop)
         await _safe_shutdown_step("close_streaq_job_queue", close_streaq_job_queue)
         await _safe_shutdown_step("close_message_bus", close_message_bus)
         await _safe_shutdown_step("close_engine", close_engine)
         await _safe_shutdown_step("channel_service.disconnect", channel_service.disconnect)
+
+        from app.modules.datastore.infrastructure.session import close_datastore_engine
+
+        await _safe_shutdown_step("close_datastore_engine", close_datastore_engine)
         logger.info("Worker shutting down...")
 
 
@@ -171,6 +256,12 @@ def create_streaq_worker(*, handle_signals: bool) -> Worker[AppWorkerContext]:
         concurrency=WORKER_CONCURRENCY,
         handle_signals=handle_signals,
         lifespan=worker_lifespan,
+        # On SIGTERM, give in-flight tasks this long to finish before forcing
+        # cancellation. Lets an interrupted agent run finalize its status in the
+        # DB (via the shielded finalization in AgentRunnerService.execute) before
+        # worker_lifespan's finally disposes the engine — otherwise the run can
+        # be left stuck in RUNNING. Backstopped by reconcile_orphaned_agent_runs.
+        grace_period=settings.worker_shutdown_grace_period_seconds,
     )
 
 

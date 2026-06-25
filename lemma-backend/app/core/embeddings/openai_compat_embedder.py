@@ -16,7 +16,7 @@ from typing import List
 
 import httpx
 
-from app.core.config import settings
+from app.core.config import reveal_secret, settings
 from app.core.embeddings.embeddings import Embedder
 
 
@@ -35,7 +35,7 @@ class OpenAICompatEmbedder(Embedder):
         if not texts:
             return []
 
-        api_key = settings.lemma_openai_api_key
+        api_key = reveal_secret(settings.lemma_openai_api_key)
         if not api_key:
             raise RuntimeError(
                 "OpenAI-compatible embeddings require LEMMA_OPENAI_API_KEY to be set "

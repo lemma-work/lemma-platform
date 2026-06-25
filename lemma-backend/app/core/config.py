@@ -1,12 +1,27 @@
 from pathlib import Path
 from typing import Literal, Optional
 
-from pydantic import Field, field_validator
+from pydantic import Field, SecretStr, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
 def _default_local_root() -> Path:
     return Path(__file__).resolve().parents[3] / ".local"
+
+
+def reveal_secret(value: "SecretStr | str | None") -> str | None:
+    """Return the plaintext of a secret setting for actual use.
+
+    Secret settings (API keys) are typed ``SecretStr`` so they never leak through
+    ``repr()``/logs/tracebacks. Read them through this helper at the point of use.
+    It tolerates a plain ``str`` too, so tests that ``monkeypatch`` a setting with
+    a bare string keep working.
+    """
+    if value is None:
+        return None
+    if isinstance(value, SecretStr):
+        return value.get_secret_value()
+    return value
 
 
 class Settings(BaseSettings):
@@ -24,24 +39,101 @@ class Settings(BaseSettings):
         description="Database connection URL",
     )
     db_pool_size: int = Field(
-        default=20,
+        default=10,
         description=(
-            "Primary SQLAlchemy connection pool size. The single-process dev app "
-            "(standalone_app) runs the HTTP API and the embedded agent worker on "
-            "one engine, and agents' in-container CLI calls re-enter the backend, "
-            "so the SQLAlchemy default of 5 is far too small and causes "
-            "pool-checkout hangs."
+            "Primary SQLAlchemy connection pool size PER PROCESS. Each API or "
+            "worker pod opens up to db_pool_size + db_max_overflow connections. "
+            "With N replicas total, the ceiling is N × (db_pool_size + "
+            "db_max_overflow + datastore_db_pool_size + "
+            "datastore_db_max_overflow). This MUST stay under Postgres "
+            "max_connections (default 100). Scale down when adding replicas. "
+            "Default 10 is safe for 1 API + 1 worker (60 total with defaults). "
+            "Standalone dev can set DB_POOL_SIZE=20 DB_MAX_OVERFLOW=30."
         ),
     )
     db_max_overflow: int = Field(
-        default=30,
-        description="Overflow connections allowed beyond db_pool_size before checkout blocks.",
+        default=10,
+        description=(
+            "Overflow connections beyond db_pool_size before checkout blocks. "
+            "Default 10 keeps per-process main pool at 20 max."
+        ),
     )
     db_pool_timeout_seconds: float = Field(
         default=10.0,
         description=(
             "Seconds to wait for a free pooled DB connection before raising "
             "(SQLAlchemy default is 30s, which surfaces as a long hang)."
+        ),
+    )
+    db_pool_recycle_seconds: int = Field(
+        default=300,
+        description=(
+            "Recycle pooled DB connections after this many seconds to prevent "
+            "stale connections from accumulating (SQLAlchemy pool_recycle)."
+        ),
+    )
+    db_idle_in_transaction_timeout_seconds: float = Field(
+        default=60.0,
+        description=(
+            "Postgres idle_in_transaction_session_timeout in seconds. "
+            "Automatically aborts transactions that sit idle (not executing "
+            "a query) for longer than this, releasing the connection back to "
+            "the pool. Set to 0 to disable. Catches the 'session held open "
+            "during external I/O' anti-pattern at the database level."
+        ),
+    )
+    datastore_db_pool_size: int = Field(
+        default=5,
+        description=(
+            "Datastore SQLAlchemy connection pool size PER PROCESS. Each API "
+            "or worker pod opens up to datastore_db_pool_size + "
+            "datastore_db_max_overflow connections to the datastore database. "
+            "Scale down when adding replicas. Default 5 keeps per-process "
+            "datastore pool at 10 max."
+        ),
+    )
+    datastore_db_max_overflow: int = Field(
+        default=5,
+        description=(
+            "Overflow connections beyond datastore_db_pool_size. "
+            "Default 5 keeps per-process datastore pool at 10 max."
+        ),
+    )
+    worker_concurrency: int = Field(
+        default=20,
+        description=(
+            "Maximum concurrent streaq tasks per worker process. Should not "
+            "exceed db_pool_size + db_max_overflow (default 20), since each "
+            "task that opens a DB session consumes one pooled connection."
+        ),
+    )
+    worker_shutdown_grace_period_seconds: int = Field(
+        default=10,
+        description=(
+            "Seconds the streaq worker waits for in-flight tasks to finish on "
+            "SIGTERM/SIGINT before forcing cancellation (streaq grace_period). "
+            "Gives an interrupted agent run time to finalize its status in the "
+            "DB before the engine is disposed, avoiding runs stuck in RUNNING. "
+            "Keep below the orchestrator's termination grace period (e.g. "
+            "Kubernetes terminationGracePeriodSeconds, default 30s)."
+        ),
+    )
+    postgres_max_connections: int = Field(
+        default=100,
+        description=(
+            "PostgreSQL max_connections setting. Used at startup to warn if "
+            "the per-process pool ceiling could exceed the server limit. "
+            "Set to the actual value in your Postgres config."
+        ),
+    )
+    conversation_title_model: str | None = Field(
+        default=None,
+        description=(
+            "Model name (within the system runtime profile's catalog) used to "
+            "LLM-generate conversation titles. When unset (the default), no LLM "
+            "call is made: the title is derived from the user's first message. "
+            "Set this only to a model your provider actually serves — pointing "
+            "it at a non-existent model makes the title call hang."
         ),
     )
     redis_url: str = Field(
@@ -59,6 +151,16 @@ class Settings(BaseSettings):
             "Higher values reduce idle XREAD/XREADGROUP volume at the cost of slightly higher event pickup latency."
         ),
     )
+    consumer_group_reconcile_interval_seconds: float = Field(
+        default=30.0,
+        description=(
+            "How often the worker re-ensures Redis consumer groups exist. Bounds "
+            "the FastStream supervisor retry-storm if a group is lost (flush / "
+            "failover / eviction): the lost group is recreated within this window "
+            "and the subscriber resumes instead of spinning forever. Set to 0 to "
+            "disable the background reconcile loop."
+        ),
+    )
     local_agent_runtime_config_path: str = Field(
         default_factory=lambda: str(
             _default_local_root() / "lemma" / "agent-runtime.json"
@@ -72,7 +174,7 @@ class Settings(BaseSettings):
         default="openai_compat",
         description="Server-provided Lemma system model profile provider type.",
     )
-    lemma_openai_api_key: Optional[str] = Field(
+    lemma_openai_api_key: Optional[SecretStr] = Field(
         default=None,
         description="API key for the server-provided OpenAI-compatible Lemma model profile.",
     )
@@ -92,7 +194,20 @@ class Settings(BaseSettings):
         default="gpt-4o,gpt-4o-mini",
         description="Comma-separated model names for the OpenAI-compatible system model profile.",
     )
-    lemma_anthropic_api_key: Optional[str] = Field(
+    lemma_openai_vision_model_names: str = Field(
+        default="",
+        description=(
+            "Comma-separated subset of LEMMA_OPENAI_MODEL_NAMES whose models accept "
+            "image input. Gates the image-returning tools (view_image): a text-only "
+            "model breaks when image content enters its history, so those tools are "
+            "withheld unless a model is listed here. The standard OpenAI /models "
+            "endpoint does not report modalities, so vision must be declared "
+            "explicitly here; leave empty if no configured model supports vision. "
+            "(Provider-discovered profiles can additionally auto-detect image input "
+            "when the provider advertises it.)"
+        ),
+    )
+    lemma_anthropic_api_key: Optional[SecretStr] = Field(
         default=None,
         description="API key for the server-provided Anthropic-compatible Lemma model profile.",
     )
@@ -324,9 +439,7 @@ class Settings(BaseSettings):
             "http://127.0.0.1:4173",
             "http://localhost:5173",
             "http://127.0.0.1:5173",
-            # Tauri webview origins for the Lemma OS desktop app. The macOS WKWebView serves
-# the app from tauri://localhost; Windows/Linux use http://tauri.localhost.
-            "tauri://localhost", 
+            "tauri://localhost",
             "http://tauri.localhost"
         ],
         description="Allowed CORS origins",

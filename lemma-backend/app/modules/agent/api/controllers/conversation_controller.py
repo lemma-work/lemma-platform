@@ -5,13 +5,14 @@ from __future__ import annotations
 from collections.abc import AsyncGenerator, Iterable
 from uuid import UUID
 
-from fastapi import APIRouter, HTTPException, Query, Request, status
+from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
 from fastapi.responses import StreamingResponse
 
-from app.core.api.dependencies import CurrentUser
+from app.core.api.dependencies import CurrentUser, get_uow_factory
 from app.core.api.pagination import parse_uuid_page_token
 from app.core.authorization.dependencies import PodContextDep
 from app.core.domain.errors import BadRequestError
+from app.core.infrastructure.db.uow_factory import UnitOfWorkFactory
 from app.modules.agent.api.controllers.shared import (
     ChannelServiceDep,
     conversation_channel,
@@ -42,12 +43,29 @@ from app.modules.agent.domain.value_objects import (
     ConversationType,
     JsonObject,
 )
+from app.modules.agent.infrastructure.repositories import (
+    AgentRepository,
+    ConversationRepository,
+)
+from app.modules.agent.services.conversation_service import ConversationService
+from app.modules.pod.services.authorization_factory import create_authorization_service
+from app.modules.usage.services.usage_service_factory import build_usage_service
 from app.modules.usage.domain.errors import UsageLimitExceededError
 
 router = APIRouter(
     prefix="/pods/{pod_id}/conversations",
     tags=["agent_conversations"],
 )
+
+
+def _build_conversation_service(uow) -> ConversationService:
+    return ConversationService(
+        uow=uow,
+        conversation_repository=ConversationRepository(uow),
+        agent_repository=AgentRepository(uow),
+        authorization_service=create_authorization_service(uow),
+        usage_service=build_usage_service(uow),
+    )
 
 
 def _parse_metadata_filters(
@@ -339,9 +357,9 @@ async def send_message(
     conversation_id: UUID,
     data: SendMessageRequest,
     user: CurrentUser,
-    service: ConversationServiceDep,
     channel_service: ChannelServiceDep,
     ctx: PodContextDep,
+    uow_factory: UnitOfWorkFactory = Depends(get_uow_factory),
 ) -> StreamingResponse:
     _ = ctx
     async def close_subscription(
@@ -357,13 +375,15 @@ async def send_message(
     subscription = channel_service.subscribe([conversation_channel(conversation_id)])
     iterator = await subscription.__aenter__()
     try:
-        result = await service.add_user_message_and_start_run(
-            conversation_id=conversation_id,
-            user_id=user.id,
-            content=data.content,
-            pod_id=pod_id,
-            message_metadata=data.metadata,
-        )
+        async with uow_factory() as uow:
+            service = _build_conversation_service(uow)
+            result = await service.add_user_message_and_start_run(
+                conversation_id=conversation_id,
+                user_id=user.id,
+                content=data.content,
+                pod_id=pod_id,
+                message_metadata=data.metadata,
+            )
     except (AgentNotFoundError, ConversationNotFoundError) as exc:
         await close_subscription(type(exc), exc, exc.__traceback__)
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND) from exc
@@ -406,18 +426,20 @@ async def stream_conversation(
     pod_id: UUID,
     conversation_id: UUID,
     user: CurrentUser,
-    service: ConversationServiceDep,
     channel_service: ChannelServiceDep,
     ctx: PodContextDep,
+    uow_factory: UnitOfWorkFactory = Depends(get_uow_factory),
     agent_run_id: UUID | None = Query(default=None),
 ) -> StreamingResponse:
     _ = ctx
     try:
-        await service.get_conversation(
-            conversation_id=conversation_id,
-            user_id=user.id,
-            pod_id=pod_id,
-        )
+        async with uow_factory() as uow:
+            service = _build_conversation_service(uow)
+            await service.get_conversation(
+                conversation_id=conversation_id,
+                user_id=user.id,
+                pod_id=pod_id,
+            )
     except (AgentNotFoundError, ConversationNotFoundError) as exc:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND) from exc
 
@@ -425,11 +447,13 @@ async def stream_conversation(
         async with channel_service.subscribe(
             [conversation_channel(conversation_id)]
         ) as iterator:
-            active_run = await service.get_active_agent_run(
-                conversation_id=conversation_id,
-                user_id=user.id,
-                pod_id=pod_id,
-            )
+            async with uow_factory() as uow:
+                service = _build_conversation_service(uow)
+                active_run = await service.get_active_agent_run(
+                    conversation_id=conversation_id,
+                    user_id=user.id,
+                    pod_id=pod_id,
+                )
             if active_run is None:
                 return
 
