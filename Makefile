@@ -59,24 +59,12 @@ DEV_DATABASE_URL      := postgresql+asyncpg://postgres:postgres@localhost:$(DEV_
 DEV_REDIS_URL         := redis://localhost:$(DEV_REDIS_PORT)/0
 DEV_SUPERTOKENS_URL   := http://localhost:$(DEV_SUPERTOKENS_PORT)
 
-# Common env the backend, frontend and docker compose all need to agree on.
-# Inlined into `make dev` so uvicorn and next dev see the same values that
-# were baked into .env / .env.local at `make init` time.
 COMMON_DEV_ENV := \
 	DEV_POSTGRES_PORT=$(DEV_POSTGRES_PORT) \
 	DEV_REDIS_PORT=$(DEV_REDIS_PORT) \
 	DEV_REDIS_UI_PORT=8001 \
 	DEV_SUPERTOKENS_PORT=$(DEV_SUPERTOKENS_PORT) \
 	DEV_KREUZBERG_PORT=$(DEV_KREUZBERG_PORT)
-
-BACKEND_DEV_ENV := \
-	API_URL=$(DEV_BACKEND_URL) \
-	FRONTEND_URL=$(DEV_FRONTEND_URL) \
-	AUTH_FRONTEND_URL=$(DEV_AUTH_FRONTEND_URL) \
-	SUPERTOKENS_CORE_URL=$(DEV_SUPERTOKENS_URL) \
-	DATABASE_URL=$(DEV_DATABASE_URL) \
-	REDIS_URL=$(DEV_REDIS_URL) \
-	CORS_ORIGINS=["http://localhost:$(DEV_FRONTEND_PORT)","http://127.0.0.1:$(DEV_FRONTEND_PORT)"]\
 
 FRONTEND_DEV_ENV := \
 	NEXT_PUBLIC_API_URL=$(DEV_BACKEND_URL) \
@@ -176,7 +164,29 @@ _init-backend-env:
 			echo "# LEMMA_ANTHROPIC_DEFAULT_MODEL=claude-sonnet-4-5"; \
 		} > $(BACKEND_DIR)/.env; \
 	else \
-		echo "  $(BACKEND_DIR)/.env already exists — skipping"; \
+		$(MAKE) --no-print-directory _ensure-backend-env-keys; \
+	fi
+
+_ensure-backend-env-keys:
+	@set -e; missing=""; \
+	for k in API_URL FRONTEND_URL AUTH_FRONTEND_URL SUPERTOKENS_CORE_URL DATABASE_URL REDIS_URL CORS_ORIGINS; do \
+		if ! grep -qE "^$$k=" $(BACKEND_DIR)/.env; then missing="$$missing $$k"; fi; \
+	done; \
+	if [ -z "$$missing" ]; then \
+		echo "  $(BACKEND_DIR)/.env already exists with all required keys"; \
+	else \
+		echo "  $(BACKEND_DIR)/.env missing keys ($$missing) — appending…"; \
+		{ \
+			echo ""; \
+			echo "# Added by make init (stack URLs in sync with canonical ports)"; \
+			echo "API_URL=$(DEV_BACKEND_URL)"; \
+			echo "FRONTEND_URL=$(DEV_FRONTEND_URL)"; \
+			echo "AUTH_FRONTEND_URL=$(DEV_AUTH_FRONTEND_URL)"; \
+			echo "SUPERTOKENS_CORE_URL=$(DEV_SUPERTOKENS_URL)"; \
+			echo "DATABASE_URL=$(DEV_DATABASE_URL)"; \
+			echo "REDIS_URL=$(DEV_REDIS_URL)"; \
+			printf 'CORS_ORIGINS=["http://localhost:%s","http://127.0.0.1:%s"]\n' "$(DEV_FRONTEND_PORT)" "$(DEV_FRONTEND_PORT)"; \
+		} >> $(BACKEND_DIR)/.env; \
 	fi
 
 _init-frontend-env:
@@ -192,7 +202,26 @@ _init-frontend-env:
 		} > $(FRONTEND_DIR)/.env.local; \
 		cd $(FRONTEND_DIR) && npm run gen:runtime-config --silent; \
 	else \
-		echo "  $(FRONTEND_DIR)/.env.local already exists — skipping"; \
+		$(MAKE) --no-print-directory _ensure-frontend-env-keys; \
+	fi
+
+_ensure-frontend-env-keys:
+	@set -e; missing=""; \
+	for k in NEXT_PUBLIC_API_URL NEXT_PUBLIC_SITE_URL NEXT_PUBLIC_AUTH_URL; do \
+		if ! grep -qE "^$$k=" $(FRONTEND_DIR)/.env.local; then missing="$$missing $$k"; fi; \
+	done; \
+	if [ -z "$$missing" ]; then \
+		echo "  $(FRONTEND_DIR)/.env.local already exists with all required keys"; \
+	else \
+		echo "  $(FRONTEND_DIR)/.env.local missing keys ($$missing) — appending…"; \
+		{ \
+			echo ""; \
+			echo "# Added by make init"; \
+			echo "NEXT_PUBLIC_API_URL=$(DEV_BACKEND_URL)"; \
+			echo "NEXT_PUBLIC_SITE_URL=$(DEV_FRONTEND_URL)"; \
+			echo "NEXT_PUBLIC_AUTH_URL=$(DEV_FRONTEND_URL)"; \
+		} >> $(FRONTEND_DIR)/.env.local; \
+		cd $(FRONTEND_DIR) && npm run gen:runtime-config --silent; \
 	fi
 
 # ── Dev stack ─────────────────────────────────────────────────────────────────
@@ -235,11 +264,11 @@ _run-backend:
 	@echo "  Starting backend ($(DEV_BACKEND_URL))…"
 	@mkdir -p $(BACKEND_DIR)
 	@cd $(BACKEND_DIR) && rm -f $(notdir $(BACKEND_PID_FILE)) && \
-		$(COMMON_DEV_ENV) $(BACKEND_DEV_ENV) \
+		$(COMMON_DEV_ENV) \
 		bash -c "if [ '$(RELOAD)' = '1' ]; then \
-			uv run uvicorn app.standalone:app --host 0.0.0.0 --port $(DEV_BACKEND_PORT) --reload & echo \$$! > $(notdir $(BACKEND_PID_FILE)); \
+			uv run uvicorn standalone_app:app --host 0.0.0.0 --port $(DEV_BACKEND_PORT) --reload & echo \$$! > $(notdir $(BACKEND_PID_FILE)); \
 		else \
-			uv run uvicorn app.standalone:app --host 0.0.0.0 --port $(DEV_BACKEND_PORT) & echo \$$! > $(notdir $(BACKEND_PID_FILE)); \
+			uv run uvicorn standalone_app:app --host 0.0.0.0 --port $(DEV_BACKEND_PORT) & echo \$$! > $(notdir $(BACKEND_PID_FILE)); \
 		fi; wait"
 
 _run-frontend:
