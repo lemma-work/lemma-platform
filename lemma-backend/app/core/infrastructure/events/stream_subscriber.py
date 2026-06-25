@@ -35,7 +35,9 @@ def registered_stream_groups() -> set[tuple[str, str]]:
     return set(_REGISTERED_STREAM_GROUPS)
 
 
-async def ensure_consumer_groups(redis_client, *, warn_on_create: bool = True) -> int:
+async def ensure_consumer_groups(
+    redis_client, *, warn_on_create: bool = True, only_stream: str | None = None
+) -> int:
     """Idempotently (re)create every registered Redis consumer group.
 
     Returns the number of groups (re)created. Two cases need this:
@@ -59,6 +61,8 @@ async def ensure_consumer_groups(redis_client, *, warn_on_create: bool = True) -
     """
     created = 0
     for stream, group in registered_stream_groups():
+        if only_stream is not None and stream != only_stream:
+            continue
         try:
             await redis_client.xgroup_create(
                 name=stream, groupname=group, id="$", mkstream=True
@@ -73,6 +77,41 @@ async def ensure_consumer_groups(redis_client, *, warn_on_create: bool = True) -
             else:
                 logger.debug(
                     "Created Redis consumer group '%s' on stream '%s'",
+                    group,
+                    stream,
+                )
+        except Exception as exc:  # BUSYGROUP (already exists) is the happy path
+            if "BUSYGROUP" not in str(exc):
+                logger.warning(
+                    "Failed ensuring consumer group '%s' on stream '%s': %s",
+                    group,
+                    stream,
+                    exc,
+                )
+    return created
+
+
+async def ensure_named_groups(
+    redis_client, stream: str, groups, *, warn_on_create: bool = False
+) -> int:
+    """Idempotently create explicitly-named consumer groups on a stream.
+
+    Unlike ``ensure_consumer_groups`` (which reads the per-process subscriber
+    registry), this takes the group names directly — so a PUBLISHER process that
+    never imports the consuming subscribers (the scheduler pod, the API pod) can
+    still guarantee a consumer's group exists before XADD. Created at ``$`` /
+    mkstream; BUSYGROUP keeps the existing group and its position. Never raises.
+    """
+    created = 0
+    for group in groups:
+        try:
+            await redis_client.xgroup_create(
+                name=stream, groupname=group, id="$", mkstream=True
+            )
+            created += 1
+            if warn_on_create:
+                logger.warning(
+                    "Recreated missing Redis consumer group '%s' on stream '%s'",
                     group,
                     stream,
                 )

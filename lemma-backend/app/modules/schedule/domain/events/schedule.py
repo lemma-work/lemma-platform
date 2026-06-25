@@ -42,3 +42,11 @@ class ScheduleFired(ScheduleEvent):
 
 class ScheduleEvents:
     STREAM = "schedule_events"
+    # Grouped consumers of this stream. Declared here (not just discovered via the
+    # subscriber registry) so any process that PUBLISHES schedule events — the
+    # scheduler pod, the API pod — can ensure these groups exist before XADD,
+    # even though it never imports the consuming subscribers. Keeps a fired event
+    # from being dropped when a consumer's group was lost (flush/failover) and is
+    # otherwise only recreated later at "$". The workflow pod consumes via this
+    # group; the surface subscriber reads group-less (fan-out) and needs none.
+    CONSUMER_GROUPS = ("workflow-schedule-events",)

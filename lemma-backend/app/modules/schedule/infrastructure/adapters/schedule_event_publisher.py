@@ -35,7 +35,15 @@ class RedisScheduleEventPublisher(ScheduleEventPublisher):
         )
 
         async with PubSubPublisher() as publisher:
-            await publisher.publish(ScheduleEvents.STREAM, event)
+            # Pass the declared consumer groups explicitly: this publisher runs in
+            # the worker (datastore-fired schedules) AND the API pod (webhook-fired
+            # schedules), and the API pod never imports the consuming subscribers,
+            # so the subscriber registry alone would miss the group there.
+            await publisher.publish(
+                ScheduleEvents.STREAM,
+                event,
+                ensure_groups=ScheduleEvents.CONSUMER_GROUPS,
+            )
             logger.info(
                 "Published schedule event for schedule %s to %s",
                 schedule.id,
