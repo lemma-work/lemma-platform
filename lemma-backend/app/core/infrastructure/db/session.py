@@ -6,6 +6,9 @@ from sqlalchemy import event
 from sqlalchemy.pool import NullPool
 from sqlalchemy.ext.asyncio import create_async_engine, async_sessionmaker, AsyncSession
 from app.core.config import settings
+from app.core.log.log import get_logger
+
+logger = get_logger(__name__)
 
 engine = None
 _async_session_maker = None
@@ -35,6 +38,33 @@ def _set_idle_in_transaction_timeout(conn):
         conn.execute(f"SET idle_in_transaction_session_timeout = {timeout_ms}")
 
 
+def _log_pool_utilization(pool):
+    """Log a warning when pool utilization exceeds 80% of max capacity.
+
+    Called on each checkout (connection borrowed from pool). Uses the pool's
+    internal counters to compute checked-out vs. max connections. This gives
+    early visibility into pool exhaustion before it surfaces as a
+    ``TimeoutError`` (pool_timeout) to application code.
+    """
+    try:
+        max_conn = pool.size() + pool._max_overflow  # noqa: SLF001
+        checked_out = pool.checkedout()
+        if max_conn > 0 and checked_out / max_conn >= 0.8:
+            logger.warning(
+                "DB pool utilization high",
+                extra={
+                    "checked_out": checked_out,
+                    "max_connections": max_conn,
+                    "utilization_pct": round(checked_out / max_conn * 100, 1),
+                    "pool_size": pool.size(),
+                    "max_overflow": pool._max_overflow,  # noqa: SLF001
+                    "overflow": pool.overflow(),
+                },
+            )
+    except Exception:
+        pass
+
+
 def get_engine():
     global engine
     if engine is None:
@@ -54,6 +84,7 @@ def get_engine():
         )
         if settings.environment != "testing":
             event.listen(engine.sync_engine, "connect", _set_idle_in_transaction_timeout)
+            event.listen(engine.sync_engine.pool, "checkout", _log_pool_utilization)
     return engine
 
 
