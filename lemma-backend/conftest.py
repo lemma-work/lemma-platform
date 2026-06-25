@@ -29,13 +29,47 @@ AGENT_PROVIDER_TESTS = {
 }
 
 
-def pytest_collection_modifyitems(config, items):
-    """Classify e2e tests by the expensive runtime fixtures they request."""
-
-    run_provider_e2e = os.getenv("LEMMA_RUN_PROVIDER_E2E") == "1"
-    provider_skip = pytest.mark.skip(
-        reason="Set LEMMA_RUN_PROVIDER_E2E=1 to run real provider-backed e2e tests."
+def _e2e_real_llm() -> bool:
+    """True when e2e hits the real model (needs a key); default is the mock."""
+    mode = os.getenv("E2E_LLM_MODE", "").lower()
+    if mode == "real":
+        return True
+    if mode == "mock":
+        return False
+    return (
+        os.getenv("E2E_REAL", "").lower() in ("1", "true", "yes")
+        or os.getenv("LEMMA_RUN_PROVIDER_E2E") == "1"
     )
+
+
+def _e2e_real_sandbox() -> bool:
+    """True when e2e uses the real Docker AgentBox; default is the fake."""
+    mode = os.getenv("E2E_SANDBOX_MODE", "").lower()
+    if mode == "docker":
+        return True
+    if mode == "fake":
+        return False
+    return os.getenv("E2E_REAL", "").lower() in ("1", "true", "yes")
+
+
+def pytest_collection_modifyitems(config, items):
+    """Classify e2e tests and gate them by the active e2e mode.
+
+    Default mode is fast/mocked: the agent LLM is a deterministic FunctionModel
+    and workspace tools hit the in-process fake AgentBox — so provider/agent-run
+    tests RUN (no key, no Docker). Real mode (``E2E_REAL=1`` / ``E2E_LLM_MODE=real``
+    / ``E2E_SANDBOX_MODE=docker``) hits the real model + Docker AgentBox.
+    """
+    real_llm = _e2e_real_llm()
+    real_sandbox = _e2e_real_sandbox()
+
+    key_available = True
+    if real_llm:
+        from app.modules.agent.tests.e2e.system_lemma_helpers import (
+            system_lemma_api_key,
+        )
+
+        key_available = bool(system_lemma_api_key())
 
     for item in items:
         path_parts = set(item.path.parts)
@@ -60,8 +94,34 @@ def pytest_collection_modifyitems(config, items):
             item.add_marker(pytest.mark.provider)
 
         marker_names = {marker.name for marker in item.iter_markers()}
-        if "provider" in marker_names and not run_provider_e2e:
-            item.add_marker(provider_skip)
+        # Tests that need the real Docker AgentBox (workspace fixtures) or are
+        # explicitly real-sandbox-only: skip unless running in real sandbox mode.
+        if ("workspace" in marker_names or "real_sandbox" in marker_names) and (
+            not real_sandbox
+        ):
+            item.add_marker(
+                pytest.mark.skip(
+                    reason="needs the real Docker AgentBox — set E2E_REAL=1 "
+                    "(or E2E_SANDBOX_MODE=docker)."
+                )
+            )
+            continue
+        # Tests that only make sense against a real model: skip unless real LLM.
+        if "real_llm" in marker_names and not real_llm:
+            item.add_marker(
+                pytest.mark.skip(
+                    reason="needs the real model — set E2E_REAL=1 (or E2E_LLM_MODE=real)."
+                )
+            )
+            continue
+        # Provider/agent-run tests run under the mock by default; in real LLM
+        # mode they need a configured key.
+        if "provider" in marker_names and real_llm and not key_available:
+            item.add_marker(
+                pytest.mark.skip(
+                    reason="real LLM mode but LEMMA_OPENAI_API_KEY is not configured."
+                )
+            )
 
 
 def pytest_sessionstart(session: pytest.Session) -> None:

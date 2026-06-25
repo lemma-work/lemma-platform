@@ -23,6 +23,18 @@ def pydantic_ai_model_from_runtime_profile(
     fallback_model_name: str | None = None,
 ) -> Model | None:
     """Return a Pydantic AI model for model-provider runtime profiles."""
+    # e2e mock mode: every model (harness, title generation, any direct
+    # agent.run) is the deterministic FunctionModel — no real provider, no key.
+    # The harness layers conversation-scripted behaviour on top via its own
+    # build_mock_model(conversation); here (no conversation) it's the default.
+    from app.modules.agent.infrastructure.harnesses.mock_model import (
+        build_mock_model,
+        is_mock_llm_enabled,
+    )
+
+    if is_mock_llm_enabled():
+        return build_mock_model(None)
+
     if not isinstance(runtime_profile, Mapping):
         return None
 

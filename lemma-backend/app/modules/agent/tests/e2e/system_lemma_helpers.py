@@ -84,8 +84,28 @@ def system_lemma_model_names() -> list[str]:
     return models
 
 
+def e2e_real_llm() -> bool:
+    """True when e2e should hit the REAL model (needs a key); False = mock.
+
+    Default is mock (fast/CI). ``E2E_LLM_MODE`` wins if set; otherwise ``E2E_REAL``.
+    Evaluated from the env so it works at collection time (before fixtures run).
+    """
+    mode = os.environ.get("E2E_LLM_MODE", "").lower()
+    if mode == "real":
+        return True
+    if mode == "mock":
+        return False
+    return os.environ.get("E2E_REAL", "").lower() in ("1", "true", "yes")
+
+
 def system_lemma_available() -> bool:
-    """True if LEMMA_OPENAI_API_KEY is configured (in .env or shell)."""
+    """True if the agent LLM can run.
+
+    In mock mode (the default) the deterministic FunctionModel needs no key, so
+    this is always True. In real mode it requires LEMMA_OPENAI_API_KEY.
+    """
+    if not e2e_real_llm():
+        return True
     return bool(system_lemma_api_key())
 
 

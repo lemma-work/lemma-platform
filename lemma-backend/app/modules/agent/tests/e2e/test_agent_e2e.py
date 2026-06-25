@@ -497,6 +497,7 @@ async def _wait_for_daemon_harness(
 
 
 class TestPodAgentLifecycle:
+    @pytest.mark.real_llm
     @pytest.mark.skipif(not system_lemma_available(), reason=SYSTEM_LEMMA_SKIP_REASON)
     async def test_file_creation_tool_call_streams_tool_json_tokens(
         self,
@@ -1041,6 +1042,7 @@ class TestPodAgentLifecycle:
         )
         _assert_completed_without_error(followup_events)
 
+    @pytest.mark.real_llm
     @pytest.mark.skipif(not system_lemma_available(), reason=SYSTEM_LEMMA_SKIP_REASON)
     async def test_task_conversation_waits_then_completes_with_real_worker_model(
         self,
@@ -1134,6 +1136,7 @@ class TestPodAgentLifecycle:
         assert completed_payload["status"] == ConversationStatus.COMPLETED.value
         assert "secret_code received" in str(completed_payload["output"])
 
+    @pytest.mark.real_llm
     @pytest.mark.skipif(not system_lemma_available(), reason=SYSTEM_LEMMA_SKIP_REASON)
     async def test_pod_agent_http_lifecycle_with_real_worker_model(
         self,
@@ -3067,25 +3070,16 @@ async def _wait_for_conversation_title(
 
 
 class TestConversationTitleGeneration:
-    @pytest.mark.slow
-    @pytest.mark.workspace
     @pytest.mark.skipif(not system_lemma_available(), reason=SYSTEM_LEMMA_SKIP_REASON)
     async def test_first_run_generates_title_with_real_worker_model(
         self,
         authenticated_client,
         fixed_test_org,
         worker,
-        local_agentbox_server,
     ):
         """After the first run completes, the worker auto-generates a title from
-        the opening exchange, and a second turn does not overwrite it.
-
-        Runs against a live agentbox: the pod assistant carries the workspace
-        toolset and the system model reaches for it, so the run only completes
-        when those tool calls can actually execute.
-        """
+        the opening exchange, and a second turn does not overwrite it."""
         _ = worker
-        _ = local_agentbox_server
         pod_id = await _create_test_pod(authenticated_client, fixed_test_org)
 
         # Pod-assistant conversation created WITHOUT a title -> eligible.

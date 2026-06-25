@@ -124,6 +124,7 @@ async def _wait_for_usage_event(
     raise AssertionError(f"Usage event for run {agent_run_id} was not recorded")
 
 
+@pytest.mark.real_llm
 @pytest.mark.skipif(not system_lemma_available(), reason=SYSTEM_LEMMA_SKIP_REASON)
 async def test_agent_run_records_usage_and_usage_apis_filter_it(
     authenticated_client,
@@ -235,6 +236,7 @@ async def test_agent_run_records_usage_and_usage_apis_filter_it(
     assert limits_payload["org_monthly"]["used_usd"] >= usage_event["cost_usd"]
 
 
+@pytest.mark.real_llm
 @pytest.mark.skipif(not system_lemma_available(), reason=SYSTEM_LEMMA_SKIP_REASON)
 async def test_non_default_model_run_records_nonzero_cost(
     authenticated_client,

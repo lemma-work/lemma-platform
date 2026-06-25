@@ -22,7 +22,7 @@ LOAD_TEST_ENV     := load_tests/.env.load_test
 MAX_SUBSCRIBERS   ?= 100
 WRITER_VUS        ?= 2
 
-.PHONY: help test test-unit test-e2e test-e2e-fast test-e2e-runtime test-module coverage coverage-unit coverage-e2e test-collect lint migrate docker-build docker-build-cloud docker-build-arm64 docker-build-amd64 agentbox-build teams-manifest-zip load-test-build load-test-up load-test-migrate load-test-setup load-test-run load-test-sse load-test-monitor load-test-down load-test
+.PHONY: help test test-unit test-e2e test-e2e-real test-e2e-fast test-e2e-runtime test-module coverage coverage-unit coverage-e2e test-collect lint migrate docker-build docker-build-cloud docker-build-arm64 docker-build-amd64 agentbox-build teams-manifest-zip load-test-build load-test-up load-test-migrate load-test-setup load-test-run load-test-sse load-test-monitor load-test-down load-test
 
 help:
 	@echo "Lemma backend:"
@@ -64,14 +64,27 @@ test:
 test-unit:
 	uv run pytest -m "not e2e"
 
+# Default e2e gate: fast + deterministic. The agent LLM is a mocked
+# FunctionModel and workspace tools hit the in-process fake AgentBox, so there
+# is NO real model call and NO Docker workspace. Parallelized via xdist. This is
+# what CI runs (no API keys, no Docker image needed). real_llm/real_sandbox
+# tests auto-skip here.
 test-e2e:
-	uv run pytest -m e2e
+	uv run pytest $(E2E_PARALLEL) -m e2e -o timeout=120
+
+# Real e2e: real model from env (needs LEMMA_OPENAI_API_KEY) + real Docker
+# AgentBox. Runs the real_llm/real_sandbox tests too. For local/manual/nightly
+# verification of the actual model + sandbox. Serial (Docker workspace shares a
+# global container namespace).
+test-e2e-real:
+	E2E_REAL=1 uv run pytest -m e2e
 
 test-e2e-fast:
 	uv run pytest $(E2E_PARALLEL) -m "e2e and not slow and not worker and not workspace and not provider and not local_cli"
 
+# Real runtime suite only (real model + Docker), serial. Subset of test-e2e-real.
 test-e2e-runtime:
-	uv run pytest -m "e2e and (slow or worker or workspace or provider or local_cli)"
+	E2E_REAL=1 uv run pytest -m "e2e and (slow or worker or workspace or provider or local_cli)"
 
 test-module:
 	@test -n "$(MODULE)" || (echo "MODULE is required, e.g. make test-module MODULE=pod" && exit 1)

@@ -496,6 +496,24 @@ class Settings(BaseSettings):
             "location or the monorepo lemma-typescript build."
         ),
     )
+    e2e_llm_mode: Literal["real", "mock"] = Field(
+        default="real",
+        description=(
+            "TEST HOOK ONLY. 'mock' swaps the agent's LLM for a deterministic "
+            "pydantic-ai FunctionModel (scripted via conversation metadata) so "
+            "e2e runs need no real model or API key. Production/dev leave this at "
+            "'real'. The e2e fixtures default it to 'mock' (override with E2E_REAL=1)."
+        ),
+    )
+    e2e_sandbox_mode: Literal["docker", "fake"] = Field(
+        default="docker",
+        description=(
+            "TEST HOOK ONLY. 'fake' runs workspace/CLI tools against an in-process "
+            "subprocess AgentBox instead of the Docker manager, so e2e needs no "
+            "Docker image. Production/dev leave this at 'docker'. The e2e fixtures "
+            "default it to 'fake' (override with E2E_REAL=1)."
+        ),
+    )
     agentbox_api_url: Optional[str] = Field(
         description="AgentBox manager API base URL used by workspace execution",
         default=None

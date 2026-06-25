@@ -223,11 +223,59 @@ def e2e_settings(test_database_url, test_redis_url, supertokens_container):
     os.environ["AGENTBOX_API_URL"] = agentbox_url
     os.environ["AGENTBOX_API_KEY"] = agentbox_key
 
+    # E2E execution mode: default to the fast mocked level (no real model, no
+    # Docker) so CI and local runs are fast and deterministic. ``E2E_REAL=1``
+    # (or the per-axis E2E_LLM_MODE / E2E_SANDBOX_MODE) opts into the real model
+    # + Docker AgentBox. Set on os.environ too so the worker subprocess (which
+    # inherits os.environ) runs in the same mode.
+    real = os.environ.get("E2E_REAL", "").lower() in ("1", "true", "yes")
+    llm_mode = os.environ.get("E2E_LLM_MODE") or ("real" if real else "mock")
+    sandbox_mode = os.environ.get("E2E_SANDBOX_MODE") or ("docker" if real else "fake")
+    settings.e2e_llm_mode = llm_mode
+    settings.e2e_sandbox_mode = sandbox_mode
+    os.environ["E2E_LLM_MODE"] = llm_mode
+    os.environ["E2E_SANDBOX_MODE"] = sandbox_mode
+
+    if sandbox_mode == "fake":
+        _start_fake_agentbox(agentbox_port)
+
     from app.core.infrastructure.db import session as db_session_module
 
     db_session_module.reset_engine_state()
 
     return settings
+
+
+_fake_agentbox_started: set[int] = set()
+
+
+def _start_fake_agentbox(port: int) -> None:
+    """Run the in-process fake AgentBox manager on ``port`` in a daemon thread.
+
+    One per session/xdist-worker (the pinned agentbox port is per-worker), so
+    parallel workers don't contend. Replaces the Docker manager for the fast
+    ``e2e_sandbox_mode == "fake"`` path; the session worker + in-process tools
+    reach it over HTTP at the pinned port.
+    """
+    if port in _fake_agentbox_started:
+        return
+    import threading
+    import time
+
+    import uvicorn
+
+    from app.modules.workspace.testing.fake_agentbox import create_fake_agentbox_app
+
+    app = create_fake_agentbox_app()
+    config = uvicorn.Config(app, host="127.0.0.1", port=port, log_level="warning")
+    server = uvicorn.Server(config)
+    thread = threading.Thread(target=server.run, name=f"fake-agentbox-{port}", daemon=True)
+    thread.start()
+    for _ in range(200):
+        if server.started:
+            break
+        time.sleep(0.02)
+    _fake_agentbox_started.add(port)
 
 
 @pytest.fixture(scope="session", autouse=True)

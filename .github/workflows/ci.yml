@@ -88,6 +88,27 @@ jobs:
         env:
           REDIS_URL: redis://localhost:6379
 
+  backend-e2e:
+    name: lemma-backend e2e (mocked)
+    needs: changes
+    if: needs.changes.outputs.backend == 'true'
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: lemma-backend
+    steps:
+      - uses: actions/checkout@v5
+      - uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+      - name: Sync deps
+        run: uv sync
+      # Default e2e mode is mock LLM + in-process fake AgentBox, so this needs
+      # NO model API keys and NO Docker workspace image. Postgres/Redis/
+      # SuperTokens come from testcontainers on the runner's Docker daemon.
+      - name: E2E tests (mocked LLM + fake AgentBox)
+        run: make test-e2e
+
   python-sdk:
     name: Python SDK + CLI tests
     needs: changes

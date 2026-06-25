@@ -10,6 +10,11 @@ from uuid import UUID
 
 import anyio
 import pydantic_core
+
+from app.modules.agent.infrastructure.harnesses.mock_model import (
+    build_mock_model,
+    is_mock_llm_enabled,
+)
 from pydantic_ai import Agent as PydanticAIAgent
 from pydantic_ai import BinaryContent, FunctionToolCallEvent, FunctionToolResultEvent
 from pydantic_ai.exceptions import (
@@ -213,7 +218,12 @@ class PydanticAIHarness:
         should_stop: StopChecker | None,
     ) -> AsyncIterator[AgentEvent]:
         history, user_prompt = self._history_and_prompt(messages)
-        model = _runtime_profile_model(options)
+        # e2e mock mode swaps only the model — the rest of the harness (tool
+        # execution, streaming, events, persistence) runs for real.
+        if is_mock_llm_enabled():
+            model = build_mock_model(conversation)
+        else:
+            model = _runtime_profile_model(options)
         agent_kwargs: dict[str, object] = {
             # Per-toolset prompt fragments (e.g. web search) are contributed by the
             # matching capabilities, so they're suppressed here to avoid duplication.
