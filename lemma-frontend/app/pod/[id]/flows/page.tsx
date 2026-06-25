@@ -33,7 +33,6 @@ import {
     DropdownMenuSeparator,
     DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu';
-import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/components/ui/tooltip';
 import { ResourceVisibilityBadge } from '@/components/shared/resource-visibility';
 import {
     useDeleteFlow,
@@ -293,18 +292,15 @@ export default function FlowsIndexPage({
                 productIconTone="workflows"
                 meta={<ConceptHint concept="flow" />}
                 actions={(
-                    <TooltipProvider>
-                    <>
-                        <Tooltip>
-                            <TooltipTrigger asChild>
-                                <Button asChild variant="ghost" size="icon" className="h-8 w-8 rounded" aria-label="Runs">
-                                    <Link href={`/pod/${podId}/flows?view=runs`}>
-                                        <Play className="h-4 w-4" />
-                                    </Link>
+                    <div className="flex items-center gap-2">
+                        {canCreateFunction ? (
+                            <Link href={`/pod/${podId}/functions/new`}>
+                                <Button variant="outline" className="gap-2" size="sm">
+                                    <Plus className="h-4 w-4" />
+                                    New function
                                 </Button>
-                            </TooltipTrigger>
-                            <TooltipContent>Runs</TooltipContent>
-                        </Tooltip>
+                            </Link>
+                        ) : null}
                         {canCreateWorkflow ? (
                             <Link href={`/pod/${podId}/flows/new`}>
                                 <Button className="gap-2" size="sm">
@@ -313,8 +309,7 @@ export default function FlowsIndexPage({
                                 </Button>
                             </Link>
                         ) : null}
-                    </>
-                    </TooltipProvider>
+                    </div>
                 )}
             />
 

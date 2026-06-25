@@ -28,9 +28,27 @@ export default function NewFunctionPage({
     const [panelTab, setPanelTab] = useState<FunctionPanelTab>('code');
 
     const [localData, setLocalData] = useState<Partial<FunctionType>>({
-        name: 'Untitled Function',
+        name: 'untitled_function',
         icon_url: null,
-        code: `# Write your Python function here\n\ndef main(input_data):\n    \"\"\"\n    Main entry point for the function.\n    \"\"\"\n    return {}`,
+        code: `#input_type_name: FunctionInput
+#output_type_name: FunctionOutput
+#function_name: untitled_function
+
+from pydantic import BaseModel
+from lemma_sdk import FunctionContext
+
+
+class FunctionInput(BaseModel):
+    message: str = ""
+
+
+class FunctionOutput(BaseModel):
+    result: str
+
+
+async def untitled_function(ctx: FunctionContext, data: FunctionInput) -> FunctionOutput:
+    return FunctionOutput(result=f"Processed: {data.message}")
+`,
         config: null,
         input_schema: {},
         output_schema: {},

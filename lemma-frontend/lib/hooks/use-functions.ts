@@ -91,6 +91,9 @@ function toSdkFunctionPayload<T extends CreateFunctionData | UpdateFunctionData>
     delete rest.accessible_connectors;
     delete rest.accessible_folders;
     delete rest.accessible_tables;
+    delete rest.input_schema;
+    delete rest.output_schema;
+    delete rest.config_schema;
     return rest;
 }
 

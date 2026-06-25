@@ -4,6 +4,7 @@ import Link from 'next/link';
 import { usePathname, useRouter, useSearchParams } from 'next/navigation';
 import { AlertCircle, CheckCircle2, X } from 'lucide-react';
 import { toast } from 'sonner';
+import { ApiError } from 'lemma-sdk';
 
 import { cn } from '@/lib/utils';
 
@@ -16,7 +17,34 @@ export type ResourceFeedbackAction = {
     variant?: 'primary' | 'secondary' | 'ghost' | 'outline';
 };
 
+function formatErrorDetails(details: unknown): string | null {
+    if (!Array.isArray(details) || details.length === 0) return null;
+    const MAX = 4;
+    const parts: string[] = [];
+    for (const entry of details) {
+        if (!entry || typeof entry !== 'object') continue;
+        const record = entry as Record<string, unknown>;
+        const msg = typeof record.msg === 'string' ? record.msg.trim() : '';
+        if (!msg) continue;
+        const loc = Array.isArray(record.loc) ? record.loc.filter((s): s is string => typeof s === 'string') : null;
+        const field = loc && loc.length > 0 ? loc.filter((segment) => segment !== 'body').join('.') : '';
+        parts.push(field ? `${field}: ${msg}` : msg);
+    }
+    if (parts.length === 0) return null;
+    const shown = parts.slice(0, MAX);
+    const remainder = parts.length - shown.length;
+    let text = shown.join('; ');
+    if (remainder > 0) text += `; +${remainder} more`;
+    return text;
+}
+
 export function getResourceErrorMessage(error: unknown, fallback: string) {
+    if (error instanceof ApiError) {
+        const base = error.message?.trim() || fallback;
+        const detailsText = formatErrorDetails(error.details);
+        if (detailsText) return `${base} — ${detailsText}`;
+        return base || fallback;
+    }
     if (error instanceof Error && error.message.trim()) return error.message;
     if (typeof error === 'string' && error.trim()) return error;
     return fallback;
