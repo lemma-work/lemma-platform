@@ -6,6 +6,7 @@ import asyncio
 import ipaddress
 import os
 import socket
+from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
 from urllib.parse import urlparse
@@ -70,16 +71,41 @@ def _openai_compat_vision_model_names() -> set[str]:
     return {name.strip() for name in (raw or "").split(",") if name.strip()}
 
 
-def system_lemma_openai_catalog_model_names() -> list[tuple[str, str | None]]:
-    """``(public_name, provider_model_name)`` for the configured system:lemma
-    OpenAI-compatible catalog.
+# Optional hook: an extension (e.g. a cloud provider module) may register a
+# customizer that rewrites the system OpenAI-compatible model catalog before it
+# is published — typically to map short public names to provider model IDs and
+# declare per-model capabilities (vision). The core stays env-driven: without a
+# customizer the catalog is used verbatim (public name == provider model name).
+SystemOpenAICatalogCustomizer = Callable[
+    [list[RuntimeModelCatalogEntry]], list[RuntimeModelCatalogEntry]
+]
 
-    The system profile uses model names verbatim — the operator configures the
-    exact provider model IDs via ``LEMMA_OPENAI_MODEL_NAMES`` — so the public and
-    provider names are identical. Mirrors the catalog built by
-    ``_system_lemma_openai_profile`` (configured model list plus the default
-    model) without requiring credentials, so it can drive the usage-pricing
-    coverage invariant at import/startup.
+_system_openai_catalog_customizer: SystemOpenAICatalogCustomizer | None = None
+
+
+def register_system_openai_catalog_customizer(
+    customizer: SystemOpenAICatalogCustomizer | None,
+) -> None:
+    """Register (or clear with ``None``) the system OpenAI catalog customizer.
+
+    Call once at application startup from an extension module. The customizer
+    receives the env-built catalog — each entry with ``provider_model_name ==
+    name`` and the TEXT+TOOLS baseline (plus any env-declared vision) — and
+    returns a rewritten catalog. This is the supported seam for a provider
+    overlay to keep short public model names user-facing while sending the real
+    provider model ID to the API and declaring per-model vision, without the
+    operator hand-configuring provider IDs in the environment.
+    """
+    global _system_openai_catalog_customizer
+    _system_openai_catalog_customizer = customizer
+
+
+def _build_system_openai_catalog() -> list[RuntimeModelCatalogEntry]:
+    """The env-configured system OpenAI catalog, after any registered customizer.
+
+    Shared by the live profile and the pricing-coverage names so both reflect the
+    same (optionally remapped) catalog. Requires no credentials, so it can run at
+    import/startup.
     """
     _load_runtime_env()
     model_names = _csv_setting(
@@ -90,7 +116,37 @@ def system_lemma_openai_catalog_model_names() -> list[tuple[str, str | None]]:
     ).strip()
     if default_model_name and default_model_name not in model_names:
         model_names.insert(0, default_model_name)
-    return [(model_name, model_name) for model_name in model_names]
+    vision_model_names = _openai_compat_vision_model_names()
+    catalog = [
+        RuntimeModelCatalogEntry(
+            name=model_name,
+            display_name=_display_model_name(model_name),
+            # The operator configures the exact provider model IDs, so the public
+            # name is the provider name unless a customizer remaps it.
+            provider_model_name=model_name,
+            capabilities=_openai_compat_model_capabilities(
+                model_name, vision_model_names
+            ),
+        )
+        for model_name in model_names
+    ]
+    if _system_openai_catalog_customizer is not None:
+        catalog = _system_openai_catalog_customizer(catalog)
+    return catalog
+
+
+def system_lemma_openai_catalog_model_names() -> list[tuple[str, str | None]]:
+    """``(public_name, provider_model_name)`` for the configured system:lemma
+    OpenAI-compatible catalog.
+
+    Mirrors the catalog built by ``_system_lemma_openai_profile`` (including any
+    registered customizer) without requiring credentials, so it can drive the
+    usage-pricing coverage invariant at import/startup.
+    """
+    return [
+        (entry.name, entry.provider_model_name)
+        for entry in _build_system_openai_catalog()
+    ]
 
 
 def _openai_compat_model_capabilities(
@@ -440,15 +496,10 @@ def _system_lemma_openai_profile() -> AgentRuntimeProfile | None:
     api_key = _env_or_setting("LEMMA_OPENAI_API_KEY", settings.lemma_openai_api_key)
     if not api_key:
         return None
-    model_names = _csv_setting(
-        os.getenv("LEMMA_OPENAI_MODEL_NAMES") or settings.lemma_openai_model_names
-    )
+    model_catalog = _build_system_openai_catalog()
     default_model_name = (
         os.getenv("LEMMA_OPENAI_DEFAULT_MODEL") or settings.lemma_openai_default_model
     ).strip()
-    if default_model_name and default_model_name not in model_names:
-        model_names.insert(0, default_model_name)
-    vision_model_names = _openai_compat_vision_model_names()
     return AgentRuntimeProfile(
         id=SYSTEM_LEMMA_PROFILE_ID,
         scope=RuntimeProfileScope.SYSTEM,
@@ -456,20 +507,8 @@ def _system_lemma_openai_profile() -> AgentRuntimeProfile | None:
         protocol=RuntimeProfileProtocol.OPENAI_COMPATIBLE,
         name="Lemma",
         description="System Lemma model provider",
-        default_model_name=default_model_name or model_names[0],
-        model_catalog=[
-            RuntimeModelCatalogEntry(
-                name=model_name,
-                display_name=_display_model_name(model_name),
-                # The operator configures the exact provider model IDs, so the
-                # public name is the provider name (no translation layer).
-                provider_model_name=model_name,
-                capabilities=_openai_compat_model_capabilities(
-                    model_name, vision_model_names
-                ),
-            )
-            for model_name in model_names
-        ],
+        default_model_name=default_model_name or model_catalog[0].name,
+        model_catalog=model_catalog,
         config=OpenAICompatibleRuntimeConfig(
             base_url=os.getenv("LEMMA_OPENAI_BASE_URL")
             or settings.lemma_openai_base_url,
