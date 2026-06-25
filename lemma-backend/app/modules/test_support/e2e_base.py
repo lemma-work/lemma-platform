@@ -77,9 +77,16 @@ def _cleanup_e2e_workspace_containers() -> None:
 def _configure_local_datastore_runtime(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     from app.core.config import settings
 
+    del tmp_path  # see below
     monkeypatch.setattr(settings, "storage_backend", "local")
     monkeypatch.setattr(settings, "embedding_provider", "local")
-    monkeypatch.setattr(settings, "local_object_storage_root", str(tmp_path / "object-storage"))
+    # Do NOT override local_object_storage_root with a per-test tmp_path: the
+    # session-scoped streaq worker (which auto-indexes uploaded files) uses the
+    # session root, so a per-test root meant the worker could never find files
+    # the API wrote — indexing failed ("Storage object not found") whenever the
+    # worker won the processing race under load. Keep the per-xdist-worker
+    # session root (set in e2e_settings); pods are namespaced by id, so tests
+    # don't collide on storage.
 
 
 async def _run_cleanup_step(

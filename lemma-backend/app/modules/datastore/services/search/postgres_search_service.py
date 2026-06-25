@@ -48,10 +48,21 @@ class PostgresSearchService:
         self.reranker = reranker or create_reranker()
         self._initialized = False
 
+    # Serializes concurrent ensure_schema() calls. CREATE EXTENSION/TYPE ... IF
+    # NOT EXISTS is NOT atomic in Postgres: parallel indexers (e.g. the worker
+    # and an in-process indexer, or two pods on a fresh DB) racing the global
+    # pg_extension / pg_type catalogs hit "duplicate key" unique violations. A
+    # transaction-scoped advisory lock makes the idempotent setup race-free.
+    _ENSURE_SCHEMA_LOCK_KEY = 0x6C656D6D61  # "lemma"
+
     async def ensure_schema(self):
         if self._initialized:
             return
         async with self.engine.begin() as conn:
+            await conn.execute(
+                text("SELECT pg_advisory_xact_lock(:key)"),
+                {"key": self._ENSURE_SCHEMA_LOCK_KEY},
+            )
             await conn.execute(text("CREATE EXTENSION IF NOT EXISTS vector"))
             await conn.execute(text(f'CREATE SCHEMA IF NOT EXISTS "{self.schema_name}"'))
             await conn.execute(
