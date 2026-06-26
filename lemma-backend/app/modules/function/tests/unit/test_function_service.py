@@ -41,9 +41,27 @@ from agentbox_client.apps.function_executor import (
     RuntimeErrorInfo,
 )
 from app.modules.function.services.function_service import FunctionService
+from app.modules.function.application.function_run_executor import (
+    _API_FUNCTION_TIMEOUT_SECONDS,
+    _JOB_FUNCTION_TIMEOUT_SECONDS,
+)
 
 
 pytestmark = pytest.mark.asyncio
+
+
+async def _execute(service: FunctionService, function, run, *, user_email=None):
+    """Run a resolved (function, run) through the bound service's execution
+    engine — the production path resolves+creates the run first, then hands the
+    entities to this same engine."""
+    timeout = (
+        _JOB_FUNCTION_TIMEOUT_SECONDS
+        if function.type == FunctionType.JOB
+        else _API_FUNCTION_TIMEOUT_SECONDS
+    )
+    return await service._executor.execute(
+        function=function, run=run, user_email=user_email, timeout_seconds=timeout
+    )
 
 
 @pytest.fixture(autouse=True)
@@ -550,9 +568,7 @@ async def test_execute_function_failure_updates_run(
         ],
     )
 
-    result = await service.execute_function(
-        function.pod_id, function.name, {"a": 1}, function.user_id, ctx=ctx
-    )
+    result = await _execute(service, function, run)
 
     assert result.status == FunctionRunStatus.FAILED
     assert result.error == "bad load"
@@ -600,9 +616,7 @@ async def test_execute_function_api_uses_cached_workspace_command(
         ],
     )
 
-    result = await service.execute_function(
-        function.pod_id, function.name, {"a": 1}, function.user_id, ctx=ctx
-    )
+    result = await _execute(service, function, run)
 
     assert result.status == FunctionRunStatus.COMPLETED
     assert result.output_data == {"done": True}
@@ -649,9 +663,7 @@ async def test_execute_function_api_cache_hit_skips_code_fetch(
         ],
     )
 
-    result = await service.execute_function(
-        function.pod_id, function.name, {"a": 1}, function.user_id, ctx=ctx
-    )
+    result = await _execute(service, function, run)
 
     assert result.status == FunctionRunStatus.COMPLETED
     assert result.output_data == {"cached": True}
@@ -682,9 +694,7 @@ async def test_execute_function_sandbox_http_error_is_persisted_on_run(
         [httpx.HTTPStatusError("server error", request=request, response=response)],
     )
 
-    result = await service.execute_function(
-        function.pod_id, function.name, {"a": 1}, function.user_id, ctx=ctx
-    )
+    result = await _execute(service, function, run)
 
     assert result.status == FunctionRunStatus.FAILED
     assert "HTTP 500" in result.error
@@ -740,9 +750,7 @@ async def test_execute_function_recovers_from_transient_sandbox_error(
         ],
     )
 
-    result = await service.execute_function(
-        function.pod_id, function.name, {"a": 1}, function.user_id, ctx=ctx
-    )
+    result = await _execute(service, function, run)
 
     assert result.status == FunctionRunStatus.COMPLETED, result.error
     assert result.output_data == {"ok": True}
@@ -762,7 +770,7 @@ async def test_execute_function_job_adds_execution_requested_event_and_returns_p
     run = _run_entity(function_id=function.id, user_id=function.user_id)
     run_repo.create_run.return_value = run
 
-    result = await service.execute_function(
+    resolved = await service.resolve_execute(
         function.pod_id,
         function.name,
         {"a": 1},
@@ -774,7 +782,7 @@ async def test_execute_function_job_adds_execution_requested_event_and_returns_p
     created_run = run_repo.create_run.await_args.args[0]
     events = created_run.collect_events()
 
-    assert result.status == FunctionRunStatus.PENDING
+    assert resolved.run.status == FunctionRunStatus.PENDING
     assert len(events) == 1
     assert isinstance(events[0], FunctionRunExecutionRequestedEvent)
     assert events[0].function_id == function.id
@@ -821,7 +829,7 @@ async def test_execute_run_by_id_job_command_failure_returns_failed_run(
         ],
     )
 
-    result = await service.execute_run_by_id(run.id)
+    result = await _execute(service, function, run, user_email=run.user_email)
 
     assert result.status == FunctionRunStatus.FAILED
     assert result.error == "AgentBox returned 500"
@@ -876,7 +884,7 @@ async def test_execute_run_by_id_for_job_uses_one_shot_workspace_command(
         ],
     )
 
-    result = await service.execute_run_by_id(run.id)
+    result = await _execute(service, function, run, user_email=run.user_email)
 
     assert result.status == FunctionRunStatus.COMPLETED
     assert result.output_data == {"done": True}
@@ -912,9 +920,7 @@ async def _run_api_function(
     run_repo.create_run.return_value = run
     workspace_service.get_session.return_value = _FakeSession([])
     clients = _install_executor(service, responses)
-    result = await service.execute_function(
-        function.pod_id, function.name, {"a": 1}, function.user_id, ctx=ctx
-    )
+    result = await _execute(service, function, run)
     return result, run, clients
 
 
@@ -1147,9 +1153,7 @@ async def test_execute_function_api_sync_504_times_out_without_retry(
     workspace_service.get_session.return_value = _FakeSession([])
     clients = _install_executor(service, [_gateway_timeout_error()])
 
-    result = await service.execute_function(
-        function.pod_id, function.name, {"a": 1}, function.user_id, ctx=ctx
-    )
+    result = await _execute(service, function, run)
 
     assert result.status == FunctionRunStatus.FAILED
     assert "execution timeout" in (result.error or "").lower()

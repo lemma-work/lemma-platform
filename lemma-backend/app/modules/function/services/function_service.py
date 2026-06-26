@@ -25,7 +25,6 @@ from app.modules.function.domain.entities import (
     FunctionStatus,
     FunctionType,
     FunctionUpdateEntity,
-    RunAsWorkload,
 )
 from app.modules.function.domain.errors import (
     FunctionConflictError,
@@ -48,14 +47,9 @@ from app.core.log.log import get_logger
 
 logger = get_logger(__name__)
 
-# The execution engine owns the sandbox machinery + its run-status writers. The
-# two timeout constants are re-exported here so callers that import them from
-# this module (events.handlers, the controller, the e2e timeout patch) and
-# execute_function (which passes them to the engine) keep working.
+# The execution engine owns the sandbox machinery + its run-status writers.
 from app.modules.function.application.function_run_executor import (  # noqa: E402
     FunctionRunExecutor,
-    _API_FUNCTION_TIMEOUT_SECONDS,
-    _JOB_FUNCTION_TIMEOUT_SECONDS,
 )
 
 # A function's `#python_packages:` header declares pip dependencies that the
@@ -657,94 +651,6 @@ class FunctionService:
         """Best-effort icon cleanup (storage only, no DB) after a delete."""
         if self.icon_service and icon_url:
             await self.icon_service.delete_by_url(icon_url)
-
-    async def execute_function(
-        self,
-        pod_id: UUID,
-        name: str,
-        input_data: dict,
-        user_id: UUID,
-        user_email: str | None = None,
-        ctx: Context | None = None,
-        run_as_workload: RunAsWorkload | None = None,
-    ) -> FunctionRunEntity:
-        if ctx is None:
-            raise RuntimeError("Context is required for function authorization")
-        # Executing a function requires only FUNCTION_EXECUTE — mirroring
-        # AGENT_EXECUTE for agent-as-tool. The right to execute implies loading the
-        # definition to run it, so a workload (or user) granted just
-        # function.execute can run it without also holding function.read. We load
-        # the entity directly here instead of via get_function_by_name, which would
-        # additionally enforce the viewer/read permission. (Inspecting a function
-        # through the read API still requires function.read.)
-        function = await self._load_function_by_name(pod_id, name, ctx=ctx)
-        if function is None:
-            raise FunctionNotFoundError(f"Function {name} not found")
-        assert function.id is not None
-        await ctx.require(
-            Permissions.FUNCTION_EXECUTE,
-            ResourceRef(
-                resource_type=ResourceType.FUNCTION,
-                resource_id=function.id,
-                pod_id=function.pod_id,
-            ),
-        )
-
-        run_entity = FunctionRunEntity(
-            id=uuid7(),
-            function_id=function.id,
-            user_id=user_id,
-            user_email=user_email,
-            input_data=input_data,
-            status=FunctionRunStatus.PENDING,
-        )
-
-        if function.type == FunctionType.JOB:
-            run_entity.job_id = self._run_job_id(run_entity.id)
-            run_entity.add_event(
-                FunctionRunExecutionRequestedEvent(
-                    run_id=run_entity.id,
-                    function_id=function.id,
-                )
-            )
-
-        run = await self._create_run(run_entity)
-        assert run.id is not None
-
-        if function.type == FunctionType.JOB:
-            return run
-
-        return await self._executor.execute(
-            function=function,
-            run=run,
-            user_email=user_email,
-            timeout_seconds=_API_FUNCTION_TIMEOUT_SECONDS,
-            run_as_workload=run_as_workload,
-        )
-
-    async def execute_run_by_id(
-        self,
-        run_id: UUID,
-        *,
-        timeout_seconds: int = _JOB_FUNCTION_TIMEOUT_SECONDS,
-    ) -> FunctionRunEntity:
-        # Bound convenience path (holds the connection across the sandbox round-
-        # trip). Production executes runs via FunctionUseCases.execute_run_by_id,
-        # which loads in a short UoW and runs the sandbox with no connection held.
-        run = await self.run_repository.get_run(run_id)
-        if run is None:
-            raise FunctionRunNotFoundError(f"Run {run_id} not found")
-
-        function = await self.repository.get(run.function_id)
-        if function is None:
-            raise FunctionNotFoundError(f"Function {run.function_id} not found")
-
-        return await self._executor.execute(
-            function=function,
-            run=run,
-            user_email=run.user_email,
-            timeout_seconds=timeout_seconds,
-        )
 
     def _run_job_id(self, run_id: UUID) -> str:
         return f"function:{run_id}"

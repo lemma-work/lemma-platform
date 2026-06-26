@@ -24,9 +24,9 @@ from app.core.authorization.scope import context_scope, pod_context_scope, uow_s
 from app.core.authorization.service import AuthorizationDataService
 from app.core.helpers.slug import slugify
 from app.core.infrastructure.db.uow_factory import UnitOfWorkFactory
+from app.modules.function.application import function_run_executor as _engine
 from app.modules.function.application.function_run_executor import (
     FunctionRunExecutor,
-    _API_FUNCTION_TIMEOUT_SECONDS,
     _JOB_FUNCTION_TIMEOUT_SECONDS,
 )
 from app.modules.function.domain.entities import (
@@ -267,6 +267,7 @@ class FunctionUseCases:
             function=function,
             run=run,
             user_email=user_email,
-            timeout_seconds=_API_FUNCTION_TIMEOUT_SECONDS,
+            # Read live so the API function timeout stays patchable (e2e).
+            timeout_seconds=_engine._API_FUNCTION_TIMEOUT_SECONDS,
             run_as_workload=run_as_workload,
         )

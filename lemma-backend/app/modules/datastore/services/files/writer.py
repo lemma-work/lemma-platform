@@ -432,38 +432,6 @@ class FileWriter:
         the repo-free ``FileStoragePhase`` (holds no DB connection)."""
         await self._storage_phase.finalize_update(plan, updated_entity)
 
-    async def update_file_by_path(
-        self,
-        pod_id: UUID,
-        update_entity: DatastoreFileUpdateEntity,
-        requester_user_id: UUID,
-        ctx: Context | None = None,
-    ) -> DatastoreFileEntity:
-        # Back-compat single-call path (holds the connection across storage). The
-        # controller uses resolve/write/persist/finalize so storage + search sync
-        # hold no pooled connection.
-        plan = await self.resolve_update_file(
-            pod_id, update_entity, requester_user_id, ctx=ctx
-        )
-        await self.write_update_storage(plan, update_entity)
-        updated_entity = await self.persist_update_file(plan)
-        await self.finalize_update_file(plan, updated_entity)
-        return updated_entity
-
-    async def delete_file_by_path(
-        self,
-        pod_id: UUID,
-        path: str,
-        requester_user_id: UUID,
-        ctx: Context | None = None,
-    ) -> None:
-        await self.delete_path_by_path(
-            pod_id=pod_id,
-            path=path,
-            requester_user_id=requester_user_id,
-            ctx=ctx,
-        )
-
     async def resolve_delete_path(
         self,
         pod_id: UUID,
@@ -549,25 +517,6 @@ class FileWriter:
             is_folder=is_folder,
             folder_prefix=folder_prefix,
             files=files,
-        )
-
-    async def delete_path_by_path(
-        self,
-        pod_id: UUID,
-        path: str,
-        requester_user_id: UUID,
-        ctx: Context | None = None,
-    ) -> None:
-        # Back-compat single-call path (holds the connection across storage). The
-        # controller uses resolve_delete_path + offloaded cleanup_deleted_paths.
-        cleanup = await self.resolve_delete_path(
-            pod_id, path, requester_user_id, ctx=ctx
-        )
-        await self.cleanup_deleted_paths(
-            cleanup.pod_id,
-            is_folder=cleanup.is_folder,
-            folder_prefix=cleanup.folder_prefix,
-            files=list(cleanup.files),
         )
 
     async def _apply_new_path(

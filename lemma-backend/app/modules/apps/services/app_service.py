@@ -167,27 +167,6 @@ class AppService:
         ``AppStoragePhase`` (holds no DB connection)."""
         return await self._storage_phase.read_asset(inputs)
 
-    async def _build_asset_document(
-        self,
-        app: AppEntity,
-        *,
-        raise_not_found_name: str,
-        asset_path: str | None,
-        request_etag: str | None = None,
-    ) -> AppAssetDocument:
-        # Back-compat single-call path (holds the connection across the storage
-        # read). Streaming/serving controllers should instead resolve in a short
-        # UoW then call read_app_asset outside it.
-        resolved = await self._resolve_asset_document(
-            app,
-            raise_not_found_name=raise_not_found_name,
-            asset_path=asset_path,
-            request_etag=request_etag,
-        )
-        if isinstance(resolved, AppAssetDocument):
-            return resolved
-        return await self.read_app_asset(resolved)
-
     async def _require_pod_permission(
         self,
         *,
@@ -442,18 +421,6 @@ class AppService:
         resolve_delete_app's UoW has committed."""
         await self._storage_phase.cleanup_storage(cleanup)
 
-    async def delete_app(
-        self,
-        pod_id: UUID,
-        name: str,
-        user_id: UUID,
-        ctx: Context | None = None,
-    ) -> None:
-        # Back-compat single-call path (holds the connection across storage
-        # cleanup). Controllers should use resolve_delete_app + cleanup_app_storage.
-        cleanup = await self.resolve_delete_app(pod_id, name, user_id, ctx=ctx)
-        await self.cleanup_app_storage(cleanup)
-
     async def resolve_upload_bundle(
         self,
         pod_id: UUID,
@@ -573,31 +540,6 @@ class AppService:
         )
         return await self.finalize_upload_bundle(plan, written, user_id)
 
-    async def get_app_asset(
-        self,
-        pod_id: UUID,
-        name: str,
-        user_id: UUID,
-        *,
-        asset_path: str | None,
-        request_etag: str | None = None,
-        ctx: Context | None = None,
-    ) -> AppAssetDocument:
-        app = await self.get_app_by_name(
-            pod_id,
-            name,
-            user_id,
-            raise_not_found=True,
-            ctx=ctx,
-        )
-        assert app is not None
-        return await self._build_asset_document(
-            app,
-            raise_not_found_name=name,
-            asset_path=asset_path,
-            request_etag=request_etag,
-        )
-
     async def resolve_app_asset(
         self,
         pod_id: UUID,
@@ -639,66 +581,6 @@ class AppService:
             asset_path=asset_path,
             request_etag=request_etag,
         )
-
-    async def get_app_asset_public(
-        self,
-        pod_id: UUID,
-        name: str,
-        *,
-        asset_path: str | None,
-        request_etag: str | None = None,
-    ) -> AppAssetDocument:
-        """Fetch an app asset without a permission check — for unauthenticated serving."""
-        app = await self.repository.get_by_name(pod_id, name)
-        if not app:
-            raise AppNotFoundError(f"App '{name}' not found")
-        return await self._build_asset_document(
-            app,
-            raise_not_found_name=name,
-            asset_path=asset_path,
-            request_etag=request_etag,
-        )
-
-    async def get_app_asset_by_public_slug(
-        self,
-        public_slug: str,
-        *,
-        asset_path: str | None,
-        request_etag: str | None = None,
-    ) -> AppAssetDocument:
-        app = await self.repository.get_by_public_slug(public_slug)
-        if not app:
-            raise AppNotFoundError(f"App with public slug '{public_slug}' not found")
-        return await self._build_asset_document(
-            app,
-            raise_not_found_name=public_slug,
-            asset_path=asset_path,
-            request_etag=request_etag,
-        )
-
-    async def get_app_source_archive(
-        self,
-        pod_id: UUID,
-        name: str,
-        user_id: UUID,
-        ctx: Context | None = None,
-    ) -> bytes:
-        app_id, archive_path = await self.resolve_source_archive(
-            pod_id, name, user_id, ctx=ctx
-        )
-        return await self.read_archive(app_id, archive_path)
-
-    async def get_app_dist_archive(
-        self,
-        pod_id: UUID,
-        name: str,
-        user_id: UUID,
-        ctx: Context | None = None,
-    ) -> bytes:
-        app_id, archive_path = await self.resolve_dist_archive(
-            pod_id, name, user_id, ctx=ctx
-        )
-        return await self.read_archive(app_id, archive_path)
 
     async def resolve_source_archive(
         self,

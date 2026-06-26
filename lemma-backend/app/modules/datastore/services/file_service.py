@@ -190,19 +190,6 @@ class DatastoreFileService:
             visibility=visibility,
         )
 
-    async def update_file_by_path(
-        self,
-        pod_id: UUID,
-        update_entity: DatastoreFileUpdateEntity,
-        ctx: Context,
-    ) -> DatastoreFileEntity:
-        return await self._writer.update_file_by_path(
-            pod_id,
-            update_entity,
-            ctx.user_id,
-            ctx=ctx,
-        )
-
     async def resolve_update_file(
         self,
         pod_id: UUID,
@@ -232,32 +219,6 @@ class DatastoreFileService:
         """Storage + search-index sync after the update row is persisted. No DB
         connection held."""
         await self._writer.finalize_update_file(plan, updated_entity)
-
-    async def delete_file_by_path(
-        self,
-        pod_id: UUID,
-        path: str,
-        ctx: Context,
-    ) -> None:
-        await self._writer.delete_file_by_path(
-            pod_id,
-            path,
-            ctx.user_id,
-            ctx=ctx,
-        )
-
-    async def delete_path_by_path(
-        self,
-        pod_id: UUID,
-        path: str,
-        ctx: Context,
-    ) -> None:
-        await self._writer.delete_path_by_path(
-            pod_id,
-            path,
-            ctx.user_id,
-            ctx=ctx,
-        )
 
     async def resolve_delete_path(
         self,

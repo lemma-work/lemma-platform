@@ -35,7 +35,9 @@ from app.modules.function.domain.errors import (
     FunctionRunNotFoundError,
 )
 from app.modules.function.infrastructure.repositories import FunctionRunRepository
-from app.modules.function.services.function_service import _JOB_FUNCTION_TIMEOUT_SECONDS
+from app.modules.function.application.function_run_executor import (
+    _JOB_FUNCTION_TIMEOUT_SECONDS,
+)
 from app.core.log.log import get_logger
 
 logger = get_logger(__name__)

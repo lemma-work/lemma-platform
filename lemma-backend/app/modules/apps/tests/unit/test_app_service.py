@@ -8,6 +8,7 @@ from zipfile import ZIP_DEFLATED, ZipFile
 import pytest
 
 from app.modules.apps.domain.entities import (
+    AppAssetDocument,
     AppEntity,
     AppReleaseEntity,
     AppStatus,
@@ -21,6 +22,27 @@ from app.modules.apps.domain.errors import (
 from app.core.runtime_config import runtime_config_token
 from app.modules.apps.services.app_service import AppService
 from app.modules.test_support.authz import allow_all_context
+
+
+async def _get_app_asset(service, pod_id, name, user_id, *, asset_path, request_etag=None, ctx=None):
+    """Serve an asset through the saga phases (the single-call convenience method
+    was removed; production resolves in a short UoW then reads storage)."""
+    resolved = await service.resolve_app_asset(
+        pod_id, name, user_id, asset_path=asset_path, request_etag=request_etag, ctx=ctx
+    )
+    if isinstance(resolved, AppAssetDocument):
+        return resolved
+    return await service.read_app_asset(resolved)
+
+
+async def _delete_app(service, pod_id, name, user_id, ctx=None):
+    cleanup = await service.resolve_delete_app(pod_id, name, user_id, ctx=ctx)
+    await service.cleanup_app_storage(cleanup)
+
+
+async def _get_app_dist_archive(service, pod_id, name, user_id, ctx=None):
+    app_id, archive_path = await service.resolve_dist_archive(pod_id, name, user_id, ctx=ctx)
+    return await service.read_archive(app_id, archive_path)
 
 
 def make_dist_zip(files: dict[str, str | bytes]) -> bytes:
@@ -231,7 +253,7 @@ async def test_get_app_asset_missing_release_raises_not_found():
     repo.get_by_name.return_value = app
 
     with pytest.raises(AppNotFoundError):
-        await service.get_app_asset(
+        await _get_app_asset(service, 
             pod_id,
             "dashboard",
             user_id,
@@ -270,7 +292,7 @@ async def test_get_app_asset_reads_release_contents():
     repo.get_release.return_value = release
     storage.read_file.return_value = "<html><head></head><body>public-ok</body></html>"
 
-    asset = await service.get_app_asset(
+    asset = await _get_app_asset(service, 
         pod_id,
         "dashboard",
         user_id,
@@ -319,7 +341,7 @@ async def test_get_app_asset_serves_static_asset_without_fallback():
     repo.get_release.return_value = release
     storage.read_file.return_value = b"console.log('asset')"
 
-    asset = await service.get_app_asset(
+    asset = await _get_app_asset(service, 
         pod_id,
         "dashboard",
         user_id,
@@ -385,7 +407,7 @@ async def test_get_app_asset_missing_path_raises_without_fallback():
     storage.read_file.side_effect = FileNotFoundError("missing")
 
     with pytest.raises(AppNotFoundError):
-        await service.get_app_asset(
+        await _get_app_asset(service, 
             pod_id,
             "dashboard",
             user_id,
@@ -426,7 +448,7 @@ async def test_get_app_asset_returns_not_modified_when_etag_matches():
 
     # The entrypoint ETag includes the config hash; a matching request 304s.
     config_token = runtime_config_token(app.pod_id)
-    asset = await service.get_app_asset(
+    asset = await _get_app_asset(service, 
         pod_id,
         "dashboard",
         user_id,
@@ -468,7 +490,7 @@ async def test_delete_app_removes_release_manifest_assets():
 
     repo.get_by_name.return_value = app
     repo.list_releases.return_value = [release]
-    await service.delete_app(
+    await _delete_app(service, 
         pod_id,
         "dashboard",
         user_id,
@@ -511,7 +533,7 @@ async def test_delete_app_ignores_missing_source_archive():
     repo.list_releases.return_value = [release]
     storage.delete_file.side_effect = [FileNotFoundError("missing source archive")]
 
-    await service.delete_app(
+    await _delete_app(service, 
         pod_id,
         "dashboard",
         user_id,
@@ -553,7 +575,7 @@ async def test_get_app_dist_archive_reads_current_release():
     repo.get_release.return_value = release
     storage.read_file.return_value = b"zip-bytes"
 
-    archive = await service.get_app_dist_archive(
+    archive = await _get_app_dist_archive(service, 
         pod_id,
         "dashboard",
         user_id,

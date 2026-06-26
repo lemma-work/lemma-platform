@@ -1529,7 +1529,9 @@ async def test_api_function_timeout_marks_run_failed_and_stops_execution(
     test_pod,
     monkeypatch,
 ):
-    from app.modules.function.services import function_service as function_service_module
+    from app.modules.function.application import (
+        function_run_executor as function_engine_module,
+    )
 
     pod_id = test_pod["id"]
     suffix = uuid4().hex[:8]
@@ -1537,7 +1539,7 @@ async def test_api_function_timeout_marks_run_failed_and_stops_execution(
     table_name = f"timeout_records_{suffix}"
 
     await _create_table(authenticated_client, pod_id, table_name)
-    monkeypatch.setattr(function_service_module, "_API_FUNCTION_TIMEOUT_SECONDS", 2)
+    monkeypatch.setattr(function_engine_module, "_API_FUNCTION_TIMEOUT_SECONDS", 2)
 
     code = f"""#input_type_name: TimeoutInput
 #output_type_name: TimeoutResult

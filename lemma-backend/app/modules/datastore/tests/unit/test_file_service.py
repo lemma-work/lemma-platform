@@ -50,6 +50,27 @@ def _ctx(user_id: UUID) -> SimpleNamespace:
     return SimpleNamespace(user_id=user_id)
 
 
+async def _update_file_by_path(file_service, pod_id, update_entity, ctx):
+    """Drive a full update through the saga phases (the production path; the old
+    single-call convenience method was removed)."""
+    plan = await file_service.resolve_update_file(pod_id, update_entity, ctx=ctx)
+    await file_service.write_update_storage(plan, update_entity)
+    updated = await file_service.persist_update_file(plan)
+    await file_service.finalize_update_file(plan, updated)
+    return updated
+
+
+async def _delete_path_by_path(file_service, pod_id, path, ctx):
+    """Drive a full delete through the saga phases (production path)."""
+    cleanup = await file_service.resolve_delete_path(pod_id, path, ctx=ctx)
+    await file_service.cleanup_deleted_paths(
+        cleanup.pod_id,
+        is_folder=cleanup.is_folder,
+        folder_prefix=cleanup.folder_prefix,
+        files=list(cleanup.files),
+    )
+
+
 def _make_folder(
     *,
     pod_id,
@@ -201,7 +222,7 @@ async def test_update_pod_folder_rename_into_duplicate_raises_conflict(
         DatastoreConflictError,
         match="already exists at '/research'",
     ):
-        await file_service.update_file_by_path(
+        await _update_file_by_path(file_service, 
             pod_id,
             DatastoreFileUpdateEntity(path=folder.path, new_path="/research"),
             ctx=_ctx(user_id),
@@ -248,7 +269,7 @@ async def test_update_pod_folder_move_into_duplicate_parent_raises_conflict(
         DatastoreConflictError,
         match=f"already exists at '{destination_folder.path}/research'",
     ):
-        await file_service.update_file_by_path(
+        await _update_file_by_path(file_service, 
             pod_id,
             DatastoreFileUpdateEntity(
                 path=folder.path,
@@ -756,7 +777,7 @@ async def test_system_skill_paths_are_read_only(
     file_service.system_skill_files.skills_root = skills_root
 
     with pytest.raises(DatastoreValidationError, match="System skills are read-only"):
-        await file_service.update_file_by_path(
+        await _update_file_by_path(file_service, 
             pod_id,
             DatastoreFileUpdateEntity(
                 path="/skills/builtin-skill/SKILL.md",
@@ -1058,7 +1079,7 @@ async def test_delete_path_by_path_removes_folder_descendants_from_storage_and_s
     search_service.engine = None
     file_service.search_service_factory = lambda _pod_id: search_service
 
-    await file_service.delete_path_by_path(pod_id, root_folder.path, ctx=_ctx(user_id))
+    await _delete_path_by_path(file_service, pod_id, root_folder.path, ctx=_ctx(user_id))
 
     deleted_prefixes = [
         call.args[0] for call in storage_mock.delete_prefix.await_args_list
