@@ -225,39 +225,9 @@ export default function AppPagesRoute({ params }: { params: Promise<{ id: string
                             <article
                                 key={page.slug}
                                 data-accent={accent}
-                                className="resource-index-card app-tile group relative overflow-hidden p-0"
+                                className="resource-index-card app-tile group"
                             >
-                                {page.url ? (
-                                    <Link href={viewHref} aria-label={`Open ${title}`} className="block">
-                                        <div className="app-preview">
-                                            <iframe
-                                                src={page.url}
-                                                title={`${title} preview`}
-                                                className="pointer-events-none absolute left-0 top-0 h-[160%] w-[160%] origin-top-left scale-[0.625] border-0"
-                                                loading="lazy"
-                                                tabIndex={-1}
-                                                aria-hidden="true"
-                                                sandbox="allow-same-origin allow-scripts allow-forms"
-                                            />
-                                        </div>
-                                    </Link>
-                                ) : (
-                                    <div className="app-cover h-10" />
-                                )}
-                                {canManageApp ? (
-                                    <div className="absolute right-2 top-2">
-                                        <ResourceActionsMenu
-                                            ariaLabel={`Open actions for ${title}`}
-                                            triggerClassName="h-7 w-7 shrink-0 rounded-md bg-[color:color-mix(in_srgb,var(--surface-1)_80%,transparent)] text-[var(--text-tertiary)] opacity-0 backdrop-blur-sm transition-opacity hover:bg-[var(--surface-2)] group-hover:opacity-100 group-focus-within:opacity-100"
-                                        >
-                                            <DestructiveResourceActionItem onSelect={() => setAppPendingDelete(page)}>
-                                                Delete app
-                                            </DestructiveResourceActionItem>
-                                        </ResourceActionsMenu>
-                                    </div>
-                                ) : null}
-
-                                <div className="app-foot flex items-center gap-3 px-3.5 py-3">
+                                <div className="flex items-center gap-3">
                                     <Link href={viewHref} aria-label={`Open ${title}`} className="shrink-0">
                                         <span className="app-icon flex h-10 w-10 items-center justify-center rounded-xl text-sm font-medium">
                                             {page.icon || title.charAt(0)}
@@ -287,6 +257,16 @@ export default function AppPagesRoute({ params }: { params: Promise<{ id: string
                                                 <ExternalLink className="h-3.5 w-3.5" />
                                             </a>
                                         </Button>
+                                    ) : null}
+                                    {canManageApp ? (
+                                        <ResourceActionsMenu
+                                            ariaLabel={`Open actions for ${title}`}
+                                            triggerClassName="h-8 w-8 shrink-0 rounded-md text-[var(--text-tertiary)] hover:bg-[var(--surface-2)]"
+                                        >
+                                            <DestructiveResourceActionItem onSelect={() => setAppPendingDelete(page)}>
+                                                Delete app
+                                            </DestructiveResourceActionItem>
+                                        </ResourceActionsMenu>
                                     ) : null}
                                 </div>
                             </article>

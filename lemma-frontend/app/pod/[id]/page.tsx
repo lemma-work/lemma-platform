@@ -587,25 +587,8 @@ function PodAppsHomePanel({ podId }: { podId: string }) {
                     const accent = getAppAccent(page.slug);
 
                     return (
-                        <article key={page.slug} data-accent={accent} className="resource-index-card app-tile group relative overflow-hidden p-0">
-                            {page.url ? (
-                                <Link href={viewHref} aria-label={`Open ${title}`} className="block">
-                                    <div className="app-preview">
-                                        <iframe
-                                            src={page.url}
-                                            title={`${title} preview`}
-                                            className="pointer-events-none absolute left-0 top-0 h-[160%] w-[160%] origin-top-left scale-[0.625] border-0"
-                                            loading="lazy"
-                                            tabIndex={-1}
-                                            aria-hidden="true"
-                                            sandbox="allow-same-origin allow-scripts allow-forms"
-                                        />
-                                    </div>
-                                </Link>
-                            ) : (
-                                <div className="app-cover h-10" />
-                            )}
-                            <div className="app-foot flex items-center gap-3 px-3.5 py-3">
+                        <article key={page.slug} data-accent={accent} className="resource-index-card app-tile group">
+                            <div className="flex items-center gap-3">
                                 <Link href={viewHref} aria-label={`Open ${title}`} className="shrink-0">
                                     <span className="app-icon flex h-10 w-10 items-center justify-center rounded-xl text-sm font-medium">
                                         {page.icon || title.charAt(0)}

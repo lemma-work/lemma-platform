@@ -219,21 +219,11 @@
 }
 
 
-/* App cards — a short accent cover + overlapping squircle avatar. The accent is
-   per-app (see lib/app/app-accent.ts) and derives every shade from one semantic
-   token via color-mix, so it adapts to light/dark automatically. */
+/* App cards — a compact accent row. The accent is per-app (see
+   lib/app/app-accent.ts) and derives every shade from one semantic token via
+   color-mix, so it adapts to light/dark automatically. */
 .app-tile {
   --app-accent: var(--action-primary);
-}
-/* Full-bleed: the base card's 1rem padding would inset the preview. */
-.resource-index-card.app-tile {
-  padding: 0;
-}
-/* Footer sits on a slightly different surface than the preview/card so the text
-   area reads as its own band — close, but distinct. */
-.app-foot {
-  background: color-mix(in srgb, var(--app-accent) 5%, var(--surface-2));
-  border-top: 1px solid color-mix(in srgb, var(--border-subtle) 26%, transparent);
 }
 .app-tile[data-accent="brand"] { --app-accent: var(--action-primary); }
 .app-tile[data-accent="intelligence"] { --app-accent: var(--intelligence); }
@@ -242,18 +232,10 @@
 .app-tile[data-accent="success"] { --app-accent: var(--state-success); }
 .app-tile[data-accent="delight"] { --app-accent: var(--delight); }
 
-.app-cover {
-  background: color-mix(in srgb, var(--app-accent) 15%, var(--surface-1));
-}
-
-/* Live preview acts as the card's cover — a 16:9 laptop-shaped window into the
-   app. Short enough to stay tidy at any width (phone to wide desktop to docked
-   single-column). Retune the ratio here. */
-.app-preview {
-  position: relative;
-  aspect-ratio: 16 / 9;
-  overflow: hidden;
-  background: color-mix(in srgb, var(--app-accent) 10%, var(--surface-1));
+/* Faint accent wash across the whole card so tiles stay visually distinct
+   without a large cover hero. */
+.resource-index-card.app-tile {
+  background: color-mix(in srgb, var(--app-accent) 6%, var(--surface-1));
 }
 
 .app-icon {
