@@ -229,11 +229,25 @@ async def update_app(
 async def delete_app(
     pod_id: UUID,
     app_name: str,
-    app_service: AppServiceDep,
     user: CurrentUser,
-    ctx: PodContextDep,
+    request: Request,
+    uow_factory: UnitOfWorkFactory = Depends(get_uow_factory),
 ) -> AppMessageResponse:
-    await app_service.delete_app(pod_id, app_name, user.id, ctx=ctx)
+    # Delete the row in a short UoW, then clean up the app's stored bytes with no
+    # pooled connection held (the cleanup can touch many objects).
+    async with uow_factory() as uow:
+        app_service = build_app_service(uow)
+        ctx = await resolve_pod_context(
+            session=uow.session, request=request, user_id=user.id, pod_id=pod_id
+        )
+        token = set_current_context(ctx)
+        try:
+            cleanup = await app_service.resolve_delete_app(
+                pod_id, app_name, user.id, ctx=ctx
+            )
+        finally:
+            reset_current_context(token)
+    await app_service.cleanup_app_storage(cleanup)
     return AppMessageResponse(message=f"App {app_name} deleted successfully")
 
 
@@ -248,9 +262,8 @@ async def upload_app_bundle(
     request: Request,
     pod_id: UUID,
     app_name: str,
-    app_service: AppServiceDep,
     user: CurrentUser,
-    ctx: PodContextDep,
+    uow_factory: UnitOfWorkFactory = Depends(get_uow_factory),
     source_archive: UploadFile | None = File(default=None),
     dist_archive: UploadFile | None = File(default=None),
 ) -> AppBundleUploadResponse:
@@ -261,17 +274,35 @@ async def upload_app_bundle(
     if dist_archive is not None:
         dist_archive_bytes = await dist_archive.read()
 
-    app = await app_service.upload_bundle(
-        pod_id,
-        app_name,
-        user.id,
-        source_archive_bytes=source_archive_bytes,
-        dist_archive_bytes=dist_archive_bytes,
-        ctx=ctx,
+    # Resolve+authorize+dedup in a short UoW, write the bundle bytes with no
+    # pooled connection held, then persist the release pointer in a second UoW.
+    async with uow_factory() as uow:
+        app_service = build_app_service(uow)
+        ctx = await resolve_pod_context(
+            session=uow.session, request=request, user_id=user.id, pod_id=pod_id
+        )
+        token = set_current_context(ctx)
+        try:
+            plan = await app_service.resolve_upload_bundle(
+                pod_id,
+                app_name,
+                user.id,
+                has_source=source_archive_bytes is not None,
+                dist_archive_bytes=dist_archive_bytes,
+                ctx=ctx,
+            )
+        finally:
+            reset_current_context(token)
+    written = await app_service.write_bundle_storage(
+        plan, source_archive_bytes, dist_archive_bytes
     )
+    async with uow_factory() as uow2:
+        app = await build_app_service(uow2).finalize_upload_bundle(
+            plan, written, user.id
+        )
     return AppBundleUploadResponse(
         message="Bundle uploaded successfully",
-        app=await _app_detail_response(ctx, app),
+        app=AppDetailResponse.model_validate(app),
     )
 
 

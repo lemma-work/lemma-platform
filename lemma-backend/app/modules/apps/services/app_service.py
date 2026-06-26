@@ -65,6 +65,36 @@ class _AssetReadInputs:
     quoted_etag: str
 
 
+@dataclass(frozen=True, slots=True)
+class _AppDeletionCleanup:
+    """Storage paths to purge after an app row is deleted, carried out of the
+    short UoW so the (potentially many-object) cleanup holds no connection."""
+
+    app_id: UUID
+    source_archive_path: str | None
+    releases: tuple
+
+
+@dataclass(frozen=True, slots=True)
+class _UploadPlan:
+    """DB-resolved plan for a bundle upload, carried across the storage write."""
+
+    app_id: UUID
+    pod_id: UUID
+    name: str
+    has_source: bool
+    version: str | None
+    release_root: str | None
+    existing_release_id: UUID | None
+    needs_dist_write: bool
+
+
+@dataclass(frozen=True, slots=True)
+class _WrittenBundle:
+    source_path: str | None
+    dist_archive_path: str | None
+
+
 class AppService:
     def __init__(
         self,
@@ -464,13 +494,16 @@ class AppService:
             return refreshed or updated
         return updated
 
-    async def delete_app(
+    async def resolve_delete_app(
         self,
         pod_id: UUID,
         name: str,
         user_id: UUID,
         ctx: Context | None = None,
-    ) -> None:
+    ) -> _AppDeletionCleanup:
+        """Authorize + delete the app row (DB only). Returns the storage paths to
+        purge so the caller can clean up AFTER this UoW commits — the storage
+        cleanup (potentially many objects) must not hold a connection."""
         app = await self.repository.get_by_name(pod_id, name)
         if not app:
             raise AppNotFoundError(f"App {name} not found")
@@ -487,30 +520,54 @@ class AppService:
                 resource_id=app.id,
                 ctx=ctx,
             )
-
-        storage = self.file_manager_factory(app.id)
         releases = await self.repository.list_releases(app.id)
-        if app.source_archive_path:
-            await self._delete_file_if_present(storage, app.source_archive_path)
-        for release in releases:
-            await self._delete_release_files(storage, release)
-        await storage.delete_prefix("")
         await self.repository.delete(app.id)
+        return _AppDeletionCleanup(
+            app_id=app.id,
+            source_archive_path=app.source_archive_path,
+            releases=tuple(releases),
+        )
 
-    async def upload_bundle(
+    async def cleanup_app_storage(self, cleanup: _AppDeletionCleanup) -> None:
+        """Delete an app's stored bytes. Holds NO DB connection; call after
+        resolve_delete_app's UoW has committed. Best-effort (rows already gone)."""
+        try:
+            storage = self.file_manager_factory(cleanup.app_id)
+            if cleanup.source_archive_path:
+                await self._delete_file_if_present(storage, cleanup.source_archive_path)
+            for release in cleanup.releases:
+                await self._delete_release_files(storage, release)
+            await storage.delete_prefix("")
+        except Exception as exc:  # pragma: no cover - best-effort cleanup
+            logger.warning("App storage cleanup failed for %s: %s", cleanup.app_id, exc)
+
+    async def delete_app(
+        self,
+        pod_id: UUID,
+        name: str,
+        user_id: UUID,
+        ctx: Context | None = None,
+    ) -> None:
+        # Back-compat single-call path (holds the connection across storage
+        # cleanup). Controllers should use resolve_delete_app + cleanup_app_storage.
+        cleanup = await self.resolve_delete_app(pod_id, name, user_id, ctx=ctx)
+        await self.cleanup_app_storage(cleanup)
+
+    async def resolve_upload_bundle(
         self,
         pod_id: UUID,
         name: str,
         user_id: UUID,
         *,
-        source_archive_bytes: bytes | None,
+        has_source: bool,
         dist_archive_bytes: bytes | None,
         ctx: Context | None = None,
-    ) -> AppEntity:
+    ) -> _UploadPlan:
+        """Authorize + dedup (DB only). The storage writes happen outside this UoW
+        via write_bundle_storage; finalize_upload_bundle then persists."""
         app = await self.repository.get_by_name(pod_id, name)
         if not app:
             raise AppNotFoundError(f"App {name} not found")
-
         if ctx is not None:
             await ctx.require(Permissions.APP_UPDATE, ResourceRef.app(pod_id, app.id))
         else:
@@ -523,43 +580,106 @@ class AppService:
                 resource_id=app.id,
                 ctx=ctx,
             )
-
-        if source_archive_bytes is None and dist_archive_bytes is None:
+        if not has_source and dist_archive_bytes is None:
             raise AppValidationError("Provide source_archive and/or dist_archive")
 
-        storage = self.file_manager_factory(app.id)
-
-        if source_archive_bytes is not None:
-            path = "source/archive.zip"
-            await storage.write_file(path, source_archive_bytes)
-            app.source_archive_path = path
-
+        version: str | None = None
+        release_root: str | None = None
+        existing_release_id: UUID | None = None
+        needs_dist_write = False
         if dist_archive_bytes is not None:
-            bundle = load_app_dist_bundle(dist_archive_bytes)
+            # Validate the bundle up front (raises AppValidationError on a missing
+            # root index.html), regardless of dedup — matches prior behavior and
+            # ensures no storage write happens for an invalid bundle.
+            load_app_dist_bundle(dist_archive_bytes)
             version = hashlib.sha256(dist_archive_bytes).hexdigest()
-            release = await self.repository.get_release_by_version(app.id, version)
-            if release is None:
-                release_root = f"releases/{version}/dist/"
-                for item in bundle.files:
-                    await storage.write_file(f"{release_root}{item.path}", item.content)
+            release_root = f"releases/{version}/dist/"
+            existing = await self.repository.get_release_by_version(app.id, version)
+            existing_release_id = existing.id if existing is not None else None
+            needs_dist_write = existing is None
+        return _UploadPlan(
+            app_id=app.id,
+            pod_id=pod_id,
+            name=name,
+            has_source=has_source,
+            version=version,
+            release_root=release_root,
+            existing_release_id=existing_release_id,
+            needs_dist_write=needs_dist_write,
+        )
 
-                dist_archive_path = f"{release_root}archive.zip"
-                await storage.write_file(dist_archive_path, dist_archive_bytes)
+    async def write_bundle_storage(
+        self,
+        plan: _UploadPlan,
+        source_archive_bytes: bytes | None,
+        dist_archive_bytes: bytes | None,
+    ) -> _WrittenBundle:
+        """Write uploaded bytes to storage. Holds NO DB connection — call between
+        resolve_upload_bundle and finalize_upload_bundle."""
+        storage = self.file_manager_factory(plan.app_id)
+        source_path: str | None = None
+        if plan.has_source and source_archive_bytes is not None:
+            source_path = "source/archive.zip"
+            await storage.write_file(source_path, source_archive_bytes)
+        dist_archive_path: str | None = None
+        if plan.needs_dist_write and dist_archive_bytes is not None:
+            bundle = load_app_dist_bundle(dist_archive_bytes)
+            for item in bundle.files:
+                await storage.write_file(f"{plan.release_root}{item.path}", item.content)
+            dist_archive_path = f"{plan.release_root}archive.zip"
+            await storage.write_file(dist_archive_path, dist_archive_bytes)
+        return _WrittenBundle(source_path=source_path, dist_archive_path=dist_archive_path)
 
-                release = await self.repository.create_release(
-                    AppReleaseEntity(
-                        app_id=app.id,
-                        version=version,
-                        dist_root_path=release_root,
-                        dist_archive_path=dist_archive_path,
-                    )
+    async def finalize_upload_bundle(
+        self, plan: _UploadPlan, written: _WrittenBundle, user_id: UUID
+    ) -> AppEntity:
+        """Persist the release + app pointer (DB only) after the storage writes."""
+        app = await self.repository.get_by_name(plan.pod_id, plan.name)
+        if not app:
+            raise AppNotFoundError(f"App {plan.name} not found")
+        release_id = plan.existing_release_id
+        if plan.needs_dist_write:
+            release = await self.repository.create_release(
+                AppReleaseEntity(
+                    app_id=app.id,
+                    version=plan.version,
+                    dist_root_path=plan.release_root,
+                    dist_archive_path=written.dist_archive_path,
                 )
-
-            app.current_release_id = release.id
+            )
+            release_id = release.id
+        if written.source_path is not None:
+            app.source_archive_path = written.source_path
+        if plan.version is not None:
+            app.current_release_id = release_id
             app.status = AppStatus.READY
-
         app.user_id = user_id
         return await self.repository.update(app)
+
+    async def upload_bundle(
+        self,
+        pod_id: UUID,
+        name: str,
+        user_id: UUID,
+        *,
+        source_archive_bytes: bytes | None,
+        dist_archive_bytes: bytes | None,
+        ctx: Context | None = None,
+    ) -> AppEntity:
+        # Back-compat single-call path (holds the connection across storage). The
+        # controller uses resolve/write/finalize so storage holds no connection.
+        plan = await self.resolve_upload_bundle(
+            pod_id,
+            name,
+            user_id,
+            has_source=source_archive_bytes is not None,
+            dist_archive_bytes=dist_archive_bytes,
+            ctx=ctx,
+        )
+        written = await self.write_bundle_storage(
+            plan, source_archive_bytes, dist_archive_bytes
+        )
+        return await self.finalize_upload_bundle(plan, written, user_id)
 
     async def get_app_asset(
         self,
