@@ -60,7 +60,7 @@ After install, the stack is running at:
 | Backend API | http://127-0-0-1.sslip.io:8711 |
 | API docs (Scalar) | http://127-0-0-1.sslip.io:8711/scalar |
 
-> **Use the `127-0-0-1.sslip.io` host, not `localhost` / `127.0.0.1`.** It's wildcard DNS that resolves to `127.0.0.1`, and sign-in cookies (and per-desk subdomains) are scoped to it — opening the app on `localhost` or `127.0.0.1` won't authenticate.
+> **Use the `127-0-0-1.sslip.io` host, not `localhost` / `127.0.0.1`.** It's wildcard DNS that resolves to `127.0.0.1`, and sign-in cookies (and per-app subdomains) are scoped to it — opening the app on `localhost` or `127.0.0.1` won't authenticate.
 
 Infrastructure (Postgres, Redis, SuperTokens, Kreuzberg) stays on a private container network — no host ports, no collisions with other projects.
 

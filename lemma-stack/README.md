@@ -17,7 +17,7 @@ all persistent state under `~/.lemma/local`:
   `lemma-local-net` container network — no host ports, no collisions.
 
 Use the `127-0-0-1.sslip.io` host (wildcard DNS that resolves to `127.0.0.1`),
-not `localhost` / `127.0.0.1` directly: sign-in cookies and per-desk subdomains
+not `localhost` / `127.0.0.1` directly: sign-in cookies and per-app subdomains
 are scoped to it, so the app only authenticates on this host.
 
 ## Commands

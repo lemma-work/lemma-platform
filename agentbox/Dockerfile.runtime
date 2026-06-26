@@ -149,7 +149,7 @@ COPY lemma-skills /sdk/lemma-skills
 # Keep the source tree at /sdk after install (read-only reference): functions and
 # agents read it to learn SDK response shapes, method signatures, and facades —
 # e.g. `cat /sdk/lemma-python/lemma_sdk/resources/data.py`. The TypeScript SDK
-# source ships too for desk authors. node_modules/.venv/dist are excluded by
+# source ships too for app authors. node_modules/.venv/dist are excluded by
 # .dockerignore, so this adds source only (~25MB).
 RUN uv pip install --system /sdk/lemma-python /sdk/lemma-cli \
     && chmod -R a+rX /sdk

@@ -1,7 +1,7 @@
 from pathlib import Path
 from typing import Literal, Optional
 
-from pydantic import Field, SecretStr, field_validator
+from pydantic import Field, SecretStr, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -503,12 +503,36 @@ class Settings(BaseSettings):
             return None
         return value
 
+    @model_validator(mode="after")
+    def _require_app_base_domain_outside_local(self) -> "Settings":
+        # Apps are served by host at `<slug>.<app_base_domain>`. Outside
+        # local/testing there is no safe default (the old `apps.lemma.work`
+        # default silently mis-served every install), so fail loud at startup
+        # rather than route apps at a wrong/cloud domain. Local installs get this
+        # from the stack (APP_BASE_DOMAIN); testing leaves it unset on purpose.
+        if not self.is_local_mode() and not (self.app_base_domain or "").strip():
+            raise ValueError(
+                "APP_BASE_DOMAIN must be set in development/production: it is the "
+                "base domain apps are served under (e.g. apps.example.com). It has "
+                "no safe default outside local/testing."
+            )
+        return self
+
     # App serving: apps are served by host, at `<public_slug>.<app_base_domain>`.
-    # Locally this is a sslip.io wildcard (e.g. 127-0-0-1.sslip.io:8711) that
-    # resolves to loopback; in cloud it is the real apps domain behind nginx.
+    # Locally the stack sets this to a sslip.io wildcard (e.g.
+    # 127-0-0-1.sslip.io:8711) that resolves to loopback; in cloud it is the real
+    # apps domain behind the ingress. There is intentionally NO cloud default: an
+    # empty value disables host-based app routing, and it is REQUIRED outside
+    # local/testing (see _require_app_base_domain_outside_local).
     app_base_domain: str = Field(
-        default="apps.lemma.work",
-        description="Base domain for public app subdomains",
+        default="",
+        description=(
+            "Base domain under which public apps are served, as "
+            "`<public_slug>.<app_base_domain>`. The local stack sets this to the "
+            "sslip.io wildcard host (e.g. 127-0-0-1.sslip.io:8711); in cloud it is "
+            "the real apps domain behind the ingress. Empty disables host-based "
+            "app routing and is rejected at startup in development/production."
+        ),
     )
     browser_sdk_path: Optional[str] = Field(
         default=None,

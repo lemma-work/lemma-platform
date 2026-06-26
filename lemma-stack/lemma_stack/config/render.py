@@ -6,7 +6,7 @@ Layering (last wins): packaged defaults -> values derived from config
 Services talk to each other over the lemma-local-net container network using
 DNS aliases (db, redis, supertokens, kreuzberg, agentbox, backend, frontend);
 browser-facing URLs use the 127-0-0-1.sslip.io wildcard host + published ports
-(see LOCAL_HOST) so desks and the API share one registrable domain.
+(see LOCAL_HOST) so apps and the API share one registrable domain.
 """
 
 from __future__ import annotations
@@ -21,14 +21,14 @@ CONTAINER_PREFIX = "lemma-local"
 POSTGRES_VOLUME = "lemma-local-postgres-data"
 
 # Browser-facing host. `127-0-0-1.sslip.io` is wildcard DNS that resolves itself
-# and every subdomain to 127.0.0.1, so the backend, frontend, and per-desk
-# subdomains all share one registrable domain. That makes desk subdomains
+# and every subdomain to 127.0.0.1, so the backend, frontend, and per-app
+# subdomains all share one registrable domain. That makes app subdomains
 # same-site with the API, so the session cookie (scoped to LOCAL_COOKIE_DOMAIN)
-# flows to desks with SameSite=Lax over plain HTTP — no proxy, hosts file, or
+# flows to apps with SameSite=Lax over plain HTTP — no proxy, hosts file, or
 # certs. The dash form keeps the IP in a single DNS label (TLS-friendly).
 LOCAL_HOST = "127-0-0-1.sslip.io"
 LOCAL_COOKIE_DOMAIN = f".{LOCAL_HOST}"
-# Allow the apex (API/frontend) and any desk subdomain, on any published port.
+# Allow the apex (API/frontend) and any app subdomain, on any published port.
 LOCAL_CORS_ORIGIN_REGEX = r"^https?://([a-z0-9-]+\.)?127-0-0-1\.sslip\.io(:\d+)?$"
 
 # Container-side mount points under /app/.local (match the backend/agentbox
@@ -47,8 +47,8 @@ def backend_origin(doc: TOMLDocument) -> str:
     return f"http://{LOCAL_HOST}:{store.port(doc, 'backend')}"
 
 
-def desk_base_domain(doc: TOMLDocument) -> str:
-    # Desks are served by the backend, at <slug>.<this>.
+def app_base_domain(doc: TOMLDocument) -> str:
+    # Apps are served by the backend, at <slug>.<this>.
     return f"{LOCAL_HOST}:{store.port(doc, 'backend')}"
 
 
@@ -87,10 +87,10 @@ def backend_env(doc: TOMLDocument, paths: LocalPaths) -> dict[str, str]:
         "SUPERTOKENS_API_GATEWAY_PATH": "/st",
         "SESSION_COOKIE_SECURE": "false",
         "SESSION_COOKIE_SAME_SITE": "lax",
-        # share the session cookie across the apex API host and desk subdomains
+        # share the session cookie across the apex API host and app subdomains
         "SESSION_COOKIE_DOMAIN": LOCAL_COOKIE_DOMAIN,
-        # desks served by host at <slug>.<desk_base_domain>; allow them in CORS
-        "DESK_BASE_DOMAIN": desk_base_domain(doc),
+        # apps served by host at <slug>.<app_base_domain>; allow them in CORS
+        "APP_BASE_DOMAIN": app_base_domain(doc),
         "CORS_ORIGIN_REGEX": LOCAL_CORS_ORIGIN_REGEX,
         # storage rooted at the mounted ~/.lemma/local/data tree
         "STORAGE_BACKEND": "local",

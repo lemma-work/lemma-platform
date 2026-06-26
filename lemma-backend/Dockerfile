@@ -59,7 +59,7 @@ COPY --from=builder --chown=appuser:appuser /app/lemma-skills /app/lemma-skills
 # Copy backend application code
 COPY --chown=appuser:appuser lemma-backend/ ./
 
-# Browser SDK bundle served at /public/sdk/lemma-client.js for no-build desks.
+# Browser SDK bundle served at /public/sdk/lemma-client.js for no-build apps.
 # settings.resolve_browser_sdk_path() looks here first in the container.
 COPY --chown=appuser:appuser lemma-typescript/public/lemma-client.js /app/browser-sdk/lemma-client.js
 # Opt-in web components bundle served at /public/sdk/lemma-ui.js (<lemma-agent-task>
