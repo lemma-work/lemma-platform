@@ -35,7 +35,7 @@ class EmailSender:
         from_name: str = "Lemma",
         use_tls: bool = True,
         transport: str = "smtp",
-        output_dir: str = "/tmp/gappy-emails",
+        output_dir: str = "/tmp/lemma-emails",
     ):
         """
         Initialize email sender.

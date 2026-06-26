@@ -409,7 +409,7 @@ class OrganizationService:
             entity.pod_description = pod_description
 
         inviter_email = (
-            inviter.user.email if inviter.user else "organization-member@gappy.local"
+            inviter.user.email if inviter.user else "organization-member@lemma.local"
         )
         entity.mark_created(
             organization_name=organization.name,

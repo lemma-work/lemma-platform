@@ -494,7 +494,7 @@ async def full_stack(
     await redis_client.aclose()
 
     backend_root = Path(__file__).resolve().parents[4]
-    log_path = f"/tmp/gappy_full_stack_worker_{uuid.uuid4().hex}.log"
+    log_path = f"/tmp/lemma_full_stack_worker_{uuid.uuid4().hex}.log"
 
     # The worker subprocess inherits os.environ, which now carries AGENTBOX_API_URL/
     # KEY and API_URL (from configure_workspace_api_url), SCHEDULER_API_URL (from

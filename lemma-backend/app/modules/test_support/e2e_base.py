@@ -64,7 +64,7 @@ def _cleanup_e2e_workspace_containers() -> None:
         return
 
     ps = subprocess.run(
-        ["docker", "ps", "-aq", "--filter", "label=gappy.e2e=true"],
+        ["docker", "ps", "-aq", "--filter", "label=lemma.e2e=true"],
         capture_output=True,
         text=True,
         check=False,
@@ -203,15 +203,15 @@ def e2e_settings(test_database_url, test_redis_url, supertokens_container):
     # workers never share (or rmtree out from under each other) the same dirs.
     # ``PYTEST_XDIST_WORKER`` is e.g. "gw0"/"gw1" under xdist, unset otherwise.
     worker_suffix = _xdist_worker_suffix()
-    settings.email_output_dir = f"/tmp/gappy-test-emails{worker_suffix}"
+    settings.email_output_dir = f"/tmp/lemma-test-emails{worker_suffix}"
     shutil.rmtree(settings.email_output_dir, ignore_errors=True)
     Path(settings.email_output_dir).mkdir(parents=True, exist_ok=True)
-    settings.local_file_storage_root = f"/tmp/gappy-files-tests{worker_suffix}"
+    settings.local_file_storage_root = f"/tmp/lemma-files-tests{worker_suffix}"
     settings.gcs_storage_bucket = None
     settings.public_bucket_name = None
     settings.storage_backend = "local"
     settings.embedding_provider = "local"
-    settings.local_object_storage_root = f"/tmp/gappy-object-storage-tests{worker_suffix}"
+    settings.local_object_storage_root = f"/tmp/lemma-object-storage-tests{worker_suffix}"
 
     # Pin a stable, session-wide AgentBox manager endpoint. The worker subprocess
     # is session-scoped and captures os.environ once at spawn, while the manager
@@ -358,7 +358,7 @@ async def worker(e2e_settings):
     await redis_client.flushdb()
     await redis_client.aclose()
 
-    log_path = f"/tmp/gappy_e2e_worker_{uuid4().hex}.log"
+    log_path = f"/tmp/lemma_e2e_worker_{uuid4().hex}.log"
     backend_root = Path(__file__).resolve().parents[3]
     with open(log_path, "w+") as log_file:
         # Forward LEMMA_OPENAI_* (and other LEMMA_*) vars from the backend

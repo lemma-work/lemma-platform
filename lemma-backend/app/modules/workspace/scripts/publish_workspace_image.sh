@@ -4,7 +4,7 @@ set -euo pipefail
 # Build and push a prebuilt workspace image for e2e usage.
 # Example:
 #   ./app/modules/workspace/scripts/publish_workspace_image.sh \
-#     asia-south1-docker.pkg.dev/gappy-global/gappy-repo/workspace-server-arm64:2026-02-18-arm64 \
+#     ghcr.io/lemma-work/workspace-server-arm64:2026-02-18-arm64 \
 #     linux/arm64/v8
 
 IMAGE_TAG="${1:-}"

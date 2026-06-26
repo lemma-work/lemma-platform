@@ -225,11 +225,11 @@ async def _consumer_group_reconcile_loop() -> None:
 async def worker_lifespan() -> AsyncGenerator[AppWorkerContext]:
     setup_logging(
         settings.environment,
-        service_name="gappy-worker",
+        service_name="lemma-worker",
         json_logs=settings.json_logs_enabled,
         log_level=settings.log_level,
     )
-    init_telemetry(service_name="gappy-worker")
+    init_telemetry(service_name="lemma-worker")
     instrument_database_engine(get_engine())
     # Pre-create Redis consumer groups BEFORE the broker starts its subscribers.
     # Several subscribers share a stream (e.g. workflow + surface both consume

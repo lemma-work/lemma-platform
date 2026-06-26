@@ -80,7 +80,7 @@ async def fireworks_worker(e2e_settings):
     await redis_client.flushdb()
     await redis_client.aclose()
 
-    log_path = f"/tmp/gappy_surface_worker_{uuid4().hex}.log"
+    log_path = f"/tmp/lemma_surface_worker_{uuid4().hex}.log"
     backend_root = Path(__file__).resolve().parents[5]
 
     def _read_log() -> str:

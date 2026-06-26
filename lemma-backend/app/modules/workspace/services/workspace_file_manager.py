@@ -25,7 +25,7 @@ class WorkspaceFileManager:
         self._local_base: Path | None = None
 
         if settings.environment == "testing":
-            root = Path(tempfile.gettempdir()) / "gappy_test_storage"
+            root = Path(tempfile.gettempdir()) / "lemma_test_storage"
             self._local_base = root / str(self.user_id)
             if self.cwd:
                 self._local_base = self._local_base / self.cwd

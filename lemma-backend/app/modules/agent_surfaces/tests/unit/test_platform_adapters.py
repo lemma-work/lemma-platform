@@ -519,7 +519,7 @@ async def test_teams_adapter_extracts_generic_content_url_attachment():
             {
                 "contentType": "reference",
                 "name": "market_share 2.png",
-                "contentUrl": "https://gappyai.sharepoint.com/sites/SuperAGIWorkshopPvtLtd/Shared Documents/test_channel/market_share 2.png",
+                "contentUrl": "https://lemma.sharepoint.com/sites/SuperAGIWorkshopPvtLtd/Shared Documents/test_channel/market_share 2.png",
             }
         ],
     }
@@ -530,13 +530,13 @@ async def test_teams_adapter_extracts_generic_content_url_attachment():
     assert "Files attached to this Teams message:" in event.message_text
     assert "market_share 2.png | reference" in event.message_text
     assert (
-        "download_url=https://gappyai.sharepoint.com/sites/SuperAGIWorkshopPvtLtd/Shared Documents/test_channel/market_share 2.png"
+        "download_url=https://lemma.sharepoint.com/sites/SuperAGIWorkshopPvtLtd/Shared Documents/test_channel/market_share 2.png"
         in event.message_text
     )
     assert event.metadata["attachments"] == [
         {
             "name": "market_share 2.png",
-            "download_url": "https://gappyai.sharepoint.com/sites/SuperAGIWorkshopPvtLtd/Shared Documents/test_channel/market_share 2.png",
+            "download_url": "https://lemma.sharepoint.com/sites/SuperAGIWorkshopPvtLtd/Shared Documents/test_channel/market_share 2.png",
             "file_type": "png",
             "content_type": "reference",
             "size": None,

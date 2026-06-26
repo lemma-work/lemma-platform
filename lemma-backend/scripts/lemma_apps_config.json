@@ -652,7 +652,7 @@
   {
     "name": "teams",
     "title": "Microsoft Teams",
-    "description": "Connect Gappy assistants to Microsoft Teams. Chat with the bot in direct messages or @mention it in channels.",
+    "description": "Connect Lemma assistants to Microsoft Teams. Chat with the bot in direct messages or @mention it in channels.",
     "auth_method": "OAUTH2",
     "auth_provider": "LEMMA",
     "operation_executor": "LEMMA",

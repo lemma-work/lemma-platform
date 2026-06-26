@@ -300,7 +300,6 @@ class Settings(BaseSettings):
         default=None, description="Microsoft OAuth Client Secret"
     )
 
-
     # WhatsApp Business API Settings
 
     # Telegram Bot Settings
@@ -372,7 +371,7 @@ class Settings(BaseSettings):
         description="Email transport backend",
     )
     email_output_dir: str = Field(
-        default="/tmp/gappy-emails",
+        default="/tmp/lemma-emails",
         description="Directory used by filesystem email transport",
     )
 
@@ -471,7 +470,7 @@ class Settings(BaseSettings):
             "http://localhost:5173",
             "http://127.0.0.1:5173",
             "tauri://localhost",
-            "http://tauri.localhost"
+            "http://tauri.localhost",
         ],
         description="Allowed CORS origins",
     )
@@ -567,12 +566,10 @@ class Settings(BaseSettings):
     )
     agentbox_api_url: Optional[str] = Field(
         description="AgentBox manager API base URL used by workspace execution",
-        default=None
+        default=None,
     )
     agentbox_api_key: Optional[str] = Field(
-        description="Bearer API key for the AgentBox manager",
-        default=None
-
+        description="Bearer API key for the AgentBox manager", default=None
     )
     workspace_callback_api_url: Optional[str] = Field(
         default=None,

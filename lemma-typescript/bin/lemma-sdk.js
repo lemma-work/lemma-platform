@@ -5,7 +5,7 @@ import { resolve } from "node:path";
 
 const SHADCN_SCHEMA_URL = "https://ui.shadcn.com/schema.json";
 const LEMMA_REGISTRY_URL =
-  "https://cdn.jsdelivr.net/gh/gappyai/lemma-typescript@main/public/r/{name}.json";
+  "https://lemma-work.github.io/lemma-platform/r/{name}.json";
 
 function printUsage() {
   console.log(`Usage:

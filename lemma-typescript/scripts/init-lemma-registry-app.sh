@@ -69,7 +69,7 @@
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-LEMMA_REGISTRY_URL="https://cdn.jsdelivr.net/gh/gappyai/lemma-typescript@main/public/r/{name}.json"
+LEMMA_REGISTRY_URL="https://lemma-work.github.io/lemma-platform/r/{name}.json"
 SHADCN_SCHEMA_URL="https://ui.shadcn.com/schema.json"
 
 TARGET_DIR="."

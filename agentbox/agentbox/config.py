@@ -17,7 +17,7 @@ class Settings(BaseSettings):
     agentbox_provider: Literal["kubernetes", "docker", "podman"] = "kubernetes"
     agentbox_namespace: str = "agentbox"
     agentbox_runtime_image: str = (
-        "asia-south1-docker.pkg.dev/gappy-global/gappy-repo/agentbox-runtime:latest"
+        "ghcr.io/lemma-work/agentbox-runtime:latest"
     )
     agentbox_sandbox_image_pull_policy: str = "IfNotPresent"
     agentbox_runtime_port: int = 8080

@@ -28,7 +28,7 @@ async def lifespan(app: FastAPI):
     # Startup
     setup_logging(
         settings.environment,
-        service_name="gappy-scheduler",
+        service_name="lemma-scheduler",
         json_logs=settings.json_logs_enabled,
         log_level=settings.log_level,
     )

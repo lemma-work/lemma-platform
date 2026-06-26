@@ -1,4 +1,4 @@
-REGISTRY ?= asia-south1-docker.pkg.dev/gappy-global/gappy-repo
+REGISTRY ?= ghcr.io/lemma-work
 TAG ?= dev
 PLATFORM ?= linux/amd64
 PLATFORMS ?= linux/amd64,linux/arm64

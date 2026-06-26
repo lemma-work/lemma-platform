@@ -197,7 +197,7 @@ def create_app(modules=OSS_MODULES) -> FastAPI:
     """
     setup_logging(
         settings.environment,
-        service_name="gappy-api",
+        service_name="lemma-api",
         json_logs=settings.json_logs_enabled,
         log_level=settings.log_level,
     )
@@ -234,7 +234,7 @@ def create_app(modules=OSS_MODULES) -> FastAPI:
 
             await self.app(scope, receive, send)
 
-    init_telemetry(service_name="gappy-api")
+    init_telemetry(service_name="lemma-api")
     instrument_database_engine(get_engine())
 
     # Auth App for SuperTokens (mounted at /st to match legacy config)

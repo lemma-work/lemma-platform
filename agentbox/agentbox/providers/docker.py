@@ -120,7 +120,7 @@ class DockerSandboxProvider:
             workspace_mount,
         ]
         if self._e2e_label_config():
-            run_args.extend(["--label", "gappy.e2e=true"])
+            run_args.extend(["--label", "lemma.e2e=true"])
         if self._network_config():
             run_args.extend(["--network", self._network_config() or ""])
         else:

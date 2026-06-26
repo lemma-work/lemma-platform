@@ -36,7 +36,7 @@ Sandbox manager only:
 
 ```bash
 AGENTBOX_PROVIDER=docker
-AGENTBOX_RUNTIME_IMAGE=asia-south1-docker.pkg.dev/gappy-global/gappy-repo/agentbox-runtime:latest
+AGENTBOX_RUNTIME_IMAGE=ghcr.io/lemma-work/agentbox-runtime:latest
 AGENTBOX_RUNTIME_PORT=8080
 AGENTBOX_STORAGE_ROOT=/tmp/agentbox-workspaces
 ```

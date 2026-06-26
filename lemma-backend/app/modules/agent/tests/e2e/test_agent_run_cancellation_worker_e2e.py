@@ -73,7 +73,7 @@ async def cancellable_worker(e2e_settings):
     worker's consumer groups and trigger the very supervisor retry-storm this
     suite guards against. The run is targeted by a unique job id instead.
     """
-    log_path = f"/tmp/gappy_cancel_worker_{uuid4().hex}.log"
+    log_path = f"/tmp/lemma_cancel_worker_{uuid4().hex}.log"
     backend_root = Path(__file__).resolve().parents[5]
     log_file = open(log_path, "w+")
     proc = subprocess.Popen(

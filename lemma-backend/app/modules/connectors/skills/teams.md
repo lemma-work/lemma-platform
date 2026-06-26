@@ -1,6 +1,6 @@
 # Microsoft Teams
 
-Microsoft Teams is a collaboration hub used by hybrid and remote teams to chat, meet, and share files. Users interact with Gappy assistants by sending direct messages or @mentioning the bot in channels.
+Microsoft Teams is a collaboration hub used by hybrid and remote teams to chat, meet, and share files. Users interact with Lemma assistants by sending direct messages or @mentioning the bot in channels.
 
 **Auth config name:** `teams`
 
