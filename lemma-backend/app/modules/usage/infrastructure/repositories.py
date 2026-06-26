@@ -56,7 +56,12 @@ class UsageRepository(UsageRepositoryPort):
         if model_name:
             stmt = stmt.where(UsageRecordModel.model_name == model_name)
         if usage_kind:
-            stmt = stmt.where(UsageRecordModel.usage_kind == usage_kind)
+            # Case-insensitive: usage_kind is stored lowercase ("llm") by every
+            # writer, but the UsageKind enum value is "LLM" — a consumer filtering
+            # by the enum value must still match. Normalize both sides.
+            stmt = stmt.where(
+                func.lower(UsageRecordModel.usage_kind) == usage_kind.lower()
+            )
         if source_type:
             stmt = stmt.where(UsageRecordModel.source_type == source_type)
         if status:

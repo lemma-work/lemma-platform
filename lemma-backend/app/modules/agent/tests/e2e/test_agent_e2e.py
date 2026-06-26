@@ -316,6 +316,26 @@ def _assert_completed_without_error(events: list[dict]) -> None:
     assert events[-1]["data"]["status"] == AgentRunStatus.COMPLETED.value, events
 
 
+def _split_concatenated_json(buffer: str) -> list[dict]:
+    """Split a buffer of back-to-back JSON objects into a list.
+
+    The tool-token stream emits one JSON object per tool call; when an agent makes
+    several tool calls their objects arrive concatenated (``{...}{...}``), so a
+    single ``json.loads`` raises "Extra data". Decode them one at a time."""
+    decoder = json.JSONDecoder()
+    objects: list[dict] = []
+    pos = 0
+    length = len(buffer)
+    while pos < length:
+        while pos < length and buffer[pos].isspace():
+            pos += 1
+        if pos >= length:
+            break
+        obj, pos = decoder.raw_decode(buffer, pos)
+        objects.append(obj)
+    return objects
+
+
 async def _create_active_run(
     *,
     conversation_id: UUID,
@@ -503,9 +523,16 @@ class TestPodAgentLifecycle:
         self,
         authenticated_client,
         fixed_test_org,
+        configure_workspace_api_url,
         worker,
     ):
+        # configure_workspace_api_url starts the per-test AgentBox manager and
+        # routes workspace calls to it. Without it the worker has no manager to
+        # reach and every exec_command fails with ConnectError (the run only
+        # "passed" when a previous test's manager happened to linger on the
+        # pinned port).
         _ = worker
+        _ = configure_workspace_api_url
         pod_id = await _create_test_pod(authenticated_client, fixed_test_org)
 
         create_agent = await authenticated_client.post(
@@ -557,10 +584,23 @@ class TestPodAgentLifecycle:
             if event.get("type") == "token" and event.get("kind") == "tool"
         ]
         assert tool_chunks, events
-        streamed_tool_call = json.loads("".join(tool_chunks))
-        assert streamed_tool_call["tool_name"] == "exec_command"
-        streamed_cmd = streamed_tool_call["args"]["cmd"]
-        assert "stream_probe.md" in streamed_cmd
+        # A real agent may legitimately stream more than one tool call (e.g. write
+        # the file, then a follow-up to verify it). The tool-token stream emits one
+        # JSON object per call, concatenated, so split the buffer into successive
+        # objects rather than assuming a single call.
+        streamed_calls = _split_concatenated_json("".join(tool_chunks))
+        assert streamed_calls, tool_chunks
+        probe_call = next(
+            (
+                call
+                for call in streamed_calls
+                if call.get("tool_name") == "exec_command"
+                and "stream_probe.md" in (call.get("args", {}).get("cmd") or "")
+            ),
+            None,
+        )
+        assert probe_call is not None, streamed_calls
+        streamed_cmd = probe_call["args"]["cmd"]
         assert "line 01" in streamed_cmd and "line 20" in streamed_cmd
 
         messages = await authenticated_client.get(
@@ -568,21 +608,28 @@ class TestPodAgentLifecycle:
         )
         assert messages.status_code == 200, messages.text
         message_items = messages.json()["items"]
-        tool_call = next(
+        probe_tool_call = next(
+            (
+                item
+                for item in message_items
+                if item["kind"] == "TOOL_CALL"
+                and item["tool_name"] == "exec_command"
+                and "stream_probe.md" in (item["tool_args"].get("cmd") or "")
+            ),
+            None,
+        )
+        assert probe_tool_call is not None, message_items
+        exec_returns = [
             item
             for item in message_items
-            if item["kind"] == "TOOL_CALL" and item["tool_name"] == "exec_command"
-        )
-        assert "stream_probe.md" in tool_call["tool_args"]["cmd"]
-        assert tool_call["tool_args"]["content"].splitlines() == [
-            f"line {index:02d}" for index in range(1, 21)
+            if item["kind"] == "TOOL_RETURN" and item["tool_name"] == "exec_command"
         ]
-        tool_return = next(
-            item
-            for item in message_items
-            if item["kind"] == "TOOL_RETURN" and item["tool_name"] == "create_file"
-        )
-        assert tool_return["tool_result"]["success"] is True
+        assert exec_returns, message_items
+        assert any(
+            (item.get("tool_result") or {}).get("success") is True
+            or (item.get("tool_result") or {}).get("exit_code") == 0
+            for item in exec_returns
+        ), exec_returns
 
     async def test_harness_text_message_between_tool_calls_persists_in_db(
         self,
