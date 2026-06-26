@@ -18,7 +18,11 @@ from fastapi.responses import Response, StreamingResponse
 
 from app.core.api.dependencies import CurrentUser, get_uow_factory
 from app.core.api.pagination import parse_uuid_page_token
-from app.core.authorization.dependencies import PodContextDep
+from app.core.authorization.current import (
+    reset_current_context,
+    set_current_context,
+)
+from app.core.authorization.dependencies import PodContextDep, resolve_pod_context
 from app.core.helpers.slug import normalize_resource_name
 from app.core.infrastructure.db.uow_factory import UnitOfWorkFactory
 from app.modules.apps.api.asset_response import app_asset_response
@@ -36,7 +40,11 @@ from app.modules.apps.api.schemas.app_schemas import (
     AppMessageResponse,
     UpdateAppRequest,
 )
-from app.modules.apps.domain.entities import AppEntity, AppUpdateEntity
+from app.modules.apps.domain.entities import (
+    AppAssetDocument,
+    AppEntity,
+    AppUpdateEntity,
+)
 
 router = APIRouter(
     prefix="/pods/{pod_id}/apps",
@@ -267,6 +275,42 @@ async def upload_app_bundle(
     )
 
 
+async def _serve_app_asset(
+    *,
+    request: Request,
+    pod_id: UUID,
+    app_name: str,
+    user_id: UUID,
+    asset_path: str | None,
+    uow_factory: UnitOfWorkFactory,
+) -> Response:
+    # Resolve + authorize + ETag in a short UoW (connection released here), then
+    # read the asset bytes from storage with no pooled connection held — a
+    # request-scoped AppServiceDep/PodContextDep would pin the connection for the
+    # whole response while reading from GCS/local storage.
+    async with uow_factory() as uow:
+        app_service = build_app_service(uow)
+        ctx = await resolve_pod_context(
+            session=uow.session, request=request, user_id=user_id, pod_id=pod_id
+        )
+        token = set_current_context(ctx)
+        try:
+            resolved = await app_service.resolve_app_asset(
+                pod_id,
+                app_name,
+                user_id,
+                asset_path=asset_path,
+                request_etag=request.headers.get("if-none-match"),
+                ctx=ctx,
+            )
+        finally:
+            reset_current_context(token)
+    if isinstance(resolved, AppAssetDocument):
+        return app_asset_response(resolved)
+    asset = await app_service.read_app_asset(resolved)
+    return app_asset_response(asset)
+
+
 @router.get(
     "/{app_name}/assets",
     status_code=status.HTTP_200_OK,
@@ -277,19 +321,17 @@ async def get_app_root_asset(
     request: Request,
     pod_id: UUID,
     app_name: str,
-    app_service: AppServiceDep,
     user: CurrentUser,
-    ctx: PodContextDep,
+    uow_factory: UnitOfWorkFactory = Depends(get_uow_factory),
 ) -> Response:
-    asset = await app_service.get_app_asset(
-        pod_id,
-        app_name,
-        user.id,
+    return await _serve_app_asset(
+        request=request,
+        pod_id=pod_id,
+        app_name=app_name,
+        user_id=user.id,
         asset_path=None,
-        request_etag=request.headers.get("if-none-match"),
-        ctx=ctx,
+        uow_factory=uow_factory,
     )
-    return app_asset_response(asset)
 
 
 @router.get(
@@ -303,19 +345,17 @@ async def get_app_asset(
     pod_id: UUID,
     app_name: str,
     asset_path: str,
-    app_service: AppServiceDep,
     user: CurrentUser,
-    ctx: PodContextDep,
+    uow_factory: UnitOfWorkFactory = Depends(get_uow_factory),
 ) -> Response:
-    asset = await app_service.get_app_asset(
-        pod_id,
-        app_name,
-        user.id,
+    return await _serve_app_asset(
+        request=request,
+        pod_id=pod_id,
+        app_name=app_name,
+        user_id=user.id,
         asset_path=asset_path,
-        request_etag=request.headers.get("if-none-match"),
-        ctx=ctx,
+        uow_factory=uow_factory,
     )
-    return app_asset_response(asset)
 
 
 @router.get(

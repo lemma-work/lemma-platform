@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import mimetypes
+from dataclasses import dataclass
 from io import BytesIO
 from pathlib import PurePosixPath
 from uuid import UUID
@@ -47,6 +48,21 @@ logger = structlog.get_logger()
 mimetypes.add_type("application/javascript", ".js")
 mimetypes.add_type("application/wasm", ".wasm")
 mimetypes.add_type("image/svg+xml", ".svg")
+
+
+@dataclass(frozen=True, slots=True)
+class _AssetReadInputs:
+    """Storage-read inputs resolved from the DB, carried out of the short UoW.
+
+    Lets a controller resolve+authorize+ETag in a short UoW (connection released)
+    and then read the asset bytes from storage with NO pooled connection held.
+    """
+
+    app_id: UUID
+    pod_id: UUID
+    dist_root_path: str
+    normalized_asset_path: str
+    quoted_etag: str
 
 
 class AppService:
@@ -126,14 +142,16 @@ class AppService:
             raise AppNotFoundError(f"Current release not found for app '{raise_not_found_name}'")
         return release
 
-    async def _build_asset_document(
+    async def _resolve_asset_document(
         self,
         app: AppEntity,
         *,
         raise_not_found_name: str,
         asset_path: str | None,
         request_etag: str | None = None,
-    ) -> AppAssetDocument:
+    ) -> _AssetReadInputs | AppAssetDocument:
+        """DB phase: resolve release + ETag. Returns a not-modified document on a
+        304 (no storage needed) or the inputs for the storage read otherwise."""
         release = await self._get_current_release(app, raise_not_found_name=raise_not_found_name)
         normalized_asset_path = self._normalize_requested_asset_path(asset_path)
         entrypoint_request = normalized_asset_path in {"", "index.html"}
@@ -153,12 +171,24 @@ class AppService:
                 is_entrypoint=entrypoint_request,
             )
 
-        storage = self.file_manager_factory(app.id)
+        return _AssetReadInputs(
+            app_id=app.id,
+            pod_id=app.pod_id,
+            dist_root_path=release.dist_root_path,
+            normalized_asset_path=normalized_asset_path,
+            quoted_etag=quoted_etag,
+        )
+
+    async def read_app_asset(self, inputs: _AssetReadInputs) -> AppAssetDocument:
+        """Storage phase: read the asset bytes. Holds NO DB connection — safe to
+        call after the resolving UoW has closed."""
+        storage = self.file_manager_factory(inputs.app_id)
+        normalized_asset_path = inputs.normalized_asset_path
         is_entrypoint = normalized_asset_path in {"", "index.html"}
         requested_storage_path = (
-            f"{release.dist_root_path}index.html"
+            f"{inputs.dist_root_path}index.html"
             if not normalized_asset_path
-            else f"{release.dist_root_path}{normalized_asset_path}"
+            else f"{inputs.dist_root_path}{normalized_asset_path}"
         )
         try:
             content = await storage.read_file(requested_storage_path)
@@ -168,20 +198,41 @@ class AppService:
             has_extension = "." in PurePosixPath(normalized_asset_path).name if normalized_asset_path else False
             if has_extension:
                 raise AppNotFoundError(f"App asset '{normalized_asset_path}' not found")
-            index_path = f"{release.dist_root_path}index.html"
+            index_path = f"{inputs.dist_root_path}index.html"
             try:
                 content = await storage.read_file(index_path)
             except FileNotFoundError as exc:
                 raise AppNotFoundError("App index.html not found") from exc
             is_entrypoint = True
         if is_entrypoint:
-            content = inject_runtime_config(content, app.pod_id)
+            content = inject_runtime_config(content, inputs.pod_id)
         return AppAssetDocument(
             content=content,
             media_type=self._guess_media_type(requested_storage_path if not is_entrypoint else "index.html"),
-            etag=quoted_etag,
+            etag=inputs.quoted_etag,
             is_entrypoint=is_entrypoint,
         )
+
+    async def _build_asset_document(
+        self,
+        app: AppEntity,
+        *,
+        raise_not_found_name: str,
+        asset_path: str | None,
+        request_etag: str | None = None,
+    ) -> AppAssetDocument:
+        # Back-compat single-call path (holds the connection across the storage
+        # read). Streaming/serving controllers should instead resolve in a short
+        # UoW then call read_app_asset outside it.
+        resolved = await self._resolve_asset_document(
+            app,
+            raise_not_found_name=raise_not_found_name,
+            asset_path=asset_path,
+            request_etag=request_etag,
+        )
+        if isinstance(resolved, AppAssetDocument):
+            return resolved
+        return await self.read_app_asset(resolved)
 
     async def _delete_release_files(
         self,
@@ -531,6 +582,48 @@ class AppService:
         return await self._build_asset_document(
             app,
             raise_not_found_name=name,
+            asset_path=asset_path,
+            request_etag=request_etag,
+        )
+
+    async def resolve_app_asset(
+        self,
+        pod_id: UUID,
+        name: str,
+        user_id: UUID,
+        *,
+        asset_path: str | None,
+        request_etag: str | None = None,
+        ctx: Context | None = None,
+    ) -> _AssetReadInputs | AppAssetDocument:
+        """DB+authz phase for serving an authed app asset. Call inside a short UoW;
+        then call read_app_asset (storage) outside it. Returns a not-modified
+        document directly on a 304."""
+        app = await self.get_app_by_name(
+            pod_id, name, user_id, raise_not_found=True, ctx=ctx
+        )
+        assert app is not None
+        return await self._resolve_asset_document(
+            app,
+            raise_not_found_name=name,
+            asset_path=asset_path,
+            request_etag=request_etag,
+        )
+
+    async def resolve_app_asset_by_public_slug(
+        self,
+        public_slug: str,
+        *,
+        asset_path: str | None,
+        request_etag: str | None = None,
+    ) -> _AssetReadInputs | AppAssetDocument:
+        """DB phase for serving a public (unauthenticated) app asset by slug."""
+        app = await self.repository.get_by_public_slug(public_slug)
+        if not app:
+            raise AppNotFoundError(f"App with public slug '{public_slug}' not found")
+        return await self._resolve_asset_document(
+            app,
+            raise_not_found_name=public_slug,
             asset_path=asset_path,
             request_etag=request_etag,
         )
