@@ -14,9 +14,18 @@ This validates:
     is disposed.
 
 The worker here is FUNCTION-scoped and owned by the test so it can be SIGTERM'd
-without affecting the shared session worker. Run in isolation, e.g.:
+without affecting the shared session worker.
 
-    uv run pytest app/modules/agent/tests/e2e/test_agent_run_cancellation_worker_e2e.py
+Determinism in a shared session: the shared session ``worker`` also runs
+``app.events:streaq_worker`` and would otherwise compete for the agent-run job
+off the shared ``default`` streaq queue — whichever worker won the race would
+run (and finalize) the job, so SIGTERMing this test's worker would be a no-op
+and the run could be left RUNNING. To make this test the SOLE consumer of its
+run, the ``cancellable_worker`` is given a DEDICATED streaq queue
+(``WORKER_QUEUE_NAME``) and the run is dispatched straight onto that queue,
+bypassing the ``agent-events`` event path so the shared worker never sees it.
+That also keeps the SIGTERM'd worker's leftover pending entries confined to its
+throwaway queue instead of starving the shared ``default`` queue.
 """
 
 from __future__ import annotations
@@ -34,7 +43,6 @@ from streaq.task import TaskStatus
 from app.core.infrastructure.db.session import async_session_maker
 from app.core.infrastructure.db.uow_factory import create_uow_from_session_maker
 from app.core.infrastructure.jobs.streaq_job_queue import create_streaq_client
-from app.modules.agent.domain.events import AgentRunStartedEvent
 from app.modules.agent.domain.value_objects import (
     AgentRuntimeConfig,
     MessageDraft,
@@ -67,12 +75,21 @@ async def cancellable_worker(e2e_settings):
     """A real streaq worker owned by the test, so it can be SIGTERM'd mid-run.
 
     Mirrors the shared session ``worker`` fixture but function-scoped, and yields
-    ``(proc, log_path)`` so the test drives the process lifecycle itself.
+    ``(proc, log_path, queue_name)`` so the test drives the process lifecycle and
+    dispatches its run onto the worker's dedicated queue.
+
+    Runs on a DEDICATED streaq queue (``WORKER_QUEUE_NAME``) rather than the
+    shared ``default`` queue, so the session worker never competes for — or
+    finalizes — the run this test SIGTERMs. The run is dispatched straight onto
+    this queue (see ``_dispatch_agent_run``), never via the shared ``agent-events``
+    event path.
 
     Deliberately does NOT flush Redis: flushing would delete the shared session
     worker's consumer groups and trigger the very supervisor retry-storm this
-    suite guards against. The run is targeted by a unique job id instead.
+    suite guards against. Any pending entries the SIGTERM leaves behind stay
+    confined to this throwaway queue.
     """
+    queue_name = f"cancel-test-{uuid4().hex[:8]}"
     log_path = f"/tmp/lemma_cancel_worker_{uuid4().hex}.log"
     backend_root = Path(__file__).resolve().parents[5]
     log_file = open(log_path, "w+")
@@ -83,6 +100,7 @@ async def cancellable_worker(e2e_settings):
             **os.environ,
             **system_lemma_env_overlay(),
             "PYTHONPATH": ".",
+            "WORKER_QUEUE_NAME": queue_name,
             "DATABASE_URL": e2e_settings.database_url,
             "DATASTORE_DATABASE_URL": e2e_settings.datastore_database_url,
             "REDIS_URL": e2e_settings.redis_url,
@@ -127,7 +145,7 @@ async def cancellable_worker(e2e_settings):
             proc.terminate()
             pytest.fail(f"Timed out waiting for worker startup.\n{_logs()}")
 
-        yield proc, log_path
+        yield proc, log_path, queue_name
     finally:
         if proc.poll() is None:
             proc.terminate()
@@ -156,10 +174,14 @@ async def _start_real_agent_run(
     *,
     conversation_id: UUID,
     agent_id: UUID,
-    user_id: UUID,
-    pod_id: UUID,
     content: str,
 ) -> UUID:
+    """Create the run + user message, WITHOUT emitting AgentRunStartedEvent.
+
+    Skipping the event keeps the run off the shared ``agent-events`` path so the
+    session worker never enqueues (or runs) it; the test dispatches the run onto
+    the cancellable_worker's dedicated queue itself via ``_dispatch_agent_run``.
+    """
     async with create_uow_from_session_maker(async_session_maker) as uow:
         repo = ConversationRepository(uow)
         run = await repo.create_agent_run(
@@ -173,23 +195,43 @@ async def _start_real_agent_run(
             agent_run_id=run.id,
             draft=MessageDraft.of_text(content, role=MessageRole.USER),
         )
-        repo.collect_events(
-            [
-                AgentRunStartedEvent(
-                    conversation_id=conversation_id,
-                    agent_run_id=run.id,
-                    user_id=user_id,
-                    pod_id=pod_id,
-                    agent_name=None,
-                )
-            ]
-        )
         await uow.commit()
         return run.id
 
 
-async def _wait_for_job_status(job_id: str, status: TaskStatus, attempts: int = 200) -> bool:
-    async with create_streaq_client() as client:
+async def _dispatch_agent_run(
+    *,
+    run_id: UUID,
+    conversation_id: UUID,
+    user_id: UUID,
+    pod_id: UUID,
+    queue_name: str,
+) -> None:
+    """Enqueue ``process_agent_run`` directly onto the worker's dedicated queue.
+
+    Mirrors the payload that ``enqueue_agent_run`` builds from an
+    AgentRunStartedEvent (the same ``agent-run:{run_id}`` job id), but targets the
+    cancellable_worker's private queue so it is the sole consumer.
+    """
+    async with create_streaq_client(queue_name=queue_name) as client:
+        task = client.enqueue_unsafe(
+            "process_agent_run",
+            context={
+                "agent_run_id": str(run_id),
+                "conversation_id": str(conversation_id),
+                "user_id": str(user_id),
+                "pod_id": str(pod_id),
+                "agent_name": None,
+            },
+        )
+        task.id = f"agent-run:{run_id}"
+        await task
+
+
+async def _wait_for_job_status(
+    job_id: str, status: TaskStatus, *, queue_name: str, attempts: int = 200
+) -> bool:
+    async with create_streaq_client(queue_name=queue_name) as client:
         for _ in range(attempts):
             if await client.status_by_id(job_id) == status:
                 return True
@@ -206,7 +248,7 @@ async def test_sigterm_midrun_shuts_down_cleanly_and_finalizes_run(
     cancellable_worker,
 ):
     """SIGTERM while an agent run executes: worker exits clean, run goes terminal."""
-    proc, log_path = cancellable_worker
+    proc, log_path, queue_name = cancellable_worker
     pod_id = await _create_pod(authenticated_client, fixed_test_org)
 
     create_agent = await authenticated_client.post(
@@ -233,15 +275,24 @@ async def test_sigterm_midrun_shuts_down_cleanly_and_finalizes_run(
     run_id = await _start_real_agent_run(
         conversation_id=UUID(conversation_id),
         agent_id=UUID(agent_id),
+        content="Write a 120 line numbered essay on the history of computing.",
+    )
+
+    # Dispatch straight onto this worker's dedicated queue so it — and only it —
+    # runs the job. The shared session worker consumes the `default` queue and
+    # never sees this run.
+    await _dispatch_agent_run(
+        run_id=run_id,
+        conversation_id=UUID(conversation_id),
         user_id=UUID(fixed_test_user["id"]),
         pod_id=UUID(pod_id),
-        content="Write a 120 line numbered essay on the history of computing.",
+        queue_name=queue_name,
     )
 
     # Wait until the worker is actually executing the run, then interrupt it
     # mid-flight (the harness is in an LLM call, with the anyio scope active).
     assert await _wait_for_job_status(
-        f"agent-run:{run_id}", TaskStatus.RUNNING
+        f"agent-run:{run_id}", TaskStatus.RUNNING, queue_name=queue_name
     ), "run never reached RUNNING on the worker"
     await asyncio.sleep(0.5)
 

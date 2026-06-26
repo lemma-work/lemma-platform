@@ -272,7 +272,7 @@ async def worker_lifespan() -> AsyncGenerator[AppWorkerContext]:
 def create_streaq_worker(*, handle_signals: bool) -> Worker[AppWorkerContext]:
     return Worker(
         redis_url=settings.redis_url,
-        queue_name="default",
+        queue_name=settings.worker_queue_name,
         concurrency=WORKER_CONCURRENCY,
         handle_signals=handle_signals,
         lifespan=worker_lifespan,

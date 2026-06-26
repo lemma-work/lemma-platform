@@ -149,6 +149,17 @@ class Settings(BaseSettings):
             "Kubernetes terminationGracePeriodSeconds, default 30s)."
         ),
     )
+    worker_queue_name: str = Field(
+        default="default",
+        description=(
+            "streaq queue (Redis key namespace) this worker process consumes "
+            "from. Production uses the shared 'default' queue, which is also the "
+            "default enqueue target. Overridable so an isolated worker can own a "
+            "dedicated queue and never compete with the shared worker for jobs — "
+            "used by the e2e cancellation test, which SIGTERMs its own worker "
+            "mid-run and must be the sole consumer of the run it dispatches."
+        ),
+    )
     postgres_max_connections: int = Field(
         default=100,
         description=(
