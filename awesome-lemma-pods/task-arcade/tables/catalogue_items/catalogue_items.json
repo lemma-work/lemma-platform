@@ -1,0 +1,11 @@
+{
+  "name": "catalogue_items",
+  "primary_key_column": "id",
+  "enable_rls": false,
+  "columns": [
+    { "name": "kind",  "type": "TEXT",    "required": true, "max_length": 60, "unique": true },
+    { "name": "label", "type": "TEXT",    "required": true, "max_length": 80 },
+    { "name": "tier",  "type": "INTEGER", "required": true }
+  ],
+  "config": {}
+}

@@ -1,0 +1,13 @@
+{
+  "name": "team_members",
+  "primary_key_column": "id",
+  "enable_rls": false,
+  "columns": [
+    { "name": "name",  "type": "TEXT", "required": true,  "max_length": 80 },
+    { "name": "email", "type": "TEXT", "required": true,  "max_length": 200, "unique": true },
+    { "name": "role",  "type": "ENUM", "required": true,  "default": "viewer",
+      "options": ["manager", "member", "viewer"] },
+    { "name": "color", "type": "TEXT", "required": false, "max_length": 20 }
+  ],
+  "config": {}
+}

@@ -1,0 +1,15 @@
+# dependencies
+desks/arcade-desk/source/node_modules/
+
+# build output
+desks/arcade-desk/source/dist/
+
+# editor / OS
+.DS_Store
+*.local
+.vscode/
+.idea/
+
+# env
+.env
+.env.*

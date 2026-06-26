@@ -1,0 +1,23 @@
+{
+  "name": "daily_standup",
+  "description": "Quartermaster posts the morning standup — who has what, what's due today. Runs weekdays at 9am.",
+  "start": { "type": "MANUAL" },
+  "nodes": [
+    {
+      "id": "post_standup",
+      "type": "AGENT",
+      "label": "Quartermaster: morning standup",
+      "config": {
+        "agent_name": "quartermaster",
+        "input_mapping": {
+          "job":     { "type": "literal", "value": "daily_standup" },
+          "message": { "type": "literal", "value": "Run job: daily_standup. Query all tasks with status='assigned'. Compose the morning board snapshot showing who has what, total points on deck, and anything due today highlighted. Log to agent_actions (kind=standup). Return the standup text." }
+        }
+      }
+    },
+    { "id": "end", "type": "END", "label": "Done" }
+  ],
+  "edges": [
+    { "id": "e1", "source": "post_standup", "target": "end" }
+  ]
+}

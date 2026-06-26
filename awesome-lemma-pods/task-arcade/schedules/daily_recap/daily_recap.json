@@ -1,0 +1,7 @@
+{
+  "name": "daily_recap",
+  "schedule_type": "TIME",
+  "config": { "cron": "0 17 * * 1-4" },
+  "workflow_name": "daily_recap",
+  "is_active": true
+}

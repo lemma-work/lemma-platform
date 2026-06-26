@@ -1,0 +1,11 @@
+{
+  "name": "milestone_check",
+  "schedule_type": "DATASTORE",
+  "config": {
+    "table_name": "tasks",
+    "operations": ["INSERT", "UPDATE"]
+  },
+  "agent_name": "quartermaster",
+  "filter_instruction": "Only fire when the task record's 'status' field equals 'established'. Ignore events where status is 'assigned', 'cleared', 'under_review', or 'demolished'.",
+  "is_active": true
+}
