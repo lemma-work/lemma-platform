@@ -20,6 +20,7 @@ the harness drives the model through the streaming API.
 
 from __future__ import annotations
 
+import asyncio
 import json
 from collections.abc import AsyncIterator, Sequence
 from typing import Any
@@ -41,6 +42,19 @@ from app.core.log.log import get_logger
 logger = get_logger(__name__)
 
 MOCK_SCRIPT_METADATA_KEY = "mock_llm_script"
+
+
+async def _emulate_model_latency() -> None:
+    """Sleep per model turn to emulate real LLM I/O (load-test honesty).
+
+    The instant mock makes an agent run pure CPU, so concurrent runs saturate one
+    worker core and every short DB UoW gets stretched (looking like a connection
+    leak). A non-zero ``e2e_mock_llm_latency_ms`` makes runs I/O-bound like a real
+    model, freeing the core between turns. Default 0 keeps unit/e2e tests instant.
+    """
+    latency_ms = settings.e2e_mock_llm_latency_ms
+    if latency_ms > 0:
+        await asyncio.sleep(latency_ms / 1000.0)
 
 
 def is_mock_llm_enabled() -> bool:
@@ -124,6 +138,7 @@ def build_mock_model(conversation: Any) -> FunctionModel:
     script = _extract_script(conversation)
 
     async def _fn(messages: list[ModelMessage], info: AgentInfo) -> ModelResponse:
+        await _emulate_model_latency()
         text, tool_calls = _resolve_turn(messages, info, script)
         parts: list[Any] = []
         if text:
@@ -143,6 +158,7 @@ def build_mock_model(conversation: Any) -> FunctionModel:
     async def _stream_fn(
         messages: list[ModelMessage], info: AgentInfo
     ) -> AsyncIterator[str | dict[int, DeltaToolCall]]:
+        await _emulate_model_latency()
         text, tool_calls = _resolve_turn(messages, info, script)
         if text:
             yield text

@@ -10,7 +10,11 @@ from fastapi.responses import StreamingResponse
 
 from app.core.api.dependencies import CurrentUser, get_uow_factory
 from app.core.api.pagination import parse_uuid_page_token
-from app.core.authorization.dependencies import PodContextDep
+from app.core.authorization.current import (
+    reset_current_context,
+    set_current_context,
+)
+from app.core.authorization.dependencies import PodContextDep, resolve_pod_context
 from app.core.domain.errors import BadRequestError
 from app.core.infrastructure.db.uow_factory import UnitOfWorkFactory
 from app.modules.agent.api.controllers.shared import (
@@ -358,10 +362,14 @@ async def send_message(
     data: SendMessageRequest,
     user: CurrentUser,
     channel_service: ChannelServiceDep,
-    ctx: PodContextDep,
+    request: Request,
     uow_factory: UnitOfWorkFactory = Depends(get_uow_factory),
 ) -> StreamingResponse:
-    _ = ctx
+    # Build the authorization context inside the SHORT uow below rather than via a
+    # request-scoped PodContextDep: a StreamingResponse keeps request-scoped
+    # dependencies (and their pooled connection) alive for the whole SSE stream,
+    # which pins one DB connection per in-flight stream. Here the connection is
+    # released the moment add_user_message_and_start_run commits, before streaming.
     async def close_subscription(
         exc_type=None,
         exc=None,
@@ -376,14 +384,21 @@ async def send_message(
     iterator = await subscription.__aenter__()
     try:
         async with uow_factory() as uow:
-            service = _build_conversation_service(uow)
-            result = await service.add_user_message_and_start_run(
-                conversation_id=conversation_id,
-                user_id=user.id,
-                content=data.content,
-                pod_id=pod_id,
-                message_metadata=data.metadata,
+            ctx = await resolve_pod_context(
+                session=uow.session, request=request, user_id=user.id, pod_id=pod_id
             )
+            token = set_current_context(ctx)
+            try:
+                service = _build_conversation_service(uow)
+                result = await service.add_user_message_and_start_run(
+                    conversation_id=conversation_id,
+                    user_id=user.id,
+                    content=data.content,
+                    pod_id=pod_id,
+                    message_metadata=data.metadata,
+                )
+            finally:
+                reset_current_context(token)
     except (AgentNotFoundError, ConversationNotFoundError) as exc:
         await close_subscription(type(exc), exc, exc.__traceback__)
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND) from exc
@@ -427,19 +442,28 @@ async def stream_conversation(
     conversation_id: UUID,
     user: CurrentUser,
     channel_service: ChannelServiceDep,
-    ctx: PodContextDep,
+    request: Request,
     uow_factory: UnitOfWorkFactory = Depends(get_uow_factory),
     agent_run_id: UUID | None = Query(default=None),
 ) -> StreamingResponse:
-    _ = ctx
+    # Build the auth context inside short uows (released before/within the stream)
+    # rather than via a request-scoped PodContextDep, which would pin a pooled
+    # connection for the whole StreamingResponse. See send_message for rationale.
     try:
         async with uow_factory() as uow:
-            service = _build_conversation_service(uow)
-            await service.get_conversation(
-                conversation_id=conversation_id,
-                user_id=user.id,
-                pod_id=pod_id,
+            ctx = await resolve_pod_context(
+                session=uow.session, request=request, user_id=user.id, pod_id=pod_id
             )
+            token = set_current_context(ctx)
+            try:
+                service = _build_conversation_service(uow)
+                await service.get_conversation(
+                    conversation_id=conversation_id,
+                    user_id=user.id,
+                    pod_id=pod_id,
+                )
+            finally:
+                reset_current_context(token)
     except (AgentNotFoundError, ConversationNotFoundError) as exc:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND) from exc
 
@@ -448,12 +472,19 @@ async def stream_conversation(
             [conversation_channel(conversation_id)]
         ) as iterator:
             async with uow_factory() as uow:
-                service = _build_conversation_service(uow)
-                active_run = await service.get_active_agent_run(
-                    conversation_id=conversation_id,
-                    user_id=user.id,
-                    pod_id=pod_id,
+                ctx = await resolve_pod_context(
+                    session=uow.session, request=request, user_id=user.id, pod_id=pod_id
                 )
+                token = set_current_context(ctx)
+                try:
+                    service = _build_conversation_service(uow)
+                    active_run = await service.get_active_agent_run(
+                        conversation_id=conversation_id,
+                        user_id=user.id,
+                        pod_id=pod_id,
+                    )
+                finally:
+                    reset_current_context(token)
             if active_run is None:
                 return
 

@@ -107,6 +107,37 @@ class Settings(BaseSettings):
             "task that opens a DB session consumes one pooled connection."
         ),
     )
+    agent_run_stop_poll_interval_seconds: float = Field(
+        default=1.0,
+        description=(
+            "Minimum interval between DB polls of an agent run's stop flag. The "
+            "harness checks should_stop at every streaming checkpoint (per token "
+            "/ part / tool call); without throttling that is one SELECT per token "
+            "per run, flooding the pool. The checker caches the result and "
+            "re-queries at most this often (0 disables throttling). A stop "
+            "request is still honored within this interval."
+        ),
+    )
+    agent_context_brief_cache_ttl_seconds: int = Field(
+        default=60,
+        description=(
+            "TTL for the in-process cache of an agent's rendered runtime-context "
+            "brief, keyed by (agent, conversation, pod, user). The brief is "
+            "injected into the system prompt and rebuilt on every message; it "
+            "only changes when pod inventory/grants change, so caching it keeps "
+            "the hot path off the DB. Tradeoff: a just-changed grant/table can "
+            "lag by up to this long. 0 disables caching."
+        ),
+    )
+    function_run_poll_interval_seconds: float = Field(
+        default=5.0,
+        description=(
+            "Interval an agent's JOB-function tool waits between DB polls of the "
+            "function run's status. JOB functions are long-running, so 1s polling "
+            "is needlessly aggressive; 5s cuts the poll query rate 5x. The overall "
+            "wait budget is unchanged."
+        ),
+    )
     worker_shutdown_grace_period_seconds: int = Field(
         default=10,
         description=(
@@ -503,6 +534,16 @@ class Settings(BaseSettings):
             "pydantic-ai FunctionModel (scripted via conversation metadata) so "
             "e2e runs need no real model or API key. Production/dev leave this at "
             "'real'. The e2e fixtures default it to 'mock' (override with E2E_REAL=1)."
+        ),
+    )
+    e2e_mock_llm_latency_ms: int = Field(
+        default=0,
+        description=(
+            "TEST HOOK ONLY. Per-turn delay (ms) the mock LLM sleeps before "
+            "streaming, to emulate real model I/O latency. Default 0 (instant). "
+            "Set this for load tests so the worker is I/O-bound like production "
+            "instead of CPU-bound on an instant mock — otherwise concurrent runs "
+            "saturate one core and distort connection/latency measurements."
         ),
     )
     e2e_sandbox_mode: Literal["docker", "fake"] = Field(

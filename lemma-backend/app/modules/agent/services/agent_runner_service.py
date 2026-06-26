@@ -3,8 +3,9 @@
 from __future__ import annotations
 
 import asyncio
+import time
 from datetime import datetime
-from typing import Awaitable, Protocol
+from typing import Awaitable, Callable, Protocol
 from uuid import UUID
 
 import anyio
@@ -302,7 +303,7 @@ class AgentRunnerService:
                 model_settings=harness_model_settings,
                 usage_limits=self.fixed_usage_limits,
                 output_type=self._resolve_output_type(agent, conversation),
-                should_stop=lambda: self._should_stop_run(agent_run_id),
+                should_stop=self._make_stop_checker(agent_run_id),
                 extra={
                     "runtime_profile": runtime_profile_snapshot,
                     "runtime_credentials": runtime_credentials,
@@ -513,6 +514,37 @@ class AgentRunnerService:
             and agent_run.status
             in {AgentRunStatus.STOP_REQUESTED, AgentRunStatus.STOPPED}
         )
+
+    def _make_stop_checker(self, agent_run_id: UUID) -> Callable[[], Awaitable[bool]]:
+        """Build a throttled, sticky stop checker for the harness.
+
+        The harness polls ``should_stop`` at every streaming checkpoint (per
+        token delta, part, and tool call). Querying the DB on every checkpoint
+        issues one ``SELECT`` per token across every concurrent run, churning the
+        connection pool — the dominant per-token DB load under streaming. Cache
+        the answer and re-query at most once per
+        ``agent_run_stop_poll_interval_seconds``; once a stop is observed it
+        sticks (no further queries). A stop request is still honored within the
+        poll interval. Interval ``0`` disables throttling (every call queries).
+        """
+        interval = settings.agent_run_stop_poll_interval_seconds
+        stopped = False
+        last_checked: float | None = None
+
+        async def _check() -> bool:
+            nonlocal stopped, last_checked
+            if stopped:
+                return True
+            now = time.monotonic()
+            if last_checked is not None and (now - last_checked) < interval:
+                return False
+            last_checked = now
+            if await self._should_stop_run(agent_run_id):
+                stopped = True
+                return True
+            return False
+
+        return _check
 
     async def _load_run_context(
         self,

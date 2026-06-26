@@ -360,12 +360,14 @@ class AgentCallableToolFactory:
             FunctionRunStatus.CANCELLED,
         }
         run: FunctionRunEntity | None = None
-        for _ in range(_SUBAGENT_TOOL_TIMEOUT_SECONDS):
+        interval = settings.function_run_poll_interval_seconds
+        attempts = max(1, int(_SUBAGENT_TOOL_TIMEOUT_SECONDS / interval))
+        for _ in range(attempts):
             async with self.uow_factory() as uow:
                 run = await FunctionRunRepository(uow).get_run(run_id)
             if run is not None and run.status in terminal:
                 return run
-            await asyncio.sleep(1.0)
+            await asyncio.sleep(interval)
         if run is None:
             raise RuntimeError(f"Function run {run_id} not found")
         return run

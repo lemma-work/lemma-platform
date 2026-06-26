@@ -122,6 +122,11 @@ async def test_send_message_starts_run_before_stream_body_is_consumed(monkeypatc
     monkeypatch.setattr(
         conversation_controller, "_build_conversation_service", lambda uow: service
     )
+    monkeypatch.setattr(
+        conversation_controller,
+        "resolve_pod_context",
+        AsyncMock(return_value=allow_all_context()),
+    )
 
     response = await send_message(
         pod_id=uuid4(),
@@ -129,7 +134,7 @@ async def test_send_message_starts_run_before_stream_body_is_consumed(monkeypatc
         data=SimpleNamespace(content="say ok", metadata=None),
         user=SimpleNamespace(id=uuid4()),
         channel_service=channel_service,
-        ctx=allow_all_context(),
+        request=SimpleNamespace(),
         uow_factory=uow_factory,
     )
 
@@ -150,6 +155,11 @@ async def test_send_message_encodes_stream_failures_as_sse_errors(monkeypatch) -
     monkeypatch.setattr(
         conversation_controller, "_build_conversation_service", lambda uow: service
     )
+    monkeypatch.setattr(
+        conversation_controller,
+        "resolve_pod_context",
+        AsyncMock(return_value=allow_all_context()),
+    )
 
     response = await send_message(
         pod_id=uuid4(),
@@ -157,7 +167,7 @@ async def test_send_message_encodes_stream_failures_as_sse_errors(monkeypatch) -
         data=SimpleNamespace(content="say ok", metadata=None),
         user=SimpleNamespace(id=uuid4()),
         channel_service=channel_service,
-        ctx=allow_all_context(),
+        request=SimpleNamespace(),
         uow_factory=uow_factory,
     )
     chunks = [chunk async for chunk in response.body_iterator]
@@ -181,6 +191,11 @@ async def test_send_message_raises_usage_limit_before_stream_starts(monkeypatch)
     monkeypatch.setattr(
         conversation_controller, "_build_conversation_service", lambda uow: service
     )
+    monkeypatch.setattr(
+        conversation_controller,
+        "resolve_pod_context",
+        AsyncMock(return_value=allow_all_context()),
+    )
 
     with pytest.raises(UsageLimitExceededError) as exc_info:
         await send_message(
@@ -189,7 +204,7 @@ async def test_send_message_raises_usage_limit_before_stream_starts(monkeypatch)
             data=SimpleNamespace(content="say ok", metadata=None),
             user=SimpleNamespace(id=uuid4()),
             channel_service=channel_service,
-            ctx=allow_all_context(),
+            request=SimpleNamespace(),
             uow_factory=uow_factory,
         )
 

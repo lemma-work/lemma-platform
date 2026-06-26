@@ -918,9 +918,8 @@ class ConversationService:
             pod_id=pod_id,
             agent_name=agent_name,
         )
-        conversation = await self.conversation_repository.get_conversation(
-            conversation.id
-        )
+        # _get_or_create_conversation_for_message already returned a fully loaded,
+        # access-checked conversation — no need to re-fetch it.
         self._validate_conversation_access(
             conversation,
             user_id=user_id,
@@ -935,9 +934,11 @@ class ConversationService:
                 agent_id=conversation.agent_id,
                 action=Permissions.AGENT_EXECUTE,
             )
-        await self.conversation_repository.lock_conversation(conversation.id)
-
+        # Resolve the agent (a read) before taking the conversation lock, so the
+        # FOR UPDATE span covers only the active-run check + run/message writes.
         agent = await self._resolve_agent(conversation=conversation, user_id=user_id)
+
+        await self.conversation_repository.lock_conversation(conversation.id)
         active_run = await self.conversation_repository.get_active_agent_run_for_update(
             conversation.id
         )

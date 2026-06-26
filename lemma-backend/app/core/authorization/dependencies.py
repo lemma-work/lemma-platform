@@ -7,6 +7,7 @@ from typing import Annotated
 from uuid import UUID
 
 from fastapi import Depends, HTTPException, Request, status
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.api.dependencies import CurrentUser, UoWDep
 from app.core.authorization.context import Context, ResourceRef, ResourceType
@@ -97,6 +98,40 @@ async def get_org_context(
     return ctx
 
 
+async def resolve_pod_context(
+    *,
+    session: AsyncSession,
+    request: Request,
+    user_id: UUID,
+    pod_id: UUID,
+) -> Context:
+    """Build the pod authorization context on a caller-provided session.
+
+    Extracted from ``get_pod_context`` so streaming endpoints can build the
+    context inside a SHORT unit of work (released before the StreamingResponse
+    body) instead of holding the request-scoped ``UoWDep`` connection for the
+    entire stream. The returned Context's authorizer is bound to ``session``, so
+    it must only be used while that session is open.
+    """
+    claims = getattr(request.state, "delegation_claims", None)
+    if claims is not None:
+        if claims.pod_id != pod_id:
+            raise HTTPException(status_code=403, detail="Delegated pod mismatch")
+        return await AuthorizationDataService(
+            session
+        ).build_context_from_delegation_claims(
+            user_id=user_id,
+            claims=claims,
+            request_id=request.headers.get("x-request-id"),
+            is_default_pod_agent=_is_default_pod_agent_claims(claims),
+        )
+    return await AuthorizationDataService(session).build_user_context(
+        user_id=user_id,
+        pod_id=pod_id,
+        request_id=request.headers.get("x-request-id"),
+    )
+
+
 async def get_pod_context(
     request: Request,
     user: CurrentUser,
@@ -117,23 +152,8 @@ async def get_pod_context(
     ):
         set_current_context(existing)
         return existing
-    claims = getattr(request.state, "delegation_claims", None)
-    if claims is not None:
-        if claims.pod_id != pod_id:
-            raise HTTPException(status_code=403, detail="Delegated pod mismatch")
-        ctx = await AuthorizationDataService(uow.session).build_context_from_delegation_claims(
-            user_id=user.id,
-            claims=claims,
-            request_id=request.headers.get("x-request-id"),
-            is_default_pod_agent=_is_default_pod_agent_claims(claims),
-        )
-        request.state.ctx = ctx
-        set_current_context(ctx)
-        return ctx
-    ctx = await AuthorizationDataService(uow.session).build_user_context(
-        user_id=user.id,
-        pod_id=pod_id,
-        request_id=request.headers.get("x-request-id"),
+    ctx = await resolve_pod_context(
+        session=uow.session, request=request, user_id=user.id, pod_id=pod_id
     )
     request.state.ctx = ctx
     set_current_context(ctx)
