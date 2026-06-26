@@ -21,6 +21,7 @@ from fastapi.responses import StreamingResponse
 
 from app.core.api.pagination import parse_uuid_page_token
 from app.core.api.dependencies import CurrentUser, get_uow_factory
+from app.core.config import settings
 from app.core.authorization.current import (
     reset_current_context,
     set_current_context,
@@ -28,6 +29,10 @@ from app.core.authorization.current import (
 from app.core.authorization.dependencies import PodContextDep, resolve_pod_context
 from app.core.infrastructure.db.uow_factory import UnitOfWorkFactory
 from app.modules.datastore.api.dependencies import FileServiceDep, build_file_service
+from app.modules.datastore.infrastructure.reindex_queue import (
+    enqueue_datastore_path_cleanup,
+)
+from app.core.log.log import get_logger
 from app.modules.datastore.api.schemas.datastore_schemas import (
     CreateFolderRequest,
     DirectoryTreeResponse,
@@ -69,6 +74,8 @@ router = APIRouter(
     tags=["files"],
     redirect_slashes=False,
 )
+
+logger = get_logger(__name__)
 
 BINARY_FILE_RESPONSE = {
     200: {
@@ -328,20 +335,49 @@ async def update_file(
 )
 async def delete_path(
     pod_id: UUID,
-    file_service: FileServiceDep,
     user: CurrentUser,
-    ctx: PodContextDep,
+    request: Request,
     path: str = Query(...),
+    uow_factory: UnitOfWorkFactory = Depends(get_uow_factory),
 ) -> Response:
-    file_entity = await file_service.get_file_by_path(
-        pod_id,
-        path,
-        ctx=ctx,
-    )
-    response = _to_file_response(file_entity, user.id)
-    _ensure_file_in_pod(response, pod_id)
+    # Authorize + delete the rows in a short UoW (released on exit), then offload
+    # the storage + search-index cleanup to the worker so the API never holds a
+    # pooled connection across the (potentially many-object) purge. If the
+    # enqueue fails, clean up in-process (still no connection held) so deleted
+    # rows never leave orphaned blobs.
+    async with uow_factory() as uow:
+        file_service = build_file_service(uow)
+        ctx = await resolve_pod_context(
+            session=uow.session, request=request, user_id=user.id, pod_id=pod_id
+        )
+        token = set_current_context(ctx)
+        try:
+            cleanup = await file_service.resolve_delete_path(pod_id, path, ctx=ctx)
+        finally:
+            reset_current_context(token)
 
-    await file_service.delete_path_by_path(pod_id, path, ctx=ctx)
+    files = list(cleanup.files)
+    enqueued = False
+    if not settings.e2e_disable_worker_file_autoindex:
+        # When the worker file-path is active, offload the purge; otherwise (e2e
+        # without a datastore worker) fall through to in-process cleanup below.
+        try:
+            enqueued = await enqueue_datastore_path_cleanup(
+                pod_id=cleanup.pod_id,
+                is_folder=cleanup.is_folder,
+                folder_prefix=cleanup.folder_prefix,
+                files=files,
+            )
+        except Exception as exc:
+            logger.warning("Failed to enqueue datastore path cleanup: %s", exc)
+            enqueued = False
+    if not enqueued:
+        await file_service.cleanup_deleted_paths(
+            cleanup.pod_id,
+            is_folder=cleanup.is_folder,
+            folder_prefix=cleanup.folder_prefix,
+            files=files,
+        )
     return Response(status_code=status.HTTP_204_NO_CONTENT)
 
 

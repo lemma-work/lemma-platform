@@ -5,7 +5,13 @@ from uuid import UUID
 
 from app.core.authorization.context import Context
 from app.core.log.log import get_logger
-from app.modules.datastore.domain.errors import DatastoreInfrastructureError, DatastoreValidationError
+from dataclasses import dataclass
+
+from app.modules.datastore.domain.errors import (
+    DatastoreFileNotFoundError,
+    DatastoreInfrastructureError,
+    DatastoreValidationError,
+)
 from app.modules.datastore.domain.file_entities import (
     DatastoreFileEntity,
     DatastoreFileUpdateEntity,
@@ -28,6 +34,19 @@ from app.modules.datastore.services.files.reader import FileReader
 from app.modules.datastore.services.system_skill_files import SystemSkillFileProvider
 
 logger = get_logger(__name__)
+
+
+@dataclass(frozen=True, slots=True)
+class _PathDeletionCleanup:
+    """Storage + search-index cleanup for already-deleted file/folder rows,
+    carried out of the short UoW so the purge holds no pooled connection. The
+    ``files`` entries (file rows only) are plain dicts so the payload is
+    JSON-serializable for an offloaded worker task."""
+
+    pod_id: UUID
+    is_folder: bool
+    folder_prefix: str | None
+    files: tuple
 
 
 class FileWriter:
@@ -455,13 +474,16 @@ class FileWriter:
             ctx=ctx,
         )
 
-    async def delete_path_by_path(
+    async def resolve_delete_path(
         self,
         pod_id: UUID,
         path: str,
         requester_user_id: UUID,
         ctx: Context | None = None,
-    ) -> None:
+    ) -> _PathDeletionCleanup:
+        """Authorize + delete the file/folder rows (DB only) and return the
+        storage/search cleanup payload, so the (potentially many-object) storage
+        purge + search-index removal run with no pooled connection held."""
         path = self.paths._resolve_api_path(
             path,
             requester_user_id=requester_user_id,
@@ -488,36 +510,106 @@ class FileWriter:
                 )
             )
 
-        search_service = self._search_factory_provider()(file_entity.pod_id)
-        if file_entity.is_folder:
-            try:
-                await self.storage.delete_prefix(
-                    build_datastore_folder_storage_prefix(
-                        file_entity.pod_id,
-                        file_entity.path,
-                    )
-                )
-            except Exception as exc:
-                logger.warning(
-                    "Failed to delete folder contents from storage %s: %s",
-                    file_entity.path,
-                    exc,
-                )
-            # Child containers (converted markdown, figures, rendered pages) are
-            # colocated under the folder prefix, so the delete above already
-            # removed them — no separate derived-artifact sweep needed.
-
+        is_folder = file_entity.is_folder
+        folder_prefix = (
+            build_datastore_folder_storage_prefix(
+                file_entity.pod_id, file_entity.path
+            )
+            if is_folder
+            else None
+        )
+        files: list[dict[str, str]] = []
         for entity in sorted(
             [*descendants, file_entity],
             key=lambda item: (item.path.count("/"), item.path),
             reverse=True,
         ):
-            await self.projection.delete_single_entity(
-                entity,
-                search_service=search_service,
-                delete_storage=not file_entity.is_folder,
-                actor_id=requester_user_id,
-            )
+            if entity.is_file:
+                files.append(
+                    {
+                        "file_id": str(entity.id),
+                        "path": entity.path,
+                        "storage_key": self.projection.storage_key(entity),
+                    }
+                )
+            entity.mark_deleted(requester_user_id)
+            deleted = await self.file_repository.delete_entity(entity)
+            if not deleted:
+                raise DatastoreFileNotFoundError(f"File {entity.path} not found")
+        return _PathDeletionCleanup(
+            pod_id=file_entity.pod_id,
+            is_folder=is_folder,
+            folder_prefix=folder_prefix,
+            files=tuple(files),
+        )
+
+    async def cleanup_deleted_paths(
+        self,
+        pod_id: UUID,
+        *,
+        is_folder: bool,
+        folder_prefix: str | None,
+        files: list[dict[str, str]],
+    ) -> None:
+        """Purge storage bytes + search-index entries for already-deleted rows.
+        Holds NO main DB connection (search uses its own pool); call after
+        resolve_delete_path's UoW has committed. Best-effort throughout."""
+        search_service = self._search_factory_provider()(pod_id)
+        if is_folder:
+            if folder_prefix:
+                try:
+                    await self.storage.delete_prefix(folder_prefix)
+                except Exception as exc:
+                    logger.warning(
+                        "Failed to delete folder contents from storage %s: %s",
+                        folder_prefix,
+                        exc,
+                    )
+            # Child containers (converted markdown, figures, rendered pages) are
+            # colocated under the folder prefix, so the delete above removed them.
+            for item in files:
+                try:
+                    await search_service.remove_file(UUID(item["file_id"]))
+                except Exception as exc:
+                    logger.warning(
+                        "Failed to remove indexed chunks for %s: %s",
+                        item["file_id"],
+                        exc,
+                    )
+            return
+        for item in files:
+            try:
+                await self.storage.delete_file(item["storage_key"])
+            except Exception as exc:
+                logger.warning("Failed to delete file %s: %s", item["path"], exc)
+            await self.projection.delete_child_artifacts(pod_id, item["path"])
+            try:
+                await search_service.remove_file(UUID(item["file_id"]))
+            except Exception as exc:
+                logger.warning(
+                    "Failed to remove indexed chunks for %s: %s",
+                    item["file_id"],
+                    exc,
+                )
+
+    async def delete_path_by_path(
+        self,
+        pod_id: UUID,
+        path: str,
+        requester_user_id: UUID,
+        ctx: Context | None = None,
+    ) -> None:
+        # Back-compat single-call path (holds the connection across storage). The
+        # controller uses resolve_delete_path + offloaded cleanup_deleted_paths.
+        cleanup = await self.resolve_delete_path(
+            pod_id, path, requester_user_id, ctx=ctx
+        )
+        await self.cleanup_deleted_paths(
+            cleanup.pod_id,
+            is_folder=cleanup.is_folder,
+            folder_prefix=cleanup.folder_prefix,
+            files=list(cleanup.files),
+        )
 
     async def _apply_new_path(
         self,

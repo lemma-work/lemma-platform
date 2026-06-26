@@ -229,6 +229,37 @@ class DatastoreFileService:
             ctx=ctx,
         )
 
+    async def resolve_delete_path(
+        self,
+        pod_id: UUID,
+        path: str,
+        ctx: Context,
+    ):
+        """Authorize + delete the file/folder rows (DB only); returns the storage
+        + search cleanup payload. Pair with ``cleanup_deleted_paths`` (or offload
+        it) so the purge holds no pooled DB connection."""
+        return await self._writer.resolve_delete_path(
+            pod_id, path, ctx.user_id, ctx=ctx
+        )
+
+    async def cleanup_deleted_paths(
+        self,
+        pod_id: UUID,
+        *,
+        is_folder: bool,
+        folder_prefix: str | None,
+        files: list[dict[str, str]],
+    ) -> None:
+        """Purge storage + search-index entries for already-deleted rows. Holds
+        no main DB connection; safe to run after the resolving UoW closed or in a
+        worker task."""
+        await self._writer.cleanup_deleted_paths(
+            pod_id,
+            is_folder=is_folder,
+            folder_prefix=folder_prefix,
+            files=files,
+        )
+
     # --- Read API ---------------------------------------------------------
 
     async def list_files(

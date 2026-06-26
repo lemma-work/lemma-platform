@@ -113,3 +113,24 @@ async def close_datastore_reindex_queue() -> None:
     if _reindex_queue is not None:
         await _reindex_queue.close()
         _reindex_queue = None
+
+
+async def enqueue_datastore_path_cleanup(
+    *,
+    pod_id: UUID,
+    is_folder: bool,
+    folder_prefix: str | None,
+    files: list[dict[str, str]],
+) -> bool:
+    """Offload storage + search-index cleanup for already-deleted file/folder
+    rows to the worker (cleanup_deleted_datastore_paths task). Returns True if
+    the task was enqueued; the caller should clean up in-process on a False/raise
+    so deleted rows never leave orphaned blobs."""
+    result = await get_streaq_job_queue().enqueue(
+        "cleanup_deleted_datastore_paths",
+        pod_id=str(pod_id),
+        is_folder=is_folder,
+        folder_prefix=folder_prefix,
+        files=files,
+    )
+    return result is not None
