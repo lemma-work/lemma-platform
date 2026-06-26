@@ -1,0 +1,7 @@
+{
+  "name": "daily-huddle-cron",
+  "schedule_type": "TIME",
+  "config": { "cron": "0 8 * * 1-5" },
+  "workflow_name": "daily-huddle",
+  "is_active": true
+}

@@ -1,0 +1,15 @@
+# dependencies
+desks/trumpet-desk/source/node_modules/
+
+# build output
+desks/trumpet-desk/source/dist/
+
+# editor / OS
+.DS_Store
+*.local
+.vscode/
+.idea/
+
+# env
+.env
+.env.*

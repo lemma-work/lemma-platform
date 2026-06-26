@@ -1,0 +1,74 @@
+{
+  "enable_rls": true,
+  "columns": [
+    {
+      "name": "title",
+      "type": "TEXT",
+      "required": true,
+      "max_length": 300,
+      "description": "Short description of the commitment"
+    },
+    {
+      "name": "type",
+      "type": "ENUM",
+      "required": true,
+      "options": ["to_others", "from_others", "habit", "calendar"],
+      "description": "to_others = user owes someone; from_others = someone owes user; habit = personal recurring commitment; calendar = scheduled event"
+    },
+    {
+      "name": "description",
+      "type": "TEXT",
+      "max_length": 2000,
+      "description": "Additional context or notes about the commitment"
+    },
+    {
+      "name": "person_id",
+      "type": "UUID",
+      "description": "Reference to a row in the people table — who this commitment involves"
+    },
+    {
+      "name": "due_date",
+      "type": "DATE",
+      "description": "When this commitment is due or scheduled (also the event date for calendar type)"
+    },
+    {
+      "name": "preferred_time",
+      "type": "TEXT",
+      "max_length": 10,
+      "description": "HH:MM — start time for habits and calendar events"
+    },
+    {
+      "name": "end_time",
+      "type": "TEXT",
+      "max_length": 10,
+      "description": "HH:MM — end time for calendar events"
+    },
+    {
+      "name": "recurrence",
+      "type": "ENUM",
+      "options": ["none", "daily", "weekly", "monthly"],
+      "default": "none",
+      "description": "For habits: how often this repeats"
+    },
+    {
+      "name": "status",
+      "type": "ENUM",
+      "required": true,
+      "default": "active",
+      "options": ["active", "completed", "missed", "snoozed"],
+      "description": "Current lifecycle state of this commitment"
+    },
+    {
+      "name": "external_ref",
+      "type": "TEXT",
+      "max_length": 500,
+      "description": "Calendar event ID or other external reference"
+    },
+    {
+      "name": "notes",
+      "type": "TEXT",
+      "max_length": 2000,
+      "description": "Any extra context the user has added"
+    }
+  ]
+}

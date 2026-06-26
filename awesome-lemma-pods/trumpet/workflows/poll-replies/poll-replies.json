@@ -1,0 +1,26 @@
+{
+  "name": "poll-replies",
+  "description": "Checks Gmail and Slack threads for replies to pings sent in the last 7 days. Writes new replies to ping_replies and marks replied_at on the pings row.",
+  "start": { "type": "MANUAL" },
+  "nodes": [
+    {
+      "id": "check_replies",
+      "type": "FUNCTION",
+      "label": "Poll for new replies",
+      "config": {
+        "function_name": "poll_replies",
+        "input_mapping": {
+          "max_age_days": { "type": "literal", "value": 7 }
+        }
+      }
+    },
+    {
+      "id": "end",
+      "type": "END",
+      "label": "Done"
+    }
+  ],
+  "edges": [
+    { "id": "e1", "source": "check_replies", "target": "end" }
+  ]
+}

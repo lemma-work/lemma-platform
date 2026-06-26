@@ -1,0 +1,28 @@
+{
+  "name": "check_integrations",
+  "description": "Checks which integration accounts are connected before external actions.",
+  "type": "API",
+  "accessible_applications": [
+    {
+      "app_name": "slack",
+      "mode": "USER_OWNED"
+    },
+    {
+      "app_name": "gmail",
+      "mode": "USER_OWNED"
+    },
+    {
+      "app_name": "googlecalendar",
+      "mode": "USER_OWNED"
+    },
+    {
+      "app_name": "outlook",
+      "mode": "USER_OWNED"
+    },
+    {
+      "app_name": "teams",
+      "mode": "USER_OWNED"
+    }
+  ],
+  "code": "#input_type_name: CheckIntegrationsInput\n#output_type_name: CheckIntegrationsResult\n#function_name: check_integrations\n\nfrom pydantic import BaseModel\nfrom typing import List\nfrom lemma_sdk import ApplicationExecutionClient, FunctionContext\n\n\nclass CheckIntegrationsInput(BaseModel):\n    apps: List[str] = [\"slack\", \"gmail\", \"googlecalendar\", \"outlook\", \"teams\"]\n\n\nclass CheckIntegrationsResult(BaseModel):\n    connected: List[str]\n    not_connected: List[str]\n    summary: str\n\n\nNOT_CONNECTED_SIGNALS = [\n    \"no account\",\n    \"account not found\",\n    \"no connected account\",\n    \"account resolution\",\n    \"not configured\",\n    \"not linked\",\n]\n\n\nasync def check_integrations(ctx: FunctionContext, data: CheckIntegrationsInput) -> CheckIntegrationsResult:\n    connected = []\n    not_connected = []\n\n    for app in data.apps:\n        try:\n            client = ApplicationExecutionClient(app)\n            await client.execute(\"_connectivity_probe_\", {})\n            connected.append(app)\n        except Exception as e:\n            err = str(e).lower()\n            if any(kw in err for kw in NOT_CONNECTED_SIGNALS):\n                not_connected.append(app)\n            else:\n                connected.append(app)\n\n    if connected and not_connected:\n        summary = f\"Connected: {', '.join(connected)}. Not connected: {', '.join(not_connected)}.\"\n    elif connected:\n        summary = f\"All checked apps connected: {', '.join(connected)}.\"\n    else:\n        summary = f\"No apps connected: {', '.join(not_connected)}. Ask user to connect before proceeding.\"\n\n    return CheckIntegrationsResult(\n        connected=connected,\n        not_connected=not_connected,\n        summary=summary,\n    )\n"
+}

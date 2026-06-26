@@ -1,0 +1,25 @@
+{
+  "enable_rls": true,
+  "columns": [
+    {
+      "name": "ping_id",
+      "type": "UUID",
+      "required": true,
+      "foreign_key": { "references": "pings.id" },
+      "description": "FK to the pings table"
+    },
+    {
+      "name": "body",
+      "type": "TEXT",
+      "required": true,
+      "max_length": 4000,
+      "description": "Reply text content"
+    },
+    {
+      "name": "received_at",
+      "type": "TEXT",
+      "max_length": 100,
+      "description": "When the reply was received — stored as string to handle Slack ts and ISO formats"
+    }
+  ]
+}

@@ -1,0 +1,22 @@
+{
+  "name": "mr-toot",
+  "description": "Personal operating system for busy professionals. Tracks commitments, manages a contact book, organises notes, and can act on calendar, email, and messaging integrations.",
+  "instruction": { "$file": "instruction.md" },
+  "toolsets": ["WORKSPACE_CLI"],
+  "accessible_tables": [
+    { "table_name": "commitments",  "mode": "WRITE" },
+    { "table_name": "people",       "mode": "WRITE" },
+    { "table_name": "note_index",   "mode": "WRITE" },
+    { "table_name": "pings",        "mode": "READ"  },
+    { "table_name": "ping_replies", "mode": "READ"  }
+  ],
+  "accessible_folders": ["/pod/notes"],
+  "accessible_functions": ["check_integrations", "send_ping", "import_contacts"],
+  "accessible_applications": [
+    { "app_name": "slack",          "mode": "USER_OWNED" },
+    { "app_name": "gmail",          "mode": "USER_OWNED" },
+    { "app_name": "googlecalendar", "mode": "USER_OWNED" },
+    { "app_name": "outlook",        "mode": "USER_OWNED" },
+    { "app_name": "teams",          "mode": "USER_OWNED" }
+  ]
+}

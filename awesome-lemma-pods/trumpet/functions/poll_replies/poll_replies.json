@@ -1,0 +1,6 @@
+{
+  "name": "poll_replies",
+  "description": "Checks Gmail threads and Slack threads for replies to pings sent in the last N days. Writes new replies to ping_replies and marks replied_at on pings. Called by the poll_replies_cron schedule every 2 hours.",
+  "type": "JOB",
+  "code": { "$file": "code.py" }
+}

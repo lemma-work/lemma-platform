@@ -1,0 +1,53 @@
+{
+  "enable_rls": true,
+  "columns": [
+    {
+      "name": "commitment_id",
+      "type": "UUID",
+      "description": "Optional FK to commitments — null for keeper-initiated pings"
+    },
+    {
+      "name": "person_id",
+      "type": "UUID",
+      "required": true,
+      "description": "FK to people — who was pinged"
+    },
+    {
+      "name": "channel",
+      "type": "ENUM",
+      "required": true,
+      "options": ["slack", "gmail"],
+      "description": "Which channel the ping was sent through"
+    },
+    {
+      "name": "message",
+      "type": "TEXT",
+      "required": true,
+      "max_length": 2000,
+      "description": "The message body that was sent"
+    },
+    {
+      "name": "slack_channel_id",
+      "type": "TEXT",
+      "max_length": 100,
+      "description": "Slack DM channel ID — needed for reply polling"
+    },
+    {
+      "name": "slack_thread_ts",
+      "type": "TEXT",
+      "max_length": 100,
+      "description": "Slack message timestamp — acts as thread ID for reply polling"
+    },
+    {
+      "name": "gmail_thread_id",
+      "type": "TEXT",
+      "max_length": 200,
+      "description": "Gmail thread ID — needed for reply polling"
+    },
+    {
+      "name": "replied_at",
+      "type": "DATETIME",
+      "description": "When the first reply was detected — null until reply arrives"
+    }
+  ]
+}

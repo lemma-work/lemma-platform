@@ -1,0 +1,9 @@
+.lemma-records-view {
+  --rv-header-blur: 95%;
+  --rv-row-hover: color-mix(in srgb, var(--muted) 30%, transparent);
+  --rv-selected: color-mix(in srgb, var(--primary) 5%, var(--card));
+  --rv-selected-border: color-mix(in srgb, var(--primary) 25%, transparent);
+  --rv-pill-radius: 9999px;
+  --rv-type-badge-radius: 9999px;
+  --rv-type-badge-size: 9px;
+}
