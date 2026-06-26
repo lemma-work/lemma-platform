@@ -1,0 +1,108 @@
+name: Windows daemon smoke
+
+# Validates that the lemma CLI's user-daemon works on a real Windows kernel —
+# the install path plus the full `daemon start --background` / `status` / `stop`
+# lifecycle. This exercises the Windows-specific code that cannot be run on the
+# Linux/macOS dev machines: the detached process-group spawn and the ctypes
+# process-liveness probe.
+#
+# Triggers:
+#   * push to main           — post-merge gate (only when CLI files change)
+#   * PR labelled `windows-ci`— opt-in per-PR run (add the label to test a branch)
+#   * manual workflow_dispatch
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'lemma-cli/**'
+      - 'lemma-skills/**'
+      - '.github/workflows/windows-daemon.yml'
+  pull_request:
+    types: [labeled, synchronize, reopened]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: windows-daemon-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  windows-daemon:
+    name: Windows daemon lifecycle
+    # Always on push/dispatch; on PRs only when the `windows-ci` label is present.
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      github.event_name == 'push' ||
+      (github.event_name == 'pull_request' &&
+       contains(github.event.pull_request.labels.*.name, 'windows-ci'))
+    runs-on: windows-latest
+    defaults:
+      run:
+        shell: pwsh
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install uv
+        run: pip install uv
+
+      - name: Install lemma-cli (uv tool — the real user install path)
+        run: uv tool install --force ./lemma-cli
+
+      - name: Put lemma on PATH
+        run: Add-Content -Path $env:GITHUB_PATH -Value (uv tool dir --bin)
+
+      - name: Smoke — version / servers / auth status
+        run: |
+          $ErrorActionPreference = "Stop"
+          lemma --version
+          if ($LASTEXITCODE -ne 0) { throw "lemma --version exited $LASTEXITCODE" }
+          lemma servers list
+          if ($LASTEXITCODE -ne 0) { throw "lemma servers list exited $LASTEXITCODE" }
+          # auth status exits 1 when logged out — that is expected; it just must
+          # not crash with a Windows-incompatibility error.
+          lemma auth status
+          if ($LASTEXITCODE -notin 0, 1) { throw "lemma auth status exited $LASTEXITCODE" }
+          Write-Host "smoke commands ok"
+          exit 0
+
+      - name: Daemon lifecycle — start --background / status / stop
+        run: |
+          $ErrorActionPreference = "Stop"
+          # A dummy --token makes session refresh a no-op (no browser login), and
+          # an unreachable --base-url keeps the daemon alive in its reconnect loop,
+          # so we get a live, detached pid to probe and then stop. Fully offline.
+          lemma --base-url http://127.0.0.1:9 --token ci-dummy-token daemon start --background
+          if ($LASTEXITCODE -ne 0) { throw "daemon start --background exited $LASTEXITCODE" }
+
+          Start-Sleep -Seconds 6
+          $status = (lemma daemon status | Out-String)
+          Write-Host "status after start:`n$status"
+          if ($status -notmatch '"running":\s*true') {
+            Write-Host "--- daemon log ---"
+            lemma daemon logs
+            throw "daemon was not running after background start"
+          }
+
+          lemma daemon stop
+          if ($LASTEXITCODE -ne 0) { throw "daemon stop exited $LASTEXITCODE" }
+
+          Start-Sleep -Seconds 3
+          $after = (lemma daemon status | Out-String)
+          Write-Host "status after stop:`n$after"
+          if ($after -match '"running":\s*true') { throw "daemon still running after stop" }
+          Write-Host "daemon lifecycle ok"
+          exit 0
+
+      - name: Unit tests — cross-platform process helpers (real Windows)
+        run: |
+          $ErrorActionPreference = "Stop"
+          pip install -e ./lemma-python -e ./lemma-cli pytest pytest-asyncio
+          pytest lemma-cli/tests/test_daemon_process.py -q
+          if ($LASTEXITCODE -ne 0) { throw "daemon process unit tests failed ($LASTEXITCODE)" }
+          exit 0
