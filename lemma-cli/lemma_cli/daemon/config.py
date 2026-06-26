@@ -4,6 +4,7 @@ import json
 import os
 import platform
 import socket
+import sys
 from datetime import datetime, timezone
 from pathlib import Path
 from uuid import uuid4
@@ -115,8 +116,53 @@ def clear_daemon_status() -> None:
 
 
 def process_is_running(pid: int) -> bool:
+    """Return True if a process with ``pid`` is currently alive.
+
+    POSIX uses the classic ``kill(pid, 0)`` probe, which sends no signal and just
+    checks that the process exists. That probe is wrong on Windows — signal ``0``
+    maps to ``CTRL_C_EVENT`` there, not a no-op — so Windows queries the process
+    handle directly instead.
+    """
+    if pid <= 0:
+        return False
+    if sys.platform == "win32":
+        return _windows_process_is_running(pid)
     try:
         os.kill(pid, 0)
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        # The process exists but is owned by another user.
+        return True
     except OSError:
         return False
     return True
+
+
+def _windows_process_is_running(pid: int) -> bool:
+    import ctypes  # noqa: PLC0415
+    from ctypes import wintypes  # noqa: PLC0415
+
+    SYNCHRONIZE = 0x00100000
+    WAIT_TIMEOUT = 0x00000102
+    ERROR_ACCESS_DENIED = 5
+
+    kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+    kernel32.OpenProcess.argtypes = (wintypes.DWORD, wintypes.BOOL, wintypes.DWORD)
+    kernel32.OpenProcess.restype = wintypes.HANDLE
+    kernel32.WaitForSingleObject.argtypes = (wintypes.HANDLE, wintypes.DWORD)
+    kernel32.WaitForSingleObject.restype = wintypes.DWORD
+    kernel32.CloseHandle.argtypes = (wintypes.HANDLE,)
+    kernel32.CloseHandle.restype = wintypes.BOOL
+
+    handle = kernel32.OpenProcess(SYNCHRONIZE, False, pid)
+    if not handle:
+        # No handle: the pid is gone, unless we were merely denied access — in
+        # which case the process does exist and is treated as running.
+        return ctypes.get_last_error() == ERROR_ACCESS_DENIED
+    try:
+        # A live process never becomes signaled, so a zero-timeout wait reports
+        # WAIT_TIMEOUT; an exited process reports WAIT_OBJECT_0 (0).
+        return kernel32.WaitForSingleObject(handle, 0) == WAIT_TIMEOUT
+    finally:
+        kernel32.CloseHandle(handle)

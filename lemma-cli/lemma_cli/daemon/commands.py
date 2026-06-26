@@ -135,6 +135,25 @@ def logs_daemon() -> None:
     _console().print(DAEMON_LOG_PATH.read_text())
 
 
+def _detach_kwargs() -> dict:
+    """Popen kwargs that detach the daemon from this CLI invocation.
+
+    POSIX uses a new session (setsid). Windows has no setsid and silently ignores
+    ``start_new_session``, so the equivalent is a detached, console-less new
+    process group. The ``subprocess.*`` flag constants below only exist on
+    Windows, so this branch is reached only where they are defined.
+    """
+    if sys.platform == "win32":
+        return {
+            "creationflags": (
+                subprocess.DETACHED_PROCESS
+                | subprocess.CREATE_NEW_PROCESS_GROUP
+                | subprocess.CREATE_NO_WINDOW
+            )
+        }
+    return {"start_new_session": True}
+
+
 def start_background(ctx: typer.Context, *, debug: bool = False) -> None:
     state = _state_from_ctx(ctx)
     DAEMON_LOG_PATH.parent.mkdir(parents=True, exist_ok=True)
@@ -160,12 +179,14 @@ def start_background(ctx: typer.Context, *, debug: bool = False) -> None:
     command.extend(["--config-file", str(state.config_path), "daemon", "start"])
     if debug:
         command.append("--debug")
+    # Detach the daemon so it outlives this CLI invocation (POSIX setsid /
+    # Windows detached process group — see _detach_kwargs).
     with DAEMON_LOG_PATH.open("ab") as log_file:
         process = subprocess.Popen(  # noqa: S603
             command,
             stdout=log_file,
             stderr=subprocess.STDOUT,
-            start_new_session=True,
+            **_detach_kwargs(),
         )
     write_daemon_status(process.pid, base_url=resolved_base_url, server=state.server)
     _console().print(f"Started daemon in background with pid {process.pid}.")
