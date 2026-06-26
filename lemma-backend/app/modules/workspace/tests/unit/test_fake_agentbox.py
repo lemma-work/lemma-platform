@@ -1,8 +1,15 @@
 from __future__ import annotations
 
+import json
+from uuid import uuid4
+
 import httpx
 import pytest
 
+from agentbox_client.apps.function_executor import (
+    FunctionExecuteRequest,
+    FunctionExecutorClient,
+)
 from agentbox_client.client import AgentBoxClient
 from app.modules.workspace.testing.fake_agentbox import create_fake_agentbox_app
 
@@ -49,6 +56,58 @@ async def test_fake_agentbox_satisfies_client_contract():
         assert not fail.success and fail.exit_code == 3
     finally:
         await client.close()
+
+
+@pytest.mark.asyncio
+async def test_fake_agentbox_schema_extraction_returns_canned_schema():
+    """Function create runs a schema-extraction script that prints the schema
+    marker; the fake detects it and returns a permissive canned schema."""
+    client = await _client(create_fake_agentbox_app())
+    try:
+        await client.ensure_sandbox("sb", env={})
+        await client.create_session("sb", "s", cwd="/workspace")
+        code = "import json\nprint('__LEMMA_FUNCTION_SCHEMAS__' + json.dumps({}))"
+        py = await client.execute_python("sb", "s", code=code)
+        assert py.status == "completed"
+        assert "__LEMMA_FUNCTION_SCHEMAS__" in py.stdout
+        payload = json.loads(py.stdout.split("__LEMMA_FUNCTION_SCHEMAS__", 1)[1])
+        assert payload["input"]["type"] == "object"
+        assert payload["output"]["type"] == "object"
+    finally:
+        await client.close()
+
+
+@pytest.mark.asyncio
+async def test_fake_agentbox_function_executor_runs_and_echoes_input():
+    """The real FunctionExecutorClient drives the fake's function_executor app:
+    readiness + a synchronous execute returning a completed FunctionInvokeResponse."""
+    app = create_fake_agentbox_app()
+    transport = httpx.ASGITransport(app=app)
+    http = httpx.AsyncClient(transport=transport, base_url="http://fake-agentbox")
+    fe = FunctionExecutorClient(
+        manager_base_url="http://fake-agentbox",
+        manager_api_key="k",
+        lemma_token="t",
+        client=http,
+    )
+    try:
+        await fe.wait_until_ready(sandbox_id="sb", timeout_seconds=5)
+        resp = await fe.execute(
+            sandbox_id="sb",
+            pod_id=uuid4(),
+            function_name="adder",
+            request=FunctionExecuteRequest(
+                run_id=uuid4(),
+                input_data={"a": 1, "b": 2},
+                async_job=False,
+                timeout_seconds=30,
+            ),
+        )
+        assert resp.status == "completed"
+        assert resp.output_data["echo"] == {"a": 1, "b": 2}
+        assert resp.output_data["function"] == "adder"
+    finally:
+        await fe.close()
 
 
 @pytest.mark.asyncio

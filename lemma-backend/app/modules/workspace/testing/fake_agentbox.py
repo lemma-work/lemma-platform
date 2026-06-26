@@ -15,6 +15,7 @@ run ``create_fake_agentbox_app()`` on the pinned AgentBox port and point
 from __future__ import annotations
 
 import asyncio
+import json
 import os
 import shutil
 import subprocess
@@ -42,6 +43,17 @@ from agentbox_client.generated.manager.models import (
 )
 
 _DEFAULT_TIMEOUT = 300
+
+# Function create extracts a function's input/output schemas by running a tiny
+# script in the sandbox that prints this marker + the JSON schemas (see
+# FunctionService._extract_schemas). The fake can't import the user's models, so
+# it detects the marker and returns a permissive canned schema instead.
+_SCHEMA_MARKER = "__LEMMA_FUNCTION_SCHEMAS__"
+_FAKE_SCHEMAS = {
+    "input": {"type": "object", "title": "FakeInput"},
+    "output": {"type": "object", "title": "FakeOutput"},
+    "config": None,
+}
 
 
 @dataclass
@@ -219,6 +231,20 @@ def create_fake_agentbox_app(*, base_dir: Path | None = None) -> FastAPI:
         sandbox_id: str, session_id: str, body: ExecutePythonRequest
     ) -> ExecutePythonResponse:
         sandbox, session = _session(sandbox_id, session_id)
+        if _SCHEMA_MARKER in body.code:
+            # Function schema extraction: the real script imports the user's
+            # Pydantic models, which the fake can't load. Return a permissive
+            # canned schema so function create succeeds without a real sandbox.
+            return ExecutePythonResponse(
+                sandbox_id=sandbox_id,
+                session_id=session_id,
+                stdout=_SCHEMA_MARKER + json.dumps(_FAKE_SCHEMAS),
+                stderr="",
+                result=None,
+                error_name=None,
+                exit_code=0,
+                status="completed",
+            )
         code, out, err, completed = await _run(
             sandbox,
             session,
@@ -259,5 +285,60 @@ def create_fake_agentbox_app(*, base_dir: Path | None = None) -> FastAPI:
     @app.post("/sandboxes/{sandbox_id}/apps/{app_name}/access")
     async def app_access(sandbox_id: str, app_name: str) -> dict[str, str]:
         return {"url": f"http://fake-agentbox.local/{sandbox_id}/{app_name}", "token": uuid.uuid4().hex}
+
+    # --- function_executor app (mock) -----------------------------------
+    # Functions run against an in-sandbox "function_executor" app that the manager
+    # proxies at /sandboxes/{id}/apps/function_executor/... . The fake serves it
+    # directly with canned responses so function execute exercises the full
+    # pipeline (controller -> service -> FunctionExecutorClient -> connection
+    # release -> persist) without a real sandbox. The function is not actually
+    # run; output_data echoes the input. (See agentbox_client.apps.function_executor
+    # for the contract.)
+    _FE = "/sandboxes/{sandbox_id}/apps/function_executor"
+
+    @app.get(_FE + "/readiness")
+    async def fe_readiness(sandbox_id: str) -> dict:
+        return {"ready": True}
+
+    @app.get(_FE + "/health")
+    async def fe_health(sandbox_id: str) -> dict:
+        return {"status": "ok"}
+
+    @app.post(_FE + "/pods/{pod_id}/functions/{function_name}/execute")
+    async def fe_execute(
+        sandbox_id: str, pod_id: str, function_name: str, body: dict
+    ) -> dict:
+        run_id = body.get("run_id")
+        input_data = body.get("input_data") or {}
+        if body.get("async_job"):
+            return {
+                "status": "accepted",
+                "run_id": run_id,
+                "job_id": f"fake-{run_id}",
+            }
+        return {
+            "status": "completed",
+            "output_data": {"echo": input_data, "function": function_name},
+            "error": None,
+            "logs": [],
+            "code_hash": "fake",
+            "duration_ms": 1,
+        }
+
+    @app.get(_FE + "/runs/{run_id}")
+    async def fe_status(sandbox_id: str, run_id: str) -> dict:
+        return {
+            "run_id": run_id,
+            "job_id": f"fake-{run_id}",
+            "status": "completed",
+            "output_data": {"echo": {}},
+            "error": None,
+            "code_hash": "fake",
+            "duration_ms": 1,
+        }
+
+    @app.get(_FE + "/runs/{run_id}/logs")
+    async def fe_logs(sandbox_id: str, run_id: str) -> dict:
+        return {"run_id": run_id, "logs": []}
 
     return app
