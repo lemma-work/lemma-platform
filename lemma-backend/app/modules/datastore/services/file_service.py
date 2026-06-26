@@ -318,6 +318,28 @@ class DatastoreFileService:
             ctx=ctx,
         )
 
+    async def resolve_children_file(
+        self,
+        pod_id: UUID,
+        path: str,
+        ctx: Context,
+    ) -> DatastoreFileEntity:
+        """Resolve + authorize a document for child listing (DB access). Pair
+        with ``load_file_children`` to build the list from the storage manifest
+        without holding a pooled DB connection for the manifest read."""
+        return await self._reader.resolve_children_file(
+            pod_id, path, ctx.user_id, ctx=ctx
+        )
+
+    async def load_file_children(
+        self,
+        file_entity: DatastoreFileEntity,
+        requester_user_id: UUID,
+    ) -> list[dict[str, Any]]:
+        """Build the child list from storage for an already-resolved entity.
+        Storage only — **no DB session** — safe after the resolving UoW closed."""
+        return await self._reader.load_children(file_entity, requester_user_id)
+
     async def get_file_child(
         self,
         pod_id: UUID,

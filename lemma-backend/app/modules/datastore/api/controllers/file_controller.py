@@ -409,16 +409,26 @@ async def download_file(
 )
 async def list_file_children(
     pod_id: UUID,
-    file_service: FileServiceDep,
     user: CurrentUser,
-    ctx: PodContextDep,
+    request: Request,
     path: str = Query(...),
+    uow_factory: UnitOfWorkFactory = Depends(get_uow_factory),
 ) -> FileChildrenResponse:
-    file_entity, children = await file_service.list_file_children(
-        pod_id,
-        path,
-        ctx=ctx,
-    )
+    # Resolve + authorize inside a short UoW (released on exit), then read the
+    # child manifest from storage with no pooled DB connection held.
+    async with uow_factory() as uow:
+        file_service = build_file_service(uow)
+        ctx = await resolve_pod_context(
+            session=uow.session, request=request, user_id=user.id, pod_id=pod_id
+        )
+        token = set_current_context(ctx)
+        try:
+            file_entity = await file_service.resolve_children_file(
+                pod_id, path, ctx=ctx
+            )
+        finally:
+            reset_current_context(token)
+    children = await file_service.load_file_children(file_entity, user.id)
     response = _to_file_response(file_entity, user.id)
     _ensure_file_in_pod(response, pod_id)
     return FileChildrenResponse(
