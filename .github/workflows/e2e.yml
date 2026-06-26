@@ -21,6 +21,7 @@ on:
 
 permissions:
   contents: read
+  packages: read  # pull the Kreuzberg test image from ghcr.io
 
 concurrency:
   group: e2e-${{ github.event.pull_request.number || github.ref }}
@@ -37,6 +38,15 @@ jobs:
         working-directory: lemma-backend
     steps:
       - uses: actions/checkout@v5
+      # The datastore/worker e2e fixtures pull ghcr.io/kreuzberg-dev/kreuzberg
+      # for document conversion; anonymous ghcr pulls are denied on the runner,
+      # so authenticate with the built-in token first.
+      - name: Log in to GHCR (Kreuzberg test image)
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
       - uses: astral-sh/setup-uv@v5
         with:
           enable-cache: true
