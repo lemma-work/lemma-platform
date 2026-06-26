@@ -52,5 +52,10 @@ jobs:
           enable-cache: true
       - name: Sync deps
         run: uv sync
+      # Run serially (1 xdist worker): the suite shares a single Kreuzberg
+      # container + per-worker testcontainers, and parallel runs are
+      # contention-flaky (a different test fails each run). Serial is the
+      # reliable choice for a once-before-merge gate (~5 min); the tests all pass
+      # standalone and serially.
       - name: E2E tests (mocked LLM + fake AgentBox)
-        run: make test-e2e-fast E2E_WORKERS=2
+        run: make test-e2e-fast E2E_WORKERS=1
