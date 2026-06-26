@@ -97,6 +97,9 @@ services:
       # Placeholder key so default runtime-profile resolution succeeds; the mock
       # short-circuits model construction before it is ever used.
       E2E_LLM_MODE: "mock"
+      # Emulate real LLM I/O latency so the worker is I/O-bound like prod (an
+      # instant mock makes runs CPU-bound and saturates one core). ~2 turns/run.
+      E2E_MOCK_LLM_LATENCY_MS: "1500"
       LEMMA_OPENAI_API_KEY: "EMPTY"
     ports:
       - "8000:8000"
@@ -118,7 +121,7 @@ services:
     deploy:
       resources:
         limits:
-          cpus: "2.0"
+          cpus: "1.0"
           memory: 2G
     ulimits:
       nofile:
@@ -147,6 +150,9 @@ services:
       # Mock LLM (see api service above): the worker runs the real agent harness
       # but with the deterministic FunctionModel instead of a real provider.
       E2E_LLM_MODE: "mock"
+      # Emulate real LLM I/O latency so the worker is I/O-bound like prod (an
+      # instant mock makes runs CPU-bound and saturates one core). ~2 turns/run.
+      E2E_MOCK_LLM_LATENCY_MS: "1500"
       LEMMA_OPENAI_API_KEY: "EMPTY"
     depends_on:
       db:
@@ -160,7 +166,7 @@ services:
     deploy:
       resources:
         limits:
-          cpus: "2.0"
+          cpus: "1.0"
           memory: 2G
     ulimits:
       nofile:

@@ -1,0 +1,10 @@
+# Experiment override: run the API with 2 uvicorn workers (use both cores) but
+# halve the per-worker pool so total API connections stay at 20 (2 workers x
+# (5+5)) — same Postgres budget as the single-worker run, double the cores.
+# Usage: docker compose -f docker-compose.load-test.yml -f docker-compose.workers.yml up -d --force-recreate api
+services:
+  api:
+    command: ["uvicorn", "app.app:app", "--host", "0.0.0.0", "--port", "8000", "--workers", "2"]
+    environment:
+      DB_POOL_SIZE: "5"
+      DB_MAX_OVERFLOW: "5"
