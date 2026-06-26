@@ -34,13 +34,27 @@ from app.modules.agent_surfaces.platforms.telegram.models import (
     TelegramCurrentChatResult,
     TelegramFileAttachment,
 )
+from app.core.config import settings
+from app.core.infrastructure.cache.redis_json_cache import RedisJsonCache
 from app.core.log.log import get_logger
 
 logger = get_logger(__name__)
 
-# Process-level cache: bot_token → getMe result dict (username + id), fetched
-# once per token so mention verification doesn't hit the API on every message.
-_BOT_INFO_CACHE: dict[str, dict[str, Any]] = {}
+# Shared Redis cache: bot_token → getMe result dict (username + id), so mention
+# verification doesn't hit the Telegram API on every message and is shared across
+# replicas. Redis unavailable -> refetch (never fails).
+_bot_info_cache: RedisJsonCache | None = None
+
+
+def _get_bot_info_cache() -> RedisJsonCache:
+    global _bot_info_cache
+    if _bot_info_cache is None or _bot_info_cache._redis_url != settings.redis_url:
+        _bot_info_cache = RedisJsonCache(
+            redis_url=settings.redis_url,
+            key_prefix="surface:telegram-bot",
+            ttl_seconds=3600,
+        )
+    return _bot_info_cache
 
 
 class TelegramPlatformService:
@@ -55,14 +69,21 @@ class TelegramPlatformService:
         token = self._bot_token
         if not token:
             return None
-        cached = _BOT_INFO_CACHE.get(token)
+        cache = _get_bot_info_cache()
+        try:
+            cached = await cache.get_json(token)
+        except Exception:
+            cached = None
         if cached:
             return cached
         try:
             result = await self._client.call("getMe", {})
             info = (result.get("result") or {}) if isinstance(result, dict) else {}
             if info:
-                _BOT_INFO_CACHE[token] = info
+                try:
+                    await cache.set_json(token, info)
+                except Exception:
+                    pass
                 return info
         except Exception as exc:
             logger.debug("getMe failed while resolving bot info: %s", exc)

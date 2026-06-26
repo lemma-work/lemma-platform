@@ -59,7 +59,7 @@ from app.modules.schedule.domain.schedule import (
     ScheduleType,
     ScheduleUpdateEntity,
 )
-from app.modules.agent_surfaces.infrastructure.ttl_cache import TTLCache
+from app.core.infrastructure.cache.redis_json_cache import RedisJsonCache
 from app.modules.agent_surfaces.infrastructure.adapters.registry import (
     SurfacePlatformAdapterRegistry,
 )
@@ -79,7 +79,25 @@ if TYPE_CHECKING:
     from app.modules.schedule.services.schedule_service import ScheduleService
 
 _GRAPH_SCOPE = "https://graph.microsoft.com/.default"
-_consent_check_cache = TTLCache()
+
+# Shared Redis cache of Teams admin-consent probe results (per-entry TTL: 60 s
+# granted / 10 s denied), so the Graph probe is shared across replicas. Redis
+# unavailable -> re-probe (never fails).
+_consent_check_cache: RedisJsonCache | None = None
+
+
+def _get_consent_cache() -> RedisJsonCache:
+    global _consent_check_cache
+    if (
+        _consent_check_cache is None
+        or _consent_check_cache._redis_url != settings.redis_url
+    ):
+        _consent_check_cache = RedisJsonCache(
+            redis_url=settings.redis_url,
+            key_prefix="surface:teams-consent",
+            ttl_seconds=60,
+        )
+    return _consent_check_cache
 _EMAIL_TRIGGER_EVENT_TYPES: dict[str, tuple[str, ...]] = {
     "GMAIL": "GMAIL_NEW_GMAIL_MESSAGE",
     "OUTLOOK": "OUTLOOK_MESSAGE_TRIGGER",
@@ -524,7 +542,11 @@ class AgentSurfaceService:
             return False
 
         cache_key = f"consent_check:{tenant_id}"
-        cached = _consent_check_cache.get(cache_key)
+        cache = _get_consent_cache()
+        try:
+            cached = await cache.get_json(cache_key)
+        except Exception:
+            cached = None
         if cached is not None:
             return bool(cached)
 
@@ -538,7 +560,10 @@ class AgentSurfaceService:
                     "scope": _GRAPH_SCOPE,
                 })
                 if token_response.status_code != 200:
-                    _consent_check_cache.set(cache_key, False, ttl_seconds=10)
+                    try:
+                        await cache.set_json(cache_key, False, ttl_seconds=10)
+                    except Exception:
+                        pass
                     return False
                 token = token_response.json().get("access_token")
         except Exception:
@@ -557,7 +582,10 @@ class AgentSurfaceService:
         except Exception:
             granted = False
 
-        _consent_check_cache.set(cache_key, granted, ttl_seconds=60 if granted else 10)
+        try:
+            await cache.set_json(cache_key, granted, ttl_seconds=60 if granted else 10)
+        except Exception:
+            pass
         return granted
 
     async def _sync_email_schedule(

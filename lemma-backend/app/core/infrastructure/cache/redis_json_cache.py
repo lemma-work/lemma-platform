@@ -1,7 +1,8 @@
 from __future__ import annotations
 
 import asyncio
-from typing import Generic, TypeVar
+import json
+from typing import Any, Generic, TypeVar
 
 from redis.asyncio import Redis
 
@@ -36,13 +37,24 @@ class RedisJsonCache(Generic[T]):
         redis = await self._get_redis()
         return await redis.get(self.build_key(suffix))
 
-    async def set_raw(self, suffix: str, payload: str) -> None:
+    async def set_raw(
+        self, suffix: str, payload: str, *, ttl_seconds: int | None = None
+    ) -> None:
         redis = await self._get_redis()
         await redis.set(
             self.build_key(suffix),
             payload,
-            ex=self._ttl_seconds,
+            ex=ttl_seconds if ttl_seconds is not None else self._ttl_seconds,
         )
+
+    async def get_json(self, suffix: str) -> Any | None:
+        raw = await self.get_raw(suffix)
+        return json.loads(raw) if raw is not None else None
+
+    async def set_json(
+        self, suffix: str, value: Any, *, ttl_seconds: int | None = None
+    ) -> None:
+        await self.set_raw(suffix, json.dumps(value), ttl_seconds=ttl_seconds)
 
     async def delete(self, suffix: str) -> None:
         redis = await self._get_redis()

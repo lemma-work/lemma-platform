@@ -8,13 +8,14 @@ resolution that both the inbound adapter and the tool service need.
 from __future__ import annotations
 
 import re
-import time
 from typing import Any
 from urllib.parse import quote
 
 import aiohttp
 
 from app.modules.agent_surfaces.config import surface_settings
+from app.core.config import settings
+from app.core.infrastructure.cache.redis_json_cache import RedisJsonCache
 from app.core.log.log import get_logger
 
 logger = get_logger(__name__)
@@ -32,8 +33,21 @@ _GUID_RE = re.compile(
     r"[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}$"
 )
 
-# Per-process token cache: "tenant:scope" → {"token": str, "expires_at": float}
-_token_cache: dict[str, dict[str, Any]] = {}
+# Shared Redis cache of OAuth tokens: "tenant:scope" → token, with the Redis TTL
+# set to the token's remaining lifetime — so tokens are reused across replicas, not
+# refetched per process. Redis unavailable -> refetch (never fails).
+_token_cache: RedisJsonCache | None = None
+
+
+def _get_token_cache() -> RedisJsonCache:
+    global _token_cache
+    if _token_cache is None or _token_cache._redis_url != settings.redis_url:
+        _token_cache = RedisJsonCache(
+            redis_url=settings.redis_url,
+            key_prefix="surface:teams-token",
+            ttl_seconds=3600,
+        )
+    return _token_cache
 
 
 def auth_headers(token: str) -> dict[str, str]:
@@ -75,9 +89,13 @@ async def _get_token(tenant_id: str, scope: str) -> str | None:
         return None
 
     cache_key = f"{tenant_id}:{scope}"
-    cached = _token_cache.get(cache_key)
-    if cached and cached["expires_at"] > time.monotonic():
-        return str(cached["token"])
+    cache = _get_token_cache()
+    try:
+        cached_token = await cache.get_raw(cache_key)
+    except Exception:
+        cached_token = None
+    if cached_token:
+        return cached_token
 
     url = f"https://login.microsoftonline.com/{tenant_id}/oauth2/v2.0/token"
     data = {
@@ -136,11 +154,11 @@ async def _get_token(tenant_id: str, scope: str) -> str | None:
         return None
 
     expires_in = int(result.get("expires_in", 3600))
-    _token_cache[cache_key] = {
-        "token": token,
-        # Subtract 60 s so we refresh before the token actually expires
-        "expires_at": time.monotonic() + expires_in - 60,
-    }
+    # Subtract 60 s so we refresh before the token actually expires.
+    try:
+        await cache.set_raw(cache_key, str(token), ttl_seconds=max(60, expires_in - 60))
+    except Exception:
+        pass
     return str(token)
 
 

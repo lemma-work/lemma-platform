@@ -10,10 +10,11 @@ import httpx
 import jwt
 from jwt.algorithms import RSAAlgorithm
 
+from app.core.config import settings
 from app.core.domain.errors import DomainError
+from app.core.infrastructure.cache.redis_json_cache import RedisJsonCache
 from app.modules.agent_surfaces.config import surface_settings
 from app.modules.agent_surfaces.domain.entities import AgentSurfaceEntity, SurfacePlatform
-from app.modules.agent_surfaces.infrastructure.ttl_cache import TTLCache
 _SLACK_SIGNATURE_VERSION = "v0"
 _SLACK_MAX_TIMESTAMP_SKEW_SECONDS = 60 * 5
 _BOT_FRAMEWORK_OPENID_CONFIG_URL = (
@@ -27,7 +28,20 @@ _BOT_FRAMEWORK_ALLOWED_ISSUERS = frozenset(
 )
 _OIDC_CACHE_TTL_SECONDS = 60 * 10
 
-_oidc_cache = TTLCache()
+# Shared Redis cache of OIDC/JWKS documents used to verify Teams webhook JWTs, so
+# the metadata is fetched once across replicas. Redis unavailable -> refetch.
+_oidc_cache: RedisJsonCache | None = None
+
+
+def _get_oidc_cache() -> RedisJsonCache:
+    global _oidc_cache
+    if _oidc_cache is None or _oidc_cache._redis_url != settings.redis_url:
+        _oidc_cache = RedisJsonCache(
+            redis_url=settings.redis_url,
+            key_prefix="surface:oidc",
+            ttl_seconds=_OIDC_CACHE_TTL_SECONDS,
+        )
+    return _oidc_cache
 
 
 class SurfaceWebhookAuthenticationError(DomainError):
@@ -252,7 +266,11 @@ class SurfaceWebhookSecurityService:
             raise SurfaceWebhookAuthenticationError("Invalid Teams token issuer")
 
     async def _get_json_cached(self, url: str) -> dict[str, Any]:
-        cached = _oidc_cache.get(url)
+        cache = _get_oidc_cache()
+        try:
+            cached = await cache.get_json(url)
+        except Exception:
+            cached = None
         if cached is not None:
             return cached
 
@@ -269,7 +287,10 @@ class SurfaceWebhookSecurityService:
                 f"Invalid Teams verification metadata from {url}",
                 status_code=503,
             )
-        _oidc_cache.set(url, payload, ttl_seconds=_OIDC_CACHE_TTL_SECONDS)
+        try:
+            await cache.set_json(url, payload, ttl_seconds=_OIDC_CACHE_TTL_SECONDS)
+        except Exception:
+            pass
         return payload
 
     def _resolve_jwt_signing_key(self, token: str, keys: list[dict[str, Any]]) -> Any:
