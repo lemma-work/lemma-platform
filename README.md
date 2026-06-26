@@ -1,22 +1,41 @@
 <div align="center">
 
-<img src="lemma-frontend/public/lemma-icon-fullbleed.svg" width="112" alt="Lemma" />
+<img src="docs/Assets/Banner/banner.jpg" alt="Lemma — where humans and AI agents work as one team" width="100%">
 
-# Lemma
+**Tables, workflows, approvals, and the app your team runs on. One pod — not a pile of glue code.**
 
-**The open-source workspace where humans and AI agents work as one team.**
+![License](https://img.shields.io/github/license/lemma-work/lemma-platform)
+![Release](https://img.shields.io/github/v/release/lemma-work/lemma-platform)
+![Build](https://img.shields.io/github/actions/workflow/status/lemma-work/lemma-platform/ci.yml)
+[![Docs](https://img.shields.io/badge/docs-lemma.work-blue)](https://lemma.work)
 
-Agents hold roles, own tasks, and follow your permissions — right alongside your teammates. Their output lands as rows in your tables, not paragraphs in a chat scrollback.
+[Quickstart](#quickstart) · [Inside a pod](#inside-a-pod) · [Why Lemma](#chat-is-not-where-work-lives) · [Surfaces](#use-it-from-anywhere) · [Coding agents](#the-back-layer-for-your-coding-agents) · [Docs](https://lemma.work)
 
-Runs on your machine — or on **[lemma.work](https://lemma.work)** when you'd rather not host. Powered by the Claude or ChatGPT subscription you already pay for, your own keys, or any compatible endpoint. AGPLv3 core, Apache-2.0 SDKs.
-
-[Quickstart](#quickstart) · [Pods](#start-from-a-pod-not-a-blank-page) · [Why Lemma](#chat-is-not-where-work-lives) · [Surfaces](#use-it-from-anywhere) · [Coding agents](#the-back-layer-for-your-coding-agents) · [Docs](https://lemma.work/docs)
-
-**Website → [lemma.work](https://lemma.work)**
+Website → **[lemma.work](https://lemma.work)**
 
 </div>
 
-<!-- TODO(launch): hero GIF — the task manager queue. "Qualify the Acme lead" assigned to Lead Qualifier Agent, score column fills, a review task appears assigned to Maya, and the approval pings her phone on WhatsApp. The mixed human/agent assignee column is the shot. -->
+---
+
+## Works with
+
+<div align="center">
+
+<table>
+  <tr>
+    <td align="center"><strong>Works&nbsp;with</strong></td>
+    <td align="center"><img src="docs/Assets/Logos/claude.svg" height="40" alt="Claude Code"><br><sub>Claude Code</sub></td>
+    <td align="center"><img src="docs/Assets/Logos/codex.svg" height="40" alt="Codex"><br><sub>Codex</sub></td>
+    <td align="center"><img src="docs/Assets/Logos/opencode-logo-light.svg" height="40" alt="OpenCode"><br><sub>OpenCode</sub></td>
+    <td align="center"><img src="docs/Assets/Logos/cursor.svg" height="40" alt="Cursor"><br><sub>Cursor</sub></td>
+    <td align="center"><img src="docs/Assets/Logos/bash.svg" height="40" alt="Bash"><br><sub>Bash</sub></td>
+    <td align="center"><img src="docs/Assets/Logos/http.svg" height="40" alt="HTTP"><br><sub>HTTP</sub></td>
+  </tr>
+</table>
+
+<em>Anything that can run a CLI can work a pod.</em>
+
+</div>
 
 ---
 
@@ -138,6 +157,24 @@ Chat is a door, not the building.
 A teammate approves a refund **in Slack**. A field update arrives as a **WhatsApp** voice note and lands as a structured record. An agent drafts a customer reply **in Gmail** and waits for a human before sending. The conversation is the surface — underneath, all of it reads and writes the same tables, runs through the same workflows, and respects the same permissions.
 
 Supported today: **Slack, Microsoft Teams, Gmail, Outlook, Telegram, WhatsApp** — each with webhook ingress, identity resolution, and agent-initiated actions. Telegram long-polling and Slack Socket Mode are built in, so local setups work without a public webhook URL.
+
+<div align="center">
+
+<table>
+  <tr>
+    <td align="center"><strong>Surfaces</strong></td>
+    <td align="center"><img src="docs/Assets/Logos/slack.svg" height="40" alt="Slack"><br><sub>Slack</sub></td>
+    <td align="center"><img src="docs/Assets/Logos/microsoft-teams.svg" height="40" alt="Microsoft Teams"><br><sub>Teams</sub></td>
+    <td align="center"><img src="docs/Assets/Logos/Gmail.svg" height="40" alt="Gmail"><br><sub>Gmail</sub></td>
+    <td align="center"><img src="docs/Assets/Logos/outlook.svg" height="40" alt="Outlook"><br><sub>Outlook</sub></td>
+    <td align="center"><img src="docs/Assets/Logos/telegram.svg" height="40" alt="Telegram"><br><sub>Telegram</sub></td>
+    <td align="center"><img src="docs/Assets/Logos/WhatsApp.svg" height="40" alt="WhatsApp"><br><sub>WhatsApp</sub></td>
+  </tr>
+</table>
+
+<em>Wherever your team already works, the pod shows up.</em>
+
+</div>
 
 This isn't only for teams. A pod of one human and a few agents — with WhatsApp as the front door and tables as the memory — is a personal assistant that actually keeps state, asks before it acts, and picks up tomorrow where it left off today.
 
