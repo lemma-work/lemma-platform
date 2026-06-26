@@ -15,8 +15,23 @@ from app.core.config import settings
 from app.modules.agent.services import agent_context_brief as brief_mod
 from app.modules.agent.services.agent_context_brief import (
     AgentContextBriefBuilder,
-    invalidate_brief_cache,
 )
+
+
+class _FakeBriefCache:
+    """In-process stand-in for the Redis brief cache (no Redis in unit tests)."""
+
+    def __init__(self) -> None:
+        self._d: dict[str, str] = {}
+
+    async def get_raw(self, suffix: str) -> str | None:
+        return self._d.get(suffix)
+
+    async def set_raw(self, suffix: str, payload: str) -> None:
+        self._d[suffix] = payload
+
+    async def clear_prefix(self) -> None:
+        self._d.clear()
 
 
 class RecordingUoWFactory:
@@ -104,9 +119,17 @@ def stubbed(monkeypatch):
     )
     monkeypatch.setattr(brief_mod, "build_table_service", lambda uow: _FakeTableService())
     monkeypatch.setattr(brief_mod, "build_file_service", lambda uow: _FakeFileService())
-    invalidate_brief_cache()
+    # Fake the Redis brief cache with an in-process dict (fresh per test). TTL<=0
+    # disables caching exactly as in production, so the cache accessor returns None.
+    fake = _FakeBriefCache()
+
+    def _fake_get_cache():
+        if settings.agent_context_brief_cache_ttl_seconds <= 0:
+            return None
+        return fake
+
+    monkeypatch.setattr(brief_mod, "_get_brief_cache", _fake_get_cache)
     yield
-    invalidate_brief_cache()
 
 
 def _named_agent():

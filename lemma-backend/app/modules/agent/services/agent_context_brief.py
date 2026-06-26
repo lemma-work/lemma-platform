@@ -15,13 +15,13 @@ so repeated messages on a conversation skip the build (and the DB) entirely.
 
 from __future__ import annotations
 
-from time import monotonic
 from uuid import UUID
 
 from app.core.authorization.context import ResourceType
 from app.core.authorization.current import reset_current_context, set_current_context
 from app.core.authorization.delegation import DEFAULT_POD_AGENT_ID
 from app.core.config import settings
+from app.core.infrastructure.cache.redis_json_cache import RedisJsonCache
 from app.core.infrastructure.db.uow_factory import UnitOfWorkFactory
 from app.modules.agent.domain.entities import Agent, Conversation
 from app.modules.agent.infrastructure.context_brief_repository import (
@@ -39,38 +39,65 @@ _MAX_TABLES = 50
 _MAX_RESOURCES = 50
 _MAX_COLUMNS = 40
 
-# In-process cache of rendered briefs, keyed by (agent, conversation, pod, user).
+# Redis-backed cache of rendered briefs, keyed by (agent, conversation, pod, user).
 # The brief is rebuilt on every message but only changes when pod inventory /
-# grants change, so a short TTL keeps the hot path off the DB. Mirrors the
-# role-snapshot cache in app/core/authorization/cache.py.
+# grants change, so a short TTL keeps the hot path off the DB. Redis (not an
+# in-process dict) so it is shared across the API, the worker, and replicas with
+# no per-process staleness. Redis being unavailable degrades to a cache miss and
+# never fails a run.
 _BriefKey = tuple[UUID, UUID, UUID, UUID]
-_BRIEF_CACHE: dict[_BriefKey, tuple[float, str]] = {}
+_brief_cache: RedisJsonCache | None = None
 
 
-def _get_cached_brief(key: _BriefKey) -> str | None:
+def _get_brief_cache() -> RedisJsonCache | None:
+    global _brief_cache
     ttl = settings.agent_context_brief_cache_ttl_seconds
     if ttl <= 0:
         return None
-    cached = _BRIEF_CACHE.get(key)
-    if cached is None:
-        return None
-    expires_at, brief = cached
-    if expires_at <= monotonic():
-        _BRIEF_CACHE.pop(key, None)
-        return None
-    return brief
+    if _brief_cache is None or _brief_cache._ttl_seconds != ttl:
+        _brief_cache = RedisJsonCache(
+            redis_url=settings.redis_url,
+            key_prefix="agent:context-brief",
+            ttl_seconds=ttl,
+        )
+    return _brief_cache
 
 
-def _set_cached_brief(key: _BriefKey, brief: str) -> None:
-    ttl = settings.agent_context_brief_cache_ttl_seconds
-    if ttl <= 0:
+def _cache_suffix(key: _BriefKey) -> str:
+    return ":".join(str(part) for part in key)
+
+
+async def _get_cached_brief(key: _BriefKey) -> str | None:
+    cache = _get_brief_cache()
+    if cache is None:
+        return None
+    try:
+        return await cache.get_raw(_cache_suffix(key))
+    except Exception:
+        # Redis unavailable -> treat as a cache miss; never fail a run.
+        return None
+
+
+async def _set_cached_brief(key: _BriefKey, brief: str) -> None:
+    cache = _get_brief_cache()
+    if cache is None:
         return
-    _BRIEF_CACHE[key] = (monotonic() + ttl, brief)
+    try:
+        await cache.set_raw(_cache_suffix(key), brief)
+    except Exception:
+        # Redis unavailable -> skip caching; never fail a run.
+        pass
 
 
-def invalidate_brief_cache() -> None:
-    """Drop all cached briefs (test hook; future grant/table-mutation hook)."""
-    _BRIEF_CACHE.clear()
+async def invalidate_brief_cache() -> None:
+    """Drop all cached briefs (test hook + future grant/table-mutation hook)."""
+    cache = _get_brief_cache()
+    if cache is None:
+        return
+    try:
+        await cache.clear_prefix()
+    except Exception:
+        pass
 
 
 class AgentContextBriefBuilder:
@@ -86,7 +113,7 @@ class AgentContextBriefBuilder:
         pod_id: UUID,
     ) -> str:
         key: _BriefKey = (agent.id, conversation.id, pod_id, user_id)
-        cached = _get_cached_brief(key)
+        cached = await _get_cached_brief(key)
         if cached is not None:
             return cached
 
@@ -115,7 +142,7 @@ class AgentContextBriefBuilder:
             )
 
         brief = "\n".join(lines)
-        _set_cached_brief(key, brief)
+        await _set_cached_brief(key, brief)
         return brief
 
     async def _pod_inventory(self, *, pod_id: UUID, user_id: UUID) -> list[str]:

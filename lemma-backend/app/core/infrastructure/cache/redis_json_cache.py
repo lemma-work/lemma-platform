@@ -48,6 +48,19 @@ class RedisJsonCache(Generic[T]):
         redis = await self._get_redis()
         await redis.delete(self.build_key(suffix))
 
+    async def clear_prefix(self) -> None:
+        """Delete every key under this cache's prefix (SCAN + DEL). Used by
+        invalidation hooks and test isolation; O(matched keys)."""
+        redis = await self._get_redis()
+        pattern = f"{self._key_prefix}:*"
+        cursor = 0
+        while True:
+            cursor, keys = await redis.scan(cursor, match=pattern, count=256)
+            if keys:
+                await redis.delete(*keys)
+            if cursor == 0:
+                break
+
     async def close(self) -> None:
         if self._redis is None:
             return

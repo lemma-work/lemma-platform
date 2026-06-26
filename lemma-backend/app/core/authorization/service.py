@@ -212,7 +212,9 @@ class AuthorizationDataService:
             granted_by_user_id=created_by_user_id,
         )
         await self.session.flush()
-        invalidate_role_snapshot_cache(organization_id=organization_id, pod_id=pod_id)
+        await invalidate_role_snapshot_cache(
+            organization_id=organization_id, pod_id=pod_id
+        )
         return await self._to_summary(role)
 
     async def delete_role(
@@ -240,7 +242,9 @@ class AuthorizationDataService:
             )
         await self.session.delete(role)
         await self.session.flush()
-        invalidate_role_snapshot_cache(organization_id=organization_id, pod_id=pod_id)
+        await invalidate_role_snapshot_cache(
+            organization_id=organization_id, pod_id=pod_id
+        )
 
     async def resolve_resource_id_by_name(
         self,
@@ -351,7 +355,9 @@ class AuthorizationDataService:
                 )
             )
         await self.session.flush()
-        invalidate_role_snapshot_cache(organization_id=organization_id, pod_id=pod_id)
+        await invalidate_role_snapshot_cache(
+            organization_id=organization_id, pod_id=pod_id
+        )
         return normalized
 
     async def build_user_context(
@@ -377,7 +383,7 @@ class AuthorizationDataService:
             if pod is not None:
                 organization_id = pod.organization_id
 
-        cached = get_role_snapshot(
+        cached = await get_role_snapshot(
             user_id=user_id,
             organization_id=organization_id,
             pod_id=pod_id,
@@ -442,7 +448,7 @@ class AuthorizationDataService:
             principal_refs=frozenset(principal_refs),
             grant_principal_sets=(frozenset(principal_refs),),
         )
-        set_role_snapshot(user_id=user_id, snapshot=snapshot)
+        await set_role_snapshot(user_id=user_id, snapshot=snapshot)
         return Context(
             actor_type=ActorType.USER,
             actor_id=str(user_id),
@@ -474,7 +480,7 @@ class AuthorizationDataService:
 
         # The role snapshot cache is keyed by principal id; workload principals
         # (agent/function ids) share it with user ids without collision.
-        cached = get_role_snapshot(
+        cached = await get_role_snapshot(
             user_id=principal_id,
             organization_id=organization_id,
             pod_id=pod_id,
@@ -523,7 +529,7 @@ class AuthorizationDataService:
             principal_refs=frozenset(principal_refs),
             grant_principal_sets=(frozenset(principal_refs),),
         )
-        set_role_snapshot(user_id=principal_id, snapshot=snapshot)
+        await set_role_snapshot(user_id=principal_id, snapshot=snapshot)
         return Context(
             actor_type=actor_type,
             actor_id=str(principal_id),
