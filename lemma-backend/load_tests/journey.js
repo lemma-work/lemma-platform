@@ -1,21 +1,22 @@
 /**
  * Lemma full-journey load test.
  *
- * Each virtual user runs the real chat journey end-to-end and we measure the
- * latency of every API in the flow plus the full message round-trip (agent run
- * through the worker + SSE). The LLM is the deterministic in-process mock
- * (E2E_LLM_MODE=mock on the api+worker containers); the agent streams text and
- * a real `write_todos` tool call scripted via the conversation metadata, so the
- * journey exercises api + worker + redis + DB + SSE with no real model.
+ * Each virtual user runs the real product journey end-to-end and we measure the
+ * latency of every API plus the full agent message round-trip. Everything runs
+ * against mocks so no external service is needed:
+ *   - LLM: deterministic in-process FunctionModel (E2E_LLM_MODE=mock).
+ *   - Sandbox/AgentBox: the in-process fake AgentBox service (E2E_SANDBOX_MODE=
+ *     fake, AGENTBOX_API_URL -> fake-agentbox) — so function create + execute run
+ *     without a real Docker sandbox (functions echo their input).
  *
- * Profile (sustained loop):
- *   - first iteration per VU = provision: signup -> org -> pod -> TODO agent ->
- *     conversation (carrying the mock_llm_script).
- *   - every iteration = send the same message and read the SSE stream to
- *     completion, then think-time sleep.
- *
- * Required env (LEMMA_API_URL defaults to host gateway). No setup.py needed —
- * each VU provisions its own user.
+ * Per VU:
+ *   - first iteration = provision: signup -> org -> pod -> TODO agent ->
+ *     conversation (mock_llm_script) -> function (API) -> app + dist bundle.
+ *   - every iteration exercises:
+ *       * agent message (SSE round-trip: api->DB->redis->worker->mock->SSE)
+ *       * file CRUD: create -> update(content) -> download -> delete
+ *       * function execute (API/sync, against the fake AgentBox)
+ *       * app asset load (serve the uploaded dist bundle)
  *
  * Run (see `make load-test-journey`):
  *   docker run --rm --network host -e LEMMA_API_URL=http://localhost:8000 \
@@ -25,6 +26,7 @@
 
 import { check, sleep } from "k6";
 import http from "k6/http";
+import { b64decode } from "k6/encoding";
 import { Counter, Rate, Trend } from "k6/metrics";
 
 // --------------------------------------------------------------------------
@@ -56,6 +58,28 @@ const MOCK_LLM_SCRIPT = [
   { text: "All set — your todos are updated." },
 ];
 
+// API (synchronous) function. The fake AgentBox cans schema extraction and echoes
+// input on execute, so the run completes without real code execution; the headers
+// + models match the real format so create's schema-extraction script is built.
+function functionCode(name) {
+  return (
+    `#input_type_name: LoadInput\n` +
+    `#output_type_name: LoadResult\n` +
+    `#function_name: ${name}\n\n` +
+    `from pydantic import BaseModel\n` +
+    `from lemma_sdk import FunctionContext\n\n` +
+    `class LoadInput(BaseModel):\n    n: int\n\n` +
+    `class LoadResult(BaseModel):\n    doubled: int\n\n` +
+    `async def ${name}(ctx: FunctionContext, data: LoadInput) -> LoadResult:\n` +
+    `    return LoadResult(doubled=data.n * 2)\n`
+  );
+}
+
+// Minimal valid dist bundle (a zip whose root has index.html). Decoded to binary
+// and uploaded as the app's dist_archive so app asset serving has a release.
+const DIST_ZIP_B64 =
+  "UEsDBBQAAAAIADR/2lzq0O+YRQAAAGIAAAAKAAAAaW5kZXguaHRtbLNRTMlPLqksSFXIKMnNsbOBkqmJKXY2JZklOal2PvmJKSGpxSUKjgUFNvoQMRt9iIqk/JRKoGpDuCKghCFQFiKuDzYMAFBLAQIUAxQAAAAIADR/2lzq0O+YRQAAAGIAAAAKAAAAAAAAAAAAAACAAQAAAABpbmRleC5odG1sUEsFBgAAAAABAAEAOAAAAG0AAAAAAA==";
+
 // --------------------------------------------------------------------------
 // Custom metrics — one Trend per API for avg + p50/p90/p95/p99
 // --------------------------------------------------------------------------
@@ -65,13 +89,22 @@ const createOrgMs = new Trend("create_org_ms", true);
 const createPodMs = new Trend("create_pod_ms", true);
 const createAgentMs = new Trend("create_agent_ms", true);
 const createConvMs = new Trend("create_conv_ms", true);
+const createFunctionMs = new Trend("create_function_ms", true);
+const createAppMs = new Trend("create_app_ms", true);
+const uploadBundleMs = new Trend("upload_bundle_ms", true);
 const messageRoundtripMs = new Trend("message_roundtrip_ms", true);
 const createFileMs = new Trend("create_file_ms", true);
+const updateFileMs = new Trend("update_file_ms", true);
 const downloadFileMs = new Trend("download_file_ms", true);
+const deleteFileMs = new Trend("delete_file_ms", true);
+const executeFunctionMs = new Trend("execute_function_ms", true);
+const loadAppAssetMs = new Trend("load_app_asset_ms", true);
 
 const provisionSuccess = new Rate("provision_success");
 const messageSuccess = new Rate("message_success");
 const fileSuccess = new Rate("file_success");
+const functionSuccess = new Rate("function_success");
+const appSuccess = new Rate("app_success");
 const tokensReceived = new Counter("tokens_received");
 const toolCallsReceived = new Counter("tool_calls_received");
 const journeyErrors = new Counter("journey_errors");
@@ -97,7 +130,7 @@ export const options = {
   // Report avg + p50/p90/p95/p99 (+ min/max/count) for every Trend.
   summaryTrendStats: ["avg", "min", "med", "p(90)", "p(95)", "p(99)", "max", "count"],
   thresholds: {
-    journey_errors: ["count<100"],
+    journey_errors: ["count<200"],
     provision_success: ["rate>0.95"],
     message_success: ["rate>0.95"],
   },
@@ -133,7 +166,7 @@ function countOccurrences(haystack, needle) {
 let vuState = null;
 
 // --------------------------------------------------------------------------
-// Provision: signup -> org -> pod -> agent -> conversation
+// Provision: signup -> org -> pod -> agent -> conversation -> function -> app
 // --------------------------------------------------------------------------
 
 function provision() {
@@ -221,12 +254,64 @@ function provision() {
   }
   const convId = resp.json("id");
 
+  // Function (API/sync). Best-effort: a failure here doesn't abort the VU; the
+  // loop simply skips function execution.
+  let functionName = null;
+  const fname = `loadfn_${__VU}_${Date.now()}`;
+  resp = http.post(
+    `${API_URL}/pods/${podId}/functions`,
+    JSON.stringify({
+      name: fname,
+      description: "load-test function",
+      type: "API",
+      code: functionCode(fname),
+    }),
+    { headers: H, tags: { name: "create_function" }, timeout: "60s" }
+  );
+  createFunctionMs.add(resp.timings.duration);
+  if (resp.status === 201) {
+    functionName = resp.json("name") || fname;
+  } else {
+    journeyErrors.add(1);
+  }
+
+  // App + dist bundle. Best-effort, same as the function.
+  let appName = null;
+  const aname = `loadapp${__VU}x${Date.now()}`;
+  resp = http.post(
+    `${API_URL}/pods/${podId}/apps`,
+    JSON.stringify({ name: aname }),
+    { headers: H, tags: { name: "create_app" }, timeout: "30s" }
+  );
+  createAppMs.add(resp.timings.duration);
+  if (resp.status === 201) {
+    appName = resp.json("name") || aname;
+    const up = http.post(
+      `${API_URL}/pods/${podId}/apps/${appName}/bundle`,
+      {
+        dist_archive: http.file(
+          b64decode(DIST_ZIP_B64, "std", "b"),
+          "dist.zip",
+          "application/zip"
+        ),
+      },
+      { headers: { Authorization: H.Authorization }, tags: { name: "upload_bundle" }, timeout: "60s" }
+    );
+    uploadBundleMs.add(up.timings.duration);
+    if (up.status !== 200 && up.status !== 201) {
+      appName = null;
+      journeyErrors.add(1);
+    }
+  } else {
+    journeyErrors.add(1);
+  }
+
   provisionSuccess.add(true);
-  return { podId, convId, H };
+  return { podId, convId, H, functionName, appName };
 }
 
 // --------------------------------------------------------------------------
-// VU: provision once, then send the message in a loop (sustained)
+// VU: provision once, then exercise the full surface in a loop (sustained)
 // --------------------------------------------------------------------------
 
 export function journeyVU() {
@@ -237,35 +322,34 @@ export function journeyVU() {
       return;
     }
   }
+  const podId = vuState.podId;
+  const H = vuState.H;
+  const authOnly = { Authorization: H.Authorization };
 
-  // POST /messages returns text/event-stream and blocks until the run reaches a
-  // terminal event; full duration = api->DB->redis->worker->mock->SSE round-trip.
+  // 1. Agent message — POST /messages returns text/event-stream and blocks until
+  // the run reaches a terminal event; full duration = the worker round-trip.
   const resp = http.post(
-    `${API_URL}/pods/${vuState.podId}/conversations/${vuState.convId}/messages`,
+    `${API_URL}/pods/${podId}/conversations/${vuState.convId}/messages`,
     JSON.stringify({ content: MESSAGE }),
-    { headers: vuState.H, tags: { name: "message" }, timeout: "120s", responseType: "text" }
+    { headers: H, tags: { name: "message" }, timeout: "120s", responseType: "text" }
   );
   messageRoundtripMs.add(resp.timings.duration);
-
   const body = resp.body || "";
   const completed = resp.status === 200 && body.indexOf('"type": "completed"') !== -1;
   messageSuccess.add(completed);
-  if (!completed) {
-    journeyErrors.add(1);
-  }
-
+  if (!completed) journeyErrors.add(1);
   const tokens = countOccurrences(body, '"type": "token"');
   if (tokens > 0) tokensReceived.add(tokens);
   if (body.indexOf("write_todos") !== -1) toolCallsReceived.add(1);
-
   check(resp, { "message run completed": () => completed });
 
-  // File create + download — verify these flows don't pin a DB connection
-  // across object-storage I/O. Auth-only headers (k6 sets the multipart type).
+  // 2. File CRUD: create -> update(content) -> download -> delete. Each must
+  // resolve/persist in short UoWs and never pin a DB connection across storage.
+  const fpath = `/lt-${__VU}-${__ITER}.txt`;
   const fname = `lt-${__VU}-${__ITER}.txt`;
-  const authOnly = { Authorization: vuState.H.Authorization };
+  let fileOk = false;
   const up = http.post(
-    `${API_URL}/pods/${vuState.podId}/datastore/files`,
+    `${API_URL}/pods/${podId}/datastore/files`,
     {
       data: http.file("hello from loadtest\n", fname, "text/plain"),
       name: fname,
@@ -276,17 +360,62 @@ export function journeyVU() {
   );
   createFileMs.add(up.timings.duration);
   if (up.status === 200 || up.status === 201) {
+    // Update file content (PATCH multipart).
+    const updt = http.patch(
+      `${API_URL}/pods/${podId}/datastore/files/by-path`,
+      {
+        path: fpath,
+        data: http.file("updated by loadtest\n", fname, "text/plain"),
+      },
+      { headers: authOnly, tags: { name: "update_file" }, timeout: "30s" }
+    );
+    updateFileMs.add(updt.timings.duration);
+
     const dl = http.get(
-      `${API_URL}/pods/${vuState.podId}/datastore/files/download?path=${encodeURIComponent("/" + fname)}`,
+      `${API_URL}/pods/${podId}/datastore/files/download?path=${encodeURIComponent(fpath)}`,
       { headers: authOnly, tags: { name: "download_file" }, timeout: "30s" }
     );
     downloadFileMs.add(dl.timings.duration);
-    const ok = dl.status === 200;
-    fileSuccess.add(ok);
-    if (!ok) journeyErrors.add(1);
-  } else {
-    fileSuccess.add(false);
-    journeyErrors.add(1);
+
+    const del = http.del(
+      `${API_URL}/pods/${podId}/datastore/files/by-path?path=${encodeURIComponent(fpath)}`,
+      null,
+      { headers: authOnly, tags: { name: "delete_file" }, timeout: "30s" }
+    );
+    deleteFileMs.add(del.timings.duration);
+
+    fileOk =
+      (updt.status === 200) &&
+      (dl.status === 200) &&
+      (del.status === 204 || del.status === 200);
+  }
+  fileSuccess.add(fileOk);
+  if (!fileOk) journeyErrors.add(1);
+
+  // 3. Function execute (API/sync) — against the fake AgentBox. The run executes
+  // inline and the response carries the terminal status.
+  if (vuState.functionName) {
+    const fx = http.post(
+      `${API_URL}/pods/${podId}/functions/${vuState.functionName}/runs`,
+      JSON.stringify({ input_data: { n: __ITER } }),
+      { headers: H, tags: { name: "execute_function" }, timeout: "60s" }
+    );
+    executeFunctionMs.add(fx.timings.duration);
+    const fnOk = fx.status === 200 && (fx.json("status") || "") === "COMPLETED";
+    functionSuccess.add(fnOk);
+    if (!fnOk) journeyErrors.add(1);
+  }
+
+  // 4. App asset load — serve the uploaded dist bundle's root asset.
+  if (vuState.appName) {
+    const asset = http.get(
+      `${API_URL}/pods/${podId}/apps/${vuState.appName}/assets`,
+      { headers: authOnly, tags: { name: "load_app_asset" }, timeout: "30s" }
+    );
+    loadAppAssetMs.add(asset.timings.duration);
+    const appOk = asset.status === 200;
+    appSuccess.add(appOk);
+    if (!appOk) journeyErrors.add(1);
   }
 
   sleep(THINK_MS / 1000);
@@ -302,9 +431,16 @@ const LATENCY_METRICS = [
   ["create_pod", "create_pod_ms"],
   ["create_agent", "create_agent_ms"],
   ["create_conv", "create_conv_ms"],
+  ["create_function", "create_function_ms"],
+  ["create_app", "create_app_ms"],
+  ["upload_bundle", "upload_bundle_ms"],
   ["message_roundtrip", "message_roundtrip_ms"],
   ["create_file", "create_file_ms"],
+  ["update_file", "update_file_ms"],
   ["download_file", "download_file_ms"],
+  ["delete_file", "delete_file_ms"],
+  ["execute_function", "execute_function_ms"],
+  ["load_app_asset", "load_app_asset_ms"],
 ];
 
 function fmt(n) {
@@ -340,15 +476,16 @@ export function handleSummary(data) {
     );
   }
   lines.push("------------------------------------------------------");
-  const ms = (m.message_success && m.message_success.values) || {};
-  const ps = (m.provision_success && m.provision_success.values) || {};
-  const fs = (m.file_success && m.file_success.values) || {};
-  lines.push("provision_success rate : " + fmt((ps.rate || 0) * 100) + "%");
-  lines.push("message_success rate   : " + fmt((ms.rate || 0) * 100) + "%");
-  lines.push("file_success rate      : " + fmt((fs.rate || 0) * 100) + "%");
-  lines.push("tokens_received        : " + fmt((m.tokens_received && m.tokens_received.values.count)));
-  lines.push("tool_calls_received    : " + fmt((m.tool_calls_received && m.tool_calls_received.values.count)));
-  lines.push("journey_errors         : " + fmt((m.journey_errors && m.journey_errors.values.count)));
+  const rate = (key) => fmt((((m[key] && m[key].values) || {}).rate || 0) * 100) + "%";
+  const cnt = (key) => fmt((m[key] && m[key].values && m[key].values.count));
+  lines.push("provision_success rate : " + rate("provision_success"));
+  lines.push("message_success rate   : " + rate("message_success"));
+  lines.push("file_success rate      : " + rate("file_success"));
+  lines.push("function_success rate  : " + rate("function_success"));
+  lines.push("app_success rate       : " + rate("app_success"));
+  lines.push("tokens_received        : " + cnt("tokens_received"));
+  lines.push("tool_calls_received    : " + cnt("tool_calls_received"));
+  lines.push("journey_errors         : " + cnt("journey_errors"));
   lines.push("======================================================");
   lines.push("");
 

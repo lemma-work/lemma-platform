@@ -72,6 +72,24 @@ services:
     networks:
       - load_test_net
 
+  # ── Fake AgentBox (mock sandbox manager) ──────────────────────────────────
+  # Serves the AgentBox manager HTTP contract + the in-sandbox function_executor
+  # app with canned responses, so function create + execute (and workspace tools)
+  # run in the load test without a real Docker sandbox. Functions are not really
+  # executed; output_data echoes the input — enough to exercise the full pipeline
+  # and its connection behavior.
+  fake-agentbox:
+    image: ${LEMMA_IMAGE:-lemma-backend:load-test}
+    container_name: lemma-load-fake-agentbox
+    command: ["uvicorn", "app.modules.workspace.testing.fake_agentbox:create_fake_agentbox_app", "--factory", "--host", "0.0.0.0", "--port", "9000"]
+    networks:
+      - load_test_net
+    deploy:
+      resources:
+        limits:
+          cpus: "1.0"
+          memory: 1G
+
   # ── API service (matches prod: separate pod) ──────────────────────────────
   api:
     image: ${LEMMA_IMAGE:-lemma-backend:load-test}
@@ -101,6 +119,11 @@ services:
       # instant mock makes runs CPU-bound and saturates one core). ~2 turns/run.
       E2E_MOCK_LLM_LATENCY_MS: "1500"
       LEMMA_OPENAI_API_KEY: "EMPTY"
+      # Fake AgentBox: function create/execute + workspace tools hit the mock
+      # sandbox manager instead of a real Docker AgentBox.
+      AGENTBOX_API_URL: "http://fake-agentbox:9000"
+      AGENTBOX_API_KEY: "EMPTY"
+      E2E_SANDBOX_MODE: "fake"
     ports:
       - "8000:8000"
     depends_on:
@@ -109,6 +132,8 @@ services:
       supertokens:
         condition: service_healthy
       redis:
+        condition: service_started
+      fake-agentbox:
         condition: service_started
     healthcheck:
       test: ["CMD-SHELL", "python -c \"import urllib.request; urllib.request.urlopen('http://localhost:8000/health')\" || exit 1"]
@@ -154,12 +179,18 @@ services:
       # instant mock makes runs CPU-bound and saturates one core). ~2 turns/run.
       E2E_MOCK_LLM_LATENCY_MS: "1500"
       LEMMA_OPENAI_API_KEY: "EMPTY"
+      # Fake AgentBox: JOB function runs + workspace tools hit the mock manager.
+      AGENTBOX_API_URL: "http://fake-agentbox:9000"
+      AGENTBOX_API_KEY: "EMPTY"
+      E2E_SANDBOX_MODE: "fake"
     depends_on:
       db:
         condition: service_healthy
       supertokens:
         condition: service_healthy
       redis:
+        condition: service_started
+      fake-agentbox:
         condition: service_started
     networks:
       - load_test_net
