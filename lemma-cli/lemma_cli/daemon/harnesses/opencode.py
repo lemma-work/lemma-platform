@@ -175,6 +175,7 @@ async def _run_opencode_turn(
 
     params = {"directory": str(cwd)}
     config = merged_opencode_config(os.environ.get("OPENCODE_CONFIG_CONTENT"), mcp)
+    mcp_server_names = tuple((config.get("mcp") or {}).keys())
     async with httpx.AsyncClient(timeout=None) as client:
         for server_name, server_config in (config.get("mcp") or {}).items():
             if isinstance(server_config, dict) and server_config.get("enabled", True) is not False:
@@ -237,6 +238,9 @@ async def _run_opencode_turn(
             await _accept_lemma_opencode_permissions(client, base_url, params=params)
             messages = await _opencode_request(client, "GET", base_url, f"/session/{session_id}/message", params=params)
             if isinstance(messages, list):
+                await text_state.update_tool_parts(
+                    _opencode_tool_parts(messages, mcp_server_names)
+                )
                 text = _opencode_latest_assistant_text(messages)
                 # Only treat text that differs from the pre-turn baseline as this
                 # turn's output.
@@ -377,6 +381,55 @@ def _opencode_latest_assistant_text(messages: list[Any]) -> str:
         if text:
             output = text
     return output
+
+
+def _strip_mcp_server_prefix(tool_name: str, server_names: tuple[str, ...]) -> str:
+    """Strip opencode's MCP server-name prefix from a tool name.
+
+    opencode exposes an MCP server's tools as ``<server>_<tool>`` (e.g. the
+    ``lemma_tools`` server's ``lemma_exec_command`` becomes
+    ``lemma_tools_lemma_exec_command``). Strip the server prefix so the emitted
+    tool_name is the canonical MCP tool name the rest of Lemma uses.
+    """
+    for server in server_names:
+        prefix = f"{server}_"
+        if server and tool_name.startswith(prefix):
+            return tool_name[len(prefix):]
+    return tool_name
+
+
+def _opencode_tool_parts(
+    messages: list[Any], server_names: tuple[str, ...] = ()
+) -> list[dict]:
+    """Return assistant ToolParts (``type == "tool"``) from opencode messages.
+
+    opencode's message endpoint returns each message's structured ``parts``; a tool
+    part carries ``callID``, ``tool`` (name) and ``state`` (status + input/output).
+    ``_opencode_latest_assistant_text`` drops these; we surface them so opencode
+    tool calls/outputs reach the conversation as TOOL_CALL/TOOL_RETURN messages,
+    like the codex and claude_code harnesses. The ``tool`` field is normalized to
+    the canonical MCP tool name (opencode prefixes it with the MCP server name).
+    """
+    parts_out: list[dict] = []
+    for entry in messages:
+        if not isinstance(entry, dict):
+            continue
+        info = entry.get("info") if isinstance(entry.get("info"), dict) else entry
+        role = str(info.get("role") or entry.get("role") or "")
+        if role and role != "assistant":
+            continue
+        parts = entry.get("parts")
+        if not isinstance(parts, list):
+            content = info.get("content")
+            parts = content if isinstance(content, list) else []
+        for part in parts:
+            if isinstance(part, dict) and str(part.get("type") or "") == "tool":
+                normalized = dict(part)
+                normalized["tool"] = _strip_mcp_server_prefix(
+                    str(part.get("tool") or ""), server_names
+                )
+                parts_out.append(normalized)
+    return parts_out
 
 
 def _opencode_model_payload(model_name: str) -> dict[str, str] | None:
