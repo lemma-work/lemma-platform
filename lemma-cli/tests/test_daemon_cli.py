@@ -1266,6 +1266,10 @@ def test_claude_mcp_args_disable_native_tools_by_default(monkeypatch):
     assert "Bash" in disallowed_tools
     assert "Read" in disallowed_tools
     assert "WebSearch" not in disallowed_tools
+    # Stale names removed in Claude Code 2.x must not return: each one Claude Code
+    # doesn't recognize prints a "matches no known tool" warning on every run.
+    for stale in ("LS", "MultiEdit", "NotebookRead", "TodoRead"):
+        assert stale not in disallowed_tools
 
 
 def test_claude_command_resumes_saved_session():
