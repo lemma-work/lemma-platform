@@ -143,6 +143,29 @@ def test_openai_compatible_transformer_inlines_all_defs():
     assert not offenders, f"unresolved $ref/$defs after inlining: {offenders}"
 
 
+def test_pod_write_record_data_advertises_object_or_json_string():
+    """`pod_write_record.data` must offer a JSON-string form alongside the object.
+
+    OpenAI requires every object schema to carry a `properties` map, so a
+    free-form (dynamic-column) object necessarily serializes with
+    `properties: {}` — which many models read as "no fields" and fill with `{}`,
+    silently dropping the row. The JSON-string branch is the escape hatch that
+    lets those models write data, so the transformed tool schema must keep both
+    branches (and never collapse `data` to a strict, closed empty object).
+    """
+    from app.modules.agent.services.openai_schema_compat import (
+        InlineDefsOpenAIJsonSchemaTransformer,
+    )
+    from app.modules.agent.tools.pod.pydantic_adapter import pod_toolset
+
+    raw = _tool_schema(pod_toolset.tools["pod_write_record"])
+    assert raw is not None
+    transformed = InlineDefsOpenAIJsonSchemaTransformer(raw, strict=None).walk()
+    data_schema = transformed["properties"]["data"]
+    branch_types = {branch.get("type") for branch in data_schema.get("anyOf", [])}
+    assert {"object", "string"} <= branch_types, data_schema
+
+
 def test_record_filter_value_is_typed_not_bare_any():
     from app.modules.agent.tools.pod.models import RecordFilter
 

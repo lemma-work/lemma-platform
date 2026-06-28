@@ -2,9 +2,10 @@
 
 from __future__ import annotations
 
+import json
 from typing import Literal
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 from app.modules.agent.domain.value_objects import JsonObject
 
@@ -58,16 +59,56 @@ class PodWriteRecordRequest(BaseModel):
         default=None,
         description="Target record id. Required for 'update' and 'delete'.",
     )
-    data: JsonObject | None = Field(
+    # Accepts a JSON object OR a JSON-encoded string of that object. The `str`
+    # member exists so the tool schema advertises the string form: OpenAI
+    # requires every object schema to carry a `properties` map, and a free-form
+    # (dynamic-column) object necessarily serializes with `properties: {}` —
+    # which many models read as "no fields" and fill with `{}`, silently
+    # dropping the row. The string form is an unambiguous escape hatch. The
+    # `_coerce_data` validator decodes any string back to a dict, so downstream
+    # code only ever sees `dict | None`.
+    data: JsonObject | str | None = Field(
         default=None,
         description=(
-            "An object mapping column name -> value, e.g. "
-            '{"title": "Q3 report", "amount": 42, "tags": ["a", "b"]}. Values may '
-            "be scalars, nested objects, or arrays. REQUIRED and must be non-empty "
-            "for 'create' and 'update' — an empty object writes nothing and is "
-            "rejected."
+            "The row's column name -> value mapping. Pass EITHER a JSON object, "
+            'e.g. {"title": "Q3 report", "amount": 42, "tags": ["a", "b"]}, OR a '
+            "JSON-encoded string of that same object if you cannot emit a "
+            'populated object directly, e.g. "{\\"title\\": \\"Q3 report\\", '
+            '\\"amount\\": 42}". Values may be scalars, nested objects, or '
+            "arrays. REQUIRED and must be non-empty for 'create' and 'update' — "
+            "an empty object writes nothing and is rejected."
         ),
     )
+
+    @field_validator("data", mode="before")
+    @classmethod
+    def _coerce_data(cls, value: object) -> object:
+        """Decode a JSON-encoded string payload into an object.
+
+        Models on OpenAI-compatible providers often pass ``data`` as a JSON
+        string instead of a native object (see the field comment). Parse it here
+        so the rest of the toolset always receives a ``dict``; a blank string
+        becomes ``None`` (caught by the non-empty guard), and a string that is
+        not a JSON object is rejected with an actionable message.
+        """
+        if not isinstance(value, str):
+            return value
+        text = value.strip()
+        if not text:
+            return None
+        try:
+            parsed = json.loads(text)
+        except (ValueError, TypeError) as exc:
+            raise ValueError(
+                '`data` was a string but not valid JSON; pass a JSON object like '
+                '{"title": "Q3 report"} (or a JSON-encoded string of it).'
+            ) from exc
+        if not isinstance(parsed, dict):
+            raise ValueError(
+                "`data` must be (or JSON-decode to) an object of column->value, "
+                f"not {type(parsed).__name__}."
+            )
+        return parsed
 
 
 class QueryRequest(BaseModel):
