@@ -1592,6 +1592,27 @@ def test_discover_harness_models_allows_explicit_override(monkeypatch):
     )
 
 
+def test_order_opencode_models_pushes_free_tier_last():
+    from lemma_cli.daemon.catalog import _order_opencode_models
+
+    ordered = _order_opencode_models(
+        [
+            "opencode/deepseek-v4-flash-free",
+            "fireworks-ai/accounts/fireworks/models/deepseek-v4-flash",
+            "opencode/mimo-v2.5-free",
+            "fireworks-ai/accounts/fireworks/models/glm-5p1",
+        ]
+    )
+    # Reliable provider models first (stable order), flaky *-free tier last, so
+    # the default selection (first model) doesn't land on a rate-limited model.
+    assert ordered == [
+        "fireworks-ai/accounts/fireworks/models/deepseek-v4-flash",
+        "fireworks-ai/accounts/fireworks/models/glm-5p1",
+        "opencode/deepseek-v4-flash-free",
+        "opencode/mimo-v2.5-free",
+    ]
+
+
 def _write_executable(path, content: str) -> None:
     path.write_text(textwrap.dedent(content), encoding="utf-8")
     path.chmod(0o755)

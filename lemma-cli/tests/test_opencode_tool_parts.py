@@ -13,6 +13,7 @@ import json
 
 from lemma_cli.daemon.harnesses.base import StreamTextState
 from lemma_cli.daemon.harnesses.opencode import (
+    _opencode_no_output_error,
     _opencode_tool_parts,
     _strip_mcp_server_prefix,
 )
@@ -99,3 +100,29 @@ def test_update_tool_parts_emits_call_then_return_once() -> None:
         )
 
     asyncio.run(run())
+
+
+def test_opencode_no_output_error_prefers_session_error() -> None:
+    # When OpenCode reported a session.error (the real reason), surface it
+    # instead of the useless server startup banner.
+    msg = _opencode_no_output_error(
+        ["Model not found: opencode/bogus."],
+        ["Warning: OPENCODE_SERVER_PASSWORD is not set", "opencode server listening"],
+    )
+    assert msg == (
+        "OpenCode session ended without assistant output: "
+        "Model not found: opencode/bogus."
+    )
+
+
+def test_opencode_no_output_error_falls_back_to_server_tail() -> None:
+    msg = _opencode_no_output_error([], ["boom on line 1", "boom on line 2"])
+    assert "OpenCode session ended without assistant output" in msg
+    assert "boom on line 2" in msg
+
+
+def test_opencode_no_output_error_bare_when_nothing_captured() -> None:
+    assert (
+        _opencode_no_output_error([], None)
+        == "OpenCode session ended without assistant output"
+    )

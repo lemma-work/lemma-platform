@@ -92,8 +92,20 @@ def discover_opencode_models(binary: str) -> list[str]:
     if payload is not None:
         models = _opencode_models_from_json(payload)
         if models:
-            return models
-    return _opencode_models_from_text(text)
+            return _order_opencode_models(models)
+    return _order_opencode_models(_opencode_models_from_text(text))
+
+
+def _order_opencode_models(models: list[str]) -> list[str]:
+    """Keep reliable provider models ahead of the rate-limited free tier.
+
+    OpenCode's ``*-free`` (zen) models are slow and frequently rate-limited,
+    which surfaces as a turn that "ends without assistant output". Default
+    selection picks the first model, so push the free tier to the end to avoid
+    landing a new runtime on a flaky default. Stable: order within each group is
+    preserved.
+    """
+    return sorted(models, key=lambda model: 1 if "free" in model.lower() else 0)
 
 
 def discover_claude_code_models(binary: str) -> list[str]:

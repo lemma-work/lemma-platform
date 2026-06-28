@@ -225,58 +225,76 @@ async def _run_opencode_turn(
                 await event_sink("status", _daemon_session_started_payload(harness_kind="OPENCODE", session_id=session_id))
             await _opencode_request(client, "POST", base_url, f"/session/{session_id}/prompt_async", params=params, body=body)
         daemon_log("opencode prompt submitted", {"session_id": session_id, "body": body})
-        deadline = asyncio.get_running_loop().time() + daemon_turn_timeout_seconds()
-        startup_grace = float(os.getenv("LEMMA_DAEMON_OPENCODE_STARTUP_GRACE_SECONDS", "10"))
-        turn_started_at = asyncio.get_running_loop().time()
-        last_output = baseline_output
-        missing_status_since: float | None = None
-        text_state = StreamTextState(harness_kind="OPENCODE", event_sink=event_sink)
-        while asyncio.get_running_loop().time() < deadline:
-            if stop_event is not None and stop_event.is_set():
-                break
-            now = asyncio.get_running_loop().time()
-            await _accept_lemma_opencode_permissions(client, base_url, params=params)
-            messages = await _opencode_request(client, "GET", base_url, f"/session/{session_id}/message", params=params)
-            if isinstance(messages, list):
-                await text_state.update_tool_parts(
-                    _opencode_tool_parts(messages, mcp_server_names)
-                )
-                text = _opencode_latest_assistant_text(messages)
-                # Only treat text that differs from the pre-turn baseline as this
-                # turn's output.
-                if text and text != baseline_output:
-                    if text != last_output:
-                        daemon_log("opencode latest assistant text", _preview(text))
-                        await text_state.update_text_snapshot(text)
-                    last_output = text
-            saw_new_output = last_output != baseline_output
-            status = await _opencode_request(client, "GET", base_url, "/session/status", params=params)
-            session_status = status.get(session_id) if isinstance(status, dict) else None
-            daemon_log("opencode session status", {"session_id": session_id, "status": session_status})
-            if isinstance(status, dict) and session_id not in status and saw_new_output:
-                await text_state.flush(is_final=True)
-                return last_output
-            if isinstance(status, dict) and session_id not in status:
-                if missing_status_since is None:
-                    missing_status_since = now
-                if now - missing_status_since < startup_grace:
-                    await asyncio.sleep(0.5)
-                    continue
-                stderr_tail = "\n".join((server_output or [])[-80:])
-                raise RuntimeError(
-                    "OpenCode session ended without assistant output"
-                    + (f":\n{stderr_tail}" if stderr_tail else "")
-                )
-            missing_status_since = None
-            if isinstance(session_status, dict) and session_status.get("type") != "busy":
-                # A resumed session can briefly report idle before it begins
-                # processing the new prompt; don't conclude the turn until we've
-                # captured new output or the startup grace has elapsed.
-                if saw_new_output or (now - turn_started_at) >= startup_grace:
+        # OpenCode reports generation failures (unknown model, provider auth,
+        # rate limits) ONLY on its /event SSE stream -- not in the message list,
+        # the session object, or the server's stdout. Tail that stream so we can
+        # surface the real reason instead of a generic "no output" error.
+        session_errors: list[str] = []
+        events_task = asyncio.create_task(
+            _consume_opencode_session_errors(client, base_url, params, session_id, session_errors)
+        )
+        try:
+            deadline = asyncio.get_running_loop().time() + daemon_turn_timeout_seconds()
+            startup_grace = float(os.getenv("LEMMA_DAEMON_OPENCODE_STARTUP_GRACE_SECONDS", "10"))
+            turn_started_at = asyncio.get_running_loop().time()
+            last_output = baseline_output
+            missing_status_since: float | None = None
+            text_state = StreamTextState(harness_kind="OPENCODE", event_sink=event_sink)
+            while asyncio.get_running_loop().time() < deadline:
+                if stop_event is not None and stop_event.is_set():
+                    break
+                now = asyncio.get_running_loop().time()
+                # A reported session error means generation failed; surface it
+                # right away rather than waiting out the grace period to raise a
+                # generic message. Prefer any partial output if we already have it.
+                if session_errors:
                     await text_state.flush(is_final=True)
-                    return last_output if saw_new_output else ""
-            await asyncio.sleep(0.5)
-    raise TimeoutError("OpenCode server turn timed out")
+                    if last_output != baseline_output:
+                        return last_output
+                    raise RuntimeError(f"OpenCode error: {_join_opencode_errors(session_errors)}")
+                await _accept_lemma_opencode_permissions(client, base_url, params=params)
+                messages = await _opencode_request(client, "GET", base_url, f"/session/{session_id}/message", params=params)
+                if isinstance(messages, list):
+                    await text_state.update_tool_parts(
+                        _opencode_tool_parts(messages, mcp_server_names)
+                    )
+                    text = _opencode_latest_assistant_text(messages)
+                    # Only treat text that differs from the pre-turn baseline as this
+                    # turn's output.
+                    if text and text != baseline_output:
+                        if text != last_output:
+                            daemon_log("opencode latest assistant text", _preview(text))
+                            await text_state.update_text_snapshot(text)
+                        last_output = text
+                saw_new_output = last_output != baseline_output
+                status = await _opencode_request(client, "GET", base_url, "/session/status", params=params)
+                session_status = status.get(session_id) if isinstance(status, dict) else None
+                daemon_log("opencode session status", {"session_id": session_id, "status": session_status})
+                if isinstance(status, dict) and session_id not in status and saw_new_output:
+                    await text_state.flush(is_final=True)
+                    return last_output
+                if isinstance(status, dict) and session_id not in status:
+                    if missing_status_since is None:
+                        missing_status_since = now
+                    if now - missing_status_since < startup_grace:
+                        await asyncio.sleep(0.5)
+                        continue
+                    await text_state.flush(is_final=True)
+                    raise RuntimeError(_opencode_no_output_error(session_errors, server_output))
+                missing_status_since = None
+                if isinstance(session_status, dict) and session_status.get("type") != "busy":
+                    # A resumed session can briefly report idle before it begins
+                    # processing the new prompt; don't conclude the turn until we've
+                    # captured new output or the startup grace has elapsed.
+                    if saw_new_output or (now - turn_started_at) >= startup_grace:
+                        await text_state.flush(is_final=True)
+                        return last_output if saw_new_output else ""
+                await asyncio.sleep(0.5)
+            raise TimeoutError("OpenCode server turn timed out")
+        finally:
+            events_task.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await events_task
 
 
 _OPENCODE_GET_RETRY_ATTEMPTS = 3
@@ -358,6 +376,65 @@ async def _accept_lemma_opencode_permissions(
         await _opencode_request(
             client, "POST", base_url, f"/permission/{request_id}/reply", params=params, body={"reply": reply},
         )
+
+
+async def _consume_opencode_session_errors(
+    client: Any,
+    base_url: str,
+    params: dict[str, str],
+    session_id: str,
+    sink: list[str],
+) -> None:
+    """Collect ``session.error`` messages from OpenCode's ``/event`` SSE stream.
+
+    OpenCode surfaces model/provider/runtime failures only here, so tailing the
+    stream lets the turn report the real reason (e.g. "Model not found", provider
+    auth, rate limit). Best-effort: any failure reading the stream is swallowed
+    so it can never break the turn itself.
+    """
+    try:
+        async with client.stream("GET", f"{base_url}/event", params=params) as response:
+            async for line in response.aiter_lines():
+                if not line.startswith("data:"):
+                    continue
+                raw = line[len("data:"):].strip()
+                if not raw:
+                    continue
+                try:
+                    event = json.loads(raw)
+                except json.JSONDecodeError:
+                    continue
+                if not isinstance(event, dict) or event.get("type") != "session.error":
+                    continue
+                props = event.get("properties") if isinstance(event.get("properties"), dict) else {}
+                event_session = str(props.get("sessionID") or "")
+                if event_session and session_id and event_session != session_id:
+                    continue
+                error = props.get("error") if isinstance(props.get("error"), dict) else {}
+                data = error.get("data") if isinstance(error.get("data"), dict) else {}
+                message = data.get("message") or error.get("name") or "OpenCode session error"
+                sink.append(str(message))
+    except asyncio.CancelledError:
+        raise
+    except Exception:  # noqa: BLE001 -- diagnostics stream is best-effort
+        pass
+
+
+def _join_opencode_errors(session_errors: list[str]) -> str:
+    """De-duplicated, order-preserving join of captured session errors."""
+    return "; ".join(dict.fromkeys(err for err in session_errors if err))
+
+
+def _opencode_no_output_error(session_errors: list[str], server_output: list[str] | None) -> str:
+    """Build the most informative message for a turn that produced no output."""
+    joined = _join_opencode_errors(session_errors)
+    if joined:
+        return f"OpenCode session ended without assistant output: {joined}"
+    stderr_tail = "\n".join((server_output or [])[-80:]).strip()
+    return (
+        "OpenCode session ended without assistant output"
+        + (f":\n{stderr_tail}" if stderr_tail else "")
+    )
 
 
 def _opencode_latest_assistant_text(messages: list[Any]) -> str:
