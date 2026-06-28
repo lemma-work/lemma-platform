@@ -1,8 +1,9 @@
 # dependencies
-desks/arcade-desk/source/node_modules/
+apps/task-arcade/source/node_modules/
 
 # build output
-desks/arcade-desk/source/dist/
+apps/task-arcade/source/dist/
+apps/task-arcade/dist.zip
 
 # editor / OS
 .DS_Store

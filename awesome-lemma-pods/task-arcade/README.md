@@ -21,7 +21,7 @@ Every task your team clears becomes a permanent object in a shared 3D island —
 
 Most work software makes effort vanish into a closed ticket. Task Arcade makes the opposite bet: a cleared task becomes something you can **see, walk through, and be proud of.** The recap isn't a report anyone writes — the recap is the world.
 
-And here's the part that matters for *you*: this whole thing — the 3D world, the points economy, the review queue, the AI Quartermaster — is **one Lemma pod.** Tables, functions, an agent, scheduled workflows, and a full 3D app, as a single importable unit. Clone it, import it, deploy the desk, and you have a running app. Then rewire it for your team's work.
+And here's the part that matters for *you*: this whole thing — the 3D world, the points economy, the review queue, the AI Quartermaster — is **one Lemma pod.** Tables, functions, an agent, scheduled workflows, and a full 3D app, as a single importable unit. Clone it, import it, deploy the app, and you have a running app. Then rewire it for your team's work.
 
 ---
 
@@ -46,7 +46,7 @@ Task Arcade isn't a demo stitched from glue code. It's a real product built on a
 | **The workspace** | **[Lemma](https://lemma.work)** | The foundation. One pod holds the tables, functions, agent, workflows, schedules, permissions, and the app — humans and AI agents reading/writing the same state. *Not a pile of connectors.* |
 | **3D world** | **[three.js](https://threejs.org) · [react-three-fiber](https://r3f.docs.pmnd.rs/) · [drei](https://github.com/pmndrs/drei)** | The isometric island — orthographic diorama camera, auto-orbit, contact shadows, GLB monuments that grow in with spring physics. |
 | **Motion** | **[GSAP](https://gsap.com)** | The deterministic autoplay cinematic — the product films its own walkthrough, one take, no mouse. |
-| **The desk app** | **React 19 · TypeScript · Vite 7** | A fast, modern SPA deployed as a Lemma app. Role-gated UI, hash routing, zero-config build. |
+| **The app** | **React 19 · TypeScript · Vite 7** | A fast, modern SPA deployed as a Lemma app. Role-gated UI, hash routing, zero-config build. |
 | **Live data** | **[TanStack Query](https://tanstack.com/query) · `lemma-sdk`** | Every build, task, and sprint is a live pod record — `useRecords`, `useAuth`, real-time, no custom backend. |
 | **Backend logic** | **Python · [Pydantic](https://docs.pydantic.dev) · `lemma-sdk`** | Four deterministic, role-enforced functions. Typed inputs, server-side rules, zero trust by default. |
 | **The teammate** | **Your own Claude Code / Codex** | The Quartermaster agent runs on *your* subscription — no separate API key, no per-token bill. |
@@ -72,8 +72,8 @@ lemma pods create task-arcade --org <your-org>
 # 2. Import the bundle (tables, functions, agent, workflows, schedules, surface)
 lemma pods import .
 
-# 3. Build + deploy the desk app
-cd desks/arcade-desk/source
+# 3. Build + deploy the app
+cd apps/task-arcade/source
 npm install
 npm run build
 lemma apps deploy task-arcade ./dist --pod <pod-id> --yes
@@ -83,13 +83,13 @@ Open the deployed app URL. **The first person to sign in becomes the manager** o
 
 > **Prefer to let your coding agent do it?** Point Claude Code / Codex / Cursor / OpenCode at **[`task-arcade.apps.lemma.work/llms.txt`](https://task-arcade.apps.lemma.work/llms.txt)** — it installs the CLI + builder skills and stands the pod up for you.
 
-> **Local dev of the desk:** the desk reads `window.__LEMMA_CONFIG__`, injected only when deployed as a Lemma app. For local Vite dev, proxy the config in `vite.config.ts` or develop against a deployed pod. `npm run dev` won't connect to a pod on its own.
+> **Local dev of the app:** the app reads `window.__LEMMA_CONFIG__`, injected only when deployed as a Lemma app. For local Vite dev, proxy the config in `vite.config.ts` or develop against a deployed pod. `npm run dev` won't connect to a pod on its own.
 
 ---
 
 ## What's in the pod
 
-A Lemma pod is a directory of plain files — tables, functions, agents, workflows, permissions, apps. Everything here is imported with `lemma pods import`. Build order follows dependencies: **tables → functions → agent → workflows → schedules → surface → desk.**
+A Lemma pod is a directory of plain files — tables, functions, agents, workflows, permissions, apps. Everything here is imported with `lemma pods import`. Build order follows dependencies: **tables → functions → agent → workflows → schedules → surface → app.**
 
 ### Tables (`tables/`)
 | Table | Purpose |
@@ -124,7 +124,7 @@ Plus `milestone_check` — a DATASTORE trigger that fires the moment a task goes
 ### Surface (`surfaces/slack/`)
 A Slack surface skeleton (disabled by default). Wire it up by creating a Slack connector account, replacing `account_id` in `slack.json`, and enabling it. See [Lemma's connectors docs](https://lemma.work/docs).
 
-### Desk (`desks/arcade-desk/`)
+### App (`apps/task-arcade/`)
 The product UI — a Vite + React 19 + react-three-fiber isometric 3D app. Primary nav: **World** (the hero — sprint panel + 3D grid + task→place card), **Tasks**, and the **Review** queue; plus **Catalog**, **Stats**, and **Recap** views, and a full-page **Quartermaster** command post at `#/quartermaster`. Role-gated: managers assign + review, members clear + place, viewers read-only.
 
 ---
@@ -154,13 +154,13 @@ The pod ships **empty**. To see a populated world immediately — a 6-member tea
 
 > ⚠️ **Never run this on a pod with real data.** It drops the tasks table. To clear seeded data later, re-import the tables empty: `lemma pods import tables/`.
 
-After seeding, rebuild + redeploy the desk to see the populated world.
+After seeding, rebuild + redeploy the app to see the populated world.
 
 ---
 
 ## First-user behavior
 
-When the desk loads for a brand-new user:
+When the app loads for a brand-new user:
 
 1. **First sign-in** → if `team_members` is empty, the user is auto-created as **manager**. They own the pod.
 2. **Subsequent users** → if they're not in `team_members`, they see a clean *"You're not on this team yet — ask the team's manager to invite you"* state. No silent auto-add.
@@ -179,11 +179,11 @@ This is a template. Make it yours:
 | Change the agent's behavior or tone | `agents/quartermaster/instruction.md` | `lemma pods import agents/quartermaster` |
 | Add build components / change tiers | `tables/catalogue_items/catalogue_items.json` + seed data | `lemma pods import tables/catalogue_items` |
 | Change the points model | `tables/tasks/tasks.json` (the `points` ENUM) + the 4 functions | Drop + recreate the tasks table (schema is immutable in-place) |
-| Reskin the 3D world | swap the Kenney kit in `desks/arcade-desk/source/src/App.tsx` + `arcade.css` | `npm run build` + redeploy |
+| Reskin the 3D world | swap the Kenney kit in `apps/task-arcade/source/src/App.tsx` + `arcade.css` | `npm run build` + redeploy |
 | Wire Slack | `surfaces/slack/slack.json` + create a connector account | `lemma surfaces upsert slack` + `lemma surfaces enable slack` |
 | Change the cron schedule | `schedules/*/...json` | `lemma pods import schedules/<name>` |
 
-**Re-import after backend edits:** `lemma pods import <folder>` (partial imports work). **Rebuild + redeploy after desk edits.**
+**Re-import after backend edits:** `lemma pods import <folder>` (partial imports work). **Rebuild + redeploy after app edits.**
 
 ---
 
@@ -191,7 +191,7 @@ This is a template. Make it yours:
 
 Task Arcade is built in public. On the way:
 
-- **A face for the Quartermaster** — the agent's persona is written; next it gets a named, illustrated mascot with a consistent voice across the desk and Slack.
+- **A face for the Quartermaster** — the agent's persona is written; next it gets a named, illustrated mascot with a consistent voice across the app and Slack.
 - **Every surface** — assign, clear, and recap from **Slack, email, and Telegram**. Tasks already carry a `source` field and the UI renders the badges; the Slack surface ships ready to wire.
 - **Tasks that find themselves** — the Quartermaster reads an inbound email/message and drafts a task (title, points, assignee) for a manager to confirm.
 - **More world juice** — drag-to-place with tile snapping, a time-lapse "rewind the sprint" scrubber, a full catalogue storefront, and the richer sound pack.
@@ -212,7 +212,7 @@ lemma pods import .             # ship it
 
 The full reference lives in the [Lemma skills](https://github.com/lemma-work/lemma-platform/tree/main/lemma-skills) and at [lemma.work/docs](https://lemma.work/docs). The key rules:
 
-1. **Build in dependency order:** tables → functions → agents → workflows → schedules → surfaces → desk.
+1. **Build in dependency order:** tables → functions → agents → workflows → schedules → surfaces → app.
 2. **Zero access by default.** Agents and functions get NO access to anything until you grant it explicitly.
 3. **Not everything bundles.** File contents and integration auth don't travel in the bundle — set those up with CLI commands and record the steps in your README.
 

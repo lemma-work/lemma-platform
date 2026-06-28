@@ -1,0 +1,6 @@
+{
+  "name": "trumpet",
+  "description": "Trumpet — the Mr. Toot personal assistant app (Home, Commits, Schedule, Notes, You), deployed as a Lemma app.",
+  "public_slug": "trumpet",
+  "visibility": "PUBLIC"
+}

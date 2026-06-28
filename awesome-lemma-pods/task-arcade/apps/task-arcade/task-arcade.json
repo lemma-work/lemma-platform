@@ -1,0 +1,6 @@
+{
+  "name": "task-arcade",
+  "description": "Task Arcade — the shared 3D world, points economy, review queue, and Quartermaster, deployed as a Lemma app.",
+  "public_slug": "task-arcade",
+  "visibility": "PUBLIC"
+}

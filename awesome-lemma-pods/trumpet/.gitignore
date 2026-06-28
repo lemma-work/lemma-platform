@@ -1,8 +1,9 @@
 # dependencies
-desks/trumpet-desk/source/node_modules/
+apps/trumpet/source/node_modules/
 
 # build output
-desks/trumpet-desk/source/dist/
+apps/trumpet/source/dist/
+apps/trumpet/dist.zip
 
 # editor / OS
 .DS_Store

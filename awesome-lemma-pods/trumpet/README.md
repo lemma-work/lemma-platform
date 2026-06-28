@@ -2,7 +2,7 @@
 
 A personal AI executive assistant that tracks commitments (to others, from others, habits, calendar), manages a contact book, and organises notes with a searchable index — all through one conversational assistant called **Mr. Toot**.
 
-This is a complete **Lemma pod** — clone it, import it, deploy the desk, and you have a running app. Rewire it for your own life.
+This is a complete **Lemma pod** — clone it, import it, deploy the app, and you have a running app. Rewire it for your own life.
 
 > Built on [Lemma](https://lemma.work) — the open-source workspace where humans and AI agents work as one team. Licensed under [AGPL-3.0](./LICENSE).
 
@@ -29,22 +29,22 @@ lemma pods import .
 node seed/seed.mjs <pod-id>
 # or: LEMMA_POD_ID=<pod-id> node seed/seed.mjs
 
-# 4. Build + deploy the desk app
-cd desks/trumpet-desk/source
+# 4. Build + deploy the app
+cd apps/trumpet/source
 npm install
 npm run build
 lemma apps deploy trumpet ./dist --pod <pod-id> --yes
 ```
 
-Open the deployed app URL. You'll see the Trumpet desk with five tabs: **Home**, **Commits**, **Schedule**, **Notes**, and **You** — and Mr. Toot in a popup chat ready to help.
+Open the deployed app URL. You'll see the Trumpet app with five tabs: **Home**, **Commits**, **Schedule**, **Notes**, and **You** — and Mr. Toot in a popup chat ready to help.
 
-> **Local dev of the desk:** the desk reads `window.__LEMMA_CONFIG__`, which Lemma injects only when the app is deployed as a Lemma app. For local Vite dev, copy `.env.example` to `.env.local`, fill in your pod ID, and run `npm run dev`. The dev server auto-authenticates using your CLI token.
+> **Local dev of the app:** the app reads `window.__LEMMA_CONFIG__`, which Lemma injects only when the app is deployed as a Lemma app. For local Vite dev, copy `.env.example` to `.env.local`, fill in your pod ID, and run `npm run dev`. The dev server auto-authenticates using your CLI token.
 
 ---
 
 ## What's in the pod
 
-A Lemma pod is a directory of plain files — tables, functions, agents, workflows, permissions, apps. Everything here is imported with `lemma pods import`. Build order follows dependencies: **tables → functions → agents → workflows → schedules → desk**.
+A Lemma pod is a directory of plain files — tables, functions, agents, workflows, permissions, apps. Everything here is imported with `lemma pods import`. Build order follows dependencies: **tables → functions → agents → workflows → schedules → app**.
 
 ### Tables (`tables/`)
 | Table | Purpose |
@@ -74,7 +74,7 @@ Two scheduled workflows run the automation layer:
 - `daily-huddle` (8am weekdays) → Mr. Toot pings team members for standup updates and compiles a daily huddle newsletter
 - `poll-replies` (every 2 hours) → checks Gmail and Slack threads for replies to pings
 
-### Desk (`desks/trumpet-desk/`)
+### App (`apps/trumpet/`)
 The product UI — a Vite + React + TypeScript app with a fixed 1512×1008 canvas, dark/light theme, and Hanken Grotesk typography. Five tabs:
 - **Home** — date, greeting summary, today's schedule, today's commitments
 - **Commits** — full commitment board with urgency sort, voice summary, poke modal
@@ -86,7 +86,7 @@ The product UI — a Vite + React + TypeScript app with a fixed 1512×1008 canva
 
 ## Seeded demo data (optional)
 
-The pod ships **empty**. If you want to see a populated desk immediately — 4 people, 7 commitments, 3 habits, and 13 calendar events — run the seed script:
+The pod ships **empty**. If you want to see a populated app immediately — 4 people, 7 commitments, 3 habits, and 13 calendar events — run the seed script:
 
 ```bash
 node seed/seed.mjs <pod-id>
@@ -95,7 +95,7 @@ node seed/seed.mjs <pod-id>
 
 The script is **idempotent** — it checks for existing people by name before creating, so re-running won't duplicate data.
 
-After seeding, rebuild + redeploy the desk to see the populated views.
+After seeding, rebuild + redeploy the app to see the populated views.
 
 ---
 
@@ -121,10 +121,10 @@ This is a template. Make it yours:
 | Change Mr. Toot's behavior or tone | `agents/mr-toot/instruction.md` | `lemma pods import agents/mr-toot` |
 | Add a new commitment type | `tables/commitments/commitments.json` (the `type` ENUM) + relevant functions | Drop + recreate the commitments table (schema is immutable in-place) |
 | Change the cron schedule | `schedules/*/<name>.json` | `lemma pods import schedules/<name>` |
-| Reskin the desk | `desks/trumpet-desk/source/src/index.css` (CSS variables) + `lib/tokens.ts` | `npm run build` + `lemma apps deploy trumpet ./dist --pod <id> --yes` |
+| Reskin the app | `apps/trumpet/source/src/index.css` (CSS variables) + `lib/tokens.ts` | `npm run build` + `lemma apps deploy trumpet ./dist --pod <id> --yes` |
 | Change the agent model | Lemma runtime profiles (per pod) | See [Lemma docs](https://lemma.work/docs) |
 
-**Re-import after backend edits:** `lemma pods import <folder>` (partial imports work — you don't have to re-import the whole pod). **Rebuild + redeploy after desk edits.**
+**Re-import after backend edits:** `lemma pods import <folder>` (partial imports work — you don't have to re-import the whole pod). **Rebuild + redeploy after app edits.**
 
 ---
 
