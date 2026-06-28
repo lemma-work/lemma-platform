@@ -202,6 +202,14 @@ async def _handle_claude_stream_event(
                 await state.flush(is_final=False)
                 await _emit_claude_tool_call(part, state)
         return text
+    if event_type == "tool_call":
+        # Cursor reports tool activity as top-level tool_call events
+        # (subtype started/completed) rather than Claude's tool_use content
+        # parts. Claude Code never emits this type, so handling it here is safe
+        # for both.
+        await state.flush(is_final=False)
+        await _emit_cursor_tool_call(event, state)
+        return ""
     if event_type == "result":
         result = event.get("result")
         if isinstance(result, str) and result and not state.full_text:
@@ -209,6 +217,74 @@ async def _handle_claude_stream_event(
         await state.flush(is_final=True)
         return result if isinstance(result, str) else ""
     return ""
+
+
+async def _emit_cursor_tool_call(event: dict[str, Any], state: StreamTextState) -> None:
+    call_id = str(event.get("call_id") or "")
+    if not call_id or state.event_sink is None:
+        return
+    subtype = str(event.get("subtype") or "")
+    tool_call = event.get("tool_call") if isinstance(event.get("tool_call"), dict) else {}
+    tool_name, tool_args = _cursor_tool_name_and_args(tool_call)
+    if subtype == "started":
+        if call_id in state.emitted_tool_call_ids:
+            return
+        state.emitted_tool_call_ids.add(call_id)
+        message = {
+            "role": "assistant",
+            "kind": "tool_call",
+            "tool_name": tool_name,
+            "tool_call_id": call_id,
+            "tool_args": tool_args,
+            "metadata": {"tool_name": tool_name, "provider": state.harness_kind},
+        }
+        state.streamed_tokens = True
+        await state.event_sink("token", codex_tool_token(message))
+        await state.event_sink("message", message)
+    elif subtype == "completed":
+        if call_id in state.emitted_tool_return_ids:
+            return
+        state.emitted_tool_return_ids.add(call_id)
+        state.streamed_messages = True
+        await state.event_sink(
+            "message",
+            {
+                "role": "tool",
+                "kind": "tool_return",
+                "tool_name": tool_name,
+                "tool_call_id": call_id,
+                "tool_result": _cursor_tool_result(tool_call),
+                "metadata": {"tool_name": tool_name, "provider": state.harness_kind},
+            },
+        )
+
+
+def _cursor_tool_name_and_args(tool_call: dict[str, Any]) -> tuple[str, Any]:
+    """Pull the tool name + args from Cursor's ``tool_call`` payload.
+
+    Shape is ``{"<kind>ToolCall": {"args": {...}, "result": ...}}`` -- e.g.
+    ``shellToolCall``, ``mcpToolCall``. MCP calls carry the real tool name; for
+    built-ins we derive it from the key ("shellToolCall" -> "shell").
+    """
+    for key, value in tool_call.items():
+        if not isinstance(value, dict):
+            continue
+        args = value.get("args") if isinstance(value.get("args"), dict) else {}
+        name = (
+            value.get("name")
+            or (args.get("name") if isinstance(args, dict) else None)
+            or (args.get("toolName") if isinstance(args, dict) else None)
+            or (key[: -len("ToolCall")] if key.endswith("ToolCall") else key)
+        )
+        return str(name), args
+    return "tool", {}
+
+
+def _cursor_tool_result(tool_call: dict[str, Any]) -> Any:
+    for value in tool_call.values():
+        if isinstance(value, dict) and "result" in value:
+            return value.get("result")
+    return None
 
 
 async def _emit_claude_tool_call(part: dict[str, Any], state: StreamTextState) -> None:
