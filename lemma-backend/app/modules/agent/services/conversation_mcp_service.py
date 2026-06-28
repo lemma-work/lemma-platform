@@ -30,6 +30,7 @@ from app.modules.agent.infrastructure.repositories import (
     AgentRepository,
     ConversationRepository,
 )
+from app.modules.agent.tools.callable_tool_factory import inline_tool_schema_refs
 from app.modules.agent.tools.context import BaseAgentContext
 from app.modules.agent.tools.dispatcher import AgentToolDispatcher
 from app.modules.agent.tools.tool_errors import (
@@ -84,7 +85,7 @@ class ConversationMCPService:
             Tool(
                 name=exported_tool_name(tool.name),
                 description=tool.description,
-                inputSchema=dict(tool.input_schema),
+                inputSchema=inline_tool_schema_refs(tool.input_schema),
                 _meta={
                     "lemma_tool_name": tool.name,
                     **(

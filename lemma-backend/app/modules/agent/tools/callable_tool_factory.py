@@ -59,6 +59,25 @@ def _inline_schema(schema: dict[str, Any]) -> dict[str, Any]:
     return InlineDefsJsonSchemaTransformer(schema, strict=False).walk()
 
 
+def inline_tool_schema_refs(schema: dict[str, Any]) -> dict[str, Any]:
+    """Inline non-recursive ``$defs``/``$ref`` in a tool's input schema.
+
+    OpenAI-compatible providers (notably Fireworks' GLM) can't resolve
+    ``$ref`` -> ``#/$defs/...`` server-side and reject the request with
+    ``Error resolving schema reference ... AttributeError("'NoneType' ... lookup")``.
+    The pydantic-ai model path already inlines refs via a model profile, but tool
+    schemas served over MCP to daemon harnesses (Claude Code, Cursor, OpenCode,
+    ...) were passed through raw. Inline them here too. Best-effort: a schema the
+    transformer can't process falls back to the original.
+    """
+    if not isinstance(schema, dict):
+        return schema
+    try:
+        return InlineDefsJsonSchemaTransformer(dict(schema), strict=False).walk()
+    except Exception:  # noqa: BLE001 -- never break tool listing over a schema quirk
+        return dict(schema)
+
+
 # Plain agents (no input_schema) are exposed as a single-string-input tool.
 _SINGLE_INPUT_FIELD = "input"
 

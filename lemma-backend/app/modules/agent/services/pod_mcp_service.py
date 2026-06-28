@@ -31,6 +31,7 @@ from app.modules.agent.infrastructure.mcp import (
     exported_tool_name,
     normalize_local_mcp_tool_name,
 )
+from app.modules.agent.tools.callable_tool_factory import inline_tool_schema_refs
 from app.modules.agent.tools.context import BaseAgentContext
 from app.modules.agent.tools.dispatcher import AgentToolDispatcher
 from app.modules.agent.tools.pod.pydantic_adapter import pod_toolset
@@ -60,7 +61,7 @@ class PodMCPService:
             Tool(
                 name=exported_tool_name(tool.name),
                 description=tool.description,
-                inputSchema=dict(tool.input_schema),
+                inputSchema=inline_tool_schema_refs(tool.input_schema),
                 _meta={"lemma_tool_name": tool.name},
             )
             for tool in tools

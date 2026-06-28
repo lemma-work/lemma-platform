@@ -207,3 +207,25 @@ def test_final_answer_tool_schema_clean_with_output_schema():
     )
     tool = Tool(get_final_answer_tool(agent), takes_ctx=True)
     assert not _typeless_default_nodes(tool.function_schema.json_schema)
+
+
+def test_inline_tool_schema_refs_removes_defs_and_refs():
+    from app.modules.agent.tools.callable_tool_factory import inline_tool_schema_refs
+
+    # MCP tool schemas are served to daemon harnesses (OpenCode/Cursor/...) whose
+    # providers (e.g. Fireworks GLM) can't resolve $ref server-side, so they must
+    # ship fully inlined. RecordFilter is flat (field/op/value), so it inlines.
+    schema = {
+        "type": "object",
+        "properties": {"filters": {"type": "array", "items": {"$ref": "#/$defs/RecordFilter"}}},
+        "$defs": {
+            "RecordFilter": {
+                "type": "object",
+                "properties": {"field": {"type": "string"}, "op": {"$ref": "#/$defs/Op"}},
+            },
+            "Op": {"enum": ["eq", "ne"]},
+        },
+    }
+    inlined = inline_tool_schema_refs(schema)
+    assert not _unresolved_refs(inlined), _unresolved_refs(inlined)
+    assert "$defs" not in inlined
