@@ -247,6 +247,10 @@ class AgentHarnessInfo(BaseModel):
     harness_kind: HarnessKind
     display_name: str
     models: list[str] = Field(default_factory=list)
+    # Structured model entries (display name, provider model id, context
+    # metadata) so the picker can advertise detected models nicely — not just
+    # the flat ``models`` aliases.
+    model_catalog: list[RuntimeModelCatalogEntry] = Field(default_factory=list)
     available: bool = True
     availability_status: str | None = None
     daemon_id: UUID | None = None

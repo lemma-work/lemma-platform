@@ -59,9 +59,13 @@ from lemma_cli.daemon.config import (
 # ── Catalog ───────────────────────────────────────────────────────────────────
 from lemma_cli.daemon.catalog import (
     HARNESS_BINARIES,
+    CLAUDE_CODE_MODEL_CATALOG,
+    CLAUDE_CODE_STANDARD_MODEL_BY_ALIAS,
     discover_harness_catalog,
     discover_harness,
     discover_harness_models,
+    discover_harness_model_entries,
+    normalize_provider_model_name,
     configured_harness_models,
     binary_version,
     run_catalog_command,
@@ -158,9 +162,13 @@ __all__ = [
     "clear_daemon_status",
     # catalog
     "HARNESS_BINARIES",
+    "CLAUDE_CODE_MODEL_CATALOG",
+    "CLAUDE_CODE_STANDARD_MODEL_BY_ALIAS",
     "discover_harness_catalog",
     "discover_harness",
     "discover_harness_models",
+    "discover_harness_model_entries",
+    "normalize_provider_model_name",
     "configured_harness_models",
     "binary_version",
     "run_catalog_command",

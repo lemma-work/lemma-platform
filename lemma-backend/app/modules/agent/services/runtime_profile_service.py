@@ -9,6 +9,7 @@ import socket
 from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Any
 from urllib.parse import urlparse
 from uuid import UUID, uuid4
 
@@ -258,15 +259,16 @@ class AgentRuntimeProfileService:
         if daemon is None:
             raise ValueError("Daemon is not available for the current user")
 
-        detected_models = _daemon_harness_model_names(
+        detected_catalog = _daemon_harness_model_catalog(
             harness_catalog=getattr(daemon, "harness_catalog", {}) or {},
             harness_kind=harness_kind,
         )
-        if detected_models is None:
+        if detected_catalog is None:
             raise ValueError(
                 f"{harness_kind.value} is not available from daemon {daemon_id}"
             )
-        model_names = _user_daemon_model_names(detected_models)
+        model_catalog = _user_daemon_model_catalog(detected_catalog)
+        model_names = [entry.name for entry in model_catalog]
         selected_default_model = _select_user_daemon_default_model(
             requested_model_name=default_model_name,
             model_names=model_names,
@@ -282,18 +284,7 @@ class AgentRuntimeProfileService:
             name=normalized_name,
             description=description.strip() if description else None,
             default_model_name=selected_default_model,
-            model_catalog=[
-                RuntimeModelCatalogEntry(
-                    name=model_name,
-                    display_name=model_name,
-                    provider_model_name=model_name,
-                    capabilities=[
-                        RuntimeModelCapability.TEXT,
-                        RuntimeModelCapability.TOOLS,
-                    ],
-                )
-                for model_name in model_names
-            ],
+            model_catalog=model_catalog,
             config={},
             status=RuntimeProfileStatus.ACTIVE,
             metadata={
@@ -593,20 +584,65 @@ def _display_model_name(model_name: str) -> str:
     return model_name.replace("-", " ").replace("_", " ").title()
 
 
-def _user_daemon_model_names(detected_models: list[str]) -> list[str]:
-    model_names = ["default"]
-    for model_name in detected_models:
-        normalized = model_name.strip()
-        if normalized and normalized not in model_names:
-            model_names.append(normalized)
-    return model_names
+def _user_daemon_model_catalog(
+    detected_models: list[dict[str, Any]],
+) -> list[RuntimeModelCatalogEntry]:
+    """Build the saved profile's model catalog from the daemon's entries.
+
+    Always leads with a ``default`` entry (the account's standard-context
+    default), then carries each detected model through with its display name,
+    provider model id, and metadata so the picker can advertise them.
+    """
+    entries = [_default_daemon_model_entry()]
+    seen = {"default"}
+    for item in detected_models:
+        name = str(item.get("name") or "").strip()
+        if not name or name in seen:
+            continue
+        seen.add(name)
+        provider_model_name = str(item.get("provider_model_name") or name).strip() or name
+        display_name = str(item.get("display_name") or "").strip() or name
+        metadata = item.get("metadata")
+        entries.append(
+            RuntimeModelCatalogEntry(
+                name=name,
+                display_name=display_name,
+                provider_model_name=provider_model_name,
+                capabilities=[
+                    RuntimeModelCapability.TEXT,
+                    RuntimeModelCapability.TOOLS,
+                ],
+                metadata=metadata if isinstance(metadata, dict) else {},
+            )
+        )
+    return entries
 
 
-def _daemon_harness_model_names(
+def _default_daemon_model_entry() -> RuntimeModelCatalogEntry:
+    return RuntimeModelCatalogEntry(
+        name="default",
+        display_name="Default",
+        provider_model_name="default",
+        capabilities=[
+            RuntimeModelCapability.TEXT,
+            RuntimeModelCapability.TOOLS,
+        ],
+        metadata={"context_window": "standard"},
+    )
+
+
+def _daemon_harness_model_catalog(
     *,
     harness_catalog: object,
     harness_kind: HarnessKind,
-) -> list[str] | None:
+) -> list[dict[str, Any]] | None:
+    """Structured model entries reported by the daemon for a harness.
+
+    Prefers the daemon's ``model_catalog`` (name/display_name/
+    provider_model_name/metadata); falls back to the flat ``models`` string
+    list for daemons that predate the structured catalog. Returns ``None`` when
+    the harness is unavailable.
+    """
     if not isinstance(harness_catalog, dict):
         return None
     entry = harness_catalog.get(harness_kind.value)
@@ -614,10 +650,29 @@ def _daemon_harness_model_names(
         return None
     if entry.get("available") is False:
         return None
+    raw_catalog = entry.get("model_catalog")
+    if isinstance(raw_catalog, list):
+        structured = [
+            item
+            for item in raw_catalog
+            if isinstance(item, dict) and str(item.get("name") or "").strip()
+        ]
+        if structured:
+            return structured
+    # Back-compat: older daemons only report a flat ``models`` list of strings.
     raw_models = entry.get("models")
     if not isinstance(raw_models, list):
         return []
-    return [model for model in raw_models if isinstance(model, str)]
+    return [
+        {
+            "name": model,
+            "display_name": model,
+            "provider_model_name": model,
+            "metadata": {},
+        }
+        for model in raw_models
+        if isinstance(model, str) and model.strip()
+    ]
 
 
 def _select_user_daemon_default_model(

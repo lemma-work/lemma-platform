@@ -9,6 +9,8 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import urlsplit, urlunsplit
 
+from .catalog import normalize_provider_model_name
+
 
 LEMMA_MCP_SERVER_NAME = "lemma_tools"
 LEMMA_MCP_TOKEN_ENV = "LEMMA_MCP_TOKEN"
@@ -74,6 +76,10 @@ def provider_command(
 ) -> list[str]:
     template = provider_command_template(harness_kind)
     mcp_config_args = provider_mcp_command_args(harness_kind=harness_kind, mcp=mcp)
+    # Rewrite bare aliases (e.g. Claude Code's "sonnet") to the standard-context
+    # model id before they reach the CLI, so profiles saved with the raw alias
+    # don't opt into the paid 1M-context variant.
+    model_name = normalize_provider_model_name(harness_kind, model_name)
     values = {
         "model": shlex.quote(model_name),
         "prompt": shlex.quote(prompt_text),

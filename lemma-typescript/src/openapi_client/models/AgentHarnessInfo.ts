@@ -3,6 +3,7 @@
 /* tslint:disable */
 /* eslint-disable */
 import type { HarnessKind } from './HarnessKind.js';
+import type { RuntimeModelCatalogEntry } from './RuntimeModelCatalogEntry.js';
 export type AgentHarnessInfo = {
     availability_status?: (string | null);
     available?: boolean;
@@ -11,6 +12,7 @@ export type AgentHarnessInfo = {
     daemon_status?: (string | null);
     display_name: string;
     harness_kind: HarnessKind;
+    model_catalog?: Array<RuntimeModelCatalogEntry>;
     models?: Array<string>;
 };
 

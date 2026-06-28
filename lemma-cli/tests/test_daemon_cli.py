@@ -1581,6 +1581,17 @@ def test_discover_harness_catalog_uses_real_cli_model_commands(monkeypatch, tmp_
         "anthropic/claude-sonnet-4-5",
     ]
     assert catalog["CLAUDE_CODE"]["models"] == ["sonnet", "opus"]
+    # Claude Code aliases are advertised with full standard-context model ids so
+    # the default path never opts into the paid 1M-context variant.
+    claude_catalog = catalog["CLAUDE_CODE"]["model_catalog"]
+    by_name = {entry["name"]: entry for entry in claude_catalog}
+    assert by_name["sonnet"]["provider_model_name"] == "claude-sonnet-4-6"
+    assert by_name["sonnet"]["display_name"] == "Claude Sonnet 4.6"
+    assert by_name["sonnet"]["metadata"]["context_window"] == "standard"
+    assert by_name["opus"]["provider_model_name"] == "claude-opus-4-8"
+    # Other harnesses keep selection name == provider model name.
+    codex_catalog = {entry["name"]: entry for entry in catalog["CODEX"]["model_catalog"]}
+    assert codex_catalog["gpt-5.5"]["provider_model_name"] == "gpt-5.5"
 
 
 def test_discover_harness_models_allows_explicit_override(monkeypatch):
@@ -1590,6 +1601,30 @@ def test_discover_harness_models_allows_explicit_override(monkeypatch):
         ["gpt-5.5", "gpt-5.4"],
         None,
     )
+
+
+def test_normalize_provider_model_name_maps_claude_aliases():
+    # Bare aliases resolve to standard-context full ids.
+    assert daemon.normalize_provider_model_name("CLAUDE_CODE", "sonnet") == "claude-sonnet-4-6"
+    assert daemon.normalize_provider_model_name("CLAUDE_CODE", " opus ") == "claude-opus-4-8"
+    # Full ids, "default", and unknown names pass through untouched.
+    assert daemon.normalize_provider_model_name("CLAUDE_CODE", "claude-sonnet-4-6") == "claude-sonnet-4-6"
+    assert daemon.normalize_provider_model_name("CLAUDE_CODE", "default") == "default"
+    # Aliases only get rewritten for Claude Code, not other harnesses.
+    assert daemon.normalize_provider_model_name("OPENCODE", "sonnet") == "sonnet"
+
+
+def test_claude_command_normalizes_alias_to_standard_context_model():
+    command = daemon.provider_command(
+        harness_kind="CLAUDE_CODE",
+        model_name="sonnet",
+        prompt_text="hello",
+        mcp={},
+    )
+
+    assert "--model" in command
+    assert command[command.index("--model") + 1] == "claude-sonnet-4-6"
+    assert "sonnet" not in command
 
 
 def _write_executable(path, content: str) -> None:

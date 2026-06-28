@@ -139,12 +139,14 @@ export function HarnessChoiceRow({
 export function RuntimeChoiceRow({
     title,
     subtitle,
+    trailing,
     selected,
     disabled = false,
     onClick,
 }: {
     title: string;
     subtitle?: string | null;
+    trailing?: ReactNode;
     selected: boolean;
     disabled?: boolean;
     onClick: () => void;
@@ -165,6 +167,7 @@ export function RuntimeChoiceRow({
                     <span className="block truncate font-mono text-xs leading-4 text-[var(--text-tertiary)]">{subtitle}</span>
                 ) : null}
             </span>
+            {trailing ? <span className="shrink-0">{trailing}</span> : null}
             <span
                 className={cn(
                     'flex h-[18px] w-[18px] shrink-0 items-center justify-center rounded-full border',

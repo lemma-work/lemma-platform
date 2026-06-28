@@ -572,6 +572,70 @@ async def test_create_user_daemon_profile_from_catalog():
 
 
 @pytest.mark.asyncio
+async def test_create_user_daemon_profile_maps_claude_standard_context_models():
+    org_id = uuid4()
+    user_id = uuid4()
+    daemon_id = uuid4()
+    repo = _ProfileRepository([])
+    daemon_repo = _DaemonRepository(
+        [
+            SimpleNamespace(
+                id=daemon_id,
+                user_id=user_id,
+                harness_catalog={
+                    "CLAUDE_CODE": {
+                        "available": True,
+                        "models": ["sonnet", "opus"],
+                        "model_catalog": [
+                            {
+                                "name": "sonnet",
+                                "display_name": "Claude Sonnet 4.6",
+                                "provider_model_name": "claude-sonnet-4-6",
+                                "metadata": {"context_window": "standard"},
+                            },
+                            {
+                                "name": "opus",
+                                "display_name": "Claude Opus 4.8",
+                                "provider_model_name": "claude-opus-4-8",
+                                "metadata": {"context_window": "standard"},
+                            },
+                        ],
+                    }
+                },
+            )
+        ]
+    )
+    service = AgentRuntimeProfileService(repo, daemon_repository=daemon_repo)
+
+    profile = await service.create_user_daemon_profile(
+        organization_id=org_id,
+        user_id=user_id,
+        daemon_id=daemon_id,
+        harness_kind=HarnessKind.CLAUDE_CODE,
+        name="Claude Code daemon",
+        default_model_name="sonnet",
+    )
+
+    by_name = {entry.name: entry for entry in profile.model_catalog}
+    # Default leads the catalog; the friendly alias stays the selection name but
+    # carries the full standard-context id + advertising metadata.
+    assert profile.model_catalog[0].name == "default"
+    assert by_name["sonnet"].provider_model_name == "claude-sonnet-4-6"
+    assert by_name["sonnet"].display_name == "Claude Sonnet 4.6"
+    assert by_name["sonnet"].metadata["context_window"] == "standard"
+    assert by_name["opus"].provider_model_name == "claude-opus-4-8"
+
+    # Resolving the alias hands the harness the standard-context id, so a user
+    # without usage credits never hits the 1M-context failure.
+    resolved = await service.resolve(
+        runtime=AgentRuntimeConfig(profile_id=profile.id, model_name="sonnet"),
+        organization_id=org_id,
+        user_id=user_id,
+    )
+    assert resolved.model_name_for_harness == "claude-sonnet-4-6"
+
+
+@pytest.mark.asyncio
 async def test_create_user_daemon_profile_rejects_unavailable_harness():
     user_id = uuid4()
     daemon_id = uuid4()
