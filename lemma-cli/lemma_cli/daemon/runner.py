@@ -323,7 +323,7 @@ async def run_provider_command(
     model_name = str(payload.get("model_name") or "default")
     mcp = payload.get("mcp") if isinstance(payload.get("mcp"), dict) else {}
 
-    if harness_kind in {"CODEX", "CLAUDE_CODE", "OPENCODE"}:
+    if harness_kind in {"CODEX", "CLAUDE_CODE", "OPENCODE", "CURSOR", "ANTIGRAVITY"}:
         harness = get_harness(harness_kind)
         allow_recovery = harness_kind == "CODEX"
         system_prompt, user_prompt, session_id = _prompt_parts(prompt, allow_recovery_system_prompt=allow_recovery)

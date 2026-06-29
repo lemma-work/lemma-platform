@@ -10,6 +10,8 @@ HARNESS_BINARIES = {
     "CODEX": "codex",
     "CLAUDE_CODE": "claude",
     "OPENCODE": "opencode",
+    "CURSOR": "cursor-agent",
+    "ANTIGRAVITY": "agy",
 }
 
 # Claude Code's bare ``sonnet``/``opus`` aliases resolve to the *latest* model,
@@ -95,6 +97,10 @@ def discover_harness_model_entries(
             return [_plain_model_entry(name) for name in discover_opencode_models(binary)], None
         if harness_kind == "CLAUDE_CODE":
             return discover_claude_code_model_entries(binary), None
+        if harness_kind == "CURSOR":
+            return discover_cursor_model_entries(binary), None
+        if harness_kind == "ANTIGRAVITY":
+            return discover_antigravity_model_entries(binary), None
     except Exception as exc:  # noqa: BLE001
         return [], str(exc)
     return [], None
@@ -206,6 +212,70 @@ def _copy_model_entry(entry: dict[str, Any]) -> dict[str, Any]:
     copied = dict(entry)
     copied["metadata"] = dict(entry.get("metadata") or {})
     return copied
+
+
+def discover_cursor_model_entries(binary: str) -> list[dict[str, Any]]:
+    """Parse ``cursor-agent models`` lines of the form ``<id> - <Label>``.
+
+    ``id`` (e.g. ``gpt-5.3-codex-low``, ``auto``) is the ``--model`` value and the
+    selection key; the label is the friendly display name. Header/blank lines and
+    anything without an id-shaped first token are skipped.
+    """
+    completed = run_catalog_command([binary, "models"])
+    text = completed.stdout or completed.stderr
+    entries: list[dict[str, Any]] = []
+    seen: set[str] = set()
+    for line in text.replace("\x1b", " ").splitlines():
+        stripped = line.strip()
+        if " - " not in stripped:
+            continue
+        model_id, _, label = stripped.partition(" - ")
+        model_id = model_id.strip()
+        label = label.strip()
+        if not model_id or " " in model_id or model_id in seen:
+            continue
+        if label.endswith("(current)"):
+            label = label[: -len("(current)")].strip()
+        seen.add(model_id)
+        entries.append(
+            {
+                "name": model_id,
+                "display_name": label or model_id,
+                "provider_model_name": model_id,
+                "metadata": {},
+            }
+        )
+    return entries
+
+
+def discover_antigravity_model_entries(binary: str) -> list[dict[str, Any]]:
+    """Parse ``agy models`` output.
+
+    Antigravity lists plain display names (e.g. ``Gemini 3.5 Flash (Medium)``,
+    ``Claude Sonnet 4.6 (Thinking)``) and accepts that same string as ``--model``,
+    so name == display_name == provider_model_name. Banner/header lines are
+    skipped.
+    """
+    completed = run_catalog_command([binary, "models"])
+    text = completed.stdout or completed.stderr
+    entries: list[dict[str, Any]] = []
+    seen: set[str] = set()
+    for line in text.replace("\x1b", " ").splitlines():
+        name = line.strip()
+        if not name or name in seen:
+            continue
+        if name.lower().startswith(("available", "models", "usage", "error", "warning", "no ")):
+            continue
+        seen.add(name)
+        entries.append(
+            {
+                "name": name,
+                "display_name": name,
+                "provider_model_name": name,
+                "metadata": {},
+            }
+        )
+    return entries
 
 
 def run_catalog_command(command: list[str]) -> subprocess.CompletedProcess[str]:

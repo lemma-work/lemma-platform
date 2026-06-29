@@ -2,8 +2,10 @@ from enum import Enum
 
 
 class HarnessKind(str, Enum):
+    ANTIGRAVITY = "ANTIGRAVITY"
     CLAUDE_CODE = "CLAUDE_CODE"
     CODEX = "CODEX"
+    CURSOR = "CURSOR"
     LEMMA = "LEMMA"
     OPENCODE = "OPENCODE"
 

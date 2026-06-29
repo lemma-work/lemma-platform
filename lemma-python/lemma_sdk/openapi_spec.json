@@ -6591,7 +6591,9 @@
           "LEMMA",
           "CODEX",
           "CLAUDE_CODE",
-          "OPENCODE"
+          "OPENCODE",
+          "CURSOR",
+          "ANTIGRAVITY"
         ],
         "title": "HarnessKind",
         "type": "string"
@@ -9349,7 +9351,9 @@
           "GOOGLE_VERTEX",
           "CODEX_APP_SERVER",
           "CLAUDE_CODE",
-          "OPENCODE"
+          "OPENCODE",
+          "CURSOR",
+          "ANTIGRAVITY"
         ],
         "title": "RuntimeProfileProtocol",
         "type": "string"

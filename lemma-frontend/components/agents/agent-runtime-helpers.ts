@@ -14,6 +14,7 @@ export const HARNESS_LOGOS: Partial<Record<string, string>> = {
     ANTIGRAVITY: '/harnesslogos/antigravity.png',
     CLAUDE_CODE: '/harnesslogos/claudecode.png',
     CODEX: '/harnesslogos/codex.png',
+    CURSOR: '/harnesslogos/cursor.png',
     OPENCODE: '/harnesslogos/opencode.png',
 };
 export const LOCAL_RUNTIME_SETUP_COMMANDS = ['lemma auth login', 'lemma daemon start --background'];
@@ -24,6 +25,8 @@ export const LOCAL_RUNTIME_SETUP_OPTIONS: Array<{
     { harnessKind: HarnessKind.CODEX, title: 'Codex' },
     { harnessKind: HarnessKind.CLAUDE_CODE, title: 'Claude Code' },
     { harnessKind: HarnessKind.OPENCODE, title: 'OpenCode' },
+    { harnessKind: HarnessKind.CURSOR, title: 'Cursor' },
+    { harnessKind: HarnessKind.ANTIGRAVITY, title: 'Antigravity' },
 ];
 
 export function runtimeKey(runtime: AgentRuntimeConfig): string {

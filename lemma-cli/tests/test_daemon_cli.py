@@ -1678,6 +1678,112 @@ def test_claude_command_normalizes_alias_to_standard_context_model():
     assert "sonnet" not in command
 
 
+def test_cursor_command_uses_stream_json_headless():
+    command = daemon.provider_command(
+        harness_kind="CURSOR",
+        model_name="auto",
+        prompt_text="hello",
+        mcp={},
+    )
+    assert command[:2] == ["cursor-agent", "-p"]
+    assert command[command.index("--model") + 1] == "auto"
+    assert "--output-format" in command and command[command.index("--output-format") + 1] == "stream-json"
+    assert {"--trust", "--force", "--approve-mcps"} <= set(command)
+
+
+def test_antigravity_command_runs_headless_one_shot():
+    command = daemon.provider_command(
+        harness_kind="ANTIGRAVITY",
+        model_name="Gemini 3.5 Flash (Low)",
+        prompt_text="hello",
+        mcp={},
+    )
+    assert command[:2] == ["agy", "-p"]
+    assert command[command.index("--model") + 1] == "Gemini 3.5 Flash (Low)"
+    assert "--dangerously-skip-permissions" in command
+
+
+def test_write_provider_mcp_files_cursor_and_antigravity(tmp_path):
+    from lemma_cli.daemon.mcp import write_provider_mcp_files
+
+    mcp = {
+        "url": "https://api.lemma.work/mcp",
+        "server_name": "lemma_tools",
+        "token": "tok-1",
+    }
+    cursor_cwd = tmp_path / "cursor"
+    cursor_cwd.mkdir()
+    write_provider_mcp_files("CURSOR", cursor_cwd, mcp)
+    cursor_config = json.loads((cursor_cwd / ".cursor" / "mcp.json").read_text())
+    server = cursor_config["mcpServers"]["lemma_tools"]
+    assert server["url"] == "https://api.lemma.work/mcp"
+    assert server["headers"]["Authorization"] == "Bearer tok-1"
+
+    agy_cwd = tmp_path / "agy"
+    agy_cwd.mkdir()
+    write_provider_mcp_files("ANTIGRAVITY", agy_cwd, mcp)
+    agy_config = json.loads((agy_cwd / ".agents" / "mcp_config.json").read_text())
+    agy_server = agy_config["mcpServers"]["lemma_tools"]
+    # Antigravity requires serverUrl (not url/httpUrl) for remote servers.
+    assert agy_server["serverUrl"] == "https://api.lemma.work/mcp"
+    assert "url" not in agy_server
+    assert agy_server["headers"]["Authorization"] == "Bearer tok-1"
+
+
+def test_write_provider_mcp_files_noop_without_usable_mcp(tmp_path):
+    from lemma_cli.daemon.mcp import write_provider_mcp_files
+
+    write_provider_mcp_files("CURSOR", tmp_path, {})
+    assert not (tmp_path / ".cursor").exists()
+
+
+def test_discover_cursor_model_entries_parses_id_label(tmp_path, monkeypatch):
+    from lemma_cli.daemon.catalog import discover_cursor_model_entries
+
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    _write_executable(
+        bin_dir / "cursor-agent",
+        f"""\
+        #!{sys.executable}
+        print("Available models")
+        print("")
+        print("auto - Auto (current)")
+        print("gpt-5.3-codex-low - Codex 5.3 Low")
+        """,
+    )
+    monkeypatch.setenv("PATH", str(bin_dir))
+
+    entries = discover_cursor_model_entries("cursor-agent")
+    by_name = {e["name"]: e for e in entries}
+    assert by_name["auto"]["display_name"] == "Auto"  # "(current)" stripped
+    assert by_name["auto"]["provider_model_name"] == "auto"
+    assert by_name["gpt-5.3-codex-low"]["display_name"] == "Codex 5.3 Low"
+
+
+def test_discover_antigravity_model_entries_uses_display_names(tmp_path, monkeypatch):
+    from lemma_cli.daemon.catalog import discover_antigravity_model_entries
+
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    _write_executable(
+        bin_dir / "agy",
+        f"""\
+        #!{sys.executable}
+        print("Gemini 3.5 Flash (Low)")
+        print("Claude Sonnet 4.6 (Thinking)")
+        """,
+    )
+    monkeypatch.setenv("PATH", str(bin_dir))
+
+    entries = discover_antigravity_model_entries("agy")
+    names = [e["name"] for e in entries]
+    assert "Gemini 3.5 Flash (Low)" in names
+    # Antigravity accepts the display name as --model, so all three fields match.
+    claude = next(e for e in entries if e["name"].startswith("Claude"))
+    assert claude["display_name"] == claude["provider_model_name"] == "Claude Sonnet 4.6 (Thinking)"
+
+
 def _write_executable(path, content: str) -> None:
     path.write_text(textwrap.dedent(content), encoding="utf-8")
     path.chmod(0o755)
