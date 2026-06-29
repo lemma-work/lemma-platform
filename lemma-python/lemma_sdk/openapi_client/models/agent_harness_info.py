@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from collections.abc import Mapping
-from typing import Any, TypeVar, cast
+from typing import TYPE_CHECKING, Any, TypeVar, cast
 from uuid import UUID
 
 from attrs import define as _attrs_define
@@ -9,6 +9,10 @@ from attrs import field as _attrs_field
 
 from ..models.harness_kind import HarnessKind
 from ..types import UNSET, Unset
+
+if TYPE_CHECKING:
+    from ..models.runtime_model_catalog_entry import RuntimeModelCatalogEntry
+
 
 T = TypeVar("T", bound="AgentHarnessInfo")
 
@@ -24,6 +28,7 @@ class AgentHarnessInfo:
         daemon_display_name (None | str | Unset):
         daemon_id (None | Unset | UUID):
         daemon_status (None | str | Unset):
+        model_catalog (list[RuntimeModelCatalogEntry] | Unset):
         models (list[str] | Unset):
     """
 
@@ -34,6 +39,7 @@ class AgentHarnessInfo:
     daemon_display_name: None | str | Unset = UNSET
     daemon_id: None | Unset | UUID = UNSET
     daemon_status: None | str | Unset = UNSET
+    model_catalog: list[RuntimeModelCatalogEntry] | Unset = UNSET
     models: list[str] | Unset = UNSET
     additional_properties: dict[str, Any] = _attrs_field(init=False, factory=dict)
 
@@ -70,6 +76,13 @@ class AgentHarnessInfo:
         else:
             daemon_status = self.daemon_status
 
+        model_catalog: list[dict[str, Any]] | Unset = UNSET
+        if not isinstance(self.model_catalog, Unset):
+            model_catalog = []
+            for model_catalog_item_data in self.model_catalog:
+                model_catalog_item = model_catalog_item_data.to_dict()
+                model_catalog.append(model_catalog_item)
+
         models: list[str] | Unset = UNSET
         if not isinstance(self.models, Unset):
             models = self.models
@@ -92,6 +105,8 @@ class AgentHarnessInfo:
             field_dict["daemon_id"] = daemon_id
         if daemon_status is not UNSET:
             field_dict["daemon_status"] = daemon_status
+        if model_catalog is not UNSET:
+            field_dict["model_catalog"] = model_catalog
         if models is not UNSET:
             field_dict["models"] = models
 
@@ -99,6 +114,8 @@ class AgentHarnessInfo:
 
     @classmethod
     def from_dict(cls: type[T], src_dict: Mapping[str, Any]) -> T:
+        from ..models.runtime_model_catalog_entry import RuntimeModelCatalogEntry
+
         d = dict(src_dict)
         display_name = d.pop("display_name")
 
@@ -154,6 +171,17 @@ class AgentHarnessInfo:
 
         daemon_status = _parse_daemon_status(d.pop("daemon_status", UNSET))
 
+        _model_catalog = d.pop("model_catalog", UNSET)
+        model_catalog: list[RuntimeModelCatalogEntry] | Unset = UNSET
+        if _model_catalog is not UNSET:
+            model_catalog = []
+            for model_catalog_item_data in _model_catalog:
+                model_catalog_item = RuntimeModelCatalogEntry.from_dict(
+                    model_catalog_item_data
+                )
+
+                model_catalog.append(model_catalog_item)
+
         models = cast(list[str], d.pop("models", UNSET))
 
         agent_harness_info = cls(
@@ -164,6 +192,7 @@ class AgentHarnessInfo:
             daemon_display_name=daemon_display_name,
             daemon_id=daemon_id,
             daemon_status=daemon_status,
+            model_catalog=model_catalog,
             models=models,
         )
 

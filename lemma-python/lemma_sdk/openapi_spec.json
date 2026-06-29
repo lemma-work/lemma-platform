@@ -619,6 +619,13 @@
           "harness_kind": {
             "$ref": "#/components/schemas/HarnessKind"
           },
+          "model_catalog": {
+            "items": {
+              "$ref": "#/components/schemas/RuntimeModelCatalogEntry"
+            },
+            "title": "Model Catalog",
+            "type": "array"
+          },
           "models": {
             "items": {
               "type": "string"
