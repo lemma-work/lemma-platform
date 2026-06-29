@@ -12,9 +12,9 @@ export function OrganizationSettingsNav({ organizationId }: { organizationId: st
             description: 'People, roles, and invitations.',
         },
         {
-            label: 'Agent Runtimes',
+            label: 'Models',
             href: `/organizations/${organizationId}/settings/agent-runtimes`,
-            description: 'Models, local harnesses, and provider routes.',
+            description: 'Built-in models, your provider keys, and coding agents.',
         },
         {
             label: 'Usage',

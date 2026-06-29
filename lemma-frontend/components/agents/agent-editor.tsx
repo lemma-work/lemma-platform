@@ -36,7 +36,8 @@ import { ConceptHint } from '@/components/education/concept-hint';
 import { AgentsSelector, ConnectorsSelector, DatastoresSelector, FoldersSelector, FunctionsSelector, PropertyRow, formatAccessLabel } from '@/components/pod/resource-selectors';
 import { useTheme } from 'next-themes';
 import { AgentAvatarPicker } from '@/components/agents/agent-avatar-picker';
-import { AgentRuntimeSelector, resolveDefaultAgentRuntime } from '@/components/agents/agent-runtime-selector';
+import { resolveDefaultAgentRuntime } from '@/components/agents/agent-runtime-helpers';
+import { RuntimeModelPicker } from '@/components/lemma/assistant/model-picker';
 import { useAgentRuntimes, useAvailableAgentRuntimeHarnesses } from '@/lib/hooks/use-agent-runtime';
 import { usePod } from '@/lib/hooks/use-pods';
 import { ResourceVisibilitySelect, type ResourceVisibilityValue } from '@/components/shared/resource-visibility';
@@ -136,19 +137,9 @@ export function AgentEditor({
     const [isAccessDialogOpen, setIsAccessDialogOpen] = useState(false);
     const [isContractDialogOpen, setIsContractDialogOpen] = useState(false);
     const { resolvedTheme } = useTheme();
-    const { data: pod, isLoading: isLoadingPod } = usePod(podId);
-    const {
-        data: runtimeCatalog,
-        isFetching: isFetchingRuntimeCatalog,
-        isLoading: isLoadingRuntimeCatalog,
-        refetch: refetchRuntimeCatalog,
-    } = useAgentRuntimes(pod?.organization_id);
-    const {
-        data: availableHarnesses,
-        isFetching: isFetchingAvailableHarnesses,
-        isLoading: isLoadingAvailableHarnesses,
-        refetch: refetchAvailableHarnesses,
-    } = useAvailableAgentRuntimeHarnesses();
+    const { data: pod } = usePod(podId);
+    const { data: runtimeCatalog } = useAgentRuntimes(pod?.organization_id);
+    const { data: availableHarnesses } = useAvailableAgentRuntimeHarnesses();
     const defaultRuntime = resolveDefaultAgentRuntime(runtimeCatalog, pod?.config?.default_profile_id, availableHarnesses);
     const mounted = useSyncExternalStore(
         () => () => { },
@@ -261,21 +252,14 @@ export function AgentEditor({
                                     <p className="inspector-section-meta">Agent Runtime and model</p>
                                 </div>
                             </div>
-                            <AgentRuntimeSelector
+                            <RuntimeModelPicker
                                 catalog={runtimeCatalog}
                                 availableHarnesses={availableHarnesses}
-                                organizationId={pod?.organization_id}
                                 defaultRuntime={defaultRuntime}
                                 value={agent.agent_runtime ?? null}
                                 onChange={(agentRuntime) => onUpdate({ agent_runtime: agentRuntime })}
-                                onRefresh={() => {
-                                    void refetchRuntimeCatalog();
-                                    void refetchAvailableHarnesses();
-                                }}
-                                isRefreshing={isFetchingRuntimeCatalog || isFetchingAvailableHarnesses}
-                                isLoading={isLoadingRuntimeCatalog || isLoadingAvailableHarnesses || isLoadingPod}
-                                allowDefault
-                                description="Pin this agent to a model, or leave it on the pod default."
+                                scopeHint="Default for this agent"
+                                manageHref={pod?.organization_id ? `/organizations/${pod.organization_id}/settings/agent-runtimes` : undefined}
                             />
                         </section>
 

@@ -7,7 +7,8 @@ import { ArrowLeft, PanelLeftOpen, Plus, XCircle } from 'lucide-react';
 
 import { useAIAssistant } from '@/components/ai/ai-assistant-context';
 import { PodAssistantEmbedded } from '@/components/ai/pod-assistant';
-import { AgentRuntimeSelector, resolveDefaultAgentRuntime } from '@/components/agents/agent-runtime-selector';
+import { resolveDefaultAgentRuntime } from '@/components/agents/agent-runtime-helpers';
+import { RuntimeModelPicker } from '@/components/lemma/assistant/model-picker';
 import { InlineLoader } from '@/components/brand/loader';
 import { usePodLayout } from '@/components/pod/pod-layout-context';
 import { Button } from '@/components/ui/button';
@@ -79,19 +80,9 @@ export default function PodConversationPage({
     const assistant = useAIAssistant();
     const { isCompact, toggleNav } = usePodLayout();
     const podAccess = usePodAccess(podId);
-    const { data: pod, isLoading: isLoadingPod } = usePod(podId);
-    const {
-        data: runtimeCatalog,
-        isFetching: isFetchingRuntimeCatalog,
-        isLoading: isLoadingRuntimeCatalog,
-        refetch: refetchRuntimeCatalog,
-    } = useAgentRuntimes(pod?.organization_id);
-    const {
-        data: availableHarnesses,
-        isFetching: isFetchingAvailableHarnesses,
-        isLoading: isLoadingAvailableHarnesses,
-        refetch: refetchAvailableHarnesses,
-    } = useAvailableAgentRuntimeHarnesses();
+    const { data: pod } = usePod(podId);
+    const { data: runtimeCatalog } = useAgentRuntimes(pod?.organization_id);
+    const { data: availableHarnesses } = useAvailableAgentRuntimeHarnesses();
     const {
         activeConversationId,
         clearMessages,
@@ -123,29 +114,23 @@ export default function PodConversationPage({
     const isRouteConversationSelected = isNewConversation || activeConversationId === conversationId;
     const isSelectingRouteConversation = !isNewConversation && activeConversationId !== conversationId;
     const canWriteConversations = podAccess.can('conversation.write');
-    const podDefaultRuntime = resolveDefaultAgentRuntime(runtimeCatalog, pod?.config?.default_profile_id, availableHarnesses);
+    const podDefaultRuntime = pod?.config?.default_runtime
+        ?? resolveDefaultAgentRuntime(runtimeCatalog, pod?.config?.default_profile_id, availableHarnesses);
     const selectedCommandRuntime = assistant.conversationRuntime ?? null;
     const handleCommandRuntimeChange = (runtime: AgentRuntimeConfig | null) => {
         void assistant.setConversationModel((runtime?.model_name ?? null) as never, runtime);
     };
     const composerModelControl = isNewConversation ? (
-        <AgentRuntimeSelector
+        <RuntimeModelPicker
             catalog={runtimeCatalog}
             availableHarnesses={availableHarnesses}
-            organizationId={pod?.organization_id}
             defaultRuntime={podDefaultRuntime}
             value={selectedCommandRuntime}
             onChange={handleCommandRuntimeChange}
-            onRefresh={() => {
-                void refetchRuntimeCatalog();
-                void refetchAvailableHarnesses();
-            }}
-            commitLabel="Use model"
-            isRefreshing={isFetchingRuntimeCatalog || isFetchingAvailableHarnesses}
-            isLoading={isLoadingPod || isLoadingRuntimeCatalog || isLoadingAvailableHarnesses}
             disabled={!canWriteConversations}
-            allowDefault
-            variant="compact"
+            compact
+            scopeHint="Just for this chat"
+            manageHref={pod?.organization_id ? `/organizations/${pod.organization_id}/settings/agent-runtimes` : undefined}
         />
     ) : undefined;
 

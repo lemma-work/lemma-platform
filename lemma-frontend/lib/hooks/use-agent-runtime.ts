@@ -1,4 +1,5 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import type { AgentRuntimeConfig } from 'lemma-sdk';
 import { getLemmaClient } from '@/lib/sdk/lemma-client';
 
 export const agentRuntimeQueryKey = (organizationId?: string | null) =>
@@ -49,10 +50,12 @@ export const useUpdatePodDefaultAgentRuntime = () => {
     const queryClient = useQueryClient();
 
     return useMutation({
-        mutationFn: ({ podId, agentRuntimeId }: { podId: string; agentRuntimeId: string | null }) =>
+        mutationFn: ({ podId, runtime }: { podId: string; runtime: AgentRuntimeConfig | null }) =>
             getLemmaClient().pods.update(podId, {
                 config: {
-                    default_profile_id: agentRuntimeId,
+                    // Persist the full runtime (profile + optional model). The
+                    // backend mirrors profile_id into the legacy default_profile_id.
+                    default_runtime: runtime,
                 },
             }),
         onSuccess: (_, variables) => {

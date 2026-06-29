@@ -7,7 +7,8 @@ import { Check, Loader2 } from 'lucide-react';
 import { toast } from 'sonner';
 
 import { ProtectedRoute } from '@/components/auth/protected-route';
-import { AgentRuntimeSelector, resolveDefaultAgentRuntime } from '@/components/agents/agent-runtime-selector';
+import { resolveDefaultAgentRuntime } from '@/components/agents/agent-runtime-helpers';
+import { RuntimeModelPicker } from '@/components/lemma/assistant/model-picker';
 import { PodSettingsPanel, PodSettingsShell } from '@/components/pod/pod-settings-shell';
 import {
     useAgentRuntimes,
@@ -31,30 +32,25 @@ function PodSettingsPageContent({ params }: { params: Promise<{ id: string }> })
     const { id: podId } = use(params);
     const podAccess = usePodAccess(podId);
     const { data: pod, isLoading: isLoadingPod } = usePod(podId);
-    const {
-        data: runtimeCatalog,
-        isFetching: isFetchingRuntimeCatalog,
-        isLoading: isLoadingRuntimeCatalog,
-        refetch: refetchRuntimeCatalog,
-    } = useAgentRuntimes(pod?.organization_id);
-    const {
-        data: availableHarnesses,
-        isFetching: isFetchingAvailableHarnesses,
-        isLoading: isLoadingAvailableHarnesses,
-        refetch: refetchAvailableHarnesses,
-    } = useAvailableAgentRuntimeHarnesses();
+    const { data: runtimeCatalog } = useAgentRuntimes(pod?.organization_id);
+    const { data: availableHarnesses } = useAvailableAgentRuntimeHarnesses();
     const updatePodDefaultRuntime = useUpdatePodDefaultAgentRuntime();
     const [runtimeDraft, setRuntimeDraft] = useState<AgentRuntimeConfig | null>(null);
 
     const canUpdatePod = podAccess.can('pod.update');
-    const podDefaultRuntime = resolveDefaultAgentRuntime(runtimeCatalog, pod?.config?.default_profile_id, availableHarnesses);
-    const selectedRuntime = runtimeDraft ?? (pod?.config?.default_profile_id ? podDefaultRuntime : null);
+    // Prefer the full stored runtime (profile + model); fall back to the legacy
+    // provider-only default, resolving its model from the profile for display.
+    const storedRuntime = pod?.config?.default_runtime
+        ?? (pod?.config?.default_profile_id
+            ? resolveDefaultAgentRuntime(runtimeCatalog, pod.config.default_profile_id, availableHarnesses)
+            : null);
+    const selectedRuntime = runtimeDraft ?? storedRuntime;
 
     const handleRuntimeCommit = (runtime: AgentRuntimeConfig | null) => {
         setRuntimeDraft(runtime);
         updatePodDefaultRuntime.mutate({
             podId,
-            agentRuntimeId: runtime?.profile_id ?? null,
+            runtime,
         }, {
             onSuccess: () => setRuntimeDraft(null),
         });
@@ -78,31 +74,18 @@ function PodSettingsPageContent({ params }: { params: Promise<{ id: string }> })
         >
             <div className="mx-auto flex w-full max-w-3xl flex-col gap-5">
             <PodSettingsPanel
-                title="Default Agent Runtime"
-                description="Agents without a pinned model and new conversations use this runtime."
+                title="Default model"
+                description="Agents without a pinned model and new conversations use this model."
             >
-                <AgentRuntimeSelector
+                <RuntimeModelPicker
                     catalog={runtimeCatalog}
                     availableHarnesses={availableHarnesses}
-                    organizationId={pod?.organization_id}
                     defaultRuntime={runtimeCatalog?.default_runtime ?? null}
                     value={selectedRuntime}
-                    onChange={setRuntimeDraft}
-                    onCommit={handleRuntimeCommit}
-                    onRefresh={() => {
-                        void refetchRuntimeCatalog();
-                        void refetchAvailableHarnesses();
-                    }}
-                    commitLabel={selectedRuntime ? 'Save default' : 'Clear override'}
-                    commitLoading={updatePodDefaultRuntime.isPending}
-                    isRefreshing={isFetchingRuntimeCatalog || isFetchingAvailableHarnesses}
-                    isLoading={isLoadingRuntimeCatalog || isLoadingAvailableHarnesses}
+                    onChange={handleRuntimeCommit}
                     disabled={!canUpdatePod}
-                    allowDefault
-                    label="Pod default"
-                    description={canUpdatePod
-                        ? 'Choose the model this pod should use by default.'
-                        : 'You can view this default, but your role cannot change pod settings.'}
+                    scopeHint="Pod default"
+                    manageHref={pod?.organization_id ? `/organizations/${pod.organization_id}/settings/agent-runtimes` : undefined}
                 />
             </PodSettingsPanel>
 
