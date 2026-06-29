@@ -1940,6 +1940,53 @@ def test_export_then_seed_table_data_strips_audit_columns(tmp_path: Path):
         assert "name" in item
 
 
+def test_seed_strips_auto_generated_columns_except_primary_key(tmp_path: Path):
+    """Regression: a value supplied for an auto column such as a SERIAL is
+    rejected by the datastore. Seeding must drop every `auto` column except the
+    primary key (which is kept for upsert matching / FK integrity)."""
+    from lemma_cli.cli_app.pod_bundle import _import_table_data
+
+    resource_dir = tmp_path / "tables" / "lucky_draw"
+    resource_dir.mkdir(parents=True)
+    (resource_dir / "lucky_draw.json").write_text(
+        json.dumps(
+            {
+                "name": "lucky_draw",
+                "primary_key_column": "id",
+                "columns": [
+                    {"name": "id", "type": "UUID", "auto": True},
+                    {"name": "ticket_number", "type": "SERIAL", "auto": True},
+                    {"name": "nickname", "type": "TEXT", "auto": False},
+                    {"name": "created_at", "type": "DATETIME", "auto": True},
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+    (resource_dir / "data.csv").write_text(
+        "id,created_at,ticket_number,nickname\n"
+        "11111111-1111-1111-1111-111111111111,2020-01-01,1,Ada\n",
+        encoding="utf-8",
+    )
+
+    captured: list = []
+    import_sdk = SimpleNamespace(
+        records=SimpleNamespace(
+            bulk_create=lambda table, items, upsert=False: captured.append(items)
+            or len(items)
+        )
+    )
+
+    count = _import_table_data(import_sdk, "lucky_draw", resource_dir)
+
+    assert count == 1
+    item = captured[0][0]
+    assert "ticket_number" not in item  # auto SERIAL -> would be rejected
+    assert "created_at" not in item     # auto timestamp
+    assert item["id"] == "11111111-1111-1111-1111-111111111111"  # PK kept
+    assert item["nickname"] == "Ada"    # business column kept
+
+
 def test_with_files_export_then_import_round_trip(tmp_path: Path):
     from lemma_cli.cli_app import pod_bundle
     from lemma_cli.cli_app.pod_bundle import _export_pod_files, _import_pod_files
@@ -2111,6 +2158,150 @@ def test_import_pod_bundle_does_not_rename_pod_by_default(tmp_path: Path):
     )
     assert pod_updates == [
         ("pod_123", {"name": "bundle-name", "description": "from bundle"})
+    ]
+
+
+def _unresolved_surface_bundle(tmp_path: Path) -> Path:
+    """A bundle whose Slack surface needs an account variable nobody supplied."""
+    (tmp_path / "pod.json").write_text(
+        json.dumps(
+            {
+                "name": "demo",
+                "variables": {
+                    "slack_account": {
+                        "type": "account",
+                        "platform": "slack",
+                        "description": "Connector account for the slack surface",
+                    }
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+    slack_dir = tmp_path / "surfaces" / "slack"
+    slack_dir.mkdir(parents=True)
+    (slack_dir / "slack.json").write_text(
+        json.dumps({"name": "slack", "platform": "SLACK", "account_id": "${slack_account}"}),
+        encoding="utf-8",
+    )
+    return tmp_path
+
+
+def _surface_client(upserted: list) -> "FakeClient":
+    return FakeClient(
+        tables=SimpleNamespace(list=lambda pod_id, limit=1000: {"items": []}),
+        functions=SimpleNamespace(list=lambda pod_id, limit=1000: {"items": []}),
+        agents=SimpleNamespace(list=lambda pod_id, limit=1000: {"items": []}),
+        workflows=SimpleNamespace(list=lambda pod_id, limit=1000: {"items": []}),
+        schedules=SimpleNamespace(list=lambda pod_id, limit=1000: {"items": []}),
+        apps=SimpleNamespace(list=lambda pod_id, limit=1000: {"items": []}),
+        surfaces=SimpleNamespace(
+            list=lambda pod_id, limit=100: {"items": []},
+            upsert=lambda pod_id, platform, payload: upserted.append(
+                (platform, _plain(payload))
+            )
+            or {"id": "surface_1", "platform": platform},
+        ),
+        files=SimpleNamespace(
+            tree=lambda pod_id, root_path="/", files_per_directory=20: {
+                "tree": {"path": "/", "name": "/", "kind": "FOLDER", "children": []}
+            }
+        ),
+    )
+
+
+def test_import_blocks_on_unresolved_requirement(tmp_path: Path):
+    bundle = _unresolved_surface_bundle(tmp_path)
+    with pytest.raises(ValueError, match="needs values|--defer"):
+        import_pod_bundle(_surface_client([]), pod_id="pod_123", source_dir=bundle)
+
+
+def test_import_defer_imports_and_drops_unresolved_field(tmp_path: Path):
+    bundle = _unresolved_surface_bundle(tmp_path)
+    upserted: list = []
+    result = import_pod_bundle(
+        _surface_client(upserted), pod_id="pod_123", source_dir=bundle, allow_unresolved=True
+    )
+    assert result["ok"] is True
+    # Surface still imported, but the unresolved account_id field was dropped.
+    assert len(upserted) == 1
+    assert "account_id" not in upserted[0][1]
+
+
+def test_import_supplying_var_clears_the_gate(tmp_path: Path):
+    bundle = _unresolved_surface_bundle(tmp_path)
+    upserted: list = []
+    result = import_pod_bundle(
+        _surface_client(upserted),
+        pod_id="pod_123",
+        source_dir=bundle,
+        variables={"slack_account": "acc-real"},
+    )
+    assert result["ok"] is True
+    assert upserted[0][1]["account_id"] == "acc-real"
+
+
+def test_import_dry_run_surfaces_unresolved_without_blocking(tmp_path: Path):
+    bundle = _unresolved_surface_bundle(tmp_path)
+    result = import_pod_bundle(
+        _surface_client([]), pod_id="pod_123", source_dir=bundle, dry_run=True
+    )
+    assert result["ok"] is True  # dry-run is informational, never blocks
+    kinds = [item["kind"] for item in result["unresolved"]]
+    assert kinds == ["connector"]
+
+
+def test_import_plan_surfaces_destructive_table_changes(tmp_path: Path):
+    (tmp_path / "pod.json").write_text(json.dumps({"name": "demo"}), encoding="utf-8")
+    contacts_dir = tmp_path / "tables" / "contacts"
+    contacts_dir.mkdir(parents=True)
+    # Bundle no longer declares the `email` column -> dropping it loses data.
+    (contacts_dir / "contacts.json").write_text(
+        json.dumps(
+            {
+                "name": "contacts",
+                "primary_key_column": "id",
+                "columns": [
+                    {"name": "id", "type": "text"},
+                    {"name": "name", "type": "text"},
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    existing_contacts = {
+        "name": "contacts",
+        "primary_key_column": "id",
+        "columns": [
+            {"name": "id", "type": "text"},
+            {"name": "name", "type": "text"},
+            {"name": "email", "type": "text"},
+        ],
+    }
+    client = FakeClient(
+        tables=SimpleNamespace(
+            list=lambda pod_id, limit=1000: {"items": [{"name": "contacts"}]},
+            get=lambda pod_id, name: existing_contacts,
+        ),
+        functions=SimpleNamespace(list=lambda pod_id, limit=1000: {"items": []}),
+        agents=SimpleNamespace(list=lambda pod_id, limit=1000: {"items": []}),
+        workflows=SimpleNamespace(list=lambda pod_id, limit=1000: {"items": []}),
+        schedules=SimpleNamespace(list=lambda pod_id, limit=1000: {"items": []}),
+        surfaces=SimpleNamespace(list=lambda pod_id, limit=100: {"items": []}),
+        apps=SimpleNamespace(list=lambda pod_id, limit=1000: {"items": []}),
+        files=SimpleNamespace(
+            tree=lambda pod_id, root_path="/", files_per_directory=20: {
+                "tree": {"path": "/", "name": "/", "kind": "FOLDER", "children": []}
+            }
+        ),
+    )
+
+    result = import_pod_bundle(client, pod_id="pod_123", source_dir=tmp_path, dry_run=True)
+
+    assert result["ok"] is True  # destructive change is surfaced, not an error
+    assert result["destructive"] == [
+        {"table": "contacts", "removed_columns": ["email"]}
     ]
 
 

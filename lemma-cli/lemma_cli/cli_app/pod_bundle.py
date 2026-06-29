@@ -452,6 +452,25 @@ def _export_table_data(pod_sdk: Any, table_name: str, resource_dir: Path) -> Non
 _SEED_STRIP_COLUMNS = frozenset({"created_at", "updated_at", "user_id"})
 
 
+def _seed_strip_columns(resource_dir: Path, table_name: str) -> set[str]:
+    """Columns to drop from seeded rows. Beyond the audit/ownership names, strip
+    every backend-generated (``auto``) column except the primary key — the
+    datastore rejects a value supplied for an auto column such as a SERIAL
+    (e.g. a ``ticket_number``), while the primary key is kept so upsert matching
+    and any FK references still resolve."""
+    strip = set(_SEED_STRIP_COLUMNS)
+    try:
+        manifest = load_resource_payload(resource_dir, table_name)
+    except Exception:
+        return strip
+    primary_key = str(manifest.get("primary_key_column") or "id")
+    for column in manifest.get("columns") or []:
+        name = str(column.get("name") or "")
+        if name and column.get("auto") and name != primary_key:
+            strip.add(name)
+    return strip
+
+
 def _import_table_data(pod_sdk: Any, table_name: str, resource_dir: Path) -> int:
     """Seed a table from a bundled ``data.{csv,jsonl,json}`` file via bulk create.
     Returns the number of rows sent (0 when there is no data file)."""
@@ -461,8 +480,9 @@ def _import_table_data(pod_sdk: Any, table_name: str, resource_dir: Path) -> int
     )
     if data_file is None:
         return 0
+    strip_columns = _seed_strip_columns(resource_dir, table_name)
     rows = [
-        {key: value for key, value in row.items() if key not in _SEED_STRIP_COLUMNS}
+        {key: value for key, value in row.items() if key not in strip_columns}
         for row in read_record_rows(data_file, None)
     ]
     if not rows:
@@ -1239,6 +1259,13 @@ def export_pod_bundle(
     # pod.json, so the bundle can be re-imported into another pod/org.
     variables = _extract_portable_variables(bundle_root)
 
+    # Derive what the bundle needs (connectors, people, variables, data) and
+    # what it does (capabilities), so the listing page, import wizard, and CLI
+    # all render the same facts. Runs after variable extraction (it reads them).
+    from .pod_requirements import extract_requirements
+
+    requirements_summary = extract_requirements(bundle_root)
+
     # Record what this bundle carries (selective scope + whether row data / file
     # bytes were captured) so a re-import seeds them automatically and a re-export
     # can refresh exactly this set.
@@ -1260,6 +1287,14 @@ def export_pod_bundle(
         "included": sorted(included),
         "names": sorted(selected_names),
         "variables": sorted(variables.keys()),
+        "requirements": {
+            category: len(items)
+            for category, items in (requirements_summary.get("requirements") or {}).items()
+            if isinstance(items, list)
+        },
+        "capabilities": [
+            cap.get("summary") for cap in (requirements_summary.get("capabilities") or [])
+        ],
         "counts": {
             "tables": len(tables),
             "functions": len(functions),
@@ -1587,15 +1622,44 @@ def _validate_function_payload(
     return issues
 
 
+def _table_destructive_change(
+    pod_sdk: Any, source_dir: Path, table_name: str
+) -> dict[str, Any] | None:
+    """Return the data-losing part of updating an existing table — columns that
+    would be dropped or rebuilt — or None if the update is purely additive.
+
+    A column the bundle no longer declares is *removed* (its data is lost); a
+    column whose type/required/unique changed is *incompatible* and today can't
+    be migrated in place. Surfacing these in the plan is what lets the importer
+    (or the wizard) see data loss before it happens instead of after.
+    """
+    resource_dir = source_dir / "tables" / table_name
+    try:
+        desired = load_resource_payload(resource_dir, table_name)
+        existing = to_plain(pod_sdk.tables.get(table_name))
+    except Exception:
+        return None  # payload/fetch errors are reported elsewhere
+    diff = diff_table_columns(existing, desired)
+    if not diff.to_remove and not diff.incompatible:
+        return None
+    change: dict[str, Any] = {"table": table_name}
+    if diff.to_remove:
+        change["removed_columns"] = list(diff.to_remove)
+    if diff.incompatible:
+        change["incompatible_columns"] = list(diff.incompatible)
+    return change
+
+
 def _build_import_plan(
     client: Lemma,
     *,
     pod_id: str,
     source_dir: Path,
     upsert: bool,
-) -> tuple[dict[str, list[str]], list[BundleValidationIssue]]:
+) -> tuple[dict[str, list[str]], list[BundleValidationIssue], list[dict[str, Any]]]:
     summary: dict[str, list[str]] = {key: [] for key in RESOURCE_DIRS}
     issues: list[BundleValidationIssue] = []
+    destructive: list[dict[str, Any]] = []
     pod_sdk = client.pod(pod_id)
 
     for resource_type in (
@@ -1661,6 +1725,9 @@ def _build_import_plan(
         if table_name in existing_tables:
             if upsert:
                 summary["tables"].append(f"updated:{table_name}")
+                change = _table_destructive_change(pod_sdk, source_dir, table_name)
+                if change is not None:
+                    destructive.append(change)
             else:
                 issues.append(BundleValidationIssue(path=str(resource_dir), message=f"Table already exists: {table_name}"))
         else:
@@ -1798,7 +1865,7 @@ def _build_import_plan(
         | _bundle_folder_keys(files_root),
     )
 
-    return summary, issues
+    return summary, issues, destructive
 
 
 def _bundle_folder_keys(files_root: Path) -> set[str]:
@@ -2191,6 +2258,34 @@ def _resolve_import_pod_member_id(client: Lemma, pod_sdk: Any, override: str | N
     )
 
 
+def _format_unresolved_message(unresolved: list[dict[str, Any]]) -> str:
+    """Render a blocking-requirements error that tells the importer exactly what
+    to supply (and how) instead of a field silently vanishing."""
+    lines: list[str] = []
+    for item in unresolved:
+        kind = item.get("kind")
+        used_by = ", ".join(item.get("used_by") or []) or "—"
+        if kind == "connector":
+            var = (item.get("resolution") or {}).get("var") or item.get("key")
+            purpose = item.get("purpose") or f"connector '{item.get('key')}'"
+            lines.append(f"  - connector {item.get('key')} ({purpose}; used by {used_by})"
+                         f"  →  --var {var}=<account-id>")
+        elif kind == "member":
+            var = (item.get("resolution") or {}).get("var") or item.get("key")
+            lines.append(f"  - person {item.get('key')} (used by {used_by})"
+                         f"  →  --var {var}=<pod-member-id>")
+        else:
+            key = item.get("key")
+            purpose = item.get("purpose") or item.get("type") or "value"
+            lines.append(f"  - variable {key} ({purpose})  →  --var {key}=<value>")
+    body = "\n".join(lines)
+    return (
+        "This bundle needs values before it can run. Supply them with "
+        "--var NAME=VALUE (or --values file.json), or re-run with --defer to "
+        f"import now and wire them up later:\n{body}"
+    )
+
+
 def import_pod_bundle(
     client: Lemma,
     *,
@@ -2203,6 +2298,7 @@ def import_pod_bundle(
     with_files: bool = False,
     variables: dict[str, str] | None = None,
     set_pod_meta: bool = False,
+    allow_unresolved: bool = False,
 ) -> dict[str, Any]:
     if not source_dir.exists():
         raise ValueError(f"Source directory does not exist: {source_dir}")
@@ -2221,6 +2317,7 @@ def import_pod_bundle(
                 with_files=with_files,
                 variables=variables,
                 set_pod_meta=set_pod_meta,
+                allow_unresolved=allow_unresolved,
             )
             result["source_dir"] = str(source_dir)
             return result
@@ -2231,11 +2328,20 @@ def import_pod_bundle(
     with_data = with_data or bool(manifest_contents.get("with_data"))
     with_files = with_files or bool(manifest_contents.get("with_files"))
 
-    summary, issues = _build_import_plan(
+    summary, issues, destructive = _build_import_plan(
         client,
         pod_id=pod_id,
         source_dir=source_dir,
         upsert=upsert,
+    )
+    # Surface what the bundle still needs from the importer. Members default to
+    # the importing user, so only connectors/variables bound to an unsupplied
+    # variable block. This turns the old silent placeholder-drop into an explicit
+    # gate (override with allow_unresolved / --defer to import and wire up later).
+    from .pod_requirements import unresolved_requirements
+
+    unresolved = unresolved_requirements(
+        source_dir, supplied_vars=set(variables or {})
     )
     if dry_run:
         return {
@@ -2244,11 +2350,15 @@ def import_pod_bundle(
             "pod_id": pod_id,
             "source_dir": str(source_dir),
             "summary": summary,
+            "unresolved": unresolved,
+            "destructive": destructive,
             "errors": [{"path": issue.path, "message": issue.message} for issue in issues],
         }
     if issues:
         rendered = "\n".join(f"- {issue.path}: {issue.message}" for issue in issues)
         raise ValueError(f"Bundle validation failed:\n{rendered}")
+    if unresolved and not allow_unresolved:
+        raise ValueError(_format_unresolved_message(unresolved))
 
     # By default an import leaves the target pod's own name/description/icon
     # alone — importing resources into an existing pod should never silently

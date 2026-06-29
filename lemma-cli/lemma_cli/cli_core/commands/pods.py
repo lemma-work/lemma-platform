@@ -537,6 +537,75 @@ def export_pod(
         )
 
 
+@app.command("requirements")
+def pod_requirements(
+    ctx: typer.Context,
+    source_dir: Path = typer.Argument(
+        ...,
+        exists=True,
+        file_okay=False,
+        dir_okay=True,
+        readable=True,
+        help="Pod bundle directory to inspect.",
+    ),
+) -> None:
+    """Show what a bundle needs and what it will do.
+
+    Lists the connectors, people, variables, and seed data that must be wired up
+    on import (each with why it's needed and where it's used), plus the
+    capability tiers the pod exercises — the same facts the import wizard and
+    listing page render.
+    """
+    state = state_from_ctx(ctx)
+    from ...cli_app.pod_requirements import read_requirements
+
+    summary = read_requirements(source_dir)
+    if state.output == "json":
+        emit(state, summary)
+        return
+    _emit_requirements(summary)
+
+
+def _emit_requirements(summary: dict[str, Any]) -> None:
+    requirements = summary.get("requirements") or {}
+    capabilities = summary.get("capabilities") or []
+
+    if capabilities:
+        console.print("[bold]This pod will[/bold]")
+        for cap in capabilities:
+            console.print(f"  • {cap.get('summary')}  [dim]({cap.get('tier')})[/dim]")
+        console.print()
+
+    if not any(requirements.get(key) for key in ("connectors", "members", "variables", "data")):
+        console.print("[green]Nothing to wire up — this bundle is self-contained.[/green]")
+        return
+
+    console.print("[bold]Needs from you[/bold]")
+    for conn in requirements.get("connectors") or []:
+        where = ", ".join(conn.get("used_by") or []) or "—"
+        purpose = conn.get("purpose") or "connector account"
+        console.print(
+            f"  [cyan]connector[/cyan] {conn.get('key')}  [dim]{purpose} · used by {where}[/dim]"
+        )
+    for member in requirements.get("members") or []:
+        where = ", ".join(member.get("used_by") or []) or "—"
+        console.print(
+            f"  [magenta]person[/magenta] {member.get('key')}  "
+            f"[dim]{member.get('role')} · used by {where} · defaults to you[/dim]"
+        )
+    for variable in requirements.get("variables") or []:
+        console.print(
+            f"  [yellow]variable[/yellow] {variable.get('key')}  "
+            f"[dim]{variable.get('purpose') or variable.get('type')}[/dim]"
+        )
+    data = requirements.get("data") or {}
+    if data:
+        tables = ", ".join(data.get("tables_with_seed") or [])
+        console.print(
+            f"  [green]data[/green] {data.get('row_count', 0)} row(s) across {tables}"
+        )
+
+
 def _parse_import_variables(
     var: list[str], values: Path | None
 ) -> dict[str, str]:
@@ -610,14 +679,22 @@ def import_pod(
         help="Also apply the bundle's pod name/description/icon (off by default "
         "so importing never renames the target pod).",
     ),
+    defer: bool = typer.Option(
+        False,
+        "--defer",
+        help="Import even if connector/variable requirements are unresolved, "
+        "dropping their fields so you can wire them up afterwards.",
+    ),
 ) -> None:
     """Import a local bundle into the pod.
 
     Non-portable ids (workflow assignees, schedule/surface accounts) are exported
     as ${name} variables listed under `variables` in pod.json. Resolve them with
     `--var name=value` or a `--values file.json`; pod-member variables default to
-    your own membership, and any unresolved account variable simply drops its
-    field so the import still succeeds (wire the account up afterwards).
+    your own membership. By default an import blocks if a connector or variable
+    is still unresolved and tells you exactly what to pass — re-run with `--defer`
+    to import now (dropping those fields) and wire them up later. See what a
+    bundle needs up front with `lemma pods requirements <bundle>`.
     """
     state = state_from_ctx(ctx)
     from ...cli_app.pod_bundle import import_pod_bundle
@@ -637,6 +714,7 @@ def import_pod(
             with_files=with_files,
             variables=variables,
             set_pod_meta=set_pod_meta,
+            allow_unresolved=defer,
         ),
     )
     if result is not None:
@@ -671,6 +749,28 @@ def _emit_import_result(result: dict[str, Any]) -> None:
         console.print(view)
     elif not result.get("errors"):
         console.print("[dim]Nothing to import.[/dim]")
+
+    destructive = result.get("destructive") or []
+    if destructive:
+        console.print("[red]Destructive changes[/red] [dim](data loss on existing tables)[/dim]")
+        for change in destructive:
+            removed = ", ".join(change.get("removed_columns") or [])
+            incompatible = ", ".join(change.get("incompatible_columns") or [])
+            parts = []
+            if removed:
+                parts.append(f"drops column(s) {removed}")
+            if incompatible:
+                parts.append(f"rebuilds column(s) {incompatible}")
+            console.print(f"  [red]table[/red] {change.get('table')}  [dim]{'; '.join(parts)}[/dim]")
+
+    unresolved = result.get("unresolved") or []
+    if unresolved:
+        console.print("[yellow]Needs from you before import[/yellow] [dim](--var, or --defer to skip)[/dim]")
+        for item in unresolved:
+            kind = item.get("kind")
+            where = ", ".join(item.get("used_by") or []) or "—"
+            var = (item.get("resolution") or {}).get("var") or item.get("key")
+            console.print(f"  [yellow]{kind}[/yellow] {item.get('key')}  [dim]used by {where} · --var {var}=…[/dim]")
 
     errors = result.get("errors") or []
     for error in errors:
