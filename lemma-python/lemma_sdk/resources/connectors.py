@@ -270,7 +270,7 @@ class BoundConnectors(BoundResource):
         return self._call(
             connector_connect_request_create,
             self._org_uuid(),
-            body=compact({"app": app, "auth_config_id": auth_config_id}),
+            body=compact({"connector_id": app, "auth_config_id": auth_config_id}),
             body_model=ConnectRequestInitiateSchema,
         )
 
