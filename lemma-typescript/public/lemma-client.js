@@ -13838,6 +13838,13 @@ var LemmaClient = (() => {
     delete(podId) {
       return this.client.request(() => PodsService.podDelete(podId));
     }
+    /**
+     * Self-join a pod when its join policy (ORG_MEMBERS / PUBLIC) allows it.
+     * For invite-only pods, use `podJoinRequests.create(podId)` instead.
+     */
+    join(podId) {
+      return this.client.request(() => PodsService.podJoin(podId));
+    }
   };
 
   // src/openapi_client/services/PodRolesService.ts

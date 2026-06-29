@@ -2,7 +2,7 @@
 
 import { use, useState } from 'react';
 import type { AgentRuntimeConfig } from 'lemma-sdk';
-import { Check, Loader2 } from 'lucide-react';
+import { Check, Info, Loader2 } from 'lucide-react';
 
 import { toast } from 'sonner';
 
@@ -116,21 +116,33 @@ function PodSettingsPageContent({ params }: { params: Promise<{ id: string }> })
     );
 }
 
-const POD_JOIN_POLICY_OPTIONS: { value: PodJoinPolicy; label: string; description: string }[] = [
+// Auto-joiners always receive the base pod role ("User"). Elevated roles
+// (Editor / Admin) are granted only via invite or by approving a join request —
+// see the note rendered below the selector and lemma-work/lemma-platform#30.
+const POD_JOIN_POLICY_OPTIONS: {
+    value: PodJoinPolicy;
+    label: string;
+    description: string;
+    /** Role a person receives when they add themselves under this policy. */
+    selfJoinRole?: string;
+}[] = [
     {
         value: PodJoinPolicy.INVITE_ONLY,
         label: 'Invite only',
-        description: 'People join only by invitation or an approved request.',
+        description:
+            'Nobody can add themselves. People join by invitation or an approved join request — the only way to grant Editor or Admin access.',
     },
     {
         value: PodJoinPolicy.ORG_MEMBERS,
         label: 'Organization members',
-        description: 'Any member of this pod’s organization can join themselves.',
+        description: 'Any member of this pod’s organization can add themselves to it.',
+        selfJoinRole: 'User',
     },
     {
         value: PodJoinPolicy.PUBLIC,
         label: 'Anyone',
-        description: 'Any Lemma user can join, and is added to the organization.',
+        description: 'Any Lemma user can add themselves, and is added to the organization as a member.',
+        selfJoinRole: 'User',
     },
 ];
 
@@ -183,9 +195,14 @@ function PodJoinPolicyPanel({
                             data-selected={selected}
                             className="settings-choice-row items-start disabled:cursor-not-allowed disabled:opacity-60"
                         >
-                            <span className="flex min-w-0 flex-col gap-0.5">
+                            <span className="flex min-w-0 flex-col gap-1">
                                 <span className="text-sm font-medium text-[var(--text-primary)]">{option.label}</span>
                                 <span className="text-xs leading-5 text-[var(--text-tertiary)]">{option.description}</span>
+                                {option.selfJoinRole ? (
+                                    <span className="mt-0.5 inline-flex w-fit items-center gap-1 rounded-full border border-[var(--chip-border)] bg-[var(--chip-bg)] px-2 py-0.5 text-[11px] font-medium text-[var(--chip-fg)]">
+                                        Joins as {option.selfJoinRole}
+                                    </span>
+                                ) : null}
                             </span>
                             <span
                                 aria-hidden
@@ -202,9 +219,17 @@ function PodJoinPolicyPanel({
                     );
                 })}
             </div>
-            {!canUpdate ? (
+            {canUpdate ? (
+                <p className="settings-help-text mt-3 flex items-start gap-1.5">
+                    <Info className="mt-0.5 h-3.5 w-3.5 shrink-0" aria-hidden />
+                    <span>
+                        People who add themselves always get the base <strong>User</strong> role. To grant
+                        Editor or Admin access, invite them or approve their join request from the Members tab.
+                    </span>
+                </p>
+            ) : (
                 <p className="settings-help-text mt-3">Your role cannot change pod settings.</p>
-            ) : null}
+            )}
         </PodSettingsPanel>
     );
 }
