@@ -199,7 +199,7 @@ function PodJoinPolicyPanel({
                                 <span className="text-sm font-medium text-[var(--text-primary)]">{option.label}</span>
                                 <span className="text-xs leading-5 text-[var(--text-tertiary)]">{option.description}</span>
                                 {option.selfJoinRole ? (
-                                    <span className="mt-0.5 inline-flex w-fit items-center gap-1 rounded-full border border-[var(--chip-border)] bg-[var(--chip-bg)] px-2 py-0.5 text-[11px] font-medium text-[var(--chip-fg)]">
+                                    <span className="mt-0.5 inline-flex w-fit items-center gap-1 rounded-full border border-[var(--chip-border)] bg-[var(--chip-bg)] px-2 py-0.5 text-xs font-medium text-[var(--chip-fg)]">
                                         Joins as {option.selfJoinRole}
                                     </span>
                                 ) : null}
