@@ -49,7 +49,14 @@ services:
       retries: 10
 
   kreuzberg:
-    image: ghcr.io/kreuzberg-dev/kreuzberg:4.9.9
+    # Document-extraction service (REST API: /health, /extract, /chunk). The
+    # project moved orgs (kreuzberg-dev → xberg-io), so the old
+    # ghcr.io/kreuzberg-dev/kreuzberg:4.9.9 path now denies pulls — a fresh
+    # `docker compose up` failed with "error from registry: denied" and took the
+    # whole stack down with it. This is the same 4.9.9 on the current public
+    # namespace. The -core image is smaller (~580MB) and downloads OCR models on
+    # first use into the kreuzberg_cache volume. Overridable via DEV_KREUZBERG_IMAGE.
+    image: ${DEV_KREUZBERG_IMAGE:-ghcr.io/xberg-io/kreuzberg:4.9.9-core}
     ports:
       - "${DEV_KREUZBERG_PORT:-8002}:8000"
     restart: unless-stopped

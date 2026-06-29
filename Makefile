@@ -144,10 +144,6 @@ init:
 	@command -v node >/dev/null 2>&1 || (echo "  ✗ Node.js not found — install from https://nodejs.org/"; exit 1)
 	@echo "  ✓ Prerequisites OK"
 	@echo ""
-	@echo "→ Creating .env files (skipped if already present)…"
-	@$(MAKE) --no-print-directory _init-backend-env
-	@$(MAKE) --no-print-directory _init-frontend-env
-	@echo ""
 	@echo "→ Installing dependencies…"
 	@cd $(BACKEND_DIR) && uv sync --quiet
 	@cd $(CLI_DIR) && uv sync --quiet
@@ -160,6 +156,14 @@ init:
 	@echo "→ Building lemma-sdk (lemma-typescript)…"
 	@cd $(TS_DIR) && npm run build --silent
 	@echo "  ✓ lemma-sdk built — dist/ ready for frontend import"
+	@echo ""
+	@# Env files come AFTER install: _init-frontend-env runs the frontend's
+	@# gen:runtime-config, which imports @next/env from node_modules. Generating
+	@# env before `npm install` aborts a fresh-clone `make init` with
+	@# ERR_MODULE_NOT_FOUND before any dependency is installed.
+	@echo "→ Creating .env files (skipped if already present)…"
+	@$(MAKE) --no-print-directory _init-backend-env
+	@$(MAKE) --no-print-directory _init-frontend-env
 	@echo ""
 	@echo "Done. Run 'make dev' to start the stack."
 
@@ -265,10 +269,6 @@ dev:
 	@$(MAKE) --no-print-directory _ensure-init
 	@$(MAKE) --no-print-directory _infra-up
 	@$(MAKE) --no-print-directory _wait-infra
-	@$(MAKE) --no-print-directory _run-agentbox &
-	@$(MAKE) --no-print-directory _wait-agentbox
-	@$(MAKE) --no-print-directory _run-backend &
-	@$(MAKE) --no-print-directory _run-frontend &
 	@echo ""
 	@echo "  Frontend  →  $(DEV_FRONTEND_URL)"
 	@echo "  Auth UI   →  $(DEV_AUTH_FRONTEND_URL)"
@@ -278,7 +278,19 @@ dev:
 	@echo ""
 	@echo "  Tail backend logs : make logs"
 	@echo "  Press Ctrl-C or run 'make stop' to stop."
-	@wait
+	@echo ""
+	@# Launch all three dev servers and wait in ONE shell. Make runs each recipe
+	@# line in its own shell, so backgrounding with `&` on separate lines orphans
+	@# the jobs and a `wait` on the next line returns immediately (make dev would
+	@# exit while the servers kept running detached). Keeping the launches + wait
+	@# in a single backslash-joined line fixes that; the trap turns Ctrl-C into a
+	@# clean `make stop` of every server and port.
+	@trap '$(MAKE) --no-print-directory stop; exit 0' INT TERM; \
+		$(MAKE) --no-print-directory _run-agentbox & \
+		$(MAKE) --no-print-directory _wait-agentbox; \
+		$(MAKE) --no-print-directory _run-backend & \
+		$(MAKE) --no-print-directory _run-frontend & \
+		wait
 
 _ensure-init:
 	@test -f $(BACKEND_DIR)/.env  || { echo "  ! $(BACKEND_DIR)/.env missing — run 'make init'"; exit 1; }
