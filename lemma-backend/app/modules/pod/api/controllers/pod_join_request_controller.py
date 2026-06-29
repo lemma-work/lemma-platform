@@ -4,8 +4,10 @@ from uuid import UUID
 
 from fastapi import APIRouter, status
 
-from app.core.api.dependencies import CurrentUser
+from app.core.api.dependencies import CurrentUser, UoWDep
 from app.core.api.pagination import parse_uuid_page_token
+from app.core.authorization.service import AuthorizationDataService
+from app.modules.identity.domain.organization_entities import OrganizationRole
 from app.modules.pod.api.dependencies import PodJoinRequestServiceDep
 from app.modules.pod.api.schemas.pod_schemas import (
     PodJoinRequestApproveRequest,
@@ -29,8 +31,20 @@ async def create_join_request(
     pod_id: UUID,
     pod_join_request_service: PodJoinRequestServiceDep,
     user: CurrentUser,
+    uow: UoWDep,
 ) -> PodJoinRequestCreateResponse:
-    join_request = await pod_join_request_service.request_join(pod_id, user.id)
+    join_request, created_org_member = await pod_join_request_service.request_join(
+        pod_id, user.id
+    )
+    if created_org_member is not None:
+        await AuthorizationDataService(uow.session).assign_roles(
+            organization_id=created_org_member.organization_id,
+            pod_id=None,
+            principal_type="ORG_MEMBER",
+            principal_id=created_org_member.id,
+            role_names=[OrganizationRole.ORG_MEMBER.value],
+            assigned_by_user_id=user.id,
+        )
     return PodJoinRequestCreateResponse.model_validate(join_request)
 
 

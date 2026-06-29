@@ -57,9 +57,10 @@ async def test_request_join_is_idempotent_for_pending_request():
         organization_repository=org_repo,
     )
 
-    result = await service.request_join(pod_id, user_id)
+    result, created_org = await service.request_join(pod_id, user_id)
 
     assert result == pending
+    assert created_org is None
     join_repo.create.assert_not_called()
 
 
@@ -189,9 +190,10 @@ async def test_request_join_allows_editor_if_not_pod_member():
         organization_repository=org_repo,
     )
 
-    result = await service.request_join(pod_id, user_id)
+    result, created_org = await service.request_join(pod_id, user_id)
 
     assert result == created_request
+    assert created_org is None
     pod_member_repo.get_by_pod_and_org_member.assert_awaited_once_with(
         pod_id, org_member_id
     )
@@ -441,3 +443,118 @@ async def test_join_pod_org_member_joins_without_new_org_member():
     org_repo.add_member.assert_not_called()
     pod_member_repo.create.assert_awaited_once()
     assert member.roles == [PodRole.USER.value]
+
+
+@pytest.mark.asyncio
+async def test_request_join_public_pod_auto_joins_and_returns_approved():
+    pod_id, org_id, user_id, org_member_id = uuid4(), uuid4(), uuid4(), uuid4()
+    pod_repo = AsyncMock()
+    pod_repo.get.return_value = _pod_with_policy(pod_id, org_id, PodJoinPolicy.PUBLIC)
+
+    org_repo = AsyncMock()
+    org_repo.get_member.return_value = None
+    created_org_member = _org_member(
+        member_id=org_member_id,
+        role=OrganizationRole.ORG_MEMBER,
+        org_id=org_id,
+        user_id=user_id,
+    )
+    org_repo.add_member.return_value = created_org_member
+
+    pod_member_repo = AsyncMock()
+    pod_member_repo.get_by_pod_and_org_member.return_value = None
+    pod_member_repo.create.return_value = PodMemberEntity(
+        pod_id=pod_id,
+        organization_member_id=org_member_id,
+        roles=[PodRole.USER.value],
+    )
+
+    join_repo = AsyncMock()
+    join_repo.get_pending_by_pod_and_user.return_value = None
+    join_repo.create.side_effect = lambda entity: entity
+
+    service = PodJoinRequestService(
+        pod_join_request_repository=join_repo,
+        pod_member_repository=pod_member_repo,
+        pod_repository=pod_repo,
+        organization_repository=org_repo,
+    )
+
+    request, created_org = await service.request_join(pod_id, user_id)
+
+    assert request.status == PodJoinRequestStatus.APPROVED
+    assert created_org is created_org_member
+    org_repo.add_member.assert_awaited_once()
+    pod_member_repo.create.assert_awaited_once()
+    join_repo.create.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_request_join_org_members_pod_auto_joins_existing_member():
+    pod_id, org_id, user_id, org_member_id = uuid4(), uuid4(), uuid4(), uuid4()
+    pod_repo = AsyncMock()
+    pod_repo.get.return_value = _pod_with_policy(pod_id, org_id, PodJoinPolicy.ORG_MEMBERS)
+
+    org_repo = AsyncMock()
+    org_repo.get_member.return_value = _org_member(
+        member_id=org_member_id,
+        role=OrganizationRole.ORG_MEMBER,
+        org_id=org_id,
+        user_id=user_id,
+    )
+
+    pod_member_repo = AsyncMock()
+    pod_member_repo.get_by_pod_and_org_member.return_value = None
+    pod_member_repo.create.return_value = PodMemberEntity(
+        pod_id=pod_id,
+        organization_member_id=org_member_id,
+        roles=[PodRole.USER.value],
+    )
+
+    join_repo = AsyncMock()
+    join_repo.get_pending_by_pod_and_user.return_value = None
+    join_repo.create.side_effect = lambda entity: entity
+
+    service = PodJoinRequestService(
+        pod_join_request_repository=join_repo,
+        pod_member_repository=pod_member_repo,
+        pod_repository=pod_repo,
+        organization_repository=org_repo,
+    )
+
+    request, created_org = await service.request_join(pod_id, user_id)
+
+    assert request.status == PodJoinRequestStatus.APPROVED
+    assert created_org is None
+    org_repo.add_member.assert_not_called()
+    pod_member_repo.create.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_request_join_org_members_pod_creates_pending_for_non_member():
+    pod_id, org_id, user_id = uuid4(), uuid4(), uuid4()
+    pod_repo = AsyncMock()
+    pod_repo.get.return_value = _pod_with_policy(pod_id, org_id, PodJoinPolicy.ORG_MEMBERS)
+
+    org_repo = AsyncMock()
+    org_repo.get_member.return_value = None
+
+    join_repo = AsyncMock()
+    join_repo.get_pending_by_pod_and_user.return_value = None
+    join_repo.create.side_effect = lambda entity: entity
+
+    pod_member_repo = AsyncMock()
+
+    service = PodJoinRequestService(
+        pod_join_request_repository=join_repo,
+        pod_member_repository=pod_member_repo,
+        pod_repository=pod_repo,
+        organization_repository=org_repo,
+    )
+
+    request, created_org = await service.request_join(pod_id, user_id)
+
+    assert request.status == PodJoinRequestStatus.PENDING
+    assert created_org is None
+    org_repo.add_member.assert_not_called()
+    pod_member_repo.create.assert_not_called()

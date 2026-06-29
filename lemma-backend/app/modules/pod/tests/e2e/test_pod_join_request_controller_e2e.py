@@ -198,3 +198,59 @@ async def test_pod_self_join_policies(
     )
     assert rejoin.status_code == 200
     assert rejoin.json()["user_id"] == outsider_user["id"]
+
+
+@pytest.mark.asyncio
+async def test_request_join_auto_approves_when_policy_allows(
+    authenticated_client: AsyncClient,
+    async_client: AsyncClient,
+    fixed_test_org,
+):
+    """The join-requests endpoint should self-join (not park in PENDING) when
+    the pod's join policy already entitles the requester."""
+    org_id = fixed_test_org["id"]
+
+    invite_only = await authenticated_client.post(
+        "/pods",
+        json={"name": f"InviteOnly {uuid4().hex[:6]}", "organization_id": org_id},
+    )
+    assert invite_only.status_code == 201, invite_only.text
+    invite_only_pod = invite_only.json()
+
+    public = await authenticated_client.post(
+        "/pods",
+        json={
+            "name": f"Public {uuid4().hex[:6]}",
+            "organization_id": org_id,
+            "config": {"join_policy": "PUBLIC"},
+        },
+    )
+    assert public.status_code == 201, public.text
+    public_pod = public.json()
+
+    outsider_user, outsider_token = await _signup_user(async_client)
+    outsider_headers = {"Authorization": f"Bearer {outsider_token}"}
+
+    # Invite-only pod: requesting still parks the user in a PENDING request.
+    invite_only_request = await async_client.post(
+        f"/pods/{invite_only_pod['id']}/join-requests", headers=outsider_headers
+    )
+    assert invite_only_request.status_code == 201, invite_only_request.text
+    assert invite_only_request.json()["status"] == "PENDING"
+
+    # Public pod: requesting auto-approves and grants membership immediately.
+    public_request = await async_client.post(
+        f"/pods/{public_pod['id']}/join-requests", headers=outsider_headers
+    )
+    assert public_request.status_code == 201, public_request.text
+    assert public_request.json()["status"] == "APPROVED"
+
+    # The user is now a real pod member (auto-added to the org too).
+    visible_pods = await async_client.get(
+        f"/pods/organization/{org_id}", headers=outsider_headers
+    )
+    assert visible_pods.status_code == 200, visible_pods.text
+    assert any(
+        item["id"] == public_pod["id"]
+        for item in visible_pods.json().get("items", [])
+    )

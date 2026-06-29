@@ -77,69 +77,37 @@ class PodJoinRequestService:
 
         return requester_org_member
 
-    async def request_join(
+    def _policy_allows_self_join(
         self,
-        pod_id: UUID,
-        requester_user_id: UUID,
-    ) -> PodJoinRequestEntity:
-        pod = await self.pod_repository.get(pod_id)
-        if not pod:
-            raise PodNotFoundError()
+        join_policy: PodJoinPolicy,
+        org_member: Optional[OrganizationMemberEntity],
+    ) -> bool:
+        """Whether the pod's join policy already entitles this user to join.
 
-        org_member = await self.organization_repository.get_member(
-            requester_user_id, pod.organization_id
-        )
-        if org_member:
-            if org_member.role == OrganizationRole.ORG_OWNER:
-                raise PodConflictError(
-                    "Org owner has access to all pods by default"
-                )
-
-            existing_pod_member = await self.pod_member_repository.get_by_pod_and_org_member(
-                pod_id, org_member.id
-            )
-            if existing_pod_member:
-                raise PodConflictError("User is already a member of this pod")
-
-        existing_pending = await self.pod_join_request_repository.get_pending_by_pod_and_user(
-            pod_id,
-            requester_user_id,
-        )
-        if existing_pending:
-            return existing_pending
-
-        entity = PodJoinRequestEntity(
-            pod_id=pod_id,
-            organization_id=pod.organization_id,
-            user_id=requester_user_id,
-            status=PodJoinRequestStatus.PENDING,
-        )
-        entity.mark_requested()
-        return await self.pod_join_request_repository.create(entity)
-
-    async def join_pod(
-        self,
-        pod_id: UUID,
-        requester_user_id: UUID,
-    ) -> Tuple[PodMemberEntity, Optional[OrganizationMemberEntity]]:
-        """Self-join a pod when its join policy allows it.
-
-        Returns the pod membership plus the org member that was *created* as part
-        of joining (``None`` if the user was already an org member), so the caller
-        can sync org-level authorization for the new member.
+        PUBLIC pods admit anyone; ORG_MEMBERS pods admit existing org members.
+        INVITE_ONLY never self-admits.
         """
-        pod = await self.pod_repository.get(pod_id)
-        if not pod:
-            raise PodNotFoundError()
+        if join_policy == PodJoinPolicy.PUBLIC:
+            return True
+        if join_policy == PodJoinPolicy.ORG_MEMBERS:
+            return org_member is not None
+        return False
 
+    async def _ensure_org_membership_for_join(
+        self,
+        *,
+        pod,
+        requester_user_id: UUID,
+        org_member: Optional[OrganizationMemberEntity],
+    ) -> Tuple[OrganizationMemberEntity, Optional[OrganizationMemberEntity]]:
+        """Resolve the requester's org membership per the pod's join policy.
+
+        Returns ``(org_member, created_org_member)`` where ``created_org_member``
+        is non-None only when a new org membership was created (PUBLIC pods), so
+        the caller can sync org-level authorization. Raises when the policy
+        forbids a self-join for this user.
+        """
         join_policy = pod.config.join_policy
-        org_member = await self.organization_repository.get_member(
-            requester_user_id, pod.organization_id
-        )
-
-        if org_member and org_member.role == OrganizationRole.ORG_OWNER:
-            raise PodConflictError("Org owner has access to all pods by default")
-
         created_org_member: Optional[OrganizationMemberEntity] = None
         if join_policy == PodJoinPolicy.PUBLIC:
             if org_member is None:
@@ -160,12 +128,21 @@ class PodJoinRequestService:
             raise PodAccessDeniedError(
                 "This pod is invite-only; request to join instead"
             )
+        return org_member, created_org_member
 
+    async def _ensure_pod_membership(
+        self,
+        *,
+        pod_id: UUID,
+        org_member: OrganizationMemberEntity,
+        requester_user_id: UUID,
+    ) -> PodMemberEntity:
+        """Idempotently add the org member to the pod with the base USER role."""
         existing_pod_member = await self.pod_member_repository.get_by_pod_and_org_member(
             pod_id, org_member.id
         )
         if existing_pod_member:
-            return existing_pod_member, created_org_member
+            return existing_pod_member
 
         pod_member = PodMemberEntity(
             pod_id=pod_id,
@@ -182,6 +159,130 @@ class PodJoinRequestService:
             )
         else:
             created.roles = [PodRole.USER.value]
+        return created
+
+    async def request_join(
+        self,
+        pod_id: UUID,
+        requester_user_id: UUID,
+    ) -> Tuple[PodJoinRequestEntity, Optional[OrganizationMemberEntity]]:
+        """Request to join a pod, or self-join immediately when policy allows.
+
+        When the pod's join policy already entitles the requester to join
+        (PUBLIC, or ORG_MEMBERS for an existing org member), the membership is
+        created right away and an ``APPROVED`` request is returned — skipping the
+        pending/approval round-trip. Otherwise a ``PENDING`` request is created.
+
+        Returns the request plus the org member that was *created* as part of an
+        auto-join (``None`` otherwise), so the caller can sync org-level
+        authorization for the new member.
+        """
+        pod = await self.pod_repository.get(pod_id)
+        if not pod:
+            raise PodNotFoundError()
+
+        org_member = await self.organization_repository.get_member(
+            requester_user_id, pod.organization_id
+        )
+        if org_member:
+            if org_member.role == OrganizationRole.ORG_OWNER:
+                raise PodConflictError(
+                    "Org owner has access to all pods by default"
+                )
+
+            existing_pod_member = await self.pod_member_repository.get_by_pod_and_org_member(
+                pod_id, org_member.id
+            )
+            if existing_pod_member:
+                raise PodConflictError("User is already a member of this pod")
+
+        if self._policy_allows_self_join(pod.config.join_policy, org_member):
+            org_member, created_org_member = await self._ensure_org_membership_for_join(
+                pod=pod,
+                requester_user_id=requester_user_id,
+                org_member=org_member,
+            )
+            await self._ensure_pod_membership(
+                pod_id=pod_id,
+                org_member=org_member,
+                requester_user_id=requester_user_id,
+            )
+
+            # Reuse a prior pending request (e.g. created while the pod was
+            # invite-only) instead of leaving it dangling.
+            existing_pending = await self.pod_join_request_repository.get_pending_by_pod_and_user(
+                pod_id,
+                requester_user_id,
+            )
+            join_request = existing_pending or PodJoinRequestEntity(
+                pod_id=pod_id,
+                organization_id=pod.organization_id,
+                user_id=requester_user_id,
+            )
+            join_request.mark_approved(
+                approved_by_user_id=requester_user_id,
+                org_role=org_member.role,
+                pod_role=PodRole.USER,
+            )
+            if existing_pending is not None:
+                created_request = await self.pod_join_request_repository.update(
+                    join_request
+                )
+            else:
+                created_request = await self.pod_join_request_repository.create(
+                    join_request
+                )
+            return created_request, created_org_member
+
+        existing_pending = await self.pod_join_request_repository.get_pending_by_pod_and_user(
+            pod_id,
+            requester_user_id,
+        )
+        if existing_pending:
+            return existing_pending, None
+
+        entity = PodJoinRequestEntity(
+            pod_id=pod_id,
+            organization_id=pod.organization_id,
+            user_id=requester_user_id,
+            status=PodJoinRequestStatus.PENDING,
+        )
+        entity.mark_requested()
+        created = await self.pod_join_request_repository.create(entity)
+        return created, None
+
+    async def join_pod(
+        self,
+        pod_id: UUID,
+        requester_user_id: UUID,
+    ) -> Tuple[PodMemberEntity, Optional[OrganizationMemberEntity]]:
+        """Self-join a pod when its join policy allows it.
+
+        Returns the pod membership plus the org member that was *created* as part
+        of joining (``None`` if the user was already an org member), so the caller
+        can sync org-level authorization for the new member.
+        """
+        pod = await self.pod_repository.get(pod_id)
+        if not pod:
+            raise PodNotFoundError()
+
+        org_member = await self.organization_repository.get_member(
+            requester_user_id, pod.organization_id
+        )
+
+        if org_member and org_member.role == OrganizationRole.ORG_OWNER:
+            raise PodConflictError("Org owner has access to all pods by default")
+
+        org_member, created_org_member = await self._ensure_org_membership_for_join(
+            pod=pod,
+            requester_user_id=requester_user_id,
+            org_member=org_member,
+        )
+        created = await self._ensure_pod_membership(
+            pod_id=pod_id,
+            org_member=org_member,
+            requester_user_id=requester_user_id,
+        )
         return created, created_org_member
 
     async def get_my_join_request(
