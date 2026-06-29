@@ -2,13 +2,15 @@
 
 import { use, useState } from 'react';
 import type { AgentRuntimeConfig } from 'lemma-sdk';
-import { Check, Loader2 } from 'lucide-react';
+import { Loader2 } from 'lucide-react';
 
 import { toast } from 'sonner';
 
 import { ProtectedRoute } from '@/components/auth/protected-route';
-import { AgentRuntimeSelector, resolveDefaultAgentRuntime } from '@/components/agents/agent-runtime-selector';
+import { resolveDefaultAgentRuntime } from '@/components/agents/agent-runtime-helpers';
+import { RuntimeModelPicker } from '@/components/lemma/assistant/model-picker';
 import { PodSettingsPanel, PodSettingsShell } from '@/components/pod/pod-settings-shell';
+import { SettingsChoiceList, SettingsHelpText } from '@/components/settings/settings-kit';
 import {
     useAgentRuntimes,
     useAvailableAgentRuntimeHarnesses,
@@ -17,7 +19,6 @@ import {
 import { usePodAccess } from '@/lib/hooks/use-pod-access';
 import { usePod, useUpdatePod } from '@/lib/hooks/use-pods';
 import { PodJoinPolicy } from '@/lib/types';
-import { cn } from '@/lib/utils';
 
 export default function PodSettingsPage({ params }: { params: Promise<{ id: string }> }) {
     return (
@@ -31,30 +32,25 @@ function PodSettingsPageContent({ params }: { params: Promise<{ id: string }> })
     const { id: podId } = use(params);
     const podAccess = usePodAccess(podId);
     const { data: pod, isLoading: isLoadingPod } = usePod(podId);
-    const {
-        data: runtimeCatalog,
-        isFetching: isFetchingRuntimeCatalog,
-        isLoading: isLoadingRuntimeCatalog,
-        refetch: refetchRuntimeCatalog,
-    } = useAgentRuntimes(pod?.organization_id);
-    const {
-        data: availableHarnesses,
-        isFetching: isFetchingAvailableHarnesses,
-        isLoading: isLoadingAvailableHarnesses,
-        refetch: refetchAvailableHarnesses,
-    } = useAvailableAgentRuntimeHarnesses();
+    const { data: runtimeCatalog } = useAgentRuntimes(pod?.organization_id);
+    const { data: availableHarnesses } = useAvailableAgentRuntimeHarnesses();
     const updatePodDefaultRuntime = useUpdatePodDefaultAgentRuntime();
     const [runtimeDraft, setRuntimeDraft] = useState<AgentRuntimeConfig | null>(null);
 
     const canUpdatePod = podAccess.can('pod.update');
-    const podDefaultRuntime = resolveDefaultAgentRuntime(runtimeCatalog, pod?.config?.default_profile_id, availableHarnesses);
-    const selectedRuntime = runtimeDraft ?? (pod?.config?.default_profile_id ? podDefaultRuntime : null);
+    // Prefer the full stored runtime (profile + model); fall back to the legacy
+    // provider-only default, resolving its model from the profile for display.
+    const storedRuntime = pod?.config?.default_runtime
+        ?? (pod?.config?.default_profile_id
+            ? resolveDefaultAgentRuntime(runtimeCatalog, pod.config.default_profile_id, availableHarnesses)
+            : null);
+    const selectedRuntime = runtimeDraft ?? storedRuntime;
 
     const handleRuntimeCommit = (runtime: AgentRuntimeConfig | null) => {
         setRuntimeDraft(runtime);
         updatePodDefaultRuntime.mutate({
             podId,
-            agentRuntimeId: runtime?.profile_id ?? null,
+            runtime,
         }, {
             onSuccess: () => setRuntimeDraft(null),
         });
@@ -76,33 +72,20 @@ function PodSettingsPageContent({ params }: { params: Promise<{ id: string }> })
             title="Pod Settings"
             description="Configure defaults that shape how this pod runs."
         >
-            <div className="mx-auto flex w-full max-w-3xl flex-col gap-5">
+            <div className="flex w-full max-w-3xl flex-col gap-5">
             <PodSettingsPanel
-                title="Default Agent Runtime"
-                description="Agents without a pinned model and new conversations use this runtime."
+                title="Default model"
+                description="Agents without a pinned model and new conversations use this model."
             >
-                <AgentRuntimeSelector
+                <RuntimeModelPicker
                     catalog={runtimeCatalog}
                     availableHarnesses={availableHarnesses}
-                    organizationId={pod?.organization_id}
                     defaultRuntime={runtimeCatalog?.default_runtime ?? null}
                     value={selectedRuntime}
-                    onChange={setRuntimeDraft}
-                    onCommit={handleRuntimeCommit}
-                    onRefresh={() => {
-                        void refetchRuntimeCatalog();
-                        void refetchAvailableHarnesses();
-                    }}
-                    commitLabel={selectedRuntime ? 'Save default' : 'Clear override'}
-                    commitLoading={updatePodDefaultRuntime.isPending}
-                    isRefreshing={isFetchingRuntimeCatalog || isFetchingAvailableHarnesses}
-                    isLoading={isLoadingRuntimeCatalog || isLoadingAvailableHarnesses}
+                    onChange={handleRuntimeCommit}
                     disabled={!canUpdatePod}
-                    allowDefault
-                    label="Pod default"
-                    description={canUpdatePod
-                        ? 'Choose the model this pod should use by default.'
-                        : 'You can view this default, but your role cannot change pod settings.'}
+                    scopeHint="Pod default"
+                    manageHref={pod?.organization_id ? `/organizations/${pod.organization_id}/settings/agent-runtimes` : undefined}
                 />
             </PodSettingsPanel>
 
@@ -169,41 +152,15 @@ function PodJoinPolicyPanel({
             title="Who can join"
             description="Decide whether people can add themselves to this pod or need an invite."
         >
-            <div className="settings-list" role="radiogroup" aria-label="Who can join this pod">
-                {POD_JOIN_POLICY_OPTIONS.map((option) => {
-                    const selected = option.value === policy;
-                    return (
-                        <button
-                            key={option.value}
-                            type="button"
-                            role="radio"
-                            aria-checked={selected}
-                            disabled={disabled}
-                            onClick={() => handleChange(option.value)}
-                            data-selected={selected}
-                            className="settings-choice-row items-start disabled:cursor-not-allowed disabled:opacity-60"
-                        >
-                            <span className="flex min-w-0 flex-col gap-0.5">
-                                <span className="text-sm font-medium text-[var(--text-primary)]">{option.label}</span>
-                                <span className="text-xs leading-5 text-[var(--text-tertiary)]">{option.description}</span>
-                            </span>
-                            <span
-                                aria-hidden
-                                className={cn(
-                                    'mt-0.5 flex h-4 w-4 shrink-0 items-center justify-center rounded-full border transition-gentle',
-                                    selected
-                                        ? 'border-[var(--state-success)] bg-[var(--state-success)] text-[var(--text-on-brand)]'
-                                        : 'border-[var(--field-border)] text-transparent',
-                                )}
-                            >
-                                <Check className="h-3 w-3" strokeWidth={3} />
-                            </span>
-                        </button>
-                    );
-                })}
-            </div>
+            <SettingsChoiceList
+                ariaLabel="Who can join this pod"
+                options={POD_JOIN_POLICY_OPTIONS}
+                value={policy}
+                onChange={handleChange}
+                disabled={disabled}
+            />
             {!canUpdate ? (
-                <p className="settings-help-text mt-3">Your role cannot change pod settings.</p>
+                <SettingsHelpText className="mt-3">Your role cannot change pod settings.</SettingsHelpText>
             ) : null}
         </PodSettingsPanel>
     );

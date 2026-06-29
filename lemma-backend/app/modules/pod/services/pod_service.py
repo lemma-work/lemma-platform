@@ -116,11 +116,16 @@ class PodService:
         merged_dict = pod_entity.model_dump()
         update_data = data.model_dump(exclude_unset=True)
         # Config is a typed multi-field blob; merge field-wise so a partial
-        # update (e.g. only default_profile_id, or only join_policy) preserves
+        # update (e.g. only default_runtime, or only join_policy) preserves
         # the other fields instead of resetting them to their defaults.
         if update_data.get("config") is not None:
             merged_config = merged_dict.get("config") or {}
             merged_config.update(update_data["config"])
+            # Keep the legacy provider-only key in sync with the full runtime so
+            # any code still reading ``default_profile_id`` stays correct.
+            default_runtime = merged_config.get("default_runtime")
+            if isinstance(default_runtime, dict) and default_runtime.get("profile_id"):
+                merged_config["default_profile_id"] = default_runtime["profile_id"]
             update_data["config"] = merged_config
         merged_dict.update(update_data)
 

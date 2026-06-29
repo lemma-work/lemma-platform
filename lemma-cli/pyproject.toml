@@ -35,7 +35,7 @@ dependencies = [
   # >= the version that has the endpoints the current commands use, so a fresh
   # `uv tool install` upgrades an already-installed older lemma-sdk. The release
   # workflow rewrites this to the release version on every tagged build.
-  "lemma-sdk>=0.5.3",
+  "lemma-sdk>=0.5.4",
   "click>=8.3.0",
   "typer>=0.12.5",
   "rich>=13.9.4",

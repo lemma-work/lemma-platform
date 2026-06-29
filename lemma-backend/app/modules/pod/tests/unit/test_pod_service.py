@@ -5,6 +5,7 @@ from uuid import uuid4
 
 import pytest
 
+from app.modules.agent.domain.value_objects import AgentRuntimeConfig
 from app.modules.identity.domain.organization_entities import (
     OrganizationMemberEntity,
     OrganizationRole,
@@ -236,6 +237,44 @@ async def test_update_pod_merges_config_field_wise(
 
     assert result.config.join_policy == PodJoinPolicy.PUBLIC
     assert result.config.default_profile_id == "profile-1"
+
+
+@pytest.mark.asyncio
+async def test_update_pod_mirrors_default_runtime_profile_id(
+    pod_service: PodService,
+    pod_repository_mock: AsyncMock,
+):
+    pod = PodEntity(
+        name="Test Pod",
+        organization_id=uuid4(),
+        user_id=uuid4(),
+        config=PodConfig(default_profile_id="old-profile"),
+    )
+    pod_repository_mock.get.return_value = pod
+    pod_repository_mock.update.side_effect = lambda entity: entity
+
+    ctx = AsyncMock()
+
+    # Set a full runtime (profile + model). The legacy default_profile_id must
+    # be kept in sync so code still reading the old key resolves correctly.
+    result = await pod_service.update_pod(
+        pod.id,
+        PodUpdateEntity(
+            config=PodConfig(
+                default_runtime=AgentRuntimeConfig(
+                    profile_id="new-profile", model_name="claude-sonnet"
+                )
+            )
+        ),
+        uuid4(),
+        ctx=ctx,
+    )
+
+    assert result.config.default_profile_id == "new-profile"  # mirrored
+    runtime = result.config.resolved_default_runtime()
+    assert runtime is not None
+    assert runtime.profile_id == "new-profile"
+    assert runtime.model_name == "claude-sonnet"
 
 
 @pytest.mark.asyncio

@@ -25,7 +25,8 @@ import { toast } from 'sonner';
 
 import { SchemaBuilder } from '@/components/agents/schema-builder';
 import { AgentAvatarPicker } from '@/components/agents/agent-avatar-picker';
-import { AgentRuntimeSelector, formatAgentRuntime, resolveDefaultAgentRuntime } from '@/components/agents/agent-runtime-selector';
+import { formatAgentRuntime, resolveDefaultAgentRuntime } from '@/components/agents/agent-runtime-helpers';
+import { RuntimeModelPicker } from '@/components/lemma/assistant/model-picker';
 import { PodPageHeader } from '@/components/pod/pod-page-header';
 import { ConnectorsSelector, DatastoresSelector, FoldersSelector } from '@/components/pod/resource-selectors';
 import { ResourceIcon } from '@/components/shared/resource-icon';
@@ -121,19 +122,9 @@ export default function NewAgentPage({
     const router = useRouter();
     const podAccess = usePodAccess(podId);
     const createAgent = useCreateAgent();
-    const { data: pod, isLoading: isLoadingPod } = usePod(podId);
-    const {
-        data: runtimeCatalog,
-        isFetching: isFetchingRuntimeCatalog,
-        isLoading: isLoadingRuntimeCatalog,
-        refetch: refetchRuntimeCatalog,
-    } = useAgentRuntimes(pod?.organization_id);
-    const {
-        data: availableHarnesses,
-        isFetching: isFetchingAvailableHarnesses,
-        isLoading: isLoadingAvailableHarnesses,
-        refetch: refetchAvailableHarnesses,
-    } = useAvailableAgentRuntimeHarnesses();
+    const { data: pod } = usePod(podId);
+    const { data: runtimeCatalog } = useAgentRuntimes(pod?.organization_id);
+    const { data: availableHarnesses } = useAvailableAgentRuntimeHarnesses();
     const defaultRuntime = resolveDefaultAgentRuntime(runtimeCatalog, pod?.config?.default_profile_id, availableHarnesses);
     const [currentStep, setCurrentStep] = useState<BuilderStepId>('identity');
     const [showTaskFields, setShowTaskFields] = useState(false);
@@ -353,20 +344,14 @@ export default function NewAgentPage({
                                         <Bot className="h-4 w-4 text-[var(--text-tertiary)]" />
                                         <h3 className="settings-title text-sm">Model</h3>
                                     </div>
-                                    <AgentRuntimeSelector
+                                    <RuntimeModelPicker
                                         catalog={runtimeCatalog}
                                         availableHarnesses={availableHarnesses}
-                                        organizationId={pod?.organization_id}
                                         defaultRuntime={defaultRuntime}
                                         value={draftAgent.agent_runtime ?? null}
                                         onChange={(agentRuntime) => updateDraft({ agent_runtime: agentRuntime })}
-                                        onRefresh={() => {
-                                            void refetchRuntimeCatalog();
-                                            void refetchAvailableHarnesses();
-                                        }}
-                                        isRefreshing={isFetchingRuntimeCatalog || isFetchingAvailableHarnesses}
-                                        isLoading={isLoadingRuntimeCatalog || isLoadingAvailableHarnesses || isLoadingPod}
-                                        allowDefault
+                                        scopeHint="Default for this agent"
+                                        manageHref={pod?.organization_id ? `/organizations/${pod.organization_id}/settings/agent-runtimes` : undefined}
                                     />
                                 </div>
 

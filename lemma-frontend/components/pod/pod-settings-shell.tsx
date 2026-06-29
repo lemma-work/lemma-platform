@@ -4,8 +4,7 @@ import type { ReactNode } from 'react';
 
 import { PodHeaderMetrics, PodPageHeader } from '@/components/pod/pod-page-header';
 import { PodSettingsNav } from '@/components/pod/pod-settings-nav';
-import { ResourcePanel, ResourcePanelHeader } from '@/components/pod/resource-layout';
-import { cn } from '@/lib/utils';
+import { SettingsPanel } from '@/components/settings/settings-kit';
 
 interface PodSettingsStat {
     label: string;
@@ -51,25 +50,9 @@ export function PodSettingsShell({
     );
 }
 
-interface PodSettingsPanelProps {
-    title: string;
-    description?: string;
-    action?: ReactNode;
-    children: ReactNode;
-    className?: string;
-}
-
-export function PodSettingsPanel({
-    title,
-    description,
-    action,
-    children,
-    className,
-}: PodSettingsPanelProps) {
-    return (
-        <ResourcePanel className={cn('overflow-hidden', className)}>
-            <ResourcePanelHeader title={title} description={description} action={action} />
-            <div className="px-4 py-4">{children}</div>
-        </ResourcePanel>
-    );
-}
+/**
+ * Back-compat alias. The panel now lives in the shared settings kit so pod and
+ * org settings render the exact same card; prefer importing `SettingsPanel`
+ * from '@/components/settings/settings-kit' in new code.
+ */
+export const PodSettingsPanel = SettingsPanel;

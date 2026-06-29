@@ -463,7 +463,7 @@ function SetupAssistant({
         if (connectedProfileId) {
           await updatePodDefaultRuntime.mutateAsync({
             podId: pod.id,
-            agentRuntimeId: connectedProfileId,
+            runtime: { profile_id: connectedProfileId, model_name: null },
           });
         }
         router.push(
@@ -486,7 +486,7 @@ function SetupAssistant({
       if (connectedProfileId) {
         await updatePodDefaultRuntime.mutateAsync({
           podId: pod.id,
-          agentRuntimeId: connectedProfileId,
+          runtime: { profile_id: connectedProfileId, model_name: null },
         });
       }
       const params = new URLSearchParams({

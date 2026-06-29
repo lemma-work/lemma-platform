@@ -23,6 +23,7 @@ from app.modules.agent.services.runtime_profile_service import (
     DEFAULT_SYSTEM_AGENT_RUNTIME_PROFILE_ID,
     AgentRuntimeProfileService,
     DiscoveredModel,
+    _selected_model,
 )
 from app.modules.agent.infrastructure.harnesses.pydantic_ai import (
     _runtime_profile_model,
@@ -314,7 +315,10 @@ async def test_runtime_lists_configured_system_org_and_owned_personal_profiles(
 
 
 @pytest.mark.asyncio
-async def test_runtime_rejects_model_not_in_selected_profile():
+async def test_runtime_falls_back_when_model_not_in_selected_profile():
+    # A pinned model that is no longer in the profile catalog (deprecated model,
+    # swapped key) must degrade to the profile's default model rather than
+    # hard-failing every run that relies on the profile.
     org_id = uuid4()
     org_profile = _test_profile(
         scope=RuntimeProfileScope.ORGANIZATION,
@@ -323,15 +327,17 @@ async def test_runtime_rejects_model_not_in_selected_profile():
     )
     service = AgentRuntimeProfileService(_ProfileRepository([org_profile]))
 
-    with pytest.raises(RuntimeError, match="not in runtime profile"):
-        await service.resolve(
-            runtime=AgentRuntimeConfig(
-                profile_id=org_profile.id,
-                model_name="missing-model",
-            ),
-            organization_id=org_id,
-            user_id=uuid4(),
-        )
+    resolved = await service.resolve(
+        runtime=AgentRuntimeConfig(
+            profile_id=org_profile.id,
+            model_name="missing-model",
+        ),
+        organization_id=org_id,
+        user_id=uuid4(),
+    )
+
+    assert resolved.model is not None
+    assert resolved.model.name == org_profile.default_model_name
 
 
 def test_system_runtime_profiles_return_empty_without_server_credentials(monkeypatch):
@@ -958,3 +964,37 @@ def test_default_runtime_cannot_be_changed_outside_local(tmp_path):
 
     with pytest.raises(AgentRuntimeDefaultError):
         service.set_default(AgentRuntimeConfig(profile_id="system:lemma"))
+
+
+def test_selected_model_returns_requested_when_in_catalog():
+    profile = _test_profile(scope=RuntimeProfileScope.SYSTEM, name="p")
+    model = _selected_model(profile, "deepseek-v4-pro")
+    assert model is not None and model.name == "deepseek-v4-pro"
+
+
+def test_selected_model_falls_back_to_profile_default_when_no_request():
+    profile = _test_profile(scope=RuntimeProfileScope.SYSTEM, name="p")
+    model = _selected_model(profile, None)
+    assert model is not None and model.name == "default"
+
+
+def test_selected_model_pinned_missing_falls_back_to_default_not_raise():
+    # A pinned model that is no longer in the catalog (e.g. deprecated) must
+    # degrade to the profile default rather than hard-failing the run.
+    profile = _test_profile(scope=RuntimeProfileScope.SYSTEM, name="p")
+    model = _selected_model(profile, "model-that-was-removed")
+    assert model is not None and model.name == "default"
+
+
+def test_selected_model_pinned_missing_and_default_missing_uses_first_entry():
+    profile = _test_profile(scope=RuntimeProfileScope.SYSTEM, name="p")
+    profile.default_model_name = "also-gone"
+    model = _selected_model(profile, "model-that-was-removed")
+    assert model is not None and model.name == "default"  # first catalog entry
+
+
+def test_selected_model_empty_catalog_returns_none():
+    profile = _test_profile(scope=RuntimeProfileScope.SYSTEM, name="p")
+    profile.model_catalog = []
+    profile.default_model_name = None
+    assert _selected_model(profile, None) is None

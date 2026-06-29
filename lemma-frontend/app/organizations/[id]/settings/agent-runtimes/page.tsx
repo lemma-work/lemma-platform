@@ -1,10 +1,9 @@
 'use client';
 
-import { use, useState } from 'react';
-import type { AgentRuntimeConfig } from 'lemma-sdk';
+import { use } from 'react';
 
 import { ProtectedRoute } from '@/components/auth/protected-route';
-import { AgentRuntimeSelector } from '@/components/agents/agent-runtime-selector';
+import { ModelsSettings } from '@/components/agents/models-settings';
 import { InlineLoader } from '@/components/brand/loader';
 import { PlainPageShell } from '@/components/dashboard/plain-page-shell';
 import { OrganizationSettingsNav } from '@/components/organizations/organization-settings-nav';
@@ -35,14 +34,12 @@ function OrganizationAgentRuntimesPageContent({ params }: { params: Promise<{ id
     const {
         data: availableHarnesses,
         isFetching: isFetchingAvailableHarnesses,
-        isLoading: isLoadingAvailableHarnesses,
         refetch: refetchAvailableHarnesses,
     } = useAvailableAgentRuntimeHarnesses();
-    const [runtimeDraft, setRuntimeDraft] = useState<AgentRuntimeConfig | null>(null);
 
     return (
         <PlainPageShell
-            title="Agent Runtimes"
+            title="Models"
             icon={<ProductIcon tone="settings" size="sm" />}
             backHref="/"
             backLabel="Home"
@@ -54,24 +51,18 @@ function OrganizationAgentRuntimesPageContent({ params }: { params: Promise<{ id
             <section className="office-arrive settings-stack">
                 {isLoadingRuntimeCatalog && !runtimeCatalog ? (
                     <div className="mb-3 flex h-10 items-center gap-2 rounded-md px-2 text-sm text-[var(--text-tertiary)]">
-                        <InlineLoader size="xs" label="Loading agent runtimes" />
+                        <InlineLoader size="xs" label="Loading models" />
                     </div>
                 ) : null}
-                <AgentRuntimeSelector
+                <ModelsSettings
+                    organizationId={organizationId}
                     catalog={runtimeCatalog}
                     availableHarnesses={availableHarnesses}
-                    organizationId={organizationId}
-                    value={runtimeDraft}
-                    onChange={setRuntimeDraft}
+                    isRefreshing={isFetchingRuntimeCatalog || isFetchingAvailableHarnesses}
                     onRefresh={() => {
                         void refetchRuntimeCatalog();
                         void refetchAvailableHarnesses();
                     }}
-                    isRefreshing={isFetchingRuntimeCatalog || isFetchingAvailableHarnesses}
-                    commitLabel="Select"
-                    isLoading={isLoadingRuntimeCatalog || isLoadingAvailableHarnesses}
-                    variant="list"
-                    selectionMode="runtime"
                 />
             </section>
         </PlainPageShell>

@@ -12,7 +12,8 @@ import { ProtectedRoute } from '@/components/auth/protected-route';
 import { FirstWinChecklist } from '@/components/education/first-win-checklist';
 import { ResourceIcon } from '@/components/shared/resource-icon';
 import { ProductIcon } from '@/components/pod/product-icon';
-import { AgentRuntimeSelector, resolveDefaultAgentRuntime } from '@/components/agents/agent-runtime-selector';
+import { resolveDefaultAgentRuntime } from '@/components/agents/agent-runtime-helpers';
+import { RuntimeModelPicker } from '@/components/lemma/assistant/model-picker';
 import { RecipeFeatureCard } from '@/components/recipes/recipe-card';
 import { useAppPages } from '@/lib/hooks/use-app';
 import { featuredRecipes } from '@/lib/recipes/recipes';
@@ -59,19 +60,9 @@ function PodBlankChatHome({ podId }: { podId: string }) {
     const router = useRouter();
     const assistant = useAIAssistant();
     const podAccess = usePodAccess(podId);
-    const { data: pod, isLoading: isLoadingPod } = usePod(podId);
-    const {
-        data: runtimeCatalog,
-        isFetching: isFetchingRuntimeCatalog,
-        isLoading: isLoadingRuntimeCatalog,
-        refetch: refetchRuntimeCatalog,
-    } = useAgentRuntimes(pod?.organization_id);
-    const {
-        data: availableHarnesses,
-        isFetching: isFetchingAvailableHarnesses,
-        isLoading: isLoadingAvailableHarnesses,
-        refetch: refetchAvailableHarnesses,
-    } = useAvailableAgentRuntimeHarnesses();
+    const { data: pod } = usePod(podId);
+    const { data: runtimeCatalog } = useAgentRuntimes(pod?.organization_id);
+    const { data: availableHarnesses } = useAvailableAgentRuntimeHarnesses();
     const canWriteConversations = podAccess.can('conversation.write');
     const [draft, setDraft] = useState('');
     const [isSending, setIsSending] = useState(false);
@@ -90,7 +81,8 @@ function PodBlankChatHome({ podId }: { podId: string }) {
     const isBlankingHome = isLaunchingComposer || isRouteHandoff;
     const isBusy = isSending || isBlankingHome || assistant.isLoading || assistant.isActiveConversationRunning || assistant.isUploadingFiles;
     const canSend = canWriteConversations && draft.trim().length > 0 && !isBusy;
-    const podDefaultRuntime = resolveDefaultAgentRuntime(runtimeCatalog, pod?.config?.default_profile_id, availableHarnesses);
+    const podDefaultRuntime = pod?.config?.default_runtime
+        ?? resolveDefaultAgentRuntime(runtimeCatalog, pod?.config?.default_profile_id, availableHarnesses);
     const selectedCommandRuntime = assistant.conversationRuntime ?? null;
 
     const handleCommandRuntimeChange = (runtime: AgentRuntimeConfig | null) => {
@@ -291,23 +283,16 @@ function PodBlankChatHome({ podId }: { podId: string }) {
                             disabled={!canWriteConversations}
                             className="inline-edit-field min-h-10 flex-1 resize-none bg-transparent py-3 text-base leading-6 text-[var(--text-primary)] outline-none placeholder:text-[var(--text-tertiary)]"
                         />
-                        <AgentRuntimeSelector
+                        <RuntimeModelPicker
                             catalog={runtimeCatalog}
                             availableHarnesses={availableHarnesses}
-                            organizationId={pod?.organization_id}
                             defaultRuntime={podDefaultRuntime}
                             value={selectedCommandRuntime}
                             onChange={handleCommandRuntimeChange}
-                            onRefresh={() => {
-                                void refetchRuntimeCatalog();
-                                void refetchAvailableHarnesses();
-                            }}
-                            commitLabel="Use model"
-                            isRefreshing={isFetchingRuntimeCatalog || isFetchingAvailableHarnesses}
-                            isLoading={isLoadingPod || isLoadingRuntimeCatalog || isLoadingAvailableHarnesses}
                             disabled={!canWriteConversations}
-                            allowDefault
-                            variant="compact"
+                            compact
+                            scopeHint="Just for this chat"
+                            manageHref={pod?.organization_id ? `/organizations/${pod.organization_id}/settings/agent-runtimes` : undefined}
                         />
                         <button
                             type="submit"

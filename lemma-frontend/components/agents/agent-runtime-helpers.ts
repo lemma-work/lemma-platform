@@ -5,6 +5,7 @@ import type {
     AgentRuntimeConfig,
     AgentRuntimeProfileListResponse,
     AgentRuntimeProfileResponse,
+    AvailableModelInfo,
     RuntimeModelCatalogEntry,
 } from 'lemma-sdk';
 
@@ -248,6 +249,33 @@ export function runtimeAvailabilityLabel(profile: AgentRuntimeProfileResponse): 
                 ? profile.daemon_status
                 : null;
     }
+}
+
+// Flatten the runtime-profile catalog into the flat, plain-language model list
+// the ModelPicker consumes. Every pickable model across every saved profile
+// (Lemma built-in, BYO providers, coding agents) becomes one row, tagged with
+// its profile so the picker can group by provider. Provider/daemon *creation*
+// is intentionally not represented here — that lives in the manage surface.
+export function runtimeCatalogToModelOptions(
+    catalog?: AgentRuntimeProfileListResponse,
+    availableHarnesses?: AgentHarnessListResponse,
+): AvailableModelInfo[] {
+    if (!catalog?.items?.length) return [];
+    const options: AvailableModelInfo[] = [];
+    for (const profile of catalog.items) {
+        for (const model of runtimeModels(profile, availableHarnesses)) {
+            options.push({
+                id: model.name as AvailableModelInfo['id'],
+                name: model.display_name ?? model.name,
+                runtime: { profile_id: profile.id, model_name: model.name },
+                profile,
+                profile_id: profile.id,
+                harness_kind: profile.derived_harness_kind ?? undefined,
+                description: modelAdvisory(model),
+            });
+        }
+    }
+    return options;
 }
 
 export function splitModelNames(value: string): string[] {

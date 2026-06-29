@@ -1,9 +1,10 @@
 from datetime import datetime, timezone
 from enum import Enum
+from typing import Mapping, Optional
 from uuid import UUID
-from typing import Optional
-from pydantic import BaseModel, Field, field_validator, model_serializer, model_validator
+from pydantic import BaseModel, Field, ValidationError, field_validator, model_serializer, model_validator
 from app.core.domain.aggregate import AggregateRoot
+from app.modules.agent.domain.value_objects import AgentRuntimeConfig
 from app.modules.identity.domain.organization_entities import OrganizationRole
 from app.modules.identity.domain.user_entities import UserEntity
 from app.modules.pod.domain.roles import PodRole
@@ -20,7 +21,12 @@ class PodJoinPolicy(str, Enum):
 class PodConfig(BaseModel):
     """Typed pod-level configuration."""
 
+    # ``default_profile_id`` is the legacy provider-only default (no model). It is
+    # kept for backward compatibility — old pods, old clients, and any code still
+    # reading the raw key — and is mirrored from ``default_runtime`` on write.
+    # New code should set/read ``default_runtime`` (profile + optional model).
     default_profile_id: str | None = Field(default=None, min_length=1)
+    default_runtime: AgentRuntimeConfig | None = None
     join_policy: PodJoinPolicy = PodJoinPolicy.INVITE_ONLY
 
     @field_validator("default_profile_id")
@@ -33,11 +39,36 @@ class PodConfig(BaseModel):
             raise ValueError("default_profile_id cannot be empty")
         return profile_id
 
+    @classmethod
+    def from_raw(cls, config: object) -> "PodConfig":
+        """Parse a raw stored config blob, tolerating legacy/malformed shapes."""
+        if isinstance(config, Mapping):
+            try:
+                return cls.model_validate(dict(config))
+            except ValidationError:
+                return cls()
+        return cls()
+
+    def resolved_default_runtime(self) -> AgentRuntimeConfig | None:
+        """The pod's default runtime, preferring the full ``default_runtime``.
+
+        Falls back to the legacy ``default_profile_id`` (model unset == use the
+        profile's own default model), so old pods resolve exactly as before.
+        Returns ``None`` when the pod pins no default.
+        """
+        if self.default_runtime is not None:
+            return self.default_runtime
+        if self.default_profile_id:
+            return AgentRuntimeConfig(profile_id=self.default_profile_id)
+        return None
+
     @model_serializer(mode="wrap")
     def serialize_without_empty_defaults(self, handler):
         data = handler(self)
         if data.get("default_profile_id") is None:
             data.pop("default_profile_id", None)
+        if data.get("default_runtime") is None:
+            data.pop("default_runtime", None)
         return data
 
 

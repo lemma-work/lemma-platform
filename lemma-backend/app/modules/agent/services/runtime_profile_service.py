@@ -19,6 +19,7 @@ from pydantic import HttpUrl
 
 from app.core.config import reveal_secret, settings
 from app.core.domain.errors import DomainError
+from app.core.log.log import get_logger
 from app.modules.agent.domain.runtime_profiles import (
     AnthropicCompatibleRuntimeConfig,
     AgentRuntimeProfile,
@@ -37,6 +38,8 @@ from app.modules.agent.infrastructure.repositories import (
     AgentRuntimeDaemonRepository,
     AgentRuntimeProfileRepository,
 )
+
+logger = get_logger(__name__)
 
 SYSTEM_LEMMA_PROFILE_ID = "system:lemma"
 DEFAULT_SYSTEM_AGENT_RUNTIME_PROFILE_ID = SYSTEM_LEMMA_PROFILE_ID
@@ -954,10 +957,21 @@ def _selected_model(
     for model in profile.model_catalog:
         if model_name == model.name:
             return model
+    # The requested model is not in the catalog (e.g. a pinned default whose
+    # model was later deprecated, or a swapped BYO key). Degrade gracefully to
+    # the profile's own default — and then the first catalog entry — rather than
+    # hard-failing every run that relies on this profile.
     if requested_model_name:
-        raise RuntimeError(
-            f"Model {requested_model_name!r} is not in runtime profile {profile.id!r}"
+        logger.warning(
+            "Requested model %r is not in runtime profile %r; "
+            "falling back to the profile default",
+            requested_model_name,
+            profile.id,
         )
+        if profile.default_model_name:
+            for model in profile.model_catalog:
+                if profile.default_model_name == model.name:
+                    return model
     if profile.model_catalog:
         return profile.model_catalog[0]
     return None

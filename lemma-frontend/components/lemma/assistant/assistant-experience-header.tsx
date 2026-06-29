@@ -10,9 +10,9 @@ import type {
 } from "./assistant-types";
 import {
   AssistantHeader,
-  AssistantModelPicker,
   type AssistantSurfaceTone,
 } from "./assistant-chrome";
+import { ModelPicker } from "./model-picker";
 
 export interface AssistantExperienceHeaderProps {
   controller: AssistantControllerView;
@@ -58,13 +58,13 @@ export function AssistantExperienceHeader({
       controls={showModelPicker || showNewConversationButton || headerActions ? (
         <>
           {showModelPicker ? (
-            <AssistantModelPicker
+            <ModelPicker
               value={controller.conversationModel}
               runtime={controller.conversationRuntime ?? null}
               options={availableModelOptions}
               onChange={(nextModel, runtime) => { onModelChange(nextModel, runtime); }}
               disabled={isConversationBusy || isUpdatingModel}
-              autoLabel="Auto"
+              autoLabel="Default"
               compact={density === "compact"}
             />
           ) : null}

@@ -23,6 +23,7 @@ from app.modules.agent.infrastructure.repositories import ConversationRepository
 from app.modules.agent.services.runtime_profile_service import (
     DEFAULT_SYSTEM_AGENT_RUNTIME_PROFILE_ID,
 )
+from app.modules.pod.domain.pod_entities import PodConfig
 from app.modules.pod.infrastructure.models.pod_models import Pod
 
 
@@ -113,10 +114,10 @@ class AgentControlAdapter(AgentPort):
             select(Pod.config).where(Pod.id == pod_id)
         )
         config = result.scalar_one_or_none() or {}
-        profile_id = config.get("default_profile_id")
-        if not isinstance(profile_id, str) or not profile_id.strip():
-            profile_id = DEFAULT_SYSTEM_AGENT_RUNTIME_PROFILE_ID
-        return AgentRuntimeConfig(profile_id=profile_id)
+        runtime = PodConfig.from_raw(config).resolved_default_runtime()
+        return runtime or AgentRuntimeConfig(
+            profile_id=DEFAULT_SYSTEM_AGENT_RUNTIME_PROFILE_ID
+        )
 
     async def run_agent_by_id(
         self,

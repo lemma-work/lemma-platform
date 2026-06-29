@@ -590,6 +590,9 @@ const informationalChecks = [
         /\bagent-runtime-harness-button\b/.test(match) ||
         /\bagent-runtime-model-button\b/.test(match) ||
         /\bagent-runtime-scope-button\b/.test(match) ||
+        /\bmodel-picker-choice-button\b/.test(match) ||
+        /\bmodels-settings-scope-button\b/.test(match) ||
+        /\bmodels-settings-provider-button\b/.test(match) ||
         /\bworkspace-sidebar-suggestion-chip-button\b/.test(match) ||
         /\bdocument-space-result-button\b/.test(match) ||
         /\bdocument-space-entry-button\b/.test(match) ||

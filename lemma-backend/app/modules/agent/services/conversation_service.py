@@ -57,6 +57,7 @@ from app.modules.agent.services.realtime import (
 )
 from app.modules.agent.services.serialization import message_to_payload
 from app.modules.agent.services.workspace_location import resolve_workspace_location
+from app.modules.pod.domain.pod_entities import PodConfig
 from app.modules.pod.infrastructure.pod_repositories import PodRepository
 from app.modules.usage.services.usage_service import UsageService
 
@@ -1138,10 +1139,10 @@ class ConversationService:
         pod_id: UUID,
     ) -> AgentRuntimeConfig:
         config = await PodRepository(self.uow).get_config(pod_id)
-        profile_id = config.get("default_profile_id")
-        if not isinstance(profile_id, str) or not profile_id.strip():
-            profile_id = DEFAULT_SYSTEM_AGENT_RUNTIME_PROFILE_ID
-        return AgentRuntimeConfig(profile_id=profile_id)
+        runtime = PodConfig.from_raw(config).resolved_default_runtime()
+        return runtime or AgentRuntimeConfig(
+            profile_id=DEFAULT_SYSTEM_AGENT_RUNTIME_PROFILE_ID
+        )
 
     async def _assert_usage_preflight_allowed(
         self,
