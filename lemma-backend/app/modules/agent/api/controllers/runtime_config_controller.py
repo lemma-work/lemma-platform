@@ -26,7 +26,11 @@ from app.modules.agent.api.schemas import (
 )
 from app.modules.agent.agent_runtime_defaults import AgentRuntimeDefaultService
 from app.modules.agent.domain.value_objects import HarnessKind
-from app.modules.agent.domain.runtime_profiles import AgentRuntimeProfile
+from app.modules.agent.domain.runtime_profiles import (
+    AgentRuntimeProfile,
+    RuntimeModelCapability,
+    RuntimeModelCatalogEntry,
+)
 from app.modules.agent.infrastructure.daemon_hub import agent_runtime_daemon_hub
 from app.modules.agent.infrastructure.repositories import (
     AgentRuntimeDaemonRepository,
@@ -378,6 +382,9 @@ def _harness_infos_from_daemons(daemons: list[object]) -> list[AgentHarnessInfo]
                 for item in raw_models
                 if available and str(item).strip()
             ]
+            model_catalog = (
+                _harness_model_catalog(raw_info) if available else []
+            )
             items.append(
                 AgentHarnessInfo(
                     harness_kind=harness_kind,
@@ -386,6 +393,7 @@ def _harness_infos_from_daemons(daemons: list[object]) -> list[AgentHarnessInfo]
                         or f"{harness_kind.value} on {daemon.display_name}"
                     ),
                     models=models,
+                    model_catalog=model_catalog,
                     available=available,
                     availability_status="READY" if available else "NOT_INSTALLED",
                     daemon_id=daemon.id,
@@ -394,3 +402,47 @@ def _harness_infos_from_daemons(daemons: list[object]) -> list[AgentHarnessInfo]
                 )
             )
     return items
+
+
+def _harness_model_catalog(raw_info: dict) -> list[RuntimeModelCatalogEntry]:
+    """Structured model entries for a detected harness.
+
+    Uses the daemon's ``model_catalog`` (display name + provider model id +
+    metadata) when present, falling back to the flat ``models`` aliases for
+    daemons that predate the structured catalog.
+    """
+    capabilities = [RuntimeModelCapability.TEXT, RuntimeModelCapability.TOOLS]
+    raw_catalog = raw_info.get("model_catalog")
+    entries: list[RuntimeModelCatalogEntry] = []
+    if isinstance(raw_catalog, list):
+        for item in raw_catalog:
+            if not isinstance(item, dict):
+                continue
+            name = str(item.get("name") or "").strip()
+            if not name:
+                continue
+            provider_model_name = str(item.get("provider_model_name") or name).strip() or name
+            display_name = str(item.get("display_name") or "").strip() or name
+            metadata = item.get("metadata")
+            entries.append(
+                RuntimeModelCatalogEntry(
+                    name=name,
+                    display_name=display_name,
+                    provider_model_name=provider_model_name,
+                    capabilities=capabilities,
+                    metadata=metadata if isinstance(metadata, dict) else {},
+                )
+            )
+    if entries:
+        return entries
+    # Back-compat: build plain entries from the flat models list.
+    return [
+        RuntimeModelCatalogEntry(
+            name=str(model).strip(),
+            display_name=str(model).strip(),
+            provider_model_name=str(model).strip(),
+            capabilities=capabilities,
+        )
+        for model in (raw_info.get("models") or [])
+        if str(model).strip()
+    ]

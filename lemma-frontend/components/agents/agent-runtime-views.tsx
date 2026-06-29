@@ -16,6 +16,7 @@ import { cn } from '@/lib/utils';
 import {
     availableHarnessKey,
     harnessLogo,
+    modelAdvisory,
     modelPathHint,
     runtimeAvailabilityLabel,
     runtimeKey,
@@ -198,12 +199,18 @@ export function AvailableHarnessDetail({
                     <Label className="text-[var(--text-secondary)]">Default model</Label>
                     <div className="space-y-1">
                         {(harness.models ?? []).map((model) => {
-                            const hint = modelPathHint(model.provider_model_name ?? model.name);
+                            const hint = model.display_name && model.display_name !== model.name
+                                ? model.name
+                                : modelPathHint(model.provider_model_name ?? model.name);
+                            const advisory = modelAdvisory(model);
                             return (
                                 <RuntimeChoiceRow
                                     key={`${harness.harness_kind}-${model.name}`}
                                     title={model.display_name ?? shortModelName(model.name)}
                                     subtitle={hint}
+                                    trailing={advisory ? (
+                                        <span className="chip chip-sm chip-pill chip-muted">{advisory}</span>
+                                    ) : null}
                                     selected={activeModelName === model.name}
                                     disabled={isPending}
                                     onClick={() => onSelectModel(model.name)}
@@ -267,11 +274,15 @@ export function HarnessModelList({
                 const hint = model.display_name && model.display_name !== model.name
                     ? model.name
                     : modelPathHint(model.provider_model_name ?? modelName);
+                const advisory = modelAdvisory(model);
                 return (
                     <RuntimeChoiceRow
                         key={runtimeKey(runtime)}
                         title={model.display_name ?? shortModelName(modelName)}
                         subtitle={hint}
+                        trailing={advisory ? (
+                            <span className="chip chip-sm chip-pill chip-muted">{advisory}</span>
+                        ) : null}
                         selected={pendingKey === runtimeKey(runtime)}
                         onClick={() => onSelectRuntime(runtime)}
                     />

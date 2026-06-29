@@ -12,6 +12,39 @@ HARNESS_BINARIES = {
     "OPENCODE": "opencode",
 }
 
+# Claude Code's bare ``sonnet``/``opus`` aliases resolve to the *latest* model,
+# which currently defaults to the 1M-context beta variant. That variant requires
+# usage-based billing credits, so a user on a plain Pro/Max plan who picks
+# "sonnet" gets a hard "Usage credits required for 1M context" failure on their
+# first message. We instead advertise the full, standard-context model ids so
+# the default path never opts into the paid 1M window.
+#
+# ``provider_model_name`` is what we hand to ``claude --model``; ``name`` stays
+# the friendly alias so it remains a stable selection key and existing saved
+# profiles keep working. Update these ids when Claude Code ships a newer model
+# (the alias->id mapping is the one spot that drifts with the CLI version).
+CLAUDE_CODE_MODEL_CATALOG: tuple[dict[str, Any], ...] = (
+    {
+        "name": "sonnet",
+        "display_name": "Claude Sonnet 4.6",
+        "provider_model_name": "claude-sonnet-4-6",
+        "metadata": {"alias": "sonnet", "context_window": "standard"},
+    },
+    {
+        "name": "opus",
+        "display_name": "Claude Opus 4.8",
+        "provider_model_name": "claude-opus-4-8",
+        "metadata": {"alias": "opus", "context_window": "standard"},
+    },
+)
+
+# Bare alias -> standard-context model id, used to rewrite ``--model`` for
+# already-saved profiles (and any caller) that still send the raw alias.
+CLAUDE_CODE_STANDARD_MODEL_BY_ALIAS: dict[str, str] = {
+    str(entry["name"]): str(entry["provider_model_name"])
+    for entry in CLAUDE_CODE_MODEL_CATALOG
+}
+
 
 def discover_harness_catalog() -> dict[str, dict[str, Any]]:
     return {
@@ -24,13 +57,17 @@ def discover_harness(harness_kind: str, binary: str) -> dict[str, Any]:
     path = shutil.which(binary)
     if path is None:
         return {"available": False, "binary": binary, "models": []}
-    models, model_discovery_error = discover_harness_models(harness_kind, binary)
+    model_catalog, model_discovery_error = discover_harness_model_entries(harness_kind, binary)
     payload: dict[str, Any] = {
         "available": True,
         "binary": binary,
         "path": path,
         "version": binary_version(binary),
-        "models": models,
+        # Flat list kept for backward compatibility with older readers.
+        "models": [str(entry["name"]) for entry in model_catalog],
+        # Structured entries carry display names, the provider model id we hand
+        # to the harness, and metadata (context window, etc.) for the picker.
+        "model_catalog": model_catalog,
         "display_name": harness_kind.replace("_", " ").title(),
     }
     if model_discovery_error:
@@ -38,20 +75,58 @@ def discover_harness(harness_kind: str, binary: str) -> dict[str, Any]:
     return payload
 
 
-def discover_harness_models(harness_kind: str, binary: str) -> tuple[list[str], str | None]:
+def discover_harness_model_entries(
+    harness_kind: str, binary: str
+) -> tuple[list[dict[str, Any]], str | None]:
+    """Structured model catalog for a harness.
+
+    Each entry is ``{name, display_name, provider_model_name, metadata}``.
+    ``name`` is the user-facing/selection key; ``provider_model_name`` is what
+    gets passed to the harness CLI. For most harnesses these are identical, but
+    Claude Code maps friendly aliases to full standard-context model ids.
+    """
     configured = configured_harness_models(harness_kind)
     if configured is not None:
-        return configured, None
+        return [_plain_model_entry(name) for name in configured], None
     try:
         if harness_kind == "CODEX":
-            return discover_codex_models(binary), None
+            return [_plain_model_entry(name) for name in discover_codex_models(binary)], None
         if harness_kind == "OPENCODE":
-            return discover_opencode_models(binary), None
+            return [_plain_model_entry(name) for name in discover_opencode_models(binary)], None
         if harness_kind == "CLAUDE_CODE":
-            return discover_claude_code_models(binary), None
+            return discover_claude_code_model_entries(binary), None
     except Exception as exc:  # noqa: BLE001
         return [], str(exc)
     return [], None
+
+
+def discover_harness_models(harness_kind: str, binary: str) -> tuple[list[str], str | None]:
+    entries, error = discover_harness_model_entries(harness_kind, binary)
+    return [str(entry["name"]) for entry in entries], error
+
+
+def _plain_model_entry(name: str) -> dict[str, Any]:
+    """A catalog entry whose selection name and provider id are the same."""
+    return {
+        "name": name,
+        "display_name": name,
+        "provider_model_name": name,
+        "metadata": {},
+    }
+
+
+def normalize_provider_model_name(harness_kind: str, model_name: str) -> str:
+    """Rewrite a model name to the string we actually hand the harness CLI.
+
+    For Claude Code this maps the bare ``sonnet``/``opus`` aliases to their
+    full standard-context model ids, so callers that send the raw alias (e.g.
+    profiles saved before this change) don't fall into the paid 1M-context
+    variant. Unknown names (full ids, ``default``, other harnesses) pass
+    through unchanged.
+    """
+    if harness_kind == "CLAUDE_CODE":
+        return CLAUDE_CODE_STANDARD_MODEL_BY_ALIAS.get(model_name.strip(), model_name)
+    return model_name
 
 
 def configured_harness_models(harness_kind: str) -> list[str] | None:
@@ -96,15 +171,29 @@ def discover_opencode_models(binary: str) -> list[str]:
     return _opencode_models_from_text(text)
 
 
-def discover_claude_code_models(binary: str) -> list[str]:
+def discover_claude_code_model_entries(binary: str) -> list[dict[str, Any]]:
     completed = run_catalog_command([binary, "--help"])
     text = f"{completed.stdout}\n{completed.stderr}"
-    aliases = [
-        model
-        for model in ("sonnet", "opus")
-        if f"'{model}'" in text or f'"{model}"' in text or f" {model}" in text
+    entries = [
+        _copy_model_entry(entry)
+        for entry in CLAUDE_CODE_MODEL_CATALOG
+        if _claude_alias_advertised(str(entry["name"]), text)
     ]
-    return aliases or ["sonnet", "opus"]
+    return entries or [_copy_model_entry(entry) for entry in CLAUDE_CODE_MODEL_CATALOG]
+
+
+def _claude_alias_advertised(alias: str, help_text: str) -> bool:
+    return (
+        f"'{alias}'" in help_text
+        or f'"{alias}"' in help_text
+        or f" {alias}" in help_text
+    )
+
+
+def _copy_model_entry(entry: dict[str, Any]) -> dict[str, Any]:
+    copied = dict(entry)
+    copied["metadata"] = dict(entry.get("metadata") or {})
+    return copied
 
 
 def run_catalog_command(command: list[str]) -> subprocess.CompletedProcess[str]:

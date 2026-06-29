@@ -149,6 +149,23 @@ export function formatAgentRuntime(
     return includeModel && modelName ? `${prefix} · ${shortModelName(modelName)}` : prefix;
 }
 
+// A short advisory drawn from a model's catalog metadata — e.g. a credits
+// requirement or a non-standard context window. Returns null for plain
+// standard-context models so the picker stays uncluttered.
+export function modelAdvisory(model: Pick<RuntimeModelCatalogEntry, 'metadata'>): string | null {
+    const metadata = (model.metadata ?? {}) as Record<string, unknown>;
+    if (metadata.requires_credits) return 'Requires usage credits';
+    const note = typeof metadata.note === 'string' ? metadata.note.trim() : '';
+    if (note) return note;
+    const contextWindow = typeof metadata.context_window === 'string'
+        ? metadata.context_window.trim()
+        : '';
+    if (contextWindow && contextWindow.toLowerCase() !== 'standard') {
+        return `${contextWindow} context`;
+    }
+    return null;
+}
+
 export function shortModelName(modelName: string): string {
     const normalized = modelName.replace(/\/$/, '');
     const markerMatch = normalized.match(/\/(?:models|routers)\/([^/]+)$/);
@@ -171,6 +188,11 @@ export function harnessLogo(harnessKind?: HarnessKind): string | undefined {
 }
 
 export function harnessModelOptions(harness: AgentHarnessInfo): RuntimeModelOption[] {
+    // Prefer the structured catalog (nice display names + context metadata);
+    // fall back to the flat model aliases for older daemons.
+    if (harness.model_catalog && harness.model_catalog.length > 0) {
+        return harness.model_catalog as RuntimeModelOption[];
+    }
     return (harness.models ?? []).map((modelName) => ({
         name: modelName,
         display_name: null,
