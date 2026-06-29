@@ -194,6 +194,52 @@ async def test_pod_write_record_rejects_empty_data(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_pod_write_record_accepts_json_string_data(monkeypatch):
+    # Models on OpenAI-compatible providers commonly pass `data` as a JSON-encoded
+    # string rather than a native object (the free-form object schema carries an
+    # empty `properties` map, which weaker models fill with `{}`, dropping the
+    # row). The string form must decode to a dict and write through unchanged.
+    record = SimpleNamespace(data={"id": "1", "name": "Ada"})
+    services = SimpleNamespace(
+        record=SimpleNamespace(create_record=AsyncMock(return_value=record)),
+        table=SimpleNamespace(get_table=AsyncMock()),
+        ctx=SimpleNamespace(pod_id=uuid4(), user_id=uuid4()),
+    )
+    _patch_services(monkeypatch, services)
+    monkeypatch.setattr(
+        pod_adapter, "_table_context", AsyncMock(return_value=SimpleNamespace())
+    )
+
+    request = PodWriteRecordRequest(
+        action="create",
+        table_name="t",
+        data='{"name": "Ada", "age": 36, "tags": ["x"]}',
+    )
+    # The validator normalizes the JSON string to a dict before the tool runs.
+    assert request.data == {"name": "Ada", "age": 36, "tags": ["x"]}
+
+    result = await pod_adapter.pod_write_record(_run_ctx(), request)
+    assert result["success"] is True
+    # The datastore receives a decoded dict (positional arg), never the raw string.
+    written = services.record.create_record.await_args.args[1]
+    assert written == {"name": "Ada", "age": 36, "tags": ["x"]}
+
+
+def test_pod_write_record_data_string_validation():
+    from pydantic import ValidationError
+
+    # A blank string is treated as no data (caught later by the non-empty guard).
+    blank = PodWriteRecordRequest(action="create", table_name="t", data="   ")
+    assert blank.data is None
+
+    # A string that is not valid JSON, or that decodes to a non-object, is a
+    # validation error — not a silently-dropped or blank write.
+    for bad in ("not json", "[1, 2, 3]", '"just a string"', "42"):
+        with pytest.raises(ValidationError):
+            PodWriteRecordRequest(action="create", table_name="t", data=bad)
+
+
+@pytest.mark.asyncio
 async def test_pod_get_records_single_vs_list(monkeypatch):
     record = SimpleNamespace(data={"id": "1", "name": "Ada"})
     services = SimpleNamespace(
