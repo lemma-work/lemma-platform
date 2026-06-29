@@ -77,6 +77,8 @@ def build_harness_registry() -> HarnessRegistry:
             DaemonHarness(HarnessKind.CODEX),
             DaemonHarness(HarnessKind.CLAUDE_CODE),
             DaemonHarness(HarnessKind.OPENCODE),
+            DaemonHarness(HarnessKind.CURSOR),
+            DaemonHarness(HarnessKind.ANTIGRAVITY),
         ]
     )
 

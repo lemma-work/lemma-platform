@@ -10,4 +10,6 @@ export enum HarnessKind {
     CODEX = 'CODEX',
     CLAUDE_CODE = 'CLAUDE_CODE',
     OPENCODE = 'OPENCODE',
+    CURSOR = 'CURSOR',
+    ANTIGRAVITY = 'ANTIGRAVITY',
 }
