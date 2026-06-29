@@ -12,7 +12,7 @@ import {
     useOrganizationDetails
 } from '@/lib/hooks/use-organizations';
 import { OrganizationJoinPolicy, OrganizationRole, type Organization, type OrganizationInvitation, type OrganizationMember } from '@/lib/types';
-import { OrgJoinPolicyField, orgJoinPolicyLabel } from '@/components/organizations/org-join-policy-field';
+import { OrgJoinPolicyField } from '@/components/organizations/org-join-policy-field';
 import { useProfile } from '@/lib/hooks/use-user';
 import { normalizeEmailDomain, workDomainFromEmail } from '@/lib/utils/organization-slugs';
 import { Button } from '@/components/ui/button';
@@ -20,7 +20,6 @@ import { DestructiveConfirmationDialog } from '@/components/shared/destructive-c
 import { EmptyState } from '@/components/shared/empty-state';
 import { DestructiveResourceActionItem, ResourceActionsMenu } from '@/components/shared/resource-actions-menu';
 import { Input } from '@/components/ui/input';
-import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import {
     Dialog,
     DialogContent,
@@ -45,6 +44,13 @@ import { ProtectedRoute } from '@/components/auth/protected-route';
 import { StepLoader } from '@/components/brand/loader';
 import { PlainPageShell } from '@/components/dashboard/plain-page-shell';
 import { OrganizationSettingsNav } from '@/components/organizations/organization-settings-nav';
+import {
+    SettingsHelpText,
+    SettingsList,
+    SettingsPanel,
+    SettingsRow,
+    SettingsStack,
+} from '@/components/settings/settings-kit';
 import { ProductIcon } from '@/components/pod/product-icon';
 import { formatRoleLabel } from '@/lib/utils/role-labels';
 import { buildOrganizationInviteRedirectUri } from '@/lib/utils/invite-redirects';
@@ -62,12 +68,10 @@ export default function OrgMembersPage() {
 function OrgMembersPageContent() {
     const params = useParams();
     const orgId = params.id as string;
-    // console.log('OrgMembersPage params (useParams):', orgId);
 
     const { data: membersData, isLoading: loadingMembers } = useOrganizationMembers(orgId);
     const { data: organization } = useOrganizationDetails(orgId);
     const { data: profile } = useProfile();
-    // console.log('Members Data:', membersData, 'Loading:', loadingMembers, 'Error:', membersError);
 
     const { data: invitationsData, isLoading: loadingInvitations } = useOrganizationInvitations(orgId);
 
@@ -82,30 +86,12 @@ function OrgMembersPageContent() {
             icon={<ProductIcon tone="settings" size="sm" />}
             backHref="/"
             backLabel="Home"
-            meta="Organization"
+            meta={organization?.name || 'Organization'}
             tabs={<OrganizationSettingsNav organizationId={orgId} />}
             contentWidthClassName="max-w-6xl"
             contentClassName="pb-16 sm:pb-20"
         >
-            <section className="settings-stack office-arrive">
-                <div className="settings-identity-band">
-                    <div className="min-w-0">
-                        <p className="type-eyebrow text-[var(--text-tertiary)]">Workspace</p>
-                        <h2 className="mt-1 truncate text-xl font-semibold leading-tight text-[var(--text-primary)]">
-                            {organization?.name || 'Organization access'}
-                        </h2>
-                        <p className="mt-2 max-w-2xl text-sm leading-6 text-[var(--text-secondary)]">
-                            Manage members, invitations, and workspace entry rules.
-                        </p>
-                    </div>
-                    {organization ? (
-                        <div className="settings-stat-strip">
-                            <OrgAccessStat label="URL slug" value={organization.slug} />
-                            <OrgAccessStat label="Email domain" value={organization.email_domain || '—'} />
-                            <OrgAccessStat label="Join policy" value={orgJoinPolicyLabel(organization.join_policy)} />
-                        </div>
-                    ) : null}
-                </div>
+            <SettingsStack className="office-arrive">
                 {organization ? (
                     <OrgAccessSettings
                         orgId={orgId}
@@ -114,29 +100,23 @@ function OrgMembersPageContent() {
                         suggestedWorkDomain={workDomainFromEmail(profile?.email)}
                     />
                 ) : null}
-                <Tabs defaultValue="members" className="w-full">
-                    <TabsList>
-                        <TabsTrigger value="members">Members ({members.length})</TabsTrigger>
-                        <TabsTrigger value="invitations">Invitations ({invitations.length})</TabsTrigger>
-                    </TabsList>
-                    <TabsContent value="members" className="mt-6">
-                        <MembersList orgId={orgId} members={members} isLoading={loadingMembers} />
-                    </TabsContent>
-                    <TabsContent value="invitations" className="mt-6">
-                        <InvitationsList orgId={orgId} invitations={invitations} isLoading={loadingInvitations} />
-                    </TabsContent>
-                </Tabs>
-            </section>
-        </PlainPageShell>
-    );
-}
 
-function OrgAccessStat({ label, value }: { label: string; value: string }) {
-    return (
-        <div className="settings-stat">
-            <p className="type-eyebrow">{label}</p>
-            <p className="mt-1 break-all text-sm font-medium text-[var(--text-primary)]">{value}</p>
-        </div>
+                <SettingsPanel
+                    title="Members"
+                    description="People with access to this organization."
+                    action={<InviteMemberDialog orgId={orgId} />}
+                >
+                    <MembersList orgId={orgId} members={members} isLoading={loadingMembers} />
+                </SettingsPanel>
+
+                <SettingsPanel
+                    title="Pending invitations"
+                    description="People invited to join the organization."
+                >
+                    <InvitationsList orgId={orgId} invitations={invitations} isLoading={loadingInvitations} />
+                </SettingsPanel>
+            </SettingsStack>
+        </PlainPageShell>
     );
 }
 
@@ -176,14 +156,11 @@ function OrgAccessSettings({
     };
 
     return (
-        <section className="settings-open-section">
-            <div className="settings-panel-header">
-                <div>
-                    <h2 className="settings-title">Workspace access</h2>
-                    <p className="settings-description">Control who can join this organization.</p>
-                </div>
-            </div>
-            <div className="mt-5 max-w-md space-y-4">
+        <SettingsPanel
+            title="Workspace access"
+            description="Control who can join this organization."
+        >
+            <div className="max-w-md space-y-4">
                 <OrgJoinPolicyField
                     value={joinPolicy}
                     onChange={(next) => {
@@ -211,17 +188,16 @@ function OrgAccessSettings({
                         Save access
                     </Button>
                 ) : (
-                    <p className="settings-help-text">Only the organization owner can change who can join.</p>
+                    <SettingsHelpText>Only the organization owner can change who can join.</SettingsHelpText>
                 )}
             </div>
-        </section>
+        </SettingsPanel>
     );
 }
 
 function MembersList({ orgId, members, isLoading }: { orgId: string, members: OrganizationMember[], isLoading: boolean }) {
     const { mutate: removeMember, isPending: isRemoving } = useRemoveOrgMember(orgId);
     const { mutate: updateRole, isPending: isUpdating } = useUpdateOrgMemberRole(orgId);
-    const [inviteOpen, setInviteOpen] = useState(false);
     const [memberPendingRemove, setMemberPendingRemove] = useState<{ id: string; label: string } | null>(null);
 
     if (isLoading) {
@@ -246,23 +222,27 @@ function MembersList({ orgId, members, isLoading }: { orgId: string, members: Or
         });
     };
 
+    if (members.length === 0) {
+        return (
+            <EmptyState
+                variant="compact"
+                title="No members yet"
+                description="Invite the people who should help own this organization."
+                className="surface-panel-muted py-8"
+            />
+        );
+    }
+
     return (
-        <section className="settings-open-section">
-            <div className="settings-panel-header">
-                <div>
-                    <h2 className="settings-title">Members</h2>
-                    <p className="settings-description">People with access to this organization.</p>
-                </div>
-                <InviteMemberDialog orgId={orgId} open={inviteOpen} onOpenChange={setInviteOpen} />
-            </div>
-            <div className="settings-list mt-5">
+        <>
+            <SettingsList>
                 {members.map((member) => {
                     const displayName = member.user?.first_name
                         ? `${member.user.first_name} ${member.user.last_name || ''}`.trim()
                         : (member.user?.email || 'Unknown User');
 
                     return (
-                        <div key={member.id} className="settings-list-row">
+                        <SettingsRow key={member.id}>
                             <div className="flex items-center gap-4">
                                 <Avatar>
                                     <AvatarImage src={member.user?.avatar_url} />
@@ -301,18 +281,10 @@ function MembersList({ orgId, members, isLoading }: { orgId: string, members: Or
                                     </DestructiveResourceActionItem>
                                 </ResourceActionsMenu>
                             </div>
-                        </div>
+                        </SettingsRow>
                     );
                 })}
-                {members.length === 0 ? (
-                    <EmptyState
-                        variant="compact"
-                        title="No members yet"
-                        description="Invite the people who should help own this organization."
-                        className="surface-panel-muted py-8"
-                    />
-                ) : null}
-            </div>
+            </SettingsList>
             <DestructiveConfirmationDialog
                 open={Boolean(memberPendingRemove)}
                 onOpenChange={(open) => {
@@ -331,7 +303,7 @@ function MembersList({ orgId, members, isLoading }: { orgId: string, members: Or
                 isPending={isRemoving}
                 onConfirm={handleRemove}
             />
-        </section>
+        </>
     );
 }
 
@@ -354,17 +326,19 @@ function InvitationsList({ orgId, invitations, isLoading }: { orgId: string, inv
         });
     };
 
-    return (
-        <section className="settings-open-section">
-            <div className="settings-panel-header">
-                <div>
-                    <h2 className="settings-title">Pending invitations</h2>
-                    <p className="settings-description">Users invited to join the organization.</p>
-                </div>
+    if (invitations.length === 0) {
+        return (
+            <div className="surface-panel-muted py-8 text-center">
+                <SettingsHelpText>No pending invitations.</SettingsHelpText>
             </div>
-            <div className="settings-list mt-5">
+        );
+    }
+
+    return (
+        <>
+            <SettingsList>
                 {invitations.map((invite) => (
-                    <div key={invite.id} className="settings-list-row">
+                    <SettingsRow key={invite.id}>
                         <div className="flex items-center gap-4">
                             <div className="settings-panel-icon h-10 w-10">
                                 <Mail className="h-4 w-4 text-[var(--text-tertiary)]" />
@@ -399,14 +373,9 @@ function InvitationsList({ orgId, invitations, isLoading }: { orgId: string, inv
                                 Revoke invite
                             </DestructiveResourceActionItem>
                         </ResourceActionsMenu>
-                    </div>
+                    </SettingsRow>
                 ))}
-                {invitations.length === 0 ? (
-                    <div className="surface-panel-muted py-8 text-center">
-                        <p className="settings-help-text">No pending invitations.</p>
-                    </div>
-                ) : null}
-            </div>
+            </SettingsList>
             <DestructiveConfirmationDialog
                 open={Boolean(invitationPendingRevoke)}
                 onOpenChange={(open) => {
@@ -425,12 +394,13 @@ function InvitationsList({ orgId, invitations, isLoading }: { orgId: string, inv
                 isPending={isPending}
                 onConfirm={handleRevoke}
             />
-        </section>
+        </>
     );
 }
 
-function InviteMemberDialog({ orgId, open, onOpenChange }: { orgId: string, open: boolean, onOpenChange: (open: boolean) => void }) {
+function InviteMemberDialog({ orgId }: { orgId: string }) {
     const { mutate: invite, isPending } = useInviteMember(orgId);
+    const [open, setOpen] = useState(false);
     const [email, setEmail] = useState('');
     const [role, setRole] = useState<OrganizationRole>(OrganizationRole.ORG_MEMBER);
     const defaultRedirectUri = useMemo(
@@ -443,7 +413,7 @@ function InviteMemberDialog({ orgId, open, onOpenChange }: { orgId: string, open
         invite({ email, role, redirect_uri: defaultRedirectUri }, {
             onSuccess: () => {
                 toast.success('Invitation sent');
-                onOpenChange(false);
+                setOpen(false);
                 setEmail('');
                 setRole(OrganizationRole.ORG_MEMBER);
             },
@@ -452,11 +422,11 @@ function InviteMemberDialog({ orgId, open, onOpenChange }: { orgId: string, open
     };
 
     return (
-        <Dialog open={open} onOpenChange={onOpenChange}>
+        <Dialog open={open} onOpenChange={setOpen}>
             <DialogTrigger asChild>
-                <Button>
-                    <Plus className="w-4 h-4 mr-2" />
-                    Invite Member
+                <Button size="sm" className="gap-2">
+                    <Plus className="h-4 w-4" />
+                    Invite member
                 </Button>
             </DialogTrigger>
             <DialogContent>
@@ -497,7 +467,7 @@ function InviteMemberDialog({ orgId, open, onOpenChange }: { orgId: string, open
                         </p>
                     </div>
                     <DialogFooter>
-                        <Button type="button" variant="ghost" onClick={() => onOpenChange(false)}>Cancel</Button>
+                        <Button type="button" variant="ghost" onClick={() => setOpen(false)}>Cancel</Button>
                         <Button type="submit" disabled={isPending}>
                             {isPending ? 'Sending...' : 'Send Invitation'}
                         </Button>

@@ -504,7 +504,7 @@ function PodMembersPageContent({ params }: { params: Promise<{ id: string }> }) 
                 </Dialog>
             ) : null}
         >
-            <div className="mx-auto w-full max-w-5xl space-y-5">
+            <div className="w-full max-w-5xl space-y-5">
                 <ResourceMetricStrip className="lemma-index-tabs-left">
                     <ResourceMetricButton active={activeView === 'people'} label="People" count={members.length} onClick={() => setActiveView('people')} />
                     <ResourceMetricButton active={activeView === 'invites'} label="Email invites" count={pendingPodInvitations.length} onClick={() => setActiveView('invites')} />

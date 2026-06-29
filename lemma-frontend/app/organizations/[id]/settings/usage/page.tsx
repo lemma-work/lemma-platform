@@ -27,15 +27,12 @@ function OrganizationUsagePageContent({ params }: { params: Promise<{ id: string
             icon={<ProductIcon tone="settings" size="sm" />}
             backHref="/"
             backLabel="Home"
-            meta="Organization"
+            meta={organization?.name || 'Organization'}
             tabs={<OrganizationSettingsNav organizationId={organizationId} />}
             contentWidthClassName="max-w-6xl"
             contentClassName="pb-16 sm:pb-20"
         >
             <section className="office-arrive space-y-5">
-                <p className="max-w-2xl text-sm leading-6 text-[var(--text-secondary)]">
-                    Review model spend, token volume, limits, and recent billing events{organization?.name ? ` for ${organization.name}` : ''}.
-                </p>
                 <UsageOverview
                     organizationId={organizationId}
                     scope="organization"

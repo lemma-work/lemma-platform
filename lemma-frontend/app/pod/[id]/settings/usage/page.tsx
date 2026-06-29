@@ -37,7 +37,7 @@ function PodUsagePageContent({ params }: { params: Promise<{ id: string }> }) {
             title="Pod Settings"
             description="Track spend, tokens, and recent model activity inside this pod."
         >
-            <div className="mx-auto w-full max-w-5xl">
+            <div className="w-full max-w-5xl">
                 {organizationId ? (
                     <UsageOverview
                         organizationId={organizationId}

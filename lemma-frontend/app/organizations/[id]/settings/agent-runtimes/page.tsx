@@ -45,7 +45,7 @@ function OrganizationAgentRuntimesPageContent({ params }: { params: Promise<{ id
             backLabel="Home"
             meta={organization?.name || 'Organization'}
             tabs={<OrganizationSettingsNav organizationId={organizationId} />}
-            contentWidthClassName="max-w-4xl"
+            contentWidthClassName="max-w-6xl"
             contentClassName="pb-16 sm:pb-20"
         >
             <section className="office-arrive settings-stack">

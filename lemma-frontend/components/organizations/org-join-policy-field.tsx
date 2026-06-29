@@ -4,13 +4,7 @@ import { Globe2 } from 'lucide-react';
 
 import { OrganizationJoinPolicy } from '@/lib/types';
 import { Label } from '@/components/ui/label';
-import {
-    Select,
-    SelectContent,
-    SelectItem,
-    SelectTrigger,
-    SelectValue,
-} from '@/components/ui/select';
+import { SettingsChoiceList } from '@/components/settings/settings-kit';
 
 export const ORG_JOIN_POLICY_OPTIONS: {
     value: OrganizationJoinPolicy;
@@ -55,55 +49,45 @@ export function OrgJoinPolicyField({
     disabled?: boolean;
     label?: string;
 }) {
-    const activeOption = ORG_JOIN_POLICY_OPTIONS.find((option) => option.value === value);
-    const isEmailDomain = value === OrganizationJoinPolicy.EMAIL_DOMAIN;
+    const emailDomainField = (
+        <div className="space-y-2">
+            <Label htmlFor="email-domain">Company email domain</Label>
+            <div className="form-field-control flex h-12 items-center gap-3 px-4">
+                <Globe2 className="h-5 w-5 shrink-0 text-[var(--text-tertiary)]" />
+                <input
+                    id="email-domain"
+                    placeholder="company.com"
+                    value={emailDomain}
+                    onChange={(event) => onEmailDomainChange(event.target.value)}
+                    disabled={disabled}
+                    className="inline-edit-field min-w-0 flex-1 border-0 bg-transparent p-0 text-base text-[var(--text-primary)] outline-none placeholder:text-[var(--text-soft)]"
+                />
+            </div>
+            {!suggestedWorkDomain ? (
+                <p className="text-xs leading-5 text-[var(--text-tertiary)]">
+                    This must match your own company email domain. Personal providers like Gmail can&apos;t use domain-based joining.
+                </p>
+            ) : null}
+        </div>
+    );
+
+    const options = ORG_JOIN_POLICY_OPTIONS.map((option) => ({
+        value: option.value,
+        label: option.label,
+        description: option.description,
+        expanded: option.value === OrganizationJoinPolicy.EMAIL_DOMAIN ? emailDomainField : undefined,
+    }));
 
     return (
-        <div className="space-y-3">
-            <div className="space-y-2">
-                <Label htmlFor="join-policy">{label}</Label>
-                <Select
-                    value={value}
-                    onValueChange={(next) => onChange(next as OrganizationJoinPolicy)}
-                    disabled={disabled}
-                >
-                    <SelectTrigger id="join-policy" className="w-full">
-                        <SelectValue />
-                    </SelectTrigger>
-                    <SelectContent>
-                        {ORG_JOIN_POLICY_OPTIONS.map((option) => (
-                            <SelectItem key={option.value} value={option.value}>
-                                {option.label}
-                            </SelectItem>
-                        ))}
-                    </SelectContent>
-                </Select>
-                {activeOption ? (
-                    <p className="text-xs leading-5 text-[var(--text-tertiary)]">{activeOption.description}</p>
-                ) : null}
-            </div>
-
-            {isEmailDomain ? (
-                <div className="space-y-2">
-                    <Label htmlFor="email-domain">Company email domain</Label>
-                    <div className="form-field-control flex h-12 items-center gap-3 px-4">
-                        <Globe2 className="h-5 w-5 shrink-0 text-[var(--text-tertiary)]" />
-                        <input
-                            id="email-domain"
-                            placeholder="company.com"
-                            value={emailDomain}
-                            onChange={(event) => onEmailDomainChange(event.target.value)}
-                            disabled={disabled}
-                            className="inline-edit-field min-w-0 flex-1 border-0 bg-transparent p-0 text-base text-[var(--text-primary)] outline-none placeholder:text-[var(--text-soft)]"
-                        />
-                    </div>
-                    {!suggestedWorkDomain ? (
-                        <p className="text-xs leading-5 text-[var(--text-tertiary)]">
-                            This must match your own company email domain. Personal providers like Gmail can&apos;t use domain-based joining.
-                        </p>
-                    ) : null}
-                </div>
-            ) : null}
+        <div className="space-y-2">
+            <Label>{label}</Label>
+            <SettingsChoiceList
+                ariaLabel={typeof label === 'string' ? label : 'Who can join'}
+                options={options}
+                value={value}
+                onChange={onChange}
+                disabled={disabled}
+            />
         </div>
     );
 }

@@ -2,7 +2,7 @@
 
 import { use, useState } from 'react';
 import type { AgentRuntimeConfig } from 'lemma-sdk';
-import { Check, Loader2 } from 'lucide-react';
+import { Loader2 } from 'lucide-react';
 
 import { toast } from 'sonner';
 
@@ -10,6 +10,7 @@ import { ProtectedRoute } from '@/components/auth/protected-route';
 import { resolveDefaultAgentRuntime } from '@/components/agents/agent-runtime-helpers';
 import { RuntimeModelPicker } from '@/components/lemma/assistant/model-picker';
 import { PodSettingsPanel, PodSettingsShell } from '@/components/pod/pod-settings-shell';
+import { SettingsChoiceList, SettingsHelpText } from '@/components/settings/settings-kit';
 import {
     useAgentRuntimes,
     useAvailableAgentRuntimeHarnesses,
@@ -18,7 +19,6 @@ import {
 import { usePodAccess } from '@/lib/hooks/use-pod-access';
 import { usePod, useUpdatePod } from '@/lib/hooks/use-pods';
 import { PodJoinPolicy } from '@/lib/types';
-import { cn } from '@/lib/utils';
 
 export default function PodSettingsPage({ params }: { params: Promise<{ id: string }> }) {
     return (
@@ -72,7 +72,7 @@ function PodSettingsPageContent({ params }: { params: Promise<{ id: string }> })
             title="Pod Settings"
             description="Configure defaults that shape how this pod runs."
         >
-            <div className="mx-auto flex w-full max-w-3xl flex-col gap-5">
+            <div className="flex w-full max-w-3xl flex-col gap-5">
             <PodSettingsPanel
                 title="Default model"
                 description="Agents without a pinned model and new conversations use this model."
@@ -152,41 +152,15 @@ function PodJoinPolicyPanel({
             title="Who can join"
             description="Decide whether people can add themselves to this pod or need an invite."
         >
-            <div className="settings-list" role="radiogroup" aria-label="Who can join this pod">
-                {POD_JOIN_POLICY_OPTIONS.map((option) => {
-                    const selected = option.value === policy;
-                    return (
-                        <button
-                            key={option.value}
-                            type="button"
-                            role="radio"
-                            aria-checked={selected}
-                            disabled={disabled}
-                            onClick={() => handleChange(option.value)}
-                            data-selected={selected}
-                            className="settings-choice-row items-start disabled:cursor-not-allowed disabled:opacity-60"
-                        >
-                            <span className="flex min-w-0 flex-col gap-0.5">
-                                <span className="text-sm font-medium text-[var(--text-primary)]">{option.label}</span>
-                                <span className="text-xs leading-5 text-[var(--text-tertiary)]">{option.description}</span>
-                            </span>
-                            <span
-                                aria-hidden
-                                className={cn(
-                                    'mt-0.5 flex h-4 w-4 shrink-0 items-center justify-center rounded-full border transition-gentle',
-                                    selected
-                                        ? 'border-[var(--state-success)] bg-[var(--state-success)] text-[var(--text-on-brand)]'
-                                        : 'border-[var(--field-border)] text-transparent',
-                                )}
-                            >
-                                <Check className="h-3 w-3" strokeWidth={3} />
-                            </span>
-                        </button>
-                    );
-                })}
-            </div>
+            <SettingsChoiceList
+                ariaLabel="Who can join this pod"
+                options={POD_JOIN_POLICY_OPTIONS}
+                value={policy}
+                onChange={handleChange}
+                disabled={disabled}
+            />
             {!canUpdate ? (
-                <p className="settings-help-text mt-3">Your role cannot change pod settings.</p>
+                <SettingsHelpText className="mt-3">Your role cannot change pod settings.</SettingsHelpText>
             ) : null}
         </PodSettingsPanel>
     );
