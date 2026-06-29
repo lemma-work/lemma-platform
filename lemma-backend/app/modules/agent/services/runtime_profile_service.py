@@ -163,6 +163,8 @@ USER_DAEMON_PROFILE_PROTOCOLS = {
     HarnessKind.CODEX: RuntimeProfileProtocol.CODEX_APP_SERVER,
     HarnessKind.CLAUDE_CODE: RuntimeProfileProtocol.CLAUDE_CODE,
     HarnessKind.OPENCODE: RuntimeProfileProtocol.OPENCODE,
+    HarnessKind.CURSOR: RuntimeProfileProtocol.CURSOR,
+    HarnessKind.ANTIGRAVITY: RuntimeProfileProtocol.ANTIGRAVITY,
 }
 
 

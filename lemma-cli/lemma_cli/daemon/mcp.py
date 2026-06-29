@@ -25,12 +25,24 @@ DEFAULT_COMMAND_TEMPLATES = {
         "--include-partial-messages --verbose {mcp_config_args}"
     ),
     "OPENCODE": "opencode serve",
+    # cursor-agent reads the prompt on stdin and emits Claude-shaped stream-json.
+    # --trust/--force run headless (no workspace-trust or per-command prompts);
+    # --approve-mcps auto-approves the MCP server we inject via .cursor/mcp.json.
+    "CURSOR": (
+        "cursor-agent -p --model {model} --output-format stream-json "
+        "--trust --force --approve-mcps"
+    ),
+    # agy has no stream-json: -p runs one prompt (read from stdin) and prints the
+    # final response. --dangerously-skip-permissions runs headless.
+    "ANTIGRAVITY": "agy -p --model {model} --dangerously-skip-permissions",
 }
 
 DEFAULT_CWD_DIRS = {
     "CODEX": "lemma-codex",
     "CLAUDE_CODE": "lemma-claude-code",
     "OPENCODE": "lemma-opencode",
+    "CURSOR": "lemma-cursor",
+    "ANTIGRAVITY": "lemma-antigravity",
 }
 
 # Claude Code's own (non-MCP) tools, passed via --disallowedTools so the agent
@@ -97,7 +109,7 @@ def provider_command(
     except KeyError as exc:
         raise RuntimeError(f"Unknown provider command placeholder: {exc}") from exc
     command = shlex.split(rendered)
-    if harness_kind == "CLAUDE_CODE" and session_id:
+    if harness_kind in ("CLAUDE_CODE", "CURSOR") and session_id:
         command.extend(["--resume", session_id])
     return command
 
@@ -138,6 +150,37 @@ def provider_environment(*, harness_kind: str, mcp: dict[str, Any]) -> dict[str,
             separators=(",", ":"),
         )
     return env
+
+
+def write_provider_mcp_files(harness_kind: str, cwd: Path, mcp: dict[str, Any]) -> None:
+    """Write file-based MCP configs into the run cwd for harnesses that read them.
+
+    Cursor reads ``<cwd>/.cursor/mcp.json`` and Antigravity reads
+    ``<cwd>/.agents/mcp_config.json``. Antigravity requires the remote server to
+    use the ``serverUrl`` field (``url``/``httpUrl`` are rejected). Flag-based
+    (Claude Code) and stdio (Codex/OpenCode) harnesses are no-ops here.
+    """
+    if not has_usable_mcp(mcp):
+        return
+    server_name = mcp_server_name(mcp)
+    url = str(mcp.get("url") or "")
+    headers = {"Authorization": mcp_authorization(mcp)}
+    cwd_path = Path(cwd)
+    if harness_kind == "CURSOR":
+        _write_json_file(
+            cwd_path / ".cursor" / "mcp.json",
+            {"mcpServers": {server_name: {"url": url, "headers": headers}}},
+        )
+    elif harness_kind == "ANTIGRAVITY":
+        _write_json_file(
+            cwd_path / ".agents" / "mcp_config.json",
+            {"mcpServers": {server_name: {"serverUrl": url, "headers": headers}}},
+        )
+
+
+def _write_json_file(path: Path, data: dict[str, Any]) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(data, indent=2), encoding="utf-8")
 
 
 def provider_cwd(harness_kind: str) -> Path:

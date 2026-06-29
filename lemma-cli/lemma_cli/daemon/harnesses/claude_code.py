@@ -14,7 +14,12 @@ from .codex import (
     daemon_turn_timeout_seconds,
 )
 from .._logging import log as daemon_log
-from ..mcp import provider_command, provider_cwd_for_run, provider_environment
+from ..mcp import (
+    provider_command,
+    provider_cwd_for_run,
+    provider_environment,
+    write_provider_mcp_files,
+)
 from ..process import STREAM_READER_LIMIT, drain_stream, terminate_gracefully
 
 
@@ -54,21 +59,29 @@ async def _run_claude_code_provider(
     mcp: dict[str, Any],
     event_sink: Callable[[str, Any], Awaitable[None]] | None = None,
     stop_event: asyncio.Event | None = None,
+    harness_kind: str = "CLAUDE_CODE",
 ) -> dict[str, Any]:
+    # Claude Code and Cursor (cursor-agent) emit the same stream-json shape
+    # (type: system/assistant/result, session_id, message.content[].text), so a
+    # single streaming runner serves both -- only the command template, cwd, and
+    # MCP injection differ per harness.
     command = provider_command(
-        harness_kind="CLAUDE_CODE",
+        harness_kind=harness_kind,
         model_name=model_name,
         prompt_text=prompt_text,
         mcp=mcp,
         session_id=session_id,
     )
     if not command:
-        raise RuntimeError("No provider command configured for CLAUDE_CODE")
+        raise RuntimeError(f"No provider command configured for {harness_kind}")
     from ..mcp import provider_command_template
-    stdin_text = None if "{prompt}" in provider_command_template("CLAUDE_CODE") else prompt_text
-    cwd = provider_cwd_for_run("CLAUDE_CODE", mcp)
-    env = provider_environment(harness_kind="CLAUDE_CODE", mcp=mcp)
-    daemon_log("start claude stream provider", {"harness_kind": "CLAUDE_CODE", "command": command, "cwd": str(cwd)})
+    stdin_text = None if "{prompt}" in provider_command_template(harness_kind) else prompt_text
+    cwd = provider_cwd_for_run(harness_kind, mcp)
+    # File-based harnesses (Cursor: .cursor/mcp.json) need their MCP config
+    # written into the run cwd; no-op for flag-based harnesses like Claude Code.
+    write_provider_mcp_files(harness_kind, cwd, mcp)
+    env = provider_environment(harness_kind=harness_kind, mcp=mcp)
+    daemon_log("start stream provider", {"harness_kind": harness_kind, "command": command, "cwd": str(cwd)})
     process = await asyncio.create_subprocess_exec(
         *command,
         stdin=asyncio.subprocess.PIPE if stdin_text is not None else None,
@@ -81,7 +94,7 @@ async def _run_claude_code_provider(
     stdout_parts: list[str] = []
     raw_stdout_parts: list[str] = []
     stderr_task = asyncio.create_task(drain_stream(process.stderr))
-    state = StreamTextState(harness_kind="CLAUDE_CODE", event_sink=event_sink)
+    state = StreamTextState(harness_kind=harness_kind, event_sink=event_sink)
     emitted_session_id: str | None = None
     try:
         async with asyncio.timeout(daemon_turn_timeout_seconds()):
@@ -114,7 +127,7 @@ async def _run_claude_code_provider(
                     and event_sink is not None
                 ):
                     emitted_session_id = stream_session_id
-                    await event_sink("status", _daemon_session_started_payload(harness_kind="CLAUDE_CODE", session_id=stream_session_id))
+                    await event_sink("status", _daemon_session_started_payload(harness_kind=harness_kind, session_id=stream_session_id))
                 handled_text = await _handle_claude_stream_event(event, state)
                 if handled_text:
                     stdout_parts.append(handled_text)
@@ -125,7 +138,7 @@ async def _run_claude_code_provider(
         stderr_task.cancel()
         with contextlib.suppress(asyncio.CancelledError):
             await stderr_task
-        raise TimeoutError("Claude Code provider turn timed out")
+        raise TimeoutError(f"{harness_kind} provider turn timed out")
     except asyncio.CancelledError:
         await terminate_gracefully(process)
         stderr_task.cancel()
@@ -142,7 +155,7 @@ async def _run_claude_code_provider(
         and _claude_saved_session_error_is_recoverable(stderr_text)
     ):
         if event_sink is not None:
-            await event_sink("status", _daemon_session_invalid_payload(harness_kind="CLAUDE_CODE", session_id=session_id))
+            await event_sink("status", _daemon_session_invalid_payload(harness_kind=harness_kind, session_id=session_id))
         return await _run_claude_code_provider(
             model_name=model_name,
             prompt_text=prompt_text,
@@ -150,6 +163,7 @@ async def _run_claude_code_provider(
             mcp=mcp,
             event_sink=event_sink,
             stop_event=stop_event,
+            harness_kind=harness_kind,
         )
     return {
         "command": command,
@@ -188,6 +202,14 @@ async def _handle_claude_stream_event(
                 await state.flush(is_final=False)
                 await _emit_claude_tool_call(part, state)
         return text
+    if event_type == "tool_call":
+        # Cursor reports tool activity as top-level tool_call events
+        # (subtype started/completed) rather than Claude's tool_use content
+        # parts. Claude Code never emits this type, so handling it here is safe
+        # for both.
+        await state.flush(is_final=False)
+        await _emit_cursor_tool_call(event, state)
+        return ""
     if event_type == "result":
         result = event.get("result")
         if isinstance(result, str) and result and not state.full_text:
@@ -195,6 +217,74 @@ async def _handle_claude_stream_event(
         await state.flush(is_final=True)
         return result if isinstance(result, str) else ""
     return ""
+
+
+async def _emit_cursor_tool_call(event: dict[str, Any], state: StreamTextState) -> None:
+    call_id = str(event.get("call_id") or "")
+    if not call_id or state.event_sink is None:
+        return
+    subtype = str(event.get("subtype") or "")
+    tool_call = event.get("tool_call") if isinstance(event.get("tool_call"), dict) else {}
+    tool_name, tool_args = _cursor_tool_name_and_args(tool_call)
+    if subtype == "started":
+        if call_id in state.emitted_tool_call_ids:
+            return
+        state.emitted_tool_call_ids.add(call_id)
+        message = {
+            "role": "assistant",
+            "kind": "tool_call",
+            "tool_name": tool_name,
+            "tool_call_id": call_id,
+            "tool_args": tool_args,
+            "metadata": {"tool_name": tool_name, "provider": state.harness_kind},
+        }
+        state.streamed_tokens = True
+        await state.event_sink("token", codex_tool_token(message))
+        await state.event_sink("message", message)
+    elif subtype == "completed":
+        if call_id in state.emitted_tool_return_ids:
+            return
+        state.emitted_tool_return_ids.add(call_id)
+        state.streamed_messages = True
+        await state.event_sink(
+            "message",
+            {
+                "role": "tool",
+                "kind": "tool_return",
+                "tool_name": tool_name,
+                "tool_call_id": call_id,
+                "tool_result": _cursor_tool_result(tool_call),
+                "metadata": {"tool_name": tool_name, "provider": state.harness_kind},
+            },
+        )
+
+
+def _cursor_tool_name_and_args(tool_call: dict[str, Any]) -> tuple[str, Any]:
+    """Pull the tool name + args from Cursor's ``tool_call`` payload.
+
+    Shape is ``{"<kind>ToolCall": {"args": {...}, "result": ...}}`` -- e.g.
+    ``shellToolCall``, ``mcpToolCall``. MCP calls carry the real tool name; for
+    built-ins we derive it from the key ("shellToolCall" -> "shell").
+    """
+    for key, value in tool_call.items():
+        if not isinstance(value, dict):
+            continue
+        args = value.get("args") if isinstance(value.get("args"), dict) else {}
+        name = (
+            value.get("name")
+            or (args.get("name") if isinstance(args, dict) else None)
+            or (args.get("toolName") if isinstance(args, dict) else None)
+            or (key[: -len("ToolCall")] if key.endswith("ToolCall") else key)
+        )
+        return str(name), args
+    return "tool", {}
+
+
+def _cursor_tool_result(tool_call: dict[str, Any]) -> Any:
+    for value in tool_call.values():
+        if isinstance(value, dict) and "result" in value:
+            return value.get("result")
+    return None
 
 
 async def _emit_claude_tool_call(part: dict[str, Any], state: StreamTextState) -> None:

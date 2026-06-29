@@ -138,6 +138,10 @@ class _DaemonRepository:
         ("codex", HarnessKind.CODEX),
         ("claude_code", HarnessKind.CLAUDE_CODE),
         ("opencode", HarnessKind.OPENCODE),
+        ("cursor", HarnessKind.CURSOR),
+        ("cursor_agent", HarnessKind.CURSOR),
+        ("antigravity", HarnessKind.ANTIGRAVITY),
+        ("agy", HarnessKind.ANTIGRAVITY),
         ("pydantic_ai", HarnessKind.LEMMA),
     ],
 )
@@ -501,6 +505,8 @@ def test_system_runtime_profile_can_use_anthropic_compatible_env(monkeypatch):
         (RuntimeProfileProtocol.CODEX_APP_SERVER, HarnessKind.CODEX),
         (RuntimeProfileProtocol.CLAUDE_CODE, HarnessKind.CLAUDE_CODE),
         (RuntimeProfileProtocol.OPENCODE, HarnessKind.OPENCODE),
+        (RuntimeProfileProtocol.CURSOR, HarnessKind.CURSOR),
+        (RuntimeProfileProtocol.ANTIGRAVITY, HarnessKind.ANTIGRAVITY),
     ],
 )
 @pytest.mark.asyncio

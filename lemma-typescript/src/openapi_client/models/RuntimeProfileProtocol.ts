@@ -10,4 +10,6 @@ export enum RuntimeProfileProtocol {
     CODEX_APP_SERVER = 'CODEX_APP_SERVER',
     CLAUDE_CODE = 'CLAUDE_CODE',
     OPENCODE = 'OPENCODE',
+    CURSOR = 'CURSOR',
+    ANTIGRAVITY = 'ANTIGRAVITY',
 }
