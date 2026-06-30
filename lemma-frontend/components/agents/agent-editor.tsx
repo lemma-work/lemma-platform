@@ -258,6 +258,8 @@ export function AgentEditor({
                                 defaultRuntime={defaultRuntime}
                                 value={agent.agent_runtime ?? null}
                                 onChange={(agentRuntime) => onUpdate({ agent_runtime: agentRuntime })}
+                                title="Agent model"
+                                description="The model this agent runs on, unless overridden in a conversation."
                                 scopeHint="Default for this agent"
                                 manageHref={pod?.organization_id ? `/organizations/${pod.organization_id}/settings/agent-runtimes` : undefined}
                             />

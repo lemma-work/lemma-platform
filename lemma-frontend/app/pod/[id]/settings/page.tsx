@@ -1,8 +1,9 @@
 'use client';
 
+import Link from 'next/link';
 import { use, useState } from 'react';
 import type { AgentRuntimeConfig } from 'lemma-sdk';
-import { Info, Loader2 } from 'lucide-react';
+import { Info, Loader2, Settings2 } from 'lucide-react';
 
 import { toast } from 'sonner';
 
@@ -45,6 +46,9 @@ function PodSettingsPageContent({ params }: { params: Promise<{ id: string }> })
             ? resolveDefaultAgentRuntime(runtimeCatalog, pod.config.default_profile_id, availableHarnesses)
             : null);
     const selectedRuntime = runtimeDraft ?? storedRuntime;
+    const manageModelsHref = pod?.organization_id
+        ? `/organizations/${pod.organization_id}/settings/agent-runtimes`
+        : undefined;
 
     const handleRuntimeCommit = (runtime: AgentRuntimeConfig | null) => {
         setRuntimeDraft(runtime);
@@ -76,6 +80,15 @@ function PodSettingsPageContent({ params }: { params: Promise<{ id: string }> })
             <PodSettingsPanel
                 title="Default model"
                 description="Agents without a pinned model and new conversations use this model."
+                action={manageModelsHref ? (
+                    <Link
+                        href={manageModelsHref}
+                        className="inline-flex items-center gap-1.5 text-sm text-[var(--text-secondary)] transition-colors hover:text-[var(--text-primary)]"
+                    >
+                        <Settings2 className="size-4" />
+                        Manage models
+                    </Link>
+                ) : undefined}
             >
                 <RuntimeModelPicker
                     catalog={runtimeCatalog}
@@ -84,8 +97,11 @@ function PodSettingsPageContent({ params }: { params: Promise<{ id: string }> })
                     value={selectedRuntime}
                     onChange={handleRuntimeCommit}
                     disabled={!canUpdatePod}
+                    title="Pod default model"
+                    description="Used by agents without a pinned model and by new conversations in this pod."
+                    allowAuto={false}
                     scopeHint="Pod default"
-                    manageHref={pod?.organization_id ? `/organizations/${pod.organization_id}/settings/agent-runtimes` : undefined}
+                    manageHref={manageModelsHref}
                 />
             </PodSettingsPanel>
 
