@@ -10,6 +10,17 @@ import type {
 } from 'lemma-sdk';
 
 export const DEFAULT_VALUE = '__default_runtime__';
+
+// Harness kinds that are *local terminal coding agents* (run a model on your
+// machine) rather than plain model providers. Single source of truth shared by
+// the Models settings page and the model picker so the two can't disagree about
+// where, say, Cursor belongs.
+export const CODING_AGENT_KINDS = new Set(['CLAUDE_CODE', 'CODEX', 'OPENCODE', 'ANTIGRAVITY', 'CURSOR']);
+
+export function isCodingAgentKind(kind?: string | null): boolean {
+    return kind ? CODING_AGENT_KINDS.has(kind) : false;
+}
+
 export const HARNESS_LOGOS: Partial<Record<string, string>> = {
     ANTIGRAVITY: '/harnesslogos/antigravity.png',
     CLAUDE_CODE: '/harnesslogos/claudecode.png',
