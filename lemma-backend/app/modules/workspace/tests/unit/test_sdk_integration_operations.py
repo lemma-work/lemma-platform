@@ -69,7 +69,11 @@ def test_connectors_resource_builds_connect_account_and_execute_calls() -> None:
     api.connect_request("gmail")
     connect_call = api.calls[-1]
     assert connect_call["endpoint"].endswith("connector_connect_request_create")
-    assert connect_call["path_args"] == (UUID(organization_id), "gmail")
+    # The create endpoint takes only the org in its path
+    # (/organizations/{organization_id}/connectors/connect-requests); the
+    # connector slug travels in the body as connector_id (see SDK PR #52).
+    assert connect_call["path_args"] == (UUID(organization_id),)
+    assert connect_call["kwargs"]["body"] == {"connector_id": "gmail"}
 
     api.accounts.list(app="gmail", limit=25)
     account_list_call = api.calls[-1]
