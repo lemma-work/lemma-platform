@@ -229,12 +229,21 @@ class Settings(BaseSettings):
         ),
     )
     lemma_openai_default_model: str = Field(
-        default="gpt-4o",
-        description="Default model name for the OpenAI-compatible system model profile.",
+        default="",
+        description=(
+            "Default model name for the OpenAI-compatible system model profile. "
+            "No built-in default: when LEMMA_OPENAI_API_KEY is set the model(s) "
+            "must be provided via LEMMA_OPENAI_MODEL_NAMES / "
+            "LEMMA_OPENAI_DEFAULT_MODEL, otherwise the profile build fails loudly."
+        ),
     )
     lemma_openai_model_names: str = Field(
-        default="gpt-4o,gpt-4o-mini",
-        description="Comma-separated model names for the OpenAI-compatible system model profile.",
+        default="",
+        description=(
+            "Comma-separated model names for the OpenAI-compatible system model "
+            "profile. Required (via env) when LEMMA_OPENAI_API_KEY is set; there "
+            "is no built-in model default."
+        ),
     )
     lemma_openai_vision_model_names: str = Field(
         default="",

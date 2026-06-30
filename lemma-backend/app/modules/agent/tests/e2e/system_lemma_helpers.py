@@ -68,15 +68,24 @@ def system_lemma_api_key() -> str | None:
 
 
 def system_lemma_default_model() -> str:
-    """The configured default model for system:lemma (from .env or os.environ)."""
+    """The configured default model for system:lemma (from .env or os.environ).
+
+    Falls back to the app's own config default (``settings.lemma_openai_default_model``)
+    rather than a hard-coded literal, so the helper can never drift from what the
+    running app resolves when no LEMMA_OPENAI_* env is set.
+    """
+    from app.core.config import settings
+
     env = system_lemma_env_overlay()
-    return env.get("LEMMA_OPENAI_DEFAULT_MODEL") or "minimax-m3"
+    return env.get("LEMMA_OPENAI_DEFAULT_MODEL") or settings.lemma_openai_default_model
 
 
 def system_lemma_model_names() -> list[str]:
     """All configured model names for system:lemma."""
+    from app.core.config import settings
+
     env = system_lemma_env_overlay()
-    raw = env.get("LEMMA_OPENAI_MODEL_NAMES", "")
+    raw = env.get("LEMMA_OPENAI_MODEL_NAMES") or settings.lemma_openai_model_names
     models = [m.strip() for m in raw.split(",") if m.strip()]
     default = system_lemma_default_model()
     if default and default not in models:

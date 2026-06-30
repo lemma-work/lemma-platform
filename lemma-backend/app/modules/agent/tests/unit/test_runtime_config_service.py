@@ -271,8 +271,13 @@ async def test_runtime_lists_configured_system_org_and_owned_personal_profiles(
 
     monkeypatch.setattr(settings, "environment", "development")
     monkeypatch.setattr(settings, "lemma_openai_api_key", "lemma-secret")
+    # The system model profile has no built-in model default; configure one.
+    monkeypatch.setattr(settings, "lemma_openai_model_names", "gpt-4o,gpt-4o-mini")
+    monkeypatch.setattr(settings, "lemma_openai_default_model", "gpt-4o")
     monkeypatch.delenv("LEMMA_DEFAULT_MODEL_TYPE", raising=False)
     monkeypatch.delenv("LEMMA_OPENAI_API_KEY", raising=False)
+    monkeypatch.delenv("LEMMA_OPENAI_MODEL_NAMES", raising=False)
+    monkeypatch.delenv("LEMMA_OPENAI_DEFAULT_MODEL", raising=False)
     org_id = uuid4()
     user_id = uuid4()
     other_org_id = uuid4()
