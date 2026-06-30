@@ -101,11 +101,19 @@ class ConversationMCPASGIApp:
             instructions="Lemma tools for the current conversation.",
             auth=LemmaMCPAuthProvider(),
         )
+        # stateless_http=True: every request carries the conversation id (URL),
+        # bearer token, and agent-run-id headers and re-authorizes per call, so
+        # there is no per-session server state to keep. A stateful transport
+        # (stateless_http=False) holds the Mcp-Session-Id session in the memory
+        # of whichever process handled `initialize`; when the follow-up
+        # `notifications/initialized` lands on a different worker/replica (no
+        # session affinity) the server returns 404 "session expired" and clients
+        # like Codex's rmcp abort the handshake. Stateless avoids that entirely.
         self._mcp_app = mcp_server.http_app(
             path="/mcp",
             transport="http",
             json_response=True,
-            stateless_http=False,
+            stateless_http=True,
         )
 
     @asynccontextmanager
@@ -194,11 +202,14 @@ class PodMCPASGIApp:
             instructions="Lemma tools for the current pod's datastore.",
             auth=LemmaMCPAuthProvider(),
         )
+        # stateless_http=True: see ConversationMCPASGIApp. Pod tool calls also
+        # carry pod id (URL) + bearer token per request and re-authorize, so no
+        # per-session state is needed and the stateful-session 404 is avoided.
         self._mcp_app = mcp_server.http_app(
             path="/mcp",
             transport="http",
             json_response=True,
-            stateless_http=False,
+            stateless_http=True,
         )
 
     @asynccontextmanager
