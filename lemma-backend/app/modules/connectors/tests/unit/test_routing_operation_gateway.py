@@ -80,6 +80,59 @@ async def test_routes_composio_executor_apps_to_composio_gateway():
 
 
 @pytest.mark.asyncio
+async def test_preresolved_provider_skips_connector_validation_read():
+    # When the caller already resolved `provider` (the use-case resolve phase,
+    # which validated the connector under a short DB scope), the gateway must NOT
+    # touch the connector repository — so the external execute phase holds no DB
+    # connection.
+    connector_repository = AsyncMock(get=AsyncMock())
+    lemma_gateway = AsyncMock(execute_operation=AsyncMock(return_value={"ok": True}))
+
+    gateway = RoutingOperationGateway(
+        connector_repository=connector_repository,
+        lemma_gateway=lemma_gateway,
+        composio_gateway=AsyncMock(),
+    )
+
+    result = await gateway.execute_operation(
+        connector_id="gmail",
+        operation_name="drafts_list",
+        payload={},
+        third_party_credentials={"access_token": "t"},
+        provider=AuthProvider.LEMMA.value,
+    )
+
+    assert result == {"ok": True}
+    connector_repository.get.assert_not_awaited()
+    lemma_gateway.execute_operation.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_no_provider_still_validates_connector():
+    # Back-compat: callers that don't pre-resolve a provider keep the existence
+    # validation (and its DB read).
+    connector_repository = AsyncMock(
+        get=AsyncMock(return_value=ConnectorEntity(id="gmail"))
+    )
+    lemma_gateway = AsyncMock(execute_operation=AsyncMock(return_value={"ok": True}))
+
+    gateway = RoutingOperationGateway(
+        connector_repository=connector_repository,
+        lemma_gateway=lemma_gateway,
+        composio_gateway=AsyncMock(),
+    )
+
+    await gateway.execute_operation(
+        connector_id="gmail",
+        operation_name="drafts_list",
+        payload={},
+        third_party_credentials={"access_token": "t"},
+    )
+
+    connector_repository.get.assert_awaited_once()
+
+
+@pytest.mark.asyncio
 async def test_execute_operation_times_out_instead_of_hanging(monkeypatch):
     """A slow/hung upstream must fail fast with a 504, not block indefinitely."""
     monkeypatch.setattr(connector_settings, "connector_operation_timeout_seconds", 0.2)

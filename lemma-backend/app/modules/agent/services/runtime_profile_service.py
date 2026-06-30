@@ -492,6 +492,9 @@ def _system_lemma_openai_profile() -> AgentRuntimeProfile | None:
     api_key = _env_or_setting("LEMMA_OPENAI_API_KEY", settings.lemma_openai_api_key)
     if not api_key:
         return None
+    # _build_system_openai_catalog() -> _csv_setting() already raises a clean
+    # "requires at least one model" error when the key is set but no models are
+    # configured (there is no built-in model default).
     model_catalog = _build_system_openai_catalog()
     default_model_name = (
         os.getenv("LEMMA_OPENAI_DEFAULT_MODEL") or settings.lemma_openai_default_model

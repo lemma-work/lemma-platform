@@ -32,7 +32,10 @@ from fastapi import Request
 
 from app.core.authorization.context import Context
 from app.core.authorization.current import reset_current_context, set_current_context
-from app.core.authorization.dependencies import resolve_pod_context
+from app.core.authorization.dependencies import (
+    resolve_current_context,
+    resolve_pod_context,
+)
 from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
 from app.core.infrastructure.db.uow_factory import UnitOfWorkFactory
 
@@ -82,6 +85,31 @@ async def pod_context_scope(
     async with uow_factory() as uow:
         ctx = await resolve_pod_context(
             session=uow.session, request=request, user_id=user_id, pod_id=pod_id
+        )
+        async with context_scope(ctx):
+            yield UowContext(uow=uow, ctx=ctx)
+
+
+@asynccontextmanager
+async def current_context_scope(
+    uow_factory: UnitOfWorkFactory,
+    *,
+    request: Request,
+    user_id: UUID,
+) -> AsyncIterator[UowContext]:
+    """Open one short UoW, build + bind the request's ``Context``, yield ``(uow,
+    ctx)``.
+
+    The org/delegation-aware counterpart of ``pod_context_scope`` for endpoints
+    that authorize via ``CurrentContextDep`` rather than a pod (e.g. the
+    organization-scoped connector-operation execute). The Context is built with
+    ``resolve_current_context`` (delegation-claims aware), bound for the block,
+    and the connection is released on exit so the slow non-DB tail (a Composio /
+    connector round-trip) runs with no pooled connection held.
+    """
+    async with uow_factory() as uow:
+        ctx = await resolve_current_context(
+            session=uow.session, request=request, user_id=user_id
         )
         async with context_scope(ctx):
             yield UowContext(uow=uow, ctx=ctx)

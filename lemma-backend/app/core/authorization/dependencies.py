@@ -24,6 +24,35 @@ def _is_default_pod_agent_claims(claims) -> bool:
     )
 
 
+async def resolve_current_context(
+    *,
+    session: AsyncSession,
+    request: Request,
+    user_id: UUID,
+) -> Context:
+    """Build the request's authorization ``Context`` on ``session``.
+
+    Pure resolution from the delegation claims (the path functions/pods take when
+    they call an endpoint with a delegated token) or the plain user context. Does
+    NOT consult/mutate ``request.state.ctx`` or bind the contextvar -- callers do
+    that. Extracted from ``get_current_context`` so the same logic can run inside
+    a short ``current_context_scope`` (release the pooled connection before slow
+    non-DB work) instead of only via the request-scoped dependency.
+    """
+    claims = getattr(request.state, "delegation_claims", None)
+    if claims is not None:
+        return await AuthorizationDataService(session).build_context_from_delegation_claims(
+            user_id=user_id,
+            claims=claims,
+            request_id=request.headers.get("x-request-id"),
+            is_default_pod_agent=_is_default_pod_agent_claims(claims),
+        )
+    return await AuthorizationDataService(session).build_user_context(
+        user_id=user_id,
+        request_id=request.headers.get("x-request-id"),
+    )
+
+
 async def get_current_context(
     request: Request,
     user: CurrentUser,
@@ -33,20 +62,8 @@ async def get_current_context(
     if existing is not None and existing.user_id == user.id:
         set_current_context(existing)
         return existing
-    claims = getattr(request.state, "delegation_claims", None)
-    if claims is not None:
-        ctx = await AuthorizationDataService(uow.session).build_context_from_delegation_claims(
-            user_id=user.id,
-            claims=claims,
-            request_id=request.headers.get("x-request-id"),
-            is_default_pod_agent=_is_default_pod_agent_claims(claims),
-        )
-        request.state.ctx = ctx
-        set_current_context(ctx)
-        return ctx
-    ctx = await AuthorizationDataService(uow.session).build_user_context(
-        user_id=user.id,
-        request_id=request.headers.get("x-request-id"),
+    ctx = await resolve_current_context(
+        session=uow.session, request=request, user_id=user.id
     )
     request.state.ctx = ctx
     set_current_context(ctx)

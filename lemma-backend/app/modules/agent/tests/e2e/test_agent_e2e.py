@@ -1748,6 +1748,10 @@ class TestAgentRuntimeConfigApis:
         monkeypatch,
     ):
         monkeypatch.setenv("LEMMA_OPENAI_API_KEY", "system-lemma-secret")
+        # The system model profile has no built-in model default; the operator
+        # must configure the catalog via env when the key is set.
+        monkeypatch.setenv("LEMMA_OPENAI_MODEL_NAMES", "gpt-4o,gpt-4o-mini")
+        monkeypatch.setenv("LEMMA_OPENAI_DEFAULT_MODEL", "gpt-4o")
         monkeypatch.delenv("LEMMA_DEFAULT_MODEL_TYPE", raising=False)
         harnesses = await authenticated_client.get("/agent-runtime/harnesses")
         assert harnesses.status_code == 200, harnesses.text
@@ -1807,6 +1811,7 @@ class TestAgentRuntimeConfigApis:
                     "harness_kind": "CLAUDE_CODE",
                     "display_name": "Claude Code",
                     "models": [],
+                    "model_catalog": [],
                     "available": False,
                     "availability_status": "NOT_INSTALLED",
                     "daemon_id": missing_tool_daemon_id,
@@ -2183,18 +2188,22 @@ class TestAgentRuntimeConfigApis:
             for item in harnesses.json()["items"]
             if item.get("daemon_id") == daemon_id
         ]
-        assert daemon_items == [
-            {
-                "harness_kind": "CODEX",
-                "display_name": "Codex E2E",
-                "models": ["gpt-5.5", "gpt-5.5-mini"],
-                "available": True,
-                "availability_status": "READY",
-                "daemon_id": daemon_id,
-                "daemon_display_name": "Real E2E laptop",
-                "daemon_status": "ONLINE",
-            }
-        ]
+        assert len(daemon_items) == 1
+        daemon_item = daemon_items[0]
+        # model_catalog is derived from the flat models list (structured entry
+        # serialization); assert it by model name and check the rest exactly.
+        model_catalog = daemon_item.pop("model_catalog")
+        assert [entry["name"] for entry in model_catalog] == ["gpt-5.5", "gpt-5.5-mini"]
+        assert daemon_item == {
+            "harness_kind": "CODEX",
+            "display_name": "Codex E2E",
+            "models": ["gpt-5.5", "gpt-5.5-mini"],
+            "available": True,
+            "availability_status": "READY",
+            "daemon_id": daemon_id,
+            "daemon_display_name": "Real E2E laptop",
+            "daemon_status": "ONLINE",
+        }
 
         created = await authenticated_client.post(
             f"/organizations/{fixed_test_org['id']}/agent-runtime/profiles",
@@ -3032,6 +3041,8 @@ class TestAgentOpenApi:
             "CODEX",
             "CLAUDE_CODE",
             "OPENCODE",
+            "CURSOR",
+            "ANTIGRAVITY",
         ]
         assert "model_name" not in schemas["SendMessageRequest"]["properties"]
         assert "model_name" in schemas["AgentRuntimeConfig"]["properties"]

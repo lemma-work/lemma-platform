@@ -371,6 +371,50 @@ async def {function_name}(ctx, data: AgentBoxInput) -> AgentBoxOutput:
     yield from _serve_fake_function(fixture)
 
 
+@pytest.fixture
+def fake_lemma_counter_function_server() -> (
+    Generator[tuple[str, FakeLemmaFunction], None, None]
+):
+    """Serves a function with an OBSERVABLE side effect: it appends one line to a
+    per-marker file on every real invocation and returns the line count. The
+    returned count reveals whether a re-POSTed run_id actually re-ran the body --
+    the real-sandbox analogue of "did we create a second Outlook draft?"."""
+    from uuid import uuid4
+
+    function_name = f"agentbox_counter_{uuid4().hex[:8]}"
+    code = f"""#input_type_name: CounterInput
+#output_type_name: CounterOutput
+#function_name: {function_name}
+
+from pathlib import Path
+from pydantic import BaseModel
+
+class CounterInput(BaseModel):
+    marker: str
+
+class CounterOutput(BaseModel):
+    invocations: int
+
+async def {function_name}(ctx, data: CounterInput) -> CounterOutput:
+    log = Path("/tmp") / ("agentbox_invocations_" + data.marker + ".log")
+    with log.open("a") as handle:
+        handle.write("x\\n")
+    with log.open() as handle:
+        count = sum(1 for _ in handle)
+    print(f"invocation {{count}} for marker {{data.marker}}")
+    return CounterOutput(invocations=count)
+"""
+    fixture = FakeLemmaFunction(
+        pod_id=str(uuid4()),
+        function_id=str(uuid4()),
+        name=function_name,
+        code=code,
+        user_id=str(uuid4()),
+        organization_id=str(uuid4()),
+    )
+    yield from _serve_fake_function(fixture)
+
+
 def _serve_fake_function(
     fixture: FakeLemmaFunction,
 ) -> Generator[tuple[str, FakeLemmaFunction], None, None]:

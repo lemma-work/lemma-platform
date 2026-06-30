@@ -479,8 +479,9 @@ async def full_stack(
         )
 
     # Inject the Fireworks key so both the in-process backend and the worker
-    # subprocess resolve the system:lemma OpenAI-compatible profile (its
-    # base_url/default model already default to Fireworks).
+    # subprocess resolve the system:lemma OpenAI-compatible profile. The model
+    # catalog has no built-in default, so the real-LLM env (.env / exported
+    # LEMMA_OPENAI_* vars) must provide LEMMA_OPENAI_BASE_URL + LEMMA_OPENAI_MODEL_NAMES.
     cred_env_keys = ("LEMMA_OPENAI_API_KEY", "lemma_openai_api_key")
     original_cred_env = {key: os.environ.get(key) for key in cred_env_keys}
     original_cred_setting = settings.lemma_openai_api_key

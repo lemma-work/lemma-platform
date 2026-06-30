@@ -15,6 +15,7 @@ import subprocess
 import sys
 import time
 import traceback
+from collections import OrderedDict
 from dataclasses import dataclass, field
 from pathlib import Path
 from types import ModuleType
@@ -283,6 +284,20 @@ class LemmaFunctionApiClient:
         return payload
 
 
+# Retention for the run_id idempotency cache. The TTL is comfortably longer than
+# the backend's full retry window for a single run (≈12 execute attempts + 3
+# sandbox-recovery attempts with backoff), after which a duplicate /execute can
+# no longer arrive for that run_id. The size cap keeps only the most-recent few
+# completed results so a long-lived sandbox never accumulates many cached
+# FunctionInvokeResponse objects (which carry logs/output) -- bounding RAM.
+# Retries arrive within seconds of the original, so the original is always among
+# the most-recent entries; if a result is evicted before a (much) later
+# duplicate, that duplicate simply re-runs (the pod-side guard still prevents a
+# duplicate side effect).
+_RESULT_TTL_SECONDS = 600.0
+_MAX_COMPLETED_RESULTS = 32
+
+
 class FunctionExecutor:
     def __init__(
         self,
@@ -296,6 +311,19 @@ class FunctionExecutor:
         self.invocation_lock = asyncio.Lock()
         # pip specs already installed in this container, so repeat runs don't reinstall.
         self._ensured_packages: set[str] = set()
+        # Idempotency by function run_id. A function run is non-idempotent (it can
+        # have side effects, e.g. creating an Outlook draft), so a re-POSTed
+        # /execute for the same run_id -- a backend transport-retry or any
+        # double-dispatch -- must NOT run the function again. `run_id` is a stable
+        # DB id reused on every retry, so it is a valid idempotency key. Per-run
+        # locks serialize same-run_id requests (the second awaits, then returns
+        # the cached result); `_completed` caches terminal sync results for the
+        # backend's full retry window; the async path dedupes against `self.jobs`.
+        self._run_locks: dict[UUID, asyncio.Lock] = {}
+        self._registry_lock = asyncio.Lock()
+        self._completed: "OrderedDict[UUID, tuple[float, FunctionInvokeResponse]]" = (
+            OrderedDict()
+        )
 
     def api_client(self, token: str) -> LemmaFunctionApiClient:
         return LemmaFunctionApiClient(base_url=self.lemma_base_url, token=token)
@@ -308,25 +336,84 @@ class FunctionExecutor:
         request: FunctionExecuteRequest,
         token: str,
     ) -> FunctionInvokeResponse | FunctionJobAcceptedResponse:
-        if request.async_job:
-            job = StoredJob(run_id=request.run_id, job_id=f"function:{request.run_id}")
-            self.jobs[request.run_id] = job
-            asyncio.create_task(
-                self._run_job(
-                    job,
-                    pod_id=pod_id,
-                    function_name=function_name,
-                    request=request,
-                    token=token,
+        # Gate every execute by a per-run_id lock so a re-POST for the same run
+        # (transport retry / double-dispatch) joins the original instead of
+        # starting a second invocation of a non-idempotent function.
+        run_lock = await self._run_lock_for(request.run_id)
+        async with run_lock:
+            if request.async_job:
+                # Async path dedup: if the job already exists (running or done),
+                # return the existing acceptance and let the backend poll it.
+                # Never launch a second _run_job for the same run_id.
+                existing = self.jobs.get(request.run_id)
+                if existing is not None:
+                    return FunctionJobAcceptedResponse(
+                        run_id=request.run_id, job_id=existing.job_id
+                    )
+                job = StoredJob(
+                    run_id=request.run_id, job_id=f"function:{request.run_id}"
                 )
+                self.jobs[request.run_id] = job
+                asyncio.create_task(
+                    self._run_job(
+                        job,
+                        pod_id=pod_id,
+                        function_name=function_name,
+                        request=request,
+                        token=token,
+                    )
+                )
+                return FunctionJobAcceptedResponse(
+                    run_id=request.run_id, job_id=job.job_id
+                )
+
+            # Sync path: return the cached terminal result on a duplicate, else
+            # run once and cache. Caches ALL terminal outcomes (completed/failed/
+            # timeout) so a function that ran its side effect then failed is never
+            # re-run.
+            cached = self._completed.get(request.run_id)
+            if cached is not None:
+                return cached[1]
+            response = await self._execute_sync(
+                pod_id=pod_id,
+                function_name=function_name,
+                request=request,
+                token=token,
             )
-            return FunctionJobAcceptedResponse(run_id=request.run_id, job_id=job.job_id)
-        return await self._execute_sync(
-            pod_id=pod_id,
-            function_name=function_name,
-            request=request,
-            token=token,
-        )
+            self._completed[request.run_id] = (time.monotonic(), response)
+            return response
+
+    async def _run_lock_for(self, run_id: UUID) -> asyncio.Lock:
+        """Get-or-create the per-run lock and opportunistically evict expired
+        idempotency state (no background task needed)."""
+        async with self._registry_lock:
+            self._sweep_expired()
+            lock = self._run_locks.get(run_id)
+            if lock is None:
+                lock = asyncio.Lock()
+                self._run_locks[run_id] = lock
+            return lock
+
+    def _sweep_expired(self) -> None:
+        """Evict completed sync results past the TTL or over the size cap, and
+        drop per-run locks that are no longer needed. Never evicts a lock that is
+        currently held (an in-flight run -- timeout_seconds can be up to 3600)."""
+        now = time.monotonic()
+        while self._completed:
+            run_id, (completed_at, _response) = next(iter(self._completed.items()))
+            over_cap = len(self._completed) > _MAX_COMPLETED_RESULTS
+            if not over_cap and now - completed_at <= _RESULT_TTL_SECONDS:
+                break
+            self._completed.popitem(last=False)
+        # A lock is safe to drop once its run has no cached result and is not
+        # in-flight (not locked) and not a live async job.
+        for run_id, lock in list(self._run_locks.items()):
+            if (
+                run_id not in self._completed
+                and run_id not in self.jobs
+                and not lock.locked()
+            ):
+                self._run_locks.pop(run_id, None)
 
     async def schemas(
         self,

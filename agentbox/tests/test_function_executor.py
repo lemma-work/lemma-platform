@@ -373,6 +373,132 @@ async def test_executor_package_install_failure_fails_run(tmp_path, monkeypatch)
     assert "install" in (response.error.message or "").lower()
 
 
+# --- idempotency by run_id --------------------------------------------------
+
+FAILING_FUNCTION_CODE = """#input_type_name: InputModel
+#output_type_name: OutputModel
+#function_name: run_function
+from pydantic import BaseModel
+
+class InputModel(BaseModel):
+    x: int
+
+class OutputModel(BaseModel):
+    y: int
+
+async def run_function(ctx, data):
+    raise ValueError("boom -- side effect already happened")
+"""
+
+
+def _increment_executor(tmp_path, *, code: str = FUNCTION_CODE) -> _TestExecutor:
+    metadata = FunctionMetadata(
+        id=uuid4(),
+        name="increment",
+        pod_id=uuid4(),
+        code=code,
+        code_hash=function_code_hash(code),
+    )
+    client = _FakeLemmaClient(
+        verified=VerifiedToken(user_id=uuid4(), email="t@example.com"),
+        metadata=metadata,
+    )
+    return _TestExecutor(client=client, workspace_root=str(tmp_path))
+
+
+@pytest.mark.anyio
+async def test_sync_execute_is_idempotent_on_run_id(tmp_path):
+    executor = _increment_executor(tmp_path)
+    pod_id = executor.client.metadata.pod_id
+    run_id = uuid4()
+    req = FunctionExecuteRequest(run_id=run_id, input_data={"x": 2})
+
+    first = await executor.execute(
+        pod_id=pod_id, function_name="increment", request=req, token="token"
+    )
+    # A re-POST for the same run_id (a backend transport-retry) must NOT re-run.
+    second = await executor.execute(
+        pod_id=pod_id, function_name="increment", request=req, token="token"
+    )
+
+    assert first.status == "completed"
+    assert second.output_data == first.output_data == {"y": 3}
+    assert second is first  # the cached result is returned verbatim
+    assert executor.client.function_calls == 1  # the function body ran once
+
+
+@pytest.mark.anyio
+async def test_different_run_ids_are_not_deduped(tmp_path):
+    executor = _increment_executor(tmp_path)
+    pod_id = executor.client.metadata.pod_id
+
+    await executor.execute(
+        pod_id=pod_id,
+        function_name="increment",
+        request=FunctionExecuteRequest(run_id=uuid4(), input_data={"x": 2}),
+        token="token",
+    )
+    await executor.execute(
+        pod_id=pod_id,
+        function_name="increment",
+        request=FunctionExecuteRequest(run_id=uuid4(), input_data={"x": 2}),
+        token="token",
+    )
+
+    # Distinct logical runs each execute (idempotency is per run_id, not global).
+    assert executor.client.function_calls == 2
+
+
+@pytest.mark.anyio
+async def test_sync_execute_caches_failed_result(tmp_path):
+    # A function that ran its side effect then failed must not be re-run on retry.
+    executor = _increment_executor(tmp_path, code=FAILING_FUNCTION_CODE)
+    pod_id = executor.client.metadata.pod_id
+    run_id = uuid4()
+    req = FunctionExecuteRequest(run_id=run_id, input_data={"x": 2})
+
+    first = await executor.execute(
+        pod_id=pod_id, function_name="increment", request=req, token="token"
+    )
+    second = await executor.execute(
+        pod_id=pod_id, function_name="increment", request=req, token="token"
+    )
+
+    assert first.status == "failed"
+    assert second is first
+    assert executor.client.function_calls == 1
+
+
+@pytest.mark.anyio
+async def test_async_execute_dedups_on_run_id(tmp_path):
+    executor = _increment_executor(tmp_path)
+    pod_id = executor.client.metadata.pod_id
+    run_id = uuid4()
+    req = FunctionExecuteRequest(run_id=run_id, input_data={"x": 5}, async_job=True)
+
+    accepted1 = await executor.execute(
+        pod_id=pod_id, function_name="increment", request=req, token="token"
+    )
+    # A re-POST while the job exists must return the same acceptance, not launch
+    # a second _run_job.
+    accepted2 = await executor.execute(
+        pod_id=pod_id, function_name="increment", request=req, token="token"
+    )
+
+    assert accepted1.status == "accepted"
+    assert accepted2.job_id == accepted1.job_id
+
+    for _ in range(50):
+        if executor.job_status(run_id).status == "completed":
+            break
+        await asyncio.sleep(0.01)
+
+    status = executor.job_status(run_id)
+    assert status.status == "completed"
+    assert status.output_data == {"y": 6}
+    assert executor.client.function_calls == 1  # job body ran once
+
+
 @pytest.mark.anyio
 async def test_executor_rejects_invalid_package_spec(tmp_path, monkeypatch):
     installed = False

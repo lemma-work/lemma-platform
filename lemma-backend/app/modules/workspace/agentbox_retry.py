@@ -33,6 +33,20 @@ RETRYABLE_TRANSPORT_ERRORS: tuple[type[BaseException], ...] = (
     OSError,
 )
 
+# A subset of the above that provably occur *before* the request is delivered to
+# the upstream app: the connection was never established, so the request could
+# not have run. These are the only transport errors safe to retry for a
+# NON-IDEMPOTENT call (e.g. a synchronous function execute that has a side
+# effect). The errors omitted here -- ReadError/ReadTimeout/RemoteProtocolError/
+# WriteError/WriteTimeout/OSError -- can all fire *after* the request reached and
+# ran in the app (the failure is only on the response leg), so re-sending would
+# run the side effect a second time. This mirrors why sync executes also drop
+# 504 from ``RETRYABLE_HTTP_STATUS_CODES``.
+CONNECT_PHASE_TRANSPORT_ERRORS: tuple[type[BaseException], ...] = (
+    httpx.ConnectError,
+    httpx.ConnectTimeout,
+)
+
 DEFAULT_MAX_ATTEMPTS = 12
 DEFAULT_INITIAL_RETRY_DELAY_SECONDS = 0.25
 DEFAULT_MAX_RETRY_DELAY_SECONDS = 2.0
@@ -80,6 +94,7 @@ async def retry_on_transient_agentbox_error(
     max_delay: float = DEFAULT_MAX_RETRY_DELAY_SECONDS,
     on_retry: Callable[[int, str], None] | None = None,
     retryable_status_codes: frozenset[int] = RETRYABLE_HTTP_STATUS_CODES,
+    retryable_transport_errors: tuple[type[BaseException], ...] = RETRYABLE_TRANSPORT_ERRORS,
 ) -> T:
     """Run ``operation`` retrying only transient transport / retryable-5xx errors.
 
@@ -89,7 +104,11 @@ async def retry_on_transient_agentbox_error(
     hook invoked before each backoff sleep. ``retryable_status_codes`` narrows
     which 5xx codes are retried -- e.g. a non-idempotent synchronous call drops
     504 (gateway timeout) so a request that already reached the app is not
-    re-sent.
+    re-sent. ``retryable_transport_errors`` narrows which transport exceptions
+    are retried for the same reason -- a non-idempotent call passes
+    ``CONNECT_PHASE_TRANSPORT_ERRORS`` so a request that may have already run in
+    the app (a response-leg failure) is not re-sent and its side effect not
+    duplicated.
     """
     delay = initial_delay
     for attempt in range(1, max_attempts + 1):
@@ -102,7 +121,7 @@ async def retry_on_transient_agentbox_error(
             ):
                 raise
             error = format_http_status_error(exc)
-        except RETRYABLE_TRANSPORT_ERRORS as exc:
+        except retryable_transport_errors as exc:
             if attempt == max_attempts:
                 raise
             error = format_transport_error(exc)

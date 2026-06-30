@@ -74,7 +74,15 @@ class RoutingOperationGateway(AppOperationGatewayPort):
         api_url: str | None = None,
         provider: str | None = None,
     ) -> Any:
-        await self._get_connector(connector_id)
+        # The connector lookup is pure existence-validation (the entity is
+        # discarded; routing uses ``provider``). When the caller already resolved
+        # ``provider`` -- the use-case resolve phase, which validated the
+        # connector under a short DB scope -- skip this read so the execute phase
+        # (this long external call) holds NO pooled DB connection. Concrete
+        # Lemma/Composio gateways are DB-free. When ``provider`` is unknown we
+        # still validate + derive the default route as before.
+        if provider is None:
+            await self._get_connector(connector_id)
         gateway = self._get_gateway_by_provider(provider or AuthProvider.LEMMA.value)
         # Hard-bound the upstream call. The LEMMA path is async (httpx.AsyncClient)
         # and the COMPOSIO path is offloaded via asyncio.to_thread, so neither
