@@ -21,7 +21,6 @@ import contextlib
 import json
 import os
 import time
-import traceback
 from datetime import datetime
 from typing import Any
 from uuid import UUID
@@ -55,8 +54,11 @@ from app.modules.function.services.function_runtime_command import (
     function_workspace_cwd,
 )
 from app.modules.workspace.agentbox_retry import (
+    CONNECT_PHASE_TRANSPORT_ERRORS,
     RETRYABLE_HTTP_STATUS_CODES,
+    RETRYABLE_TRANSPORT_ERRORS,
     retry_on_transient_agentbox_error,
+    truncate_message,
 )
 from app.modules.workspace.services.agentbox_manager import agentbox_sandbox_id
 
@@ -113,6 +115,17 @@ _RECOVERABLE_SANDBOX_TRANSPORT_ERRORS = (
     httpx.WriteError,
     httpx.WriteTimeout,
 )
+# A synchronous (API) function execute is NON-IDEMPOTENT: re-running it re-runs
+# whatever side effect the function already performed (e.g. creating an Outlook
+# draft). Its sandbox-recovery may therefore only re-run on errors that prove the
+# request never reached a running app -- the pod is missing/conflicted (404/409)
+# or the connection was never established (ConnectError/ConnectTimeout). A 5xx or
+# a response-leg transport error (read/remote-protocol/write) is ambiguous (the
+# app may have already run), so it must surface as a failure rather than trigger
+# a re-run. Mirrors the inner ``CONNECT_PHASE_TRANSPORT_ERRORS`` / 504-drop logic
+# in ``_execute_via_function_executor``.
+_NON_IDEMPOTENT_RECOVERABLE_SANDBOX_STATUS_CODES = frozenset({404, 409})
+_NON_IDEMPOTENT_RECOVERABLE_SANDBOX_TRANSPORT_ERRORS = CONNECT_PHASE_TRANSPORT_ERRORS
 
 
 class FunctionRunExecutor:
@@ -221,7 +234,10 @@ class FunctionRunExecutor:
                 )
             except Exception as exc:
                 run.status = FunctionRunStatus.FAILED
-                run.error, run.logs = self._format_execution_exception(exc)
+                # Clean, user-facing error only; full server detail goes to
+                # logger.exception below. Leave run.logs as the container logs
+                # (if any) -- never append a server traceback.
+                run.error = self._user_facing_execution_error(exc)
                 run.completed_at = datetime.now()
                 await self._persist_terminal_run(function, run)
                 logger.exception("Function job run %s failed during execution", run.id)
@@ -237,10 +253,10 @@ class FunctionRunExecutor:
             )
         except Exception as exc:
             run.status = FunctionRunStatus.FAILED
-            run.error, exception_logs = self._format_execution_exception(exc)
-            run.logs = "\n".join(
-                part for part in [run.logs, exception_logs] if part
-            ) or None
+            # Clean, user-facing error only; full server detail goes to
+            # logger.exception below. Preserve any container logs already on the
+            # run -- never append a server traceback or raw HTTP body.
+            run.error = self._user_facing_execution_error(exc)
             logger.exception("Function run %s failed during execution", run.id)
 
         run.completed_at = datetime.now()
@@ -396,8 +412,16 @@ class FunctionRunExecutor:
                 if close is not None:
                     await close()
 
+        # A synchronous (API) execute is non-idempotent, so sandbox-recovery may
+        # only re-run on "the request provably never ran" errors (pod missing /
+        # connect-phase) -- never on an ambiguous 5xx or response-leg transport
+        # error that may have already executed the function and run its side
+        # effect (the cause of the duplicate-draft storm).
         executor_response = await self._execute_with_sandbox_recovery(
-            run=run, make_attempt=_attempt
+            run=run,
+            make_attempt=_attempt,
+            recoverable_status_codes=_NON_IDEMPOTENT_RECOVERABLE_SANDBOX_STATUS_CODES,
+            recoverable_transport_errors=_NON_IDEMPOTENT_RECOVERABLE_SANDBOX_TRANSPORT_ERRORS,
         )
         self._apply_executor_response_to_run(run, executor_response)
 
@@ -470,21 +494,32 @@ class FunctionRunExecutor:
     # -- Resilience helpers ------------------------------------------------
 
     @staticmethod
-    def _is_recoverable_sandbox_error(exc: BaseException) -> bool:
+    def _is_recoverable_sandbox_error(
+        exc: BaseException,
+        *,
+        status_codes: frozenset[int] = _RECOVERABLE_SANDBOX_STATUS_CODES,
+        transport_errors: tuple[type[BaseException], ...] = _RECOVERABLE_SANDBOX_TRANSPORT_ERRORS,
+    ) -> bool:
         """True for errors that mean "the sandbox is internally unavailable right
         now" -- a missing/not-running pod or a manager/transport blip -- as
         opposed to a real function failure (which comes back as a 200 response,
         never an exception) or a genuine function timeout (a builtin TimeoutError
-        from the poll, deliberately excluded so it stays terminal)."""
+        from the poll, deliberately excluded so it stays terminal).
+
+        ``status_codes``/``transport_errors`` are narrowed by the caller for a
+        non-idempotent (synchronous) execute so a request that may have already
+        run is not re-run."""
         if isinstance(exc, httpx.HTTPStatusError):
-            return exc.response.status_code in _RECOVERABLE_SANDBOX_STATUS_CODES
-        return isinstance(exc, _RECOVERABLE_SANDBOX_TRANSPORT_ERRORS)
+            return exc.response.status_code in status_codes
+        return isinstance(exc, transport_errors)
 
     async def _execute_with_sandbox_recovery(
         self,
         *,
         run: FunctionRunEntity,
         make_attempt,
+        recoverable_status_codes: frozenset[int] = _RECOVERABLE_SANDBOX_STATUS_CODES,
+        recoverable_transport_errors: tuple[type[BaseException], ...] = _RECOVERABLE_SANDBOX_TRANSPORT_ERRORS,
     ) -> FunctionInvokeResponse:
         """Run an execution attempt, recovering from transient sandbox failures.
 
@@ -496,6 +531,11 @@ class FunctionRunExecutor:
         200 response (status ``failed``/``timeout``) -- never an exception -- so it
         is returned and never retried. Only a sandbox that cannot be provisioned
         (the error persists across every attempt) surfaces as a run failure.
+
+        For a non-idempotent (synchronous) execute the caller narrows
+        ``recoverable_status_codes``/``recoverable_transport_errors`` to the
+        "request provably never ran" set, so an ambiguous failure does not re-run
+        the function and duplicate its side effect.
         """
         last_exc: BaseException | None = None
         for attempt in range(1, _SANDBOX_RECOVERY_MAX_ATTEMPTS + 1):
@@ -503,7 +543,11 @@ class FunctionRunExecutor:
                 return await make_attempt()
             except Exception as exc:
                 if (
-                    not self._is_recoverable_sandbox_error(exc)
+                    not self._is_recoverable_sandbox_error(
+                        exc,
+                        status_codes=recoverable_status_codes,
+                        transport_errors=recoverable_transport_errors,
+                    )
                     or attempt == _SANDBOX_RECOVERY_MAX_ATTEMPTS
                 ):
                     raise
@@ -614,19 +658,31 @@ class FunctionRunExecutor:
             # A synchronous execute is non-idempotent: a 504 means the request
             # reached the in-sandbox app and it ran past its budget without
             # responding, so re-sending could run the function again. Drop 504
-            # from the retryable set for sync and surface a timeout instead. An
-            # async_job execute returns immediately, so it keeps the full set
-            # (its retries only ever cover the cold-start "app not ready" race).
+            # from the retryable set for sync and surface a timeout instead. For
+            # the same reason, drop the response-leg transport errors (read /
+            # remote-protocol / write / OSError such as "connection reset by
+            # peer"): each can fire *after* the function already ran and produced
+            # its side effect, so retrying would duplicate it -- the bug behind
+            # the Outlook duplicate-draft storm. Only connect-phase errors
+            # (ConnectError/ConnectTimeout) are safe, and they still cover the
+            # cold-start "app not ready" race. An async_job execute returns
+            # immediately, so it keeps the full sets.
             retryable_status_codes = (
                 RETRYABLE_HTTP_STATUS_CODES
                 if async_job
                 else RETRYABLE_HTTP_STATUS_CODES - {504}
+            )
+            retryable_transport_errors = (
+                RETRYABLE_TRANSPORT_ERRORS
+                if async_job
+                else CONNECT_PHASE_TRANSPORT_ERRORS
             )
             try:
                 return await retry_on_transient_agentbox_error(
                     _do_execute,
                     max_attempts=_FUNCTION_EXECUTE_RETRY_MAX_ATTEMPTS,
                     retryable_status_codes=retryable_status_codes,
+                    retryable_transport_errors=retryable_transport_errors,
                     on_retry=lambda attempt, message: logger.info(
                         "function_executor execute not ready sandbox=%s run=%s attempt=%s: %s",
                         sandbox_id,
@@ -828,40 +884,35 @@ class FunctionRunExecutor:
 
         return "\n".join(part for part in parts if part) or None
 
-    def _format_execution_exception(self, exc: Exception) -> tuple[str, str | None]:
-        response = getattr(exc, "response", None)
-        if response is not None:
-            status_code = getattr(response, "status_code", None)
-            body = getattr(response, "text", None) or getattr(response, "content", b"")
-            if isinstance(body, bytes):
-                body = body.decode("utf-8", errors="replace")
-            body = str(body).strip()
-            request = getattr(response, "request", None)
-            request_label = ""
-            if request is not None:
-                request_label = f" {getattr(request, 'method', '')} {getattr(request, 'url', '')}".strip()
-            error = (
-                f"Function sandbox request failed with HTTP {status_code}"
-                if status_code is not None
-                else "Function sandbox request failed"
-            )
-            if body:
-                first_line = body.splitlines()[0]
-                error = f"{error}: {first_line}"
-            logs = "\n".join(
-                part
-                for part in [
-                    f"Sandbox request failed{': ' + request_label if request_label else ''}",
-                    f"HTTP status: {status_code}" if status_code is not None else None,
-                    body,
-                ]
-                if part
-            )
-            return error, logs or None
+    def _user_facing_execution_error(self, exc: Exception) -> str:
+        """A concise, user-facing message for a backend<->sandbox failure.
 
-        error = str(exc) or exc.__class__.__name__
-        logs = "".join(traceback.format_exception(type(exc), exc, exc.__traceback__))
-        return error, logs
+        ``run.error`` and ``run.logs`` are surfaced to pod authors (and embedded
+        in workflow node errors), so they must NOT carry server internals -- raw
+        HTTP response bodies, ``str(OSError)`` like ``[Errno 104] Connection reset
+        by peer``, or Python tracebacks. The full detail is captured server-side
+        via ``logger.exception`` at the call site; here we map the failure class
+        to a clean sentence. A real function failure never reaches this path (it
+        returns a 200 response whose structured ``error.message`` is used by
+        ``_apply_executor_response_to_run``); only backend<->sandbox transport /
+        HTTP / timeout failures and our own ``FunctionValidationError`` do.
+        """
+        if isinstance(exc, FunctionValidationError):
+            # Already authored to be user-facing (e.g. schema mismatch).
+            return truncate_message(str(exc)) or "Function validation failed."
+        if isinstance(exc, httpx.HTTPStatusError):
+            status_code = exc.response.status_code
+            if status_code in (502, 503, 504):
+                return "The function sandbox was temporarily unavailable. Please retry."
+            return "The function sandbox returned an unexpected error."
+        if isinstance(exc, (httpx.TimeoutException, TimeoutError)):
+            return "The function did not complete before the execution timeout."
+        if isinstance(exc, (httpx.TransportError, OSError)):
+            return (
+                "The function sandbox connection was interrupted; the function "
+                "may not have completed."
+            )
+        return "The function failed to execute due to an internal error."
 
     def _job_workspace_session_id(self, run_id: UUID) -> str:
         return f"function-run-{run_id}"

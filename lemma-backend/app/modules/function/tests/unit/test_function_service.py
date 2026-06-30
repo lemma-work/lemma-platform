@@ -671,7 +671,7 @@ async def test_execute_function_api_cache_hit_skips_code_fetch(
     assert fake_session.exec_calls == []
 
 
-async def test_execute_function_sandbox_http_error_is_persisted_on_run(
+async def test_execute_function_sandbox_http_error_surfaces_clean_error(
     service: FunctionService,
     function_repo: AsyncMock,
     run_repo: AsyncMock,
@@ -697,11 +697,15 @@ async def test_execute_function_sandbox_http_error_is_persisted_on_run(
     result = await _execute(service, function, run)
 
     assert result.status == FunctionRunStatus.FAILED
-    assert "HTTP 500" in result.error
-    assert "sandbox execution crashed" in result.logs
+    # Fix 3: the run carries a clean, user-facing error — never the HTTP status
+    # code or the raw sandbox/manager response body.
+    assert "unexpected error" in result.error.lower()
+    assert "HTTP 500" not in result.error
+    assert "sandbox execution crashed" not in result.error
+    assert "sandbox execution crashed" not in (result.logs or "")
     final_update = run_repo.update_run_and_collect.await_args.kwargs
     assert final_update["status"] == FunctionRunStatus.FAILED
-    assert "sandbox execution crashed" in final_update["logs"]
+    assert "sandbox execution crashed" not in (final_update.get("logs") or "")
 
 
 async def test_execute_function_recovers_from_transient_sandbox_error(

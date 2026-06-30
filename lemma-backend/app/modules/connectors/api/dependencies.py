@@ -2,10 +2,14 @@ from typing import Annotated
 
 from fastapi import Depends
 
-from app.core.api.dependencies import UoWDep
+from app.core.api.dependencies import UoWDep, get_uow_factory
 from app.core.crypto import get_secret_cipher
+from app.core.infrastructure.db.uow_factory import UnitOfWorkFactory
 from app.core.infrastructure.events.message_bus import get_message_bus
 from app.modules.pod.services.authorization_factory import create_authorization_service
+from app.modules.connectors.application.connector_operation_use_cases import (
+    ConnectorOperationUseCases,
+)
 from app.modules.connectors.domain.connector import AuthProvider
 from app.modules.connectors.infrastructure.adapters.auth_provider_registry import (
     AuthProviderRegistry,
@@ -160,6 +164,26 @@ ConnectorTriggerServiceDep = Annotated[
 ]
 ConnectorOperationServiceDep = Annotated[
     ConnectorOperationService, Depends(get_connector_operation_service)
+]
+
+
+def build_connector_operation_use_cases(
+    uow_factory: UnitOfWorkFactory,
+) -> ConnectorOperationUseCases:
+    # Factory mode: the use-case opens its own short UoWs per phase (via
+    # build_connector_operation_service as the per-phase builder) so no pooled
+    # connection is held across the external operation call.
+    return ConnectorOperationUseCases(uow_factory, build_connector_operation_service)
+
+
+def get_connector_operation_use_cases(
+    uow_factory: UnitOfWorkFactory = Depends(get_uow_factory),
+) -> ConnectorOperationUseCases:
+    return build_connector_operation_use_cases(uow_factory)
+
+
+ConnectorOperationUseCasesDep = Annotated[
+    ConnectorOperationUseCases, Depends(get_connector_operation_use_cases)
 ]
 AccountResolutionServiceDep = Annotated[
     AccountResolutionService, Depends(get_account_resolution_service)

@@ -46,7 +46,6 @@ from app.modules.function.api.dependencies import (
     FunctionResourceDeleteDep,
     FunctionResourceEditorDep,
     FunctionResourceAdminDep,
-    FunctionResourceExecuteDep,
     FunctionResourceViewerDep,
 )
 from app.modules.workspace.services.workspace_tool_runtime import (
@@ -331,7 +330,12 @@ async def delete_function(
     operation_id="function.run",
     summary="Execute Function",
     description="Execute a function",
-    dependencies=[FunctionResourceExecuteDep],
+    # No route-level FunctionResourceExecuteDep: that request-scoped dependency
+    # pins its pooled DB connection for the whole request, including the slow
+    # sandbox execution. Authorization happens instead inside the use-case's
+    # short pod_context_scope (function_service.resolve_execute ->
+    # ctx.require(FUNCTION_EXECUTE)), so the connection is released before the
+    # sandbox round-trip. Mirrors conversation_controller.send_message.
 )
 async def execute_function(
     request: Request,

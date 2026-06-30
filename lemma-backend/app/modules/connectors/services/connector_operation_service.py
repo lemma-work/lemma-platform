@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import base64
+from dataclasses import dataclass
 from typing import Any
 from uuid import UUID
 
@@ -12,6 +13,7 @@ from app.modules.connectors.api.schemas.connector_operation_schemas import (
     OperationExecutionResponse,
     OperationSummary,
 )
+from app.modules.connectors.domain.connector import AuthProvider
 from app.modules.connectors.domain.errors import (
     AccountResolutionError,
     ConnectorNotFoundError,
@@ -29,6 +31,21 @@ from app.modules.connectors.services.account_resolution_service import (
     AccountResolutionService,
 )
 from app.modules.connectors.services.connector_service import ConnectorService
+
+
+@dataclass(frozen=True, slots=True)
+class ResolvedConnectorExecution:
+    """Session-free output of the connector-operation resolve phase, handed to
+    the external execute phase so the operation runs with no pooled DB connection
+    held. Carries only plain values -- never ORM/session-bound objects."""
+
+    connector_id: str
+    operation_execution_name: str
+    provider: str | None
+    third_party_credentials: dict[str, Any]
+    payload: dict[str, Any]
+    auth_token: str | None
+    api_url: str | None
 
 
 class ConnectorOperationService:
@@ -443,7 +460,15 @@ class ConnectorOperationService:
             provider=provider,
         )
 
-    async def execute_operation_for_auth_config(
+    # -- Resolve / execute split ------------------------------------------------
+    # ``resolve_execution*`` does all the DB reads + authorization + credential
+    # resolution and returns a session-free ``ResolvedConnectorExecution``;
+    # ``execute_resolved`` performs only the external gateway call. The
+    # ConnectorOperationUseCases runs resolve in a short DB scope and execute with
+    # no connection held. ``execute_operation*`` remain as thin wrappers
+    # (resolve + execute) for any single-shot internal callers.
+
+    async def resolve_execution_for_auth_config(
         self,
         *,
         user_id: UUID,
@@ -455,13 +480,13 @@ class ConnectorOperationService:
         auth_token: str | None = None,
         api_url: str | None = None,
         account_id: UUID | None = None,
-    ) -> OperationExecutionResponse:
+    ) -> ResolvedConnectorExecution:
         auth_config, connector_id, _provider = await self._resolve_auth_config_context(
             user_id=user_id,
             organization_id=organization_id,
             auth_config_name=auth_config_name,
         )
-        return await self.execute_operation(
+        return await self._resolve_execution(
             connector_id=connector_id,
             operation_name=operation_name,
             payload=payload,
@@ -473,7 +498,7 @@ class ConnectorOperationService:
             auth_config_id=auth_config.id,
         )
 
-    async def execute_operation(
+    async def _resolve_execution(
         self,
         *,
         connector_id: str,
@@ -485,7 +510,7 @@ class ConnectorOperationService:
         api_url: str | None = None,
         account_id: UUID | None = None,
         auth_config_id: UUID | None = None,
-    ) -> OperationExecutionResponse:
+    ) -> ResolvedConnectorExecution:
         await self._get_connector(connector_id)
         provider: str | None = None
         if auth_config_id is not None:
@@ -544,23 +569,97 @@ class ConnectorOperationService:
             account,
             user_id,
         )
+        return ResolvedConnectorExecution(
+            connector_id=connector_id,
+            operation_execution_name=operation.execution_name,
+            # Resolve the provider to a concrete value (the gateway already maps
+            # None -> LEMMA for routing). This guarantees the execute phase passes
+            # a non-None provider, so the gateway skips its connector-validation
+            # read and the external call holds NO DB connection.
+            provider=provider or AuthProvider.LEMMA.value,
+            third_party_credentials=third_party_credentials,
+            payload=payload or {},
+            auth_token=auth_token,
+            api_url=api_url,
+        )
+
+    async def execute_resolved(
+        self, resolved: ResolvedConnectorExecution
+    ) -> OperationExecutionResponse:
+        """Run the external operation for an already-resolved plan. Holds NO DB
+        connection: the gateway's connector-validation read is skipped because
+        ``provider`` is supplied (the connector was validated in the resolve
+        phase), and the concrete provider gateways are DB-free."""
         try:
             result = await self.operation_gateway.execute_operation(
-                connector_id=connector_id,
-                operation_name=operation.execution_name,
-                payload=payload or {},
-                third_party_credentials=third_party_credentials,
-                auth_token=auth_token,
-                api_url=api_url,
-                provider=provider,
+                connector_id=resolved.connector_id,
+                operation_name=resolved.operation_execution_name,
+                payload=resolved.payload or {},
+                third_party_credentials=resolved.third_party_credentials,
+                auth_token=resolved.auth_token,
+                api_url=resolved.api_url,
+                provider=resolved.provider,
             )
         except ConnectorDomainError:
             raise
         except Exception as exc:
             raise OperationExecutionInfrastructureError(
-                f"Failed to execute '{operation.execution_name}' for '{connector_id}'.",
+                f"Failed to execute '{resolved.operation_execution_name}' for "
+                f"'{resolved.connector_id}'.",
                 details=self._exception_details(exc),
             ) from exc
         return OperationExecutionResponse(
             result=self._normalize_execution_result(result)
         )
+
+    async def execute_operation_for_auth_config(
+        self,
+        *,
+        user_id: UUID,
+        organization_id: UUID,
+        auth_config_name: str,
+        operation_name: str,
+        payload: dict[str, Any],
+        actor: Context | None = None,
+        auth_token: str | None = None,
+        api_url: str | None = None,
+        account_id: UUID | None = None,
+    ) -> OperationExecutionResponse:
+        resolved = await self.resolve_execution_for_auth_config(
+            user_id=user_id,
+            organization_id=organization_id,
+            auth_config_name=auth_config_name,
+            operation_name=operation_name,
+            payload=payload,
+            actor=actor,
+            auth_token=auth_token,
+            api_url=api_url,
+            account_id=account_id,
+        )
+        return await self.execute_resolved(resolved)
+
+    async def execute_operation(
+        self,
+        *,
+        connector_id: str,
+        operation_name: str,
+        payload: dict[str, Any],
+        user_id: UUID,
+        actor: Context | None = None,
+        auth_token: str | None = None,
+        api_url: str | None = None,
+        account_id: UUID | None = None,
+        auth_config_id: UUID | None = None,
+    ) -> OperationExecutionResponse:
+        resolved = await self._resolve_execution(
+            connector_id=connector_id,
+            operation_name=operation_name,
+            payload=payload,
+            user_id=user_id,
+            actor=actor,
+            auth_token=auth_token,
+            api_url=api_url,
+            account_id=account_id,
+            auth_config_id=auth_config_id,
+        )
+        return await self.execute_resolved(resolved)

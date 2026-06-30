@@ -47,7 +47,11 @@ class FunctionControlAdapter(FunctionPort):
         if run.status == FunctionRunStatus.COMPLETED:
             return run.output_data
         if run.status == FunctionRunStatus.FAILED:
-            raise RuntimeError(f"Function execution failed: {run.error}")
+            # run.error is already a clean, user-facing message; the stepper wraps
+            # this as "Node '<id>' execution failed: <message>", so don't add a
+            # redundant "Function execution failed:" prefix (the node is a
+            # function) or leak internal detail here.
+            raise RuntimeError(run.error or "The function failed to execute.")
 
         # A non-terminal run is a JOB dispatched to the worker; suspend the
         # workflow on the run id (API functions always complete inline or fail).
