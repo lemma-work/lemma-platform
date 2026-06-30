@@ -16,7 +16,13 @@ class OAuthCredentials(BaseModel):
 
     model_config = ConfigDict(extra="allow")
 
-    access_token: str = Field(..., description="OAuth access token")
+    access_token: Optional[str] = Field(
+        None,
+        description=(
+            "OAuth access token. Optional because Composio-managed connections "
+            "are addressed by connection_id and may not surface a raw token."
+        ),
+    )
     refresh_token: Optional[str] = Field(None, description="OAuth refresh token")
     token_type: str = Field(default="Bearer", description="Type of the token")
     expires_at: Optional[datetime] = Field(

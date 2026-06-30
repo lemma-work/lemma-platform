@@ -46,6 +46,11 @@ class ResolvedConnectorExecution:
     payload: dict[str, Any]
     auth_token: str | None
     api_url: str | None
+    # Plain identifiers (never session-bound) so the execute phase can flag the
+    # account for re-auth on an unauthorized failure without re-resolving it.
+    account_id: UUID | None = None
+    account_user_id: UUID | None = None
+    organization_id: UUID | None = None
 
 
 class ConnectorOperationService:
@@ -581,6 +586,9 @@ class ConnectorOperationService:
             payload=payload or {},
             auth_token=auth_token,
             api_url=api_url,
+            account_id=getattr(account, "id", None),
+            account_user_id=getattr(account, "user_id", None),
+            organization_id=getattr(account, "organization_id", None),
         )
 
     async def execute_resolved(

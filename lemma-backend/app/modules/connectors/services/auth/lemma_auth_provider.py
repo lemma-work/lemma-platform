@@ -29,6 +29,16 @@ class LemmaAuthProvider(AuthProviderInterface):
         self._oauth_session_factory = oauth_session_factory
         self._cloud_id_resolver = cloud_id_resolver
 
+    async def connect_with_credentials(
+        self,
+        connector: ConnectorEntity,
+        user_id: UUID,
+        credentials: dict,
+    ) -> dict:
+        # Native credential-managed accounts store the submitted credentials
+        # verbatim — there is no provider-side connection to establish.
+        return credentials
+
     async def get_authorization_url(
         self,
         connector: ConnectorEntity,

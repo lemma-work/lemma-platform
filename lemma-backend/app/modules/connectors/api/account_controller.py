@@ -125,6 +125,7 @@ async def get_credentials(
             expires_at=credentials.expires_at
             if hasattr(credentials, "expires_at")
             else None,
+            connection_id=getattr(credentials, "connection_id", None),
         ),
         user_data=credentials.user_data if hasattr(credentials, "user_data") else None,
     )

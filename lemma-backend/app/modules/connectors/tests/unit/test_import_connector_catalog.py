@@ -834,7 +834,12 @@ async def test_deactivate_excluded_composio_connectors_deactivates_microsoft_tea
         is_active=True,
     )
     connector_repository = SimpleNamespace(
-        get=AsyncMock(return_value=existing),
+        # Only microsoft_teams exists in the DB; other excluded ids resolve to None.
+        get=AsyncMock(
+            side_effect=lambda connector_id: existing
+            if connector_id == "microsoft_teams"
+            else None
+        ),
         update=AsyncMock(),
     )
 
@@ -843,7 +848,7 @@ async def test_deactivate_excluded_composio_connectors_deactivates_microsoft_tea
     )
 
     assert count == 1
-    connector_repository.get.assert_awaited_once_with("microsoft_teams")
+    connector_repository.get.assert_any_await("microsoft_teams")
     connector_repository.update.assert_awaited_once()
     updated = connector_repository.update.await_args.args[0]
     assert updated.id == "microsoft_teams"

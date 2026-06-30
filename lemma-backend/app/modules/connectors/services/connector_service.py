@@ -5,7 +5,11 @@ from uuid import UUID
 
 from app.core.domain.uow import IUnitOfWork
 from app.core.domain.errors import DomainError
-from app.modules.connectors.domain.account import AccountEntity, OAuthCredentials
+from app.modules.connectors.domain.account import (
+    AccountEntity,
+    AccountStatus,
+    OAuthCredentials,
+)
 from app.modules.connectors.domain.auth_config import (
     AuthConfigEntity,
     AuthConfigSource,
@@ -739,17 +743,26 @@ class ConnectorService:
             auth_config_id=auth_config_id,
         )
         connector = await self.get_connector(auth_config.connector_id)
-        if self._provider_value(auth_config) == AuthProvider.LEMMA.value:
+        provider_value = self._provider_value(auth_config)
+        if provider_value == AuthProvider.LEMMA.value:
             capability = self._lemma_capability(connector)
             if capability.auth_scheme != AuthScheme.OAUTH2:
                 raise ConnectorValidationError(
                     "Credential-managed native accounts must be connected with the accounts API."
                 )
+        elif provider_value == AuthProvider.COMPOSIO.value:
+            if self._composio_capability(connector).auth_scheme != AuthScheme.OAUTH2:
+                raise ConnectorValidationError(
+                    "Credential-managed Composio accounts must be connected with the accounts API."
+                )
 
         existing_account = await self.account_repository.get_by_user_and_auth_config(
             user_id, auth_config.id
         )
-        if existing_account:
+        # Allow re-running OAuth on an existing account that has become unusable
+        # (preserving its account_id); only a healthy CONNECTED account blocks a
+        # new connect request.
+        if existing_account and existing_account.status == AccountStatus.CONNECTED:
             raise AccountAlreadyConnectedError(connector.id)
 
         effective_connector = self._build_effective_connector(connector, auth_config)
@@ -819,13 +832,14 @@ class ConnectorService:
         )
         connector = await self.get_connector(auth_config.connector_id)
         provider = AuthProvider(self._provider_value(auth_config))
-        if provider != AuthProvider.LEMMA:
-            raise ConnectorValidationError(
-                "Direct credential account creation is only supported for Lemma native auth configs."
-            )
+        if provider == AuthProvider.LEMMA:
+            auth_scheme = self._lemma_capability(connector).auth_scheme
+        elif provider == AuthProvider.COMPOSIO:
+            auth_scheme = self._composio_capability(connector).auth_scheme
+        else:
+            raise UnsupportedAuthProviderError(provider.value)
 
-        capability = self._lemma_capability(connector)
-        if capability.auth_scheme == AuthScheme.OAUTH2:
+        if auth_scheme == AuthScheme.OAUTH2:
             raise ConnectorValidationError(
                 "OAuth2 accounts must be connected with an OAuth connect request."
             )
@@ -841,13 +855,23 @@ class ConnectorService:
         if existing_account:
             raise AccountAlreadyConnectedError(connector.id)
 
+        # Composio credential-managed apps must establish a connected account on
+        # Composio's side; native (Lemma) apps store the credentials verbatim.
+        effective_connector = self._build_effective_connector(connector, auth_config)
+        auth_provider = self._get_auth_provider_by_name(provider.value)
+        stored_credentials = await auth_provider.connect_with_credentials(
+            connector=effective_connector,
+            user_id=user_id,
+            credentials=credentials,
+        )
+
         account = await self.account_repository.create(
             AccountEntity(
                 user_id=user_id,
                 organization_id=organization_id,
                 auth_config_id=auth_config.id,
                 connector_id=connector.id,
-                credentials=credentials,
+                credentials=stored_credentials,
                 provider_account_id=provider_account_id,
                 email=email,
                 preferences=preferences,
@@ -933,6 +957,8 @@ class ConnectorService:
                 account.provider_account_id = provider_account_id
             if email:
                 account.email = email
+            # A successful (re-)auth restores the account to a usable state.
+            account.status = AccountStatus.CONNECTED
             account = await self.account_repository.update(account)
         else:
             account = await self.account_repository.create(
@@ -1041,14 +1067,21 @@ class ConnectorService:
                         credentials=oauth_credentials,
                         user_id=account.user_id,
                     )
-                except DomainError:
-                    raise
                 except Exception as exc:
+                    # An expired token we cannot refresh means the account is
+                    # unusable until the user reconnects.
                     if is_expired:
+                        await self._persist_account_status(
+                            account, AccountStatus.REAUTH_REQUIRED
+                        )
+                        if isinstance(exc, DomainError):
+                            raise
                         raise OAuthFlowError(
                             f"Failed to refresh credentials: {exc}",
                             details=self._exception_details(exc),
                         ) from exc
+                    if isinstance(exc, DomainError):
+                        raise
                     logger.warning(
                         "Credential refresh failed for account %s; using stored token. %s",
                         account_id,
@@ -1056,15 +1089,48 @@ class ConnectorService:
                     )
                 else:
                     account.credentials = new_credentials
+                    # A successful refresh restores a previously-degraded account.
+                    account.status = AccountStatus.CONNECTED
                     account = await self.account_repository.update(account)
                     await self.uow.commit()
                     credentials = account.credentials
             elif is_expired:
+                await self._persist_account_status(
+                    account, AccountStatus.REAUTH_REQUIRED
+                )
                 raise OAuthFlowError(
                     "Credentials are expired and cannot be refreshed for this account."
                 )
 
         return self._to_oauth_credentials(credentials)
+
+    async def _persist_account_status(
+        self, account: AccountEntity, status: AccountStatus
+    ) -> AccountEntity:
+        """Persist an account status transition (idempotent)."""
+        if account.status == status:
+            return account
+        account.status = status
+        account = await self.account_repository.update(account)
+        await self.uow.commit()
+        return account
+
+    async def mark_account_reauth_required(
+        self,
+        account_id: UUID,
+        user_id: UUID,
+        organization_id: UUID | None = None,
+    ) -> None:
+        """Flag an account as needing re-authentication.
+
+        Best-effort: a missing/inaccessible account is silently ignored so this
+        never masks the original auth failure that triggered it.
+        """
+        try:
+            account = await self.get_account(account_id, user_id, organization_id)
+        except DomainError:
+            return
+        await self._persist_account_status(account, AccountStatus.REAUTH_REQUIRED)
 
     async def delete_account(
         self,
@@ -1157,6 +1223,11 @@ class ConnectorService:
     def _to_oauth_credentials(self, credentials: object) -> OAuthCredentials:
         if isinstance(credentials, OAuthCredentials):
             return credentials
+        # Coerce any other pydantic credential model (e.g. ComposioCredentials)
+        # to a dict so its fields — crucially connection_id — are preserved.
+        if not isinstance(credentials, dict):
+            model_dump = getattr(credentials, "model_dump", None)
+            credentials = model_dump() if callable(model_dump) else {}
         if isinstance(credentials, dict):
             return OAuthCredentials(
                 access_token=credentials.get("access_token", ""),

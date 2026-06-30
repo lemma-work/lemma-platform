@@ -105,29 +105,46 @@ class ComposioOperationGateway(AppOperationGatewayPort):
                 "error": error,
                 "response": response,
             }
+            message = f"Composio tool execution failed for '{operation_name}': {error}"
             normalized_error = str(error).lower()
-            if normalized_error in {"not_found", "tool_not_found"}:
-                raise OperationExecutionNotFoundError(
-                    f"Composio tool execution failed for '{operation_name}': {error}",
-                    details=details,
-                )
-            if normalized_error in {"unauthorized", "not_authed", "invalid_auth"}:
-                raise OperationExecutionUnauthorizedError(
-                    f"Composio tool execution failed for '{operation_name}': {error}",
-                    details=details,
-                )
-            if normalized_error in {"forbidden", "missing_scope"}:
-                raise OperationExecutionAccessDeniedError(
-                    f"Composio tool execution failed for '{operation_name}': {error}",
-                    details=details,
-                )
-            if normalized_error in {"invalid_arguments", "validation_error", "bad_request"}:
-                raise OperationExecutionValidationError(
-                    f"Composio tool execution failed for '{operation_name}': {error}",
-                    details=details,
-                )
-            raise OperationExecutionInfrastructureError(
-                f"Composio tool execution failed for '{operation_name}': {error}",
-                details=details,
-            )
+            # Composio surfaces failures two ways: a structured token (e.g.
+            # "unauthorized") or a provider passthrough whose HTTP status lives in
+            # the response data (e.g. OpenWeather "HTTP 401"). Classify on both so
+            # a revoked/invalid credential maps to Unauthorized (triggering the
+            # account reauth flow) rather than a generic 500.
+            status_code = self._error_status_code(response)
+            if normalized_error in {"not_found", "tool_not_found"} or status_code == 404:
+                raise OperationExecutionNotFoundError(message, details=details)
+            if (
+                normalized_error in {"unauthorized", "not_authed", "invalid_auth"}
+                or status_code == 401
+            ):
+                raise OperationExecutionUnauthorizedError(message, details=details)
+            if (
+                normalized_error in {"forbidden", "missing_scope"}
+                or status_code == 403
+            ):
+                raise OperationExecutionAccessDeniedError(message, details=details)
+            if (
+                normalized_error in {"invalid_arguments", "validation_error", "bad_request"}
+                or status_code in {400, 422}
+            ):
+                raise OperationExecutionValidationError(message, details=details)
+            raise OperationExecutionInfrastructureError(message, details=details)
         return response.get("data")
+
+    @staticmethod
+    def _error_status_code(response: dict[str, Any]) -> int | None:
+        """Best-effort HTTP status from a failed Composio tool response."""
+        candidates: list[Any] = [response.get("status_code")]
+        data = response.get("data")
+        if isinstance(data, dict):
+            candidates.append(data.get("status_code"))
+        for candidate in candidates:
+            if isinstance(candidate, bool):
+                continue
+            if isinstance(candidate, int):
+                return candidate
+            if isinstance(candidate, str) and candidate.isdigit():
+                return int(candidate)
+        return None

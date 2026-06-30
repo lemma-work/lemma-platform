@@ -9,10 +9,11 @@ import aiohttp
 os.environ.setdefault("COMPOSIO_CACHE_DIR", "/tmp/composio")
 
 from composio import Composio
+from composio.types import auth_scheme as composio_auth_scheme
 
 from app.modules.connectors.config import connector_settings
-from app.modules.connectors.domain.account import OAuthCredentials
-from app.modules.connectors.domain.connector import ConnectorEntity
+from app.modules.connectors.domain.account import ComposioCredentials, OAuthCredentials
+from app.modules.connectors.domain.connector import AuthScheme, ConnectorEntity
 from app.modules.connectors.domain.errors import ConnectorValidationError
 from app.modules.connectors.domain.ports import ConnectorRepositoryPort
 from app.modules.connectors.services.auth.auth_provider import AuthProviderInterface
@@ -22,6 +23,12 @@ logger = get_logger(__name__)
 
 ComposioClientFactory = Callable[[], Any]
 HttpSessionFactory = Callable[[], aiohttp.ClientSession]
+
+# Mirrors the Composio SDK's terminal connection states (INACTIVE is excluded
+# on purpose — it can recover to ACTIVE).
+_TERMINAL_CONNECTION_STATES: frozenset[str] = frozenset(
+    {"FAILED", "EXPIRED", "REVOKED"}
+)
 
 
 class ComposioAuthProvider(AuthProviderInterface):
@@ -139,6 +146,93 @@ class ComposioAuthProvider(AuthProviderInterface):
             return model_dump(mode="json", by_alias=True, exclude_none=True)
         return None
 
+    def _composio_auth_scheme(self, connector: ConnectorEntity) -> AuthScheme:
+        try:
+            capability = connector.capability_for("COMPOSIO")
+        except ValueError:
+            return AuthScheme.OAUTH2
+        return getattr(capability, "auth_scheme", AuthScheme.OAUTH2)
+
+    # Maps our auth scheme to the Composio custom-auth scheme string used when a
+    # toolkit has no Composio-managed credentials (bring-your-own API key, etc.).
+    _CUSTOM_AUTH_SCHEME = {
+        AuthScheme.API_KEY: "API_KEY",
+        AuthScheme.NOAUTH: "NO_AUTH",
+    }
+
+    def _resolve_auth_config_id(
+        self,
+        connector: ConnectorEntity,
+        composio: Any,
+        *,
+        custom_auth_scheme: str | None = None,
+    ) -> str:
+        """Reuse the connector's Composio auth config, else create one.
+
+        OAuth apps use Composio-managed credentials (``use_composio_managed_auth``).
+        Credential-managed apps (API key / no-auth) have no managed credentials, so
+        they need ``use_custom_auth`` with the explicit scheme; the per-account key
+        is supplied at ``initiate`` time.
+        """
+        auth_config_id = connector.composio_auth_config_id
+        if auth_config_id:
+            return auth_config_id
+        if custom_auth_scheme is not None:
+            options: dict[str, Any] = {
+                "type": "use_custom_auth",
+                "auth_scheme": custom_auth_scheme,
+            }
+        else:
+            options = {"type": "use_composio_managed_auth"}
+        auth_config = composio.auth_configs.create(
+            toolkit=self._toolkit_slug(connector),
+            options=options,
+        )
+        logger.info(
+            "Created Composio auth config ID: %s for app %s",
+            auth_config.id,
+            connector.id,
+        )
+        return auth_config.id
+
+    async def connect_with_credentials(
+        self,
+        connector: ConnectorEntity,
+        user_id: UUID,
+        credentials: dict,
+    ) -> ComposioCredentials:
+        if not credentials:
+            raise ConnectorValidationError(
+                "Credentials are required to connect this Composio app."
+            )
+
+        scheme = self._composio_auth_scheme(connector)
+        if scheme == AuthScheme.OAUTH2:
+            raise ConnectorValidationError(
+                "OAuth2 Composio apps must be connected with a connect request, "
+                "not direct credentials."
+            )
+
+        composio = self._composio_client_factory()
+        auth_config_id = self._resolve_auth_config_id(
+            connector,
+            composio,
+            custom_auth_scheme=self._CUSTOM_AUTH_SCHEME.get(scheme, "API_KEY"),
+        )
+
+        if scheme == AuthScheme.NOAUTH:
+            config = composio_auth_scheme.no_auth(credentials)
+        else:
+            config = composio_auth_scheme.api_key(credentials)
+
+        connection_request = composio.connected_accounts.initiate(
+            user_id=str(user_id),
+            auth_config_id=auth_config_id,
+            config=config,
+        )
+
+        return ComposioCredentials(connection_id=connection_request.id)
+
     async def get_authorization_url(
         self,
         connector: ConnectorEntity,
@@ -146,22 +240,9 @@ class ComposioAuthProvider(AuthProviderInterface):
         state: str,
         redirect_uri: str,
     ) -> Tuple[str, str]:
-        composio_app_name = self._toolkit_slug(connector)
-
         composio = self._composio_client_factory()
 
-        auth_config_id = connector.composio_auth_config_id
-        if not auth_config_id:
-            auth_config = composio.auth_configs.create(
-                toolkit=composio_app_name,
-                options={
-                    "type": "use_composio_managed_auth",
-                },
-            )
-            auth_config_id = auth_config.id
-            logger.info(
-                f"Created Composio auth config ID: {auth_config_id} for app {connector.id}"
-            )
+        auth_config_id = self._resolve_auth_config_id(connector, composio)
 
         redirect_url = f"{redirect_uri}?state={state}"
 
@@ -197,6 +278,13 @@ class ComposioAuthProvider(AuthProviderInterface):
 
         composio = self._composio_client_factory()
         connection_account = composio.connected_accounts.get(connected_account_id)
+
+        status = str(getattr(connection_account, "status", "") or "").upper()
+        if status in _TERMINAL_CONNECTION_STATES:
+            raise ConnectorValidationError(
+                f"Composio connection {connected_account_id} is in terminal state "
+                f"{status}; the account could not be connected."
+            )
 
         state_value = connection_account.state.val
         access_token = getattr(state_value, "access_token", None)

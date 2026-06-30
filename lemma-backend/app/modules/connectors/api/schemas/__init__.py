@@ -241,8 +241,11 @@ class CredentialTypes(Enum):
 class OauthCredentialsResponseSchema(BaseModel):
     """Schema for OAuth credentials response."""
 
-    access_token: str
+    # Optional: Composio-managed connections are addressed by connection_id and
+    # may not surface a raw access token.
+    access_token: Optional[str] = None
     expires_at: Optional[datetime.datetime] = None
+    connection_id: Optional[str] = None
 
 
 class ApiKeyCredentialsResponseSchema(BaseModel):

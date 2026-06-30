@@ -1,4 +1,4 @@
-from app.modules.connectors.domain.account import OAuthCredentials
+from app.modules.connectors.domain.account import CredentialTypes, OAuthCredentials
 from abc import ABC, abstractmethod
 from typing import Tuple, Optional
 from uuid import UUID
@@ -7,6 +7,29 @@ from app.modules.connectors.domain.connector import ConnectorEntity
 
 class AuthProviderInterface(ABC):
     """Abstract interface for authentication providers."""
+
+    @abstractmethod
+    async def connect_with_credentials(
+        self,
+        connector: ConnectorEntity,
+        user_id: UUID,
+        credentials: dict,
+    ) -> CredentialTypes:
+        """
+        Connect an account directly from user-supplied credentials (non-OAuth).
+
+        Used for credential-managed schemes (API key, etc.) where there is no
+        redirect/callback flow.
+
+        Args:
+            connector: The connector (effective connector with provider config)
+            user_id: The user ID
+            credentials: Raw credential fields submitted by the user
+
+        Returns:
+            The credentials to persist on the account.
+        """
+        pass
 
     @abstractmethod
     async def get_authorization_url(

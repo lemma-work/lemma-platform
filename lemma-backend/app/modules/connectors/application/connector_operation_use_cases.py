@@ -20,8 +20,13 @@ from app.core.infrastructure.db.uow_factory import UnitOfWorkFactory
 from app.modules.connectors.api.schemas.connector_operation_schemas import (
     OperationExecutionResponse,
 )
+from app.modules.connectors.domain.errors import (
+    OperationExecutionAccessDeniedError,
+    OperationExecutionUnauthorizedError,
+)
 from app.modules.connectors.services.connector_operation_service import (
     ConnectorOperationService,
+    ResolvedConnectorExecution,
 )
 
 
@@ -75,5 +80,31 @@ class ConnectorOperationUseCases:
         # checks out a connection across the (1-45s) external call. The scope only
         # supplies the service collaborator that owns the gateway + timeout +
         # error-mapping logic.
+        try:
+            async with uow_scope(self._uow_factory) as uow:
+                return await self._build(uow).execute_resolved(resolved)
+        except (
+            OperationExecutionUnauthorizedError,
+            OperationExecutionAccessDeniedError,
+        ):
+            # The provider rejected our credentials: the account is unusable until
+            # the user reconnects. Flag it in a fresh short scope (the external
+            # call already finished, so no connection was held across it), then
+            # re-raise the original error unchanged.
+            await self._flag_account_reauth_required(resolved)
+            raise
+
+    async def _flag_account_reauth_required(
+        self, resolved: ResolvedConnectorExecution
+    ) -> None:
+        if resolved.account_id is None or resolved.account_user_id is None:
+            return
         async with uow_scope(self._uow_factory) as uow:
-            return await self._build(uow).execute_resolved(resolved)
+            connector_service = self._build(uow).connector_service
+            if connector_service is None:
+                return
+            await connector_service.mark_account_reauth_required(
+                resolved.account_id,
+                resolved.account_user_id,
+                resolved.organization_id,
+            )

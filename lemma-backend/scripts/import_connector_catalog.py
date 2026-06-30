@@ -127,6 +127,7 @@ NATIVE_AUTH_METHOD_OVERRIDES: dict[str, AuthMethod] = {
 LEMMA_AUTH_PROVIDER_CONNECTOR_IDS = NATIVE_OPERATION_CONNECTOR_IDS | {"confluence"}
 COMPOSIO_EXCLUDED_CONNECTOR_IDS = {
     "microsoft_teams",
+    "splitwise",
 }
 DEFAULT_COMPOSIO_CONNECTOR_IDS: tuple[str, ...] = (
     "gmail",
@@ -183,7 +184,6 @@ DEFAULT_COMPOSIO_CONNECTOR_IDS: tuple[str, ...] = (
     "semrush",
     "sentry",
     "servicenow",
-    "splitwise",
     "spotify",
     "square",
     "stripe",
@@ -335,6 +335,88 @@ def _infer_composio_auth_method(toolkit_item, toolkit_detail) -> AuthMethod:
     if schemes & {"OAUTH1", "OAUTH2", "COMPOSIO_LINK"}:
         return AuthMethod.OAUTH2
     return AuthMethod.API_KEY
+
+
+_COMPOSIO_FIELD_TYPE_TO_JSON = {
+    "string": "string",
+    "number": "number",
+    "integer": "integer",
+    "boolean": "boolean",
+    "object": "object",
+}
+_COMPOSIO_OAUTH_MODES = {"OAUTH1", "OAUTH2", "COMPOSIO_LINK", "DCR_OAUTH", "S2S_OAUTH2"}
+
+
+def _composio_field_json_type(field_type: object) -> str:
+    return _COMPOSIO_FIELD_TYPE_TO_JSON.get(str(field_type).lower(), "string")
+
+
+def _composio_credential_schema(
+    toolkit_detail, auth_method: AuthMethod
+) -> dict | None:
+    """Build a JSON Schema describing the credentials a user must submit to
+    connect a non-OAuth Composio app, derived from the toolkit's
+    ``connected_account_initiation`` fields so the UI can render the form."""
+    if auth_method == AuthMethod.OAUTH2:
+        return None
+
+    details = getattr(toolkit_detail, "auth_config_details", None) or []
+    target_mode = auth_method.value.upper()
+    selected = None
+    for detail in details:
+        if str(getattr(detail, "mode", "")).upper() == target_mode:
+            selected = detail
+            break
+    if selected is None:
+        for detail in details:
+            if str(getattr(detail, "mode", "")).upper() not in _COMPOSIO_OAUTH_MODES:
+                selected = detail
+                break
+    if selected is None:
+        return None
+
+    fields_group = getattr(
+        getattr(selected, "fields", None), "connected_account_initiation", None
+    )
+    if fields_group is None:
+        return None
+
+    properties: dict[str, dict] = {}
+    required: list[str] = []
+    all_fields = list(getattr(fields_group, "required", None) or []) + list(
+        getattr(fields_group, "optional", None) or []
+    )
+    for field in all_fields:
+        name = getattr(field, "name", None)
+        if not name or name in properties:
+            continue
+        prop: dict[str, object] = {
+            "type": _composio_field_json_type(getattr(field, "type", "string")),
+            "title": getattr(field, "display_name", None) or name,
+        }
+        description = getattr(field, "description", None)
+        if description:
+            prop["description"] = description
+        default = getattr(field, "default", None)
+        if default is not None:
+            prop["default"] = default
+        if getattr(field, "is_secret", False):
+            prop["format"] = "password"
+        properties[name] = prop
+        if getattr(field, "required", False):
+            required.append(name)
+
+    if not properties:
+        return None
+
+    schema: dict[str, object] = {
+        "type": "object",
+        "properties": properties,
+        "additionalProperties": False,
+    }
+    if required:
+        schema["required"] = required
+    return schema
 
 
 def _infer_native_auth_method(
@@ -1115,6 +1197,9 @@ async def _sync_single_composio_toolkit(
     existing = await connector_repository.get(connector_id)
     toolkit_detail = composio.toolkits.get(toolkit_item.slug)
     composio_auth_method = _infer_composio_auth_method(toolkit_item, toolkit_detail)
+    composio_auth_config_schema = _composio_credential_schema(
+        toolkit_detail, composio_auth_method
+    )
     lemma_capability = None
     if supports_native:
         try:
@@ -1148,6 +1233,7 @@ async def _sync_single_composio_toolkit(
             _composio_provider_capability(
                 auth_method=composio_auth_method,
                 toolkit_slug=toolkit_item.slug,
+                auth_config_schema=composio_auth_config_schema,
             ),
             lemma_capability,
         ),
