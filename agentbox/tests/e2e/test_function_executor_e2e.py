@@ -192,3 +192,137 @@ def test_private_function_executor_installs_declared_python_package(
     assert result["status"] == "completed", result
     assert "moo" in result["output_data"]["rendered"]
 
+
+
+# --- run_id idempotency against the real Docker AgentBox ---------------------
+#
+# A function run is non-idempotent (it can create an Outlook draft, etc.). These
+# exercise the real sandbox to prove a re-POSTed run_id never re-runs the body,
+# concurrent duplicates collapse to one run, and distinct run_ids each execute.
+
+import concurrent.futures
+from uuid import uuid4
+
+
+def _counter_headers(agentbox_server, sandbox_id, function, lemma_base_url):
+    created = agentbox_server.client.request_json(
+        "PUT",
+        f"/sandboxes/{sandbox_id}",
+        body={"env": {"LEMMA_BASE_URL": lemma_base_url}},
+        timeout=180,
+    )
+    assert created.status_code == HTTPStatus.OK, created.text
+    return {
+        "Authorization": f"Bearer {function.token}",
+        "X-API-Key": agentbox_server.api_key,
+    }
+
+
+def _post_execute(manager, sandbox_id, function, headers, *, run_id, marker, async_job=False):
+    return manager.request_json(
+        "POST",
+        f"/sandboxes/{sandbox_id}/apps/function_executor/"
+        f"pods/{function.pod_id}/functions/{function.name}/execute",
+        body={
+            "run_id": run_id,
+            "input_data": {"marker": marker},
+            "async_job": async_job,
+            "timeout_seconds": 120,
+        },
+        headers=headers,
+        timeout=180,
+    )
+
+
+def test_sync_execute_idempotent_on_run_id(
+    agentbox_server, sandbox_id, fake_lemma_counter_function_server
+):
+    lemma_base_url, function = fake_lemma_counter_function_server
+    manager = agentbox_server.client
+    headers = _counter_headers(agentbox_server, sandbox_id, function, lemma_base_url)
+    run_id = str(uuid4())
+    marker = uuid4().hex
+
+    first = _post_execute(manager, sandbox_id, function, headers, run_id=run_id, marker=marker)
+    # A backend transport-retry re-POSTs the SAME run_id.
+    second = _post_execute(manager, sandbox_id, function, headers, run_id=run_id, marker=marker)
+
+    assert first.status_code == HTTPStatus.OK, first.text
+    assert second.status_code == HTTPStatus.OK, second.text
+    assert first.json()["status"] == "completed"
+    # The function body ran exactly once: the side-effect counter stays at 1 and
+    # the retry returns the identical cached result.
+    assert first.json()["output_data"] == {"invocations": 1}
+    assert second.json()["output_data"] == {"invocations": 1}
+
+
+def test_distinct_run_ids_each_execute(
+    agentbox_server, sandbox_id, fake_lemma_counter_function_server
+):
+    lemma_base_url, function = fake_lemma_counter_function_server
+    manager = agentbox_server.client
+    headers = _counter_headers(agentbox_server, sandbox_id, function, lemma_base_url)
+    marker = uuid4().hex
+
+    first = _post_execute(manager, sandbox_id, function, headers, run_id=str(uuid4()), marker=marker)
+    second = _post_execute(manager, sandbox_id, function, headers, run_id=str(uuid4()), marker=marker)
+
+    # Distinct logical runs each execute (idempotency is per run_id, not global).
+    assert first.json()["output_data"] == {"invocations": 1}
+    assert second.json()["output_data"] == {"invocations": 2}
+
+
+def test_concurrent_same_run_id_runs_once(
+    agentbox_server, sandbox_id, fake_lemma_counter_function_server
+):
+    lemma_base_url, function = fake_lemma_counter_function_server
+    manager = agentbox_server.client
+    headers = _counter_headers(agentbox_server, sandbox_id, function, lemma_base_url)
+    run_id = str(uuid4())
+    marker = uuid4().hex
+
+    # Fire two executes for the SAME run_id concurrently (the backend's retry can
+    # race the original). The per-run lock must collapse them to a single run.
+    with concurrent.futures.ThreadPoolExecutor(max_workers=2) as pool:
+        futures = [
+            pool.submit(_post_execute, manager, sandbox_id, function, headers, run_id=run_id, marker=marker)
+            for _ in range(2)
+        ]
+        responses = [f.result() for f in futures]
+
+    for resp in responses:
+        assert resp.status_code == HTTPStatus.OK, resp.text
+        assert resp.json()["status"] == "completed"
+        assert resp.json()["output_data"] == {"invocations": 1}
+
+
+def test_async_execute_idempotent_on_run_id(
+    agentbox_server, sandbox_id, fake_lemma_counter_function_server
+):
+    lemma_base_url, function = fake_lemma_counter_function_server
+    manager = agentbox_server.client
+    headers = _counter_headers(agentbox_server, sandbox_id, function, lemma_base_url)
+    run_id = str(uuid4())
+    marker = uuid4().hex
+
+    first = _post_execute(manager, sandbox_id, function, headers, run_id=run_id, marker=marker, async_job=True)
+    second = _post_execute(manager, sandbox_id, function, headers, run_id=run_id, marker=marker, async_job=True)
+    assert first.json()["status"] == "accepted"
+    # A re-POST returns the same job, never launching a second run.
+    assert second.json()["job_id"] == first.json()["job_id"]
+
+    deadline = time.monotonic() + 30
+    status = None
+    while time.monotonic() < deadline:
+        resp = manager.request_json(
+            "GET",
+            f"/sandboxes/{sandbox_id}/apps/function_executor/runs/{run_id}",
+            headers={"X-API-Key": agentbox_server.api_key},
+            timeout=60,
+        )
+        status = resp.json()
+        if status["status"] == "completed":
+            break
+        time.sleep(0.5)
+    assert status is not None and status["status"] == "completed"
+    assert status["output_data"] == {"invocations": 1}
