@@ -16,6 +16,7 @@ import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { useCreateAgentRuntime } from '@/lib/hooks/use-agent-runtime';
+import { useProfile } from '@/lib/hooks/use-user';
 import { cn } from '@/lib/utils';
 import {
     CUSTOM_PROVIDER_OPTIONS,
@@ -24,16 +25,25 @@ import {
     availableHarnessStatusLabel,
     firstHarnessModelName,
     HARNESS_LOGOS,
+    isCodingAgentKind,
     isHarnessAvailable,
     runtimeAvailabilityLabel,
+    runtimeProfileDaemonKey,
     splitModelNames,
     type CustomProviderKind,
 } from './agent-runtime-helpers';
 
-const CODING_AGENT_KINDS = new Set(['CLAUDE_CODE', 'CODEX', 'OPENCODE', 'ANTIGRAVITY', 'CURSOR']);
+// The two scopes a connection can be saved under. SYSTEM profiles (Lemma's
+// built-ins) aren't user-creatable, so the chooser only offers these two.
+const SAVE_SCOPES: Array<{ value: RuntimeProfileScope; label: string; hint: string }> = [
+    { value: RuntimeProfileScope.ORGANIZATION, label: 'Workspace', hint: 'Shared with everyone here' },
+    { value: RuntimeProfileScope.PERSONAL, label: 'Personal', hint: 'Only you' },
+];
 
-function isCodingAgentKind(kind?: string | null): boolean {
-    return kind ? CODING_AGENT_KINDS.has(kind) : false;
+function scopeBadge(scope: RuntimeProfileScope): { label: string; tone: 'ok' | 'muted' } | null {
+    if (scope === RuntimeProfileScope.SYSTEM) return null;
+    if (scope === RuntimeProfileScope.PERSONAL) return { label: 'Personal', tone: 'muted' };
+    return { label: 'Workspace', tone: 'muted' };
 }
 
 // Quick-start presets for popular providers and routers. Clicking one prefills
@@ -78,36 +88,28 @@ export function ModelsSettings({
     onRefresh?: () => void | Promise<void>;
     isRefreshing?: boolean;
 }) {
-    const [scope, setScope] = useState<RuntimeProfileScope>(RuntimeProfileScope.ORGANIZATION);
-
     const providers = (catalog?.items ?? []).filter((p) => !isCodingAgentKind(p.derived_harness_kind));
     const detectedLocalAgents = (availableHarnesses?.items ?? []).filter((h) => isCodingAgentKind(h.harness_kind));
 
+    // Daemons already saved as runtime profiles, keyed by daemonId::harnessKind so
+    // a detected harness can tell whether it's been added — and under which scope.
+    const savedDaemonScopeByKey = new Map<string, RuntimeProfileScope>();
+    for (const profile of catalog?.items ?? []) {
+        if (!isCodingAgentKind(profile.derived_harness_kind)) continue;
+        const key = runtimeProfileDaemonKey(profile);
+        if (key) savedDaemonScopeByKey.set(key, profile.scope);
+    }
+
     return (
         <div className="flex flex-col gap-8">
-            <div className="flex items-center justify-between">
-                <div className="inline-flex gap-1 rounded-md bg-[var(--surface-1)] p-1">
-                    {[
-                        { value: RuntimeProfileScope.ORGANIZATION, label: 'Workspace' },
-                        { value: RuntimeProfileScope.PERSONAL, label: 'Personal' },
-                    ].map((option) => (
-                        <button
-                            key={option.value}
-                            type="button"
-                            onClick={() => setScope(option.value)}
-                            className={cn(
-                                'models-settings-scope-button rounded px-3 py-1.5 text-sm font-medium transition-colors',
-                                scope === option.value
-                                    ? 'bg-[var(--surface-2)] text-[var(--text-primary)] shadow-xs'
-                                    : 'text-[var(--text-tertiary)] hover:text-[var(--text-secondary)]',
-                            )}
-                        >
-                            {option.label}
-                        </button>
-                    ))}
-                </div>
+            <div className="flex items-start justify-between gap-4">
+                <p className="text-sm text-[var(--text-tertiary)]">
+                    Connect the models and local agents this workspace can use. Each connection is saved as{' '}
+                    <span className="font-medium text-[var(--text-secondary)]">Workspace</span> (shared with everyone) or{' '}
+                    <span className="font-medium text-[var(--text-secondary)]">Personal</span> (only you) — you choose when you add it.
+                </p>
                 {onRefresh ? (
-                    <Button type="button" variant="ghost" size="sm" onClick={() => void onRefresh()} disabled={isRefreshing} className="gap-1.5">
+                    <Button type="button" variant="ghost" size="sm" onClick={() => void onRefresh()} disabled={isRefreshing} className="shrink-0 gap-1.5">
                         <RefreshCw className={cn('size-3.5', isRefreshing && 'animate-spin')} />
                         Recheck
                     </Button>
@@ -116,17 +118,44 @@ export function ModelsSettings({
 
             <ProvidersSection
                 organizationId={organizationId}
-                scope={scope}
                 providers={providers}
                 onRefresh={onRefresh}
             />
 
             <LocalAgentsSection
                 organizationId={organizationId}
-                scope={scope}
                 harnesses={detectedLocalAgents}
+                savedDaemonScopeByKey={savedDaemonScopeByKey}
                 onRefresh={onRefresh}
             />
+        </div>
+    );
+}
+
+// A small two-option chooser for where a new connection is saved. Inline at the
+// point of saving — there's no global mode, so the list always reflects reality.
+function ScopeChooser({ value, onChange }: { value: RuntimeProfileScope; onChange: (scope: RuntimeProfileScope) => void }) {
+    return (
+        <div className="flex flex-col gap-1.5">
+            <Label className="text-[var(--text-secondary)]">Save to</Label>
+            <div className="inline-flex w-fit gap-1 rounded-md bg-[var(--surface-2)] p-1">
+                {SAVE_SCOPES.map((option) => (
+                    <button
+                        key={option.value}
+                        type="button"
+                        onClick={() => onChange(option.value)}
+                        title={option.hint}
+                        className={cn(
+                            'rounded px-3 py-1.5 text-sm font-medium transition-colors',
+                            value === option.value
+                                ? 'bg-[var(--surface-1)] text-[var(--text-primary)] shadow-xs'
+                                : 'text-[var(--text-tertiary)] hover:text-[var(--text-secondary)]',
+                        )}
+                    >
+                        {option.label}
+                    </button>
+                ))}
+            </div>
         </div>
     );
 }
@@ -152,12 +181,10 @@ function providerStatusLabel(profile: AgentRuntimeProfileResponse): { label: str
 
 function ProvidersSection({
     organizationId,
-    scope,
     providers,
     onRefresh,
 }: {
     organizationId: string;
-    scope: RuntimeProfileScope;
     providers: AgentRuntimeProfileResponse[];
     onRefresh?: () => void | Promise<void>;
 }) {
@@ -175,6 +202,7 @@ function ProvidersSection({
                     const status = providerStatusLabel(profile);
                     const modelCount = profile.model_catalog?.length ?? 0;
                     const isSystem = profile.scope === RuntimeProfileScope.SYSTEM;
+                    const scope = scopeBadge(profile.scope);
                     return (
                         <div key={profile.id} className="flex items-center gap-3 rounded-md border border-[var(--border-subtle)] px-4 py-3">
                             <span className="flex size-9 shrink-0 items-center justify-center rounded-md bg-[var(--surface-1)] text-[var(--text-secondary)]">
@@ -187,6 +215,7 @@ function ProvidersSection({
                                     {modelCount ? ` · ${modelCount} model${modelCount === 1 ? '' : 's'}` : ''}
                                 </div>
                             </div>
+                            {scope ? <StatusBadge label={scope.label} tone={scope.tone} /> : null}
                             <StatusBadge label={status.label} tone={status.tone} />
                         </div>
                     );
@@ -196,7 +225,6 @@ function ProvidersSection({
                     <ConnectProviderForm
                         target={connect}
                         organizationId={organizationId}
-                        scope={scope}
                         onClose={() => setConnect(null)}
                         onSaved={() => {
                             setConnect(null);
@@ -239,13 +267,11 @@ function ProvidersSection({
 function ConnectProviderForm({
     target,
     organizationId,
-    scope,
     onClose,
     onSaved,
 }: {
     target: ConnectTarget;
     organizationId: string;
-    scope: RuntimeProfileScope;
     onClose: () => void;
     onSaved: () => void;
 }) {
@@ -255,6 +281,7 @@ function ConnectProviderForm({
     const [apiKey, setApiKey] = useState('');
     const [models, setModels] = useState('');
     const [defaultModel, setDefaultModel] = useState('');
+    const [scope, setScope] = useState<RuntimeProfileScope>(RuntimeProfileScope.ORGANIZATION);
     const createRuntime = useCreateAgentRuntime();
 
     const save = async () => {
@@ -324,11 +351,14 @@ function ConnectProviderForm({
                     <Input value={defaultModel} onChange={(e) => setDefaultModel(e.target.value)} placeholder="First listed model is used by default" />
                 </Field>
             </div>
-            <div className="flex items-center justify-end gap-2">
-                <Button type="button" variant="ghost" size="sm" onClick={onClose}>Cancel</Button>
-                <Button type="button" size="sm" onClick={() => void save()} loading={createRuntime.isPending} loadingLabel="Connecting">
-                    Connect
-                </Button>
+            <div className="flex flex-wrap items-end justify-between gap-3">
+                <ScopeChooser value={scope} onChange={setScope} />
+                <div className="flex items-center gap-2">
+                    <Button type="button" variant="ghost" size="sm" onClick={onClose}>Cancel</Button>
+                    <Button type="button" size="sm" onClick={() => void save()} loading={createRuntime.isPending} loadingLabel="Connecting">
+                        Connect
+                    </Button>
+                </div>
             </div>
         </div>
     );
@@ -336,17 +366,25 @@ function ConnectProviderForm({
 
 function LocalAgentsSection({
     organizationId,
-    scope,
     harnesses,
+    savedDaemonScopeByKey,
     onRefresh,
 }: {
     organizationId: string;
-    scope: RuntimeProfileScope;
     harnesses: AgentHarnessInfo[];
+    savedDaemonScopeByKey: Map<string, RuntimeProfileScope>;
     onRefresh?: () => void | Promise<void>;
 }) {
     const createRuntime = useCreateAgentRuntime();
+    const { data: profile } = useProfile();
     const [savingKey, setSavingKey] = useState<string | null>(null);
+    const [addingKey, setAddingKey] = useState<string | null>(null);
+
+    // Who's adding this daemon — used to pre-name it so a workspace with several
+    // people's machines doesn't end up with five identical "Claude Code" entries.
+    const userLabel = (profile?.full_name?.trim() || profile?.first_name?.trim() || profile?.email?.split('@')[0] || '').trim();
+    const defaultDaemonName = (displayName: string) =>
+        userLabel ? `${userLabel}'s ${displayName}` : `${displayName} daemon`;
 
     // Show the full known roster, each matched to a detected harness if present,
     // then append anything detected that we don't have a name for yet.
@@ -360,8 +398,9 @@ function LocalAgentsSection({
             .map((h) => ({ kind: h.harness_kind as string, name: h.display_name, harness: h })),
     ];
 
-    const save = async (harness: AgentHarnessInfo) => {
+    const save = async (harness: AgentHarnessInfo, scope: RuntimeProfileScope, name: string) => {
         if (!harness.daemon_id) return toast.error('Start the Lemma daemon to add this local agent');
+        const finalName = name.trim() || defaultDaemonName(harness.display_name);
         setSavingKey(availableHarnessKey(harness));
         try {
             await createRuntime.mutateAsync({
@@ -371,11 +410,13 @@ function LocalAgentsSection({
                     daemon_id: harness.daemon_id,
                     harness_kind: harness.harness_kind,
                     scope,
-                    name: `${harness.display_name} daemon`,
+                    name: finalName,
                     default_model_name: firstHarnessModelName(harness) || undefined,
                 },
             });
-            toast.success(`${harness.display_name} added`);
+            const scopeLabel = scope === RuntimeProfileScope.PERSONAL ? 'Personal' : 'Workspace';
+            toast.success(`${finalName} added to ${scopeLabel}`);
+            setAddingKey(null);
             void onRefresh?.();
         } catch (error) {
             toast.error(`Couldn't add ${harness.display_name}: ${error instanceof Error ? error.message : 'Unknown error'}`);
@@ -399,6 +440,10 @@ function LocalAgentsSection({
                     const status = harness ? (availableHarnessStatusLabel(harness) ?? 'Ready') : 'Not detected';
                     const logo = HARNESS_LOGOS[row.kind];
                     const key = harness ? availableHarnessKey(harness) : row.kind;
+                    // Has this exact daemon already been saved as a runtime profile?
+                    // If so the row reads as "Saved" instead of offering Add again.
+                    const savedScope = harness ? savedDaemonScopeByKey.get(availableHarnessKey(harness)) : undefined;
+                    const isSaved = savedScope !== undefined;
                     return (
                         <div key={key} className={cn('rounded-md border border-[var(--border-subtle)] px-4 py-3', !detected && 'opacity-70')}>
                             <div className="flex items-center gap-3">
@@ -409,22 +454,35 @@ function LocalAgentsSection({
                                     <div className="truncate text-sm font-medium text-[var(--text-primary)]">{row.name}</div>
                                     <div className="text-xs text-[var(--text-tertiary)]">Local · this machine</div>
                                 </div>
-                                <StatusBadge label={status} tone={available ? 'ok' : 'muted'} />
-                                {available && harness ? (
-                                    <Button
-                                        type="button"
-                                        size="sm"
-                                        onClick={() => void save(harness)}
-                                        loading={savingKey === key}
-                                        loadingLabel="Adding"
-                                        className="gap-1.5"
-                                    >
-                                        <Check className="size-3.5" />
-                                        Add
-                                    </Button>
-                                ) : null}
+                                {isSaved && savedScope ? (
+                                    <>
+                                        {scopeBadge(savedScope) ? <StatusBadge label={scopeBadge(savedScope)!.label} tone="muted" /> : null}
+                                        <span className="inline-flex shrink-0 items-center gap-1 rounded-full bg-[var(--state-success-soft,var(--surface-1))] px-2 py-0.5 text-xs font-medium text-[var(--state-success,var(--text-secondary))]">
+                                            <Check className="size-3" />
+                                            Saved
+                                        </span>
+                                    </>
+                                ) : (
+                                    <>
+                                        <StatusBadge label={status} tone={available ? 'ok' : 'muted'} />
+                                        {available && harness && addingKey !== key ? (
+                                            <Button type="button" size="sm" onClick={() => setAddingKey(key)} className="gap-1.5">
+                                                <Plus className="size-3.5" />
+                                                Add
+                                            </Button>
+                                        ) : null}
+                                    </>
+                                )}
                             </div>
-                            {!available ? (
+                            {available && harness && addingKey === key && !isSaved ? (
+                                <AddDaemonForm
+                                    defaultName={defaultDaemonName(harness.display_name)}
+                                    loading={savingKey === key}
+                                    onCancel={() => setAddingKey(null)}
+                                    onSave={(name, scope) => void save(harness, scope, name)}
+                                />
+                            ) : null}
+                            {!available && !isSaved ? (
                                 <div className="mt-3 flex flex-col gap-1.5 border-t border-[var(--border-subtle)] pt-3">
                                     <p className="text-xs text-[var(--text-tertiary)]">
                                         {detected ? 'Start the Lemma daemon on this machine:' : `Install ${row.name}, then start the Lemma daemon:`}
@@ -441,6 +499,41 @@ function LocalAgentsSection({
                 })}
             </div>
         </section>
+    );
+}
+
+// Naming a daemon at save time is the only chance to do it (there's no rename
+// API yet), and a good name is what lets people tell "Ada's Claude Code" from
+// "Sam's Claude Code" once several machines are connected to one workspace.
+function AddDaemonForm({
+    defaultName,
+    loading,
+    onCancel,
+    onSave,
+}: {
+    defaultName: string;
+    loading: boolean;
+    onCancel: () => void;
+    onSave: (name: string, scope: RuntimeProfileScope) => void;
+}) {
+    const [name, setName] = useState(defaultName);
+    const [scope, setScope] = useState<RuntimeProfileScope>(RuntimeProfileScope.ORGANIZATION);
+    return (
+        <div className="mt-3 flex flex-col gap-3 border-t border-[var(--border-subtle)] pt-3">
+            <Field label="Name" hint="How this daemon shows up in your workspace">
+                <Input value={name} onChange={(e) => setName(e.target.value)} placeholder={defaultName} />
+            </Field>
+            <div className="flex flex-wrap items-end justify-between gap-3">
+                <ScopeChooser value={scope} onChange={setScope} />
+                <div className="flex items-center gap-2">
+                    <Button type="button" variant="ghost" size="sm" onClick={onCancel}>Cancel</Button>
+                    <Button type="button" size="sm" onClick={() => onSave(name, scope)} loading={loading} loadingLabel="Adding" className="gap-1.5">
+                        <Check className="size-3.5" />
+                        Add
+                    </Button>
+                </div>
+            </div>
+        </div>
     );
 }
 
