@@ -32,9 +32,10 @@ from app.modules.agent.tools.registry import (
 )
 
 
-def test_partition_core_extra_splits_pod_into_extra():
+def test_partition_core_extra_splits_pod_into_extra_for_pod_default():
     core, extra = _partition_core_extra(
-        [workspace_cli_toolset, pod_toolset, web_search_toolset]
+        [workspace_cli_toolset, pod_toolset, web_search_toolset],
+        is_pod_default=True,
     )
     assert pod_toolset in extra
     assert workspace_cli_toolset in core
@@ -42,27 +43,17 @@ def test_partition_core_extra_splits_pod_into_extra():
     assert pod_toolset not in core
 
 
-def test_adapt_toolsets_for_vision_swaps_only_when_no_vision():
-    from app.modules.agent.tools.registry import adapt_toolsets_for_vision
-    from app.modules.agent.tools.workspace_cli.pydantic_adapter import (
-        workspace_cli_text_only_toolset,
+def test_partition_core_extra_keeps_everything_core_for_user_created_agent():
+    """User-created agents that configured POD/SUBAGENTS get them injected
+    directly (no ToolSearch round-trip) — only the pod-default agent defers."""
+    core, extra = _partition_core_extra(
+        [workspace_cli_toolset, pod_toolset, web_search_toolset],
+        is_pod_default=False,
     )
-
-    # Vision model: list is returned unchanged (view_image stays).
-    kept = adapt_toolsets_for_vision(
-        [workspace_cli_toolset, web_search_toolset], supports_vision=True
-    )
-    assert kept[0] is workspace_cli_toolset
-
-    # No-vision model: the workspace CLI toolset is swapped for the text-only
-    # variant (no view_image); other toolsets are untouched.
-    swapped = adapt_toolsets_for_vision(
-        [workspace_cli_toolset, web_search_toolset], supports_vision=False
-    )
-    assert swapped[0] is workspace_cli_text_only_toolset
-    assert swapped[1] is web_search_toolset
-    assert "view_image" not in workspace_cli_text_only_toolset.tools
-    assert "exec_command" in workspace_cli_text_only_toolset.tools
+    assert extra == []
+    assert pod_toolset in core
+    assert workspace_cli_toolset in core
+    assert web_search_toolset in core
 
 
 def test_prompt_caching_keys_on_conversation_id():
@@ -120,7 +111,7 @@ async def test_assembler_returns_capabilities_for_every_visible_toolset():
         agent=SimpleNamespace(
             toolsets=[AgentToolset.WEB_SEARCH, AgentToolset.WORKSPACE_CLI]
         ),
-        ctx=SimpleNamespace(conversation_id=uuid4()),
+        ctx=SimpleNamespace(conversation_id=uuid4(), is_pod_default_agent=True),
         full_toolsets=[web_search_toolset, workspace_cli_toolset],
         agent_run_id=uuid4(),
         model_name="m",
@@ -341,14 +332,16 @@ async def test_current_time_and_deferral_in_real_run():
     assert captured["settings"].get("openai_user") == str(conversation_id)
 
 
-# The 13 user-facing function tools. ToolSearch adds a 14th tool (`search_tools`)
-# at the discovery layer for the live provider adapter; it isn't reported in
-# FunctionModel's AgentInfo.function_tools, so it's asserted separately below.
+# The 12 user-facing function tools (view_image is a separate, vision-gated
+# toolset appended by the runner, not part of an agent's configured toolsets —
+# see test_pod_default_gains_view_image_toolset_when_vision_supported).
+# ToolSearch adds a 13th tool (`search_tools`) at the discovery layer for the
+# live provider adapter; it isn't reported in FunctionModel's
+# AgentInfo.function_tools, so it's asserted separately below.
 _EXPECTED_VISIBLE_POD_DEFAULT_TOOLS = {
     "exec_command",
     "manage_process",
     "execute_python",
-    "view_image",
     "web_search",
     "list_skills",
     "load_skill",
@@ -376,7 +369,8 @@ async def test_pod_default_visible_toolset_is_slim(monkeypatch):
     )
 
     deps = BaseAgentContext(
-        user_id=uuid4(), pod_id=uuid4(), conversation_id=uuid4()
+        user_id=uuid4(), pod_id=uuid4(), conversation_id=uuid4(),
+        is_pod_default_agent=True,
     )
     # Assemble through the real RunToolAssembler so the pod-default toolset
     # (including the conversation-scoped TODO toolset) is resolved exactly as in a
@@ -450,7 +444,10 @@ async def test_pod_default_speech_capability_carries_its_prompt(monkeypatch):
         storage_mod, "ConversationRepository", lambda _uow: _FakeRepo({})
     )
 
-    deps = BaseAgentContext(user_id=uuid4(), pod_id=uuid4(), conversation_id=uuid4())
+    deps = BaseAgentContext(
+        user_id=uuid4(), pod_id=uuid4(), conversation_id=uuid4(),
+        is_pod_default_agent=True,
+    )
     full_toolsets = await RunToolAssembler(lambda: _FakeUoW()).assemble(
         agent=None,
         conversation=SimpleNamespace(id=deps.conversation_id, metadata={}),
@@ -479,60 +476,75 @@ async def test_pod_default_speech_capability_carries_its_prompt(monkeypatch):
 
 
 @pytest.mark.anyio
-async def test_pod_default_without_vision_omits_view_image(monkeypatch):
-    """On a non-vision model the runner swaps in the text-only workspace toolset,
-    so view_image disappears while the other workspace tools and the workspace_cli
-    usage instructions are preserved."""
-    from app.modules.agent.capabilities import todo_storage as storage_mod
+async def test_pod_default_gains_view_image_toolset_when_vision_supported():
+    """`view_image` is not part of workspace_cli or any configured toolset — the
+    runner appends the standalone `view_image_toolset` only when the resolved
+    model supports vision (mirroring the vision-gated append in
+    `agent_runner_service.py`)."""
     from app.modules.agent.capabilities.assembler import build_lemma_harness_tooling
     from app.modules.agent.capabilities.instructed_toolset import (
         InstructedToolsetCapability,
     )
     from app.modules.agent.tools.context import BaseAgentContext
-    from app.modules.agent.tools.registry import (
-        POD_DEFAULT_AGENT_TOOLSETS,
-        adapt_toolsets_for_vision,
-    )
+    from app.modules.agent.tools.registry import POD_DEFAULT_AGENT_TOOLSETS
     from app.modules.agent.tools.tool_assembler import RunToolAssembler
-
-    monkeypatch.setattr(
-        storage_mod, "ConversationRepository", lambda _uow: _FakeRepo({})
+    from app.modules.agent.tools.workspace_cli.pydantic_adapter import (
+        view_image_toolset,
     )
 
-    deps = BaseAgentContext(user_id=uuid4(), pod_id=uuid4(), conversation_id=uuid4())
+    deps = BaseAgentContext(
+        user_id=uuid4(), pod_id=uuid4(), conversation_id=uuid4(),
+        is_pod_default_agent=True,
+    )
     full_toolsets = await RunToolAssembler(lambda: _FakeUoW()).assemble(
         agent=None,
         conversation=SimpleNamespace(id=deps.conversation_id, metadata={}),
     )
-    # Mirror the runner's LEMMA branch for a model that lacks VISION.
-    lemma_toolsets = adapt_toolsets_for_vision(full_toolsets, supports_vision=False)
-    capabilities = await build_lemma_harness_tooling(
-        uow_factory=lambda: _FakeUoW(),
-        agent=SimpleNamespace(toolsets=list(POD_DEFAULT_AGENT_TOOLSETS)),
-        ctx=deps,
-        full_toolsets=lemma_toolsets,
-        agent_run_id=uuid4(),
-        model_name="m",
-        enable_prompt_caching=False,
+
+    async def build_capabilities(*, supports_vision: bool) -> list[object]:
+        toolsets = full_toolsets
+        if supports_vision:
+            toolsets = [*full_toolsets, view_image_toolset]
+        return await build_lemma_harness_tooling(
+            uow_factory=lambda: _FakeUoW(),
+            agent=SimpleNamespace(toolsets=list(POD_DEFAULT_AGENT_TOOLSETS)),
+            ctx=deps,
+            full_toolsets=toolsets,
+            agent_run_id=uuid4(),
+            model_name="m",
+            enable_prompt_caching=False,
+        )
+
+    async def visible_tool_names(capabilities: list[object]) -> set[str]:
+        captured: dict = {}
+
+        def model_fn(messages, info: AgentInfo):
+            captured["visible"] = {
+                t.name for t in info.function_tools if not t.defer_loading
+            }
+            return ModelResponse(parts=[TextPart("done")])
+
+        agent = Agent(FunctionModel(model_fn), capabilities=capabilities)
+        await agent.run("hi", deps=deps)
+        return captured["visible"]
+
+    # No vision → view_image absent; everything else is unaffected.
+    no_vision_caps = await build_capabilities(supports_vision=False)
+    assert (
+        await visible_tool_names(no_vision_caps) == _EXPECTED_VISIBLE_POD_DEFAULT_TOOLS
     )
 
-    captured: dict = {}
-
-    def model_fn(messages, info: AgentInfo):
-        captured["visible"] = {
-            t.name for t in info.function_tools if not t.defer_loading
-        }
-        return ModelResponse(parts=[TextPart("done")])
-
-    agent = Agent(FunctionModel(model_fn), capabilities=capabilities)
-    await agent.run("hi", deps=deps)
-
-    # view_image is gone; the remaining workspace tools (and everything else) stay.
-    assert captured["visible"] == _EXPECTED_VISIBLE_POD_DEFAULT_TOOLS - {"view_image"}
-    # The workspace_cli usage instructions still ride along (text-only variant is
-    # recognised as the workspace CLI toolset).
+    # Vision supported → view_image appended as a plain core toolset capability
+    # (no bespoke instructions needed; the tool's own docstring carries guidance).
+    vision_caps = await build_capabilities(supports_vision=True)
+    assert (
+        await visible_tool_names(vision_caps)
+        == _EXPECTED_VISIBLE_POD_DEFAULT_TOOLS | {"view_image"}
+    )
+    # The workspace_cli usage instructions still ride along, unaffected by
+    # whether view_image is present.
     assert any(
         isinstance(c, InstructedToolsetCapability)
         and c.get_serialization_name() == "workspace_cli"
-        for c in capabilities
+        for c in vision_caps
     )

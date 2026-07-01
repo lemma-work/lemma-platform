@@ -87,7 +87,18 @@ def _agent_has_toolset(agent: Agent, toolset: AgentToolset) -> bool:
 
 def _partition_core_extra(
     toolsets: list[object],
+    *,
+    is_pod_default: bool,
 ) -> tuple[list[object], list[object]]:
+    """Split toolsets into core (prompt-visible) vs extra (deferred via ToolSearch).
+
+    Deferral only applies to the pod-default agent, which otherwise accumulates
+    every optional toolset in its prompt prefix. User-created agents already
+    chose a deliberately scoped toolset, so POD/SUBAGENTS are injected directly
+    for them like any other configured toolset.
+    """
+    if not is_pod_default:
+        return list(toolsets), []
     core: list[object] = []
     extra: list[object] = []
     for toolset in toolsets:
@@ -165,7 +176,9 @@ async def build_lemma_harness_tooling(
     # agent/uow_factory/run-id reserved: tool selection (incl. todo) now happens in
     # RunToolAssembler, so full_toolsets already reflects the agent's toolsets.
     _ = (agent, uow_factory, agent_run_id, model_name)
-    core, extra = _partition_core_extra(full_toolsets)
+    core, extra = _partition_core_extra(
+        full_toolsets, is_pod_default=ctx.is_pod_default_agent
+    )
 
     # The todo toolset (if the agent has TODO) already arrives in `full_toolsets`
     # from RunToolAssembler and is wrapped by `_visible_capability` above.

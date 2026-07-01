@@ -54,7 +54,7 @@ async def test_project_groups_children_and_shares_cwd(
     assert project["id"] in await _list_ids(authenticated_client, pod_id, type="PROJECT")
 
     # A conversation pinned under the project inherits the project's cwd instead of
-    # getting its own /workspace/conversations/{id} directory.
+    # getting its own c/{date}/{slug} directory.
     child = await _create_conversation(
         authenticated_client,
         pod_id,
@@ -79,5 +79,8 @@ async def test_root_conversation_records_own_cwd(authenticated_client, fixed_tes
     convo = await _create_conversation(
         authenticated_client, pod_id, {"title": "root", "type": "CHAT"}
     )
-    # cwd is always recorded in metadata; a root gets its own conversation dir.
-    assert convo["metadata"]["cwd"] == f"/workspace/conversations/{convo['id']}"
+    # cwd is always recorded in metadata; a root gets its own c/{date}/{slug} dir,
+    # sharing its suffix with the pod filesystem default (`/me/{suffix}`).
+    cwd = convo["metadata"]["cwd"]
+    assert cwd.startswith("/workspace/c/")
+    assert cwd.count("/") == 4  # /workspace/c/{date}/{slug}

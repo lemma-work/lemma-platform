@@ -10,7 +10,7 @@ from __future__ import annotations
 
 from contextlib import asynccontextmanager
 from types import SimpleNamespace
-from unittest.mock import AsyncMock
+from unittest.mock import ANY, AsyncMock
 from uuid import uuid4
 
 import pytest
@@ -24,18 +24,21 @@ from app.modules.agent.tools.pod.models import (
     PodGetRecordsRequest,
     PodReadFileRequest,
     PodTablesRequest,
+    PodWriteFileRequest,
     PodWriteRecordRequest,
     ViewDocumentPagesRequest,
 )
 from app.modules.agent.tools.registry import resolve_agent_toolsets
+from app.modules.datastore.domain.errors import DatastoreConflictError
 
 
-def _run_ctx() -> SimpleNamespace:
+def _run_ctx(*, pod_cwd: str | None = None) -> SimpleNamespace:
     return SimpleNamespace(
         deps=BaseAgentContext(
             user_id=uuid4(),
             pod_id=uuid4(),
             conversation_id=uuid4(),
+            pod_cwd=pod_cwd,
         )
     )
 
@@ -54,7 +57,7 @@ def test_pod_toolset_is_registered_under_pod_toolset_enum():
     assert pod_adapter.pod_toolset in toolsets
 
 
-def test_pod_toolset_exposes_exactly_the_nine_tools():
+def test_pod_toolset_exposes_exactly_the_ten_tools():
     names = set(pod_adapter.pod_toolset.tools.keys())
     assert names == {
         "pod_tables",
@@ -63,6 +66,7 @@ def test_pod_toolset_exposes_exactly_the_nine_tools():
         "pod_query",
         "pod_list_files",
         "pod_read_file",
+        "pod_write_file",
         "pod_view_document_pages",
         "pod_get_file_url",
         "pod_search_files",
@@ -443,3 +447,103 @@ async def test_pod_get_file_url_public_mints_signed_url(monkeypatch):
     create_signed_url.assert_awaited_once()
     _entity_args, kwargs = create_signed_url.call_args
     assert kwargs == {"expires_seconds": 3600, "max_hits": 5}
+
+
+@pytest.mark.asyncio
+async def test_pod_write_file_creates_new_file(monkeypatch):
+    entity = SimpleNamespace(path="/me/report.md", size_bytes=5)
+    services = SimpleNamespace(
+        file=SimpleNamespace(create_file=AsyncMock(return_value=entity)),
+        ctx=SimpleNamespace(pod_id=uuid4(), user_id=uuid4()),
+    )
+    _patch_services(monkeypatch, services)
+
+    result = await pod_adapter.pod_write_file(
+        _run_ctx(), PodWriteFileRequest(path="/me/report.md", content="hello")
+    )
+
+    assert result == {
+        "success": True,
+        "path": "/me/report.md",
+        "size_bytes": 5,
+        "created": True,
+    }
+    services.file.create_file.assert_awaited_once()
+    args, kwargs = services.file.create_file.call_args
+    assert args[1] == "report.md"
+    assert args[2] == b"hello"
+    assert kwargs["directory_path"] == "/me"
+
+
+@pytest.mark.asyncio
+async def test_pod_write_file_relative_path_resolves_against_pod_cwd(monkeypatch):
+    entity = SimpleNamespace(path="/me/c/2026-07-02/ab3f2k7q/notes.md", size_bytes=3)
+    services = SimpleNamespace(
+        file=SimpleNamespace(create_file=AsyncMock(return_value=entity)),
+        ctx=SimpleNamespace(pod_id=uuid4(), user_id=uuid4()),
+    )
+    _patch_services(monkeypatch, services)
+
+    ctx = _run_ctx(pod_cwd="/me/c/2026-07-02/ab3f2k7q")
+    result = await pod_adapter.pod_write_file(
+        ctx, PodWriteFileRequest(path="notes.md", content="hey")
+    )
+
+    assert result["success"] is True
+    args, kwargs = services.file.create_file.call_args
+    assert args[1] == "notes.md"
+    assert kwargs["directory_path"] == "/me/c/2026-07-02/ab3f2k7q"
+
+
+@pytest.mark.asyncio
+async def test_pod_write_file_conflict_without_overwrite_returns_error(monkeypatch):
+    services = SimpleNamespace(
+        file=SimpleNamespace(
+            create_file=AsyncMock(side_effect=DatastoreConflictError("exists")),
+            resolve_update_file=AsyncMock(),
+        ),
+        ctx=SimpleNamespace(pod_id=uuid4(), user_id=uuid4()),
+    )
+    _patch_services(monkeypatch, services)
+
+    result = await pod_adapter.pod_write_file(
+        _run_ctx(),
+        PodWriteFileRequest(path="/me/report.md", content="hello", overwrite=False),
+    )
+
+    assert result["success"] is False
+    assert "already exists" in result["error"]
+    services.file.resolve_update_file.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_pod_write_file_conflict_with_overwrite_updates_existing(monkeypatch):
+    plan = object()
+    updated = SimpleNamespace(path="/me/report.md", size_bytes=7)
+    services = SimpleNamespace(
+        file=SimpleNamespace(
+            create_file=AsyncMock(side_effect=DatastoreConflictError("exists")),
+            resolve_update_file=AsyncMock(return_value=plan),
+            write_update_storage=AsyncMock(),
+            persist_update_file=AsyncMock(return_value=updated),
+            finalize_update_file=AsyncMock(),
+        ),
+        ctx=SimpleNamespace(pod_id=uuid4(), user_id=uuid4()),
+    )
+    _patch_services(monkeypatch, services)
+
+    result = await pod_adapter.pod_write_file(
+        _run_ctx(),
+        PodWriteFileRequest(path="/me/report.md", content="hello", overwrite=True),
+    )
+
+    assert result == {
+        "success": True,
+        "path": "/me/report.md",
+        "size_bytes": 7,
+        "created": False,
+    }
+    services.file.resolve_update_file.assert_awaited_once()
+    services.file.write_update_storage.assert_awaited_once_with(plan, ANY)
+    services.file.persist_update_file.assert_awaited_once_with(plan)
+    services.file.finalize_update_file.assert_awaited_once_with(plan, updated)

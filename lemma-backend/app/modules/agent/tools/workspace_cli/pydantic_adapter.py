@@ -144,9 +144,6 @@ async def view_image(
     return await workspace_cli.view_image(ctx.deps, request)
 
 
-# Tools every model can use. `view_image` is kept out of this base list because
-# it returns image bytes (BinaryContent) into the message history, which breaks
-# models without vision support.
 _WORKSPACE_CLI_BASE_TOOLS = [
     exec_command,
     manage_process,
@@ -154,20 +151,16 @@ _WORKSPACE_CLI_BASE_TOOLS = [
 ]
 
 workspace_cli_toolset = FunctionToolset[BaseAgentContext](
-    tools=[*_WORKSPACE_CLI_BASE_TOOLS, view_image]
-)
-
-# Variant for text-only models: identical to the full toolset minus `view_image`,
-# so a non-vision model never receives image content it cannot process.
-workspace_cli_text_only_toolset = FunctionToolset[BaseAgentContext](
     tools=list(_WORKSPACE_CLI_BASE_TOOLS)
 )
 
+# `view_image` lives in its own always-on-when-supported toolset (see
+# `registry.py`'s VIEW_IMAGE toolset) rather than workspace_cli, so it reaches
+# any agent with a vision-capable model regardless of configured toolsets.
+view_image_toolset = FunctionToolset[BaseAgentContext](tools=[view_image])
+
 
 def is_workspace_cli_toolset(toolset: object) -> bool:
-    """True for either workspace CLI variant (full or text-only).
-
-    The capability assembler keys workspace-CLI special handling (its usage
-    prompt) off the toolset identity, so both variants must be recognised.
-    """
-    return toolset is workspace_cli_toolset or toolset is workspace_cli_text_only_toolset
+    """True for the workspace CLI toolset (the capability assembler keys its
+    usage-prompt special handling off this identity check)."""
+    return toolset is workspace_cli_toolset

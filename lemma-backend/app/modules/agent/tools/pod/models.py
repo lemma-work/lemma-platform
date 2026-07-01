@@ -126,7 +126,14 @@ class QueryRequest(BaseModel):
 
 
 class PodListFilesRequest(BaseModel):
-    path: str = Field(default="/", description="Folder path, e.g. /pod or /me.")
+    path: str = Field(
+        default="/",
+        description=(
+            "Folder path, e.g. /pod or /me. An absolute path is used as-is; a "
+            "relative path (e.g. '' or 'notes') is resolved against your "
+            "default pod working directory (`/me/c/{date}/{slug}`)."
+        ),
+    )
     recursive: bool = Field(
         default=False,
         description=(
@@ -142,8 +149,33 @@ class PodListFilesRequest(BaseModel):
     )
 
 
+class PodWriteFileRequest(BaseModel):
+    path: str = Field(
+        ...,
+        description=(
+            "Pod file path to write. An absolute path (e.g. /me/report.md) is "
+            "used as-is; a relative path (e.g. report.md) is resolved against "
+            "your default pod working directory (`/me/c/{date}/{slug}`) — write "
+            "there when you don't need a specific shared location."
+        ),
+    )
+    content: str = Field(..., description="UTF-8 text content to write.")
+    overwrite: bool = Field(
+        default=True,
+        description="If false and the file already exists, the write is rejected instead of replacing it.",
+    )
+    description: str | None = Field(default=None, description="Optional file description.")
+
+
 class PodReadFileRequest(BaseModel):
-    path: str = Field(..., description="Absolute pod file path, e.g. /pod/notes.txt.")
+    path: str = Field(
+        ...,
+        description=(
+            "Pod file path to read. An absolute path (e.g. /pod/notes.txt) is "
+            "used as-is; a relative path is resolved against your default pod "
+            "working directory (`/me/c/{date}/{slug}`)."
+        ),
+    )
     format: Literal["text", "markdown"] = Field(
         default="text",
         description=(

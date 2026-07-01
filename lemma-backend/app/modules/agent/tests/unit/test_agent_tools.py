@@ -1148,7 +1148,11 @@ async def test_root_conversation_gets_own_cwd():
     convo = Conversation(pod_id=uuid4(), user_id=uuid4())
     await service._apply_inherited_cwd(convo, parent_id=None)
 
-    assert convo.metadata["cwd"] == f"/workspace/conversations/{convo.id}"
+    # A root gets its own pretty c/{date}/{slug} cwd stamped into metadata.
+    date = convo.created_at.date().isoformat()
+    cwd = convo.metadata["cwd"]
+    assert cwd.startswith(f"/workspace/c/{date}/")
+    assert cwd.count("/") == 4  # /workspace/c/{date}/{slug}
 
 
 @pytest.mark.asyncio

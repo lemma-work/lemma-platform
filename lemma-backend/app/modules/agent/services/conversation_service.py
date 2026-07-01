@@ -191,8 +191,12 @@ class ConversationService:
         A child (``parent_id`` set — a sub-agent OR a conversation pinned under a
         PROJECT) inherits the parent's resolved cwd + workspace selection, so it
         shares the parent's directory instead of getting its own. A root
-        conversation gets its own ``/workspace/conversations/{id}`` cwd. An
-        explicit ``cwd`` already in metadata always wins.
+        conversation gets its own ``/workspace/c/{date}/{slug}`` cwd. An explicit
+        ``cwd`` already in metadata always wins.
+
+        The cwd is the single source of truth for both filesystems: the pod
+        working directory (``/me/{suffix}``) is derived from it at read time
+        (``resolve_pod_cwd``), so nothing pod-specific is persisted here.
         """
         metadata = conversation.metadata if isinstance(conversation.metadata, dict) else {}
         if metadata.get("cwd"):
@@ -749,6 +753,7 @@ class ConversationService:
         )
         from app.modules.agent.tools.context import ConversationContext
         from app.core.crypto import get_secret_cipher
+        from app.modules.agent.services.workspace_location import resolve_pod_cwd
 
         uow_factory = SessionUnitOfWorkFactory(async_session_maker)
         agent = await self._resolve_agent(conversation=conversation, user_id=user_id)
@@ -786,6 +791,7 @@ class ConversationService:
             runtime_credentials=resolved.credentials or {},
             workspace_id=workspace_location.workspace_id,
             workspace_cwd=workspace_location.cwd,
+            pod_cwd=resolve_pod_cwd(conversation),
         )
 
     async def _pending_user_approval_from_messages(

@@ -24,6 +24,7 @@ from app.modules.agent.tools.pod.models import (
     PodListFilesRequest,
     PodReadFileRequest,
     PodTablesRequest,
+    PodWriteFileRequest,
     PodWriteRecordRequest,
     QueryRequest,
     SearchFilesRequest,
@@ -31,11 +32,31 @@ from app.modules.agent.tools.pod.models import (
 )
 from app.modules.agent.tools.pod.pod_data_access import PodServices, pod_services
 from app.modules.agent.tools.tool_errors import approval_error_result
+from app.modules.datastore.domain.errors import DatastoreConflictError
+from app.modules.datastore.domain.file_entities import DatastoreFileUpdateEntity
 from app.modules.datastore.services.files.file_url import (
     build_file_app_url,
     build_object_url,
 )
 from app.modules.datastore.services.table_context import TableContext
+
+
+def _resolve_pod_path(deps: BaseAgentContext, path: str) -> str:
+    """Resolve a possibly-relative pod path against the agent's pod cwd."""
+    if path.startswith("/"):
+        return path
+    cwd = deps.get_pod_cwd().rstrip("/")
+    return f"{cwd}/{path}" if path else cwd
+
+
+def _split_pod_path(path: str) -> tuple[str, str]:
+    """Split an absolute pod path into (directory_path, name)."""
+    normalized = path if path.startswith("/") else f"/{path}"
+    trimmed = normalized.rstrip("/") or "/"
+    if trimmed == "/":
+        raise ValueError("A file path must include a file name.")
+    directory, _, name = trimmed.rpartition("/")
+    return (directory or "/", name)
 
 
 def _has_meaningful_data(data: JsonObject | None) -> bool:
@@ -280,6 +301,70 @@ async def pod_query(
 # --- Files ------------------------------------------------------------------
 
 
+async def pod_write_file(
+    ctx: RunContext[BaseAgentContext],
+    request: PodWriteFileRequest,
+) -> JsonObject:
+    """Write text content to a pod file, creating or overwriting it.
+
+    Without an absolute path, the file lands in your default pod working
+    directory (`/me/c/{date}/{slug}`) — a stable, private location scoped to
+    this conversation. Writes under your own `/me/...` (including that default
+    location) never need approval; writes to a shared pod path may.
+    """
+
+    async def op(services: PodServices) -> JsonObject:
+        resolved_path = _resolve_pod_path(ctx.deps, request.path)
+        directory_path, name = _split_pod_path(resolved_path)
+        content_bytes = request.content.encode("utf-8")
+        try:
+            entity = await services.file.create_file(
+                services.ctx.pod_id,
+                name,
+                content_bytes,
+                services.ctx,
+                description=request.description,
+                directory_path=directory_path,
+            )
+            return {
+                "success": True,
+                "path": entity.path,
+                "size_bytes": entity.size_bytes,
+                "created": True,
+            }
+        except DatastoreConflictError:
+            if not request.overwrite:
+                return {
+                    "success": False,
+                    "path": resolved_path,
+                    "error": (
+                        f"A file already exists at '{resolved_path}'. Pass "
+                        "overwrite=true to replace it."
+                    ),
+                }
+            update_entity = DatastoreFileUpdateEntity(
+                path=resolved_path,
+                content=content_bytes,
+                description=request.description,
+            )
+            plan = await services.file.resolve_update_file(
+                services.ctx.pod_id, update_entity, services.ctx
+            )
+            await services.file.write_update_storage(plan, update_entity)
+            updated = await services.file.persist_update_file(plan)
+            await services.file.finalize_update_file(plan, updated)
+            return {
+                "success": True,
+                "path": updated.path,
+                "size_bytes": updated.size_bytes,
+                "created": False,
+            }
+
+    return await _run(
+        ctx.deps, tool_name="pod_write_file", args=request.model_dump(), op=op
+    )
+
+
 async def pod_list_files(
     ctx: RunContext[BaseAgentContext],
     request: PodListFilesRequest,
@@ -288,22 +373,24 @@ async def pod_list_files(
 
     ``recursive=false`` (default) lists the immediate files and folders in
     ``path``. ``recursive=true`` returns a file tree rooted at ``path`` (folders
-    plus a sample of files per directory).
+    plus a sample of files per directory). Without an absolute path, resolves
+    against your default pod working directory (`/me/c/{date}/{slug}`).
     """
 
     async def op(services: PodServices) -> JsonObject:
+        resolved_path = _resolve_pod_path(ctx.deps, request.path)
         if request.recursive:
             tree = await services.file.get_directory_tree(
                 services.ctx.pod_id,
                 services.ctx,
-                root_path=request.path,
+                root_path=resolved_path,
                 files_per_directory=request.files_per_directory,
             )
             return {"success": True, "tree": to_json_value(tree)}
         files, cursor = await services.file.list_files(
             services.ctx.pod_id,
             services.ctx,
-            directory_path=request.path,
+            directory_path=resolved_path,
             limit=request.limit,
         )
         return {
@@ -339,10 +426,11 @@ async def pod_read_file(
     """
 
     async def op(services: PodServices) -> JsonObject:
+        resolved_path = _resolve_pod_path(ctx.deps, request.path)
         if request.format == "markdown":
             entity, markdown, page_count = await services.file.get_document_markdown(
                 services.ctx.pod_id,
-                request.path,
+                resolved_path,
                 services.ctx,
                 page_start=request.page_start,
                 page_end=request.page_end,
@@ -359,7 +447,7 @@ async def pod_read_file(
             }
 
         entity, content = await services.file.download_file_content_by_path(
-            services.ctx.pod_id, request.path, services.ctx
+            services.ctx.pod_id, resolved_path, services.ctx
         )
         try:
             text = content.decode("utf-8")
@@ -530,6 +618,7 @@ pod_toolset = FunctionToolset[BaseAgentContext](
         pod_query,
         pod_list_files,
         pod_read_file,
+        pod_write_file,
         pod_view_document_pages,
         pod_get_file_url,
         pod_search_files,

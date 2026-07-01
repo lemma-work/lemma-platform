@@ -19,6 +19,12 @@ class AgentContext(BaseModel):
     agent_name: str | None = None
     agent_run_id: UUID | None = None
     metadata: JsonObject | None = None
+    # True only for the pod-default assistant (no user-created Agent entity).
+    # Gates the deferred-tool (ToolSearch) partitioning in the LEMMA capability
+    # assembler: the pod-default agent keeps POD/SUBAGENTS deferred to avoid
+    # overloading its prompt prefix, while user-created agents that deliberately
+    # configured those toolsets get them injected directly.
+    is_pod_default_agent: bool = False
     # Rendered runtime brief (pod/user/granted resources) appended to the system
     # prompt. Built once per run by the runner; harness-neutral so it just rides
     # along on the context.

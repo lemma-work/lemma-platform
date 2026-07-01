@@ -14,7 +14,7 @@ from app.modules.agent.tools.user_interaction.pydantic_adapter import (
 )
 from app.modules.agent.tools.web.pydantic_adapter import web_search_toolset
 from app.modules.agent.tools.workspace_cli.pydantic_adapter import (
-    workspace_cli_text_only_toolset,
+    view_image_toolset,
     workspace_cli_toolset,
 )
 
@@ -40,6 +40,7 @@ _TOOLSET_BY_NAME: dict[AgentToolset, object] = {
     AgentToolset.SPEECH: speech_toolset,
     AgentToolset.POD: pod_toolset,
     AgentToolset.SUBAGENTS: subagents_toolset,
+    AgentToolset.VIEW_IMAGE: view_image_toolset,
 }
 
 # Toolsets that are NOT static singletons — they are realized per-conversation as
@@ -83,30 +84,9 @@ def resolve_agent_toolsets(
     return resolved
 
 
-def adapt_toolsets_for_vision(
-    toolsets: list[object],
-    *,
-    supports_vision: bool,
-) -> list[object]:
-    """Drop image-returning tools when the resolved model has no vision support.
-
-    Swaps the workspace CLI toolset for its text-only variant (no ``view_image``)
-    so a non-vision model never receives image content in its history — which
-    otherwise breaks the conversation. When the model supports vision the list is
-    returned unchanged.
-    """
-    if supports_vision:
-        return toolsets
-    return [
-        workspace_cli_text_only_toolset if t is workspace_cli_toolset else t
-        for t in toolsets
-    ]
-
-
 __all__ = [
     "POD_DEFAULT_AGENT_TOOLSETS",
     "EXTRA_TOOLSETS",
     "EXTRA_TOOLSET_OBJECTS",
     "resolve_agent_toolsets",
-    "adapt_toolsets_for_vision",
 ]

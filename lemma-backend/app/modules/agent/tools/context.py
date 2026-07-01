@@ -39,6 +39,9 @@ class BaseAgentContext(AgentContext):
     runtime_credentials: dict[str, object] = Field(default_factory=dict)
     workspace_id: str = "default"
     workspace_cwd: str | None = None
+    # Default pod-filesystem working directory for this conversation, e.g.
+    # `/me/c/{date}/{slug}`. Relative pod tool paths resolve against this.
+    pod_cwd: str | None = None
 
     # True only when this tool runs inside the in-process pydantic harness, which
     # catches the AgentInputRequired pause signal and turns it into a clean run
@@ -64,6 +67,12 @@ class BaseAgentContext(AgentContext):
 
     def get_workspace_cwd(self) -> str:
         return self.workspace_cwd or f"/workspace/conversations/{self.conversation_id}"
+
+    def get_pod_cwd(self) -> str:
+        # Callers on the main run path always set `pod_cwd` explicitly (see
+        # `resolve_pod_cwd`); this conversation_id-based fallback only covers
+        # secondary context-construction sites that haven't set it.
+        return self.pod_cwd or f"/me/conversations/{self.conversation_id}"
 
     def get_workspace_scope_key(self) -> str:
         return f"workspace:{self.workspace_id}:conversation:{self.conversation_id}"
