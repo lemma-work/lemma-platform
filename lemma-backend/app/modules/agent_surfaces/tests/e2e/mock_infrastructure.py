@@ -65,6 +65,13 @@ class FakeSlackServer:
         app.router.add_route(
             "*", "/api/assistant.threads.setStatus", self._assistant_threads_set_status
         )
+        app.router.add_route(
+            "*", "/api/files.getUploadURLExternal", self._files_get_upload_url_external
+        )
+        app.router.add_route(
+            "*", "/api/files.completeUploadExternal", self._files_complete_upload_external
+        )
+        app.router.add_post("/upload/{file_id}", self._upload_raw_file)
 
         self._runner = web.AppRunner(app)
         await self._runner.setup()
@@ -146,6 +153,36 @@ class FakeSlackServer:
         self._store.add("SLACK_STATUS", params)
         return web.json_response({"ok": True})
 
+    async def _files_get_upload_url_external(self, request: web.Request) -> web.Response:
+        params = await self._collect_params(request)
+        file_id = f"F{len(self._store.get_all('SLACK_FILE_UPLOAD')) + 1:09d}"
+        self._store.add("SLACK_FILE_UPLOAD_URL", params)
+        return web.json_response(
+            {
+                "ok": True,
+                "upload_url": f"http://127.0.0.1:{self._port}/upload/{file_id}",
+                "file_id": file_id,
+            }
+        )
+
+    async def _upload_raw_file(self, request: web.Request) -> web.Response:
+        form = await request.post()
+        uploaded = form.get("file")
+        self._store.add(
+            "SLACK_FILE_UPLOAD",
+            {
+                "file_id": request.match_info["file_id"],
+                "filename": getattr(uploaded, "filename", None),
+                "size": len(uploaded.file.read()) if hasattr(uploaded, "file") else None,
+            },
+        )
+        return web.Response(text="OK")
+
+    async def _files_complete_upload_external(self, request: web.Request) -> web.Response:
+        params = await self._collect_params(request)
+        self._store.add("SLACK_FILE_COMPLETE", params)
+        return web.json_response({"ok": True, "files": []})
+
 
 class FakeTeamsServer:
     """Lightweight aiohttp server mimicking the MS Teams Bot Framework."""
@@ -175,6 +212,10 @@ class FakeTeamsServer:
         app.router.add_post(
             "/teams/v3/conversations/{conversation_id}/activities",
             self._post_activity,
+        )
+        app.router.add_put(
+            "/teams/v3/conversations/{conversation_id}/activities/{activity_id}",
+            self._put_activity,
         )
         app.router.add_get(
             "/teams/v3/conversations/{conversation_id}/members/{member_id}",
@@ -233,6 +274,18 @@ class FakeTeamsServer:
             {"id": f"activity-{len(self._store.get_all('TEAMS'))}"}
         )
 
+    async def _put_activity(self, request: web.Request) -> web.Response:
+        body = await request.json()
+        self._store.add(
+            "TEAMS_UPDATE",
+            {
+                "path": str(request.rel_url),
+                "activity_id": request.match_info["activity_id"],
+                "body": body,
+            },
+        )
+        return web.json_response({"id": request.match_info["activity_id"]})
+
     async def _get_member(self, request: web.Request) -> web.Response:
         return web.json_response(
             {
@@ -267,6 +320,10 @@ class FakeWhatsAppServer:
             "/v21.0/{phone_number_id}/messages",
             self._send_message,
         )
+        app.router.add_post(
+            "/v21.0/{phone_number_id}/media",
+            self._upload_media,
+        )
 
         self._runner = web.AppRunner(app)
         await self._runner.setup()
@@ -282,6 +339,20 @@ class FakeWhatsAppServer:
     @property
     def api_base(self) -> str:
         return f"http://127.0.0.1:{self._port}"
+
+    async def _upload_media(self, request: web.Request) -> web.Response:
+        form = await request.post()
+        uploaded = form.get("file")
+        media_id = f"media-{len(self._store.get_all('WHATSAPP_MEDIA_UPLOAD')) + 1}"
+        self._store.add(
+            "WHATSAPP_MEDIA_UPLOAD",
+            {
+                "phone_number_id": request.match_info["phone_number_id"],
+                "filename": getattr(uploaded, "filename", None),
+                "media_id": media_id,
+            },
+        )
+        return web.json_response({"id": media_id})
 
     async def _send_message(self, request: web.Request) -> web.Response:
         body = await request.json()
@@ -314,6 +385,7 @@ class FakeTelegramServer:
     async def start(self) -> None:
         app = web.Application()
         app.router.add_post("/bot{token}/sendMessage", self._send_message)
+        app.router.add_post("/bot{token}/editMessageText", self._edit_message_text)
         app.router.add_post("/bot{token}/sendVoice", self._send_voice)
         app.router.add_post("/bot{token}/sendDocument", self._send_document)
         app.router.add_post("/bot{token}/sendChatAction", self._send_chat_action)
@@ -376,6 +448,23 @@ class FakeTelegramServer:
                     "message_id": len(self._store.get_all("TELEGRAM")),
                     "chat": {"id": body.get("chat_id")},
                     "text": text,
+                },
+            }
+        )
+
+    async def _edit_message_text(self, request: web.Request) -> web.Response:
+        failure = self._maybe_fail("editMessageText")
+        if failure is not None:
+            return failure
+        body = await request.json()
+        self._store.add("TELEGRAM_EDIT", body)
+        return web.json_response(
+            {
+                "ok": True,
+                "result": {
+                    "message_id": body.get("message_id"),
+                    "chat": {"id": body.get("chat_id")},
+                    "text": body.get("text"),
                 },
             }
         )
@@ -515,6 +604,40 @@ class FakeGmailServer:
         body = await request.json()
         self._store.add("GMAIL", body)
         return web.json_response({"id": "gmail-message-1"})
+
+
+class FakeResendServer:
+    """Lightweight aiohttp server mimicking the Resend send API."""
+
+    def __init__(self, store: MockPlatformMessageStore):
+        self._store = store
+        self._runner: web.AppRunner | None = None
+        self._site: web.TCPSite | None = None
+        self._port: int | None = None
+
+    async def start(self) -> None:
+        app = web.Application()
+        app.router.add_post("/emails", self._send_email)
+
+        self._runner = web.AppRunner(app)
+        await self._runner.setup()
+        self._site = web.TCPSite(self._runner, host="127.0.0.1", port=0)
+        await self._site.start()
+        sockets = self._site._server.sockets if self._site._server else []
+        self._port = sockets[0].getsockname()[1]
+
+    async def stop(self) -> None:
+        if self._runner:
+            await self._runner.cleanup()
+
+    @property
+    def api_base(self) -> str:
+        return f"http://127.0.0.1:{self._port}"
+
+    async def _send_email(self, request: web.Request) -> web.Response:
+        body = await request.json()
+        self._store.add("RESEND", body)
+        return web.json_response({"id": f"resend-message-{len(self._store.get_all('RESEND'))}"})
 
 
 class FakeOutlookServer:

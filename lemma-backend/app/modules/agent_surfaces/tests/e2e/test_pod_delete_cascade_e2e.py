@@ -127,8 +127,8 @@ async def test_pod_delete_cascades_schedule_and_surface_cleanup(
 
     # Two surfaces: a system WhatsApp surface (no account) and an account-bound
     # Slack surface (so we can prove the account is released on cleanup).
-    whatsapp = await authenticated_client.put(
-        f"/pods/{pod_id}/surfaces/whatsapp", json={}
+    whatsapp = await authenticated_client.post(
+        f"/pods/{pod_id}/surfaces", json={"platform": "WHATSAPP"}
     )
     assert whatsapp.status_code == 200, whatsapp.text
 
@@ -147,9 +147,9 @@ async def test_pod_delete_cascades_schedule_and_surface_cleanup(
             },
         },
     )
-    slack = await authenticated_client.put(
-        f"/pods/{pod_id}/surfaces/slack",
-        json={"account_id": str(account.id)},
+    slack = await authenticated_client.post(
+        f"/pods/{pod_id}/surfaces",
+        json={"platform": "SLACK", "account_id": str(account.id)},
     )
     assert slack.status_code == 200, slack.text
 
@@ -179,8 +179,8 @@ async def test_pod_delete_cascades_schedule_and_surface_cleanup(
     sibling_pod_id = await _create_pod(
         authenticated_client, org_id, name=f"Sibling Pod {uuid4().hex[:6]}"
     )
-    reused = await authenticated_client.put(
-        f"/pods/{sibling_pod_id}/surfaces/slack",
-        json={"account_id": str(account.id)},
+    reused = await authenticated_client.post(
+        f"/pods/{sibling_pod_id}/surfaces",
+        json={"platform": "SLACK", "account_id": str(account.id)},
     )
     assert reused.status_code == 200, reused.text

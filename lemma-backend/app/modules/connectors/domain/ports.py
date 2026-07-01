@@ -48,6 +48,13 @@ class AccountRepositoryPort(Protocol):
         self, user_id: UUID, auth_config_id: UUID
     ) -> Optional[AccountEntity]: ...
 
+    async def get_by_user_auth_config_and_provider_account(
+        self,
+        user_id: UUID,
+        auth_config_id: UUID,
+        provider_account_id: str,
+    ) -> Optional[AccountEntity]: ...
+
     async def list_by_auth_config(
         self, auth_config_id: UUID
     ) -> Sequence[AccountEntity]: ...

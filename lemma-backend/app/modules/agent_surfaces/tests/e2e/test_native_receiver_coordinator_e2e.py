@@ -89,17 +89,19 @@ async def test_native_receiver_coordinator_starts_account_backed_telegram_and_sl
     task = asyncio.create_task(service.run())
     try:
         pod_id = test_pod["id"]
-        telegram = await authenticated_client.put(
-            f"/pods/{pod_id}/surfaces/telegram",
+        telegram = await authenticated_client.post(
+            f"/pods/{pod_id}/surfaces",
             json={
+                "platform": "TELEGRAM",
                 "account_id": str(telegram_account.id),
                 "credential_mode": "CUSTOM",
             },
         )
         assert telegram.status_code == 200, telegram.text
-        slack = await authenticated_client.put(
-            f"/pods/{pod_id}/surfaces/slack",
+        slack = await authenticated_client.post(
+            f"/pods/{pod_id}/surfaces",
             json={
+                "platform": "SLACK",
                 "account_id": str(slack_account.id),
                 "credential_mode": "CUSTOM",
             },

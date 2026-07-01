@@ -67,3 +67,11 @@ class OutlookReplyEmailParams(EmailReplyParams):
 
 class OutlookReplyEmailResult(EmailReplyResult):
     pass
+
+
+class ResendReplyEmailParams(EmailReplyParams):
+    pass
+
+
+class ResendReplyEmailResult(EmailReplyResult):
+    pass

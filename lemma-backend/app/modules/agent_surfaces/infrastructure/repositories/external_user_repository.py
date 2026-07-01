@@ -36,6 +36,30 @@ class ExternalSurfaceUserRepository:
         instance = result.scalar_one_or_none()
         return instance.to_entity() if instance else None
 
+    async def get_by_resolved_user(
+        self,
+        *,
+        platform: str,
+        resolved_user_id,
+    ) -> ExternalSurfaceUserEntity | None:
+        """Reverse lookup: the cached external identity for a Lemma user.
+
+        Used by ``surface.send`` to reach a pod member on a platform without a
+        prior inbound event in hand. Returns the most recently seen record.
+        """
+        stmt = (
+            select(AgentSurfaceExternalUser)
+            .where(
+                AgentSurfaceExternalUser.platform == platform,
+                AgentSurfaceExternalUser.resolved_user_id == resolved_user_id,
+            )
+            .order_by(AgentSurfaceExternalUser.last_seen_at.desc().nullslast())
+            .limit(1)
+        )
+        result = await self.session.execute(stmt)
+        instance = result.scalars().first()
+        return instance.to_entity() if instance else None
+
     async def upsert(
         self,
         *,

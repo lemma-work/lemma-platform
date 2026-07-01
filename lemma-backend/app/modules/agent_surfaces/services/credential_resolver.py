@@ -29,7 +29,12 @@ from app.modules.connectors.services.connector_service import ConnectorService
 logger = get_logger(__name__)
 
 # Connectors that manage service-level credentials (no OAuth refresh flow).
-_SELF_MANAGED_CREDENTIAL_APPS = frozenset({"teams", "whatsapp", "telegram"})
+# Resend uses a static API key, not a 3-legged OAuth token — routing it through
+# the OAuth refresh flow would silently drop `api_key` (ConnectorService's
+# `_to_oauth_credentials` only carries access_token/refresh_token/token_type/
+# expires_at/raw_response/connection_id; `api_key` isn't one of them, and it
+# isn't in `_CONTEXT_KEYS` below either, so nothing rescues it afterward).
+_SELF_MANAGED_CREDENTIAL_APPS = frozenset({"teams", "whatsapp", "telegram", "resend"})
 
 # Non-secret keys platform adapters read for identity/routing context.
 _CONTEXT_KEYS = ("scope", "scopes", "api_base_url", "raw_response", "user_data")
@@ -50,6 +55,13 @@ def native_credentials(platform: str | SurfacePlatform | None) -> dict[str, Any]
         return credentials
     if normalized == SurfacePlatform.TELEGRAM:
         return {"bot_token": surface_settings.telegram_bot_token or ""}
+    if normalized == SurfacePlatform.RESEND:
+        # from_address is per-surface (the provisioned pod address); the resolver
+        # injects it from surface.surface_identity_email in for_surface().
+        return {
+            "api_key": surface_settings.resend_api_key or "",
+            "from_name": surface_settings.resend_from_name or "Lemma",
+        }
     return {}
 
 
@@ -59,6 +71,8 @@ def has_native_credentials(platform: str | SurfacePlatform | None) -> bool:
         return bool(surface_settings.whatsapp_access_token and surface_settings.whatsapp_phone_number_id)
     if normalized == SurfacePlatform.TELEGRAM:
         return bool(surface_settings.telegram_bot_token)
+    if normalized == SurfacePlatform.RESEND:
+        return bool(surface_settings.resend_api_key)
     return False
 
 
@@ -74,11 +88,30 @@ class SurfaceCredentialResolver:
         prefer_native: bool = False,
         force_refresh: bool = False,
     ) -> dict[str, Any]:
+        # `from_address` is a property of the surface row (its provisioned
+        # Resend address), never of the account's own credentials — inject it
+        # unconditionally, regardless of which branch below resolves the rest.
         if prefer_native and has_native_credentials(surface.surface_type):
-            return native_credentials(surface.surface_type)
-        if surface.account_id is None:
-            return native_credentials(surface.surface_type)
-        return await self.for_account(surface.account_id, force_refresh=force_refresh)
+            credentials = native_credentials(surface.surface_type)
+        elif surface.account_id is None:
+            credentials = native_credentials(surface.surface_type)
+        else:
+            credentials = await self.for_account(
+                surface.account_id, force_refresh=force_refresh
+            )
+        return self._with_resend_from_address(credentials, surface)
+
+    @staticmethod
+    def _with_resend_from_address(
+        credentials: dict[str, Any], surface: AgentSurfaceEntity
+    ) -> dict[str, Any]:
+        """Inject the surface's provisioned address as the Resend ``from``."""
+        if (
+            surface.surface_type is SurfacePlatform.RESEND
+            and surface.surface_identity_email
+        ):
+            return {**credentials, "from_address": surface.surface_identity_email}
+        return credentials
 
     async def for_platform(
         self,

@@ -3,7 +3,7 @@ from __future__ import annotations
 from datetime import datetime
 from uuid import UUID
 
-from sqlalchemy import DateTime, ForeignKey, Index, String, Text
+from sqlalchemy import DateTime, ForeignKey, Index, String, Text, UniqueConstraint
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -25,10 +25,15 @@ class AgentSurface(UUIDAuditBase):
     """External platform surface connected to a default agent or pod agent."""
 
     __tablename__ = "agent_surfaces"
+    __table_args__ = (
+        UniqueConstraint("pod_id", "name", name="uq_agent_surface_pod_name"),
+    )
 
     pod_id: Mapped[UUID] = mapped_column(
         ForeignKey("pods.id", ondelete="CASCADE"), index=True
     )
+    # Stable, pod-unique identifier addressed by the API (like agent names).
+    name: Mapped[str] = mapped_column(String(255), nullable=False, index=True)
     agent_id: Mapped[UUID | None] = mapped_column(
         ForeignKey("agents.id", ondelete="SET NULL"), index=True, nullable=True
     )
@@ -77,6 +82,7 @@ class AgentSurface(UUIDAuditBase):
             created_at=self.created_at,
             updated_at=self.updated_at,
             pod_id=self.pod_id,
+            name=self.name or surface_type_raw.lower(),
             agent_id=self.agent_id,
             surface_type=SurfacePlatform(surface_type_raw.upper()),
             mode=SurfaceMode(self.mode or SurfaceMode.DM.value),

@@ -11,15 +11,17 @@ from app.modules.agent_surfaces.domain.ingress_context import SurfaceChatContext
 from app.modules.agent_surfaces.domain.ingress_request import SurfaceScheduleIngress
 from app.modules.agent_surfaces.infrastructure.models import AgentSurface
 from app.modules.agent_surfaces.tests.e2e.helpers import (
-    EmulatedAgentHarness,
     _conversation_by_external_thread,
     _create_agent_surface,
     _ensure_connector_trigger,
     _ensure_connector_account,
     _outlook_payload,
-    _process_ingress_and_emulate_reply,
 )
 from app.modules.agent_surfaces.tests.e2e.mock_infrastructure import wait_for_messages
+from app.modules.agent_surfaces.tests.e2e.scripted_llm import (
+    process_ingress_and_run_scripted,
+    script_text,
+)
 from app.modules.connectors.domain.connector import AuthProvider
 from app.modules.schedule.infrastructure.schedule_managers.manager_factory import (
     ManagersFactory,
@@ -66,8 +68,7 @@ async def test_outlook_email_surface_handles_trigger_payload_and_replies(
     assert surface_model is not None
     assert surface_model.schedule_id is not None
 
-    harness = EmulatedAgentHarness()
-    context = await _process_ingress_and_emulate_reply(
+    context = await process_ingress_and_run_scripted(
         db_session,
         SurfaceScheduleIngress(
             schedule_id=surface_model.schedule_id,
@@ -82,7 +83,7 @@ async def test_outlook_email_surface_handles_trigger_payload_and_replies(
             pod_id=UUID(pod_id),
             user_id=UUID(fixed_test_user["id"]),
         ),
-        harness,
+        script=[script_text("E2E agent reply [OUTLOOK]")],
     )
     assert isinstance(context, SurfaceChatContext)
 

@@ -45,16 +45,18 @@ async def test_surface_http_lifecycle_openapi_and_no_per_surface_webhook(
         },
     )
     agent = await _create_agent(authenticated_client, pod_id)
-    # A surface is unique per pod+platform, so the single PUT upsert creates it.
-    created = await authenticated_client.put(
-        f"/pods/{pod_id}/surfaces/slack",
+    # Surfaces are created via POST; name defaults to the lowercased platform.
+    created = await authenticated_client.post(
+        f"/pods/{pod_id}/surfaces",
         json={
+            "platform": "SLACK",
             "default_agent_name": agent["name"],
             "account_id": str(account.id),
         },
     )
     assert created.status_code == 200, created.text
     surface = created.json()
+    assert surface["name"] == "slack"
     assert surface["agent_name"] == agent["name"]
     assert surface["uses_default_agent"] is False
     assert surface["webhook_url"].endswith("/surfaces/webhooks/slack")
@@ -72,12 +74,19 @@ async def test_surface_http_lifecycle_openapi_and_no_per_surface_webhook(
     listed_ids = {item["id"] for item in listed.json()["items"]}
     assert {surface["id"], default_agent_surface["id"]}.issubset(listed_ids)
 
-    # Surfaces are addressed by platform, not by id.
+    # Listing can be filtered by platform.
+    slack_only = await authenticated_client.get(
+        f"/pods/{pod_id}/surfaces", params={"platform": "SLACK"}
+    )
+    assert slack_only.status_code == 200, slack_only.text
+    assert {item["id"] for item in slack_only.json()["items"]} == {surface["id"]}
+
+    # Surfaces are addressed by their stable name, not the platform.
     fetched = await authenticated_client.get(f"/pods/{pod_id}/surfaces/slack")
     assert fetched.status_code == 200, fetched.text
     assert fetched.json()["agent_name"] == agent["name"]
 
-    rejected_old_shape = await authenticated_client.put(
+    rejected_old_shape = await authenticated_client.patch(
         f"/pods/{pod_id}/surfaces/slack",
         json={
             "mode": "CHANNEL",
@@ -88,7 +97,7 @@ async def test_surface_http_lifecycle_openapi_and_no_per_surface_webhook(
     assert rejected_old_shape.status_code == 422, rejected_old_shape.text
 
     reassigned_agent = await _create_agent(authenticated_client, pod_id)
-    reassigned = await authenticated_client.put(
+    reassigned = await authenticated_client.patch(
         f"/pods/{pod_id}/surfaces/slack",
         json={"default_agent_name": reassigned_agent["name"]},
     )
@@ -97,7 +106,7 @@ async def test_surface_http_lifecycle_openapi_and_no_per_surface_webhook(
     assert reassigned.json()["agent_name"] == reassigned_agent["name"]
     assert reassigned.json()["uses_default_agent"] is False
 
-    reset_to_default = await authenticated_client.put(
+    reset_to_default = await authenticated_client.patch(
         f"/pods/{pod_id}/surfaces/slack",
         json={"default_agent_name": None},
     )
@@ -105,8 +114,8 @@ async def test_surface_http_lifecycle_openapi_and_no_per_surface_webhook(
     assert reset_to_default.json()["agent_id"] is None
     assert reset_to_default.json()["uses_default_agent"] is True
 
-    # Disable rides on the same upsert via is_enabled (distinct from delete).
-    disabled = await authenticated_client.put(
+    # Disable rides on the same PATCH via is_enabled (distinct from delete).
+    disabled = await authenticated_client.patch(
         f"/pods/{pod_id}/surfaces/slack",
         json={"is_enabled": False},
     )
@@ -122,7 +131,7 @@ async def test_surface_http_lifecycle_openapi_and_no_per_surface_webhook(
     )
     assert removed_ingress.status_code == 404
 
-    # The unified setup read merges live state with the static platform guide.
+    # The per-surface setup read merges live state with the static platform guide.
     # This Slack surface uses SYSTEM credentials (Lemma's own app), so there is
     # nothing for the user to configure: ready, no actions.
     setup = await authenticated_client.get(f"/pods/{pod_id}/surfaces/slack/setup")
@@ -136,30 +145,42 @@ async def test_surface_http_lifecycle_openapi_and_no_per_surface_webhook(
     assert setup_body["webhook_url"].endswith("/surfaces/webhooks/slack")
     assert setup_body["guide"]["platform"] == "SLACK"
 
-    # Setup works before a surface exists: guide only, exists=False.
-    teams_setup = await authenticated_client.get(
+    # The pre-creation guide works with no surface (platform-level, not
+    # surface-scoped) and needs no `exists`/live-state fields.
+    teams_guide = await authenticated_client.get(
+        f"/pods/{pod_id}/surface-setup/teams"
+    )
+    assert teams_guide.status_code == 200, teams_guide.text
+    assert teams_guide.json()["platform"] == "TEAMS"
+    # And is a 404 on the per-surface endpoint until a Teams surface exists.
+    missing_teams_setup = await authenticated_client.get(
         f"/pods/{pod_id}/surfaces/teams/setup"
     )
-    assert teams_setup.status_code == 200, teams_setup.text
-    assert teams_setup.json()["exists"] is False
-    assert teams_setup.json()["status"] == "NEEDS_SETUP"
-    assert teams_setup.json()["guide"]["platform"] == "TEAMS"
+    assert missing_teams_setup.status_code == 404
 
     openapi = await authenticated_client.get("/openapi.json")
     assert openapi.status_code == 200, openapi.text
     openapi_schema = openapi.json()
     paths = openapi_schema["paths"]
     assert (
-        paths["/pods/{pod_id}/surfaces/{platform}"]["put"]["operationId"]
-        == "agent.surface.upsert"
+        paths["/pods/{pod_id}/surfaces"]["post"]["operationId"]
+        == "agent.surface.create"
     )
     assert (
-        paths["/pods/{pod_id}/surfaces/{platform}"]["delete"]["operationId"]
+        paths["/pods/{pod_id}/surfaces/{surface_name}"]["patch"]["operationId"]
+        == "agent.surface.update"
+    )
+    assert (
+        paths["/pods/{pod_id}/surfaces/{surface_name}"]["delete"]["operationId"]
         == "agent.surface.delete"
     )
     assert (
-        paths["/pods/{pod_id}/surfaces/{platform}/setup"]["get"]["operationId"]
+        paths["/pods/{pod_id}/surfaces/{surface_name}/setup"]["get"]["operationId"]
         == "agent.surface.setup"
+    )
+    assert (
+        paths["/pods/{pod_id}/surface-setup/{platform}"]["get"]["operationId"]
+        == "agent.surface.setup_guide"
     )
     assert (
         paths["/surfaces/webhooks/{platform}"]["post"]["operationId"]
@@ -177,12 +198,13 @@ async def test_surface_http_lifecycle_openapi_and_no_per_surface_webhook(
                 for key, value in openapi_schema.get("components", {})
                 .get("schemas", {})
                 .items()
-                if "Surface" in key or key == "SurfaceUpsertRequest"
+                if "Surface" in key
+                or key in ("SurfaceCreateRequest", "SurfaceUpdateRequest")
             },
         },
         sort_keys=True,
     )
-    request_schema_names = {"SurfaceUpsertRequest"}
+    request_schema_names = {"SurfaceCreateRequest", "SurfaceUpdateRequest"}
     response_schema_names = {"AgentSurfaceResponse"}
     public_surface_properties = {}
     for schema_name in request_schema_names | response_schema_names:
@@ -202,7 +224,7 @@ async def test_surface_http_lifecycle_openapi_and_no_per_surface_webhook(
     }
     for schema_name, properties in public_surface_properties.items():
         assert properties.isdisjoint(forbidden_fields), schema_name
-    # The collapsed write/read endpoints must be gone from the spec.
+    # The old collapsed upsert and any never-shipped ops must be gone from the spec.
     for removed_name in (
         "assistant_name",
         "uses_pod_assistant",
@@ -210,11 +232,12 @@ async def test_surface_http_lifecycle_openapi_and_no_per_surface_webhook(
         "AssistantSurface",
         "webhook_mode",
         "/surfaces/webhooks/surface",
-        "agent.surface.create",
+        "agent.surface.upsert",
         "agent.surface.toggle",
         "agent.surface.update_channels",
         "agent.surface.admin_consent_info",
         "agent.surface.platform_checklist",
+        "SurfaceUpsertRequest",
     ):
         assert removed_name not in surface_openapi
 
@@ -251,9 +274,10 @@ async def test_surface_config_round_trips_and_supports_partial_updates(
     )
     route_agent = await _create_agent(authenticated_client, pod_id)
 
-    created = await authenticated_client.put(
-        f"/pods/{pod_id}/surfaces/slack",
+    created = await authenticated_client.post(
+        f"/pods/{pod_id}/surfaces",
         json={
+            "platform": "SLACK",
             "account_id": str(account.id),
             "config": {
                 "identity": {"allowed_domains": ["Lemma.Test "]},
@@ -271,6 +295,7 @@ async def test_surface_config_round_trips_and_supports_partial_updates(
         "identity",
         "channels",
         "dm_conversation_reset_after_hours",
+        "send_policy",
     }
     assert config["dm_conversation_reset_after_hours"] == 6
     # Identity values are normalized on write.
@@ -282,8 +307,8 @@ async def test_surface_config_round_trips_and_supports_partial_updates(
     assert route["channel_id"] == "C-ROUTED"
     assert route["agent_name"] == route_agent["name"]
 
-    # A partial upsert (only one config field) leaves identity + channels intact.
-    partial = await authenticated_client.put(
+    # A partial update (only one config field) leaves identity + channels intact.
+    partial = await authenticated_client.patch(
         f"/pods/{pod_id}/surfaces/slack",
         json={"config": {"dm_conversation_reset_after_hours": 48}},
     )
@@ -299,11 +324,13 @@ async def test_surface_config_round_trips_and_supports_partial_updates(
         "identity",
         "channels",
         "dm_conversation_reset_after_hours",
+        "send_policy",
     }
     assert set(schemas["SurfaceBehaviorConfigInput"]["properties"]) == {
         "identity",
         "channels",
         "dm_conversation_reset_after_hours",
+        "send_policy",
     }
 
 
@@ -331,9 +358,9 @@ async def test_delete_surface_removes_row_provider_webhook_and_releases_account(
         credentials={"bot_token": "telegram-delete-token"},
     )
 
-    created = await authenticated_client.put(
-        f"/pods/{pod_id}/surfaces/telegram",
-        json={"account_id": str(account.id)},
+    created = await authenticated_client.post(
+        f"/pods/{pod_id}/surfaces",
+        json={"platform": "TELEGRAM", "account_id": str(account.id)},
     )
     assert created.status_code == 200, created.text
     surface = created.json()
@@ -362,9 +389,9 @@ async def test_delete_surface_removes_row_provider_webhook_and_releases_account(
     assert webhook_calls[2]["body"] == {"drop_pending_updates": False}
 
     # Deleting frees the account for a fresh surface (new id).
-    recreated = await authenticated_client.put(
-        f"/pods/{pod_id}/surfaces/telegram",
-        json={"account_id": str(account.id)},
+    recreated = await authenticated_client.post(
+        f"/pods/{pod_id}/surfaces",
+        json={"platform": "TELEGRAM", "account_id": str(account.id)},
     )
     assert recreated.status_code == 200, recreated.text
     assert recreated.json()["id"] != surface["id"]
@@ -397,9 +424,10 @@ async def test_upsert_preserves_channel_routes_and_explicit_credential_mode(
             },
         },
     )
-    created = await authenticated_client.put(
-        f"/pods/{pod_id}/surfaces/slack",
+    created = await authenticated_client.post(
+        f"/pods/{pod_id}/surfaces",
         json={
+            "platform": "SLACK",
             "account_id": str(account.id),
             "credential_mode": "SYSTEM",
             "config": {"identity": {"allowed_domains": ["lemma.test"]}},
@@ -409,8 +437,8 @@ async def test_upsert_preserves_channel_routes_and_explicit_credential_mode(
     assert created.json()["credential_mode"] == "SYSTEM"
     assert created.json()["config"]["identity"]["allowed_domains"] == ["lemma.test"]
 
-    # Channel routes are just another config field on the same upsert.
-    routed = await authenticated_client.put(
+    # Channel routes are just another config field on the same PATCH.
+    routed = await authenticated_client.patch(
         f"/pods/{pod_id}/surfaces/slack",
         json={
             "config": {
@@ -426,8 +454,8 @@ async def test_upsert_preserves_channel_routes_and_explicit_credential_mode(
     assert routed.status_code == 200, routed.text
     assert routed.json()["config"]["channels"][0]["channel_id"] == "C123"
 
-    # A later upsert that omits config must preserve identity AND channels.
-    updated = await authenticated_client.put(
+    # A later PATCH that omits config must preserve identity AND channels.
+    updated = await authenticated_client.patch(
         f"/pods/{pod_id}/surfaces/slack",
         json={
             "account_id": str(account.id),
@@ -501,15 +529,15 @@ async def test_surface_credentials_are_unique_within_org_until_deleted(
     assert sibling.status_code == 201, sibling.text
     sibling_pod_id = sibling.json()["id"]
 
-    system_created = await authenticated_client.put(
-        f"/pods/{primary_pod_id}/surfaces/whatsapp",
-        json={},
+    system_created = await authenticated_client.post(
+        f"/pods/{primary_pod_id}/surfaces",
+        json={"platform": "WHATSAPP"},
     )
     assert system_created.status_code == 200, system_created.text
 
-    duplicate_system = await authenticated_client.put(
-        f"/pods/{sibling_pod_id}/surfaces/whatsapp",
-        json={},
+    duplicate_system = await authenticated_client.post(
+        f"/pods/{sibling_pod_id}/surfaces",
+        json={"platform": "WHATSAPP"},
     )
     assert duplicate_system.status_code == 400, duplicate_system.text
     assert "System WHATSAPP credentials are already used" in duplicate_system.text
@@ -519,9 +547,9 @@ async def test_surface_credentials_are_unique_within_org_until_deleted(
     )
     assert deleted_system.status_code == 204, deleted_system.text
 
-    reused_system = await authenticated_client.put(
-        f"/pods/{sibling_pod_id}/surfaces/whatsapp",
-        json={},
+    reused_system = await authenticated_client.post(
+        f"/pods/{sibling_pod_id}/surfaces",
+        json={"platform": "WHATSAPP"},
     )
     assert reused_system.status_code == 200, reused_system.text
 
@@ -540,15 +568,15 @@ async def test_surface_credentials_are_unique_within_org_until_deleted(
             },
         },
     )
-    account_created = await authenticated_client.put(
-        f"/pods/{primary_pod_id}/surfaces/slack",
-        json={"account_id": str(account.id)},
+    account_created = await authenticated_client.post(
+        f"/pods/{primary_pod_id}/surfaces",
+        json={"platform": "SLACK", "account_id": str(account.id)},
     )
     assert account_created.status_code == 200, account_created.text
 
-    duplicate_account = await authenticated_client.put(
-        f"/pods/{sibling_pod_id}/surfaces/slack",
-        json={"account_id": str(account.id)},
+    duplicate_account = await authenticated_client.post(
+        f"/pods/{sibling_pod_id}/surfaces",
+        json={"platform": "SLACK", "account_id": str(account.id)},
     )
     assert duplicate_account.status_code == 400, duplicate_account.text
     assert "connected account is already used" in duplicate_account.text
@@ -558,9 +586,9 @@ async def test_surface_credentials_are_unique_within_org_until_deleted(
     )
     assert deleted_account.status_code == 204, deleted_account.text
 
-    reused_account = await authenticated_client.put(
-        f"/pods/{sibling_pod_id}/surfaces/slack",
-        json={"account_id": str(account.id)},
+    reused_account = await authenticated_client.post(
+        f"/pods/{sibling_pod_id}/surfaces",
+        json={"platform": "SLACK", "account_id": str(account.id)},
     )
     assert reused_account.status_code == 200, reused_account.text
 
@@ -600,9 +628,9 @@ async def test_surface_setup_actions_depend_on_auth_config_source(
         },
     )
 
-    created = await authenticated_client.put(
-        f"/pods/{pod_id}/surfaces/slack",
-        json={"account_id": str(account.id)},
+    created = await authenticated_client.post(
+        f"/pods/{pod_id}/surfaces",
+        json={"platform": "SLACK", "account_id": str(account.id)},
     )
     assert created.status_code == 200, created.text
 
@@ -624,3 +652,88 @@ async def test_surface_setup_actions_depend_on_auth_config_source(
     assert action["steps"]
     assert action["link"] == "https://api.slack.com/apps"
     assert any(field["value"].endswith("/surfaces/webhooks/slack") for field in action["fields"])
+
+
+async def test_surface_send_endpoint_and_send_policy_config(
+    authenticated_client: AsyncClient,
+    db_session: AsyncSession,
+    test_pod,
+    fixed_test_user,
+    fake_slack,
+    monkeypatch,
+):
+    from app.core.config import settings as app_settings
+
+    monkeypatch.setattr(app_settings, "api_url", "https://api.example.test")
+    pod_id = test_pod["id"]
+    account = await _ensure_connector_account(
+        db_session,
+        user_id=fixed_test_user["id"],
+        connector_id="slack",
+        credentials={
+            "access_token": "xoxb-surface-send",
+            "scope": "chat:write",
+            "api_base_url": fake_slack.base_url,
+            "raw_response": {"bot_user_id": "U0BOT", "team_id": "T0123456"},
+        },
+    )
+    agent = await _create_agent(authenticated_client, pod_id)
+    created = await authenticated_client.post(
+        f"/pods/{pod_id}/surfaces",
+        json={
+            "platform": "SLACK",
+            "default_agent_name": agent["name"],
+            "account_id": str(account.id),
+            "config": {"send_policy": {"allow_send": True}},
+        },
+    )
+    assert created.status_code == 200, created.text
+    # send_policy round-trips through the config.
+    assert created.json()["config"]["send_policy"]["allow_send"] is True
+
+    # The member is a pod member but has no thread on this surface yet -> 404.
+    resp = await authenticated_client.post(
+        f"/pods/{pod_id}/surfaces/slack/send",
+        json={"user_id": fixed_test_user["id"], "message": "ping"},
+    )
+    assert resp.status_code == 404, resp.text
+
+
+async def test_create_resend_email_surface_provisions_address(
+    authenticated_client: AsyncClient,
+    db_session: AsyncSession,
+    test_pod,
+    fixed_test_user,
+    monkeypatch,
+):
+    from app.core.config import settings as app_settings
+    from app.modules.agent_surfaces.infrastructure.models import AgentSurface
+    from sqlalchemy import select
+
+    monkeypatch.setattr(app_settings, "api_url", "https://api.example.test")
+    pod_id = test_pod["id"]
+    agent = await _create_agent(authenticated_client, pod_id)
+
+    # Resend is a system-credentialed email surface: no account_id needed, and
+    # it must not require a Composio polling schedule.
+    created = await authenticated_client.post(
+        f"/pods/{pod_id}/surfaces",
+        json={"platform": "RESEND", "default_agent_name": agent["name"]},
+    )
+    assert created.status_code == 200, created.text
+    body = created.json()
+    assert body["platform"] == "RESEND"
+    assert body["agent_name"] == agent["name"]
+
+    # The per-pod inbound/outbound address is provisioned on creation.
+    row = (
+        await db_session.execute(
+            select(AgentSurface).where(
+                AgentSurface.pod_id == pod_id,
+                AgentSurface.surface_type == "RESEND",
+            )
+        )
+    ).scalar_one()
+    assert row.surface_identity_email and row.surface_identity_email.endswith(
+        "@ops.lemma.work"
+    )

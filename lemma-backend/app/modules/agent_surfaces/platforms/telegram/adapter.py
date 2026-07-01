@@ -4,15 +4,23 @@ from __future__ import annotations
 
 from typing import Any
 
-from app.modules.agent_surfaces.domain.entities import ParsedInboundSurfaceEvent
+from app.modules.agent_surfaces.domain.entities import (
+    ParsedInboundSurfaceEvent,
+    ParsedSurfaceInteraction,
+)
 from app.modules.agent_surfaces.domain.models import (
     SurfaceContextMessage,
     SurfaceDisplayRenderPlan,
+    SurfaceQuestionRenderPlan,
     SurfaceSenderProfile,
 )
 from app.modules.agent_surfaces.platforms.base import BaseSurfaceAdapter
+from app.modules.agent_surfaces.platforms.telegram.callback_token_store import (
+    get_callback_token,
+)
 from app.modules.agent_surfaces.platforms.telegram.parser import TelegramMessageParser
 from app.modules.agent_surfaces.platforms.telegram.service import (
+    _OTHER_CALLBACK_VALUE,
     TelegramPlatformService,
 )
 
@@ -70,6 +78,60 @@ class TelegramSurfaceAdapter(BaseSurfaceAdapter):
             event,
             render_plan,
             metadata,
+        )
+
+    async def send_questions(
+        self,
+        *,
+        credentials: dict[str, Any],
+        event: ParsedInboundSurfaceEvent,
+        question_plan: SurfaceQuestionRenderPlan,
+        metadata: dict[str, Any] | None = None,
+    ) -> bool:
+        return await TelegramPlatformService(credentials).send_questions(
+            event, question_plan, metadata
+        )
+
+    async def parse_inbound_interaction(
+        self, payload: dict[str, Any], headers: dict[str, str] | None = None
+    ) -> ParsedSurfaceInteraction | None:
+        """Resolve an inline-keyboard tap into an ask_user answer.
+
+        The button's ``callback_data`` is a short token that resolves to the
+        stored ``{callback_id, header, value}``. The "Other" sentinel and any
+        unknown/expired token return ``None`` so the message path (typed reply)
+        takes over instead.
+        """
+        del headers
+        if not isinstance(payload, dict):
+            return None
+        callback_query = payload.get("callback_query")
+        if not isinstance(callback_query, dict):
+            return None
+        token = str(callback_query.get("data") or "").strip()
+        stored = await get_callback_token(token)
+        if not stored:
+            return None
+        callback_id = str(stored.get("callback_id") or "").strip()
+        header = str(stored.get("header") or "").strip()
+        value = stored.get("value")
+        if not callback_id or not header or value == _OTHER_CALLBACK_VALUE:
+            return None
+        message = callback_query.get("message") or {}
+        chat = message.get("chat") or {}
+        from_user = callback_query.get("from") or {}
+        chat_id = str(chat.get("id") or "").strip() or None
+        thread_id = message.get("message_thread_id")
+        return ParsedSurfaceInteraction(
+            platform="TELEGRAM",
+            external_channel_id=chat_id,
+            external_thread_id=str(thread_id) if thread_id is not None else None,
+            external_user_id=str(from_user.get("id") or "").strip() or None,
+            callback_id=callback_id,
+            values={header: value},
+            reply_target={"chat_id": chat_id} if chat_id else {},
+            dedup_id=str(callback_query.get("id") or "").strip() or None,
+            raw_payload=payload,
         )
 
     async def add_processing_indicator(

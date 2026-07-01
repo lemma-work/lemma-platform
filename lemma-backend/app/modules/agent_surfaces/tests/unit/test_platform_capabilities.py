@@ -28,16 +28,17 @@ def test_attachment_cap_reused_from_limits(platform):
     assert caps.attachment_byte_cap == attachment_cap(platform)
 
 
-def test_only_slack_and_teams_support_native_choices():
+def test_native_choices_platforms():
     native = {
         p for p, c in PLATFORM_CAPABILITIES.items() if c.supports_native_choices
     }
-    assert native == {"SLACK", "TEAMS"}
+    # All chat surfaces render native choices; only email surfaces don't.
+    assert native == {"SLACK", "TEAMS", "TELEGRAM", "WHATSAPP"}
 
 
 def test_email_platforms_flagged():
     email = {p for p, c in PLATFORM_CAPABILITIES.items() if c.is_email}
-    assert email == {"GMAIL", "OUTLOOK"}
+    assert email == {"GMAIL", "OUTLOOK", "RESEND"}
 
 
 def test_channel_capable_only_slack_teams():
@@ -54,11 +55,11 @@ def test_slack_guidance_has_native_choices_channel_and_mrkdwn():
     assert "5 MB" in text  # effective inline cap = min(30MB hard, 5MB soft)
 
 
-def test_whatsapp_guidance_uses_text_fallback_and_omits_channel():
+def test_whatsapp_guidance_has_native_choices_and_omits_channel():
     text = platform_agent_guidance("WHATSAPP")
     assert "Talking over WhatsApp" in text
     assert "Channel background context" not in text  # not channel-capable
-    assert "ask_user" in text and "formatted message" in text
+    assert "ask_user" in text and "native tappable options" in text
 
 
 def test_unknown_platform_guidance_is_empty():

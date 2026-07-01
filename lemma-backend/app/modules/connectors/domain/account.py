@@ -88,6 +88,13 @@ class AccountEntity(Entity):
     organization_id: UUID = Field(..., description="ID of the organization scope")
     auth_config_id: UUID = Field(..., description="ID of the org auth config")
     connector_id: str = Field(..., description="ID of the connected connector")
+    is_default: bool = Field(
+        default=False,
+        description=(
+            "Whether this is the default account for (user, auth_config), used "
+            "when an account is resolved without an explicit account_id."
+        ),
+    )
     status: AccountStatus = Field(default=AccountStatus.CONNECTED)
     provider_account_id: Optional[str] = Field(
         None, description="Provider-side user/account identifier"

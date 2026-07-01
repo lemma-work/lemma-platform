@@ -14,6 +14,7 @@ from app.modules.agent_surfaces.domain.entities import (
     SurfacePlatform,
 )
 from app.modules.agent_surfaces.domain.errors import (
+    AgentSurfaceAlreadyExistsError,
     AgentSurfaceNotFoundError,
     AgentSurfaceValidationError,
 )
@@ -34,6 +35,7 @@ def _surface_entity(**overrides) -> AgentSurfaceEntity:
     payload = {
         "id": uuid4(),
         "pod_id": uuid4(),
+        "name": "slack",
         "agent_id": uuid4(),
         "surface_type": SurfacePlatform.SLACK,
         "mode": SurfaceMode.DM,
@@ -81,6 +83,61 @@ async def test_create_surface(monkeypatch):
     assert result.surface_identity_id == "U-BOT"
     repo.create.assert_awaited_once()
     enricher.resolve_binding.assert_awaited_once()
+
+
+async def test_create_surface_name_defaults_and_is_pod_unique(monkeypatch):
+    """A surface is addressed by its pod-unique name (defaults to the
+    lowercased platform); several surfaces of the same platform can coexist
+    under distinct names, but the same name cannot be reused in a pod."""
+    repo = AsyncMock()
+    enricher = AsyncMock()
+    service = AgentSurfaceService(
+        surface_repository=repo,
+        account_binding_resolver=enricher,
+    )
+    monkeypatch.setattr(
+        "app.modules.agent_surfaces.services.surface_service.settings.api_url",
+        "https://api.example.test",
+    )
+    pod_id = uuid4()
+    repo.create.side_effect = lambda entity: entity
+    enricher.resolve_binding.return_value = (None, "T123", "U-BOT")
+
+    # No surface with this name yet -> created; name defaults to the platform.
+    repo.get_by_pod_and_name.return_value = None
+    created = await service.create_surface(
+        platform=SurfacePlatform.SLACK,
+        pod_id=pod_id,
+        agent_id=uuid4(),
+        config=SurfaceConfig(),
+        account_id=uuid4(),
+    )
+    assert created.name == "slack"
+    repo.get_by_pod_and_name.assert_awaited_with(pod_id=pod_id, name="slack")
+
+    # A surface with that name already exists in the pod -> rejected, even for
+    # a different agent/account.
+    repo.get_by_pod_and_name.return_value = _surface_entity(pod_id=pod_id)
+    with pytest.raises(AgentSurfaceAlreadyExistsError):
+        await service.create_surface(
+            platform=SurfacePlatform.SLACK,
+            pod_id=pod_id,
+            agent_id=uuid4(),
+            config=SurfaceConfig(),
+            account_id=uuid4(),
+        )
+
+    # An explicit distinct name for a second Slack surface succeeds.
+    repo.get_by_pod_and_name.return_value = None
+    second = await service.create_surface(
+        platform=SurfacePlatform.SLACK,
+        pod_id=pod_id,
+        agent_id=uuid4(),
+        name="slack-support",
+        config=SurfaceConfig(),
+        account_id=uuid4(),
+    )
+    assert second.name == "slack-support"
 
 
 async def test_create_telegram_surface_uses_built_in_credentials_without_account(monkeypatch):
@@ -799,7 +856,9 @@ async def test_list_surfaces_by_pod():
     assert len(surfaces) == 1
     assert surfaces[0].pod_id == pod_id
     assert next_cursor is None
-    repo.list_by_pod.assert_awaited_once_with(pod_id, cursor=None, limit=100)
+    repo.list_by_pod.assert_awaited_once_with(
+        pod_id, platform=None, agent_id=None, match_agent=False, cursor=None, limit=100
+    )
 
 
 async def test_delete_all_surfaces_for_pod_paginates_and_deletes():

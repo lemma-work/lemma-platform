@@ -14,10 +14,9 @@ from app.modules.agent_surfaces.domain.ingress_context import (
 )
 from app.modules.agent_surfaces.domain.ingress_request import SurfacePlatformWebhookIngress
 from app.modules.agent_surfaces.tests.e2e.helpers import (
-    EmulatedAgentHarness,
     _conversation_by_external_thread,
     _create_surface,
-    _process_ingress_and_emulate_reply,
+    _messages_for_conversation,
     _seed_external_user,
     _set_user_mobile_number,
     _telegram_payload,
@@ -26,7 +25,10 @@ from app.modules.agent_surfaces.tests.e2e.mock_infrastructure import (
     build_telegram_secret_headers,
     wait_for_messages,
 )
-from app.modules.agent_surfaces.tests.e2e.scripted_harnesses import RecordPromptHarness
+from app.modules.agent_surfaces.tests.e2e.scripted_llm import (
+    process_ingress_and_run_scripted,
+    script_text,
+)
 
 pytestmark = pytest.mark.e2e
 
@@ -74,11 +76,10 @@ async def test_telegram_built_in_dm_surface_uses_default_agent_and_replies(
     )
     assert response.status_code == 200, response.text
 
-    harness = EmulatedAgentHarness()
-    context = await _process_ingress_and_emulate_reply(
+    context = await process_ingress_and_run_scripted(
         db_session,
         SurfacePlatformWebhookIngress(source="telegram", payload=payload, headers={}),
-        harness,
+        script=[script_text("E2E agent reply [TELEGRAM]")],
     )
     assert isinstance(context, SurfaceChatContext)
     assert context.agent_name is None
@@ -173,11 +174,10 @@ async def test_telegram_group_mention_routes_and_replies(
         sender_id=900100,
         chat_id=-1001234567890,
     )
-    harness = EmulatedAgentHarness()
-    context = await _process_ingress_and_emulate_reply(
+    context = await process_ingress_and_run_scripted(
         db_session,
         SurfacePlatformWebhookIngress(source="telegram", payload=payload, headers={}),
-        harness,
+        script=[script_text("E2E agent reply")],
     )
     assert isinstance(context, SurfaceChatContext)
 
@@ -216,11 +216,10 @@ async def test_telegram_group_reply_to_bot_continues_without_mention(
         mention=False,
         reply_to_bot=True,
     )
-    harness = EmulatedAgentHarness()
-    context = await _process_ingress_and_emulate_reply(
+    context = await process_ingress_and_run_scripted(
         db_session,
         SurfacePlatformWebhookIngress(source="telegram", payload=payload, headers={}),
-        harness,
+        script=[script_text("ok")],
     )
     assert isinstance(context, SurfaceChatContext)
     telegram_messages = await wait_for_messages(message_store, "TELEGRAM", min_count=1)
@@ -256,15 +255,18 @@ async def test_telegram_group_injects_reply_as_channel_context(
         reply_to_bot=True,
         reply_text="Earlier the team agreed to ship on Friday.",
     )
-    harness = RecordPromptHarness()
-    context = await _process_ingress_and_emulate_reply(
+    context = await process_ingress_and_run_scripted(
         db_session,
         SurfacePlatformWebhookIngress(source="telegram", payload=payload, headers={}),
-        harness,
+        script=[script_text("noted")],
     )
     assert isinstance(context, SurfaceChatContext)
-    assert harness.metadatas, "agent run did not record message metadata"
-    channel_context = harness.metadatas[-1].get("channel_context")
+
+    messages = await _messages_for_conversation(
+        authenticated_client, pod_id=pod_id, conversation_id=str(context.conversation_id)
+    )
+    user_message = next(m for m in messages if m.get("role") == "user")
+    channel_context = (user_message.get("metadata") or {}).get("channel_context")
     assert channel_context, channel_context
     assert any(
         "ship on Friday" in (m.get("text") or "") for m in channel_context
@@ -290,19 +292,22 @@ async def test_telegram_dm_has_no_channel_context(
         external_user_id="222333555",
         resolved_user_id=UUID(fixed_test_user["id"]),
     )
-    harness = RecordPromptHarness()
-    context = await _process_ingress_and_emulate_reply(
+    context = await process_ingress_and_run_scripted(
         db_session,
         SurfacePlatformWebhookIngress(
             source="telegram",
             payload=_telegram_payload(text="hi", message_id=78, sender_id=222333555),
             headers={},
         ),
-        harness,
+        script=[script_text("noted")],
     )
     assert isinstance(context, SurfaceChatContext)
-    assert harness.metadatas
-    assert "channel_context" not in harness.metadatas[-1]
+
+    messages = await _messages_for_conversation(
+        authenticated_client, pod_id=pod_id, conversation_id=str(context.conversation_id)
+    )
+    user_message = next(m for m in messages if m.get("role") == "user")
+    assert "channel_context" not in (user_message.get("metadata") or {})
 
 
 async def test_telegram_group_without_mention_is_ignored(
@@ -424,11 +429,10 @@ async def test_telegram_username_resolves_user_without_contact_share(
 
     # _telegram_payload's sender carries username="surfaceuser".
     payload = _telegram_payload(text="hello directly", message_id=70, sender_id=55501234)
-    harness = EmulatedAgentHarness()
-    context = await _process_ingress_and_emulate_reply(
+    context = await process_ingress_and_run_scripted(
         db_session,
         SurfacePlatformWebhookIngress(source="telegram", payload=payload, headers={}),
-        harness,
+        script=[script_text("E2E agent reply")],
     )
     # Resolved by username → a real chat (not the "share your contact" reply).
     assert isinstance(context, SurfaceChatContext)
@@ -482,20 +486,19 @@ async def test_telegram_contact_share_links_user_then_allows_chat(
         },
     }
 
-    harness = EmulatedAgentHarness()
-    linked = await _process_ingress_and_emulate_reply(
+    linked = await process_ingress_and_run_scripted(
         db_session,
         SurfacePlatformWebhookIngress(
             source="telegram",
             payload=contact_payload,
             headers={},
         ),
-        harness,
+        script=[script_text("linked")],
     )
     assert isinstance(linked, SurfaceReplyContext)
     assert "linked now" in linked.reply_message
 
-    chat = await _process_ingress_and_emulate_reply(
+    chat = await process_ingress_and_run_scripted(
         db_session,
         SurfacePlatformWebhookIngress(
             source="telegram",
@@ -506,7 +509,7 @@ async def test_telegram_contact_share_links_user_then_allows_chat(
             ),
             headers={},
         ),
-        harness,
+        script=[script_text("E2E agent reply [TELEGRAM]")],
     )
     assert isinstance(chat, SurfaceChatContext)
     conversation = await _conversation_by_external_thread(

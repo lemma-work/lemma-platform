@@ -187,3 +187,277 @@ def test_decode_webhook_payload_handles_form_encoded_and_json():
         "type": "event_callback"
     }
     assert _decode_webhook_payload(b"", {}) == {}
+
+
+# ── Telegram native inline keyboards ─────────────────────────────────────────
+
+import pytest
+from unittest.mock import AsyncMock, patch
+
+from app.modules.agent_surfaces.domain.entities import (
+    ConversationType,
+    ParsedInboundSurfaceEvent,
+    SurfacePlatform,
+)
+from app.modules.agent_surfaces.platforms.telegram.adapter import TelegramSurfaceAdapter
+from app.modules.agent_surfaces.platforms.telegram.service import _OTHER_CALLBACK_VALUE
+
+
+def _single_question_plan() -> SurfaceQuestionRenderPlan:
+    return SurfaceQuestionRenderPlan(
+        title="Which country?",
+        callback_id="conv-1|tool-1",
+        questions=[
+            SurfaceQuestion(
+                header="country",
+                question="Which country?",
+                options=[
+                    SurfaceQuestionOption(label="US", recommended=True),
+                    SurfaceQuestionOption(label="CA"),
+                ],
+            )
+        ],
+    )
+
+
+def _telegram_event() -> ParsedInboundSurfaceEvent:
+    return ParsedInboundSurfaceEvent(
+        platform=SurfacePlatform.TELEGRAM,
+        conversation_type=ConversationType.EXTERNAL_DM,
+        external_thread_id="123",
+        message_text="hi",
+        is_dm=True,
+        reply_target={"chat_id": "123"},
+    )
+
+
+@pytest.mark.asyncio
+async def test_telegram_send_questions_builds_inline_keyboard():
+    adapter = TelegramSurfaceAdapter()
+    tokens = iter(["tok0", "tok1", "tokother"])
+    with patch(
+        "app.modules.agent_surfaces.platforms.telegram.service.put_callback_token",
+        new=AsyncMock(side_effect=lambda payload: next(tokens)),
+    ), patch(
+        "app.modules.agent_surfaces.platforms.telegram.service."
+        "TelegramPlatformService.send_message",
+        new=AsyncMock(),
+    ) as send_message:
+        ok = await adapter.send_questions(
+            credentials={"bot_token": "x"},
+            event=_telegram_event(),
+            question_plan=_single_question_plan(),
+        )
+
+    assert ok is True
+    keyboard = send_message.await_args.kwargs["metadata"]["reply_markup"][
+        "inline_keyboard"
+    ]
+    # one row per option + a trailing "Other" row; callback_data is the short token
+    assert [row[0]["callback_data"] for row in keyboard] == ["tok0", "tok1", "tokother"]
+    assert "US" in keyboard[0][0]["text"]
+    assert "Other" in keyboard[-1][0]["text"]
+    # every callback_data stays within Telegram's 64-byte limit
+    assert all(len(row[0]["callback_data"]) <= 64 for row in keyboard)
+
+
+@pytest.mark.asyncio
+async def test_telegram_send_questions_falls_back_on_multi_select():
+    adapter = TelegramSurfaceAdapter()
+    plan = SurfaceQuestionRenderPlan(
+        title="tags",
+        callback_id="conv-1|tool-1",
+        questions=[
+            SurfaceQuestion(
+                header="tags",
+                question="Which tags?",
+                multi_select=True,
+                options=[SurfaceQuestionOption(label="a"), SurfaceQuestionOption(label="b")],
+            )
+        ],
+    )
+    ok = await adapter.send_questions(
+        credentials={"bot_token": "x"},
+        event=_telegram_event(),
+        question_plan=plan,
+    )
+    assert ok is False
+
+
+@pytest.mark.asyncio
+async def test_telegram_parse_inbound_interaction_resolves_tap():
+    adapter = TelegramSurfaceAdapter()
+    payload = {
+        "callback_query": {
+            "id": "cbq-1",
+            "data": "tok0",
+            "from": {"id": 555},
+            "message": {"chat": {"id": 123}},
+        }
+    }
+    stored = {"callback_id": "conv-1|tool-1", "header": "country", "value": "US"}
+    with patch(
+        "app.modules.agent_surfaces.platforms.telegram.adapter.get_callback_token",
+        new=AsyncMock(return_value=stored),
+    ):
+        interaction = await adapter.parse_inbound_interaction(payload)
+
+    assert interaction is not None
+    assert interaction.callback_id == "conv-1|tool-1"
+    assert interaction.values == {"country": "US"}
+    assert interaction.external_user_id == "555"
+    assert interaction.dedup_id == "cbq-1"
+
+
+@pytest.mark.asyncio
+async def test_telegram_parse_inbound_interaction_other_and_unknown_return_none():
+    adapter = TelegramSurfaceAdapter()
+    payload = {"callback_query": {"id": "c", "data": "tok", "from": {"id": 1}, "message": {"chat": {"id": 1}}}}
+    other = {"callback_id": "conv-1|tool-1", "header": "country", "value": _OTHER_CALLBACK_VALUE}
+    with patch(
+        "app.modules.agent_surfaces.platforms.telegram.adapter.get_callback_token",
+        new=AsyncMock(return_value=other),
+    ):
+        assert await adapter.parse_inbound_interaction(payload) is None
+    with patch(
+        "app.modules.agent_surfaces.platforms.telegram.adapter.get_callback_token",
+        new=AsyncMock(return_value=None),
+    ):
+        assert await adapter.parse_inbound_interaction(payload) is None
+
+
+# ── WhatsApp native interactive replies ──────────────────────────────────────
+
+from app.modules.agent_surfaces.platforms.whatsapp.adapter import WhatsAppSurfaceAdapter
+
+
+def _whatsapp_event() -> ParsedInboundSurfaceEvent:
+    return ParsedInboundSurfaceEvent(
+        platform=SurfacePlatform.WHATSAPP,
+        conversation_type=ConversationType.EXTERNAL_DM,
+        external_thread_id="15551230000",
+        message_text="hi",
+        is_dm=True,
+        sender_phone="15551230000",
+        reply_target={"sender_wa_id": "15551230000", "phone_number_id": "pn1"},
+    )
+
+
+@pytest.mark.asyncio
+async def test_whatsapp_send_questions_uses_buttons_for_few_options():
+    adapter = WhatsAppSurfaceAdapter()
+    captured = {}
+
+    async def _fake_post(self, url, json, headers):  # noqa: ANN001
+        captured["payload"] = json
+
+        class _Resp:
+            def raise_for_status(self):
+                return None
+
+        return _Resp()
+
+    with patch("httpx.AsyncClient.post", new=_fake_post):
+        ok = await adapter.send_questions(
+            credentials={"access_token": "t", "phone_number_id": "pn1"},
+            event=_whatsapp_event(),
+            question_plan=_single_question_plan(),
+        )
+
+    assert ok is True
+    interactive = captured["payload"]["interactive"]
+    assert interactive["type"] == "button"
+    buttons = interactive["action"]["buttons"]
+    assert [b["reply"]["title"] for b in buttons] == ["US", "CA"]
+    # the id encodes callback_id~header~value and stays within 256 chars
+    assert all(len(b["reply"]["id"].encode("utf-8")) <= 256 for b in buttons)
+    assert buttons[0]["reply"]["id"] == "conv-1|tool-1~country~US"
+
+
+@pytest.mark.asyncio
+async def test_whatsapp_send_questions_falls_back_on_multi_select():
+    adapter = WhatsAppSurfaceAdapter()
+    plan = SurfaceQuestionRenderPlan(
+        title="tags",
+        callback_id="conv-1|tool-1",
+        questions=[
+            SurfaceQuestion(
+                header="tags",
+                question="Which tags?",
+                multi_select=True,
+                options=[SurfaceQuestionOption(label="a"), SurfaceQuestionOption(label="b")],
+            )
+        ],
+    )
+    ok = await adapter.send_questions(
+        credentials={"access_token": "t", "phone_number_id": "pn1"},
+        event=_whatsapp_event(),
+        question_plan=plan,
+    )
+    assert ok is False
+
+
+@pytest.mark.asyncio
+async def test_whatsapp_parse_inbound_interaction_decodes_button_reply():
+    adapter = WhatsAppSurfaceAdapter()
+    payload = {
+        "entry": [
+            {
+                "changes": [
+                    {
+                        "value": {
+                            "messages": [
+                                {
+                                    "id": "wamid.1",
+                                    "from": "15551230000",
+                                    "type": "interactive",
+                                    "interactive": {
+                                        "type": "button_reply",
+                                        "button_reply": {
+                                            "id": "conv-1|tool-1~country~US",
+                                            "title": "US",
+                                        },
+                                    },
+                                }
+                            ]
+                        }
+                    }
+                ]
+            }
+        ]
+    }
+    interaction = await adapter.parse_inbound_interaction(payload)
+    assert interaction is not None
+    assert interaction.callback_id == "conv-1|tool-1"
+    assert interaction.values == {"country": "US"}
+    assert interaction.external_user_id == "15551230000"
+    assert interaction.dedup_id == "wamid.1"
+
+
+@pytest.mark.asyncio
+async def test_whatsapp_parse_inbound_interaction_ignores_non_lemma_id():
+    adapter = WhatsAppSurfaceAdapter()
+    payload = {
+        "entry": [
+            {
+                "changes": [
+                    {
+                        "value": {
+                            "messages": [
+                                {
+                                    "id": "wamid.2",
+                                    "from": "1",
+                                    "type": "interactive",
+                                    "interactive": {
+                                        "type": "button_reply",
+                                        "button_reply": {"id": "some-other-id", "title": "x"},
+                                    },
+                                }
+                            ]
+                        }
+                    }
+                ]
+            }
+        ]
+    }
+    assert await adapter.parse_inbound_interaction(payload) is None

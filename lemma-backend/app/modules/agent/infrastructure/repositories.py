@@ -6,9 +6,7 @@ from datetime import datetime, timedelta, timezone
 from enum import Enum
 from uuid import UUID
 
-import json
-
-from sqlalchemy import cast, func, select, update
+from sqlalchemy import func, literal, select, update
 from sqlalchemy.dialects.postgresql import JSONB, array
 from sqlalchemy.orm import selectinload
 
@@ -642,6 +640,11 @@ class ConversationRepository:
 
         Uses ``jsonb_set`` so concurrent writers touching other keys (e.g. the
         ``is_sub_agent`` / ``surface_platform`` flags) are never overwritten.
+
+        ``value`` must be bound with the ``JSONB`` type directly (``literal``,
+        not ``cast(json.dumps(value), JSONB)``) — casting an already-serialized
+        JSON string double-encodes it, so ``jsonb_set`` stores a JSON *string*
+        scalar (the dumped text) instead of the intended array/object.
         """
         stmt = (
             update(ConversationModel)
@@ -650,10 +653,10 @@ class ConversationRepository:
                 conversation_metadata=func.jsonb_set(
                     func.coalesce(
                         ConversationModel.conversation_metadata,
-                        cast("{}", JSONB),
+                        literal({}, JSONB),
                     ),
                     array([key]),
-                    cast(json.dumps(value), JSONB),
+                    literal(value, JSONB),
                     True,
                 )
             )

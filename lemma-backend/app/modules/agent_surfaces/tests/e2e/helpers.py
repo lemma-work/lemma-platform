@@ -1,10 +1,12 @@
-"""E2E tests for agent surfaces and emulated agent replies."""
+"""Shared fixtures and helpers for the agent_surfaces e2e suite (fake platform
+servers, connector/surface/agent setup, inbound payload builders). Agent runs
+themselves are driven by the real harness via ``scripted_llm.py``, not by
+anything in this module."""
 
 from __future__ import annotations
 
 import asyncio
 import json
-from collections.abc import AsyncIterator, Sequence
 from datetime import datetime, timezone
 from pathlib import Path
 from uuid import UUID, uuid4
@@ -15,22 +17,7 @@ from httpx import AsyncClient
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.core.infrastructure.db.session import async_session_maker
 from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
-from app.core.infrastructure.db.uow_factory import SessionUnitOfWorkFactory
-from app.modules.agent.domain.context import AgentContext
-from app.modules.agent.domain.entities import Agent, Conversation, Message
-from app.modules.agent.domain.value_objects import (
-    AgentEvent,
-    AgentEventType,
-    AgentRunStatus,
-    HarnessKind,
-    HarnessOptions,
-    MessageDraft,
-    MessageKind,
-    MessageRole,
-)
-from app.modules.agent.infrastructure.harnesses.registry import HarnessRegistry
 from app.modules.agent.domain.runtime_profiles import (
     RuntimeProfileKind,
     RuntimeProfileProtocol,
@@ -40,22 +27,10 @@ from app.modules.agent.domain.runtime_profiles import (
 from app.modules.agent.infrastructure.models import (
     AgentRunModel,
     AgentRuntimeProfileModel,
-    ConversationModel,
 )
-from app.modules.agent.services.agent_runner_service import AgentRunnerService
-from app.modules.agent.services.conversation_service import suppress_agent_run_enqueue
 from app.modules.agent_surfaces.domain.ingress_context import (
     SurfaceChatContext,
     SurfaceReplyContext,
-)
-from app.modules.agent_surfaces.domain.ingress_request import (
-    SurfaceDirectWebhookIngress,
-    SurfacePlatformWebhookIngress,
-    SurfaceScheduleIngress,
-)
-from app.modules.agent_surfaces.events.handlers import build_surface_event_handler
-from app.modules.agent_surfaces.services.progress_observer import (
-    SurfaceAgentRunProgressObserver,
 )
 from app.modules.agent_surfaces.infrastructure.models import (
     AgentSurfaceExternalUser,
@@ -63,6 +38,7 @@ from app.modules.agent_surfaces.infrastructure.models import (
 from app.modules.agent_surfaces.tests.e2e.mock_infrastructure import (
     FakeGmailServer,
     FakeOutlookServer,
+    FakeResendServer,
     FakeSlackServer,
     FakeTeamsServer,
     FakeTelegramServer,
@@ -89,52 +65,6 @@ REAL_TEAMS_TENANT_ID = "1b5c589f-1718-42c8-8244-166fbe5dd8fc"
 REAL_TEAMS_THREAD_ID = "1776236638028"
 E2E_RUNTIME_PROFILE_NAME = "Surface E2E Runtime"
 E2E_RUNTIME_MODEL_NAME = "surface-e2e-model"
-
-
-class EmulatedAgentHarness:
-    """Deterministic harness used by surface e2e tests."""
-
-    kind = HarnessKind.LEMMA
-
-    def __init__(self) -> None:
-        self.contexts: list[AgentContext] = []
-        self.toolset_counts: list[int] = []
-
-    async def run(
-        self,
-        *,
-        agent: Agent,
-        conversation: Conversation,
-        messages: Sequence[Message],
-        ctx: AgentContext,
-        options: HarnessOptions,
-        agent_run_id: UUID,
-    ) -> AsyncIterator[AgentEvent]:
-        del conversation
-        self.contexts.append(ctx)
-        self.toolset_counts.append(len(options.toolsets))
-        prompt = _latest_user_text(messages)
-        platform = getattr(ctx, "surface_platform", None) or "POD"
-        reply = f"E2E agent reply [{platform}] from {agent.name}: {prompt}"
-
-        yield AgentEvent(
-            type=AgentEventType.TOKEN,
-            data=reply[:12],
-            agent_run_id=agent_run_id,
-        )
-        yield AgentEvent(
-            type=AgentEventType.MESSAGE,
-            data=MessageDraft.of_text(
-                reply,
-                metadata={"is_final_answer": True, "emulated_surface_e2e": True},
-            ),
-            agent_run_id=agent_run_id,
-        )
-        yield AgentEvent(
-            type=AgentEventType.COMPLETED,
-            data={"conversation_id": str(ctx.conversation_id)},
-            agent_run_id=agent_run_id,
-        )
 
 
 @pytest_asyncio.fixture
@@ -205,6 +135,16 @@ async def fake_outlook(message_store):
 
 
 @pytest_asyncio.fixture
+async def fake_resend(message_store):
+    server = FakeResendServer(message_store)
+    await server.start()
+    try:
+        yield server
+    finally:
+        await server.stop()
+
+
+@pytest_asyncio.fixture
 async def fake_composio_email(message_store, monkeypatch):
     """Intercept Composio email operations so e2e exercises the email send path
     without calling the real Composio SDK.
@@ -233,16 +173,6 @@ async def fake_composio_email(message_store, monkeypatch):
     monkeypatch.setattr(gmail_service, "execute_composio_operation", _record)
     monkeypatch.setattr(outlook_service, "execute_composio_operation", _record)
     return message_store
-
-
-def _latest_user_text(messages: Sequence[Message]) -> str:
-    for message in reversed(messages):
-        if message.role != MessageRole.USER.value:
-            continue
-        if message.kind == MessageKind.TEXT:
-            return message.text or ""
-        return message.text or ""
-    return ""
 
 
 def _load_json_fixture(name: str) -> dict:
@@ -279,7 +209,17 @@ async def _create_agent(
     pod_id: str,
     *,
     name: str | None = None,
+    toolsets: list[str] | None = None,
 ) -> dict:
+    """Create a surface e2e test agent.
+
+    ``toolsets`` defaults to ``[]`` (matches the previous hard-coded behavior:
+    no generic tools available). Pass e.g. ``["USER_INTERACTION"]`` or
+    ``["USER_INTERACTION", "SPEECH"]`` to opt a test into ``ask_user``/
+    ``request_approval``/``display_resource``/``say`` — these are gated by the
+    agent's own toolsets, unlike platform-specific tools (``gmail_reply_email``,
+    etc.) which are always attached to a surface conversation regardless.
+    """
     response = await client.post(
         f"/pods/{pod_id}/agents",
         json={
@@ -289,7 +229,7 @@ async def _create_agent(
                 "profile_id": "system:fireworks",
                 "model_name": "kimi-k2.6",
             },
-            "toolsets": [],
+            "toolsets": toolsets if toolsets is not None else [],
         },
     )
     assert response.status_code == 201, response.text
@@ -302,12 +242,16 @@ async def _create_surface(
     *,
     config: dict,
     agent_name: str | None = None,
+    name: str | None = None,
 ) -> dict:
     platform = str(config.get("type", "TELEGRAM")).upper()
     allowed_channel_ids = config.get("allowed_channel_ids") or []
     payload: dict[str, object] = {
+        "platform": platform,
         "config": {},
     }
+    if name:
+        payload["name"] = name
     if config.get("account_id"):
         payload["account_id"] = config["account_id"]
     if allowed_channel_ids:
@@ -317,7 +261,7 @@ async def _create_surface(
     if agent_name:
         payload["default_agent_name"] = agent_name
 
-    response = await client.put(f"/pods/{pod_id}/surfaces/{platform}", json=payload)
+    response = await client.post(f"/pods/{pod_id}/surfaces", json=payload)
     assert response.status_code == 200, response.text
     return response.json()
 
@@ -327,8 +271,9 @@ async def _create_agent_surface(
     pod_id: str,
     *,
     config: dict,
+    toolsets: list[str] | None = None,
 ) -> tuple[dict, dict]:
-    agent = await _create_agent(client, pod_id)
+    agent = await _create_agent(client, pod_id, toolsets=toolsets)
     surface = await _create_surface(
         client,
         pod_id,
@@ -483,6 +428,75 @@ async def _seed_external_user(
     await db_session.commit()
 
 
+async def _seed_pod_file(
+    db_session: AsyncSession,
+    *,
+    user_id: str,
+    pod_id: str,
+    name: str,
+    content: bytes,
+    directory_path: str = "/me/reports",
+) -> str:
+    """Write a real pod file via the datastore file service and return its path.
+
+    Used to give ``display_resource(type=FILE, path=...)`` a real file to
+    reference — no AgentBox/sandbox involvement, matching how the real tool
+    resolves a path.
+    """
+    from app.core.authorization.current import (
+        reset_current_context,
+        set_current_context,
+    )
+    from app.core.authorization.factory import create_authorization_data_service
+    from app.modules.datastore.api.dependencies import build_file_service
+
+    uow = SqlAlchemyUnitOfWork(db_session)
+    ctx = await create_authorization_data_service(uow).build_user_context(
+        user_id=user_id, pod_id=pod_id
+    )
+    token = set_current_context(ctx)
+    try:
+        entity = await build_file_service(uow).create_file(
+            pod_id=pod_id,
+            name=name,
+            file_content=content,
+            ctx=ctx,
+            directory_path=directory_path,
+            search_enabled=False,
+        )
+        await uow.commit()
+        return entity.path
+    finally:
+        reset_current_context(token)
+
+
+@pytest_asyncio.fixture
+async def fake_speech_provider(monkeypatch):
+    """Deterministic TTS so ``say`` can be scripted as a real tool call without
+    a real speech-provider credential. Delivery/format negotiation still runs
+    for real — only synthesis is faked."""
+    import app.modules.agent.tools.speech.provider as speech_provider_module
+    import app.modules.agent.tools.speech.speech as speech_module
+
+    class _FakeSpeechProvider:
+        async def synthesize(
+            self, text: str, *, voice: str | None = None, output_format: str = "mp3"
+        ) -> bytes:
+            del voice, output_format
+            return b"FAKE-AUDIO-" + text.encode("utf-8")[:64]
+
+    fake = _FakeSpeechProvider()
+    # speech.py imports get_speech_provider by value (`from ... import
+    # get_speech_provider`), so its own module-local name must be patched too
+    # — patching only the defining module leaves speech.py's call sites bound
+    # to the original function.
+    monkeypatch.setattr(
+        speech_provider_module, "get_speech_provider", lambda *a, **k: fake
+    )
+    monkeypatch.setattr(speech_module, "get_speech_provider", lambda *a, **k: fake)
+    return fake
+
+
 async def _set_user_mobile_number(
     db_session: AsyncSession,
     *,
@@ -496,79 +510,6 @@ async def _set_user_mobile_number(
     if telegram_username is not None:
         user.telegram_username = telegram_username
     await db_session.commit()
-
-
-async def _process_ingress_and_emulate_reply(
-    db_session: AsyncSession,
-    request: SurfacePlatformWebhookIngress
-    | SurfaceDirectWebhookIngress
-    | SurfaceScheduleIngress,
-    harness: EmulatedAgentHarness,
-) -> SurfaceContext:
-    uow = SqlAlchemyUnitOfWork(db_session)
-    handler = build_surface_event_handler(uow)
-    context = await handler.prepare_ingress(request)
-    assert context is not None
-    await uow.commit()
-
-    # Run the agent inline below (so its reply is delivered via the in-test fake
-    # platform servers); suppress the worker-dispatch event so the shared session
-    # worker doesn't also run it and race a duplicate (mock) reply onto the
-    # conversation.
-    with suppress_agent_run_enqueue():
-        await handler.execute_chat(context)
-    if isinstance(context, SurfaceChatContext):
-        await _run_agent_and_deliver_surface_reply(
-            db_session=db_session,
-            context=context,
-            harness=harness,
-        )
-    return context
-
-
-async def _run_agent_and_deliver_surface_reply(
-    *,
-    db_session: AsyncSession,
-    context: SurfaceChatContext,
-    harness: EmulatedAgentHarness,
-) -> None:
-    db_session.expire_all()
-    run = await _latest_agent_run(db_session, context.conversation_id)
-    assert run is not None
-    assert run.status == AgentRunStatus.RUNNING.value
-    run_id = run.id
-    conversation = await db_session.get(ConversationModel, context.conversation_id)
-    assert conversation is not None
-    assert conversation.organization_id is not None
-    runtime_profile_id = await _ensure_e2e_runtime_profile(
-        db_session,
-        organization_id=conversation.organization_id,
-    )
-    run.agent_runtime = {
-        "profile_id": runtime_profile_id,
-        "model_name": E2E_RUNTIME_MODEL_NAME,
-    }
-    await db_session.commit()
-
-    runner = AgentRunnerService(
-        uow_factory=SessionUnitOfWorkFactory(async_session_maker),
-        harness_registry=HarnessRegistry([harness]),
-    )
-    await runner.execute(
-        agent_run_id=run_id,
-        user_id=context.user_id,
-        pod_id=context.pod_id,
-        agent_name=context.agent_name,
-        observer=SurfaceAgentRunProgressObserver(
-            uow_factory=SessionUnitOfWorkFactory(async_session_maker),
-            service_factory=build_surface_event_handler,
-        ),
-    )
-
-    db_session.expire_all()
-    completed = await db_session.get(AgentRunModel, run_id)
-    assert completed is not None
-    assert completed.status == AgentRunStatus.COMPLETED.value
 
 
 async def _ensure_e2e_runtime_profile(
@@ -758,6 +699,29 @@ def _gmail_payload(
                 ]
             },
         }
+    }
+
+
+def _resend_payload(
+    *,
+    sender_email: str,
+    assistant_address: str,
+    message_id: str,
+    text: str,
+    subject: str = "Surface Resend E2E",
+) -> dict:
+    """Already-normalized Resend inbound shape (matches what the production
+    webhook controller's ``_normalize_resend_inbound`` produces from the raw
+    ``email.received`` envelope) — this is what ``ResendInboundParser.parse``
+    consumes directly."""
+    return {
+        "from": sender_email,
+        "to": assistant_address,
+        "subject": subject,
+        "text": text,
+        "message_id": f"<{message_id}@resend-e2e.test>",
+        "in_reply_to": None,
+        "references": [],
     }
 
 

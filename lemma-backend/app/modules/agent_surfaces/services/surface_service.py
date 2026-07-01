@@ -34,6 +34,7 @@ from app.modules.agent_surfaces.domain.entities import (
     SurfacePlatform,
 )
 from app.modules.agent_surfaces.domain.errors import (
+    AgentSurfaceAlreadyExistsError,
     AgentSurfacePlatformError,
     AgentSurfaceNotFoundError,
     AgentSurfaceValidationError,
@@ -148,6 +149,7 @@ class AgentSurfaceService:
         pod_id: UUID,
         agent_id: UUID | None,
         platform: SurfacePlatform,
+        name: str | None = None,
         config: SurfaceConfig | None = None,
         mode: SurfaceMode | None = None,
         event_mode: SurfaceEventMode | None = None,
@@ -158,14 +160,17 @@ class AgentSurfaceService:
         external_channel_id: str | None = None,
         ctx: Context | None = None,
     ) -> AgentSurfaceEntity:
-        existing = await self.surface_repository.get_by_pod_and_platform(
-            pod_id=pod_id,
-            platform=platform.value,
+        # A surface is addressed by its pod-unique name (defaults to the
+        # platform); several surfaces of the same platform can coexist under
+        # distinct names (e.g. different bots → different agents). Distinct bot
+        # accounts are still enforced by the credential/account conflict checks
+        # below.
+        resolved_name = (name or "").strip() or AgentSurfaceEntity.default_name_for(platform)
+        existing = await self.surface_repository.get_by_pod_and_name(
+            pod_id=pod_id, name=resolved_name
         )
         if isinstance(existing, AgentSurfaceEntity):
-            raise AgentSurfaceValidationError(
-                f"{platform.value} surface already exists for this pod"
-            )
+            raise AgentSurfaceAlreadyExistsError(resolved_name)
         (
             resolved_tenant_id,
             resolved_workspace_id,
@@ -177,6 +182,7 @@ class AgentSurfaceService:
         entity = AgentSurfaceEntity.create(
             pod_id=pod_id,
             surface_type=platform,
+            name=resolved_name,
             agent_id=agent_id,
             config=config,
             mode=mode,
@@ -188,6 +194,15 @@ class AgentSurfaceService:
             external_channel_id=external_channel_id,
             surface_identity_id=surface_identity_id,
         )
+        # Resend is a system-credentialed email surface: provision a unique
+        # per-pod inbound/outbound address that inbound routing matches on and
+        # outbound uses as the From. (Other email surfaces get this from their
+        # connected account.)
+        if (
+            platform is SurfacePlatform.RESEND
+            and not entity.surface_identity_email
+        ):
+            entity.surface_identity_email = self._provision_resend_address(pod_id)
         self._validate_runtime_supported(entity)
         await self._ensure_unique_org_credential_binding(entity)
         telegram_credentials: dict[str, Any] | None = None
@@ -204,6 +219,16 @@ class AgentSurfaceService:
         synced = await self._sync_email_schedule(created, previous_surface=None, ctx=ctx)
         await notify_surface_receiver_config_changed(synced.id)
         return synced
+
+    @staticmethod
+    def _provision_resend_address(pod_id: UUID) -> str:
+        """Derive a unique per-pod inbound/outbound Resend address.
+
+        Uses the pod id for uniqueness under a catch-all inbound domain
+        (``*@<domain>`` → one webhook), so no per-address API registration.
+        """
+        domain = surface_settings.resend_inbound_domain or "ops.lemma.work"
+        return f"pod-{pod_id.hex[:12]}@{domain}"
 
     async def get_surface(self, surface_id: UUID) -> AgentSurfaceEntity:
         surface = await self.surface_repository.get(surface_id)
@@ -222,18 +247,17 @@ class AgentSurfaceService:
             raise AgentSurfaceNotFoundError(str(surface_id))
         return surface
 
-    async def get_surface_by_platform_in_pod(
+    async def get_surface_by_name_in_pod(
         self,
         *,
         pod_id: UUID,
-        platform: str,
+        name: str,
     ) -> AgentSurfaceEntity:
-        surface = await self.surface_repository.get_by_pod_and_platform(
-            pod_id=pod_id,
-            platform=platform,
+        surface = await self.surface_repository.get_by_pod_and_name(
+            pod_id=pod_id, name=name
         )
         if surface is None:
-            raise AgentSurfaceNotFoundError(str(platform))
+            raise AgentSurfaceNotFoundError(name)
         return surface
 
     async def update_surface(
@@ -339,11 +363,17 @@ class AgentSurfaceService:
         self,
         pod_id: UUID,
         *,
+        platform: str | None = None,
+        agent_id: UUID | None = None,
+        match_agent: bool = False,
         cursor: UUID | None = None,
         limit: int = 100,
     ) -> tuple[list[AgentSurfaceEntity], UUID | None]:
         return await self.surface_repository.list_by_pod(
             pod_id,
+            platform=platform,
+            agent_id=agent_id,
+            match_agent=match_agent,
             cursor=cursor,
             limit=limit,
         )
@@ -394,36 +424,21 @@ class AgentSurfaceService:
                 ) from exc
         return build_surface_setup_guide(resolved_platform)
 
-    async def get_surface_setup(
+    async def get_surface_setup_by_name(
         self,
         *,
         pod_id: UUID,
-        platform: str,
+        name: str,
     ) -> dict[str, Any]:
-        """Everything needed to finish setting up a surface, in one read.
+        """Everything needed to finish setting up an existing surface, in one read.
 
-        Merges the static platform checklist (always available) with the live
-        webhook and admin-consent state when the surface exists. Returns a plain
-        dict the controller maps onto ``SurfaceSetupResponse``.
+        Merges the static platform checklist with the live webhook and
+        admin-consent state. Raises ``AgentSurfaceNotFoundError`` if no surface
+        has this name — use ``get_platform_setup_guide`` for the pre-creation
+        checklist, which needs no surface to exist yet.
         """
-        guide = self.get_platform_setup_guide(platform)
-        resolved_platform = guide.platform
-        surface = await self.surface_repository.get_by_pod_and_platform(
-            pod_id=pod_id,
-            platform=resolved_platform.value,
-        )
-        if surface is None:
-            return {
-                "platform": resolved_platform,
-                "exists": False,
-                "status": AgentSurfaceStatus.NEEDS_SETUP,
-                "ready": False,
-                "webhook_url": None,
-                "admin_consent": None,
-                "actions": [],
-                "guide": guide,
-            }
-
+        surface = await self.get_surface_by_name_in_pod(pod_id=pod_id, name=name)
+        guide = self.get_platform_setup_guide(surface.surface_type.value)
         webhook_url = computed_webhook_url(surface)
         admin_consent = await self._surface_admin_consent(surface)
         actions = build_surface_setup_actions(
@@ -631,7 +646,13 @@ class AgentSurfaceService:
         previous_surface: AgentSurfaceEntity | None,
         ctx: Context | None = None,
     ) -> AgentSurfaceEntity:
-        if not self._is_email_surface(surface):
+        # Only Composio-trigger email surfaces (Gmail/Outlook) get a polling
+        # schedule. Resend is an email surface but receives over a native webhook,
+        # so it has no schedule.
+        if (
+            not self._is_email_surface(surface)
+            or surface.event_mode is not SurfaceEventMode.COMPOSIO_TRIGGER
+        ):
             if previous_surface is not None:
                 await self._delete_email_schedule_if_needed(previous_surface)
             return surface

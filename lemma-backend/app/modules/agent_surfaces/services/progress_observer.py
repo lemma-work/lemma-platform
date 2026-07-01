@@ -18,7 +18,13 @@ from app.modules.agent.domain.value_objects import (
 )
 from app.modules.agent.tools.context import ConversationContext
 from app.modules.agent_surfaces.domain.entities import SurfacePlatform
-from app.modules.agent_surfaces.platforms.rendering import strip_thinking_tokens
+from app.modules.agent_surfaces.platforms.platform_capabilities import (
+    PLATFORM_CAPABILITIES,
+)
+from app.modules.agent_surfaces.platforms.rendering import (
+    sanitize_user_visible_text,
+    strip_thinking_tokens,
+)
 from app.modules.agent_surfaces.services.ingress_service import (
     AgentSurfaceIngressService,
 )
@@ -45,8 +51,18 @@ _MAX_PROGRESS_TEXT_LENGTH = 120
 # Email recipients should get one composed reply, not a stream of chat
 # messages. Agents reply via the platform reply tools; the observer only
 # falls back to emailing the final assistant text if no reply was sent.
-_EMAIL_PLATFORMS = {SurfacePlatform.GMAIL.value, SurfacePlatform.OUTLOOK.value}
-_EMAIL_REPLY_TOOL_NAMES = {"gmail_reply_email", "outlook_reply_email"}
+#
+# Derived from the platform-capability registry (not hand-maintained) so a
+# newly added email platform is automatically covered here too — a hardcoded
+# set previously let Resend fall through both checks even after it shipped as
+# a full `is_email=True` platform, causing a duplicate auto-echoed send via
+# broken fallback credentials on every real Resend reply.
+_EMAIL_PLATFORMS = {
+    caps.platform for caps in PLATFORM_CAPABILITIES.values() if caps.is_email
+}
+_EMAIL_REPLY_TOOL_NAMES = {
+    caps.reply_tool for caps in PLATFORM_CAPABILITIES.values() if caps.reply_tool
+}
 
 
 class SurfaceAgentRunProgressObserver:
@@ -401,7 +417,9 @@ def _progress_text_from_event(event: AgentEvent) -> str | None:
     if data.kind == MessageKind.TOOL_CALL:
         comment = _find_comment(data.tool_args)
         if comment:
-            return _sanitize_progress_text(comment)
+            # A comment that is entirely reasoning sanitizes to empty -> no
+            # progress update (rather than streaming a blank/leaky message).
+            return _sanitize_progress_text(comment) or None
         if data.tool_name:
             return _sanitize_progress_text(f"Using {data.tool_name}")
         return None
@@ -469,7 +487,10 @@ def _find_comment(value: object) -> str | None:
 
 
 def _sanitize_progress_text(value: str) -> str:
-    text = " ".join(value.split())
+    # Strip model reasoning BEFORE collapsing/truncating: a model that writes
+    # ``<think>…</think>`` into a tool-call comment must never have it streamed
+    # to the surface as a live progress update.
+    text = " ".join(sanitize_user_visible_text(value).split())
     if len(text) <= _MAX_PROGRESS_TEXT_LENGTH:
         return text
     return text[: _MAX_PROGRESS_TEXT_LENGTH - 1].rstrip() + "..."

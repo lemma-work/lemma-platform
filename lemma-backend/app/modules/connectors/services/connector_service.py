@@ -756,14 +756,9 @@ class ConnectorService:
                     "Credential-managed Composio accounts must be connected with the accounts API."
                 )
 
-        existing_account = await self.account_repository.get_by_user_and_auth_config(
-            user_id, auth_config.id
-        )
-        # Allow re-running OAuth on an existing account that has become unusable
-        # (preserving its account_id); only a healthy CONNECTED account blocks a
-        # new connect request.
-        if existing_account and existing_account.status == AccountStatus.CONNECTED:
-            raise AccountAlreadyConnectedError(connector.id)
+        # Multiple accounts are allowed per auth config, so a new connect request
+        # is always permitted. The OAuth callback dedups by provider account id:
+        # re-authing an existing identity updates it, a new identity is created.
 
         effective_connector = self._build_effective_connector(connector, auth_config)
         auth_provider = self._get_auth_provider_by_name(self._provider_value(auth_config))
@@ -852,8 +847,9 @@ class ConnectorService:
         existing_account = await self.account_repository.get_by_user_and_auth_config(
             user_id, auth_config.id
         )
-        if existing_account:
-            raise AccountAlreadyConnectedError(connector.id)
+        # Multiple credential-managed accounts are allowed (e.g. several bot
+        # tokens for different agents); the first connected becomes the default.
+        is_default = existing_account is None
 
         # Composio credential-managed apps must establish a connected account on
         # Composio's side; native (Lemma) apps store the credentials verbatim.
@@ -871,6 +867,7 @@ class ConnectorService:
                 organization_id=organization_id,
                 auth_config_id=auth_config.id,
                 connector_id=connector.id,
+                is_default=is_default,
                 credentials=stored_credentials,
                 provider_account_id=provider_account_id,
                 email=email,
@@ -947,9 +944,22 @@ class ConnectorService:
             connector.id, credentials, native_profile
         )
 
+        # The user's default account for this auth config; a plain re-auth
+        # updates it. Multiple identities may be connected per auth config, so
+        # if the default belongs to a different provider identity, look up the
+        # matching account (or fall through to creating a new one).
         account = await self.account_repository.get_by_user_and_auth_config(
             user_id, auth_config.id
         )
+        if (
+            account is not None
+            and provider_account_id
+            and account.provider_account_id
+            and account.provider_account_id != provider_account_id
+        ):
+            account = await self.account_repository.get_by_user_auth_config_and_provider_account(
+                user_id, auth_config.id, provider_account_id
+            )
 
         if account:
             account.credentials = credentials
@@ -961,12 +971,17 @@ class ConnectorService:
             account.status = AccountStatus.CONNECTED
             account = await self.account_repository.update(account)
         else:
+            # A new identity is the default only if the user has no account yet.
+            has_existing = await self.account_repository.get_by_user_and_auth_config(
+                user_id, auth_config.id
+            )
             account = await self.account_repository.create(
                 AccountEntity(
                     user_id=user_id,
                     organization_id=pending_request.organization_id,
                     auth_config_id=auth_config.id,
                     connector_id=connector.id,
+                    is_default=has_existing is None,
                     credentials=credentials,
                     provider_account_id=provider_account_id,
                     email=email,

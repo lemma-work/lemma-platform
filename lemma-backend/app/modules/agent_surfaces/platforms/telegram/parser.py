@@ -19,19 +19,11 @@ class TelegramMessageParser:
         del headers
         message = payload.get("message") or payload.get("edited_message")
         if not message:
-            callback_query = payload.get("callback_query")
-            if callback_query:
-                message = callback_query.get("message") or {}
-                message_text = callback_query.get("data") or ""
-                if not message and message_text:
-                    return None
-            else:
-                return None
-        else:
-            message_text = self._extract_text(message)
-
-        if message is None:
+            # Inline-keyboard taps arrive as ``callback_query`` and are owned by
+            # the interaction path (``parse_inbound_interaction``); they are not
+            # chat messages, so the message parser ignores them.
             return None
+        message_text = self._extract_text(message)
 
         if not message_text:
             message_text = ""

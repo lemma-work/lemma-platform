@@ -14,6 +14,7 @@ from typing import Annotated, Literal, Union
 from pydantic import BaseModel, Field, TypeAdapter
 
 from app.modules.agent_surfaces.platforms.email_models import (
+    EmailFileAttachment,
     GmailFileAttachment,
     OutlookFileAttachment,
 )
@@ -91,6 +92,18 @@ class OutlookSurfaceEventMetadata(BaseModel):
     attachments: list[OutlookFileAttachment] = Field(default_factory=list)
 
 
+class ResendSurfaceEventMetadata(BaseModel):
+    platform: Literal["RESEND"] = "RESEND"
+    mailbox_email: str | None = None
+    subject: str | None = None
+    thread_id: str | None = None
+    message_id: str | None = None
+    reply_to_email: str | None = None
+    references: list[str] = Field(default_factory=list)
+    in_reply_to: str | None = None
+    attachments: list[EmailFileAttachment] = Field(default_factory=list)
+
+
 SurfaceEventMetadata = Annotated[
     Union[
         TeamsSurfaceEventMetadata,
@@ -99,6 +112,7 @@ SurfaceEventMetadata = Annotated[
         TelegramSurfaceEventMetadata,
         GmailSurfaceEventMetadata,
         OutlookSurfaceEventMetadata,
+        ResendSurfaceEventMetadata,
     ],
     Field(discriminator="platform"),
 ]

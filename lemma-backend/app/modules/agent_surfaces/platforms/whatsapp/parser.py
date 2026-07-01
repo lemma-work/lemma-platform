@@ -7,11 +7,62 @@ from typing import Any
 from app.modules.agent_surfaces.domain.entities import (
     ConversationType,
     ParsedInboundSurfaceEvent,
+    ParsedSurfaceInteraction,
+)
+from app.modules.agent_surfaces.platforms.whatsapp.service import (
+    WHATSAPP_INTERACTION_SEP,
 )
 
 
 class WhatsAppMessageParser:
     platform = "WHATSAPP"
+
+    def parse_interaction(
+        self, payload: dict[str, Any], headers: dict[str, str] | None = None
+    ) -> ParsedSurfaceInteraction | None:
+        """Resolve a button/list reply into an ask_user answer.
+
+        The reply ``id`` carries ``callback_id~header~value``. A reply whose id
+        does not decode (a non-Lemma interactive) returns ``None`` so the message
+        path handles it as a typed reply by title.
+        """
+        del headers
+        try:
+            entry = (payload.get("entry") or [{}])[0]
+            change = (entry.get("changes") or [{}])[0]
+            value = change.get("value") or {}
+            messages = value.get("messages") or []
+            if not messages:
+                return None
+            msg = messages[0]
+            if msg.get("type") != "interactive":
+                return None
+            interactive = msg.get("interactive") or {}
+            reply = (
+                interactive.get("button_reply")
+                or interactive.get("list_reply")
+                or {}
+            )
+            reply_id = str(reply.get("id") or "")
+            parts = reply_id.split(WHATSAPP_INTERACTION_SEP, 2)
+            if len(parts) != 3:
+                return None
+            callback_id, header, answer = parts
+            if not callback_id or not header:
+                return None
+            sender_wa_id = str(msg.get("from") or "")
+            return ParsedSurfaceInteraction(
+                platform="WHATSAPP",
+                external_user_id=sender_wa_id or None,
+                external_thread_id=sender_wa_id or None,
+                callback_id=callback_id,
+                values={header: answer},
+                reply_target={"sender_wa_id": sender_wa_id} if sender_wa_id else {},
+                dedup_id=str(msg.get("id") or "") or None,
+                raw_payload=payload,
+            )
+        except Exception:
+            return None
 
     def parse(
         self, payload: dict[str, Any], headers: dict[str, str] | None = None

@@ -7,6 +7,7 @@ from uuid import UUID
 
 from app.core.config import settings
 from app.core.log.log import get_logger
+from app.modules.agent_surfaces.platforms.rendering import sanitize_user_visible_text
 from app.modules.agent.tools.user_interaction.models import (
     AskUserRequest,
     DisplayResourceRequest,
@@ -56,14 +57,18 @@ def build_ask_user_render_plan(
     header maps straight into ``AskUserResponse.answers``. ``callback_id`` routes
     the submission back to the waiting run.
     """
+    # Sanitize every model-authored string so reasoning never reaches a user,
+    # regardless of which adapter renders it (blocks/cards/keyboards/text).
     questions = [
         SurfaceQuestion(
             header=q.header,
-            question=q.question,
+            question=sanitize_user_visible_text(q.question),
             options=[
                 SurfaceQuestionOption(
-                    label=o.label,
-                    description=o.description,
+                    label=sanitize_user_visible_text(o.label),
+                    description=sanitize_user_visible_text(o.description)
+                    if o.description
+                    else o.description,
                     recommended=o.recommended,
                 )
                 for o in q.options
@@ -138,9 +143,13 @@ def build_display_resource_render_plan(
     tool_call_id: str | None = None,
     tool_output: object | None = None,
 ) -> SurfaceDisplayRenderPlan:
-    title = _display_resource_title(request)
-    summary = _display_resource_summary(request)
-    detail_lines = _display_resource_detail_lines(request, tool_output=tool_output)
+    title = sanitize_user_visible_text(_display_resource_title(request))
+    summary_raw = _display_resource_summary(request)
+    summary = sanitize_user_visible_text(summary_raw) if summary_raw else summary_raw
+    detail_lines = [
+        sanitize_user_visible_text(line)
+        for line in _display_resource_detail_lines(request, tool_output=tool_output)
+    ]
     url = build_display_resource_url(
         pod_id=pod_id,
         request=request,

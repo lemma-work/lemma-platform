@@ -10,16 +10,18 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.modules.agent_surfaces.domain.ingress_context import SurfaceChatContext
 from app.modules.agent_surfaces.domain.ingress_request import SurfacePlatformWebhookIngress
 from app.modules.agent_surfaces.tests.e2e.helpers import (
-    EmulatedAgentHarness,
     _conversation_by_external_thread,
     _create_agent_surface,
-    _process_ingress_and_emulate_reply,
     _set_user_mobile_number,
     _whatsapp_payload,
 )
 from app.modules.agent_surfaces.tests.e2e.mock_infrastructure import (
     build_whatsapp_signature_headers,
     wait_for_messages,
+)
+from app.modules.agent_surfaces.tests.e2e.scripted_llm import (
+    process_ingress_and_run_scripted,
+    script_text,
 )
 
 pytestmark = pytest.mark.e2e
@@ -75,11 +77,10 @@ async def test_whatsapp_built_in_dm_surface_handles_payload_and_replies(
     )
     assert response.status_code == 200, response.text
 
-    harness = EmulatedAgentHarness()
-    context = await _process_ingress_and_emulate_reply(
+    context = await process_ingress_and_run_scripted(
         db_session,
         SurfacePlatformWebhookIngress(source="whatsapp", payload=payload, headers={}),
-        harness,
+        script=[script_text("E2E agent reply [WHATSAPP]")],
     )
     assert isinstance(context, SurfaceChatContext)
 

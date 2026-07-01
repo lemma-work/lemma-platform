@@ -89,6 +89,22 @@ class SurfaceSettings(BaseSettings):
         description="Secret token expected in native Telegram webhook requests",
     )
 
+    # Resend (system email surface)
+    resend_api_key: Optional[str] = Field(
+        default=None, description="Resend API key for the system email surface"
+    )
+    resend_inbound_domain: str = Field(
+        default="ops.lemma.work",
+        description="Domain for per-pod inbound addresses (pod.org@<domain>)",
+    )
+    resend_from_name: str = Field(
+        default="Lemma", description="Display name on outbound Resend emails"
+    )
+    resend_inbound_signing_secret: Optional[str] = Field(
+        default=None,
+        description="Secret for verifying Resend inbound webhook signatures",
+    )
+
     # Surface webhook ingress + runtime
     surface_raw_webhook_log_dir: Optional[str] = Field(
         default=None,

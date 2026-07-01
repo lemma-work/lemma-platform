@@ -22,6 +22,7 @@ SURFACE_ATTACHMENT_BYTE_CAPS: dict[str, int] = {
     "TEAMS": 25 * _MB,
     "GMAIL": 25 * _MB,
     "OUTLOOK": 25 * _MB,
+    "RESEND": 25 * _MB,  # Resend total-message ceiling is ~40 MB
 }
 
 # Default cap for any platform not listed above.

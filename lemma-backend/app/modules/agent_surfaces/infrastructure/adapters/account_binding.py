@@ -32,6 +32,14 @@ class SurfaceAccountBindingResolver(SurfaceAccountBindingPort):
         if platform is SurfacePlatform.TEAMS:
             tenant_id = await self._resolve_teams(account_id)
             return tenant_id, None, None
+        if platform is SurfacePlatform.RESEND:
+            # System-credentialed by default (no account); a CUSTOM Resend
+            # connector account is optional.
+            if account_id is not None:
+                await self._require_account_app(
+                    account_id, label="Resend", expected_connector_id="resend"
+                )
+            return None, None, None
         if platform.is_email:
             await self._require_account_app(
                 account_id,

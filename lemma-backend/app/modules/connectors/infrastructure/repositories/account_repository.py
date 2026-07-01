@@ -55,6 +55,7 @@ class AccountRepository(
             "organization_id": instance.organization_id,
             "auth_config_id": instance.auth_config_id,
             "connector_id": instance.connector_id,
+            "is_default": instance.is_default,
             "status": instance.status,
             "provider_account_id": instance.provider_account_id,
             "email": instance.email,
@@ -113,10 +114,11 @@ class AccountRepository(
     async def get_by_user_and_app(
         self, user_id: UUID, connector_id: str
     ) -> Optional[AccountEntity]:
-        """Get account by user and connector."""
+        """Get the user's default (or oldest) account for a connector."""
         stmt = (
             select(Account)
             .where(Account.user_id == user_id, Account.connector_id == connector_id)
+            .order_by(Account.is_default.desc(), Account.created_at)
             .options(selectinload(Account.connector))
         )
         result = await self.session.execute(stmt)
@@ -142,9 +144,35 @@ class AccountRepository(
     async def get_by_user_and_auth_config(
         self, user_id: UUID, auth_config_id: UUID
     ) -> Optional[AccountEntity]:
+        """Get the user's default (or oldest) account for an auth config."""
         stmt = (
             select(Account)
             .where(Account.user_id == user_id, Account.auth_config_id == auth_config_id)
+            .order_by(Account.is_default.desc(), Account.created_at)
+            .options(selectinload(Account.connector))
+        )
+        result = await self.session.execute(stmt)
+        instance = result.scalars().first()
+        return self._to_entity(instance) if instance else None
+
+    async def get_by_user_auth_config_and_provider_account(
+        self,
+        user_id: UUID,
+        auth_config_id: UUID,
+        provider_account_id: str,
+    ) -> Optional[AccountEntity]:
+        """Get a specific account by its provider-side identity.
+
+        Used on OAuth re-auth to update the right account when a user has
+        connected more than one identity for the same auth config.
+        """
+        stmt = (
+            select(Account)
+            .where(
+                Account.user_id == user_id,
+                Account.auth_config_id == auth_config_id,
+                Account.provider_account_id == provider_account_id,
+            )
             .options(selectinload(Account.connector))
         )
         result = await self.session.execute(stmt)

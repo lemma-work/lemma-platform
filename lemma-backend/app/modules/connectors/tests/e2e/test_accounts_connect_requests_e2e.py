@@ -352,16 +352,22 @@ async def test_direct_credential_managed_account_create_encrypts_credentials(
     stored_account = result.mappings().one()
     assert stored_account["credentials"]["_encrypted"] == "lemma-secret-v2"
     assert "telegram-secret-token" not in str(stored_account["credentials"])
+    # The first account connected for an auth config is the default.
+    assert account["is_default"] is True
 
-    duplicate_response = await authenticated_client.post(
+    # Multiple credential-managed accounts per auth config are allowed (e.g.
+    # several bot tokens); a subsequent one succeeds and is not the default.
+    second_response = await authenticated_client.post(
         f"/organizations/{org_id}/connectors/accounts",
         json={
             "auth_config_name": connector_id,
             "credentials": {"bot_token": "another-secret"},
         },
     )
-    assert duplicate_response.status_code == 409
-    assert duplicate_response.json()["code"] == "ACCOUNT_ALREADY_CONNECTED"
+    assert second_response.status_code == 200, second_response.text
+    second_account = second_response.json()
+    assert second_account["id"] != account_id
+    assert second_account["is_default"] is False
 
 
 @pytest.mark.asyncio

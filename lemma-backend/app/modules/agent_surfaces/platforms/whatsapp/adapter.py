@@ -4,9 +4,13 @@ from __future__ import annotations
 
 from typing import Any
 
-from app.modules.agent_surfaces.domain.entities import ParsedInboundSurfaceEvent
+from app.modules.agent_surfaces.domain.entities import (
+    ParsedInboundSurfaceEvent,
+    ParsedSurfaceInteraction,
+)
 from app.modules.agent_surfaces.domain.models import (
     SurfaceDisplayRenderPlan,
+    SurfaceQuestionRenderPlan,
     SurfaceSenderProfile,
 )
 from app.modules.agent_surfaces.platforms.base import BaseSurfaceAdapter
@@ -57,6 +61,23 @@ class WhatsAppSurfaceAdapter(BaseSurfaceAdapter):
             render_plan,
             metadata,
         )
+
+    async def send_questions(
+        self,
+        *,
+        credentials: dict[str, Any],
+        event: ParsedInboundSurfaceEvent,
+        question_plan: SurfaceQuestionRenderPlan,
+        metadata: dict[str, Any] | None = None,
+    ) -> bool:
+        return await WhatsAppPlatformService(credentials).send_questions(
+            event, question_plan, metadata
+        )
+
+    async def parse_inbound_interaction(
+        self, payload: dict[str, Any], headers: dict[str, str] | None = None
+    ) -> ParsedSurfaceInteraction | None:
+        return self._parser.parse_interaction(payload, headers)
 
     async def add_processing_indicator(
         self,

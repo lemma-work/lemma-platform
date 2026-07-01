@@ -45,6 +45,59 @@ def _decode_webhook_payload(raw_body: bytes, headers: dict[str, str]) -> dict:
         return {}
 
 
+def _email_address(value) -> str | None:
+    """Pull a bare email address out of a string / {address} / list shape."""
+    if isinstance(value, list):
+        return _email_address(value[0]) if value else None
+    if isinstance(value, dict):
+        return _email_address(value.get("address") or value.get("email"))
+    if isinstance(value, str):
+        text = value.strip()
+        if "<" in text and ">" in text:
+            text = text[text.index("<") + 1 : text.index(">")].strip()
+        return text or None
+    return None
+
+
+def _normalize_resend_inbound(payload: dict) -> dict:
+    """Normalize a Resend inbound webhook into the flat dict the parser expects.
+
+    Tolerates both a flat body and a Svix-style ``{type, data: {...}}`` envelope,
+    and address fields shaped as strings, ``{address}`` dicts, or lists.
+    """
+    data = payload.get("data") if isinstance(payload.get("data"), dict) else payload
+    raw_headers = data.get("headers") or []
+    header_map: dict[str, str] = {}
+    if isinstance(raw_headers, list):
+        for h in raw_headers:
+            if isinstance(h, dict) and h.get("name"):
+                header_map[str(h["name"]).lower()] = str(h.get("value") or "")
+    elif isinstance(raw_headers, dict):
+        header_map = {str(k).lower(): str(v) for k, v in raw_headers.items()}
+
+    references_raw = (
+        data.get("references") or header_map.get("references") or ""
+    )
+    if isinstance(references_raw, str):
+        references = [r for r in references_raw.split() if r]
+    else:
+        references = [str(r) for r in (references_raw or [])]
+
+    return {
+        "from": _email_address(data.get("from")),
+        "from_name": (data.get("from") or {}).get("name")
+        if isinstance(data.get("from"), dict)
+        else None,
+        "to": _email_address(data.get("to")),
+        "subject": data.get("subject") or header_map.get("subject"),
+        "text": data.get("text"),
+        "html": data.get("html"),
+        "message_id": data.get("message_id") or header_map.get("message-id"),
+        "in_reply_to": data.get("in_reply_to") or header_map.get("in-reply-to"),
+        "references": references,
+    }
+
+
 @router.post(
     "/webhooks/{platform}",
     operation_id="surface.webhook.handle_platform",
@@ -54,12 +107,35 @@ async def handle_platform_webhook(
     platform: str,
     request: Request,
     security_service: SurfaceWebhookSecurityServiceDep,
+    service: AgentSurfaceService = Depends(get_surface_service),
     message_bus=Depends(get_message_bus),
 ):
     """Handle platform-level webhook callbacks."""
     headers = dict(request.headers)
     raw_body = await request.body()
     payload = _decode_webhook_payload(raw_body, headers)
+
+    # Resend inbound: a catch-all address webhook. Resolve the destination
+    # address to a concrete surface and feed the normal surface-level pipeline.
+    if platform == "resend":
+        normalized = _normalize_resend_inbound(payload)
+        to_address = normalized.get("to")
+        if not to_address:
+            return {"message": "Ignored: no destination address"}
+        surface = await service.surface_repository.get_active_by_address(
+            platform="RESEND", address=to_address
+        )
+        if surface is None:
+            return {"message": "Ignored: no surface for address"}
+        await log_raw_webhook_event(source="resend", payload=normalized, headers=headers)
+        event = SurfaceWebhookReceivedEvent(
+            source="resend",
+            payload=normalized,
+            headers=headers,
+            surface_id=surface.id,
+        )
+        await message_bus.publish(stream=event.stream_name(), event=event)
+        return {"message": "Webhook received"}
 
     # Slack sends url_verification before any signing secret is configured — respond immediately.
     if platform == "slack" and payload.get("type") == "url_verification":

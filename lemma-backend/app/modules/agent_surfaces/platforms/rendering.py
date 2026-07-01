@@ -170,3 +170,14 @@ def strip_thinking_tokens(text: str) -> str:
         return ""
     stripped = _THINK_TAG_RE.sub("", text)
     return stripped.strip()
+
+
+def sanitize_user_visible_text(text: str | None) -> str:
+    """The single boundary every model-authored string passes through before it
+    leaves the backend for a surface.
+
+    Strips ``<think>…</think>`` reasoning so it can never reach a user on any
+    path — progress updates, questions, approvals, captions, final answers.
+    Safe on ``None``/empty input.
+    """
+    return strip_thinking_tokens(text or "")

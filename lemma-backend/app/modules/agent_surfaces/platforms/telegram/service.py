@@ -14,7 +14,11 @@ from app.modules.agent.tools.context import ConversationContext
 from app.modules.agent_surfaces.domain.entities import ParsedInboundSurfaceEvent
 from app.modules.agent_surfaces.domain.models import (
     SurfaceDisplayRenderPlan,
+    SurfaceQuestionRenderPlan,
     SurfaceSenderProfile,
+)
+from app.modules.agent_surfaces.platforms.telegram.callback_token_store import (
+    put_callback_token,
 )
 from app.modules.agent_surfaces.domain.surface_event_metadata import (
     TelegramSurfaceEventMetadata,
@@ -39,6 +43,10 @@ from app.core.infrastructure.cache.redis_json_cache import RedisJsonCache
 from app.core.log.log import get_logger
 
 logger = get_logger(__name__)
+
+# Sentinel callback value meaning "the user wants to type a free-text answer";
+# the tap resolves to no answer so their next typed message resumes the run.
+_OTHER_CALLBACK_VALUE = "__lemma_other__"
 
 # Shared Redis cache: bot_token → getMe result dict (username + id), so mention
 # verification doesn't hit the Telegram API on every message and is shared across
@@ -147,6 +155,56 @@ class TelegramPlatformService:
             if index == 0 and isinstance(reply_markup, dict):
                 payload["reply_markup"] = reply_markup
             await self._send_chunk(payload, raw_chunk)
+
+    async def send_questions(
+        self,
+        event: ParsedInboundSurfaceEvent,
+        question_plan: SurfaceQuestionRenderPlan,
+        metadata: dict[str, Any] | None = None,
+    ) -> bool:
+        """Render ask_user questions as native inline keyboards.
+
+        One message per question; each option is a button whose ``callback_data``
+        is a short token resolving to ``{callback_id, header, value}`` (Telegram
+        caps callback_data at 64 bytes). A trailing "Other" button lets the user
+        type a free-text answer instead. Returns ``False`` (caller falls back to
+        formatted text) when there is no chat target or any question is
+        multi-select (not expressible as a single-tap keyboard).
+        """
+        del metadata
+        chat_id = event.reply_target.get("chat_id") or event.external_channel_id
+        if not chat_id:
+            return False
+        if any(q.multi_select for q in question_plan.questions):
+            return False
+        for question in question_plan.questions:
+            rows: list[list[dict[str, str]]] = []
+            for option in question.options:
+                token = await put_callback_token(
+                    {
+                        "callback_id": question_plan.callback_id,
+                        "header": question.header,
+                        "value": option.label,
+                    }
+                )
+                text = f"⭐ {option.label}" if option.recommended else option.label
+                rows.append([{"text": text[:64], "callback_data": token}])
+            other_token = await put_callback_token(
+                {
+                    "callback_id": question_plan.callback_id,
+                    "header": question.header,
+                    "value": _OTHER_CALLBACK_VALUE,
+                }
+            )
+            rows.append(
+                [{"text": "✏️ Other (type a reply)", "callback_data": other_token}]
+            )
+            await self.send_message(
+                event,
+                question.question,
+                metadata={"reply_markup": {"inline_keyboard": rows}},
+            )
+        return True
 
     async def _send_chunk(self, payload: dict[str, Any], raw_text: str) -> None:
         rendered = to_markdown_v2(raw_text)

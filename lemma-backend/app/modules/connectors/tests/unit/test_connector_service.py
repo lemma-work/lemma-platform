@@ -26,7 +26,6 @@ from app.modules.connectors.domain.auth_config import AuthConfigEntity, AuthConf
 from app.modules.connectors.domain.connect_request import ConnectRequestEntity
 from app.modules.connectors.domain.connect_request import ConnectRequestStatus
 from app.modules.connectors.domain.errors import (
-    AccountAlreadyConnectedError,
     ConnectorNotFoundError,
     ConnectorValidationError,
     ConnectRequestStateRequiredError,
@@ -115,21 +114,38 @@ async def test_get_connector_raises_not_found():
         await service.get_connector("missing")
 
 
-async def test_initiate_connect_request_raises_conflict_when_account_exists():
+async def test_initiate_connect_request_allowed_when_account_exists():
+    """Multiple accounts per auth config are allowed, so an existing connected
+    account no longer blocks a new connect request."""
     user_id = uuid4()
     auth_config = _auth_config()
+    auth_provider = AsyncMock()
+    auth_provider.get_authorization_url.return_value = ("https://auth", "provider_state")
+    registry = Mock()
+    registry.get.return_value = auth_provider
+    uow = AsyncMock()
+    connect_repo = AsyncMock()
+    connect_repo.create.side_effect = lambda req: req
+    redirect_builder = Mock()
+    redirect_builder.build.return_value = "https://callback"
+
     service = _service(
+        uow=uow,
         connector_repository=AsyncMock(get=AsyncMock(return_value=_connector())),
         auth_config_repository=_auth_config_repo(auth_config),
         account_repository=AsyncMock(
             get_by_user_and_auth_config=AsyncMock(return_value=_account(user_id))
         ),
+        connect_request_repository=connect_repo,
+        auth_provider_registry=registry,
+        redirect_uri_builder=redirect_builder,
     )
 
-    with pytest.raises(AccountAlreadyConnectedError):
-        await service.initiate_connect_request(
-            user_id=user_id, organization_id=ORG_ID, connector_id="slack"
-        )
+    result = await service.initiate_connect_request(
+        user_id=user_id, organization_id=ORG_ID, connector_id="slack"
+    )
+
+    assert isinstance(result, ConnectRequestEntity)
 
 
 async def test_initiate_connect_request_success():
@@ -277,6 +293,60 @@ async def test_create_account_composio_api_key_connects_via_provider():
     auth_provider.connect_with_credentials.assert_awaited_once()
     account_repo.create.assert_awaited_once()
     uow.commit.assert_awaited_once()
+
+
+async def test_create_account_allows_multiple_and_sets_default():
+    """Multiple credential-managed accounts are allowed; the first one
+    connected is the default, later ones are not."""
+    user_id = uuid4()
+    app = ConnectorEntity(
+        id="airtable",
+        provider_capabilities=[
+            ComposioProviderCapability(
+                toolkit_slug="airtable",
+                auth_scheme=AuthScheme.API_KEY,
+            )
+        ],
+    )
+    auth_config = _composio_auth_config("airtable")
+    auth_provider = AsyncMock()
+    auth_provider.connect_with_credentials.return_value = ComposioCredentials(
+        connection_id="ca_airtable"
+    )
+    registry = Mock()
+    registry.get.return_value = auth_provider
+
+    account_repo = AsyncMock()
+    account_repo.create.side_effect = lambda entity: entity
+
+    def _make_service():
+        return _service(
+            uow=AsyncMock(),
+            connector_repository=AsyncMock(get=AsyncMock(return_value=app)),
+            auth_config_repository=_auth_config_repo(auth_config),
+            account_repository=account_repo,
+            auth_provider_registry=registry,
+        )
+
+    # First account for the auth config -> default.
+    account_repo.get_by_user_and_auth_config.return_value = None
+    first = await _make_service().create_account(
+        user_id=user_id,
+        organization_id=ORG_ID,
+        auth_config_id=auth_config.id,
+        credentials={"api_key": "one"},
+    )
+    assert first.is_default is True
+
+    # A second account is allowed (no conflict) and is not the default.
+    account_repo.get_by_user_and_auth_config.return_value = first
+    second = await _make_service().create_account(
+        user_id=user_id,
+        organization_id=ORG_ID,
+        auth_config_id=auth_config.id,
+        credentials={"api_key": "two"},
+    )
+    assert second.is_default is False
 
 
 async def test_create_account_rejects_oauth2_scheme():

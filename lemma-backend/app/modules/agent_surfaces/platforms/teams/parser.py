@@ -128,7 +128,14 @@ class TeamsMessageParser:
             tenant_id=str(tenant.get("id") or payload.get("tenantId") or "") or None,
             external_channel_id=str(channel.get("id") or "") or None,
             external_thread_id=reply_to_id or conversation_id,
-            external_user_id=str(from_user.get("id") or "") or None,
+            # Match the same aad_id-or-bf_user_id precedence identity resolution
+            # uses (TeamsSurfaceAdapter.fetch_sender_profile): when the AAD Object
+            # ID was resolvable, it — not the bot-framework `id` — is what got
+            # stored as the conversation link's external_user_id. Reading only
+            # `id` here would reject every native submission's authz check.
+            external_user_id=(
+                str(from_user.get("aadObjectId") or from_user.get("id") or "") or None
+            ),
             callback_id=callback_id,
             values=field_values,
             reply_target={

@@ -14,6 +14,7 @@ from app.modules.agent_surfaces.domain.entities import (
     AgentSurfaceEntity,
     ConversationType,
     SurfaceChannelRoute,
+    SurfaceCredentialMode,
     SurfaceIdentityPolicy,
     ParsedInboundSurfaceEvent,
     ResolvedSurfaceUser,
@@ -57,6 +58,7 @@ def _slack_surface(*, agent_id: UUID | None = None) -> AgentSurfaceEntity:
     return AgentSurfaceEntity(
         id=uuid4(),
         pod_id=uuid4(),
+        name="slack",
         agent_id=agent_id if agent_id is not None else uuid4(),
         surface_type=SurfacePlatform.SLACK,
         mode=SurfaceMode.DM,
@@ -71,6 +73,7 @@ def _teams_surface() -> AgentSurfaceEntity:
     return AgentSurfaceEntity(
         id=uuid4(),
         pod_id=uuid4(),
+        name="teams",
         agent_id=uuid4(),
         surface_type=SurfacePlatform.TEAMS,
         mode=SurfaceMode.DM,
@@ -86,6 +89,7 @@ def _telegram_surface(*, agent_id: UUID | None = None) -> AgentSurfaceEntity:
     return AgentSurfaceEntity(
         id=uuid4(),
         pod_id=uuid4(),
+        name="telegram",
         agent_id=agent_id if agent_id is not None else uuid4(),
         surface_type=SurfacePlatform.TELEGRAM,
         mode=SurfaceMode.DM,
@@ -99,6 +103,7 @@ def _gmail_surface() -> AgentSurfaceEntity:
     return AgentSurfaceEntity(
         id=uuid4(),
         pod_id=uuid4(),
+        name="gmail",
         agent_id=uuid4(),
         surface_type=SurfacePlatform.GMAIL,
         mode=SurfaceMode.EMAIL,
@@ -303,6 +308,49 @@ async def test_prepare_webhook_returns_signup_context_for_unresolved_user():
     assert isinstance(context, SurfaceReplyContext)
     assert context.surface_id == surface.id
     assert context.agent_display_name == "Surface Agent"
+    service.conversation_service.create_conversation.assert_not_called()
+
+
+async def test_prepare_webhook_returns_pod_access_link_for_non_member():
+    """A signed-up user who isn't a pod member is pointed to the pod home page
+    (request access) on a DM system surface, instead of being dropped."""
+    surface = _telegram_surface()
+    surface.credential_mode = SurfaceCredentialMode.SYSTEM
+    event = ParsedInboundSurfaceEvent(
+        platform=SurfacePlatform.TELEGRAM,
+        conversation_type=ConversationType.EXTERNAL_DM,
+        external_thread_id="123",
+        external_channel_id="123",
+        sender_external_user_id="999",
+        message_text="hi",
+        is_dm=True,
+        reply_target={"chat_id": "123"},
+    )
+    adapter = AsyncMock()
+    adapter.parse_inbound_event.return_value = event
+    adapter.unresolved_sender_reply.return_value = None
+    adapter.linked_sender_confirmation.return_value = None
+    service = _build_service(
+        adapter=adapter,
+        surfaces=[surface],
+        resolved_user=ResolvedSurfaceUser(
+            internal_user_id=uuid4(),
+            external_user_id="999",
+            email="member@example.com",
+            display_name="Member",
+        ),
+    )
+    # Resolved user belongs to no pod -> not a member of the surface's pod.
+    service.pod_membership_port = SimpleNamespace(
+        get_user_pod_ids=AsyncMock(return_value=[])
+    )
+
+    context = await service.prepare_ingress(
+        SurfacePlatformWebhookIngress(source="telegram", payload={}, headers={})
+    )
+
+    assert isinstance(context, SurfaceReplyContext)
+    assert "Request access" in (context.reply_message or "")
     service.conversation_service.create_conversation.assert_not_called()
 
 
@@ -626,6 +674,7 @@ async def test_prepare_surface_context_ignores_self_sent_outlook_after_enrich():
     surface = AgentSurfaceEntity(
         id=uuid4(),
         pod_id=uuid4(),
+        name="outlook",
         agent_id=uuid4(),
         surface_type=SurfacePlatform.OUTLOOK,
         mode=SurfaceMode.EMAIL,
@@ -1176,6 +1225,113 @@ async def test_send_approval_prompt_skips_when_no_pending():
     service.conversation_service.get_pending_user_interaction.return_value = None
 
     sent = await service.send_approval_prompt_for_conversation(conversation_id=conversation_id)
+    assert sent is False
+    adapter.send_message.assert_not_awaited()
+
+
+async def test_interactive_prompts_suppressed_on_email_surface():
+    """Email is non-interactive: ask_user and request_approval renders are
+    suppressed (the run never pauses for a reply that can't come back)."""
+    surface = _gmail_surface()
+    conversation_id = uuid4()
+    parsed_event = _slack_event()
+    link = AgentSurfaceConversationLink(
+        surface_id=surface.id,
+        conversation_id=conversation_id,
+        platform="GMAIL",
+        external_channel_id=parsed_event.external_channel_id,
+        external_thread_id=parsed_event.external_thread_id,
+        external_user_id=parsed_event.sender_external_user_id,
+        last_event=parsed_event.model_dump(mode="json"),
+    )
+    adapter = AsyncMock()
+    service = _build_service(adapter=adapter, surfaces=[surface], existing_link=link)
+    service.conversation_link_repository.get_by_conversation_id.return_value = link
+
+    questions_sent = await service.send_questions_for_conversation(
+        conversation_id=conversation_id
+    )
+    assert questions_sent is False
+    adapter.send_questions.assert_not_awaited()
+
+    approval_sent = await service.send_approval_prompt_for_conversation(
+        conversation_id=conversation_id
+    )
+    assert approval_sent is False
+    adapter.send_message.assert_not_awaited()
+    # The email surface never even reads pending interaction state.
+    service.conversation_service.get_pending_ask_user.assert_not_awaited()
+    service.conversation_service.get_pending_user_interaction.assert_not_awaited()
+
+
+async def test_send_to_member_reuses_existing_thread():
+    """surface.send reaches a pod member by reusing their existing thread."""
+    surface = _slack_surface()
+    conversation_id = uuid4()
+    parsed_event = _slack_event()
+    link = await _ask_user_link(surface, conversation_id, parsed_event)
+    adapter = AsyncMock()
+    service = _build_service(adapter=adapter, surfaces=[surface], existing_link=link)
+    service.conversation_link_repository.get_by_conversation_id.return_value = link
+    service.pod_membership_port = SimpleNamespace(
+        get_user_pod_ids=AsyncMock(return_value=[surface.pod_id])
+    )
+    service.external_user_repository = AsyncMock(
+        get_by_resolved_user=AsyncMock(
+            return_value=SimpleNamespace(external_user_id=link.external_user_id)
+        )
+    )
+    service.conversation_link_repository.get_latest_by_surface_and_external_user = (
+        AsyncMock(return_value=link)
+    )
+
+    sent = await service.send_to_member(
+        surface=surface,
+        user_id=uuid4(),
+        message="Your report is ready.",
+    )
+    assert sent is True
+    assert "Your report is ready." in adapter.send_message.await_args.kwargs["message"]
+
+
+async def test_send_to_member_rejects_non_member():
+    surface = _slack_surface()
+    adapter = AsyncMock()
+    service = _build_service(adapter=adapter, surfaces=[surface])
+    service.pod_membership_port = SimpleNamespace(
+        get_user_pod_ids=AsyncMock(return_value=[uuid4()])  # a different pod
+    )
+
+    sent = await service.send_to_member(
+        surface=surface,
+        user_id=uuid4(),
+        message="x",
+    )
+    assert sent is False
+    adapter.send_message.assert_not_awaited()
+
+
+async def test_send_to_member_returns_false_without_reachable_thread():
+    surface = _slack_surface()
+    adapter = AsyncMock()
+    service = _build_service(adapter=adapter, surfaces=[surface])
+    service.pod_membership_port = SimpleNamespace(
+        get_user_pod_ids=AsyncMock(return_value=[surface.pod_id])
+    )
+    service.external_user_repository = AsyncMock(
+        get_by_resolved_user=AsyncMock(
+            return_value=SimpleNamespace(external_user_id="U-MEMBER")
+        )
+    )
+    service.conversation_link_repository.get_latest_by_surface_and_external_user = (
+        AsyncMock(return_value=None)
+    )
+
+    sent = await service.send_to_member(
+        surface=surface,
+        user_id=uuid4(),
+        message="x",
+    )
     assert sent is False
     adapter.send_message.assert_not_awaited()
 

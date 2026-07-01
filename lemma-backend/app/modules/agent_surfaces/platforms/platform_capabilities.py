@@ -110,9 +110,9 @@ PLATFORM_CAPABILITIES: dict[str, PlatformCapabilities] = {
     "WHATSAPP": PlatformCapabilities(
         platform="WHATSAPP",
         display_name="WhatsApp",
-        # TODO(follow-up): native interactive buttons/list + parse_inbound_interaction.
-        # Until then ask_user uses the formatted-text fallback + typed-reply resume.
-        supports_native_choices=False,
+        # Native interactive replies: ≤3 options as buttons, 4–10 as a list.
+        # Multi-select / >10 options fall back to formatted text.
+        supports_native_choices=True,
         supports_native_files=True,
         is_email=False,
         is_channel_capable=False,
@@ -123,10 +123,10 @@ PLATFORM_CAPABILITIES: dict[str, PlatformCapabilities] = {
     "TELEGRAM": PlatformCapabilities(
         platform="TELEGRAM",
         display_name="Telegram",
-        # TODO(follow-up): native inline-keyboard rendering + callback_query parse
-        # (needs a Redis short-token store for the 64-byte callback_data limit).
-        # Until then ask_user uses the formatted-text fallback + typed-reply resume.
-        supports_native_choices=False,
+        # Native inline-keyboard ask_user; option taps resolve via a Redis
+        # short-token store (64-byte callback_data limit). Multi-select falls
+        # back to formatted text.
+        supports_native_choices=True,
         supports_native_files=True,
         is_email=False,
         is_channel_capable=False,
@@ -157,6 +157,18 @@ PLATFORM_CAPABILITIES: dict[str, PlatformCapabilities] = {
         formatting_style=_EMAIL_FORMATTING,
         soft_char_limit=6000,
         reply_tool="outlook_reply_email",
+    ),
+    "RESEND": PlatformCapabilities(
+        platform="RESEND",
+        display_name="Email",
+        supports_native_choices=False,
+        supports_native_files=True,
+        is_email=True,
+        is_channel_capable=False,
+        markdown_mode="html_rendered",
+        formatting_style=_EMAIL_FORMATTING,
+        soft_char_limit=6000,
+        reply_tool="resend_reply_email",
     ),
 }
 
@@ -212,6 +224,14 @@ def platform_agent_guidance(platform: str | None) -> str:
             "download links automatically. Do not send partial or progress "
             "messages. `display_resource` does NOT reach the email recipient — "
             "share files through the reply tool's `attachment_paths`."
+        )
+        lines.append(
+            "## Email is not interactive\n"
+            "This is email, not a chat — the conversation cannot pause for a "
+            "reply. Do NOT call `ask_user`, `request_approval`, `display_resource`, "
+            "or `say`; none of them reach an email recipient. When you would "
+            "otherwise ask, pick the most sensible default and proceed, then "
+            f"deliver everything in the single `{caps.reply_tool}` reply."
         )
     else:
         # Chat surfaces: files always, forms only where native.

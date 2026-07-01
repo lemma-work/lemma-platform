@@ -10,6 +10,8 @@ from app.modules.agent.tools.context import ConversationContext
 from app.modules.agent_surfaces.domain.entities import ParsedInboundSurfaceEvent
 from app.modules.agent_surfaces.domain.models import (
     SurfaceDisplayRenderPlan,
+    SurfaceQuestion,
+    SurfaceQuestionRenderPlan,
     SurfaceSenderProfile,
 )
 from app.modules.agent_surfaces.domain.surface_event_metadata import (
@@ -24,6 +26,55 @@ from app.modules.agent_surfaces.platforms.whatsapp.models import (
 from app.core.log.log import get_logger
 
 logger = get_logger(__name__)
+
+# Separator for encoding ask_user routing into a WhatsApp button/list ``id``
+# (``callback_id~header~value``). The callback id itself uses ``|``, so ``~``
+# unambiguously splits the three parts. WhatsApp allows ids up to 256 chars.
+WHATSAPP_INTERACTION_SEP = "~"
+
+
+def _build_whatsapp_interactive(
+    callback_id: str, question: SurfaceQuestion
+) -> dict[str, Any] | None:
+    """Build a WhatsApp interactive payload for one question, or ``None`` if it
+    can't be expressed natively (id over 256 chars, or more than 10 options)."""
+    rows: list[tuple[str, str]] = []
+    for option in question.options:
+        button_id = (
+            f"{callback_id}{WHATSAPP_INTERACTION_SEP}{question.header}"
+            f"{WHATSAPP_INTERACTION_SEP}{option.label}"
+        )
+        if len(button_id.encode("utf-8")) > 256:
+            return None
+        rows.append((button_id, option.label))
+    body = {"text": (question.question or "").strip()[:1024] or "Please choose"}
+    if 1 <= len(rows) <= 3:
+        return {
+            "type": "button",
+            "body": body,
+            "action": {
+                "buttons": [
+                    {"type": "reply", "reply": {"id": rid, "title": title[:20]}}
+                    for rid, title in rows
+                ]
+            },
+        }
+    if 4 <= len(rows) <= 10:
+        return {
+            "type": "list",
+            "body": body,
+            "action": {
+                "button": "Choose",
+                "sections": [
+                    {
+                        "rows": [
+                            {"id": rid, "title": title[:24]} for rid, title in rows
+                        ]
+                    }
+                ],
+            },
+        }
+    return None
 
 _WHATSAPP_API_BASE = "https://graph.facebook.com/v21.0"
 
@@ -69,6 +120,53 @@ class WhatsAppPlatformService:
                 headers={"Authorization": f"Bearer {self._access_token}"},
             )
             resp.raise_for_status()
+
+    async def send_questions(
+        self,
+        event: ParsedInboundSurfaceEvent,
+        question_plan: SurfaceQuestionRenderPlan,
+        metadata: dict[str, Any] | None = None,
+    ) -> bool:
+        """Render ask_user questions as native interactive replies.
+
+        ≤3 options → reply buttons, 4–10 → a list; multi-select or anything that
+        can't be encoded returns ``False`` so the caller falls back to text. The
+        button/list ``id`` carries ``callback_id~header~value`` (no token store —
+        WhatsApp ids allow 256 chars).
+        """
+        del metadata
+        phone_number_id = (
+            event.reply_target.get("phone_number_id") or self._phone_number_id
+        )
+        sender_wa_id = event.reply_target.get("sender_wa_id") or event.sender_phone
+        if not sender_wa_id or not phone_number_id or not self._access_token:
+            return False
+        if any(q.multi_select for q in question_plan.questions):
+            return False
+        interactives = []
+        for question in question_plan.questions:
+            interactive = _build_whatsapp_interactive(
+                question_plan.callback_id, question
+            )
+            if interactive is None:
+                return False
+            interactives.append(interactive)
+        url = f"{self._api_base}/{phone_number_id}/messages"
+        async with httpx.AsyncClient() as client:
+            for interactive in interactives:
+                payload = {
+                    "messaging_product": "whatsapp",
+                    "to": sender_wa_id,
+                    "type": "interactive",
+                    "interactive": interactive,
+                }
+                resp = await client.post(
+                    url,
+                    json=payload,
+                    headers={"Authorization": f"Bearer {self._access_token}"},
+                )
+                resp.raise_for_status()
+        return True
 
     async def send_display_resource(
         self,

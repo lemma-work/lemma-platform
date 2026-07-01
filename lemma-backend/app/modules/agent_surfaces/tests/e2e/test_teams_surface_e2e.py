@@ -10,7 +10,6 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.modules.agent_surfaces.domain.ingress_context import SurfaceChatContext
 from app.modules.agent_surfaces.domain.ingress_request import SurfacePlatformWebhookIngress
 from app.modules.agent_surfaces.tests.e2e.helpers import (
-    EmulatedAgentHarness,
     REAL_TEAMS_CHANNEL_ID,
     REAL_TEAMS_TENANT_ID,
     REAL_TEAMS_THREAD_ID,
@@ -18,9 +17,12 @@ from app.modules.agent_surfaces.tests.e2e.helpers import (
     _create_agent_surface,
     _ensure_connector_account,
     _load_teams_channel_mention_fixture,
-    _process_ingress_and_emulate_reply,
 )
 from app.modules.agent_surfaces.tests.e2e.mock_infrastructure import wait_for_messages
+from app.modules.agent_surfaces.tests.e2e.scripted_llm import (
+    process_ingress_and_run_scripted,
+    script_text,
+)
 
 pytestmark = pytest.mark.e2e
 
@@ -91,11 +93,10 @@ async def test_teams_channel_surface_handles_platform_payload_and_replies(
     )
     assert response.status_code == 200, response.text
 
-    harness = EmulatedAgentHarness()
-    context = await _process_ingress_and_emulate_reply(
+    context = await process_ingress_and_run_scripted(
         db_session,
         SurfacePlatformWebhookIngress(source="teams", payload=payload, headers={}),
-        harness,
+        script=[script_text("E2E agent reply [TEAMS]")],
     )
     assert isinstance(context, SurfaceChatContext)
     assert str(context.surface_id) == surface["id"]

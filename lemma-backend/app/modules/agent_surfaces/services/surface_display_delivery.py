@@ -96,6 +96,32 @@ async def deliver_display_resource_to_surface(
         return False
 
 
+async def deliver_surface_message_to_surface(
+    *,
+    conversation_id: UUID,
+    message: str,
+) -> bool:
+    """Deliver a plain message to the conversation's chat surface now.
+
+    Backs the current-user ``surface_send_message`` agent tool. Best-effort:
+    returns False (never raises) when there is no active surface egress target.
+    """
+    try:
+        async with create_uow_from_session_maker(async_session_maker) as uow:
+            service = build_agent_surface_ingress_service(uow)
+            return await service.send_agent_message_for_conversation(
+                conversation_id=conversation_id,
+                message=message,
+            )
+    except Exception as exc:
+        logger.warning(
+            "Surface message delivery failed conversation=%s error=%s",
+            conversation_id,
+            exc,
+        )
+        return False
+
+
 async def deliver_voice_note_to_surface(
     *,
     conversation_id: UUID,
