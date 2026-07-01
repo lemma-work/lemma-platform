@@ -90,7 +90,7 @@ def start_daemon(
 
     from lemma_sdk.config import resolve_base_url, resolve_token, resolve_verify_ssl  # noqa: PLC0415
 
-    from .runner import run_daemon  # noqa: PLC0415
+    from .runner import run_daemon_with_graceful_shutdown  # noqa: PLC0415
 
     resolved_base_url = resolve_base_url(
         state.base_url, state.config, use_env=state.server_source == "env",
@@ -98,7 +98,7 @@ def start_daemon(
     write_daemon_status(os.getpid(), base_url=resolved_base_url, server=state.server)
     try:
         asyncio.run(
-            run_daemon(
+            run_daemon_with_graceful_shutdown(
                 base_url=resolved_base_url,
                 token=resolve_token(
                     state.token,

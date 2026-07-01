@@ -6,6 +6,8 @@ import asyncio
 import collections
 import contextlib
 import json
+import os
+import signal
 import time
 
 import pytest
@@ -845,3 +847,86 @@ async def test_heartbeat_ping_includes_capacity_payload(monkeypatch):
 
     ping = _pings_sent(ws)[0]
     assert ping["payload"]["capacity"] == {"max_concurrent_runs": 4, "active_run_count": 1}
+
+
+@pytest.mark.asyncio
+@pytest.mark.skipif(os.name == "nt", reason="add_signal_handler is POSIX-only")
+async def test_graceful_shutdown_cancels_run_daemon_on_sigterm(monkeypatch):
+    """`lemma daemon stop` / a plain `kill` send SIGTERM. With no handler at
+    all, the interpreter's default behavior tears the process down before
+    run_daemon()'s own subprocess-teardown cleanup gets a chance to run,
+    orphaning any active/held provider subprocess. The wrapper must turn
+    that into a cancellation of the daemon task instead.
+    """
+    cleanup_ran = asyncio.Event()
+
+    async def _fake_run_daemon(**kwargs):
+        del kwargs
+        try:
+            await asyncio.sleep(10)
+        except asyncio.CancelledError:
+            cleanup_ran.set()
+            raise
+
+    monkeypatch.setattr(runner, "run_daemon", _fake_run_daemon)
+
+    task = asyncio.create_task(runner.run_daemon_with_graceful_shutdown())
+    # Handler registration is synchronous, before the wrapper's first
+    # `await` -- yielding back to the loop a few times is enough for that
+    # setup to have run.
+    await asyncio.sleep(0.05)
+    os.kill(os.getpid(), signal.SIGTERM)
+
+    await asyncio.wait_for(task, timeout=2)
+    assert cleanup_ran.is_set()
+    assert task.done() and not task.cancelled()  # CancelledError is suppressed, not propagated
+
+
+@pytest.mark.asyncio
+@pytest.mark.skipif(os.name == "nt", reason="add_signal_handler is POSIX-only")
+async def test_graceful_shutdown_awaits_held_run_cancellation_before_returning(monkeypatch):
+    """run_daemon()'s own finally block must AWAIT cancelled held-run tasks,
+    not just call .cancel() and move on -- otherwise the process can still
+    exit (via the graceful-shutdown wrapper returning) before a held
+    subprocess's own CancelledError-triggered teardown actually finishes.
+    """
+    torn_down = asyncio.Event()
+
+    async def _held_task_body():
+        try:
+            await asyncio.sleep(10)
+        except asyncio.CancelledError:
+            await asyncio.sleep(0.05)  # simulate terminate-then-wait teardown work
+            torn_down.set()
+            raise
+
+    # run_daemon() owns `held_runs` internally and only ever hands it to
+    # _serve_connection() by reference -- inject the pre-populated entry from
+    # inside the fake so it lands in the SAME dict run_daemon()'s own
+    # `finally` later inspects.
+    async def _fake_serve_connection(*args, held_runs, **kwargs):
+        del args, kwargs
+        held_runs["run-1"] = runner._HeldRun(
+            task=asyncio.create_task(_held_task_body()),
+            sink=runner._RunEventSink(_FakeWS(), "run-1", asyncio.Lock()),
+            buffer=collections.deque(),
+            disconnected_at=time.monotonic(),
+        )
+        await asyncio.sleep(10)
+
+    monkeypatch.setattr(runner, "_serve_connection", _fake_serve_connection)
+
+    daemon_task = asyncio.create_task(
+        runner.run_daemon(
+            base_url="http://x",
+            token="t",
+            verify_ssl=False,
+            connect_factory=lambda _token: _FakeConn(_FakeWS()),
+        )
+    )
+    await asyncio.sleep(0.05)
+    daemon_task.cancel()
+    with contextlib.suppress(asyncio.CancelledError):
+        await asyncio.wait_for(daemon_task, timeout=2)
+
+    assert torn_down.is_set()

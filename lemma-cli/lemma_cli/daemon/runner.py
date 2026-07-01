@@ -286,9 +286,47 @@ async def run_daemon(
         reaper_task.cancel()
         with contextlib.suppress(asyncio.CancelledError):
             await reaper_task
-        for held in held_runs.values():
-            if not held.task.done():
-                held.task.cancel()
+        pending = [held.task for held in held_runs.values() if not held.task.done()]
+        for task in pending:
+            task.cancel()
+        if pending:
+            # Await, not just request, cancellation -- each task's own
+            # CancelledError handler (harness-specific, e.g. claude_code.py's
+            # terminate_gracefully) is what actually tears down its
+            # subprocess. Returning before that finishes would let
+            # run_daemon() exit (and the process die, if this is on the
+            # graceful-shutdown path) while a provider subprocess is still
+            # orphaned mid-teardown.
+            await asyncio.gather(*pending, return_exceptions=True)
+
+
+async def run_daemon_with_graceful_shutdown(**kwargs: Any) -> None:
+    """Run ``run_daemon`` with SIGTERM/SIGINT cancelling it instead of killing
+    the process outright.
+
+    With no signal handler installed, the interpreter's default SIGTERM
+    behavior tears the process down immediately -- none of ``run_daemon``'s
+    own cleanup (terminating active/held provider subprocesses) gets a
+    chance to run, orphaning them. `lemma daemon stop` and a plain `kill`
+    both send SIGTERM; this makes both paths shut down the same way a
+    reconnect-triggered hold/cancel already does.
+    """
+    import signal
+
+    loop = asyncio.get_running_loop()
+    task = asyncio.ensure_future(run_daemon(**kwargs))
+
+    def _request_shutdown(sig_name: str) -> None:
+        daemon_log("received shutdown signal; stopping gracefully", {"signal": sig_name})
+        task.cancel()
+
+    for sig in (signal.SIGTERM, signal.SIGINT):
+        with contextlib.suppress(NotImplementedError):
+            # Not implemented on Windows -- falls back to default handling there.
+            loop.add_signal_handler(sig, _request_shutdown, sig.name)
+
+    with contextlib.suppress(asyncio.CancelledError):
+        await task
 
 
 def _capacity_payload(active_run_count: int) -> dict[str, int]:
