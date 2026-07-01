@@ -435,7 +435,13 @@ class Settings(BaseSettings):
         ),
     )
     scheduler_api_url: str = Field(
-        default="http://localhost:8711", description="Scheduler API URL"
+        default="",
+        description=(
+            "Scheduler API URL. The backend hosts the scheduler routes, so this "
+            "defaults to api_url; set it explicitly only when the scheduler is "
+            "split out to its own service (e.g. compose points it at the internal "
+            "backend URL)."
+        ),
     )
     supertokens_core_url: str = Field(
         default="http://localhost:3567", description="Supertokens core URL"
@@ -522,6 +528,17 @@ class Settings(BaseSettings):
         if isinstance(value, str) and not value.strip():
             return None
         return value
+
+    @model_validator(mode="after")
+    def _default_scheduler_api_url_to_api_url(self) -> "Settings":
+        # The scheduler routes are served by the backend itself, so an unset
+        # SCHEDULER_API_URL should follow api_url rather than a stale fixed port.
+        # Local dev overrides API_URL (e.g. :8710) but not SCHEDULER_API_URL;
+        # without this the scheduler client dials the wrong port and every
+        # schedule create fails with a connection error.
+        if not self.scheduler_api_url.strip():
+            self.scheduler_api_url = self.api_url
+        return self
 
     @model_validator(mode="after")
     def _require_app_base_domain_outside_local(self) -> "Settings":
