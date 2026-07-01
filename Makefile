@@ -12,7 +12,7 @@ SHELL := /bin/bash
 #   make coverage      full coverage report (unit + e2e per component)
 # ──────────────────────────────────────────────────────────────────────────────
 
-.PHONY: help init dev stop stop-all logs _ensure-databases \
+.PHONY: help init dev stop stop-all logs _ensure-databases _ensure-agentbox-image \
         test test-backend test-backend-unit test-backend-e2e \
         test-frontend test-cli test-cli-unit test-cli-e2e test-python \
         coverage coverage-backend coverage-backend-unit coverage-backend-e2e \
@@ -63,6 +63,13 @@ DEV_REDIS_URL         := redis://localhost:$(DEV_REDIS_PORT)/0
 DEV_SUPERTOKENS_URL   := http://localhost:$(DEV_SUPERTOKENS_PORT)
 DEV_AGENTBOX_URL      := http://127.0.0.1:$(DEV_AGENTBOX_PORT)
 DEV_AGENTBOX_API_KEY  ?= dev-agentbox-key
+# ~2.9GB image. docker run auto-pulls a missing image synchronously and
+# uncapped — the first sandbox creation after a fresh clone would otherwise
+# block on this pull with zero progress feedback, which looks exactly like a
+# hung agent ("stuck at exec command, no sandbox created"). Pre-pulling in
+# `make init`/`make dev` turns that invisible stall into a visible, one-time
+# download.
+AGENTBOX_RUNTIME_IMAGE := ghcr.io/lemma-work/lemma-agentbox-runtime:latest
 
 COMMON_DEV_ENV := \
 	DEV_POSTGRES_PORT=$(DEV_POSTGRES_PORT) \
@@ -83,7 +90,7 @@ AGENTBOX_DEV_ENV := \
 	AGENTBOX_PROVIDER=docker \
 	AGENTBOX_API_KEY=$(DEV_AGENTBOX_API_KEY) \
 	AGENTBOX_API_URL=$(DEV_AGENTBOX_URL) \
-	AGENTBOX_RUNTIME_IMAGE=ghcr.io/lemma-work/lemma-agentbox-runtime:latest \
+	AGENTBOX_RUNTIME_IMAGE=$(AGENTBOX_RUNTIME_IMAGE) \
 	AGENTBOX_STATE_DB_PATH=/tmp/agentbox-state.db \
 	AGENTBOX_STORAGE_ROOT=/tmp/agentbox-workspaces \
 	AGENTBOX_ENDPOINT_HOST=127.0.0.1 \
@@ -165,7 +172,18 @@ init:
 	@$(MAKE) --no-print-directory _init-backend-env
 	@$(MAKE) --no-print-directory _init-frontend-env
 	@echo ""
+	@$(MAKE) --no-print-directory _ensure-agentbox-image
+	@echo ""
 	@echo "Done. Run 'make dev' to start the stack."
+
+_ensure-agentbox-image:
+	@if docker image inspect "$(AGENTBOX_RUNTIME_IMAGE)" >/dev/null 2>&1; then \
+		echo "  ✓ AgentBox runtime image already present: $(AGENTBOX_RUNTIME_IMAGE)"; \
+	else \
+		echo "→ Pulling AgentBox runtime image (one-time, ~2.9GB): $(AGENTBOX_RUNTIME_IMAGE)…"; \
+		docker pull "$(AGENTBOX_RUNTIME_IMAGE)" && \
+		echo "  ✓ AgentBox runtime image ready"; \
+	fi
 
 _init-backend-env:
 	@if [ ! -f $(BACKEND_DIR)/.env ]; then \
@@ -267,6 +285,7 @@ dev:
 	@echo "→ Starting Lemma dev stack…"
 	@$(MAKE) --no-print-directory stop 2>/dev/null || true
 	@$(MAKE) --no-print-directory _ensure-init
+	@$(MAKE) --no-print-directory _ensure-agentbox-image
 	@$(MAKE) --no-print-directory _infra-up
 	@$(MAKE) --no-print-directory _wait-infra
 	@$(MAKE) --no-print-directory _ensure-databases
