@@ -111,6 +111,48 @@ def resolve_file_refs(value: Any, *, base_dir: Path) -> Any:
     return value
 
 
+def table_fk_dependencies(manifest: dict[str, Any]) -> set[str]:
+    """Table names this table references via a foreign-key column."""
+    deps: set[str] = set()
+    for column in manifest.get("columns") or []:
+        if not isinstance(column, dict):
+            continue
+        fk = column.get("foreign_key")
+        if isinstance(fk, dict) and fk.get("references"):
+            referenced = str(fk["references"]).split(".", 1)[0].strip()
+            if referenced:
+                deps.add(referenced)
+    return deps
+
+
+def order_tables_by_fk(bundle_root: Path, names: list[str]) -> list[str]:
+    """Order table names so a table comes after any in-bundle table it
+    references by foreign key. Alphabetical for ties; cycles/self-refs are left
+    in stable order rather than failing."""
+    names = list(names)
+    in_bundle = set(names)
+    deps_by_name: dict[str, set[str]] = {}
+    for name in names:
+        try:
+            manifest = read_manifest(bundle_root, "tables", name)
+        except (OSError, ValueError, FileNotFoundError):
+            manifest = {}
+        deps_by_name[name] = table_fk_dependencies(manifest) & in_bundle
+
+    ordered: list[str] = []
+    placed: set[str] = set()
+    remaining = list(names)
+    while remaining:
+        ready = [name for name in remaining if deps_by_name[name] <= placed]
+        if not ready:  # cycle / self-reference — emit the rest stably
+            ready = list(remaining)
+        for name in sorted(ready):
+            ordered.append(name)
+            placed.add(name)
+        remaining = [name for name in remaining if name not in placed]
+    return ordered
+
+
 def read_manifest(bundle_root: Path, kind: str, name: str) -> dict[str, Any]:
     """Parse a resource's manifest JSON (tolerant of JSONC), with sidecar
     ``$file``/``$json_file`` references resolved. Raises if missing."""

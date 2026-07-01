@@ -267,26 +267,26 @@ def _capabilities(
     n_functions = _count_dirs(bundle_root / "functions")
     if n_functions:
         caps.append(
-            {"tier": "code", "summary": f"Runs {n_functions} Python function{_plural(n_functions)}"}
+            {"tier": "code", "summary": f"Run {n_functions} Python function{_plural(n_functions)}"}
         )
 
     if connectors:
         names = ", ".join(str(conn.get("platform") or conn["key"]) for conn in connectors)
         caps.append(
-            {"tier": "external", "summary": f"Uses your {names} connection{_plural(len(connectors))}"}
+            {"tier": "external", "summary": f"Use your {names} connection{_plural(len(connectors))}"}
         )
 
     n_agents = _count_dirs(bundle_root / "agents")
     if n_agents:
-        caps.append({"tier": "ai", "summary": f"Runs {n_agents} AI agent{_plural(n_agents)}"})
+        caps.append({"tier": "ai", "summary": f"Run {n_agents} AI agent{_plural(n_agents)}"})
 
     n_tables = _count_dirs(bundle_root / "tables")
     if n_tables:
         seeded = _seed_tables(bundle_root)
-        summary = f"Creates {n_tables} table{_plural(n_tables)}"
+        summary = f"Create {n_tables} table{_plural(n_tables)}"
         if seeded:
             rows = sum(_count_rows(path) for _, path in seeded)
-            summary += f", seeds {rows} row{_plural(rows)}"
+            summary += f", seed {rows} row{_plural(rows)}"
         caps.append({"tier": "data", "summary": summary})
 
     return caps

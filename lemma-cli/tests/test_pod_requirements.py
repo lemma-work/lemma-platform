@@ -109,7 +109,7 @@ def test_capabilities_are_tier_ordered_and_data_counts_rows(tmp_path):
     tiers = [c["tier"] for c in caps]
     assert tiers == ["code", "external", "ai", "data"]
     data_cap = next(c for c in caps if c["tier"] == "data")
-    assert "seeds 3 rows" in data_cap["summary"]
+    assert "seed 3 rows" in data_cap["summary"]
 
     data_req = extract_requirements(root)["requirements"]["data"]
     assert data_req["tables_with_seed"] == ["products"]

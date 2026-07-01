@@ -7,6 +7,7 @@ capabilities extraction, table-column diffing, and tolerant JSON parsing.
 from lemma_pod_bundle.bundle import (
     RESOURCE_KINDS,
     list_resource_names,
+    order_tables_by_fk,
     read_manifest,
     read_table_data,
 )
@@ -37,6 +38,7 @@ __all__ = [
     "resolve_placeholders",
     "list_resource_names",
     "loads_jsonc",
+    "order_tables_by_fk",
     "read_manifest",
     "read_table_data",
     "read_requirements",
