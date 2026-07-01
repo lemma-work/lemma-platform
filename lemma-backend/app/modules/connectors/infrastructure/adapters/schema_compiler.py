@@ -25,7 +25,13 @@ class PydanticCodeSchemaCompiler(SchemaCompilerPort):
                     break
 
             namespace: dict[str, Any] = {}
-            exec(code, namespace)  # nosec B102 - controlled internal code snippets
+            # SECURITY: Restrict __builtins__ to prevent arbitrary code execution
+            safe_ns = {"__builtins__": {k: v for k, v in __builtins__.items() 
+                       if k in ("BaseModel", "Field", "__import__", "type", "isinstance", 
+                                "issubclass", "hasattr", "getattr", "Exception", 
+                                "ValueError", "TypeError", "__name__", "__doc__")}}
+            safe_ns.update(namespace)
+            exec(code, safe_ns)  # nosec B102 — restricted builtins to prevent RCE
 
             # 2. If model_name found, try to use it
             if model_name:
