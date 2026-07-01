@@ -25,7 +25,14 @@ class PodImportRepository:
             self.session.add(PodImportModel.from_entity(entity))
         else:
             existing.apply_entity(entity)
-        await self.session.flush()
+        # A real commit (not just flush) — every checkpoint call site in
+        # ImportService.apply() needs to be durable and visible to a
+        # concurrent GET the instant it happens, or a polling frontend can
+        # never see live progress during the (single, blocking) apply
+        # request. Safe: this repository is only ever used for these
+        # checkpoints, and async_session_maker has expire_on_commit=False,
+        # so objects loaded earlier in the same apply loop stay usable.
+        await self.session.commit()
 
     async def get(self, import_id: UUID) -> PodImportEntity | None:
         model = await self.session.get(PodImportModel, import_id)

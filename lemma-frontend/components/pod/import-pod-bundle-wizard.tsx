@@ -12,6 +12,7 @@ import {
     Database,
     FileArchive,
     Globe,
+    Loader2,
     type LucideIcon,
     PackagePlus,
     RotateCcw,
@@ -22,14 +23,18 @@ import { toast } from 'sonner';
 import { RemixTakeover } from '@/components/pod/remix-takeover';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
-import { usePod } from '@/lib/hooks/use-pods';
+import { useOrganizations } from '@/lib/hooks/use-organizations';
+import { useAccessiblePods, usePod } from '@/lib/hooks/use-pods';
 import {
     type Capability,
     type ImportStep,
     type PodImport,
     useApplyImport,
     useCreateImport,
+    useImportFromGithub,
+    useImportFromGithubIntoPod,
     useImportIntoNewPod,
+    usePodImport,
 } from '@/lib/hooks/use-pod-imports';
 
 /** Where an import lands: a brand-new pod the importer owns, or merged into the
@@ -37,6 +42,11 @@ import {
 type Target = 'new' | 'here';
 
 type Phase = 'upload' | 'review' | 'result';
+
+/** A non-upload origin for the wizard — drives the standalone entry points
+ * (e.g. /import/github/<owner>/<repo>) that have no file to pick, only a
+ * fetch to trigger once the new-vs-existing choice is made. */
+type ExternalSource = { kind: 'github'; owner: string; repo: string };
 
 const TIER_ICON: Record<string, LucideIcon> = {
     code: Code2,
@@ -326,28 +336,52 @@ function TargetCard({
 export function ImportPodBundleWizard({
     podId,
     initialImport,
+    source,
 }: {
-    podId: string;
+    // The pod you're already inside (e.g. /pod/<id>/import) — omit for a
+    // standalone entry point that has no "current pod" (see `source`).
+    podId?: string;
     // A pre-planned import (e.g. from a shared /import/p/<id> link) — the wizard
     // skips upload and opens straight at review.
     initialImport?: PodImport;
+    // A non-upload origin (e.g. a GitHub repo) for a standalone entry point —
+    // the "upload" phase asks new-vs-existing-pod and an org/pod picker
+    // instead of a file drop.
+    source?: ExternalSource;
 }) {
     const router = useRouter();
+    const standalone = !podId;
     const [phase, setPhase] = useState<Phase>(initialImport ? 'review' : 'upload');
     const [target, setTarget] = useState<Target>('new');
     const [file, setFile] = useState<File | null>(null);
     const [imp, setImp] = useState<PodImport | null>(initialImport ?? null);
     const [vars, setVars] = useState<Record<string, string>>({});
+    const [selectedOrgId, setSelectedOrgId] = useState('');
+    const [selectedExistingPodId, setSelectedExistingPodId] = useState('');
 
     const pod = usePod(podId);
     const createImport = useCreateImport();
     const importIntoNewPod = useImportIntoNewPod();
+    const importFromGithub = useImportFromGithub();
+    const importFromGithubIntoPod = useImportFromGithubIntoPod();
     const applyImport = useApplyImport();
     const uploading = createImport.isPending || importIntoNewPod.isPending;
-    // The import always carries the pod it targets (imp.pod_id) — the current pod
-    // when installing here, a freshly-created pod when creating new.
-    const createdNewPod = !!imp && imp.pod_id !== podId;
-    const newPod = usePod(createdNewPod ? imp!.pod_id : undefined);
+    const continuing = importFromGithub.isPending || importFromGithubIntoPod.isPending;
+
+    const organizations = useOrganizations({ enabled: standalone }).data?.items ?? [];
+    const effectiveOrgId = selectedOrgId || organizations[0]?.id || '';
+    const accessiblePods = useAccessiblePods({ enabled: standalone }).data;
+
+    // The import always carries the pod it targets (imp.pod_id). In pod-scoped
+    // mode that's "did it differ from the pod we started in"; standalone has
+    // no starting pod, so the choice the user made is the source of truth.
+    const createdNewPod = podId ? !!imp && imp.pod_id !== podId : target === 'new';
+    const newPod = usePod(createdNewPod ? imp?.pod_id : undefined);
+    // Live progress: the apply POST blocks until done, so a concurrent poll
+    // (enabled here for the exact duration of that call) is what actually
+    // shows per-step progress as it happens.
+    const polled = usePodImport(imp?.pod_id, imp?.id, { forcePoll: applyImport.isPending });
+    const liveImp = polled.data ?? imp;
 
     const destructiveCount = useMemo(
         () => imp?.plan.filter((s) => s.destructive).length ?? 0,
@@ -364,11 +398,33 @@ export function ImportPodBundleWizard({
                           organizationId: pod.data!.organization_id,
                           sourceRef: file.name,
                       })
-                    : await createImport.mutateAsync({ podId, file, sourceName: file.name });
+                    : await createImport.mutateAsync({ podId: podId!, file, sourceName: file.name });
             setImp(result);
             setPhase('review');
         } catch (e) {
             toast.error(e instanceof Error ? e.message : 'Upload failed');
+        }
+    };
+
+    const onContinueFromSource = async () => {
+        if (!source) return;
+        try {
+            const result =
+                target === 'new'
+                    ? await importFromGithub.mutateAsync({
+                          owner: source.owner,
+                          repo: source.repo,
+                          organizationId: effectiveOrgId,
+                      })
+                    : await importFromGithubIntoPod.mutateAsync({
+                          podId: selectedExistingPodId,
+                          owner: source.owner,
+                          repo: source.repo,
+                      });
+            setImp(result);
+            setPhase('review');
+        } catch (e) {
+            toast.error(e instanceof Error ? e.message : 'Could not import this repo');
         }
     };
 
@@ -399,6 +455,8 @@ export function ImportPodBundleWizard({
     const reset = () => {
         setFile(null);
         setImp(null);
+        setSelectedOrgId('');
+        setSelectedExistingPodId('');
         setPhase('upload');
     };
 
@@ -407,23 +465,27 @@ export function ImportPodBundleWizard({
             <div className="surface-panel p-6">
                 {phase === 'upload' && (
                     <>
-                        <p className="mb-4 text-sm text-[var(--text-secondary)]">
-                            Upload a pod bundle archive (.zip or .tar.gz). We&apos;ll show you exactly
-                            what it does and what it needs before anything is applied.
-                        </p>
-                        <label className="flex cursor-pointer flex-col items-center gap-2 rounded-lg border border-dashed border-[var(--border-strong)] px-4 py-8 text-center hover:bg-[var(--surface-2)]">
-                            <Upload className="h-5 w-5 text-[var(--text-tertiary)]" />
-                            <span className="text-sm text-[var(--text-secondary)]">
-                                {file ? file.name : 'Choose a bundle archive'}
-                            </span>
-                            <input
-                                type="file"
-                                accept=".zip,.tar.gz,.tgz,.tar"
-                                className="hidden"
-                                onChange={(e) => setFile(e.target.files?.[0] ?? null)}
-                            />
-                        </label>
-                        <div className="mt-4 grid grid-cols-2 gap-2">
+                        {!standalone && (
+                            <>
+                                <p className="mb-4 text-sm text-[var(--text-secondary)]">
+                                    Upload a pod bundle archive (.zip or .tar.gz). We&apos;ll show you
+                                    exactly what it does and what it needs before anything is applied.
+                                </p>
+                                <label className="flex cursor-pointer flex-col items-center gap-2 rounded-lg border border-dashed border-[var(--border-strong)] px-4 py-8 text-center hover:bg-[var(--surface-2)]">
+                                    <Upload className="h-5 w-5 text-[var(--text-tertiary)]" />
+                                    <span className="text-sm text-[var(--text-secondary)]">
+                                        {file ? file.name : 'Choose a bundle archive'}
+                                    </span>
+                                    <input
+                                        type="file"
+                                        accept=".zip,.tar.gz,.tgz,.tar"
+                                        className="hidden"
+                                        onChange={(e) => setFile(e.target.files?.[0] ?? null)}
+                                    />
+                                </label>
+                            </>
+                        )}
+                        <div className={`grid grid-cols-2 gap-2 ${standalone ? '' : 'mt-4'}`}>
                             <TargetCard
                                 active={target === 'new'}
                                 icon={PackagePlus}
@@ -434,19 +496,75 @@ export function ImportPodBundleWizard({
                             <TargetCard
                                 active={target === 'here'}
                                 icon={ArrowRight}
-                                title="Install into this pod"
-                                subtitle="Add its resources here"
+                                title={standalone ? 'Install into an existing pod' : 'Install into this pod'}
+                                subtitle={standalone ? 'Add its resources to a pod you have' : 'Add its resources here'}
                                 onClick={() => setTarget('here')}
                             />
                         </div>
+                        {standalone && target === 'new' && (
+                            <div className="mt-4">
+                                <label className="mb-1.5 block text-sm text-[var(--text-secondary)]">
+                                    Workspace
+                                </label>
+                                <select
+                                    value={effectiveOrgId}
+                                    onChange={(e) => setSelectedOrgId(e.target.value)}
+                                    className="form-field-control flex h-11 w-full items-center px-3 py-2 text-sm text-[var(--text-primary)] outline-none"
+                                >
+                                    <option value="" disabled>
+                                        Select a workspace
+                                    </option>
+                                    {organizations.map((org) => (
+                                        <option key={org.id} value={org.id}>
+                                            {org.name}
+                                        </option>
+                                    ))}
+                                </select>
+                            </div>
+                        )}
+                        {standalone && target === 'here' && (
+                            <div className="mt-4">
+                                <label className="mb-1.5 block text-sm text-[var(--text-secondary)]">
+                                    Pod
+                                </label>
+                                <select
+                                    value={selectedExistingPodId}
+                                    onChange={(e) => setSelectedExistingPodId(e.target.value)}
+                                    className="form-field-control flex h-11 w-full items-center px-3 py-2 text-sm text-[var(--text-primary)] outline-none"
+                                >
+                                    <option value="" disabled>
+                                        Select a pod
+                                    </option>
+                                    {accessiblePods?.groups.map((group) => (
+                                        <optgroup key={group.organization.id} label={group.organization.name}>
+                                            {group.pods.map((p) => (
+                                                <option key={p.id} value={p.id}>
+                                                    {p.name}
+                                                </option>
+                                            ))}
+                                        </optgroup>
+                                    ))}
+                                </select>
+                            </div>
+                        )}
                         <div className="mt-5 flex justify-end gap-2">
-                            <Button
-                                disabled={!file || (target === 'new' && !pod.data)}
-                                loading={uploading}
-                                onClick={onUpload}
-                            >
-                                <FileArchive className="mr-1.5 h-4 w-4" /> Analyze bundle
-                            </Button>
+                            {standalone ? (
+                                <Button
+                                    disabled={target === 'new' ? !effectiveOrgId : !selectedExistingPodId}
+                                    loading={continuing}
+                                    onClick={onContinueFromSource}
+                                >
+                                    Continue <ArrowRight className="ml-1.5 h-4 w-4" />
+                                </Button>
+                            ) : (
+                                <Button
+                                    disabled={!file || (target === 'new' && !pod.data)}
+                                    loading={uploading}
+                                    onClick={onUpload}
+                                >
+                                    <FileArchive className="mr-1.5 h-4 w-4" /> Analyze bundle
+                                </Button>
+                            )}
                         </div>
                     </>
                 )}
@@ -460,7 +578,13 @@ export function ImportPodBundleWizard({
                             values={vars}
                             onChange={(key, value) => setVars((prev) => ({ ...prev, [key]: value }))}
                         />
-                        <PlanList imp={imp} />
+                        <PlanList imp={applyImport.isPending ? (liveImp ?? imp) : imp} />
+                        {applyImport.isPending && (
+                            <p className="mb-5 flex items-center gap-2 text-sm text-[var(--text-tertiary)]">
+                                <Loader2 className="h-3.5 w-3.5 animate-spin" /> Applying — this can take
+                                up to a minute for larger pods.
+                            </p>
+                        )}
                         {destructiveCount > 0 && (
                             <div className="mb-5 flex items-start gap-2 rounded-lg border border-[var(--state-error)] px-3 py-2.5">
                                 <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0 text-[var(--state-error)]" />
@@ -566,6 +690,13 @@ export function ImportPodBundleWizard({
                                     onClick={() => router.push(`/pod/${imp.pod_id}`)}
                                 >
                                     Open your new pod <ArrowRight className="ml-1.5 h-4 w-4" />
+                                </Button>
+                            ) : imp.status === 'COMPLETED' ? (
+                                <Button
+                                    variant="primary"
+                                    onClick={() => router.push(`/pod/${imp.pod_id}`)}
+                                >
+                                    Open pod <ArrowRight className="ml-1.5 h-4 w-4" />
                                 </Button>
                             ) : null}
                         </div>

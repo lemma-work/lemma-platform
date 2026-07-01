@@ -18,8 +18,9 @@ from app.modules.pod.api.dependencies import PodServiceDep
 from app.modules.pod.domain.pod_entities import PodConfig, PodEntity, PodSource
 from app.modules.pod_import.api.dependencies import ImportAppServiceDep
 from app.modules.pod_import.api.schemas import ApplyImportRequest, PodImportResponse
+from app.modules.pod_import.domain.entities import PodImportEntity
 from app.modules.pod_import.infrastructure.exporter import BundleExporter
-from app.modules.pod_import.infrastructure.staging import peek_pod_manifest
+from app.modules.pod_import.infrastructure.staging import has_pod_manifest, peek_pod_manifest
 
 router = APIRouter(prefix="/pods/{pod_id}/imports", tags=["imports"])
 
@@ -53,6 +54,52 @@ async def _unique_pod_name(pod_service, organization_id: UUID, user_id: UUID, de
     return f"{desired} ({user_id.hex[:6]})"
 
 
+async def _create_new_pod_from_bundle(
+    *,
+    pod_service: PodServiceDep,
+    service: ImportAppServiceDep,
+    organization_id: UUID,
+    user_id: UUID,
+    archive: bytes,
+    filename: str | None,
+    source_kind: str,
+    source_ref: str | None,
+) -> PodImportEntity:
+    """Shared by every "create a new pod" entry (upload, shared link, GitHub
+    import): name the pod from the bundle's pod.json, dedupe against the org,
+    stamp provenance, then plan the import into it."""
+    if not has_pod_manifest(archive, filename):
+        # Otherwise this silently creates an empty "Imported pod" with no
+        # resources — e.g. a GitHub repo whose file pushes never landed (repo
+        # created, then publish failed before committing anything) fetches as
+        # a valid-looking but content-less zip.
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="This doesn't look like a Lemma pod bundle (no pod.json found).",
+        )
+    manifest = peek_pod_manifest(archive, filename)
+    desired = str(manifest.get("name") or _bundle_stem(filename) or "Imported pod")
+    name = await _unique_pod_name(pod_service, organization_id, user_id, desired)
+    pod = await pod_service.create_pod(
+        PodEntity(
+            user_id=user_id,
+            organization_id=organization_id,
+            name=name,
+            description=manifest.get("description"),
+            icon_url=manifest.get("icon") or manifest.get("icon_url"),
+            config=PodConfig(source=PodSource(kind=source_kind, ref=source_ref or filename)),
+        ),
+        user_id,
+    )
+    return await service.create(
+        pod_id=pod.id,
+        user_id=user_id,
+        archive=archive,
+        filename=filename,
+        source_name=source_ref or filename,
+    )
+
+
 @new_pod_import_router.post(
     "", response_model=PodImportResponse, status_code=status.HTTP_201_CREATED
 )
@@ -70,28 +117,15 @@ async def import_into_new_pod(
     "create a new pod" path, a pod the importer fully owns. Where the bundle came
     from (``source_kind``/``source_ref``) is stamped on the pod for provenance."""
     archive = await bundle.read()
-    manifest = peek_pod_manifest(archive, bundle.filename)
-    desired = str(manifest.get("name") or _bundle_stem(bundle.filename) or "Imported pod")
-    name = await _unique_pod_name(pod_service, organization_id, user.id, desired)
-    pod = await pod_service.create_pod(
-        PodEntity(
-            user_id=user.id,
-            organization_id=organization_id,
-            name=name,
-            description=manifest.get("description"),
-            icon_url=manifest.get("icon") or manifest.get("icon_url"),
-            config=PodConfig(
-                source=PodSource(kind=source_kind, ref=source_ref or bundle.filename)
-            ),
-        ),
-        user.id,
-    )
-    entity = await service.create(
-        pod_id=pod.id,
+    entity = await _create_new_pod_from_bundle(
+        pod_service=pod_service,
+        service=service,
+        organization_id=organization_id,
         user_id=user.id,
         archive=archive,
         filename=bundle.filename,
-        source_name=source_ref or bundle.filename,
+        source_kind=source_kind,
+        source_ref=source_ref,
     )
     async with uow:
         await uow.commit()

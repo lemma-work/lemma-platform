@@ -45,6 +45,20 @@ def _zip_bundle(bundle_root: Path) -> bytes:
     return buffer.getvalue()
 
 
+def _wrap_in_folder(archive: bytes, folder: str) -> bytes:
+    """Re-zip every entry under an extra top-level folder — simulates a GitHub
+    codeload zipball's own "<repo>-<ref>/" wrapper stacking on top of whatever
+    the archive already contains."""
+    buffer = io.BytesIO()
+    with zipfile.ZipFile(buffer, "w", zipfile.ZIP_DEFLATED) as zf:
+        with zipfile.ZipFile(io.BytesIO(archive)) as src:
+            for info in src.infolist():
+                if info.is_dir():
+                    continue
+                zf.writestr(f"{folder}/{info.filename}", src.read(info))
+    return buffer.getvalue()
+
+
 def _stage_bundle(root: Path) -> Path:
     """A bundle covering the wired handlers: a table with seed data, an
     inline-instruction agent, and a (code-less) function."""
@@ -330,3 +344,120 @@ async def test_share_link_imports_existing_pod_into_a_new_pod(
     # the new pod's plan mirrors the source's resources
     kinds = {(s["resource_type"], s["resource_name"]) for s in imp["plan"]}
     assert ("tables", "widgets") in kinds
+
+
+async def test_github_badge_imports_a_repos_bundle_into_a_new_pod(
+    authenticated_client: AsyncClient, fixed_test_org: dict, tmp_path: Path, monkeypatch
+):
+    # The "Import to Lemma" badge on a published repo's README: fetching the
+    # repo's zipball is mocked (no live network/GitHub dependency in tests),
+    # but everything after that — naming, provenance, planning — is real.
+    #
+    # The mocked zipball is wrapped in an extra "<repo>-<ref>/" folder, exactly
+    # like a real `codeload.github.com` zip -- on top of whatever the bundle
+    # itself is wrapped in. A pod published before the wrapper-stripping fix
+    # (or a repo built by hand) nests pod.json two folders deep; this must
+    # still resolve to a real, non-empty plan rather than silently planning
+    # zero resources (the empty-plan bug this regression-tests for looked like
+    # a successful "PLANNED" import with nothing in it).
+    from app.modules.pod_import.api.controllers import github_controller
+
+    archive = _wrap_in_folder(_zip_bundle(_stage_bundle(tmp_path / "bundle")), "trumpet-4-2-main")
+
+    async def fake_fetch(owner: str, repo: str, ref: str) -> bytes:
+        assert (owner, repo, ref) == ("deepak", "trumpet", "HEAD")
+        return archive
+
+    monkeypatch.setattr(github_controller, "_fetch_repo_zip", fake_fetch)
+
+    created = await authenticated_client.post(
+        "/imports/from-github/deepak/trumpet",
+        params={"organization_id": fixed_test_org["id"]},
+    )
+    assert created.status_code == status.HTTP_201_CREATED, created.text
+    imp = created.json()
+    assert imp["status"] == "PLANNED"
+
+    # The plan must actually carry the bundle's resources, not come back empty.
+    kinds = {(s["resource_type"], s["resource_name"]) for s in imp["plan"]}
+    assert ("tables", "widgets") in kinds
+    assert ("agents", "greeter") in kinds
+    assert ("functions", "echo") in kinds
+
+    pod = (await authenticated_client.get(f"/pods/{imp['pod_id']}")).json()
+    assert pod["name"] == "import-e2e"  # named from the repo bundle's pod.json
+    source = pod["config"]["source"]
+    assert source["kind"] == "github"
+    assert source["ref"] == "deepak/trumpet"
+
+
+async def test_github_badge_imports_a_repos_bundle_into_an_existing_pod(
+    authenticated_client: AsyncClient, fixed_test_org: dict, tmp_path: Path, monkeypatch
+):
+    # The "install into this pod" counterpart: same badge/repo, but the caller
+    # already has a pod open and wants the repo's resources added there rather
+    # than getting a fresh pod.
+    from app.modules.pod_import.api.controllers import github_controller
+
+    target_pod = await _create_pod(authenticated_client, fixed_test_org)
+    archive = _wrap_in_folder(_zip_bundle(_stage_bundle(tmp_path / "bundle")), "trumpet-4-2-main")
+
+    async def fake_fetch(owner: str, repo: str, ref: str) -> bytes:
+        assert (owner, repo, ref) == ("deepak", "trumpet", "HEAD")
+        return archive
+
+    monkeypatch.setattr(github_controller, "_fetch_repo_zip", fake_fetch)
+
+    created = await authenticated_client.post(
+        f"/pods/{target_pod}/imports/from-github/deepak/trumpet"
+    )
+    assert created.status_code == status.HTTP_201_CREATED, created.text
+    imp = created.json()
+    assert imp["status"] == "PLANNED"
+    assert imp["pod_id"] == target_pod  # installed into the existing pod, not a new one
+
+    kinds = {(s["resource_type"], s["resource_name"]) for s in imp["plan"]}
+    assert ("tables", "widgets") in kinds
+    assert ("agents", "greeter") in kinds
+
+
+async def test_github_publish_preview_renders_the_readme_without_touching_github(
+    authenticated_client: AsyncClient, fixed_test_org: dict, tmp_path: Path
+):
+    # The share dialog reads this before Publish is ever clicked, so it must
+    # be real content (the actual capability counts) without requiring a
+    # GitHub connection or creating anything remote.
+    pod_id = await _create_pod(authenticated_client, fixed_test_org)
+    seeded = await _import_and_apply(
+        authenticated_client, pod_id, _zip_bundle(_stage_bundle(tmp_path / "bundle"))
+    )
+    assert seeded["status"] == "COMPLETED"
+
+    resp = await authenticated_client.get(
+        f"/pods/{pod_id}/export/github/preview", params={"repo_name": "my-cool-pod"}
+    )
+    assert resp.status_code == status.HTTP_200_OK, resp.text
+    body = resp.json()
+    assert body["repo_name"] == "my-cool-pod"
+    assert "# " in body["readme"]
+    assert "Import-Lemma" in body["readme"]
+    assert "table" in body["readme"]  # capability bullet from the seeded widgets table
+
+
+async def test_create_new_pod_rejects_a_bundle_with_no_pod_json(
+    authenticated_client: AsyncClient, fixed_test_org: dict, tmp_path: Path
+):
+    # A repo whose publish failed before anything committed (or any other
+    # archive that isn't a real bundle) must error clearly, not silently
+    # create an empty "Imported pod" with zero resources.
+    empty = tmp_path / "empty"
+    (empty / "not-a-bundle").mkdir(parents=True)
+    (empty / "not-a-bundle" / "readme.txt").write_text("hello")
+    archive = _zip_bundle(empty / "not-a-bundle")
+
+    resp = await authenticated_client.post(
+        "/imports",
+        files={"bundle": ("nope.zip", archive, "application/zip")},
+        data={"organization_id": fixed_test_org["id"]},
+    )
+    assert resp.status_code == status.HTTP_422_UNPROCESSABLE_ENTITY, resp.text

@@ -35,6 +35,18 @@ export interface PodImport {
     completed_at?: string | null;
 }
 
+export interface GithubPublishResult {
+    status: 'published' | 'not_connected' | 'failed';
+    repo_url?: string | null;
+    import_badge_markdown?: string | null;
+    message?: string | null;
+}
+
+export interface GithubPublishPreview {
+    repo_name: string;
+    readme: string;
+}
+
 async function readError(res: Response): Promise<string> {
     try {
         const body = await res.json();
@@ -107,8 +119,98 @@ export const useImportFromPod = () =>
         },
     });
 
-/** Poll an import; auto-refreshes while it is applying. */
-export const usePodImport = (podId?: string, importId?: string) =>
+/** GitHub badge path: create a new pod from a public repo's bundle. Returns the
+ * PLANNED import for the new pod. */
+export const useImportFromGithub = () =>
+    useMutation({
+        mutationFn: async ({
+            owner,
+            repo,
+            organizationId,
+            ref = 'HEAD',
+        }: {
+            owner: string;
+            repo: string;
+            organizationId: string;
+            ref?: string;
+        }): Promise<PodImport> => {
+            const params = new URLSearchParams({ organization_id: organizationId, ref });
+            const res = await lemmaFetch(`/imports/from-github/${owner}/${repo}?${params}`, {
+                method: 'POST',
+            });
+            if (!res.ok) throw new Error(await readError(res));
+            return res.json();
+        },
+    });
+
+/** GitHub badge path, "install into an existing pod": plan a public repo's
+ * bundle into a pod the caller already has. Returns the PLANNED import. */
+export const useImportFromGithubIntoPod = () =>
+    useMutation({
+        mutationFn: async ({
+            podId,
+            owner,
+            repo,
+            ref = 'HEAD',
+        }: {
+            podId: string;
+            owner: string;
+            repo: string;
+            ref?: string;
+        }): Promise<PodImport> => {
+            const params = new URLSearchParams({ ref });
+            const res = await lemmaFetch(
+                `/pods/${podId}/imports/from-github/${owner}/${repo}?${params}`,
+                { method: 'POST' },
+            );
+            if (!res.ok) throw new Error(await readError(res));
+            return res.json();
+        },
+    });
+
+/** Publish this pod as a new GitHub repo (bundle + generated README with an
+ * import badge), via the GitHub connector already connected in Connectors
+ * settings — no separate OAuth here. */
+export const useGithubPublish = () =>
+    useMutation({
+        mutationFn: async ({
+            podId,
+            repoName,
+            isPrivate = false,
+        }: {
+            podId: string;
+            repoName?: string;
+            isPrivate?: boolean;
+        }): Promise<GithubPublishResult> => {
+            const res = await lemmaFetch(`/pods/${podId}/export/github`, {
+                method: 'POST',
+                body: JSON.stringify({ repo_name: repoName, private: isPrivate }),
+            });
+            if (!res.ok) throw new Error(await readError(res));
+            return res.json();
+        },
+    });
+
+/** What Publish will actually write — repo name + rendered README — fetched
+ * live as the user edits the form, without touching GitHub. */
+export const useGithubPublishPreview = (podId: string, repoName: string, enabled: boolean) =>
+    useQuery({
+        queryKey: ['pod-github-publish-preview', podId, repoName],
+        queryFn: async (): Promise<GithubPublishPreview> => {
+            const params = new URLSearchParams(repoName ? { repo_name: repoName } : {});
+            const res = await lemmaFetch(`/pods/${podId}/export/github/preview?${params}`);
+            if (!res.ok) throw new Error(await readError(res));
+            return res.json();
+        },
+        enabled,
+        staleTime: 15_000,
+    });
+
+/** Poll an import; auto-refreshes while it is applying. `forcePoll` keeps it
+ * polling for the exact duration of an in-flight apply call even before the
+ * first fetch has landed (the apply POST itself blocks until done, so the
+ * status field alone lags behind — see useApplyImport). */
+export const usePodImport = (podId?: string, importId?: string, opts?: { forcePoll?: boolean }) =>
     useQuery({
         queryKey: ['pod-imports', podId, importId],
         queryFn: async (): Promise<PodImport> => {
@@ -118,7 +220,9 @@ export const usePodImport = (podId?: string, importId?: string) =>
         },
         enabled: !!podId && !!importId,
         refetchInterval: (query) =>
-            (query.state.data as PodImport | undefined)?.status === 'APPLYING' ? 1500 : false,
+            opts?.forcePoll || (query.state.data as PodImport | undefined)?.status === 'APPLYING'
+                ? 1500
+                : false,
     });
 
 /** Export the pod as a bundle archive and trigger a browser download. */

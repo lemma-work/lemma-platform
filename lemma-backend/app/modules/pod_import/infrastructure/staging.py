@@ -35,14 +35,17 @@ class BundleStaging:
         return self._bundle_root(dest) if dest.is_dir() else None
 
     def _bundle_root(self, extracted: Path) -> Path:
-        """The directory containing pod.json — either the extraction root or the
-        single top-level folder an export archive wraps everything in."""
+        """The directory containing pod.json — the extraction root, or the
+        shallowest descendant that has one. An export archive wraps everything
+        in one folder, and a GitHub codeload zip adds its own wrapper on top of
+        that, so two levels of nesting is normal for a repo-published bundle;
+        this isn't limited to one level down."""
         if (extracted / "pod.json").is_file():
             return extracted
-        for child in sorted(extracted.iterdir()):
-            if child.is_dir() and (child / "pod.json").is_file():
-                return child
-        return extracted
+        matches = sorted(
+            extracted.rglob("pod.json"), key=lambda p: len(p.relative_to(extracted).parts)
+        )
+        return matches[0].parent if matches else extracted
 
 
 def _is_within(base: Path, target: Path) -> bool:
@@ -74,6 +77,13 @@ def _extract(archive: bytes, filename: str, dest: Path) -> None:
 
 def _looks_zip(archive: bytes) -> bool:
     return archive[:2] == b"PK"
+
+
+def has_pod_manifest(archive: bytes, filename: str | None = None) -> bool:
+    """Whether the archive contains a pod.json at all — distinct from
+    ``peek_pod_manifest`` returning ``{}``, which is ambiguous between "no
+    pod.json" and "a pod.json whose content happens to be an empty object"."""
+    return _read_archive_member(archive, filename or "", "pod.json") is not None
 
 
 def peek_pod_manifest(archive: bytes, filename: str | None = None) -> dict:

@@ -60,7 +60,8 @@ and later "source changed — pull updates".
 - **L1 — spine + basic loop:** `Share` button, `/import/*` routes, link envelope,
   create-new vs install-here, provenance field. Shareable end-to-end via link.
 - **L2 — remix takeover:** the live screen, four actions, share wired to beat 1.
-- **L3 — GitHub:** OAuth, repo creation, README + badge, `/import/github/...`.
+- **L3 — GitHub:** repo creation + README/badge via Lemma's own GitHub connector
+  (no bespoke OAuth), `/import/github/...`.
 - **L4 — gallery:** `lemma.work/gallery`, registry, gallery-PR as 2nd publish target.
 
 ## Decisions locked
@@ -78,6 +79,32 @@ and later "source changed — pull updates".
 - [x] Frontend: `/import/p/<id>` route → resolves link into the wizard (review → apply).
 - [x] Frontend (L2): remix takeover — four actions (view app, surface, share, customize)
       on a create-new completion.
-- [ ] L3: GitHub publish (OAuth, repo + README + badge) and `/import/github/<owner>/<repo>`.
-- [ ] Follow-up: public/token sharing (today the link is org-scoped) and the lemma.work
-      sign-up-in-the-loop redirect.
+- [x] L3: GitHub publish — reuses Lemma's own GitHub connector (Composio), not
+      bespoke OAuth. `POST /pods/{id}/export/github` creates a repo, then
+      commits each bundle file individually (not the whole bundle as one blob —
+      Composio's own gateway has an undocumented request-size ceiling; a live
+      test 413'd both on a whole-zip push and on an individual large file).
+      Verified live end-to-end: repo creation, name-collision retry, and file
+      pushes all confirmed working against a real Composio+GitHub connection.
+      Returns `not_connected` if the caller hasn't connected GitHub (never
+      auto-triggers OAuth).
+      **Large files (e.g. an app's built dist.zip) are chunked adaptively** —
+      split into `<path>.chunkNNNNofMMMM` pieces starting from a size guess,
+      halving on a 413 until a size fits, since the real ceiling isn't
+      documented or discoverable ahead of time. `import_from_github`
+      reassembles complete chunk sets before staging; an incomplete set (a
+      stale leftover from a shrunk attempt) is dropped rather than risking
+      corrupt reassembly. Round-trip byte-identity verified in tests.
+- [x] L3: GitHub import — `POST /imports/from-github/{owner}/{repo}` fetches a
+      public repo's zipball directly (no auth needed) and feeds it through the
+      same create-new-pod path as upload/link. Fully tested (zip-wrapper
+      tolerance verified against real codeload.github.com structure; e2e test
+      mocks only the network fetch, the rest is the real path).
+      `/import/github/<owner>/<repo>` is the frontend page a repo's badge
+      points to.
+- [ ] Follow-up: public/token sharing for `/import/p/<id>` (today it's
+      org-scoped — an external viewer without org access gets a 403); private
+      GitHub repo import (needs the *viewer's* own GitHub account, not the
+      publisher's); verify the two Composio operation names against a live
+      catalog and replace with confirmed names if they differ; the
+      sign-up-in-the-loop redirect for logged-out visitors.
