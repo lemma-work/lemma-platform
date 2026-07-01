@@ -29,3 +29,10 @@ __pycache__/
 *.dev-backend.pid
 *.dev-frontend.pid
 *.dev-infra.pid
+
+# Local-disk object/file storage used in dev when no real S3/GCS is configured
+# (see local_object_storage_root/local_file_storage_root in app/core/config.py)
+/.local/
+
+# Claude Code local tooling (launch configs, worktrees) — not part of the repo
+/.claude/
