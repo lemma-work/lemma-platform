@@ -1,34 +1,105 @@
 'use client';
 
 import { useMemo, useState } from 'react';
+import { useRouter } from 'next/navigation';
 import {
     AlertTriangle,
+    ArrowRight,
+    Bot,
     Check,
     CircleAlert,
+    Code2,
+    Database,
     FileArchive,
+    Globe,
+    type LucideIcon,
+    PackagePlus,
     RotateCcw,
     Upload,
 } from 'lucide-react';
 import { toast } from 'sonner';
 
+import { RemixTakeover } from '@/components/pod/remix-takeover';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
+import { usePod } from '@/lib/hooks/use-pods';
 import {
     type Capability,
     type ImportStep,
     type PodImport,
     useApplyImport,
     useCreateImport,
+    useImportIntoNewPod,
 } from '@/lib/hooks/use-pod-imports';
+
+/** Where an import lands: a brand-new pod the importer owns, or merged into the
+ * pod they're already in. */
+type Target = 'new' | 'here';
 
 type Phase = 'upload' | 'review' | 'result';
 
-const TIER_LABEL: Record<string, string> = {
-    code: 'Runs code',
-    external: 'External access',
-    ai: 'AI agents',
-    data: 'Data',
+const TIER_ICON: Record<string, LucideIcon> = {
+    code: Code2,
+    external: Globe,
+    ai: Bot,
+    data: Database,
 };
+
+const PLAN_TYPE_ORDER = [
+    'tables',
+    'functions',
+    'agents',
+    'workflows',
+    'schedules',
+    'surfaces',
+    'apps',
+    // Grants are applied in a final pass once every resource exists.
+    'agent_grants',
+    'function_grants',
+];
+const PLAN_TYPE_LABEL: Record<string, string> = {
+    tables: 'Tables',
+    functions: 'Functions',
+    agents: 'Agents',
+    workflows: 'Workflows',
+    schedules: 'Schedules',
+    surfaces: 'Surfaces',
+    apps: 'Apps',
+    agent_grants: 'Agent access',
+    function_grants: 'Function access',
+};
+
+const SINGULAR: Record<string, string> = {
+    tables: 'table',
+    functions: 'function',
+    agents: 'agent',
+    workflows: 'workflow',
+    schedules: 'schedule',
+    surfaces: 'surface',
+    apps: 'app',
+    agent_grants: 'agent access',
+    function_grants: 'function access',
+};
+
+/** A human hint for the most common failure causes; null falls back to the raw error. */
+function errorHint(raw: string): string | null {
+    if (/cannot connect to host|connect call failed|connection refused/i.test(raw)) {
+        const port = raw.match(/:(\d{2,5})\b/)?.[1];
+        const svc =
+            port === '8711'
+                ? 'The scheduler service'
+                : port === '8721'
+                  ? 'The agentbox sandbox service'
+                  : port
+                    ? `A backend service on port ${port}`
+                    : 'A backend service';
+        return `${svc} isn’t reachable — it may not be running in your stack.`;
+    }
+    if (/already exists/i.test(raw)) return 'It already exists in this pod.';
+    if (/relation .* does not exist|does not exist/i.test(raw))
+        return 'A resource it depends on hasn’t been created yet.';
+    return null;
+}
 
 function Section({ title, children }: { title: string; children: React.ReactNode }) {
     return (
@@ -43,16 +114,20 @@ function CapabilityList({ capabilities }: { capabilities: Capability[] }) {
     if (!capabilities.length) return null;
     return (
         <Section title="This pod will">
-            <ul className="space-y-1.5">
-                {capabilities.map((cap, i) => (
-                    <li key={i} className="flex items-center gap-2 text-sm text-[var(--text-primary)]">
-                        <span className="h-1.5 w-1.5 rounded-full bg-[var(--delight)]" aria-hidden />
-                        {cap.summary}
-                        <span className="text-xs text-[var(--text-tertiary)]">
-                            {TIER_LABEL[cap.tier] ?? cap.tier}
-                        </span>
-                    </li>
-                ))}
+            <ul className="space-y-2">
+                {capabilities.map((cap, i) => {
+                    const Icon = TIER_ICON[cap.tier];
+                    return (
+                        <li key={i} className="flex items-center gap-2.5 text-sm text-[var(--text-primary)]">
+                            {Icon ? (
+                                <Icon className="h-4 w-4 shrink-0 text-[var(--text-tertiary)]" aria-hidden />
+                            ) : (
+                                <span className="h-1.5 w-1.5 rounded-full bg-[var(--text-tertiary)]" aria-hidden />
+                            )}
+                            {cap.summary}
+                        </li>
+                    );
+                })}
             </ul>
         </Section>
     );
@@ -144,60 +219,135 @@ function ResolveInputs({
     );
 }
 
-function StepRow({ step }: { step: ImportStep }) {
-    const icon =
-        step.status === 'COMPLETED' ? (
-            <Check className="h-4 w-4 text-[var(--state-success)]" />
-        ) : step.status === 'FAILED' ? (
-            <CircleAlert className="h-4 w-4 text-[var(--state-error)]" />
-        ) : step.status === 'SKIPPED' ? (
-            <span className="text-xs text-[var(--text-tertiary)]">skipped</span>
-        ) : (
-            <span className="h-1.5 w-1.5 rounded-full bg-[var(--border-strong)]" aria-hidden />
-        );
+function StepDot({ status }: { status: ImportStep['status'] }) {
+    if (status === 'COMPLETED')
+        return <Check className="h-3.5 w-3.5 shrink-0 text-[var(--state-success)]" aria-hidden />;
+    if (status === 'FAILED')
+        return <CircleAlert className="h-3.5 w-3.5 shrink-0 text-[var(--state-error)]" aria-hidden />;
     return (
-        <li className="flex items-center gap-3 border-b border-[var(--border-subtle)] py-2 last:border-0">
-            <span className="flex w-4 justify-center">{icon}</span>
-            <span className="text-xs uppercase tracking-wide text-[var(--text-tertiary)]">
-                {step.action}
-            </span>
-            <span className="flex-1 text-sm text-[var(--text-primary)]">
-                {step.resource_type}/{step.resource_name}
-            </span>
-            {step.destructive ? (
-                <span className="flex items-center gap-1 text-xs text-[var(--state-error)]">
-                    <AlertTriangle className="h-3.5 w-3.5" /> data loss
-                </span>
-            ) : null}
-            {step.error ? (
-                <span className="max-w-[40%] truncate text-xs text-[var(--state-error)]" title={step.error}>
-                    {step.error}
-                </span>
-            ) : null}
-        </li>
+        <span
+            className={`h-1.5 w-1.5 shrink-0 rounded-full ${
+                status === 'SKIPPED' ? 'bg-[var(--text-tertiary)]' : 'bg-[var(--border-strong)]'
+            }`}
+            aria-hidden
+        />
     );
 }
 
+/** The plan, grouped by resource type — compact, and each type (incl. apps) is
+ * its own clearly-labelled row instead of one long flat list. */
 function PlanList({ imp }: { imp: PodImport }) {
+    const groups = PLAN_TYPE_ORDER.map((type) => ({
+        type,
+        steps: imp.plan.filter((s) => s.resource_type === type),
+    })).filter((g) => g.steps.length);
+
     return (
         <Section title={`Plan · ${imp.progress_done}/${imp.progress_total}`}>
-            <ul className="rounded-lg border border-[var(--border-subtle)] bg-[var(--surface-2)] px-3">
-                {imp.plan.map((step) => (
-                    <StepRow key={`${step.resource_type}/${step.resource_name}`} step={step} />
-                ))}
-            </ul>
+            <div className="overflow-hidden rounded-lg border border-[var(--border-subtle)]">
+                {groups.map((g, gi) => {
+                    const done = g.steps.filter(
+                        (s) => s.status === 'COMPLETED' || s.status === 'SKIPPED',
+                    ).length;
+                    return (
+                        <div
+                            key={g.type}
+                            className={`flex gap-3 px-3 py-2.5 ${gi ? 'border-t border-[var(--border-subtle)]' : ''}`}
+                        >
+                            <div className="w-24 shrink-0 pt-1">
+                                <span className="text-sm font-medium text-[var(--text-primary)]">
+                                    {PLAN_TYPE_LABEL[g.type] ?? g.type}
+                                </span>
+                                <span className="ml-1.5 text-xs text-[var(--text-tertiary)]">
+                                    {done}/{g.steps.length}
+                                </span>
+                            </div>
+                            <div className="flex flex-1 flex-wrap gap-1.5">
+                                {g.steps.map((s) => (
+                                    <span
+                                        key={s.resource_name}
+                                        title={s.error ?? undefined}
+                                        className="inline-flex items-center gap-1.5 rounded-md bg-[var(--surface-2)] px-2 py-1 text-xs text-[var(--text-secondary)]"
+                                    >
+                                        <StepDot status={s.status} />
+                                        {s.resource_name}
+                                        {s.destructive ? (
+                                            <AlertTriangle
+                                                className="h-3 w-3 text-[var(--state-error)]"
+                                                aria-hidden
+                                            />
+                                        ) : null}
+                                    </span>
+                                ))}
+                            </div>
+                        </div>
+                    );
+                })}
+            </div>
         </Section>
     );
 }
 
-export function ImportPodBundleWizard({ podId }: { podId: string }) {
-    const [phase, setPhase] = useState<Phase>('upload');
+/** The new-pod vs install-here choice — two selectable cards. */
+function TargetCard({
+    active,
+    icon: Icon,
+    title,
+    subtitle,
+    onClick,
+}: {
+    active: boolean;
+    icon: LucideIcon;
+    title: string;
+    subtitle: string;
+    onClick: () => void;
+}) {
+    return (
+        <button
+            type="button"
+            onClick={onClick}
+            className={`flex items-start gap-2.5 rounded-lg border p-3 text-left ${
+                active
+                    ? 'border-[var(--accent)] bg-[var(--surface-2)]'
+                    : 'border-[var(--border-subtle)] hover:bg-[var(--surface-2)]'
+            }`}
+        >
+            <Icon
+                className={`mt-0.5 h-4 w-4 shrink-0 ${active ? 'text-[var(--accent)]' : 'text-[var(--text-tertiary)]'}`}
+            />
+            <span>
+                <span className="block text-sm font-medium text-[var(--text-primary)]">{title}</span>
+                <span className="block text-xs text-[var(--text-tertiary)]">{subtitle}</span>
+            </span>
+        </button>
+    );
+}
+
+export function ImportPodBundleWizard({
+    podId,
+    initialImport,
+}: {
+    podId: string;
+    // A pre-planned import (e.g. from a shared /import/p/<id> link) — the wizard
+    // skips upload and opens straight at review.
+    initialImport?: PodImport;
+}) {
+    const router = useRouter();
+    const [phase, setPhase] = useState<Phase>(initialImport ? 'review' : 'upload');
+    const [target, setTarget] = useState<Target>('new');
     const [file, setFile] = useState<File | null>(null);
-    const [imp, setImp] = useState<PodImport | null>(null);
+    const [imp, setImp] = useState<PodImport | null>(initialImport ?? null);
     const [vars, setVars] = useState<Record<string, string>>({});
 
+    const pod = usePod(podId);
     const createImport = useCreateImport();
+    const importIntoNewPod = useImportIntoNewPod();
     const applyImport = useApplyImport();
+    const uploading = createImport.isPending || importIntoNewPod.isPending;
+    // The import always carries the pod it targets (imp.pod_id) — the current pod
+    // when installing here, a freshly-created pod when creating new.
+    const createdNewPod = !!imp && imp.pod_id !== podId;
+    const newPod = usePod(createdNewPod ? imp!.pod_id : undefined);
 
     const destructiveCount = useMemo(
         () => imp?.plan.filter((s) => s.destructive).length ?? 0,
@@ -207,7 +357,14 @@ export function ImportPodBundleWizard({ podId }: { podId: string }) {
     const onUpload = async () => {
         if (!file) return;
         try {
-            const result = await createImport.mutateAsync({ podId, file, sourceName: file.name });
+            const result =
+                target === 'new'
+                    ? await importIntoNewPod.mutateAsync({
+                          file,
+                          organizationId: pod.data!.organization_id,
+                          sourceRef: file.name,
+                      })
+                    : await createImport.mutateAsync({ podId, file, sourceName: file.name });
             setImp(result);
             setPhase('review');
         } catch (e) {
@@ -218,11 +375,22 @@ export function ImportPodBundleWizard({ podId }: { podId: string }) {
     const onApply = async () => {
         if (!imp) return;
         try {
-            const result = await applyImport.mutateAsync({ podId, importId: imp.id, variables: vars });
+            const result = await applyImport.mutateAsync({
+                podId: imp.pod_id,
+                importId: imp.id,
+                variables: vars,
+            });
             setImp(result);
             setPhase('result');
             if (result.status === 'COMPLETED') toast.success('Import complete');
-            else if (result.status === 'FAILED') toast.error('Import failed — you can resume');
+            else if (result.status === 'FAILED') {
+                const failed = result.plan.find((s) => s.status === 'FAILED');
+                toast.error(
+                    failed
+                        ? `Couldn’t create ${SINGULAR[failed.resource_type] ?? failed.resource_type} “${failed.resource_name}”`
+                        : 'Import stopped',
+                );
+            }
         } catch (e) {
             toast.error(e instanceof Error ? e.message : 'Apply failed');
         }
@@ -255,8 +423,28 @@ export function ImportPodBundleWizard({ podId }: { podId: string }) {
                                 onChange={(e) => setFile(e.target.files?.[0] ?? null)}
                             />
                         </label>
+                        <div className="mt-4 grid grid-cols-2 gap-2">
+                            <TargetCard
+                                active={target === 'new'}
+                                icon={PackagePlus}
+                                title="Create a new pod"
+                                subtitle="A fresh pod you fully own"
+                                onClick={() => setTarget('new')}
+                            />
+                            <TargetCard
+                                active={target === 'here'}
+                                icon={ArrowRight}
+                                title="Install into this pod"
+                                subtitle="Add its resources here"
+                                onClick={() => setTarget('here')}
+                            />
+                        </div>
                         <div className="mt-5 flex justify-end gap-2">
-                            <Button disabled={!file} loading={createImport.isPending} onClick={onUpload}>
+                            <Button
+                                disabled={!file || (target === 'new' && !pod.data)}
+                                loading={uploading}
+                                onClick={onUpload}
+                            >
                                 <FileArchive className="mr-1.5 h-4 w-4" /> Analyze bundle
                             </Button>
                         </div>
@@ -297,7 +485,21 @@ export function ImportPodBundleWizard({ podId }: { podId: string }) {
                     </>
                 )}
 
-                {phase === 'result' && imp && (
+                {phase === 'result' && imp && createdNewPod && imp.status === 'COMPLETED' && (
+                    <>
+                        <RemixTakeover podId={imp.pod_id} podName={newPod.data?.name} />
+                        <div className="mt-5">
+                            <PlanList imp={imp} />
+                        </div>
+                        <div className="mt-4 flex justify-end">
+                            <Button variant="ghost" onClick={reset}>
+                                Import another
+                            </Button>
+                        </div>
+                    </>
+                )}
+
+                {phase === 'result' && imp && !(createdNewPod && imp.status === 'COMPLETED') && (
                     <>
                         <div className="mb-4 flex items-center gap-2">
                             {imp.status === 'COMPLETED' ? (
@@ -316,19 +518,56 @@ export function ImportPodBundleWizard({ podId }: { podId: string }) {
                                 </>
                             )}
                         </div>
-                        {imp.error ? (
-                            <p className="mb-4 text-sm text-[var(--state-error)]">{imp.error}</p>
-                        ) : null}
+                        {imp.status === 'FAILED'
+                            ? (() => {
+                                  const failed = imp.plan.find((s) => s.status === 'FAILED');
+                                  const raw = (failed?.error || imp.error || '').trim();
+                                  const hint = errorHint(raw);
+                                  return (
+                                      <div className="mb-4 rounded-lg border border-[var(--state-error)] p-3">
+                                          <p className="text-sm font-medium text-[var(--text-primary)]">
+                                              {failed
+                                                  ? `Couldn’t create ${SINGULAR[failed.resource_type] ?? failed.resource_type} “${failed.resource_name}”`
+                                                  : 'Import stopped'}
+                                          </p>
+                                          {hint ? (
+                                              <p className="mt-1 text-sm text-[var(--text-secondary)]">{hint}</p>
+                                          ) : null}
+                                          {raw ? (
+                                              <details className="mt-2">
+                                                  <summary className="cursor-pointer text-xs text-[var(--text-tertiary)]">
+                                                      Error details
+                                                  </summary>
+                                                  <pre className="mt-1 whitespace-pre-wrap text-xs text-[var(--text-secondary)]">
+                                                      {raw}
+                                                  </pre>
+                                              </details>
+                                          ) : null}
+                                          <p className="mt-2 text-xs text-[var(--text-tertiary)]">
+                                              Fix the cause, then Resume — the {imp.progress_done} step(s)
+                                              already imported are skipped.
+                                          </p>
+                                      </div>
+                                  );
+                              })()
+                            : null}
                         <PlanList imp={imp} />
                         <div className="flex justify-between">
                             <Button variant="ghost" onClick={reset}>
                                 Import another
                             </Button>
-                            {imp.status === 'FAILED' && (
+                            {imp.status === 'FAILED' ? (
                                 <Button loading={applyImport.isPending} onClick={onApply}>
                                     <RotateCcw className="mr-1.5 h-4 w-4" /> Resume
                                 </Button>
-                            )}
+                            ) : createdNewPod ? (
+                                <Button
+                                    variant="primary"
+                                    onClick={() => router.push(`/pod/${imp.pod_id}`)}
+                                >
+                                    Open your new pod <ArrowRight className="ml-1.5 h-4 w-4" />
+                                </Button>
+                            ) : null}
                         </div>
                     </>
                 )}

@@ -8,10 +8,11 @@ def _routers():
         router as export_router,
     )
     from app.modules.pod_import.api.controllers.import_controller import (
+        new_pod_import_router,
         router as import_router,
     )
 
-    return [import_router, export_router]
+    return [import_router, new_pod_import_router, export_router]
 
 
 module = LemmaModule(name="pod_import", routers=_routers)

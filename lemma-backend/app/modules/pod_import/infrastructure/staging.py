@@ -74,3 +74,38 @@ def _extract(archive: bytes, filename: str, dest: Path) -> None:
 
 def _looks_zip(archive: bytes) -> bool:
     return archive[:2] == b"PK"
+
+
+def peek_pod_manifest(archive: bytes, filename: str | None = None) -> dict:
+    """Read just ``pod.json`` from an archive in memory — enough to name a new
+    pod before the bundle is staged. Returns the parsed manifest (name,
+    description, icon), or ``{}`` if there's no readable pod.json."""
+    from lemma_pod_bundle import loads_jsonc
+
+    raw = _read_archive_member(archive, filename or "", "pod.json")
+    if raw is None:
+        return {}
+    try:
+        data = loads_jsonc(raw.decode("utf-8"))
+    except Exception:
+        return {}
+    return data if isinstance(data, dict) else {}
+
+
+def _read_archive_member(archive: bytes, filename: str, basename: str) -> bytes | None:
+    """Return the bytes of the shallowest archive entry named ``basename``."""
+    lowered = filename.lower()
+    if lowered.endswith(".zip") or (not lowered and _looks_zip(archive)):
+        with zipfile.ZipFile(io.BytesIO(archive)) as zf:
+            names = [n for n in zf.namelist() if n.rsplit("/", 1)[-1] == basename]
+            if not names:
+                return None
+            return zf.read(min(names, key=lambda n: n.count("/")))
+    mode = "r:gz" if lowered.endswith((".tar.gz", ".tgz")) else "r:*"
+    with tarfile.open(fileobj=io.BytesIO(archive), mode=mode) as tf:
+        cand = [m for m in tf.getmembers() if m.isfile() and m.name.rsplit("/", 1)[-1] == basename]
+        if not cand:
+            return None
+        member = min(cand, key=lambda m: m.name.count("/"))
+        extracted = tf.extractfile(member)
+        return extracted.read() if extracted else None

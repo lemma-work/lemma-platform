@@ -268,3 +268,65 @@ async def test_export_then_reimport_roundtrip(
     )
     labels = {r.get("label") for r in records.json().get("items", [])}
     assert {"alpha", "beta"} <= labels
+
+
+async def test_import_into_new_pod_creates_pod_with_provenance(
+    authenticated_client: AsyncClient, fixed_test_org: dict, tmp_path: Path
+):
+    # The "create a new pod" path: POST /imports with no pod id creates a fresh
+    # pod named from the bundle, stamps provenance, and returns a PLANNED import.
+    archive = _zip_bundle(_stage_bundle(tmp_path / "bundle"))
+    create = await authenticated_client.post(
+        "/imports",
+        files={"bundle": ("trumpet.zip", archive, "application/zip")},
+        data={
+            "organization_id": fixed_test_org["id"],
+            "source_kind": "upload",
+            "source_ref": "trumpet.zip",
+        },
+    )
+    assert create.status_code == status.HTTP_201_CREATED, create.text
+    plan = create.json()
+    assert plan["status"] == "PLANNED"
+    new_pod_id = plan["pod_id"]
+
+    pod = await authenticated_client.get(f"/pods/{new_pod_id}")
+    assert pod.status_code == status.HTTP_200_OK, pod.text
+    body = pod.json()
+    assert body["name"] == "import-e2e"  # named from the bundle's pod.json
+    source = body["config"]["source"]
+    assert source["kind"] == "upload"
+    assert source["ref"] == "trumpet.zip"
+
+
+async def test_share_link_imports_existing_pod_into_a_new_pod(
+    authenticated_client: AsyncClient, fixed_test_org: dict, tmp_path: Path
+):
+    # The /import/p/<id> link: export an existing pod's bundle and create a fresh
+    # pod from it for the caller, with provenance pointing back to the source.
+    source_pod = await _create_pod(authenticated_client, fixed_test_org)
+    seed = await authenticated_client.post(
+        f"/pods/{source_pod}/imports",
+        files={
+            "bundle": ("seed.zip", _zip_bundle(_stage_bundle(tmp_path / "bundle")), "application/zip"),
+        },
+    )
+    assert seed.status_code == status.HTTP_201_CREATED, seed.text
+    applied = await authenticated_client.post(
+        f"/pods/{source_pod}/imports/{seed.json()['id']}/apply"
+    )
+    assert applied.json()["status"] == "COMPLETED", applied.text
+
+    created = await authenticated_client.post(f"/imports/from-pod/{source_pod}")
+    assert created.status_code == status.HTTP_201_CREATED, created.text
+    imp = created.json()
+    assert imp["status"] == "PLANNED"
+    new_pod_id = imp["pod_id"]
+    assert new_pod_id != source_pod
+    # provenance points back to the source pod
+    src = (await authenticated_client.get(f"/pods/{new_pod_id}")).json()["config"]["source"]
+    assert src["kind"] == "link"
+    assert src["ref"] == source_pod
+    # the new pod's plan mirrors the source's resources
+    kinds = {(s["resource_type"], s["resource_name"]) for s in imp["plan"]}
+    assert ("tables", "widgets") in kinds

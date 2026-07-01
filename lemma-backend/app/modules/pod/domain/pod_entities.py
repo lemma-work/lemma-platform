@@ -18,6 +18,20 @@ class PodJoinPolicy(str, Enum):
     PUBLIC = "PUBLIC"  # any Lemma user may self-join (auto-added to the org)
 
 
+class PodSource(BaseModel):
+    """Where a pod was imported from — its provenance.
+
+    Set once when a pod is created from a bundle, so an imported pod can credit
+    its origin ("remixed from …") and the origin can count how many pods came
+    from it. ``ref`` is the portable handle: ``owner/repo`` for github, a pod id
+    for a shared link, or a filename for an upload.
+    """
+
+    kind: str  # "github" | "link" | "upload"
+    ref: str | None = None
+    import_id: UUID | None = None
+
+
 class PodConfig(BaseModel):
     """Typed pod-level configuration."""
 
@@ -28,6 +42,8 @@ class PodConfig(BaseModel):
     default_profile_id: str | None = Field(default=None, min_length=1)
     default_runtime: AgentRuntimeConfig | None = None
     join_policy: PodJoinPolicy = PodJoinPolicy.INVITE_ONLY
+    # Provenance: set when the pod was created from an imported bundle.
+    source: PodSource | None = None
 
     @field_validator("default_profile_id")
     @classmethod
@@ -69,6 +85,8 @@ class PodConfig(BaseModel):
             data.pop("default_profile_id", None)
         if data.get("default_runtime") is None:
             data.pop("default_runtime", None)
+        if data.get("source") is None:
+            data.pop("source", None)
         return data
 
 

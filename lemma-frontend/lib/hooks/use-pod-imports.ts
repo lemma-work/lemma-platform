@@ -70,6 +70,43 @@ export const useCreateImport = () => {
     });
 };
 
+/** "Create a new pod" path: create a fresh pod from the bundle, then plan the
+ * import into it. Returns the PLANNED import — its `pod_id` is the new pod. */
+export const useImportIntoNewPod = () =>
+    useMutation({
+        mutationFn: async ({
+            file,
+            organizationId,
+            sourceKind = 'upload',
+            sourceRef,
+        }: {
+            file: File;
+            organizationId: string;
+            sourceKind?: string;
+            sourceRef?: string;
+        }): Promise<PodImport> => {
+            const form = new FormData();
+            form.append('bundle', file);
+            form.append('organization_id', organizationId);
+            form.append('source_kind', sourceKind);
+            if (sourceRef) form.append('source_ref', sourceRef);
+            const res = await lemmaFetch('/imports', { method: 'POST', body: form });
+            if (!res.ok) throw new Error(await readError(res));
+            return res.json();
+        },
+    });
+
+/** Shared-link path: create a new pod from an existing pod's bundle (the engine
+ * behind /import/p/<id>). Returns the PLANNED import for the new pod. */
+export const useImportFromPod = () =>
+    useMutation({
+        mutationFn: async ({ sourcePodId }: { sourcePodId: string }): Promise<PodImport> => {
+            const res = await lemmaFetch(`/imports/from-pod/${sourcePodId}`, { method: 'POST' });
+            if (!res.ok) throw new Error(await readError(res));
+            return res.json();
+        },
+    });
+
 /** Poll an import; auto-refreshes while it is applying. */
 export const usePodImport = (podId?: string, importId?: string) =>
     useQuery({
