@@ -49,8 +49,8 @@ def _stage_bundle(root: Path) -> Path:
     """A bundle covering the wired handlers: a table with seed data, an
     inline-instruction agent, and a (code-less) function."""
     _write(root / "pod.json", {"name": "import-e2e", "format_version": 2})
+    # No top-level "name" — it comes from the directory (real bundles omit it).
     _write(root / "tables" / "widgets" / "widgets.json", {
-        "name": "widgets",
         "primary_key_column": "id",
         "enable_rls": False,
         "columns": [
@@ -151,8 +151,11 @@ async def test_plan_and_apply_imports_resources(
         ("workflows", "daily"),
         ("schedules", "morning"),
         ("apps", "mini"),
+        # greeter carries grants, replayed in a deferred final pass once every
+        # resource a grant could target exists.
+        ("agent_grants", "greeter"),
     }
-    assert plan["progress_total"] == 6
+    assert plan["progress_total"] == 7
     import_id = plan["id"]
 
     # 2) Apply -> COMPLETED, every step done. No body: the bundle was staged.
@@ -162,7 +165,7 @@ async def test_plan_and_apply_imports_resources(
     assert applied.status_code == status.HTTP_200_OK, applied.text
     result = applied.json()
     assert result["status"] == "COMPLETED", result
-    assert result["progress_done"] == 6
+    assert result["progress_done"] == 7
     assert all(s["status"] == "COMPLETED" for s in result["plan"])
 
     # 3) The resources really exist in the pod.

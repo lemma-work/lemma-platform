@@ -141,6 +141,12 @@ class BundleExporter:
                 "toolsets": [str(getattr(t, "value", t)) for t in (agent.toolsets or [])],
                 "input_schema": agent.input_schema,
                 "output_schema": agent.output_schema,
+                # Model/profile selection + freeform metadata, so the agent runs
+                # the same way on re-import instead of falling back to defaults.
+                "agent_runtime": (
+                    agent.agent_runtime.model_dump(mode="json") if agent.agent_runtime else None
+                ),
+                "metadata": agent.metadata,
             }
             grants = await self._grants_manifest("AGENT", agent.id, pod_id)
             if grants:
@@ -153,15 +159,44 @@ class BundleExporter:
         grants_map = await list_grantee_resource_grants(
             self.uow.session, pod_id=pod_id, grantee_type=grantee_type, grantee_id=grantee_id
         )
-        grants = [
-            {
-                "resource_type": getattr(resource_type, "value", str(resource_type)),
-                "resource_name": name,
-                "permission_ids": list(permission_ids),
-            }
-            for (resource_type, name), permission_ids in grants_map.items()
-        ]
+        grants = []
+        for (resource_type, name), permission_ids in grants_map.items():
+            rtype = getattr(resource_type, "value", str(resource_type))
+            resource_name = name
+            # connector_account grants resolve to a source-user account UUID,
+            # which means nothing in another install. Re-key them to the
+            # connector provider slug so import can re-point them to the
+            # importing user's own account for that provider.
+            if rtype == "connector_account":
+                provider = await self._connector_provider_for_account(name)
+                if provider is None:
+                    continue  # account gone / unresolvable — drop the dangling grant
+                resource_name = provider
+            grants.append(
+                {
+                    "resource_type": rtype,
+                    "resource_name": resource_name,
+                    "permission_ids": list(permission_ids),
+                }
+            )
         return {"grants": grants} if grants else None
+
+    async def _connector_provider_for_account(self, account_name: str) -> str | None:
+        """Map a connector_account grant's account UUID to its provider slug."""
+        from uuid import UUID as _UUID
+
+        from app.core.crypto import get_secret_cipher
+        from app.modules.connectors.infrastructure.repositories.account_repository import (
+            AccountRepository,
+        )
+
+        try:
+            account_id = _UUID(str(account_name))
+        except (ValueError, TypeError):
+            return None
+        repo = AccountRepository(self.uow, encryption=get_secret_cipher())
+        account = await repo.get(account_id)
+        return account.connector_id if account else None
 
     async def _export_functions(self, root, pod_id, user_id, ctx) -> None:
         from app.modules.function.api.dependencies import build_function_service
@@ -176,9 +211,17 @@ class BundleExporter:
             payload = {
                 "name": function.name,
                 "description": function.description,
+                "icon_url": function.icon_url,
                 "config": function.config,
                 "visibility": function.visibility,
                 "code": function.code,
+                # Schemas, type and pip deps, so the function is runnable on
+                # re-import without re-deriving everything from the code.
+                "type": getattr(function.type, "value", function.type),
+                "input_schema": function.input_schema,
+                "output_schema": function.output_schema,
+                "config_schema": function.config_schema,
+                "python_packages": list(function.python_packages or []),
             }
             grants = await self._grants_manifest("FUNCTION", function.id, pod_id)
             if grants:

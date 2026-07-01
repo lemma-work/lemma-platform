@@ -28,6 +28,16 @@ from app.modules.pod_import.domain.value_objects import ImportStep
 # Audit columns Lemma materializes itself — a bundle must not declare them.
 _RESERVED_COLUMNS = frozenset({"created_at", "updated_at", "user_id"})
 
+# Grants are applied in a final pass, AFTER every resource exists, because a
+# grant can target a resource created later (an agent granted a workflow, or a
+# peer agent) — applying them inline would fail to resolve the target. Each
+# entry maps a grant-step type to (manifest dir, grantee_type). The plan appends
+# one such step per grantee that carries grants.
+_GRANT_STEP_KINDS: dict[str, tuple[str, str]] = {
+    "agent_grants": ("agents", "AGENT"),
+    "function_grants": ("functions", "FUNCTION"),
+}
+
 
 class ImportApplyContext:
     """Per-apply context handed to the applier (satisfies the engine's port)."""
@@ -72,17 +82,35 @@ class BackendResourceApplier:
         }
 
     async def apply_step(self, step: ImportStep, ctx: ImportApplyContext) -> None:
-        manifest = read_manifest(ctx.bundle_path, step.resource_type, step.resource_name)
+        # A grant step replays a grantee's grants; its manifest is the
+        # agent/function it grants for, read from that resource's dir.
+        grant_spec = _GRANT_STEP_KINDS.get(step.resource_type)
+        read_kind = grant_spec[0] if grant_spec else step.resource_type
+        manifest = read_manifest(ctx.bundle_path, read_kind, step.resource_name)
+        # The resource name is the directory name; a manifest may omit it, so
+        # make it canonical before any handler reads manifest["name"].
+        manifest.setdefault("name", step.resource_name)
         # Resolve ${var} placeholders (account/member ids) before the handler
         # constructs entities; unsupplied ones drop their field.
         manifest = resolve_placeholders(manifest, ctx.variables)
-        handler = self._handlers.get(step.resource_type)
-        if handler is None:
-            raise ResourceApplyNotWired(
-                f"Applying '{step.resource_type}' is not wired to a backend service yet "
-                f"(resource '{step.resource_name}')."
-            )
-        await handler(manifest, ctx)
+        try:
+            if grant_spec is not None:
+                await self._apply_grants_phase(grant_spec[1], step.resource_name, manifest, ctx)
+                return
+            handler = self._handlers.get(step.resource_type)
+            if handler is None:
+                raise ResourceApplyNotWired(
+                    f"Applying '{step.resource_type}' is not wired to a backend service yet "
+                    f"(resource '{step.resource_name}')."
+                )
+            await handler(manifest, ctx)
+        except Exception as exc:
+            # Idempotent apply: a resource that already exists (from a prior or
+            # partial import) is treated as done, not a failure — so re-imports
+            # and resumes don't break on what's already there.
+            if _is_already_exists(exc):
+                return
+            raise
 
     # -- handlers -------------------------------------------------------------
 
@@ -146,20 +174,23 @@ class BackendResourceApplier:
             agent_repository=AgentRepository(self.uow),
             authorization_service=create_authorization_service(self.uow),
         )
-        agent = await service.create_agent(
+        await service.create_agent(
             pod_id=ctx.pod_id,
             user_id=ctx.user_id,
             name=str(manifest["name"]),
             instruction=instruction,
             description=manifest.get("description"),
             icon_url=manifest.get("icon_url"),
+            agent_runtime=_agent_runtime_config(manifest.get("agent_runtime")),
             toolsets=manifest.get("toolsets") or None,
             input_schema=manifest.get("input_schema"),
             output_schema=manifest.get("output_schema"),
             visibility=manifest.get("visibility"),
+            metadata=manifest.get("metadata"),
             ctx=ctx.ctx,
         )
-        await self._apply_grants("AGENT", agent.id, manifest, ctx)
+        # Grants are replayed in the deferred grant pass (see _GRANT_STEP_KINDS),
+        # after every resource the grants might target has been created.
 
 
     async def _apply_function(self, manifest: dict[str, Any], ctx: ImportApplyContext) -> None:
@@ -171,6 +202,8 @@ class BackendResourceApplier:
             raise ResourceApplyNotWired(
                 f"Function '{manifest.get('name')}' has an unresolved code reference."
             )
+        from app.modules.function.domain.entities import FunctionType
+
         entity = FunctionEntity(
             pod_id=ctx.pod_id,
             user_id=ctx.user_id,
@@ -179,23 +212,71 @@ class BackendResourceApplier:
             icon_url=manifest.get("icon_url"),
             config=manifest.get("config"),
             visibility=str(manifest.get("visibility") or "POD"),
+            input_schema=manifest.get("input_schema") or {},
+            output_schema=manifest.get("output_schema") or {},
+            config_schema=manifest.get("config_schema"),
+            type=FunctionType(manifest["type"]) if manifest.get("type") else FunctionType.API,
+            python_packages=list(manifest.get("python_packages") or []),
         )
         service = build_function_service(self.uow)
-        created = await service.create_function(entity, ctx.user_id, code=code, ctx=ctx.ctx)
-        await self._apply_grants("FUNCTION", created.id, manifest, ctx)
+        await service.create_function(entity, ctx.user_id, code=code, ctx=ctx.ctx)
+        # Grants are replayed in the deferred grant pass (see _GRANT_STEP_KINDS),
+        # after every resource the grants might target has been created.
 
 
-    # Connector-scoped grants reference environment-specific resources that
-    # can't resolve by name in a fresh pod — skip them (the requirements/gate
-    # path wires connectors up separately).
-    _UNRESOLVABLE_GRANT_TYPES = frozenset({"connector", "connector_account", "connector_auth_config"})
+    # Org-scoped auth config is not a pod-level grant, so it never resolves in a
+    # pod import — skip it. (connector / connector_account DO traverse: the
+    # connector slug resolves against the global catalog, and a connector_account
+    # is re-pointed to the importing user's own account below.)
+    _UNRESOLVABLE_GRANT_TYPES = frozenset({"connector_auth_config"})
+
+    async def _apply_grants_phase(
+        self,
+        grantee_type: str,
+        grantee_name: str,
+        manifest: dict[str, Any],
+        ctx: ImportApplyContext,
+    ) -> None:
+        """Deferred grant pass: look up the (already-created) grantee by name and
+        replay its grants now that every resource a grant could target exists."""
+        grantee_id = await self._resolve_grantee_id(grantee_type, grantee_name, ctx)
+        await self._apply_grants(grantee_type, grantee_id, manifest, ctx)
+
+    async def _resolve_grantee_id(
+        self, grantee_type: str, name: str, ctx: ImportApplyContext
+    ) -> UUID:
+        if grantee_type == "AGENT":
+            from app.modules.agent.infrastructure.repositories import AgentRepository
+            from app.modules.agent.services.agent_service import AgentService
+            from app.modules.pod.services.authorization_factory import (
+                create_authorization_service,
+            )
+
+            service = AgentService(
+                agent_repository=AgentRepository(self.uow),
+                authorization_service=create_authorization_service(self.uow),
+            )
+            agent = await service.get_agent_by_name(
+                pod_id=ctx.pod_id, name=name, requester_user_id=ctx.user_id, ctx=ctx.ctx
+            )
+            return agent.id
+        if grantee_type == "FUNCTION":
+            from app.modules.function.api.dependencies import build_function_service
+
+            service = build_function_service(self.uow)
+            function = await service.get_function_by_name(
+                ctx.pod_id, name, ctx.user_id, raise_not_found=True, ctx=ctx.ctx
+            )
+            return function.id
+        raise ResourceApplyNotWired(f"Grant grantee type '{grantee_type}' is not wired.")
 
     async def _apply_grants(
         self, grantee_type: str, grantee_id: UUID, manifest: dict[str, Any], ctx: ImportApplyContext
     ) -> None:
-        """Replay a resource's grants (table/folder/agent/function access) onto
-        the freshly-created grantee. Grants are name-based, so they resolve in
-        the target pod as long as the referenced resource is in the bundle."""
+        """Replay a resource's grants (table/folder/agent/function/connector
+        access) onto the grantee. Grants are name-based, so they resolve in the
+        target pod as long as the referenced resource is in the bundle or, for
+        connectors, in the importing user's connected accounts."""
         from types import SimpleNamespace
 
         from app.core.authorization.context import ResourceType
@@ -206,16 +287,27 @@ class BackendResourceApplier:
         )
 
         raw = (manifest.get("permissions") or {}).get("grants") or []
-        grant_inputs = [
-            SimpleNamespace(
-                resource_type=ResourceType(g["resource_type"]),
-                resource_name=g["resource_name"],
-                permission_ids=list(g.get("permission_ids") or []),
+        grant_inputs = []
+        for g in raw:
+            rtype = str(g.get("resource_type") or "")
+            rname = g.get("resource_name")
+            if not rname or rtype in self._UNRESOLVABLE_GRANT_TYPES:
+                continue
+            if rtype == "connector_account":
+                # Exported as a provider slug; re-point to the importing user's
+                # own account for that provider. Skip if they haven't connected
+                # it — the requirements/consent flow surfaces that separately.
+                account_id = await self._resolve_user_connector_account(str(rname), ctx)
+                if account_id is None:
+                    continue
+                rname = str(account_id)
+            grant_inputs.append(
+                SimpleNamespace(
+                    resource_type=ResourceType(rtype),
+                    resource_name=rname,
+                    permission_ids=list(g.get("permission_ids") or []),
+                )
             )
-            for g in raw
-            if g.get("resource_name")
-            and str(g.get("resource_type")) not in self._UNRESOLVABLE_GRANT_TYPES
-        ]
         if not grant_inputs:
             return
         validate_pod_resource_grant_permissions(grant_inputs)
@@ -230,6 +322,23 @@ class BackendResourceApplier:
             grants=normalized,
             created_by_user_id=ctx.user_id,
         )
+
+    async def _resolve_user_connector_account(
+        self, provider: str, ctx: ImportApplyContext
+    ) -> UUID | None:
+        """The importing user's connected account id for a connector provider
+        slug (e.g. 'slack'), or None if they have no such connection."""
+        org_id = getattr(ctx.ctx, "organization_id", None)
+        if org_id is None:
+            return None
+        from app.core.crypto import get_secret_cipher
+        from app.modules.connectors.infrastructure.repositories.account_repository import (
+            AccountRepository,
+        )
+
+        repo = AccountRepository(self.uow, encryption=get_secret_cipher())
+        account = await repo.get_by_user_org_and_app(ctx.user_id, org_id, provider)
+        return account.id if account else None
 
     async def _apply_workflow(self, manifest: dict[str, Any], ctx: ImportApplyContext) -> None:
         from app.modules.icon.services.icon_service import IconService
@@ -302,22 +411,31 @@ class BackendResourceApplier:
         )
 
     async def _apply_app(self, manifest: dict[str, Any], ctx: ImportApplyContext) -> None:
+        from app.core.helpers.slug import normalize_public_slug
         from app.modules.apps.api.dependencies import build_app_service
         from app.modules.apps.domain.entities import AppEntity
 
-        # public_slug is globally unique, so a bundle's slug can't be reused
-        # verbatim in another pod — derive a pod-scoped slug to avoid collisions.
-        base_slug = str(manifest.get("public_slug") or manifest["name"])
-        pod_suffix = str(ctx.pod_id).replace("-", "")[:8]
+        service = build_app_service(self.uow)
+        # Prefer the bundle's clean slug for a readable app URL. public_slug is
+        # globally unique, so fall back to a pod-scoped slug only when the clean
+        # one is already taken (e.g. the same bundle imported into a second pod).
+        base_slug = normalize_public_slug(str(manifest.get("public_slug") or manifest["name"]))
+        taken = bool(base_slug) and (
+            await service.repository.get_by_public_slug(base_slug) is not None
+        )
+        if taken:
+            pod_suffix = str(ctx.pod_id).replace("-", "")[:8]
+            public_slug = f"{base_slug}-{pod_suffix}"
+        else:
+            public_slug = base_slug
         entity = AppEntity(
             pod_id=ctx.pod_id,
             user_id=ctx.user_id,
             name=str(manifest["name"]),
-            public_slug=f"{base_slug}-{pod_suffix}",
+            public_slug=public_slug,
             description=manifest.get("description"),
             visibility=manifest.get("visibility") or "POD",
         )
-        service = build_app_service(self.uow)
         await service.create_app_with_context(entity, ctx.user_id, ctx=ctx.ctx)
         # Upload the prebuilt assets if the bundle carries them (no build needed —
         # a dist archive uploads straight to READY).
@@ -355,8 +473,26 @@ class BackendResourceApplier:
         await ScheduleService(uow=self.uow).create_schedule(create, ctx=ctx.ctx)
 
 
+def _is_already_exists(exc: BaseException) -> bool:
+    """True if the error means the resource is already present — the services
+    raise *AlreadyExistsError / *ConflictError, or say so in the message."""
+    name = type(exc).__name__
+    if "AlreadyExists" in name or "Conflict" in name:
+        return True
+    return "already exists" in str(exc).lower()
+
+
 def _read_bytes(path: Path) -> bytes | None:
     return path.read_bytes() if path.is_file() else None
+
+
+def _agent_runtime_config(data: Any):
+    """Rebuild an AgentRuntimeConfig from its serialized manifest form, or None."""
+    if not data:
+        return None
+    from app.modules.agent.domain.value_objects import AgentRuntimeConfig
+
+    return AgentRuntimeConfig(**data)
 
 
 def _column_kwargs(column: dict[str, Any]) -> dict[str, Any]:

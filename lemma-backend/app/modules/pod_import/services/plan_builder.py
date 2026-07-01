@@ -19,6 +19,7 @@ from lemma_pod_bundle import (
     RESOURCE_KINDS,
     diff_table_columns,
     list_resource_names,
+    order_tables_by_fk,
     read_manifest,
     read_requirements,
 )
@@ -64,7 +65,12 @@ def build_plan(
     steps: list[ImportStep] = []
 
     for kind in RESOURCE_KINDS:
-        for name in list_resource_names(bundle_root, kind):
+        names = list_resource_names(bundle_root, kind)
+        if kind == "tables":
+            # A table with a foreign key must be created after the table it
+            # references, or the FK target won't exist yet.
+            names = order_tables_by_fk(bundle_root, names)
+        for name in names:
             exists = existing.has(kind, name)
             action = ImportAction.UPDATE if exists else ImportAction.CREATE
             destructive = (
@@ -80,6 +86,22 @@ def build_plan(
                     destructive=destructive,
                 )
             )
+
+    # Deferred grant pass: a grant can target a resource created later (an agent
+    # granted a workflow, a peer agent, or a connector connected during consent),
+    # so grants are replayed only after every resource exists. Emit one grant
+    # step per agent/function that actually carries grants.
+    for kind, grant_kind in (("agents", "agent_grants"), ("functions", "function_grants")):
+        for name in list_resource_names(bundle_root, kind):
+            manifest = read_manifest(bundle_root, kind, name)
+            if (manifest.get("permissions") or {}).get("grants"):
+                steps.append(
+                    ImportStep(
+                        resource_type=grant_kind,
+                        resource_name=name,
+                        action=ImportAction.CREATE,
+                    )
+                )
 
     summary = read_requirements(bundle_root)
     return steps, summary.get("requirements") or {}, summary.get("capabilities") or []

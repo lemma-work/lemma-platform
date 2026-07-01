@@ -86,6 +86,51 @@ def test_table_update_dropping_a_column_is_destructive(tmp_path):
     assert contacts.destructive is True
 
 
+def test_tables_ordered_after_their_foreign_key_targets(tmp_path):
+    # `aaa` references `zzz`, but sorts first alphabetically — the plan must put
+    # `zzz` before `aaa` so the FK target exists at create time.
+    root = tmp_path / "fk"
+    _write(root / "pod.json", {"name": "fk"})
+    _write(root / "tables" / "aaa" / "aaa.json", {
+        "columns": [{"name": "zzz_id", "type": "UUID", "foreign_key": {"references": "zzz.id"}}],
+    })
+    _write(root / "tables" / "zzz" / "zzz.json", {"columns": [{"name": "id", "type": "UUID"}]})
+
+    steps, _, _ = build_plan(root, FakeExisting(set(), {}))
+    table_order = [s.resource_name for s in steps if s.resource_type == "tables"]
+    assert table_order.index("zzz") < table_order.index("aaa")
+
+
+def test_grants_become_a_deferred_step_after_all_resources(tmp_path):
+    # An agent that grants access to a function gets its grants applied in a
+    # final pass — emitted as an `agent_grants` step ordered after every
+    # resource step, so the grant target exists when it runs.
+    root = tmp_path / "p"
+    _write(root / "pod.json", {"name": "p"})
+    _write(root / "functions" / "foo" / "foo.json", {"name": "foo"})
+    _write(root / "agents" / "triage" / "triage.json", {
+        "name": "triage",
+        "permissions": {"grants": [
+            {"resource_type": "function", "resource_name": "foo", "permission_ids": ["function.use"]},
+        ]},
+    })
+
+    steps, _, _ = build_plan(root, FakeExisting(set(), {}))
+    keys = [(s.resource_type, s.resource_name) for s in steps]
+
+    assert ("agent_grants", "triage") in keys
+    assert keys.index(("agent_grants", "triage")) > keys.index(("agents", "triage"))
+    assert keys.index(("agent_grants", "triage")) > keys.index(("functions", "foo"))
+    # foo has no grants of its own — no grant step for it.
+    assert ("function_grants", "foo") not in keys
+
+
+def test_no_grant_steps_when_no_grants(tmp_path):
+    root = _bundle(tmp_path)  # contacts table + triage agent, neither has grants
+    steps, _, _ = build_plan(root, FakeExisting(set(), {}))
+    assert not any(s.resource_type.endswith("_grants") for s in steps)
+
+
 def test_additive_table_update_is_not_destructive(tmp_path):
     root = _bundle(tmp_path)
     # Pod's contacts has only id; the bundle adds email — additive, safe.
