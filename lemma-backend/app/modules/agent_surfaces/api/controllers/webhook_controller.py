@@ -127,17 +127,18 @@ async def handle_surface_webhook(
     return {"message": "Webhook received"}
 
 
-def _webhook_verification_response(platform: str, params: dict[str, str]) -> Response:
+def _webhook_verification_response(
+    platform: str, params: dict[str, str], *, whatsapp_verify_token: str | None = None
+) -> Response:
     """Shared GET-verification handshake (WhatsApp hub challenge / Telegram ok)."""
     if platform == "whatsapp":
         mode = params.get("hub.mode")
         challenge = params.get("hub.challenge")
         verify_token = params.get("hub.verify_token")
 
-        expected_token = surface_settings.whatsapp_verify_token
         security_enabled = bool(surface_settings.surface_webhook_security_enabled)
         if mode == "subscribe" and challenge and (
-            not security_enabled or verify_token == expected_token
+            not security_enabled or verify_token == whatsapp_verify_token
         ):
             return Response(content=challenge, media_type="text/plain")
 
@@ -157,7 +158,11 @@ async def verify_surface_webhook(
     request: Request,
 ):
     """Webhook verification endpoint for platforms that require it."""
-    return _webhook_verification_response(platform, dict(request.query_params))
+    return _webhook_verification_response(
+        platform,
+        dict(request.query_params),
+        whatsapp_verify_token=surface_settings.whatsapp_verify_token,
+    )
 
 
 @router.get(
@@ -168,12 +173,27 @@ async def verify_surface_webhook(
 async def verify_direct_surface_webhook(
     surface_id: UUID,
     request: Request,
+    security_service: SurfaceWebhookSecurityServiceDep,
     service: AgentSurfaceService = Depends(get_surface_service),
 ):
-    """Webhook verification endpoint for platforms that require it."""
+    """Webhook verification endpoint for platforms that require it.
+
+    WhatsApp surfaces bound to a connector account are verified against that
+    account's own ``verify_token`` (never the system-wide one) so each
+    customer's WhatsApp Business webhook config only has to match their own
+    credentials.
+    """
     surface = await service.get_surface(surface_id)
+    platform = surface.surface_type.value.lower()
+    whatsapp_verify_token = (
+        await security_service.resolve_whatsapp_verify_token(surface)
+        if platform == "whatsapp"
+        else surface_settings.whatsapp_verify_token
+    )
     return _webhook_verification_response(
-        surface.surface_type.value.lower(), dict(request.query_params)
+        platform,
+        dict(request.query_params),
+        whatsapp_verify_token=whatsapp_verify_token,
     )
 
 

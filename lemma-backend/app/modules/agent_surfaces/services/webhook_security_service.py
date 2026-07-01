@@ -4,7 +4,7 @@ import hashlib
 import hmac
 import json
 import time
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 import httpx
 import jwt
@@ -13,8 +13,16 @@ from jwt.algorithms import RSAAlgorithm
 from app.core.config import settings
 from app.core.domain.errors import DomainError
 from app.core.infrastructure.cache.redis_json_cache import RedisJsonCache
+from app.core.log.log import get_logger
 from app.modules.agent_surfaces.config import surface_settings
 from app.modules.agent_surfaces.domain.entities import AgentSurfaceEntity, SurfacePlatform
+
+if TYPE_CHECKING:
+    from app.modules.agent_surfaces.services.credential_resolver import (
+        SurfaceCredentialResolver,
+    )
+
+logger = get_logger(__name__)
 _SLACK_SIGNATURE_VERSION = "v0"
 _SLACK_MAX_TIMESTAMP_SKEW_SECONDS = 60 * 5
 _BOT_FRAMEWORK_OPENID_CONFIG_URL = (
@@ -62,6 +70,11 @@ class SurfaceWebhookAuthenticationError(DomainError):
 
 
 class SurfaceWebhookSecurityService:
+    def __init__(
+        self, *, credential_resolver: "SurfaceCredentialResolver | None" = None
+    ):
+        self._credential_resolver = credential_resolver
+
     def verification_enabled(self) -> bool:
         return bool(surface_settings.surface_webhook_security_enabled)
 
@@ -128,11 +141,55 @@ class SurfaceWebhookSecurityService:
                 webhook_secret=surface.webhook_secret,
             )
             return
+        if surface.surface_type is SurfacePlatform.WHATSAPP:
+            app_secret, _ = await self._resolve_whatsapp_secrets(surface)
+            self._verify_whatsapp_signature(
+                headers=headers,
+                raw_body=raw_body,
+                app_secret=app_secret,
+            )
+            return
         await self.verify_platform_request(
             platform=surface.surface_type.value,
             headers=headers,
             raw_body=raw_body,
         )
+
+    async def _resolve_whatsapp_secrets(
+        self, surface: AgentSurfaceEntity | None
+    ) -> tuple[str | None, str | None]:
+        """Returns ``(app_secret, verify_token)`` to check a WhatsApp request against.
+
+        A surface bound to a connector account (the org's own WhatsApp Business
+        app) is verified against *that account's* stored ``app_secret`` /
+        ``verify_token`` — never the system fallback, so a misconfigured or
+        missing org credential fails closed instead of silently matching
+        Lemma's own managed number. Only account-less (Lemma-managed) surfaces
+        use the env-configured system credentials.
+        """
+        if surface is not None and surface.account_id is not None:
+            if self._credential_resolver is None:
+                return None, None
+            try:
+                credentials = await self._credential_resolver.for_account(
+                    surface.account_id
+                )
+            except Exception:
+                logger.warning(
+                    "Could not resolve WhatsApp credentials for account %s",
+                    surface.account_id,
+                    exc_info=True,
+                )
+                return None, None
+            return credentials.get("app_secret"), credentials.get("verify_token")
+        return surface_settings.whatsapp_app_secret, surface_settings.whatsapp_verify_token
+
+    async def resolve_whatsapp_verify_token(
+        self, surface: AgentSurfaceEntity | None
+    ) -> str | None:
+        """The verify token to check ``hub.verify_token`` against for this surface."""
+        _, verify_token = await self._resolve_whatsapp_secrets(surface)
+        return verify_token
 
     def _verify_slack_signature(
         self,

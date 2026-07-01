@@ -43,15 +43,19 @@ def computed_webhook_url(surface: AgentSurfaceEntity) -> str | None:
 
     Shared by the surface response builder and the unified setup read. Returns
     None unless the surface uses WEBHOOK event mode and the API is publicly
-    reachable. Telegram with a connected account gets a surface-specific URL;
-    the other platform webhooks share a platform-level URL.
+    reachable. Telegram and WhatsApp with a connected account get a
+    surface-specific URL (each account has its own webhook secret/verify
+    token); the other platform webhooks share a platform-level URL.
     """
     if surface.event_mode is not SurfaceEventMode.WEBHOOK:
         return None
     if not public_https_api_url_available():
         return None
     base = settings.api_url.rstrip("/")
-    if surface.surface_type is SurfacePlatform.TELEGRAM and surface.account_id is not None:
+    if (
+        surface.surface_type in (SurfacePlatform.TELEGRAM, SurfacePlatform.WHATSAPP)
+        and surface.account_id is not None
+    ):
         return f"{base}/surfaces/{surface.id}/webhook"
     if surface.surface_type in _PLATFORM_WEBHOOK_TYPES:
         return f"{base}/surfaces/webhooks/{surface.surface_type.value.lower()}"

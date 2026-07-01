@@ -74,8 +74,15 @@ def get_surface_event_handler(
     )
 
 
-def get_surface_webhook_security_service() -> SurfaceWebhookSecurityService:
-    return SurfaceWebhookSecurityService()
+def get_surface_webhook_security_service(
+    uow: UoWDep,
+) -> SurfaceWebhookSecurityService:
+    return SurfaceWebhookSecurityService(
+        credential_resolver=SurfaceCredentialResolver(
+            session=uow.session,
+            connector_service=get_connector_service(uow),
+        )
+    )
 
 
 SurfaceServiceDep = Annotated[AgentSurfaceService, Depends(get_surface_service)]

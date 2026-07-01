@@ -431,7 +431,7 @@ class AgentSurfaceService:
             is_custom_app=await self._surface_uses_org_custom_app(surface),
             webhook_url=webhook_url,
             slack_socket_mode=surface_settings.enable_slack_socket_mode,
-            whatsapp_verify_token=surface_settings.whatsapp_verify_token,
+            whatsapp_verify_token=await self._whatsapp_verify_token_for_setup(surface),
         )
         pending_consent = bool(
             admin_consent and admin_consent["required"] and not admin_consent["granted"]
@@ -450,16 +450,23 @@ class AgentSurfaceService:
     async def _surface_uses_org_custom_app(
         self, surface: AgentSurfaceEntity
     ) -> bool:
-        """True when the surface's account was set up with the org's own OAuth
-        app (auth config ``ORG_CUSTOM``), so the org must point that app's
-        webhook at Lemma. System/Lemma-managed auth configs need no setup."""
+        """True when the org must manually point a platform app's webhook at Lemma.
+
+        For OAuth platforms this means the account was set up with the org's
+        own app (auth config ``ORG_CUSTOM``) — Lemma's system app is already
+        wired up centrally. WhatsApp is credential-managed (API_KEY, no OAuth
+        app registration) so there is no Lemma-shared "system app" to fall
+        back to: any connected account is the org's own WhatsApp Business app
+        and always needs its webhook configured.
+        """
+        if surface.account_id is None:
+            return False
+        if surface.surface_type is SurfacePlatform.WHATSAPP:
+            return True
+
         from app.modules.connectors.domain.auth_config import AuthConfigSource
 
-        if (
-            surface.account_id is None
-            or self._account_port is None
-            or self._auth_config_port is None
-        ):
+        if self._account_port is None or self._auth_config_port is None:
             return False
         account = await self._account_port.get_account(surface.account_id)
         if account is None or account.auth_config_id is None:
@@ -471,6 +478,35 @@ class AgentSurfaceService:
             auth_config
             and auth_config.config_source == AuthConfigSource.ORG_CUSTOM.value
         )
+
+    async def _whatsapp_verify_token_for_setup(
+        self, surface: AgentSurfaceEntity
+    ) -> str | None:
+        """The verify token to show the user for pasting into Meta's console.
+
+        A connected account's own ``verify_token`` (from its stored
+        credentials) — the value the backend actually checks incoming
+        ``hub.verify_token`` requests against for that surface. Falls back to
+        the system-wide token for account-less (Lemma-managed) surfaces.
+        """
+        if (
+            surface.surface_type is SurfacePlatform.WHATSAPP
+            and surface.account_id is not None
+            and self._credential_resolver is not None
+        ):
+            try:
+                credentials = await self._credential_resolver.for_account(
+                    surface.account_id
+                )
+            except Exception:
+                logger.warning(
+                    "Could not resolve WhatsApp verify token for account %s",
+                    surface.account_id,
+                    exc_info=True,
+                )
+                return None
+            return credentials.get("verify_token")
+        return surface_settings.whatsapp_verify_token
 
     async def _surface_admin_consent(
         self, surface: AgentSurfaceEntity
