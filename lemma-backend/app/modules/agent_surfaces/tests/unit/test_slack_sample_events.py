@@ -173,6 +173,7 @@ async def test_sample_slack_dm_event_runs_assistant_and_posts_reply(monkeypatch)
     surface = AgentSurfaceEntity(
         id=uuid4(),
         pod_id=uuid4(),
+        name="slack",
         agent_id=uuid4(),
         surface_type="SLACK",
         mode=SurfaceMode.DM,
@@ -266,6 +267,7 @@ async def test_sample_slack_app_mention_event_replies_in_thread(monkeypatch):
     surface = AgentSurfaceEntity(
         id=uuid4(),
         pod_id=uuid4(),
+        name="slack",
         agent_id=uuid4(),
         surface_type="SLACK",
         mode=SurfaceMode.DM,

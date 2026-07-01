@@ -22,10 +22,11 @@ from app.modules.agent_surfaces.api.schemas import (
     AvailableSurfaceChannelsResponse,
     SurfaceBehaviorConfigInput,
     SurfaceConfigResponse,
+    SurfaceCreateRequest,
     SurfaceSendRequest,
     SurfaceSendResponse,
     SurfaceSetupResponse,
-    SurfaceUpsertRequest,
+    SurfaceUpdateRequest,
     surface_config_from_input,
 )
 from app.modules.agent_surfaces.domain.entities import (
@@ -36,13 +37,19 @@ from app.modules.agent_surfaces.domain.entities import (
     SurfacePlatform,
     SurfaceSendPolicy,
 )
-from app.modules.agent_surfaces.domain.errors import AgentSurfaceNotFoundError
+from app.modules.agent_surfaces.domain.setup_guides import SurfacePlatformSetupGuide
 from app.modules.agent_surfaces.platforms.common import computed_webhook_url
 from app.modules.agent_surfaces.services.surface_service import (
     AgentSurfaceService,
 )
 
 router = APIRouter(prefix="/pods/{pod_id}/surfaces", tags=["Agent Surfaces"])
+
+# A surface's platform-level setup checklist (env/OAuth prerequisites) needs no
+# surface to exist yet, so it lives outside the surface-resource router.
+setup_guide_router = APIRouter(
+    prefix="/pods/{pod_id}/surface-setup", tags=["Agent Surfaces"]
+)
 
 
 async def _require_surface_agent_action(
@@ -72,6 +79,7 @@ def _surface_response(
     return AgentSurfaceResponse(
         id=surface.id,
         pod_id=surface.pod_id,
+        name=surface.name,
         agent_id=surface.agent_id,
         agent_name=agent_name,
         uses_default_agent=surface.agent_id is None,
@@ -96,22 +104,17 @@ def _surface_platform_from_ref(platform: str) -> SurfacePlatform:
         ) from exc
 
 
-async def _resolve_agent_filter(
+async def _resolve_agent_id_filter(
     *,
     agent_service,
     pod_id: UUID,
     agent_name: str | None,
-) -> tuple[UUID | None, bool]:
-    """Resolve an optional ``agent_name`` filter to ``(agent_id, match_agent)``.
-
-    Multiple surfaces of a platform can exist in a pod (one per agent); callers
-    pass ``agent_name`` to target a specific agent's surface. When omitted, the
-    lookup is not agent-scoped (returns the oldest matching surface).
-    """
+) -> UUID | None:
+    """Resolve an optional ``agent_name`` list filter to an agent id."""
     if not agent_name:
-        return None, False
+        return None
     agent = await agent_service.get_agent_by_name(pod_id=pod_id, name=agent_name)
-    return agent.id, True
+    return agent.id
 
 
 async def _resolve_channel_routes(
@@ -196,6 +199,16 @@ async def _merge_surface_config(
     return existing.model_copy(update=updates)
 
 
+async def _resolve_agent_display_name(agent_service, agent_id: UUID | None) -> str | None:
+    if agent_id is None:
+        return None
+    try:
+        agent = await agent_service.agent_repository.get(agent_id)
+        return agent.name if agent else None
+    except Exception:
+        return None
+
+
 @router.get(
     "",
     response_model=AgentSurfaceListResponse,
@@ -210,25 +223,30 @@ async def list_surfaces(
     service: AgentSurfaceService = Depends(get_surface_service),
     limit: int = 100,
     page_token: str | None = None,
+    platform: str | None = None,
     agent_name: str | None = None,
 ) -> AgentSurfaceListResponse:
+    """List surfaces in the pod. A pod may have several surfaces of the same
+    ``platform`` (different bots/accounts, one per agent); filter by
+    ``platform`` and/or ``agent_name`` to narrow the results."""
     cursor = parse_uuid_page_token(page_token)
 
-    agent_id, match_agent = await _resolve_agent_filter(
+    agent_id_filter = await _resolve_agent_id_filter(
         agent_service=agent_service,
         pod_id=pod_id,
         agent_name=agent_name,
     )
     surfaces, next_cursor = await service.list_surfaces_by_pod(
         pod_id,
-        agent_id=agent_id,
-        match_agent=match_agent,
+        platform=platform,
+        agent_id=agent_id_filter,
+        match_agent=agent_id_filter is not None,
         cursor=cursor,
         limit=limit,
     )
     items = []
     for surface in surfaces:
-        agent_name = None
+        resolved_agent_name = None
         if surface.agent_id is not None:
             allowed = await ctx.can(
                 Permissions.AGENT_READ,
@@ -240,12 +258,10 @@ async def list_surfaces(
             )
             if not allowed:
                 continue
-            try:
-                agent = await agent_service.agent_repository.get(surface.agent_id)
-                agent_name = agent.name if agent else None
-            except Exception:
-                agent_name = None
-        items.append(_surface_response(surface, agent_name=agent_name))
+            resolved_agent_name = await _resolve_agent_display_name(
+                agent_service, surface.agent_id
+            )
+        items.append(_surface_response(surface, agent_name=resolved_agent_name))
     return AgentSurfaceListResponse(
         items=items,
         limit=limit,
@@ -253,80 +269,103 @@ async def list_surfaces(
     )
 
 
+@router.post(
+    "",
+    operation_id="agent.surface.create",
+    dependencies=[require_action(Permissions.AGENT_UPDATE)],
+)
+async def create_surface(
+    pod_id: UUID,
+    request: SurfaceCreateRequest,
+    user: CurrentUser,
+    agent_service: AgentServiceDep,
+    ctx: PodContextDep,
+    service: AgentSurfaceService = Depends(get_surface_service),
+) -> AgentSurfaceResponse:
+    """Create a surface. ``name`` defaults to the lowercased platform — pass an
+    explicit name to create a second surface of the same platform (e.g. a
+    second bot routed to a different agent)."""
+    agent = (
+        await agent_service.get_agent_by_name(
+            pod_id=pod_id, name=request.default_agent_name
+        )
+        if request.default_agent_name
+        else None
+    )
+    await _require_surface_agent_action(
+        ctx=ctx,
+        pod_id=pod_id,
+        agent_id=agent.id if agent else None,
+        action=Permissions.AGENT_UPDATE,
+    )
+
+    config = await _resolve_surface_config(
+        pod_id=pod_id,
+        config_input=request.config,
+        agent_service=agent_service,
+        ctx=ctx,
+    )
+    surface = await service.create_surface(
+        pod_id=pod_id,
+        agent_id=agent.id if agent else None,
+        platform=request.platform,
+        name=request.name,
+        config=config,
+        credential_mode=request.credential_mode,
+        account_id=request.account_id,
+        ctx=ctx,
+    )
+    if not request.is_enabled:
+        surface = await service.update_surface(
+            surface_id=surface.id,
+            is_active=False,
+            ctx=ctx,
+        )
+    del user
+    return _surface_response(surface, agent_name=agent.name if agent else None)
+
+
 @router.get(
-    "/{platform}",
+    "/{surface_name}",
     operation_id="agent.surface.get",
     dependencies=[require_action(Permissions.AGENT_READ)],
 )
 async def get_surface(
     pod_id: UUID,
-    platform: str,
+    surface_name: str,
     user: CurrentUser,
     agent_service: AgentServiceDep,
     ctx: PodContextDep,
     service: AgentSurfaceService = Depends(get_surface_service),
-    agent_name: str | None = None,
-):
-    agent_id, match_agent = await _resolve_agent_filter(
-        agent_service=agent_service,
-        pod_id=pod_id,
-        agent_name=agent_name,
-    )
-    surface = await service.get_surface_by_platform_in_pod(
-        pod_id=pod_id,
-        platform=platform,
-        agent_id=agent_id,
-        match_agent=match_agent,
-    )
+) -> AgentSurfaceResponse:
+    surface = await service.get_surface_by_name_in_pod(pod_id=pod_id, name=surface_name)
     await _require_surface_agent_action(
         ctx=ctx,
         pod_id=pod_id,
         agent_id=surface.agent_id,
         action=Permissions.AGENT_READ,
     )
-    agent_name = None
-    if surface.agent_id is not None:
-        try:
-            agent = await agent_service.agent_repository.get(surface.agent_id)
-            agent_name = agent.name if agent else None
-        except Exception:
-            agent_name = None
+    agent_name = await _resolve_agent_display_name(agent_service, surface.agent_id)
     del user
     return _surface_response(surface, agent_name=agent_name)
 
 
-@router.put(
-    "/{platform}",
-    operation_id="agent.surface.upsert",
+@router.patch(
+    "/{surface_name}",
+    operation_id="agent.surface.update",
     dependencies=[require_action(Permissions.AGENT_UPDATE)],
 )
-async def upsert_surface(
+async def update_surface(
     pod_id: UUID,
-    platform: str,
-    request: SurfaceUpsertRequest,
+    surface_name: str,
+    request: SurfaceUpdateRequest,
     user: CurrentUser,
     agent_service: AgentServiceDep,
     ctx: PodContextDep,
     service: AgentSurfaceService = Depends(get_surface_service),
-    agent_name: str | None = None,
-):
-    """Create or merge-update a surface for a platform.
-
-    Without ``agent_name`` this targets the pod's primary surface for the
-    platform: ``default_agent_name`` in the body (re)assigns which agent handles
-    it. Pass the ``agent_name`` query param to address a specific agent's
-    surface, which lets several agents/accounts (e.g. multiple bots) each own a
-    surface on the same platform. Only fields present in the request are applied
-    on update.
-    """
-    surface_platform = _surface_platform_from_ref(platform)
-
-    filter_agent_id, match_agent = await _resolve_agent_filter(
-        agent_service=agent_service,
-        pod_id=pod_id,
-        agent_name=agent_name,
-    )
-
+) -> AgentSurfaceResponse:
+    """Partially update a surface. Only fields present in the request are
+    applied; the surface's platform and name are immutable."""
     update_agent_id = "default_agent_name" in request.model_fields_set
     agent = (
         await agent_service.get_agent_by_name(
@@ -342,44 +381,7 @@ async def upsert_surface(
         action=Permissions.AGENT_UPDATE,
     )
 
-    try:
-        # Without agent_name, target the primary surface (back-compat reassign);
-        # with it, scope to that agent's surface so multiple agents/accounts can
-        # each own a surface on the same platform.
-        existing = await service.get_surface_by_platform_in_pod(
-            pod_id=pod_id,
-            platform=surface_platform.value,
-            agent_id=filter_agent_id,
-            match_agent=match_agent,
-        )
-    except AgentSurfaceNotFoundError:
-        existing = None
-
-    if existing is None:
-        config = await _resolve_surface_config(
-            pod_id=pod_id,
-            config_input=request.config,
-            agent_service=agent_service,
-            ctx=ctx,
-        )
-        surface = await service.create_surface(
-            pod_id=pod_id,
-            agent_id=agent.id if agent else None,
-            platform=surface_platform,
-            config=config,
-            credential_mode=request.credential_mode,
-            account_id=request.account_id,
-            ctx=ctx,
-        )
-        if not request.is_enabled:
-            surface = await service.update_surface(
-                surface_id=surface.id,
-                is_active=False,
-                ctx=ctx,
-            )
-        del user
-        return _surface_response(surface, agent_name=agent.name if agent else None)
-
+    existing = await service.get_surface_by_name_in_pod(pod_id=pod_id, name=surface_name)
     config = await _merge_surface_config(
         existing=existing.config,
         pod_id=pod_id,
@@ -406,35 +408,26 @@ async def upsert_surface(
         ctx=ctx,
     )
     del user
-    return _surface_response(updated, agent_name=agent.name if agent else None)
+    resolved_agent_name = agent.name if agent else await _resolve_agent_display_name(
+        agent_service, updated.agent_id
+    )
+    return _surface_response(updated, agent_name=resolved_agent_name)
 
 
 @router.delete(
-    "/{platform}",
+    "/{surface_name}",
     operation_id="agent.surface.delete",
     status_code=status.HTTP_204_NO_CONTENT,
     dependencies=[require_action(Permissions.AGENT_DELETE)],
 )
 async def delete_surface(
     pod_id: UUID,
-    platform: str,
+    surface_name: str,
     user: CurrentUser,
-    agent_service: AgentServiceDep,
     ctx: PodContextDep,
     service: AgentSurfaceService = Depends(get_surface_service),
-    agent_name: str | None = None,
 ):
-    agent_id, match_agent = await _resolve_agent_filter(
-        agent_service=agent_service,
-        pod_id=pod_id,
-        agent_name=agent_name,
-    )
-    surface = await service.get_surface_by_platform_in_pod(
-        pod_id=pod_id,
-        platform=platform,
-        agent_id=agent_id,
-        match_agent=match_agent,
-    )
+    surface = await service.get_surface_by_name_in_pod(pod_id=pod_id, name=surface_name)
     await _require_surface_agent_action(
         ctx=ctx,
         pod_id=pod_id,
@@ -447,17 +440,18 @@ async def delete_surface(
 
 
 @router.post(
-    "/{platform}/send",
+    "/{surface_name}/send",
     response_model=SurfaceSendResponse,
     operation_id="agent.surface.send",
     dependencies=[require_action(Permissions.AGENT_UPDATE)],
 )
 async def send_surface_message(
     pod_id: UUID,
-    platform: str,
+    surface_name: str,
     request: SurfaceSendRequest,
     user: CurrentUser,
     ingress: SurfaceEventHandlerDep,
+    service: AgentSurfaceService = Depends(get_surface_service),
 ) -> SurfaceSendResponse:
     """Proactively send a message to a pod member on this surface.
 
@@ -465,10 +459,9 @@ async def send_surface_message(
     thread on the surface (bots can't cold-DM), so a 404 means the member has no
     reachable conversation here yet.
     """
-    surface_platform = _surface_platform_from_ref(platform)
+    surface = await service.get_surface_by_name_in_pod(pod_id=pod_id, name=surface_name)
     sent = await ingress.send_to_member(
-        pod_id=pod_id,
-        platform=surface_platform,
+        surface=surface,
         user_id=request.user_id,
         message=request.message,
     )
@@ -482,36 +475,34 @@ async def send_surface_message(
 
 
 @router.get(
-    "/{platform}/setup",
+    "/{surface_name}/setup",
     response_model=SurfaceSetupResponse,
     operation_id="agent.surface.setup",
     dependencies=[require_action(Permissions.AGENT_READ)],
 )
 async def get_surface_setup(
     pod_id: UUID,
-    platform: str,
+    surface_name: str,
     user: CurrentUser,
     service: AgentSurfaceService = Depends(get_surface_service),
 ) -> SurfaceSetupResponse:
-    """Everything needed to finish setting up this platform's surface.
-
-    Merges the static platform checklist with live webhook + admin-consent
-    state. Works before the surface exists (guide only) and after (live state).
-    """
+    """Live setup state for an existing surface: static platform checklist plus
+    webhook URL and admin-consent status. For the pre-creation checklist (before
+    any surface exists) use ``GET /pods/{pod_id}/surface-setup/{platform}``."""
     del user
-    setup = await service.get_surface_setup(pod_id=pod_id, platform=platform)
+    setup = await service.get_surface_setup_by_name(pod_id=pod_id, name=surface_name)
     return SurfaceSetupResponse.model_validate(setup)
 
 
 @router.get(
-    "/{platform}/channels",
+    "/{surface_name}/channels",
     operation_id="agent.surface.channels",
     response_model=AvailableSurfaceChannelsResponse,
     dependencies=[require_action(Permissions.AGENT_READ)],
 )
 async def list_surface_channels(
     pod_id: UUID,
-    platform: str,
+    surface_name: str,
     service: AgentSurfaceService = Depends(get_surface_service),
 ) -> AvailableSurfaceChannelsResponse:
     """List the channels/groups this surface bot can be configured to respond in.
@@ -519,10 +510,7 @@ async def list_surface_channels(
     Returns an empty list for platforms without an enumerable channel concept
     (Telegram groups, WhatsApp, email).
     """
-    surface = await service.get_surface_by_platform_in_pod(
-        pod_id=pod_id,
-        platform=platform,
-    )
+    surface = await service.get_surface_by_name_in_pod(pod_id=pod_id, name=surface_name)
     channels = await service.list_channels(surface=surface)
     return AvailableSurfaceChannelsResponse(
         channels=[
@@ -532,3 +520,20 @@ async def list_surface_channels(
             for channel in channels
         ]
     )
+
+
+@setup_guide_router.get(
+    "/{platform}",
+    operation_id="agent.surface.setup_guide",
+    dependencies=[require_action(Permissions.AGENT_READ)],
+)
+async def get_surface_setup_guide(
+    pod_id: UUID,
+    platform: str,
+    user: CurrentUser,
+    service: AgentSurfaceService = Depends(get_surface_service),
+) -> SurfacePlatformSetupGuide:
+    """The static pre-creation checklist for a platform (env/OAuth
+    prerequisites) — works before any surface of this platform exists."""
+    del user, pod_id
+    return service.get_platform_setup_guide(platform)

@@ -83,7 +83,7 @@ async def test_slack_identity_policy_blocks_then_allows_sender_domain(
         pod_id,
         config={"type": "SLACK", "account_id": str(account.id)},
     )
-    restricted = await authenticated_client.put(
+    restricted = await authenticated_client.patch(
         f"/pods/{pod_id}/surfaces/slack",
         json={"config": {"identity": {"allowed_domains": ["blocked.example"]}}},
     )
@@ -103,7 +103,7 @@ async def test_slack_identity_policy_blocks_then_allows_sender_domain(
     assert blocked_context is None
 
     sender_domain = fixed_test_user["email"].rsplit("@", 1)[-1]
-    allowed = await authenticated_client.put(
+    allowed = await authenticated_client.patch(
         f"/pods/{pod_id}/surfaces/slack",
         json={"config": {"identity": {"allowed_domains": [sender_domain]}}},
     )
@@ -166,7 +166,7 @@ async def test_slack_dm_and_channel_surfaces_route_through_shared_webhook(
         authenticated_client,
         pod_id,
     )
-    route_update = await authenticated_client.put(
+    route_update = await authenticated_client.patch(
         f"/pods/{pod_id}/surfaces/slack",
         json={
             "config": {
@@ -466,7 +466,7 @@ async def test_slack_channel_mention_injects_recent_thread_context(
         pod_id,
         config={"type": "SLACK", "account_id": str(account.id)},
     )
-    route_update = await authenticated_client.put(
+    route_update = await authenticated_client.patch(
         f"/pods/{pod_id}/surfaces/slack",
         json={"config": {"channels": [{"channel_id": "C-SUPPORT"}]}},
     )

@@ -31,6 +31,17 @@ class AgentSurfaceNotFoundError(AgentSurfaceError):
         )
 
 
+class AgentSurfaceAlreadyExistsError(AgentSurfaceError):
+    """A surface with the same stable name already exists in this pod."""
+
+    def __init__(self, name: str):
+        super().__init__(
+            message=f"Surface '{name}' already exists in this pod",
+            code="AGENT_SURFACE_ALREADY_EXISTS",
+            status_code=409,
+        )
+
+
 class AgentSurfacePlatformError(AgentSurfaceError):
     def __init__(self, platform: str, message: str):
         super().__init__(

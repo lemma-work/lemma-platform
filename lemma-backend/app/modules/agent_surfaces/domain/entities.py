@@ -219,6 +219,10 @@ class AgentSurfaceStatus(StrEnum):
 
 class AgentSurfaceEntity(AggregateRoot):
     pod_id: UUID
+    # Stable, pod-unique identifier used by the API (like agent names). Defaults
+    # to the lowercased platform when not given; a pod may have several surfaces
+    # of the same platform (different bots/agents), each with its own name.
+    name: str
     agent_id: UUID | None = None
     surface_type: SurfacePlatform
     mode: SurfaceMode = SurfaceMode.DM
@@ -241,12 +245,17 @@ class AgentSurfaceEntity(AggregateRoot):
     def is_active(self) -> bool:
         return self.status is not AgentSurfaceStatus.INACTIVE
 
+    @staticmethod
+    def default_name_for(surface_type: SurfacePlatform) -> str:
+        return surface_type.value.lower()
+
     @classmethod
     def create(
         cls,
         *,
         pod_id: UUID,
         surface_type: str | SurfacePlatform,
+        name: str | None = None,
         config: SurfaceConfig | None = None,
         agent_id: UUID | None = None,
         mode: SurfaceMode | None = None,
@@ -259,6 +268,7 @@ class AgentSurfaceEntity(AggregateRoot):
         surface_identity_id: str | None = None,
     ) -> "AgentSurfaceEntity":
         resolved = SurfacePlatform(str(surface_type).upper())
+        resolved_name = (name or "").strip() or cls.default_name_for(resolved)
         config = config if config is not None else SurfaceConfig()
         resolved_mode = cls._resolve_mode(resolved, mode)
         resolved_event_mode = cls._default_event_mode(resolved, event_mode)
@@ -280,6 +290,7 @@ class AgentSurfaceEntity(AggregateRoot):
 
         return cls(
             pod_id=pod_id,
+            name=resolved_name,
             agent_id=agent_id,
             surface_type=resolved,
             mode=resolved_mode,

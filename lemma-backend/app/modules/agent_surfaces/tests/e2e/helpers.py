@@ -302,12 +302,16 @@ async def _create_surface(
     *,
     config: dict,
     agent_name: str | None = None,
+    name: str | None = None,
 ) -> dict:
     platform = str(config.get("type", "TELEGRAM")).upper()
     allowed_channel_ids = config.get("allowed_channel_ids") or []
     payload: dict[str, object] = {
+        "platform": platform,
         "config": {},
     }
+    if name:
+        payload["name"] = name
     if config.get("account_id"):
         payload["account_id"] = config["account_id"]
     if allowed_channel_ids:
@@ -317,7 +321,7 @@ async def _create_surface(
     if agent_name:
         payload["default_agent_name"] = agent_name
 
-    response = await client.put(f"/pods/{pod_id}/surfaces/{platform}", json=payload)
+    response = await client.post(f"/pods/{pod_id}/surfaces", json=payload)
     assert response.status_code == 200, response.text
     return response.json()
 

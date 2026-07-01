@@ -56,28 +56,17 @@ class SurfaceRepository(SurfaceInstallationRepositoryPort):
         model = await self.session.get(AgentSurface, id)
         return model.to_entity() if model else None
 
-    async def get_by_pod_and_platform(
+    async def get_by_pod_and_name(
         self,
         *,
         pod_id: UUID,
-        platform: str,
-        agent_id: UUID | None = None,
-        match_agent: bool = False,
+        name: str,
     ) -> AgentSurfaceEntity | None:
-        """Resolve a surface within a pod for a platform.
-
-        Multiple surfaces of the same platform may exist in a pod (one per
-        agent/account). When ``match_agent`` is set, the lookup is scoped to a
-        specific agent (``agent_id=None`` matches the default-agent surface);
-        otherwise the oldest matching surface is returned for compatibility.
-        """
+        """Resolve a surface by its stable, pod-unique name (the API identity)."""
         stmt = select(AgentSurface).where(
             AgentSurface.pod_id == pod_id,
-            AgentSurface.surface_type == str(platform).upper(),
+            AgentSurface.name == name,
         )
-        if match_agent:
-            stmt = stmt.where(AgentSurface.agent_id == agent_id)
-        stmt = stmt.order_by(AgentSurface.created_at)
         result = await self.session.execute(stmt)
         model = result.scalars().first()
         return model.to_entity() if model else None
@@ -86,12 +75,15 @@ class SurfaceRepository(SurfaceInstallationRepositoryPort):
         self,
         pod_id: UUID,
         *,
+        platform: str | None = None,
         agent_id: UUID | None = None,
         match_agent: bool = False,
         cursor: UUID | None = None,
         limit: int = 100,
     ) -> tuple[list[AgentSurfaceEntity], UUID | None]:
         stmt = select(AgentSurface).where(AgentSurface.pod_id == pod_id)
+        if platform:
+            stmt = stmt.where(AgentSurface.surface_type == str(platform).upper())
         if match_agent:
             stmt = stmt.where(AgentSurface.agent_id == agent_id)
         if cursor is not None:
@@ -244,6 +236,7 @@ class SurfaceRepository(SurfaceInstallationRepositoryPort):
             created_at=entity.created_at,
             updated_at=entity.updated_at,
             pod_id=entity.pod_id,
+            name=entity.name,
             agent_id=entity.agent_id,
             surface_type=entity.surface_type.value,
             mode=entity.mode.value if hasattr(entity.mode, "value") else str(entity.mode),

@@ -54,17 +54,27 @@ class SurfaceInstallationRepositoryPort(Protocol):
         self, conversation_id: UUID, updates: dict
     ) -> None: ...
 
-    async def get_by_pod_and_platform(
+    async def get_by_pod_and_name(
         self,
         *,
         pod_id: UUID,
+        name: str,
+    ) -> AgentSurfaceEntity | None: ...
+
+    async def get_active_by_address(
+        self,
+        *,
         platform: str,
+        address: str,
     ) -> AgentSurfaceEntity | None: ...
 
     async def list_by_pod(
         self,
         pod_id: UUID,
         *,
+        platform: str | None = None,
+        agent_id: UUID | None = None,
+        match_agent: bool = False,
         cursor: UUID | None = None,
         limit: int = 100,
     ) -> tuple[list[AgentSurfaceEntity], UUID | None]: ...

@@ -750,38 +750,31 @@ class AgentSurfaceIngressService:
     async def send_to_member(
         self,
         *,
-        pod_id: UUID,
-        platform: SurfacePlatform | str,
+        surface: AgentSurfaceEntity,
         user_id: UUID,
         message: str,
     ) -> bool:
-        """Proactively send a message to a pod member on a surface.
+        """Proactively send a message to a pod member on a specific surface.
 
         Powers ``surface.send`` (notifications from functions/workflows, or an
         agent reaching a specific member). Reuses the member's existing thread on
         the surface — bots can't cold-DM, so the member must have interacted
         before; returns ``False`` when no reachable thread exists.
         """
-        platform_value = (
-            platform.value if isinstance(platform, SurfacePlatform) else str(platform).upper()
-        )
-        surface = await self.surface_repository.get_by_pod_and_platform(
-            pod_id=pod_id, platform=platform_value
-        )
-        if surface is None or not surface.is_active:
+        if not surface.is_active:
             return False
         # Only ever reach members of the surface's pod.
         if self.pod_membership_port is not None:
             member_pod_ids = set(
                 await self.pod_membership_port.get_user_pod_ids(user_id)
             )
-            if pod_id not in member_pod_ids:
+            if surface.pod_id not in member_pod_ids:
                 return False
         external_user_repository = getattr(self, "external_user_repository", None)
         if external_user_repository is None:
             return False
         ext = await external_user_repository.get_by_resolved_user(
-            platform=platform_value, resolved_user_id=user_id
+            platform=surface.surface_type.value, resolved_user_id=user_id
         )
         if ext is None or not ext.external_user_id:
             return False

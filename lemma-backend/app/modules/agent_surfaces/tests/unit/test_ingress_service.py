@@ -58,6 +58,7 @@ def _slack_surface(*, agent_id: UUID | None = None) -> AgentSurfaceEntity:
     return AgentSurfaceEntity(
         id=uuid4(),
         pod_id=uuid4(),
+        name="slack",
         agent_id=agent_id if agent_id is not None else uuid4(),
         surface_type=SurfacePlatform.SLACK,
         mode=SurfaceMode.DM,
@@ -72,6 +73,7 @@ def _teams_surface() -> AgentSurfaceEntity:
     return AgentSurfaceEntity(
         id=uuid4(),
         pod_id=uuid4(),
+        name="teams",
         agent_id=uuid4(),
         surface_type=SurfacePlatform.TEAMS,
         mode=SurfaceMode.DM,
@@ -87,6 +89,7 @@ def _telegram_surface(*, agent_id: UUID | None = None) -> AgentSurfaceEntity:
     return AgentSurfaceEntity(
         id=uuid4(),
         pod_id=uuid4(),
+        name="telegram",
         agent_id=agent_id if agent_id is not None else uuid4(),
         surface_type=SurfacePlatform.TELEGRAM,
         mode=SurfaceMode.DM,
@@ -100,6 +103,7 @@ def _gmail_surface() -> AgentSurfaceEntity:
     return AgentSurfaceEntity(
         id=uuid4(),
         pod_id=uuid4(),
+        name="gmail",
         agent_id=uuid4(),
         surface_type=SurfacePlatform.GMAIL,
         mode=SurfaceMode.EMAIL,
@@ -670,6 +674,7 @@ async def test_prepare_surface_context_ignores_self_sent_outlook_after_enrich():
     surface = AgentSurfaceEntity(
         id=uuid4(),
         pod_id=uuid4(),
+        name="outlook",
         agent_id=uuid4(),
         surface_type=SurfacePlatform.OUTLOOK,
         mode=SurfaceMode.EMAIL,
@@ -1268,7 +1273,6 @@ async def test_send_to_member_reuses_existing_thread():
     adapter = AsyncMock()
     service = _build_service(adapter=adapter, surfaces=[surface], existing_link=link)
     service.conversation_link_repository.get_by_conversation_id.return_value = link
-    service.surface_repository.get_by_pod_and_platform = AsyncMock(return_value=surface)
     service.pod_membership_port = SimpleNamespace(
         get_user_pod_ids=AsyncMock(return_value=[surface.pod_id])
     )
@@ -1282,8 +1286,7 @@ async def test_send_to_member_reuses_existing_thread():
     )
 
     sent = await service.send_to_member(
-        pod_id=surface.pod_id,
-        platform=SurfacePlatform.SLACK,
+        surface=surface,
         user_id=uuid4(),
         message="Your report is ready.",
     )
@@ -1295,14 +1298,12 @@ async def test_send_to_member_rejects_non_member():
     surface = _slack_surface()
     adapter = AsyncMock()
     service = _build_service(adapter=adapter, surfaces=[surface])
-    service.surface_repository.get_by_pod_and_platform = AsyncMock(return_value=surface)
     service.pod_membership_port = SimpleNamespace(
         get_user_pod_ids=AsyncMock(return_value=[uuid4()])  # a different pod
     )
 
     sent = await service.send_to_member(
-        pod_id=surface.pod_id,
-        platform=SurfacePlatform.SLACK,
+        surface=surface,
         user_id=uuid4(),
         message="x",
     )
@@ -1314,7 +1315,6 @@ async def test_send_to_member_returns_false_without_reachable_thread():
     surface = _slack_surface()
     adapter = AsyncMock()
     service = _build_service(adapter=adapter, surfaces=[surface])
-    service.surface_repository.get_by_pod_and_platform = AsyncMock(return_value=surface)
     service.pod_membership_port = SimpleNamespace(
         get_user_pod_ids=AsyncMock(return_value=[surface.pod_id])
     )
@@ -1328,8 +1328,7 @@ async def test_send_to_member_returns_false_without_reachable_thread():
     )
 
     sent = await service.send_to_member(
-        pod_id=surface.pod_id,
-        platform=SurfacePlatform.SLACK,
+        surface=surface,
         user_id=uuid4(),
         message="x",
     )

@@ -34,6 +34,7 @@ from app.modules.agent_surfaces.domain.entities import (
     SurfacePlatform,
 )
 from app.modules.agent_surfaces.domain.errors import (
+    AgentSurfaceAlreadyExistsError,
     AgentSurfacePlatformError,
     AgentSurfaceNotFoundError,
     AgentSurfaceValidationError,
@@ -148,6 +149,7 @@ class AgentSurfaceService:
         pod_id: UUID,
         agent_id: UUID | None,
         platform: SurfacePlatform,
+        name: str | None = None,
         config: SurfaceConfig | None = None,
         mode: SurfaceMode | None = None,
         event_mode: SurfaceEventMode | None = None,
@@ -158,20 +160,17 @@ class AgentSurfaceService:
         external_channel_id: str | None = None,
         ctx: Context | None = None,
     ) -> AgentSurfaceEntity:
-        # A surface is keyed by (pod, platform, agent): each agent may have its
-        # own surface for a platform (e.g. different bots → different agents).
-        # Distinct bot accounts are still enforced by the credential/account
-        # conflict checks below.
-        existing = await self.surface_repository.get_by_pod_and_platform(
-            pod_id=pod_id,
-            platform=platform.value,
-            agent_id=agent_id,
-            match_agent=True,
+        # A surface is addressed by its pod-unique name (defaults to the
+        # platform); several surfaces of the same platform can coexist under
+        # distinct names (e.g. different bots → different agents). Distinct bot
+        # accounts are still enforced by the credential/account conflict checks
+        # below.
+        resolved_name = (name or "").strip() or AgentSurfaceEntity.default_name_for(platform)
+        existing = await self.surface_repository.get_by_pod_and_name(
+            pod_id=pod_id, name=resolved_name
         )
         if isinstance(existing, AgentSurfaceEntity):
-            raise AgentSurfaceValidationError(
-                f"{platform.value} surface already exists for this agent in the pod"
-            )
+            raise AgentSurfaceAlreadyExistsError(resolved_name)
         (
             resolved_tenant_id,
             resolved_workspace_id,
@@ -183,6 +182,7 @@ class AgentSurfaceService:
         entity = AgentSurfaceEntity.create(
             pod_id=pod_id,
             surface_type=platform,
+            name=resolved_name,
             agent_id=agent_id,
             config=config,
             mode=mode,
@@ -247,22 +247,17 @@ class AgentSurfaceService:
             raise AgentSurfaceNotFoundError(str(surface_id))
         return surface
 
-    async def get_surface_by_platform_in_pod(
+    async def get_surface_by_name_in_pod(
         self,
         *,
         pod_id: UUID,
-        platform: str,
-        agent_id: UUID | None = None,
-        match_agent: bool = False,
+        name: str,
     ) -> AgentSurfaceEntity:
-        surface = await self.surface_repository.get_by_pod_and_platform(
-            pod_id=pod_id,
-            platform=platform,
-            agent_id=agent_id,
-            match_agent=match_agent,
+        surface = await self.surface_repository.get_by_pod_and_name(
+            pod_id=pod_id, name=name
         )
         if surface is None:
-            raise AgentSurfaceNotFoundError(str(platform))
+            raise AgentSurfaceNotFoundError(name)
         return surface
 
     async def update_surface(
@@ -368,6 +363,7 @@ class AgentSurfaceService:
         self,
         pod_id: UUID,
         *,
+        platform: str | None = None,
         agent_id: UUID | None = None,
         match_agent: bool = False,
         cursor: UUID | None = None,
@@ -375,6 +371,7 @@ class AgentSurfaceService:
     ) -> tuple[list[AgentSurfaceEntity], UUID | None]:
         return await self.surface_repository.list_by_pod(
             pod_id,
+            platform=platform,
             agent_id=agent_id,
             match_agent=match_agent,
             cursor=cursor,
@@ -427,36 +424,21 @@ class AgentSurfaceService:
                 ) from exc
         return build_surface_setup_guide(resolved_platform)
 
-    async def get_surface_setup(
+    async def get_surface_setup_by_name(
         self,
         *,
         pod_id: UUID,
-        platform: str,
+        name: str,
     ) -> dict[str, Any]:
-        """Everything needed to finish setting up a surface, in one read.
+        """Everything needed to finish setting up an existing surface, in one read.
 
-        Merges the static platform checklist (always available) with the live
-        webhook and admin-consent state when the surface exists. Returns a plain
-        dict the controller maps onto ``SurfaceSetupResponse``.
+        Merges the static platform checklist with the live webhook and
+        admin-consent state. Raises ``AgentSurfaceNotFoundError`` if no surface
+        has this name — use ``get_platform_setup_guide`` for the pre-creation
+        checklist, which needs no surface to exist yet.
         """
-        guide = self.get_platform_setup_guide(platform)
-        resolved_platform = guide.platform
-        surface = await self.surface_repository.get_by_pod_and_platform(
-            pod_id=pod_id,
-            platform=resolved_platform.value,
-        )
-        if surface is None:
-            return {
-                "platform": resolved_platform,
-                "exists": False,
-                "status": AgentSurfaceStatus.NEEDS_SETUP,
-                "ready": False,
-                "webhook_url": None,
-                "admin_consent": None,
-                "actions": [],
-                "guide": guide,
-            }
-
+        surface = await self.get_surface_by_name_in_pod(pod_id=pod_id, name=name)
+        guide = self.get_platform_setup_guide(surface.surface_type.value)
         webhook_url = computed_webhook_url(surface)
         admin_consent = await self._surface_admin_consent(surface)
         actions = build_surface_setup_actions(

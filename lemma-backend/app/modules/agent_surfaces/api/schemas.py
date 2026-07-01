@@ -111,15 +111,22 @@ def surface_config_from_input(
     )
 
 
-class SurfaceUpsertRequest(BaseModel):
-    """The single create-or-update body for `PUT /surfaces/{platform}`.
+class SurfaceCreateRequest(BaseModel):
+    """Body for `POST /pods/{pod_id}/surfaces` — creates one surface.
 
-    A surface is uniquely identified by `pod_id + platform`, so this one
-    request handles both creation and partial update. Only the fields present
-    in the request are applied on update (merge semantics); `is_enabled`
-    defaults to True on create and is only changed on update when sent.
+    A pod may have several surfaces of the same ``platform`` (different
+    bots/accounts, each routed to its own agent); ``name`` is the stable,
+    pod-unique identifier used to address it afterward. When omitted, it
+    defaults to the lowercased platform (so the common single-surface-per-
+    platform case needs no name at all) — pick an explicit name to create a
+    second surface of the same platform.
     """
 
+    platform: SurfacePlatform
+    name: str | None = Field(
+        default=None,
+        description="Pod-unique surface identifier. Defaults to the lowercased platform.",
+    )
     default_agent_name: str | None = None
     account_id: UUID | None = None
     credential_mode: SurfaceCredentialMode = SurfaceCredentialMode.SYSTEM
@@ -129,9 +136,27 @@ class SurfaceUpsertRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
 
+class SurfaceUpdateRequest(BaseModel):
+    """Body for `PATCH /pods/{pod_id}/surfaces/{surface_name}`.
+
+    Partial update (merge semantics): only fields present in the request are
+    applied. The surface's ``platform`` and ``name`` are immutable — delete and
+    recreate to change either.
+    """
+
+    default_agent_name: str | None = None
+    account_id: UUID | None = None
+    credential_mode: SurfaceCredentialMode | None = None
+    config: SurfaceBehaviorConfigInput = Field(default_factory=SurfaceBehaviorConfigInput)
+    is_enabled: bool | None = None
+
+    model_config = ConfigDict(extra="forbid")
+
+
 class AgentSurfaceResponse(BaseModel):
     id: UUID
     pod_id: UUID
+    name: str
     agent_id: UUID | None = None
     agent_name: str | None = None
     uses_default_agent: bool = False
