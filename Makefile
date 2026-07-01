@@ -12,7 +12,7 @@ SHELL := /bin/bash
 #   make coverage      full coverage report (unit + e2e per component)
 # ──────────────────────────────────────────────────────────────────────────────
 
-.PHONY: help init dev stop stop-all logs \
+.PHONY: help init dev stop stop-all logs _ensure-databases \
         test test-backend test-backend-unit test-backend-e2e \
         test-frontend test-cli test-cli-unit test-cli-e2e test-python \
         coverage coverage-backend coverage-backend-unit coverage-backend-e2e \
@@ -269,6 +269,8 @@ dev:
 	@$(MAKE) --no-print-directory _ensure-init
 	@$(MAKE) --no-print-directory _infra-up
 	@$(MAKE) --no-print-directory _wait-infra
+	@$(MAKE) --no-print-directory _ensure-databases
+	@$(MAKE) --no-print-directory migrate
 	@echo ""
 	@echo "  Frontend  →  $(DEV_FRONTEND_URL)"
 	@echo "  Auth UI   →  $(DEV_AUTH_FRONTEND_URL)"
@@ -310,6 +312,24 @@ _wait-infra:
 			pg_isready -h localhost -p $(DEV_POSTGRES_PORT) -q 2>/dev/null && echo "  ✓ Postgres ready" && break; \
 			sleep 1; \
 		done
+
+_ensure-databases:
+	@echo "  Ensuring extra databases (supertokens, lemma_datastore) exist…"
+	@cd $(BACKEND_DIR) && \
+		for db in supertokens lemma_datastore; do \
+			exists=$$(docker compose exec -T db psql -U postgres -tAc "SELECT 1 FROM pg_database WHERE datname = '$$db'" 2>/dev/null | tr -d '[:space:]'); \
+			if [ "$$exists" != "1" ]; then \
+				echo "    Creating database $$db…"; \
+				docker compose exec -T db psql -U postgres -c "CREATE DATABASE $$db" >/dev/null; \
+				if [ "$$db" = "supertokens" ]; then \
+					echo "    Restarting supertokens (picks up new database)…"; \
+					docker compose restart supertokens >/dev/null; \
+				fi; \
+			fi; \
+		done; \
+		docker compose exec -T db psql -U postgres -d lemma -c "CREATE EXTENSION IF NOT EXISTS vector" >/dev/null; \
+		docker compose exec -T db psql -U postgres -d lemma_datastore -c "CREATE EXTENSION IF NOT EXISTS vector" >/dev/null
+	@echo "  ✓ Databases ready"
 
 _run-backend:
 	@echo "  Starting backend ($(DEV_BACKEND_URL))…"
