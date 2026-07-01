@@ -1,0 +1,23 @@
+{
+  "name": "weekly_recap",
+  "description": "Quartermaster posts the Friday weekly recap — top builders, total points approved, monuments raised, streak status. Runs Fridays at 5pm.",
+  "start": { "type": "MANUAL" },
+  "nodes": [
+    {
+      "id": "post_weekly",
+      "type": "AGENT",
+      "label": "Quartermaster: weekly recap",
+      "config": {
+        "agent_name": "quartermaster",
+        "input_mapping": {
+          "job":     { "type": "literal", "value": "weekly_recap" },
+          "message": { "type": "literal", "value": "Run job: weekly_recap. Query all placements where state='established', grouped by builder to compute top contributors and total points approved. Count how many teammates contributed. Compose the Friday recap: total points approved, top builders with their monuments, total teammates who built something, and a streak note. Log to agent_actions (kind=recap). Return the full recap." }
+        }
+      }
+    },
+    { "id": "end", "type": "END", "label": "Done" }
+  ],
+  "edges": [
+    { "id": "e1", "source": "post_weekly", "target": "end" }
+  ]
+}

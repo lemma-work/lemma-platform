@@ -1,0 +1,14 @@
+{
+  "name": "sprints",
+  "primary_key_column": "id",
+  "enable_rls": false,
+  "columns": [
+    { "name": "name",      "type": "TEXT",    "required": true,  "max_length": 120 },
+    { "name": "goal",      "type": "INTEGER", "required": true },
+    { "name": "starts_at", "type": "DATE",    "required": false },
+    { "name": "ends_at",   "type": "DATE",    "required": false },
+    { "name": "status",    "type": "ENUM",    "required": true,  "default": "active",
+      "options": ["active", "completed"] }
+  ],
+  "config": {}
+}

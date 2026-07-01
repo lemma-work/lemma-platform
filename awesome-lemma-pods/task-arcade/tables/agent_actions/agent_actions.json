@@ -1,0 +1,16 @@
+{
+  "name": "agent_actions",
+  "primary_key_column": "id",
+  "enable_rls": false,
+  "columns": [
+    {
+      "name": "kind",
+      "type": "ENUM",
+      "required": true,
+      "options": ["nudge", "standup", "recap", "hype", "assign", "remind", "query"]
+    },
+    { "name": "payload", "type": "TEXT", "required": false },
+    { "name": "result",  "type": "TEXT", "required": false }
+  ],
+  "config": {}
+}

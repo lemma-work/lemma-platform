@@ -1,0 +1,23 @@
+{
+  "name": "tasks",
+  "primary_key_column": "id",
+  "enable_rls": false,
+  "columns": [
+    { "name": "title",      "type": "TEXT",    "required": true,  "max_length": 300 },
+    { "name": "assignee",   "type": "TEXT",    "required": true,  "max_length": 200 },
+    { "name": "assigner",   "type": "TEXT",    "required": true,  "max_length": 200 },
+    { "name": "points",     "type": "INTEGER", "required": true },
+    { "name": "source",     "type": "ENUM",    "required": false, "default": "slack",
+      "options": ["slack", "email", "telegram"] },
+    { "name": "sprint_id",  "type": "UUID",    "required": true,
+      "foreign_key": { "references": "sprints.id" } },
+    { "name": "due",        "type": "TEXT",    "required": false, "max_length": 40 },
+    { "name": "status",     "type": "ENUM",    "required": true,  "default": "assigned",
+      "options": ["assigned", "cleared", "under_review", "established", "demolished"] },
+    { "name": "component",  "type": "TEXT",    "required": false, "max_length": 60 },
+    { "name": "world_x",    "type": "INTEGER", "required": false },
+    { "name": "world_z",    "type": "INTEGER", "required": false },
+    { "name": "reviewer",   "type": "TEXT",    "required": false, "max_length": 200 }
+  ],
+  "config": {}
+}

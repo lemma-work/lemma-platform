@@ -1,0 +1,45 @@
+{
+  "enable_rls": true,
+  "columns": [
+    {
+      "name": "title",
+      "type": "TEXT",
+      "required": true,
+      "max_length": 300,
+      "description": "Title of the note"
+    },
+    {
+      "name": "summary",
+      "type": "TEXT",
+      "required": true,
+      "max_length": 500,
+      "description": "One-sentence description of what this note contains — used to decide which note to fetch"
+    },
+    {
+      "name": "keywords",
+      "type": "TEXT",
+      "max_length": 500,
+      "description": "Comma-separated keywords for quick lookup"
+    },
+    {
+      "name": "category",
+      "type": "ENUM",
+      "options": ["idea", "content", "meeting", "reference", "task", "personal", "other"],
+      "default": "other",
+      "description": "User-defined note category"
+    },
+    {
+      "name": "file_path",
+      "type": "FILE_PATH",
+      "required": true,
+      "max_length": 700,
+      "description": "Path to the markdown file under /pod/notes/"
+    },
+    {
+      "name": "notes",
+      "type": "TEXT",
+      "max_length": 1000,
+      "description": "Any extra metadata about this note"
+    }
+  ]
+}

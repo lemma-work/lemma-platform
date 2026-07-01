@@ -1,0 +1,6 @@
+{
+  "name": "send_ping",
+  "description": "Sends a message to a person via Slack DM or Gmail. Looks up the person's email from the people table, resolves their Slack user ID if needed, sends the message, and logs the ping to the pings table with thread IDs for later reply polling.",
+  "type": "API",
+  "code": { "$file": "code.py" }
+}

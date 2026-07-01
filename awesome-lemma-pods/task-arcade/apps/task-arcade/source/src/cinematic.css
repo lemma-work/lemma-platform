@@ -1,0 +1,259 @@
+/* Cinematic director — captions, vignette, zoom, controls. Sits above the whole desk. */
+
+.cine-layer {
+  position: fixed;
+  inset: 0;
+  z-index: 200;
+  pointer-events: none;
+  font-family: inherit;
+}
+
+.cine-vignette {
+  position: absolute;
+  inset: 0;
+  opacity: 0;
+  background: radial-gradient(120% 92% at 50% 45%, transparent 50%, rgba(18, 40, 26, 0.44) 100%);
+}
+
+/* Hero caption — large, center stage, blurs + scales in */
+.cine-cap-wrap {
+  position: absolute;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  padding: 0 7vw;
+  text-align: center;
+}
+.cine-hero {
+  margin: 0;
+  color: #fff;
+  font-weight: 900;
+  letter-spacing: -0.02em;
+  line-height: 1.02;
+  font-size: clamp(38px, 7.4vw, 104px);
+  text-shadow: 0 4px 30px rgba(15, 40, 25, 0.55), 0 1px 3px rgba(0, 0, 0, 0.3);
+  will-change: transform, opacity, filter;
+}
+
+/* Lower-third caption — smaller, narrates each beat */
+.cine-lower {
+  position: absolute;
+  left: 50%;
+  bottom: 13%;
+  transform: translateX(-50%);
+  max-width: 80vw;
+  text-align: center;
+  color: #fff;
+  font-weight: 800;
+  font-size: clamp(18px, 2.9vw, 34px);
+  letter-spacing: -0.01em;
+  line-height: 1.25;
+  padding: 12px 22px;
+  border-radius: 16px;
+  background: rgba(16, 34, 24, 0.46);
+  backdrop-filter: blur(7px);
+  box-shadow: 0 10px 34px rgba(10, 30, 18, 0.3);
+  will-change: transform, opacity;
+}
+
+/* Replay / Exit controls (revealed at the end; Exit always available) */
+.cine-controls {
+  position: fixed;
+  left: 50%;
+  bottom: 22px;
+  transform: translateX(-50%);
+  display: flex;
+  gap: 10px;
+  z-index: 210;
+  pointer-events: auto;
+}
+.cine-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  cursor: pointer;
+  font-size: 14px;
+  font-weight: 800;
+  color: #14321c;
+  padding: 9px 16px;
+  border-radius: 999px;
+  border: none;
+  background: #fff;
+  box-shadow: 0 8px 24px rgba(10, 30, 18, 0.28);
+}
+.cine-btn--ghost {
+  background: rgba(255, 255, 255, 0.16);
+  color: #fff;
+  backdrop-filter: blur(6px);
+}
+.cine-btn:hover {
+  filter: brightness(1.04);
+}
+
+/* Launch button in the header */
+.cine-launch {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  cursor: pointer;
+  font-size: 13px;
+  font-weight: 800;
+  color: #2f8d4d;
+  padding: 7px 12px;
+  border-radius: 999px;
+  border: 2px solid #cdeccf;
+  background: #fff;
+}
+.cine-launch:hover {
+  background: #f1faf2;
+}
+
+/* ── Demos library (full-page list of cinematic walkthroughs) ───────────── */
+.demo-library {
+  position: absolute;
+  inset: 80px 0 0;
+  z-index: 40;
+  overflow: auto;
+  padding: 28px clamp(20px, 6vw, 80px) 48px;
+  background: rgba(245, 251, 238, 0.92);
+  backdrop-filter: blur(10px);
+}
+.demo-lib-head {
+  display: flex;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: 20px;
+  max-width: 1040px;
+  margin: 0 auto 24px;
+}
+.demo-lib-head h2 {
+  margin: 0;
+  font-size: clamp(24px, 3vw, 34px);
+  font-weight: 900;
+  letter-spacing: -0.02em;
+  color: #16331d;
+}
+.demo-lib-head p {
+  margin: 6px 0 0;
+  color: #5a7861;
+  font-size: 15px;
+  font-weight: 600;
+  max-width: 60ch;
+}
+.demo-lib-count {
+  flex: none;
+  font-size: 13px;
+  font-weight: 800;
+  color: #2f8d4d;
+  background: #fff;
+  border: 2px solid #cdeccf;
+  border-radius: 999px;
+  padding: 6px 14px;
+  white-space: nowrap;
+}
+.demo-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(300px, 1fr));
+  gap: 16px;
+  max-width: 1040px;
+  margin: 0 auto;
+}
+.demo-card {
+  display: flex;
+  align-items: flex-start;
+  gap: 14px;
+  text-align: left;
+  cursor: pointer;
+  padding: 18px;
+  border-radius: 18px;
+  border: 2px solid rgba(255, 255, 255, 0.9);
+  background: #fff;
+  box-shadow: 0 14px 34px rgba(56, 103, 78, 0.12);
+  transition: transform 0.16s ease, box-shadow 0.16s ease, border-color 0.16s ease;
+}
+.demo-card:hover {
+  transform: translateY(-3px);
+  border-color: #bfe8c4;
+  box-shadow: 0 20px 44px rgba(56, 103, 78, 0.2);
+}
+.demo-card-icon {
+  flex: none;
+  display: grid;
+  place-items: center;
+  width: 46px;
+  height: 46px;
+  border-radius: 13px;
+  color: #2f8d4d;
+  background: linear-gradient(150deg, #eafbec, #d6f2da);
+}
+.demo-card-body {
+  flex: 1;
+  min-width: 0;
+}
+.demo-card-top {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 6px;
+}
+.demo-card-tag {
+  font-size: 11px;
+  font-weight: 800;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: #2f8d4d;
+  background: #eafbec;
+  border-radius: 999px;
+  padding: 3px 9px;
+}
+.demo-card-dur {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 12px;
+  font-weight: 700;
+  color: #7c9583;
+}
+.demo-card-body strong {
+  display: block;
+  font-size: 17px;
+  font-weight: 900;
+  letter-spacing: -0.01em;
+  color: #16331d;
+}
+.demo-card-body p {
+  margin: 4px 0 0;
+  font-size: 13.5px;
+  font-weight: 600;
+  line-height: 1.4;
+  color: #5a7861;
+}
+.demo-card-play {
+  flex: none;
+  align-self: center;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 13px;
+  font-weight: 800;
+  color: #fff;
+  background: #2f8d4d;
+  border-radius: 999px;
+  padding: 8px 14px;
+}
+
+/* The element GSAP zooms. Origin is animated per beat. */
+.world-stage {
+  transform-origin: 50% 52%;
+  will-change: transform;
+}
+
+/* Declutter the frame while the cinematic plays (opacity keeps layout stable) */
+.cinematic-on .app-tabs,
+.cinematic-on .header-right,
+.cinematic-on .hint,
+.cinematic-on .zoom-controls,
+.cinematic-on .task-card {
+  opacity: 0 !important;
+  pointer-events: none;
+}

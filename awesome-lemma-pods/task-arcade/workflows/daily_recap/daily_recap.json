@@ -1,0 +1,23 @@
+{
+  "name": "daily_recap",
+  "description": "Quartermaster posts the end-of-day recap — what cleared, what's pending review, what's still in flight. Runs Mon–Thu at 5pm.",
+  "start": { "type": "MANUAL" },
+  "nodes": [
+    {
+      "id": "post_recap",
+      "type": "AGENT",
+      "label": "Quartermaster: daily recap",
+      "config": {
+        "agent_name": "quartermaster",
+        "input_mapping": {
+          "job":     { "type": "literal", "value": "daily_recap" },
+          "message": { "type": "literal", "value": "Run job: daily_recap. Query tasks with status='cleared' or 'placed', placements with state='under_review', and remaining 'assigned' tasks. Compose the end-of-day digest: what the team cleared, what's pending a manager's approval, what's still in flight. Log to agent_actions (kind=recap). Return the digest." }
+        }
+      }
+    },
+    { "id": "end", "type": "END", "label": "Done" }
+  ],
+  "edges": [
+    { "id": "e1", "source": "post_recap", "target": "end" }
+  ]
+}

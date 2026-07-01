@@ -1,0 +1,23 @@
+{
+  "name": "stall_check",
+  "description": "Quartermaster checks for stalled tasks and nudges their owners. Runs daily at 10am.",
+  "start": { "type": "MANUAL" },
+  "nodes": [
+    {
+      "id": "run_check",
+      "type": "AGENT",
+      "label": "Quartermaster: check stalls",
+      "config": {
+        "agent_name": "quartermaster",
+        "input_mapping": {
+          "job":     { "type": "literal", "value": "stall_check" },
+          "message": { "type": "literal", "value": "Run job: stall_check. Check agent_actions for tasks already nudged today so you don't double-ping. Then query tasks with status='assigned'. For each task where 'due' is today or past (or that has sat assigned with no progress), compose a nudge and log it to agent_actions (kind=nudge). Return a summary of what you sent." }
+        }
+      }
+    },
+    { "id": "end", "type": "END", "label": "Done" }
+  ],
+  "edges": [
+    { "id": "e1", "source": "run_check", "target": "end" }
+  ]
+}

@@ -1,0 +1,4 @@
+{
+  "path": "/pod/notes",
+  "description": "Markdown notes for the user. Each file has a corresponding entry in the note_index table for fast lookup."
+}

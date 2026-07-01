@@ -1,0 +1,54 @@
+{
+  "enable_rls": true,
+  "columns": [
+    {
+      "name": "name",
+      "type": "TEXT",
+      "required": true,
+      "max_length": 200,
+      "description": "Full name of the person"
+    },
+    {
+      "name": "nickname",
+      "type": "TEXT",
+      "max_length": 100,
+      "description": "Short name or first name used in the UI"
+    },
+    {
+      "name": "email",
+      "type": "TEXT",
+      "max_length": 300,
+      "description": "Primary email address"
+    },
+    {
+      "name": "phone",
+      "type": "TEXT",
+      "max_length": 50,
+      "description": "Phone number including country code"
+    },
+    {
+      "name": "role",
+      "type": "TEXT",
+      "max_length": 200,
+      "description": "How the user knows this person, e.g. colleague, client, investor, friend"
+    },
+    {
+      "name": "organization",
+      "type": "TEXT",
+      "max_length": 200,
+      "description": "Company or organisation this person belongs to"
+    },
+    {
+      "name": "photo_url",
+      "type": "TEXT",
+      "max_length": 2000,
+      "description": "URL to profile photo — absolute URL, relative path like /photos/deepak.jpg, or pod file path like /pod/photos/id.jpg"
+    },
+    {
+      "name": "notes",
+      "type": "TEXT",
+      "max_length": 2000,
+      "description": "Anything the agent should remember about this person"
+    }
+  ]
+}

@@ -1,0 +1,7 @@
+{
+  "name": "poll_replies_cron",
+  "schedule_type": "TIME",
+  "config": { "cron": "0 */2 * * *" },
+  "workflow_name": "poll-replies",
+  "is_active": true
+}

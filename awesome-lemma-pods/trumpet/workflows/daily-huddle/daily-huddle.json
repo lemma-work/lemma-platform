@@ -1,0 +1,29 @@
+{
+  "name": "daily-huddle",
+  "description": "Pings every team member with open commitments, collects their standup updates, and compiles a daily huddle newsletter posted to the team Slack channel.",
+  "start": { "type": "MANUAL" },
+  "nodes": [
+    {
+      "id": "run_huddle",
+      "type": "AGENT",
+      "label": "Mr. Toot runs the huddle",
+      "config": {
+        "agent_name": "mr-toot",
+        "input_mapping": {
+          "message": {
+            "type": "literal",
+            "value": "Run the daily huddle. Look up every team member who has open commitments from yesterday. Ping each of them via Slack DM asking for their standup update — what did they commit to yesterday, what did they deliver, and what are they working on today. Collect all replies. Then compile them into a structured daily huddle newsletter and post it to the team Slack channel."
+          }
+        }
+      }
+    },
+    {
+      "id": "end",
+      "type": "END",
+      "label": "Huddle complete"
+    }
+  ],
+  "edges": [
+    { "id": "e1", "source": "run_huddle", "target": "end" }
+  ]
+}

@@ -1,0 +1,6 @@
+{
+  "name": "check_integrations",
+  "description": "Checks which integration accounts are currently connected for this user. Call this before any external action (send email, post Slack, book calendar) so you know what is available and can inform the user if something needs to be connected first.",
+  "type": "API",
+  "code": { "$file": "code.py" }
+}

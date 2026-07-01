@@ -1,0 +1,12 @@
+{
+  "name": "slack",
+  "platform": "SLACK",
+  "default_agent_name": "quartermaster",
+  "credential_mode": "CUSTOM",
+  "account_id": "REPLACE_WITH_SLACK_INTEGRATION_ACCOUNT_ID",
+  "is_enabled": false,
+  "config": {
+    "channels": [],
+    "identity": {}
+  }
+}

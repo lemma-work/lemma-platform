@@ -1,0 +1,342 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>Trumpet — intro</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Hanken+Grotesk:wght@500;600;700;800&display=swap" rel="stylesheet">
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+    body {
+      width: 100vw;
+      height: 100vh;
+      background: #0b0a0a;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      overflow: hidden;
+      font-family: 'Hanken Grotesk', system-ui, sans-serif;
+    }
+
+    /* ── Canvas ── */
+    #canvas {
+      position: relative;
+      width: 1512px;
+      height: 1008px;
+      flex-shrink: 0;
+      overflow: hidden;
+    }
+
+    /* ── Quadrants ── */
+    .quad {
+      position: absolute;
+      width: 756px;
+      height: 504px;
+      overflow: hidden;
+    }
+    #q-tl { top: 0;     left: 0;     background: #cfe7cf; }
+    #q-tr { top: 0;     left: 756px; background: #f6d775; }
+    #q-bl { top: 504px; left: 0;     background: #d9cef0; }
+    #q-br { top: 504px; left: 756px; background: #d8d4cc; }
+
+    /* ── Mascot inside quad ── */
+    .quad-gif {
+      position: absolute;
+      width: 270px;
+      height: 270px;
+      object-fit: contain;
+      left: 50%;
+      top: 44%;
+      transform: translate(-50%, -50%);
+    }
+
+    /* ── Section text ── */
+    .q-name {
+      position: absolute;
+      bottom: 40px;
+      left: 40px;
+      font-size: 66px;
+      font-weight: 800;
+      letter-spacing: -2px;
+      line-height: 1;
+      color: #1a1815;
+    }
+    .q-sub {
+      position: absolute;
+      bottom: 16px;
+      left: 43px;
+      font-size: 17px;
+      font-weight: 600;
+      letter-spacing: 0.1px;
+      color: rgba(26,24,21,0.52);
+    }
+
+    /* ── Dividers ── */
+    #div-h {
+      position: absolute;
+      top: 504px; left: 0;
+      width: 1512px; height: 2px;
+      background: rgba(0,0,0,0.18);
+      z-index: 5;
+      pointer-events: none;
+    }
+    #div-v {
+      position: absolute;
+      top: 0; left: 756px;
+      width: 2px; height: 1008px;
+      background: rgba(0,0,0,0.18);
+      z-index: 5;
+      pointer-events: none;
+    }
+
+    /* ── Background glow (center, post-collapse) ── */
+    #glow {
+      position: absolute;
+      top: 50%; left: 50%;
+      transform: translate(-50%, -50%);
+      width: 700px; height: 700px;
+      border-radius: 50%;
+      background: radial-gradient(circle, rgba(239,233,219,0.09) 0%, transparent 68%);
+      z-index: 10;
+      pointer-events: none;
+    }
+
+    /* ── Center reveal ── */
+    #center {
+      position: absolute;
+      top: 50%; left: 50%;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      z-index: 20;
+      text-align: center;
+      pointer-events: none;
+    }
+    #center-gif {
+      width: 390px;
+      height: 390px;
+      object-fit: contain;
+      filter: drop-shadow(0 28px 60px rgba(0,0,0,0.7));
+    }
+    #tagline {
+      font-size: 38px;
+      font-weight: 700;
+      color: #f3efe6;
+      letter-spacing: -0.5px;
+      line-height: 1.45;
+      margin-top: 16px;
+    }
+    #brand {
+      font-size: 15px;
+      font-weight: 700;
+      letter-spacing: 6px;
+      text-transform: uppercase;
+      color: rgba(243,239,230,0.5);
+      margin-top: 24px;
+    }
+
+    /* ── Replay hint ── */
+    #hint {
+      position: fixed;
+      bottom: 18px;
+      left: 50%;
+      transform: translateX(-50%);
+      font-size: 11px;
+      font-weight: 500;
+      color: rgba(255,255,255,0.18);
+      letter-spacing: 2px;
+      text-transform: uppercase;
+      pointer-events: none;
+      font-family: 'Hanken Grotesk', system-ui, sans-serif;
+    }
+
+    /* ── Loading overlay ── */
+    #loader {
+      position: fixed;
+      inset: 0;
+      background: #0b0a0a;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      z-index: 999;
+      color: rgba(255,255,255,0.25);
+      font-size: 13px;
+      font-family: 'Hanken Grotesk', system-ui, sans-serif;
+      letter-spacing: 2px;
+      text-transform: uppercase;
+    }
+  </style>
+</head>
+<body>
+
+<!-- Loading screen — hides once all GIFs are ready -->
+<div id="loader">loading Mr Toot…</div>
+
+<div id="canvas">
+
+  <!-- Dividers -->
+  <div id="div-h"></div>
+  <div id="div-v"></div>
+
+  <!-- TL: Schedule — average mood -->
+  <div class="quad" id="q-tl">
+    <img class="quad-gif" id="gif-avg-1" src="/mascot/trumpet-average-stable-v2-loop2.gif" alt="">
+    <div class="q-name">Schedule</div>
+    <div class="q-sub">events · habits</div>
+  </div>
+
+  <!-- TR: Commits — overwhelmed mood -->
+  <div class="quad" id="q-tr">
+    <img class="quad-gif" id="gif-ovr" src="/mascot/trumpet-overwhelmed-stable-v2-loop2.gif" alt="">
+    <div class="q-name">Commits</div>
+    <div class="q-sub">what you owe · what's owed</div>
+  </div>
+
+  <!-- BL: Notes — chill mood -->
+  <div class="quad" id="q-bl">
+    <img class="quad-gif" id="gif-chl-1" src="/mascot/trumpet-chill-stable-v2-loop2.gif" alt="">
+    <div class="q-name">Notes</div>
+    <div class="q-sub">thoughts · ideas · context</div>
+  </div>
+
+  <!-- BR: People — chill mood -->
+  <div class="quad" id="q-br">
+    <img class="quad-gif" id="gif-chl-2" src="/mascot/trumpet-chill-stable-v2-loop2.gif" alt="">
+    <div class="q-name">People</div>
+    <div class="q-sub">contacts · relationships</div>
+  </div>
+
+  <!-- Post-collapse glow -->
+  <div id="glow"></div>
+
+  <!-- Center reveal -->
+  <div id="center">
+    <img id="center-gif" src="/mascot/trumpet-average-stable-v2-loop2.gif" alt="">
+    <div id="tagline">everything that matters,<br>in one place.</div>
+    <div id="brand">Trumpet</div>
+  </div>
+
+</div>
+
+<div id="hint">R or Space — replay</div>
+
+<script src="https://cdn.jsdelivr.net/npm/gsap@3.14.2/dist/gsap.min.js"></script>
+<script>
+  // ── Fit canvas to viewport ─────────────────────────────────────────────────
+  function fit() {
+    const s = Math.min(window.innerWidth / 1512, window.innerHeight / 1008);
+    const c = document.getElementById('canvas');
+    c.style.transform = `scale(${s})`;
+    c.style.transformOrigin = 'center center';
+  }
+  fit();
+  window.addEventListener('resize', fit);
+
+  // ── Set initial off-screen / hidden state immediately ──────────────────────
+  gsap.set('#q-tl', { x: -756, y: -504 });
+  gsap.set('#q-tr', { x:  756, y: -504 });
+  gsap.set('#q-bl', { x: -756, y:  504 });
+  gsap.set('#q-br', { x:  756, y:  504 });
+  gsap.set('#div-h, #div-v', { autoAlpha: 0 });
+  gsap.set('.q-name, .q-sub', { autoAlpha: 0 });
+  gsap.set('#glow',   { autoAlpha: 0, scale: 0 });
+  gsap.set('#center', { xPercent: -50, yPercent: -50, autoAlpha: 0, scale: 0 });
+  gsap.set('#tagline', { autoAlpha: 0, y: 14 });
+  gsap.set('#brand',   { autoAlpha: 0 });
+
+  // ── Preload all GIFs before starting ─────────────────────────────────────
+  // Solves the blank-image issue: GIFs load in the background (panels are
+  // off-screen), and the animation only starts once every image is decoded.
+  function waitForImages() {
+    const imgs = Array.from(document.querySelectorAll('img'));
+    return Promise.all(imgs.map(img => {
+      if (img.complete && img.naturalWidth > 0) return Promise.resolve();
+      return new Promise(resolve => {
+        img.addEventListener('load',  resolve, { once: true });
+        img.addEventListener('error', resolve, { once: true });
+      });
+    }));
+  }
+
+  // ── Build & run timeline ──────────────────────────────────────────────────
+  let tl;
+
+  function buildTimeline() {
+    tl = gsap.timeline({ delay: 0.4 });
+
+    // SLAM IN
+    tl.to('#q-tl', { x: 0, y: 0, duration: 0.62, ease: 'expo.out' }, 0);
+    tl.to('#q-tr', { x: 0, y: 0, duration: 0.62, ease: 'expo.out' }, 0.08);
+    tl.to('#q-bl', { x: 0, y: 0, duration: 0.62, ease: 'expo.out' }, 0.16);
+    tl.to('#q-br', { x: 0, y: 0, duration: 0.62, ease: 'expo.out' }, 0.24);
+
+    // Dividers snap in
+    tl.to('#div-h, #div-v', { autoAlpha: 1, duration: 0.12, ease: 'none' }, 0.44);
+
+    // Section names
+    tl.to('#q-tl .q-name', { autoAlpha: 1, duration: 0.32, ease: 'power2.out' }, 0.72);
+    tl.to('#q-tr .q-name', { autoAlpha: 1, duration: 0.32, ease: 'power2.out' }, 0.80);
+    tl.to('#q-bl .q-name', { autoAlpha: 1, duration: 0.32, ease: 'power2.out' }, 0.88);
+    tl.to('#q-br .q-name', { autoAlpha: 1, duration: 0.32, ease: 'power2.out' }, 0.96);
+
+    // Sub-labels
+    tl.to('#q-tl .q-sub', { autoAlpha: 1, duration: 0.28, ease: 'power2.out' }, 0.88);
+    tl.to('#q-tr .q-sub', { autoAlpha: 1, duration: 0.28, ease: 'power2.out' }, 0.96);
+    tl.to('#q-bl .q-sub', { autoAlpha: 1, duration: 0.28, ease: 'power2.out' }, 1.04);
+    tl.to('#q-br .q-sub', { autoAlpha: 1, duration: 0.28, ease: 'power2.out' }, 1.12);
+
+    // BREATHE — 1.1s to 2.5s, GIFs loop naturally
+
+    // COLLAPSE — each panel's center converges to canvas center (756, 504)
+    tl.to('#q-tl', { x:  378, y:  252, scale: 0.04, autoAlpha: 0, duration: 0.52, ease: 'power3.in' }, 2.5);
+    tl.to('#q-tr', { x: -378, y:  252, scale: 0.04, autoAlpha: 0, duration: 0.52, ease: 'power3.in' }, 2.5);
+    tl.to('#q-bl', { x:  378, y: -252, scale: 0.04, autoAlpha: 0, duration: 0.52, ease: 'power3.in' }, 2.5);
+    tl.to('#q-br', { x: -378, y: -252, scale: 0.04, autoAlpha: 0, duration: 0.52, ease: 'power3.in' }, 2.5);
+    tl.to('#div-h, #div-v', { autoAlpha: 0, duration: 0.28, ease: 'power2.in' }, 2.5);
+
+    // Glow blooms
+    tl.to('#glow', { autoAlpha: 1, scale: 1, duration: 0.55, ease: 'power2.out' }, 2.98);
+
+    // Mr Toot pops in
+    tl.to('#center', { autoAlpha: 1, scale: 1, duration: 0.52, ease: 'back.out(1.7)' }, 3.04);
+
+    // Tagline
+    tl.to('#tagline', { autoAlpha: 1, y: 0, duration: 0.40, ease: 'power2.out' }, 3.46);
+
+    // Brand
+    tl.to('#brand', { autoAlpha: 1, duration: 0.32, ease: 'power2.out' }, 3.72);
+  }
+
+  function resetState() {
+    if (tl) tl.kill();
+    gsap.set('#q-tl', { x: -756, y: -504, scale: 1, autoAlpha: 1 });
+    gsap.set('#q-tr', { x:  756, y: -504, scale: 1, autoAlpha: 1 });
+    gsap.set('#q-bl', { x: -756, y:  504, scale: 1, autoAlpha: 1 });
+    gsap.set('#q-br', { x:  756, y:  504, scale: 1, autoAlpha: 1 });
+    gsap.set('#div-h, #div-v', { autoAlpha: 0 });
+    gsap.set('.q-name, .q-sub', { autoAlpha: 0 });
+    gsap.set('#glow',   { autoAlpha: 0, scale: 0 });
+    gsap.set('#center', { xPercent: -50, yPercent: -50, autoAlpha: 0, scale: 0 });
+    gsap.set('#tagline', { autoAlpha: 0, y: 14 });
+    gsap.set('#brand',   { autoAlpha: 0 });
+  }
+
+  // ── Boot: wait for GIFs, then go ─────────────────────────────────────────
+  waitForImages().then(() => {
+    document.getElementById('loader').style.display = 'none';
+    buildTimeline();
+  });
+
+  // ── Replay ────────────────────────────────────────────────────────────────
+  document.addEventListener('keydown', e => {
+    if (e.key === 'r' || e.key === 'R' || e.key === ' ') {
+      e.preventDefault();
+      resetState();
+      buildTimeline();
+    }
+  });
+</script>
+</body>
+</html>

@@ -1,0 +1,17 @@
+{"kind":"sapling","label":"Sapling","tier":15}
+{"kind":"mushrooms","label":"Mushroom patch","tier":15}
+{"kind":"crystals","label":"Crystal rocks","tier":15}
+{"kind":"lantern","label":"Lantern","tier":15}
+{"kind":"tree","label":"Canopy tree","tier":30}
+{"kind":"stall","label":"Market stall","tier":30}
+{"kind":"fountain","label":"Fountain","tier":30}
+{"kind":"cart","label":"Cart","tier":30}
+{"kind":"cottage","label":"Cottage","tier":45}
+{"kind":"watermill","label":"Watermill","tier":45}
+{"kind":"taco_stand","label":"Taco stand","tier":45}
+{"kind":"watchtower","label":"Watchtower","tier":45}
+{"kind":"ship","label":"Large ship","tier":60}
+{"kind":"castle_gate","label":"Castle gate","tier":60}
+{"kind":"windmill","label":"Windmill","tier":60}
+{"kind":"manor","label":"Manor","tier":60}
+{"kind":"grand_fountain","label":"Grand fountain","tier":60}

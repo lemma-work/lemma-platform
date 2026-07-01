@@ -1,0 +1,16 @@
+# dependencies
+apps/trumpet/source/node_modules/
+
+# build output
+apps/trumpet/source/dist/
+apps/trumpet/dist.zip
+
+# editor / OS
+.DS_Store
+*.local
+.vscode/
+.idea/
+
+# env
+.env
+.env.*

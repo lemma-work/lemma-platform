@@ -1,0 +1,44 @@
+{
+  "name": "quartermaster",
+  "description": "One agent that runs the coordination layer for Task Arcade — nudges, standups, recaps, hype, and channel commands. Never approves or rejects tasks.",
+  "instruction": { "$file": "instruction.md" },
+  "toolsets": ["WORKSPACE_CLI"],
+  "permissions": {
+    "grants": [
+      {
+        "resource_type": "datastore_table",
+        "resource_name": "tasks",
+        "permission_ids": ["datastore.table.read", "datastore.record.read"]
+      },
+      {
+        "resource_type": "datastore_table",
+        "resource_name": "team_members",
+        "permission_ids": ["datastore.table.read", "datastore.record.read"]
+      },
+      {
+        "resource_type": "datastore_table",
+        "resource_name": "sprints",
+        "permission_ids": ["datastore.table.read", "datastore.record.read"]
+      },
+      {
+        "resource_type": "datastore_table",
+        "resource_name": "catalogue_items",
+        "permission_ids": ["datastore.table.read", "datastore.record.read"]
+      },
+      {
+        "resource_type": "datastore_table",
+        "resource_name": "agent_actions",
+        "permission_ids": [
+          "datastore.table.read",
+          "datastore.record.read",
+          "datastore.record.write"
+        ]
+      },
+      {
+        "resource_type": "function",
+        "resource_name": "assign_task",
+        "permission_ids": ["function.read", "function.execute"]
+      }
+    ]
+  }
+}

@@ -1,0 +1,16 @@
+# dependencies
+apps/task-arcade/source/node_modules/
+
+# build output
+apps/task-arcade/source/dist/
+apps/task-arcade/dist.zip
+
+# editor / OS
+.DS_Store
+*.local
+.vscode/
+.idea/
+
+# env
+.env
+.env.*

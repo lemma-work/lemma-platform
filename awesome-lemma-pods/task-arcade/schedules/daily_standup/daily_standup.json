@@ -1,0 +1,7 @@
+{
+  "name": "daily_standup",
+  "schedule_type": "TIME",
+  "config": { "cron": "0 9 * * 1-5" },
+  "workflow_name": "daily_standup",
+  "is_active": true
+}

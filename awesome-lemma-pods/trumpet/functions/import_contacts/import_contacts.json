@@ -1,0 +1,6 @@
+{
+  "name": "import_contacts",
+  "description": "Fetches contacts from Gmail and/or Slack and returns only those not already in the people table. Used by the ImportModal to populate the preview list before the user confirms.",
+  "type": "API",
+  "code": { "$file": "code.py" }
+}

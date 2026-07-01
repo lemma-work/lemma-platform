@@ -1,0 +1,7 @@
+{
+  "name": "stall_check",
+  "schedule_type": "TIME",
+  "config": { "cron": "0 10 * * 1-5" },
+  "workflow_name": "stall_check",
+  "is_active": true
+}
