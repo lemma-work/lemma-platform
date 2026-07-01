@@ -1,12 +1,21 @@
-"""agent_surfaces: add stable, pod-unique name
+"""surfaces rework: multi-account accounts + stable pod-unique surface name
 
-Adds ``name`` — the identifier the REST API now addresses surfaces by (like
-agent names), replacing platform-keyed paths now that a pod may have several
-surfaces of the same platform. Existing rows are backfilled to the lowercased
-platform, with a numeric suffix on any collisions.
+Two changes for the agent-surfaces rework, bundled since neither has shipped
+to a live DB yet:
 
-Revision ID: 0003_agent_surfaces_name
-Revises: 0002_accounts_multiple
+1. accounts: drop the (user_id, auth_config_id) uniqueness so a user can
+   connect several accounts to the same app (e.g. multiple Telegram bot
+   tokens). Add an ``is_default`` flag (exactly one default per user/auth_config,
+   enforced by a partial unique index) used when an account is resolved
+   without an explicit id.
+
+2. agent_surfaces: add ``name`` — the stable, pod-unique identifier the REST
+   API now addresses surfaces by (like agent names), since a pod may have
+   several surfaces of the same platform. Existing rows are backfilled to the
+   lowercased platform, with a numeric suffix on any collisions.
+
+Revision ID: 0002_surfaces_rework
+Revises: 0001_baseline
 Create Date: 2026-07-01
 
 """
@@ -23,8 +32,8 @@ if TYPE_CHECKING:
 __all__ = ["downgrade", "upgrade", "schema_upgrades", "schema_downgrades", "data_upgrades", "data_downgrades"]
 
 # revision identifiers, used by Alembic.
-revision = '0003_agent_surfaces_name'
-down_revision = '0002_accounts_multiple'
+revision = '0002_surfaces_rework'
+down_revision = '0001_baseline'
 branch_labels = None
 depends_on = None
 
@@ -46,6 +55,30 @@ def downgrade() -> None:
 
 
 def schema_upgrades() -> None:
+    # --- accounts: multiple per auth config + is_default ---
+    op.add_column(
+        'accounts',
+        sa.Column(
+            'is_default',
+            sa.Boolean(),
+            nullable=False,
+            server_default=sa.text('false'),
+        ),
+    )
+    op.create_index('ix_accounts_is_default', 'accounts', ['is_default'])
+    # Existing rows are unique per (user, auth_config) under the old constraint,
+    # so promoting them all to default keeps at most one default per pair.
+    op.execute("UPDATE accounts SET is_default = true")
+    op.drop_index('ix_unique_user_auth_config_account', table_name='accounts')
+    op.create_index(
+        'uq_accounts_default_per_auth_config',
+        'accounts',
+        ['user_id', 'auth_config_id'],
+        unique=True,
+        postgresql_where=sa.text('is_default'),
+    )
+
+    # --- agent_surfaces: stable, pod-unique name ---
     op.add_column(
         'agent_surfaces',
         sa.Column('name', sa.String(length=255), nullable=True),
@@ -79,6 +112,16 @@ def schema_downgrades() -> None:
     op.drop_constraint('uq_agent_surface_pod_name', 'agent_surfaces', type_='unique')
     op.drop_index('ix_agent_surfaces_name', table_name='agent_surfaces')
     op.drop_column('agent_surfaces', 'name')
+
+    op.drop_index('uq_accounts_default_per_auth_config', table_name='accounts')
+    op.create_index(
+        'ix_unique_user_auth_config_account',
+        'accounts',
+        ['user_id', 'auth_config_id'],
+        unique=True,
+    )
+    op.drop_index('ix_accounts_is_default', table_name='accounts')
+    op.drop_column('accounts', 'is_default')
 
 
 def data_upgrades() -> None:
