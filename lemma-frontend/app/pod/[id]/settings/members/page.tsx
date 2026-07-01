@@ -1,7 +1,9 @@
 'use client';
 
 import { use, useMemo, useState } from 'react';
-import { ArrowRight, CheckCircle2, Loader2, Mail, Plus, ShieldCheck, UserPlus, Users } from 'lucide-react';
+import { useSearchParams } from 'next/navigation';
+import { ArrowRight, CheckCircle2, Loader2, Mail, Plus, ShieldCheck, Users } from 'lucide-react';
+import { formatDistanceToNow } from 'date-fns';
 import { toast } from 'sonner';
 
 import { ProtectedRoute } from '@/components/auth/protected-route';
@@ -53,6 +55,12 @@ import { buildPodInviteRedirectUri, getPodInviteRedirectOptions } from '@/lib/ut
 
 type AccessView = 'people' | 'invites' | 'requests' | 'roles' | 'available';
 
+function formatRequestedAt(value: string): string {
+    const date = new Date(value);
+    if (Number.isNaN(date.getTime())) return 'recently';
+    return formatDistanceToNow(date, { addSuffix: true });
+}
+
 export default function PodMembersPage({ params }: { params: Promise<{ id: string }> }) {
     return (
         <ProtectedRoute>
@@ -63,6 +71,7 @@ export default function PodMembersPage({ params }: { params: Promise<{ id: strin
 
 function PodMembersPageContent({ params }: { params: Promise<{ id: string }> }) {
     const { id: podId } = use(params);
+    const searchParams = useSearchParams();
     const podAccess = usePodAccess(podId);
     const { data: pod } = usePod(podId);
     const { data: profile } = useProfile();
@@ -117,7 +126,12 @@ function PodMembersPageContent({ params }: { params: Promise<{ id: string }> }) 
     const [memberPendingRemove, setMemberPendingRemove] = useState<{ id: string; label: string } | null>(null);
     const [invitationPendingRevoke, setInvitationPendingRevoke] = useState<{ id: string; email: string } | null>(null);
     const [approvingRequestId, setApprovingRequestId] = useState<string | null>(null);
-    const [activeView, setActiveView] = useState<AccessView>('people');
+    const initialView = ((): AccessView => {
+        const requested = searchParams.get('view');
+        const allowed: AccessView[] = ['people', 'invites', 'requests', 'roles', 'available'];
+        return allowed.includes(requested as AccessView) ? (requested as AccessView) : 'people';
+    })();
+    const [activeView, setActiveView] = useState<AccessView>(initialView);
     const [editingRoleName, setEditingRoleName] = useState<string | null>(null);
     const [newRoleName, setNewRoleName] = useState('');
     const [newRoleDescription, setNewRoleDescription] = useState('');
@@ -677,24 +691,33 @@ function PodMembersPageContent({ params }: { params: Promise<{ id: string }> }) 
                                 {pendingJoinRequests.map((request) => {
                                     const requesterOrgMember = orgMembers.find((member) => member.user_id === request.user_id);
                                     const requester = requesterOrgMember?.user;
-                                    const requesterLabel = requester?.full_name || requester?.email || request.user_id;
+                                    // Requesters are typically not org members yet, so prefer the
+                                    // name/email the join-request API returns over the org-member lookup.
+                                    const requesterName = request.user_name || requester?.full_name || null;
+                                    const requesterEmail = request.user_email || requester?.email || null;
+                                    const requesterLabel = requesterName || requesterEmail || request.user_id;
+                                    const requesterSecondary = requesterEmail && requesterEmail !== requesterLabel ? requesterEmail : null;
+                                    const requesterInitial = (requesterName?.[0] || requesterEmail?.[0] || 'U').toUpperCase();
+                                    const requestedAgo = formatRequestedAt(request.requested_at);
                                     const approvalConfig = resolveApprovalConfig(request.id);
                                     const isApprovingThis = isApprovingJoinRequest && approvingRequestId === request.id;
 
                                     return (
                                         <div key={request.id} className="lemma-index-row group flex flex-col gap-3 py-3">
-                                            <div className="flex min-w-0 items-center gap-2">
-                                                <UserPlus className="h-3.5 w-3.5 shrink-0 text-[var(--text-tertiary)]" />
-                                                <div className="flex min-w-0 flex-1 items-baseline gap-2">
+                                            <div className="flex min-w-0 items-center gap-3">
+                                                <Avatar className="h-8 w-8 shrink-0 border border-[color:var(--border-subtle)]">
+                                                    <AvatarFallback>{requesterInitial}</AvatarFallback>
+                                                </Avatar>
+                                                <div className="flex min-w-0 flex-1 flex-col">
                                                     <p className="truncate text-sm font-medium text-[var(--text-primary)]">{requesterLabel}</p>
-                                                    <p className="hidden truncate text-xs text-[var(--text-secondary)] md:block">
-                                                        Requested {new Date(request.requested_at).toLocaleString()}
+                                                    <p className="truncate text-xs text-[var(--text-secondary)]">
+                                                        {requesterSecondary ? `${requesterSecondary} · ` : ''}Requested {requestedAgo}
                                                     </p>
                                                 </div>
                                             </div>
 
                                             {canManageMembers ? (
-                                                <div className="grid gap-2 pl-5 sm:grid-cols-[minmax(0,1fr)_minmax(0,1fr)_auto] sm:items-end">
+                                                <div className="grid gap-2 pl-11 sm:grid-cols-[minmax(0,1fr)_minmax(0,1fr)_auto] sm:items-end">
                                                     <div className="space-y-1.5">
                                                         <p className="type-eyebrow-medium">Organization role</p>
                                                         <Select

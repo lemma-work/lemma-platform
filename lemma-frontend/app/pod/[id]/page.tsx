@@ -4,7 +4,7 @@ import { use, useEffect, useMemo, useRef, useState, type CSSProperties } from 'r
 import Image from 'next/image';
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
-import { ArrowRight, ArrowUp, ExternalLink, Loader2, MessageCircle, Plus, X } from 'lucide-react';
+import { ArrowRight, ArrowUp, ExternalLink, Loader2, MessageCircle, Plus, UserPlus, X } from 'lucide-react';
 
 import { useAIAssistant } from '@/components/ai/ai-assistant-context';
 import { StepLoader } from '@/components/brand/loader';
@@ -29,6 +29,7 @@ import {
 import { getAppAccent } from '@/lib/app/app-accent';
 import { usePod } from '@/lib/hooks/use-pods';
 import { usePodAccess } from '@/lib/hooks/use-pod-access';
+import { usePodJoinRequests } from '@/lib/hooks/use-pod-join-requests';
 import { usePodSurfaces } from '@/lib/hooks/use-pod-surfaces';
 import { useSchedules } from '@/lib/hooks/use-schedules';
 import { cn } from '@/lib/utils';
@@ -330,6 +331,51 @@ function PodBlankChatHome({ podId }: { podId: string }) {
     );
 }
 
+function PodJoinRequestsHomePanel({ podId }: { podId: string }) {
+    const podAccess = usePodAccess(podId);
+    const canManageMembers = podAccess.can('pod.member.manage');
+    const { data, isLoading } = usePodJoinRequests(podId, 'PENDING');
+    const requests = data?.items || [];
+
+    if (!canManageMembers || isLoading || requests.length === 0) return null;
+
+    const first = requests[0];
+    const firstLabel = first.user_name || first.user_email || first.user_id;
+    const headline =
+        requests.length === 1
+            ? `${firstLabel} wants to join this pod`
+            : `${requests.length} people are waiting to join`;
+    const detail =
+        requests.length === 1
+            ? first.user_email && first.user_email !== firstLabel
+                ? first.user_email
+                : 'Review and approve their access request.'
+            : `Including ${firstLabel} and ${requests.length - 1} more.`;
+
+    return (
+        <section className="lemma-pop-card w-full p-4 sm:p-5">
+            <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
+                <div className="flex min-w-0 items-start gap-3">
+                    <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg border border-[var(--row-border)] bg-[var(--delight-soft)] text-[var(--delight)]">
+                        <UserPlus className="h-5 w-5" />
+                    </div>
+                    <div className="min-w-0">
+                        <p className="truncate text-sm font-semibold text-[var(--text-primary)]">{headline}</p>
+                        <p className="mt-1 truncate text-sm leading-6 text-[var(--text-secondary)]">{detail}</p>
+                    </div>
+                </div>
+                <Link
+                    href={`/pod/${podId}/settings/members?view=requests`}
+                    className="custom-focus-ring inline-flex shrink-0 items-center justify-center gap-2 rounded-lg bg-[var(--action-primary)] px-3.5 py-2 text-sm font-medium text-[var(--text-on-brand)] transition-colors hover:bg-[var(--action-primary-hover)]"
+                >
+                    Review requests
+                    <ArrowRight className="h-4 w-4" />
+                </Link>
+            </div>
+        </section>
+    );
+}
+
 type KanbanItem = {
     id: string;
     kind: 'agent' | 'workflow';
@@ -472,6 +518,7 @@ function PodAgentWorkflowKanban({ podId }: { podId: string }) {
                 />
             ) : null}
             <div className="mt-10 w-full space-y-5">
+                <PodJoinRequestsHomePanel podId={podId} />
                 <PodAppsHomePanel podId={podId} />
                 <PodSurfacesHomePanel podId={podId} />
             {isLoading || hasKanbanItems ? (

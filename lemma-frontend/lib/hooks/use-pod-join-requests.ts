@@ -19,6 +19,8 @@ export interface PodJoinRequest {
     status: PodJoinRequestStatus;
     updated_at: string;
     user_id: string;
+    user_email?: string | null;
+    user_name?: string | null;
 }
 
 interface PodJoinRequestListResponse {
