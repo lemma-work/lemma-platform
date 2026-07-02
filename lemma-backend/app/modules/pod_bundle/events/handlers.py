@@ -27,6 +27,7 @@ from app.core.authorization.service import AuthorizationDataService
 from app.core.domain.errors import DomainError
 from app.core.infrastructure.jobs.streaq_runtime import (
     AppWorkerContext,
+    streaq_cron,
     streaq_task,
     streaq_worker,
 )
@@ -642,3 +643,68 @@ def _now():
     from datetime import datetime, timezone
 
     return datetime.now(timezone.utc)
+
+
+# A non-terminal job untouched for longer than this is presumed dead (worker
+# crash/restart): the apply job's own timeout is 1800s, so ~40min leaves a wide
+# margin before the sweep intervenes.
+_STUCK_AFTER_SECONDS = 40 * 60
+
+
+@streaq_cron("*/30 * * * *", name="sweep_pod_bundle_staging")
+async def sweep_pod_bundle_staging() -> None:
+    """Reclaim staged archives whose ephemeral state has expired, and mark
+    crashed (long-idle, non-terminal) imports/exports FAILED so the UI stops
+    showing them as in-progress. Keyed off the object-store inventory, so it is
+    bounded by how many archives are actually staged."""
+    reclaimed, recovered = await _sweep(
+        get_pod_bundle_state_store(), BundleStagingStorage()
+    )
+    if reclaimed or recovered:
+        logger.info(
+            "Pod bundle sweep: reclaimed %d orphaned archives, recovered %d stuck jobs",
+            reclaimed,
+            recovered,
+        )
+
+
+async def _sweep(store, staging) -> tuple[int, int]:
+    from datetime import timedelta
+
+    cutoff = _now() - timedelta(seconds=_STUCK_AFTER_SECONDS)
+
+    reclaimed = 0
+    recovered = 0
+    for kind, get_state, save_state, is_import in (
+        ("pod-imports", store.get_import, store.save_import, True),
+        ("pod-exports", store.get_export, store.save_export, False),
+    ):
+        try:
+            archives = await staging.list_archives(kind)  # type: ignore[arg-type]
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("Sweep: could not list %s: %s", kind, exc)
+            continue
+        for job_id, _ in archives:
+            state = await get_state(job_id)
+            if state is None:
+                # State TTL expired → the job is unreferenceable; reclaim bytes.
+                try:
+                    await staging.delete_archive(kind, job_id)  # type: ignore[arg-type]
+                    reclaimed += 1
+                except Exception as exc:  # noqa: BLE001
+                    logger.warning("Sweep: delete %s/%s failed: %s", kind, job_id, exc)
+                continue
+            if not state.is_terminal and state.updated_at < cutoff:
+                if is_import:
+                    state.status = ImportStatus.FAILED
+                else:
+                    state.status = ExportStatus.FAILED
+                state.error = "Interrupted (worker restart or crash); start over."
+                state.completed_at = _now()
+                await save_state(state)  # type: ignore[arg-type]
+                await publish_bundle_event(
+                    job_id, error_payload(state.error, state.seq)
+                )
+                recovered += 1
+
+    return reclaimed, recovered
