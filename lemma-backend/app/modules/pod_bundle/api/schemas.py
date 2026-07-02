@@ -13,6 +13,8 @@ from app.modules.pod_bundle.domain.state import (
     ImportState,
     ImportStatus,
     Progress,
+    PublishState,
+    PublishStatus,
 )
 
 
@@ -182,5 +184,47 @@ class ImportStatusResponse(BaseModel):
             events_url=(
                 f"/pods/{state.pod_id}/bundle/imports/{state.import_id}/events"
             ),
+            error=state.error,
+        )
+
+
+# --- publish -----------------------------------------------------------------
+
+
+class PublishStartRequest(BaseModel):
+    """Body for publishing a pod to GitHub."""
+
+    repo_name: str = Field(..., min_length=1, description="Name for the new GitHub repo.")
+    private: bool = Field(default=False, description="Create the repo as private.")
+    account_id: UUID | None = Field(
+        default=None, description="GitHub connector account to publish as (optional)."
+    )
+    ai_readme: bool = Field(
+        default=False, description="Polish the generated README with the system model."
+    )
+
+
+class PublishStatusResponse(BaseModel):
+    """Status of a pod publish job (pure Redis read)."""
+
+    publish_id: UUID
+    pod_id: UUID
+    status: PublishStatus
+    repo_name: str
+    repo_url: str | None = None
+    progress: ExportProgressResponse = Field(default_factory=ExportProgressResponse)
+    events_url: str
+    error: str | None = None
+
+    @classmethod
+    def from_state(cls, state: PublishState) -> "PublishStatusResponse":
+        return cls(
+            publish_id=state.publish_id,
+            pod_id=state.pod_id,
+            status=state.status,
+            repo_name=state.repo_name,
+            repo_url=state.repo_url,
+            progress=ExportProgressResponse.from_domain(state.progress),
+            events_url=f"/pods/{state.pod_id}/bundle/publishes/{state.publish_id}/events",
             error=state.error,
         )

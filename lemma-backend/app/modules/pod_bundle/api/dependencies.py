@@ -10,6 +10,7 @@ from app.core.api.dependencies import get_uow_factory
 from app.core.infrastructure.db.uow_factory import UnitOfWorkFactory
 from app.modules.pod_bundle.application.export_use_cases import ExportUseCases
 from app.modules.pod_bundle.application.import_use_cases import ImportUseCases
+from app.modules.pod_bundle.application.publish_use_cases import PublishUseCases
 
 
 def build_export_use_cases(uow_factory: UnitOfWorkFactory) -> ExportUseCases:
@@ -38,3 +39,16 @@ def get_import_use_cases(
 
 
 ImportUseCasesDep = Annotated[ImportUseCases, Depends(get_import_use_cases)]
+
+
+def build_publish_use_cases(uow_factory: UnitOfWorkFactory) -> PublishUseCases:
+    return PublishUseCases(uow_factory)
+
+
+def get_publish_use_cases(
+    uow_factory: UnitOfWorkFactory = Depends(get_uow_factory),
+) -> PublishUseCases:
+    return build_publish_use_cases(uow_factory)
+
+
+PublishUseCasesDep = Annotated[PublishUseCases, Depends(get_publish_use_cases)]

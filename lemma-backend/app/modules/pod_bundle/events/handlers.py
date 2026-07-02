@@ -38,6 +38,8 @@ from app.modules.pod_bundle.domain.state import (
     ExportStatus,
     ImportState,
     ImportStatus,
+    PublishState,
+    PublishStatus,
 )
 from app.modules.pod_bundle.infrastructure.exporter import BundleExporter
 from app.modules.pod_bundle.infrastructure.realtime import (
@@ -409,6 +411,176 @@ async def _checkpoint(store, state: ImportState, step) -> None:
             state.seq,
         ),
     )
+
+
+@streaq_task(name="publish_pod_github")
+async def publish_pod_github(context: dict[str, str | None]) -> None:
+    """Export the pod, render a README, and push everything to a new GitHub repo
+    via the Composio connector — per-file checkpoints make it resumable and a
+    missing GitHub connection ends terminally with a clear message."""
+    worker_ctx: AppWorkerContext = streaq_worker.context
+    publish_id = UUID(str(context["publish_id"]))
+    pod_id = UUID(str(context["pod_id"]))
+    user_id = UUID(str(context["user_id"]))
+
+    store = get_pod_bundle_state_store()
+    state = await store.get_publish(publish_id)
+    if state is None or state.status == PublishStatus.COMPLETED:
+        return
+
+    from app.modules.pod_bundle.infrastructure.ai_readme import polish_readme
+    from app.modules.pod_bundle.infrastructure.exporter import BundleExporter
+    from app.modules.pod_bundle.infrastructure.github_publisher import (
+        ComposioGithubOps,
+        GithubPublisher,
+    )
+    from app.modules.pod_bundle.infrastructure.readme import render_readme
+
+    try:
+        # (1) EXPORTING — assemble the bundle bytes in one short UoW scope.
+        state.status = PublishStatus.EXPORTING
+        await store.save_publish(state)
+        await publish_bundle_event(publish_id, status_payload(state.status.value, state.seq))
+
+        async def _noop_progress(done: int, total: int) -> None:
+            return None
+
+        async with uow_scope(worker_ctx.uow_factory) as uow:
+            ctx = await AuthorizationDataService(uow.session).build_user_context(
+                user_id=user_id, pod_id=pod_id
+            )
+            async with context_scope(ctx):
+                pod_name, zip_bytes = await BundleExporter().export(
+                    pod_id=pod_id,
+                    user_id=user_id,
+                    with_data=True,
+                    include=None,
+                    ctx=ctx,
+                    uow=uow,
+                    on_progress=_noop_progress,
+                )
+
+        files = _zip_to_files(zip_bytes)
+        counts = _resource_counts(files)
+        owner_guess = state.repo_name  # refined from the created repo below
+        readme = render_readme(
+            pod_name=pod_name.removesuffix(".zip"),
+            description=None,
+            resource_counts=counts,
+            owner=owner_guess,
+            repo=state.repo_name,
+        )
+        if state.ai_readme:
+            readme = await polish_readme(readme, polish_fn=None)
+        state.readme = readme
+
+        # (2) PUBLISHING — create the repo + push files via Composio (no DB held
+        # across the HTTP calls beyond each short per-operation scope).
+        state.status = PublishStatus.PUBLISHING
+        await store.save_publish(state)
+        await publish_bundle_event(publish_id, status_payload(state.status.value, state.seq))
+
+        async def _run_op(op_name: str, payload: dict) -> dict:
+            async with uow_scope(worker_ctx.uow_factory) as op_uow:
+                op_ctx = await AuthorizationDataService(
+                    op_uow.session
+                ).build_user_context(user_id=user_id, pod_id=pod_id)
+                from app.modules.connectors.api.dependencies import (
+                    build_connector_operation_service,
+                )
+
+                svc = build_connector_operation_service(op_uow)
+                resp = await svc.execute_operation(
+                    connector_id="github",
+                    operation_name=op_name,
+                    payload=payload,
+                    user_id=user_id,
+                    actor=op_ctx,
+                    account_id=state.account_id,
+                )
+            return resp.model_dump() if hasattr(resp, "model_dump") else (
+                resp if isinstance(resp, dict) else {}
+            )
+
+        publisher = GithubPublisher(ComposioGithubOps(_run_op))
+
+        async def _on_file(path: str, done: int, total: int) -> None:
+            state.progress.done = done
+            state.progress.total = total
+            await store.save_publish(state)
+            await publish_bundle_event(
+                publish_id, progress_payload(done, total, state.seq, path=path)
+            )
+
+        repo = await publisher.publish(
+            repo_name=state.repo_name,
+            private=state.private,
+            description=None,
+            files=files,
+            readme=readme,
+            on_progress=_on_file,
+        )
+
+        state.status = PublishStatus.COMPLETED
+        state.repo_url = repo.html_url
+        state.repo_created = True
+        state.completed_at = _now()
+        await store.save_publish(state)
+        await publish_bundle_event(
+            publish_id,
+            completed_payload(state.status.value, state.seq, repo_url=repo.html_url),
+        )
+    except DomainError as exc:
+        await _fail_publish(store, state, str(exc))
+        logger.warning("Pod publish %s failed (terminal): %s", publish_id, exc)
+    except Exception as exc:
+        await _fail_publish(store, state, "Publish failed due to a transient error.")
+        logger.error("Pod publish %s failed (retryable): %s", publish_id, exc)
+        raise
+
+
+async def _fail_publish(store, state: PublishState, message: str) -> None:
+    state.status = PublishStatus.FAILED
+    state.error = message
+    state.completed_at = _now()
+    try:
+        await store.save_publish(state)
+        await publish_bundle_event(state.publish_id, error_payload(message, state.seq))
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("Failed to persist FAILED publish %s: %s", state.publish_id, exc)
+
+
+def _zip_to_files(zip_bytes: bytes) -> dict[str, bytes]:
+    """Unpack an exported bundle zip to a ``{path: bytes}`` map for upload,
+    dropping directory entries and any pre-existing README (we render our own)."""
+    import io
+    import zipfile
+
+    files: dict[str, bytes] = {}
+    with zipfile.ZipFile(io.BytesIO(zip_bytes)) as zf:
+        for info in zf.infolist():
+            if info.is_dir():
+                continue
+            name = info.filename
+            if name.lower().endswith("readme.md"):
+                continue
+            files[name] = zf.read(info)
+    return files
+
+
+def _resource_counts(files: dict[str, bytes]) -> dict[str, int]:
+    counts: dict[str, int] = {}
+    for path in files:
+        parts = path.split("/")
+        if len(parts) >= 2:
+            counts[parts[0]] = counts.get(parts[0], 0)
+    # Count distinct resource directories per type.
+    seen: dict[str, set[str]] = {}
+    for path in files:
+        parts = path.split("/")
+        if len(parts) >= 2:
+            seen.setdefault(parts[0], set()).add(parts[1])
+    return {k: len(v) for k, v in seen.items()}
 
 
 async def _record_recipe(worker_ctx: AppWorkerContext, state: ImportState) -> None:
