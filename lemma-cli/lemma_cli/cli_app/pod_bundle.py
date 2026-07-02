@@ -1,17 +1,89 @@
 from __future__ import annotations
 
-import ast
 import io
 import json
-import re
 import subprocess
 import shutil
 import tempfile
 from contextlib import contextmanager
-from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Iterator
 from zipfile import ZIP_DEFLATED, ZipFile
+
+# The pure bundle-format vocabulary (constants, JSONC parsing, table diffing,
+# portable variables, payload normalization) lives in the shared
+# lemma-pod-bundle package so the backend can consume the same format. The
+# names are re-bound here — including the underscore-private ones — so every
+# existing `lemma_cli.cli_app.pod_bundle.<name>` reference keeps working.
+from lemma_pod_bundle.diff import (
+    TableDiff,
+    _is_system_table_column,
+    _normalize_column_for_diff,
+    _order_table_dirs_by_dependency,
+    _table_fk_dependencies,
+    diff_table_columns,
+)
+from lemma_pod_bundle.jsonc import _strip_trailing_commas, loads_jsonc, strip_jsonc
+from lemma_pod_bundle.layout import (
+    APP_MANIFEST_ALIAS,
+    EXPORTABLE_RESOURCE_DIRS,
+    FILES_MANIFEST,
+    FORMAT_VERSION,
+    JSON_FILE_REF_KEY,
+    POD_MEMBER_TOKEN,
+    RAW_FILE_REF_KEY,
+    RESOURCE_DIR_ALIASES,
+    RESOURCE_DIRS,
+    SYSTEM_TABLE_COLUMNS,
+    TABLE_DATA_FILE,
+    _TABLE_DATA_CANDIDATES,
+    _bundle_folder_keys,
+    _file_path_key,
+    _json_dump,
+    _looks_like_single_resource_dir,
+    _parse_function_headers,
+    _read_export_contents,
+    _read_json,
+    _record_export_contents,
+    _resolve_file_refs,
+    _resource_manifest_path,
+    _sanitize_resource_name,
+    _write_json,
+    load_resource_payload,
+    normalize_resource_dir_name,
+)
+from lemma_pod_bundle.normalize import (
+    _AGENT_CLEARABLE_SCHEMA_FIELDS,
+    _SEED_STRIP_COLUMNS,
+    BundleValidationIssue,
+    _attach_permissions_payload,
+    _declared_reserved_columns,
+    _normalize_agent_payload,
+    _normalize_app_payload,
+    _normalize_function_payload,
+    _normalize_pod_payload,
+    _normalize_resource_permissions_payload,
+    _normalize_schedule_payload,
+    _normalize_surface_payload,
+    _normalize_table_payload,
+    _normalize_workflow_payload,
+    _sanitize_function_payload_for_import,
+    _sanitize_table_payload_for_import,
+    _split_resource_permissions_payload,
+    _strip_keys,
+    _surface_platform_from_payload,
+    _validate_function_payload,
+)
+from lemma_pod_bundle.portability import (
+    _ACCOUNT_REF_FIELDS,
+    _MEMBER_REF_FIELDS,
+    _PLACEHOLDER_RE,
+    _extract_portable_variables,
+    _placeholder,
+    _slug_var_name,
+    _strip_unresolved_placeholders,
+    _tokenize_ref_fields,
+)
 
 from lemma_sdk import Lemma
 from lemma_sdk.errors import LemmaAPIError
@@ -47,63 +119,6 @@ from .record_io import (
     read_record_rows,
     write_export_rows,
 )
-
-FORMAT_VERSION = 2
-# Legacy placeholder for a pod-member assignee; superseded by ${name} variables
-# but still recognized on import so older templated bundles keep working.
-POD_MEMBER_TOKEN = "$POD_MEMBER"
-# Per-table row dump carried by `--with-data` (CSV, complex cells as JSON text).
-TABLE_DATA_FILE = "data.csv"
-_TABLE_DATA_CANDIDATES = ("data.csv", "data.jsonl", "data.json")
-RAW_FILE_REF_KEY = "$file"
-JSON_FILE_REF_KEY = "$json_file"
-# Some app scaffolds write the manifest as `lemma.app.json` rather than
-# `<name>.json`. Accept it as an alias so those bundles import without a rename.
-APP_MANIFEST_ALIAS = "lemma.app.json"
-RESOURCE_DIRS = (
-    "tables",
-    "functions",
-    "agents",
-    "workflows",
-    "schedules",
-    "surfaces",
-    "apps",
-    "files",
-)
-EXPORTABLE_RESOURCE_DIRS = frozenset(RESOURCE_DIRS)
-RESOURCE_DIR_ALIASES = {
-    "table": "tables",
-    "tables": "tables",
-    "function": "functions",
-    "functions": "functions",
-    "agent": "agents",
-    "agents": "agents",
-    "workflow": "workflows",
-    "workflows": "workflows",
-    "schedule": "schedules",
-    "schedules": "schedules",
-    "surface": "surfaces",
-    "surfaces": "surfaces",
-    "app": "apps",
-    "apps": "apps",
-    "file": "files",
-    "files": "files",
-}
-SYSTEM_TABLE_COLUMNS = frozenset({"created_at", "updated_at", "user_id"})
-
-
-@dataclass
-class TableDiff:
-    to_add: list[dict[str, Any]]
-    to_remove: list[str]
-    incompatible: list[str]
-
-
-@dataclass
-class BundleValidationIssue:
-    path: str
-    message: str
-
 
 def _progress_start(resource_type: str, resource_name: str, action: str) -> None:
     console.print(f"[cyan]{resource_type}[/cyan] {action} {resource_name}")
@@ -206,105 +221,6 @@ def _build_app_bundle(
     return dist_file
 
 
-def _json_dump(data: Any) -> str:
-    return json.dumps(data, indent=2, sort_keys=True) + "\n"
-
-
-def _write_json(path: Path, data: Any) -> None:
-    path.write_text(_json_dump(data), encoding="utf-8")
-
-
-def strip_jsonc(text: str) -> str:
-    """Remove `//` line comments and `/* */` block comments from JSONC text,
-    leaving string literals (and any `//` inside them, e.g. URLs) untouched.
-    Comment characters are replaced with spaces so byte offsets — and thus the
-    line/column in any downstream json error — stay accurate."""
-    out: list[str] = []
-    i = 0
-    n = len(text)
-    in_string = False
-    escaped = False
-    while i < n:
-        ch = text[i]
-        if in_string:
-            out.append(ch)
-            if escaped:
-                escaped = False
-            elif ch == "\\":
-                escaped = True
-            elif ch == '"':
-                in_string = False
-            i += 1
-            continue
-        if ch == '"':
-            in_string = True
-            out.append(ch)
-            i += 1
-            continue
-        if ch == "/" and i + 1 < n and text[i + 1] == "/":
-            while i < n and text[i] != "\n":
-                out.append(" ")
-                i += 1
-            continue
-        if ch == "/" and i + 1 < n and text[i + 1] == "*":
-            while i < n and not (text[i] == "*" and i + 1 < n and text[i + 1] == "/"):
-                out.append("\n" if text[i] == "\n" else " ")
-                i += 1
-            # consume the closing */
-            i += 2
-            out.append("  ")
-            continue
-        out.append(ch)
-        i += 1
-    return "".join(out)
-
-
-def _strip_trailing_commas(text: str) -> str:
-    """Blank a trailing comma (one before a closing `}`/`]`, ignoring whitespace)
-    by replacing it with a space, so a common hand-edit mistake still parses.
-    Replacing rather than deleting keeps byte offsets — and json error line/cols —
-    accurate. Expects comment-free input (run after strip_jsonc)."""
-    out = list(text)
-    n = len(out)
-    in_string = False
-    escaped = False
-    for i, ch in enumerate(out):
-        if in_string:
-            if escaped:
-                escaped = False
-            elif ch == "\\":
-                escaped = True
-            elif ch == '"':
-                in_string = False
-            continue
-        if ch == '"':
-            in_string = True
-        elif ch == ",":
-            j = i + 1
-            while j < n and out[j] in " \t\r\n":
-                j += 1
-            if j < n and out[j] in "}]":
-                out[i] = " "
-    return "".join(out)
-
-
-def loads_jsonc(text: str) -> Any:
-    """json.loads that tolerates JSONC comments and trailing commas (so scaffolded
-    and hand-edited bundle files can be self-documenting and forgiving)."""
-    return json.loads(_strip_trailing_commas(strip_jsonc(text)))
-
-
-def _read_json(path: Path) -> dict[str, Any]:
-    payload = loads_jsonc(path.read_text(encoding="utf-8"))
-    if not isinstance(payload, dict):
-        raise ValueError(f"Expected JSON object in {path}")
-    return payload
-
-
-def _sanitize_resource_name(name: str) -> str:
-    return name.strip()
-
-
 def _ensure_clean_dir(path: Path, *, force: bool) -> None:
     if path.exists():
         if not force:
@@ -318,57 +234,6 @@ def _ensure_resource_dirs(root: Path) -> None:
         (root / resource_dir).mkdir(parents=True, exist_ok=True)
 
 
-def normalize_resource_dir_name(value: str) -> str:
-    normalized = value.lower().strip().replace("-", "_")
-    return RESOURCE_DIR_ALIASES.get(normalized, "")
-
-
-def _strip_keys(payload: dict[str, Any], keys: set[str]) -> dict[str, Any]:
-    return {key: value for key, value in payload.items() if key not in keys}
-
-
-def _normalize_resource_permissions_payload(payload: dict[str, Any]) -> dict[str, Any]:
-    grants = payload.get("grants", [])
-    if not isinstance(grants, list):
-        raise ValueError("Embedded permissions must be an object with a grants list.")
-    if any(
-        not isinstance(grant, dict) or "resource_name" not in grant
-        for grant in grants
-    ):
-        raise ValueError("Permission grants must reference resources by resource_name.")
-    return {"grants": grants}
-
-
-def _split_resource_permissions_payload(
-    payload: dict[str, Any],
-) -> tuple[dict[str, Any], dict[str, Any] | None]:
-    resource_payload = dict(payload)
-    raw_permissions = resource_payload.pop("permissions", None)
-    if raw_permissions is None:
-        return resource_payload, None
-    if not isinstance(raw_permissions, dict):
-        raise ValueError("Embedded permissions must be an object with a grants list.")
-    return resource_payload, _normalize_resource_permissions_payload(raw_permissions)
-
-
-def _attach_permissions_payload(
-    payload: dict[str, Any],
-    permissions: dict[str, Any],
-) -> dict[str, Any]:
-    return {
-        **payload,
-        "permissions": _normalize_resource_permissions_payload(permissions),
-    }
-
-
-# Structured-contract fields an agent bundle declares wholesale: a bundle that
-# omits them means "no schema". On update we send an explicit null so a stale
-# schema on the existing agent is cleared rather than silently retained (the
-# backend leaves omitted fields untouched). agent_runtime is deliberately NOT in
-# this set — templates strip it to preserve the target's pinned runtime.
-_AGENT_CLEARABLE_SCHEMA_FIELDS = ("output_schema", "input_schema")
-
-
 def _prepare_agent_update_payload(
     payload: dict[str, Any],
     _existing: dict[str, Any] | None,
@@ -377,58 +242,6 @@ def _prepare_agent_update_payload(
     for field in _AGENT_CLEARABLE_SCHEMA_FIELDS:
         update.setdefault(field, None)
     return update
-
-
-def _record_export_contents(
-    bundle_root: Path,
-    *,
-    included: set[str],
-    excluded: set[str],
-    names: set[str],
-    with_data: bool,
-    with_files: bool,
-) -> dict[str, Any]:
-    """Record the bundle's selective scope under ``pod.json -> contents``: which
-    resource types/names it covers and whether it carries table rows (data.csv)
-    and file bytes. On import this auto-enables seeding/upload; a re-export can
-    refresh exactly this set."""
-    pod_path = bundle_root / "pod.json"
-    if not pod_path.is_file():
-        return {}
-    pod_data = _read_json(pod_path)
-    contents: dict[str, Any] = {}
-    if included:
-        contents["resources"] = sorted(included)
-    if excluded:
-        contents["exclude"] = sorted(excluded)
-    if names:
-        contents["names"] = sorted(names)
-    if with_data:
-        contents["with_data"] = True
-    if with_files:
-        contents["with_files"] = True
-    pod_data["contents"] = contents
-    _write_json(pod_path, pod_data)
-    return contents
-
-
-def _read_export_contents(source_dir: Path) -> dict[str, Any]:
-    """Read the ``contents`` block written by a manifest-aware export (empty for
-    older bundles)."""
-    pod_path = source_dir / "pod.json"
-    if not pod_path.is_file():
-        return {}
-    contents = _read_json(pod_path).get("contents")
-    return contents if isinstance(contents, dict) else {}
-
-
-def _normalize_pod_payload(pod: dict[str, Any]) -> dict[str, Any]:
-    return {
-        "format_version": FORMAT_VERSION,
-        "name": pod.get("name"),
-        "description": pod.get("description"),
-        "icon_url": pod.get("icon_url"),
-    }
 
 
 def _export_table_data(pod_sdk: Any, table_name: str, resource_dir: Path) -> None:
@@ -443,13 +256,6 @@ def _export_table_data(pod_sdk: Any, table_name: str, resource_dir: Path) -> Non
             f"[yellow]warning[/yellow] table '{table_name}': exported the first "
             f"{RECORD_EXPORT_DEFAULT_LIMIT} rows (cap); any beyond that were skipped."
         )
-
-
-# Audit/ownership columns dropped from seeded rows: the backend manages the
-# timestamps, and a source-pod user_id would orphan ownership in the target pod
-# (bulk-create assigns rows to the importer). The primary key is kept so any
-# foreign-key references between seeded tables still resolve.
-_SEED_STRIP_COLUMNS = frozenset({"created_at", "updated_at", "user_id"})
 
 
 def _import_table_data(pod_sdk: Any, table_name: str, resource_dir: Path) -> int:
@@ -473,177 +279,6 @@ def _import_table_data(pod_sdk: Any, table_name: str, resource_dir: Path) -> int
     return len(rows)
 
 
-def _normalize_table_payload(table: dict[str, Any]) -> dict[str, Any]:
-    payload = {
-        "name": table.get("name"),
-        "columns": table.get("columns") or [],
-        "config": table.get("config"),
-        "enable_rls": table.get("enable_rls", True),
-        "primary_key_column": table.get("primary_key_column", "id"),
-        "visibility": table.get("visibility"),
-    }
-    return {key: value for key, value in payload.items() if value is not None}
-
-
-def _is_system_table_column(column: dict[str, Any]) -> bool:
-    return bool(column.get("system")) or str(column.get("name") or "") in SYSTEM_TABLE_COLUMNS
-
-
-def _sanitize_table_payload_for_import(payload: dict[str, Any]) -> dict[str, Any]:
-    sanitized = dict(payload)
-    sanitized["columns"] = [
-        column
-        for column in payload.get("columns") or []
-        if not _is_system_table_column(column)
-    ]
-    return sanitized
-
-
-def _declared_reserved_columns(payload: dict[str, Any]) -> list[str]:
-    """System-managed column names the user declared explicitly in a table payload.
-
-    Mirrors the backend rule (``materialize_table_columns``): ``created_at`` and
-    ``updated_at`` are always reserved, while ``user_id`` is reserved only when RLS
-    is enabled. Columns the backend itself emitted (marked ``system: true``, as in
-    an exported bundle) are excluded so export -> import round-trips cleanly — those
-    are stripped silently by ``_sanitize_table_payload_for_import``. What's left is
-    a genuine author mistake the backend would reject, so we surface it instead of
-    silently dropping the column.
-    """
-    reserved = {"created_at", "updated_at"}
-    if payload.get("enable_rls", True):
-        reserved.add("user_id")
-    declared: list[str] = []
-    for column in payload.get("columns") or []:
-        if bool(column.get("system")):
-            continue
-        name = str(column.get("name") or "")
-        if name in reserved and name not in declared:
-            declared.append(name)
-    return declared
-
-
-def _normalize_function_payload(function: dict[str, Any]) -> dict[str, Any]:
-    payload = _strip_keys(
-        function,
-        {
-            "id",
-            "pod_id",
-            "user_id",
-            "created_at",
-            "updated_at",
-            "status",
-            "code_path",
-            "input_schema",
-            "output_schema",
-            "config_schema",
-            "allowed_actions",
-        },
-    )
-    return payload
-
-
-def _sanitize_function_payload_for_import(payload: dict[str, Any]) -> dict[str, Any]:
-    return _strip_keys(
-        payload,
-        {
-            "id",
-            "pod_id",
-            "user_id",
-            "created_at",
-            "updated_at",
-            "status",
-            "code_path",
-            "input_schema",
-            "output_schema",
-            "config_schema",
-            "allowed_actions",
-        },
-    )
-
-
-def _normalize_agent_payload(agent: dict[str, Any]) -> dict[str, Any]:
-    payload = _strip_keys(
-        agent,
-        {"id", "pod_id", "user_id", "created_at", "updated_at", "allowed_actions"},
-    )
-    # Make the structured-contract fields explicit in the bundle (as null when
-    # unset) so the declarative intent is visible and a re-import faithfully
-    # clears a schema the source agent no longer defines.
-    for field in _AGENT_CLEARABLE_SCHEMA_FIELDS:
-        payload.setdefault(field, None)
-    return payload
-
-
-def _normalize_workflow_payload(workflow: dict[str, Any]) -> dict[str, Any]:
-    payload = _strip_keys(
-        workflow,
-        {"id", "pod_id", "created_at", "updated_at", "is_active", "allowed_actions"},
-    )
-    payload.setdefault("nodes", [])
-    payload.setdefault("edges", [])
-    return payload
-
-
-def _normalize_schedule_payload(schedule: dict[str, Any]) -> dict[str, Any]:
-    return _strip_keys(
-        schedule,
-        {
-            "id",
-            "pod_id",
-            "user_id",
-            "created_at",
-            "updated_at",
-            "last_run_at",
-            "next_run_at",
-            "agent_id",
-            "workflow_id",
-            "allowed_actions",
-        },
-    )
-
-
-def _normalize_surface_payload(surface: dict[str, Any]) -> dict[str, Any]:
-    platform = str(surface.get("platform") or surface.get("surface_type") or "").upper()
-    config = surface.get("config") or {}
-
-    behavior_config: dict[str, Any] = {}
-    channels: list[dict[str, Any]] = []
-    for channel in config.get("channels") or []:
-        if not isinstance(channel, dict) or channel.get("enabled") is False:
-            continue
-        entry = {
-            key: channel[key]
-            for key in ("channel_id", "channel_name", "agent_name")
-            if channel.get(key)
-        }
-        if entry:
-            channels.append(entry)
-    if channels:
-        behavior_config["channels"] = channels
-    identity = config.get("identity") or {}
-    identity_entry = {
-        key: identity[key]
-        for key in ("allowed_domains", "allowed_email_addresses")
-        if identity.get(key)
-    }
-    if identity_entry:
-        behavior_config["identity"] = identity_entry
-
-    status = str(surface.get("status") or "").upper()
-    payload: dict[str, Any] = {
-        "name": platform.lower(),
-        "platform": platform,
-        "default_agent_name": surface.get("agent_name"),
-        "credential_mode": surface.get("credential_mode"),
-        "account_id": surface.get("account_id"),
-        "is_enabled": status != "INACTIVE",
-    }
-    if behavior_config:
-        payload["config"] = behavior_config
-    return {key: value for key, value in payload.items() if value is not None}
-
-
 def _surface_upsert_body(payload: dict[str, Any]) -> dict[str, Any]:
     return {
         key: payload[key]
@@ -658,27 +293,6 @@ def _surface_upsert_body(payload: dict[str, Any]) -> dict[str, Any]:
     }
 
 
-def _surface_platform_from_payload(payload: dict[str, Any], resource_name: str) -> str:
-    return str(payload.get("platform") or resource_name).upper()
-
-
-def _normalize_app_payload(app: dict[str, Any]) -> dict[str, Any]:
-    return _strip_keys(
-        app,
-        {
-            "id",
-            "pod_id",
-            "user_id",
-            "created_at",
-            "updated_at",
-            "status",
-            "current_release_id",
-            "source_archive_path",
-            "allowed_actions",
-        },
-    )
-
-
 def _app_payload_with_unique_public_slug(
     payload: dict[str, Any],
     *,
@@ -691,142 +305,6 @@ def _app_payload_with_unique_public_slug(
     next_payload = dict(payload)
     next_payload["public_slug"] = unique_slug
     return next_payload
-
-
-# --- Portable variables (pod.json manifest) -------------------------------
-#
-# Some resource fields hold ids that are only valid in the source pod/org and
-# break a re-import elsewhere: a workflow's assignee_pod_member_id and a
-# schedule/surface account_id. On export we replace each with a ``${name}``
-# placeholder and record it under ``pod.json -> variables``; on import the
-# placeholders are resolved (``--var``, ``--values``, or a per-type default) and
-# any still-unresolved ones drop their field so the import still succeeds.
-
-_PLACEHOLDER_RE = re.compile(r"\$\{[A-Za-z0-9_]+\}")
-# Fields whose values are non-portable ids, by variable type.
-_MEMBER_REF_FIELDS = frozenset({"assignee_pod_member_id"})
-_ACCOUNT_REF_FIELDS = frozenset({"account_id"})
-
-
-def _placeholder(name: str) -> str:
-    return "${" + name + "}"
-
-
-def _slug_var_name(base: str, existing: dict[str, Any]) -> str:
-    cleaned = re.sub(r"[^a-z0-9]+", "_", str(base).lower()).strip("_") or "var"
-    name = cleaned
-    index = 2
-    while name in existing:
-        name = f"{cleaned}_{index}"
-        index += 1
-    return name
-
-
-def _tokenize_ref_fields(node: object, field_keys: frozenset[str], on_value) -> bool:
-    """Recursively replace string values stored under ``field_keys`` with the
-    placeholder returned by ``on_value(raw)``. Skips values already templated."""
-    changed = False
-    if isinstance(node, dict):
-        for key, value in list(node.items()):
-            if (
-                key in field_keys
-                and isinstance(value, str)
-                and value
-                and value != POD_MEMBER_TOKEN
-                and not _PLACEHOLDER_RE.fullmatch(value)
-            ):
-                node[key] = on_value(value)
-                changed = True
-            elif _tokenize_ref_fields(value, field_keys, on_value):
-                changed = True
-    elif isinstance(node, list):
-        for item in node:
-            if _tokenize_ref_fields(item, field_keys, on_value):
-                changed = True
-    return changed
-
-
-def _extract_portable_variables(bundle_root: Path) -> dict[str, Any]:
-    """Replace non-portable ids in workflows/schedules/surfaces with ``${name}``
-    placeholders and record them under ``pod.json -> variables``. Returns the
-    variables map (possibly empty)."""
-    pod_path = bundle_root / "pod.json"
-    if not pod_path.is_file():
-        return {}
-    pod_data = _read_json(pod_path)
-    variables: dict[str, Any] = dict(pod_data.get("variables") or {})
-    by_value: dict[tuple[str, str], str] = {}
-
-    def register(vtype: str, raw: str, base: str, meta: dict[str, Any]) -> str:
-        key = (vtype, str(raw))
-        if key in by_value:
-            return _placeholder(by_value[key])
-        name = _slug_var_name(base, variables)
-        variables[name] = {"type": vtype, "source_value": str(raw), **meta}
-        by_value[key] = name
-        return _placeholder(name)
-
-    def rewrite(resource_glob: str, field_keys, make_ref) -> None:
-        for resource_json in sorted((bundle_root).glob(resource_glob)):
-            data = loads_jsonc(resource_json.read_text(encoding="utf-8"))
-            owner = resource_json.parent.name
-            if _tokenize_ref_fields(data, field_keys, lambda raw, owner=owner: make_ref(owner, raw)):
-                resource_json.write_text(
-                    json.dumps(data, indent=2) + "\n", encoding="utf-8"
-                )
-
-    rewrite(
-        "workflows/*/*.json",
-        _MEMBER_REF_FIELDS,
-        lambda owner, raw: register(
-            "pod_member",
-            raw,
-            f"{owner}_assignee",
-            {"description": f"Pod member assigned in workflow '{owner}'"},
-        ),
-    )
-    rewrite(
-        "schedules/*/*.json",
-        _ACCOUNT_REF_FIELDS,
-        lambda owner, raw: register(
-            "account",
-            raw,
-            f"{owner}_account",
-            {"description": f"Connector account for schedule '{owner}'"},
-        ),
-    )
-    rewrite(
-        "surfaces/*/*.json",
-        _ACCOUNT_REF_FIELDS,
-        lambda owner, raw: register(
-            "account",
-            raw,
-            f"{owner}_account",
-            {
-                "description": f"Connector account for the {owner} surface",
-                "platform": owner,
-            },
-        ),
-    )
-
-    if variables:
-        pod_data["variables"] = variables
-        _write_json(pod_path, pod_data)
-    return variables
-
-
-def _strip_unresolved_placeholders(node: object) -> object:
-    """Drop dict entries whose value is still an unresolved ``${...}`` token so
-    a literal placeholder never reaches the API (e.g. an unsupplied account)."""
-    if isinstance(node, dict):
-        return {
-            key: _strip_unresolved_placeholders(value)
-            for key, value in node.items()
-            if not (isinstance(value, str) and _PLACEHOLDER_RE.fullmatch(value))
-        }
-    if isinstance(node, list):
-        return [_strip_unresolved_placeholders(item) for item in node]
-    return node
 
 
 def _build_variable_applier(
@@ -954,9 +432,6 @@ def fetch_files_index(
 
     walk(root, parent_key=None)
     return by_parent, all_items
-
-
-FILES_MANIFEST = ".files.json"
 
 
 def _export_pod_files(
@@ -1275,122 +750,6 @@ def export_pod_bundle(
     }
 
 
-def _resolve_file_refs(value: Any, *, base_dir: Path) -> Any:
-    if isinstance(value, list):
-        return [_resolve_file_refs(item, base_dir=base_dir) for item in value]
-    if not isinstance(value, dict):
-        return value
-    if set(value.keys()) == {RAW_FILE_REF_KEY}:
-        raw_path = base_dir / str(value[RAW_FILE_REF_KEY])
-        return raw_path.read_text(encoding="utf-8")
-    if set(value.keys()) == {JSON_FILE_REF_KEY}:
-        json_path = base_dir / str(value[JSON_FILE_REF_KEY])
-        return loads_jsonc(json_path.read_text(encoding="utf-8"))
-    return {key: _resolve_file_refs(item, base_dir=base_dir) for key, item in value.items()}
-
-
-def _resource_manifest_path(
-    resource_dir: Path,
-    resource_name: str,
-    *,
-    resource_type: str | None = None,
-) -> Path | None:
-    """Path to a resource directory's manifest JSON, or None if absent.
-
-    The canonical name is `<resource_name>.json`. Apps additionally accept
-    `lemma.app.json` as a fallback, since some app scaffolds write that name.
-    """
-    primary = resource_dir / f"{resource_name}.json"
-    if primary.exists():
-        return primary
-    if resource_type == "apps":
-        alias = resource_dir / APP_MANIFEST_ALIAS
-        if alias.exists():
-            return alias
-    return None
-
-
-def load_resource_payload(
-    resource_dir: Path,
-    resource_name: str,
-    *,
-    resource_type: str | None = None,
-) -> dict[str, Any]:
-    manifest_path = _resource_manifest_path(
-        resource_dir, resource_name, resource_type=resource_type
-    )
-    if manifest_path is None:
-        manifest_path = resource_dir / f"{resource_name}.json"
-    payload = _resolve_file_refs(
-        _read_json(manifest_path),
-        base_dir=resource_dir,
-    )
-    if "tool_sets" in payload and "toolsets" not in payload:
-        payload["toolsets"] = payload.pop("tool_sets")
-    return payload
-
-
-def _normalize_column_for_diff(column: dict[str, Any], *, primary_key: bool = False) -> dict[str, Any]:
-    type_name = (column.get("type_params") or {}).get("type") or column.get("type")
-    normalized = {
-        "name": column.get("name"),
-        "type": type_name,
-        "required": bool(column.get("required", False)),
-        "unique": bool(column.get("unique", False)),
-    }
-    if primary_key:
-        normalized["primary_key"] = True
-    return normalized
-
-
-def diff_table_columns(existing: dict[str, Any], desired: dict[str, Any]) -> TableDiff:
-    primary_key = str(existing.get("primary_key_column") or desired.get("primary_key_column") or "id")
-    existing_columns = {
-        str(column.get("name")): _normalize_column_for_diff(
-            column,
-            primary_key=str(column.get("name")) == primary_key,
-        )
-        for column in existing.get("columns") or []
-        if not _is_system_table_column(column)
-    }
-    desired_columns = {
-        str(column.get("name")): _normalize_column_for_diff(
-            column,
-            primary_key=str(column.get("name")) == primary_key,
-        )
-        for column in desired.get("columns") or []
-        if not _is_system_table_column(column)
-    }
-    desired_columns_raw = {
-        str(column.get("name")): column
-        for column in desired.get("columns") or []
-        if not _is_system_table_column(column)
-    }
-
-    to_add = [
-        desired_columns_raw[name]
-        for name in desired_columns_raw.keys() - existing_columns.keys()
-    ]
-    to_remove = sorted(
-        name
-        for name in existing_columns.keys() - desired_columns.keys()
-        if name and name != primary_key
-    )
-
-    incompatible: list[str] = []
-    for name in sorted(existing_columns.keys() & desired_columns.keys()):
-        existing_column = existing_columns[name]
-        desired_column = desired_columns[name]
-        if existing_column != desired_column:
-            incompatible.append(name)
-
-    return TableDiff(
-        to_add=sorted(to_add, key=lambda item: str(item.get("name", ""))),
-        to_remove=to_remove,
-        incompatible=incompatible,
-    )
-
-
 def _resource_dirs(root: Path, resource_type: str) -> list[Path]:
     base = root / resource_type
     if not base.exists():
@@ -1413,59 +772,6 @@ def _resource_dirs(root: Path, resource_type: str) -> list[Path]:
                 f"'{path.name}.json' manifest found (misnamed file?)"
             )
     return kept
-
-
-def _table_fk_dependencies(payload: dict[str, Any]) -> set[str]:
-    """Table names referenced by this table's foreign-key columns."""
-    deps: set[str] = set()
-    for column in payload.get("columns") or []:
-        if not isinstance(column, dict):
-            continue
-        fk = column.get("foreign_key")
-        if isinstance(fk, dict) and fk.get("references"):
-            referenced = str(fk["references"]).split(".", 1)[0].strip()
-            if referenced:
-                deps.add(referenced)
-    return deps
-
-
-def _order_table_dirs_by_dependency(table_dirs: list[Path]) -> list[Path]:
-    """Sort table directories so a table is imported after any table it
-    references via a foreign key. Falls back to alphabetical for ties and
-    leaves cycles in a stable order rather than failing."""
-    dir_by_name: dict[str, Path] = {path.name: path for path in table_dirs}
-    deps_by_name: dict[str, set[str]] = {}
-    for path in table_dirs:
-        try:
-            payload = load_resource_payload(path, path.name)
-        except Exception:
-            payload = {}
-        # Only intra-bundle dependencies matter for ordering.
-        deps_by_name[path.name] = _table_fk_dependencies(payload) & set(dir_by_name)
-
-    ordered: list[Path] = []
-    placed: set[str] = set()
-    remaining = [path.name for path in table_dirs]
-    while remaining:
-        ready = [
-            name for name in remaining if deps_by_name[name] <= placed
-        ]
-        if not ready:
-            # Cycle or self-reference: emit the rest in stable order.
-            ready = list(remaining)
-        for name in sorted(ready):
-            ordered.append(dir_by_name[name])
-            placed.add(name)
-        remaining = [name for name in remaining if name not in placed]
-    return ordered
-
-
-def _looks_like_single_resource_dir(path: Path, resource_type: str) -> bool:
-    if resource_type == "files":
-        return False
-    return _resource_manifest_path(
-        path, path.name, resource_type=resource_type
-    ) is not None
 
 
 @contextmanager
@@ -1519,72 +825,6 @@ def _build_existing_schedule_map(items: list[dict[str, Any]]) -> dict[str, dict[
 def _list_pod_visible_items(client: Lemma, pod_id: str) -> list[dict[str, Any]]:
     _, all_items = fetch_files_index(client, pod_id)
     return [item for item in all_items.values() if _is_pod_visible_file(item)]
-
-
-def _file_path_key(parts: list[str]) -> str:
-    return "/".join(parts)
-
-
-def _parse_function_headers(code: str) -> dict[str, str]:
-    headers: dict[str, str] = {}
-    for line in code.splitlines():
-        stripped = line.strip()
-        if not stripped:
-            continue
-        if not stripped.startswith("#"):
-            break
-        if ":" not in stripped:
-            continue
-        key, value = stripped[1:].split(":", 1)
-        headers[key.strip()] = value.strip()
-    return headers
-
-
-def _validate_function_payload(
-    resource_dir: Path,
-    resource_name: str,
-    payload: dict[str, Any],
-) -> list[BundleValidationIssue]:
-    issues: list[BundleValidationIssue] = []
-    code = payload.get("code")
-    if not isinstance(code, str) or not code.strip():
-        issues.append(BundleValidationIssue(path=str(resource_dir), message="Function code is required."))
-        return issues
-
-    try:
-        ast.parse(code, filename=str(resource_dir / "code.py"))
-    except SyntaxError as exc:
-        issues.append(
-            BundleValidationIssue(
-                path=str(resource_dir / "code.py"),
-                message=f"Python syntax error: {exc.msg} at line {exc.lineno}",
-            )
-        )
-        return issues
-
-    headers = _parse_function_headers(code)
-    required_headers = ["input_type_name", "output_type_name", "function_name"]
-    if payload.get("config_schema") is not None:
-        required_headers.append("config_type_name")
-
-    for header_name in required_headers:
-        actual_value = headers.get(header_name)
-        if not actual_value:
-            issues.append(
-                BundleValidationIssue(
-                    path=str(resource_dir / "code.py"),
-                    message=f"Missing required header #{header_name}.",
-                )
-            )
-    function_name_in_code = headers.get("function_name")
-    if function_name_in_code and function_name_in_code != resource_name:
-        issues.append(
-            BundleValidationIssue(
-                path=str(resource_dir / "code.py"),
-                message=f"Invalid #function_name header: expected '{resource_name}'.",
-            )
-        )
-    return issues
 
 
 def _build_import_plan(
@@ -1799,16 +1039,6 @@ def _build_import_plan(
     )
 
     return summary, issues
-
-
-def _bundle_folder_keys(files_root: Path) -> set[str]:
-    keys: set[str] = set()
-    if files_root.exists():
-        for folder_dir in (path for path in files_root.rglob("*") if path.is_dir()):
-            parts = list(folder_dir.relative_to(files_root).parts)
-            if parts:
-                keys.add(_file_path_key(parts))
-    return keys
 
 
 def _validate_grant_references(

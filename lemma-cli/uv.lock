@@ -1,5 +1,5 @@
 version = 1
-revision = 2
+revision = 3
 requires-python = ">=3.11"
 
 [[package]]
@@ -487,8 +487,13 @@ wheels = [
 ]
 
 [[package]]
+name = "lemma-pod-bundle"
+version = "0.1.0"
+source = { directory = "../lemma-pod-bundle" }
+
+[[package]]
 name = "lemma-sdk"
-version = "0.5.3"
+version = "0.5.4"
 source = { directory = "../lemma-python" }
 dependencies = [
     { name = "attrs" },
@@ -512,6 +517,7 @@ name = "lemma-terminal"
 source = { editable = "." }
 dependencies = [
     { name = "click" },
+    { name = "lemma-pod-bundle" },
     { name = "lemma-sdk" },
     { name = "rich" },
     { name = "textual" },
@@ -532,6 +538,7 @@ dev = [
 [package.metadata]
 requires-dist = [
     { name = "click", specifier = ">=8.3.0" },
+    { name = "lemma-pod-bundle", directory = "../lemma-pod-bundle" },
     { name = "lemma-sdk", directory = "../lemma-python" },
     { name = "rich", specifier = ">=13.9.4" },
     { name = "textual", specifier = ">=8.0" },

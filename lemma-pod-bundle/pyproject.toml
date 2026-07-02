@@ -1,0 +1,23 @@
+[project]
+name = "lemma-pod-bundle"
+version = "0.1.0"
+description = "Shared pod bundle format vocabulary for the Lemma CLI and backend"
+readme = "README.md"
+license = { text = "Apache-2.0" }
+authors = [{ name = "Lemma" }]
+requires-python = ">=3.11"
+# Stdlib only, on purpose: this package is the shared bundle-format vocabulary
+# consumed by both the CLI and the backend, so it must stay dependency-free.
+dependencies = []
+
+[build-system]
+requires = ["setuptools>=69.0"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools]
+package-dir = {"" = "."}
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["lemma_pod_bundle*"]
+exclude = ["build*", "dist*", "*.egg-info*", "tests*"]

@@ -36,6 +36,9 @@ dependencies = [
   # `uv tool install` upgrades an already-installed older lemma-sdk. The release
   # workflow rewrites this to the release version on every tagged build.
   "lemma-sdk>=0.5.4",
+  # Shared pod bundle format vocabulary (layout/jsonc/diff/portability/
+  # normalize/archive), extracted so the backend can consume the same format.
+  "lemma-pod-bundle>=0.1.0",
   "click>=8.3.0",
   "typer>=0.12.5",
   "rich>=13.9.4",
@@ -127,3 +130,4 @@ addopts = "-ra --import-mode=importlib --strict-markers"
 # This only affects local uv resolution — the published wheel pins lemma-sdk
 # from PyPI (see [project.dependencies]).
 lemma-sdk = { path = "../lemma-python" }
+lemma-pod-bundle = { path = "../lemma-pod-bundle" }
