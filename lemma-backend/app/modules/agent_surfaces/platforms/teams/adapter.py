@@ -316,10 +316,13 @@ class TeamsSurfaceAdapter(BaseSurfaceAdapter):
             f"{client.bf_service_url(event.reply_target.get('service_url'))}"
             f"/v3/conversations/{quote(str(conversation_id))}/activities"
         )
+        # The adaptive card carries the title/summary and the "Open file" button,
+        # so no inline ``text`` (which would dump the raw URL next to the card).
+        # ``summary`` is the Bot Framework notification field — shown in toasts,
+        # not as a message bubble — so the deep link is never rendered inline.
         body: dict[str, Any] = {
             "type": "message",
-            "text": render_plan.to_plain_text(),
-            "textFormat": "markdown",
+            "summary": render_plan.to_caption(),
             "attachments": [
                 {
                     "contentType": "application/vnd.microsoft.card.adaptive",
@@ -492,6 +495,41 @@ class TeamsSurfaceAdapter(BaseSurfaceAdapter):
             return {"activity_id": new_id} if new_id else progress_handle
         except Exception:
             return progress_handle
+
+    async def end_progress(
+        self,
+        *,
+        credentials: dict[str, Any],
+        event: ParsedInboundSurfaceEvent,
+        progress_handle: dict[str, Any] | None = None,
+    ) -> None:
+        """Delete the streamed progress ("thinking") activity at run end so it
+        does not linger next to the final answer (the final answer is delivered
+        separately). Mirrors Slack/Telegram end_progress. Best-effort."""
+        del credentials
+        activity_id = (progress_handle or {}).get("activity_id")
+        tenant_id = event.tenant_id
+        conversation_id = event.reply_target.get("conversation_id")
+        if not activity_id or not tenant_id or not conversation_id:
+            return
+        bot_token = await self._get_bot_token(tenant_id)
+        if not bot_token:
+            return
+        base = client.bf_service_url(event.reply_target.get("service_url"))
+        url = (
+            f"{base}/v3/conversations/{quote(str(conversation_id))}"
+            f"/activities/{quote(str(activity_id))}"
+        )
+        try:
+            async with aiohttp.ClientSession(
+                timeout=aiohttp.ClientTimeout(total=30)
+            ) as session:
+                async with session.delete(
+                    url, headers=client.auth_headers(bot_token)
+                ) as response:
+                    response.raise_for_status()
+        except Exception:
+            return
 
     async def download_attachment(
         self,

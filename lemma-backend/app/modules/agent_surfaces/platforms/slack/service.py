@@ -146,7 +146,9 @@ class SlackPlatformService:
         try:
             payload: dict[str, Any] = {
                 "channel": channel,
-                "text": render_plan.to_plain_text(),
+                # Notification-fallback text only (blocks carry the button). Use
+                # the caption so the raw URL isn't surfaced in the push preview.
+                "text": render_plan.to_caption(),
                 "blocks": _display_resource_blocks(render_plan),
             }
             thread_ts = event.reply_target.get("thread_ts")

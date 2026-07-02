@@ -39,6 +39,32 @@ def test_display_resource_renderer_builds_table_filter_url(monkeypatch):
     assert "stage" in plan.to_plain_text()
 
 
+def test_display_resource_renderer_file_url_is_bare_path(monkeypatch):
+    monkeypatch.setattr(settings, "frontend_url", "https://app.example.test")
+    pod_id = uuid4()
+    conversation_id = uuid4()
+
+    plan = build_display_resource_render_plan(
+        pod_id=pod_id,
+        conversation_id=conversation_id,
+        tool_call_id="tool-file-1",
+        request=DisplayResourceRequest.model_validate(
+            {"type": "FILE", "path": "/LEDFLEX_SKILLS/product-catalog-reference.md"}
+        ),
+    )
+
+    assert plan.primary_action is not None
+    url = plan.primary_action.url
+    # File links carry ONLY the file path: no folder (the viewer derives it) and
+    # no assistantConversationId (which would trigger the header-less viewer).
+    assert url == (
+        f"https://app.example.test/pod/{pod_id}/files"
+        "?file=%2FLEDFLEX_SKILLS%2Fproduct-catalog-reference.md"
+    )
+    assert "assistantConversationId" not in url
+    assert "folder=" not in url
+
+
 def test_display_resource_renderer_reads_browser_url_from_model_output():
     pod_id = uuid4()
 

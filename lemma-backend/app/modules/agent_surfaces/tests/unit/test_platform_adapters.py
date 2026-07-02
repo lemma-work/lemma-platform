@@ -377,6 +377,71 @@ async def test_teams_send_display_resource_posts_adaptive_card(monkeypatch):
     assert attachment["content"]["type"] == "AdaptiveCard"
     assert attachment["content"]["actions"][0]["type"] == "Action.OpenUrl"
     assert posted["json"]["replyToId"] == "msg-1"
+    # No inline text bubble dumping the raw URL — the card carries the button and
+    # ``summary`` is notification-only.
+    assert "text" not in posted["json"]
+    assert posted["json"]["summary"].startswith("Table: deals")
+    assert "http" not in posted["json"]["summary"]
+
+
+@pytest.mark.asyncio
+async def test_teams_end_progress_deletes_activity(monkeypatch):
+    deleted: dict = {}
+
+    class _Response:
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, exc_type, exc, tb):
+            return None
+
+        def raise_for_status(self):
+            return None
+
+    class _Session:
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, exc_type, exc, tb):
+            return None
+
+        def delete(self, url, *, headers):
+            deleted["url"] = url
+            deleted["headers"] = headers
+            return _Response()
+
+    adapter = TeamsSurfaceAdapter()
+    adapter._get_bot_token = AsyncMock(return_value="bot-token")
+    monkeypatch.setattr(
+        teams_adapter_module.aiohttp,
+        "ClientSession",
+        lambda *args, **kwargs: _Session(),
+    )
+    event = ParsedInboundSurfaceEvent(
+        platform="TEAMS",
+        conversation_type=ConversationType.EXTERNAL_DM,
+        tenant_id="tenant-1",
+        external_channel_id="a:dm-conversation",
+        external_thread_id="a:dm-conversation",
+        external_message_id="msg-1",
+        sender_external_user_id="29:user",
+        message_text="hello",
+        is_dm=True,
+        reply_target={
+            "service_url": "https://smba.example.test/teams",
+            "conversation_id": "a:dm-conversation",
+        },
+    )
+
+    await adapter.end_progress(
+        credentials={},
+        event=event,
+        progress_handle={"activity_id": "act-99"},
+    )
+
+    assert deleted["url"].endswith("/activities/act-99")
+    assert "conversations/" in deleted["url"]
+    assert deleted["headers"]["Authorization"] == "Bearer bot-token"
 
 
 @pytest.mark.asyncio
