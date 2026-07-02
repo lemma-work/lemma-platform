@@ -135,6 +135,7 @@ RUN printf '%s\n' \
     && chown appuser:appuser /workspace/agent-browser.json
 
 COPY lemma-python /sdk/lemma-python
+COPY lemma-pod-bundle /sdk/lemma-pod-bundle
 COPY lemma-cli /sdk/lemma-cli
 COPY lemma-typescript /sdk/lemma-typescript
 # lemma-skills is gitignored inside lemma-cli (vendored at build time), so copy
@@ -142,16 +143,17 @@ COPY lemma-typescript /sdk/lemma-typescript
 COPY lemma-skills /sdk/lemma-skills
 # Regular (non-editable) install: nothing edits the SDK/CLI inside a sandbox, so
 # editable mode only adds a per-import finder hook and, worse, skips bytecode
-# precompilation. lemma-cli pins lemma-sdk to the sibling path (non-editable),
-# so this lands in site-packages where UV_COMPILE_BYTECODE=1 precompiles every
-# module and `lemma` never recompiles from source on startup.
+# precompilation. lemma-cli pins lemma-sdk AND lemma-pod-bundle to sibling paths
+# (non-editable), so both must be present under /sdk and installed before
+# lemma-cli. This lands in site-packages where UV_COMPILE_BYTECODE=1 precompiles
+# every module and `lemma` never recompiles from source on startup.
 #
 # Keep the source tree at /sdk after install (read-only reference): functions and
 # agents read it to learn SDK response shapes, method signatures, and facades —
 # e.g. `cat /sdk/lemma-python/lemma_sdk/resources/data.py`. The TypeScript SDK
 # source ships too for app authors. node_modules/.venv/dist are excluded by
 # .dockerignore, so this adds source only (~25MB).
-RUN uv pip install --system /sdk/lemma-python /sdk/lemma-cli \
+RUN uv pip install --system /sdk/lemma-python /sdk/lemma-pod-bundle /sdk/lemma-cli \
     && chmod -R a+rX /sdk
 
 COPY agentbox/agentbox/__init__.py agentbox/agentbox/runtime_server.py agentbox/agentbox/function_executor.py ./agentbox/

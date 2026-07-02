@@ -11,6 +11,7 @@ from ..types import UNSET, Unset
 
 if TYPE_CHECKING:
     from ..models.agent_runtime_config import AgentRuntimeConfig
+    from ..models.pod_recipe import PodRecipe
 
 
 T = TypeVar("T", bound="PodConfig")
@@ -24,11 +25,13 @@ class PodConfig:
         default_profile_id (None | str | Unset):
         default_runtime (AgentRuntimeConfig | None | Unset):
         join_policy (PodJoinPolicy | Unset): Who may self-join a pod, ordered from closed to open.
+        recipes (list[PodRecipe] | Unset):
     """
 
     default_profile_id: None | str | Unset = UNSET
     default_runtime: AgentRuntimeConfig | None | Unset = UNSET
     join_policy: PodJoinPolicy | Unset = UNSET
+    recipes: list[PodRecipe] | Unset = UNSET
     additional_properties: dict[str, Any] = _attrs_field(init=False, factory=dict)
 
     def to_dict(self) -> dict[str, Any]:
@@ -52,6 +55,13 @@ class PodConfig:
         if not isinstance(self.join_policy, Unset):
             join_policy = self.join_policy.value
 
+        recipes: list[dict[str, Any]] | Unset = UNSET
+        if not isinstance(self.recipes, Unset):
+            recipes = []
+            for recipes_item_data in self.recipes:
+                recipes_item = recipes_item_data.to_dict()
+                recipes.append(recipes_item)
+
         field_dict: dict[str, Any] = {}
         field_dict.update(self.additional_properties)
         field_dict.update({})
@@ -61,12 +71,15 @@ class PodConfig:
             field_dict["default_runtime"] = default_runtime
         if join_policy is not UNSET:
             field_dict["join_policy"] = join_policy
+        if recipes is not UNSET:
+            field_dict["recipes"] = recipes
 
         return field_dict
 
     @classmethod
     def from_dict(cls: type[T], src_dict: Mapping[str, Any]) -> T:
         from ..models.agent_runtime_config import AgentRuntimeConfig
+        from ..models.pod_recipe import PodRecipe
 
         d = dict(src_dict)
 
@@ -105,10 +118,20 @@ class PodConfig:
         else:
             join_policy = PodJoinPolicy(_join_policy)
 
+        _recipes = d.pop("recipes", UNSET)
+        recipes: list[PodRecipe] | Unset = UNSET
+        if _recipes is not UNSET:
+            recipes = []
+            for recipes_item_data in _recipes:
+                recipes_item = PodRecipe.from_dict(recipes_item_data)
+
+                recipes.append(recipes_item)
+
         pod_config = cls(
             default_profile_id=default_profile_id,
             default_runtime=default_runtime,
             join_policy=join_policy,
+            recipes=recipes,
         )
 
         pod_config.additional_properties = d

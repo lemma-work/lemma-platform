@@ -18,6 +18,19 @@ class PodJoinPolicy(str, Enum):
     PUBLIC = "PUBLIC"  # any Lemma user may self-join (auto-added to the org)
 
 
+class PodRecipe(BaseModel):
+    """A record of a bundle installed into this pod (the durable trace of an
+    import; the ephemeral import job state is not kept). ``kind`` distinguishes an
+    uploaded bundle from a GitHub-sourced one; ``repo_url`` is set for GitHub."""
+
+    kind: str  # "upload" | "github"
+    name: str | None = None
+    repo_url: str | None = None
+    format_version: int | None = None
+    imported_at: datetime
+    imported_by: UUID
+
+
 class PodConfig(BaseModel):
     """Typed pod-level configuration."""
 
@@ -28,6 +41,9 @@ class PodConfig(BaseModel):
     default_profile_id: str | None = Field(default=None, min_length=1)
     default_runtime: AgentRuntimeConfig | None = None
     join_policy: PodJoinPolicy = PodJoinPolicy.INVITE_ONLY
+    # Bundles installed into this pod, appended on each successful import. Omitted
+    # from the serialized config when empty so legacy config blobs are unchanged.
+    recipes: list[PodRecipe] = Field(default_factory=list)
 
     @field_validator("default_profile_id")
     @classmethod
@@ -69,6 +85,8 @@ class PodConfig(BaseModel):
             data.pop("default_profile_id", None)
         if data.get("default_runtime") is None:
             data.pop("default_runtime", None)
+        if not data.get("recipes"):
+            data.pop("recipes", None)
         return data
 
 

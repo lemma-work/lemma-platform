@@ -21,6 +21,7 @@ from app.modules.icon.module import module as icon_module
 from app.modules.identity.module import module as identity_module
 from app.modules.connectors.module import module as connector_module
 from app.modules.pod.module import module as pod_module
+from app.modules.pod_bundle.module import module as pod_bundle_module
 from app.modules.schedule.module import module as schedule_module
 from app.modules.usage.module import module as usage_module
 from app.modules.workflow.module import module as workflow_module
@@ -32,6 +33,7 @@ from app.core.registry.contract import LemmaModule
 OSS_MODULES: tuple[LemmaModule, ...] = (
     identity_module,
     pod_module,
+    pod_bundle_module,
     datastore_module,
     schedule_module,
     connector_module,

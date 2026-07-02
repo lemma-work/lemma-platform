@@ -63,6 +63,11 @@ def sync_detailed(
 
      Webhook verification endpoint for platforms that require it.
 
+    WhatsApp surfaces bound to a connector account are verified against that
+    account's own ``verify_token`` (never the system-wide one) so each
+    customer's WhatsApp Business webhook config only has to match their own
+    credentials.
+
     Args:
         surface_id (UUID):
 
@@ -94,6 +99,11 @@ def sync(
 
      Webhook verification endpoint for platforms that require it.
 
+    WhatsApp surfaces bound to a connector account are verified against that
+    account's own ``verify_token`` (never the system-wide one) so each
+    customer's WhatsApp Business webhook config only has to match their own
+    credentials.
+
     Args:
         surface_id (UUID):
 
@@ -119,6 +129,11 @@ async def asyncio_detailed(
     """Verify surface webhook using a surface-level callback URL
 
      Webhook verification endpoint for platforms that require it.
+
+    WhatsApp surfaces bound to a connector account are verified against that
+    account's own ``verify_token`` (never the system-wide one) so each
+    customer's WhatsApp Business webhook config only has to match their own
+    credentials.
 
     Args:
         surface_id (UUID):
@@ -148,6 +163,11 @@ async def asyncio(
     """Verify surface webhook using a surface-level callback URL
 
      Webhook verification endpoint for platforms that require it.
+
+    WhatsApp surfaces bound to a connector account are verified against that
+    account's own ``verify_token`` (never the system-wide one) so each
+    customer's WhatsApp Business webhook config only has to match their own
+    credentials.
 
     Args:
         surface_id (UUID):

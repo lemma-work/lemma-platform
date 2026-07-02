@@ -1619,6 +1619,7 @@ dependencies = [
     { name = "jsonpath-ng" },
     { name = "jsonschema" },
     { name = "lemma-connectors" },
+    { name = "lemma-pod-bundle" },
     { name = "markdown" },
     { name = "obstore" },
     { name = "openinference-instrumentation-pydantic-ai" },
@@ -1693,6 +1694,7 @@ requires-dist = [
     { name = "jsonschema", specifier = ">=4.26.0" },
     { name = "keyring", marker = "extra == 'keychain'", specifier = ">=25.0.0" },
     { name = "lemma-connectors", editable = "lemma-connectors" },
+    { name = "lemma-pod-bundle", editable = "../lemma-pod-bundle" },
     { name = "markdown", specifier = ">=3.8.2" },
     { name = "obstore", specifier = ">=0.8.2" },
     { name = "openinference-instrumentation-pydantic-ai", specifier = ">=0.1.12" },
@@ -1760,6 +1762,11 @@ dev = [
     { name = "datamodel-code-generator", specifier = ">=0.56.1" },
     { name = "openapi-python-client", specifier = ">=0.28.3" },
 ]
+
+[[package]]
+name = "lemma-pod-bundle"
+version = "0.1.0"
+source = { editable = "../lemma-pod-bundle" }
 
 [[package]]
 name = "logfire-api"

@@ -6,7 +6,8 @@
  * Schema for OAuth credentials response.
  */
 export type OauthCredentialsResponseSchema = {
-    access_token: string;
+    access_token?: (string | null);
+    connection_id?: (string | null);
     expires_at?: (string | null);
 };
 
