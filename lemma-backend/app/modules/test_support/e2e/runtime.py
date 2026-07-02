@@ -51,6 +51,7 @@ def _read_root_env_value(key: str) -> str | None:
 _AGENTBOX_BUILD_INPUTS = (
     "agentbox",
     "lemma-python",
+    "lemma-pod-bundle",
     "lemma-cli",
     "lemma-typescript",
     "lemma-skills",
