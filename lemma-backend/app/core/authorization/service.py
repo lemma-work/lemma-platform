@@ -938,7 +938,24 @@ class Authorizer:
         permission_id: str,
         resource: ResourceRef,
     ) -> AuthorizationDecision:
-        if ctx.delegation_scope and permission_id not in ctx.delegation_scope:
+        """Grant-first evaluation for named delegated workloads.
+
+        A named delegated workload may perform exactly the actions for which
+        the workload itself holds an explicit resource grant — inside its own
+        pod and delegation scope. The invoking user's identity is consulted
+        only for owner checks (PERSONAL resources) and org-scoped resources
+        (workload grants are pod rows, so those fall back to the user's
+        capability); data-layer scoping (RLS, ``/me``) also resolves to the
+        invoking user. The default pod agent is the opposite: it mirrors the
+        invoking user's pod permissions and never reaches this method. Who can
+        *trigger* a workload is governed by ``agent.execute`` /
+        ``function.execute`` grants on the workload itself.
+        """
+        if ctx.delegation_scope and not (
+            equivalent_permission_ids(permission_id) & ctx.delegation_scope
+        ):
+            # Implication-expanded so a {function.execute} scope also covers
+            # the implied function.read a run needs.
             return AuthorizationDecision(
                 False,
                 "DELEGATION_SCOPE_VIOLATION",
@@ -946,15 +963,17 @@ class Authorizer:
                 resource,
             )
         if resource.pod_id is not None and resource.pod_id != ctx.pod_id:
-            return AuthorizationDecision(False, "DELEGATION_SCOPE_VIOLATION", permission_id, resource)
-        if not ctx.has_permission(permission_id):
-            return AuthorizationDecision(
-                False,
-                "INSUFFICIENT_PERMISSION",
-                permission_id,
-                resource,
-            )
+            return AuthorizationDecision(False, "POD_SCOPE_MISMATCH", permission_id, resource)
         if resource.organization_id is not None and resource.pod_id is None:
+            # Workload grants are pod rows; org-scoped resources fall back to
+            # the invoking user's role capability.
+            if not ctx.has_permission(permission_id):
+                return AuthorizationDecision(
+                    False,
+                    "INSUFFICIENT_PERMISSION",
+                    permission_id,
+                    resource,
+                )
             if resource.organization_id != ctx.organization_id:
                 return AuthorizationDecision(
                     False,
@@ -965,25 +984,15 @@ class Authorizer:
             return AuthorizationDecision(True, "ORG_VISIBLE", permission_id, resource)
 
         visibility = resource.visibility or ResourceVisibility.POD
-        if resource.pod_id is not None and resource.pod_id != ctx.pod_id:
-            return AuthorizationDecision(False, "POD_SCOPE_MISMATCH", permission_id, resource)
         if visibility == ResourceVisibility.PERSONAL and resource.owner_user_id != ctx.user_id:
+            # Privacy trumps grants: nothing grants a workload access to
+            # another user's PERSONAL resource.
             return AuthorizationDecision(
                 False,
                 "PERSONAL_RESOURCE_DENIED",
                 permission_id,
                 resource,
             )
-
-        if visibility == ResourceVisibility.RESTRICTED:
-            grant_decision = await self._resource_grant_decision(
-                ctx,
-                permission_id,
-                resource,
-            )
-            if grant_decision is not None:
-                return grant_decision
-            return AuthorizationDecision(False, "MISSING_RESOURCE_GRANT", permission_id, resource)
 
         workload_grant_ids = await self._matching_grant_ids_for_principal_sets(
             ctx,
@@ -1019,6 +1028,14 @@ class Authorizer:
             return AuthorizationDecision(
                 True,
                 "POD_VISIBLE",
+                permission_id,
+                resource,
+                matched_grant_ids=tuple(workload_grant_ids),
+            )
+        if visibility == ResourceVisibility.RESTRICTED:
+            return AuthorizationDecision(
+                True,
+                "WORKLOAD_RESOURCE_GRANT",
                 permission_id,
                 resource,
                 matched_grant_ids=tuple(workload_grant_ids),
@@ -1079,6 +1096,14 @@ class Authorizer:
         pod_id: UUID,
     ) -> frozenset[UUID]:
         principal_sets = ctx.grant_principal_sets or (ctx.principal_refs,)
+        if (
+            ctx.actor_type == ActorType.DELEGATED_USER_WORKLOAD
+            and ctx.workload_principal_refs
+        ):
+            # Grant-first: listings must match _authorize_delegated_workload,
+            # which consults the workload's grants alone. Also collapses the
+            # per-principal-group query loop to a single query here.
+            principal_sets = (ctx.workload_principal_refs,)
         if not principal_sets or any(not group for group in principal_sets):
             return frozenset()
         permission_ids = equivalent_permission_ids(permission_id)
