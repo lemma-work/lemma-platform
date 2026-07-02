@@ -197,7 +197,7 @@ def build_display_resource_url(
             tool_call_id=tool_call_id,
         )
     if request.type is DisplayResourceType.FILE:
-        return _file_resource_url(pod_base, request, conversation_id)
+        return _file_resource_url(pod_base, request)
     if request.type is DisplayResourceType.TABLE:
         if request.query:
             return _conversation_url(pod_base, conversation_id, tool_call_id)
@@ -310,21 +310,17 @@ def _display_resource_kind(request: DisplayResourceRequest) -> str:
     return request.type.value.lower().replace("_", " ").title()
 
 
-def _file_resource_url(
-    pod_base: str,
-    request: DisplayResourceRequest,
-    conversation_id: UUID | None,
-) -> str:
+def _file_resource_url(pod_base: str, request: DisplayResourceRequest) -> str:
+    # A bare ``?file=<path>`` deep link is intentional. The in-app document
+    # viewer opens the file straight from the path and derives the parent folder
+    # from it, so ``folder`` is redundant. ``assistantConversationId`` is
+    # deliberately omitted too: when present it switches the viewer into a
+    # header-less "assistant presentation" mode, whereas the plain path opens the
+    # full file viewer (with header + back nav) — the better reading experience.
     if not request.path:
-        return _append_conversation(f"{pod_base}/files", conversation_id)
+        return f"{pod_base}/files"
     file_path = _normalize_pod_file_path(request.path)
-    params: dict[str, str] = {"file": file_path}
-    parent = _parent_path(file_path)
-    if parent:
-        params["folder"] = parent
-    return _append_conversation(
-        f"{pod_base}/files?{urlencode(params)}", conversation_id
-    )
+    return f"{pod_base}/files?{urlencode({'file': file_path})}"
 
 
 def _table_resource_url(
@@ -416,14 +412,6 @@ def _normalize_pod_file_path(path: str) -> str:
     if with_leading.startswith("/pod/"):
         return with_leading[len("/pod") :] or "/"
     return with_leading
-
-
-def _parent_path(path: str) -> str | None:
-    normalized = path.rstrip("/")
-    parts = [part for part in normalized.split("/") if part]
-    if len(parts) <= 1:
-        return None
-    return "/" + "/".join(parts[:-1])
 
 
 def _compact(value: object, max_length: int) -> str:

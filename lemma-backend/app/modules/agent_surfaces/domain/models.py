@@ -81,6 +81,19 @@ class SurfaceDisplayRenderPlan(BaseModel):
             lines.append(f"{action.label}: {action.url}")
         return "\n".join(lines)
 
+    def to_caption(self) -> str:
+        """Title + summary + details, WITHOUT the action URL.
+
+        For surfaces where a card or button already carries the link (Teams
+        adaptive card, Slack blocks): the caption is used as the accompanying/
+        notification text so the raw URL is never dumped inline next to the card.
+        """
+        lines = [self.title]
+        if self.summary:
+            lines.append(self.summary)
+        lines.extend(line for line in self.detail_lines if line)
+        return "\n".join(lines)
+
 
 # Suffix marking a native "Other (type your own)" free-text input whose answer,
 # when filled, overrides the selected option for the question keyed by the prefix.
