@@ -335,6 +335,8 @@ def doctor_pod(
     targets that don't exist, and surfaces missing an agent or account."""
 
     def run(client, s):  # type: ignore[no-untyped-def]
+        from ...cli_app.pod_bundle import DESTRUCTIVE_PERMISSION_IDS
+
         pod_sdk = pod_client(client, s, pod)
         tables = {str(t.get("name")) for t in to_plain(list_items(pod_sdk.tables.list(limit=1000)))}
         agent_items = to_plain(list_items(pod_sdk.agents.list(limit=1000)))
@@ -346,19 +348,34 @@ def doctor_pod(
         errors: list[str] = []
         warnings: list[str] = []
 
-        def check_grants(kind: str, name: str) -> None:
+        def check_grants(kind: str, name: str) -> list[dict]:
             try:
                 perms = to_plain(getattr(pod_sdk, kind).permissions(name))
             except Exception as exc:  # noqa: BLE001 — surface, don't hide, a failed check
                 warnings.append(f"could not read permissions for {kind[:-1]} '{name}': {exc}")
-                return
-            for grant in (perms.get("grants") or []):
+                return []
+            grants = [g for g in (perms.get("grants") or []) if isinstance(g, dict)]
+            for grant in grants:
                 rtype = grant.get("resource_type")
                 rname = str(grant.get("resource_name") or "")
                 if rtype == "datastore_table" and rname not in tables:
                     errors.append(f"{kind[:-1]} '{name}' is granted on table '{rname}' which does not exist.")
+                elif rtype == "agent" and rname not in agents:
+                    errors.append(f"{kind[:-1]} '{name}' is granted on agent '{rname}' which does not exist.")
+                elif rtype == "function" and rname not in functions:
+                    errors.append(f"{kind[:-1]} '{name}' is granted on function '{rname}' which does not exist.")
                 elif rtype == "folder":
                     warnings.append(f"{kind[:-1]} '{name}' grants folder '{rname}' — verify it exists / will be created.")
+                destructive = sorted(
+                    p for p in (grant.get("permission_ids") or []) if p in DESTRUCTIVE_PERMISSION_IDS
+                )
+                if destructive:
+                    warnings.append(
+                        f"{kind[:-1]} '{name}' holds destructive permission(s) "
+                        f"{', '.join(destructive)} on {rtype} '{rname}' — standing "
+                        "authority, no approval prompt at runtime."
+                    )
+            return grants
 
         def agent_has_runtime(item: dict, name: str) -> bool:
             # Prefer the list payload; only fetch the detail if it omits runtime.
@@ -373,9 +390,17 @@ def doctor_pod(
 
         for item in agent_items:
             name = str(item.get("name"))
-            check_grants("agents", name)
+            grants = check_grants("agents", name)
             if name and not agent_has_runtime(item, name):
                 warnings.append(f"agent '{name}' has no pinned runtime — relies on the backend default (system:lemma).")
+            toolsets = {str(t).upper() for t in (item.get("toolsets") or []) if isinstance(t, str)}
+            if "SUBAGENTS" in toolsets and not any(
+                g.get("resource_type") == "agent" for g in grants
+            ):
+                warnings.append(
+                    f"agent '{name}' has the SUBAGENTS toolset but no agent grants — "
+                    "self-spawn only; grant `agent:<other>:execute` to fan out."
+                )
         for name in functions:
             check_grants("functions", name)
 
@@ -677,6 +702,13 @@ def _emit_import_result(result: dict[str, Any]) -> None:
         path = error.get("path") if isinstance(error, dict) else ""
         message = error.get("message") if isinstance(error, dict) else str(error)
         console.print(f"[red]error[/red] {path}: {message}")
+
+    # Non-fatal findings (connector grants are env-specific, destructive grants
+    # are standing authority, SUBAGENTS without agent grants, ...). During a
+    # real import these were already streamed; a dry run surfaces them here.
+    if dry_run:
+        for advisory in result.get("advisories") or []:
+            console.print(f"[yellow]advisory[/yellow] {advisory}")
 
     if result.get("ok", True):
         console.print("[green]OK[/green]" if dry_run else "[green]Imported[/green]")

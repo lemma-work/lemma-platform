@@ -91,6 +91,26 @@ RESOURCE_DIR_ALIASES = {
 }
 SYSTEM_TABLE_COLUMNS = frozenset({"created_at", "updated_at", "user_id"})
 
+# Mirrors the backend's DESTRUCTIVE_ACTIONS (app/core/authorization/delegation.py):
+# workloads may only perform these with an explicit grant (standing authority)
+# or a per-conversation user approval. A bundle granting one is legitimate but
+# worth surfacing at import time.
+DESTRUCTIVE_PERMISSION_IDS = frozenset(
+    {
+        "pod.delete",
+        "pod.role.manage",
+        "pod.member.manage",
+        "datastore.table.delete",
+        "folder.delete",
+        "function.delete",
+        "agent.delete",
+        "workflow.delete",
+        "app.delete",
+        "schedule.delete",
+        "connector_account.manage",
+    }
+)
+
 
 @dataclass
 class TableDiff:
@@ -1593,7 +1613,7 @@ def _build_import_plan(
     pod_id: str,
     source_dir: Path,
     upsert: bool,
-) -> tuple[dict[str, list[str]], list[BundleValidationIssue]]:
+) -> tuple[dict[str, list[str]], list[BundleValidationIssue], list[str]]:
     summary: dict[str, list[str]] = {key: [] for key in RESOURCE_DIRS}
     issues: list[BundleValidationIssue] = []
     pod_sdk = client.pod(pod_id)
@@ -1798,7 +1818,7 @@ def _build_import_plan(
         | _bundle_folder_keys(files_root),
     )
 
-    return summary, issues
+    return summary, issues, _collect_grant_advisories(source_dir)
 
 
 def _bundle_folder_keys(files_root: Path) -> set[str]:
@@ -1863,6 +1883,76 @@ def _validate_grant_references(
                             ),
                         )
                     )
+
+
+def _collect_grant_advisories(source_dir: Path) -> list[str]:
+    """Non-fatal findings about the bundle's grants — printed, never blocking.
+
+    The hard-fail pass (`_validate_grant_references`) catches dangling
+    references; this pass surfaces things that are valid but commonly cause
+    silent runtime 403s or surprises after import.
+    """
+    advisories: list[str] = []
+    for kind in ("agents", "functions"):
+        for resource_dir in _resource_dirs(source_dir, kind):
+            name = resource_dir.name
+            try:
+                payload, permissions = _split_resource_permissions_payload(
+                    load_resource_payload(resource_dir, name, resource_type=kind)
+                )
+            except Exception:
+                continue  # payload errors are already reported as issues
+            grants = [
+                grant
+                for grant in (permissions or {}).get("grants", [])
+                if isinstance(grant, dict)
+            ]
+            connector_targets = sorted(
+                {
+                    str(grant.get("resource_name") or "?")
+                    for grant in grants
+                    if str(grant.get("resource_type") or "")
+                    in ("connector", "connector_account")
+                }
+            )
+            if connector_targets:
+                advisories.append(
+                    f"{kind[:-1]} '{name}' has connector grant(s) on "
+                    f"{', '.join(connector_targets)} — connector accounts are "
+                    "environment-specific; verify a connected account exists in "
+                    "the target pod after import."
+                )
+            destructive = sorted(
+                {
+                    permission_id
+                    for grant in grants
+                    for permission_id in grant.get("permission_ids", [])
+                    if permission_id in DESTRUCTIVE_PERMISSION_IDS
+                }
+            )
+            if destructive:
+                advisories.append(
+                    f"{kind[:-1]} '{name}' is granted destructive permission(s) "
+                    f"{', '.join(destructive)} — standing authority, it will NOT "
+                    "prompt for user approval at runtime."
+                )
+            if kind == "agents":
+                toolsets = {
+                    str(entry).upper()
+                    for entry in (payload.get("toolsets") or [])
+                    if isinstance(entry, str)
+                }
+                has_agent_grants = any(
+                    str(grant.get("resource_type") or "") == "agent"
+                    for grant in grants
+                )
+                if "SUBAGENTS" in toolsets and not has_agent_grants:
+                    advisories.append(
+                        f"agent '{name}' has the SUBAGENTS toolset but no agent "
+                        "grants — it can only spawn copies of itself. Grant "
+                        "`agent:<other>:execute` to let it dispatch other agents."
+                    )
+    return advisories
 
 
 def _build_existing_folder_map(items: list[dict[str, Any]]) -> dict[str, dict[str, Any]]:
@@ -2231,7 +2321,7 @@ def import_pod_bundle(
     with_data = with_data or bool(manifest_contents.get("with_data"))
     with_files = with_files or bool(manifest_contents.get("with_files"))
 
-    summary, issues = _build_import_plan(
+    summary, issues, advisories = _build_import_plan(
         client,
         pod_id=pod_id,
         source_dir=source_dir,
@@ -2245,10 +2335,13 @@ def import_pod_bundle(
             "source_dir": str(source_dir),
             "summary": summary,
             "errors": [{"path": issue.path, "message": issue.message} for issue in issues],
+            "advisories": advisories,
         }
     if issues:
         rendered = "\n".join(f"- {issue.path}: {issue.message}" for issue in issues)
         raise ValueError(f"Bundle validation failed:\n{rendered}")
+    for advisory in advisories:
+        console.print(f"[yellow]advisory[/yellow] {advisory}")
 
     # By default an import leaves the target pod's own name/description/icon
     # alone — importing resources into an existing pod should never silently
@@ -2577,7 +2670,18 @@ def import_pod_bundle(
     )
 
     for kind, resource_name, permissions_payload in pending_permissions:
-        _progress_start(kind, resource_name, "replacing permissions")
+        grants = [
+            grant
+            for grant in (permissions_payload or {}).get("grants", [])
+            if isinstance(grant, dict)
+        ]
+        targets = ", ".join(
+            f"{grant.get('resource_type')}:{grant.get('resource_name')}"
+            for grant in grants
+        )
+        detail = f"replacing permissions ({len(grants)} grant(s)"
+        detail += f": {targets})" if targets else ")"
+        _progress_start(kind, resource_name, detail)
         if kind == "function":
             pod_sdk.functions.replace_permissions(
                 resource_name,
@@ -2596,12 +2700,13 @@ def import_pod_bundle(
                     context=f"agent {resource_name} permissions",
                 ),
             )
-        summary[f"{kind}s"].append(f"permissions:{resource_name}")
-        _progress_done(kind, resource_name, "replaced permissions")
+        summary[f"{kind}s"].append(f"permissions:{resource_name}:{len(grants)}")
+        _progress_done(kind, resource_name, f"replaced permissions ({len(grants)} grant(s))")
 
     return {
         "ok": True,
         "pod_id": pod_id,
         "source_dir": str(source_dir),
         "summary": summary,
+        "advisories": advisories,
     }

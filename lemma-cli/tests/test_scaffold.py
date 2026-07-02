@@ -213,8 +213,17 @@ def test_parse_grant_spec_explicit_app_and_raw_perm():
     g = parse_grant_spec("app:gmail:use")
     assert g["resource_type"] == "connector"
     assert g["permission_ids"] == ["connector.use"]
-    raw = parse_grant_spec("table:tickets:datastore.record.delete")
-    assert raw["permission_ids"] == ["datastore.record.delete"]
+    raw = parse_grant_spec("table:tickets:datastore.record.write")
+    assert raw["permission_ids"] == ["datastore.record.write"]
+
+
+def test_parse_grant_spec_table_delete_is_structural():
+    # Regression: the delete preset used to emit datastore.record.delete, a
+    # permission id that does not exist in the backend registry (grants with it
+    # were rejected server-side). Record deletion rides on datastore.record.write;
+    # `delete` means the structural (destructive) table delete.
+    g = parse_grant_spec("tickets:delete")
+    assert g["permission_ids"] == ["datastore.table.delete"]
 
 
 def test_parse_grant_spec_function_and_agent_tools():
