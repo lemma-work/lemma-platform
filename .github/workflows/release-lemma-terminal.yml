@@ -62,6 +62,33 @@ jobs:
           )
           if pp_count != 1:
               raise SystemExit("Could not find the lemma-sdk pin in lemma-cli/pyproject.toml")
+
+          # The published CLI wheel resolves lemma-pod-bundle from PyPI (the
+          # [tool.uv.sources] path dep only applies in-repo). The bundle is
+          # released in LOCKSTEP: it gets the release version too, so a source
+          # change can never ship silently unpublished — an independently
+          # hand-bumped version combined with --skip-existing would skip the
+          # upload whenever someone changed bundle code without remembering
+          # the bump, while the CLI floor kept pointing at the stale wheel.
+          bundle_pyproject = pathlib.Path("lemma-pod-bundle/pyproject.toml")
+          bundle_text, pb_ver_count = re.subn(
+              r'(?m)^version = "[^"]+"$',
+              f'version = "{version}"',
+              bundle_pyproject.read_text(),
+              count=1,
+          )
+          if pb_ver_count != 1:
+              raise SystemExit("Could not find version in lemma-pod-bundle/pyproject.toml")
+          bundle_pyproject.write_text(bundle_text)
+
+          pp_text, pb_count = re.subn(
+              r'(?m)^(\s*)"lemma-pod-bundle>=[^"]+",',
+              rf'\g<1>"lemma-pod-bundle>={version}",',
+              pp_text,
+              count=1,
+          )
+          if pb_count != 1:
+              raise SystemExit("Could not find the lemma-pod-bundle pin in lemma-cli/pyproject.toml")
           pyproject.write_text(pp_text)
 
       - name: Vendor agent skills into the package
@@ -76,7 +103,26 @@ jobs:
       - name: Install build tools
         run: python -m pip install --upgrade build twine
 
-      - name: Build package
+      # lemma-pod-bundle must be on PyPI before the CLI wheel that pins it goes
+      # live, so it is built and published first. It is versioned in lockstep
+      # with the release tag (stamped above); --skip-existing only guards
+      # re-running the same release, never a real change.
+      - name: Build pod-bundle package
+        working-directory: lemma-pod-bundle
+        run: python -m build
+
+      - name: Check pod-bundle distribution
+        working-directory: lemma-pod-bundle
+        run: python -m twine check dist/*
+
+      - name: Publish pod-bundle package
+        working-directory: lemma-pod-bundle
+        env:
+          TWINE_USERNAME: __token__
+          TWINE_PASSWORD: ${{ secrets.PYPI_API_TOKEN }}
+        run: python -m twine upload --skip-existing dist/*
+
+      - name: Build CLI package
         working-directory: lemma-cli
         run: python -m build
 
@@ -89,11 +135,11 @@ jobs:
           echo "SKILL.md files in wheel: $count"
           test "$count" -ge 1 || { echo 'No skills bundled in the wheel — aborting release.'; exit 1; }
 
-      - name: Check distribution
+      - name: Check CLI distribution
         working-directory: lemma-cli
         run: python -m twine check dist/*
 
-      - name: Publish package
+      - name: Publish CLI package
         working-directory: lemma-cli
         env:
           TWINE_USERNAME: __token__

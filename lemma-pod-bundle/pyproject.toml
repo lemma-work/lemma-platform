@@ -3,9 +3,30 @@ name = "lemma-pod-bundle"
 version = "0.1.3"
 description = "Shared pod-bundle logic — requirements/capabilities extraction, table-column diff, and JSONC parsing — used by both lemma-cli and lemma-backend so the import experience has one source of truth."
 readme = "README.md"
-requires-python = ">=3.11"
 license = "Apache-2.0"
+license-files = ["LICENSE"]
+authors = [{ name = "Lemma" }]
+requires-python = ">=3.11"
+keywords = ["lemma", "pods", "bundle", "import", "export"]
+classifiers = [
+  "Development Status :: 4 - Beta",
+  "Intended Audience :: Developers",
+  "Operating System :: OS Independent",
+  "Programming Language :: Python :: 3",
+  "Programming Language :: Python :: 3.11",
+  "Programming Language :: Python :: 3.12",
+  "Programming Language :: Python :: 3.13",
+  "Topic :: Software Development :: Libraries",
+]
+# Stdlib-only on purpose: this package is imported by both lemma-cli and
+# lemma-backend, so it must not drag either consumer's dependency tree.
 dependencies = []
+
+[project.urls]
+Homepage = "https://github.com/lemma-work/lemma-platform"
+Repository = "https://github.com/lemma-work/lemma-platform"
+Documentation = "https://github.com/lemma-work/lemma-platform/tree/main/lemma-pod-bundle"
+Issues = "https://github.com/lemma-work/lemma-platform/issues"
 
 [build-system]
 requires = ["hatchling"]

@@ -111,6 +111,7 @@ jobs:
         # lemma-cli e2e tests need postgres/redis/supertokens containers, and
         # lemma-python integration tests need a live Lemma API + LEMMA_TOKEN.
         run: |
+          pytest lemma-pod-bundle/tests
           pytest lemma-cli/tests -m "not e2e"
           pytest lemma-python/tests -m "not integration"
 
