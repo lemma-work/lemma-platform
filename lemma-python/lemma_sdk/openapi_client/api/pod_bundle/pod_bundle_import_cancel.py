@@ -1,5 +1,5 @@
 from http import HTTPStatus
-from typing import Any
+from typing import Any, cast
 from urllib.parse import quote
 from uuid import UUID
 
@@ -12,13 +12,15 @@ from ...types import Response
 
 
 def _get_kwargs(
-    surface_id: UUID,
+    pod_id: UUID,
+    import_id: UUID,
 ) -> dict[str, Any]:
 
     _kwargs: dict[str, Any] = {
-        "method": "get",
-        "url": "/surfaces/{surface_id}/webhook".format(
-            surface_id=quote(str(surface_id), safe=""),
+        "method": "delete",
+        "url": "/pods/{pod_id}/bundle/imports/{import_id}".format(
+            pod_id=quote(str(pod_id), safe=""),
+            import_id=quote(str(import_id), safe=""),
         ),
     }
 
@@ -28,9 +30,9 @@ def _get_kwargs(
 def _parse_response(
     *, client: AuthenticatedClient | Client, response: httpx.Response
 ) -> Any | ErrorResponse | None:
-    if response.status_code == 200:
-        response_200 = response.json()
-        return response_200
+    if response.status_code == 204:
+        response_204 = cast(Any, None)
+        return response_204
 
     if response.status_code == 422:
         response_422 = ErrorResponse.from_dict(response.json())
@@ -55,21 +57,18 @@ def _build_response(
 
 
 def sync_detailed(
-    surface_id: UUID,
+    pod_id: UUID,
+    import_id: UUID,
     *,
     client: AuthenticatedClient | Client,
 ) -> Response[Any | ErrorResponse]:
-    """Verify surface webhook using a surface-level callback URL
+    """Cancel Pod Import
 
-     Webhook verification endpoint for platforms that require it.
-
-    WhatsApp surfaces bound to a connector account are verified against that
-    account's own ``verify_token`` (never the system-wide one) so each
-    customer's WhatsApp Business webhook config only has to match their own
-    credentials.
+     Abort a running import and delete its state + staged archive.
 
     Args:
-        surface_id (UUID):
+        pod_id (UUID):
+        import_id (UUID):
 
     Raises:
         errors.UnexpectedStatus: If the server returns an undocumented status code and Client.raise_on_unexpected_status is True.
@@ -80,7 +79,8 @@ def sync_detailed(
     """
 
     kwargs = _get_kwargs(
-        surface_id=surface_id,
+        pod_id=pod_id,
+        import_id=import_id,
     )
 
     response = client.get_httpx_client().request(
@@ -91,21 +91,18 @@ def sync_detailed(
 
 
 def sync(
-    surface_id: UUID,
+    pod_id: UUID,
+    import_id: UUID,
     *,
     client: AuthenticatedClient | Client,
 ) -> Any | ErrorResponse | None:
-    """Verify surface webhook using a surface-level callback URL
+    """Cancel Pod Import
 
-     Webhook verification endpoint for platforms that require it.
-
-    WhatsApp surfaces bound to a connector account are verified against that
-    account's own ``verify_token`` (never the system-wide one) so each
-    customer's WhatsApp Business webhook config only has to match their own
-    credentials.
+     Abort a running import and delete its state + staged archive.
 
     Args:
-        surface_id (UUID):
+        pod_id (UUID):
+        import_id (UUID):
 
     Raises:
         errors.UnexpectedStatus: If the server returns an undocumented status code and Client.raise_on_unexpected_status is True.
@@ -116,27 +113,25 @@ def sync(
     """
 
     return sync_detailed(
-        surface_id=surface_id,
+        pod_id=pod_id,
+        import_id=import_id,
         client=client,
     ).parsed
 
 
 async def asyncio_detailed(
-    surface_id: UUID,
+    pod_id: UUID,
+    import_id: UUID,
     *,
     client: AuthenticatedClient | Client,
 ) -> Response[Any | ErrorResponse]:
-    """Verify surface webhook using a surface-level callback URL
+    """Cancel Pod Import
 
-     Webhook verification endpoint for platforms that require it.
-
-    WhatsApp surfaces bound to a connector account are verified against that
-    account's own ``verify_token`` (never the system-wide one) so each
-    customer's WhatsApp Business webhook config only has to match their own
-    credentials.
+     Abort a running import and delete its state + staged archive.
 
     Args:
-        surface_id (UUID):
+        pod_id (UUID):
+        import_id (UUID):
 
     Raises:
         errors.UnexpectedStatus: If the server returns an undocumented status code and Client.raise_on_unexpected_status is True.
@@ -147,7 +142,8 @@ async def asyncio_detailed(
     """
 
     kwargs = _get_kwargs(
-        surface_id=surface_id,
+        pod_id=pod_id,
+        import_id=import_id,
     )
 
     response = await client.get_async_httpx_client().request(**kwargs)
@@ -156,21 +152,18 @@ async def asyncio_detailed(
 
 
 async def asyncio(
-    surface_id: UUID,
+    pod_id: UUID,
+    import_id: UUID,
     *,
     client: AuthenticatedClient | Client,
 ) -> Any | ErrorResponse | None:
-    """Verify surface webhook using a surface-level callback URL
+    """Cancel Pod Import
 
-     Webhook verification endpoint for platforms that require it.
-
-    WhatsApp surfaces bound to a connector account are verified against that
-    account's own ``verify_token`` (never the system-wide one) so each
-    customer's WhatsApp Business webhook config only has to match their own
-    credentials.
+     Abort a running import and delete its state + staged archive.
 
     Args:
-        surface_id (UUID):
+        pod_id (UUID):
+        import_id (UUID):
 
     Raises:
         errors.UnexpectedStatus: If the server returns an undocumented status code and Client.raise_on_unexpected_status is True.
@@ -182,7 +175,8 @@ async def asyncio(
 
     return (
         await asyncio_detailed(
-            surface_id=surface_id,
+            pod_id=pod_id,
+            import_id=import_id,
             client=client,
         )
     ).parsed

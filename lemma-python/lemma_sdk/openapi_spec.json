@@ -1427,7 +1427,8 @@
           "SPEECH",
           "POD",
           "SUBAGENTS",
-          "TODO"
+          "TODO",
+          "VIEW_IMAGE"
         ],
         "title": "AgentToolset",
         "type": "string"
@@ -1835,6 +1836,27 @@
           "updated_at"
         ],
         "title": "AppTriggerSummaryResponseSchema",
+        "type": "object"
+      },
+      "ApplyImportRequest": {
+        "description": "Body for applying a planned import.",
+        "properties": {
+          "confirm_destructive": {
+            "default": false,
+            "description": "Required to proceed when the plan has destructive steps.",
+            "title": "Confirm Destructive",
+            "type": "boolean"
+          },
+          "variables": {
+            "additionalProperties": {
+              "type": "string"
+            },
+            "description": "Resolved values for the plan's ${var} placeholders.",
+            "title": "Variables",
+            "type": "object"
+          }
+        },
+        "title": "ApplyImportRequest",
         "type": "object"
       },
       "ApprovalDecisionResponse": {
@@ -4494,6 +4516,116 @@
         "title": "ExecuteFunctionRequest",
         "type": "object"
       },
+      "ExportProgressResponse": {
+        "properties": {
+          "done": {
+            "default": 0,
+            "title": "Done",
+            "type": "integer"
+          },
+          "total": {
+            "default": 0,
+            "title": "Total",
+            "type": "integer"
+          }
+        },
+        "title": "ExportProgressResponse",
+        "type": "object"
+      },
+      "ExportStartRequest": {
+        "description": "Body for starting a pod export.",
+        "properties": {
+          "include": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Optional list of resource types to include (e.g. ['tables', 'agents']). Omit to export every supported resource type.",
+            "title": "Include"
+          },
+          "with_data": {
+            "default": true,
+            "description": "Include table row data (data.csv per table) in the bundle.",
+            "title": "With Data",
+            "type": "boolean"
+          }
+        },
+        "title": "ExportStartRequest",
+        "type": "object"
+      },
+      "ExportStatus": {
+        "enum": [
+          "QUEUED",
+          "EXPORTING",
+          "READY",
+          "FAILED"
+        ],
+        "title": "ExportStatus",
+        "type": "string"
+      },
+      "ExportStatusResponse": {
+        "description": "Status of a pod export job (pure Redis read).",
+        "properties": {
+          "bundle_filename": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Bundle Filename"
+          },
+          "download_url": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Relative download path; present once the export is READY.",
+            "title": "Download Url"
+          },
+          "error": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Error"
+          },
+          "export_id": {
+            "format": "uuid",
+            "title": "Export Id",
+            "type": "string"
+          },
+          "progress": {
+            "$ref": "#/components/schemas/ExportProgressResponse"
+          },
+          "status": {
+            "$ref": "#/components/schemas/ExportStatus"
+          }
+        },
+        "required": [
+          "export_id",
+          "status"
+        ],
+        "title": "ExportStatusResponse",
+        "type": "object"
+      },
       "ExpressionInputBinding": {
         "description": "Resolve a value from the run context using a JMESPath expression.",
         "properties": {
@@ -6585,6 +6717,61 @@
         "title": "FunctionType",
         "type": "string"
       },
+      "GithubImportRequest": {
+        "description": "Body for importing a pod from a public GitHub repo.",
+        "properties": {
+          "owner": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Repo owner (alternative to repo_url).",
+            "title": "Owner"
+          },
+          "ref": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Branch, tag, or commit sha (optional).",
+            "title": "Ref"
+          },
+          "repo": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Repo name (alternative to repo_url).",
+            "title": "Repo"
+          },
+          "repo_url": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Public repo URL, e.g. https://github.com/owner/repo.",
+            "title": "Repo Url"
+          }
+        },
+        "title": "GithubImportRequest",
+        "type": "object"
+      },
       "HarnessKind": {
         "description": "Runtime framework used to execute an agent.",
         "enum": [
@@ -6634,6 +6821,129 @@
           "content_type"
         ],
         "title": "IconUploadResponse",
+        "type": "object"
+      },
+      "ImportPlanResponse": {
+        "properties": {
+          "bundle_name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Bundle Name"
+          },
+          "format_version": {
+            "title": "Format Version",
+            "type": "integer"
+          },
+          "has_destructive_steps": {
+            "default": false,
+            "title": "Has Destructive Steps",
+            "type": "boolean"
+          },
+          "steps": {
+            "items": {
+              "$ref": "#/components/schemas/PlanStepResponse"
+            },
+            "title": "Steps",
+            "type": "array"
+          },
+          "variables": {
+            "items": {
+              "$ref": "#/components/schemas/VariableSpecResponse"
+            },
+            "title": "Variables",
+            "type": "array"
+          },
+          "warnings": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Warnings",
+            "type": "array"
+          }
+        },
+        "required": [
+          "format_version"
+        ],
+        "title": "ImportPlanResponse",
+        "type": "object"
+      },
+      "ImportStatus": {
+        "enum": [
+          "QUEUED",
+          "FETCHING",
+          "PLANNING",
+          "AWAITING_CONFIRMATION",
+          "APPLYING",
+          "COMPLETED",
+          "FAILED",
+          "CANCELLED"
+        ],
+        "title": "ImportStatus",
+        "type": "string"
+      },
+      "ImportStatusResponse": {
+        "description": "Status of a pod import job (pure Redis read).",
+        "properties": {
+          "error": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Error"
+          },
+          "events_url": {
+            "title": "Events Url",
+            "type": "string"
+          },
+          "import_id": {
+            "format": "uuid",
+            "title": "Import Id",
+            "type": "string"
+          },
+          "plan": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ImportPlanResponse"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "pod_id": {
+            "format": "uuid",
+            "title": "Pod Id",
+            "type": "string"
+          },
+          "progress": {
+            "$ref": "#/components/schemas/ExportProgressResponse"
+          },
+          "source_kind": {
+            "title": "Source Kind",
+            "type": "string"
+          },
+          "status": {
+            "$ref": "#/components/schemas/ImportStatus"
+          }
+        },
+        "required": [
+          "import_id",
+          "pod_id",
+          "status",
+          "source_kind",
+          "events_url"
+        ],
+        "title": "ImportStatusResponse",
         "type": "object"
       },
       "InstalledAppSummary": {
@@ -7184,8 +7494,26 @@
         "description": "Schema for OAuth credentials response.",
         "properties": {
           "access_token": {
-            "title": "Access Token",
-            "type": "string"
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Access Token"
+          },
+          "connection_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Connection Id"
           },
           "expires_at": {
             "anyOf": [
@@ -7200,9 +7528,6 @@
             "title": "Expires At"
           }
         },
-        "required": [
-          "access_token"
-        ],
         "title": "OauthCredentialsResponseSchema",
         "type": "object"
       },
@@ -7972,6 +8297,60 @@
         "title": "OrganizationUpdateRequest",
         "type": "object"
       },
+      "PlanStepResponse": {
+        "properties": {
+          "action": {
+            "title": "Action",
+            "type": "string"
+          },
+          "destructive": {
+            "default": false,
+            "title": "Destructive",
+            "type": "boolean"
+          },
+          "detail": {
+            "additionalProperties": true,
+            "title": "Detail",
+            "type": "object"
+          },
+          "error": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Error"
+          },
+          "index": {
+            "title": "Index",
+            "type": "integer"
+          },
+          "kind": {
+            "title": "Kind",
+            "type": "string"
+          },
+          "name": {
+            "title": "Name",
+            "type": "string"
+          },
+          "status": {
+            "default": "PENDING",
+            "title": "Status",
+            "type": "string"
+          }
+        },
+        "required": [
+          "index",
+          "kind",
+          "name",
+          "action"
+        ],
+        "title": "PlanStepResponse",
+        "type": "object"
+      },
       "PodConfig": {
         "description": "Typed pod-level configuration.",
         "properties": {
@@ -8000,6 +8379,13 @@
           "join_policy": {
             "$ref": "#/components/schemas/PodJoinPolicy",
             "default": "INVITE_ONLY"
+          },
+          "recipes": {
+            "items": {
+              "$ref": "#/components/schemas/PodRecipe"
+            },
+            "title": "Recipes",
+            "type": "array"
           }
         },
         "title": "PodConfig",
@@ -8571,6 +8957,65 @@
         "title": "PodPermissionResponse",
         "type": "object"
       },
+      "PodRecipe": {
+        "description": "A record of a bundle installed into this pod (the durable trace of an\nimport; the ephemeral import job state is not kept). ``kind`` distinguishes an\nuploaded bundle from a GitHub-sourced one; ``repo_url`` is set for GitHub.",
+        "properties": {
+          "format_version": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Format Version"
+          },
+          "imported_at": {
+            "format": "date-time",
+            "title": "Imported At",
+            "type": "string"
+          },
+          "imported_by": {
+            "format": "uuid",
+            "title": "Imported By",
+            "type": "string"
+          },
+          "kind": {
+            "title": "Kind",
+            "type": "string"
+          },
+          "name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Name"
+          },
+          "repo_url": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Repo Url"
+          }
+        },
+        "required": [
+          "kind",
+          "imported_at",
+          "imported_by"
+        ],
+        "title": "PodRecipe",
+        "type": "object"
+      },
       "PodResponse": {
         "description": "Pod response schema.",
         "properties": {
@@ -8920,6 +9365,118 @@
           }
         },
         "title": "PodUpdateRequest",
+        "type": "object"
+      },
+      "PublishStartRequest": {
+        "description": "Body for publishing a pod to GitHub.",
+        "properties": {
+          "account_id": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "GitHub connector account to publish as (optional).",
+            "title": "Account Id"
+          },
+          "ai_readme": {
+            "default": false,
+            "description": "Polish the generated README with the system model.",
+            "title": "Ai Readme",
+            "type": "boolean"
+          },
+          "private": {
+            "default": false,
+            "description": "Create the repo as private.",
+            "title": "Private",
+            "type": "boolean"
+          },
+          "repo_name": {
+            "description": "Name for the new GitHub repo.",
+            "minLength": 1,
+            "title": "Repo Name",
+            "type": "string"
+          }
+        },
+        "required": [
+          "repo_name"
+        ],
+        "title": "PublishStartRequest",
+        "type": "object"
+      },
+      "PublishStatus": {
+        "enum": [
+          "QUEUED",
+          "EXPORTING",
+          "PUBLISHING",
+          "COMPLETED",
+          "FAILED"
+        ],
+        "title": "PublishStatus",
+        "type": "string"
+      },
+      "PublishStatusResponse": {
+        "description": "Status of a pod publish job (pure Redis read).",
+        "properties": {
+          "error": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Error"
+          },
+          "events_url": {
+            "title": "Events Url",
+            "type": "string"
+          },
+          "pod_id": {
+            "format": "uuid",
+            "title": "Pod Id",
+            "type": "string"
+          },
+          "progress": {
+            "$ref": "#/components/schemas/ExportProgressResponse"
+          },
+          "publish_id": {
+            "format": "uuid",
+            "title": "Publish Id",
+            "type": "string"
+          },
+          "repo_name": {
+            "title": "Repo Name",
+            "type": "string"
+          },
+          "repo_url": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Repo Url"
+          },
+          "status": {
+            "$ref": "#/components/schemas/PublishStatus"
+          }
+        },
+        "required": [
+          "publish_id",
+          "pod_id",
+          "status",
+          "repo_name",
+          "events_url"
+        ],
+        "title": "PublishStatusResponse",
         "type": "object"
       },
       "RecordAccessMode": {
@@ -11867,6 +12424,51 @@
         "title": "UserResponse",
         "type": "object"
       },
+      "VariableSpecResponse": {
+        "properties": {
+          "default": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Default"
+          },
+          "description": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Description"
+          },
+          "kind": {
+            "title": "Kind",
+            "type": "string"
+          },
+          "name": {
+            "title": "Name",
+            "type": "string"
+          },
+          "required": {
+            "default": false,
+            "title": "Required",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "name",
+          "kind"
+        ],
+        "title": "VariableSpecResponse",
+        "type": "object"
+      },
       "VerifyTokenResponse": {
         "properties": {
           "email": {
@@ -13233,6 +13835,20 @@
         "title": "WorkspaceMeSession",
         "type": "object"
       },
+      "start": {
+        "properties": {
+          "data": {
+            "contentMediaType": "application/octet-stream",
+            "title": "Data",
+            "type": "string"
+          }
+        },
+        "required": [
+          "data"
+        ],
+        "title": "Body_pod.bundle.import.start",
+        "type": "object"
+      },
       "update": {
         "properties": {
           "data": {
@@ -13307,7 +13923,7 @@
   "info": {
     "description": "Authentication API with JWT, user management, and OAuth support",
     "title": "Lemma Backend",
-    "version": "3.2.0"
+    "version": "3.3.0"
   },
   "openapi": "3.1.0",
   "paths": {
@@ -17437,6 +18053,800 @@
           "resource": "app.source.archive",
           "result": "entity",
           "verb": "get"
+        }
+      }
+    },
+    "/pods/{pod_id}/bundle/exports": {
+      "post": {
+        "description": "Enqueue a pod export. Returns 202 with an export_id; poll the status endpoint until READY, then download the bundle archive.",
+        "operationId": "pod.bundle.export.start",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "pod_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Pod Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ExportStartRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "202": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ExportStatusResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Start Pod Export",
+        "tags": [
+          "Pod Bundle"
+        ],
+        "x-lemma": {
+          "invalidates": [
+            "pod.bundle.export"
+          ],
+          "kind": "mutation",
+          "paginates": false,
+          "resource": "pod.bundle.export",
+          "result": "entity",
+          "verb": "start"
+        }
+      }
+    },
+    "/pods/{pod_id}/bundle/exports/{export_id}": {
+      "get": {
+        "description": "Poll the status of a pod export (Redis-only; 410 when expired).",
+        "operationId": "pod.bundle.export.get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "pod_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Pod Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "export_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Export Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ExportStatusResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Get Pod Export Status",
+        "tags": [
+          "Pod Bundle"
+        ],
+        "x-lemma": {
+          "kind": "query",
+          "paginates": false,
+          "resource": "pod.bundle.export",
+          "result": "entity",
+          "verb": "get"
+        }
+      }
+    },
+    "/pods/{pod_id}/bundle/exports/{export_id}/download": {
+      "get": {
+        "description": "Stream the exported bundle archive (application/zip). Available once the export is READY; 410 if the staged archive was swept.",
+        "operationId": "pod.bundle.export.download",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "pod_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Pod Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "export_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Export Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Download Pod Export Bundle",
+        "tags": [
+          "Pod Bundle"
+        ],
+        "x-lemma": {
+          "kind": "query",
+          "paginates": false,
+          "resource": "pod.bundle.export",
+          "result": "entity",
+          "verb": "download"
+        }
+      }
+    },
+    "/pods/{pod_id}/bundle/imports": {
+      "post": {
+        "description": "Upload a pod bundle (.zip) and enqueue planning. Returns 202 with an import_id; poll the status endpoint until AWAITING_CONFIRMATION, review the plan, then apply.",
+        "operationId": "pod.bundle.import.start",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "pod_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Pod Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "multipart/form-data": {
+              "schema": {
+                "$ref": "#/components/schemas/start"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "202": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ImportStatusResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Start Pod Import",
+        "tags": [
+          "Pod Bundle"
+        ],
+        "x-lemma": {
+          "invalidates": [
+            "pod.bundle.import"
+          ],
+          "kind": "mutation",
+          "paginates": false,
+          "resource": "pod.bundle.import",
+          "result": "entity",
+          "verb": "start"
+        }
+      }
+    },
+    "/pods/{pod_id}/bundle/imports/github": {
+      "post": {
+        "description": "Import a pod bundle from a public GitHub repository. Returns 202 with an import_id; the bundle is fetched, planned, and awaits confirmation.",
+        "operationId": "pod.bundle.import.github",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "pod_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Pod Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/GithubImportRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "202": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ImportStatusResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Import Pod From GitHub",
+        "tags": [
+          "Pod Bundle"
+        ],
+        "x-lemma": {
+          "invalidates": [
+            "pod.bundle.import"
+          ],
+          "kind": "mutation",
+          "paginates": false,
+          "resource": "pod.bundle.import",
+          "result": "entity",
+          "verb": "github"
+        }
+      }
+    },
+    "/pods/{pod_id}/bundle/imports/{import_id}": {
+      "delete": {
+        "description": "Abort a running import and delete its state + staged archive.",
+        "operationId": "pod.bundle.import.cancel",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "pod_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Pod Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "import_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Import Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Cancel Pod Import",
+        "tags": [
+          "Pod Bundle"
+        ],
+        "x-lemma": {
+          "invalidates": [
+            "pod.bundle.import"
+          ],
+          "kind": "mutation",
+          "paginates": false,
+          "resource": "pod.bundle.import",
+          "result": "entity",
+          "verb": "cancel"
+        }
+      },
+      "get": {
+        "description": "Poll the status + plan of a pod import (Redis-only; 410 when expired).",
+        "operationId": "pod.bundle.import.get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "pod_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Pod Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "import_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Import Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ImportStatusResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Get Pod Import Status",
+        "tags": [
+          "Pod Bundle"
+        ],
+        "x-lemma": {
+          "kind": "query",
+          "paginates": false,
+          "resource": "pod.bundle.import",
+          "result": "entity",
+          "verb": "get"
+        }
+      }
+    },
+    "/pods/{pod_id}/bundle/imports/{import_id}/apply": {
+      "post": {
+        "description": "Apply a planned import. Requires confirm_destructive when the plan drops or alters columns, and resolved values for any required variables. Returns 202; poll the status endpoint for per-step progress.",
+        "operationId": "pod.bundle.import.apply",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "pod_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Pod Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "import_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Import Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ApplyImportRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "202": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ImportStatusResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Apply Pod Import",
+        "tags": [
+          "Pod Bundle"
+        ],
+        "x-lemma": {
+          "invalidates": [
+            "pod.bundle.import"
+          ],
+          "kind": "mutation",
+          "paginates": false,
+          "resource": "pod.bundle.import",
+          "result": "entity",
+          "verb": "apply"
+        }
+      }
+    },
+    "/pods/{pod_id}/bundle/imports/{import_id}/events": {
+      "get": {
+        "description": "Server-Sent Events for an import. The first frame is a full state snapshot; subsequent frames are live status/step/progress updates. The stream closes when the import reaches a terminal state or expires.",
+        "operationId": "pod.bundle.import.events",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "pod_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Pod Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "import_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Import Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Stream Pod Import Progress",
+        "tags": [
+          "Pod Bundle"
+        ],
+        "x-lemma": {
+          "kind": "query",
+          "paginates": false,
+          "resource": "pod.bundle.import",
+          "result": "entity",
+          "verb": "events"
+        }
+      }
+    },
+    "/pods/{pod_id}/bundle/imports/{import_id}/replan": {
+      "post": {
+        "description": "Re-run planning against the still-staged bundle (410 if swept).",
+        "operationId": "pod.bundle.import.replan",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "pod_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Pod Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "import_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Import Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "202": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ImportStatusResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Re-plan Pod Import",
+        "tags": [
+          "Pod Bundle"
+        ],
+        "x-lemma": {
+          "invalidates": [
+            "pod.bundle.import"
+          ],
+          "kind": "mutation",
+          "paginates": false,
+          "resource": "pod.bundle.import",
+          "result": "entity",
+          "verb": "replan"
+        }
+      }
+    },
+    "/pods/{pod_id}/bundle/publishes": {
+      "post": {
+        "description": "Publish the pod as a bundle to a new GitHub repository. Returns 202 with a publish_id; poll the status endpoint for the repo URL.",
+        "operationId": "pod.bundle.publish.start",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "pod_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Pod Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PublishStartRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "202": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PublishStatusResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Publish Pod To GitHub",
+        "tags": [
+          "Pod Bundle"
+        ],
+        "x-lemma": {
+          "invalidates": [
+            "pod.bundle.publish"
+          ],
+          "kind": "mutation",
+          "paginates": false,
+          "resource": "pod.bundle.publish",
+          "result": "entity",
+          "verb": "start"
+        }
+      }
+    },
+    "/pods/{pod_id}/bundle/publishes/{publish_id}": {
+      "get": {
+        "description": "Poll the status of a pod publish (Redis-only; 410 when expired).",
+        "operationId": "pod.bundle.publish.get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "pod_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Pod Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "publish_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Publish Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PublishStatusResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Get Pod Publish Status",
+        "tags": [
+          "Pod Bundle"
+        ],
+        "x-lemma": {
+          "kind": "query",
+          "paginates": false,
+          "resource": "pod.bundle.publish",
+          "result": "entity",
+          "verb": "get"
+        }
+      }
+    },
+    "/pods/{pod_id}/bundle/publishes/{publish_id}/events": {
+      "get": {
+        "description": "Server-Sent Events for a publish (snapshot then live frames).",
+        "operationId": "pod.bundle.publish.events",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "pod_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Pod Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "publish_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Publish Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Stream Pod Publish Progress",
+        "tags": [
+          "Pod Bundle"
+        ],
+        "x-lemma": {
+          "kind": "query",
+          "paginates": false,
+          "resource": "pod.bundle.publish",
+          "result": "entity",
+          "verb": "events"
         }
       }
     },
@@ -24687,7 +26097,7 @@
     },
     "/surfaces/{surface_id}/webhook": {
       "get": {
-        "description": "Webhook verification endpoint for platforms that require it.",
+        "description": "Webhook verification endpoint for platforms that require it.\n\nWhatsApp surfaces bound to a connector account are verified against that\naccount's own ``verify_token`` (never the system-wide one) so each\ncustomer's WhatsApp Business webhook config only has to match their own\ncredentials.",
         "operationId": "surface.webhook.verify_surface",
         "parameters": [
           {

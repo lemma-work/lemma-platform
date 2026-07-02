@@ -65,6 +65,8 @@ _NAME_TO_MODULE = {
     'AppTriggerResponseSchemaPayloadExampleType0': 'app_trigger_response_schema_payload_example_type_0',
     'AppTriggerResponseSchemaPayloadSchemaType0': 'app_trigger_response_schema_payload_schema_type_0',
     'AppTriggerSummaryResponseSchema': 'app_trigger_summary_response_schema',
+    'ApplyImportRequest': 'apply_import_request',
+    'ApplyImportRequestVariables': 'apply_import_request_variables',
     'ApprovalDecisionResponse': 'approval_decision_response',
     'AuthConfigCreateSchema': 'auth_config_create_schema',
     'AuthConfigCreateSchemaCredentialConfigType0': 'auth_config_create_schema_credential_config_type_0',
@@ -80,6 +82,7 @@ _NAME_TO_MODULE = {
     'BodyFileUpdate': 'body_file_update',
     'BodyFileUpload': 'body_file_upload',
     'BodyIconUpload': 'body_icon_upload',
+    'BodyPodBundleImportStart': 'body_pod_bundle_import_start',
     'BulkCreateRecordsRequest': 'bulk_create_records_request',
     'BulkCreateRecordsRequestRecordsItem': 'bulk_create_records_request_records_item',
     'BulkDeleteRecordsRequest': 'bulk_delete_records_request',
@@ -163,6 +166,10 @@ _NAME_TO_MODULE = {
     'EventWorkflowStartOutput': 'event_workflow_start_output',
     'ExecuteFunctionRequest': 'execute_function_request',
     'ExecuteFunctionRequestInputData': 'execute_function_request_input_data',
+    'ExportProgressResponse': 'export_progress_response',
+    'ExportStartRequest': 'export_start_request',
+    'ExportStatus': 'export_status',
+    'ExportStatusResponse': 'export_status_response',
     'ExpressionInputBinding': 'expression_input_binding',
     'FeedbackCategory': 'feedback_category',
     'FileChildSchema': 'file_child_schema',
@@ -222,8 +229,12 @@ _NAME_TO_MODULE = {
     'FunctionSummaryResponse': 'function_summary_response',
     'FunctionSummaryResponseConfigType0': 'function_summary_response_config_type_0',
     'FunctionType': 'function_type',
+    'GithubImportRequest': 'github_import_request',
     'HarnessKind': 'harness_kind',
     'IconUploadResponse': 'icon_upload_response',
+    'ImportPlanResponse': 'import_plan_response',
+    'ImportStatus': 'import_status',
+    'ImportStatusResponse': 'import_status_response',
     'InstalledAppSummary': 'installed_app_summary',
     'LemmaProviderCapabilityResponseSchema': 'lemma_provider_capability_response_schema',
     'LemmaProviderCapabilityResponseSchemaAuthConfigSchemaType0': 'lemma_provider_capability_response_schema_auth_config_schema_type_0',
@@ -268,6 +279,8 @@ _NAME_TO_MODULE = {
     'OrganizationRole': 'organization_role',
     'OrganizationSlugAvailabilityResponse': 'organization_slug_availability_response',
     'OrganizationUpdateRequest': 'organization_update_request',
+    'PlanStepResponse': 'plan_step_response',
+    'PlanStepResponseDetail': 'plan_step_response_detail',
     'PodConfig': 'pod_config',
     'PodCreateRequest': 'pod_create_request',
     'PodEffectivePermissionsResponse': 'pod_effective_permissions_response',
@@ -284,6 +297,7 @@ _NAME_TO_MODULE = {
     'PodMemberUpdateRoleRequest': 'pod_member_update_role_request',
     'PodPermissionCatalogResponse': 'pod_permission_catalog_response',
     'PodPermissionResponse': 'pod_permission_response',
+    'PodRecipe': 'pod_recipe',
     'PodResponse': 'pod_response',
     'PodRole': 'pod_role',
     'PodRoleCreateRequest': 'pod_role_create_request',
@@ -294,6 +308,9 @@ _NAME_TO_MODULE = {
     'PodRoleResourcePermissionResponse': 'pod_role_resource_permission_response',
     'PodRoleResponse': 'pod_role_response',
     'PodUpdateRequest': 'pod_update_request',
+    'PublishStartRequest': 'publish_start_request',
+    'PublishStatus': 'publish_status',
+    'PublishStatusResponse': 'publish_status_response',
     'RecordAccessMode': 'record_access_mode',
     'RecordCreateResponseRecordCreate': 'record_create_response_record_create',
     'RecordGetResponseRecordGet': 'record_get_response_record_get',
@@ -392,6 +409,7 @@ _NAME_TO_MODULE = {
     'UserApprovalListResponse': 'user_approval_list_response',
     'UserProfileRequest': 'user_profile_request',
     'UserResponse': 'user_response',
+    'VariableSpecResponse': 'variable_spec_response',
     'VerifyTokenResponse': 'verify_token_response',
     'WaitUntilNode': 'wait_until_node',
     'WaitUntilNodeConfig': 'wait_until_node_config',
@@ -485,6 +503,8 @@ if TYPE_CHECKING:
     from .app_trigger_response_schema_payload_example_type_0 import AppTriggerResponseSchemaPayloadExampleType0
     from .app_trigger_response_schema_payload_schema_type_0 import AppTriggerResponseSchemaPayloadSchemaType0
     from .app_trigger_summary_response_schema import AppTriggerSummaryResponseSchema
+    from .apply_import_request import ApplyImportRequest
+    from .apply_import_request_variables import ApplyImportRequestVariables
     from .approval_decision_response import ApprovalDecisionResponse
     from .auth_config_create_schema import AuthConfigCreateSchema
     from .auth_config_create_schema_credential_config_type_0 import AuthConfigCreateSchemaCredentialConfigType0
@@ -500,6 +520,7 @@ if TYPE_CHECKING:
     from .body_file_update import BodyFileUpdate
     from .body_file_upload import BodyFileUpload
     from .body_icon_upload import BodyIconUpload
+    from .body_pod_bundle_import_start import BodyPodBundleImportStart
     from .bulk_create_records_request import BulkCreateRecordsRequest
     from .bulk_create_records_request_records_item import BulkCreateRecordsRequestRecordsItem
     from .bulk_delete_records_request import BulkDeleteRecordsRequest
@@ -583,6 +604,10 @@ if TYPE_CHECKING:
     from .event_workflow_start_output import EventWorkflowStartOutput
     from .execute_function_request import ExecuteFunctionRequest
     from .execute_function_request_input_data import ExecuteFunctionRequestInputData
+    from .export_progress_response import ExportProgressResponse
+    from .export_start_request import ExportStartRequest
+    from .export_status import ExportStatus
+    from .export_status_response import ExportStatusResponse
     from .expression_input_binding import ExpressionInputBinding
     from .feedback_category import FeedbackCategory
     from .file_child_schema import FileChildSchema
@@ -642,8 +667,12 @@ if TYPE_CHECKING:
     from .function_summary_response import FunctionSummaryResponse
     from .function_summary_response_config_type_0 import FunctionSummaryResponseConfigType0
     from .function_type import FunctionType
+    from .github_import_request import GithubImportRequest
     from .harness_kind import HarnessKind
     from .icon_upload_response import IconUploadResponse
+    from .import_plan_response import ImportPlanResponse
+    from .import_status import ImportStatus
+    from .import_status_response import ImportStatusResponse
     from .installed_app_summary import InstalledAppSummary
     from .lemma_provider_capability_response_schema import LemmaProviderCapabilityResponseSchema
     from .lemma_provider_capability_response_schema_auth_config_schema_type_0 import LemmaProviderCapabilityResponseSchemaAuthConfigSchemaType0
@@ -688,6 +717,8 @@ if TYPE_CHECKING:
     from .organization_role import OrganizationRole
     from .organization_slug_availability_response import OrganizationSlugAvailabilityResponse
     from .organization_update_request import OrganizationUpdateRequest
+    from .plan_step_response import PlanStepResponse
+    from .plan_step_response_detail import PlanStepResponseDetail
     from .pod_config import PodConfig
     from .pod_create_request import PodCreateRequest
     from .pod_effective_permissions_response import PodEffectivePermissionsResponse
@@ -704,6 +735,7 @@ if TYPE_CHECKING:
     from .pod_member_update_role_request import PodMemberUpdateRoleRequest
     from .pod_permission_catalog_response import PodPermissionCatalogResponse
     from .pod_permission_response import PodPermissionResponse
+    from .pod_recipe import PodRecipe
     from .pod_response import PodResponse
     from .pod_role import PodRole
     from .pod_role_create_request import PodRoleCreateRequest
@@ -714,6 +746,9 @@ if TYPE_CHECKING:
     from .pod_role_resource_permission_response import PodRoleResourcePermissionResponse
     from .pod_role_response import PodRoleResponse
     from .pod_update_request import PodUpdateRequest
+    from .publish_start_request import PublishStartRequest
+    from .publish_status import PublishStatus
+    from .publish_status_response import PublishStatusResponse
     from .record_access_mode import RecordAccessMode
     from .record_create_response_record_create import RecordCreateResponseRecordCreate
     from .record_get_response_record_get import RecordGetResponseRecordGet
@@ -812,6 +847,7 @@ if TYPE_CHECKING:
     from .user_approval_list_response import UserApprovalListResponse
     from .user_profile_request import UserProfileRequest
     from .user_response import UserResponse
+    from .variable_spec_response import VariableSpecResponse
     from .verify_token_response import VerifyTokenResponse
     from .wait_until_node import WaitUntilNode
     from .wait_until_node_config import WaitUntilNodeConfig
@@ -918,6 +954,8 @@ __all__ = [
     'AppTriggerResponseSchemaPayloadExampleType0',
     'AppTriggerResponseSchemaPayloadSchemaType0',
     'AppTriggerSummaryResponseSchema',
+    'ApplyImportRequest',
+    'ApplyImportRequestVariables',
     'ApprovalDecisionResponse',
     'AuthConfigCreateSchema',
     'AuthConfigCreateSchemaCredentialConfigType0',
@@ -933,6 +971,7 @@ __all__ = [
     'BodyFileUpdate',
     'BodyFileUpload',
     'BodyIconUpload',
+    'BodyPodBundleImportStart',
     'BulkCreateRecordsRequest',
     'BulkCreateRecordsRequestRecordsItem',
     'BulkDeleteRecordsRequest',
@@ -1016,6 +1055,10 @@ __all__ = [
     'EventWorkflowStartOutput',
     'ExecuteFunctionRequest',
     'ExecuteFunctionRequestInputData',
+    'ExportProgressResponse',
+    'ExportStartRequest',
+    'ExportStatus',
+    'ExportStatusResponse',
     'ExpressionInputBinding',
     'FeedbackCategory',
     'FileChildSchema',
@@ -1075,8 +1118,12 @@ __all__ = [
     'FunctionSummaryResponse',
     'FunctionSummaryResponseConfigType0',
     'FunctionType',
+    'GithubImportRequest',
     'HarnessKind',
     'IconUploadResponse',
+    'ImportPlanResponse',
+    'ImportStatus',
+    'ImportStatusResponse',
     'InstalledAppSummary',
     'LemmaProviderCapabilityResponseSchema',
     'LemmaProviderCapabilityResponseSchemaAuthConfigSchemaType0',
@@ -1121,6 +1168,8 @@ __all__ = [
     'OrganizationRole',
     'OrganizationSlugAvailabilityResponse',
     'OrganizationUpdateRequest',
+    'PlanStepResponse',
+    'PlanStepResponseDetail',
     'PodConfig',
     'PodCreateRequest',
     'PodEffectivePermissionsResponse',
@@ -1137,6 +1186,7 @@ __all__ = [
     'PodMemberUpdateRoleRequest',
     'PodPermissionCatalogResponse',
     'PodPermissionResponse',
+    'PodRecipe',
     'PodResponse',
     'PodRole',
     'PodRoleCreateRequest',
@@ -1147,6 +1197,9 @@ __all__ = [
     'PodRoleResourcePermissionResponse',
     'PodRoleResponse',
     'PodUpdateRequest',
+    'PublishStartRequest',
+    'PublishStatus',
+    'PublishStatusResponse',
     'RecordAccessMode',
     'RecordCreateResponseRecordCreate',
     'RecordGetResponseRecordGet',
@@ -1245,6 +1298,7 @@ __all__ = [
     'UserApprovalListResponse',
     'UserProfileRequest',
     'UserResponse',
+    'VariableSpecResponse',
     'VerifyTokenResponse',
     'WaitUntilNode',
     'WaitUntilNodeConfig',

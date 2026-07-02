@@ -7,30 +7,39 @@ import httpx
 
 from ... import errors
 from ...client import AuthenticatedClient, Client
+from ...models.body_pod_bundle_import_start import BodyPodBundleImportStart
 from ...models.error_response import ErrorResponse
+from ...models.import_status_response import ImportStatusResponse
 from ...types import Response
 
 
 def _get_kwargs(
-    surface_id: UUID,
+    pod_id: UUID,
+    *,
+    body: BodyPodBundleImportStart,
 ) -> dict[str, Any]:
+    headers: dict[str, Any] = {}
 
     _kwargs: dict[str, Any] = {
-        "method": "get",
-        "url": "/surfaces/{surface_id}/webhook".format(
-            surface_id=quote(str(surface_id), safe=""),
+        "method": "post",
+        "url": "/pods/{pod_id}/bundle/imports".format(
+            pod_id=quote(str(pod_id), safe=""),
         ),
     }
 
+    _kwargs["files"] = body.to_multipart()
+
+    _kwargs["headers"] = headers
     return _kwargs
 
 
 def _parse_response(
     *, client: AuthenticatedClient | Client, response: httpx.Response
-) -> Any | ErrorResponse | None:
-    if response.status_code == 200:
-        response_200 = response.json()
-        return response_200
+) -> ErrorResponse | ImportStatusResponse | None:
+    if response.status_code == 202:
+        response_202 = ImportStatusResponse.from_dict(response.json())
+
+        return response_202
 
     if response.status_code == 422:
         response_422 = ErrorResponse.from_dict(response.json())
@@ -45,7 +54,7 @@ def _parse_response(
 
 def _build_response(
     *, client: AuthenticatedClient | Client, response: httpx.Response
-) -> Response[Any | ErrorResponse]:
+) -> Response[ErrorResponse | ImportStatusResponse]:
     return Response(
         status_code=HTTPStatus(response.status_code),
         content=response.content,
@@ -55,32 +64,31 @@ def _build_response(
 
 
 def sync_detailed(
-    surface_id: UUID,
+    pod_id: UUID,
     *,
     client: AuthenticatedClient | Client,
-) -> Response[Any | ErrorResponse]:
-    """Verify surface webhook using a surface-level callback URL
+    body: BodyPodBundleImportStart,
+) -> Response[ErrorResponse | ImportStatusResponse]:
+    """Start Pod Import
 
-     Webhook verification endpoint for platforms that require it.
-
-    WhatsApp surfaces bound to a connector account are verified against that
-    account's own ``verify_token`` (never the system-wide one) so each
-    customer's WhatsApp Business webhook config only has to match their own
-    credentials.
+     Upload a pod bundle (.zip) and enqueue planning. Returns 202 with an import_id; poll the status
+    endpoint until AWAITING_CONFIRMATION, review the plan, then apply.
 
     Args:
-        surface_id (UUID):
+        pod_id (UUID):
+        body (BodyPodBundleImportStart):
 
     Raises:
         errors.UnexpectedStatus: If the server returns an undocumented status code and Client.raise_on_unexpected_status is True.
         httpx.TimeoutException: If the request takes longer than Client.timeout.
 
     Returns:
-        Response[Any | ErrorResponse]
+        Response[ErrorResponse | ImportStatusResponse]
     """
 
     kwargs = _get_kwargs(
-        surface_id=surface_id,
+        pod_id=pod_id,
+        body=body,
     )
 
     response = client.get_httpx_client().request(
@@ -91,63 +99,61 @@ def sync_detailed(
 
 
 def sync(
-    surface_id: UUID,
+    pod_id: UUID,
     *,
     client: AuthenticatedClient | Client,
-) -> Any | ErrorResponse | None:
-    """Verify surface webhook using a surface-level callback URL
+    body: BodyPodBundleImportStart,
+) -> ErrorResponse | ImportStatusResponse | None:
+    """Start Pod Import
 
-     Webhook verification endpoint for platforms that require it.
-
-    WhatsApp surfaces bound to a connector account are verified against that
-    account's own ``verify_token`` (never the system-wide one) so each
-    customer's WhatsApp Business webhook config only has to match their own
-    credentials.
+     Upload a pod bundle (.zip) and enqueue planning. Returns 202 with an import_id; poll the status
+    endpoint until AWAITING_CONFIRMATION, review the plan, then apply.
 
     Args:
-        surface_id (UUID):
+        pod_id (UUID):
+        body (BodyPodBundleImportStart):
 
     Raises:
         errors.UnexpectedStatus: If the server returns an undocumented status code and Client.raise_on_unexpected_status is True.
         httpx.TimeoutException: If the request takes longer than Client.timeout.
 
     Returns:
-        Any | ErrorResponse
+        ErrorResponse | ImportStatusResponse
     """
 
     return sync_detailed(
-        surface_id=surface_id,
+        pod_id=pod_id,
         client=client,
+        body=body,
     ).parsed
 
 
 async def asyncio_detailed(
-    surface_id: UUID,
+    pod_id: UUID,
     *,
     client: AuthenticatedClient | Client,
-) -> Response[Any | ErrorResponse]:
-    """Verify surface webhook using a surface-level callback URL
+    body: BodyPodBundleImportStart,
+) -> Response[ErrorResponse | ImportStatusResponse]:
+    """Start Pod Import
 
-     Webhook verification endpoint for platforms that require it.
-
-    WhatsApp surfaces bound to a connector account are verified against that
-    account's own ``verify_token`` (never the system-wide one) so each
-    customer's WhatsApp Business webhook config only has to match their own
-    credentials.
+     Upload a pod bundle (.zip) and enqueue planning. Returns 202 with an import_id; poll the status
+    endpoint until AWAITING_CONFIRMATION, review the plan, then apply.
 
     Args:
-        surface_id (UUID):
+        pod_id (UUID):
+        body (BodyPodBundleImportStart):
 
     Raises:
         errors.UnexpectedStatus: If the server returns an undocumented status code and Client.raise_on_unexpected_status is True.
         httpx.TimeoutException: If the request takes longer than Client.timeout.
 
     Returns:
-        Response[Any | ErrorResponse]
+        Response[ErrorResponse | ImportStatusResponse]
     """
 
     kwargs = _get_kwargs(
-        surface_id=surface_id,
+        pod_id=pod_id,
+        body=body,
     )
 
     response = await client.get_async_httpx_client().request(**kwargs)
@@ -156,33 +162,32 @@ async def asyncio_detailed(
 
 
 async def asyncio(
-    surface_id: UUID,
+    pod_id: UUID,
     *,
     client: AuthenticatedClient | Client,
-) -> Any | ErrorResponse | None:
-    """Verify surface webhook using a surface-level callback URL
+    body: BodyPodBundleImportStart,
+) -> ErrorResponse | ImportStatusResponse | None:
+    """Start Pod Import
 
-     Webhook verification endpoint for platforms that require it.
-
-    WhatsApp surfaces bound to a connector account are verified against that
-    account's own ``verify_token`` (never the system-wide one) so each
-    customer's WhatsApp Business webhook config only has to match their own
-    credentials.
+     Upload a pod bundle (.zip) and enqueue planning. Returns 202 with an import_id; poll the status
+    endpoint until AWAITING_CONFIRMATION, review the plan, then apply.
 
     Args:
-        surface_id (UUID):
+        pod_id (UUID):
+        body (BodyPodBundleImportStart):
 
     Raises:
         errors.UnexpectedStatus: If the server returns an undocumented status code and Client.raise_on_unexpected_status is True.
         httpx.TimeoutException: If the request takes longer than Client.timeout.
 
     Returns:
-        Any | ErrorResponse
+        ErrorResponse | ImportStatusResponse
     """
 
     return (
         await asyncio_detailed(
-            surface_id=surface_id,
+            pod_id=pod_id,
             client=client,
+            body=body,
         )
     ).parsed

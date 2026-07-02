@@ -18,16 +18,28 @@ class OauthCredentialsResponseSchema:
     """Schema for OAuth credentials response.
 
     Attributes:
-        access_token (str):
+        access_token (None | str | Unset):
+        connection_id (None | str | Unset):
         expires_at (datetime.datetime | None | Unset):
     """
 
-    access_token: str
+    access_token: None | str | Unset = UNSET
+    connection_id: None | str | Unset = UNSET
     expires_at: datetime.datetime | None | Unset = UNSET
     additional_properties: dict[str, Any] = _attrs_field(init=False, factory=dict)
 
     def to_dict(self) -> dict[str, Any]:
-        access_token = self.access_token
+        access_token: None | str | Unset
+        if isinstance(self.access_token, Unset):
+            access_token = UNSET
+        else:
+            access_token = self.access_token
+
+        connection_id: None | str | Unset
+        if isinstance(self.connection_id, Unset):
+            connection_id = UNSET
+        else:
+            connection_id = self.connection_id
 
         expires_at: None | str | Unset
         if isinstance(self.expires_at, Unset):
@@ -39,11 +51,11 @@ class OauthCredentialsResponseSchema:
 
         field_dict: dict[str, Any] = {}
         field_dict.update(self.additional_properties)
-        field_dict.update(
-            {
-                "access_token": access_token,
-            }
-        )
+        field_dict.update({})
+        if access_token is not UNSET:
+            field_dict["access_token"] = access_token
+        if connection_id is not UNSET:
+            field_dict["connection_id"] = connection_id
         if expires_at is not UNSET:
             field_dict["expires_at"] = expires_at
 
@@ -52,7 +64,24 @@ class OauthCredentialsResponseSchema:
     @classmethod
     def from_dict(cls: type[T], src_dict: Mapping[str, Any]) -> T:
         d = dict(src_dict)
-        access_token = d.pop("access_token")
+
+        def _parse_access_token(data: object) -> None | str | Unset:
+            if data is None:
+                return data
+            if isinstance(data, Unset):
+                return data
+            return cast(None | str | Unset, data)
+
+        access_token = _parse_access_token(d.pop("access_token", UNSET))
+
+        def _parse_connection_id(data: object) -> None | str | Unset:
+            if data is None:
+                return data
+            if isinstance(data, Unset):
+                return data
+            return cast(None | str | Unset, data)
+
+        connection_id = _parse_connection_id(d.pop("connection_id", UNSET))
 
         def _parse_expires_at(data: object) -> datetime.datetime | None | Unset:
             if data is None:
@@ -73,6 +102,7 @@ class OauthCredentialsResponseSchema:
 
         oauth_credentials_response_schema = cls(
             access_token=access_token,
+            connection_id=connection_id,
             expires_at=expires_at,
         )
 
