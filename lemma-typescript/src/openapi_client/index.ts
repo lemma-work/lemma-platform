@@ -355,7 +355,6 @@ export { SchedulesService } from './services/SchedulesService.js';
 export { TablesService } from './services/TablesService.js';
 export { UsageService } from './services/UsageService.js';
 export { UsersService } from './services/UsersService.js';
-export { WebhooksService } from './services/WebhooksService.js';
 export { WidgetsService } from './services/WidgetsService.js';
 export { WorkflowsService } from './services/WorkflowsService.js';
 export { WorkspaceService } from './services/WorkspaceService.js';

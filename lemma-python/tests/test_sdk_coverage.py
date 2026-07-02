@@ -41,6 +41,11 @@ KNOWN_UNEXPOSED_PREFIXES = (
     "app.bundle.upload",
     "app.asset.",
     "file.converted.",
+    # Pod bundle export/import/publish: job-triggering, multipart-upload, and
+    # SSE endpoints consumed by the frontend (TS SDK) and the import wizard. The
+    # CLI imports client-side via the per-resource facades, not these; a Python
+    # facade is a deliberate follow-up.
+    "pod.bundle.",
     # Membership/governance surface not yet exposed in CLI/SDK facades
     "org.invitation.",
     "org.member.",
