@@ -254,6 +254,12 @@ IMPLIED_PERMISSIONS: dict[str, frozenset[str]] = {
         {Permissions.CONNECTOR_ACCOUNT_USE}
     ),
     Permissions.CONVERSATION_WRITE: frozenset({Permissions.CONVERSATION_READ}),
+    # Executing a workload requires reading its definition (an agent's
+    # instructions, a function's source) to run it at all, so execute-only
+    # grants must satisfy read checks. Read does NOT imply execute.
+    Permissions.AGENT_EXECUTE: frozenset({Permissions.AGENT_READ}),
+    Permissions.FUNCTION_EXECUTE: frozenset({Permissions.FUNCTION_READ}),
+    Permissions.WORKFLOW_EXECUTE: frozenset({Permissions.WORKFLOW_READ}),
 }
 
 

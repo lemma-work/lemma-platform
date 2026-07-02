@@ -106,6 +106,45 @@ def test_equivalent_permission_ids_include_higher_resource_permissions():
     }
 
 
+def test_execute_implies_read_for_agent_function_workflow():
+    assert equivalent_permission_ids(Permissions.AGENT_READ) == {
+        Permissions.AGENT_READ,
+        Permissions.AGENT_EXECUTE,
+    }
+    assert equivalent_permission_ids(Permissions.FUNCTION_READ) == {
+        Permissions.FUNCTION_READ,
+        Permissions.FUNCTION_EXECUTE,
+    }
+    assert equivalent_permission_ids(Permissions.WORKFLOW_READ) == {
+        Permissions.WORKFLOW_READ,
+        Permissions.WORKFLOW_EXECUTE,
+    }
+    # Read must never satisfy an execute check.
+    assert equivalent_permission_ids(Permissions.AGENT_EXECUTE) == {
+        Permissions.AGENT_EXECUTE
+    }
+    assert equivalent_permission_ids(Permissions.FUNCTION_EXECUTE) == {
+        Permissions.FUNCTION_EXECUTE
+    }
+    assert equivalent_permission_ids(Permissions.WORKFLOW_EXECUTE) == {
+        Permissions.WORKFLOW_EXECUTE
+    }
+
+
+def test_implied_permissions_map_is_valid_and_flattened():
+    from app.core.authorization.permissions import IMPLIED_PERMISSIONS, PERMISSION_BY_ID
+
+    for granted, implied in IMPLIED_PERMISSIONS.items():
+        assert granted in PERMISSION_BY_ID
+        assert granted not in implied
+        for permission_id in implied:
+            assert permission_id in PERMISSION_BY_ID
+            # The map stores flattened sets: anything implied transitively must
+            # already be listed directly (equivalent_permission_ids is a
+            # single-hop reverse lookup and relies on this).
+            assert IMPLIED_PERMISSIONS.get(permission_id, frozenset()) <= implied
+
+
 def test_connector_resource_ref_factories_are_pod_and_org_scoped():
     pod_id = uuid4()
     pod_connector_id = uuid4()

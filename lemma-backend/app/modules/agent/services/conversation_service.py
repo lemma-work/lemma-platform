@@ -141,12 +141,12 @@ class ConversationService:
         # agent.execute grant on itself, but running another copy of the agent the
         # user is already running is no privilege escalation.
         if require_execute_grant:
-            # Dispatching a *named* agent needs both agent.execute (to start it)
-            # and agent.read (to load the conversation back when starting the
-            # run). Check them together so a caller missing a grant sees every
-            # missing permission at once instead of fixing one, retrying, and
-            # hitting the next 403. The downstream read check reuses the cached
-            # decision. The default pod agent (agent is None) needs only execute.
+            # Dispatching a *named* agent checks agent.execute and agent.read
+            # together. agent.execute implies agent.read (IMPLIED_PERMISSIONS),
+            # so an execute-only grant satisfies both; checking read here anyway
+            # warms the decision cache for the run-load that follows and keeps
+            # the error complete for callers missing everything. The default
+            # pod agent (agent is None) needs only execute.
             actions = [Permissions.AGENT_EXECUTE]
             if agent is not None:
                 actions.append(Permissions.AGENT_READ)
