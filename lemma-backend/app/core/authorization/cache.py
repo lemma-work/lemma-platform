@@ -16,6 +16,9 @@ from uuid import UUID
 from app.core.authorization.context import PrincipalRef
 from app.core.config import settings
 from app.core.infrastructure.cache.redis_json_cache import RedisJsonCache
+from app.core.log.log import get_logger
+
+logger = get_logger(__name__)
 
 
 @dataclass(frozen=True, slots=True)
@@ -109,7 +112,12 @@ async def get_role_snapshot(
             _snapshot_suffix(user_id, organization_id, pod_id)
         )
     except Exception:
-        return None  # Redis unavailable -> miss; the snapshot is re-derived.
+        # Redis unavailable -> miss; the snapshot is re-derived from the DB.
+        # Warn so an outage is visible before it turns into DB pressure.
+        logger.warning(
+            "Role-snapshot cache read failed; re-deriving from DB.", exc_info=True
+        )
+        return None
     if not payload:
         return None
     try:
@@ -132,7 +140,9 @@ async def set_role_snapshot(
             _serialize(snapshot),
         )
     except Exception:
-        pass  # Redis unavailable -> skip caching.
+        # Redis unavailable -> skip caching (next access re-derives). Warn so
+        # an outage is visible before it turns into DB pressure.
+        logger.warning("Role-snapshot cache write failed.", exc_info=True)
 
 
 async def invalidate_role_snapshot_cache(
@@ -155,4 +165,8 @@ async def invalidate_role_snapshot_cache(
     try:
         await cache.clear_prefix()
     except Exception:
-        pass
+        logger.warning(
+            "Role-snapshot cache invalidation failed; stale snapshots persist "
+            "until the TTL elapses.",
+            exc_info=True,
+        )

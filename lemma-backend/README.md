@@ -4,9 +4,9 @@ FastAPI backend platform for building AI-powered connectors around isolated pods
 
 The backend lives in `lemma-backend/` inside the `lemma-platform` monorepo. It is a normal Python project with its own `pyproject.toml`, `uv.lock`, migrations, scripts, and Docker Compose files.
 
-> Detailed architecture and engineering-style docs are being added under `docs/`
-> (and `docs/tests/` for test-specific notes). For now this README is the
-> development guide.
+> Engineering conventions (DB sessions/connections, caching, the authorization
+> model, secrets) live in [docs/development.md](docs/development.md); test
+> notes in `docs/tests/`. This README covers setup and running the stack.
 
 ## Stack
 
