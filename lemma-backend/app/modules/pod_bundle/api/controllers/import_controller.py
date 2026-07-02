@@ -29,7 +29,11 @@ from app.core.infrastructure.channels.channel_service import (
 from app.core.infrastructure.db.uow_factory import UnitOfWorkFactory
 from app.modules.pod.api.dependencies import PodEditorDep, PodViewerDep
 from app.modules.pod_bundle.api.dependencies import ImportUseCasesDep
-from app.modules.pod_bundle.api.schemas import ApplyImportRequest, ImportStatusResponse
+from app.modules.pod_bundle.api.schemas import (
+    ApplyImportRequest,
+    GithubImportRequest,
+    ImportStatusResponse,
+)
 from app.modules.pod_bundle.domain.state import IMPORT_TERMINAL_STATUSES
 from app.modules.pod_bundle.infrastructure.realtime import bundle_job_channel
 from app.modules.pod_bundle.infrastructure.state_store import (
@@ -65,6 +69,35 @@ async def start_import(
     content = await data.read()
     state = await use_cases.start_upload_import(
         pod_id=pod_id, user_id=user.id, filename=data.filename, data=content
+    )
+    return ImportStatusResponse.from_state(state)
+
+
+@router.post(
+    "/{pod_id}/bundle/imports/github",
+    response_model=ImportStatusResponse,
+    status_code=status.HTTP_202_ACCEPTED,
+    operation_id="pod.bundle.import.github",
+    summary="Import Pod From GitHub",
+    description=(
+        "Import a pod bundle from a public GitHub repository. Returns 202 with an "
+        "import_id; the bundle is fetched, planned, and awaits confirmation."
+    ),
+    dependencies=[PodEditorDep],
+)
+async def start_github_import(
+    pod_id: UUID,
+    data: GithubImportRequest,
+    user: CurrentUser,
+    use_cases: ImportUseCasesDep,
+) -> ImportStatusResponse:
+    state = await use_cases.start_github_import(
+        pod_id=pod_id,
+        user_id=user.id,
+        repo_url=data.repo_url,
+        owner=data.owner,
+        repo=data.repo,
+        ref=data.ref,
     )
     return ImportStatusResponse.from_state(state)
 

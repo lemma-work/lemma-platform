@@ -40,6 +40,7 @@ from app.modules.pod_bundle.infrastructure.state_store import (
 )
 
 PLAN_JOB_NAME = "plan_pod_import"
+GITHUB_JOB_NAME = "import_pod_github"
 APPLY_JOB_NAME = "apply_pod_import"
 
 
@@ -109,6 +110,51 @@ class ImportUseCases:
                 "import_id": str(import_id),
                 "pod_id": str(pod_id),
                 "user_id": str(user_id),
+            },
+            _job_id=import_plan_job_id(import_id),
+        )
+        if job is None:
+            raise BundleJobConflictError("This import is already being planned.")
+        return state
+
+    async def start_github_import(
+        self,
+        *,
+        pod_id: UUID,
+        user_id: UUID,
+        repo_url: str | None,
+        owner: str | None,
+        repo: str | None,
+        ref: str | None,
+    ) -> ImportState:
+        """Authorize POD_UPDATE, validate the repo reference, and enqueue the
+        GitHub import job (fetch → stage → plan under one import_id)."""
+        from app.modules.pod_bundle.infrastructure.github_fetcher import parse_repo_ref
+
+        await self._authorize(pod_id=pod_id, user_id=user_id, action=Permissions.POD_UPDATE)
+        owner, repo = parse_repo_ref(repo_url=repo_url, owner=owner, repo=repo)
+
+        import_id = uuid4()
+        state = ImportState(
+            import_id=import_id,
+            pod_id=pod_id,
+            user_id=user_id,
+            status=ImportStatus.QUEUED,
+            source=BundleSource(
+                kind="github",
+                repo_url=repo_url or f"https://github.com/{owner}/{repo}",
+                ref=ref,
+            ),
+        )
+        await self._state_store.save_import(state)
+        job = await self._job_queue.enqueue(
+            GITHUB_JOB_NAME,
+            context={
+                "import_id": str(import_id),
+                "pod_id": str(pod_id),
+                "user_id": str(user_id),
+                "owner": owner,
+                "repo": repo,
             },
             _job_id=import_plan_job_id(import_id),
         )

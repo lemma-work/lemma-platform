@@ -134,6 +134,17 @@ class ImportPlanResponse(BaseModel):
         )
 
 
+class GithubImportRequest(BaseModel):
+    """Body for importing a pod from a public GitHub repo."""
+
+    repo_url: str | None = Field(
+        default=None, description="Public repo URL, e.g. https://github.com/owner/repo."
+    )
+    owner: str | None = Field(default=None, description="Repo owner (alternative to repo_url).")
+    repo: str | None = Field(default=None, description="Repo name (alternative to repo_url).")
+    ref: str | None = Field(default=None, description="Branch, tag, or commit sha (optional).")
+
+
 class ApplyImportRequest(BaseModel):
     """Body for applying a planned import."""
 

@@ -9,6 +9,7 @@ the flow create a real function (its schema extraction runs in the agentbox).
 
 from __future__ import annotations
 
+import os
 from uuid import uuid4
 
 import pytest
@@ -21,6 +22,14 @@ from app.modules.test_support.e2e.runtime import (
     configure_workspace_api_url,
     local_agentbox_server,
     workspace_image,
+)
+
+# Point the worker subprocess's GitHub zipball fetch at the local fixture server
+# (see test_import_github_e2e.py). Set at import time — BEFORE the session worker
+# subprocess is spawned — so it lands in the worker's inherited environment.
+GITHUB_FIXTURE_PORT = 8771
+os.environ.setdefault(
+    "POD_BUNDLE_GITHUB_API_BASE", f"http://127.0.0.1:{GITHUB_FIXTURE_PORT}"
 )
 
 pytestmark = pytest.mark.e2e

@@ -163,8 +163,6 @@ async def plan_pod_import(context: dict[str, str | None]) -> None:
     """
     worker_ctx: AppWorkerContext = streaq_worker.context
     import_id = UUID(str(context["import_id"]))
-    pod_id = UUID(str(context["pod_id"]))
-    user_id = UUID(str(context["user_id"]))
 
     store = get_pod_bundle_state_store()
     staging = BundleStagingStorage()
@@ -178,60 +176,113 @@ async def plan_pod_import(context: dict[str, str | None]) -> None:
         return
 
     try:
-        state.status = ImportStatus.PLANNING
-        await store.save_import(state)
-        await publish_bundle_event(
-            import_id, status_payload(state.status.value, state.seq)
-        )
-
-        archive = await staging.get_archive("pod-imports", import_id)
-        if archive is None:
-            raise BundleStagingMissingError()
-
-        with tempfile.TemporaryDirectory(prefix="lemma-pod-import-") as tmp:
-            from lemma_pod_bundle import extract_bundle
-
-            try:
-                bundle_root = extract_bundle(
-                    archive,
-                    Path(tmp),
-                    max_uncompressed_bytes=pod_bundle_settings.pod_bundle_max_uncompressed_bytes,
-                )
-            except ValueError as exc:
-                # Unsafe path, missing pod.json, or a zip bomb — a bad bundle is
-                # terminal (retrying would fail identically), not a transient error.
-                raise BundleInvalidError(str(exc)) from exc
-
-            async with uow_scope(worker_ctx.uow_factory) as uow:
-                ctx = await AuthorizationDataService(uow.session).build_user_context(
-                    user_id=user_id, pod_id=pod_id
-                )
-                async with context_scope(ctx):
-                    from app.modules.pod_bundle.infrastructure.plan_builder import (
-                        PlanBuilder,
-                        ServiceExistingResources,
-                    )
-
-                    existing = ServiceExistingResources(
-                        uow=uow, ctx=ctx, pod_id=pod_id, user_id=user_id
-                    )
-                    plan = await PlanBuilder(existing).build_plan(bundle_root=bundle_root)
-
-        state.plan = plan
-        state.progress.total = len(plan.steps)
-        state.progress.done = 0
-        state.status = ImportStatus.AWAITING_CONFIRMATION
-        await store.save_import(state)
-        await publish_bundle_event(
-            import_id,
-            completed_payload(state.status.value, state.seq, step_count=len(plan.steps)),
-        )
+        await _plan_from_staging(worker_ctx, store, staging, state)
     except DomainError as exc:
         await _fail_import(store, state, str(exc))
         logger.warning("Pod bundle plan %s failed (terminal): %s", import_id, exc)
     except Exception as exc:
         await _fail_import(store, state, "Planning failed due to a transient error.")
         logger.error("Pod bundle plan %s failed (retryable): %s", import_id, exc)
+        raise
+
+
+async def _plan_from_staging(worker_ctx, store, staging, state: ImportState) -> None:
+    """Extract the staged bundle and build a plan (shared by upload + GitHub
+    imports). Sets ``PLANNING`` → ``AWAITING_CONFIRMATION``; raises a domain error
+    the caller maps to a terminal FAILED state."""
+    import_id = state.import_id
+    state.status = ImportStatus.PLANNING
+    await store.save_import(state)
+    await publish_bundle_event(import_id, status_payload(state.status.value, state.seq))
+
+    archive = await staging.get_archive("pod-imports", import_id)
+    if archive is None:
+        raise BundleStagingMissingError()
+
+    with tempfile.TemporaryDirectory(prefix="lemma-pod-import-") as tmp:
+        from lemma_pod_bundle import extract_bundle
+
+        try:
+            bundle_root = extract_bundle(
+                archive,
+                Path(tmp),
+                max_uncompressed_bytes=pod_bundle_settings.pod_bundle_max_uncompressed_bytes,
+            )
+        except ValueError as exc:
+            raise BundleInvalidError(str(exc)) from exc
+
+        async with uow_scope(worker_ctx.uow_factory) as uow:
+            ctx = await AuthorizationDataService(uow.session).build_user_context(
+                user_id=state.user_id, pod_id=state.pod_id
+            )
+            async with context_scope(ctx):
+                from app.modules.pod_bundle.infrastructure.plan_builder import (
+                    PlanBuilder,
+                    ServiceExistingResources,
+                )
+
+                existing = ServiceExistingResources(
+                    uow=uow, ctx=ctx, pod_id=state.pod_id, user_id=state.user_id
+                )
+                plan = await PlanBuilder(existing).build_plan(bundle_root=bundle_root)
+
+    state.plan = plan
+    state.progress.total = len(plan.steps)
+    state.progress.done = 0
+    state.status = ImportStatus.AWAITING_CONFIRMATION
+    await store.save_import(state)
+    await publish_bundle_event(
+        import_id,
+        completed_payload(state.status.value, state.seq, step_count=len(plan.steps)),
+    )
+
+
+@streaq_task(name="import_pod_github")
+async def import_pod_github(context: dict[str, str | None]) -> None:
+    """Fetch a public repo's zipball, stage it, then plan — one job, so a single
+    ``import_id`` covers fetch + plan. Falls through to the same planning routine
+    as an uploaded bundle."""
+    worker_ctx: AppWorkerContext = streaq_worker.context
+    import_id = UUID(str(context["import_id"]))
+
+    store = get_pod_bundle_state_store()
+    staging = BundleStagingStorage()
+
+    state = await store.get_import(import_id)
+    if state is None:
+        logger.info("Import state missing; skipping github job %s", import_id)
+        return
+    if state.is_terminal or state.status == ImportStatus.AWAITING_CONFIRMATION:
+        return
+
+    try:
+        state.status = ImportStatus.FETCHING
+        await store.save_import(state)
+        await publish_bundle_event(import_id, status_payload(state.status.value, state.seq))
+
+        from app.modules.pod_bundle.infrastructure.github_fetcher import (
+            GithubBundleFetcher,
+            parse_repo_ref,
+        )
+
+        owner, repo = parse_repo_ref(
+            repo_url=state.source.repo_url,
+            owner=(context.get("owner")),
+            repo=(context.get("repo")),
+        )
+        zip_bytes = await GithubBundleFetcher().fetch_zipball(
+            owner=owner, repo=repo, ref=state.source.ref
+        )
+        state.staging_key = await staging.put_archive("pod-imports", import_id, zip_bytes)
+        await store.save_import(state)
+
+        await _plan_from_staging(worker_ctx, store, staging, state)
+    except DomainError as exc:
+        await _fail_import(store, state, str(exc))
+        logger.warning("GitHub import %s failed (terminal): %s", import_id, exc)
+    except Exception as exc:
+        await _fail_import(store, state, "GitHub import failed due to a transient error.")
+        logger.error("GitHub import %s failed (retryable): %s", import_id, exc)
         raise
 
 

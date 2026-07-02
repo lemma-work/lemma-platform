@@ -36,6 +36,18 @@ class PodBundleSettings(BaseSettings):
             "bundle archives live in object storage."
         ),
     )
+    pod_bundle_github_api_base: str = Field(
+        default="https://api.github.com",
+        description=(
+            "Base URL for the GitHub REST API used to fetch a public repo's "
+            "zipball on import. Overridable (POD_BUNDLE_GITHUB_API_BASE) so tests "
+            "can point it at a local fixture server."
+        ),
+    )
+    pod_bundle_github_fetch_timeout_seconds: float = Field(
+        default=30.0,
+        description="HTTP timeout (seconds) for fetching a GitHub repo zipball.",
+    )
 
 
 pod_bundle_settings = PodBundleSettings()

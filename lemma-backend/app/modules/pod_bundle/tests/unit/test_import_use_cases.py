@@ -168,6 +168,43 @@ async def test_duplicate_enqueue_raises_conflict():
         )
 
 
+# --- github ------------------------------------------------------------------
+
+
+async def test_start_github_import_enqueues():
+    uc, store, _, queue = _use_cases()
+    pod_id, user_id = uuid4(), uuid4()
+    state = await uc.start_github_import(
+        pod_id=pod_id,
+        user_id=user_id,
+        repo_url="https://github.com/acme/crm",
+        owner=None,
+        repo=None,
+        ref="main",
+    )
+    assert state.status == ImportStatus.QUEUED
+    assert state.source.kind == "github"
+    assert state.source.repo_url.endswith("acme/crm")
+    assert queue.calls[0][0] == "import_pod_github"
+    assert queue.calls[0][1]["owner"] == "acme"
+    assert queue.calls[0][1]["repo"] == "crm"
+
+
+async def test_start_github_import_bad_ref_rejected():
+    from app.modules.pod_bundle.domain.errors import BundleInvalidError
+
+    uc, *_ = _use_cases()
+    with pytest.raises(BundleInvalidError):
+        await uc.start_github_import(
+            pod_id=uuid4(),
+            user_id=uuid4(),
+            repo_url="not-a-repo!!",
+            owner=None,
+            repo=None,
+            ref=None,
+        )
+
+
 # --- apply -------------------------------------------------------------------
 
 
