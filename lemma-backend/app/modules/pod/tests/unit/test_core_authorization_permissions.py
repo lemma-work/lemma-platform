@@ -861,3 +861,200 @@ def test_document_and_folder_grants_are_authorization_aliases():
         "document",
         "folder",
     }
+
+
+@pytest.mark.asyncio
+async def test_default_pod_agent_destructive_action_requires_approval(monkeypatch):
+    """The user-mirror never includes DESTRUCTIVE_ACTIONS: without a session
+    approval the default pod agent is denied even though the user could."""
+    from app.core.authorization import service as service_module
+
+    async def no_approval(**kwargs):
+        return False
+
+    monkeypatch.setattr(service_module, "has_session_approval", no_approval)
+    authorizer = Authorizer(session=None)  # type: ignore[arg-type]
+    pod_id = uuid4()
+    resource = ResourceRef(
+        resource_type=ResourceType.DATASTORE_TABLE,
+        resource_id=uuid4(),
+        pod_id=pod_id,
+        visibility=ResourceVisibility.POD,
+    )
+    ctx = _default_pod_agent_ctx(
+        pod_id=pod_id,
+        permission_ids=frozenset({Permissions.DATASTORE_TABLE_DELETE}),
+        authorizer=authorizer,
+    )
+
+    decision = await authorizer.authorize(
+        ctx, Permissions.DATASTORE_TABLE_DELETE, resource
+    )
+
+    assert not decision.allowed
+    assert decision.reason_code == "DESTRUCTIVE_ACTION_REQUIRES_APPROVAL"
+
+
+@pytest.mark.asyncio
+async def test_default_pod_agent_destructive_action_allowed_with_session_approval(
+    monkeypatch,
+):
+    from app.core.authorization import service as service_module
+
+    seen: list[dict] = []
+
+    async def approved(**kwargs):
+        seen.append(kwargs)
+        return True
+
+    monkeypatch.setattr(service_module, "has_session_approval", approved)
+    authorizer = Authorizer(session=None)  # type: ignore[arg-type]
+    pod_id = uuid4()
+    resource = ResourceRef(
+        resource_type=ResourceType.DATASTORE_TABLE,
+        resource_id=uuid4(),
+        pod_id=pod_id,
+        visibility=ResourceVisibility.POD,
+    )
+    ctx = _default_pod_agent_ctx(
+        pod_id=pod_id,
+        permission_ids=frozenset({Permissions.DATASTORE_TABLE_DELETE}),
+        authorizer=authorizer,
+    )
+    ctx.delegation_session_id = str(uuid4())
+
+    decision = await authorizer.authorize(
+        ctx, Permissions.DATASTORE_TABLE_DELETE, resource
+    )
+
+    assert decision.allowed  # falls through to the normal user-mirror path
+    assert seen and seen[0]["permission_id"] == Permissions.DATASTORE_TABLE_DELETE
+
+
+@pytest.mark.asyncio
+async def test_named_workload_destructive_explicit_grant_is_standing_authority(
+    monkeypatch,
+):
+    """An explicit destructive grant works without any approval — the headless
+    (schedule/webhook) path."""
+    from app.core.authorization import service as service_module
+
+    async def fail_if_approval_checked(**kwargs):
+        raise AssertionError("explicit grant must not consult session approvals")
+
+    monkeypatch.setattr(service_module, "has_session_approval", fail_if_approval_checked)
+    authorizer = Authorizer(session=None)  # type: ignore[arg-type]
+    workload_principal_refs = frozenset({PrincipalRef("AGENT", uuid4())})
+    grant_id = uuid4()
+
+    async def grants(ctx, permission_id, resource, principal_sets):
+        return [grant_id]
+
+    monkeypatch.setattr(
+        authorizer, "_matching_grant_ids_for_principal_sets", grants
+    )
+    resource = ResourceRef(
+        resource_type=ResourceType.DATASTORE_TABLE,
+        resource_id=uuid4(),
+        pod_id=uuid4(),
+        visibility=ResourceVisibility.POD,
+    )
+    ctx = Context(
+        actor_type=ActorType.DELEGATED_USER_WORKLOAD,
+        actor_id=f"agent:{next(iter(workload_principal_refs)).id}",
+        user_id=uuid4(),
+        pod_id=resource.pod_id,
+        permission_ids=frozenset(),
+        workload_principal_refs=workload_principal_refs,
+        authorizer=authorizer,
+    )
+
+    decision = await authorizer.authorize(
+        ctx, Permissions.DATASTORE_TABLE_DELETE, resource
+    )
+
+    assert decision.allowed
+    assert decision.matched_grant_ids == (grant_id,)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("approved", "expected_allowed", "expected_reason"),
+    [
+        (False, False, "DESTRUCTIVE_ACTION_REQUIRES_APPROVAL"),
+        (True, True, "SESSION_APPROVAL"),
+    ],
+)
+async def test_named_workload_destructive_without_grant_needs_session_approval(
+    monkeypatch, approved, expected_allowed, expected_reason
+):
+    from app.core.authorization import service as service_module
+
+    async def approval(**kwargs):
+        return approved
+
+    monkeypatch.setattr(service_module, "has_session_approval", approval)
+    authorizer = Authorizer(session=None)  # type: ignore[arg-type]
+    workload_principal_refs = frozenset({PrincipalRef("AGENT", uuid4())})
+
+    async def no_grants(ctx, permission_id, resource, principal_sets):
+        return []
+
+    monkeypatch.setattr(
+        authorizer, "_matching_grant_ids_for_principal_sets", no_grants
+    )
+    resource = ResourceRef(
+        resource_type=ResourceType.DATASTORE_TABLE,
+        resource_id=uuid4(),
+        pod_id=uuid4(),
+        visibility=ResourceVisibility.POD,
+    )
+    ctx = Context(
+        actor_type=ActorType.DELEGATED_USER_WORKLOAD,
+        actor_id=f"agent:{next(iter(workload_principal_refs)).id}",
+        user_id=uuid4(),
+        pod_id=resource.pod_id,
+        permission_ids=frozenset(),
+        workload_principal_refs=workload_principal_refs,
+        delegation_session_id=str(uuid4()),
+        authorizer=authorizer,
+    )
+
+    decision = await authorizer.authorize(
+        ctx, Permissions.DATASTORE_TABLE_DELETE, resource
+    )
+
+    assert decision.allowed is expected_allowed
+    assert decision.reason_code == expected_reason
+
+
+@pytest.mark.asyncio
+async def test_user_actor_destructive_action_is_ungated(monkeypatch):
+    """Human users never hit the destructive gate."""
+    from app.core.authorization import service as service_module
+
+    async def fail_if_approval_checked(**kwargs):
+        raise AssertionError("USER actors must not consult session approvals")
+
+    monkeypatch.setattr(service_module, "has_session_approval", fail_if_approval_checked)
+    authorizer = Authorizer(session=None)  # type: ignore[arg-type]
+    resource = ResourceRef(
+        resource_type=ResourceType.DATASTORE_TABLE,
+        resource_id=uuid4(),
+        pod_id=uuid4(),
+        visibility=ResourceVisibility.POD,
+    )
+    ctx = Context(
+        actor_type=ActorType.USER,
+        actor_id=str(uuid4()),
+        user_id=uuid4(),
+        pod_id=resource.pod_id,
+        permission_ids=frozenset({Permissions.DATASTORE_TABLE_DELETE}),
+        authorizer=authorizer,
+    )
+
+    decision = await authorizer.authorize(
+        ctx, Permissions.DATASTORE_TABLE_DELETE, resource
+    )
+
+    assert decision.allowed

@@ -25,7 +25,12 @@ from app.core.authorization.cache import (
     invalidate_role_snapshot_cache,
     set_role_snapshot,
 )
-from app.core.authorization.delegation import DelegationClaims, WorkloadPrincipalType
+from app.core.authorization.delegation import (
+    DESTRUCTIVE_ACTIONS,
+    DelegationClaims,
+    WorkloadPrincipalType,
+)
+from app.core.authorization.session_approvals import has_session_approval
 from app.core.authorization.grants import (
     delete_grantee_grants,
     grant_resource_type_values,
@@ -848,6 +853,22 @@ class Authorizer:
             return AuthorizationDecision(
                 False, "DELEGATED_POD_SCOPE_ONLY", permission_id, resource
             )
+        # Destructive actions are never part of the user-mirror: the default
+        # pod agent may only perform them after the user approves (per session,
+        # per action type). Named workloads handle this in
+        # _authorize_delegated_workload where explicit grants count too.
+        if (
+            clamp_to_pod
+            and permission_id in DESTRUCTIVE_ACTIONS
+            and not await has_session_approval(
+                session_id=ctx.delegation_session_id,
+                workload_actor_id=ctx.actor_id,
+                permission_id=permission_id,
+            )
+        ):
+            return AuthorizationDecision(
+                False, "DESTRUCTIVE_ACTION_REQUIRES_APPROVAL", permission_id, resource
+            )
 
         if resource is None:
             if not ctx.has_permission(permission_id):
@@ -950,6 +971,10 @@ class Authorizer:
         invoking user's pod permissions and never reaches this method. Who can
         *trigger* a workload is governed by ``agent.execute`` /
         ``function.execute`` grants on the workload itself.
+
+        DESTRUCTIVE_ACTIONS are the carve-out: with no explicit grant they
+        deny with DESTRUCTIVE_ACTION_REQUIRES_APPROVAL unless the user
+        recorded a session approval (APPROVE_FOR_SESSION) for the action type.
         """
         if ctx.delegation_scope and not (
             equivalent_permission_ids(permission_id) & ctx.delegation_scope
@@ -1001,6 +1026,25 @@ class Authorizer:
             (ctx.workload_principal_refs,),
         )
         if not workload_grant_ids:
+            # A session approval (APPROVE_FOR_SESSION) stands in as an
+            # ephemeral grant — the only path for destructive actions besides
+            # an explicit grant, and a coherent fallback for anything else the
+            # user chose to approve for the session.
+            if await has_session_approval(
+                session_id=ctx.delegation_session_id,
+                workload_actor_id=ctx.actor_id,
+                permission_id=permission_id,
+            ):
+                return AuthorizationDecision(
+                    True, "SESSION_APPROVAL", permission_id, resource
+                )
+            if permission_id in DESTRUCTIVE_ACTIONS:
+                return AuthorizationDecision(
+                    False,
+                    "DESTRUCTIVE_ACTION_REQUIRES_APPROVAL",
+                    permission_id,
+                    resource,
+                )
             return AuthorizationDecision(
                 False,
                 "MISSING_WORKLOAD_RESOURCE_GRANT",

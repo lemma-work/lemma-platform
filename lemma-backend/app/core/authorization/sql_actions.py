@@ -15,6 +15,7 @@ from app.core.authorization.context import (
     PrincipalRef,
     ResourceType,
 )
+from app.core.authorization.delegation import DESTRUCTIVE_ACTIONS
 from app.core.authorization.grants import grant_resource_type_values
 from app.core.authorization.models import ResourcePermissionGrantModel
 from app.core.authorization.permissions import equivalent_permission_ids
@@ -69,6 +70,19 @@ def allowed_actions_expr(
     owner_actions = list(
         dict.fromkeys([*owner_actions_for_resource(resource_type), *role_actions])
     )
+    grant_candidate_actions: Sequence[str] = resource_actions
+    if (
+        ctx.actor_type == ActorType.DELEGATED_USER_WORKLOAD
+        and not ctx.workload_principal_refs
+    ):
+        # Default pod agent (user-equivalent): destructive actions never
+        # project as available — at execution time they require a session
+        # approval (DESTRUCTIVE_ACTION_REQUIRES_APPROVAL otherwise).
+        role_actions = [a for a in role_actions if a not in DESTRUCTIVE_ACTIONS]
+        owner_actions = [a for a in owner_actions if a not in DESTRUCTIVE_ACTIONS]
+        grant_candidate_actions = [
+            a for a in resource_actions if a not in DESTRUCTIVE_ACTIONS
+        ]
     empty_actions = _text_array([])
 
     if ctx.actor_type == ActorType.ANONYMOUS:
@@ -96,7 +110,7 @@ def allowed_actions_expr(
         resource_id_col=resource_id_col,
         pod_id_col=pod_id_col,
         principal_sets=ctx.grant_principal_sets or (ctx.principal_refs,),
-        candidate_actions=resource_actions,
+        candidate_actions=grant_candidate_actions,
         resource_path_col=resource_path_col,
     )
 

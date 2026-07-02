@@ -204,6 +204,7 @@ async def request_approval(
     title: str,
     reason: str | None = None,
     payload: JsonObject | None = None,
+    permission_ids: list[str] | None = None,
 ) -> RequestApprovalResponse:
     """
     Ask the user to approve running a tool you lack permission for, then run it.
@@ -228,8 +229,13 @@ async def request_approval(
     - `title`: concise user-facing title for the approval card.
     - `reason`: optional explanation of why this needs approval.
     - `payload`: optional extra structured details for rendering/audit.
+    - `permission_ids`: when the action failed with a permission error, copy the
+      `approval.permission_ids` list from that failed tool result verbatim. If
+      the user picks "approve for session", these action types stay approved for
+      you for the rest of this conversation instead of re-prompting every time.
     """
     del payload  # rendered from the persisted tool call; not needed at runtime
+    del permission_ids  # read from the persisted tool call on resolution
     deps = ctx.deps
     if deps.agent_run_id is None:
         return RequestApprovalResponse(

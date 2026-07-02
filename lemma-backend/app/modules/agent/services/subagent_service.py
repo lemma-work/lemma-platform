@@ -81,6 +81,8 @@ class SubAgentService:
             pod_id=deps.pod_id,
             is_default_pod_agent=self._is_default(deps),
             delegation_actor_name=deps.agent_name,
+            # Session approvals (APPROVE_FOR_SESSION) are keyed by conversation.
+            delegation_session_id=str(deps.conversation_id),
         )
 
     def _input_prompt(self, input_data: JsonObject | str) -> str:

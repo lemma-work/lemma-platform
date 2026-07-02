@@ -226,6 +226,9 @@ class Context:
             f"Missing permission {permission_id}",
             code=decision.reason_code,
             status_code=403,
+            # Structured so tool-error handlers can carry the denied permission
+            # into a request_approval payload (session approvals key on it).
+            details={"permission_ids": [permission_id]},
         )
 
     async def require_all(
@@ -265,6 +268,7 @@ class Context:
                 f"Missing permission(s): {', '.join(missing)}",
                 code=first_reason or "AUTH_REQUIRED",
                 status_code=403,
+                details={"permission_ids": list(missing)},
             )
 
     async def accessible_resource_ids(

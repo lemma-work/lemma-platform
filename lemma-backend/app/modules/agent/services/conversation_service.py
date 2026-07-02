@@ -670,6 +670,19 @@ class ConversationService:
             )
             return "request_approval", content.model_dump(mode="json")
 
+        if decision == AgentRunApprovalDecision.APPROVE_FOR_SESSION:
+            # Beyond the one-off run below, remember the approval so the
+            # workload can keep performing this action type in this
+            # conversation (the authorizer honors it as an ephemeral grant,
+            # which is the only unlock for DESTRUCTIVE_ACTIONS besides an
+            # explicit grant). The permission ids ride in the request_approval
+            # args, copied by the agent from the denied tool result.
+            await self._record_session_approvals(
+                conversation=conversation,
+                tool_args=tool_args,
+                user_id=user_id,
+            )
+
         executed = await self._execute_approved_tool_as_user(
             conversation=conversation,
             user_id=user_id,
@@ -695,6 +708,37 @@ class ConversationService:
                 response=response,
             )
         return "request_approval", content.model_dump(mode="json")
+
+    async def _record_session_approvals(
+        self,
+        *,
+        conversation: Conversation,
+        tool_args: dict[str, object],
+        user_id: UUID,
+    ) -> None:
+        """Persist APPROVE_FOR_SESSION as per-permission session approvals.
+
+        Keyed to (conversation, workload actor, permission) — the same key the
+        authorizer checks. Without permission ids in the request_approval args
+        this quietly degrades to APPROVE_ONCE behavior (the wrapped tool still
+        runs once as the user; the next attempt re-prompts).
+        """
+        from app.core.authorization.delegation import DEFAULT_POD_AGENT_ID
+        from app.core.authorization.session_approvals import record_session_approval
+
+        permission_ids = tool_args.get("permission_ids")
+        if not isinstance(permission_ids, list):
+            return
+        workload_actor_id = f"agent:{conversation.agent_id or DEFAULT_POD_AGENT_ID}"
+        for permission_id in permission_ids:
+            if not isinstance(permission_id, str) or not permission_id:
+                continue
+            await record_session_approval(
+                session_id=str(conversation.id),
+                workload_actor_id=workload_actor_id,
+                permission_id=permission_id,
+                resolved_by_user_id=user_id,
+            )
 
     async def _execute_approved_tool_as_user(
         self,

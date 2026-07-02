@@ -306,6 +306,14 @@ class Settings(BaseSettings):
             "Set to 0 to disable the in-process cache."
         ),
     )
+    session_approval_ttl_seconds: int = Field(
+        default=3600,
+        description=(
+            "How long an APPROVE_FOR_SESSION decision authorizes the approved "
+            "action type for a workload within one conversation. Set to 0 to "
+            "disable session approvals (every destructive action re-prompts)."
+        ),
+    )
     # Google OAuth Settings
     google_client_id: Optional[str] = Field(
         default=None, description="Google OAuth Client ID"

@@ -74,6 +74,8 @@ async def pod_services(deps: BaseAgentContext) -> AsyncIterator[PodServices]:
             pod_id=deps.pod_id,
             is_default_pod_agent=_is_default_pod_agent(deps),
             delegation_actor_name=deps.agent_name,
+            # Session approvals (APPROVE_FOR_SESSION) are keyed by conversation.
+            delegation_session_id=str(deps.conversation_id),
         )
         token = set_current_context(auth_ctx)
         try:
