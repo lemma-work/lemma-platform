@@ -9,6 +9,7 @@ from faststream import Depends, Logger
 from faststream.redis import RedisRouter
 from streaq.task import TaskStatus
 
+from app.core.config import settings
 from app.core.infrastructure.db.session import async_session_maker
 from app.core.infrastructure.db.uow_factory import (
     SessionUnitOfWorkFactory,
@@ -71,14 +72,15 @@ def provide_uow_factory() -> UnitOfWorkFactory:
 
 
 def build_harness_registry() -> HarnessRegistry:
+    reconnect_grace_seconds = settings.daemon_reconnect_grace_seconds
     return HarnessRegistry(
         [
             PydanticAIHarness(),
-            DaemonHarness(HarnessKind.CODEX),
-            DaemonHarness(HarnessKind.CLAUDE_CODE),
-            DaemonHarness(HarnessKind.OPENCODE),
-            DaemonHarness(HarnessKind.CURSOR),
-            DaemonHarness(HarnessKind.ANTIGRAVITY),
+            DaemonHarness(HarnessKind.CODEX, reconnect_grace_seconds=reconnect_grace_seconds),
+            DaemonHarness(HarnessKind.CLAUDE_CODE, reconnect_grace_seconds=reconnect_grace_seconds),
+            DaemonHarness(HarnessKind.OPENCODE, reconnect_grace_seconds=reconnect_grace_seconds),
+            DaemonHarness(HarnessKind.CURSOR, reconnect_grace_seconds=reconnect_grace_seconds),
+            DaemonHarness(HarnessKind.ANTIGRAVITY, reconnect_grace_seconds=reconnect_grace_seconds),
         ]
     )
 

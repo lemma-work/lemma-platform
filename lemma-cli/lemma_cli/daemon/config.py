@@ -14,6 +14,24 @@ DAEMON_CONFIG_PATH = DAEMON_DIR / "config.json"
 DAEMON_PID_PATH = DAEMON_DIR / "daemon.pid"
 DAEMON_LOG_PATH = DAEMON_DIR / "logs" / "daemon.log"
 
+# Admission-control cap on concurrent runs -- defined here (not alongside the
+# other daemon tunables in runner.py) so ensure_config() can lazy-fill it into
+# the persisted config without a circular import (runner.py already imports
+# from this module). The persisted value is for discoverability only; the
+# actual enforcement in runner.py always reads the env var fresh via this
+# function, so an env var change takes effect on the next daemon start without
+# needing to edit config.json.
+MAX_CONCURRENT_RUNS_ENV = "LEMMA_DAEMON_MAX_CONCURRENT_RUNS"
+DEFAULT_MAX_CONCURRENT_RUNS = 4
+
+
+def max_concurrent_runs() -> int:
+    raw = os.getenv(MAX_CONCURRENT_RUNS_ENV, str(DEFAULT_MAX_CONCURRENT_RUNS))
+    try:
+        return max(1, int(raw))
+    except ValueError:
+        return DEFAULT_MAX_CONCURRENT_RUNS
+
 
 def ensure_config() -> dict:
     DAEMON_DIR.mkdir(parents=True, exist_ok=True)
@@ -22,6 +40,8 @@ def ensure_config() -> dict:
         config["device_key"] = str(uuid4())
     if not config.get("display_name"):
         config["display_name"] = socket.gethostname()
+    if not config.get("max_concurrent_runs"):
+        config["max_concurrent_runs"] = max_concurrent_runs()
     save_config(config)
     return config
 

@@ -118,7 +118,7 @@ class SurfaceAgentRunProgressObserver:
         ctx: ConversationContext,
     ) -> None:
         del ctx
-        if event.type == AgentEventType.ERROR:
+        if event.type in {AgentEventType.ERROR, AgentEventType.REJECTED}:
             self._run_errored = True
             return
 

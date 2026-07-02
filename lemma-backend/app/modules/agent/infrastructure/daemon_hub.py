@@ -52,6 +52,15 @@ class AgentRuntimeDaemonHub:
     def __init__(self) -> None:
         self._connections: dict[UUID, _DaemonConnection] = {}
         self._remote_runs: dict[UUID, _RemoteRunSubscription] = {}
+        # Run queues salvaged from a connection that just died, keyed by
+        # agent_run_id. A DaemonHarness.run() consumer for one of these runs
+        # is still reading from the SAME queue object (it never lets go of
+        # its reference), sitting in a bounded reconnect-grace wait after
+        # seeing the RECONNECTING sentinel pushed below -- this dict is what
+        # lets a future reattach hand the queue back to a live connection.
+        # Entries are removed either by finish_run() (the run resolved, one
+        # way or another) or, once implemented, by a reattach reclaiming them.
+        self._orphaned_run_queues: dict[UUID, asyncio.Queue[AgentEvent]] = {}
         self._lock = asyncio.Lock()
 
     async def register(
@@ -74,6 +83,10 @@ class AgentRuntimeDaemonHub:
             if old_connection is not None and old_connection.command_task is not None:
                 old_connection.command_task.cancel()
             self._connections[daemon_id] = connection
+            if old_connection is not None:
+                self._orphan_connection_runs_locked(old_connection)
+        if old_connection is not None:
+            self._notify_connection_runs_reconnecting(old_connection, reason="daemon_superseded")
         with contextlib.suppress(TimeoutError):
             await asyncio.wait_for(connection.command_ready.wait(), timeout=2)
 
@@ -84,9 +97,73 @@ class AgentRuntimeDaemonHub:
                 del self._connections[daemon_id]
                 if connection.command_task is not None:
                     connection.command_task.cancel()
+                self._orphan_connection_runs_locked(connection)
+        if connection is not None and connection.user_id == user_id:
+            self._notify_connection_runs_reconnecting(connection, reason="daemon_disconnected")
         if connection is not None and connection.command_task is not None:
             with contextlib.suppress(asyncio.CancelledError):
                 await connection.command_task
+
+    def _orphan_connection_runs_locked(self, connection: _DaemonConnection) -> None:
+        """Move a dying connection's run queues into ``_orphaned_run_queues``.
+
+        Must be called while holding ``self._lock`` (it mutates the shared
+        dict). Only preserves queues; pushing the RECONNECTING sentinel
+        happens separately (outside the lock -- ``queue.put_nowait`` doesn't
+        need it and there's no reason to hold the hub lock across N queue
+        pushes).
+        """
+        self._orphaned_run_queues.update(connection.run_queues)
+
+    def _notify_connection_runs_reconnecting(
+        self,
+        connection: _DaemonConnection,
+        *,
+        reason: str,
+    ) -> None:
+        for agent_run_id, queue in list(connection.run_queues.items()):
+            with contextlib.suppress(asyncio.QueueFull):
+                queue.put_nowait(
+                    AgentEvent(
+                        type=AgentEventType.RECONNECTING,
+                        data={"reason": reason},
+                        agent_run_id=agent_run_id,
+                    )
+                )
+
+    async def reattach_runs(
+        self,
+        *,
+        daemon_id: UUID,
+        user_id: UUID,
+        agent_run_ids: list[UUID],
+    ) -> None:
+        """Re-link surviving ``DaemonHarness.run()`` consumers to a new connection.
+
+        Each ``agent_run_id`` here was registered via ``start_run()`` on a now-dead
+        connection; its ``asyncio.Queue`` is still being read by a
+        ``DaemonHarness.run()`` sitting in its bounded reconnect-grace window
+        (see ``harnesses/daemon.py``). This does NOT create a new queue -- it
+        hands the SAME queue object to the new connection, so the harness's
+        already-running consumer starts receiving events again transparently
+        the moment the daemon flushes its buffered backlog and resumes live
+        sends, with no protocol-visible "resume" step needed on the consumer
+        side (it just sees ordinary events arrive after the RECONNECTING
+        sentinel it already saw).
+
+        Must be called before the connection is told to consider itself fully
+        ready (e.g. before ``daemon.ready_ack``), so a run.start/run.stop for
+        one of these ids that arrives right after can find the reattached
+        queue rather than racing ahead of this.
+        """
+        connection = await self._connection_for(daemon_id=daemon_id, user_id=user_id)
+        if connection is None:
+            return
+        async with self._lock:
+            for agent_run_id in agent_run_ids:
+                queue = self._orphaned_run_queues.pop(agent_run_id, None)
+                if queue is not None:
+                    connection.run_queues[agent_run_id] = queue
 
     async def connected(self, *, daemon_id: UUID, user_id: UUID) -> bool:
         return await self._connection_for(daemon_id=daemon_id, user_id=user_id) is not None
@@ -99,6 +176,15 @@ class AgentRuntimeDaemonHub:
         agent_run_id: UUID,
         payload: JsonObject,
     ) -> asyncio.Queue[AgentEvent]:
+        capacity = await get_daemon_capacity(daemon_id=daemon_id)
+        if capacity is not None:
+            active = capacity.get("active_run_count")
+            cap = capacity.get("max_concurrent_runs")
+            if isinstance(active, int) and isinstance(cap, int) and active >= cap:
+                raise RuntimeError(
+                    f"User daemon is at capacity ({active}/{cap} runs active). "
+                    "Try again shortly."
+                )
         connection = await self._connection_for(daemon_id=daemon_id, user_id=user_id)
         queue: asyncio.Queue[AgentEvent] = asyncio.Queue()
         if connection is None:
@@ -135,6 +221,18 @@ class AgentRuntimeDaemonHub:
                 },
             )
             return queue
+
+        if agent_run_id in connection.run_queues:
+            # Defense in depth: the CLI daemon itself guards against a
+            # redelivered run.start for an id it's already running, but this
+            # would otherwise silently clobber the first queue reference here
+            # too (same shape of bug) if some other caller ever double-dispatched.
+            logger.warning(
+                "start_run called for an agent_run_id already registered on this connection",
+                daemon_id=str(daemon_id),
+                agent_run_id=str(agent_run_id),
+            )
+            return connection.run_queues[agent_run_id]
 
         connection.run_queues[agent_run_id] = queue
         await self._send(
@@ -187,6 +285,12 @@ class AgentRuntimeDaemonHub:
             connection.run_queues.pop(agent_run_id, None)
         async with self._lock:
             subscription = self._remote_runs.pop(agent_run_id, None)
+            # A run that resolved (completed/failed/stopped) while its queue was
+            # sitting in _orphaned_run_queues (disconnected, never reattached)
+            # must not linger there forever -- DaemonHarness.run() always calls
+            # finish_run() in its `finally`, so this is the guaranteed cleanup
+            # path for orphaned entries nothing ever reattached.
+            self._orphaned_run_queues.pop(agent_run_id, None)
         if subscription is not None:
             subscription.task.cancel()
             with contextlib.suppress(asyncio.CancelledError):
@@ -364,6 +468,45 @@ def _run_event_channel(agent_run_id: UUID) -> str:
 
 def _daemon_online_key(daemon_id: UUID) -> str:
     return f"agent-runtime:daemon:{daemon_id}:online"
+
+
+def _daemon_capacity_key(daemon_id: UUID) -> str:
+    return f"agent-runtime:daemon:{daemon_id}:capacity"
+
+
+# Ephemeral, presence-scoped data (same category as _daemon_online_key above)
+# -- lives in Redis, not a DB column, because it's a live fact that changes on
+# every heartbeat and is meaningless the instant the daemon disconnects. The
+# TTL is a safety net only; the heartbeat refreshes it far more often, and
+# _clear_daemon_capacity() below removes it immediately on a clean disconnect.
+_DAEMON_CAPACITY_TTL_SECONDS = 120
+
+
+async def set_daemon_capacity(
+    *, daemon_id: UUID, active_run_count: int, max_concurrent_runs: int
+) -> None:
+    await _get_redis().set(
+        _daemon_capacity_key(daemon_id),
+        json.dumps(
+            {"active_run_count": active_run_count, "max_concurrent_runs": max_concurrent_runs}
+        ),
+        ex=_DAEMON_CAPACITY_TTL_SECONDS,
+    )
+
+
+async def get_daemon_capacity(*, daemon_id: UUID) -> JsonObject | None:
+    raw = await _get_redis().get(_daemon_capacity_key(daemon_id))
+    if raw is None:
+        return None
+    try:
+        parsed = json.loads(raw)
+    except json.JSONDecodeError:
+        return None
+    return parsed if isinstance(parsed, dict) else None
+
+
+async def clear_daemon_capacity(*, daemon_id: UUID) -> None:
+    await _get_redis().delete(_daemon_capacity_key(daemon_id))
 
 
 _redis_pool: ConnectionPool | None = None

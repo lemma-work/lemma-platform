@@ -103,6 +103,22 @@ class _FakeWebSocket:
         self.messages.append(json.loads(payload))
 
 
+async def _handle_run_start(websocket, message, **kwargs):
+    """Back-compat wrapper for tests written against the pre-hold-not-kill
+    ``handle_run_start(websocket, message, ...)`` signature.
+
+    Production code now threads a redirectable ``_RunEventSink`` instead of a
+    raw websocket + lock, so a held run's subprocess can survive a disconnect
+    without being restarted. The sink defaults to "live" (not buffered), so
+    routing through it here still populates ``websocket.messages`` exactly as
+    the old direct-websocket calls did.
+    """
+    sink = daemon._RunEventSink(
+        websocket, str(message.get("agent_run_id") or ""), asyncio.Lock()
+    )
+    return await daemon.handle_run_start(message, sink=sink, **kwargs)
+
+
 @pytest.mark.asyncio
 async def test_stop_active_run_acks_orphaned_run():
     websocket = _FakeWebSocket()
@@ -149,7 +165,7 @@ async def test_daemon_run_start_executes_configured_provider_command(monkeypatch
         f"{sys.executable} -c \"print('assistant ok')\"",
     )
 
-    await daemon.handle_run_start(
+    await _handle_run_start(
         websocket,
         {
             "type": "run.start",
@@ -187,7 +203,7 @@ async def test_daemon_does_not_emit_prompt_echo_from_provider_stdout(monkeypatch
         f"{sys.executable} -c \"import sys; print(sys.stdin.read())\"",
     )
 
-    await daemon.handle_run_start(
+    await _handle_run_start(
         websocket,
         {
             "type": "run.start",
@@ -227,7 +243,7 @@ async def test_daemon_strips_prompt_echo_prefix_from_provider_stdout(monkeypatch
         ),
     )
 
-    await daemon.handle_run_start(
+    await _handle_run_start(
         websocket,
         {
             "type": "run.start",
@@ -268,7 +284,7 @@ async def test_codex_app_server_tool_events_stream_as_agent_tokens_and_messages(
     monkeypatch.setattr(daemon, "_JsonRpcProcess", _FakeCodexJsonRpcProcess)
 
     try:
-        await daemon.handle_run_start(
+        await _handle_run_start(
             websocket,
             {
                 "type": "run.start",
@@ -367,7 +383,7 @@ async def test_codex_app_server_pool_allows_parallel_runs(monkeypatch, tmp_path)
     monkeypatch.setattr(daemon, "_JsonRpcProcess", _SlowFakeCodexJsonRpcProcess)
 
     async def run(websocket: _FakeWebSocket, run_id: str) -> None:
-        await daemon.handle_run_start(
+        await _handle_run_start(
             websocket,
             {
                 "type": "run.start",
@@ -442,7 +458,7 @@ async def test_codex_app_server_pool_reuses_worker_with_saved_thread(
         },
     }
     try:
-        await daemon.handle_run_start(
+        await _handle_run_start(
             websocket_one,
             {"type": "run.start", "agent_run_id": "run-one", "payload": payload},
         )
@@ -453,7 +469,7 @@ async def test_codex_app_server_pool_reuses_worker_with_saved_thread(
                 "user_prompt": "USER:\nwhat is my code word?",
             },
         }
-        await daemon.handle_run_start(
+        await _handle_run_start(
             websocket_two,
             {"type": "run.start", "agent_run_id": "run-two", "payload": payload},
         )
@@ -517,7 +533,7 @@ async def test_codex_app_server_worker_closes_after_cancelled_turn(
     }
 
     task = asyncio.create_task(
-        daemon.handle_run_start(
+        _handle_run_start(
             websocket_one,
             {"type": "run.start", "agent_run_id": "run-cancel", "payload": payload},
         )
@@ -537,7 +553,7 @@ async def test_codex_app_server_worker_closes_after_cancelled_turn(
         assert _HangingFakeCodexJsonRpcProcess.instances[0].closed is True
 
         monkeypatch.setattr(daemon, "_JsonRpcProcess", _FakeCodexJsonRpcProcess)
-        await daemon.handle_run_start(
+        await _handle_run_start(
             websocket_two,
             {"type": "run.start", "agent_run_id": "run-resume", "payload": payload},
         )
@@ -571,7 +587,7 @@ async def test_codex_app_server_recovers_from_stale_saved_session(
     monkeypatch.setattr(daemon, "_JsonRpcProcess", _FailingTurnFakeCodexJsonRpcProcess)
 
     try:
-        await daemon.handle_run_start(
+        await _handle_run_start(
             websocket,
             {
                 "type": "run.start",
@@ -645,7 +661,7 @@ async def test_codex_app_server_flushes_completed_agent_message_items(
     monkeypatch.setattr(daemon, "_JsonRpcProcess", _MultiMessageFakeCodexJsonRpcProcess)
 
     try:
-        await daemon.handle_run_start(
+        await _handle_run_start(
             websocket,
             {
                 "type": "run.start",
@@ -697,7 +713,7 @@ async def test_codex_app_server_strips_submitted_prompt_echo_from_stream(
     monkeypatch.setattr(daemon, "_JsonRpcProcess", _PromptEchoFakeCodexJsonRpcProcess)
 
     try:
-        await daemon.handle_run_start(
+        await _handle_run_start(
             websocket,
             {
                 "type": "run.start",
@@ -754,7 +770,7 @@ async def test_codex_app_server_pool_uses_separate_threads_for_separate_conversa
     monkeypatch.setattr(daemon, "_JsonRpcProcess", _FakeCodexJsonRpcProcess)
 
     async def run(conversation_id: str, text: str) -> None:
-        await daemon.handle_run_start(
+        await _handle_run_start(
             _FakeWebSocket(),
             {
                 "type": "run.start",
@@ -803,7 +819,7 @@ async def test_codex_app_server_pool_closes_idle_worker_after_ttl(monkeypatch, t
     monkeypatch.setattr(daemon, "_JsonRpcProcess", _FakeCodexJsonRpcProcess)
 
     try:
-        await daemon.handle_run_start(
+        await _handle_run_start(
             websocket,
             {
                 "type": "run.start",
@@ -928,7 +944,7 @@ async def test_claude_stream_persists_assistant_text_before_tool_call(monkeypatc
         f"{sys.executable} {script_path}",
     )
 
-    await daemon.handle_run_start(
+    await _handle_run_start(
         websocket,
         {
             "type": "run.start",
@@ -984,7 +1000,7 @@ async def test_daemon_persists_claude_stream_session_id(monkeypatch, tmp_path):
         f"{sys.executable} {script_path}",
     )
 
-    await daemon.handle_run_start(
+    await _handle_run_start(
         websocket,
         {
             "type": "run.start",
@@ -1050,7 +1066,7 @@ async def test_daemon_recovers_from_stale_claude_session(monkeypatch, tmp_path):
         f"{sys.executable} {script_path}",
     )
 
-    await daemon.handle_run_start(
+    await _handle_run_start(
         websocket,
         {
             "type": "run.start",

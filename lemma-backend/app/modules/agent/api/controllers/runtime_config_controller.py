@@ -2,6 +2,9 @@
 
 from __future__ import annotations
 
+import asyncio
+import contextlib
+import time
 from uuid import UUID
 
 from fastapi import APIRouter, HTTPException, WebSocket, WebSocketDisconnect, status
@@ -12,8 +15,10 @@ from app.core.api.dependencies import CurrentUser, UoWDep
 from app.core.authorization.context import ResourceRef
 from app.core.authorization.dependencies import OrgContextDep
 from app.core.authorization.permissions import Permissions
+from app.core.config import settings
 from app.core.infrastructure.db.session import async_session_maker
 from app.core.infrastructure.db.uow_factory import SessionUnitOfWorkFactory
+from app.core.log.log import get_logger
 from app.modules.agent.api.schemas import (
     AgentHarnessInfo,
     AgentHarnessListResponse,
@@ -31,7 +36,11 @@ from app.modules.agent.domain.runtime_profiles import (
     RuntimeModelCapability,
     RuntimeModelCatalogEntry,
 )
-from app.modules.agent.infrastructure.daemon_hub import agent_runtime_daemon_hub
+from app.modules.agent.infrastructure.daemon_hub import (
+    agent_runtime_daemon_hub,
+    clear_daemon_capacity,
+    set_daemon_capacity,
+)
 from app.modules.agent.infrastructure.repositories import (
     AgentRuntimeDaemonRepository,
     AgentRuntimeProfileRepository,
@@ -41,6 +50,8 @@ from app.modules.identity.infrastructure.organization_repositories import (
     OrganizationRepository,
 )
 from app.core.crypto import get_secret_cipher
+
+logger = get_logger(__name__)
 
 router = APIRouter(tags=["agent_runtime"])
 
@@ -270,6 +281,7 @@ async def daemon_websocket(websocket: WebSocket) -> None:
     await websocket.accept()
     uow_factory = SessionUnitOfWorkFactory(async_session_maker)
     daemon_id: UUID | None = None
+    stale_reaper_task: asyncio.Task[None] | None = None
     try:
         ready_message = await websocket.receive_json()
         if ready_message.get("type") != "daemon.ready":
@@ -297,11 +309,27 @@ async def daemon_websocket(websocket: WebSocket) -> None:
             user_id=user_id,
             websocket=websocket,
         )
+        await _store_capacity_if_present(daemon_id, payload.get("capacity"))
+        # Reattach any runs the daemon says it's still holding from a prior
+        # connection BEFORE acking readiness, so a run.start/run.stop that
+        # arrives right after can find the reattached queue rather than racing
+        # ahead of this.
+        reattach_run_ids = _reattach_agent_run_ids(payload.get("reattach_runs"))
+        if reattach_run_ids:
+            await agent_runtime_daemon_hub.reattach_runs(
+                daemon_id=daemon_id,
+                user_id=user_id,
+                agent_run_ids=reattach_run_ids,
+            )
         await websocket.send_json(
             {
                 "type": "daemon.ready_ack",
                 "daemon_id": str(daemon_id),
             }
+        )
+        last_ping_monotonic = _MutableMonotonic()
+        stale_reaper_task = asyncio.create_task(
+            _close_if_ping_stale(websocket, last_ping_monotonic, daemon_id=daemon_id)
         )
         while True:
             message = await websocket.receive_json()
@@ -314,6 +342,7 @@ async def daemon_websocket(websocket: WebSocket) -> None:
                         user_id=user_id,
                         harness_catalog=catalog,
                     )
+                await _store_capacity_if_present(daemon_id, message.get("capacity"))
                 continue
             if message_type == "run.event":
                 await agent_runtime_daemon_hub.handle_run_event(
@@ -323,20 +352,34 @@ async def daemon_websocket(websocket: WebSocket) -> None:
                 )
                 continue
             if message_type == "daemon.ping":
+                last_ping_monotonic.value = time.monotonic()
                 async with uow_factory() as uow:
                     await AgentRuntimeDaemonRepository(uow).mark_seen(
                         daemon_id=daemon_id,
                         user_id=user_id,
                     )
+                await _store_capacity_if_present(
+                    daemon_id, _json_object(message.get("payload")).get("capacity")
+                )
                 await websocket.send_json({"type": "daemon.pong"})
     except WebSocketDisconnect:
         pass
     finally:
+        if stale_reaper_task is not None:
+            stale_reaper_task.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await stale_reaper_task
         if daemon_id is not None:
             await agent_runtime_daemon_hub.unregister(
                 daemon_id=daemon_id,
                 user_id=user_id,
             )
+            # A disconnected daemon's last-known capacity has no actionable
+            # meaning -- clear it immediately rather than relying solely on
+            # the Redis TTL, which would let start_run() see stale
+            # not-at-capacity data for up to _DAEMON_CAPACITY_TTL_SECONDS
+            # after a crash.
+            await clear_daemon_capacity(daemon_id=daemon_id)
             async with uow_factory() as uow:
                 await AgentRuntimeDaemonRepository(uow).mark_offline(
                     daemon_id=daemon_id,
@@ -344,8 +387,75 @@ async def daemon_websocket(websocket: WebSocket) -> None:
                 )
 
 
+class _MutableMonotonic:
+    """Tiny mutable holder so the reaper task can observe ping updates.
+
+    Plain closures over a local variable can't be reassigned from another
+    task without ``nonlocal`` plumbing across two separate coroutines; a
+    one-field object is simpler than threading an ``asyncio.Event`` for this.
+    """
+
+    __slots__ = ("value",)
+
+    def __init__(self) -> None:
+        self.value = time.monotonic()
+
+
+async def _close_if_ping_stale(
+    websocket: WebSocket,
+    last_ping_monotonic: _MutableMonotonic,
+    *,
+    daemon_id: UUID,
+) -> None:
+    """Proactively close a daemon websocket that's gone quiet on ``daemon.ping``.
+
+    Backstop for a half-open connection the daemon's own client-side heartbeat
+    doesn't notice (e.g. one direction of the socket is silently dropped by a
+    middlebox). Normal disconnects are already detected instantly via
+    ``WebSocketDisconnect`` elsewhere in this route -- this only fires when the
+    transport looks alive but has stopped carrying heartbeats.
+    """
+    threshold = settings.daemon_ws_ping_stale_after_seconds
+    poll_interval = max(1.0, threshold / 3)
+    while True:
+        await asyncio.sleep(poll_interval)
+        if time.monotonic() - last_ping_monotonic.value > threshold:
+            logger.warning(
+                "Daemon websocket stale (no daemon.ping); closing",
+                daemon_id=str(daemon_id),
+                threshold_seconds=threshold,
+            )
+            with contextlib.suppress(Exception):
+                await websocket.close(code=status.WS_1001_GOING_AWAY, reason="Heartbeat timeout")
+            return
+
+
 def _json_object(value: object) -> dict[str, object]:
     return value if isinstance(value, dict) else {}
+
+
+def _reattach_agent_run_ids(raw: object) -> list[UUID]:
+    if not isinstance(raw, list):
+        return []
+    agent_run_ids: list[UUID] = []
+    for item in raw:
+        if not isinstance(item, dict):
+            continue
+        try:
+            agent_run_ids.append(UUID(str(item.get("agent_run_id"))))
+        except ValueError:
+            continue
+    return agent_run_ids
+
+
+async def _store_capacity_if_present(daemon_id: UUID, raw_capacity: object) -> None:
+    if not isinstance(raw_capacity, dict):
+        return
+    active = raw_capacity.get("active_run_count")
+    cap = raw_capacity.get("max_concurrent_runs")
+    if not isinstance(active, int) or not isinstance(cap, int):
+        return
+    await set_daemon_capacity(daemon_id=daemon_id, active_run_count=active, max_concurrent_runs=cap)
 
 
 async def _daemon_websocket_session(websocket: WebSocket):

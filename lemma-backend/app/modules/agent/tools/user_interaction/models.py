@@ -107,17 +107,20 @@ def validate_display_payload(request: "DisplayResourceRequest") -> str | None:
     by both the model and the frontend) instead of a retry / validation error.
     """
     if request.type == DisplayResourceType.BROWSER:
-        if any(
-            value is not None
-            for value in (
-                request.name,
-                request.path,
-                request.public_url,
-                request.content,
-                request.filters,
-                request.query,
+        if (
+            any(
+                value is not None
+                for value in (
+                    request.name,
+                    request.path,
+                    request.public_url,
+                    request.content,
+                    request.filters,
+                    request.query,
+                )
             )
-        ) or request.loading_messages:
+            or request.loading_messages
+        ):
             return "BROWSER resources only accept type."
         return None
 
@@ -148,10 +151,7 @@ def validate_display_payload(request: "DisplayResourceRequest") -> str | None:
             for value in (request.public_url, request.content)
         )
         if payload_count != 1:
-            return (
-                "WIDGET resources must provide exactly one of public_url or "
-                "content."
-            )
+            return "WIDGET resources must provide exactly one of public_url or content."
 
     if request.type != DisplayResourceType.TABLE and (
         request.filters is not None or request.query is not None

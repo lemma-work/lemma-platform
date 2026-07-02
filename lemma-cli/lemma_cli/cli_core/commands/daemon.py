@@ -29,6 +29,8 @@ from lemma_cli.daemon.runner import (
     _prompt_text_preview,
     _strip_prompt_echo_from_stdout,
     _stop_active_run,
+    _RunEventSink,
+    _HeldRun,
 )
 
 # ── Logging helpers ───────────────────────────────────────────────────────────
@@ -141,6 +143,8 @@ __all__ = [
     "_prompt_text_preview",
     "_strip_prompt_echo_from_stdout",
     "_stop_active_run",
+    "_RunEventSink",
+    "_HeldRun",
     # logging
     "_daemon_log",
     "_set_daemon_debug",

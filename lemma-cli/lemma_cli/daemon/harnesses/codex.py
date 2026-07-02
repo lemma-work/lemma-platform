@@ -30,6 +30,23 @@ CODEX_WORKER_TTL_SECONDS_ENV = "LEMMA_DAEMON_CODEX_WORKER_TTL_SECONDS"
 DAEMON_TURN_TIMEOUT_SECONDS_ENV = "LEMMA_DAEMON_TURN_TIMEOUT_SECONDS"
 DEFAULT_DAEMON_TURN_TIMEOUT_SECONDS = 7200.0
 DEFAULT_CODEX_WORKER_TTL_SECONDS = DEFAULT_DAEMON_TURN_TIMEOUT_SECONDS
+# Bounds how many distinct conversations can have a live codex app-server
+# subprocess at once. Unlike the daemon-wide run cap (runner.py's
+# max_concurrent_runs, admission-control/reject), this one QUEUES a new
+# conversation's first turn when full rather than rejecting it: an unrelated
+# stale-but-still-warm conversation shouldn't fail a brand new one on a
+# single-user laptop with no peers to redistribute to, and the daemon-wide cap
+# already bounds total exposure.
+CODEX_POOL_MAX_WORKERS_ENV = "LEMMA_DAEMON_CODEX_POOL_MAX_WORKERS"
+DEFAULT_CODEX_POOL_MAX_WORKERS = 4
+
+
+def codex_pool_max_workers() -> int:
+    raw = os.getenv(CODEX_POOL_MAX_WORKERS_ENV, str(DEFAULT_CODEX_POOL_MAX_WORKERS))
+    try:
+        return max(1, int(raw))
+    except ValueError:
+        return DEFAULT_CODEX_POOL_MAX_WORKERS
 
 
 class JsonRpcRequestError(RuntimeError):
@@ -287,12 +304,19 @@ class CodexWorker:
 
 
 class CodexWorkerPool:
-    """Manages a pool of CodexWorkers with TTL-based idle cleanup."""
+    """Manages a pool of CodexWorkers with TTL-based idle cleanup.
+
+    Bounded by ``codex_pool_max_workers()``: acquiring a semaphore slot is
+    required only to *create* a new worker, never to reuse an existing one for
+    an already-pooled conversation, so a single conversation's turns never
+    block on the pool being "full" of itself.
+    """
 
     def __init__(self) -> None:
         self._workers: dict[str, CodexWorker] = {}
         self._ttl_tasks: dict[str, asyncio.Task[None]] = {}
         self._lock = asyncio.Lock()
+        self._slots = asyncio.Semaphore(codex_pool_max_workers())
 
     async def run(
         self,
@@ -345,20 +369,37 @@ class CodexWorkerPool:
             if task is not None:
                 task.cancel()
             worker = self._workers.get(conversation_id)
-            if worker is None:
-                worker = CodexWorker(conversation_id=conversation_id)
-                self._workers[conversation_id] = worker
+            if worker is not None:
+                return worker  # existing conversation -- no new slot needed
+        # New conversation: acquire a pool slot. This await is what makes a
+        # full pool queue a new conversation's first turn rather than reject
+        # it -- it simply waits here until a slot frees.
+        await self._slots.acquire()
+        async with self._lock:
+            worker = self._workers.get(conversation_id)
+            if worker is not None:
+                # Lost the race to a concurrent call for the same
+                # conversation_id while waiting on the semaphore -- release
+                # the slot we don't need and reuse the winner's worker.
+                self._slots.release()
+                return worker
+            worker = CodexWorker(conversation_id=conversation_id)
+            self._workers[conversation_id] = worker
             return worker
 
     async def _retire_worker(self, conversation_id: str, worker: CodexWorker) -> None:
+        removed = False
         async with self._lock:
             current = self._workers.get(conversation_id)
             if current is worker:
                 self._workers.pop(conversation_id, None)
+                removed = True
             task = self._ttl_tasks.pop(conversation_id, None)
             if task is not None:
                 task.cancel()
         await worker.close()
+        if removed:
+            self._slots.release()
 
     def _schedule_idle_close(self, conversation_id: str, worker: CodexWorker) -> None:
         existing = self._ttl_tasks.pop(conversation_id, None)
@@ -378,10 +419,13 @@ class CodexWorkerPool:
         async with self._lock:
             current = self._workers.get(conversation_id)
             if current is not worker or worker.last_used_at != last_used_at:
+                # Reused since this close was scheduled -- the worker is still
+                # live and its slot still legitimately held; do not release.
                 return
             self._workers.pop(conversation_id, None)
             self._ttl_tasks.pop(conversation_id, None)
         await worker.close()
+        self._slots.release()
 
 
 _CODEX_APP_SERVER_POOL = CodexWorkerPool()

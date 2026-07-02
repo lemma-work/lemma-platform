@@ -396,6 +396,19 @@ class AgentEventType(str, Enum):
     # The run paused waiting for the user (ask_user / request_approval). Terminal
     # for this run; the user's submission starts a fresh run that resumes.
     WAITING = "WAITING"
+    # Internal only -- never sent by the daemon. Synthesized by
+    # AgentRuntimeDaemonHub when a daemon's websocket drops, so a
+    # DaemonHarness.run() consumer blocked on its run's queue wakes up
+    # immediately instead of waiting out the (much longer)
+    # DEFAULT_DAEMON_EVENT_TIMEOUT_SECONDS silence budget. Not terminal: the
+    # harness intercepts it, starts a bounded reconnect-grace window, and
+    # either resumes normally or fails the run once the grace window elapses.
+    RECONNECTING = "RECONNECTING"
+    # The daemon explicitly refused a run.start because it's already running
+    # max_concurrent_runs turns. Terminal, like ERROR, but kept as its own
+    # member (not folded into ERROR) so callers can distinguish "busy, retry"
+    # from "the provider crashed" and surface a more actionable message.
+    REJECTED = "REJECTED"
 
     @classmethod
     def _missing_(cls, value: object) -> "AgentEventType | None":

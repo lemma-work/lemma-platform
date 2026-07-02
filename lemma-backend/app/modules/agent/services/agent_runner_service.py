@@ -117,6 +117,25 @@ async def _finalize_safely(coro: Awaitable[None], *, agent_run_id: UUID) -> None
         )
 
 
+def _rejected_run_error_message(data: object) -> str:
+    """Build a user-facing message for a daemon-capacity REJECTED event.
+
+    Falls back to a generic message if the structured shape the daemon sends
+    (``{"reason", "active_run_count", "max_concurrent_runs"}``) isn't present
+    -- keeps this robust against an older/newer daemon sending a different
+    payload shape.
+    """
+    if isinstance(data, dict) and data.get("reason") == "daemon_at_capacity":
+        active = data.get("active_run_count")
+        cap = data.get("max_concurrent_runs")
+        if isinstance(active, int) and isinstance(cap, int):
+            return (
+                f"Daemon busy: {active}/{cap} runs already active. "
+                "Try again in a moment."
+            )
+    return "Daemon rejected this run (at capacity). Try again in a moment."
+
+
 def _profile_model_settings(
     runtime_profile_snapshot: dict[str, object | None] | None,
 ) -> JsonObject | None:
@@ -643,6 +662,26 @@ class AgentRunnerService:
                 agent_run_id=agent_run_id,
                 status=AgentRunStatus.FAILED,
                 error=str(event.data),
+                usage_data=usage_data,
+                organization_id=organization_id,
+                pod_id=pod_id,
+                user_id=user_id,
+                agent_id=agent_id,
+                started_at=started_at,
+                runtime_profile=runtime_profile,
+                usage_reservation=usage_reservation,
+            )
+            return True
+
+        if event.type == AgentEventType.REJECTED:
+            # The daemon explicitly refused this run (already at
+            # max_concurrent_runs) -- terminal, like ERROR, but with a more
+            # actionable message built from the event's structured data.
+            await self._finish_agent_run(
+                conversation_id=conversation_id,
+                agent_run_id=agent_run_id,
+                status=AgentRunStatus.FAILED,
+                error=_rejected_run_error_message(event.data),
                 usage_data=usage_data,
                 organization_id=organization_id,
                 pod_id=pod_id,

@@ -39,6 +39,12 @@ from pydantic_ai.usage import RunUsage
 
 
 DEFAULT_DAEMON_EVENT_TIMEOUT_SECONDS = 7200.0
+# Bounded and orthogonal to DEFAULT_DAEMON_EVENT_TIMEOUT_SECONDS above: that one
+# tolerates a *live* connection's long silent gap between events (a slow tool
+# call); this one bounds how long a disconnected run waits for its daemon to
+# reconnect before giving up. Kept far shorter on purpose -- see run()'s
+# RECONNECTING handling below.
+DEFAULT_RECONNECT_GRACE_SECONDS = 120.0
 
 
 class DaemonHarness:
@@ -49,9 +55,11 @@ class DaemonHarness:
         kind: HarnessKind,
         *,
         event_timeout_seconds: float = DEFAULT_DAEMON_EVENT_TIMEOUT_SECONDS,
+        reconnect_grace_seconds: float = DEFAULT_RECONNECT_GRACE_SECONDS,
     ):
         self.kind = kind
         self.event_timeout_seconds = event_timeout_seconds
+        self.reconnect_grace_seconds = reconnect_grace_seconds
 
     async def run(
         self,
@@ -97,6 +105,10 @@ class DaemonHarness:
             return
 
         stop_sent = False
+        # Set the moment a RECONNECTING sentinel is first seen; cleared once a
+        # real event arrives again. Bounds how long this run waits out a dead
+        # connection, independent of (and much shorter than) event_timeout_seconds.
+        reconnecting_since: float | None = None
         try:
             while True:
                 if (
@@ -114,6 +126,18 @@ class DaemonHarness:
                 try:
                     while True:
                         remaining = deadline - time.monotonic()
+                        if reconnecting_since is not None:
+                            grace_remaining = (
+                                reconnecting_since + self.reconnect_grace_seconds
+                            ) - time.monotonic()
+                            if grace_remaining <= 0:
+                                yield AgentEvent(
+                                    type=AgentEventType.ERROR,
+                                    data="User daemon did not reconnect within the grace period",
+                                    agent_run_id=agent_run_id,
+                                )
+                                return
+                            remaining = min(remaining, grace_remaining)
                         if remaining <= 0:
                             raise TimeoutError
                         try:
@@ -142,11 +166,34 @@ class DaemonHarness:
                         agent_run_id=agent_run_id,
                     )
                     return
+
+                if event.type == AgentEventType.RECONNECTING:
+                    if reconnecting_since is None:
+                        reconnecting_since = time.monotonic()
+                        yield AgentEvent(
+                            type=AgentEventType.STATUS,
+                            data={
+                                "status": "Connection to your machine dropped; waiting to reconnect…",
+                                "phase": "reconnecting",
+                            },
+                            agent_run_id=agent_run_id,
+                        )
+                    continue
+
+                if reconnecting_since is not None:
+                    reconnecting_since = None
+                    yield AgentEvent(
+                        type=AgentEventType.STATUS,
+                        data={"status": "Reconnected.", "phase": "reconnected"},
+                        agent_run_id=agent_run_id,
+                    )
+
                 yield event
                 if event.type in {
                     AgentEventType.COMPLETED,
                     AgentEventType.STOPPED,
                     AgentEventType.ERROR,
+                    AgentEventType.REJECTED,
                 }:
                     return
         finally:
