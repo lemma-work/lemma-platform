@@ -493,7 +493,7 @@ source = { directory = "../lemma-pod-bundle" }
 
 [[package]]
 name = "lemma-sdk"
-version = "0.5.4"
+version = "0.5.5"
 source = { directory = "../lemma-python" }
 dependencies = [
     { name = "attrs" },
