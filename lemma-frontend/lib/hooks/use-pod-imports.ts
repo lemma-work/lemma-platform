@@ -39,12 +39,30 @@ export interface GithubPublishResult {
     status: 'published' | 'not_connected' | 'failed';
     repo_url?: string | null;
     import_badge_markdown?: string | null;
+    /** The exact README text committed to the repo (post AI-polish / import-URL
+     * rewrite); null when publish never reached the README stage. */
+    readme?: string | null;
     message?: string | null;
 }
+
+/** One "progress" line of the NDJSON publish stream. `label` describes the
+ * export/repo/readme stages; the upload stage carries per-file counters. */
+export type GithubPublishProgress = {
+    stage: 'export' | 'repo' | 'readme' | 'upload';
+    label?: string;
+    done?: number;
+    total?: number;
+    path?: string;
+};
 
 export interface GithubPublishPreview {
     repo_name: string;
     readme: string;
+    /** True when publish will run an AI polish pass over the README draft. */
+    ai_polish?: boolean;
+    /** Non-zero bundle resource counts keyed by kind name (tables, functions,
+     * agents, workflows, schedules, surfaces, apps). */
+    resource_counts?: Record<string, number>;
 }
 
 async function readError(res: Response): Promise<string> {
@@ -108,17 +126,6 @@ export const useImportIntoNewPod = () =>
         },
     });
 
-/** Shared-link path: create a new pod from an existing pod's bundle (the engine
- * behind /import/p/<id>). Returns the PLANNED import for the new pod. */
-export const useImportFromPod = () =>
-    useMutation({
-        mutationFn: async ({ sourcePodId }: { sourcePodId: string }): Promise<PodImport> => {
-            const res = await lemmaFetch(`/imports/from-pod/${sourcePodId}`, { method: 'POST' });
-            if (!res.ok) throw new Error(await readError(res));
-            return res.json();
-        },
-    });
-
 /** GitHub badge path: create a new pod from a public repo's bundle. Returns the
  * PLANNED import for the new pod. */
 export const useImportFromGithub = () =>
@@ -168,26 +175,116 @@ export const useImportFromGithubIntoPod = () =>
         },
     });
 
+type GithubPublishStreamLine =
+    | ({ event: 'progress' } & GithubPublishProgress)
+    | ({ event: 'result' } & GithubPublishResult)
+    | { event?: undefined };
+
 /** Publish this pod as a new GitHub repo (bundle + generated README with an
  * import badge), via the GitHub connector already connected in Connectors
- * settings — no separate OAuth here. */
+ * settings — no separate OAuth here. The backend streams NDJSON progress
+ * lines and finishes with an "event":"result" line; older backends respond
+ * with one plain JSON object, which we still accept. */
 export const useGithubPublish = () =>
     useMutation({
         mutationFn: async ({
             podId,
             repoName,
             isPrivate = false,
+            readme,
+            onProgress,
         }: {
             podId: string;
             repoName?: string;
             isPrivate?: boolean;
+            /** User-edited README: published verbatim (import URLs still get
+             * rewritten server-side) instead of the rendered + AI-polished draft. */
+            readme?: string;
+            onProgress?: (progress: GithubPublishProgress) => void;
         }): Promise<GithubPublishResult> => {
             const res = await lemmaFetch(`/pods/${podId}/export/github`, {
                 method: 'POST',
-                body: JSON.stringify({ repo_name: repoName, private: isPrivate }),
+                body: JSON.stringify({
+                    repo_name: repoName,
+                    private: isPrivate,
+                    ...(readme !== undefined ? { readme } : {}),
+                }),
             });
             if (!res.ok) throw new Error(await readError(res));
-            return res.json();
+            if (!res.body) return res.json();
+
+            const reader = res.body.getReader();
+            const decoder = new TextDecoder();
+            let buffer = '';
+            let fullText = ''; // everything decoded so far, for the old-shape fallback
+            let sawEventLine = false;
+
+            // The dialog is unclosable while a publish is pending (the stream
+            // can't be resumed), so a silently-dead socket must surface as an
+            // error rather than spin forever. The backend writes a line at
+            // least once per stage/file — minutes of silence means it's gone.
+            const STALL_MS = 120_000;
+            const read = async (): Promise<ReadableStreamReadResult<Uint8Array>> => {
+                let timer: ReturnType<typeof setTimeout> | undefined;
+                const stalled = new Promise<never>((_, reject) => {
+                    timer = setTimeout(() => {
+                        reader.cancel().catch(() => {});
+                        reject(
+                            new Error(
+                                'The publish stream stalled — check GitHub for a partial repo before retrying',
+                            ),
+                        );
+                    }, STALL_MS);
+                });
+                try {
+                    return await Promise.race([reader.read(), stalled]);
+                } finally {
+                    clearTimeout(timer);
+                }
+            };
+
+            // Old backend shape: not NDJSON — drain the rest of the stream and
+            // parse the whole body as a single GithubPublishResult.
+            const parseWholeBody = async (): Promise<GithubPublishResult> => {
+                for (;;) {
+                    const { done, value } = await read();
+                    if (value) fullText += decoder.decode(value, { stream: true });
+                    if (done) break;
+                }
+                return JSON.parse(fullText + decoder.decode());
+            };
+
+            for (;;) {
+                const { done, value } = await read();
+                if (value) {
+                    const chunk = decoder.decode(value, { stream: true });
+                    buffer += chunk;
+                    fullText += chunk;
+                }
+                const lines = buffer.split('\n');
+                // Mid-stream, the last piece may be a partial line — keep it
+                // buffered; once the stream ends it is the final line.
+                buffer = done ? '' : (lines.pop() ?? '');
+                for (const raw of lines) {
+                    const line = raw.trim();
+                    if (!line) continue;
+                    let parsed: GithubPublishStreamLine;
+                    try {
+                        parsed = JSON.parse(line);
+                    } catch {
+                        if (sawEventLine) throw new Error('Publish stream returned a malformed line');
+                        return parseWholeBody();
+                    }
+                    if (!parsed.event && !sawEventLine) return parseWholeBody();
+                    sawEventLine = true;
+                    if (parsed.event === 'progress') {
+                        onProgress?.(parsed);
+                    } else if (parsed.event === 'result') {
+                        return parsed;
+                    }
+                }
+                if (done) throw new Error('Publish stream ended unexpectedly');
+            }
         },
     });
 
