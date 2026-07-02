@@ -186,6 +186,28 @@ OrgContextDep = Annotated[Context, Depends(get_org_context)]
 PodContextDep = Annotated[Context, Depends(get_pod_context)]
 
 
+def reject_delegated_workload(action_label: str):
+    """Deny a delegated workload outright for an org-scoped destructive action.
+
+    Use where there is no pod context to run the nuanced destructive gate (an
+    explicit grant / session approval are pod-scoped). A workload has no
+    business performing these org-level, ownership-based actions — deleting a
+    user's connected account, etc. Humans are unaffected.
+    """
+
+    async def _dependency(ctx: OrgContextDep) -> None:
+        if ctx.actor_type == ActorType.DELEGATED_USER_WORKLOAD:
+            from app.core.domain.errors import DomainError
+
+            raise DomainError(
+                f"Delegated workloads may not {action_label}.",
+                code="DESTRUCTIVE_ACTION_REQUIRES_APPROVAL",
+                status_code=403,
+            )
+
+    return Depends(_dependency)
+
+
 async def pod_from_path(request: Request) -> ResourceRef:
     raw_pod_id = request.path_params.get("pod_id")
     if not raw_pod_id:

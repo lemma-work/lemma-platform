@@ -6,6 +6,7 @@ from fastapi import APIRouter, Query
 
 from app.core.api.pagination import parse_uuid_page_token
 from app.core.api.dependencies import CurrentUser
+from app.core.authorization.dependencies import reject_delegated_workload
 from app.modules.connectors.api.dependencies import ConnectorServiceDep
 from app.modules.connectors.api.schemas import (
     AccountCreateSchema,
@@ -138,6 +139,7 @@ async def get_credentials(
     summary="Delete Account",
     description="Delete a connected account and revoke the connection",
     status_code=200,
+    dependencies=[reject_delegated_workload("delete a connected account")],
 )
 async def delete_account(
     user: CurrentUser,

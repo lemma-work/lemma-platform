@@ -108,3 +108,50 @@ async def test_default_pod_agent_agent_delete_is_gated_despite_user_admin(
     # The human user (not delegated) can still delete it directly.
     human = await _delete_agent(authenticated_client, pod_id, victim["name"])
     assert human.status_code in (status.HTTP_200_OK, status.HTTP_204_NO_CONTENT), human.text
+
+
+@pytest.mark.asyncio
+async def test_default_pod_agent_cannot_delete_pod(
+    test_app, authenticated_client, fixed_test_org, fixed_test_user
+):
+    """pod.delete is destructive: even the default pod agent (mirroring an admin
+    user) is gated. The DELETE /pods/{id} route authorizes via
+    require_action(POD_DELETE) -> the gate."""
+    pod_id = await create_pod(authenticated_client, fixed_test_org)
+    client = await mint_default_pod_agent_client(
+        test_app, user_id=fixed_test_user["id"], pod_id=pod_id
+    )
+    try:
+        denied = await client.request("DELETE", f"/pods/{pod_id}")
+        assert denied.status_code == status.HTTP_403_FORBIDDEN, denied.text
+    finally:
+        await client.aclose()
+    # The pod still exists — the human admin can delete it.
+    human = await authenticated_client.request("DELETE", f"/pods/{pod_id}")
+    assert human.status_code in (status.HTTP_200_OK, status.HTTP_204_NO_CONTENT), human.text
+
+
+@pytest.mark.asyncio
+async def test_default_pod_agent_cannot_manage_members(
+    test_app, authenticated_client, fixed_test_org, fixed_test_user
+):
+    """pod.member.manage is destructive: the default pod agent is gated at the
+    require_action(POD_MEMBER_MANAGE) dependency, before the endpoint body."""
+    pod_id = await create_pod(authenticated_client, fixed_test_org)
+    client = await mint_default_pod_agent_client(
+        test_app, user_id=fixed_test_user["id"], pod_id=pod_id
+    )
+    try:
+        # The gate fires before the (missing) member is resolved -> 403, not 404.
+        removed = await client.request(
+            "DELETE", f"/pods/{pod_id}/members/{uuid4()}"
+        )
+        assert removed.status_code == status.HTTP_403_FORBIDDEN, removed.text
+        updated = await client.request(
+            "PATCH",
+            f"/pods/{pod_id}/members/{uuid4()}/roles",
+            json={"roles": ["POD_VIEWER"]},
+        )
+        assert updated.status_code == status.HTTP_403_FORBIDDEN, updated.text
+    finally:
+        await client.aclose()
