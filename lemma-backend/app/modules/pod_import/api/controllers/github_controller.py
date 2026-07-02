@@ -15,19 +15,24 @@ upload and shared-link flows already use.
 from __future__ import annotations
 
 import base64
+import json
 import re
 import zipfile
+from collections.abc import AsyncGenerator
 from io import BytesIO
 from typing import Any, Literal
 from uuid import UUID
 
 import httpx
 from fastapi import APIRouter, HTTPException, Query, Request, status
-from pydantic import BaseModel
+from fastapi.responses import StreamingResponse
+from pydantic import BaseModel, Field
 
 from app.core.api.dependencies import CurrentUser, UoWDep
 from app.core.authorization.dependencies import PodContextDep
+from app.core.config import settings
 from app.core.crypto import get_secret_cipher
+from app.core.log.log import get_logger
 from app.modules.connectors.api.dependencies import ConnectorOperationUseCasesDep
 from app.modules.connectors.domain.errors import (
     ConnectorDomainError,
@@ -44,7 +49,15 @@ from app.modules.pod_import.api.controllers.import_controller import (
 )
 from app.modules.pod_import.api.dependencies import ImportAppServiceDep
 from app.modules.pod_import.api.schemas import PodImportResponse
+from app.modules.pod_import.infrastructure.ai_readme import polish_available, polish_readme
 from app.modules.pod_import.infrastructure.exporter import BundleExporter
+from app.modules.pod_import.infrastructure.readme import (
+    import_badge_markdown,
+    render_readme,
+    resource_counts,
+)
+
+logger = get_logger(__name__)
 
 github_publish_router = APIRouter(prefix="/pods/{pod_id}/export", tags=["imports"])
 github_import_router = APIRouter(prefix="/imports/from-github", tags=["imports"])
@@ -70,18 +83,37 @@ _GITHUB_ZIPBALL_TIMEOUT_SECONDS = 30.0
 class GithubPublishRequest(BaseModel):
     repo_name: str | None = None
     private: bool = False
+    # A user-edited README from the share dialog. When non-empty it is
+    # committed verbatim (no render, no AI polish) — except any import URL in
+    # it gets rewritten to the final repo slug, which a name collision can
+    # change server-side after the preview guessed one. Capped well under the
+    # ~150KB Composio single-request ceiling: a bigger file would silently be
+    # split into .chunkNNNN pieces, leaving the repo with no rendered README
+    # (and no import badge) at all.
+    readme: str | None = Field(default=None, max_length=100_000)
 
 
 class GithubPublishResponse(BaseModel):
     status: Literal["published", "not_connected", "failed"]
     repo_url: str | None = None
     import_badge_markdown: str | None = None
+    # The exact README text committed to the repo (post AI polish / post
+    # import-URL rewrite) so the UI can show what actually landed — None
+    # unless the publish got far enough to write one.
+    readme: str | None = None
     message: str | None = None
 
 
 class GithubPublishPreviewResponse(BaseModel):
     repo_name: str
     readme: str
+    # Non-zero bundle resource counts, e.g. {"tables": 5, "agents": 1} — the
+    # share dialog's summary of what publish will ship.
+    resource_counts: dict[str, int]
+    # True when publish will run the system-LLM polish pass over the README
+    # draft — the share dialog labels the publish step accordingly. Preview
+    # itself stays deterministic (never calls the model).
+    ai_polish: bool
 
 
 def _github_repo_slug(name: str) -> str:
@@ -116,48 +148,36 @@ def _strip_bundle_root(pod_name: str, entries: list[tuple[str, bytes]]) -> list[
     ]
 
 
-def _capability_bullets(archive: bytes) -> list[str]:
-    """A short "this pod includes" list, counted straight from the archive's
-    top-level resource directories — no need to re-stage the bundle."""
-    kinds = ("tables", "functions", "agents", "workflows", "schedules", "surfaces", "apps")
-    counts: dict[str, set[str]] = {k: set() for k in kinds}
-    with zipfile.ZipFile(BytesIO(archive)) as zf:
-        for entry in zf.namelist():
-            parts = entry.strip("/").split("/")
-            # tolerate a wrapping top-level folder (export archives have one)
-            for i, part in enumerate(parts):
-                if part in kinds and i + 1 < len(parts) and parts[i + 1]:
-                    counts[part].add(parts[i + 1])
-    labels = {
-        "tables": "table",
-        "functions": "function",
-        "agents": "agent",
-        "workflows": "workflow",
-        "schedules": "schedule",
-        "surfaces": "surface",
-        "apps": "app",
-    }
-    bullets = []
-    for kind in kinds:
-        n = len(counts[kind])
-        if n:
-            bullets.append(f"- {n} {labels[kind]}{'s' if n != 1 else ''}")
-    return bullets
+def _frontend_base() -> str:
+    return settings.frontend_url.rstrip("/")
 
 
-def _render_readme(pod_name: str, description: str | None, archive: bytes, import_url: str) -> str:
-    bullets = _capability_bullets(archive)
-    lines = [
-        f"# {pod_name}",
-        "",
-        description or f"A pod built with [Lemma]({import_url.rsplit('/import', 1)[0]}).",
-        "",
-        f"[![Import to Lemma](https://img.shields.io/badge/Import-Lemma-black)]({import_url})",
-        "",
-    ]
-    if bullets:
-        lines += ["## This pod includes", "", *bullets, ""]
-    return "\n".join(lines)
+def _rewrite_import_urls(text: str, import_url: str, requested_slug: str) -> str:
+    """Repoint an override README's import link(s) at the repo that actually
+    got created: the preview embeds a URL guessed from the requested owner/
+    slug, but a name collision makes _create_repo_with_retry land on a
+    ``-N``-suffixed repo. Only URLs ending in the slug this publish asked for
+    are rewritten — a deliberate link to some *other* pod's import page, or
+    punctuation right after the URL, must survive verbatim."""
+    # The trailing guard is two lookaheads because "." is both a legal slug
+    # character and sentence punctuation: "…/trumpet. Enjoy!" must rewrite
+    # (dot ends the sentence), while "…/trumpet-2" and "…/trumpet.zip" are
+    # different slugs and must not.
+    pattern = (
+        rf"{re.escape(_frontend_base())}/import/github/[A-Za-z0-9_.-]+/"
+        rf"{re.escape(requested_slug)}(?![A-Za-z0-9_-])(?!\.[A-Za-z0-9_-])"
+    )
+    # Lambda replacement: import_url is literal text, not a template re.sub
+    # should expand backslashes in.
+    return re.sub(pattern, lambda _match: import_url, text)
+
+
+def _progress_line(**fields: Any) -> str:
+    return json.dumps({"event": "progress", **fields}) + "\n"
+
+
+def _result_line(result: GithubPublishResponse) -> str:
+    return json.dumps({"event": "result", **result.model_dump(mode="json")}) + "\n"
 
 
 def _extract_result(result: Any) -> dict[str, Any]:
@@ -242,24 +262,6 @@ async def _push_one_file_best_effort(
     return False
 
 
-async def _push_files_best_effort(
-    use_cases: Any,
-    common: dict[str, Any],
-    owner: str,
-    repo: str,
-    files: list[tuple[str, bytes]],
-) -> list[str]:
-    """Commit each file individually (chunking any that don't fit in one
-    request); a file that's too large even at the smallest chunk size is
-    skipped rather than aborting the whole publish — better a repo missing one
-    oversized file than no repo."""
-    skipped: list[str] = []
-    for path, content in files:
-        if not await _push_one_file_best_effort(use_cases, common, owner, repo, path, content):
-            skipped.append(path)
-    return skipped
-
-
 def _reassemble_chunked_entries(archive: bytes) -> bytes:
     """A repo published by Lemma may have large files split into
     `<path>.chunkNNNNofMMMM` pieces (see _push_one_file_best_effort) — glue
@@ -338,9 +340,11 @@ async def preview_github_publish(
     repo_name: str | None = Query(None),
 ) -> GithubPublishPreviewResponse:
     """What Publish will actually write, without touching GitHub: the repo name
-    it'll create and the exact README it'll commit — so the share dialog can
+    it'll create and the README draft it'll commit — so the share dialog can
     show it before the user commits to publishing. Skips row data (with_data=
-    False) since the README only ever reports resource *counts*, not rows."""
+    False): the renderer then omits the seed-row column, and re-exporting every
+    row just to preview a README would be waste. Deterministic — the optional
+    AI polish (flagged via ``ai_polish``) only runs on publish."""
     pod = await pod_service.get_pod(pod_id, user.id)
     if pod is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Pod not found")
@@ -354,12 +358,17 @@ async def preview_github_publish(
     account = await account_repo.get_by_user_org_and_app(user.id, pod.organization_id, "github")
     owner = account.provider_account_id if account else "your-username"
 
-    import_url = f"https://lemma.work/import/github/{owner}/{slug}"
-    readme = _render_readme(pod.name, pod.description, archive, import_url)
-    return GithubPublishPreviewResponse(repo_name=slug, readme=readme)
+    import_url = f"{_frontend_base()}/import/github/{owner}/{slug}"
+    readme = render_readme(pod.name, pod.description, archive, import_url, _frontend_base())
+    return GithubPublishPreviewResponse(
+        repo_name=slug,
+        readme=readme,
+        resource_counts=resource_counts(archive),
+        ai_polish=polish_available(),
+    )
 
 
-@github_publish_router.post("/github", response_model=GithubPublishResponse)
+@github_publish_router.post("/github", response_class=StreamingResponse)
 async def publish_pod_to_github(
     pod_id: UUID,
     user: CurrentUser,
@@ -369,26 +378,25 @@ async def publish_pod_to_github(
     use_cases: ConnectorOperationUseCasesDep,
     request: Request,
     body: GithubPublishRequest,
-) -> GithubPublishResponse:
+) -> StreamingResponse:
     """Publish this pod as a new GitHub repo: bundle + a generated README with
     an import badge. Requires the caller to have already connected GitHub
-    (Connectors settings) — this never initiates OAuth itself."""
+    (Connectors settings) — this never initiates OAuth itself.
+
+    Streams NDJSON: ``{"event":"progress",...}`` lines (stage export/repo/
+    readme, then one per file upload with done/total/path) and a final
+    ``{"event":"result",...}`` line carrying exactly the GithubPublishResponse
+    fields. A publish is dozens of sequential Composio calls, easily a minute —
+    without progress the dialog is a dead spinner. Errors after streaming
+    starts can't become HTTP errors anymore, so they map onto the same result
+    statuses the old JSON response used (the missing-connection case is also a
+    result line, so the frontend has one parsing path)."""
     pod = await pod_service.get_pod(pod_id, user.id)
     if pod is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Pod not found")
 
     account_repo = AccountRepository(uow, encryption=get_secret_cipher())
     account = await account_repo.get_by_user_org_and_app(user.id, pod.organization_id, "github")
-    if account is None:
-        return GithubPublishResponse(
-            status="not_connected",
-            message="Connect GitHub in this pod's Connectors settings, then try again.",
-        )
-
-    pod_name, archive = await BundleExporter(uow).export(
-        pod_id=pod_id, user_id=user.id, ctx=ctx, with_data=True
-    )
-    repo_name = _github_repo_slug(body.repo_name or pod_name or pod.name)
 
     common: dict[str, Any] = dict(
         organization_id=pod.organization_id,
@@ -396,60 +404,139 @@ async def publish_pod_to_github(
         user_id=user.id,
         request=request,
     )
-    try:
-        repo = await _create_repo_with_retry(
-            use_cases,
-            common,
-            repo_name,
-            description=pod.description or f"A pod built with Lemma: {pod.name}",
-            private=body.private,
-        )
-        full_name = repo.get("full_name") or f"{repo.get('owner', {}).get('login', '')}/{repo_name}"
-        html_url = repo.get("html_url") or f"https://github.com/{full_name}"
-        owner, repo_slug = full_name.split("/", 1)
 
-        import_url = f"https://lemma.work/import/github/{owner}/{repo_slug}"
-        readme = _render_readme(pod.name, pod.description, archive, import_url)
-        # One file per commit, not the whole bundle as a single base64 blob —
-        # a real bundle can exceed Composio's request-size ceiling as one
-        # payload (a live publish hit a 413 pushing the zip whole), and a
-        # committed file tree is what makes the repo importable in the first
-        # place (import_from_github reads pod.json etc. from the repo's own
-        # tree, not from a zip nested inside it). The ceiling's exact size is
-        # unknown (it's Composio's own gateway, not GitHub's — a live publish
-        # still hit 413 on an individual file after that first fix), so a
-        # single oversized file is skipped rather than failing the whole
-        # publish; the rest of the bundle still lands.
-        files = [
-            ("README.md", readme.encode("utf-8")),
-            *_strip_bundle_root(pod_name, _archive_entries(archive)),
-        ]
-        skipped = await _push_files_best_effort(use_cases, common, owner, repo_slug, files)
-        if any(path.rsplit("/", 1)[-1] == "pod.json" for path in skipped):
-            raise OperationExecutionError(
-                "pod.json itself was too large to publish — the repo was created but "
-                "isn't importable. This shouldn't happen for a normal pod; please retry."
+    # The generator runs after this handler returns, but it can keep using the
+    # request-scoped uow: FastAPI keeps yield-dependencies (and their pooled
+    # connection) alive for the whole StreamingResponse body (same lifecycle
+    # the SSE endpoints in conversation_controller.py rely on). Pinning one
+    # connection for a one-shot publish is fine; the long part (Composio
+    # calls) doesn't touch the DB anyway.
+    async def publish_events() -> AsyncGenerator[str, None]:
+        if account is None:
+            yield _result_line(
+                GithubPublishResponse(
+                    status="not_connected",
+                    message="Connect GitHub in this pod's Connectors settings, then try again.",
+                )
             )
-    except (OperationExecutionUnauthorizedError, OperationExecutionAccessDeniedError):
-        return GithubPublishResponse(
-            status="not_connected",
-            message="Your GitHub connection needs to be reconnected — check Connectors settings.",
-        )
-    except (OperationExecutionError, ConnectorDomainError) as exc:
-        return GithubPublishResponse(status="failed", message=str(exc))
+            return
+        try:
+            yield _progress_line(stage="export", label="Bundling pod")
+            pod_name, archive = await BundleExporter(uow).export(
+                pod_id=pod_id, user_id=user.id, ctx=ctx, with_data=True
+            )
+            repo_name = _github_repo_slug(body.repo_name or pod_name or pod.name)
 
-    message = (
-        f"{len(skipped)} file(s) were too large to publish and were skipped: "
-        f"{', '.join(skipped)}"
-        if skipped
-        else None
-    )
-    return GithubPublishResponse(
-        status="published",
-        repo_url=html_url,
-        import_badge_markdown=f"[![Import to Lemma](https://img.shields.io/badge/Import-Lemma-black)]({import_url})",
-        message=message,
-    )
+            yield _progress_line(stage="repo", label="Creating repository")
+            repo = await _create_repo_with_retry(
+                use_cases,
+                common,
+                repo_name,
+                description=pod.description or f"A pod built with Lemma: {pod.name}",
+                private=body.private,
+            )
+            full_name = (
+                repo.get("full_name") or f"{repo.get('owner', {}).get('login', '')}/{repo_name}"
+            )
+            html_url = repo.get("html_url") or f"https://github.com/{full_name}"
+            owner, repo_slug = full_name.split("/", 1)
+
+            import_url = f"{_frontend_base()}/import/github/{owner}/{repo_slug}"
+            override = body.readme if body.readme and body.readme.strip() else None
+            ai_polish = override is None and polish_available()
+            yield _progress_line(
+                stage="readme",
+                label="Polishing README with AI" if ai_polish else "Writing README",
+            )
+            if override is not None:
+                # The user already saw and edited the draft — commit their text
+                # verbatim. Only the import URL may be stale: the preview embeds
+                # one guessed from the requested owner/slug, and a repo-name
+                # collision just landed the repo on a suffixed slug.
+                readme = _rewrite_import_urls(override, import_url, repo_name)
+            else:
+                readme = render_readme(
+                    pod.name, pod.description, archive, import_url, _frontend_base()
+                )
+                if ai_polish:
+                    readme = (
+                        await polish_readme(
+                            readme,
+                            pod_name=pod.name,
+                            description=pod.description,
+                            user_id=user.id,
+                            organization_id=pod.organization_id,
+                            pod_id=pod_id,
+                        )
+                        or readme
+                    )
+            # One file per commit, not the whole bundle as a single base64 blob —
+            # a real bundle can exceed Composio's request-size ceiling as one
+            # payload (a live publish hit a 413 pushing the zip whole), and a
+            # committed file tree is what makes the repo importable in the first
+            # place (import_from_github reads pod.json etc. from the repo's own
+            # tree, not from a zip nested inside it). The ceiling's exact size is
+            # unknown (it's Composio's own gateway, not GitHub's — a live publish
+            # still hit 413 on an individual file after that first fix), so a
+            # single oversized file is skipped rather than failing the whole
+            # publish; the rest of the bundle still lands.
+            files = [
+                ("README.md", readme.encode("utf-8")),
+                *_strip_bundle_root(pod_name, _archive_entries(archive)),
+            ]
+            skipped: list[str] = []
+            for done, (path, content) in enumerate(files, start=1):
+                yield _progress_line(stage="upload", done=done, total=len(files), path=path)
+                if not await _push_one_file_best_effort(
+                    use_cases, common, owner, repo_slug, path, content
+                ):
+                    skipped.append(path)
+            if any(path.rsplit("/", 1)[-1] == "pod.json" for path in skipped):
+                raise OperationExecutionError(
+                    "pod.json itself was too large to publish — the repo was created but "
+                    "isn't importable. This shouldn't happen for a normal pod; please retry."
+                )
+        except (OperationExecutionUnauthorizedError, OperationExecutionAccessDeniedError):
+            yield _result_line(
+                GithubPublishResponse(
+                    status="not_connected",
+                    message="Your GitHub connection needs to be reconnected — "
+                    "check Connectors settings.",
+                )
+            )
+            return
+        except (OperationExecutionError, ConnectorDomainError) as exc:
+            yield _result_line(GithubPublishResponse(status="failed", message=str(exc)))
+            return
+        except Exception:
+            # Mid-stream there is no 500 to raise; surface a generic failure
+            # (never a raw traceback) and keep the details server-side.
+            logger.exception("GitHub publish failed unexpectedly for pod %s", pod_id)
+            yield _result_line(
+                GithubPublishResponse(
+                    status="failed",
+                    message="Publishing failed unexpectedly — please try again.",
+                )
+            )
+            return
+
+        message = (
+            f"{len(skipped)} file(s) were too large to publish and were skipped: "
+            f"{', '.join(skipped)}"
+            if skipped
+            else None
+        )
+        yield _result_line(
+            GithubPublishResponse(
+                status="published",
+                repo_url=html_url,
+                import_badge_markdown=import_badge_markdown(import_url),
+                readme=readme,
+                message=message,
+            )
+        )
+
+    return StreamingResponse(publish_events(), media_type="application/x-ndjson")
 
 
 @github_import_router.post(

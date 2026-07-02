@@ -440,8 +440,10 @@ async def test_github_publish_preview_renders_the_readme_without_touching_github
     body = resp.json()
     assert body["repo_name"] == "my-cool-pod"
     assert "# " in body["readme"]
-    assert "Import-Lemma" in body["readme"]
+    assert "img.shields.io/badge/Import%20to-Lemma" in body["readme"]
     assert "table" in body["readme"]  # capability bullet from the seeded widgets table
+    # Preview never calls the model; the flag only reports whether publish will.
+    assert isinstance(body["ai_polish"], bool)
 
 
 async def test_create_new_pod_rejects_a_bundle_with_no_pod_json(
