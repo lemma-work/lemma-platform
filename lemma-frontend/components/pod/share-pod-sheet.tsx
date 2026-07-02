@@ -479,18 +479,18 @@ export function SharePodSheet({ podId, podName }: { podId: string; podName?: str
                             >
                                 Open Connectors <ExternalLink className="h-3 w-3" />
                             </Link>
-                            <button
-                                type="button"
+                            <Button
+                                variant="ghost"
+                                size="xs"
                                 onClick={() => {
                                     // Reconnected in another tab? Back to the
                                     // form — no close-and-reopen dance.
                                     setGithubResult(null);
                                     setShowGithubForm(true);
                                 }}
-                                className="text-xs font-medium text-[var(--text-secondary)] hover:underline"
                             >
                                 Try again
-                            </button>
+                            </Button>
                         </div>
                     </div>
                 ) : !showGithubForm ? (

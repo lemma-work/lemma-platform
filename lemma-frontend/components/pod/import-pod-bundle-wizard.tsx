@@ -87,7 +87,7 @@ function errorHint(raw: string): string | null {
 function Section({ title, children }: { title: string; children: React.ReactNode }) {
     return (
         <div className="mb-5">
-            <p className="mb-2.5 text-[11px] font-semibold uppercase tracking-wider text-[var(--text-tertiary)]">
+            <p className="mb-2.5 text-xs font-semibold uppercase tracking-wider text-[var(--text-tertiary)]">
                 {title}
             </p>
             {children}
@@ -140,7 +140,7 @@ function InstallHero({
     return (
         <div className="mb-5">
             <div className="flex items-center gap-3.5">
-                <div className="flex h-14 w-14 shrink-0 items-center justify-center rounded-2xl border border-[var(--border-subtle)] bg-[var(--surface-2)] shadow-[var(--shadow-xs)]">
+                <div className="flex h-14 w-14 shrink-0 items-center justify-center rounded-lg border border-[var(--border-subtle)] bg-[var(--surface-2)]">
                     <PackagePlus className="h-7 w-7 text-[var(--accent)]" aria-hidden />
                 </div>
                 <div className="min-w-0">
@@ -655,7 +655,7 @@ export function ImportPodBundleWizard({
                             </>
                         )}
                         {standalone && source && (
-                            <p className="mb-2.5 text-[11px] font-semibold uppercase tracking-wider text-[var(--text-tertiary)]">
+                            <p className="mb-2.5 text-xs font-semibold uppercase tracking-wider text-[var(--text-tertiary)]">
                                 Install to
                             </p>
                         )}
@@ -758,12 +758,12 @@ export function ImportPodBundleWizard({
                             onChange={(key, value) => setVars((prev) => ({ ...prev, [key]: value }))}
                         />
                         <div className="mb-5">
-                            <button
-                                type="button"
+                            <Button
+                                variant="ghost"
                                 disabled={applyImport.isPending}
                                 onClick={() => setPlanOpen((open) => !open)}
                                 aria-expanded={planOpen || applyImport.isPending}
-                                className="flex w-full items-center gap-1.5 text-sm font-medium text-[var(--text-secondary)] hover:text-[var(--text-primary)] disabled:cursor-default disabled:hover:text-[var(--text-secondary)]"
+                                className="w-full justify-start gap-1.5 px-2 text-sm font-medium text-[var(--text-secondary)]"
                             >
                                 <ChevronRight
                                     className={`h-4 w-4 shrink-0 transition-transform ${
@@ -772,7 +772,7 @@ export function ImportPodBundleWizard({
                                     aria-hidden
                                 />
                                 What’s inside · {imp.plan.length} step{imp.plan.length === 1 ? '' : 's'}
-                            </button>
+                            </Button>
                             {(planOpen || applyImport.isPending) && (
                                 <div className="mt-2">
                                     <PlanList
