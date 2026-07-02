@@ -1,7 +1,13 @@
 from uuid import UUID
 from typing import List
 
-from app.core.authorization.context import Context, ResourceRef, ResourceType, ResourceVisibility
+from app.core.authorization.context import (
+    ActorType,
+    Context,
+    ResourceRef,
+    ResourceType,
+    ResourceVisibility,
+)
 from app.core.authorization.permissions import Permissions
 from app.core.helpers.slug import normalize_resource_name
 from app.modules.icon.services.icon_service import IconService
@@ -270,10 +276,15 @@ class FlowService:
     ) -> None:
         flow = await self.flow_repo.get(flow_id, ctx=ctx)
         old_icon_url = flow.icon_url if flow else None
+        # A delegated workload always routes through authz — workflow.delete is
+        # destructive and gated — so the owner shortcut can't let it bypass.
+        is_delegated = ctx is not None and (
+            ctx.actor_type == ActorType.DELEGATED_USER_WORKLOAD
+        )
         if (
             flow
             and requester_user_id is not None
-            and flow.user_id != requester_user_id
+            and (is_delegated or flow.user_id != requester_user_id)
         ):
             await self._require_action(
                 requester_user_id=requester_user_id,

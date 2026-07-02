@@ -106,18 +106,21 @@ def test_equivalent_permission_ids_include_higher_resource_permissions():
     }
 
 
-def test_execute_implies_read_for_agent_function_workflow():
+def test_execute_and_delete_imply_read_for_agent_function_workflow():
     assert equivalent_permission_ids(Permissions.AGENT_READ) == {
         Permissions.AGENT_READ,
         Permissions.AGENT_EXECUTE,
+        Permissions.AGENT_DELETE,
     }
     assert equivalent_permission_ids(Permissions.FUNCTION_READ) == {
         Permissions.FUNCTION_READ,
         Permissions.FUNCTION_EXECUTE,
+        Permissions.FUNCTION_DELETE,
     }
     assert equivalent_permission_ids(Permissions.WORKFLOW_READ) == {
         Permissions.WORKFLOW_READ,
         Permissions.WORKFLOW_EXECUTE,
+        Permissions.WORKFLOW_DELETE,
     }
     # Read must never satisfy an execute check.
     assert equivalent_permission_ids(Permissions.AGENT_EXECUTE) == {

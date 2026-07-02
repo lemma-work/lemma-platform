@@ -5,6 +5,7 @@ from __future__ import annotations
 from uuid import UUID
 
 from app.core.authorization.context import (
+    ActorType,
     Context,
     ResourceRef,
     ResourceType,
@@ -240,7 +241,15 @@ class AgentService:
         ctx: Context | None = None,
     ) -> None:
         agent = await self.get_agent_by_name(pod_id=pod_id, name=name, ctx=ctx)
-        if requester_user_id is not None and agent.user_id != requester_user_id:
+        # A delegated workload must always route through authz — agent.delete is
+        # destructive and gated — so the owner shortcut (creator deletes their
+        # own agent) never lets a workload bypass it.
+        is_delegated = ctx is not None and (
+            ctx.actor_type == ActorType.DELEGATED_USER_WORKLOAD
+        )
+        if requester_user_id is not None and (
+            is_delegated or agent.user_id != requester_user_id
+        ):
             await self._require_action(
                 requester_user_id=requester_user_id,
                 action=Permissions.AGENT_DELETE,

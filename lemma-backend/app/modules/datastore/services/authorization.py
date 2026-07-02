@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from uuid import UUID
 
-from app.core.authorization.context import Context, ResourceRef, ResourceType
+from app.core.authorization.context import ActorType, Context, ResourceRef, ResourceType
 from app.core.authorization.current import get_current_context
 from app.core.authorization.permissions import Permissions
 from app.core.authorization.context import ResourceVisibility
@@ -281,7 +281,14 @@ class DatastoreAuthorization:
         user_id: UUID,
         ctx: Context | None = None,
     ) -> None:
-        if file_entity.owner_user_id == user_id:
+        # A human deleting their own file is fine via the owner shortcut. A
+        # delegated workload must route through authz — folder.delete is
+        # destructive and gated — so the owner shortcut can't let a workload
+        # bypass it for a file its delegating user happens to own.
+        is_delegated = ctx is not None and (
+            getattr(ctx, "actor_type", None) == ActorType.DELEGATED_USER_WORKLOAD
+        )
+        if file_entity.owner_user_id == user_id and not is_delegated:
             return
         await self.require_document_delete(
             user_id=user_id,
