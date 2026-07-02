@@ -1,3 +1,24 @@
+"""Resolves which connected account a connector call runs against.
+
+Resolution rule:
+- **Account owner**: a user (or a workload delegating for them) using their own
+  account needs no grant beyond ``connector.use`` — the owner-match
+  early-return below handles it.
+- **Default pod agent**: mirrors the invoking user, so it resolves to the
+  user's own account for the connector.
+- **Named workload with a pinned (shared) account id**: authority comes from
+  the workload's grants alone — ``connector.use`` on the connector plus
+  ``connector_account.use`` on the pinned account — and is therefore
+  invoker-independent. This is what makes a shared-sender setup (e.g. one
+  team Gmail account pinned on a function) work for every pod member.
+
+Connector-account *visibility* is derived (RESTRICTED iff any grant row
+exists); for human actors that still means "non-owners need a user-level
+grant". For workloads the derived visibility is inert: the grant-first
+evaluation in ``_authorize_delegated_workload`` consults the workload's own
+grants for every visibility.
+"""
+
 from uuid import UUID
 
 from app.core.authorization.context import ActorType, Context, ResourceRef

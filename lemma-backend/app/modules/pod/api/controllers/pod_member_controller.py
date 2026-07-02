@@ -5,6 +5,8 @@ from fastapi import APIRouter, HTTPException, Query, status
 
 from app.core.api.pagination import parse_uuid_page_token
 from app.core.api.dependencies import CurrentUser
+from app.core.authorization.dependencies import pod_from_path, require_action
+from app.core.authorization.permissions import Permissions
 from app.modules.pod.api.dependencies import PodMemberServiceDep
 from app.modules.pod.api.schemas.pod_schemas import (
     PodMemberAddRequest,
@@ -16,6 +18,12 @@ from app.modules.pod.api.schemas.pod_schemas import (
 from app.modules.pod.domain.pod_entities import PodMemberEntity
 
 router = APIRouter(prefix="/pods/{pod_id}/members", tags=["Pod Members"])
+
+# Managing pod members is destructive: routing through require_action puts it
+# behind ctx.require, so a delegated workload is gated (needs an explicit grant
+# or a session approval) instead of inheriting its user's admin power silently.
+# A human admin (holding pod.member.manage) is unaffected.
+_PodMemberManageDep = require_action(Permissions.POD_MEMBER_MANAGE, pod_from_path)
 
 
 @router.post(
@@ -149,6 +157,7 @@ async def list_members(
     summary="Update Member Roles",
     description="Update a pod member's roles",
     response_model=PodMemberResponse,
+    dependencies=[_PodMemberManageDep],
 )
 async def update_member_roles(
     pod_id: UUID,
@@ -175,6 +184,7 @@ async def update_member_roles(
     operation_id="pod.member.remove",
     summary="Remove Pod Member",
     description="Remove a member from a pod",
+    dependencies=[_PodMemberManageDep],
 )
 async def remove_member(
     pod_id: UUID,

@@ -15,6 +15,7 @@ from app.core.authorization.context import (
     PrincipalRef,
     ResourceType,
 )
+from app.core.authorization.delegation import DESTRUCTIVE_ACTIONS
 from app.core.authorization.grants import grant_resource_type_values
 from app.core.authorization.models import ResourcePermissionGrantModel
 from app.core.authorization.permissions import equivalent_permission_ids
@@ -69,6 +70,19 @@ def allowed_actions_expr(
     owner_actions = list(
         dict.fromkeys([*owner_actions_for_resource(resource_type), *role_actions])
     )
+    grant_candidate_actions: Sequence[str] = resource_actions
+    if (
+        ctx.actor_type == ActorType.DELEGATED_USER_WORKLOAD
+        and not ctx.workload_principal_refs
+    ):
+        # Default pod agent (user-equivalent): destructive actions never
+        # project as available — at execution time they require a session
+        # approval (DESTRUCTIVE_ACTION_REQUIRES_APPROVAL otherwise).
+        role_actions = [a for a in role_actions if a not in DESTRUCTIVE_ACTIONS]
+        owner_actions = [a for a in owner_actions if a not in DESTRUCTIVE_ACTIONS]
+        grant_candidate_actions = [
+            a for a in resource_actions if a not in DESTRUCTIVE_ACTIONS
+        ]
     empty_actions = _text_array([])
 
     if ctx.actor_type == ActorType.ANONYMOUS:
@@ -85,7 +99,6 @@ def allowed_actions_expr(
             pod_id_col=pod_id_col,
             owner_user_id_col=owner_user_id_col,
             visibility_col=visibility_col,
-            role_actions=role_actions,
             all_actions=all_actions,
             empty_actions=empty_actions,
             resource_path_col=resource_path_col,
@@ -97,7 +110,7 @@ def allowed_actions_expr(
         resource_id_col=resource_id_col,
         pod_id_col=pod_id_col,
         principal_sets=ctx.grant_principal_sets or (ctx.principal_refs,),
-        candidate_actions=resource_actions,
+        candidate_actions=grant_candidate_actions,
         resource_path_col=resource_path_col,
     )
 
@@ -164,61 +177,40 @@ def _delegated_allowed_actions_expr(
     pod_id_col,
     owner_user_id_col,
     visibility_col,
-    role_actions: Sequence[str],
     all_actions: Sequence[str],
     empty_actions: ColumnElement,
     resource_path_col=None,
 ) -> ColumnElement:
-    delegated_actions = []
-    for action in role_actions:
-        workload_grant = _grant_exists_for_action(
-            resource_type=resource_type,
-            resource_id_col=resource_id_col,
-            pod_id_col=pod_id_col,
-            principal_group=ctx.workload_principal_refs,
-            action=action,
-            resource_path_col=resource_path_col,
-        )
-        delegated_actions.append((action, workload_grant))
-
-    pod_public_actions = _conditional_actions_array_expr(delegated_actions)
-    restricted_actions = _grant_actions_array_expr(
-        ctx=ctx,
-        resource_type=resource_type,
-        resource_id_col=resource_id_col,
-        pod_id_col=pod_id_col,
-        principal_sets=ctx.grant_principal_sets or (ctx.principal_refs,),
-        candidate_actions=role_actions,
-        resource_path_col=resource_path_col,
+    # Grant-first: the workload's own grants decide the projection for every
+    # visibility, mirroring _authorize_delegated_workload. The invoking user's
+    # role neither widens nor narrows it; only PERSONAL rows owned by someone
+    # else stay empty.
+    workload_actions = _conditional_actions_array_expr(
+        [
+            (
+                action,
+                _grant_exists_for_action(
+                    resource_type=resource_type,
+                    resource_id_col=resource_id_col,
+                    pod_id_col=pod_id_col,
+                    principal_group=ctx.workload_principal_refs,
+                    action=action,
+                    resource_path_col=resource_path_col,
+                ),
+            )
+            for action in all_actions
+        ]
     )
-
-    whens = []
-    if visibility_col is not None:
-        whens.append((visibility_col == "RESTRICTED", restricted_actions))
+    if visibility_col is None:
+        return workload_actions
     if owner_user_id_col is not None and ctx.user_id is not None:
-        owner_actions = _conditional_actions_array_expr(
-            [
-                (
-                    action,
-                    _grant_exists_for_action(
-                        resource_type=resource_type,
-                        resource_id_col=resource_id_col,
-                        pod_id_col=pod_id_col,
-                        principal_group=ctx.workload_principal_refs,
-                        action=action,
-                        resource_path_col=resource_path_col,
-                    ),
-                )
-                for action in all_actions
-            ]
+        personal_denied = and_(
+            visibility_col == "PERSONAL",
+            or_(owner_user_id_col.is_(None), owner_user_id_col != ctx.user_id),
         )
-        whens.append((owner_user_id_col == ctx.user_id, owner_actions))
-    if visibility_col is not None:
-        whens.append((visibility_col.in_(["POD", "PUBLIC"]), pod_public_actions))
-        whens.append((visibility_col == "PERSONAL", empty_actions))
     else:
-        whens.append((literal(True), pod_public_actions))
-    return case(*whens, else_=empty_actions)
+        personal_denied = visibility_col == "PERSONAL"
+    return case((personal_denied, empty_actions), else_=workload_actions)
 
 
 def _grant_actions_array_expr(

@@ -3,7 +3,7 @@ from __future__ import annotations
 from typing import Optional, Sequence, Tuple
 from uuid import UUID
 
-from app.core.authorization.context import Context, ResourceVisibility
+from app.core.authorization.context import ActorType, Context, ResourceVisibility
 from app.modules.datastore.domain.datastore_entities import (
     ColumnSchema,
     DatastoreTableEntity,
@@ -251,8 +251,16 @@ class TableService:
         if not table:
             raise DatastoreTableNotFoundError("Table not found")
 
+        # A human deleting a table they created is fine via the owner shortcut.
+        # A delegated workload must ALWAYS route through authz, even for a table
+        # its delegating user created — table.delete is destructive and gated
+        # (needs an explicit workload grant or a session approval), so the owner
+        # shortcut must not let a workload bypass that.
+        is_delegated = ctx is not None and (
+            ctx.actor_type == ActorType.DELEGATED_USER_WORKLOAD
+        )
         if ctx is not None:
-            if table.user_id != requester_user_id:
+            if is_delegated or table.user_id != requester_user_id:
                 await self.authz.require_table_delete(
                     user_id=requester_user_id,
                     pod_id=pod_id,

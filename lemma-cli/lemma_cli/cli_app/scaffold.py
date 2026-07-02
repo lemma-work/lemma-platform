@@ -509,8 +509,12 @@ def resource_example(resource_type: str, name: str = "example") -> str:
 PERMISSION_PRESETS: dict[str, dict[str, list[str]]] = {
     "datastore_table": {
         "read": ["datastore.table.read", "datastore.record.read"],
+        # record deletion rides on datastore.record.write; there is no
+        # datastore.record.delete permission in the backend registry.
         "write": ["datastore.record.write"],
-        "delete": ["datastore.record.delete"],
+        # Structural table deletion — a DESTRUCTIVE action: granting it gives
+        # the workload standing authority (no runtime approval prompt).
+        "delete": ["datastore.table.delete"],
     },
     "folder": {
         "read": ["folder.read"],

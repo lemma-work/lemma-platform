@@ -54,7 +54,7 @@ Keep the note short (half a page). Name every resource in it — those names bec
 | Output feeds another system | Function, or agent **with `output_schema`** |
 | Several judgment sub-steps that are **one continuous reasoning pass** | **One agent** returning rich `output_schema` — not multiple agent nodes (heuristic #1) |
 | Humans must **approve, be assigned, or see progress**; or code + agents + humans interleave durably | Workflow composing the above (heuristic #2) |
-| One workload must call/compose an agent or a function (incl. "let the agent decide at runtime") | Grant it as a tool — `agent.execute` → `agent_<name>`, or `function.read` + `function.execute` **plus the function's own grants** → `function_<name>` — or use a workflow node. **Never wrap one primitive in another** (heuristic #6; agents.md → "Agents & Functions as Tools") |
+| One workload must call/compose an agent or a function (incl. "let the agent decide at runtime") | Grant it as a tool — one grant each: `agent.execute` → `agent_<name>`, or `function.execute` → `function_<name>` (the callee runs under its own grants; no mirroring) — or use a workflow node. **Never wrap one primitive in another** (heuristic #6; agents.md → "Agents & Functions as Tools") |
 | One-off insert/update of a record | Neither — direct record ops (`lemma records create ...`), not a function (heuristic #6) |
 
 ### Table column vs JSON column vs separate table

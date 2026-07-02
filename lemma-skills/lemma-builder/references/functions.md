@@ -379,30 +379,32 @@ reach — add exactly that grant and retry.
 
 ### Exposing a function as an agent's tool
 
-Grants also flow the other way: grant an **agent** both `function.read` **and**
-`function.execute` on a function (`resource_type: "function"`, `resource_name:
-<function-name>`) and the function becomes a callable tool (`function_<name>`) for
-that agent, with the function's input schema as the tool arguments. This is the clean
-way to give an agent deterministic, auditable capabilities mid-conversation.
+Grants also flow the other way: grant an **agent** `function.execute` on a function
+(`resource_type: "function"`, `resource_name: <function-name>`) and the function
+becomes a callable tool (`function_<name>`) for that agent, with the function's input
+schema as the tool arguments. This is the clean way to give an agent deterministic,
+auditable capabilities mid-conversation.
 
-**A function tool needs the complete grant set — three pieces, not one:**
+**A function tool needs exactly one grant.** `function.execute` on the parent implies
+`function.read`, so that single grant covers both discovering and running the tool.
+The function runs under **its own** FUNCTION principal with **its own** grants — the
+same identity it has when run directly or as a job — so you grant the tables / files /
+connectors it touches to the **function**, never mirrored onto the parent. A
+`MISSING_WORKLOAD_RESOURCE_GRANT` from a tool call names the resource the *function*
+lacks; fix it on the function.
 
-1. `function.read` on the function (on the parent agent) — the runtime loads the
-   function by name before running it (tool *discovery* keys on `function.execute`).
-   Missing → 403 `Missing permission function.read`.
-2. `function.execute` on the function (parent agent) — to run it.
-3. **The function's own table/file/connector grants, mirrored onto the parent agent.**
-   The runtime checks the *calling* agent against the function's effective
-   permissions, so if the function does `datastore.record.write` on `expenses`, the
-   parent must **also** hold `datastore.record.write` on `expenses` — otherwise 403
-   `Missing permission datastore.record.write`. Granting the function alone is not
-   enough.
+Use the shorthand or the bundle JSON:
 
-The `lemma agents grant` shorthand has no `function:` type, so write grants 1+2 into
-the parent's `permissions.grants` JSON (`{ "resource_type": "function",
-"resource_name": "<fn>", "permission_ids": ["function.read", "function.execute"] }`);
-grant 3 can use the shorthand (`lemma agents grant <parent> expenses:read,write`). See
-`agents.md` → "Agents & Functions as Tools" for the full bundle example.
+```bash
+lemma agents grant <parent> function:<fn>:execute
+```
+```jsonc
+{ "resource_type": "function", "resource_name": "<fn>",
+  "permission_ids": ["function.execute"] }
+```
+
+See `agents.md` → "Agents & Functions as Tools" and `authorization-model.md` §6 for
+the full model.
 
 ## Config
 

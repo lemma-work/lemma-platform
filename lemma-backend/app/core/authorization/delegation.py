@@ -1,4 +1,12 @@
-"""Delegated authorization token claims."""
+"""Delegated authorization token claims and workload delegation constants.
+
+Delegation-scope convention: contexts minted for a single operation carry a
+minimal scope (e.g. a function tool call sets ``{function.execute}``; the
+scope check is implication-expanded, so the implied ``function.read`` is
+admitted too). Long-lived agent contexts (sub-agent runs, pod data-access
+tools) are deliberately unscoped — the workload's explicit resource grants
+and the destructive-action gate are the limiters there.
+"""
 
 from __future__ import annotations
 
@@ -24,14 +32,26 @@ DELEGATION_VERSION = 1
 DEFAULT_POD_AGENT_ID = UUID("00000000-0000-0000-0000-000000000001")
 DEFAULT_POD_AGENT_NAME = "pod_default"
 
+# No workload — the default pod agent included — performs these by default.
+# A workload needs either an explicit grant of the destructive permission
+# (standing authority; keeps headless schedules/functions working) or a live
+# session approval from the user (APPROVE_FOR_SESSION, Redis-backed, TTL).
+# Data-level deletes (records via datastore.record.write, file deletes via
+# folder.write) are deliberately NOT in this set — they are routine
+# automation, scoped by RLS. Note connector_account.manage implies
+# connector_account.use; the gate applies to manage checks only.
 DESTRUCTIVE_ACTIONS = {
     Permissions.POD_DELETE,
     Permissions.POD_ROLE_MANAGE,
+    Permissions.POD_MEMBER_MANAGE,
     Permissions.DATASTORE_TABLE_DELETE,
     Permissions.FOLDER_DELETE,
     Permissions.FUNCTION_DELETE,
     Permissions.AGENT_DELETE,
     Permissions.WORKFLOW_DELETE,
+    Permissions.APP_DELETE,
+    Permissions.SCHEDULE_DELETE,
+    Permissions.CONNECTOR_ACCOUNT_MANAGE,
 }
 
 

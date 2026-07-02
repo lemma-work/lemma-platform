@@ -198,10 +198,10 @@ tool, or drop it into a workflow AGENT node (pod-model heuristic #6). There are 
 complementary mechanisms:
 
 1. **Grant-based one-shot tools** (no toolset) — granting `agent.execute` (for agents)
-   or `function.read` + `function.execute` (for functions) on the parent gives it a
-   synchronous `agent_<name>` / `function_<name>` tool. The parent calls it, waits,
-   and gets the result back. Best for "delegate this, give me the answer." (Function
-   tools need the **complete grant set** — see the callout below.)
+   or `function.execute` (for functions) on the parent gives it a synchronous
+   `agent_<name>` / `function_<name>` tool. The parent calls it, waits, and gets the
+   result back. Best for "delegate this, give me the answer." **One grant per tool** —
+   see the callout below.
 2. **The `SUBAGENTS` toolset** — async orchestration: spawn one or more child
    conversations (including another instance of *itself*), let them run in the
    background, and await/poll/list them. Best for fan-out and long-running sub-tasks.
@@ -209,7 +209,7 @@ complementary mechanisms:
 
 | Grant the parent agent… | Tool it gains | Tool name | A call does |
 | --- | --- | --- | --- |
-| `function.read` **and** `function.execute` on `resource_type: "function"` | that function | `function_<name>` | Runs the function (args = the function's input schema). `API` returns its result inline; `JOB` is awaited, then returns its result. **Both** permissions are required — `function.read` to discover/load the tool, `function.execute` to run it; missing either is a 403 (`Missing permission function.read`). The parent must **also** mirror the function's own table/resource grants — see the callout below. |
+| `function.execute` on `resource_type: "function"` | that function | `function_<name>` | Runs the function (args = the function's input schema). `API` returns its result inline; `JOB` is awaited, then returns its result. `function.execute` implies `function.read`, so this one grant covers both discovery and execution. The function runs under **its own** grants — you do **not** mirror them onto the parent (see the callout). |
 | `agent.execute` on `resource_type: "agent"` | that agent | `agent_<name>` | Spawns a real, persisted **child conversation** (linked via `parent_id`/`parent_run_id`), runs it, and returns its output. Schema-flexible (see below): args = the child's `input_schema` if set, else a single `input` string; result = the child's `output_schema` dict if set, else a plain string. |
 
 In a bundle these are ordinary name-based grants on the **parent** agent:
@@ -221,12 +221,7 @@ In a bundle these are ordinary name-based grants on the **parent** agent:
   "toolsets": ["WEB_SEARCH"],
   "permissions": { "grants": [
     { "resource_type": "function", "resource_name": "save_expense",
-      "permission_ids": ["function.read", "function.execute"] },
-    // Mirror the function's OWN resource grants on the parent. save_expense
-    // writes the `expenses` table, so the parent needs that grant too —
-    // otherwise the call 403s with `Missing permission datastore.record.write`.
-    { "resource_type": "datastore_table", "resource_name": "expenses",
-      "permission_ids": ["datastore.record.read", "datastore.record.write"] },
+      "permission_ids": ["function.execute"] },
     { "resource_type": "agent", "resource_name": "triage-agent",
       "permission_ids": ["agent.execute"] }
   ]}
@@ -235,33 +230,17 @@ In a bundle these are ordinary name-based grants on the **parent** agent:
 
 Or directly: `lemma agents permissions replace coordinator --file payloads/coordinator.permissions.json`.
 
-> **Function tool = three grants, not one.** Exposing a function as an agent tool is
-> the single most common grant trip-up. The runtime enforces the **complete set** and
-> fails with sequential 403s if any piece is missing:
-> 1. `function.read` on the function (parent) — checked when the tool runs (the
->    runtime loads the function by name before executing; tool *discovery* keys on
->    `function.execute`). Missing → `Missing permission function.read`.
-> 2. `function.execute` on the function (parent) — so the agent can run it.
-> 3. **The function's own resource grants, mirrored onto the parent agent** — every
->    table/file/connector the function touches. If `save_expense` does
->    `datastore.record.write` on `expenses`, the **parent** must also hold
->    `datastore.record.write` on `expenses`, or the call 403s with `Missing permission
->    datastore.record.write`. Granting the function alone is not enough; the calling
->    agent is checked against the function's effective permissions too.
+> **Function tool = one grant.** Exposing a function as an agent tool needs exactly
+> **`function.execute`** on the parent (`function.execute` implies `function.read`, so
+> you don't list read separately). The function runs under **its own** FUNCTION
+> principal with **its own** grants — the same identity it has when run directly or as
+> a job. You do **not** mirror the function's table/file/connector grants onto the
+> parent; grant those to the **function**. See `authorization-model.md` §6.
 >
-> Copy-pasteable. The `lemma agents grant` shorthand only covers tables/folders/
-> connectors — it has **no** `function:` type — so grants 1+2 go in the bundle JSON
-> (or `permissions replace`), and grant 3 can use the shorthand:
-> ```jsonc
-> // coordinator.json → permissions.grants — function tool grants (1 + 2):
-> { "resource_type": "function", "resource_name": "save_expense",
->   "permission_ids": ["function.read", "function.execute"] }
-> ```
+> The `agent:`/`function:` shorthand exists:
 > ```bash
-> # 3: mirror every table/file the function writes onto the PARENT agent
-> lemma agents grant coordinator expenses:read,write
-> # then re-import the agent so all grants take effect:
-> lemma pods import ./my-pod/agents/coordinator
+> lemma agents grant coordinator function:save_expense:execute agent:triage-agent:execute
+> lemma pods import ./my-pod/agents/coordinator   # re-import so grants take effect
 > ```
 
 **Make the callee tool-friendly.** Schemas are optional but shape the tool:
@@ -283,15 +262,13 @@ Or directly: `lemma agents permissions replace coordinator --file payloads/coord
 
 - The callee runs **under its own grants** — a chain of zero-default-access
   principals, each still delegated to the same invoking user. The function/child agent
-  still needs its own grants for the tables/files/connectors it touches, so a
+  needs its own grants for the tables/files/connectors it touches, so a
   `MISSING_WORKLOAD_RESOURCE_GRANT` can originate from the callee, not the caller.
-- **But a `function_<name>` tool is double-checked: the parent must also hold the
-  function's resource grants.** Granting the function `function.read` +
-  `function.execute` is necessary but not sufficient — the runtime also verifies the
-  **calling agent** holds every table/file/connector permission the function uses.
-  Mirror those grants onto the parent or the call 403s. (The `agent_<name>` path does
-  **not** require this mirroring — a child agent run is its own principal.) See the
-  "Function tool = three grants" callout above.
+  Grant those resources to the **callee**, not the parent.
+- Both `function_<name>` and `agent_<name>` follow this rule: the parent needs only
+  the one `.execute` grant to *trigger* the tool; the callee's own grants govern what
+  it can *touch*. There is no grant mirroring in either direction. See
+  `authorization-model.md` §6–§7.
 - The grant-based `agent_<name>` tool **cannot target the calling agent itself**
   (self-reference is dropped). To run another instance of yourself, use the
   `SUBAGENTS` toolset's self-spawn (below).

@@ -23,7 +23,9 @@ Good pod scope = *one team, one operating loop, one coherent data model.*
 
 ## Identity & permissions — the spine
 
-Two ideas drive everything:
+Two ledgers drive everything — **human roles** and **workload grants** — and a named
+workload is governed by its grants alone (**grant-first**: an explicit workload grant
+is standalone authority; the invoking user's role isn't also required).
 
 1. **Zero access by default.** A freshly created agent or function can touch
    *nothing* — no tables, no folders, no connectors. Every resource is granted
@@ -35,9 +37,23 @@ Two ideas drive everything:
    personal `/me` file area resolve to *that* user. A workload never has its own
    `/me` and never sees more rows than the invoking user would — it just has the
    subset of capabilities you granted, exercised on that user's behalf.
+3. **Destructive actions are gated.** No workload — not even the default pod agent
+   that otherwise mirrors your permissions — can delete tables/agents/functions/
+   workflows/apps/schedules, manage members/roles, or manage connector accounts by
+   default. Unlock it with either an **explicit grant** of that permission on the
+   workload (standing authority — needed for headless schedules/webhooks) or a live
+   **`request_approval`** the user answers with "approve for session" (works for the
+   rest of that conversation). Denied attempts surface as
+   `DESTRUCTIVE_ACTION_REQUIRES_APPROVAL`.
 
 **Pod member roles** (humans): `VIEWER` < `USER` < `EDITOR` < `ADMIN`. Roles gate
 member-facing actions; workload grants are separate and additive.
+
+**Common deny codes**: `MISSING_WORKLOAD_RESOURCE_GRANT` (grant the workload the
+resource), `DESTRUCTIVE_ACTION_REQUIRES_APPROVAL` (grant it or approve),
+`INSUFFICIENT_PERMISSION` (a human-role gap), `DELEGATION_SCOPE_VIOLATION`,
+`PERSONAL_RESOURCE_DENIED` (another user's private resource). The full model, with
+payloads and a decoder table, is in `authorization-model.md`.
 
 ## Data layer — tables
 

@@ -859,6 +859,9 @@ async def test_callable_function_tool_passes_flat_model_args_as_input(
         ):
             captured["input_data"] = input_data
             captured["user_id"] = user_id
+            captured["run_as_workload"] = run_as_workload
+            captured["principal_type"] = principal_type
+            captured["principal_id"] = principal_id
             return SimpleNamespace(
                 id=uuid4(),
                 status=FunctionRunStatus.COMPLETED,
@@ -891,6 +894,13 @@ async def test_callable_function_tool_passes_flat_model_args_as_input(
     assert result == {"ok": True}
     assert captured["input_data"] == {"apps": ["gmail", "slack"], "query": "x"}
     assert captured["user_id"] == user_id
+    # The agent's function.execute grant is enforced via the AGENT principal,
+    # but the function itself must run under its OWN identity (run_as_workload
+    # unset -> executor defaults to the function principal), same as the
+    # direct-user and JOB paths. No parent-grant mirroring.
+    assert captured["run_as_workload"] is None
+    assert captured["principal_type"] == "AGENT"
+    assert captured["principal_id"] == parent_agent.id
 
 
 def test_callable_agent_tool_uses_agent_name_prefix():

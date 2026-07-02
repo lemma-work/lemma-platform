@@ -28,10 +28,17 @@ from pydantic_ai.exceptions import (
 
 from app.core.domain.errors import DomainError
 
-# DomainError codes that mean "the agent lacks a grant for this action": surface
-# these as ``needs_approval`` so the model can re-issue the call through
-# ``request_approval`` instead of treating it as a hard failure.
-APPROVAL_CODES = {"MISSING_WORKLOAD_RESOURCE_GRANT", "AUTH_REQUIRED"}
+# DomainError codes that mean "the agent lacks a grant/approval for this
+# action": surface these as ``needs_approval`` so the model can re-issue the
+# call through ``request_approval`` instead of treating it as a hard failure.
+# DESTRUCTIVE_ACTION_REQUIRES_APPROVAL is the destructive-action gate — the
+# user's APPROVE_FOR_SESSION decision unlocks the action type for the rest of
+# the conversation.
+APPROVAL_CODES = {
+    "MISSING_WORKLOAD_RESOURCE_GRANT",
+    "DESTRUCTIVE_ACTION_REQUIRES_APPROVAL",
+    "AUTH_REQUIRED",
+}
 
 
 class AgentInputRequired(Exception):
@@ -108,5 +115,14 @@ def approval_error_result(
     }
     if exc.code in APPROVAL_CODES:
         result["needs_approval"] = True
-        result["approval"] = {"tool_name": tool_name, "args": args}
+        approval: dict[str, object] = {"tool_name": tool_name, "args": args}
+        # Carry the denied permission ids (and the deny code) so an
+        # APPROVE_FOR_SESSION resolution knows exactly which action types to
+        # record in the session-approval store.
+        approval["reason_code"] = exc.code
+        details = exc.details if isinstance(exc.details, dict) else {}
+        permission_ids = details.get("permission_ids")
+        if isinstance(permission_ids, list) and permission_ids:
+            approval["permission_ids"] = [str(p) for p in permission_ids]
+        result["approval"] = approval
     return result

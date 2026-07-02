@@ -59,6 +59,9 @@ async def _create_agent(
 
 
 async def _grant_agent_execute(client, pod_id, parent_name, child_name):
+    # Execute-only: agent.execute implies agent.read, so this single grant is
+    # enough to dispatch the child. Serves as the execute-only regression for
+    # the implication map — no separate agent.read needed.
     response = await client.put(
         f"/pods/{pod_id}/agents/{parent_name}/permissions",
         json={
@@ -66,7 +69,7 @@ async def _grant_agent_execute(client, pod_id, parent_name, child_name):
                 {
                     "resource_type": "agent",
                     "resource_name": child_name,
-                    "permission_ids": ["agent.execute", "agent.read"],
+                    "permission_ids": ["agent.execute"],
                 }
             ]
         },

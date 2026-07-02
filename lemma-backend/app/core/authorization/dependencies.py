@@ -10,9 +10,13 @@ from fastapi import Depends, HTTPException, Request, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.api.dependencies import CurrentUser, UoWDep
-from app.core.authorization.context import Context, ResourceRef, ResourceType
+from app.core.authorization.context import ActorType, Context, ResourceRef, ResourceType
 from app.core.authorization.current import set_current_context
-from app.core.authorization.delegation import DEFAULT_POD_AGENT_ID, DEFAULT_POD_AGENT_NAME
+from app.core.authorization.delegation import (
+    DEFAULT_POD_AGENT_ID,
+    DEFAULT_POD_AGENT_NAME,
+    DESTRUCTIVE_ACTIONS,
+)
 from app.core.authorization.service import AuthorizationDataService
 
 
@@ -182,6 +186,28 @@ OrgContextDep = Annotated[Context, Depends(get_org_context)]
 PodContextDep = Annotated[Context, Depends(get_pod_context)]
 
 
+def reject_delegated_workload(action_label: str):
+    """Deny a delegated workload outright for an org-scoped destructive action.
+
+    Use where there is no pod context to run the nuanced destructive gate (an
+    explicit grant / session approval are pod-scoped). A workload has no
+    business performing these org-level, ownership-based actions — deleting a
+    user's connected account, etc. Humans are unaffected.
+    """
+
+    async def _dependency(ctx: OrgContextDep) -> None:
+        if ctx.actor_type == ActorType.DELEGATED_USER_WORKLOAD:
+            from app.core.domain.errors import DomainError
+
+            raise DomainError(
+                f"Delegated workloads may not {action_label}.",
+                code="DESTRUCTIVE_ACTION_REQUIRES_APPROVAL",
+                status_code=403,
+            )
+
+    return Depends(_dependency)
+
+
 async def pod_from_path(request: Request) -> ResourceRef:
     raw_pod_id = request.path_params.get("pod_id")
     if not raw_pod_id:
@@ -252,7 +278,20 @@ def require_resource_admin_or_creator(
         )
         if await ctx.can(permission_id, resource):
             return
-        if ctx.user_id is not None and resource.resource_id is not None:
+        # The creator shortcut lets a human who created a resource delete it
+        # without the role permission. A delegated workload must NOT get it for
+        # a destructive action: table/agent/etc. deletion is gated (explicit
+        # grant or session approval), and a workload delegating for the creator
+        # would otherwise bypass that. Fall through to ctx.require (the gate).
+        workload_destructive = (
+            ctx.actor_type == ActorType.DELEGATED_USER_WORKLOAD
+            and permission_id in DESTRUCTIVE_ACTIONS
+        )
+        if (
+            not workload_destructive
+            and ctx.user_id is not None
+            and resource.resource_id is not None
+        ):
             creator_user_id = await AuthorizationDataService(uow.session).get_resource_creator(
                 resource_type=resource.resource_type,
                 resource_id=resource.resource_id,

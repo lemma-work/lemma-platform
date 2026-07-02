@@ -11,6 +11,7 @@ import pytest
 from lemma_sdk.errors import LemmaAPIError
 from lemma_cli.cli_core.sdk import _FlatPodProxy
 from lemma_cli.cli_app.pod_bundle import (
+    _collect_grant_advisories,
     _export_pod_files,
     _build_app_bundle,
     _import_pod_files,
@@ -70,6 +71,94 @@ def test_load_resource_payload_normalizes_legacy_agent_tool_sets(tmp_path):
     payload = load_resource_payload(resource_dir, "triage")
 
     assert payload == {"name": "triage", "toolsets": ["WORKSPACE_CLI"]}
+
+
+def _write_agent(root: Path, name: str, payload: dict) -> None:
+    resource_dir = root / "agents" / name
+    resource_dir.mkdir(parents=True)
+    (resource_dir / f"{name}.json").write_text(json.dumps(payload), encoding="utf-8")
+
+
+def test_collect_grant_advisories_flags_connector_destructive_and_subagents(tmp_path):
+    _write_agent(
+        tmp_path,
+        "cleaner",
+        {
+            "name": "cleaner",
+            "toolsets": ["SUBAGENTS"],
+            "permissions": {
+                "grants": [
+                    {
+                        "resource_type": "connector",
+                        "resource_name": "gmail",
+                        "permission_ids": ["connector.use"],
+                    },
+                    {
+                        "resource_type": "datastore_table",
+                        "resource_name": "orders",
+                        "permission_ids": ["datastore.table.delete"],
+                    },
+                ]
+            },
+        },
+    )
+
+    advisories = _collect_grant_advisories(tmp_path)
+
+    joined = "\n".join(advisories)
+    assert "connector grant" in joined
+    assert "gmail" in joined
+    assert "datastore.table.delete" in joined
+    assert "standing authority" in joined
+    # SUBAGENTS toolset but no agent grant -> self-spawn advisory.
+    assert "SUBAGENTS toolset but no agent grants" in joined
+
+
+def test_collect_grant_advisories_quiet_for_plain_bundle(tmp_path):
+    _write_agent(
+        tmp_path,
+        "reader",
+        {
+            "name": "reader",
+            "toolsets": ["POD"],
+            "permissions": {
+                "grants": [
+                    {
+                        "resource_type": "datastore_table",
+                        "resource_name": "tickets",
+                        "permission_ids": [
+                            "datastore.table.read",
+                            "datastore.record.read",
+                        ],
+                    }
+                ]
+            },
+        },
+    )
+
+    assert _collect_grant_advisories(tmp_path) == []
+
+
+def test_collect_grant_advisories_subagents_with_agent_grant_is_quiet(tmp_path):
+    _write_agent(
+        tmp_path,
+        "dispatcher",
+        {
+            "name": "dispatcher",
+            "toolsets": ["SUBAGENTS"],
+            "permissions": {
+                "grants": [
+                    {
+                        "resource_type": "agent",
+                        "resource_name": "helper",
+                        "permission_ids": ["agent.execute"],
+                    }
+                ]
+            },
+        },
+    )
+
+    assert _collect_grant_advisories(tmp_path) == []
 
 
 def test_diff_table_columns_detects_add_remove_and_incompatible():

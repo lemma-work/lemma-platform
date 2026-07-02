@@ -50,7 +50,7 @@ export function userApprovalDetails(args: ToolCardArgs): {
   params: Array<{ name: string; value: string }>;
   canApproveForSession: boolean;
 } {
-  // request_approval args: { tool_name, args, title, reason, payload? }.
+  // request_approval args: { tool_name, args, title, reason, payload?, permission_ids? }.
   const toolName = asString(args.tool_name) || toolNameFromApprovalMessage(asString(args.reason));
   const title = asString(args.title);
   const reason = asString(args.reason);
@@ -65,8 +65,10 @@ export function userApprovalDetails(args: ToolCardArgs): {
     toolName: toolName ?? undefined,
     kind: toolName ?? undefined,
     params: approvalToolParamsDisplay(args),
-    // The request_approval gate resolves per call; there is no session-scoped memory.
-    canApproveForSession: false,
+    // "Approve for session" persists the approved action types for this agent
+    // in this conversation (backend session-approval store, TTL-bound), so the
+    // same action type won't re-prompt until it expires.
+    canApproveForSession: true,
   };
 }
 

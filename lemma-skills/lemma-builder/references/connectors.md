@@ -174,6 +174,35 @@ pod.connectors.execute(
   the `WORKSPACE_CLI` toolset can also run the `lemma connectors operations …`
   commands themselves.
 
+### Whose account: USER-owned vs a pinned shared account
+
+Which connected account a call runs against depends on whether you pin one:
+
+- **USER-owned (default, no `account_id`)** — the call resolves to the **invoking
+  user's** own connected account. Each pod member acts as themselves; a member with no
+  connected account gets an account-resolution error. This is what you want for "email
+  the customer *as me*."
+- **Pinned shared account (AGENT-owned)** — pass a specific `account_id` (or configure
+  a fixed account on the surface/function) and every invoker uses that **one** account,
+  regardless of who triggered the workload. This is the shared-sender pattern: one team
+  Gmail account sends for everyone.
+
+A pinned account owned by someone other than the invoker needs **two grants on the
+workload** — `connector.use` on the connector *and* `connector_account.use` on that
+account:
+
+```json
+{ "resource_type": "connector", "resource_name": "gmail",
+  "permission_ids": ["connector.use"] },
+{ "resource_type": "connector_account", "resource_name": "<account-id>",
+  "permission_ids": ["connector_account.use"] }
+```
+
+With both grants the pinned account works for every invoker (it is invoker-independent
+— the workload's grants are the authority, not the caller's identity). Note
+`connector_account.manage` is a **destructive** permission gated behind approval; plain
+`connector_account.use` is not. See `authorization-model.md` §7.
+
 (App side — calling a connector operation from a browser app, with discovery and a
 safe action button → `app-recipes/connector-action.md`.)
 

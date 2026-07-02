@@ -343,3 +343,108 @@ async def test_default_pod_agent_record_access_without_grant(
         assert (await api.list_records(table))["total"] == 1
     finally:
         await client.aclose()
+
+
+# --------------------------------------------------------------------------- #
+# Destructive actions (table delete) are gated for workloads by default
+# --------------------------------------------------------------------------- #
+@pytest.mark.asyncio
+async def test_named_workload_table_delete_requires_explicit_grant(
+    test_app,
+    authenticated_client,
+    fixed_test_org,
+    fixed_test_user,
+):
+    """datastore.table.delete is destructive: a named workload cannot delete a
+    table without an EXPLICIT grant of it (standing authority). No session
+    approval is recorded, so the un-granted attempt is gated."""
+    pod_id = await create_pod(authenticated_client, fixed_test_org)
+    owner = DatastoreApi(authenticated_client, pod_id)
+    suffix = uuid4().hex[:8]
+    table = f"del_{suffix}"
+    await owner.create_table(_table_payload(table, enable_rls=False))
+
+    name = f"del_agent_{suffix}"
+    workload = await create_workload(authenticated_client, pod_id, AGENT, name)
+    # Read/write only — deliberately NOT table.delete.
+    await replace_workload_grants(
+        authenticated_client,
+        pod_id,
+        AGENT,
+        name,
+        [_table_grant(table, "datastore.table.read", "datastore.record.write")],
+    )
+    client = await mint_workload_client(
+        test_app,
+        user_id=fixed_test_user["id"],
+        workload_type=AGENT,
+        workload_id=workload["id"],
+        pod_id=pod_id,
+        workload_name=name,
+    )
+    api = DatastoreApi(client, pod_id)
+    try:
+        denied = await api.delete_table(table, expected_status=status.HTTP_403_FORBIDDEN)
+        # Datastore wraps the authz denial; the underlying reason is the gate.
+        assert denied  # a 403 body is returned
+    finally:
+        await client.aclose()
+
+    # Grant table.delete explicitly -> standing authority, delete succeeds.
+    await replace_workload_grants(
+        authenticated_client,
+        pod_id,
+        AGENT,
+        name,
+        [
+            _table_grant(
+                table,
+                "datastore.table.read",
+                "datastore.record.write",
+                "datastore.table.delete",
+            )
+        ],
+    )
+    granted = await mint_workload_client(
+        test_app,
+        user_id=fixed_test_user["id"],
+        workload_type=AGENT,
+        workload_id=workload["id"],
+        pod_id=pod_id,
+        workload_name=name,
+    )
+    api = DatastoreApi(granted, pod_id)
+    try:
+        await api.delete_table(table)  # 204
+    finally:
+        await granted.aclose()
+
+
+@pytest.mark.asyncio
+async def test_default_pod_agent_table_delete_is_gated_despite_user_admin(
+    test_app,
+    authenticated_client,
+    fixed_test_org,
+    fixed_test_user,
+):
+    """The default pod agent mirrors the invoking user's permissions — but NOT
+    destructive ones. Even though the invoking user is a pod admin who can
+    delete tables, the default agent is gated without a session approval."""
+    pod_id = await create_pod(authenticated_client, fixed_test_org)
+    owner = DatastoreApi(authenticated_client, pod_id)
+    suffix = uuid4().hex[:8]
+    table = f"pod_del_{suffix}"
+    await owner.create_table(_table_payload(table, enable_rls=False))
+
+    client = await mint_default_pod_agent_client(
+        test_app, user_id=fixed_test_user["id"], pod_id=pod_id
+    )
+    api = DatastoreApi(client, pod_id)
+    try:
+        denied = await api.delete_table(table, expected_status=status.HTTP_403_FORBIDDEN)
+        assert denied
+    finally:
+        await client.aclose()
+
+    # The human user (not delegated) can still delete it directly.
+    await owner.delete_table(table)

@@ -37,3 +37,43 @@ def test_role_snapshot_serialization_handles_empty_and_none_scopes():
         grant_principal_sets=(),
     )
     assert _deserialize(_serialize(snapshot)) == snapshot
+
+
+import pytest
+
+from app.core.authorization import cache as cache_module
+
+
+class _BrokenCache:
+    async def get_raw(self, suffix):
+        raise ConnectionError("redis down")
+
+    async def set_raw(self, suffix, payload, ttl_seconds=None):
+        raise ConnectionError("redis down")
+
+
+@pytest.mark.asyncio
+async def test_redis_outage_degrades_to_miss_with_warning(monkeypatch, caplog):
+    """Redis being down must never fail an auth check — but it must be visible
+    (warn log) before the re-derivation load reaches the DB."""
+    monkeypatch.setattr(cache_module, "_get_role_cache", lambda: _BrokenCache())
+    with caplog.at_level("WARNING"):
+        result = await cache_module.get_role_snapshot(
+            user_id=uuid4(), organization_id=None, pod_id=None
+        )
+        await cache_module.set_role_snapshot(
+            user_id=uuid4(),
+            snapshot=RoleSnapshot(
+                organization_id=None,
+                pod_id=None,
+                role_ids=frozenset(),
+                role_names=frozenset(),
+                permission_ids=frozenset(),
+                principal_refs=frozenset(),
+                grant_principal_sets=(),
+            ),
+        )
+    assert result is None
+    warnings = [r.message for r in caplog.records if r.levelname == "WARNING"]
+    assert any("cache read failed" in m for m in warnings)
+    assert any("cache write failed" in m for m in warnings)

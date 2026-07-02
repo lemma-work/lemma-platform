@@ -30,7 +30,6 @@ from app.modules.function.domain.entities import (
     FunctionRunStatus,
     FunctionStatus,
     FunctionType,
-    RunAsWorkload,
 )
 from app.modules.function.infrastructure.repositories import (
     FunctionRepository,
@@ -211,13 +210,11 @@ class AgentCallableToolFactory:
             # delegated-workload context AND runs the DB resolve phase inside ONE
             # short UoW (so ctx.require's resource hydration never touches a closed
             # session), then runs the sandbox with no pooled connection held.
-            # Reuse the agent's cached workspace token instead of minting a
-            # separate function-workload token.
-            run_as_workload = RunAsWorkload(
-                workload_type=ctx.deps.workload_type or "agent",
-                workload_id=parent_agent_id,
-                workload_name=parent_agent_name,
-            )
+            # run_as_workload stays None so the function executes under its own
+            # FUNCTION principal with its own grants — the same identity as the
+            # direct-user and JOB paths. Exposing a function as an agent tool
+            # therefore needs exactly ONE grant on the parent (function.execute);
+            # the function's resource grants are never mirrored onto the agent.
             use_cases = build_function_use_cases(self.uow_factory)
             run = await use_cases.execute_function_as_workload(
                 pod_id=function.pod_id,
@@ -226,9 +223,10 @@ class AgentCallableToolFactory:
                 user_id=ctx.deps.user_id,
                 principal_type="AGENT",
                 principal_id=parent_agent_id,
+                # Minimal single-operation scope; implication-expanded, so the
+                # implied function.read is admitted (see delegation.py).
                 delegation_scope=frozenset([Permissions.FUNCTION_EXECUTE]),
                 delegation_actor_name=parent_agent_name,
-                run_as_workload=run_as_workload,
             )
 
             # JOB functions enqueue a background run and return PENDING; await it.
