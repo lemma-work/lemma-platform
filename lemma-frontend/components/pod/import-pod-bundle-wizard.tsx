@@ -6,7 +6,9 @@ import {
     AlertTriangle,
     ArrowRight,
     Bot,
+    CalendarClock,
     Check,
+    ChevronRight,
     CircleAlert,
     Code2,
     Database,
@@ -15,8 +17,14 @@ import {
     Loader2,
     type LucideIcon,
     PackagePlus,
+    PanelsTopLeft,
+    Plug,
+    Radio,
     RotateCcw,
     Upload,
+    User,
+    Variable,
+    Workflow,
 } from 'lucide-react';
 import { toast } from 'sonner';
 
@@ -114,9 +122,105 @@ function errorHint(raw: string): string | null {
 function Section({ title, children }: { title: string; children: React.ReactNode }) {
     return (
         <div className="mb-5">
-            <p className="mb-2 text-sm font-medium text-[var(--text-secondary)]">{title}</p>
+            <p className="mb-2.5 text-[11px] font-semibold uppercase tracking-wider text-[var(--text-tertiary)]">
+                {title}
+            </p>
             {children}
         </div>
+    );
+}
+
+/** "meal-log-from-telegram-12.zip" → "meal log from telegram 12" — repo slugs
+ * and bundle filenames read like identifiers; the install hero should read
+ * like an app name. Case is left alone (title-casing mangles acronyms). */
+function prettifyBundleName(name: string): string {
+    return name
+        .replace(/\.(zip|tar\.gz|tgz|tar)$/i, '')
+        .replace(/[-_]+/g, ' ')
+        .trim();
+}
+
+/** The resource types the hero strip counts, in display order — grants are an
+ * implementation detail of the plan, not something the user "gets". */
+const HERO_COUNT_TYPES: [string, LucideIcon][] = [
+    ['tables', Database],
+    ['functions', Code2],
+    ['agents', Bot],
+    ['workflows', Workflow],
+    ['schedules', CalendarClock],
+    ['surfaces', Radio],
+    ['apps', PanelsTopLeft],
+];
+
+/** The install sheet's inventory chips ("5 tables", "1 app"), computed off the
+ * plan. */
+function resourceCountChips(imp: PodImport): { label: string; icon: LucideIcon }[] {
+    const counts = new Map<string, number>();
+    for (const s of imp.plan) counts.set(s.resource_type, (counts.get(s.resource_type) ?? 0) + 1);
+    return HERO_COUNT_TYPES.flatMap(([type, icon]) => {
+        const n = counts.get(type) ?? 0;
+        return n ? [{ label: `${n} ${n === 1 ? (SINGULAR[type] ?? type) : type}`, icon }] : [];
+    });
+}
+
+/** App-store-style install header: app-icon tile + title + where it came from,
+ * with the resource inventory as icon chips under it. */
+function InstallHero({
+    title,
+    sourceLine,
+    counts,
+}: {
+    title: string;
+    sourceLine: string;
+    counts?: { label: string; icon: LucideIcon }[];
+}) {
+    return (
+        <div className="mb-5">
+            <div className="flex items-center gap-3.5">
+                <div className="flex h-14 w-14 shrink-0 items-center justify-center rounded-2xl border border-[var(--border-subtle)] bg-[var(--surface-2)] shadow-[var(--shadow-xs)]">
+                    <PackagePlus className="h-7 w-7 text-[var(--accent)]" aria-hidden />
+                </div>
+                <div className="min-w-0">
+                    <p className="break-words text-lg font-semibold leading-snug text-[var(--text-primary)]">
+                        {title}
+                    </p>
+                    <p className="mt-0.5 truncate text-xs text-[var(--text-tertiary)]">{sourceLine}</p>
+                </div>
+            </div>
+            {counts?.length ? (
+                <div className="mt-3.5 flex flex-wrap gap-1.5">
+                    {counts.map(({ label, icon: Icon }) => (
+                        <span
+                            key={label}
+                            className="inline-flex items-center gap-1.5 rounded-md border border-[color:var(--chip-border)] bg-[var(--chip-bg)] px-2 py-1 text-xs text-[var(--text-secondary)]"
+                        >
+                            <Icon className="h-3 w-3 text-[var(--text-tertiary)]" aria-hidden />
+                            {label}
+                        </span>
+                    ))}
+                </div>
+            ) : null}
+        </div>
+    );
+}
+
+/** The small soft square every consent/setup row leads with. */
+function IconChip({ icon: Icon, tone = 'default' }: { icon?: LucideIcon; tone?: 'default' | 'success' }) {
+    return (
+        <span
+            className="flex h-7 w-7 shrink-0 items-center justify-center rounded-md bg-[var(--surface-2)]"
+            aria-hidden
+        >
+            {Icon ? (
+                <Icon
+                    className={`h-3.5 w-3.5 ${
+                        tone === 'success' ? 'text-[var(--state-success)]' : 'text-[var(--text-secondary)]'
+                    }`}
+                />
+            ) : (
+                <span className="h-1.5 w-1.5 rounded-full bg-[var(--text-tertiary)]" />
+            )}
+        </span>
     );
 }
 
@@ -125,74 +229,64 @@ function CapabilityList({ capabilities }: { capabilities: Capability[] }) {
     return (
         <Section title="This pod will">
             <ul className="space-y-2">
-                {capabilities.map((cap, i) => {
-                    const Icon = TIER_ICON[cap.tier];
-                    return (
-                        <li key={i} className="flex items-center gap-2.5 text-sm text-[var(--text-primary)]">
-                            {Icon ? (
-                                <Icon className="h-4 w-4 shrink-0 text-[var(--text-tertiary)]" aria-hidden />
-                            ) : (
-                                <span className="h-1.5 w-1.5 rounded-full bg-[var(--text-tertiary)]" aria-hidden />
-                            )}
-                            {cap.summary}
-                        </li>
-                    );
-                })}
+                {capabilities.map((cap, i) => (
+                    <li key={i} className="flex items-center gap-2.5">
+                        <IconChip icon={TIER_ICON[cap.tier]} />
+                        <span className="text-sm text-[var(--text-primary)]">{cap.summary}</span>
+                    </li>
+                ))}
             </ul>
         </Section>
     );
 }
 
-function RequirementsList({ requirements }: { requirements: Record<string, unknown> }) {
-    const connectors = (requirements.connectors as { key: string; purpose?: string }[]) ?? [];
-    const members = (requirements.members as { key: string }[]) ?? [];
-    const variables = (requirements.variables as { key: string; purpose?: string }[]) ?? [];
-    const data = requirements.data as { row_count?: number; tables_with_seed?: string[] } | undefined;
-
-    if (!connectors.length && !members.length && !variables.length && !data) {
-        return (
-            <Section title="Needs from you">
-                <p className="text-sm text-[var(--state-success)]">
-                    Nothing to wire up — this bundle is self-contained.
-                </p>
-            </Section>
-        );
-    }
+/** One "Setup required" row: icon chip + label/purpose, and — when the bundle
+ * needs a value from the user — an input on the right (stacked below on small
+ * screens). */
+function SetupRow({
+    icon,
+    label,
+    subtitle,
+    input,
+    values,
+    onChange,
+}: {
+    icon: LucideIcon;
+    label: string;
+    subtitle?: string;
+    input?: { key: string; hint: string };
+    values?: Record<string, string>;
+    onChange?: (key: string, value: string) => void;
+}) {
     return (
-        <Section title="Needs from you">
-            <ul className="space-y-1.5 text-sm">
-                {connectors.map((c) => (
-                    <li key={c.key} className="text-[var(--text-primary)]">
-                        <span className="font-medium">connector</span> {c.key}
-                        {c.purpose ? <span className="text-[var(--text-tertiary)]"> · {c.purpose}</span> : null}
-                    </li>
-                ))}
-                {members.map((m) => (
-                    <li key={m.key} className="text-[var(--text-primary)]">
-                        <span className="font-medium">person</span> {m.key}
-                        <span className="text-[var(--text-tertiary)]"> · defaults to you</span>
-                    </li>
-                ))}
-                {variables.map((v) => (
-                    <li key={v.key} className="text-[var(--text-primary)]">
-                        <span className="font-medium">variable</span> {v.key}
-                    </li>
-                ))}
-                {data ? (
-                    <li className="text-[var(--text-primary)]">
-                        <span className="font-medium">data</span> {data.row_count ?? 0} row(s) across{' '}
-                        {(data.tables_with_seed ?? []).join(', ')}
-                    </li>
-                ) : null}
-            </ul>
-        </Section>
+        <li className="flex flex-col gap-2 sm:flex-row sm:items-center sm:gap-3">
+            <div className="flex min-w-0 flex-1 items-center gap-2.5">
+                <IconChip icon={icon} />
+                <div className="min-w-0">
+                    <p className="truncate text-sm text-[var(--text-primary)]">{label}</p>
+                    {subtitle ? (
+                        <p className="truncate text-xs text-[var(--text-tertiary)]">{subtitle}</p>
+                    ) : null}
+                </div>
+            </div>
+            {input && onChange ? (
+                <Input
+                    className="w-full sm:w-56 sm:shrink-0"
+                    placeholder={input.hint}
+                    aria-label={label}
+                    value={values?.[input.key] ?? ''}
+                    onChange={(e) => onChange(input.key, e.target.value)}
+                />
+            ) : null}
+        </li>
     );
 }
 
-/** Editable inputs for the variables a bundle needs resolved (connector
- * accounts + free variables). Members default to the importing user server-side,
- * so they're not asked for here. */
-function ResolveInputs({
+/** Everything the bundle needs from the importer, as one consent-style list —
+ * requirement and (where applicable) the input that resolves it live on the
+ * same row. Members default to the importing user server-side, so they get no
+ * input. */
+function SetupRequired({
     requirements,
     values,
     onChange,
@@ -201,35 +295,77 @@ function ResolveInputs({
     values: Record<string, string>;
     onChange: (key: string, value: string) => void;
 }) {
-    const connectors = (requirements.connectors as { key: string; resolution?: { var?: string } }[]) ?? [];
+    const connectors =
+        (requirements.connectors as { key: string; purpose?: string; resolution?: { var?: string } }[]) ??
+        [];
+    const members = (requirements.members as { key: string; purpose?: string }[]) ?? [];
     const variables = (requirements.variables as { key: string; purpose?: string }[]) ?? [];
-    const fields = [
-        ...connectors
-            .map((c) => ({ key: c.resolution?.var, label: `connector · ${c.key}`, hint: 'account id' }))
-            .filter((f): f is { key: string; label: string; hint: string } => !!f.key),
-        ...variables.map((v) => ({ key: v.key, label: `variable · ${v.key}`, hint: v.purpose ?? '' })),
-    ];
-    if (!fields.length) return null;
+    const data = requirements.data as { row_count?: number; tables_with_seed?: string[] } | undefined;
+
+    if (!connectors.length && !members.length && !variables.length && !data) {
+        return (
+            <Section title="Setup required">
+                <div className="flex items-center gap-2.5">
+                    <IconChip icon={Check} tone="success" />
+                    <p className="text-sm text-[var(--state-success)]">
+                        Self-contained — nothing to set up.
+                    </p>
+                </div>
+            </Section>
+        );
+    }
+
+    const rowCount = data?.row_count ?? 0;
     return (
-        <Section title="Resolve">
-            <div className="space-y-2">
-                {fields.map((f) => (
-                    <label key={f.key} className="flex items-center gap-3 text-sm">
-                        <span className="w-44 shrink-0 text-[var(--text-secondary)]">{f.label}</span>
-                        <Input
-                            className="flex-1"
-                            placeholder={f.hint}
-                            value={values[f.key] ?? ''}
-                            onChange={(e) => onChange(f.key, e.target.value)}
-                        />
-                    </label>
+        <Section title="Setup required">
+            <ul className="space-y-2.5">
+                {connectors.map((c) => (
+                    <SetupRow
+                        key={`connector-${c.key}`}
+                        icon={Plug}
+                        label={c.key}
+                        subtitle={c.purpose ?? 'Connector'}
+                        input={c.resolution?.var ? { key: c.resolution.var, hint: 'account id' } : undefined}
+                        values={values}
+                        onChange={onChange}
+                    />
                 ))}
-            </div>
+                {members.map((m) => (
+                    <SetupRow
+                        key={`member-${m.key}`}
+                        icon={User}
+                        label={m.key}
+                        subtitle="Pod member · defaults to you"
+                    />
+                ))}
+                {variables.map((v) => (
+                    <SetupRow
+                        key={`variable-${v.key}`}
+                        icon={Variable}
+                        label={v.key}
+                        subtitle={v.purpose ?? 'Variable'}
+                        input={{ key: v.key, hint: v.purpose ?? 'value' }}
+                        values={values}
+                        onChange={onChange}
+                    />
+                ))}
+                {data ? (
+                    <SetupRow
+                        icon={Database}
+                        label="Seed data"
+                        subtitle={`${rowCount} row${rowCount === 1 ? '' : 's'} across ${(
+                            data.tables_with_seed ?? []
+                        ).join(', ')}`}
+                    />
+                ) : null}
+            </ul>
         </Section>
     );
 }
 
-function StepDot({ status }: { status: ImportStep['status'] }) {
+function StepDot({ status, running }: { status: ImportStep['status']; running?: boolean }) {
+    if (running)
+        return <Loader2 className="h-3 w-3 shrink-0 animate-spin text-[var(--accent)]" aria-hidden />;
     if (status === 'COMPLETED')
         return <Check className="h-3.5 w-3.5 shrink-0 text-[var(--state-success)]" aria-hidden />;
     if (status === 'FAILED')
@@ -245,15 +381,37 @@ function StepDot({ status }: { status: ImportStep['status'] }) {
 }
 
 /** The plan, grouped by resource type — compact, and each type (incl. apps) is
- * its own clearly-labelled row instead of one long flat list. */
-function PlanList({ imp }: { imp: PodImport }) {
+ * its own clearly-labelled row instead of one long flat list. `runningKey`
+ * (resource_type:resource_name) marks the step the apply is on right now;
+ * `showProgress` adds a thin overall bar under the title row. `bare` drops the
+ * Section chrome for use inside the "What's inside" disclosure. */
+function PlanList({
+    imp,
+    runningKey,
+    showProgress = false,
+    bare = false,
+}: {
+    imp: PodImport;
+    runningKey?: string | null;
+    showProgress?: boolean;
+    bare?: boolean;
+}) {
     const groups = PLAN_TYPE_ORDER.map((type) => ({
         type,
         steps: imp.plan.filter((s) => s.resource_type === type),
     })).filter((g) => g.steps.length);
 
-    return (
-        <Section title={`Plan · ${imp.progress_done}/${imp.progress_total}`}>
+    const body = (
+        <>
+            {showProgress && imp.progress_total > 0 ? (
+                <div className="mb-2 h-0.5 w-full rounded-full bg-[var(--border-subtle)]">
+                    <div
+                        className="h-full rounded-full bg-[var(--accent)] transition-all"
+                        /* eslint-disable-next-line no-restricted-syntax -- Apply progress width is data-driven geometry. */
+                        style={{ width: `${(imp.progress_done / imp.progress_total) * 100}%` }}
+                    />
+                </div>
+            ) : null}
             <div className="overflow-hidden rounded-lg border border-[var(--border-subtle)]">
                 {groups.map((g, gi) => {
                     const done = g.steps.filter(
@@ -273,29 +431,38 @@ function PlanList({ imp }: { imp: PodImport }) {
                                 </span>
                             </div>
                             <div className="flex flex-1 flex-wrap gap-1.5">
-                                {g.steps.map((s) => (
-                                    <span
-                                        key={s.resource_name}
-                                        title={s.error ?? undefined}
-                                        className="inline-flex items-center gap-1.5 rounded-md bg-[var(--surface-2)] px-2 py-1 text-xs text-[var(--text-secondary)]"
-                                    >
-                                        <StepDot status={s.status} />
-                                        {s.resource_name}
-                                        {s.destructive ? (
-                                            <AlertTriangle
-                                                className="h-3 w-3 text-[var(--state-error)]"
-                                                aria-hidden
-                                            />
-                                        ) : null}
-                                    </span>
-                                ))}
+                                {g.steps.map((s) => {
+                                    const running =
+                                        runningKey === `${s.resource_type}:${s.resource_name}`;
+                                    return (
+                                        <span
+                                            key={s.resource_name}
+                                            title={s.error ?? undefined}
+                                            className={`inline-flex items-center gap-1.5 rounded-md bg-[var(--surface-2)] px-2 py-1 text-xs text-[var(--text-secondary)] ${
+                                                running ? 'ring-1 ring-inset ring-[var(--accent)]' : ''
+                                            }`}
+                                        >
+                                            <StepDot status={s.status} running={running} />
+                                            {s.resource_name}
+                                            {s.destructive ? (
+                                                <AlertTriangle
+                                                    className="h-3 w-3 text-[var(--state-error)]"
+                                                    aria-hidden
+                                                />
+                                            ) : null}
+                                        </span>
+                                    );
+                                })}
                             </div>
                         </div>
                     );
                 })}
             </div>
-        </Section>
+        </>
     );
+
+    if (bare) return body;
+    return <Section title={`Plan · ${imp.progress_done}/${imp.progress_total}`}>{body}</Section>;
 }
 
 /** The new-pod vs install-here choice — two selectable cards. */
@@ -337,17 +504,22 @@ export function ImportPodBundleWizard({
     podId,
     initialImport,
     source,
+    fullWidth = false,
 }: {
     // The pod you're already inside (e.g. /pod/<id>/import) — omit for a
     // standalone entry point that has no "current pod" (see `source`).
     podId?: string;
-    // A pre-planned import (e.g. from a shared /import/p/<id> link) — the wizard
-    // skips upload and opens straight at review.
+    // A pre-planned import — the wizard skips upload and opens straight at
+    // review. No entry point passes this today (direct pod-id share links were
+    // pulled), but the capability stays for the next shared-link flow.
     initialImport?: PodImport;
     // A non-upload origin (e.g. a GitHub repo) for a standalone entry point —
     // the "upload" phase asks new-vs-existing-pod and an org/pod picker
     // instead of a file drop.
     source?: ExternalSource;
+    // Let a parent grid own the width (e.g. the two-column GitHub import page)
+    // instead of the wizard's default centered max-w-2xl.
+    fullWidth?: boolean;
 }) {
     const router = useRouter();
     const standalone = !podId;
@@ -358,6 +530,9 @@ export function ImportPodBundleWizard({
     const [vars, setVars] = useState<Record<string, string>>({});
     const [selectedOrgId, setSelectedOrgId] = useState('');
     const [selectedExistingPodId, setSelectedExistingPodId] = useState('');
+    // "What's inside" starts folded; installing forces it open (and it stays
+    // open) so the live per-step progress is never hidden.
+    const [planOpen, setPlanOpen] = useState(false);
 
     const pod = usePod(podId);
     const createImport = useCreateImport();
@@ -376,17 +551,41 @@ export function ImportPodBundleWizard({
     // mode that's "did it differ from the pod we started in"; standalone has
     // no starting pod, so the choice the user made is the source of truth.
     const createdNewPod = podId ? !!imp && imp.pod_id !== podId : target === 'new';
-    const newPod = usePod(createdNewPod ? imp?.pod_id : undefined);
+    // The pod the import lands in — a fresh pod or an existing one — named in
+    // the post-import takeover.
+    const targetPod = usePod(imp?.pod_id);
     // Live progress: the apply POST blocks until done, so a concurrent poll
     // (enabled here for the exact duration of that call) is what actually
     // shows per-step progress as it happens.
     const polled = usePodImport(imp?.pod_id, imp?.id, { forcePoll: applyImport.isPending });
     const liveImp = polled.data ?? imp;
+    // The step the backend is on right now — the first still-PENDING one in
+    // the polled plan, but only while an apply is actually in flight.
+    const runningStep = applyImport.isPending
+        ? (liveImp?.plan.find((s) => s.status === 'PENDING') ?? null)
+        : null;
+    const runningKey = runningStep
+        ? `${runningStep.resource_type}:${runningStep.resource_name}`
+        : null;
 
     const destructiveCount = useMemo(
         () => imp?.plan.filter((s) => s.destructive).length ?? 0,
         [imp],
     );
+    const hasApp = useMemo(() => !!imp?.plan.some((s) => s.resource_type === 'apps'), [imp]);
+    // A pre-planned import (shared link) has no upload phase to go "Back" to —
+    // reset() would land on an upload form scoped to the SHARER's pod, where
+    // "install into this pod" mutates the pod that was shared with you.
+    const preplanned = !!initialImport;
+
+    // Where this bundle came from, for the install hero's source line.
+    const sourceLine =
+        source?.kind === 'github'
+            ? `From GitHub · ${source.owner}/${source.repo}`
+            : initialImport
+              ? 'Shared from another Lemma pod'
+              : 'From uploaded bundle';
+    const countChips = useMemo(() => (imp ? resourceCountChips(imp) : []), [imp]);
 
     const onUpload = async () => {
         if (!file) return;
@@ -430,6 +629,9 @@ export function ImportPodBundleWizard({
 
     const onApply = async () => {
         if (!imp) return;
+        // Force the plan disclosure open so live per-step progress is visible
+        // for the whole install (and after it lands).
+        setPlanOpen(true);
         try {
             const result = await applyImport.mutateAsync({
                 podId: imp.pod_id,
@@ -457,14 +659,21 @@ export function ImportPodBundleWizard({
         setImp(null);
         setSelectedOrgId('');
         setSelectedExistingPodId('');
+        setPlanOpen(false);
         setPhase('upload');
     };
 
     return (
-        <div className="mx-auto w-full max-w-2xl">
+        <div className={fullWidth ? 'w-full' : 'mx-auto w-full max-w-2xl'}>
             <div className="surface-panel p-6">
                 {phase === 'upload' && (
                     <>
+                        {standalone && source && (
+                            <InstallHero
+                                title={prettifyBundleName(source.repo)}
+                                sourceLine={`From GitHub · ${source.owner}/${source.repo}`}
+                            />
+                        )}
                         {!standalone && (
                             <>
                                 <p className="mb-4 text-sm text-[var(--text-secondary)]">
@@ -484,6 +693,11 @@ export function ImportPodBundleWizard({
                                     />
                                 </label>
                             </>
+                        )}
+                        {standalone && source && (
+                            <p className="mb-2.5 text-[11px] font-semibold uppercase tracking-wider text-[var(--text-tertiary)]">
+                                Install to
+                            </p>
                         )}
                         <div className={`grid grid-cols-2 gap-2 ${standalone ? '' : 'mt-4'}`}>
                             <TargetCard
@@ -550,11 +764,12 @@ export function ImportPodBundleWizard({
                         <div className="mt-5 flex justify-end gap-2">
                             {standalone ? (
                                 <Button
+                                    className="w-full"
                                     disabled={target === 'new' ? !effectiveOrgId : !selectedExistingPodId}
                                     loading={continuing}
                                     onClick={onContinueFromSource}
                                 >
-                                    Continue <ArrowRight className="ml-1.5 h-4 w-4" />
+                                    Prepare install <ArrowRight className="ml-1.5 h-4 w-4" />
                                 </Button>
                             ) : (
                                 <Button
@@ -571,20 +786,44 @@ export function ImportPodBundleWizard({
 
                 {phase === 'review' && imp && (
                     <>
+                        <InstallHero
+                            title={imp.source_name ? prettifyBundleName(imp.source_name) : 'Pod bundle'}
+                            sourceLine={sourceLine}
+                            counts={countChips}
+                        />
                         <CapabilityList capabilities={imp.capabilities} />
-                        <RequirementsList requirements={imp.requirements} />
-                        <ResolveInputs
+                        <SetupRequired
                             requirements={imp.requirements}
                             values={vars}
                             onChange={(key, value) => setVars((prev) => ({ ...prev, [key]: value }))}
                         />
-                        <PlanList imp={applyImport.isPending ? (liveImp ?? imp) : imp} />
-                        {applyImport.isPending && (
-                            <p className="mb-5 flex items-center gap-2 text-sm text-[var(--text-tertiary)]">
-                                <Loader2 className="h-3.5 w-3.5 animate-spin" /> Applying — this can take
-                                up to a minute for larger pods.
-                            </p>
-                        )}
+                        <div className="mb-5">
+                            <button
+                                type="button"
+                                disabled={applyImport.isPending}
+                                onClick={() => setPlanOpen((open) => !open)}
+                                aria-expanded={planOpen || applyImport.isPending}
+                                className="flex w-full items-center gap-1.5 text-sm font-medium text-[var(--text-secondary)] hover:text-[var(--text-primary)] disabled:cursor-default disabled:hover:text-[var(--text-secondary)]"
+                            >
+                                <ChevronRight
+                                    className={`h-4 w-4 shrink-0 transition-transform ${
+                                        planOpen || applyImport.isPending ? 'rotate-90' : ''
+                                    }`}
+                                    aria-hidden
+                                />
+                                What’s inside · {imp.plan.length} step{imp.plan.length === 1 ? '' : 's'}
+                            </button>
+                            {(planOpen || applyImport.isPending) && (
+                                <div className="mt-2">
+                                    <PlanList
+                                        bare
+                                        imp={applyImport.isPending ? (liveImp ?? imp) : imp}
+                                        runningKey={runningKey}
+                                        showProgress={applyImport.isPending}
+                                    />
+                                </div>
+                            )}
+                        </div>
                         {destructiveCount > 0 && (
                             <div className="mb-5 flex items-start gap-2 rounded-lg border border-[var(--state-error)] px-3 py-2.5">
                                 <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0 text-[var(--state-error)]" />
@@ -594,16 +833,38 @@ export function ImportPodBundleWizard({
                                 </p>
                             </div>
                         )}
-                        <div className="flex justify-between">
-                            <Button variant="ghost" onClick={reset}>
-                                Back
-                            </Button>
+                        {applyImport.isPending && (
+                            <p className="mb-4 flex items-center gap-2 text-sm text-[var(--text-tertiary)]">
+                                <Loader2 className="h-3.5 w-3.5 shrink-0 animate-spin" />
+                                {runningStep ? (
+                                    <span>
+                                        Applying {(liveImp ?? imp).progress_done + 1} of{' '}
+                                        {(liveImp ?? imp).progress_total} —{' '}
+                                        {runningStep.action === 'UPDATE' ? 'updating' : 'creating'}{' '}
+                                        {SINGULAR[runningStep.resource_type] ?? runningStep.resource_type}{' '}
+                                        “{runningStep.resource_name}”… This can take up to a minute
+                                        for larger pods.
+                                    </span>
+                                ) : (
+                                    <span>Applying — this can take up to a minute for larger pods.</span>
+                                )}
+                            </p>
+                        )}
+                        <div className="flex items-center gap-2">
+                            {!preplanned && (
+                                <Button variant="ghost" onClick={reset}>
+                                    Back
+                                </Button>
+                            )}
+                            {/* The install CTA owns the row, app-store style —
+                                this is the one button the whole sheet leads to. */}
                             <Button
+                                className="flex-1"
                                 variant={destructiveCount > 0 ? 'destructive' : 'primary'}
                                 loading={applyImport.isPending}
                                 onClick={onApply}
                             >
-                                {destructiveCount > 0 ? 'Apply (data loss)' : 'Apply import'}
+                                {destructiveCount > 0 ? 'Install (data loss)' : 'Install pod'}
                             </Button>
                         </div>
                     </>
@@ -611,13 +872,25 @@ export function ImportPodBundleWizard({
 
                 {phase === 'result' && imp && createdNewPod && imp.status === 'COMPLETED' && (
                     <>
-                        <RemixTakeover podId={imp.pod_id} podName={newPod.data?.name} />
+                        <RemixTakeover
+                            podId={imp.pod_id}
+                            podName={targetPod.data?.name}
+                            hasApp={hasApp}
+                        />
                         <div className="mt-5">
-                            <PlanList imp={imp} />
+                            <PlanList imp={imp} showProgress />
                         </div>
-                        <div className="mt-4 flex justify-end">
-                            <Button variant="ghost" onClick={reset}>
-                                Import another
+                        <div className={`mt-4 flex ${preplanned ? 'justify-end' : 'justify-between'}`}>
+                            {!preplanned && (
+                                <Button variant="ghost" onClick={reset}>
+                                    Import another
+                                </Button>
+                            )}
+                            <Button
+                                variant="primary"
+                                onClick={() => router.push(`/pod/${imp.pod_id}`)}
+                            >
+                                Open your new pod <ArrowRight className="ml-1.5 h-4 w-4" />
                             </Button>
                         </div>
                     </>
@@ -625,24 +898,41 @@ export function ImportPodBundleWizard({
 
                 {phase === 'result' && imp && !(createdNewPod && imp.status === 'COMPLETED') && (
                     <>
-                        <div className="mb-4 flex items-center gap-2">
-                            {imp.status === 'COMPLETED' ? (
-                                <>
-                                    <Check className="h-5 w-5 text-[var(--state-success)]" />
-                                    <p className="text-base font-medium text-[var(--text-primary)]">
-                                        Imported · {imp.progress_done}/{imp.progress_total}
-                                    </p>
-                                </>
-                            ) : (
-                                <>
-                                    <CircleAlert className="h-5 w-5 text-[var(--state-error)]" />
-                                    <p className="text-base font-medium text-[var(--text-primary)]">
-                                        Stopped at {imp.progress_done}/{imp.progress_total}
-                                    </p>
-                                </>
-                            )}
-                        </div>
-                        {imp.status === 'FAILED'
+                        {imp.status === 'COMPLETED' ? (
+                            <div className="mb-5">
+                                <RemixTakeover
+                                    podId={imp.pod_id}
+                                    podName={targetPod.data?.name}
+                                    context="existing"
+                                    hasApp={hasApp}
+                                />
+                            </div>
+                        ) : applyImport.isPending ? (
+                            // A resume in flight is an apply like any other —
+                            // show the live step instead of the stale failure.
+                            <p className="mb-4 flex items-center gap-2 text-sm text-[var(--text-tertiary)]">
+                                <Loader2 className="h-3.5 w-3.5 shrink-0 animate-spin" />
+                                {runningStep ? (
+                                    <span>
+                                        Resuming {(liveImp ?? imp).progress_done + 1} of{' '}
+                                        {(liveImp ?? imp).progress_total} —{' '}
+                                        {runningStep.action === 'UPDATE' ? 'updating' : 'creating'}{' '}
+                                        {SINGULAR[runningStep.resource_type] ?? runningStep.resource_type}{' '}
+                                        “{runningStep.resource_name}”…
+                                    </span>
+                                ) : (
+                                    <span>Resuming — already-imported steps are skipped.</span>
+                                )}
+                            </p>
+                        ) : (
+                            <div className="mb-4 flex items-center gap-2">
+                                <CircleAlert className="h-5 w-5 text-[var(--state-error)]" />
+                                <p className="text-base font-medium text-[var(--text-primary)]">
+                                    Stopped at {imp.progress_done}/{imp.progress_total}
+                                </p>
+                            </div>
+                        )}
+                        {imp.status === 'FAILED' && !applyImport.isPending
                             ? (() => {
                                   const failed = imp.plan.find((s) => s.status === 'FAILED');
                                   const raw = (failed?.error || imp.error || '').trim();
@@ -675,11 +965,17 @@ export function ImportPodBundleWizard({
                                   );
                               })()
                             : null}
-                        <PlanList imp={imp} />
-                        <div className="flex justify-between">
-                            <Button variant="ghost" onClick={reset}>
-                                Import another
-                            </Button>
+                        <PlanList
+                            imp={applyImport.isPending ? (liveImp ?? imp) : imp}
+                            runningKey={runningKey}
+                            showProgress
+                        />
+                        <div className={`flex ${preplanned ? 'justify-end' : 'justify-between'}`}>
+                            {!preplanned && (
+                                <Button variant="ghost" onClick={reset}>
+                                    Import another
+                                </Button>
+                            )}
                             {imp.status === 'FAILED' ? (
                                 <Button loading={applyImport.isPending} onClick={onApply}>
                                     <RotateCcw className="mr-1.5 h-4 w-4" /> Resume

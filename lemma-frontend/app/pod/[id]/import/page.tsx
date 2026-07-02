@@ -22,7 +22,7 @@ function PodImportPageContent({ params }: { params: Promise<{ id: string }> }) {
         <PodSettingsShell
             podId={podId}
             title="Import / export"
-            description="Share this pod or bring one in — reviewing what it does and needs before applying."
+            description="Share this pod or install one — you see what it does and needs before anything is installed."
             action={<SharePodSheet podId={podId} />}
         >
             <ImportPodBundleWizard podId={podId} />
