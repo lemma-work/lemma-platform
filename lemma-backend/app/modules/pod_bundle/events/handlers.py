@@ -18,6 +18,8 @@ always safe.
 
 from __future__ import annotations
 
+import tempfile
+from pathlib import Path
 from uuid import UUID
 
 from app.core.authorization.scope import context_scope, uow_scope
@@ -29,7 +31,14 @@ from app.core.infrastructure.jobs.streaq_runtime import (
     streaq_worker,
 )
 from app.core.log.log import get_logger
-from app.modules.pod_bundle.domain.state import ExportState, ExportStatus
+from app.modules.pod_bundle.config import pod_bundle_settings
+from app.modules.pod_bundle.domain.errors import BundleInvalidError, BundleStagingMissingError
+from app.modules.pod_bundle.domain.state import (
+    ExportState,
+    ExportStatus,
+    ImportState,
+    ImportStatus,
+)
 from app.modules.pod_bundle.infrastructure.exporter import BundleExporter
 from app.modules.pod_bundle.infrastructure.realtime import (
     completed_payload,
@@ -140,6 +149,103 @@ async def _fail(store, state: ExportState, message: str) -> None:
     except Exception as exc:  # noqa: BLE001 - failure bookkeeping is best-effort
         logger.warning(
             "Failed to persist FAILED state for export %s: %s", state.export_id, exc
+        )
+
+
+@streaq_task(name="plan_pod_import")
+async def plan_pod_import(context: dict[str, str | None]) -> None:
+    """Diff a staged bundle against the pod and produce a resumable plan.
+
+    Read-only against the DB (snapshots current resources, computes a pure diff),
+    so it is safe to retry. Terminal on a malformed/missing bundle; the user
+    re-uploads to try again.
+    """
+    worker_ctx: AppWorkerContext = streaq_worker.context
+    import_id = UUID(str(context["import_id"]))
+    pod_id = UUID(str(context["pod_id"]))
+    user_id = UUID(str(context["user_id"]))
+
+    store = get_pod_bundle_state_store()
+    staging = BundleStagingStorage()
+
+    state = await store.get_import(import_id)
+    if state is None:
+        logger.info("Import state missing; skipping plan job %s", import_id)
+        return
+    if state.is_terminal or state.status == ImportStatus.AWAITING_CONFIRMATION:
+        logger.info("Import %s already at %s; skipping plan", import_id, state.status)
+        return
+
+    try:
+        state.status = ImportStatus.PLANNING
+        await store.save_import(state)
+        await publish_bundle_event(
+            import_id, status_payload(state.status.value, state.seq)
+        )
+
+        archive = await staging.get_archive("pod-imports", import_id)
+        if archive is None:
+            raise BundleStagingMissingError()
+
+        with tempfile.TemporaryDirectory(prefix="lemma-pod-import-") as tmp:
+            from lemma_pod_bundle import extract_bundle
+
+            try:
+                bundle_root = extract_bundle(
+                    archive,
+                    Path(tmp),
+                    max_uncompressed_bytes=pod_bundle_settings.pod_bundle_max_uncompressed_bytes,
+                )
+            except ValueError as exc:
+                # Unsafe path, missing pod.json, or a zip bomb — a bad bundle is
+                # terminal (retrying would fail identically), not a transient error.
+                raise BundleInvalidError(str(exc)) from exc
+
+            async with uow_scope(worker_ctx.uow_factory) as uow:
+                ctx = await AuthorizationDataService(uow.session).build_user_context(
+                    user_id=user_id, pod_id=pod_id
+                )
+                async with context_scope(ctx):
+                    from app.modules.pod_bundle.infrastructure.plan_builder import (
+                        PlanBuilder,
+                        ServiceExistingResources,
+                    )
+
+                    existing = ServiceExistingResources(
+                        uow=uow, ctx=ctx, pod_id=pod_id, user_id=user_id
+                    )
+                    plan = await PlanBuilder(existing).build_plan(bundle_root=bundle_root)
+
+        state.plan = plan
+        state.progress.total = len(plan.steps)
+        state.progress.done = 0
+        state.status = ImportStatus.AWAITING_CONFIRMATION
+        await store.save_import(state)
+        await publish_bundle_event(
+            import_id,
+            completed_payload(state.status.value, state.seq, step_count=len(plan.steps)),
+        )
+    except DomainError as exc:
+        await _fail_import(store, state, str(exc))
+        logger.warning("Pod bundle plan %s failed (terminal): %s", import_id, exc)
+    except Exception as exc:
+        await _fail_import(store, state, "Planning failed due to a transient error.")
+        logger.error("Pod bundle plan %s failed (retryable): %s", import_id, exc)
+        raise
+
+
+async def _fail_import(store, state: ImportState, message: str) -> None:
+    state.status = ImportStatus.FAILED
+    state.error = message
+    state.completed_at = _now()
+    try:
+        await store.save_import(state)
+        await publish_bundle_event(
+            state.import_id, error_payload(message, state.seq)
+        )
+    except Exception as exc:  # noqa: BLE001 - failure bookkeeping is best-effort
+        logger.warning(
+            "Failed to persist FAILED state for import %s: %s", state.import_id, exc
         )
 
 

@@ -9,6 +9,7 @@ from fastapi import Depends
 from app.core.api.dependencies import get_uow_factory
 from app.core.infrastructure.db.uow_factory import UnitOfWorkFactory
 from app.modules.pod_bundle.application.export_use_cases import ExportUseCases
+from app.modules.pod_bundle.application.import_use_cases import ImportUseCases
 
 
 def build_export_use_cases(uow_factory: UnitOfWorkFactory) -> ExportUseCases:
@@ -24,3 +25,16 @@ def get_export_use_cases(
 
 
 ExportUseCasesDep = Annotated[ExportUseCases, Depends(get_export_use_cases)]
+
+
+def build_import_use_cases(uow_factory: UnitOfWorkFactory) -> ImportUseCases:
+    return ImportUseCases(uow_factory)
+
+
+def get_import_use_cases(
+    uow_factory: UnitOfWorkFactory = Depends(get_uow_factory),
+) -> ImportUseCases:
+    return build_import_use_cases(uow_factory)
+
+
+ImportUseCasesDep = Annotated[ImportUseCases, Depends(get_import_use_cases)]

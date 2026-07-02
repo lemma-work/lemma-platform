@@ -6,7 +6,14 @@ from uuid import UUID
 
 from pydantic import BaseModel, Field
 
-from app.modules.pod_bundle.domain.state import ExportState, ExportStatus, Progress
+from app.modules.pod_bundle.domain.state import (
+    ExportState,
+    ExportStatus,
+    ImportPlan,
+    ImportState,
+    ImportStatus,
+    Progress,
+)
 
 
 class ExportStartRequest(BaseModel):
@@ -60,5 +67,96 @@ class ExportStatusResponse(BaseModel):
             progress=ExportProgressResponse.from_domain(state.progress),
             bundle_filename=state.bundle_filename,
             download_url=download_url,
+            error=state.error,
+        )
+
+
+# --- import ------------------------------------------------------------------
+
+
+class PlanStepResponse(BaseModel):
+    index: int
+    kind: str
+    name: str
+    action: str
+    destructive: bool = False
+    detail: dict = Field(default_factory=dict)
+    status: str = "PENDING"
+    error: str | None = None
+
+
+class VariableSpecResponse(BaseModel):
+    name: str
+    kind: str
+    description: str | None = None
+    required: bool = False
+    default: str | None = None
+
+
+class ImportPlanResponse(BaseModel):
+    format_version: int
+    bundle_name: str | None = None
+    steps: list[PlanStepResponse] = Field(default_factory=list)
+    variables: list[VariableSpecResponse] = Field(default_factory=list)
+    warnings: list[str] = Field(default_factory=list)
+    has_destructive_steps: bool = False
+
+    @classmethod
+    def from_domain(cls, plan: ImportPlan) -> "ImportPlanResponse":
+        return cls(
+            format_version=plan.format_version,
+            bundle_name=plan.bundle_name,
+            steps=[
+                PlanStepResponse(
+                    index=s.index,
+                    kind=s.kind.value,
+                    name=s.name,
+                    action=s.action.value,
+                    destructive=s.destructive,
+                    detail=s.detail,
+                    status=s.status.value,
+                    error=s.error,
+                )
+                for s in plan.steps
+            ],
+            variables=[
+                VariableSpecResponse(
+                    name=v.name,
+                    kind=v.kind,
+                    description=v.description,
+                    required=v.required,
+                    default=v.default,
+                )
+                for v in plan.variables
+            ],
+            warnings=plan.warnings,
+            has_destructive_steps=plan.has_destructive_steps,
+        )
+
+
+class ImportStatusResponse(BaseModel):
+    """Status of a pod import job (pure Redis read)."""
+
+    import_id: UUID
+    pod_id: UUID
+    status: ImportStatus
+    source_kind: str
+    plan: ImportPlanResponse | None = None
+    progress: ExportProgressResponse = Field(default_factory=ExportProgressResponse)
+    events_url: str
+    error: str | None = None
+
+    @classmethod
+    def from_state(cls, state: ImportState) -> "ImportStatusResponse":
+        return cls(
+            import_id=state.import_id,
+            pod_id=state.pod_id,
+            status=state.status,
+            source_kind=state.source.kind,
+            plan=ImportPlanResponse.from_domain(state.plan) if state.plan else None,
+            progress=ExportProgressResponse.from_domain(state.progress),
+            events_url=(
+                f"/pods/{state.pod_id}/bundle/imports/{state.import_id}/events"
+            ),
             error=state.error,
         )
