@@ -20,6 +20,7 @@ from app.modules.workspace.services.agentbox_manager import AgentBoxSandbox, age
 from app.modules.workspace.services.interfaces import ISandbox, IWorkspaceSession
 from app.modules.workspace.services.workspace_activity_store import WorkspaceActivityStore
 from app.modules.workspace.services.workspace_state_store import WorkspaceStateStore
+from app.modules.workspace.services.workspace_sync import workspace_sync_env
 from app.core.log.log import get_logger
 
 logger = get_logger(__name__)
@@ -100,7 +101,7 @@ class WorkspaceSandboxService:
     async def _ensure_sandbox_info(self, user_id: UUID) -> SandboxInfo:
         return await self.sandbox.ensure_sandbox(
             user_id,
-            env=self._get_sandbox_app_env(),
+            env=self._get_sandbox_app_env(user_id),
         )
 
     async def _ensure_sandbox_info_with_retry(self, user_id: UUID) -> SandboxInfo:
@@ -125,10 +126,16 @@ class WorkspaceSandboxService:
             on_retry=_log_retry,
         )
 
-    def _get_sandbox_app_env(self) -> dict[str, str]:
-        return {
+    def _get_sandbox_app_env(self, user_id: UUID) -> dict[str, str]:
+        env = {
             "LEMMA_BASE_URL": self._resolve_workspace_api_url(),
         }
+        # Per-user /workspace persistence: a deployment may register a provider
+        # that returns a scoped object-storage URL + credential for this user's
+        # workspace directory (keyed on the sandbox id == user_id.hex). No-op in
+        # the OSS/local build. Never blocks sandbox creation on failure.
+        env.update(workspace_sync_env(agentbox_sandbox_id(user_id)))
+        return env
 
     def _resolve_workspace_api_url(self) -> str:
         return self.resolve_workspace_api_url_for_runtime(self.runtime)

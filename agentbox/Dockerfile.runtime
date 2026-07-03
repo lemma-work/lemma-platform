@@ -59,6 +59,15 @@ RUN apt-get update && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-ins
     xvfb \
     && rm -rf /var/lib/apt/lists/*
 
+# azcopy — start-runtime.sh uses it to sync /workspace to the user's per-user
+# object-storage directory (restore on boot, periodic + on-teardown save).
+RUN curl -sL https://aka.ms/downloadazcopy-v10-linux -o /tmp/azcopy.tgz \
+    && tar -xzf /tmp/azcopy.tgz -C /tmp \
+    && cp /tmp/azcopy_linux_amd64_*/azcopy /usr/local/bin/azcopy \
+    && chmod +x /usr/local/bin/azcopy \
+    && rm -rf /tmp/azcopy.tgz /tmp/azcopy_linux_amd64_* \
+    && azcopy --version
+
 COPY --from=node-runtime /usr/local/bin/node /usr/local/bin/node
 COPY --from=node-runtime /usr/local/lib/node_modules /usr/local/lib/node_modules
 RUN ln -sf /usr/local/lib/node_modules/npm/bin/npm-cli.js /usr/local/bin/npm \
