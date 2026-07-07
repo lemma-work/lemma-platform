@@ -372,6 +372,18 @@
   background: radial-gradient(ellipse at bottom, color-mix(in srgb, var(--delight) 22%, transparent), transparent 68%);
 }
 
+/* Scoped to the split-panel's left column itself (not the full shell width)
+   so the falloff actually completes within the visible area — the shell's
+   own bottom-glow above is calibrated for the full page and gets cut off
+   mid-fade by the opaque preview pane on the right, which reads as a stain
+   rather than a gradient. */
+.setup-split-glow {
+  pointer-events: none;
+  background:
+    radial-gradient(120% 90% at 8% 108%, color-mix(in srgb, var(--delight) 13%, transparent) 0%, transparent 62%),
+    radial-gradient(90% 70% at 100% -10%, color-mix(in srgb, var(--brand-primary) 8%, transparent) 0%, transparent 60%);
+}
+
 .setup-shell-rail {
   opacity: 0.6;
   background-image: linear-gradient(165deg, transparent 0%, transparent 55%, rgba(99, 102, 241, 0.06) 55.5%, transparent 67%);
@@ -404,41 +416,41 @@
 }
 
 .setup-boot-title {
-  font-size: 42px;
-  line-height: 1.04;
+  font-size: 32px;
+  line-height: 1.08;
 }
 
 .setup-panel-title {
-  font-size: 38px;
+  font-size: 28px;
 }
 
 .setup-title-intent {
   max-width: 42rem !important;
-  font-size: 34px !important;
-  line-height: 1.08 !important;
+  font-size: 26px !important;
+  line-height: 1.12 !important;
 }
 
 .setup-title-path {
   max-width: 42rem !important;
-  font-size: 32px !important;
-  line-height: 1.08 !important;
+  font-size: 24px !important;
+  line-height: 1.12 !important;
 }
 
 @media (min-width: 640px) {
   .setup-boot-title {
-    font-size: 54px;
+    font-size: 40px;
   }
 
   .setup-panel-title {
-    font-size: 52px;
+    font-size: 34px;
   }
 
   .setup-title-intent {
-    font-size: 46px !important;
+    font-size: 32px !important;
   }
 
   .setup-title-path {
-    font-size: 42px !important;
+    font-size: 30px !important;
   }
 }
 
@@ -526,21 +538,19 @@
   background: var(--surface-1);
 }
 
-.setup-progress-dot {
+.setup-progress-track {
   border-radius: var(--radius-full);
   background: var(--border-default);
+  overflow: hidden;
 }
 
-.setup-progress-dot.is-complete {
-  background: var(--border-strong);
+.setup-progress-fill {
+  border-radius: var(--radius-full);
+  background: color-mix(in srgb, var(--action-primary) 70%, var(--border-strong));
+  transition: width var(--dur-base) var(--ease-out);
 }
 
-.setup-progress-dot.is-active {
-  background: var(--action-primary);
-}
-
-.setup-chrome-intro,
-.setup-boot-progress {
+.setup-chrome-intro {
   opacity: 0;
   animation: setup-fade-ui 820ms cubic-bezier(0.22, 1, 0.36, 1) forwards;
   animation-delay: 7.35s;
@@ -875,7 +885,7 @@
   position: absolute;
   inset: 0 auto 0 0;
   width: 3px;
-  background: var(--delight);
+  background: var(--action-primary);
   opacity: 0;
   transform: scaleY(0.42);
   transition:
@@ -898,9 +908,11 @@
 
 .setup-path-choice.is-active,
 .setup-path-choice[data-active="true"] {
-  border-color: #9a8f80;
-  background: color-mix(in srgb, var(--surface-1) 88%, transparent);
-  box-shadow: var(--shadow-sm);
+  border-color: var(--action-primary);
+  background: var(--action-primary-soft);
+  box-shadow:
+    0 0 0 1px color-mix(in srgb, var(--action-primary) 32%, transparent),
+    var(--shadow-sm);
 }
 
 .setup-path-choice[data-active="true"]::before {
@@ -915,8 +927,8 @@
 }
 
 .setup-path-choice-icon.is-active {
-  background: var(--surface-2);
-  color: var(--text-primary);
+  background: color-mix(in srgb, var(--action-primary) 16%, var(--surface-2));
+  color: var(--action-primary);
 }
 
 .setup-path-pane {
@@ -1146,9 +1158,28 @@
   gap: 0.5rem;
 }
 
+/* Real labeled nav rows (Agents, Workflows, ...), not a loading placeholder —
+   the whole preview pane is a deterministic mock, nothing here is ever
+   actually in flight, so this must never carry a loading-style animation. */
 .setup-preview-sidebar-item {
-  height: 0.5rem;
-  border-radius: var(--radius-full);
+  display: flex;
+  align-items: center;
+  gap: 0.375rem;
+  overflow: hidden;
+  border-radius: var(--radius-md);
+  padding: 0.25rem 0.375rem;
+  white-space: nowrap;
+  font-size: 10px;
+  font-weight: 500;
+  color: var(--text-tertiary);
+  transition:
+    color 180ms ease,
+    background-color 180ms ease;
+}
+
+.setup-preview-sidebar-item.is-active {
+  background: color-mix(in srgb, var(--surface-2) 70%, transparent);
+  color: var(--text-primary);
 }
 
 .setup-preview-main {
@@ -1156,11 +1187,6 @@
   flex-direction: column;
   gap: 0.625rem;
   min-width: 0;
-}
-
-.setup-preview-line {
-  height: 0.5rem;
-  border-radius: var(--radius-full);
 }
 
 .setup-preview-card {
@@ -1175,6 +1201,23 @@
   font-weight: 600;
   color: var(--text-primary);
   transition: color 180ms ease;
+}
+
+/* Tiny inline "what kind of thing is this" tag (Agent, App, ...) — sits mid-
+   sentence next to an item's name, so it stays small and neutral rather than
+   competing with the delight-toned setup-preview-badge below. */
+.setup-preview-kind-tag {
+  display: inline-flex;
+  align-items: center;
+  vertical-align: middle;
+  border: 1px solid var(--border-default);
+  border-radius: var(--radius-sm);
+  padding: 0 0.3125rem;
+  font-size: 9px;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  text-transform: uppercase;
+  color: var(--text-tertiary);
 }
 
 .setup-preview-badge {
@@ -1201,14 +1244,14 @@
 .setup-split-title {
   font-family: var(--font-ibm-plex-sans);
   font-weight: 700;
-  font-size: 26px;
-  line-height: 1.2;
-  letter-spacing: -0.02em;
+  font-size: 20px;
+  line-height: 1.25;
+  letter-spacing: -0.01em;
 }
 
 @media (min-width: 640px) {
   .setup-split-title {
-    font-size: 30px;
+    font-size: 22px;
   }
 }
 

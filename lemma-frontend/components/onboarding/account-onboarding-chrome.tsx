@@ -112,7 +112,8 @@ export function SetupSplitPanel({
 }) {
   return (
     <div className="grid w-full flex-1 lg:grid-cols-2">
-      <div className="flex flex-col px-6 py-6 sm:px-10 lg:px-16 lg:py-10">
+      <div className="relative flex flex-col overflow-hidden px-6 py-6 sm:px-10 lg:px-16 lg:py-10">
+        <div className="setup-split-glow absolute inset-0" aria-hidden="true" />
         <div className="flex items-center justify-between">
           {onBack ? (
             <Button
@@ -129,6 +130,13 @@ export function SetupSplitPanel({
           )}
           <Logo size="sm" className="text-[var(--text-primary)]" />
         </div>
+        {/* Pinned right under the header at a fixed height, independent of
+            title/subtitle/form length, so it sits in the same spot on every
+            step instead of drifting with the vertically-centered content
+            below it. */}
+        <div className="mt-6 w-full max-w-xl">
+          <SetupProgressBar currentStep={currentStep} steps={steps} />
+        </div>
         <div className="flex flex-1 flex-col justify-center">
           <div className="w-full max-w-xl text-left">
             <h1 className="setup-split-title text-[var(--text-primary)]">
@@ -142,11 +150,6 @@ export function SetupSplitPanel({
           </div>
           <div className="mt-8 w-full">{children}</div>
         </div>
-        <ProgressDots
-          currentStep={currentStep}
-          steps={steps}
-          className="flex gap-2"
-        />
       </div>
       <div className="setup-preview-pane hidden lg:flex lg:flex-col">
         <div className="setup-path-pane-content flex h-full flex-col p-8 xl:p-10">
@@ -176,7 +179,10 @@ export function SetupPrimaryButton({
   );
 }
 
-export function ProgressDots({
+// Thin fill bar tracking how far through setup the operator is, in place of
+// the previous step dots — a single glance at percentage-complete reads
+// faster than counting dots, and it frees the bottom of the left column.
+export function SetupProgressBar({
   currentStep,
   steps = SETUP_STEPS,
   className,
@@ -186,26 +192,22 @@ export function ProgressDots({
   className?: string;
 }) {
   const currentIndex = steps.indexOf(currentStep);
+  const percent =
+    steps.length > 1 ? (currentIndex / (steps.length - 1)) * 100 : 100;
+
   return (
     <div
-      className={cn(
-        className ?? "absolute bottom-7 left-1/2 flex -translate-x-1/2 gap-3",
-        currentStep === "boot" ? "setup-boot-progress" : "",
-      )}
+      role="progressbar"
+      aria-valuenow={Math.round(percent)}
+      aria-valuemin={0}
+      aria-valuemax={100}
+      className={cn("setup-progress-track h-[3px] w-full max-w-[120px]", className)}
     >
-      {steps.map((step, index) => (
-        <span
-          key={step}
-          className={[
-            "setup-progress-dot h-2 w-2 transition",
-            index === currentIndex
-              ? "is-active"
-              : index < currentIndex
-                ? "is-complete"
-                : "",
-          ].join(" ")}
-        />
-      ))}
+      <div
+        className="setup-progress-fill h-full"
+        /* eslint-disable-next-line no-restricted-syntax -- Fill width is a computed percentage, not a themeable style. */
+        style={{ width: `${percent}%` }}
+      />
     </div>
   );
 }

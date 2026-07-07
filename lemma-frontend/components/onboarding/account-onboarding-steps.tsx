@@ -256,10 +256,9 @@ export function IdentityStep({
             <p className="setup-preview-card-title">
               {name.trim() ? `Welcome, ${name.trim()}` : "Welcome"}
             </p>
-            <div className="mt-2 space-y-1.5">
-              <span className="setup-preview-line lemma-skeleton block w-full" />
-              <span className="setup-preview-line lemma-skeleton block w-2/3" />
-            </div>
+            <p className="mt-1.5 text-xs leading-5 text-[var(--text-tertiary)]">
+              This is what teammates will see when you sign in.
+            </p>
           </div>
         </OnboardingPreviewChrome>
       }

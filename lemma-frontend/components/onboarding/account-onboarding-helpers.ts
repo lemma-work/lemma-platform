@@ -39,8 +39,8 @@ export const SETUP_STEPS: SetupStep[] = [
 ];
 
 // Solo users skip the workspace step entirely — their workspace is created
-// silently when the first pod lands. ProgressDots uses this so the dots match
-// the path the user is actually on.
+// silently when the first pod lands. SetupProgressBar uses this so its fill
+// matches the path the user is actually on.
 export function setupStepsForAudience(audience: Audience | null): SetupStep[] {
   if (audience === "personal") {
     return ["boot", "identity", "audience", "connect", "start"];
