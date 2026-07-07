@@ -201,7 +201,7 @@ export function ResourceArrivalNotice({
     );
 }
 
-function ConfettiBurst({ density = 'full' }: { density?: 'full' | 'small' }) {
+export function ConfettiBurst({ density = 'full' }: { density?: 'full' | 'small' }) {
     const count = density === 'small' ? 18 : 42;
 
     return (

@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import Image from "next/image";
 import { useRouter } from "next/navigation";
 import {
+  ArrowLeft,
   ArrowRight,
   Boxes,
   Check,
@@ -52,10 +53,19 @@ import {
   SetupPanel,
   SetupPrimaryButton,
   SetupShell,
+  SetupSplitPanel,
 } from "./account-onboarding-chrome";
+import {
+  AudiencePreviewBody,
+  ConnectPreviewBody,
+  OnboardingPreviewChrome,
+  StartPreviewBody,
+  WorkspacePreviewBody,
+} from "./onboarding-preview";
 import {
   AUDIENCE_OPTIONS,
   BUILD_PATHS,
+  DAEMON_SETUP_STEPS,
   INTENT_EXAMPLE_LABELS,
   INTENT_EXAMPLES,
   SETUP_GREETINGS,
@@ -64,13 +74,8 @@ import {
   type Audience,
   type BuildPath,
   type ConnectChoice,
+  type SetupStep,
 } from "./account-onboarding-helpers";
-
-const DAEMON_SETUP_STEPS: Array<{ label: string; command: string }> = [
-  { label: "Install the Lemma terminal", command: "uv tool install lemma-terminal" },
-  { label: "Sign in", command: "lemma auth login" },
-  { label: "Start the daemon", command: "lemma daemon start --background" },
-];
 
 type ProviderPreset = {
   id: string;
@@ -145,36 +150,32 @@ export function InvitationsStep({
   );
 }
 
+// Static and immediately visible on purpose — the previous version staged a
+// multilingual morphing greeting + skyline reveal ahead of this content on a
+// ~7s timer tuned for the old boxed card layout. Disabled for now: revisit
+// once the full-bleed shell settles.
 export function BootStep({ onBegin }: { onBegin: () => void }) {
   return (
-    <div className="setup-boot-intro w-full max-w-3xl text-center">
-      <div className="setup-boot-stage mx-auto">
-        <GreetingPrelude />
-      </div>
-      <p className="setup-final-greeting" aria-hidden="true">
-        Welcome to Lemma
+    <div className="mx-auto flex w-full max-w-2xl flex-col items-center text-center">
+      <h1 className="setup-boot-title font-normal tracking-normal text-[var(--text-primary)]">
+        Welcome to your AI workspace
+      </h1>
+      <p className="mx-auto mt-4 max-w-xl text-base leading-7 text-[var(--text-secondary)]">
+        Tell Lemma what you want done and it builds the space around it — bots,
+        apps, the lot. Or just poke around. Nothing to set up first.
       </p>
-      <div className="setup-boot-content">
-        <h1 className="setup-boot-title font-normal tracking-normal text-[var(--text-primary)]">
-          Welcome to your AI workspace
-        </h1>
-        <p className="mx-auto mt-4 max-w-xl text-base leading-7 text-[var(--text-secondary)]">
-          Tell Lemma what you want done and it builds the space around it — bots,
-          apps, the lot. Or just poke around. Nothing to set up first.
-        </p>
-        <Button
-          onClick={onBegin}
-          size="lg"
-          className="setup-primary-action mt-8 h-12 min-w-56 gap-3 text-sm font-medium"
-        >
-          <Sparkles className="h-5 w-5" />
-          Begin setup
-        </Button>
-        <p className="mx-auto mt-4 max-w-sm font-mono text-xs text-[var(--text-tertiary)]">
-          Or run{" "}
-          <span className="text-[var(--text-secondary)]">lemma init</span>
-        </p>
-      </div>
+      <Button
+        onClick={onBegin}
+        size="lg"
+        className="setup-primary-action mt-8 h-12 min-w-56 gap-3 text-sm font-medium"
+      >
+        <Sparkles className="h-5 w-5" />
+        Begin setup
+      </Button>
+      <p className="mx-auto mt-4 max-w-sm font-mono text-xs text-[var(--text-tertiary)]">
+        Or run{" "}
+        <span className="text-[var(--text-secondary)]">lemma init</span>
+      </p>
     </div>
   );
 }
@@ -231,22 +232,39 @@ export function IdentityStep({
   isSaving,
   onNameChange,
   onSubmit,
+  onBack,
+  steps,
 }: {
   email: string;
   name: string;
   isSaving: boolean;
   onNameChange: (value: string) => void;
   onSubmit: (event: React.FormEvent) => void;
+  onBack?: () => void;
+  steps?: SetupStep[];
 }) {
   return (
-    <SetupPanel
+    <SetupSplitPanel
       title="What should Lemma call you?"
       subtitle="We will use this to set up your operator profile and find your team."
+      onBack={onBack}
+      currentStep="identity"
+      steps={steps}
+      preview={
+        <OnboardingPreviewChrome orgLabel="Your workspace" personName={name}>
+          <div className="setup-preview-card">
+            <p className="setup-preview-card-title">
+              {name.trim() ? `Welcome, ${name.trim()}` : "Welcome"}
+            </p>
+            <div className="mt-2 space-y-1.5">
+              <span className="setup-preview-line lemma-skeleton block w-full" />
+              <span className="setup-preview-line lemma-skeleton block w-2/3" />
+            </div>
+          </div>
+        </OnboardingPreviewChrome>
+      }
     >
-      <form
-        onSubmit={onSubmit}
-        className="mx-auto mt-10 w-full max-w-xl space-y-5 text-left"
-      >
+      <form onSubmit={onSubmit} className="w-full max-w-xl space-y-5 text-left">
         <div className="space-y-2">
           <Label htmlFor="operator-name">Full name</Label>
           <div className="form-field-control flex h-14 items-center gap-3 px-4">
@@ -272,27 +290,44 @@ export function IdentityStep({
           type="submit"
           loading={isSaving}
           loadingLabel="Saving profile"
+          className="!mx-0"
         >
           Continue
         </SetupPrimaryButton>
       </form>
-    </SetupPanel>
+    </SetupSplitPanel>
   );
 }
 
 export function AudienceStep({
   audience,
   onSelect,
+  onBack,
+  steps,
 }: {
   audience: Audience | null;
   onSelect: (audience: Audience) => void;
+  onBack?: () => void;
+  steps?: SetupStep[];
 }) {
+  // Selecting an audience navigates to the next step immediately, so hover
+  // is the only chance to actually see the other option's preview — clicking
+  // never leaves it on screen long enough to look at.
+  const [hoveredAudience, setHoveredAudience] = useState<Audience | null>(
+    null,
+  );
+  const previewAudience = hoveredAudience ?? audience;
+
   return (
-    <SetupPanel
+    <SetupSplitPanel
       title="Who are you setting this up for?"
       subtitle="This shapes how much we set up up front. You can change direction later."
+      preview={<AudiencePreviewBody audience={previewAudience} />}
+      onBack={onBack}
+      currentStep="audience"
+      steps={steps}
     >
-      <div className="mx-auto mt-9 grid w-full max-w-2xl gap-3 text-left sm:grid-cols-2">
+      <div className="grid w-full max-w-2xl gap-3 text-left sm:grid-cols-2">
         {AUDIENCE_OPTIONS.map((option) => {
           const Icon = option.icon;
           const selected = audience === option.id;
@@ -301,6 +336,10 @@ export function AudienceStep({
               key={option.id}
               type="button"
               onClick={() => onSelect(option.id)}
+              onMouseEnter={() => setHoveredAudience(option.id)}
+              onMouseLeave={() => setHoveredAudience(null)}
+              onFocus={() => setHoveredAudience(option.id)}
+              onBlur={() => setHoveredAudience(null)}
               data-active={selected}
               className={[
                 "setup-path-choice flex w-full items-start gap-3 px-4 py-4 text-left",
@@ -328,20 +367,29 @@ export function AudienceStep({
           );
         })}
       </div>
-    </SetupPanel>
+    </SetupSplitPanel>
   );
 }
 
 export function ConnectStep({
   isSaving,
   onContinue,
+  onBack,
+  steps,
 }: {
   isSaving: boolean;
   onContinue: (choice: ConnectChoice) => void;
+  onBack?: () => void;
+  steps?: SetupStep[];
 }) {
   const [selectedOption, setSelectedOption] = useState<
     "lemma" | "daemon" | "provider"
   >("lemma");
+  // Hovering a card previews it on the right without expanding its form —
+  // clicking still does that (and selects it) separately.
+  const [hoveredOption, setHoveredOption] = useState<
+    "lemma" | "daemon" | "provider" | null
+  >(null);
   const {
     data: harnessesData,
     isLoading: isLoadingHarnesses,
@@ -417,15 +465,45 @@ export function ConnectStep({
       (providerKind === "anthropic" || Boolean(baseUrl.trim())));
   const continueDisabled = isSaving || !daemonCanContinue || !providerCanContinue;
 
+  const selectedHarness = availableLocalHarnesses.find(
+    (h) => availableHarnessKey(h) === selectedHarnessKey,
+  );
+  const previewOption = hoveredOption ?? selectedOption;
+  const previewModelName =
+    previewOption === "daemon"
+      ? (selectedModel ??
+          (selectedHarness ? firstHarnessModelName(selectedHarness) : null) ??
+          null)
+      : previewOption === "provider"
+        ? defaultModelName.trim() || splitModelNames(modelNames)[0] || null
+        : null;
+  const previewHarnesses = harnesses.map((h) => ({
+    kind: h.harness_kind,
+    detected: isHarnessAvailable(h),
+  }));
+
   return (
-    <SetupPanel
+    <SetupSplitPanel
       title="Connect your AI"
       subtitle="Choose how Lemma runs AI for you. You can change this anytime in settings."
+      preview={
+        <ConnectPreviewBody
+          selectedOption={previewOption}
+          harnesses={previewHarnesses}
+          selectedHarnessKind={selectedHarness?.harness_kind}
+          providerName={providerName}
+          modelName={previewModelName}
+        />
+      }
+      onBack={onBack}
+      currentStep="connect"
+      steps={steps}
     >
-      <div className="mx-auto mt-8 w-full max-w-2xl space-y-3 text-left">
+      <div className="w-full max-w-2xl space-y-3 text-left">
         <ConnectOptionCard
           selected={selectedOption === "daemon"}
           onClick={() => setSelectedOption("daemon")}
+          onHoverChange={(hovering) => setHoveredOption(hovering ? "daemon" : null)}
           icon={<Terminal className="h-4 w-4" />}
           title="Connect a local harness"
           subtitle="Codex, Claude Code, or OpenCode via the Lemma daemon."
@@ -516,7 +594,8 @@ export function ConnectStep({
                         : "No harness detected yet"}
                     </p>
                     <p className="mt-1 text-sm leading-6 text-[var(--text-secondary)]">
-                      Open a terminal and run these commands, then recheck.
+                      Install a harness and it shows up here automatically —
+                      full setup steps are in the panel on the right.
                     </p>
                   </div>
                   <Button
@@ -535,21 +614,12 @@ export function ConnectStep({
                     Recheck
                   </Button>
                 </div>
-                <div className="mt-4 space-y-3">
-                  {DAEMON_SETUP_STEPS.map((step, index) => (
-                    <div key={step.command}>
-                      <p className="mb-1 text-xs font-medium text-[var(--text-tertiary)]">
-                        {index + 1}. {step.label}
-                      </p>
-                      <code className="block rounded-md border border-[var(--border-subtle)] bg-[var(--surface-1)] px-3 py-2 font-mono text-xs leading-5 text-[var(--text-primary)]">
-                        {step.command}
-                      </code>
-                    </div>
-                  ))}
-                </div>
-                <p className="mt-4 text-sm leading-6 text-[var(--text-tertiary)]">
-                  Once a harness appears above, pick it and continue.
-                </p>
+                {/* lg+ screens get the full step-by-step in the preview pane
+                    on the right; below that breakpoint the pane is hidden, so
+                    this is the only copy of the setup command. */}
+                <code className="mt-4 block rounded-md border border-[var(--border-subtle)] bg-[var(--surface-1)] px-3 py-2 font-mono text-xs leading-5 text-[var(--text-primary)] lg:hidden">
+                  {DAEMON_SETUP_STEPS.map((step) => step.command).join(" && ")}
+                </code>
               </div>
             )}
           </div>
@@ -563,6 +633,7 @@ export function ConnectStep({
             if (!providerName && preset) setProviderName(preset.name);
             if (!baseUrl && preset) setBaseUrl(preset.baseUrl);
           }}
+          onHoverChange={(hovering) => setHoveredOption(hovering ? "provider" : null)}
           icon={<KeyRound className="h-4 w-4" />}
           title="Paste an API key"
           subtitle="Bring your own OpenAI, Anthropic, OpenRouter, Fireworks, or other key."
@@ -680,6 +751,7 @@ export function ConnectStep({
         <ConnectOptionCard
           selected={selectedOption === "lemma"}
           onClick={() => setSelectedOption("lemma")}
+          onHoverChange={(hovering) => setHoveredOption(hovering ? "lemma" : null)}
           icon={<Sparkles className="h-4 w-4" />}
           title="Use Lemma"
           subtitle="Fastest — no setup. AI runs on Lemma's built-in models."
@@ -691,7 +763,7 @@ export function ConnectStep({
           loading={isSaving}
           loadingLabel="Connecting"
           disabled={continueDisabled}
-          className="setup-primary-action !flex mx-auto mt-6 h-11 min-w-44 gap-2 px-6 text-sm font-medium"
+          className="setup-primary-action !flex mt-6 h-11 min-w-44 gap-2 px-6 text-sm font-medium"
         >
           Continue
           <ArrowRight className="h-4 w-4" />
@@ -701,25 +773,27 @@ export function ConnectStep({
           <button
             type="button"
             onClick={() => onContinue({ kind: "lemma" })}
-            className="setup-defer-button mx-auto mt-1 block text-xs text-[var(--text-tertiary)] underline-offset-4 transition hover:text-[var(--text-secondary)] hover:underline"
+            className="setup-defer-button mt-1 block text-xs text-[var(--text-tertiary)] underline-offset-4 transition hover:text-[var(--text-secondary)] hover:underline"
           >
             Skip for now
           </button>
         ) : null}
       </div>
-    </SetupPanel>
+    </SetupSplitPanel>
   );
 }
 
 function ConnectOptionCard({
   selected,
   onClick,
+  onHoverChange,
   icon,
   title,
   subtitle,
 }: {
   selected: boolean;
   onClick: () => void;
+  onHoverChange?: (hovering: boolean) => void;
   icon: React.ReactNode;
   title: string;
   subtitle: string;
@@ -728,6 +802,10 @@ function ConnectOptionCard({
     <button
       type="button"
       onClick={onClick}
+      onMouseEnter={() => onHoverChange?.(true)}
+      onMouseLeave={() => onHoverChange?.(false)}
+      onFocus={() => onHoverChange?.(true)}
+      onBlur={() => onHoverChange?.(false)}
       data-active={selected}
       className={[
         "setup-path-choice flex w-full items-start gap-3 px-4 py-4 text-left",
@@ -765,6 +843,8 @@ export function StartStep({
   onCustomIntentChange,
   onContinue,
   onSkip,
+  onBack,
+  steps,
 }: {
   audience: Audience;
   recipes: Recipe[];
@@ -775,13 +855,26 @@ export function StartStep({
   onCustomIntentChange: (value: string) => void;
   onContinue: () => void;
   onSkip: () => void;
+  onBack?: () => void;
+  steps?: SetupStep[];
 }) {
   const personal = audience === "personal";
   const hasIntent = Boolean(customIntent.trim());
   const continueDisabled = isCreating || (!hasIntent && !selectedRecipeId);
+  const selectedRecipe = recipes.find((recipe) => recipe.id === selectedRecipeId);
+  // Hovering a card previews it without committing — clicking still selects
+  // it for real (and stays selected after the mouse leaves).
+  const [hoveredRecipeId, setHoveredRecipeId] = useState<string | null>(null);
+  const hoveredRecipe = recipes.find((recipe) => recipe.id === hoveredRecipeId);
+  const previewTitle = hasIntent
+    ? derivePodNameFromIntent(customIntent)
+    : (hoveredRecipe?.name ?? selectedRecipe?.name ?? "First Pod");
+  const previewBlurb = hasIntent
+    ? undefined
+    : (hoveredRecipe?.blurb ?? selectedRecipe?.blurb);
 
   return (
-    <SetupPanel
+    <SetupSplitPanel
       title={
         personal
           ? "What do you want to get done?"
@@ -792,8 +885,18 @@ export function StartStep({
           ? "Describe it, or start from one of these — Lemma wires up the bots and apps and hands you something that already works."
           : "Describe it, or start from one of these — Lemma wires up the bots, apps, and approvals into a working pod."
       }
+      preview={
+        <StartPreviewBody
+          podTitle={previewTitle}
+          podBlurb={previewBlurb}
+          justSelected={hasIntent ? null : selectedRecipeId || null}
+        />
+      }
+      onBack={onBack}
+      currentStep="start"
+      steps={steps}
     >
-      <div className="mx-auto mt-8 w-full max-w-4xl text-left">
+      <div className="w-full max-w-4xl text-left">
         <div className="form-field-control flex min-h-14 items-center gap-3 px-4 py-2">
           <Sparkles className="h-5 w-5 shrink-0 text-[var(--text-tertiary)]" />
           <input
@@ -825,6 +928,10 @@ export function StartStep({
                 key={recipe.id}
                 type="button"
                 onClick={() => onSelectRecipe(recipe.id)}
+                onMouseEnter={() => setHoveredRecipeId(recipe.id)}
+                onMouseLeave={() => setHoveredRecipeId(null)}
+                onFocus={() => setHoveredRecipeId(recipe.id)}
+                onBlur={() => setHoveredRecipeId(null)}
                 data-active={selected}
                 className={[
                   "setup-kit-option flex flex-col px-3.5 py-3.5 text-left",
@@ -856,7 +963,7 @@ export function StartStep({
           loading={isCreating}
           loadingLabel={personal ? "Building your space" : "Creating pod"}
           disabled={continueDisabled}
-          className="setup-primary-action !flex mx-auto mt-6 h-11 min-w-44 gap-2 px-6 text-sm font-medium"
+          className="setup-primary-action !flex mt-6 h-11 min-w-44 gap-2 px-6 text-sm font-medium"
         >
           {personal ? "Create my space" : "Create pod"}
           <ArrowRight className="h-4 w-4" />
@@ -866,12 +973,12 @@ export function StartStep({
           type="button"
           onClick={onSkip}
           disabled={isCreating}
-          className="setup-defer-button mx-auto mt-3 block text-xs text-[var(--text-tertiary)] underline-offset-4 transition hover:text-[var(--text-secondary)] hover:underline disabled:opacity-50"
+          className="setup-defer-button mt-3 block text-xs text-[var(--text-tertiary)] underline-offset-4 transition hover:text-[var(--text-secondary)] hover:underline disabled:opacity-50"
         >
           I&apos;ll set this up later
         </button>
       </div>
-    </SetupPanel>
+    </SetupSplitPanel>
   );
 }
 
@@ -887,6 +994,8 @@ export function WorkspaceStep({
   onAllowDomainJoinChange,
   onJoinSuggested,
   onCreateWorkspace,
+  onBack,
+  steps,
 }: {
   domain: string | null;
   suggestedOrganization: Organization | null;
@@ -899,6 +1008,8 @@ export function WorkspaceStep({
   onAllowDomainJoinChange: (value: boolean) => void;
   onJoinSuggested: () => void;
   onCreateWorkspace: () => void;
+  onBack?: () => void;
+  steps?: SetupStep[];
 }) {
   const [showManualCreate, setShowManualCreate] = useState(false);
 
@@ -909,10 +1020,21 @@ export function WorkspaceStep({
       suggestedOrganization.slug;
 
     return (
-      <SetupPanel
-        title="We found your workspace"
-        subtitle={`Your ${teamDomain} email can join this Lemma workspace.`}
-      >
+      <>
+        {onBack ? (
+          <button
+            type="button"
+            onClick={onBack}
+            className="fixed left-6 top-6 z-10 flex items-center gap-1.5 text-sm text-[var(--text-tertiary)] transition hover:text-[var(--text-primary)]"
+          >
+            <ArrowLeft className="h-4 w-4" />
+            Back
+          </button>
+        ) : null}
+        <SetupPanel
+          title="We found your workspace"
+          subtitle={`Your ${teamDomain} email can join this Lemma workspace.`}
+        >
         <div className="setup-suggestion-card mx-auto mt-9 w-full max-w-2xl px-6 py-5 text-left">
           <div className="flex items-center gap-4">
             <div className="setup-suggestion-icon flex h-12 w-12 shrink-0 items-center justify-center">
@@ -962,16 +1084,27 @@ export function WorkspaceStep({
             Use this for a different team, client workspace, or sandbox.
           </p>
         </div>
-      </SetupPanel>
+        </SetupPanel>
+      </>
     );
   }
 
   return (
-    <SetupPanel
+    <SetupSplitPanel
       title="Create your workspace"
       subtitle="This is where your pods, teammates, and approval rails will live."
+      preview={
+        <WorkspacePreviewBody
+          workspaceName={workspaceName}
+          allowDomainJoin={allowDomainJoin}
+          domain={domain}
+        />
+      }
+      onBack={onBack}
+      currentStep="workspace"
+      steps={steps}
     >
-      <div className="mx-auto mt-10 w-full max-w-xl space-y-5">
+      <div className="w-full max-w-xl space-y-5">
         <div className="space-y-2">
           <Label htmlFor="workspace-name" className="block text-left">
             Workspace name
@@ -1031,11 +1164,12 @@ export function WorkspaceStep({
           loading={isCreating}
           loadingLabel="Creating workspace"
           disabled={!workspaceName.trim()}
+          className="!mx-0"
         >
           Create workspace
         </SetupPrimaryButton>
       </div>
-    </SetupPanel>
+    </SetupSplitPanel>
   );
 }
 

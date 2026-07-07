@@ -48,11 +48,7 @@ import {
   getRecipeById,
 } from "@/lib/recipes/recipes";
 
-import {
-  ProgressDots,
-  SetupChrome,
-  SetupShell,
-} from "./account-onboarding-chrome";
+import { SetupChrome, SetupShell } from "./account-onboarding-chrome";
 import {
   buildPodDescription,
   buildPromptFromIntent,
@@ -72,7 +68,6 @@ import {
   BootStep,
   ConnectStep,
   IdentityStep,
-  IntroSkylines,
   InvitationsStep,
   StartStep,
   WorkspaceStep,
@@ -513,75 +508,97 @@ function SetupAssistant({
     }
   };
 
-  return (
-    <SetupShell>
-      <section className="setup-card-shell relative mx-auto w-full overflow-hidden backdrop-blur-xl">
-        {step === "boot" ? <AnomalousOrb className="setup-card-orb" /> : null}
-        <div className="setup-card-glow absolute inset-0" />
-        {step === "boot" ? <IntroSkylines /> : null}
-        <div className="relative z-10 min-h-[min(680px,calc(100vh-80px))] px-5 py-5 sm:px-7 sm:py-6">
-          <SetupChrome intro={step === "boot"} />
-          <div className="mx-auto flex min-h-[min(570px,calc(100vh-190px))] max-w-4xl flex-col items-center justify-center pt-8 pb-16">
-            {step === "boot" ? (
+  if (step === "boot") {
+    return (
+      <SetupShell fullBleed>
+        <div className="relative flex min-h-screen w-full flex-col overflow-hidden">
+          <div className="setup-card-glow absolute inset-0" />
+          {/* Country-skyline morph is disabled for now — revisit once the
+              transition into the split-view steps is settled. */}
+          {/* <IntroSkylines /> */}
+          <div className="relative z-10 flex flex-1 flex-col px-5 py-5 sm:px-7 sm:py-6">
+            <SetupChrome />
+            <div className="mx-auto flex flex-1 max-w-4xl flex-col items-center justify-center pb-16">
+              <AnomalousOrb className="static mb-8 h-40 w-40 shrink-0 sm:h-48 sm:w-48" />
               <BootStep onBegin={handleBegin} />
-            ) : step === "identity" ? (
-              <IdentityStep
-                email={email}
-                name={identityName}
-                isSaving={updateProfile.isPending}
-                onNameChange={setIdentityName}
-                onSubmit={handleIdentitySubmit}
-              />
-            ) : step === "audience" ? (
-              <AudienceStep audience={audience} onSelect={handleAudienceSelect} />
-            ) : step === "workspace" ? (
-              <WorkspaceStep
-                domain={workDomain}
-                suggestedOrganization={suggestedOrganization}
-                workspaceName={workspaceName}
-                slugAvailable={slugAvailability.data?.available}
-                allowDomainJoin={allowDomainJoin}
-                isJoining={joinSuggestedOrganization.isPending}
-                isCreating={createOrganization.isPending}
-                onWorkspaceNameChange={setWorkspaceName}
-                onAllowDomainJoinChange={setAllowDomainJoin}
-                onJoinSuggested={handleJoinSuggested}
-                onCreateWorkspace={handleCreateWorkspace}
-              />
-            ) : step === "connect" ? (
-              <ConnectStep
-                isSaving={isConnectingAi}
-                onContinue={handleConnectContinue}
-              />
-            ) : (
-              <StartStep
-                audience={audience ?? "personal"}
-                recipes={startRecipes}
-                selectedRecipeId={selectedRecipeId}
-                customIntent={customIntent}
-                isCreating={isCreatingPod}
-                onSelectRecipe={(id) => {
-                  setCustomIntent("");
-                  setSelectedRecipeId(id);
-                }}
-                onCustomIntentChange={(value) => {
-                  setCustomIntent(value);
-                  // Typing overrides a card; clearing restores the default pick.
-                  setSelectedRecipeId(
-                    value.trim() ? "" : startRecipes[0]?.id ?? "",
-                  );
-                }}
-                onContinue={handleCreateFromStart}
-                onSkip={handleSkipFirstPod}
-              />
-            )}
+            </div>
           </div>
-          <ProgressDots
-            currentStep={step}
-            steps={setupStepsForAudience(audience)}
-          />
         </div>
-      </section>
+      </SetupShell>
+    );
+  }
+
+  const orderedSteps = setupStepsForAudience(audience);
+  const handleBack = () => {
+    const currentIndex = orderedSteps.indexOf(step);
+    if (currentIndex <= 0) return;
+    goTo(orderedSteps[currentIndex - 1]);
+  };
+
+  return (
+    <SetupShell fullBleed>
+      {step === "identity" ? (
+        <IdentityStep
+          email={email}
+          name={identityName}
+          isSaving={updateProfile.isPending}
+          onNameChange={setIdentityName}
+          onSubmit={handleIdentitySubmit}
+          onBack={handleBack}
+          steps={orderedSteps}
+        />
+      ) : step === "audience" ? (
+        <AudienceStep
+          audience={audience}
+          onSelect={handleAudienceSelect}
+          onBack={handleBack}
+          steps={orderedSteps}
+        />
+      ) : step === "workspace" ? (
+        <WorkspaceStep
+          domain={workDomain}
+          suggestedOrganization={suggestedOrganization}
+          workspaceName={workspaceName}
+          slugAvailable={slugAvailability.data?.available}
+          allowDomainJoin={allowDomainJoin}
+          isJoining={joinSuggestedOrganization.isPending}
+          isCreating={createOrganization.isPending}
+          onWorkspaceNameChange={setWorkspaceName}
+          onAllowDomainJoinChange={setAllowDomainJoin}
+          onJoinSuggested={handleJoinSuggested}
+          onCreateWorkspace={handleCreateWorkspace}
+          onBack={handleBack}
+          steps={orderedSteps}
+        />
+      ) : step === "connect" ? (
+        <ConnectStep
+          isSaving={isConnectingAi}
+          onContinue={handleConnectContinue}
+          onBack={handleBack}
+          steps={orderedSteps}
+        />
+      ) : (
+        <StartStep
+          audience={audience ?? "personal"}
+          recipes={startRecipes}
+          selectedRecipeId={selectedRecipeId}
+          customIntent={customIntent}
+          isCreating={isCreatingPod}
+          onSelectRecipe={(id) => {
+            setCustomIntent("");
+            setSelectedRecipeId(id);
+          }}
+          onCustomIntentChange={(value) => {
+            setCustomIntent(value);
+            // Typing overrides a card; clearing restores the default pick.
+            setSelectedRecipeId(value.trim() ? "" : startRecipes[0]?.id ?? "");
+          }}
+          onContinue={handleCreateFromStart}
+          onSkip={handleSkipFirstPod}
+          onBack={handleBack}
+          steps={orderedSteps}
+        />
+      )}
     </SetupShell>
   );
 }

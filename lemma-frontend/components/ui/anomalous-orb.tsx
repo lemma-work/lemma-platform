@@ -80,8 +80,10 @@ void main() {
     vec3 lightDir = normalize(pointLightPos - vPosition);
     float diffuse = max(dot(normal, lightDir), 0.0);
     float fresnel = pow(1.0 - max(dot(normal, vec3(0.0, 0.0, 1.0)), 0.0), 2.0);
-    vec3 finalColor = color * (0.28 + diffuse * 0.58 + fresnel * 0.68);
-    gl_FragColor = vec4(finalColor, 0.72);
+    // Ambient floor raised from 0.28 so unlit facets stay legible against a
+    // near-black canvas — the old value only read against a light bg.
+    vec3 finalColor = color * (0.48 + diffuse * 0.5 + fresnel * 0.6);
+    gl_FragColor = vec4(finalColor, 0.8);
 }
 `;
 
@@ -100,6 +102,14 @@ export function AnomalousOrb({ className, ...props }: AnomalousOrbProps) {
         const renderer = new THREE.WebGLRenderer({ alpha: true, antialias: true });
         renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
         renderer.setClearColor(0xffffff, 0);
+        // setSize below is called with updateStyle=false, so the canvas's own
+        // CSS size never tracks its container unless we pin it here — without
+        // this it renders at its raw buffer resolution (often larger than the
+        // container after devicePixelRatio scaling) and gets cropped to one
+        // corner by the container's overflow:hidden.
+        renderer.domElement.style.width = "100%";
+        renderer.domElement.style.height = "100%";
+        renderer.domElement.style.display = "block";
         container.appendChild(renderer.domElement);
 
         const geometry = new THREE.IcosahedronGeometry(1.15, 48);

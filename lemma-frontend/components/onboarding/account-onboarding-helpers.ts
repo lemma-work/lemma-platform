@@ -70,6 +70,15 @@ export type ConnectChoice =
       defaultModelName?: string;
     };
 
+// Shared between ConnectStep (the mobile-safe fallback, since the preview
+// pane is hidden below lg) and ConnectPreviewBody (the full walkthrough on
+// large screens) so the two copies of these commands can't drift apart.
+export const DAEMON_SETUP_STEPS: Array<{ label: string; command: string }> = [
+  { label: "Install the Lemma terminal", command: "uv tool install lemma-terminal" },
+  { label: "Sign in", command: "lemma auth login" },
+  { label: "Start the daemon", command: "lemma daemon start --background" },
+];
+
 export const AUDIENCE_OPTIONS: Array<{
   id: Audience;
   title: string;

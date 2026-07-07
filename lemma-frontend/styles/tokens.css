@@ -360,7 +360,12 @@
 }
 
 .setup-shell {
-  background: linear-gradient(180deg, #f0efec 0%, #f5f4f0 42%, #e5e3df 100%);
+  background: linear-gradient(
+    180deg,
+    var(--bg-subtle) 0%,
+    var(--bg-canvas) 42%,
+    var(--bg-muted) 100%
+  );
 }
 
 .setup-shell-bottom-glow {
@@ -383,7 +388,7 @@
 .setup-card-glow {
   background:
     radial-gradient(circle at 50% 0%, color-mix(in srgb, var(--delight) 16%, transparent), transparent 34%),
-    linear-gradient(180deg, transparent, rgba(255, 255, 255, 0.36));
+    linear-gradient(180deg, transparent, color-mix(in srgb, var(--surface-1) 36%, transparent));
 }
 
 .setup-badge {
@@ -547,11 +552,9 @@
   z-index: 0;
   width: min(18.48rem, 36.96vw);
   height: min(18.48rem, 36.96vw);
-  opacity: 0;
+  opacity: 0.82;
   filter: drop-shadow(0 26px 60px rgba(216, 155, 61, 0.22));
-  transform: translateX(-50%) scale(0.96);
-  animation: setup-card-orb-arrive 1200ms ease forwards;
-  animation-delay: 7s;
+  transform: translateX(-50%) scale(1);
 }
 
 .setup-card-orb::before {
@@ -1075,6 +1078,145 @@
     opacity: 1;
     transform: translateX(0);
   }
+}
+
+.setup-preview-chrome {
+  display: flex;
+  height: 100%;
+  min-height: 0;
+  flex-direction: column;
+  gap: 0.75rem;
+}
+
+.setup-preview-topbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+  border-bottom: 1px solid var(--border-subtle);
+  padding-bottom: 0.75rem;
+}
+
+.setup-preview-breadcrumb {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  gap: 0.375rem;
+  font-size: var(--text-sm);
+  color: var(--text-secondary);
+}
+
+.setup-preview-breadcrumb-value {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-weight: 600;
+  color: var(--text-primary);
+  transition: color 180ms ease;
+}
+
+.setup-preview-avatar {
+  display: flex;
+  height: 1.75rem;
+  width: 1.75rem;
+  flex-shrink: 0;
+  align-items: center;
+  justify-content: center;
+  border-radius: var(--radius-full);
+  background: color-mix(in srgb, var(--brand-primary) 88%, black);
+  color: var(--text-inverse);
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0;
+  transition: background-color 220ms ease;
+}
+
+.setup-preview-body {
+  display: grid;
+  min-height: 0;
+  flex: 1;
+  grid-template-columns: minmax(0, 0.2fr) minmax(0, 1fr);
+  gap: 0.75rem;
+}
+
+.setup-preview-sidebar {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+}
+
+.setup-preview-sidebar-item {
+  height: 0.5rem;
+  border-radius: var(--radius-full);
+}
+
+.setup-preview-main {
+  display: flex;
+  flex-direction: column;
+  gap: 0.625rem;
+  min-width: 0;
+}
+
+.setup-preview-line {
+  height: 0.5rem;
+  border-radius: var(--radius-full);
+}
+
+.setup-preview-card {
+  border: 1px solid var(--border-default);
+  border-radius: var(--radius-lg);
+  background: color-mix(in srgb, var(--surface-1) 82%, transparent);
+  padding: 0.75rem;
+}
+
+.setup-preview-card-title {
+  font-size: var(--text-sm);
+  font-weight: 600;
+  color: var(--text-primary);
+  transition: color 180ms ease;
+}
+
+.setup-preview-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.25rem;
+  border-radius: var(--radius-full);
+  border: 1px solid color-mix(in srgb, var(--delight) 45%, var(--border-default));
+  background: color-mix(in srgb, var(--delight) 14%, transparent);
+  color: color-mix(in srgb, var(--delight) 70%, var(--text-primary));
+  padding: 0.125rem 0.5rem;
+  font-size: 11px;
+  font-weight: 500;
+  opacity: 0;
+  transform: translateY(2px) scale(0.96);
+  transition: opacity 200ms ease, transform 200ms ease;
+}
+
+.setup-preview-badge.is-visible {
+  opacity: 1;
+  transform: translateY(0) scale(1);
+}
+
+.setup-split-title {
+  font-family: var(--font-ibm-plex-sans);
+  font-weight: 700;
+  font-size: 26px;
+  line-height: 1.2;
+  letter-spacing: -0.02em;
+}
+
+@media (min-width: 640px) {
+  .setup-split-title {
+    font-size: 30px;
+  }
+}
+
+.setup-preview-pane {
+  position: relative;
+  overflow: hidden;
+  border-left: 1px solid var(--border-subtle);
+  background: color-mix(in srgb, var(--surface-1) 55%, var(--bg-subtle));
 }
 
 .run-confetti-piece {
