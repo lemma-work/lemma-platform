@@ -61,6 +61,7 @@ export function OnboardingPreviewChrome({
                 "setup-preview-sidebar-item lemma-skeleton",
                 index < activeSidebarItems ? "opacity-100" : "opacity-60",
               )}
+              /* eslint-disable-next-line no-restricted-syntax -- Skeleton bar width is data-driven geometry per sidebar item. */
               style={{ width: index === 0 ? "100%" : `${72 - index * 6}%` }}
             />
           ))}
@@ -178,7 +179,7 @@ export function ConnectPreviewBody({
       <OnboardingPreviewChrome orgLabel="AI Runtime" activeSidebarItems={2}>
         <div className="setup-preview-card">
           <div className="flex items-center gap-2">
-            <span className="flex h-7 w-7 shrink-0 items-center justify-center rounded-md border border-[var(--border-default)] bg-[var(--surface-2)] text-[var(--text-secondary)]">
+            <span className="flex h-7 w-7 shrink-0 items-center justify-center rounded-md border border-[var(--border-subtle)] bg-[var(--surface-2)] text-[var(--text-secondary)]">
               <Terminal className="h-3.5 w-3.5" />
             </span>
             <p className="setup-preview-card-title">Local harnesses</p>
@@ -228,10 +229,10 @@ export function ConnectPreviewBody({
             <div className="mt-3 space-y-2.5">
               {DAEMON_SETUP_STEPS.map((step, index) => (
                 <div key={step.command}>
-                  <p className="text-[11px] font-medium text-[var(--text-tertiary)]">
+                  <p className="text-xs font-medium text-[var(--text-tertiary)]">
                     {index + 1}. {step.label}
                   </p>
-                  <code className="mt-1 block truncate rounded-md border border-[var(--border-subtle)] bg-[var(--surface-2)] px-2.5 py-1.5 font-mono text-[11px] leading-4 text-[var(--text-primary)]">
+                  <code className="mt-1 block truncate rounded-md border border-[var(--border-subtle)] bg-[var(--surface-2)] px-2.5 py-1.5 font-mono text-xs leading-4 text-[var(--text-primary)]">
                     {step.command}
                   </code>
                 </div>
@@ -250,7 +251,7 @@ export function ConnectPreviewBody({
       <OnboardingPreviewChrome orgLabel="AI Runtime" activeSidebarItems={2}>
         <div className="setup-preview-card">
           <div className="flex items-center gap-2">
-            <span className="flex h-7 w-7 shrink-0 items-center justify-center rounded-md border border-[var(--border-default)] bg-[var(--surface-2)] text-[var(--text-secondary)]">
+            <span className="flex h-7 w-7 shrink-0 items-center justify-center rounded-md border border-[var(--border-subtle)] bg-[var(--surface-2)] text-[var(--text-secondary)]">
               <KeyRound className="h-3.5 w-3.5" />
             </span>
             <p className="setup-preview-card-title truncate">{title}</p>
@@ -270,7 +271,7 @@ export function ConnectPreviewBody({
     <OnboardingPreviewChrome orgLabel="AI Runtime" activeSidebarItems={2}>
       <div className="setup-preview-card">
         <div className="flex items-center gap-2">
-          <span className="flex h-7 w-7 shrink-0 items-center justify-center rounded-md border border-[var(--border-default)] bg-[var(--surface-2)] text-[var(--text-secondary)]">
+          <span className="flex h-7 w-7 shrink-0 items-center justify-center rounded-md border border-[var(--border-subtle)] bg-[var(--surface-2)] text-[var(--text-secondary)]">
             <Sparkles className="h-3.5 w-3.5" />
           </span>
           <p className="setup-preview-card-title">Lemma</p>
@@ -300,7 +301,7 @@ export function StartPreviewBody({
       {justSelected ? <ConfettiBurst key={justSelected} density="small" /> : null}
       <div className="setup-preview-card">
         <div className="flex items-center gap-2">
-          <span className="flex h-7 w-7 shrink-0 items-center justify-center rounded-md border border-[var(--border-default)] bg-[var(--surface-2)] text-[var(--text-secondary)]">
+          <span className="flex h-7 w-7 shrink-0 items-center justify-center rounded-md border border-[var(--border-subtle)] bg-[var(--surface-2)] text-[var(--text-secondary)]">
             <Boxes className="h-3.5 w-3.5" />
           </span>
           <p className="setup-preview-card-title truncate">{podTitle}</p>

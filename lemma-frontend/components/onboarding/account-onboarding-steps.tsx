@@ -1022,14 +1022,15 @@ export function WorkspaceStep({
     return (
       <>
         {onBack ? (
-          <button
+          <Button
             type="button"
+            variant="ghost"
             onClick={onBack}
-            className="fixed left-6 top-6 z-10 flex items-center gap-1.5 text-sm text-[var(--text-tertiary)] transition hover:text-[var(--text-primary)]"
+            className="fixed left-6 top-6 z-10 h-auto gap-1.5 px-0 text-sm text-[var(--text-tertiary)] hover:bg-transparent hover:text-[var(--text-primary)]"
           >
             <ArrowLeft className="h-4 w-4" />
             Back
-          </button>
+          </Button>
         ) : null}
         <SetupPanel
           title="We found your workspace"

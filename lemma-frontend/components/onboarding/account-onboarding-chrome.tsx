@@ -115,14 +115,15 @@ export function SetupSplitPanel({
       <div className="flex flex-col px-6 py-6 sm:px-10 lg:px-16 lg:py-10">
         <div className="flex items-center justify-between">
           {onBack ? (
-            <button
+            <Button
               type="button"
+              variant="ghost"
               onClick={onBack}
-              className="flex items-center gap-1.5 text-sm text-[var(--text-tertiary)] transition hover:text-[var(--text-primary)]"
+              className="h-auto gap-1.5 px-0 text-sm text-[var(--text-tertiary)] hover:bg-transparent hover:text-[var(--text-primary)]"
             >
               <ArrowLeft className="h-4 w-4" />
               Back
-            </button>
+            </Button>
           ) : (
             <span />
           )}
