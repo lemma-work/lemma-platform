@@ -1,9 +1,11 @@
 from __future__ import annotations
 
+from typing import Any
 from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
+from app.modules.connectors.domain.connector import AuthScheme
 from app.modules.agent_surfaces.domain.entities import (
     AgentSurfaceStatus,
     SurfaceChannelRoute,
@@ -153,6 +155,19 @@ class SurfaceUpdateRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
 
+class SurfaceReach(BaseModel):
+    """How a human reaches this surface.
+
+    ``handle`` is the platform-native name a person types/sees to message the
+    bot (Slack/Teams bot display name, Telegram ``@username``, WhatsApp phone,
+    or the account/email for email surfaces). ``email`` is the surface's email
+    address, when it has one.
+    """
+
+    handle: str | None = None
+    email: str | None = None
+
+
 class AgentSurfaceResponse(BaseModel):
     id: UUID
     pod_id: UUID
@@ -165,7 +180,9 @@ class AgentSurfaceResponse(BaseModel):
     account_id: UUID | None = None
     surface_identity_id: str | None = None
     surface_identity_username: str | None = None
+    surface_identity_email: str | None = None
     webhook_url: str | None = None
+    reach: SurfaceReach | None = None
     config: SurfaceConfigResponse
     status: AgentSurfaceStatus = AgentSurfaceStatus.ACTIVE
 
@@ -250,3 +267,39 @@ class SurfaceSetupResponse(BaseModel):
     admin_consent: SurfaceAdminConsentInfo | None = None
     actions: list[SurfaceSetupAction] = Field(default_factory=list)
     guide: SurfacePlatformSetupGuide
+
+
+class SurfaceConnectDescriptor(BaseModel):
+    """What the frontend needs to render the "connect an account" (CUSTOM) flow
+    for a surface's connector — a slim projection of the connector's LEMMA
+    capability. ``system_oauth_available`` means the platform supplies the OAuth
+    app so the user connects without registering their own (distinct from whether
+    a fully-managed SYSTEM bot exists — that's ``supported_credential_modes``)."""
+
+    auth_scheme: AuthScheme
+    auth_config_schema: dict[str, Any] | None = None
+    credential_schema: dict[str, Any] | None = None
+    system_oauth_available: bool = False
+    supports_org_custom_oauth: bool = False
+
+
+class AvailableSurface(BaseModel):
+    """One connectable surface platform. ``supported_credential_modes`` is the
+    single source of truth for how it can be set up: ``[CUSTOM]`` means an account
+    must be connected; ``[CUSTOM, SYSTEM]`` means a Lemma-managed bot can also run
+    with no account. The frontend derives ``account_needed = SYSTEM not in modes``
+    and ``system_bot_available = SYSTEM in modes``."""
+
+    platform: SurfacePlatform
+    connector_id: str
+    provider: str
+    title: str | None = None
+    description: str | None = None
+    icon: str | None = None
+    supported_credential_modes: list[SurfaceCredentialMode]
+    connector_available: bool = True
+    connect: SurfaceConnectDescriptor | None = None
+
+
+class AvailableSurfacesResponse(BaseModel):
+    surfaces: list[AvailableSurface] = Field(default_factory=list)

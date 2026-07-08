@@ -3,6 +3,7 @@ from typing import Union, Optional, Any
 from pydantic import BaseModel
 from app.modules.agent.tools.file_entities import FileInfo, FileType
 
+from app.core.concurrency.offload import run_blocking
 from app.core.embeddings.token_counter import num_tokens_from_string, prefix_by_token
 from app.core.log.log import get_logger
 
@@ -114,11 +115,15 @@ class LLMFile:
             else:
                 formatted_content += text_content
 
-            if num_tokens_from_string(formatted_content) > max_tokens:
+            if await run_blocking(
+                num_tokens_from_string, formatted_content, limiter="cpu_bound"
+            ) > max_tokens:
                 logger.warning(
                     f"File {self.file.path} is too long. Cutting it down to {max_tokens} tokens."
                 )
-                formatted_content = prefix_by_token(formatted_content, max_tokens)
+                formatted_content = await run_blocking(
+                    prefix_by_token, formatted_content, max_tokens, limiter="cpu_bound"
+                )
             return TextContent(content=formatted_content, file_name=self.file.path)
         else:
             # Binary content
@@ -235,11 +240,15 @@ class LLMFile:
             lines_content = "\n".join(lines[start_idx:end_idx])
 
         formatted_content += lines_content
-        if num_tokens_from_string(formatted_content) > max_tokens:
+        if await run_blocking(
+            num_tokens_from_string, formatted_content, limiter="cpu_bound"
+        ) > max_tokens:
             logger.warning(
                 f"File {self.file.path} is too long. Cutting it down to {max_tokens} tokens."
             )
-            formatted_content = prefix_by_token(formatted_content, max_tokens)
+            formatted_content = await run_blocking(
+                prefix_by_token, formatted_content, max_tokens, limiter="cpu_bound"
+            )
         return TextContent(content=formatted_content, file_name=self.file.path)
 
     def _get_binary_file_text_content(

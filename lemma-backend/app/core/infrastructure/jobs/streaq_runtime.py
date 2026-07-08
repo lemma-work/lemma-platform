@@ -215,6 +215,27 @@ async def worker_lifespan() -> AsyncGenerator[AppWorkerContext]:
     )
     init_telemetry(service_name="lemma-worker")
     instrument_database_engine(get_engine())
+    # Size the thread-offload pool before any task runs blocking work off-loop.
+    from app.core.concurrency.offload import configure_thread_pool
+
+    configure_thread_pool()
+
+    # Guardrail: each task that opens a DB session holds a pooled connection for
+    # its duration, so concurrency above the pool capacity means tasks block on
+    # connection checkout — which looks like the whole worker hanging. Warn (not
+    # fail, to keep dev flexible) when the margin is too thin so it can't
+    # silently regress.
+    pool_capacity = settings.db_pool_size + settings.db_max_overflow
+    if pool_capacity and settings.worker_concurrency > pool_capacity * 0.8:
+        logger.warning(
+            "worker_concurrency exceeds safe DB pool headroom; tasks holding a "
+            "connection can exhaust the pool and stall the worker — lower "
+            "WORKER_CONCURRENCY or raise DB_POOL_SIZE/DB_MAX_OVERFLOW",
+            worker_concurrency=settings.worker_concurrency,
+            db_pool_capacity=pool_capacity,
+            db_pool_size=settings.db_pool_size,
+            db_max_overflow=settings.db_max_overflow,
+        )
     # Pre-create Redis consumer groups BEFORE the broker starts its subscribers.
     # Several subscribers share a stream (e.g. workflow + surface both consume
     # `schedule_events`); at broker.start FastStream races to create each group,
@@ -243,6 +264,15 @@ async def worker_lifespan() -> AsyncGenerator[AppWorkerContext]:
     if settings.consumer_group_reconcile_interval_seconds > 0:
         reconcile_task = asyncio.create_task(_consumer_group_reconcile_loop())
 
+    # Loop-lag watchdog: measures event-loop lag and refreshes the liveness
+    # heartbeat the k8s probe reads, so a wedged worker gets restarted instead of
+    # hanging silently (the worker has no HTTP server for a /livez probe).
+    from app.core.observability.loop_watchdog import loop_lag_watchdog
+
+    watchdog_task = asyncio.create_task(
+        loop_lag_watchdog(service_name="lemma-worker")
+    )
+
     try:
         # Module-contributed worker lifespans (e.g. agent_surfaces native event
         # receiver + dedupe-store close; datastore reindex-queue close). Entered
@@ -251,12 +281,13 @@ async def worker_lifespan() -> AsyncGenerator[AppWorkerContext]:
             await enter_worker_lifespans(module_stack, OSS_MODULES, context)
             yield context
     finally:
-        if reconcile_task is not None and not reconcile_task.done():
-            reconcile_task.cancel()
-            try:
-                await reconcile_task
-            except BaseException:
-                pass
+        for background_task in (reconcile_task, watchdog_task):
+            if background_task is not None and not background_task.done():
+                background_task.cancel()
+                try:
+                    await background_task
+                except BaseException:
+                    pass
         await _safe_shutdown_step("broker.stop", broker.stop)
         await _safe_shutdown_step("close_streaq_job_queue", close_streaq_job_queue)
         await _safe_shutdown_step("close_message_bus", close_message_bus)

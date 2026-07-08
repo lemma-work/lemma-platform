@@ -45,9 +45,9 @@ class AccountRepository(
             return credentials
         return None
 
-    def _to_model(self, entity: AccountEntity) -> Account:
+    async def _to_model(self, entity: AccountEntity) -> Account:
         data = entity.model_dump(exclude_unset=True)
-        data["credentials"] = self.encryption.encrypt_json(
+        data["credentials"] = await self.encryption.encrypt_json_async(
             self._serialize_credentials(entity.credentials)
         )
         return self.model_cls(**data)
@@ -70,7 +70,8 @@ class AccountRepository(
             raise AccountAlreadyConnectedError(connector_id) from exc
         raise exc
 
-    def _to_entity(self, instance: Account) -> AccountEntity:
+    async def _to_entity(self, instance: Account) -> AccountEntity:
+        credentials = await self.encryption.decrypt_json_async(instance.credentials)
         data = {
             "id": instance.id,
             "user_id": instance.user_id,
@@ -82,7 +83,7 @@ class AccountRepository(
             "provider_account_id": instance.provider_account_id,
             "email": instance.email,
             "display_name": instance.display_name,
-            "credentials": self.encryption.decrypt_json(instance.credentials),
+            "credentials": credentials,
             "preferences": instance.preferences,
             "allowed_scopes": instance.allowed_scopes,
             "created_at": instance.created_at,
@@ -94,14 +95,14 @@ class AccountRepository(
 
     async def create(self, entity: AccountEntity) -> AccountEntity:
         """Create new account with eager loaded connector."""
-        instance = self._to_model(entity)
+        instance = await self._to_model(entity)
         self.session.add(instance)
         try:
             await self.session.flush()
         except IntegrityError as exc:
             self._reraise_as_conflict_if_duplicate_identity(exc, entity.connector_id)
         await self.session.refresh(instance, attribute_names=["connector"])
-        return self._to_entity(instance)
+        return await self._to_entity(instance)
 
     async def update(self, entity: AccountEntity) -> AccountEntity:
         """Update account with eager loaded connector."""
@@ -116,7 +117,7 @@ class AccountRepository(
         if not instance:
             raise AccountNotFoundError(str(entity.id))
 
-        instance.credentials = self.encryption.encrypt_json(
+        instance.credentials = await self.encryption.encrypt_json_async(
             self._serialize_credentials(entity.credentials)
         )
         instance.provider_account_id = entity.provider_account_id
@@ -128,7 +129,7 @@ class AccountRepository(
             await self.session.flush()
         except IntegrityError as exc:
             self._reraise_as_conflict_if_duplicate_identity(exc, entity.connector_id)
-        return self._to_entity(instance)
+        return await self._to_entity(instance)
 
     async def get(self, id: UUID) -> Optional[AccountEntity]:
         """Get account by ID with connector."""
@@ -139,7 +140,7 @@ class AccountRepository(
         )
         result = await self.session.execute(stmt)
         instance = result.scalars().first()
-        return self._to_entity(instance) if instance else None
+        return await self._to_entity(instance) if instance else None
 
     async def get_by_user_and_app(
         self, user_id: UUID, connector_id: str
@@ -153,7 +154,7 @@ class AccountRepository(
         )
         result = await self.session.execute(stmt)
         instance = result.scalars().first()
-        return self._to_entity(instance) if instance else None
+        return await self._to_entity(instance) if instance else None
 
     async def get_by_user_org_and_app(
         self, user_id: UUID, organization_id: UUID, connector_id: str
@@ -172,7 +173,7 @@ class AccountRepository(
         )
         result = await self.session.execute(stmt)
         instance = result.scalars().first()
-        return self._to_entity(instance) if instance else None
+        return await self._to_entity(instance) if instance else None
 
     async def get_by_user_and_auth_config(
         self, user_id: UUID, auth_config_id: UUID
@@ -186,7 +187,7 @@ class AccountRepository(
         )
         result = await self.session.execute(stmt)
         instance = result.scalars().first()
-        return self._to_entity(instance) if instance else None
+        return await self._to_entity(instance) if instance else None
 
     async def get_by_user_org_and_auth_config(
         self, user_id: UUID, organization_id: UUID, auth_config_id: UUID
@@ -204,7 +205,7 @@ class AccountRepository(
         )
         result = await self.session.execute(stmt)
         instance = result.scalars().first()
-        return self._to_entity(instance) if instance else None
+        return await self._to_entity(instance) if instance else None
 
     async def get_by_user_auth_config_and_provider_account(
         self,
@@ -228,7 +229,7 @@ class AccountRepository(
         )
         result = await self.session.execute(stmt)
         instance = result.scalars().first()
-        return self._to_entity(instance) if instance else None
+        return await self._to_entity(instance) if instance else None
 
     async def promote_next_default(
         self,
@@ -256,7 +257,7 @@ class AccountRepository(
         if not instance.is_default:
             instance.is_default = True
             await self.session.flush()
-        return self._to_entity(instance)
+        return await self._to_entity(instance)
 
     async def list_by_auth_config(
         self,
@@ -268,7 +269,7 @@ class AccountRepository(
             .options(selectinload(Account.connector))
         )
         result = await self.session.execute(stmt)
-        return [self._to_entity(instance) for instance in result.scalars().all()]
+        return [await self._to_entity(instance) for instance in result.scalars().all()]
 
     async def list_by_user(
         self,
@@ -293,7 +294,7 @@ class AccountRepository(
             next_cursor = instances[limit - 1].id
             instances = instances[:limit]
 
-        return [self._to_entity(instance) for instance in instances], next_cursor
+        return [await self._to_entity(instance) for instance in instances], next_cursor
 
     async def list_by_user_and_org(
         self,
@@ -321,4 +322,4 @@ class AccountRepository(
             next_cursor = instances[limit - 1].id
             instances = instances[:limit]
 
-        return [self._to_entity(instance) for instance in instances], next_cursor
+        return [await self._to_entity(instance) for instance in instances], next_cursor

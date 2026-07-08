@@ -43,6 +43,20 @@ class BundleJobConflictError(PodBundleDomainError):
         super().__init__(message, code="POD_BUNDLE_CONFLICT", status_code=409)
 
 
+class BundleRateLimitExceededError(PodBundleDomainError):
+    """The user hit their per-UTC-day cap on export or import jobs. Retriable
+    tomorrow (or once an operator raises the limit) — not a bug, so 429 with a
+    clear message rather than a generic 400."""
+
+    def __init__(self, message: str, details: object | None = None):
+        super().__init__(
+            message,
+            code="POD_BUNDLE_RATE_LIMITED",
+            status_code=429,
+            details=details,
+        )
+
+
 class BundleConfirmationRequiredError(PodBundleDomainError):
     """Destructive steps present without ``confirm_destructive``, or required
     variables missing."""

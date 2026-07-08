@@ -20,9 +20,11 @@ from app.modules.agent_surfaces.api.schemas import (
     AgentSurfaceResponse,
     AvailableSurfaceChannelResponse,
     AvailableSurfaceChannelsResponse,
+    AvailableSurfacesResponse,
     SurfaceBehaviorConfigInput,
     SurfaceConfigResponse,
     SurfaceCreateRequest,
+    SurfaceReach,
     SurfaceSendRequest,
     SurfaceSendResponse,
     SurfaceSetupResponse,
@@ -39,9 +41,16 @@ from app.modules.agent_surfaces.domain.entities import (
 )
 from app.modules.agent_surfaces.domain.setup_guides import SurfacePlatformSetupGuide
 from app.modules.agent_surfaces.platforms.common import computed_webhook_url
+from app.modules.agent_surfaces.services.available_surfaces_builder import (
+    build_available_surfaces,
+)
+from app.modules.agent_surfaces.services.surface_reach_resolver import (
+    SurfaceReachResolver,
+)
 from app.modules.agent_surfaces.services.surface_service import (
     AgentSurfaceService,
 )
+from app.modules.connectors.api.dependencies import ConnectorServiceDep
 
 router = APIRouter(prefix="/pods/{pod_id}/surfaces", tags=["Agent Surfaces"])
 
@@ -49,6 +58,13 @@ router = APIRouter(prefix="/pods/{pod_id}/surfaces", tags=["Agent Surfaces"])
 # surface to exist yet, so it lives outside the surface-resource router.
 setup_guide_router = APIRouter(
     prefix="/pods/{pod_id}/surface-setup", tags=["Agent Surfaces"]
+)
+
+# The connectable-surface catalog (platform -> connector + supported credential
+# modes + connect schema) — also platform-level, needs no surface to exist. Kept
+# on its own path so it never collides with GET /surfaces/{surface_name}.
+available_surfaces_router = APIRouter(
+    prefix="/pods/{pod_id}/available-surfaces", tags=["Agent Surfaces"]
 )
 
 
@@ -75,6 +91,7 @@ def _surface_response(
     surface: AgentSurfaceEntity,
     *,
     agent_name: str | None = None,
+    reach: SurfaceReach | None = None,
 ) -> AgentSurfaceResponse:
     return AgentSurfaceResponse(
         id=surface.id,
@@ -88,10 +105,30 @@ def _surface_response(
         account_id=surface.account_id,
         surface_identity_id=surface.surface_identity_id,
         surface_identity_username=surface.surface_identity_username,
+        surface_identity_email=surface.surface_identity_email,
         webhook_url=computed_webhook_url(surface),
+        reach=reach,
         config=SurfaceConfigResponse.from_domain(surface.config),
         status=surface.status,
     )
+
+
+async def _resolve_surface_reach(
+    surface: AgentSurfaceEntity,
+    *,
+    service: AgentSurfaceService,
+    connector_service,
+) -> SurfaceReach | None:
+    """Best-effort ``reach`` for a surface (never breaks the response)."""
+    try:
+        return await SurfaceReachResolver().resolve(
+            surface,
+            credential_resolver=service._credential_resolver,
+            connector_service=connector_service,
+            surface_repository=service.surface_repository,
+        )
+    except Exception:
+        return None
 
 
 def _surface_platform_from_ref(platform: str) -> SurfacePlatform:
@@ -220,6 +257,7 @@ async def list_surfaces(
     user: CurrentUser,
     agent_service: AgentServiceDep,
     ctx: PodContextDep,
+    connector_service: ConnectorServiceDep,
     service: AgentSurfaceService = Depends(get_surface_service),
     limit: int = 100,
     page_token: str | None = None,
@@ -261,7 +299,14 @@ async def list_surfaces(
             resolved_agent_name = await _resolve_agent_display_name(
                 agent_service, surface.agent_id
             )
-        items.append(_surface_response(surface, agent_name=resolved_agent_name))
+        reach = await _resolve_surface_reach(
+            surface, service=service, connector_service=connector_service
+        )
+        items.append(
+            _surface_response(
+                surface, agent_name=resolved_agent_name, reach=reach
+            )
+        )
     return AgentSurfaceListResponse(
         items=items,
         limit=limit,
@@ -280,6 +325,7 @@ async def create_surface(
     user: CurrentUser,
     agent_service: AgentServiceDep,
     ctx: PodContextDep,
+    connector_service: ConnectorServiceDep,
     service: AgentSurfaceService = Depends(get_surface_service),
 ) -> AgentSurfaceResponse:
     """Create a surface. ``name`` defaults to the lowercased platform — pass an
@@ -321,8 +367,13 @@ async def create_surface(
             is_active=False,
             ctx=ctx,
         )
+    reach = await _resolve_surface_reach(
+        surface, service=service, connector_service=connector_service
+    )
     del user
-    return _surface_response(surface, agent_name=agent.name if agent else None)
+    return _surface_response(
+        surface, agent_name=agent.name if agent else None, reach=reach
+    )
 
 
 @router.get(
@@ -336,6 +387,7 @@ async def get_surface(
     user: CurrentUser,
     agent_service: AgentServiceDep,
     ctx: PodContextDep,
+    connector_service: ConnectorServiceDep,
     service: AgentSurfaceService = Depends(get_surface_service),
 ) -> AgentSurfaceResponse:
     surface = await service.get_surface_by_name_in_pod(pod_id=pod_id, name=surface_name)
@@ -346,8 +398,11 @@ async def get_surface(
         action=Permissions.AGENT_READ,
     )
     agent_name = await _resolve_agent_display_name(agent_service, surface.agent_id)
+    reach = await _resolve_surface_reach(
+        surface, service=service, connector_service=connector_service
+    )
     del user
-    return _surface_response(surface, agent_name=agent_name)
+    return _surface_response(surface, agent_name=agent_name, reach=reach)
 
 
 @router.patch(
@@ -362,6 +417,7 @@ async def update_surface(
     user: CurrentUser,
     agent_service: AgentServiceDep,
     ctx: PodContextDep,
+    connector_service: ConnectorServiceDep,
     service: AgentSurfaceService = Depends(get_surface_service),
 ) -> AgentSurfaceResponse:
     """Partially update a surface. Only fields present in the request are
@@ -407,11 +463,16 @@ async def update_surface(
         ),
         ctx=ctx,
     )
-    del user
     resolved_agent_name = agent.name if agent else await _resolve_agent_display_name(
         agent_service, updated.agent_id
     )
-    return _surface_response(updated, agent_name=resolved_agent_name)
+    reach = await _resolve_surface_reach(
+        updated, service=service, connector_service=connector_service
+    )
+    del user
+    return _surface_response(
+        updated, agent_name=resolved_agent_name, reach=reach
+    )
 
 
 @router.delete(
@@ -551,3 +612,20 @@ async def get_surface_setup_guide(
     prerequisites) — works before any surface of this platform exists."""
     del user, pod_id
     return service.get_platform_setup_guide(platform)
+
+
+@available_surfaces_router.get(
+    "",
+    operation_id="agent.surface.available",
+    dependencies=[require_action(Permissions.AGENT_READ)],
+)
+async def list_available_surfaces(
+    pod_id: UUID,
+    user: CurrentUser,
+    connector_service: ConnectorServiceDep,
+) -> AvailableSurfacesResponse:
+    """The connectable-surface catalog: every surface platform with its connector,
+    supported credential modes, and the schema to connect an account. Platform-
+    level (no surface need exist); the pod scopes authorization only."""
+    del user, pod_id
+    return await build_available_surfaces(connector_service=connector_service)

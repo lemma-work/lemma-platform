@@ -19,9 +19,10 @@ from typing import TYPE_CHECKING, Any
 from uuid import UUID
 
 from lemma_pod_bundle import load_resource_payload
-from lemma_pod_bundle.apply_fields import SCHEDULE_APPLY_FIELDS, SURFACE_APPLY_FIELDS
+from lemma_pod_bundle.apply_fields import SCHEDULE_APPLY_FIELDS
 from lemma_pod_bundle.layout import TABLE_DATA_FILE
 
+from app.core.concurrency.offload import run_blocking
 from app.core.log.log import get_logger
 from app.modules.pod_bundle.domain.errors import PodBundleDomainError
 from app.modules.pod_bundle.domain.state import PlanStep, StepKind
@@ -192,10 +193,11 @@ class BundleApplier:
             return
         meta = _file_manifest_entry(files_root, pod_path)
         directory_path = "/" + "/".join(parts[:-1]) if len(parts) > 1 else "/"
+        file_content = await run_blocking(source.read_bytes, limiter="cpu_bound")
         await service.create_file(
             self._pod_id,
             parts[-1],
-            source.read_bytes(),
+            file_content,
             self._ctx,
             description=meta.get("description"),
             directory_path=directory_path,
@@ -362,6 +364,59 @@ class BundleApplier:
 
     # --- schedules -------------------------------------------------------
 
+    async def _validate_account_binding(
+        self,
+        *,
+        account_id: object,
+        expected_connector: object,
+        expected_provider: object,
+        resource_label: str,
+    ) -> None:
+        """Guard against a surface/schedule being wired to the wrong connector
+        account on import.
+
+        The bundle stamps every account reference with the ``connector_id`` (and
+        ``provider``) it was exported against; the importer supplies one of *their
+        own* org's account ids for the ``${..._account}`` variable. Here we confirm
+        that supplied account actually exists in the target org and belongs to the
+        expected connector — otherwise the resource is created pointing at a
+        missing/mismatched account and only fails opaquely when it next runs. The
+        connector match mirrors the surface account-binding rule
+        (``SurfaceAccountBindingResolver``), so an imported surface is held to the
+        same contract as a hand-configured one.
+        """
+        if not account_id or not expected_connector:
+            return
+        try:
+            account_uuid = (
+                account_id if isinstance(account_id, UUID) else UUID(str(account_id))
+            )
+        except (ValueError, TypeError) as exc:
+            raise PodBundleDomainError(
+                f"{resource_label} was given an invalid connector account id "
+                f"'{account_id}'.",
+                code="POD_BUNDLE_ACCOUNT_INVALID",
+            ) from exc
+
+        from app.modules.connectors.api.dependencies import get_connector_service
+
+        service = get_connector_service(self._uow)
+        account = await service.account_repository.get(account_uuid)
+        if account is None:
+            raise PodBundleDomainError(
+                f"{resource_label} references a connector account that does not "
+                f"exist in this org. Connect a '{expected_connector}' account and "
+                "supply its id for this import.",
+                code="POD_BUNDLE_ACCOUNT_NOT_FOUND",
+            )
+        if str(account.connector_id).lower() != str(expected_connector).lower():
+            raise PodBundleDomainError(
+                f"{resource_label} needs a '{expected_connector}' account, but the "
+                f"supplied account is for '{account.connector_id}'. Connect a "
+                f"'{expected_connector}' account and re-run the import.",
+                code="POD_BUNDLE_ACCOUNT_CONNECTOR_MISMATCH",
+            )
+
     async def _apply_schedule(self, step: PlanStep) -> None:
         from app.modules.schedule.api.dependencies import get_schedule_service
         from app.modules.schedule.domain.schedule import (
@@ -386,6 +441,12 @@ class BundleApplier:
         fields["name"] = step.name
         fields["schedule_type"] = ScheduleType(str(payload.get("schedule_type")))
         fields["config"] = payload.get("config") or {}
+        await self._validate_account_binding(
+            account_id=fields.get("account_id"),
+            expected_connector=payload.get("connector_id"),
+            expected_provider=payload.get("provider"),
+            resource_label=f"Schedule '{step.name}'",
+        )
         entity = ScheduleCreateEntity(
             user_id=self._user_id,
             pod_id=self._pod_id,
@@ -486,6 +547,13 @@ class BundleApplier:
                     }
                 },
             }
+        )
+
+        await self._validate_account_binding(
+            account_id=request.account_id,
+            expected_connector=payload.get("connector_id"),
+            expected_provider=payload.get("provider"),
+            resource_label=f"Surface '{resolved_name}'",
         )
 
         agent_service = get_agent_service(self._uow)

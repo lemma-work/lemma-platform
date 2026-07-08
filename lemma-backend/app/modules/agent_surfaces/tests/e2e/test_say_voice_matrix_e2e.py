@@ -280,7 +280,7 @@ async def test_say_falls_back_to_link_card_on_teams(
     account = await _ensure_connector_account(
         db_session,
         user_id=fixed_test_user["id"],
-        connector_id="teams",
+        connector_id="microsoft_teams",
         credentials={
             "access_token": "teams-token",
             "user_data": {"tenant_id": REAL_TEAMS_TENANT_ID},

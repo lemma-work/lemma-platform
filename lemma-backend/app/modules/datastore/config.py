@@ -14,11 +14,12 @@ from typing import Literal, Optional
 
 from pydantic import Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
+from app.core.settings_env import dotenv_path
 
 
 class DatastoreSettings(BaseSettings):
     model_config = SettingsConfigDict(
-        env_file=".env", env_file_encoding="utf-8", case_sensitive=False, extra="ignore"
+        env_file=dotenv_path(), env_file_encoding="utf-8", case_sensitive=False, extra="ignore"
     )
 
     # Ad-hoc SQL query guardrails
@@ -64,6 +65,49 @@ class DatastoreSettings(BaseSettings):
     document_processing_debounce_seconds: int = Field(
         default=300,
         description="Debounce window for datastore file content updates before enqueueing document processing.",
+    )
+    recovery_enqueue_batch_size: int = Field(
+        default=10,
+        description=(
+            "The recovery cron re-drives stale files in batches of this size, "
+            "yielding to the event loop between batches, so a large backlog is "
+            "spread out instead of dispatched as one burst (which would spike "
+            "worker task pickup and DB connection demand). Env: "
+            "``RECOVERY_ENQUEUE_BATCH_SIZE``."
+        ),
+    )
+    datastore_recovery_max_attempts: int = Field(
+        default=3,
+        description=(
+            "Maximum times the recovery cron will (re)drive a file through "
+            "processing before terminally failing it (status -> FAILED_PERMANENT). "
+            "processing_attempts is incremented on each claim; once it reaches this "
+            "cap the file is no longer re-driven, which stops a permanently-failing "
+            "file (e.g. a down extractor, an unprocessable document) from looping "
+            "forever and pinning worker memory/slots. A fresh upload / content "
+            "update resets the counter. Env: ``DATASTORE_RECOVERY_MAX_ATTEMPTS``."
+        ),
+    )
+    document_processing_max_file_bytes: int = Field(
+        default=104_857_600,  # 100 MB
+        description=(
+            "Files larger than this are not processed: the whole file is buffered "
+            "in memory during extraction, so an oversized file risks OOMing the "
+            "worker. Such files are marked FAILED_PERMANENT with a clear reason "
+            "rather than attempted. 0 disables the guard. Env: "
+            "``DOCUMENT_PROCESSING_MAX_FILE_BYTES``."
+        ),
+    )
+    document_processing_max_inflight_bytes: int = Field(
+        default=0,
+        description=(
+            "Optional aggregate cap (bytes) on document content held in memory "
+            "across all concurrent extractions. Complements "
+            "document_processing_max_concurrency (a count) by bounding total bytes "
+            "so a few large files can't stack to an OOM. 0 disables the byte gate "
+            "(only the count semaphore applies). Env: "
+            "``DOCUMENT_PROCESSING_MAX_INFLIGHT_BYTES``."
+        ),
     )
     pdf_ocr_detection_sample_pages: int = Field(
         default=5,
@@ -142,18 +186,33 @@ class DatastoreSettings(BaseSettings):
     )
     kreuzberg_request_timeout_seconds: float = Field(
         default=180.0,
-        description="HTTP timeout (seconds) for Kreuzberg extract and chunk requests",
+        description=(
+            "Total HTTP timeout (seconds) for a Kreuzberg extract/chunk request. "
+            "Kept long because a connected-but-slow OCR of a large PDF can "
+            "legitimately take minutes. A DOWN endpoint no longer waits this long "
+            "— see kreuzberg_connect_timeout_seconds."
+        ),
+    )
+    kreuzberg_connect_timeout_seconds: float = Field(
+        default=8.0,
+        description=(
+            "Connection-establishment timeout (seconds) for Kreuzberg requests "
+            "(aiohttp connect/sock_connect). A down/unreachable extractor fails "
+            "within this window instead of hanging to the full request timeout, so "
+            "a Kreuzberg outage costs seconds per attempt, not minutes. Env: "
+            "``KREUZBERG_CONNECT_TIMEOUT_SECONDS``."
+        ),
     )
     kreuzberg_transient_retry_attempts: int = Field(
-        default=6,
+        default=3,
         description=(
             "Attempts for transient (connection/timeout) Kreuzberg failures before "
-            "giving up. Combined with the base delay below the exponential backoff "
-            "totals base*(2^(attempts-1)-1) seconds of waiting, so the default "
-            "6/1.0s rides out ~30s of unavailability — enough to survive a backend "
-            "restart or a scale-from-zero cold start rather than failing the "
-            "extraction (which would mark the file FAILED). Raise for a backend "
-            "with longer cold starts. Env: ``KREUZBERG_TRANSIENT_RETRY_ATTEMPTS``."
+            "giving up. With the fast connect timeout above, the exponential "
+            "backoff (base*(2^(attempts-1)-1)) is now the dominant wait, so the "
+            "default 3/1.0s rides out ~3s of blips without letting a persistently "
+            "down extractor pin a file for minutes. The circuit breaker "
+            "short-circuits repeated failures. Env: "
+            "``KREUZBERG_TRANSIENT_RETRY_ATTEMPTS``."
         ),
     )
     kreuzberg_transient_retry_base_delay_seconds: float = Field(
@@ -162,6 +221,25 @@ class DatastoreSettings(BaseSettings):
             "Base delay (seconds) for exponential backoff between transient "
             "Kreuzberg retries; total wait is base*(2^(attempts-1)-1). Env: "
             "``KREUZBERG_TRANSIENT_RETRY_BASE_DELAY_SECONDS``."
+        ),
+    )
+    kreuzberg_circuit_failure_threshold: int = Field(
+        default=5,
+        description=(
+            "Consecutive connection failures before the in-process Kreuzberg "
+            "circuit breaker opens. While open, extractions short-circuit "
+            "immediately (the file is marked FAILED and retried later by the "
+            "recovery cron) instead of each one burning the full retry budget "
+            "against a known-down extractor. Env: "
+            "``KREUZBERG_CIRCUIT_FAILURE_THRESHOLD``."
+        ),
+    )
+    kreuzberg_circuit_reset_seconds: float = Field(
+        default=30.0,
+        description=(
+            "How long the Kreuzberg circuit stays open before allowing a single "
+            "trial request (half-open). A success closes it; a failure re-opens "
+            "it. Env: ``KREUZBERG_CIRCUIT_RESET_SECONDS``."
         ),
     )
 

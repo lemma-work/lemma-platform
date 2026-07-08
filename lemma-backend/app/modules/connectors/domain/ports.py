@@ -192,6 +192,16 @@ class SecretEncryptionPort(Protocol):
 
     def decrypt_json(self, value: dict[str, Any] | None) -> dict[str, Any] | None: ...
 
+    # Async variants offload the (possibly blocking, KMS-backed) crypto off the
+    # event loop. Callers on the worker loop must use these, not the sync ones.
+    async def encrypt_json_async(
+        self, value: dict[str, Any] | None
+    ) -> dict[str, Any] | None: ...
+
+    async def decrypt_json_async(
+        self, value: dict[str, Any] | None
+    ) -> dict[str, Any] | None: ...
+
 
 class SystemOAuthConfigPort(Protocol):
     def has_default_oauth_config(self, connector: ConnectorEntity) -> bool: ...

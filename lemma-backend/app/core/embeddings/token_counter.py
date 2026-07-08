@@ -1,14 +1,28 @@
+from functools import lru_cache
+
 import tiktoken
+
+
+@lru_cache(maxsize=8)
+def _get_encoding(encoding_name: str):
+    """Cache tiktoken encodings; building one is non-trivial and they're reused.
+
+    ``num_tokens_from_string`` / ``prefix_by_token`` are CPU-bound over the whole
+    input string, so callers on the worker event loop must dispatch them via
+    ``app.core.concurrency.offload.run_blocking`` to avoid stalling the loop.
+    """
+    return tiktoken.get_encoding(encoding_name)
+
 
 def num_tokens_from_string(string: str, encoding_name: str = "cl100k_base") -> int:
     """Returns the number of tokens in a text string."""
-    encoding = tiktoken.get_encoding(encoding_name)
+    encoding = _get_encoding(encoding_name)
     num_tokens = len(encoding.encode(string))
     return num_tokens
 
 def prefix_by_token(text: str, max_tokens: int, encoding_name: str = "cl100k_base") -> str:
     """Split a text into chunks of max_tokens."""
-    tokenizer = tiktoken.get_encoding(encoding_name)
+    tokenizer = _get_encoding(encoding_name)
     # Tokenize the input string
     tokens = tokenizer.encode(text)
     if len(tokens) <= max_tokens:

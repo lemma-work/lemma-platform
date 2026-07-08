@@ -88,6 +88,28 @@ class SlackPlatformService:
             )
             raise
 
+    async def get_user_display_name(self, user_id: str) -> str | None:
+        """Return a user's Slack display name (best-effort).
+
+        Used to surface the bot's own human-facing name for the reach handle.
+        Returns None when the token or user id is missing, or on any API error.
+        """
+        token = slack_access_token(self.credentials)
+        if not user_id or not token:
+            return None
+        try:
+            client = build_slack_client(self.credentials)
+            response = await client.users_info(user=user_id)
+            user = response.get("user") or {}
+            profile = user.get("profile") or {}
+            name = profile.get("display_name") or profile.get("real_name")
+            return str(name).strip() or None if name else None
+        except Exception as exc:
+            logger.debug(
+                "Slack get_user_display_name failed for user=%s: %s", user_id, exc
+            )
+            return None
+
     async def send_message(
         self,
         *,

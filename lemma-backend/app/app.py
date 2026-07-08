@@ -1,7 +1,9 @@
+import asyncio
 import uuid
 from collections.abc import Mapping, Sequence
 from contextlib import AsyncExitStack, asynccontextmanager
 from fastapi import Depends, FastAPI
+from fastapi.responses import JSONResponse
 from fastapi.openapi.utils import get_openapi
 from scalar_fastapi import get_scalar_api_reference
 from starlette.middleware.cors import CORSMiddleware
@@ -121,6 +123,13 @@ async def lifespan(app: FastAPI):
 
         # Core startup
         logger.info("Application starting up")
+        from app.core.concurrency.offload import configure_thread_pool
+        from app.core.observability.loop_watchdog import loop_lag_watchdog
+
+        configure_thread_pool()
+        watchdog_task = asyncio.create_task(
+            loop_lag_watchdog(service_name="lemma-api")
+        )
         initialize_supertokens()
         await channel_service.connect()
         await get_streaq_job_queue().connect()
@@ -141,6 +150,12 @@ async def lifespan(app: FastAPI):
         finally:
             # Core closers — explicit and last so they tear down after modules.
             logger.info("Application shutting down")
+            if not watchdog_task.done():
+                watchdog_task.cancel()
+                try:
+                    await watchdog_task
+                except BaseException:
+                    pass
             await close_streaq_job_queue()
             await close_message_bus()
             await close_engine()
@@ -301,6 +316,25 @@ def create_app(modules=OSS_MODULES) -> FastAPI:
     @app.get("/health")
     async def health_check():
         return {"status": "healthy", "message": "API is running"}
+
+    # Liveness: 503 when the event loop is wedged (lag over the unhealthy
+    # threshold), so a Kubernetes liveness probe restarts the process. A fully
+    # blocked loop can't serve this at all, which trips the probe's timeout —
+    # either way a hung process is restarted instead of hanging silently.
+    @app.get("/livez", include_in_schema=False)
+    async def livez():
+        from app.core.observability.loop_watchdog import (
+            get_loop_lag_seconds,
+            is_loop_healthy,
+        )
+
+        payload = {
+            "status": "ok" if is_loop_healthy() else "unhealthy",
+            "loop_lag_seconds": round(get_loop_lag_seconds(), 3),
+        }
+        return JSONResponse(
+            payload, status_code=200 if is_loop_healthy() else 503
+        )
 
     @app.get("/scalar", include_in_schema=False)
     async def scalar_html():

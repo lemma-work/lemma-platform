@@ -1,5 +1,5 @@
-"""FunctionExecutor node outcome: JOB functions suspend on a FUNCTION wait;
-API functions (and any inline result) advance without waiting."""
+"""FunctionExecutor node outcome: a dispatched run (any function type) suspends
+the workflow on a FUNCTION wait; a non-run result advances inline."""
 from __future__ import annotations
 
 from types import SimpleNamespace
@@ -50,14 +50,16 @@ async def test_api_function_advances_inline():
     assert outcome.output == {"done": True}
 
 
-async def test_non_job_pending_result_raises():
-    with pytest.raises(RuntimeError, match="Only JOB functions can suspend"):
-        await FunctionExecutor().execute(
-            _node(),
-            _step(
-                {"run_id": str(uuid4()), "status": "RUNNING", "function_type": "API"}
-            ),
-        )
+async def test_pending_run_suspends_regardless_of_type():
+    # API functions are now dispatch-and-suspend too (the engine releases its
+    # run-row lock across the sandbox call), so a pending run of any type waits.
+    run_id = uuid4()
+    outcome = await FunctionExecutor().execute(
+        _node(),
+        _step({"run_id": str(run_id), "status": "PENDING", "function_type": "API"}),
+    )
+    assert isinstance(outcome, Suspend)
+    assert outcome.wait.external_ref == str(run_id)
 
 
 async def test_non_dict_result_wrapped_in_advance():

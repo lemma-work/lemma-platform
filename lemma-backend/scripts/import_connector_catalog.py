@@ -129,6 +129,14 @@ COMPOSIO_EXCLUDED_CONNECTOR_IDS = {
     "microsoft_teams",
     "splitwise",
 }
+# One-time id renames applied on catalog import: the value connector is synced
+# from config first, then existing accounts/auth-configs are re-pointed to it and
+# the old (key) connector is removed. ``teams`` -> ``microsoft_teams`` aligns the
+# native Teams surface connector with the Composio toolkit slug so every surface
+# platform maps to a single, consistently-named connector.
+CONNECTOR_ID_RENAMES: dict[str, str] = {
+    "teams": "microsoft_teams",
+}
 DEFAULT_COMPOSIO_CONNECTOR_IDS: tuple[str, ...] = (
     "gmail",
     "googlecalendar",
@@ -1400,6 +1408,84 @@ async def _run_in_session_batch(
             raise
 
 
+# Child tables that hold a live per-org/user reference to a connector and must be
+# re-pointed to the new id before the old connector row is deleted. Operations and
+# triggers are intentionally NOT here — they belong to the connector definition and
+# cascade-delete with the old row (the new connector already re-synced its own).
+_CONNECTOR_RENAME_REPOINT_TABLES = ("accounts", "auth_configs")
+
+
+async def _apply_connector_renames(connector_repository, session) -> int:
+    """Apply :data:`CONNECTOR_ID_RENAMES` as a safe, idempotent data migration.
+
+    ``connectors.id`` is a string primary key that ``accounts``, ``auth_configs``,
+    ``connector_operations`` and ``connector_triggers`` reference with
+    ``ON DELETE CASCADE`` — so this must (1) confirm the new connector already
+    exists (synced from config), (2) re-point accounts + auth configs off the old
+    id, then (3) delete the old connector (its stale operations/triggers cascade
+    away; the new connector carries its own freshly-synced set). Deleting the old
+    row *before* re-pointing would cascade-delete every connected account.
+
+    Idempotent: a rename whose old connector is already gone (or whose target
+    hasn't been synced yet) is skipped. Returns the number of renames applied.
+    """
+    from sqlalchemy import text
+
+    renamed = 0
+    for old_id, new_id in CONNECTOR_ID_RENAMES.items():
+        old = await connector_repository.get(old_id)
+        if old is None:
+            continue  # already migrated (or never existed)
+        new = await connector_repository.get(new_id)
+        if new is None:
+            logger.warning(
+                "Skipping connector rename %s -> %s: target connector is not "
+                "synced yet (run a native/full import first).",
+                old_id,
+                new_id,
+            )
+            continue
+        for table in _CONNECTOR_RENAME_REPOINT_TABLES:
+            result = await session.execute(
+                text(
+                    f"UPDATE {table} SET connector_id = :new "  # noqa: S608 - table names are a fixed literal allow-list
+                    "WHERE connector_id = :old"
+                ),
+                {"new": new_id, "old": old_id},
+            )
+            logger.info(
+                "Re-pointed %s %s row(s) from %s to %s",
+                getattr(result, "rowcount", "?"),
+                table,
+                old_id,
+                new_id,
+            )
+        await session.execute(
+            text("DELETE FROM connectors WHERE id = :old"),
+            {"old": old_id},
+        )
+        renamed += 1
+        logger.info("Renamed connector %s -> %s", old_id, new_id)
+    return renamed
+
+
+async def _run_connector_id_renames(*, dry_run: bool) -> int:
+    """Session wrapper around :func:`_apply_connector_renames` (commit unless dry-run)."""
+    async with async_session_maker() as session:
+        uow = SqlAlchemyUnitOfWork(session)
+        connector_repository = ConnectorRepository(uow)
+        try:
+            renamed = await _apply_connector_renames(connector_repository, session)
+            if dry_run:
+                await uow.rollback()
+            else:
+                await uow.commit()
+            return renamed
+        except Exception:
+            await uow.rollback()
+            raise
+
+
 async def _sync_native_catalog_batched(
     *,
     app_filters: set[str] | None,
@@ -1720,6 +1806,12 @@ async def main() -> None:
             max_composio_apps=args.max_composio_apps,
             dry_run=args.dry_run,
         )
+
+    # Apply any one-time connector id renames now that the target connectors have
+    # been synced (idempotent; skips renames whose old connector is already gone).
+    renamed_connectors = await _run_connector_id_renames(dry_run=args.dry_run)
+    if renamed_connectors:
+        logger.info("Applied %s connector id rename(s).", renamed_connectors)
 
     if args.dry_run:
         logger.info(

@@ -42,7 +42,7 @@ async def search_web(request: WebSearchRequest) -> WebSearchResponse:
         search_client = SearchClient()
 
         # Perform the search
-        results = search_client.search(
+        results = await search_client.search(
             query=request.query, max_results=request.max_results
         )
 

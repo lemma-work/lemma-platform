@@ -19,6 +19,12 @@ class FileStatus(str, Enum):
     PROCESSING = "PROCESSING"
     COMPLETED = "COMPLETED"
     FAILED = "FAILED"
+    # Terminal failure: the file exhausted its processing-retry budget (or is
+    # unprocessable, e.g. too large). Unlike FAILED, the recovery cron never
+    # re-drives a FAILED_PERMANENT file, so it cannot rejoin the poison queue.
+    # A fresh upload / content update re-opens it (status -> PENDING, attempts
+    # reset) via mark_content_updated / set_search_enabled below.
+    FAILED_PERMANENT = "FAILED_PERMANENT"
 
 
 class FileKind(str, Enum):
@@ -159,6 +165,11 @@ class DatastoreFileEntity(AggregateRoot):
 
     def mark_failed(self, error: str | None = None) -> None:
         self.status = FileStatus.FAILED
+        self.last_processing_error = error
+
+    def mark_failed_permanent(self, error: str | None = None) -> None:
+        """Terminal failure the recovery cron never re-drives (see FileStatus)."""
+        self.status = FileStatus.FAILED_PERMANENT
         self.last_processing_error = error
 
     def mark_deleted(self, actor_id: UUID | None = None) -> None:

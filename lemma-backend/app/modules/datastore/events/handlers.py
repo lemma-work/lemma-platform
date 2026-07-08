@@ -232,15 +232,23 @@ async def recover_stuck_processing_files(
             summary.processing_cutoff,
         )
 
+        if summary.terminal_count:
+            logger.warning(
+                "Datastore file recovery terminally failed %d files that exhausted "
+                "their processing-retry budget (status -> FAILED_PERMANENT).",
+                summary.terminal_count,
+            )
+
         if summary.examined_count == 0:
-            logger.info("No stale datastore files found.")
+            logger.info("No stale datastore files to re-drive.")
             return
 
         logger.info(
-            "Datastore file recovery examined %d stale files, reset %d PROCESSING files to PENDING, enqueued %d.",
+            "Datastore file recovery examined %d stale files, reset %d PROCESSING files to PENDING, enqueued %d, terminally failed %d.",
             summary.examined_count,
             summary.reset_count,
             summary.enqueued_count,
+            summary.terminal_count,
         )
     except Exception as exc:
         logger.error("Stuck file recovery cron failed: %s", exc)

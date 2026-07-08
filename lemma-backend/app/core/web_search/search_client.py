@@ -30,7 +30,7 @@ class BaseSearchClient:
     def is_available(self) -> bool:
         return True
 
-    def search(self, query: str, max_results: int = 5) -> List[SearchResult]:
+    async def search(self, query: str, max_results: int = 5) -> List[SearchResult]:
         raise NotImplementedError
 
 
@@ -101,13 +101,13 @@ class DuckDuckGoHTMLParser(HTMLParser):
 class DuckDuckGoSearchClient(BaseSearchClient):
     source = "duckduckgo"
 
-    def search(self, query: str, max_results: int = 5) -> List[SearchResult]:
-        response = httpx.post(
-            "https://html.duckduckgo.com/html/",
-            data={"q": query},
-            headers={"User-Agent": "lemma-local-web-search/1.0"},
-            timeout=15,
-        )
+    async def search(self, query: str, max_results: int = 5) -> List[SearchResult]:
+        async with httpx.AsyncClient(timeout=15) as client:
+            response = await client.post(
+                "https://html.duckduckgo.com/html/",
+                data={"q": query},
+                headers={"User-Agent": "lemma-local-web-search/1.0"},
+            )
         response.raise_for_status()
 
         parser = DuckDuckGoHTMLParser()
@@ -132,15 +132,15 @@ class SearXNGSearchClient(BaseSearchClient):
     def is_available(self) -> bool:
         return bool(self.base_url)
 
-    def search(self, query: str, max_results: int = 5) -> List[SearchResult]:
+    async def search(self, query: str, max_results: int = 5) -> List[SearchResult]:
         if not self.base_url:
             raise ValueError("SEARXNG_URL is not set")
-        response = httpx.get(
-            f"{self.base_url}/search",
-            params={"q": query, "format": "json", "pageno": 1},
-            headers={"Accept": "application/json"},
-            timeout=15,
-        )
+        async with httpx.AsyncClient(timeout=15) as client:
+            response = await client.get(
+                f"{self.base_url}/search",
+                params={"q": query, "format": "json", "pageno": 1},
+                headers={"Accept": "application/json"},
+            )
         response.raise_for_status()
         raw_results = response.json().get("results", [])
         sorted_results = sorted(
@@ -169,18 +169,18 @@ class BraveSearchClient(BaseSearchClient):
     def is_available(self) -> bool:
         return bool(self.api_key)
 
-    def search(self, query: str, max_results: int = 5) -> List[SearchResult]:
+    async def search(self, query: str, max_results: int = 5) -> List[SearchResult]:
         if not self.api_key:
             raise ValueError("BRAVE_SEARCH_API_KEY is not set")
-        response = httpx.get(
-            "https://api.search.brave.com/res/v1/web/search",
-            params={"q": query, "count": max(1, min(max_results, 20))},
-            headers={
-                "X-Subscription-Token": self.api_key,
-                "Accept": "application/json",
-            },
-            timeout=15,
-        )
+        async with httpx.AsyncClient(timeout=15) as client:
+            response = await client.get(
+                "https://api.search.brave.com/res/v1/web/search",
+                params={"q": query, "count": max(1, min(max_results, 20))},
+                headers={
+                    "X-Subscription-Token": self.api_key,
+                    "Accept": "application/json",
+                },
+            )
         response.raise_for_status()
         raw_results = (response.json().get("web") or {}).get("results", [])
         return [
@@ -221,7 +221,7 @@ class SearchClient:
                 return client
         return DuckDuckGoSearchClient()
 
-    def search(self, query: str, max_results: int = 10) -> List[SearchResult]:
+    async def search(self, query: str, max_results: int = 10) -> List[SearchResult]:
         if not query:
             raise ValueError("Search query cannot be empty")
-        return self.search_engine.search(query, max_results)
+        return await self.search_engine.search(query, max_results)

@@ -5,7 +5,7 @@ from uuid import UUID
 
 from app.core.authorization.context import Context
 from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
-from app.modules.function.domain.entities import FunctionRunStatus, FunctionType
+from app.modules.function.domain.entities import FunctionType
 from app.modules.workflow.domain.ports import FunctionPort
 
 
@@ -37,24 +37,19 @@ class FunctionControlAdapter(FunctionPort):
         user_id: UUID,
         ctx: Context | None = None,
     ) -> Any:
-        run = await self._use_cases.execute_function_for_user(
+        # Dispatch-and-suspend for ALL function types (not just JOB). The run is
+        # enqueued to the worker and returned PENDING; the workflow engine
+        # suspends on the run id, committing (and releasing its run-row lock +
+        # pooled connection) at the suspend boundary in milliseconds instead of
+        # holding them across the function's sandbox round-trip. The worker
+        # executes the run and its FunctionRunCompleted event resumes the workflow
+        # via resume_workflow_run_for_function (the same path JOB functions use).
+        run = await self._use_cases.dispatch_function_for_workflow(
             pod_id=pod_id,
             name=function_name,
             input_data=inputs,
             user_id=user_id,
         )
-
-        if run.status == FunctionRunStatus.COMPLETED:
-            return run.output_data
-        if run.status == FunctionRunStatus.FAILED:
-            # run.error is already a clean, user-facing message; the stepper wraps
-            # this as "Node '<id>' execution failed: <message>", so don't add a
-            # redundant "Function execution failed:" prefix (the node is a
-            # function) or leak internal detail here.
-            raise RuntimeError(run.error or "The function failed to execute.")
-
-        # A non-terminal run is a JOB dispatched to the worker; suspend the
-        # workflow on the run id (API functions always complete inline or fail).
         return {
             "run_id": str(run.id),
             "status": str(getattr(run.status, "value", run.status)),

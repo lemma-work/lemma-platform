@@ -793,6 +793,57 @@ async def test_execute_function_job_adds_execution_requested_event_and_returns_p
     assert events[0].run_id == created_run.id
 
 
+async def test_resolve_execute_api_does_not_dispatch_by_default(
+    service: FunctionService,
+    function_repo: AsyncMock,
+    run_repo: AsyncMock,
+    ctx: Context,
+):
+    function = _function_entity(code_path="f.py", type=FunctionType.API)
+    function_repo.get_by_name.return_value = function
+    run = _run_entity(function_id=function.id, user_id=function.user_id)
+    run_repo.create_run.return_value = run
+
+    await service.resolve_execute(
+        function.pod_id, function.name, {"a": 1}, function.user_id, None, ctx=ctx
+    )
+
+    # API functions run inline for the normal caller — no worker dispatch event.
+    created_run = run_repo.create_run.await_args.args[0]
+    assert created_run.collect_events() == []
+
+
+async def test_resolve_execute_force_dispatch_enqueues_api_function(
+    service: FunctionService,
+    function_repo: AsyncMock,
+    run_repo: AsyncMock,
+    ctx: Context,
+):
+    # The workflow path force-dispatches even API functions so the engine can
+    # suspend and release its run-row lock instead of running them inline.
+    function = _function_entity(code_path="f.py", type=FunctionType.API)
+    function_repo.get_by_name.return_value = function
+    run = _run_entity(function_id=function.id, user_id=function.user_id)
+    run_repo.create_run.return_value = run
+
+    resolved = await service.resolve_execute(
+        function.pod_id,
+        function.name,
+        {"a": 1},
+        function.user_id,
+        None,
+        ctx=ctx,
+        force_dispatch=True,
+    )
+
+    created_run = run_repo.create_run.await_args.args[0]
+    events = created_run.collect_events()
+    assert resolved.run.status == FunctionRunStatus.PENDING
+    assert len(events) == 1
+    assert isinstance(events[0], FunctionRunExecutionRequestedEvent)
+    assert created_run.job_id is not None
+
+
 async def test_execute_run_by_id_job_command_failure_returns_failed_run(
     service: FunctionService,
     function_repo: AsyncMock,

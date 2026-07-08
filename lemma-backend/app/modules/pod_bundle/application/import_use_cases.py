@@ -34,6 +34,10 @@ from app.modules.pod_bundle.domain.state import (
     ImportStatus,
     StepStatus,
 )
+from app.modules.pod_bundle.infrastructure.rate_limiter import (
+    BundleRateLimiter,
+    get_bundle_rate_limiter,
+)
 from app.modules.pod_bundle.infrastructure.staging import BundleStagingStorage
 from app.modules.pod_bundle.infrastructure.state_store import (
     PodBundleStateStore,
@@ -91,11 +95,13 @@ class ImportUseCases:
         state_store: PodBundleStateStore | None = None,
         staging: BundleStagingStorage | None = None,
         job_queue=None,
+        rate_limiter: BundleRateLimiter | None = None,
     ):
         self._uow_factory = uow_factory
         self._state_store = state_store or get_pod_bundle_state_store()
         self._staging = staging or BundleStagingStorage()
         self._job_queue = job_queue or get_streaq_job_queue()
+        self._rate_limiter = rate_limiter or get_bundle_rate_limiter()
 
     async def stage_upload(
         self, *, pod_id: UUID, user_id: UUID, filename: str | None, data: bytes
@@ -146,6 +152,16 @@ class ImportUseCases:
         The request carries no bytes either way.
         """
         await self._authorize(pod_id=pod_id, user_id=user_id, action=Permissions.POD_UPDATE)
+
+        # Abuse guard: count this import against the user's daily cap (separate
+        # bucket from exports) once POD_UPDATE is authorized. Staging an upload
+        # is not counted — only starting the plan/apply pipeline is.
+        await self._rate_limiter.check_and_increment(
+            user_id=user_id,
+            operation="import",
+            limit=pod_bundle_settings.pod_bundle_daily_import_limit,
+        )
+
         import_id = uuid4()
 
         if kind == BundleSourceKind.URL:

@@ -643,3 +643,125 @@ async def test_surface_apply_rejects_missing_platform(tmp_path, monkeypatch):
     )
     with pytest.raises(PodBundleDomainError, match="platform"):
         await _applier(root).apply_step(_step(StepKind.SURFACE, "slack"))
+
+
+# --- account-binding validation on import ------------------------------------
+
+
+class _FakeConnectorService:
+    """Stand-in for the connectors service the applier consults to confirm a
+    supplied account matches the connector the bundle declared."""
+
+    def __init__(self, account, provider: str = "LEMMA"):
+        from types import SimpleNamespace
+
+        self.account_repository = SimpleNamespace(get=self._get_account)
+        self.auth_config_repository = SimpleNamespace(get=self._get_auth_config)
+        self._account = account
+        self._provider = provider
+
+    async def _get_account(self, account_id):
+        return self._account
+
+    async def _get_auth_config(self, auth_config_id):
+        from types import SimpleNamespace
+
+        return SimpleNamespace(provider=SimpleNamespace(value=self._provider))
+
+
+def _patch_surface_deps(monkeypatch, surface_service, connector_service) -> None:
+    monkeypatch.setattr(
+        "app.modules.agent_surfaces.api.dependencies.get_surface_service",
+        lambda uow: surface_service,
+    )
+    monkeypatch.setattr(
+        "app.modules.agent.api.dependencies.get_agent_service",
+        lambda uow: FakeAgentService(),
+    )
+    monkeypatch.setattr(
+        "app.modules.connectors.api.dependencies.get_connector_service",
+        lambda uow: connector_service,
+    )
+
+
+async def test_surface_apply_accepts_matching_connector_account(tmp_path, monkeypatch):
+    """A supplied account whose connector matches the bundle's declared
+    connector_id passes validation and the surface is created."""
+    from types import SimpleNamespace
+
+    account = uuid4()
+    root = tmp_path / "bundle"
+    _write(
+        root / "surfaces" / "teams" / "teams.json",
+        {
+            "name": "teams",
+            "platform": "TEAMS",
+            "account_id": "${teams_account}",
+            "connector_id": "microsoft_teams",
+            "provider": "LEMMA",
+            "is_enabled": True,
+        },
+    )
+    surface_fake = FakeSurfaceService()
+    connector_account = SimpleNamespace(connector_id="microsoft_teams", auth_config_id=uuid4())
+    _patch_surface_deps(monkeypatch, surface_fake, _FakeConnectorService(connector_account))
+
+    applier = _applier(root, replacements={"teams_account": str(account)})
+    await applier.apply_step(_step(StepKind.SURFACE, "teams"))
+    assert surface_fake.created is not None
+    assert surface_fake.created["account_id"] == account
+
+
+async def test_surface_apply_rejects_wrong_connector_account(tmp_path, monkeypatch):
+    """A supplied account for the wrong connector is rejected with a clear error
+    instead of silently binding a mismatched account."""
+    from types import SimpleNamespace
+
+    from app.modules.pod_bundle.domain.errors import PodBundleDomainError
+
+    root = tmp_path / "bundle"
+    _write(
+        root / "surfaces" / "teams" / "teams.json",
+        {
+            "name": "teams",
+            "platform": "TEAMS",
+            "account_id": "${teams_account}",
+            "connector_id": "microsoft_teams",
+            "provider": "LEMMA",
+            "is_enabled": True,
+        },
+    )
+    # User supplied a slack account for a teams surface.
+    connector_account = SimpleNamespace(connector_id="slack", auth_config_id=uuid4())
+    _patch_surface_deps(
+        monkeypatch, FakeSurfaceService(), _FakeConnectorService(connector_account)
+    )
+
+    applier = _applier(root, replacements={"teams_account": str(uuid4())})
+    with pytest.raises(PodBundleDomainError, match="teams"):
+        await applier.apply_step(_step(StepKind.SURFACE, "teams"))
+
+
+async def test_surface_apply_rejects_missing_account(tmp_path, monkeypatch):
+    """A supplied account id that doesn't exist in the target org is rejected."""
+    from app.modules.pod_bundle.domain.errors import PodBundleDomainError
+
+    root = tmp_path / "bundle"
+    _write(
+        root / "surfaces" / "teams" / "teams.json",
+        {
+            "name": "teams",
+            "platform": "TEAMS",
+            "account_id": "${teams_account}",
+            "connector_id": "microsoft_teams",
+            "provider": "LEMMA",
+            "is_enabled": True,
+        },
+    )
+    _patch_surface_deps(
+        monkeypatch, FakeSurfaceService(), _FakeConnectorService(None)
+    )
+
+    applier = _applier(root, replacements={"teams_account": str(uuid4())})
+    with pytest.raises(PodBundleDomainError, match="does not exist"):
+        await applier.apply_step(_step(StepKind.SURFACE, "teams"))

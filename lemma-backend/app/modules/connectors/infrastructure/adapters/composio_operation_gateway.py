@@ -1,9 +1,9 @@
 from __future__ import annotations
 
-import asyncio
 import os
 from typing import Any, Callable
 
+from app.core.concurrency.offload import run_blocking
 from app.modules.connectors.config import connector_settings
 from app.modules.connectors.domain.errors import (
     ConnectorValidationError,
@@ -95,7 +95,10 @@ class ComposioOperationGateway(AppOperationGatewayPort):
             return response
 
         try:
-            response = await asyncio.to_thread(_execute)
+            # Composio's SDK is synchronous HTTP; run it on the dedicated
+            # external-HTTP limiter so a burst of connector calls can't drain the
+            # shared thread pool and stall unrelated (CPU) offloads.
+            response = await run_blocking(_execute, limiter="external_http")
         except Exception as exc:
             raise OperationExecutionInfrastructureError(
                 f"Composio tool execution failed for '{operation_name}': {exc}",

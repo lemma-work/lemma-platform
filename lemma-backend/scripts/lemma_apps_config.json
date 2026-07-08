@@ -650,7 +650,7 @@
     "triggers": []
   },
   {
-    "name": "teams",
+    "name": "microsoft_teams",
     "title": "Microsoft Teams",
     "description": "Connect Lemma assistants to Microsoft Teams. Chat with the bot in direct messages or @mention it in channels.",
     "auth_method": "OAUTH2",

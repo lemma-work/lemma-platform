@@ -65,6 +65,12 @@ class _NoopEncryption:
     def decrypt_json(self, value):
         return value
 
+    async def encrypt_json_async(self, value):
+        return value
+
+    async def decrypt_json_async(self, value):
+        return value
+
 
 def _account_entity(**overrides) -> AccountEntity:
     defaults = dict(

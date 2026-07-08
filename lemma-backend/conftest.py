@@ -4,6 +4,23 @@ import os
 
 import pytest
 
+# Tests are deterministic and self-contained: they set the config they need (via
+# fixtures / the defaults below / monkeypatch), NOT a developer's local ``.env``.
+# A leaked ``.env`` makes the suite non-deterministic — a value present locally
+# but absent in CI (e.g. ``API_URL``, ``ENABLE_TELEGRAM_POLLING_MODE``) silently
+# flips tests. So disable ``.env`` loading for the whole suite (matching CI, which
+# has no ``.env``). It is still honored in real-LLM / real-sandbox mode, where the
+# ``.env`` legitimately supplies real API keys. This MUST run before any
+# ``app.core.config`` import (env_file is resolved at Settings-class definition).
+_REAL_MODE = (
+    os.getenv("E2E_REAL", "").lower() in ("1", "true", "yes")
+    or os.getenv("E2E_LLM_MODE", "").lower() == "real"
+    or os.getenv("E2E_SANDBOX_MODE", "").lower() == "docker"
+    or os.getenv("LEMMA_RUN_PROVIDER_E2E") == "1"
+)
+if not _REAL_MODE:
+    os.environ.setdefault("LEMMA_DISABLE_DOTENV", "1")
+
 # AgentBox config is required to construct workspace/function services. Default
 # to test-only values (set before app.core.config is imported) so suites run
 # without a configured local AgentBox manager; workspace-marked e2e tests

@@ -594,10 +594,17 @@ class FunctionService:
         user_email: str | None,
         *,
         ctx: Context,
+        force_dispatch: bool = False,
     ) -> ResolvedExecution:
         """Authorize FUNCTION_EXECUTE + create the PENDING run (+ JOB enqueue
         event on the same UoW). DB only. The function is loaded directly (execute
-        needs only FUNCTION_EXECUTE, not FUNCTION_READ)."""
+        needs only FUNCTION_EXECUTE, not FUNCTION_READ).
+
+        ``force_dispatch`` enqueues the run to the worker even for API functions
+        (which normally run inline). The workflow engine uses this so it can
+        suspend on the run id and release its run-row lock/connection instead of
+        holding them across the function's sandbox round-trip; the worker executes
+        the run and its FunctionRunCompleted event resumes the workflow."""
         function = await self._load_function_by_name(pod_id, name, ctx=ctx)
         if function is None:
             raise FunctionNotFoundError(f"Function {name} not found")
@@ -619,7 +626,7 @@ class FunctionService:
             input_data=input_data,
             status=FunctionRunStatus.PENDING,
         )
-        if function.type == FunctionType.JOB:
+        if function.type == FunctionType.JOB or force_dispatch:
             run_entity.job_id = self._run_job_id(run_entity.id)
             run_entity.add_event(
                 FunctionRunExecutionRequestedEvent(

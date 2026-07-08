@@ -123,7 +123,15 @@ class DatastoreFileRepositoryPort(Protocol):
         pending_cutoff: datetime,
         processing_cutoff: datetime,
         failed_cutoff: datetime | None = None,
-        max_attempts: int = 5,
+        max_attempts: int = 3,
+    ) -> Sequence[DatastoreFileEntity]: ...
+
+    async def list_exhausted_recovery_candidates(
+        self,
+        *,
+        processing_cutoff: datetime,
+        failed_cutoff: datetime | None = None,
+        max_attempts: int = 3,
     ) -> Sequence[DatastoreFileEntity]: ...
 
     async def bulk_update_status(
@@ -132,6 +140,15 @@ class DatastoreFileRepositoryPort(Protocol):
         file_ids: Sequence[UUID],
         status: FileStatus,
     ) -> int: ...
+
+    async def bulk_mark_failed_permanent(
+        self,
+        *,
+        file_ids: Sequence[UUID],
+        error: str,
+    ) -> int: ...
+
+    async def mark_failed_permanent(self, file_id: UUID, *, error: str) -> bool: ...
 
 
 class DatastoreSchemaPort(Protocol):
@@ -266,11 +283,21 @@ class DocumentProcessorPort(Protocol):
 
     async def extract(
         self,
-        content: bytes,
+        content: bytes | None,
         filename: str,
         *,
         mime_type: str | None = None,
-    ) -> DocumentExtraction: ...
+        content_path: str | None = None,
+    ) -> DocumentExtraction:
+        """Extract from either in-memory ``content`` or an on-disk ``content_path``.
+
+        ``content_path`` lets the caller stream a large file to a temp file and
+        hand the path down, so the extractor can stream it (Kreuzberg) rather than
+        holding the whole file — plus a multipart copy — in memory. Processors
+        that must work in-process (markitdown/docling) read the path into bytes.
+        Exactly one of ``content`` / ``content_path`` is provided.
+        """
+        ...
 
     def supports_page_rendering(self, mime_type: str | None, filename: str) -> bool: ...
 

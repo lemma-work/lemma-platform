@@ -35,6 +35,7 @@ from lemma_pod_bundle.layout import (
     _write_json,
 )
 from lemma_pod_bundle.normalize import (
+    _attach_permissions_payload,
     _normalize_agent_payload,
     _normalize_app_payload,
     _normalize_function_payload,
@@ -47,6 +48,7 @@ from lemma_pod_bundle.normalize import (
 from lemma_pod_bundle.portability import _extract_portable_variables
 
 from app.core.authorization.context import Context
+from app.core.concurrency.offload import run_blocking
 from app.core.helpers.slug import slugify
 from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
 from app.core.log.log import get_logger
@@ -329,6 +331,16 @@ class BundleExporter:
                     payload = _normalize_function_payload(
                         _function_response_dict(function)
                     )
+                    grantee_id = getattr(function, "id", None)
+                    if grantee_id is not None:
+                        grants = await _resource_grants_payload(
+                            uow,
+                            pod_id=pod_id,
+                            grantee_type="FUNCTION",
+                            grantee_id=grantee_id,
+                        )
+                        if grants:
+                            payload = _attach_permissions_payload(payload, grants)
                     payload = _extract_large_text(
                         payload, field_name="code", file_name="code.py", resource_dir=dir_
                     )
@@ -353,6 +365,16 @@ class BundleExporter:
                     dir_ = root / "agents" / agent_name
                     dir_.mkdir(parents=True, exist_ok=True)
                     payload = _normalize_agent_payload(_agent_response_dict(agent))
+                    grantee_id = getattr(agent, "id", None)
+                    if grantee_id is not None:
+                        grants = await _resource_grants_payload(
+                            uow,
+                            pod_id=pod_id,
+                            grantee_type="AGENT",
+                            grantee_id=grantee_id,
+                        )
+                        if grants:
+                            payload = _attach_permissions_payload(payload, grants)
                     payload = _extract_large_text(
                         payload,
                         field_name="instruction",
@@ -477,7 +499,8 @@ class BundleExporter:
                 with_files=wrote_files,
             )
 
-            zip_bytes = pack_bundle(root)
+            # DEFLATE over the whole bundle is CPU-bound; keep it off the loop.
+            zip_bytes = await run_blocking(pack_bundle, root, limiter="cpu_bound")
 
         bundle_filename = f"{slugify(pod_name) or 'pod'}.zip"
         await on_progress(total, total)
@@ -525,7 +548,9 @@ class BundleExporter:
         csv_text, kept = _csv_within_bytes(cleaned, data_budget.item_cap())
         if kept == 0:
             return 0, max(available, len(cleaned))
-        dest.write_text(csv_text, encoding="utf-8")
+        await run_blocking(
+            dest.write_text, csv_text, encoding="utf-8", limiter="cpu_bound"
+        )
         data_budget.consume(len(csv_text.encode("utf-8")))
         return kept, max(available, len(cleaned))
 
@@ -546,7 +571,7 @@ class BundleExporter:
             logger.warning("Skipping surface export for pod %s: %s", pod_id, exc)
             return
 
-        seen_platforms: set[str] = set()
+        seen_names: set[str] = set()
         for surface in surfaces:
             try:
                 raw_surface = _dump_response(_surface_response(surface))
@@ -563,10 +588,12 @@ class BundleExporter:
                     raw_surface["connector_id"], raw_surface["provider"] = info
                 payload = _normalize_surface_payload(raw_surface)
                 platform = str(payload.get("platform") or "")
-                if not platform or platform in seen_platforms:
+                # De-dup by the surface's pod-unique name (not platform), so a pod
+                # with several surfaces of one platform exports all of them.
+                surface_name = str(payload.get("name") or "")
+                if not platform or not surface_name or surface_name in seen_names:
                     continue
-                seen_platforms.add(platform)
-                surface_name = str(payload["name"])
+                seen_names.add(surface_name)
                 dir_ = root / "surfaces" / surface_name
                 dir_.mkdir(parents=True, exist_ok=True)
                 _write_json(dir_ / f"{surface_name}.json", payload)
@@ -608,7 +635,9 @@ class BundleExporter:
 
         if source_bytes:
             if byte_budget.allow(name=f"apps/{app_name}/source", size=len(source_bytes)):
-                _extract_zip_bytes(source_bytes, dest / "source")
+                await run_blocking(
+                    _extract_zip_bytes, source_bytes, dest / "source", limiter="cpu_bound"
+                )
             return
 
         dist_bytes: bytes | None = None
@@ -623,7 +652,9 @@ class BundleExporter:
         if dist_bytes and byte_budget.allow(
             name=f"apps/{app_name}/dist.zip", size=len(dist_bytes)
         ):
-            (dest / "dist.zip").write_bytes(dist_bytes)
+            await run_blocking(
+                (dest / "dist.zip").write_bytes, dist_bytes, limiter="cpu_bound"
+            )
 
     async def _export_pod_files(
         self,
@@ -702,7 +733,7 @@ class BundleExporter:
                 continue
             target = files_root.joinpath(*parts)
             target.parent.mkdir(parents=True, exist_ok=True)
-            target.write_bytes(content)
+            await run_blocking(target.write_bytes, content, limiter="cpu_bound")
             file_manifest.append(
                 {
                     "path": path,
@@ -743,6 +774,54 @@ class BundleExporter:
 
 
 # --- response-dict adapters (per-module GET serialization) -------------------
+
+
+async def _resource_grants_payload(
+    uow: SqlAlchemyUnitOfWork,
+    *,
+    pod_id: UUID,
+    grantee_type: str,
+    grantee_id: UUID,
+) -> dict[str, Any] | None:
+    """Serialize an agent's/function's resource grants into the bundle's portable
+    ``{"grants": [...]}`` shape (keyed by ``resource_name``, never a source-org id).
+
+    Mirrors the ``…/permissions`` GET endpoint the CLI exporter reads, so a pod
+    exported through the async backend keeps the same executable grants a
+    CLI-exported one does — without them, an imported agent/function can be created
+    but can't call the tables/functions it was granted. ``list_grantee_resource_grants``
+    already drops grants whose resource no longer resolves to a name, and the applier
+    skips any that don't resolve in the target pod, so this stays best-effort/portable.
+    Best-effort: a failure to read grants logs and returns ``None`` (the resource
+    still exports, just without its grants) rather than sinking the whole export,
+    matching the surfaces/files/apps best-effort policy. Returns ``None`` when the
+    grantee has no grants (so nothing is attached)."""
+    from app.core.authorization.grants import list_grantee_resource_grants
+
+    try:
+        grouped = await list_grantee_resource_grants(
+            uow.session,
+            pod_id=pod_id,
+            grantee_type=grantee_type,
+            grantee_id=grantee_id,
+        )
+    except Exception as exc:  # noqa: BLE001 - grant export is best-effort
+        logger.warning(
+            "Skipping grant export for %s %s: %s", grantee_type, grantee_id, exc
+        )
+        return None
+    if not grouped:
+        return None
+    return {
+        "grants": [
+            {
+                "resource_type": resource_type.value,
+                "resource_name": resource_name,
+                "permission_ids": sorted(set(permission_ids)),
+            }
+            for (resource_type, resource_name), permission_ids in grouped.items()
+        ]
+    }
 
 
 def _pod_response_dict(pod: Any) -> dict[str, Any]:

@@ -7,10 +7,22 @@ import aiohttp
 import pytest
 
 from app.modules.datastore.infrastructure import kreuzberg_helper as kreuzberg_module
+from app.modules.datastore.infrastructure.kreuzberg_circuit import (
+    reset_kreuzberg_circuit,
+)
 from app.modules.datastore.infrastructure.kreuzberg_helper import (
     KreuzbergExtractionResult,
     KreuzbergHelper,
 )
+
+
+@pytest.fixture(autouse=True)
+def _reset_circuit():
+    """The Kreuzberg circuit breaker is a process-wide singleton; reset it around
+    every test so failures recorded by one test can't open it for the next."""
+    reset_kreuzberg_circuit()
+    yield
+    reset_kreuzberg_circuit()
 
 
 class _FakeSession:
@@ -388,6 +400,43 @@ async def test_extract_retries_transient_connection_error_then_succeeds(monkeypa
 
 
 @pytest.mark.asyncio
+async def test_extract_streams_content_path_instead_of_buffering(monkeypatch, tmp_path):
+    """When given a content_path, _extract streams the file from disk (opens it)
+    rather than holding a BytesIO copy of the bytes."""
+    doc = tmp_path / "paper.pdf"
+    doc.write_bytes(b"PDF-ON-DISK")
+
+    opened: list[str] = []
+    real_open = kreuzberg_module.open_binary
+
+    def _spy_open(path):
+        opened.append(path)
+        return real_open(path)
+
+    monkeypatch.setattr(kreuzberg_module, "open_binary", _spy_open)
+
+    response = SimpleNamespace(
+        status=200,
+        json=AsyncMock(return_value=[{"content": "ok", "chunks": [{"text": "ok"}]}]),
+    )
+    session = SimpleNamespace(post=_FlakyPost(fail_times=0, response=response))
+
+    helper = KreuzbergHelper()
+    result = await helper._extract(
+        session,
+        file_content=None,
+        filename="paper.pdf",
+        mime_type="application/pdf",
+        config=None,
+        content_path=str(doc),
+    )
+
+    assert result.content == "ok"
+    # The on-disk source was streamed (opened) rather than buffered from bytes.
+    assert opened == [str(doc)]
+
+
+@pytest.mark.asyncio
 async def test_extract_raises_after_exhausting_transient_retries(monkeypatch):
     """Persistent connection failures are retried a bounded number of times and
     then surface as a single RuntimeError rather than retrying forever."""
@@ -410,5 +459,8 @@ async def test_extract_raises_after_exhausting_transient_retries(monkeypatch):
             config=None,
         )
 
-    assert session.post.attempts == kreuzberg_module._TRANSIENT_RETRY_ATTEMPTS
-    assert len(sleeps) == kreuzberg_module._TRANSIENT_RETRY_ATTEMPTS - 1
+    expected_attempts = (
+        kreuzberg_module.datastore_settings.kreuzberg_transient_retry_attempts
+    )
+    assert session.post.attempts == expected_attempts
+    assert len(sleeps) == expected_attempts - 1

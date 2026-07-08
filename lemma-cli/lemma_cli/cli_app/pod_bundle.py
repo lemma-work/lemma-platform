@@ -483,8 +483,16 @@ def _build_variable_applier(
             if default_id:
                 try:
                     client.connectors.accounts.get(str(default_id))
-                except LemmaAPIError:
-                    resolved = None
+                except LemmaAPIError as exc:
+                    # A 404/403 means the recorded source account isn't ours to
+                    # reuse — leave the variable unresolved. But a 429 (rate
+                    # limited) or 5xx is transient/systemic: treating it as
+                    # "account gone" would silently drop the binding and import a
+                    # half-wired resource, so surface it instead.
+                    if getattr(exc, "status_code", None) in (403, 404):
+                        resolved = None
+                    else:
+                        raise
                 else:
                     resolved = str(default_id)
             account_default_cache[name] = resolved

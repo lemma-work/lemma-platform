@@ -581,3 +581,69 @@ async def test_app_asset_over_byte_budget_is_skipped(
     assert (root / "apps" / "big_app" / "big_app.json").is_file()
     assert not (root / "apps" / "big_app" / "source").exists()
     assert any("per-item limit" in w for w in warnings)
+
+
+# --- resource-grant export ---------------------------------------------------
+
+
+async def test_resource_grants_payload_serializes_grants_by_name(monkeypatch):
+    """Grants export in the portable ``{"grants": [...]}`` shape the applier +
+    CLI consume, keyed by resource_name (never a source-org id)."""
+    from app.core.authorization.context import ResourceType
+
+    async def _fake_list(session, *, pod_id, grantee_type, grantee_id):
+        return {(ResourceType.DATASTORE_TABLE, "leads"): ["write", "read", "read"]}
+
+    monkeypatch.setattr(
+        "app.core.authorization.grants.list_grantee_resource_grants", _fake_list
+    )
+    out = await exporter_mod._resource_grants_payload(
+        SimpleNamespace(session=object()),
+        pod_id=uuid4(),
+        grantee_type="AGENT",
+        grantee_id=uuid4(),
+    )
+    assert out == {
+        "grants": [
+            {
+                "resource_type": "datastore_table",
+                "resource_name": "leads",
+                "permission_ids": ["read", "write"],
+            }
+        ]
+    }
+
+
+async def test_resource_grants_payload_none_when_no_grants(monkeypatch):
+    async def _fake_list(session, *, pod_id, grantee_type, grantee_id):
+        return {}
+
+    monkeypatch.setattr(
+        "app.core.authorization.grants.list_grantee_resource_grants", _fake_list
+    )
+    out = await exporter_mod._resource_grants_payload(
+        SimpleNamespace(session=object()),
+        pod_id=uuid4(),
+        grantee_type="FUNCTION",
+        grantee_id=uuid4(),
+    )
+    assert out is None
+
+
+async def test_resource_grants_payload_is_best_effort_on_error(monkeypatch):
+    """A grant-read failure must not sink the whole export — it degrades to no
+    grants for that resource."""
+
+    async def _boom(session, *, pod_id, grantee_type, grantee_id):
+        raise RuntimeError("db down")
+
+    monkeypatch.setattr(
+        "app.core.authorization.grants.list_grantee_resource_grants", _boom
+    )
+    out = await exporter_mod._resource_grants_payload(
+        SimpleNamespace(session=object()),
+        pod_id=uuid4(),
+        grantee_type="AGENT",
+        grantee_id=uuid4(),
+    )
+    assert out is None

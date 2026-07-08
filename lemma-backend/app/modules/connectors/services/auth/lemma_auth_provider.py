@@ -1,10 +1,9 @@
-import asyncio
 from datetime import datetime, timedelta
 from typing import Awaitable, Callable, Optional, Tuple
 from urllib.parse import urlsplit, urlunsplit
 from uuid import UUID
 
-from authlib.integrations.requests_client import OAuth2Session
+from authlib.integrations.httpx_client import AsyncOAuth2Client
 
 from app.modules.connectors.domain.account import OAuthCredentials
 from app.modules.connectors.domain.connector import ConnectorEntity
@@ -23,7 +22,7 @@ class LemmaAuthProvider(AuthProviderInterface):
 
     def __init__(
         self,
-        oauth_session_factory: type[OAuth2Session] = OAuth2Session,
+        oauth_session_factory: type[AsyncOAuth2Client] = AsyncOAuth2Client,
         cloud_id_resolver: CloudIdResolver = get_atlassian_cloud_id,
     ):
         self._oauth_session_factory = oauth_session_factory
@@ -53,19 +52,19 @@ class LemmaAuthProvider(AuthProviderInterface):
 
         oauth_config = connector.oauth2_config
 
-        oauth = self._oauth_session_factory(
+        # create_authorization_url is pure URL/PKCE building (no network), so it
+        # stays synchronous even on the async client — no thread hop needed.
+        async with self._oauth_session_factory(
             client_id=oauth_config.client_id,
             client_secret=oauth_config.client_secret,
             redirect_uri=redirect_uri,
             scope=oauth_config.default_scopes,
-        )
-
-        authorization_url, provider_state = await asyncio.to_thread(
-            oauth.create_authorization_url,
-            url=oauth_config.authorization_url,
-            state=state,
-            **(oauth_config.extra_params or {})
-        )
+        ) as oauth:
+            authorization_url, provider_state = oauth.create_authorization_url(
+                url=oauth_config.authorization_url,
+                state=state,
+                **(oauth_config.extra_params or {}),
+            )
 
         return authorization_url, provider_state
 
@@ -85,18 +84,16 @@ class LemmaAuthProvider(AuthProviderInterface):
         authorization_response = redirect_uri
         normalized_redirect_uri = self._normalize_redirect_uri(authorization_response)
 
-        oauth = self._oauth_session_factory(
+        async with self._oauth_session_factory(
             client_id=oauth_config.client_id,
             client_secret=oauth_config.client_secret,
             redirect_uri=normalized_redirect_uri,
             scope=oauth_config.default_scopes,
-        )
-
-        token_data = await asyncio.to_thread(
-            oauth.fetch_token,
-            url=oauth_config.token_url,
-            authorization_response=authorization_response,
-        )
+        ) as oauth:
+            token_data = await oauth.fetch_token(
+                url=oauth_config.token_url,
+                authorization_response=authorization_response,
+            )
 
         return await self._create_oauth_credentials(token_data, connector)
 
@@ -123,17 +120,15 @@ class LemmaAuthProvider(AuthProviderInterface):
 
         oauth_config = connector.oauth2_config
 
-        oauth = self._oauth_session_factory(
+        async with self._oauth_session_factory(
             client_id=oauth_config.client_id,
             client_secret=oauth_config.client_secret,
             token=credentials.raw_response,
-        )
-
-        token_data = await asyncio.to_thread(
-            oauth.refresh_token,
-            url=oauth_config.token_url,
-            refresh_token=credentials.refresh_token,
-        )
+        ) as oauth:
+            token_data = await oauth.refresh_token(
+                url=oauth_config.token_url,
+                refresh_token=credentials.refresh_token,
+            )
 
         return await self._create_oauth_credentials(token_data, connector)
 
@@ -181,7 +176,7 @@ class LemmaAuthProvider(AuthProviderInterface):
             expires_at = datetime.now().replace(microsecond=0) + timedelta(
                 seconds=token_data["expires_in"]
             )
-        if connector.id == "teams":
+        if connector.id == "microsoft_teams":
             import base64
             import json as _json
 

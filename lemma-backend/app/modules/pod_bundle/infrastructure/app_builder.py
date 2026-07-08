@@ -38,6 +38,7 @@ from pathlib import Path
 from typing import Any, Callable
 from uuid import UUID
 
+from app.core.concurrency.offload import run_blocking
 from app.core.config import settings
 from app.core.log.log import get_logger
 from app.modules.pod_bundle.domain.errors import AppBuildFailedError
@@ -385,7 +386,7 @@ class AppStepRunner:
         dist_zip = resource_dir / "dist.zip"
 
         if source_dir.is_dir():
-            source_bytes = zip_dir(source_dir)
+            source_bytes = await run_blocking(zip_dir, source_dir, limiter="cpu_bound")
             tier = classify_source_dir(source_dir)
             if tier == "vite":
                 dist_bytes = await self._sandbox.build(
@@ -396,7 +397,8 @@ class AppStepRunner:
             return source_bytes, dist_bytes
 
         if dist_zip.is_file():
-            return None, dist_zip.read_bytes()
+            dist_bytes = await run_blocking(dist_zip.read_bytes, limiter="cpu_bound")
+            return None, dist_bytes
 
         raise AppBuildFailedError(
             f"App '{name}' bundle has neither a source/ directory nor a dist.zip."

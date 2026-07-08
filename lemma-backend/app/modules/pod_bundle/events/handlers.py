@@ -23,6 +23,7 @@ from pathlib import Path
 from uuid import UUID
 
 from app.core.authorization.scope import context_scope, uow_scope
+from app.core.concurrency.offload import run_blocking
 from app.core.authorization.service import AuthorizationDataService
 from app.core.domain.errors import DomainError
 from app.core.infrastructure.jobs.streaq_runtime import (
@@ -396,6 +397,23 @@ async def apply_pod_import(context: dict[str, str | None]) -> None:
         }
         replacements.update(state.variables_provided or {})
 
+        # A pod_member (``${..._assignee}``) variable auto-resolves to the
+        # importing user's own membership unless they supplied one — otherwise the
+        # placeholder is left unresolved and the workflow silently loses its
+        # assignee. Resolve once and reuse for every such variable.
+        unresolved_member_vars = [
+            v.name
+            for v in state.plan.variables
+            if v.kind == "pod_member" and not replacements.get(v.name)
+        ]
+        if unresolved_member_vars:
+            member_id = await _resolve_importer_pod_member_id(
+                worker_ctx, pod_id=pod_id, user_id=user_id
+            )
+            if member_id is not None:
+                for name in unresolved_member_vars:
+                    replacements[name] = member_id
+
         # APP steps build in the agentbox and must not hold a pooled DB connection,
         # so they run through a self-scoped runner instead of the per-step uow_scope.
         app_runner = AppStepRunner(uow_factory=worker_ctx.uow_factory)
@@ -563,7 +581,7 @@ async def publish_pod_github(context: dict[str, str | None]) -> None:
                     on_progress=_noop_progress,
                 )
 
-        files = _zip_to_files(zip_bytes)
+        files = await run_blocking(_zip_to_files, zip_bytes, limiter="cpu_bound")
         counts = _resource_counts(files)
         pod_meta = _pod_meta_from_files(files)
         repo_description = pod_meta.get("description")
@@ -727,6 +745,40 @@ def _resource_counts(files: dict[str, bytes]) -> dict[str, int]:
         if len(parts) >= 2:
             seen.setdefault(parts[0], set()).add(parts[1])
     return {k: len(v) for k, v in seen.items()}
+
+
+async def _resolve_importer_pod_member_id(
+    worker_ctx: AppWorkerContext, *, pod_id: UUID, user_id: UUID
+) -> str | None:
+    """The importing user's own pod-member id in the target pod — what a
+    ``pod_member`` (``${..._assignee}``) variable resolves to when the importer
+    doesn't supply one explicitly, matching the CLI's assignee resolution.
+
+    Best-effort: returns ``None`` (leaving the placeholder unresolved, so the
+    service drops the assignee) if the user has no membership or the lookup
+    fails, rather than failing the whole apply over one workflow assignee."""
+    from app.modules.pod.api.dependencies import get_pod_member_service
+
+    try:
+        async with uow_scope(worker_ctx.uow_factory) as uow:
+            ctx = await AuthorizationDataService(uow.session).build_user_context(
+                user_id=user_id, pod_id=pod_id
+            )
+            async with context_scope(ctx):
+                service = get_pod_member_service(uow)
+                member = await service.get_pod_member_by_user_id(
+                    pod_id, user_id, requester_user_id=user_id
+                )
+                return str(member.id)
+    except Exception as exc:  # noqa: BLE001 — assignee auto-resolution is best-effort
+        logger.warning(
+            "Could not resolve importer pod-member id for pod %s user %s (%s); "
+            "workflow assignees left unresolved",
+            pod_id,
+            user_id,
+            exc,
+        )
+        return None
 
 
 async def _record_recipe(worker_ctx: AppWorkerContext, state: ImportState) -> None:

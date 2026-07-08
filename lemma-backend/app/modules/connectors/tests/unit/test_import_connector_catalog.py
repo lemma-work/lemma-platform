@@ -1049,3 +1049,69 @@ async def test_upsert_trigger_tags_provider():
     assert entity.provider == AuthProvider.COMPOSIO
     assert entity.id == "gmail:composio:new_message"
     assert entity.event_type == "new_message"
+
+
+# --- connector id rename migration -------------------------------------------
+
+
+class _FakeRenameResult:
+    rowcount = 1
+
+
+class _FakeRenameSession:
+    """Records executed statements so tests can assert the re-point-then-delete
+    order without a real database."""
+
+    def __init__(self) -> None:
+        self.executed: list = []
+
+    async def execute(self, statement, params=None):
+        self.executed.append((str(statement), params))
+        return _FakeRenameResult()
+
+
+class _FakeConnectorRepoForRename:
+    def __init__(self, existing_ids: set[str]) -> None:
+        self._existing = existing_ids
+
+    async def get(self, connector_id: str):
+        return object() if connector_id in self._existing else None
+
+
+def _rename_ops(session: _FakeRenameSession) -> list[str]:
+    return [" ".join(sql.split()[:2]) for sql, _ in session.executed]
+
+
+async def test_apply_connector_renames_repoints_then_deletes():
+    session = _FakeRenameSession()
+    repo = _FakeConnectorRepoForRename({"teams", "microsoft_teams"})
+    with patch.object(importer, "CONNECTOR_ID_RENAMES", {"teams": "microsoft_teams"}):
+        renamed = await importer._apply_connector_renames(repo, session)
+    assert renamed == 1
+    # Accounts + auth_configs are re-pointed BEFORE the old connector is deleted;
+    # deleting first would cascade-delete every connected account.
+    assert _rename_ops(session) == ["UPDATE accounts", "UPDATE auth_configs", "DELETE FROM"]
+    for _, params in session.executed:
+        assert params["old"] == "teams"
+        assert params.get("new", "microsoft_teams") == "microsoft_teams"
+
+
+async def test_apply_connector_renames_skips_when_old_absent():
+    session = _FakeRenameSession()
+    repo = _FakeConnectorRepoForRename({"microsoft_teams"})  # already migrated
+    with patch.object(importer, "CONNECTOR_ID_RENAMES", {"teams": "microsoft_teams"}):
+        renamed = await importer._apply_connector_renames(repo, session)
+    assert renamed == 0
+    assert session.executed == []
+
+
+async def test_apply_connector_renames_skips_when_target_not_synced():
+    # Safety: if the new connector isn't in the catalog yet, do NOT touch/delete
+    # the old one — re-pointing to a missing FK target or deleting the old row
+    # (ON DELETE CASCADE) would break or destroy live accounts.
+    session = _FakeRenameSession()
+    repo = _FakeConnectorRepoForRename({"teams"})
+    with patch.object(importer, "CONNECTOR_ID_RENAMES", {"teams": "microsoft_teams"}):
+        renamed = await importer._apply_connector_renames(repo, session)
+    assert renamed == 0
+    assert session.executed == []

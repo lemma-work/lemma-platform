@@ -52,6 +52,19 @@ def test_encrypt_json_is_idempotent_on_already_encrypted():
     assert cipher.encrypt_json(enc) == enc  # not double-wrapped
 
 
+@pytest.mark.asyncio
+async def test_encrypt_json_async_round_trip_off_loop():
+    # The connector credential repos call encrypt_json_async/decrypt_json_async on
+    # the REAL cipher (get_secret_cipher() → EnvelopeSecretCipher), so those async
+    # methods must exist here and round-trip — not just on the deprecated adapter.
+    cipher = _cipher(_keyring(("k1", Fernet.generate_key()), primary="k1"))
+    secret = "ASYNC-ACCESS-TOKEN-SENTINEL-7b3d1"
+    enc = await cipher.encrypt_json_async({"access_token": secret})
+    assert enc is not None and secret not in json.dumps(enc)
+    assert await cipher.decrypt_json_async(enc) == {"access_token": secret}
+    assert await cipher.encrypt_json_async(None) is None
+
+
 def test_none_passthrough():
     cipher = _cipher(_keyring(("k1", Fernet.generate_key()), primary="k1"))
     assert cipher.encrypt_json(None) is None

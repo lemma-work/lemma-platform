@@ -84,6 +84,24 @@ jobs:
         env:
           REDIS_URL: redis://localhost:6379
 
+  backend-lint:
+    name: lemma-backend async-safety lint
+    needs: changes
+    if: needs.changes.outputs.backend == 'true'
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: lemma-backend
+    steps:
+      - uses: actions/checkout@v5
+      - uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+      - name: Sync deps
+        run: uv sync
+      - name: Async-safety lint (flake8-async on app/)
+        run: make lint-async
+
   python-sdk:
     name: Python SDK + CLI tests
     needs: changes
@@ -304,6 +322,7 @@ jobs:
     needs:
       - changes
       - backend-unit
+      - backend-lint
       - python-sdk
       - typescript-sdk
       - codegen-drift

@@ -30,6 +30,8 @@ import tempfile
 import aiohttp
 import anyio
 
+from app.core.concurrency.offload import run_blocking
+from app.modules.datastore.infrastructure.streaming import read_file_bytes
 from app.core.log.log import get_logger
 from app.modules.datastore.config import datastore_settings
 from app.modules.datastore.domain.document_processing import (
@@ -80,16 +82,27 @@ class DoclingDocumentProcessor(PdfPageRenderingMixin):
 
     async def extract(
         self,
-        content: bytes,
+        content: bytes | None,
         filename: str,
         *,
         mime_type: str | None = None,
+        content_path: str | None = None,
     ) -> DocumentExtraction:
         if not self.base_url:
             raise ValueError("Docling serve URL not configured")
+        # Docling serve takes the bytes; when handed a streamed temp path, read
+        # it off the loop.
+        if content is None:
+            content = await run_blocking(
+                read_file_bytes, content_path, limiter="cpu_bound"
+            )
         raw_markdown = await self._convert(content, filename, mime_type)
         markdown = self._number_page_markers(raw_markdown)
-        chunks = chunk_markdown(markdown) if markdown.strip() else []
+        chunks = (
+            await run_blocking(chunk_markdown, markdown, limiter="cpu_bound")
+            if markdown.strip()
+            else []
+        )
         pages = await anyio.to_thread.run_sync(
             self._pdf_pages, content, mime_type, filename
         )

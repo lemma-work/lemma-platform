@@ -134,6 +134,15 @@ test-collect:
 lint:
 	uv run ruff check .
 
+# Async-safety gate (enforced in CI). Catches blocking calls newly introduced
+# into async production code. Scoped to app/ with the noisy/stylistic ASYNC
+# rules disabled: ASYNC109 (timeout param), ASYNC110 (sleep-in-while — valid for
+# poll loops), ASYNC240 (pathlib/os.path — mostly fast metadata + intentional
+# disk writes). Keeps the high-signal ones: ASYNC210 (sync HTTP), ASYNC22x
+# (subprocess), ASYNC230 (blocking open), ASYNC251 (time.sleep).
+lint-async:
+	uv run ruff check --select ASYNC --ignore ASYNC109,ASYNC110,ASYNC240 app/
+
 migrate:
 	uv run alembic upgrade head
 

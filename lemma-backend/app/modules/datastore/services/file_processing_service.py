@@ -2,12 +2,15 @@ from __future__ import annotations
 
 import json
 import mimetypes
+import os
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from datetime import datetime, timezone
 from uuid import UUID
 
+from app.core.concurrency.offload import run_blocking
 from app.core.infrastructure.db.uow_factory import UnitOfWorkFactory
+from app.modules.datastore.config import datastore_settings
 from app.modules.datastore.domain.document_processing import (
     DocumentExtraction,
     DocumentImage,
@@ -19,7 +22,11 @@ from app.modules.datastore.domain.ports import DocumentProcessorPort
 from app.modules.datastore.infrastructure.document_processor import (
     create_document_processor,
 )
+from app.modules.datastore.infrastructure.inflight_budget import (
+    get_inflight_byte_budget,
+)
 from app.modules.datastore.infrastructure.markdown_chunker import chunk_markdown
+from app.modules.datastore.infrastructure.streaming import stream_to_tempfile
 from app.modules.datastore.infrastructure.markdown_images import (
     rewrite_image_references,
 )
@@ -180,6 +187,29 @@ class DatastoreFileProcessingService:
                 await files.mark_not_required(file_id)
             return
 
+        # Size guard: extraction buffers the whole document in memory, so an
+        # oversized file risks OOMing the worker. Terminally fail it (rather than
+        # claim + attempt) so it never enters the processing/recovery loop.
+        max_file_bytes = datastore_settings.document_processing_max_file_bytes
+        size_bytes = int(getattr(file_entity, "size_bytes", 0) or 0)
+        if max_file_bytes and size_bytes > max_file_bytes:
+            logger.warning(
+                "File %s (%d bytes) exceeds document_processing_max_file_bytes "
+                "(%d); marking FAILED_PERMANENT without processing",
+                file_id,
+                size_bytes,
+                max_file_bytes,
+            )
+            async with self._file_repo() as files:
+                await files.mark_failed_permanent(
+                    file_id,
+                    error=(
+                        f"file exceeds max processing size "
+                        f"({size_bytes} > {max_file_bytes} bytes)"
+                    ),
+                )
+            return
+
         # Claim PENDING -> PROCESSING in its own committed transaction so the
         # claim is durable before the long extraction begins. A crash mid-work
         # then leaves a recoverable PROCESSING row for recover_stuck_processing_files.
@@ -194,31 +224,36 @@ class DatastoreFileProcessingService:
 
         try:
             # --- External I/O: NO DB connection held across any of this. ---
-            current_metadata = dict(metadata or {})
-            current_metadata.update(file_entity.file_metadata or {})
-            search_metadata = await self._build_search_metadata(file_entity, current_metadata)
-            extraction, user_markdown_bytes = await self._build_extraction(file_entity)
-            chunks = self._chunks_for_index(extraction)
-            page_count = 0
-            has_markdown = False
-            if self._should_store_converted_projection(file_entity):
-                page_count = extraction.page_count
-                has_markdown = extraction.has_markdown
-                await self._write_converted_projection(
-                    file_entity,
-                    extraction,
+            # Reserve this file's bytes against the aggregate in-flight budget
+            # (soft cap; disabled by default) so concurrent large documents can't
+            # stack to an OOM. Held only for the memory-heavy extract+index span,
+            # then released before the DB write below.
+            async with get_inflight_byte_budget().reserve(size_bytes):
+                current_metadata = dict(metadata or {})
+                current_metadata.update(file_entity.file_metadata or {})
+                search_metadata = await self._build_search_metadata(file_entity, current_metadata)
+                extraction, user_markdown_bytes = await self._build_extraction(file_entity)
+                chunks = self._chunks_for_index(extraction)
+                page_count = 0
+                has_markdown = False
+                if self._should_store_converted_projection(file_entity):
+                    page_count = extraction.page_count
+                    has_markdown = extraction.has_markdown
+                    await self._write_converted_projection(
+                        file_entity,
+                        extraction,
+                        search_metadata,
+                        user_markdown_bytes=user_markdown_bytes,
+                    )
+                else:
+                    await self._file_projection.delete_child_artifacts(
+                        self.pod_id, file_entity.path
+                    )
+                await self.search_service.index_file_chunks(
+                    file_id,
+                    chunks,
                     search_metadata,
-                    user_markdown_bytes=user_markdown_bytes,
                 )
-            else:
-                await self._file_projection.delete_child_artifacts(
-                    self.pod_id, file_entity.path
-                )
-            await self.search_service.index_file_chunks(
-                file_id,
-                chunks,
-                search_metadata,
-            )
             # Persist page metadata so listing/markdown tools can report page
             # count without a storage round-trip.
             merged_metadata = {
@@ -273,21 +308,34 @@ class DatastoreFileProcessingService:
                 markdown = raw.decode("utf-8", "replace")
                 if markdown.strip():
                     images = await self._load_user_markdown_images(file_entity)
-                    return self._extraction_from_user_markdown(markdown, images), raw
+                    extraction = await self._extraction_from_user_markdown(
+                        markdown, images
+                    )
+                    return extraction, raw
             logger.warning(
                 "File %s is flagged markdown_source=user but its source.md is "
                 "missing/empty; falling back to document extraction",
                 file_entity.path,
             )
 
-        source_content = await self.storage.download_file(
-            build_datastore_file_storage_key(self.pod_id, file_entity.path)
-        )
-        extraction = await self.document_processor.extract(
-            source_content,
-            file_entity.name,
-            mime_type=self._base_mime_type(file_entity),
-        )
+        # Stream the source to a temp file instead of buffering the whole file in
+        # memory. The processor extracts from the path (Kreuzberg streams it to
+        # its multipart body; markitdown/docling read it off the loop), so peak
+        # memory stays ~one chunk rather than the file plus a BytesIO copy.
+        storage_key = build_datastore_file_storage_key(self.pod_id, file_entity.path)
+        tmp_path = await stream_to_tempfile(self.storage.iter_download(storage_key))
+        try:
+            extraction = await self.document_processor.extract(
+                None,
+                file_entity.name,
+                mime_type=self._base_mime_type(file_entity),
+                content_path=tmp_path,
+            )
+        finally:
+            try:
+                os.unlink(tmp_path)
+            except OSError:
+                pass
         return extraction, None
 
     async def _load_user_markdown_images(
@@ -321,7 +369,7 @@ class DatastoreFileProcessingService:
             )
         return images
 
-    def _extraction_from_user_markdown(
+    async def _extraction_from_user_markdown(
         self, markdown: str, images: list[DocumentImage]
     ) -> DocumentExtraction:
         """Build a ``DocumentExtraction`` from user-provided markdown: rewrite its
@@ -329,7 +377,9 @@ class DatastoreFileProcessingService:
         sibling child artifacts), chunk it in-process, and derive per-page
         summaries from any ``<!-- PAGE n -->`` markers."""
         markdown = rewrite_image_references(markdown, {image.name for image in images})
-        chunks = chunk_markdown(markdown)
+        # chunk_markdown is a pure-Python loop over the whole document; keep it
+        # off the event loop so a large doc doesn't stall the worker.
+        chunks = await run_blocking(chunk_markdown, markdown, limiter="cpu_bound")
         page_count = max((page for _, page in parse_page_offsets(markdown)), default=0)
         pages = [DocumentPage(page_number=number) for number in range(1, page_count + 1)]
         return DocumentExtraction(

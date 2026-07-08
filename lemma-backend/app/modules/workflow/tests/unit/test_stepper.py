@@ -476,7 +476,11 @@ async def test_job_function_suspends_with_function_wait_but_run_stays_running():
     assert result.wait.external_ref
 
 
-async def test_api_function_non_terminal_result_fails_instead_of_waiting():
+async def test_function_node_suspends_on_dispatched_run():
+    # Function nodes are dispatch-and-suspend for every type: the adapter enqueues
+    # the run and returns it PENDING, so the stepper suspends on a FUNCTION wait
+    # (the engine commits + releases its run-row lock) rather than blocking inline.
+    run_id = uuid4()
     nodes = [
         FunctionNode(id="api", config=FunctionNodeConfig(function_name="api_fn")),
         EndNode(id="end"),
@@ -484,13 +488,13 @@ async def test_api_function_non_terminal_result_fails_instead_of_waiting():
     flow = _flow(nodes, [_edge(1, "api", "end")])
     run = _run(flow)
     result = await _stepper(
-        {"api_fn": {"run_id": str(uuid4()), "status": "RUNNING"}}
+        {"api_fn": {"run_id": str(run_id), "status": "PENDING"}}
     ).advance(run, flow)
 
-    assert result.wait is None
-    assert run.status == FlowRunStatus.FAILED
-    assert run.failed_node_id == "api"
-    assert "Only JOB functions can suspend" in run.error
+    assert run.status == FlowRunStatus.RUNNING
+    assert result.wait is not None
+    assert result.wait.wait_type == WorkflowRunWaitType.FUNCTION
+    assert result.wait.external_ref == str(run_id)
 
 
 async def test_wait_until_suspends_with_time_wait():

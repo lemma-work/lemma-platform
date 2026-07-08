@@ -3,6 +3,7 @@ from typing import Literal, Optional
 
 from pydantic import Field, SecretStr, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
+from app.core.settings_env import dotenv_path
 
 
 def _default_local_root() -> Path:
@@ -28,7 +29,7 @@ class Settings(BaseSettings):
     """Application settings loaded from environment variables."""
 
     model_config = SettingsConfigDict(
-        env_file=".env", env_file_encoding="utf-8", case_sensitive=False, extra="ignore"
+        env_file=dotenv_path(), env_file_encoding="utf-8", case_sensitive=False, extra="ignore"
     )
     environment: Literal["local", "development", "production", "testing"] = Field(
         default="local",
@@ -105,6 +106,76 @@ class Settings(BaseSettings):
             "Maximum concurrent streaq tasks per worker process. Should not "
             "exceed db_pool_size + db_max_overflow (default 20), since each "
             "task that opens a DB session consumes one pooled connection."
+        ),
+    )
+    # --- Thread-offload pool (app.core.concurrency.offload) ---
+    # Blocking work (CPU-bound, sync SDKs, KMS) runs in worker threads via
+    # run_blocking(). These partition the pool by workload class so one class
+    # can't starve another, and the total raises anyio's default (40) to leave
+    # headroom for residual un-limited offloads (embedder/reranker).
+    offload_total_threads: int = Field(
+        default=64,
+        description=(
+            "Total worker threads for off-loop blocking work (anyio's global "
+            "default thread limiter). Raised from the anyio default (40) so the "
+            "named sub-limiters below, which sum above 40, have room alongside "
+            "un-limited offloads. Env: ``OFFLOAD_TOTAL_THREADS``."
+        ),
+    )
+    offload_cpu_bound_limit: int = Field(
+        default=8,
+        description=(
+            "Max concurrent CPU-bound offloads (markdown chunking, tokenizing, "
+            "zip/unzip). Env: ``OFFLOAD_CPU_BOUND_LIMIT``."
+        ),
+    )
+    offload_external_http_limit: int = Field(
+        default=24,
+        description=(
+            "Max concurrent blocking external-HTTP offloads (sync connector SDKs "
+            "like Composio, OAuth token exchanges). Sized near worker_concurrency "
+            "so connector-heavy runs aren't throttled, while still bounded. Env: "
+            "``OFFLOAD_EXTERNAL_HTTP_LIMIT``."
+        ),
+    )
+    offload_crypto_limit: int = Field(
+        default=8,
+        description=(
+            "Max concurrent crypto offloads (KMS wrap/unwrap gRPC). Env: "
+            "``OFFLOAD_CRYPTO_LIMIT``."
+        ),
+    )
+    # --- Event-loop watchdog (app.core.observability.loop_watchdog) ---
+    loop_lag_watchdog_interval_seconds: float = Field(
+        default=0.5,
+        description=(
+            "How often the watchdog probes event-loop lag and refreshes the "
+            "liveness heartbeat. Env: ``LOOP_LAG_WATCHDOG_INTERVAL_SECONDS``."
+        ),
+    )
+    loop_lag_warn_seconds: float = Field(
+        default=0.3,
+        description=(
+            "Log a warning when measured event-loop lag exceeds this. Env: "
+            "``LOOP_LAG_WARN_SECONDS``."
+        ),
+    )
+    loop_lag_unhealthy_seconds: float = Field(
+        default=5.0,
+        description=(
+            "Event-loop lag above this marks the process unhealthy: /livez "
+            "returns 503 so a Kubernetes liveness probe restarts a wedged loop. "
+            "Env: ``LOOP_LAG_UNHEALTHY_SECONDS``."
+        ),
+    )
+    worker_heartbeat_path: str = Field(
+        default="/tmp/worker_heartbeat",
+        description=(
+            "File the loop watchdog rewrites (epoch seconds) each tick. The "
+            "worker has no HTTP server, so its Kubernetes liveness probe execs a "
+            "freshness check on this file — a wedged loop stops updating it and "
+            "the pod is restarted. Set empty to disable heartbeat writes. Env: "
+            "``WORKER_HEARTBEAT_PATH``."
         ),
     )
     agent_run_stop_poll_interval_seconds: float = Field(

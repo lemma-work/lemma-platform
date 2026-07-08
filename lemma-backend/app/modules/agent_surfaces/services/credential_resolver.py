@@ -23,18 +23,22 @@ from app.modules.agent_surfaces.domain.entities import (
     AgentSurfaceEntity,
     SurfacePlatform,
 )
+from app.modules.agent_surfaces.domain.surface_connectors import (
+    SELF_MANAGED_CREDENTIAL_CONNECTOR_IDS,
+)
 from app.modules.connectors.infrastructure.models.account import Account
 from app.modules.connectors.services.connector_service import ConnectorService
 
 logger = get_logger(__name__)
 
-# Connectors that manage service-level credentials (no OAuth refresh flow).
-# Resend uses a static API key, not a 3-legged OAuth token — routing it through
-# the OAuth refresh flow would silently drop `api_key` (ConnectorService's
-# `_to_oauth_credentials` only carries access_token/refresh_token/token_type/
-# expires_at/raw_response/connection_id; `api_key` isn't one of them, and it
-# isn't in `_CONTEXT_KEYS` below either, so nothing rescues it afterward).
-_SELF_MANAGED_CREDENTIAL_APPS = frozenset({"teams", "whatsapp", "telegram", "resend"})
+# Connectors that manage service-level credentials (no OAuth refresh flow),
+# derived from the surface-connector registry so it can't drift from the
+# bindings. Resend, for one, uses a static API key, not a 3-legged OAuth token —
+# routing it through the OAuth refresh flow would silently drop `api_key`
+# (ConnectorService's `_to_oauth_credentials` only carries access_token/
+# refresh_token/token_type/expires_at/raw_response/connection_id; `api_key` isn't
+# one of them, and it isn't in `_CONTEXT_KEYS` below either, so nothing rescues it).
+_SELF_MANAGED_CREDENTIAL_APPS = SELF_MANAGED_CREDENTIAL_CONNECTOR_IDS
 
 # Non-secret keys platform adapters read for identity/routing context.
 _CONTEXT_KEYS = ("scope", "scopes", "api_base_url", "raw_response", "user_data")

@@ -249,6 +249,37 @@ class FunctionUseCases:
                 )
         return await self._run_resolved(resolved, user_email=None)
 
+    async def dispatch_function_for_workflow(
+        self,
+        *,
+        pod_id: UUID,
+        name: str,
+        input_data: dict,
+        user_id: UUID,
+    ) -> FunctionRunEntity:
+        """Create + dispatch a function run for a workflow node WITHOUT running it
+        inline. Works for API and JOB functions alike: the run is enqueued to the
+        worker (force_dispatch) and returned PENDING, so the workflow engine
+        suspends on the run id and releases its run-row lock instead of pinning it
+        across the sandbox round-trip. The FunctionRunCompleted event resumes the
+        workflow."""
+        async with uow_scope(self._uow_factory) as uow:
+            auth_ctx = await AuthorizationDataService(uow.session).build_user_context(
+                user_id=user_id,
+                pod_id=pod_id,
+            )
+            async with context_scope(auth_ctx):
+                resolved = await self._build(uow).resolve_execute(
+                    pod_id,
+                    name,
+                    input_data,
+                    user_id,
+                    None,
+                    ctx=auth_ctx,
+                    force_dispatch=True,
+                )
+        return resolved.run
+
     # -- Shared dispatch ------------------------------------------------------
 
     async def _run_resolved(

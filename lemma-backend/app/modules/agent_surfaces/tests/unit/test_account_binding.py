@@ -73,7 +73,7 @@ async def test_teams_binding_extracts_tenant_id_from_account():
         SurfaceAccountInfo(
             id=account_id,
             user_id=uuid4(),
-            connector_id="teams",
+            connector_id="microsoft_teams",
             credentials={"user_data": {"tenant_id": "tenant-from-account"}},
         )
     )

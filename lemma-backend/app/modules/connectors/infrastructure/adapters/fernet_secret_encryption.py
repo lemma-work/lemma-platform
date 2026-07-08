@@ -12,6 +12,7 @@ from __future__ import annotations
 
 from typing import Any
 
+from app.core.concurrency.offload import run_blocking
 from app.core.crypto.envelope import V1_MARKER
 from app.core.crypto.factory import get_secret_cipher
 from app.modules.connectors.domain.ports import SecretEncryptionPort
@@ -32,3 +33,17 @@ class FernetSecretEncryptionAdapter(SecretEncryptionPort):
 
     def decrypt_json(self, value: dict[str, Any] | None) -> dict[str, Any] | None:
         return self._cipher.decrypt_json(value)
+
+    async def encrypt_json_async(
+        self, value: dict[str, Any] | None
+    ) -> dict[str, Any] | None:
+        # Offload onto the crypto limiter: with a KMS-backed provider this wraps
+        # a blocking gRPC round-trip that must not run on the event loop. With
+        # the static/keychain providers it's a cheap Fernet op — a negligible
+        # thread hop.
+        return await run_blocking(self.encrypt_json, value, limiter="crypto")
+
+    async def decrypt_json_async(
+        self, value: dict[str, Any] | None
+    ) -> dict[str, Any] | None:
+        return await run_blocking(self.decrypt_json, value, limiter="crypto")
