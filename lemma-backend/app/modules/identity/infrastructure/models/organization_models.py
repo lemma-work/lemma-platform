@@ -2,7 +2,7 @@ from __future__ import annotations
 from datetime import datetime
 from typing import TYPE_CHECKING
 from uuid import UUID
-from sqlalchemy import DateTime, ForeignKey, Index, String
+from sqlalchemy import DateTime, ForeignKey, Index, String, func, text
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 from app.core.infrastructure.db.base import UUIDAuditBase
 from app.modules.identity.domain.organization_entities import (
@@ -109,7 +109,13 @@ class OrganizationInvitation(UUIDAuditBase):
     )
 
     __table_args__ = (
-        Index("ix_org_invitation_email_org", "email", "organization_id", unique=True),
+        Index(
+            "uq_org_invitation_pending_email_org_lower",
+            func.lower(email),
+            organization_id,
+            unique=True,
+            postgresql_where=text("status = 'PENDING'"),
+        ),
     )
 
     def to_entity(self) -> OrganizationInvitationEntity:

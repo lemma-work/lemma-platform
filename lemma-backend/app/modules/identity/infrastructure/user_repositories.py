@@ -4,10 +4,12 @@ from typing import Optional
 from uuid import UUID
 
 from sqlalchemy import func, select
+from sqlalchemy.exc import IntegrityError
 
 from app.core.domain.message_bus import MessageBus
 from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
-from app.modules.identity.domain.errors import UserNotFoundError
+from app.modules.identity.domain.email import normalize_identity_email
+from app.modules.identity.domain.errors import UserConflictError, UserNotFoundError
 from app.modules.identity.domain.ports import UserRepositoryPort
 from app.modules.identity.domain.user_entities import UserEntity
 from app.modules.identity.domain.user_preferences import UserPreferences
@@ -36,7 +38,13 @@ class UserRepository(UserRepositoryPort):
     async def create(self, entity: UserEntity) -> UserEntity:
         instance = User(**entity.model_dump())
         self.session.add(instance)
-        await self.session.flush()
+        try:
+            await self.session.flush()
+        except IntegrityError as exc:
+            error = str(exc.orig).lower()
+            if "uq_users_email_lower" in error or "ix_users_email" in error:
+                raise UserConflictError("User with this email already exists") from exc
+            raise
         self._collect_events(entity)
         return instance.to_entity()
 
@@ -47,7 +55,8 @@ class UserRepository(UserRepositoryPort):
         return instance.to_entity() if instance else None
 
     async def get_by_email(self, email: str) -> Optional[UserEntity]:
-        stmt = select(User).where(User.email == email)
+        normalized = normalize_identity_email(email)
+        stmt = select(User).where(func.lower(User.email) == normalized)
         result = await self.session.execute(stmt)
         instance = result.scalars().first()
         return instance.to_entity() if instance else None

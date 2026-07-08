@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from uuid import UUID
 from fastapi import APIRouter, HTTPException, Query, status
+from pydantic import EmailStr
 
 from app.core.api.pagination import parse_uuid_page_token
 from app.core.api.dependencies import CurrentUser
@@ -87,12 +88,12 @@ async def lookup_member_by_email(
     pod_id: UUID,
     pod_member_service: PodMemberServiceDep,
     user: CurrentUser,
-    email: str = Query(..., min_length=3),
+    email: EmailStr = Query(...),
 ) -> PodMemberDetailResponse:
     """Resolve pod member details by email."""
     member = await pod_member_service.get_pod_member_by_user_email(
         pod_id,
-        email,
+        str(email),
         user.id,
     )
     return PodMemberDetailResponse.model_validate(member)

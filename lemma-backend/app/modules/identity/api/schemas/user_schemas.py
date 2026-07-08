@@ -1,6 +1,8 @@
 from datetime import date, datetime
 from uuid import UUID
 
+from pydantic import EmailStr
+
 from app.core.api.schemas import BaseSchema
 
 
@@ -20,7 +22,7 @@ class UserResponse(BaseSchema):
     """User response schema."""
 
     id: UUID
-    email: str
+    email: EmailStr
     is_verified: bool
     is_active: bool
     is_superuser: bool

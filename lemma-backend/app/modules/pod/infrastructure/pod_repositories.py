@@ -3,7 +3,7 @@ from __future__ import annotations
 from typing import Optional, Sequence, Tuple
 from uuid import UUID
 
-from sqlalchemy import delete, select, update
+from sqlalchemy import delete, func, select, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import joinedload
 
@@ -11,6 +11,7 @@ from app.core.domain.message_bus import MessageBus
 from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
 from app.core.authorization.models import RoleAssignmentModel, RoleModel
 from app.composition.pod_identity_wiring import OrganizationMember, User
+from app.modules.identity.contracts import normalize_identity_email
 from app.modules.pod.domain.ports import (
     PodJoinRequestRepositoryPort,
     PodMemberRepositoryPort,
@@ -347,6 +348,7 @@ class PodMemberRepository(PodMemberRepositoryPort):
     async def get_by_pod_and_user_email(
         self, pod_id: UUID, email: str
     ) -> Optional[PodMemberEntity]:
+        normalized = normalize_identity_email(email)
         stmt = (
             select(PodMember)
             .join(OrganizationMember, PodMember.organization_member_id == OrganizationMember.id)
@@ -354,7 +356,7 @@ class PodMemberRepository(PodMemberRepositoryPort):
             .options(*self._member_options())
             .where(
                 PodMember.pod_id == pod_id,
-                User.email == email.strip().lower(),
+                func.lower(User.email) == normalized,
                 User.is_deleted.is_(False),
             )
         )

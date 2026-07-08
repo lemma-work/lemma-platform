@@ -4,7 +4,8 @@ from datetime import datetime, timezone
 from typing import Optional, Sequence, Tuple
 from uuid import UUID
 
-from app.core.helpers.slug import slugify
+from app.core.helpers.slug import slugify, validate_slug
+from app.modules.identity.domain.email import normalize_identity_email
 from app.modules.identity.domain.errors import (
     IdentityAccessDeniedError,
     IdentityValidationError,
@@ -167,6 +168,13 @@ class OrganizationService:
 
         if not entity.slug:
             entity.slug = slugify(entity.name)
+        else:
+            try:
+                entity.slug = validate_slug(entity.slug)
+            except ValueError as exc:
+                raise IdentityValidationError(str(exc)) from exc
+        if not entity.slug:
+            raise IdentityValidationError("Organization slug is required")
 
         existing_slug = await self.organization_repository.get_by_slug(entity.slug)
         if existing_slug:
@@ -360,6 +368,7 @@ class OrganizationService:
         entity: OrganizationInvitationEntity,
         inviter_user_id: UUID,
     ) -> OrganizationInvitationEntity:
+        entity.email = normalize_identity_email(entity.email)
         organization = await self.organization_repository.get(entity.organization_id)
         if not organization:
             raise OrganizationNotFoundError()
@@ -387,9 +396,13 @@ class OrganizationService:
             )
         )
         if existing_invitation:
-            raise OrganizationConflictError(
-                "An invitation already exists for this email"
+            existing_invitation = await self._mark_invitation_expired_if_needed(
+                existing_invitation
             )
+            if existing_invitation.status == OrganizationInvitationStatus.PENDING:
+                raise OrganizationConflictError(
+                    "An invitation already exists for this email"
+                )
 
         pod_name: str | None = None
         pod_description: str | None = None
@@ -467,7 +480,7 @@ class OrganizationService:
             raise UserNotFoundError()
 
         invitations, next_cursor = await self.organization_repository.list_user_invitations(
-            user_email=str(user.email),
+            user_email=normalize_identity_email(user.email),
             status=status,
             limit=limit,
             cursor=cursor,
