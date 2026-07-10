@@ -6,41 +6,33 @@ from collections.abc import Iterable, Mapping
 from datetime import datetime, timedelta, timezone
 from uuid import UUID
 
-from app.core.log.log import get_logger
 from app.modules.usage.contracts import AgentRunUsage, ModelPricing
 from app.modules.usage.domain.entities import (
-    SystemModelBudget,
     UsageLimitCounterScope,
     UsageRecord,
     UsageReservation,
 )
 from app.modules.usage.domain.ports import UsageLimitPort, UsageLimitValues
-from app.modules.usage.domain.errors import (
-    UsageConfigurationError,
-    UsageLimitExceededError,
-)
+from app.modules.usage.domain.errors import UsageLimitExceededError
 from app.modules.usage.domain.events import (
     ModelUsageEvent,
     UsageLimitDeniedEvent,
-    UsageQuoteExceededEvent,
 )
 from app.modules.usage.infrastructure.repositories import UsageRepository
 from app.modules.usage.services.usage_context import UsageExecutionContext
 from app.modules.usage.services.pricing import UsagePricing
 
-logger = get_logger(__name__)
-
-
 class UsageService(UsagePricing):
     """Service for profile-aware usage recording and system-profile limits."""
+
+    DEFAULT_RESERVATION_USD = 0.01
 
     # Per-model rates (USD per 1M tokens). Keyed by both the public model name
     # and the provider model id so resolution succeeds on either. Starts empty;
     # provider-specific cloud modules register their pricing at startup via
-    # ``register_model_pricing()``. The fallback below prevents unpriced models
-    # from escaping metering entirely.
+    # ``register_model_pricing()``. Unpriced models are still metered, with a
+    # null cost, and never fail solely because price metadata is absent.
     _SYSTEM_MODEL_PRICING: dict[str, ModelPricing] = {}
-    _SYSTEM_MODEL_BUDGETS: dict[str, SystemModelBudget] = {}
     _ENV_METADATA_SOURCE: str | None = None
 
     @classmethod
@@ -53,42 +45,14 @@ class UsageService(UsagePricing):
         """
         cls._SYSTEM_MODEL_PRICING.update(pricing)
 
-    @classmethod
-    def register_model_budgets(
-        cls,
-        budgets: Mapping[str, SystemModelBudget],
-    ) -> None:
-        """Register enforceable worst-case budgets for system model aliases."""
-        cls._SYSTEM_MODEL_BUDGETS.update(budgets)
-
-    @classmethod
-    def register_system_model_metadata(
-        cls,
-        *,
-        pricing: Mapping[str, ModelPricing],
-        budgets: Mapping[str, SystemModelBudget],
-    ) -> None:
-        cls._SYSTEM_MODEL_PRICING.update(pricing)
-        cls._SYSTEM_MODEL_BUDGETS.update(budgets)
-
-    # Used when a system model has no explicit pricing entry, so that usage is
-    # still recorded (and counts toward limits) instead of being silently
-    # dropped. Deliberately the most expensive rates in the table with no cache
-    # discount, so an unpriced model over-counts rather than runs free. The
-    # startup + unit invariant keeps the shipped catalog fully priced, so this
-    # should never be hit in practice.
-    _FALLBACK_PRICING = ModelPricing(1.74, 4.40, cached_input_per_million_usd=1.74)
-
     def __init__(
         self,
         *,
         usage_repository: UsageRepository,
         usage_limit_port: UsageLimitPort | None = None,
-        default_limit_values: UsageLimitValues | None = None,
     ):
         self.usage_repository = usage_repository
         self.usage_limit_port = usage_limit_port
-        self.default_limit_values = default_limit_values or UsageLimitValues()
 
     async def reserve_for_profile(
         self,
@@ -98,8 +62,6 @@ class UsageService(UsagePricing):
         profile_id: str,
         profile_scope: str,
         model_name: str,
-        provider_model_name: str | None = None,
-        budget: SystemModelBudget | None = None,
         now: datetime | None = None,
     ) -> UsageReservation | None:
         if not self._is_system_scope(profile_scope):
@@ -110,19 +72,8 @@ class UsageService(UsagePricing):
         )
         if not self._has_applicable_limit(limit_values, organization_id):
             return None
-        self._load_environment_metadata()
-        if await self.usage_repository.is_profile_admission_blocked(profile_id):
-            raise UsageConfigurationError(code="USAGE_PROFILE_ADMISSION_BLOCKED")
-        pricing = self._resolve_registered_pricing(model_name, provider_model_name)
-        maximum_budget = self._resolve_registered_budget(
-            model_name,
-            provider_model_name,
-        )
-        selected_budget = budget or maximum_budget
-        if not selected_budget.is_within(maximum_budget):
-            raise UsageConfigurationError(code="USAGE_BUDGET_EXCEEDS_MODEL_MAXIMUM")
         now = now or datetime.now(timezone.utc)
-        amount = self._quote_budget(pricing, selected_budget)
+        amount = self.DEFAULT_RESERVATION_USD
         limits = await self.get_usage_limits(
             organization_id=organization_id,
             user_id=user_id,
@@ -188,12 +139,6 @@ class UsageService(UsagePricing):
             user_id=user_id,
             amount_usd=amount,
             counter_ids=counter_ids,
-            profile_id=profile_id,
-            model_name=model_name,
-            max_input_tokens=selected_budget.max_input_tokens,
-            max_output_tokens=selected_budget.max_output_tokens,
-            max_requests=selected_budget.max_requests,
-            max_billable_units=selected_budget.max_billable_units,
         )
 
     async def release_reservation(self, reservation: UsageReservation | None) -> None:
@@ -228,7 +173,8 @@ class UsageService(UsagePricing):
         cache_read_tokens = self._coerce_token_count(
             (usage_data.metadata or {}).get("cache_read_tokens")
         )
-        cost_usd, pricing_fallback = self._calculate_system_cost(
+        self._load_environment_metadata()
+        cost_usd, pricing_missing = self._calculate_system_cost(
             profile_scope=profile_scope,
             model_name=model_name,
             provider_model_name=provider_model_name,
@@ -240,8 +186,8 @@ class UsageService(UsagePricing):
         metadata = dict(usage_data.metadata or {})
         if provider_model_name:
             metadata["provider_model_name"] = provider_model_name
-        if pricing_fallback:
-            metadata["pricing_fallback"] = True
+        if pricing_missing:
+            metadata["pricing_missing"] = True
         record = UsageRecord(
             organization_id=ctx.organization_id,
             pod_id=ctx.pod_id,
@@ -266,17 +212,6 @@ class UsageService(UsagePricing):
         saved = await self.usage_repository.create(record)
         if reservation is not None:
             actual_cost = cost_usd or 0.0
-            if actual_cost > reservation.amount_usd:
-                await self.usage_repository.block_profile_admission(
-                    profile_id=reservation.profile_id,
-                    model_name=reservation.model_name,
-                    quoted_usd=reservation.amount_usd,
-                    actual_usd=actual_cost,
-                )
-                self._collect_quote_exceeded_event(
-                    reservation=reservation,
-                    actual_usd=actual_cost,
-                )
             await self.usage_repository.consume_reservation(
                 counter_ids=reservation.counter_ids,
                 reserved_usd=reservation.amount_usd,
@@ -551,11 +486,10 @@ class UsageService(UsagePricing):
         organization_id: UUID | None,
         user_id: UUID,
     ) -> UsageLimitValues:
-        # No external plan provider (e.g. no billing installed) uses the
-        # module's environment-backed defaults. They are unlimited unless a
-        # deployment explicitly opts into one or more monetary limits.
+        # OSS metering is unlimited. A separately composed billing/plan module
+        # opts into admission by implementing the usage-owned limit port.
         if self.usage_limit_port is None:
-            return self.default_limit_values
+            return UsageLimitValues()
         resolved = await self.usage_limit_port.resolve_limits(
             organization_id=organization_id,
             user_id=user_id,
@@ -688,27 +622,6 @@ class UsageService(UsagePricing):
             ]
         )
 
-    def _collect_quote_exceeded_event(
-        self,
-        *,
-        reservation: UsageReservation,
-        actual_usd: float,
-    ) -> None:
-        self.usage_repository.uow.collect_events(
-            [
-                UsageQuoteExceededEvent(
-                    organization_id=reservation.organization_id,
-                    user_id=reservation.user_id,
-                    profile_id=reservation.profile_id,
-                    model_name=reservation.model_name,
-                    quoted_usd=reservation.amount_usd,
-                    actual_usd=actual_usd,
-                )
-            ]
-        )
-
-
-
 def assert_system_pricing_covers_catalog(
     model_names: Iterable[tuple[str, str | None]],
     *,
@@ -718,30 +631,10 @@ def assert_system_pricing_covers_catalog(
 
     A model is "covered" when either its public name or its provider id is present
     in the pricing table, mirroring ``UsageService._resolve_pricing``'s
-    OR-resolution. Used by the startup check and the unit invariant to guarantee
-    no system model can slip through metering unpriced — the class of bug that let
-    glm-5.2 escape usage tracking and run free past plan limits.
+    OR-resolution. Missing prices never prevent metering; callers may use this
+    helper to report catalog pricing completeness.
     """
     table = pricing if pricing is not None else UsageService._SYSTEM_MODEL_PRICING
-    uncovered: list[str] = []
-    for public_name, provider_name in model_names:
-        candidates = [
-            candidate.strip()
-            for candidate in (public_name, provider_name)
-            if candidate and candidate.strip()
-        ]
-        if not any(candidate in table for candidate in candidates):
-            uncovered.append(public_name or provider_name or "<unknown>")
-    return uncovered
-
-
-def assert_system_budgets_cover_catalog(
-    model_names: Iterable[tuple[str, str | None]],
-    *,
-    budgets: Mapping[str, SystemModelBudget] | None = None,
-) -> list[str]:
-    """Return configured system models without enforceable budget metadata."""
-    table = budgets if budgets is not None else UsageService._SYSTEM_MODEL_BUDGETS
     uncovered: list[str] = []
     for public_name, provider_name in model_names:
         candidates = [

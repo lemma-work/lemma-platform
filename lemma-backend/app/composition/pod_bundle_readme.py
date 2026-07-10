@@ -10,7 +10,6 @@ from app.modules.agent.services.runtime_profile_service import (
 from app.modules.usage.services.pydantic_ai_tracking import (
     record_pydantic_ai_result_usage,
     reserve_usage_for_runtime,
-    usage_limits_for_reservation,
 )
 from app.modules.usage.services.usage_context import UsageExecutionContext
 
@@ -21,5 +20,4 @@ __all__ = [
     "record_pydantic_ai_result_usage",
     "require_pydantic_ai_model_from_runtime_profile",
     "reserve_usage_for_runtime",
-    "usage_limits_for_reservation",
 ]

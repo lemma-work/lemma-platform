@@ -4,9 +4,8 @@ from typing import NamedTuple
 
 from pydantic import BaseModel
 
-from app.modules.usage.domain.entities import SystemModelBudget, UsageReservation
+from app.modules.usage.domain.entities import UsageReservation
 from app.modules.usage.domain.errors import (
-    UsageConfigurationError,
     UsageContextMissingError,
     UsageLimitExceededError,
 )
@@ -35,8 +34,6 @@ class AgentRunUsage(BaseModel):
 __all__ = [
     "AgentRunUsage",
     "ModelPricing",
-    "SystemModelBudget",
-    "UsageConfigurationError",
     "UsageContextMissingError",
     "UsageLimitExceededError",
     "UsageReservation",

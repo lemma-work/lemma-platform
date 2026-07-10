@@ -196,26 +196,6 @@ def _repair_usage_counter_uniqueness() -> None:
     )
 
 
-def _add_usage_admission_blocks() -> None:
-    op.create_table(
-        "usage_model_admission_blocks",
-        sa.Column("profile_id", sa.String(length=120), nullable=False),
-        sa.Column("model_name", sa.String(length=160), nullable=False),
-        sa.Column("reason_code", sa.String(length=100), nullable=False),
-        sa.Column("quoted_usd", sa.Float(), nullable=False),
-        sa.Column("actual_usd", sa.Float(), nullable=False),
-        sa.Column("detail", sa.Text(), nullable=True),
-        sa.Column("id", sa.Uuid(), nullable=False),
-        sa.Column("created_at", sa.DateTime(timezone=True), nullable=False),
-        sa.Column("updated_at", sa.DateTime(timezone=True), nullable=False),
-        sa.PrimaryKeyConstraint("id"),
-        sa.UniqueConstraint(
-            "profile_id",
-            name="uq_usage_admission_block_profile",
-        ),
-    )
-
-
 def _add_schedule_run_ledger() -> None:
     op.add_column(
         "schedules",
@@ -358,7 +338,6 @@ def _add_agent_invocation_origin() -> None:
 def upgrade() -> None:
     _add_event_delivery_tables()
     _repair_usage_counter_uniqueness()
-    _add_usage_admission_blocks()
     _add_schedule_run_ledger()
     _add_agent_invocation_origin()
     _add_pod_bundle_jobs()
@@ -377,8 +356,6 @@ def downgrade() -> None:
     )
     op.drop_column("agent_conversations", "origin_id")
     op.drop_column("agent_conversations", "origin_type")
-
-    op.drop_table("usage_model_admission_blocks")
 
     op.drop_index("uq_usage_limit_counter_window", table_name="usage_limit_counters")
     op.create_index(

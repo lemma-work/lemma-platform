@@ -1,10 +1,9 @@
 """DB-free unit tests for system-model pricing and cost.
 
-These pin the fixes for the metering-breakaway bug: cached input is billed at
-the discounted rate and the fail-safe path records usage at a fallback price
-instead of raising and dropping the record. Provider-specific pricing (e.g.
-Fireworks) is registered at startup by cloud modules; the tests below use a
-local fixture to simulate that.
+These pin optional pricing semantics: cached input is billed at the discounted
+rate when pricing is registered, while an unpriced model still creates a usage
+record with a null cost. Provider-specific pricing is registered by composed
+deployments; the tests below use a local fixture.
 """
 
 from __future__ import annotations
@@ -16,11 +15,9 @@ import pytest
 
 from app.modules.agent.domain.value_objects import AgentRunUsage
 from app.modules.test_support.fakes import FakeUnitOfWork
-from app.modules.usage.config import UsageSettings
 from app.modules.usage.domain.ports import UsageLimitValues
 from app.modules.usage.services.usage_context import UsageExecutionContext
-from app.modules.usage.domain.entities import SystemModelBudget, UsageReservation
-from app.modules.usage.domain.errors import UsageConfigurationError
+from app.modules.usage.domain.entities import UsageReservation
 from app.modules.usage.services.usage_service import (
     ModelPricing,
     UsageService,
@@ -44,23 +41,13 @@ _TEST_PRICING: dict[str, ModelPricing] = {
         0.95, 4.00, cached_input_per_million_usd=0.16
     ),
 }
-_TEST_BUDGET = SystemModelBudget(
-    max_input_tokens=200_000,
-    max_output_tokens=32_000,
-    max_requests=200,
-)
-_TEST_BUDGETS = {key: _TEST_BUDGET for key in _TEST_PRICING}
-
-
 @pytest.fixture(autouse=True)
 def _pricing_setup():
     """Register test pricing and clean up after each test."""
     UsageService.register_model_pricing(_TEST_PRICING)
-    UsageService.register_model_budgets(_TEST_BUDGETS)
     yield
     for key in _TEST_PRICING:
         UsageService._SYSTEM_MODEL_PRICING.pop(key, None)
-        UsageService._SYSTEM_MODEL_BUDGETS.pop(key, None)
 
 
 class _RecordingUsageRepository:
@@ -71,7 +58,6 @@ class _RecordingUsageRepository:
         self.created: list = []
         self.released: list = []
         self.consumed: list = []
-        self.blocked: list = []
 
     async def create(self, record):
         self.created.append(record)
@@ -83,21 +69,22 @@ class _RecordingUsageRepository:
     async def consume_reservation(self, **kwargs):
         self.consumed.append(kwargs)
 
-    async def block_profile_admission(self, **kwargs):
-        self.blocked.append(kwargs)
-
-
 def _service() -> UsageService:
     return UsageService(
         usage_repository=_RecordingUsageRepository(), usage_limit_port=None
     )
 
 
+class _LimitPort:
+    async def resolve_limits(self, *, organization_id, user_id):
+        del organization_id, user_id
+        return UsageLimitValues(user_weekly_limit_usd=10.0)
+
+
 def _limited_service(repo) -> UsageService:
     return UsageService(
         usage_repository=repo,
-        usage_limit_port=None,
-        default_limit_values=UsageLimitValues(user_weekly_limit_usd=10.0),
+        usage_limit_port=_LimitPort(),
     )
 
 
@@ -153,9 +140,8 @@ def test_register_model_pricing_hook_works():
     UsageService._SYSTEM_MODEL_PRICING.pop("test-model")
 
 
-async def test_reservation_quotes_registered_worst_case_budget():
+async def test_injected_limit_uses_legacy_default_reservation_amount():
     repo = AsyncMock()
-    repo.is_profile_admission_blocked.return_value = False
     repo.get_system_cost.return_value = 0.0
     repo.get_reserved_cost.return_value = 0.0
     repo.reserve_limit_scopes.return_value = []
@@ -170,29 +156,7 @@ async def test_reservation_quotes_registered_worst_case_budget():
     )
 
     assert reservation is not None
-    expected = round(200_000 / 1_000_000 * 1.40 + 32_000 / 1_000_000 * 4.40, 8)
-    assert reservation.amount_usd == expected
-    assert reservation.max_requests == 200
-    repo.reserve_limit_scopes.assert_awaited_once()
-
-
-async def test_admission_rejects_missing_budget_without_weak_fallback():
-    UsageService._SYSTEM_MODEL_BUDGETS.pop("glm-5.2")
-    repo = AsyncMock()
-    repo.is_profile_admission_blocked.return_value = False
-    service = _limited_service(repo)
-
-    with pytest.raises(UsageConfigurationError) as exc_info:
-        await service.reserve_for_profile(
-            organization_id=None,
-            user_id=uuid4(),
-            profile_id="system:lemma",
-            profile_scope=SYSTEM,
-            model_name="glm-5.2",
-        )
-
-    assert exc_info.value.code == "USAGE_MODEL_BUDGET_MISSING"
-    repo.reserve_limit_scopes.assert_not_awaited()
+    assert reservation.amount_usd == UsageService.DEFAULT_RESERVATION_USD
 
 
 async def test_unlimited_default_skips_admission_for_unpriced_custom_model():
@@ -205,43 +169,29 @@ async def test_unlimited_default_skips_admission_for_unpriced_custom_model():
         profile_id="system:local",
         profile_scope=SYSTEM,
         model_name="accounts/fireworks/models/minimax-m3",
-        provider_model_name="accounts/fireworks/models/minimax-m3",
     )
 
     assert reservation is None
-    repo.is_profile_admission_blocked.assert_not_awaited()
     repo.reserve_limit_scopes.assert_not_awaited()
 
 
-async def test_configured_limit_still_rejects_unpriced_custom_model():
+async def test_injected_limit_does_not_reject_unpriced_custom_model():
     repo = AsyncMock()
-    repo.is_profile_admission_blocked.return_value = False
+    repo.get_system_cost.return_value = 0.0
+    repo.get_reserved_cost.return_value = 0.0
+    repo.reserve_limit_scopes.return_value = []
     service = _limited_service(repo)
 
-    with pytest.raises(UsageConfigurationError) as exc_info:
-        await service.reserve_for_profile(
-            organization_id=uuid4(),
-            user_id=uuid4(),
-            profile_id="system:limited",
-            profile_scope=SYSTEM,
-            model_name="accounts/fireworks/models/minimax-m3",
-        )
+    reservation = await service.reserve_for_profile(
+        organization_id=uuid4(),
+        user_id=uuid4(),
+        profile_id="system:limited",
+        profile_scope=SYSTEM,
+        model_name="accounts/fireworks/models/minimax-m3",
+    )
 
-    assert exc_info.value.code == "USAGE_MODEL_PRICING_MISSING"
-    repo.reserve_limit_scopes.assert_not_awaited()
-
-
-def test_usage_settings_are_unlimited_by_default_and_env_configurable():
-    defaults = UsageSettings(_env_file=None).default_limit_values()
-    assert defaults == UsageLimitValues()
-
-    configured = UsageSettings(
-        _env_file=None,
-        usage_default_org_monthly_cost_limit_usd=50,
-        usage_default_user_weekly_cost_limit_usd=10,
-    ).default_limit_values()
-    assert configured.org_monthly_limit_usd == 50
-    assert configured.user_weekly_limit_usd == 10
+    assert reservation is not None
+    assert reservation.amount_usd == UsageService.DEFAULT_RESERVATION_USD
 
 
 def test_glm_cost_uses_glm_pricing():
@@ -339,13 +289,13 @@ def test_non_system_scope_has_no_cost():
     assert fallback is False
 
 
-def test_unpriced_model_uses_fallback_and_does_not_raise():
+def test_unpriced_model_has_no_synthetic_cost_and_does_not_raise():
     service = _service()
-    pricing, fallback = service._resolve_pricing("totally-unknown-model", None)
-    assert fallback is True
-    assert pricing is UsageService._FALLBACK_PRICING
+    pricing, missing = service._resolve_pricing("totally-unknown-model", None)
+    assert missing is True
+    assert pricing is None
 
-    cost, cost_fallback = service._calculate_system_cost(
+    cost, cost_missing = service._calculate_system_cost(
         profile_scope=SYSTEM,
         model_name="totally-unknown-model",
         provider_model_name=None,
@@ -353,11 +303,11 @@ def test_unpriced_model_uses_fallback_and_does_not_raise():
         output_tokens=0,
         units=0.0,
     )
-    assert cost_fallback is True
-    assert cost > 0
+    assert cost_missing is True
+    assert cost is None
 
 
-async def test_record_persists_with_fallback_pricing():
+async def test_record_persists_without_cost_when_pricing_is_missing():
     repo = _RecordingUsageRepository()
     service = UsageService(usage_repository=repo, usage_limit_port=None)
 
@@ -371,8 +321,8 @@ async def test_record_persists_with_fallback_pricing():
 
     assert record is not None
     assert len(repo.created) == 1
-    assert record.cost_usd is not None and record.cost_usd > 0
-    assert record.metadata.get("pricing_fallback") is True
+    assert record.cost_usd is None
+    assert record.metadata.get("pricing_missing") is True
 
 
 async def test_record_priced_model_has_no_fallback_flag():
@@ -395,10 +345,10 @@ async def test_record_priced_model_has_no_fallback_flag():
     assert record.cost_usd == pytest.approx(
         1500 / 1_000_000 * 1.40 + 500 / 1_000_000 * 0.26 + 1000 / 1_000_000 * 4.40
     )
-    assert "pricing_fallback" not in record.metadata
+    assert "pricing_missing" not in record.metadata
 
 
-async def test_provider_cost_above_quote_blocks_profile_and_emits_anomaly():
+async def test_actual_cost_consumes_reservation_without_admission_block():
     repo = _RecordingUsageRepository()
     service = UsageService(usage_repository=repo, usage_limit_port=None)
     reservation = UsageReservation(
@@ -406,12 +356,6 @@ async def test_provider_cost_above_quote_blocks_profile_and_emits_anomaly():
         user_id=uuid4(),
         amount_usd=0.000001,
         counter_ids=[],
-        profile_id="system:lemma",
-        model_name="glm-5.2",
-        max_input_tokens=1,
-        max_output_tokens=0,
-        max_requests=1,
-        max_billable_units=0,
     )
 
     await service.record_agent_run_usage(
@@ -422,10 +366,4 @@ async def test_provider_cost_above_quote_blocks_profile_and_emits_anomaly():
         reservation=reservation,
     )
 
-    assert len(repo.blocked) == 1
-    assert repo.blocked[0]["profile_id"] == "system:lemma"
     assert repo.consumed[0]["actual_usd"] > reservation.amount_usd
-    assert any(
-        event.event_type == "usage.quote.exceeded"
-        for event in repo.uow.collected_events
-    )

@@ -34,6 +34,7 @@ class ModelUsageEvent(DomainEvent):
     cost_usd: float | None = None
     status: str | None = None
     metadata: dict[str, object] | None = None
+
     @classmethod
     def stream_name(cls) -> str:
         return USAGE_EVENTS_STREAM
@@ -48,22 +49,6 @@ class UsageLimitDeniedEvent(DomainEvent):
     profile_id: str
     model_name: str
     reason: str
-
-    @classmethod
-    def stream_name(cls) -> str:
-        return USAGE_EVENTS_STREAM
-
-
-class UsageQuoteExceededEvent(DomainEvent):
-    """Provider accounting exceeded the limits enforced for an admission."""
-
-    event_type: str = "usage.quote.exceeded"
-    organization_id: UUID | None = None
-    user_id: UUID
-    profile_id: str
-    model_name: str
-    quoted_usd: float
-    actual_usd: float
 
     @classmethod
     def stream_name(cls) -> str:

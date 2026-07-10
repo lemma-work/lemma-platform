@@ -7,8 +7,6 @@ import os
 
 from app.core.log.log import get_logger
 from app.modules.usage.contracts import ModelPricing
-from app.modules.usage.domain.entities import SystemModelBudget
-from app.modules.usage.domain.errors import UsageConfigurationError
 
 logger = get_logger(__name__)
 
@@ -17,9 +15,7 @@ class UsagePricing:
     """Pricing responsibility mixed into :class:`UsageService`."""
 
     _SYSTEM_MODEL_PRICING: dict[str, ModelPricing]
-    _SYSTEM_MODEL_BUDGETS: dict[str, SystemModelBudget]
     _ENV_METADATA_SOURCE: str | None
-    _FALLBACK_PRICING: ModelPricing
 
     @classmethod
     def _load_environment_metadata(cls) -> None:
@@ -31,7 +27,6 @@ class UsagePricing:
             if not isinstance(payload, dict):
                 raise TypeError("metadata must be a JSON object")
             pricing: dict[str, ModelPricing] = {}
-            budgets: dict[str, SystemModelBudget] = {}
             for model_name, values in payload.items():
                 if not isinstance(model_name, str) or not isinstance(values, dict):
                     raise TypeError("model metadata entries must be objects")
@@ -45,14 +40,6 @@ class UsagePricing:
                         else None
                     ),
                 )
-                budgets[model_name] = SystemModelBudget(
-                    max_input_tokens=int(values["max_input_tokens"]),
-                    max_output_tokens=int(values["max_output_tokens"]),
-                    max_requests=int(values["max_requests"]),
-                    max_billable_units=float(
-                        values.get("max_billable_units", 0.0)
-                    ),
-                )
         except (KeyError, TypeError, ValueError, json.JSONDecodeError) as exc:
             logger.error(
                 "Invalid system model usage metadata configuration",
@@ -61,7 +48,6 @@ class UsagePricing:
             cls._ENV_METADATA_SOURCE = raw
             return
         cls._SYSTEM_MODEL_PRICING.update(pricing)
-        cls._SYSTEM_MODEL_BUDGETS.update(budgets)
         cls._ENV_METADATA_SOURCE = raw
 
     def _calculate_system_cost(
@@ -77,9 +63,9 @@ class UsagePricing:
     ) -> tuple[float | None, bool]:
         if not self._is_system_scope(profile_scope):
             return None, False
-        pricing, pricing_fallback = self._resolve_pricing(
-            model_name, provider_model_name
-        )
+        pricing, pricing_missing = self._resolve_pricing(model_name, provider_model_name)
+        if pricing is None:
+            return None, True
         total_input = max(0, input_tokens)
         cache_read = min(max(0, cache_read_tokens), total_input)
         non_cached = total_input - cache_read
@@ -96,49 +82,20 @@ class UsagePricing:
             max(0, output_tokens) / 1_000_000
         ) * pricing.output_per_million_usd
         unit_cost = max(0.0, units) * pricing.unit_usd
-        return round(input_cost + output_cost + unit_cost, 8), pricing_fallback
+        return round(input_cost + output_cost + unit_cost, 8), pricing_missing
 
     def _resolve_pricing(
         self, model_name: str, provider_model_name: str | None
-    ) -> tuple[ModelPricing, bool]:
+    ) -> tuple[ModelPricing | None, bool]:
         for candidate in (model_name, provider_model_name):
             if candidate and candidate.strip() in self._SYSTEM_MODEL_PRICING:
                 return self._SYSTEM_MODEL_PRICING[candidate.strip()], False
-        logger.warning(
-            "Missing usage pricing for system model "
-            f"{model_name!r} (provider={provider_model_name!r}); "
-            "recording with conservative fallback"
+        logger.debug(
+            "Usage pricing is not registered; recording without cost",
+            model_name=model_name,
+            provider_model_name=provider_model_name,
         )
-        return self._FALLBACK_PRICING, True
-
-    def _resolve_registered_pricing(
-        self, model_name: str, provider_model_name: str | None
-    ) -> ModelPricing:
-        pricing, fallback = self._resolve_pricing(model_name, provider_model_name)
-        if fallback:
-            raise UsageConfigurationError(code="USAGE_MODEL_PRICING_MISSING")
-        return pricing
-
-    def _resolve_registered_budget(
-        self, model_name: str, provider_model_name: str | None
-    ) -> SystemModelBudget:
-        for candidate in (model_name, provider_model_name):
-            if candidate and candidate.strip() in self._SYSTEM_MODEL_BUDGETS:
-                return self._SYSTEM_MODEL_BUDGETS[candidate.strip()]
-        raise UsageConfigurationError(code="USAGE_MODEL_BUDGET_MISSING")
-
-    @staticmethod
-    def _quote_budget(pricing: ModelPricing, budget: SystemModelBudget) -> float:
-        return round(
-            budget.max_input_tokens
-            / 1_000_000
-            * pricing.input_per_million_usd
-            + budget.max_output_tokens
-            / 1_000_000
-            * pricing.output_per_million_usd
-            + budget.max_billable_units * pricing.unit_usd,
-            8,
-        )
+        return None, True
 
     @staticmethod
     def _coerce_token_count(value: object) -> int:

@@ -17,7 +17,7 @@ from __future__ import annotations
 
 from uuid import UUID
 
-from pydantic_ai import Agent as PydanticAIAgent
+from pydantic_ai import Agent as PydanticAIAgent, UsageLimits
 
 from app.modules.agent.config import agent_settings
 from app.core.infrastructure.db.uow_factory import UnitOfWorkFactory
@@ -42,13 +42,19 @@ from app.modules.agent.services.runtime_profile_service import (
 from app.composition.agent_usage import (
     record_pydantic_ai_result_usage,
     reserve_usage_for_runtime,
-    usage_limits_for_reservation,
 )
-from app.composition.agent_usage import SystemModelBudget, UsageExecutionContext
+from app.composition.agent_usage import UsageExecutionContext
 
 logger = get_logger(__name__)
 
 _MAX_TITLE_LEN = 80
+_TITLE_USAGE_LIMITS = UsageLimits(
+    request_limit=1,
+    input_tokens_limit=12_000,
+    output_tokens_limit=256,
+    total_tokens_limit=12_256,
+    count_tokens_before_request=True,
+)
 
 _TITLE_SYSTEM_PROMPT = (
     "You generate a concise title for a chat conversation. "
@@ -161,20 +167,13 @@ class ConversationTitleService:
             organization_id=organization_id,
             user_id=user_id,
             runtime_profile=runtime_profile,
-            budget=SystemModelBudget(
-                max_input_tokens=12_000,
-                max_output_tokens=256,
-                max_requests=1,
-            ),
         )
-        if reservation is None:
-            raise RuntimeError("System title model did not create a usage reservation")
         agent = PydanticAIAgent(model, system_prompt=_TITLE_SYSTEM_PROMPT)
         result = None
         try:
             result = await agent.run(
                 _build_user_prompt(user_text, reply_text),
-                usage_limits=usage_limits_for_reservation(reservation),
+                usage_limits=_TITLE_USAGE_LIMITS,
             )
             await record_pydantic_ai_result_usage(
                 ctx=usage_context,

@@ -9,7 +9,6 @@ from sqlalchemy import select
 
 from app.core.infrastructure.db.uow_factory import SessionUnitOfWorkFactory
 from app.modules.usage.domain.errors import UsageLimitExceededError
-from app.modules.usage.domain.entities import SystemModelBudget
 from app.modules.usage.domain.ports import UsageLimitValues
 from app.modules.usage.infrastructure.models import UsageLimitCounter
 from app.modules.usage.infrastructure.repositories import UsageRepository
@@ -20,19 +19,9 @@ pytestmark = pytest.mark.e2e
 
 @pytest.fixture(autouse=True)
 def _system_model_metadata():
-    UsageService.register_system_model_metadata(
-        pricing={"test-model": ModelPricing(1.0, 0.0)},
-        budgets={
-            "test-model": SystemModelBudget(
-                max_input_tokens=10_000,
-                max_output_tokens=0,
-                max_requests=1,
-            )
-        },
-    )
+    UsageService.register_model_pricing({"test-model": ModelPricing(1.0, 0.0)})
     yield
     UsageService._SYSTEM_MODEL_PRICING.pop("test-model", None)
-    UsageService._SYSTEM_MODEL_BUDGETS.pop("test-model", None)
 
 
 class _Limits:

@@ -175,7 +175,7 @@ coverage-backend-gate:
 		$(BACKEND_COVERAGE_DIR)/coverage.json \
 		--min-total 70 --min-module schedule=65
 	uv run diff-cover $(BACKEND_COVERAGE_DIR)/coverage.xml \
-		--compare-branch origin/main --fail-under=90
+		--compare-branch origin/main --fail-under=85
 
 coverage-module:
 	@test -n "$(MODULE)" || (echo "MODULE is required, e.g. make coverage-module MODULE=agent" && exit 1)

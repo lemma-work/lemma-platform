@@ -33,7 +33,6 @@ class RunUsageRecorder:
         profile_id = runtime_profile.get("profile_id")
         profile_scope = runtime_profile.get("scope")
         model_name = runtime_profile.get("model_name")
-        provider_model_name = runtime_profile.get("provider_model_name")
         if not isinstance(profile_id, str) or not isinstance(profile_scope, str):
             return None
         if not isinstance(model_name, str):
@@ -45,11 +44,6 @@ class RunUsageRecorder:
                 profile_id=profile_id,
                 profile_scope=profile_scope,
                 model_name=model_name,
-                provider_model_name=(
-                    provider_model_name
-                    if isinstance(provider_model_name, str)
-                    else None
-                ),
             )
             await uow.commit()
             return reservation

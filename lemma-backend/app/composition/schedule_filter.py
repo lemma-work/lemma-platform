@@ -5,7 +5,7 @@ from __future__ import annotations
 import json
 from typing import Any
 
-from pydantic_ai import Agent as PydanticAIAgent
+from pydantic_ai import Agent as PydanticAIAgent, UsageLimits
 from pydantic_ai.output import StructuredDict
 
 from app.modules.agent.services.runtime_model_factory import (
@@ -18,11 +18,9 @@ from app.modules.schedule.infrastructure.adapters.schedule_event_publisher impor
     DurableScheduleEventPublisher,
 )
 from app.modules.schedule.services.schedule_processor import ScheduleProcessor
-from app.modules.usage.domain.entities import SystemModelBudget
 from app.modules.usage.services.pydantic_ai_tracking import (
     record_pydantic_ai_result_usage,
     reserve_usage_for_runtime,
-    usage_limits_for_reservation,
 )
 from app.modules.usage.services.usage_context import UsageExecutionContext
 
@@ -40,6 +38,13 @@ DEFAULT_FILTER_SCHEMA: dict[str, Any] = {
     },
     "required": ["should_proceed"],
 }
+FILTER_USAGE_LIMITS = UsageLimits(
+    request_limit=1,
+    input_tokens_limit=32_000,
+    output_tokens_limit=4_000,
+    total_tokens_limit=36_000,
+    count_tokens_before_request=True,
+)
 
 
 class SystemModelScheduleFilter:
@@ -80,14 +85,7 @@ class SystemModelScheduleFilter:
             organization_id=usage_context.organization_id,
             user_id=usage_context.user_id,
             runtime_profile=runtime_profile,
-            budget=SystemModelBudget(
-                max_input_tokens=32_000,
-                max_output_tokens=4_000,
-                max_requests=1,
-            ),
         )
-        if reservation is None:
-            raise RuntimeError("Schedule filter usage admission returned no reservation")
 
         agent = PydanticAIAgent(
             model,
@@ -98,7 +96,7 @@ class SystemModelScheduleFilter:
         try:
             result = await agent.run(
                 self._user_message(event_payload),
-                usage_limits=usage_limits_for_reservation(reservation),
+                usage_limits=FILTER_USAGE_LIMITS,
             )
         finally:
             await record_pydantic_ai_result_usage(

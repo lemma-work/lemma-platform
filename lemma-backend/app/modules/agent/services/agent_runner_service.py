@@ -73,7 +73,6 @@ from app.composition.agent_usage import (
     UsageReservation,
     usage_context_from_agent_context,
     usage_execution_context,
-    usage_limits_for_reservation,
 )
 from app.modules.agent.services.workspace_location import (
     resolve_pod_cwd,
@@ -313,11 +312,7 @@ class AgentRunnerService:
                 user_id=user_id,
                 runtime_profile=runtime_profile_snapshot,
             )
-            enforced_usage_limits = (
-                usage_limits_for_reservation(usage_reservation)
-                if usage_reservation is not None
-                else self.fixed_usage_limits
-            )
+            enforced_usage_limits = self.fixed_usage_limits
             options = HarnessOptions(
                 model_name=resolved_runtime.model_name_for_harness,
                 toolsets=harness_toolsets,

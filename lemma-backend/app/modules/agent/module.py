@@ -10,7 +10,7 @@ logger = get_logger(__name__)
 
 
 @asynccontextmanager
-async def _validate_system_model_usage_metadata(
+async def _report_system_model_pricing(
     _context: object,
 ) -> AsyncIterator[None]:
     from app.modules.agent.services.runtime_profile_service import (
@@ -18,19 +18,16 @@ async def _validate_system_model_usage_metadata(
     )
     from app.composition.agent_usage import (
         UsageService,
-        assert_system_budgets_cover_catalog,
         assert_system_pricing_covers_catalog,
     )
 
     UsageService._load_environment_metadata()
     catalog = system_lemma_openai_catalog_model_names()
     unpriced = assert_system_pricing_covers_catalog(catalog)
-    unbudgeted = assert_system_budgets_cover_catalog(catalog)
-    if unpriced or unbudgeted:
-        logger.error(
-            "system:lemma models have incomplete usage admission metadata",
+    if unpriced:
+        logger.info(
+            "system:lemma models will be metered without cost until pricing is registered",
             unpriced_models=unpriced,
-            unbudgeted_models=unbudgeted,
         )
     yield
 
@@ -77,7 +74,7 @@ module = LemmaModule(
     routers=_routers,
     event_routers=_event_routers,
     api_lifespans=(
-        _validate_system_model_usage_metadata,
+        _report_system_model_pricing,
         _close_agent_runtime_redis,
     ),
     worker_lifespans=(_close_agent_runtime_redis,),

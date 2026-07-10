@@ -21,10 +21,11 @@ limits.
 | `usage_records` | Immutable run/profile/model/token/unit/cost/status attribution |
 | `usage_limit_counters` | Per organization/user time-window reserved amount used to constrain concurrency |
 
-System-scoped runtimes use registered per-model pricing. An intentionally
-conservative fallback estimates unknown models for reporting, without blocking
-an otherwise-unlimited local/OSS run. User-owned provider profiles are recorded
-but do not count as Lemma system cost.
+System-scoped runtimes use registered per-model pricing when available. An
+unknown model is still metered, but its record has `cost_usd = null` and
+`metadata.pricing_missing = true`; missing pricing never blocks the run.
+User-owned provider profiles are recorded but do not count as Lemma system
+cost.
 
 ## API groups
 
@@ -40,11 +41,11 @@ sequenceDiagram
     participant U as Usage service
     participant DB as PostgreSQL
     A->>U: reserve(profile, model)
-    alt an applicable monetary limit is configured
+    alt a composed billing/plan adapter supplies a monetary limit
         U->>DB: read used + reserved + effective limits
         U->>DB: increment window reservations
-        U-->>A: reservation ids and enforced model budget
-    else no billing adapter or environment limit
+        U-->>A: reservation ids
+    else no limit adapter
         U-->>A: no reservation (run remains allowed)
     end
     A->>U: record actual provider usage
@@ -56,15 +57,14 @@ sequenceDiagram
 
 `UsageLimitPort` lets another composed module supply plan-specific values. The
 OSS/local default is unlimited so an unregistered custom model cannot prevent
-an agent run. Deployments can opt into built-in limits with
-`USAGE_DEFAULT_ORG_MONTHLY_COST_LIMIT_USD`,
-`USAGE_DEFAULT_USER_WEEKLY_COST_LIMIT_USD`, and
-`USAGE_DEFAULT_USER_MONTHLY_COST_LIMIT_USD`, or install a `UsageLimitPort`.
-Once any applicable limit is configured, pricing and maximum-budget metadata
-are mandatory and admission fails closed if either is missing.
+an agent run. OSS does not define environment-backed plans or a fail-closed
+pricing policy; deployments that need monetary admission install a
+`UsageLimitPort` and register the prices they want reflected in usage records.
+Direct model-call token/request guardrails are independent of monetary
+admission.
 
 ## Tests and operations
 
-Tests cover pricing, unlimited defaults, opt-in reservations, fallback pricing,
-hard limits, queries, concurrency, and API authorization. Issue evidence is in
+Tests cover optional pricing, unlimited defaults, injected reservations,
+atomic counter concurrency, queries, and API authorization. Issue evidence is in
 [issues.md](issues.md).

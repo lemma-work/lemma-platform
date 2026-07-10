@@ -2,9 +2,9 @@
 
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import datetime
 from typing import Sequence
-from uuid import UUID, uuid7
+from uuid import UUID
 
 from sqlalchemy import and_, func, or_, select
 from sqlalchemy.dialects.postgresql import insert
@@ -17,7 +17,6 @@ from app.modules.usage.domain.entities import (
 )
 from app.modules.usage.domain.ports import UsageRepositoryPort
 from app.modules.usage.infrastructure.models import (
-    SystemModelAdmissionBlock,
     UsageLimitCounter,
     UsageRecord as UsageRecordModel,
 )
@@ -33,50 +32,6 @@ class UsageRepository(UsageRepositoryPort):
         self.session.add(record)
         await self.session.flush()
         return record.to_entity()
-
-    async def is_profile_admission_blocked(self, profile_id: str) -> bool:
-        return bool(
-            await self.session.scalar(
-                select(SystemModelAdmissionBlock.id).where(
-                    SystemModelAdmissionBlock.profile_id == profile_id
-                )
-            )
-        )
-
-    async def block_profile_admission(
-        self,
-        *,
-        profile_id: str,
-        model_name: str,
-        quoted_usd: float,
-        actual_usd: float,
-    ) -> None:
-        now = datetime.now(timezone.utc)
-        await self.session.execute(
-            insert(SystemModelAdmissionBlock)
-            .values(
-                id=uuid7(),
-                profile_id=profile_id,
-                model_name=model_name,
-                reason_code="PROVIDER_USAGE_EXCEEDED_QUOTE",
-                quoted_usd=quoted_usd,
-                actual_usd=actual_usd,
-                detail="Provider accounting exceeded enforced system-model limits",
-                created_at=now,
-                updated_at=now,
-            )
-            .on_conflict_do_update(
-                constraint="uq_usage_admission_block_profile",
-                set_={
-                    "model_name": model_name,
-                    "reason_code": "PROVIDER_USAGE_EXCEEDED_QUOTE",
-                    "quoted_usd": quoted_usd,
-                    "actual_usd": actual_usd,
-                    "detail": "Provider accounting exceeded enforced system-model limits",
-                    "updated_at": now,
-                },
-            )
-        )
 
     def _apply_filters(
         self,

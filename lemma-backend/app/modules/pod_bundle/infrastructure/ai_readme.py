@@ -75,7 +75,7 @@ def build_system_polish_fn(
     :func:`polish_readme` falls back to the deterministic README."""
 
     async def _polish(readme: str) -> str:
-        from pydantic_ai import Agent as PydanticAIAgent
+        from pydantic_ai import Agent as PydanticAIAgent, UsageLimits
 
         from app.core.domain.runtime import AgentRuntimeConfig
         from app.composition.pod_bundle_readme import (
@@ -88,9 +88,7 @@ def build_system_polish_fn(
         from app.composition.pod_bundle_readme import (
             record_pydantic_ai_result_usage,
             reserve_usage_for_runtime,
-            usage_limits_for_reservation,
         )
-        from app.modules.usage.contracts import SystemModelBudget
         from app.composition.pod_bundle_readme import UsageExecutionContext
 
         resolved = await AgentRuntimeProfileService().resolve(
@@ -114,20 +112,19 @@ def build_system_polish_fn(
             organization_id=organization_id,
             user_id=user_id,
             runtime_profile=runtime_profile,
-            budget=SystemModelBudget(
-                max_input_tokens=64_000,
-                max_output_tokens=8_000,
-                max_requests=1,
-            ),
         )
-        if reservation is None:
-            raise RuntimeError("System README model did not create a usage reservation")
         agent = PydanticAIAgent(model, system_prompt=_PROMPT)
         result = None
         try:
             result = await agent.run(
                 readme,
-                usage_limits=usage_limits_for_reservation(reservation),
+                usage_limits=UsageLimits(
+                    request_limit=1,
+                    input_tokens_limit=64_000,
+                    output_tokens_limit=8_000,
+                    total_tokens_limit=72_000,
+                    count_tokens_before_request=True,
+                ),
             )
             await record_pydantic_ai_result_usage(
                 ctx=usage_context,

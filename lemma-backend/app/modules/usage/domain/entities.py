@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 from datetime import datetime, timezone
-from dataclasses import dataclass
 from enum import Enum
 from uuid import UUID
 
@@ -140,44 +139,12 @@ def _as_float(value: object) -> float:
 
 
 class UsageReservation(BaseModel):
-    """A reserved amount against one or more active limit windows."""
+    """A monetary reservation created by an injected limit policy."""
 
     organization_id: UUID | None = None
     user_id: UUID
     amount_usd: float
     counter_ids: list[UUID] = Field(default_factory=list)
-    profile_id: str
-    model_name: str
-    max_input_tokens: int = Field(ge=0)
-    max_output_tokens: int = Field(ge=0)
-    max_requests: int = Field(ge=1)
-    max_billable_units: float = Field(ge=0)
-
-
-@dataclass(frozen=True, slots=True)
-class SystemModelBudget:
-    """Enforceable worst-case billable work for one system-model operation."""
-
-    max_input_tokens: int
-    max_output_tokens: int
-    max_requests: int
-    max_billable_units: float = 0.0
-
-    def __post_init__(self) -> None:
-        if self.max_input_tokens < 0 or self.max_output_tokens < 0:
-            raise ValueError("System model token budgets cannot be negative")
-        if self.max_requests < 1:
-            raise ValueError("System model request budget must be positive")
-        if self.max_billable_units < 0:
-            raise ValueError("System model billable-unit budget cannot be negative")
-
-    def is_within(self, maximum: "SystemModelBudget") -> bool:
-        return (
-            self.max_input_tokens <= maximum.max_input_tokens
-            and self.max_output_tokens <= maximum.max_output_tokens
-            and self.max_requests <= maximum.max_requests
-            and self.max_billable_units <= maximum.max_billable_units
-        )
 
 
 class UsageLimitCounterScope(BaseModel):
