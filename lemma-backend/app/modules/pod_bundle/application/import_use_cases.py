@@ -54,6 +54,23 @@ PLAN_JOB_NAME = "plan_pod_import"
 GITHUB_JOB_NAME = "import_pod_github"
 URL_JOB_NAME = "import_pod_url"
 APPLY_JOB_NAME = "apply_pod_import"
+
+
+def _require_import_variables(
+    state: ImportState,
+    variables: dict[str, str] | None,
+) -> None:
+    if state.plan is None:
+        return
+    missing = [
+        item.name
+        for item in state.plan.variables
+        if item.required and not (variables or {}).get(item.name)
+    ]
+    if missing:
+        raise BundleConfirmationRequiredError(
+            "Required variables are missing.", details={"missing": missing}
+        )
 logger = get_logger(__name__)
 
 
@@ -281,16 +298,9 @@ class ImportUseCases:
                 "confirm_destructive=true to proceed.",
                 details={"warnings": state.plan.warnings},
             )
-        missing = [
-            v.name
-            for v in state.plan.variables
-            if v.required and not (variables or {}).get(v.name)
-        ]
-        if missing:
-            raise BundleConfirmationRequiredError(
-                "Required variables are missing.", details={"missing": missing}
-            )
+        _require_import_variables(state, variables)
 
+        retrying_failed_job = state.status is ImportStatus.FAILED
         # Reset any FAILED step back to PENDING so a re-apply retries it; DONE
         # steps stay DONE (idempotent resume).
         for step in state.plan.steps:
@@ -300,7 +310,15 @@ class ImportUseCases:
         state.variables_provided = dict(variables or {})
         state.confirm_destructive = confirm_destructive
         state.status = ImportStatus.APPLYING
-        await self._state_store.save_import(state)
+        state.error = None
+        state.error_type = None
+        state.error_code = None
+        state.completed_at = None
+        if retrying_failed_job:
+            state.attempt += 1
+            await self._state_store.reopen_import(state)
+        else:
+            await self._state_store.save_import(state)
 
         job = await self._job_queue.enqueue(
             APPLY_JOB_NAME,
@@ -324,9 +342,25 @@ class ImportUseCases:
         state = await self._state_store.get_import(import_id)
         if state is None or state.pod_id != pod_id:
             raise BundleJobExpiredError()
+        if state.status not in {
+            ImportStatus.AWAITING_CONFIRMATION,
+            ImportStatus.FAILED,
+        }:
+            raise BundleJobConflictError(
+                f"Import cannot be replanned from status {state.status.value}."
+            )
+        retrying_failed_job = state.status is ImportStatus.FAILED
         state.status = ImportStatus.QUEUED
         state.plan = None
-        await self._state_store.save_import(state)
+        state.error = None
+        state.error_type = None
+        state.error_code = None
+        state.completed_at = None
+        if retrying_failed_job:
+            state.attempt += 1
+            await self._state_store.reopen_import(state)
+        else:
+            await self._state_store.save_import(state)
         job = await self._job_queue.enqueue(
             PLAN_JOB_NAME,
             context={

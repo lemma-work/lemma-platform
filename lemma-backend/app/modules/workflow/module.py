@@ -17,4 +17,13 @@ def _event_routers():
     return [router]
 
 
-module = LemmaModule(name="workflow", routers=_routers, event_routers=_event_routers)
+module = LemmaModule(
+    name="workflow",
+    routers=_routers,
+    event_routers=_event_routers,
+    stream_groups=(
+        ("function_run_events", "workflow-function-events"),
+        ("agent_events", "workflow-agent-events"),
+        ("schedule_events", "workflow-schedule-events"),
+    ),
+)

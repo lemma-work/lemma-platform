@@ -30,7 +30,7 @@ from app.modules.agent.infrastructure.mcp import (
     LEMMA_MCP_SERVER_NAME,
     exported_tool_name,
 )
-from app.modules.workspace.services.workspace_sandbox_service import (
+from app.composition.agent_workspace import (
     WorkspaceSandboxService,
 )
 from pydantic_ai.tools import RunContext

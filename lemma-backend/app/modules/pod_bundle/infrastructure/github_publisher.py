@@ -14,6 +14,7 @@ from collections.abc import Awaitable, Callable
 from typing import Protocol
 
 from app.core.log.log import get_logger
+from app.modules.connectors.contracts import OperationExecutionNotFoundError
 from app.modules.pod_bundle.domain.errors import PodBundleDomainError
 
 logger = get_logger(__name__)
@@ -37,6 +38,8 @@ class RepoCreateResult:
 
 
 class GithubOps(Protocol):
+    async def resolve_repo(self, *, name: str) -> RepoCreateResult | None: ...
+
     async def create_repo(
         self, *, name: str, private: bool, description: str | None
     ) -> RepoCreateResult: ...
@@ -44,6 +47,10 @@ class GithubOps(Protocol):
     async def put_file(
         self, *, owner: str, repo: str, path: str, content: bytes, message: str
     ) -> None: ...
+
+    async def file_matches(
+        self, *, owner: str, repo: str, path: str, content: bytes
+    ) -> bool: ...
 
 
 ProgressCallback = Callable[[str, int, int], Awaitable[None]]
@@ -60,12 +67,18 @@ class GithubPublisher:
         :meth:`publish` so a caller that needs the real GitHub **owner** before
         pushing — e.g. to render an install link into the README — can create
         first, then push with ``already_created=repo``."""
+        existing = await self._ops.resolve_repo(name=repo_name)
+        if existing is not None:
+            return existing
         try:
             return await self._ops.create_repo(
                 name=repo_name, private=private, description=description
             )
-        except Exception as exc:  # noqa: BLE001
-            raise GithubPublishError(f"Could not create GitHub repo: {exc}") from exc
+        except Exception as exc:  # provider boundary: resolve ambiguous response
+            existing = await self._ops.resolve_repo(name=repo_name)
+            if existing is not None:
+                return existing
+            raise GithubPublishError("Could not create the GitHub repository") from exc
 
     async def publish(
         self,
@@ -77,6 +90,7 @@ class GithubPublisher:
         readme: str,
         on_progress: ProgressCallback | None = None,
         already_created: RepoCreateResult | None = None,
+        completed_paths: set[str] | None = None,
     ) -> RepoCreateResult:
         """Create the repo (tolerating an existing one we already made) and push
         every file plus the README. Returns the repo location."""
@@ -88,6 +102,9 @@ class GithubPublisher:
         total = len(payload)
         done = 0
         for path, content in payload.items():
+            if path in (completed_paths or set()):
+                done += 1
+                continue
             await self._put_with_chunking(repo, path, content)
             done += 1
             if on_progress is not None:
@@ -109,6 +126,13 @@ class GithubPublisher:
             await self._put_one(repo, chunk_path, part)
 
     async def _put_one(self, repo: RepoCreateResult, path: str, content: bytes) -> None:
+        if await self._ops.file_matches(
+            owner=repo.owner,
+            repo=repo.repo,
+            path=path,
+            content=content,
+        ):
+            return
         try:
             await self._ops.put_file(
                 owner=repo.owner,
@@ -117,8 +141,15 @@ class GithubPublisher:
                 content=content,
                 message=f"Add {path}",
             )
-        except Exception as exc:  # noqa: BLE001
-            raise GithubPublishError(f"Failed to upload {path}: {exc}") from exc
+        except Exception as exc:  # provider boundary: resolve ambiguous response
+            if await self._ops.file_matches(
+                owner=repo.owner,
+                repo=repo.repo,
+                path=path,
+                content=content,
+            ):
+                return
+            raise GithubPublishError(f"Failed to upload {path}") from exc
 
 
 class ComposioGithubOps:
@@ -131,9 +162,27 @@ class ComposioGithubOps:
 
     _OP_CREATE_REPO = "GITHUB_CREATE_A_REPOSITORY_FOR_THE_AUTHENTICATED_USER"
     _OP_PUT_FILE = "GITHUB_CREATE_OR_UPDATE_FILE_CONTENTS"
+    _OP_GET_USER = "GITHUB_GET_THE_AUTHENTICATED_USER"
+    _OP_GET_REPO = "GITHUB_GET_A_REPOSITORY"
+    _OP_GET_CONTENT = "GITHUB_GET_REPOSITORY_CONTENT"
 
     def __init__(self, operation_runner: Callable[[str, dict], Awaitable[dict]]):
         self._run = operation_runner
+
+    async def resolve_repo(self, *, name: str) -> RepoCreateResult | None:
+        user_result = _unwrap(await self._run(self._OP_GET_USER, {}))
+        owner = str(user_result.get("login") or "")
+        if not owner:
+            return None
+        try:
+            result = _unwrap(
+                await self._run(self._OP_GET_REPO, {"owner": owner, "repo": name})
+            )
+        except OperationExecutionNotFoundError:
+            return None
+        if not result or result.get("id") is None:
+            return None
+        return _repo_result(result, fallback_owner=owner, fallback_repo=name)
 
     async def create_repo(
         self, *, name: str, private: bool, description: str | None
@@ -142,28 +191,54 @@ class ComposioGithubOps:
             self._OP_CREATE_REPO,
             {"name": name, "private": private, "description": description or "", "auto_init": False},
         )
-        data = _unwrap(result)
-        full = str(data.get("full_name") or "")
-        owner = full.split("/")[0] if "/" in full else str(
-            (data.get("owner") or {}).get("login") or ""
-        )
-        repo = full.split("/")[1] if "/" in full else name
-        html_url = str(data.get("html_url") or f"https://github.com/{owner}/{repo}")
-        return RepoCreateResult(owner=owner, repo=repo, html_url=html_url)
+        return _repo_result(_unwrap(result), fallback_owner="", fallback_repo=name)
 
     async def put_file(
         self, *, owner: str, repo: str, path: str, content: bytes, message: str
     ) -> None:
+        existing = await self._get_content(owner=owner, repo=repo, path=path)
+        payload = {
+            "owner": owner,
+            "repo": repo,
+            "path": path,
+            "message": message,
+            "content": base64.b64encode(content).decode("ascii"),
+        }
+        sha = existing.get("sha") if existing else None
+        if isinstance(sha, str) and sha:
+            payload["sha"] = sha
         await self._run(
             self._OP_PUT_FILE,
-            {
-                "owner": owner,
-                "repo": repo,
-                "path": path,
-                "message": message,
-                "content": base64.b64encode(content).decode("ascii"),
-            },
+            payload,
         )
+
+    async def file_matches(
+        self, *, owner: str, repo: str, path: str, content: bytes
+    ) -> bool:
+        result = await self._get_content(owner=owner, repo=repo, path=path)
+        if result is None:
+            return False
+        encoded = result.get("content")
+        if not isinstance(encoded, str):
+            return False
+        try:
+            existing = base64.b64decode(encoded.replace("\n", ""), validate=True)
+        except (ValueError, TypeError):
+            return False
+        return existing == content
+
+    async def _get_content(
+        self, *, owner: str, repo: str, path: str
+    ) -> dict | None:
+        try:
+            return _unwrap(
+                await self._run(
+                    self._OP_GET_CONTENT,
+                    {"owner": owner, "repo": repo, "path": path},
+                )
+            )
+        except OperationExecutionNotFoundError:
+            return None
 
 
 def _unwrap(result: dict) -> dict:
@@ -175,3 +250,20 @@ def _unwrap(result: dict) -> dict:
         if isinstance(inner, dict):
             return inner
     return result
+
+
+def _repo_result(
+    data: dict,
+    *,
+    fallback_owner: str,
+    fallback_repo: str,
+) -> RepoCreateResult:
+    full = str(data.get("full_name") or "")
+    owner_data = data.get("owner")
+    nested_owner = (
+        str(owner_data.get("login") or "") if isinstance(owner_data, dict) else ""
+    )
+    owner = full.split("/")[0] if "/" in full else nested_owner or fallback_owner
+    repo = full.split("/")[1] if "/" in full else fallback_repo
+    html_url = str(data.get("html_url") or f"https://github.com/{owner}/{repo}")
+    return RepoCreateResult(owner=owner, repo=repo, html_url=html_url)

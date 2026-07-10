@@ -82,13 +82,9 @@ class RunToolAssembler:
             and conversation.metadata
             and conversation.metadata.get("surface_platform")
         ):
-            from app.modules.agent_surfaces.infrastructure.adapters.platform_tool_factory import (
-                SurfacePlatformToolFactory,
-            )
+            from app.composition.agent_surface_runtime import build_surface_toolsets
 
             toolsets.extend(
-                await SurfacePlatformToolFactory(self.uow_factory).build_toolsets(
-                    conversation=conversation,
-                )
+                await build_surface_toolsets(self.uow_factory, conversation)
             )
         return toolsets

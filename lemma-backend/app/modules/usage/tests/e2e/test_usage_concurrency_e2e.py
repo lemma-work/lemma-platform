@@ -9,12 +9,30 @@ from sqlalchemy import select
 
 from app.core.infrastructure.db.uow_factory import SessionUnitOfWorkFactory
 from app.modules.usage.domain.errors import UsageLimitExceededError
+from app.modules.usage.domain.entities import SystemModelBudget
 from app.modules.usage.domain.ports import UsageLimitValues
 from app.modules.usage.infrastructure.models import UsageLimitCounter
 from app.modules.usage.infrastructure.repositories import UsageRepository
-from app.modules.usage.services.usage_service import UsageService
+from app.modules.usage.services.usage_service import ModelPricing, UsageService
 
 pytestmark = pytest.mark.e2e
+
+
+@pytest.fixture(autouse=True)
+def _system_model_metadata():
+    UsageService.register_system_model_metadata(
+        pricing={"test-model": ModelPricing(1.0, 0.0)},
+        budgets={
+            "test-model": SystemModelBudget(
+                max_input_tokens=10_000,
+                max_output_tokens=0,
+                max_requests=1,
+            )
+        },
+    )
+    yield
+    UsageService._SYSTEM_MODEL_PRICING.pop("test-model", None)
+    UsageService._SYSTEM_MODEL_BUDGETS.pop("test-model", None)
 
 
 class _Limits:
@@ -37,7 +55,6 @@ async def _reserve(
     user_id: UUID,
     organization_id: UUID | None,
     limits: _Limits,
-    amount: float,
     now: datetime,
 ) -> bool:
     try:
@@ -52,7 +69,6 @@ async def _reserve(
                 profile_id="system:lemma",
                 profile_scope="SYSTEM",
                 model_name="test-model",
-                amount_usd=amount,
                 now=now,
             )
         return True
@@ -71,7 +87,6 @@ async def test_concurrent_fresh_window_never_admits_above_exact_limit(db_manager
                 user_id=user_id,
                 organization_id=None,
                 limits=_Limits(organization=None, user=0.05),
-                amount=0.01,
                 now=now,
             )
             for _ in range(20)
@@ -105,7 +120,6 @@ async def test_rejected_multi_scope_reservation_rolls_back_every_scope(db_manage
         user_id=user_id,
         organization_id=organization_id,
         limits=limits,
-        amount=0.01,
         now=now,
     )
     assert not await _reserve(
@@ -113,7 +127,6 @@ async def test_rejected_multi_scope_reservation_rolls_back_every_scope(db_manage
         user_id=user_id,
         organization_id=organization_id,
         limits=limits,
-        amount=0.01,
         now=now,
     )
 

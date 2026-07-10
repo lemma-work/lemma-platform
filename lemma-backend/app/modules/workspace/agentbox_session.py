@@ -11,7 +11,7 @@ import httpx
 
 from agentbox_client import AgentBoxClient
 from app.core.log.log import get_logger
-from app.modules.agent.domain.workspace_entities import (
+from app.modules.workspace.contracts import (
     PythonExecutionResult,
     ShellCommandResult,
 )

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from datetime import datetime
+from typing import Any
 from uuid import UUID
 
 from sqlalchemy import Boolean, DateTime, ForeignKey, Index, Integer, String, Text, text
@@ -14,12 +15,6 @@ from app.modules.schedule.domain.schedule import (
     ScheduleFireStatus,
     ScheduleType,
 )
-
-from app.modules.identity.infrastructure.models.user_models import User
-from app.modules.pod.infrastructure.models import Pod
-from app.modules.agent.infrastructure.models import AgentModel
-from app.modules.workflow.infrastructure.models import WorkflowModel
-
 
 class Schedule(UUIDAuditBase):
     """Unified schedule model for time, webhook, and datastore event sources."""
@@ -88,13 +83,13 @@ class Schedule(UUIDAuditBase):
     )
 
     # Relationships
-    user: Mapped["User"] = relationship(User, foreign_keys=[user_id])
-    pod: Mapped["Pod | None"] = relationship(Pod, foreign_keys=[pod_id])
-    workflow: Mapped["WorkflowModel | None"] = relationship(
-        WorkflowModel, foreign_keys=[workflow_id]
+    user: Mapped[Any] = relationship("User", foreign_keys=[user_id])
+    pod: Mapped[Any] = relationship("Pod", foreign_keys=[pod_id])
+    workflow: Mapped[Any] = relationship(
+        "WorkflowModel", foreign_keys=[workflow_id]
     )
-    agent: Mapped["AgentModel | None"] = relationship(
-        AgentModel, foreign_keys=[agent_id]
+    agent: Mapped[Any] = relationship(
+        "AgentModel", foreign_keys=[agent_id]
     )
 
     __table_args__ = (

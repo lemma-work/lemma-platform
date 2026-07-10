@@ -30,6 +30,9 @@ class FakeStore:
         state.touch()
         self.imports[state.import_id] = state
 
+    async def reopen_import(self, state: ImportState):
+        await self.save_import(state)
+
     async def get_import(self, import_id):
         return self.imports.get(import_id)
 
@@ -289,6 +292,27 @@ async def test_apply_enqueues_with_dedup_id():
     assert result.status == ImportStatus.APPLYING
     assert queue.calls[0][0] == "apply_pod_import"
     assert queue.calls[0][2] == import_apply_job_id(state.import_id)
+
+
+async def test_explicit_apply_reopens_failed_job_and_increments_attempt():
+    uc, store, _, _ = _use_cases()
+    pod_id, user_id = uuid4(), uuid4()
+    state = _awaiting_state(pod_id, user_id)
+    state.status = ImportStatus.FAILED
+    state.error = "Previous attempt failed."
+    state.completed_at = state.updated_at
+    await store.save_import(state)
+
+    result = await uc.apply_import(
+        pod_id=pod_id,
+        import_id=state.import_id,
+        user_id=user_id,
+    )
+
+    assert result.status is ImportStatus.APPLYING
+    assert result.attempt == 2
+    assert result.error is None
+    assert result.completed_at is None
 
 
 async def test_apply_wrong_status_conflicts():

@@ -57,9 +57,9 @@ from app.modules.agent.services.realtime import (
 )
 from app.modules.agent.services.serialization import message_to_payload
 from app.modules.agent.services.workspace_location import resolve_workspace_location
-from app.modules.pod.domain.pod_entities import PodConfig
-from app.modules.pod.infrastructure.pod_repositories import PodRepository
-from app.modules.usage.services.usage_service import UsageService
+from app.modules.pod.contracts import PodConfig
+from app.composition.agent_pod import create_agent_pod_repository
+from app.composition.agent_usage import UsageLimitExceededError, UsageService
 
 _POD_ASSISTANT_AGENT_ID = DEFAULT_POD_AGENT_ID
 
@@ -1447,14 +1447,14 @@ class ConversationService:
         return agent.id
 
     async def _get_pod_organization_id(self, pod_id: UUID) -> UUID | None:
-        return await PodRepository(self.uow).get_organization_id(pod_id)
+        return await create_agent_pod_repository(self.uow).get_organization_id(pod_id)
 
     async def _default_agent_runtime_for_pod(
         self,
         *,
         pod_id: UUID,
     ) -> AgentRuntimeConfig:
-        config = await PodRepository(self.uow).get_config(pod_id)
+        config = await create_agent_pod_repository(self.uow).get_config(pod_id)
         runtime = PodConfig.from_raw(config).resolved_default_runtime()
         return runtime or AgentRuntimeConfig(
             profile_id=DEFAULT_SYSTEM_AGENT_RUNTIME_PROFILE_ID
@@ -1477,8 +1477,6 @@ class ConversationService:
         )
         if limits["allowed"]:
             return
-        from app.modules.usage.domain.errors import UsageLimitExceededError
-
         raise UsageLimitExceededError()
 
     async def _authorized_conversation(

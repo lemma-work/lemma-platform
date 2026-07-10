@@ -15,7 +15,13 @@ from app.core.infrastructure.db.uow_factory import (
     SessionUnitOfWorkFactory,
     UnitOfWorkFactory,
 )
-from app.core.infrastructure.events.stream_subscriber import redis_stream_sub
+from app.core.infrastructure.events.inbox import (
+    EventInboxPort,
+    provide_domain_event_inbox,
+)
+from app.core.infrastructure.events.stream_subscriber import (
+    reliable_redis_stream_subscriber,
+)
 from app.modules.pod.domain.events import PodDeletedEvent, PodEvents
 from app.modules.schedule.api.dependencies import get_schedule_service
 
@@ -26,11 +32,17 @@ def provide_uow_factory() -> UnitOfWorkFactory:
     return SessionUnitOfWorkFactory(async_session_maker)
 
 
-@router.subscriber(stream=redis_stream_sub(PodEvents.STREAM))
+@reliable_redis_stream_subscriber(
+    router,
+    PodEvents.STREAM,
+    group="schedule-pod-events",
+    consumer="schedule-pod-events-consumer",
+)
 async def on_pod_deleted(
     event: dict,
     fs_logger: Logger,
     uow_factory: UnitOfWorkFactory = Depends(provide_uow_factory),
+    inbox: EventInboxPort = Depends(provide_domain_event_inbox),
 ) -> None:
     """Delete all schedules for a deleted pod.
 
@@ -40,9 +52,19 @@ async def on_pod_deleted(
     if event.get("event_type") != PodDeletedEvent.get_event_type():
         return
 
-    parsed = PodDeletedEvent.model_validate(event)
-    fs_logger.info("Processing PodDeletedEvent for schedule cleanup pod=%s", parsed.pod_id)
+    async def delete_schedules() -> None:
+        parsed = PodDeletedEvent.model_validate(event)
+        fs_logger.info(
+            "Processing PodDeletedEvent for schedule cleanup pod=%s",
+            parsed.pod_id,
+        )
 
-    async with uow_factory() as uow:
-        count = await get_schedule_service(uow).delete_all_for_pod(parsed.pod_id)
-    fs_logger.info("Deleted %s schedules for deleted pod %s", count, parsed.pod_id)
+        async with uow_factory() as uow:
+            count = await get_schedule_service(uow).delete_all_for_pod(parsed.pod_id)
+        fs_logger.info(
+            "Deleted %s schedules for deleted pod %s",
+            count,
+            parsed.pod_id,
+        )
+
+    await inbox.process("schedule-pod-events", event, delete_schedules)

@@ -10,12 +10,15 @@ local fixture to simulate that.
 from __future__ import annotations
 
 from uuid import uuid4
+from unittest.mock import AsyncMock
 
 import pytest
 
 from app.modules.agent.domain.value_objects import AgentRunUsage
 from app.modules.test_support.fakes import FakeUnitOfWork
 from app.modules.usage.services.usage_context import UsageExecutionContext
+from app.modules.usage.domain.entities import SystemModelBudget, UsageReservation
+from app.modules.usage.domain.errors import UsageConfigurationError
 from app.modules.usage.services.usage_service import (
     ModelPricing,
     UsageService,
@@ -39,15 +42,23 @@ _TEST_PRICING: dict[str, ModelPricing] = {
         0.95, 4.00, cached_input_per_million_usd=0.16
     ),
 }
+_TEST_BUDGET = SystemModelBudget(
+    max_input_tokens=200_000,
+    max_output_tokens=32_000,
+    max_requests=200,
+)
+_TEST_BUDGETS = {key: _TEST_BUDGET for key in _TEST_PRICING}
 
 
 @pytest.fixture(autouse=True)
 def _pricing_setup():
     """Register test pricing and clean up after each test."""
     UsageService.register_model_pricing(_TEST_PRICING)
+    UsageService.register_model_budgets(_TEST_BUDGETS)
     yield
     for key in _TEST_PRICING:
         UsageService._SYSTEM_MODEL_PRICING.pop(key, None)
+        UsageService._SYSTEM_MODEL_BUDGETS.pop(key, None)
 
 
 class _RecordingUsageRepository:
@@ -57,6 +68,8 @@ class _RecordingUsageRepository:
         self.uow = FakeUnitOfWork()
         self.created: list = []
         self.released: list = []
+        self.consumed: list = []
+        self.blocked: list = []
 
     async def create(self, record):
         self.created.append(record)
@@ -64,6 +77,12 @@ class _RecordingUsageRepository:
 
     async def release_reservation(self, *, counter_ids, amount_usd):
         self.released.append((counter_ids, amount_usd))
+
+    async def consume_reservation(self, **kwargs):
+        self.consumed.append(kwargs)
+
+    async def block_profile_admission(self, **kwargs):
+        self.blocked.append(kwargs)
 
 
 def _service() -> UsageService:
@@ -122,6 +141,48 @@ def test_register_model_pricing_hook_works():
     UsageService.register_model_pricing(extra)
     assert "test-model" in UsageService._SYSTEM_MODEL_PRICING
     UsageService._SYSTEM_MODEL_PRICING.pop("test-model")
+
+
+async def test_reservation_quotes_registered_worst_case_budget():
+    repo = AsyncMock()
+    repo.is_profile_admission_blocked.return_value = False
+    repo.get_system_cost.return_value = 0.0
+    repo.get_reserved_cost.return_value = 0.0
+    repo.reserve_limit_scopes.return_value = []
+    service = UsageService(usage_repository=repo, usage_limit_port=None)
+
+    reservation = await service.reserve_for_profile(
+        organization_id=None,
+        user_id=uuid4(),
+        profile_id="system:lemma",
+        profile_scope=SYSTEM,
+        model_name="glm-5.2",
+    )
+
+    assert reservation is not None
+    expected = round(200_000 / 1_000_000 * 1.40 + 32_000 / 1_000_000 * 4.40, 8)
+    assert reservation.amount_usd == expected
+    assert reservation.max_requests == 200
+    repo.reserve_limit_scopes.assert_awaited_once()
+
+
+async def test_admission_rejects_missing_budget_without_weak_fallback():
+    UsageService._SYSTEM_MODEL_BUDGETS.pop("glm-5.2")
+    repo = AsyncMock()
+    repo.is_profile_admission_blocked.return_value = False
+    service = UsageService(usage_repository=repo, usage_limit_port=None)
+
+    with pytest.raises(UsageConfigurationError) as exc_info:
+        await service.reserve_for_profile(
+            organization_id=None,
+            user_id=uuid4(),
+            profile_id="system:lemma",
+            profile_scope=SYSTEM,
+            model_name="glm-5.2",
+        )
+
+    assert exc_info.value.code == "USAGE_MODEL_BUDGET_MISSING"
+    repo.reserve_limit_scopes.assert_not_awaited()
 
 
 def test_glm_cost_uses_glm_pricing():
@@ -276,3 +337,36 @@ async def test_record_priced_model_has_no_fallback_flag():
         1500 / 1_000_000 * 1.40 + 500 / 1_000_000 * 0.26 + 1000 / 1_000_000 * 4.40
     )
     assert "pricing_fallback" not in record.metadata
+
+
+async def test_provider_cost_above_quote_blocks_profile_and_emits_anomaly():
+    repo = _RecordingUsageRepository()
+    service = UsageService(usage_repository=repo, usage_limit_port=None)
+    reservation = UsageReservation(
+        organization_id=uuid4(),
+        user_id=uuid4(),
+        amount_usd=0.000001,
+        counter_ids=[],
+        profile_id="system:lemma",
+        model_name="glm-5.2",
+        max_input_tokens=1,
+        max_output_tokens=0,
+        max_requests=1,
+        max_billable_units=0,
+    )
+
+    await service.record_agent_run_usage(
+        ctx=_ctx(),
+        runtime_profile=_runtime_profile("glm-5.2"),
+        usage_data=_usage("glm-5.2", input_tokens=1_000, output_tokens=500),
+        status="COMPLETED",
+        reservation=reservation,
+    )
+
+    assert len(repo.blocked) == 1
+    assert repo.blocked[0]["profile_id"] == "system:lemma"
+    assert repo.consumed[0]["actual_usd"] > reservation.amount_usd
+    assert any(
+        event.event_type == "usage.quote.exceeded"
+        for event in repo.uow.collected_events
+    )

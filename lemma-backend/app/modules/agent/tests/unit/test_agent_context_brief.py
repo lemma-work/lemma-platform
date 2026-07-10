@@ -112,7 +112,11 @@ class _FakeFileService:
 def stubbed(monkeypatch):
     monkeypatch.setattr(brief_mod, "AgentContextBriefRepository", _FakeBriefRepo)
     monkeypatch.setattr(brief_mod, "AgentRepository", _FakeListRepo)
-    monkeypatch.setattr(brief_mod, "FunctionRepository", _FakeListRepo)
+    monkeypatch.setattr(
+        brief_mod,
+        "create_function_repository",
+        lambda uow: _FakeListRepo(uow),
+    )
     monkeypatch.setattr(
         brief_mod, "create_authorization_service", lambda uow: _FakeAuthzService()
     )

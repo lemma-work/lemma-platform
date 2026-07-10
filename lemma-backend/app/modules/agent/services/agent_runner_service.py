@@ -69,6 +69,12 @@ from app.modules.agent.services.realtime import (
 from app.modules.agent.services.agent_context_brief import AgentContextBriefBuilder
 from app.modules.agent.services.run_message_writer import RunMessageWriter
 from app.modules.agent.services.run_usage_recorder import RunUsageRecorder
+from app.composition.agent_usage import (
+    UsageReservation,
+    usage_context_from_agent_context,
+    usage_execution_context,
+    usage_limits_for_reservation,
+)
 from app.modules.agent.services.workspace_location import (
     resolve_pod_cwd,
     resolve_workspace_location,
@@ -81,15 +87,8 @@ from app.modules.agent.tools.workspace_cli.pydantic_adapter import view_image_to
 from app.modules.agent.tools.tool_assembler import RunToolAssembler
 from app.core.crypto import get_secret_cipher
 from app.core.authorization.delegation import DEFAULT_POD_AGENT_NAME
-from app.modules.usage.domain.entities import UsageReservation
-from app.modules.usage.services.usage_context import (
-    usage_context_from_agent_context,
-    usage_execution_context,
-)
-
 logger = get_logger(__name__)
 FULL_HISTORY_AGENT_RUN_COUNT = 5
-
 
 async def _finalize_safely(coro: Awaitable[None], *, agent_run_id: UUID) -> None:
     """Await a finalization coroutine, swallowing all errors.
@@ -309,12 +308,22 @@ class AgentRunnerService:
                     ),
                 )
                 harness_toolsets = []
+            usage_reservation = await self.usage_recorder.reserve(
+                organization_id=conversation.organization_id,
+                user_id=user_id,
+                runtime_profile=runtime_profile_snapshot,
+            )
+            enforced_usage_limits = (
+                usage_limits_for_reservation(usage_reservation)
+                if usage_reservation is not None
+                else self.fixed_usage_limits
+            )
             options = HarnessOptions(
                 model_name=resolved_runtime.model_name_for_harness,
                 toolsets=harness_toolsets,
                 capabilities=harness_capabilities,
                 model_settings=harness_model_settings,
-                usage_limits=self.fixed_usage_limits,
+                usage_limits=enforced_usage_limits,
                 output_type=self._resolve_output_type(agent, conversation),
                 should_stop=self._make_stop_checker(agent_run_id),
                 extra={
@@ -322,12 +331,6 @@ class AgentRunnerService:
                     "runtime_credentials": runtime_credentials,
                 },
             )
-            usage_reservation = await self.usage_recorder.reserve(
-                organization_id=conversation.organization_id,
-                user_id=user_id,
-                runtime_profile=runtime_profile_snapshot,
-            )
-
             terminal_event_seen = False
             observer_started = False
             harness_agent = self._agent_with_resolved_runtime_metadata(
@@ -1027,14 +1030,11 @@ class AgentRunnerService:
         surface_metadata = None
         if isinstance(surface_metadata_payload, dict):
             try:
-                from app.modules.agent_surfaces.domain.surface_event_metadata import (
-                    SurfaceEventMetadata,
+                from app.composition.agent_surface_runtime import (
+                    parse_surface_event_metadata,
                 )
-                from pydantic import TypeAdapter
 
-                surface_metadata = TypeAdapter(SurfaceEventMetadata).validate_python(
-                    surface_metadata_payload
-                )
+                surface_metadata = parse_surface_event_metadata(surface_metadata_payload)
             except Exception:
                 surface_metadata = surface_metadata_payload
         return {

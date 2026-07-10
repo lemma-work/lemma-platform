@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+import json
 import socket
 from pathlib import Path
 import shutil
@@ -287,6 +288,20 @@ def e2e_settings(test_database_url, test_redis_url, supertokens_container):
         os.environ.setdefault("LEMMA_OPENAI_API_KEY", "e2e-mock-key-not-used")
         os.environ.setdefault("LEMMA_OPENAI_DEFAULT_MODEL", "e2e-mock-model")
         os.environ.setdefault("LEMMA_OPENAI_MODEL_NAMES", "e2e-mock-model")
+        os.environ.setdefault(
+            "LEMMA_SYSTEM_MODEL_METADATA_JSON",
+            json.dumps(
+                {
+                    "e2e-mock-model": {
+                        "input_per_million_usd": 1.0,
+                        "output_per_million_usd": 1.0,
+                        "max_input_tokens": 100_000,
+                        "max_output_tokens": 20_000,
+                        "max_requests": 200,
+                    }
+                }
+            ),
+        )
 
     # A single Kreuzberg is shared across all xdist workers (see datastore
     # conftest); under concurrent indexing load it can briefly stall or be

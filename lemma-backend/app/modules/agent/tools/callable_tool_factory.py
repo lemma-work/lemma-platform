@@ -24,18 +24,18 @@ from app.modules.agent.infrastructure.repositories import (
     AgentRepository,
 )
 from app.modules.agent.tools.context import BaseAgentContext
-from app.modules.function.domain.entities import (
+from app.modules.function.contracts import (
     FunctionEntity,
     FunctionRunEntity,
     FunctionRunStatus,
     FunctionStatus,
     FunctionType,
 )
-from app.modules.function.infrastructure.repositories import (
-    FunctionRepository,
-    FunctionRunRepository,
+from app.composition.agent_functions import (
+    create_function_repository,
+    create_function_run_repository,
+    create_function_use_cases,
 )
-from app.modules.function.api.dependencies import build_function_use_cases
 
 
 logger = get_logger(__name__)
@@ -117,7 +117,7 @@ class AgentCallableToolFactory:
 
         tools: list[Tool] = []
         async with self.uow_factory() as uow:
-            function_repo = FunctionRepository(uow)
+            function_repo = create_function_repository(uow)
             agent_repo = AgentRepository(uow)
             function_ids, agent_ids = await self._load_callable_resource_ids(
                 uow,
@@ -221,7 +221,7 @@ class AgentCallableToolFactory:
             # direct-user and JOB paths. Exposing a function as an agent tool
             # therefore needs exactly ONE grant on the parent (function.execute);
             # the function's resource grants are never mirrored onto the agent.
-            use_cases = build_function_use_cases(self.uow_factory)
+            use_cases = create_function_use_cases(self.uow_factory)
             run = await use_cases.execute_function_as_workload(
                 pod_id=function.pod_id,
                 name=function.name,
@@ -362,7 +362,7 @@ class AgentCallableToolFactory:
         attempts = max(1, int(_SUBAGENT_TOOL_TIMEOUT_SECONDS / interval))
         for _ in range(attempts):
             async with self.uow_factory() as uow:
-                run = await FunctionRunRepository(uow).get_run(run_id)
+                run = await create_function_run_repository(uow).get_run(run_id)
             if run is not None and run.status in terminal:
                 return run
             await asyncio.sleep(interval)

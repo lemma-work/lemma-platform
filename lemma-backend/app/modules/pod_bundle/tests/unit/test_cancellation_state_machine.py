@@ -17,6 +17,7 @@ from app.modules.pod_bundle.domain.state import (
     StepKind,
     StepStatus,
 )
+from app.modules.pod_bundle.domain.errors import BundleStateConflictError
 from app.modules.pod_bundle.events import handlers
 
 
@@ -122,6 +123,35 @@ async def test_finalize_cancellation_contains_staging_cleanup_failure(monkeypatc
 
     assert state.status is ImportStatus.CANCELLED
     assert store.saved == [state]
+
+
+async def test_finalize_cancellation_tolerates_another_worker_winning(monkeypatch):
+    cancelling = _state(ImportStatus.CANCELLING)
+    terminal = cancelling.model_copy(deep=True)
+    terminal.status = ImportStatus.CANCELLED
+
+    class ConflictStore:
+        reads = 0
+
+        async def get_import(self, import_id):
+            assert import_id == cancelling.import_id
+            self.reads += 1
+            return cancelling if self.reads == 1 else terminal
+
+        async def save_import(self, state):
+            del state
+            raise BundleStateConflictError()
+
+    publish = AsyncMock()
+    monkeypatch.setattr(handlers, "publish_bundle_event", publish)
+
+    await handlers._finalize_import_cancellation(
+        ConflictStore(),
+        AsyncMock(),
+        cancelling,
+    )
+
+    publish.assert_not_awaited()
 
 
 async def test_apply_job_terminalizes_preexisting_cancelling_state(monkeypatch):

@@ -6,8 +6,8 @@ from typing import Optional
 
 from app.core.authorization.context import Context, ResourceRef
 from app.core.authorization.permissions import Permissions
-from app.modules.identity.domain.organization_entities import OrganizationRole
-from app.modules.icon.services.icon_service import IconService
+from app.modules.identity.contracts import OrganizationRole
+from app.modules.icon.contracts import IconCleanupPort
 from app.modules.pod.domain.errors import (
     PodAccessDeniedError,
     PodNotFoundError,
@@ -17,7 +17,6 @@ from app.modules.pod.domain.pod_entities import (
     PodMemberEntity,
     PodRole,
     PodUpdateEntity,
-    PodProvisioningStatus,
 )
 from app.modules.pod.domain.ports import (
     OrganizationMembershipPort,
@@ -36,7 +35,7 @@ class PodService:
         organization_repository: OrganizationMembershipPort,
         pod_role_service: PodRoleService | None = None,
         authorization_service: object | None = None,
-        icon_service: IconService | None = None,
+        icon_service: IconCleanupPort | None = None,
     ):
         self.pod_repository = pod_repository
         self.pod_member_repository = pod_member_repository
@@ -98,28 +97,6 @@ class PodService:
             raise PodAccessDeniedError("User doesn't have access to this pod")
 
         return pod
-
-    async def retry_provisioning(
-        self,
-        pod_id: UUID,
-        requester_user_id: UUID,
-        *,
-        ctx: Context,
-    ) -> PodEntity:
-        pod = await self.pod_repository.get(pod_id)
-        if pod is None:
-            raise PodNotFoundError()
-        await ctx.require(
-            Permissions.POD_UPDATE,
-            ResourceRef.pod(pod_id, pod.organization_id),
-        )
-        if pod.provisioning_status not in {
-            PodProvisioningStatus.UNKNOWN,
-            PodProvisioningStatus.FAILED,
-        }:
-            return pod
-        pod.retry_provisioning(requester_user_id)
-        return await self.pod_repository.update(pod)
 
     async def update_pod(
         self,

@@ -4,10 +4,12 @@ from __future__ import annotations
 
 from uuid import UUID
 
+from pydantic_ai import UsageLimits
+
 from app.core.infrastructure.db.session import async_session_maker
 from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
 from app.core.infrastructure.events.message_bus import get_message_bus
-from app.modules.usage.domain.entities import UsageReservation
+from app.modules.usage.domain.entities import SystemModelBudget, UsageReservation
 from app.modules.usage.services.usage_context import UsageExecutionContext
 from app.modules.usage.services.usage_service import UsageService
 from app.modules.usage.services.usage_service_factory import build_usage_service
@@ -18,12 +20,14 @@ async def reserve_usage_for_runtime(
     organization_id: UUID | None,
     user_id: UUID,
     runtime_profile: dict[str, object | None] | None,
+    budget: SystemModelBudget | None = None,
 ) -> UsageReservation | None:
     if not isinstance(runtime_profile, dict):
         return None
     profile_id = runtime_profile.get("profile_id")
     profile_scope = runtime_profile.get("scope")
     model_name = runtime_profile.get("model_name")
+    provider_model_name = runtime_profile.get("provider_model_name")
     if not isinstance(profile_id, str) or not isinstance(profile_scope, str):
         return None
     if not isinstance(model_name, str):
@@ -36,9 +40,30 @@ async def reserve_usage_for_runtime(
             profile_id=profile_id,
             profile_scope=profile_scope,
             model_name=model_name,
+            provider_model_name=(
+                provider_model_name
+                if isinstance(provider_model_name, str)
+                else None
+            ),
+            budget=budget,
         )
         await uow.commit()
         return reservation
+
+
+def usage_limits_for_reservation(
+    reservation: UsageReservation,
+) -> UsageLimits:
+    """Build the harness guardrails from the exact values used for quoting."""
+    return UsageLimits(
+        request_limit=reservation.max_requests,
+        input_tokens_limit=reservation.max_input_tokens,
+        output_tokens_limit=reservation.max_output_tokens,
+        total_tokens_limit=(
+            reservation.max_input_tokens + reservation.max_output_tokens
+        ),
+        count_tokens_before_request=True,
+    )
 
 
 async def release_usage_reservation(reservation: UsageReservation | None) -> None:

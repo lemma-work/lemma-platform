@@ -191,9 +191,10 @@ async def _consumer_group_reconcile_loop() -> None:
     """
     import redis.asyncio as redis
 
+    from app.core.infrastructure.events.config import event_transport_settings
     from app.core.infrastructure.events.stream_subscriber import ensure_consumer_groups
 
-    interval = settings.consumer_group_reconcile_interval_seconds
+    interval = event_transport_settings.consumer_group_reconcile_interval_seconds
     client = redis.from_url(settings.redis_url, decode_responses=False)
     try:
         while True:
@@ -262,7 +263,9 @@ async def worker_lifespan() -> AsyncGenerator[AppWorkerContext]:
     from app.core.registry.installed import OSS_MODULES
 
     reconcile_task: asyncio.Task[None] | None = None
-    if settings.consumer_group_reconcile_interval_seconds > 0:
+    from app.core.infrastructure.events.config import event_transport_settings
+
+    if event_transport_settings.consumer_group_reconcile_interval_seconds > 0:
         reconcile_task = asyncio.create_task(_consumer_group_reconcile_loop())
 
     # Loop-lag watchdog: measures event-loop lag and refreshes the liveness

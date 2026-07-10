@@ -148,24 +148,4 @@ export class PodsService {
             },
         });
     }
-    /**
-     * Retry Pod Provisioning
-     * @param podId
-     * @returns PodResponse Successful Response
-     * @throws ApiError
-     */
-    public static podProvisioningRetry(
-        podId: string,
-    ): CancelablePromise<PodResponse> {
-        return __request(OpenAPI, {
-            method: 'POST',
-            url: '/pods/{pod_id}/provisioning/retry',
-            path: {
-                'pod_id': podId,
-            },
-            errors: {
-                422: `Validation Error`,
-            },
-        });
-    }
 }

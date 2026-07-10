@@ -5,7 +5,7 @@ from typing import Any, Dict, List, Optional, Union
 
 from pydantic import BaseModel, Field, field_validator
 
-from app.modules.schedule.domain.value_objects import (
+from app.modules.schedule.contracts import (
     DatastoreOperation,
     normalize_datastore_operations,
 )

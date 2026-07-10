@@ -54,14 +54,14 @@ from app.modules.function.domain.events import (
 from app.modules.function.services.function_runtime_command import (
     function_workspace_cwd,
 )
-from app.modules.workspace.agentbox_retry import (
+from app.composition.function_workspace import (
     CONNECT_PHASE_TRANSPORT_ERRORS,
     RETRYABLE_HTTP_STATUS_CODES,
     RETRYABLE_TRANSPORT_ERRORS,
     retry_on_transient_agentbox_error,
     truncate_message,
 )
-from app.modules.workspace.services.agentbox_manager import agentbox_sandbox_id
+from app.composition.function_workspace import agentbox_sandbox_id
 
 logger = get_logger(__name__)
 

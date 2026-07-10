@@ -245,9 +245,7 @@ async def process_agent_run(
         uow_factory=worker_ctx.uow_factory,
         harness_registry=build_harness_registry(),
     )
-    from app.modules.agent_surfaces.services.progress_observer import (
-        SurfaceAgentRunProgressObserver,
-    )
+    from app.composition.agent_surface_runtime import build_progress_observer
 
     # Safety net: if a cancellation arrives before/during runner.execute (e.g.
     # streaq task timeout, worker shutdown) and propagates as CancelledError
@@ -262,7 +260,7 @@ async def process_agent_run(
             user_id=user_id,
             pod_id=pod_id,
             agent_name=agent_name,
-            observer=SurfaceAgentRunProgressObserver(
+            observer=build_progress_observer(
                 uow_factory=worker_ctx.uow_factory,
                 service_factory=worker_ctx.build_surface_event_handler,
             ),

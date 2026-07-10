@@ -89,10 +89,6 @@ async def test_platform_webhook_verifies_and_publishes_versioned_event():
 
     with patch(
         "app.modules.agent_surfaces.api.controllers.webhook_controller."
-        "log_raw_webhook_event",
-        new=AsyncMock(),
-    ), patch(
-        "app.modules.agent_surfaces.api.controllers.webhook_controller."
         "EventPublisher.publish",
         new=AsyncMock(),
     ) as publish:
@@ -128,10 +124,6 @@ async def test_resend_webhook_resolves_surface_before_publishing():
 
     with patch(
         "app.modules.agent_surfaces.api.controllers.webhook_controller."
-        "log_raw_webhook_event",
-        new=AsyncMock(),
-    ), patch(
-        "app.modules.agent_surfaces.api.controllers.webhook_controller."
         "EventPublisher.publish",
         new=AsyncMock(),
     ) as publish:
@@ -157,10 +149,6 @@ async def test_surface_webhook_verifies_binding_and_publishes_surface_id():
     body = json.dumps({"id": "provider-event-1"}).encode()
 
     with patch(
-        "app.modules.agent_surfaces.api.controllers.webhook_controller."
-        "log_raw_webhook_event",
-        new=AsyncMock(),
-    ), patch(
         "app.modules.agent_surfaces.api.controllers.webhook_controller."
         "EventPublisher.publish",
         new=AsyncMock(),

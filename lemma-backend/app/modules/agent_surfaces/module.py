@@ -82,4 +82,9 @@ module = LemmaModule(
     event_routers=_event_routers,
     api_lifespans=(_dedup_store_lifespan,),
     worker_lifespans=(_surface_event_receiver,),
+    stream_groups=(
+        ("surface_events", "surface-webhook-events"),
+        ("schedule_events", "surface-schedule-events"),
+        ("pod_events", "surface-pod-deletion-events"),
+    ),
 )

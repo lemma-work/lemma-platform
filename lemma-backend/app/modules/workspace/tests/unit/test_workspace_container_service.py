@@ -425,7 +425,7 @@ async def test_get_env_vars_includes_delegation_claims(monkeypatch):
         return "delegated-token"
 
     monkeypatch.setattr(
-        "app.modules.workspace.services.workspace_sandbox_service.get_user_token",
+        "app.composition.workspace_identity.get_user_token",
         _fake_get_user_token,
     )
     monkeypatch.setattr(

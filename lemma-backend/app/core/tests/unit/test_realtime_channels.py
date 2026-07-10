@@ -59,6 +59,9 @@ async def test_realtime_adapter_publishes_json_and_releases_subscription() -> No
 
     assert redis.pubsub_instance.subscribed == ("conversation:1",)
     assert redis.pubsub_instance.unsubscribed == ("conversation:1",)
+    # The one process-wide Pub/Sub lease stays open for later subscribers.
+    assert redis.pubsub_instance.closed is False
+    await adapter.disconnect()
     assert redis.pubsub_instance.closed is True
 
 
@@ -80,3 +83,35 @@ async def test_realtime_adapter_rejects_empty_subscription() -> None:
     with pytest.raises(ValueError, match="At least one"):
         async with adapter.subscribe([]):
             pass
+
+
+@pytest.mark.asyncio
+async def test_realtime_adapter_ref_counts_shared_channel() -> None:
+    redis = _FakeRedis()
+    adapter = RedisChannelAdapter(client=redis)  # type: ignore[arg-type]
+
+    async with adapter.subscribe(["conversation:1"]):
+        async with adapter.subscribe(["conversation:1"]):
+            assert redis.pubsub_instance.subscribed == ("conversation:1",)
+        assert redis.pubsub_instance.unsubscribed == ()
+
+    assert redis.pubsub_instance.unsubscribed == ("conversation:1",)
+    await adapter.disconnect()
+
+
+@pytest.mark.asyncio
+async def test_realtime_adapter_evicts_only_slow_client() -> None:
+    redis = _FakeRedis()
+    adapter = RedisChannelAdapter(client=redis)  # type: ignore[arg-type]
+
+    async with adapter.subscribe(["slow"]) as slow_messages:
+        async with adapter.subscribe(["fast"]) as fast_messages:
+            for index in range(257):
+                await adapter._fan_out("slow", str(index))
+            await adapter._fan_out("fast", "still-connected")
+
+            with pytest.raises(RuntimeError, match="fell behind"):
+                await anext(slow_messages)
+            assert await anext(fast_messages) == "still-connected"
+
+    await adapter.disconnect()

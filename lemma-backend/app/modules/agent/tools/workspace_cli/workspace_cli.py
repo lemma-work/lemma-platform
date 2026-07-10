@@ -25,7 +25,7 @@ from app.modules.agent.tools.workspace_cli.models import (
 )
 from app.modules.agent.tools.workspace_cli.helper import trim_python_result
 from app.modules.agent.tools.workspace_entities import PythonExecutionResult
-from app.modules.workspace.services.workspace_tool_runtime import (
+from app.composition.agent_workspace import (
     get_workspace_tool_runtime,
 )
 from pydantic_ai import ToolReturn, BinaryContent

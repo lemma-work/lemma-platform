@@ -4,13 +4,14 @@ from __future__ import annotations
 
 from typing import Any, Dict, Optional
 
-from app.modules.schedule.domain.interfaces import ScheduleEventPublisher
+from app.modules.schedule.domain.interfaces import (
+    ScheduleEventFilter,
+    ScheduleEventPublisher,
+)
 from app.modules.schedule.domain.schedule import ScheduleEntity
 from app.modules.schedule.infrastructure.adapters.schedule_event_publisher import (
     DurableScheduleEventPublisher,
 )
-from app.modules.schedule.services.schedule_filter_service import ScheduleFilterService
-from app.modules.usage.domain.errors import UsageLimitExceededError
 from app.core.log.log import get_logger
 
 logger = get_logger(__name__)
@@ -21,10 +22,10 @@ class ScheduleProcessor:
 
     def __init__(
         self,
-        filter_service: ScheduleFilterService | None = None,
+        filter_service: ScheduleEventFilter | None = None,
         event_publisher: ScheduleEventPublisher | None = None,
     ):
-        self.filter_service = filter_service or ScheduleFilterService()
+        self.filter_service = filter_service
         self.event_publisher = event_publisher or DurableScheduleEventPublisher()
 
     async def process_event(
@@ -45,25 +46,18 @@ class ScheduleProcessor:
         llm_output: Optional[Dict[str, Any]] = None
 
         if schedule.filter_instruction:
-            try:
-                should_proceed, llm_output = await self.filter_service.filter_event(
-                    instruction=schedule.filter_instruction,
-                    output_schema=schedule.filter_output_schema,
-                    event_payload=payload,
-                    schedule=schedule,
-                )
+            if self.filter_service is None:
+                raise RuntimeError("Schedule filter adapter is not configured")
+            should_proceed, llm_output = await self.filter_service.filter_event(
+                instruction=schedule.filter_instruction,
+                output_schema=schedule.filter_output_schema,
+                event_payload=payload,
+                schedule=schedule,
+            )
 
-                if not should_proceed:
-                    logger.info("Schedule %s filtered out by LLM.", schedule.id)
-                    return False
-            except UsageLimitExceededError:
-                raise
-            except Exception:
-                logger.exception(
-                    "Retryable LLM filter failure",
-                    schedule_id=str(schedule.id),
-                )
-                raise
+            if not should_proceed:
+                logger.info("Schedule %s filtered out by LLM.", schedule.id)
+                return False
 
         await self.event_publisher.publish_schedule_fired(
             schedule=schedule,

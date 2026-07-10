@@ -447,3 +447,11 @@ class ScheduleRepository(ScheduleRepositoryInterface):
             .where(Schedule.id == schedule_id)
             .values(consecutive_failures=0)
         )
+
+    async def set_consecutive_failures(self, schedule_id: UUID, count: int) -> None:
+        """Set the streak derived from distinct terminal schedule runs."""
+        await self.session.execute(
+            update(Schedule)
+            .where(Schedule.id == schedule_id)
+            .values(consecutive_failures=max(0, count))
+        )

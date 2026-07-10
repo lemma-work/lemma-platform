@@ -33,7 +33,11 @@ class SchedulerEventEmitter:
             logger.info("Scheduler event emitter stopped")
 
     async def emit_scheduled_job_event(
-        self, schedule_id: UUID, payload: Dict[str, Any] | None = None
+        self,
+        schedule_id: UUID,
+        payload: Dict[str, Any] | None = None,
+        *,
+        scheduled_at: datetime,
     ):
         """Emit an event when a scheduled job fires.
 
@@ -44,7 +48,7 @@ class SchedulerEventEmitter:
         if not self._started:
             raise RuntimeError("Scheduler event emitter is not started")
 
-        scheduled_at = datetime.now(timezone.utc).replace(microsecond=0)
+        scheduled_at = scheduled_at.astimezone(timezone.utc)
         source_event_id = f"cron:{schedule_id}:{scheduled_at.isoformat()}"
         event = ScheduleFired(
             schedule_id=schedule_id,
@@ -56,9 +60,9 @@ class SchedulerEventEmitter:
         )
         await EventPublisher.publish(event.stream_name(), event)
         logger.info(
-            "Staged scheduled job event schedule=%s source=%s",
-            schedule_id,
-            source_event_id,
+            "Staged scheduled job event",
+            schedule_id=str(schedule_id),
+            source_event_id=source_event_id,
         )
 
 

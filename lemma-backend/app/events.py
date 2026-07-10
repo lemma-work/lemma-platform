@@ -14,6 +14,9 @@ from app.core.infrastructure.jobs.streaq_runtime import broker, streaq_worker
 from app.core.registry.assembly import wire_module_events
 from app.core.registry.installed import OSS_MODULES
 
+# Core-owned cron tasks register alongside module tasks.
+from app.core.infrastructure.events import tasks as event_tasks  # noqa: F401
+
 wire_module_events(OSS_MODULES, broker)
 
 __all__ = ["broker", "streaq_worker"]

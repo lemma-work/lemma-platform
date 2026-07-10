@@ -15,9 +15,6 @@ from app.modules.agent_surfaces.api.dependencies import (
     get_surface_service,
 )
 from app.modules.agent_surfaces.domain.events import SurfaceWebhookReceivedEvent
-from app.modules.agent_surfaces.infrastructure.debug.raw_webhook_file_logger import (
-    log_raw_webhook_event,
-)
 from app.modules.agent_surfaces.services.surface_service import (
     AgentSurfaceService,
 )
@@ -153,7 +150,6 @@ async def handle_platform_webhook(
         )
         if surface is None:
             return {"message": "Ignored: no surface for address"}
-        await log_raw_webhook_event(source="resend", payload=normalized, headers=headers)
         source_event_id = _surface_source_event_id("resend", normalized, raw_body)
         event = SurfaceWebhookReceivedEvent(
             event_id=stable_event_id({"event_id": source_event_id}),
@@ -178,8 +174,6 @@ async def handle_platform_webhook(
         headers=headers,
         raw_body=raw_body,
     )
-
-    await log_raw_webhook_event(source=platform, payload=payload, headers=headers)
 
     source_event_id = _surface_source_event_id(platform, payload, raw_body)
     event = SurfaceWebhookReceivedEvent(
@@ -221,8 +215,6 @@ async def handle_surface_webhook(
     )
 
     source = surface.surface_type.value.lower()
-    await log_raw_webhook_event(source=source, payload=payload, headers=headers)
-
     source_event_id = _surface_source_event_id(source, payload, raw_body)
     event = SurfaceWebhookReceivedEvent(
         event_id=stable_event_id({"event_id": source_event_id}),

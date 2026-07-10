@@ -19,6 +19,7 @@ from sqlalchemy.engine import CursorResult
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.infrastructure.events.models import DomainEventOutbox
+from app.core.infrastructure.events.config import event_transport_settings
 from app.core.log.log import get_logger
 
 
@@ -113,7 +114,6 @@ class OutboxDispatcher:
             for row in rows:
                 row.lease_owner = self.owner
                 row.lease_until = now + timedelta(seconds=self.lease_seconds)
-                row.attempts += 1
             return [
                 ClaimedEvent(
                     id=row.id,
@@ -132,9 +132,12 @@ class OutboxDispatcher:
             span.set_attribute("lemma.event_id", str(event.id))
             span.set_attribute("lemma.event_type", event.event_type)
             span.set_attribute("lemma.event_stream", event.stream)
-            span.set_attribute("lemma.event_attempt", event.attempts)
+            span.set_attribute("lemma.event_attempt", event.attempts + 1)
             try:
-                await self._message_bus.publish(event.stream, event.payload)
+                await asyncio.wait_for(
+                    self._message_bus.publish(event.stream, event.payload),
+                    timeout=event_transport_settings.event_publish_timeout_seconds,
+                )
             except asyncio.CancelledError:
                 raise
             except Exception as exc:  # publication boundary; persisted for retry
@@ -146,7 +149,7 @@ class OutboxDispatcher:
                     event_id=str(event.id),
                     event_type=event.event_type,
                     stream=event.stream,
-                    attempt=event.attempts,
+                    attempt=event.attempts + 1,
                     error_type=type(exc).__name__,
                 )
                 return
@@ -178,8 +181,9 @@ class OutboxDispatcher:
 
     async def _mark_failed(self, event: ClaimedEvent, exc: Exception) -> None:
         now = datetime.now(timezone.utc)
-        terminal = event.attempts >= self.max_attempts
-        delay = min(300.0, 2 ** max(0, event.attempts - 1))
+        failed_attempts = event.attempts + 1
+        terminal = failed_attempts >= self.max_attempts
+        delay = min(300.0, 2 ** max(0, failed_attempts - 1))
         delay *= random.uniform(0.75, 1.25)
         values = {
             "lease_owner": None,
@@ -187,6 +191,7 @@ class OutboxDispatcher:
             "last_error_type": type(exc).__name__[:200],
             "last_error": "Event publication failed; inspect the correlated trace",
             "available_at": now + timedelta(seconds=delay),
+            "attempts": failed_attempts,
         }
         if terminal:
             values["dead_lettered_at"] = now

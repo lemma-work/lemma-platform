@@ -43,6 +43,19 @@ class BadRequestError(DomainError):
         super().__init__(message, code=code, status_code=400, details=details)
 
 
+class ValidationError(DomainError):
+    """A syntactically valid request whose structured values are invalid."""
+
+    def __init__(
+        self,
+        message: str = "Request validation failed",
+        *,
+        code: str = "VALIDATION_ERROR",
+        details: object | None = None,
+    ) -> None:
+        super().__init__(message, code=code, status_code=422, details=details)
+
+
 class PayloadTooLargeError(DomainError):
     """A request or multipart field exceeded its configured byte budget."""
 
@@ -52,4 +65,15 @@ class PayloadTooLargeError(DomainError):
             code="UPLOAD_TOO_LARGE",
             status_code=413,
             details={"field": field, "max_bytes": max_bytes},
+        )
+
+
+class UploadCapacityExceededError(DomainError):
+    """This process has reached its bounded concurrent staging capacity."""
+
+    def __init__(self) -> None:
+        super().__init__(
+            "Upload staging capacity is temporarily exhausted",
+            code="UPLOAD_CAPACITY_EXCEEDED",
+            status_code=503,
         )

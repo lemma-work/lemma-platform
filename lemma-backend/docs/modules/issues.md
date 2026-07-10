@@ -85,10 +85,10 @@ historical broad catch, or deployed dashboard dependency.
 
 **Evidence**
 
-- Pod schema provisioning catches every exception and returns after logging:
-  [`pod/events/pod_handlers.py`](../../app/modules/pod/events/pod_handlers.py#L64).
-  A committed pod can therefore exist without its required physical datastore
-  schema.
+- Pod schema provisioning previously caught every exception and returned after
+  logging. It now uses the durable outbox/grouped inbox consumer and rethrows
+  infrastructure failures for bounded retry/DLQ handling. First-table creation
+  independently bootstraps the same schema under an advisory lock.
 - Surface webhook and scheduled-ingress consumers wrap the entire handler,
   including streaq enqueue, and return on failure:
   [`agent_surfaces/events/handlers.py`](../../app/modules/agent_surfaces/events/handlers.py#L70).
@@ -112,16 +112,16 @@ operators.
    acknowledged; infrastructure errors re-raise for retry.
 2. Add bounded retry plus a dead-letter stream containing event id, type,
    request/correlation id, exception class, and attempt count.
-3. Make pod provisioning a durable state (`PROVISIONING/READY/FAILED`) with an
-   idempotent repair job, or provision inside a saga that users can observe.
+3. Keep infrastructure delivery state in the event outbox/inbox rather than on
+   the pod aggregate; make schema creation and first-table bootstrap idempotent.
 4. Add fault-injection tests for DB/Redis/streaq failure between receive,
    enqueue, and acknowledgement.
 
 **Acceptance criteria**
 
 - Killing Redis/streaq/DB during each consumer does not silently lose work.
-- A failed pod provision is visible and can be retried without creating a new
-  pod.
+- A failed schema-creation delivery is visible/replayable through the event
+  inbox/DLQ, and the first table write repairs a missing physical schema.
 - DLQ/replay behavior is documented and alertable.
 
 ### UPLOAD-001 — unbounded multipart buffering can exhaust API memory/storage
@@ -457,8 +457,8 @@ have reconcilers; others depend on logs.
 Standardize event metadata (`event_id`, causation/correlation/request ids,
 occurred_at, schema version), metrics, trace propagation, retry/DLQ naming, and
 operator replay tooling. Add dashboards/alerts for stream lag, failed jobs,
-orphaned waits/runs, stuck file processing, pod provisioning, and schedule-fire
-outcomes.
+orphaned waits/runs, stuck file processing, pod schema-bootstrap DLQ outcomes,
+and schedule-run outcomes.
 
 ### OSS-001 — public backend contribution and security processes are missing
 
@@ -533,7 +533,7 @@ about and hide whether an event is deliberately unconsumed.
 | `pytest app/modules/schedule/tests/e2e` | Cron, webhook, datastore, schedule-run ledger, retry, authorization, and telemetry |
 | Pod-bundle + usage E2E | 22 passed; six Docker/real-runtime protected cases skipped locally |
 | Datastore + apps E2E | Dedicated datastore/apps shard passed, including typed-record, upload cleanup, file processing/recovery, WebSocket, and search journeys; its raw coverage contributes to the authoritative union |
-| Pod provisioning E2E | Dedicated pod shard passed retry, concurrent-claim, authorization, and provisioning reconciliation journeys; first-table/schema bootstrap is serialized by a shared PostgreSQL advisory lock |
+| Pod schema bootstrap | Durable consumer retry unit tests and datastore DDL concurrency tests cover rethrow/replay and the shared PostgreSQL advisory lock; infrastructure state is not stored on `pods`. |
 | Python / TypeScript SDK | Python 44 passed, one skip; TypeScript 115 passed; TypeScript production/browser bundles built |
 | CLI / frontend | CLI 585 passed (24 deselected); frontend production build passed with 69 pages |
 

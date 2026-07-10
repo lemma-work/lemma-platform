@@ -223,30 +223,6 @@ class Settings(BaseSettings):
         default=200,
         description="Maximum pooled Redis connections per process",
     )
-    redis_stream_polling_interval_ms: int = Field(
-        default=500,
-        description=(
-            "Polling interval in milliseconds for FastStream Redis stream consumers. "
-            "Higher values reduce idle XREAD/XREADGROUP volume at the cost of slightly higher event pickup latency."
-        ),
-    )
-    redis_stream_min_idle_time_ms: int = Field(
-        default=60_000,
-        description=(
-            "Minimum pending time before a grouped Redis Stream message can be "
-            "claimed by another consumer after a worker crash."
-        ),
-    )
-    consumer_group_reconcile_interval_seconds: float = Field(
-        default=30.0,
-        description=(
-            "How often the worker re-ensures Redis consumer groups exist. Bounds "
-            "the FastStream supervisor retry-storm if a group is lost (flush / "
-            "failover / eviction): the lost group is recreated within this window "
-            "and the subscriber resumes instead of spinning forever. Set to 0 to "
-            "disable the background reconcile loop."
-        ),
-    )
     lemma_default_model_type: Literal["openai_compat", "anthropic_compat"] = Field(
         default="openai_compat",
         description="Server-provided Lemma system model profile provider type.",

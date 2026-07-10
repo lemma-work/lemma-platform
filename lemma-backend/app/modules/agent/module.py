@@ -4,6 +4,35 @@ from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 
 from app.core.registry import LemmaModule
+from app.core.log.log import get_logger
+
+logger = get_logger(__name__)
+
+
+@asynccontextmanager
+async def _validate_system_model_usage_metadata(
+    _context: object,
+) -> AsyncIterator[None]:
+    from app.modules.agent.services.runtime_profile_service import (
+        system_lemma_openai_catalog_model_names,
+    )
+    from app.composition.agent_usage import (
+        UsageService,
+        assert_system_budgets_cover_catalog,
+        assert_system_pricing_covers_catalog,
+    )
+
+    UsageService._load_environment_metadata()
+    catalog = system_lemma_openai_catalog_model_names()
+    unpriced = assert_system_pricing_covers_catalog(catalog)
+    unbudgeted = assert_system_budgets_cover_catalog(catalog)
+    if unpriced or unbudgeted:
+        logger.error(
+            "system:lemma models have incomplete usage admission metadata",
+            unpriced_models=unpriced,
+            unbudgeted_models=unbudgeted,
+        )
+    yield
 
 
 @asynccontextmanager
@@ -47,6 +76,10 @@ module = LemmaModule(
     name="agent",
     routers=_routers,
     event_routers=_event_routers,
-    api_lifespans=(_close_agent_runtime_redis,),
+    api_lifespans=(
+        _validate_system_model_usage_metadata,
+        _close_agent_runtime_redis,
+    ),
     worker_lifespans=(_close_agent_runtime_redis,),
+    stream_groups=(("agent_events", "agent-events"),),
 )

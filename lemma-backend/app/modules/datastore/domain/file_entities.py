@@ -71,7 +71,7 @@ class DatastoreFileEntity(AggregateRoot):
             return self.mime_type
         if self.is_folder:
             return "application/x-directory"
-        from app.modules.agent.domain.file_entities import get_content_type
+        from app.core.file_types import get_content_type
 
         return get_content_type(self.name)
 

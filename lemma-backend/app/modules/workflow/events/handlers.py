@@ -2,6 +2,7 @@
 
 import hashlib
 import json
+from datetime import datetime
 
 from faststream import Depends, Logger
 from faststream.redis import RedisRouter
@@ -180,8 +181,8 @@ async def resume_workflow_run_for_agent(
 
     _ = attempt
     logger.info(
-        "Job: Resuming workflow run waiting for agent conversation %s",
-        agent_conversation_id,
+        "Job: Resuming workflow run waiting for agent conversation",
+        agent_conversation_id=agent_conversation_id,
     )
 
     async with worker_ctx.uow() as uow:
@@ -237,6 +238,7 @@ async def on_schedule_fired(
     payload = event.get("payload")
     metadata = event.get("metadata")
     llm_output = event.get("llm_output")
+    source_occurred_at = event.get("scheduled_at") or event.get("occurred_at")
     schedule_event_id = (
         event.get("source_event_id")
         or event.get("event_id")
@@ -270,6 +272,13 @@ async def on_schedule_fired(
         metadata=metadata or {},
         llm_output=llm_output,
         schedule_event_id=str(schedule_event_id),
+        source_occurred_at=(
+            source_occurred_at.isoformat()
+            if isinstance(source_occurred_at, datetime)
+            else str(source_occurred_at)
+            if source_occurred_at
+            else None
+        ),
         **dedup_kwargs,
     )
 
@@ -281,6 +290,7 @@ async def check_and_start_flows_for_schedule(
     metadata: dict | None = None,
     llm_output: dict | None = None,
     schedule_event_id: str | None = None,
+    source_occurred_at: str | None = None,
 ):
     """Check schedules and start or wake workflow runs."""
     worker_ctx: AppWorkerContext = streaq_worker.context
@@ -294,4 +304,9 @@ async def check_and_start_flows_for_schedule(
             metadata=metadata,
             llm_output=llm_output,
             schedule_event_id=schedule_event_id,
+            source_occurred_at=(
+                datetime.fromisoformat(source_occurred_at.replace("Z", "+00:00"))
+                if source_occurred_at
+                else None
+            ),
         )

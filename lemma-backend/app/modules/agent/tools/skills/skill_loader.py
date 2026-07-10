@@ -12,13 +12,9 @@ from app.core.authorization.context import Context
 from app.core.authorization.service import AuthorizationDataService
 from app.core.infrastructure.db.session import async_session_maker
 from app.core.infrastructure.db.uow_factory import create_uow_from_session_maker
-from app.modules.datastore.domain.errors import DatastoreFileNotFoundError
-from app.modules.datastore.infrastructure.repositories import (
-    DatastoreFileRepository,
-)
-from app.modules.datastore.infrastructure.storage import create_datastore_storage
-from app.modules.datastore.services.file_service import DatastoreFileService
-from app.modules.pod.services.authorization_factory import create_authorization_service
+from app.modules.datastore.contracts import DatastoreFileNotFoundError
+from app.composition.agent_datastore import create_agent_skill_file_service
+from app.composition.authorization import create_authorization_service
 
 _FRONTMATTER_NAME_PATTERN = re.compile(r"^[a-z0-9](?:[a-z0-9-]{0,62}[a-z0-9])?$")
 _SKILLS_ROOT = "/skills"
@@ -182,9 +178,8 @@ async def _default_file_service(
     user_id: UUID,
 ) -> AsyncIterator[_FileServiceScope]:
     async with create_uow_from_session_maker(async_session_maker) as uow:
-        service = DatastoreFileService(
-            file_repository=DatastoreFileRepository(uow),
-            storage=create_datastore_storage(),
+        service = create_agent_skill_file_service(
+            uow,
             authorization_service=create_authorization_service(uow),
         )
         ctx = await AuthorizationDataService(uow.session).build_user_context(

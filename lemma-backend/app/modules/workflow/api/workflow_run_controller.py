@@ -9,7 +9,7 @@ from starlette.requests import Request
 from app.core.api.dependencies import CurrentUser, UoWDep
 from app.core.api.pagination import parse_uuid_page_token
 from app.core.authorization.dependencies import PodContextDep
-from app.modules.pod.infrastructure.pod_repositories import PodMemberRepository
+from app.composition.workflow_pod import PodMemberRepository
 from app.modules.workflow.api.schemas import (
     WorkflowRunFormSubmitRequest,
     WorkflowRunResponse,

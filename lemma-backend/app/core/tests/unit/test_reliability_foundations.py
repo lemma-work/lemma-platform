@@ -97,8 +97,15 @@ class _MemoryInbox(InboxConsumer):
         return self.attempt
 
     async def _finish(
-        self, consumer, event_id, status, *, error_type: str | None = None
+        self,
+        consumer,
+        event_id,
+        status,
+        *,
+        error_type: str | None = None,
+        failed_attempts: int | None = None,
     ) -> None:
+        del failed_attempts
         self.finished.append((status, error_type))
 
 
@@ -240,6 +247,7 @@ async def test_inbox_claim_and_finish_persist_all_state_transitions() -> None:
     claimable = SimpleNamespace(
         status=InboxStatus.RETRYING.value,
         attempts=2,
+        delivery_count=1,
         last_received_at=now - timedelta(minutes=2),
         last_error_type="OldError",
         last_error="old",
@@ -249,6 +257,8 @@ async def test_inbox_claim_and_finish_persist_all_state_transitions() -> None:
 
     assert await inbox._claim("worker", event_id, "test.created") == 3
     assert claimable.status == InboxStatus.PROCESSING.value
+    assert claimable.attempts == 2
+    assert claimable.delivery_count == 2
     assert claimable.last_error_type is None
     assert claimable.last_error is None
 
@@ -257,11 +267,13 @@ async def test_inbox_claim_and_finish_persist_all_state_transitions() -> None:
         SimpleNamespace(
             status=InboxStatus.COMPLETED.value,
             attempts=1,
+            delivery_count=1,
             last_received_at=now,
         ),
         SimpleNamespace(
             status=InboxStatus.PROCESSING.value,
             attempts=1,
+            delivery_count=1,
             last_received_at=now,
         ),
     ):
@@ -270,13 +282,16 @@ async def test_inbox_claim_and_finish_persist_all_state_transitions() -> None:
 
     abandoned = SimpleNamespace(
         status=InboxStatus.PROCESSING.value,
-        attempts=10,
+        attempts=4,
+        delivery_count=3,
         last_received_at=now - timedelta(minutes=2),
         last_error_type="WorkerLost",
         last_error="abandoned",
     )
     reclaiming = InboxConsumer(_session_maker(_DatabaseSessionDouble(row=abandoned)))
-    assert await reclaiming._claim("worker", event_id, "test.created") == 11
+    assert await reclaiming._claim("worker", event_id, "test.created") == 5
+    assert abandoned.attempts == 4
+    assert abandoned.delivery_count == 4
 
     finish_row = SimpleNamespace(
         status=None,
@@ -285,6 +300,7 @@ async def test_inbox_claim_and_finish_persist_all_state_transitions() -> None:
         dead_lettered_at=None,
         last_error_type=None,
         last_error=None,
+        attempts=0,
     )
     finisher = InboxConsumer(_session_maker(_DatabaseSessionDouble(row=finish_row)))
     await finisher._finish(
@@ -396,7 +412,7 @@ async def test_outbox_claim_state_updates_replay_and_lifespan(monkeypatch) -> No
             stream="test_events",
             event_type="test.created",
             payload={"value": "one"},
-            attempts=1,
+            attempts=0,
             occurred_at=now,
         )
     ]
@@ -410,7 +426,7 @@ async def test_outbox_claim_state_updates_replay_and_lifespan(monkeypatch) -> No
         stream=row.stream,
         event_type=row.event_type,
         payload=row.payload,
-        attempts=10,
+        attempts=9,
         occurred_at=row.occurred_at,
     )
     await dispatcher._mark_failed(terminal, RuntimeError("redis unavailable"))

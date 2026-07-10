@@ -18,7 +18,7 @@ from app.core.authorization.delegation_revocation import revoke_delegation
 from app.core.authorization.permissions import Permissions
 from app.core.helpers.slug import slugify
 from app.core.domain.job_queue import JobQueuePort
-from app.modules.icon.services.icon_service import IconService
+from app.modules.icon.contracts import IconCleanupPort
 from app.modules.function.domain.entities import (
     FunctionEntity,
     FunctionRunEntity,
@@ -43,7 +43,7 @@ from app.modules.function.domain.ports import (
     WorkspaceSessionPort,
 )
 
-from app.modules.pod.domain.pod_entities import PodRole
+from app.modules.pod.contracts import PodRole
 from app.core.log.log import get_logger
 
 logger = get_logger(__name__)
@@ -157,7 +157,7 @@ class FunctionService:
         storage_factory: FunctionStorageFactoryPort,
         authorization_service: object,
         job_queue: JobQueuePort | None = None,
-        icon_service: IconService | None = None,
+        icon_service: IconCleanupPort | None = None,
         function_executor_client_factory=None,
     ):
         # Bound mode only: real repositories + authorization. The use-case layer
@@ -725,4 +725,3 @@ class FunctionService:
         return await self._executor.extract_schemas(
             user_id, code, code_path, pod_id, function_id
         )
-

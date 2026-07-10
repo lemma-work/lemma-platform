@@ -14,9 +14,6 @@ from app.core.domain.events import RawWebhookReceivedEvent
 from app.core.infrastructure.events.inbox import stable_event_id
 from app.core.infrastructure.events.publisher import EventPublisher
 from app.core.redaction import redact_value
-from app.modules.agent_surfaces.infrastructure.debug.raw_webhook_file_logger import (
-    log_raw_webhook_event,
-)
 
 logger = get_logger(__name__)
 
@@ -118,8 +115,6 @@ async def handle_webhook(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="Unsupported or unverified webhook source",
         )
-
-    await log_raw_webhook_event(source=source, payload=payload, headers=headers)
 
     # Handle Slack URL verification challenge
     if source == "slack" and payload.get("type") == "url_verification":

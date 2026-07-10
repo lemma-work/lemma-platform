@@ -158,7 +158,7 @@ class AppSandboxBuilder:
     def _service(self) -> Any:
         if self._workspace is not None:
             return self._workspace
-        from app.modules.workspace.services.workspace_sandbox_service import (
+        from app.composition.pod_bundle_apps import (
             WorkspaceSandboxService,
         )
 
@@ -331,8 +331,7 @@ class AppStepRunner:
         ``(already_ready, slug)`` where ``already_ready`` is True when it already
         exists fully deployed (a READY current release) so the caller can skip the
         rebuild on replay. ``slug`` is the app's deployed public slug."""
-        from app.modules.apps.domain.entities import AppEntity, AppStatus
-        from app.modules.apps.domain.errors import AppConflictError
+        from app.modules.apps.contracts import AppConflictError, AppEntity, AppStatus
 
         async with self._authed_scope(pod_id, user_id) as (uow, ctx):
             service = self._build_service(uow)
@@ -418,7 +417,7 @@ class AppStepRunner:
         """resolve → write (no connection) → finalize, mirroring
         ``AppUseCases.upload_bundle`` so the imported app serves immediately.
         Wraps dist validation into a terminal build error."""
-        from app.modules.apps.domain.errors import AppValidationError
+        from app.modules.apps.contracts import AppValidationError
 
         async with self._authed_scope(pod_id, user_id) as (uow, ctx):
             service = self._build_service(uow)
@@ -475,7 +474,7 @@ class AppStepRunner:
 
 
 def _default_service_builder(uow: Any) -> Any:
-    from app.modules.apps.api.dependencies import build_app_service
+    from app.composition.pod_bundle_apps import build_app_service
 
     return build_app_service(uow)
 

@@ -5,8 +5,9 @@ Covers:
   schedule-event unique constraint gates node side effects.
 - C3 (LP-102): a duplicate agent-target schedule fire is skipped via the durable
   PostgreSQL ledger, so the agent conversation is not started twice.
-- E: the failure circuit breaker counts ERROR fires, resets on success, and
-  deactivates the schedule at the threshold.
+- E: the failure circuit breaker counts distinct dead-lettered schedule runs,
+  ignores delivery attempts, resets on successful dispatch, and deactivates at
+  the threshold.
 """
 
 from __future__ import annotations
@@ -18,7 +19,11 @@ from uuid import uuid4
 import pytest
 
 from app.modules.schedule.domain.events.schedule import ScheduleDeactivated
-from app.modules.schedule.domain.schedule import ScheduleFireStatus, ScheduleType
+from app.modules.schedule.domain.schedule import (
+    ScheduleFireStatus,
+    ScheduleRunStatus,
+    ScheduleType,
+)
 from app.modules.workflow.execution.engine import WorkflowEngine
 from app.modules.workflow.services.schedule_start_service import ScheduleStartService
 
@@ -91,7 +96,7 @@ async def test_duplicate_agent_schedule_fire_is_skipped(monkeypatch):
     svc = ScheduleStartService(engine)
 
     # Schedule lookup returns our agent-target schedule.
-    import app.modules.schedule.repositories.schedule_repository as repo_mod
+    import app.modules.workflow.services.schedule_start_service as repo_mod
 
     monkeypatch.setattr(
         repo_mod,
@@ -100,7 +105,7 @@ async def test_duplicate_agent_schedule_fire_is_skipped(monkeypatch):
     )
 
     # The durable dedup claim reports "already delivered".
-    import app.modules.schedule.repositories.schedule_run_repository as run_repo_mod
+    import app.modules.workflow.services.schedule_start_service as run_repo_mod
 
     run_repo = Mock()
     run_repo.claim = AsyncMock(return_value=None)
@@ -118,15 +123,21 @@ async def test_duplicate_agent_schedule_fire_is_skipped(monkeypatch):
 
 @pytest.mark.anyio
 @pytest.mark.parametrize(
-    "status,counts,expect_deactivate",
+    "run_status,count,expect_deactivate",
     [
-        (ScheduleFireStatus.TRIGGERED, None, False),
-        (ScheduleFireStatus.ERROR, 2, False),
-        (ScheduleFireStatus.ERROR, 3, True),
+        (ScheduleRunStatus.DISPATCHED, None, False),
+        (ScheduleRunStatus.FAILED, None, False),
+        (ScheduleRunStatus.DEAD_LETTERED, 2, False),
+        (ScheduleRunStatus.DEAD_LETTERED, 3, True),
     ],
 )
-async def test_failure_circuit_breaker(monkeypatch, status, counts, expect_deactivate):
-    """ERROR increments and trips at the threshold; TRIGGERED resets."""
+async def test_failure_circuit_breaker(
+    monkeypatch,
+    run_status,
+    count,
+    expect_deactivate,
+):
+    """Only distinct terminal runs contribute to the breaker streak."""
     monkeypatch.setattr(
         "app.modules.schedule.config.schedule_settings.schedule_max_consecutive_failures",
         3,
@@ -136,19 +147,35 @@ async def test_failure_circuit_breaker(monkeypatch, status, counts, expect_deact
     schedule = SimpleNamespace(id=uuid4(), user_id=uuid4(), schedule_type="TIME")
     schedule_repo = Mock()
     schedule_repo.update = AsyncMock()
-    schedule_repo.increment_consecutive_failures = AsyncMock(return_value=counts or 0)
-    schedule_repo.reset_consecutive_failures = AsyncMock()
+    schedule_repo.set_consecutive_failures = AsyncMock()
+    run_repo = Mock()
+    run_repo.consecutive_terminal_failures = AsyncMock(return_value=count)
 
-    tripped = await svc._apply_failure_policy(schedule_repo, schedule, status)
+    tripped = await svc._apply_failure_policy(
+        schedule_repo,
+        run_repo,
+        schedule,
+        run_status,
+    )
 
-    if status == ScheduleFireStatus.TRIGGERED:
-        schedule_repo.reset_consecutive_failures.assert_awaited_once_with(schedule.id)
+    if run_status == ScheduleRunStatus.DISPATCHED:
+        schedule_repo.set_consecutive_failures.assert_awaited_once_with(schedule.id, 0)
+        run_repo.consecutive_terminal_failures.assert_not_awaited()
+        assert tripped is None
+    elif run_status == ScheduleRunStatus.FAILED:
+        schedule_repo.set_consecutive_failures.assert_not_awaited()
+        run_repo.consecutive_terminal_failures.assert_not_awaited()
         assert tripped is None
     elif expect_deactivate:
+        schedule_repo.set_consecutive_failures.assert_awaited_once_with(
+            schedule.id, count
+        )
         schedule_repo.update.assert_awaited_once_with(schedule.id, is_active=False)
-        schedule_repo.reset_consecutive_failures.assert_awaited_once_with(schedule.id)
-        assert tripped == counts
+        assert tripped == count
     else:
+        schedule_repo.set_consecutive_failures.assert_awaited_once_with(
+            schedule.id, count
+        )
         schedule_repo.update.assert_not_awaited()
         assert tripped is None
 
@@ -166,13 +193,16 @@ async def test_deactivation_event_is_staged_before_fire_transaction_commits(
     )
     schedule_repo = Mock()
     schedule_repo.record_fire = AsyncMock()
+    run_repo = Mock()
     monkeypatch.setattr(service, "_apply_failure_policy", AsyncMock(return_value=3))
 
     await service._record_fire(
         schedule_repo,
+        run_repo,
         schedule,
         status=ScheduleFireStatus.ERROR,
         error="target dispatch failed",
+        run_status=ScheduleRunStatus.DEAD_LETTERED,
     )
 
     staged = engine.uow.collect_events.call_args.args[0]

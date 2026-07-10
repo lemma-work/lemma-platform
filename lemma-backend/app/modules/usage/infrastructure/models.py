@@ -4,9 +4,9 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 from typing import Any
-from uuid import UUID
+from uuid import UUID, uuid7
 
-from sqlalchemy import DateTime, Float, Index, String
+from sqlalchemy import DateTime, Float, Index, String, Text, UniqueConstraint
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -167,4 +167,22 @@ class UsageLimitCounter(UUIDAuditBase):
             unique=True,
             postgresql_nulls_not_distinct=True,
         ),
+    )
+
+
+class SystemModelAdmissionBlock(UUIDAuditBase):
+    """Durable fail-closed switch after a provider exceeds an enforced quote."""
+
+    __tablename__ = "usage_model_admission_blocks"
+
+    id: Mapped[UUID] = mapped_column(primary_key=True, default=uuid7, index=False)
+    profile_id: Mapped[str] = mapped_column(String(120), nullable=False)
+    model_name: Mapped[str] = mapped_column(String(160), nullable=False)
+    reason_code: Mapped[str] = mapped_column(String(100), nullable=False)
+    quoted_usd: Mapped[float] = mapped_column(Float, nullable=False)
+    actual_usd: Mapped[float] = mapped_column(Float, nullable=False)
+    detail: Mapped[str | None] = mapped_column(Text, nullable=True)
+
+    __table_args__ = (
+        UniqueConstraint("profile_id", name="uq_usage_admission_block_profile"),
     )

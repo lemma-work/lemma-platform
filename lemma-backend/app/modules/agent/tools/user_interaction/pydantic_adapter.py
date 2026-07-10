@@ -19,8 +19,10 @@ from app.modules.agent.tools.user_interaction.models import (
     RequestApprovalResponse,
     validate_display_payload,
 )
-from app.modules.workspace.services.agentbox_manager import agentbox_sandbox_id
-from app.modules.workspace.services.workspace_sandbox_service import WorkspaceSandboxService
+from app.composition.agent_workspace import (
+    WorkspaceSandboxService,
+    agentbox_sandbox_id,
+)
 
 
 async def display_resource(
@@ -177,19 +179,14 @@ async def _maybe_deliver_to_surface(
         return
 
     # Lazy import to avoid an agent -> agent_surfaces module-load cycle.
-    from app.modules.agent_surfaces.platforms.platform_capabilities import (
-        get_platform_capabilities,
-    )
+    from app.composition.agent_surface_runtime import platform_supports_chat_delivery
 
-    caps = get_platform_capabilities(platform)
-    if caps is None or caps.is_email:
+    if not platform_supports_chat_delivery(platform):
         return
 
-    from app.modules.agent_surfaces.services.surface_display_delivery import (
-        deliver_display_resource_to_surface,
-    )
+    from app.composition.agent_surface_runtime import deliver_display_resource
 
-    await deliver_display_resource_to_surface(
+    await deliver_display_resource(
         conversation_id=deps.conversation_id,
         request=request,
         tool_call_id=getattr(ctx, "tool_call_id", None),

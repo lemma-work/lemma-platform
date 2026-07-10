@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from datetime import datetime
 from uuid import UUID
 
 from app.core.authorization.context import Context
@@ -13,7 +14,12 @@ from app.modules.workflow.domain.start import WorkflowStartType
 from app.modules.workflow.domain.wait import WorkflowRunWaitType
 from app.modules.workflow.execution.engine import WorkflowEngine
 from app.core.log.log import get_logger
-from app.modules.schedule.config import schedule_settings
+from app.composition.workflow_schedule_runtime import (
+    ScheduleRepository,
+    ScheduleRunRepository,
+    schedule_settings,
+)
+from app.modules.schedule.contracts import ScheduleFireStatus, ScheduleRunStatus
 
 logger = get_logger(__name__)
 
@@ -46,15 +52,8 @@ class ScheduleStartService:
         metadata: dict | None = None,
         llm_output: dict | None = None,
         schedule_event_id: str | None = None,
+        source_occurred_at: datetime | None = None,
     ) -> None:
-        from app.modules.schedule.repositories.schedule_repository import (
-            ScheduleRepository,
-        )
-        from app.modules.schedule.domain.schedule import ScheduleFireStatus
-        from app.modules.schedule.repositories.schedule_run_repository import (
-            ScheduleRunRepository,
-        )
-
         # 1. A wake for a specific run (wait_until timers carry the run id, and —
         # for timers scheduled after the per-wait-token change — a wait_ref that
         # resolves to the exact wait so sequential timers can't cross-resume).
@@ -91,6 +90,7 @@ class ScheduleStartService:
             payload=payload,
             metadata=metadata,
             llm_output=llm_output,
+            source_occurred_at=source_occurred_at,
         )
         if schedule_run is None:
             logger.info(
@@ -117,14 +117,22 @@ class ScheduleStartService:
                 await run_repo.mark_dispatched(
                     schedule_run.id, target_run_id=run_id
                 )
-                await self._record_fire(schedule_repo, schedule, run_id=run_id)
-            except Exception as exc:
-                await run_repo.mark_failed(schedule_run.id, exc)
                 await self._record_fire(
                     schedule_repo,
+                    run_repo,
+                    schedule,
+                    run_id=run_id,
+                    run_status=ScheduleRunStatus.DISPATCHED,
+                )
+            except Exception as exc:
+                run_status = await run_repo.mark_failed(schedule_run.id, exc)
+                await self._record_fire(
+                    schedule_repo,
+                    run_repo,
                     schedule,
                     status=ScheduleFireStatus.ERROR,
                     error=f"{type(exc).__name__}: target dispatch failed",
+                    run_status=run_status,
                 )
                 raise
             return
@@ -138,15 +146,21 @@ class ScheduleStartService:
                     user_id=schedule.user_id,
                     source="SCHEDULE",
                     conversation_metadata={"schedule_id": str(schedule_id)},
+                    origin_type="SCHEDULE_RUN",
+                    origin_id=schedule_run.id,
                 )
                 await run_repo.mark_dispatched(
                     schedule_run.id, target_run_id=str(conversation_id)
                 )
                 await self._record_fire(
-                    schedule_repo, schedule, run_id=str(conversation_id)
+                    schedule_repo,
+                    run_repo,
+                    schedule,
+                    run_id=str(conversation_id),
+                    run_status=ScheduleRunStatus.DISPATCHED,
                 )
             except Exception as exc:
-                await run_repo.mark_failed(schedule_run.id, exc)
+                run_status = await run_repo.mark_failed(schedule_run.id, exc)
                 logger.exception(
                     "Failed to start agent for schedule",
                     agent_id=str(schedule.agent_id),
@@ -154,9 +168,11 @@ class ScheduleStartService:
                 )
                 await self._record_fire(
                     schedule_repo,
+                    run_repo,
                     schedule,
                     status=ScheduleFireStatus.ERROR,
                     error=f"{type(exc).__name__}: target dispatch failed",
+                    run_status=run_status,
                 )
                 raise
 
@@ -253,76 +269,57 @@ class ScheduleStartService:
     async def _record_fire(
         self,
         schedule_repo,
+        run_repo,
         schedule,
         *,
         run_id: str | None = None,
         status=None,
         error: str | None = None,
+        run_status=None,
     ) -> None:
-        from app.modules.schedule.domain.schedule import ScheduleFireStatus
-
         resolved = status or ScheduleFireStatus.TRIGGERED
-        tripped_count: int | None = None
-        try:
-            await schedule_repo.record_fire(
-                schedule.id,
-                status=resolved,
-                run_id=run_id,
-                error=error,
-            )
-            tripped_count = await self._apply_failure_policy(
-                schedule_repo, schedule, resolved
-            )
-            if tripped_count is not None:
-                from app.modules.schedule.domain.events.schedule import (
-                    ScheduleDeactivated,
-                )
+        await schedule_repo.record_fire(
+            schedule.id,
+            status=resolved,
+            run_id=run_id,
+            error=error,
+        )
+        tripped_count = await self._apply_failure_policy(
+            schedule_repo, run_repo, schedule, run_status
+        )
+        if tripped_count is not None:
+            from app.modules.schedule.domain.events.schedule import ScheduleDeactivated
 
-                self._uow.collect_events(
-                    [
-                        ScheduleDeactivated(
-                            schedule_id=schedule.id,
-                            user_id=schedule.user_id,
-                            schedule_type=schedule.schedule_type,
-                            consecutive_failures=tripped_count,
-                        )
-                    ]
-                )
-            await self._uow.commit()
-        except Exception:
-            logger.exception(
-                "Failed to record fire telemetry",
-                schedule_id=str(schedule.id),
+            self._uow.collect_events(
+                [
+                    ScheduleDeactivated(
+                        schedule_id=schedule.id,
+                        user_id=schedule.user_id,
+                        schedule_type=schedule.schedule_type,
+                        consecutive_failures=tripped_count,
+                    )
+                ]
             )
-            return
+        await self._uow.commit()
 
     async def _apply_failure_policy(
-        self, schedule_repo, schedule, status
+        self, schedule_repo, run_repo, schedule, run_status
     ) -> int | None:
-        """Circuit breaker: count consecutive failures and deactivate on threshold.
-
-        ERROR increments the PostgreSQL counter; a success (TRIGGERED) resets it;
-        anything else (e.g. FILTERED, which never reaches this execution choke
-        point anyway) is a no-op. Returns the failure count when it trips the
-        breaker, else None.
-        """
-        from app.modules.schedule.domain.schedule import ScheduleFireStatus
-
-        if status == ScheduleFireStatus.TRIGGERED:
-            await schedule_repo.reset_consecutive_failures(schedule.id)
+        """Derive the breaker from distinct terminal schedule runs."""
+        if run_status == ScheduleRunStatus.DISPATCHED:
+            await schedule_repo.set_consecutive_failures(schedule.id, 0)
             return None
-        if status != ScheduleFireStatus.ERROR:
+        if run_status != ScheduleRunStatus.DEAD_LETTERED:
             return None
 
-        count = await schedule_repo.increment_consecutive_failures(schedule.id)
+        count = await run_repo.consecutive_terminal_failures(schedule.id)
+        await schedule_repo.set_consecutive_failures(schedule.id, count)
         threshold = schedule_settings.schedule_max_consecutive_failures
         if threshold <= 0 or count < threshold:
             return None
 
-        # Trip: stop the schedule from firing (all matcher queries filter is_active)
-        # and clear the counter so a later reactivation starts clean.
+        # Trip: stop the schedule from firing (all matcher queries filter is_active).
         await schedule_repo.update(schedule.id, is_active=False)
-        await schedule_repo.reset_consecutive_failures(schedule.id)
         logger.warning(
             "Circuit breaker deactivated schedule",
             schedule_id=str(schedule.id),

@@ -9,10 +9,12 @@ import pytest
 from redis.exceptions import RedisError
 
 from app.modules.pod_bundle.domain.state import (
+    BundleJobKind,
     BundleSource,
     ImportState,
     ImportStatus,
 )
+from app.modules.pod_bundle.domain.errors import BundleStateConflictError
 from app.modules.pod_bundle.infrastructure.state_store import PodBundleStateStore
 from app.modules.pod_bundle.infrastructure import state_store as state_store_module
 
@@ -120,27 +122,29 @@ class _Session:
         return self.model
 
 
-class _PersistSession(_Session):
-    def begin(self):
-        return _Session()
-
-    async def scalar(self, statement):
-        del statement
-        return self.model
-
-    async def execute(self, statement):
-        del statement
-
-
 async def test_durable_get_prefers_postgres_snapshot(monkeypatch, store):
     state = _state()
-    session = _Session(SimpleNamespace(snapshot=state.model_dump(mode="json")))
+    heartbeat = datetime.now(timezone.utc)
+    session = _Session(
+        SimpleNamespace(
+            job_kind=BundleJobKind.IMPORT.value,
+            snapshot=state.model_dump(mode="json"),
+            version=4,
+            attempt=2,
+            heartbeat_at=heartbeat,
+        )
+    )
     monkeypatch.setattr(state_store_module, "async_session_maker", lambda: session)
     store._durable = True
 
     loaded = await store.get_import(state.import_id)
 
-    assert loaded == state
+    assert loaded is not None
+    assert loaded.import_id == state.import_id
+    assert loaded.status == state.status
+    assert loaded.version == 4
+    assert loaded.attempt == 2
+    assert loaded.heartbeat_at == heartbeat
 
 
 async def test_durable_get_contains_invalid_legacy_cache(monkeypatch, store):
@@ -165,23 +169,36 @@ async def test_durable_get_imports_legacy_redis_snapshot(monkeypatch, store, cac
     monkeypatch.setattr(
         state_store_module, "async_session_maker", lambda: _Session(None)
     )
-    persist = AsyncMock(return_value=True)
-    monkeypatch.setattr(store, "_persist_import", persist)
+    persisted = state.model_copy(deep=True)
+    persisted.version = 1
+    persist = AsyncMock(return_value=persisted)
+    monkeypatch.setattr(store, "_persist_state", persist)
 
     loaded = await store.get_import(state.import_id)
 
-    assert loaded == state
-    persist.assert_awaited_once_with(loaded)
+    assert loaded is not None
+    assert loaded.import_id == state.import_id
+    assert loaded.version == 1
+    persist.assert_awaited_once_with(
+        BundleJobKind.IMPORT,
+        state.import_id,
+        loaded,
+    )
 
 
-async def test_durable_save_does_not_mirror_rejected_terminal_regression(
+async def test_durable_save_does_not_mirror_state_conflict(
     monkeypatch, store, cache
 ):
     state = _state()
     store._durable = True
-    monkeypatch.setattr(store, "_persist_import", AsyncMock(return_value=False))
+    monkeypatch.setattr(
+        store,
+        "_persist_state",
+        AsyncMock(side_effect=BundleStateConflictError()),
+    )
 
-    await store.save_import(state)
+    with pytest.raises(BundleStateConflictError):
+        await store.save_import(state)
 
     assert cache.data == {}
 
@@ -194,25 +211,31 @@ async def test_durable_save_survives_redis_mirror_failure(monkeypatch):
 
     store = PodBundleStateStore(cache=_FailingCache())
     store._durable = True
-    monkeypatch.setattr(store, "_persist_import", AsyncMock(return_value=True))
+    state = _state()
+    persisted = state.model_copy(deep=True)
+    persisted.version = 1
+    monkeypatch.setattr(store, "_persist_state", AsyncMock(return_value=persisted))
 
-    await store.save_import(_state())
+    await store.save_import(state)
+    assert state.version == 1
 
 
-async def test_persist_refuses_to_overwrite_terminal_state(monkeypatch, store):
+def test_transition_refuses_to_overwrite_terminal_state():
     existing = _state()
     existing.status = ImportStatus.CANCELLED
-    session = _PersistSession(
-        SimpleNamespace(snapshot=existing.model_dump(mode="json"))
-    )
-    monkeypatch.setattr(state_store_module, "async_session_maker", lambda: session)
+    incoming = existing.model_copy(deep=True)
+    incoming.status = ImportStatus.APPLYING
 
-    assert await store._persist_import(_state()) is False
+    with pytest.raises(BundleStateConflictError):
+        PodBundleStateStore._validate_transition(
+            BundleJobKind.IMPORT,
+            existing,
+            incoming,
+            allow_failed_reopen=False,
+        )
 
 
-async def test_persist_preserves_cancellation_and_merges_committed_steps(
-    monkeypatch, store
-):
+def test_transition_rejects_stale_worker_after_cancellation():
     existing = _state()
     existing.status = ImportStatus.CANCELLING
     existing.cancel_requested_at = datetime.now(timezone.utc)
@@ -221,12 +244,34 @@ async def test_persist_preserves_cancellation_and_merges_committed_steps(
     incoming.status = ImportStatus.APPLYING
     incoming.cancel_requested_at = None
     incoming.committed_steps = [1]
-    session = _PersistSession(
-        SimpleNamespace(snapshot=existing.model_dump(mode="json"))
-    )
-    monkeypatch.setattr(state_store_module, "async_session_maker", lambda: session)
 
-    assert await store._persist_import(incoming) is True
-    assert incoming.status is ImportStatus.CANCELLING
-    assert incoming.cancel_requested_at == existing.cancel_requested_at
-    assert incoming.committed_steps == [1, 2]
+    with pytest.raises(BundleStateConflictError):
+        PodBundleStateStore._validate_transition(
+            BundleJobKind.IMPORT,
+            existing,
+            incoming,
+            allow_failed_reopen=False,
+        )
+
+
+def test_failed_job_reopens_only_with_explicit_incremented_attempt():
+    existing = _state()
+    existing.status = ImportStatus.FAILED
+    incoming = existing.model_copy(deep=True)
+    incoming.status = ImportStatus.APPLYING
+
+    with pytest.raises(BundleStateConflictError):
+        PodBundleStateStore._validate_transition(
+            BundleJobKind.IMPORT,
+            existing,
+            incoming,
+            allow_failed_reopen=True,
+        )
+
+    incoming.attempt += 1
+    PodBundleStateStore._validate_transition(
+        BundleJobKind.IMPORT,
+        existing,
+        incoming,
+        allow_failed_reopen=True,
+    )

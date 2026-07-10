@@ -209,7 +209,6 @@ export type { PodMemberResponse } from './models/PodMemberResponse.js';
 export type { PodMemberUpdateRoleRequest } from './models/PodMemberUpdateRoleRequest.js';
 export type { PodPermissionCatalogResponse } from './models/PodPermissionCatalogResponse.js';
 export type { PodPermissionResponse } from './models/PodPermissionResponse.js';
-export { PodProvisioningStatus } from './models/PodProvisioningStatus.js';
 export type { PodRecipe } from './models/PodRecipe.js';
 export type { PodResponse } from './models/PodResponse.js';
 export { PodRole } from './models/PodRole.js';

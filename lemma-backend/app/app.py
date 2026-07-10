@@ -12,6 +12,7 @@ from supertokens_python.framework.fastapi import get_middleware
 
 from app.version import API_VERSION
 from app.core.api.exception_handlers import register_exception_handlers
+from app.core.api.streaming_multipart import install_streaming_multipart_openapi
 from app.core.domain.errors import PayloadTooLargeError
 from app.core.config import settings
 from app.core.cors import get_allowed_cors_origin_regex, get_allowed_cors_origins
@@ -421,6 +422,7 @@ def create_app(modules=OSS_MODULES) -> FastAPI:
             description=app.description,
         )
         schema = _replace_openapi_refs(schema, OPENAPI_SCHEMA_RENAMES)
+        schema = install_streaming_multipart_openapi(schema)
         components = schema.setdefault("components", {}).setdefault("schemas", {})
         for old_name, new_name in OPENAPI_SCHEMA_RENAMES.items():
             if old_name in components:

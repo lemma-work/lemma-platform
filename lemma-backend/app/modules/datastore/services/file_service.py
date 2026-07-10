@@ -43,6 +43,9 @@ from app.modules.datastore.services.files.searcher import FileSearcher
 from app.modules.datastore.services.files.skills_overlay import SkillsOverlay
 from app.modules.datastore.services.files.tree import DirectoryTreeBuilder
 from app.modules.datastore.services.files.writer import FileWriter
+from app.modules.datastore.services.files.transaction_facade import (
+    FileTransactionFacade,
+)
 from app.modules.datastore.services.search.postgres_search_service import PostgresSearchService
 from app.modules.datastore.services.system_skill_files import SystemSkillFileProvider
 
@@ -59,7 +62,7 @@ def _child_page_number(artifact_rel: str) -> int | None:
     return int(match.group(1)) if match else None
 
 
-class DatastoreFileService:
+class DatastoreFileService(FileTransactionFacade):
     """Thin facade over the datastore file collaborators. Public method names
     and signatures are part of the frozen contract; each delegates to the
     collaborator that owns the behaviour."""

@@ -1139,20 +1139,16 @@ class PydanticAIHarness:
             attachments = metadata.get("attachments")
             if isinstance(attachments, list) and attachments:
                 try:
-                    from app.modules.agent_surfaces.platforms.common import (
-                        attachment_tool_hint,
-                        render_attachment_prompt_block,
+                    from app.composition.agent_surface_runtime import (
+                        render_attachment_context,
                     )
 
                     platform_name = str(platform or "external").upper()
-                    attachment_block = render_attachment_prompt_block(
-                        attachments,
-                        platform=platform_name,
-                        include_hint=False,
+                    attachment_block, hint = render_attachment_context(
+                        attachments, platform=platform_name
                     )
                     if attachment_block:
                         pieces.append(attachment_block)
-                    hint = attachment_tool_hint(platform_name)
                     if hint:
                         pieces.append(hint)
                 except Exception:
@@ -1160,9 +1156,7 @@ class PydanticAIHarness:
 
         if platform:
             try:
-                from app.modules.agent_surfaces.platforms.common import (
-                    email_reply_instruction,
-                )
+                from app.composition.agent_surface_runtime import email_reply_instruction
 
                 email_hint = email_reply_instruction(str(platform))
                 if email_hint:

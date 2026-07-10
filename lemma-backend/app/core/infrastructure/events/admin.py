@@ -20,7 +20,12 @@ logger = get_logger(__name__)
 async def _list_events(*, dead_only: bool, limit: int) -> None:
     session_maker = get_session_maker()
     async with session_maker() as session:
-        stmt = select(DomainEventOutbox).order_by(DomainEventOutbox.occurred_at.desc()).limit(limit)
+        order = (
+            (DomainEventOutbox.dead_lettered_at.desc(), DomainEventOutbox.id.desc())
+            if dead_only
+            else (DomainEventOutbox.occurred_at.desc(), DomainEventOutbox.id.desc())
+        )
+        stmt = select(DomainEventOutbox).order_by(*order).limit(limit)
         if dead_only:
             stmt = stmt.where(DomainEventOutbox.dead_lettered_at.is_not(None))
         for row in (await session.scalars(stmt)).all():

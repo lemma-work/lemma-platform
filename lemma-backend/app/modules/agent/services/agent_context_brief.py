@@ -29,12 +29,12 @@ from app.modules.agent.infrastructure.context_brief_repository import (
     AgentContextBriefRepository,
 )
 from app.modules.agent.infrastructure.repositories import AgentRepository
-from app.modules.datastore.api.dependencies import (
+from app.composition.agent_datastore import (
     build_file_service,
     build_table_service,
 )
-from app.modules.function.infrastructure.repositories import FunctionRepository
-from app.modules.pod.services.authorization_factory import create_authorization_service
+from app.composition.agent_functions import create_function_repository
+from app.composition.authorization import create_authorization_service
 
 _MAX_TABLES = 50
 _MAX_RESOURCES = 50
@@ -182,7 +182,7 @@ class AgentContextBriefBuilder:
 
         # Functions (plain query).
         async with self.uow_factory() as uow:
-            functions, _ = await FunctionRepository(uow).list_by_pod(
+            functions, _ = await create_function_repository(uow).list_by_pod(
                 pod_id, limit=_MAX_RESOURCES
             )
         if functions:

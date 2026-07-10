@@ -3,7 +3,13 @@ from __future__ import annotations
 from faststream import Depends, Logger
 from faststream.redis import RedisRouter
 
-from app.core.infrastructure.events.stream_subscriber import redis_stream_sub
+from app.core.infrastructure.events.inbox import (
+    EventInboxPort,
+    provide_domain_event_inbox,
+)
+from app.core.infrastructure.events.stream_subscriber import (
+    reliable_redis_stream_subscriber,
+)
 from app.modules.identity.domain.events import (
     IdentityEvents,
     OrganizationInvitationAcceptedEvent,
@@ -23,13 +29,30 @@ def provide_identity_email_port() -> IdentityEmailPort:
     return SmtpIdentityEmailAdapter()
 
 
-@router.subscriber(stream=redis_stream_sub(IdentityEvents.STREAM))
+@reliable_redis_stream_subscriber(
+    router,
+    IdentityEvents.STREAM,
+    group="identity-email-events",
+    consumer="identity-email-events-consumer",
+)
 async def handle_identity_event(
     event: dict,
     fs_logger: Logger,
     email_port: IdentityEmailPort = Depends(provide_identity_email_port),
+    inbox: EventInboxPort = Depends(provide_domain_event_inbox),
 ):
     """Dispatch identity events to email adapter."""
+    async def dispatch() -> None:
+        await _dispatch_identity_event(event, fs_logger, email_port)
+
+    await inbox.process("identity-email-events", event, dispatch)
+
+
+async def _dispatch_identity_event(
+    event: dict,
+    fs_logger: Logger,
+    email_port: IdentityEmailPort,
+) -> None:
     event_type = event.get("event_type")
 
     if event_type == OrganizationInvitationCreatedEvent.get_event_type():

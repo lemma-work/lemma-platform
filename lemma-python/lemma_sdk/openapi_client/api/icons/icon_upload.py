@@ -5,15 +5,14 @@ import httpx
 
 from ... import errors
 from ...client import AuthenticatedClient, Client
-from ...models.body_icon_upload import BodyIconUpload
-from ...models.error_response import ErrorResponse
+from ...models.icon_upload_request import IconUploadRequest
 from ...models.icon_upload_response import IconUploadResponse
 from ...types import Response
 
 
 def _get_kwargs(
     *,
-    body: BodyIconUpload,
+    body: IconUploadRequest,
 ) -> dict[str, Any]:
     headers: dict[str, Any] = {}
 
@@ -30,16 +29,11 @@ def _get_kwargs(
 
 def _parse_response(
     *, client: AuthenticatedClient | Client, response: httpx.Response
-) -> ErrorResponse | IconUploadResponse | None:
+) -> IconUploadResponse | None:
     if response.status_code == 201:
         response_201 = IconUploadResponse.from_dict(response.json())
 
         return response_201
-
-    if response.status_code == 422:
-        response_422 = ErrorResponse.from_dict(response.json())
-
-        return response_422
 
     if client.raise_on_unexpected_status:
         raise errors.UnexpectedStatus(response.status_code, response.content)
@@ -49,7 +43,7 @@ def _parse_response(
 
 def _build_response(
     *, client: AuthenticatedClient | Client, response: httpx.Response
-) -> Response[ErrorResponse | IconUploadResponse]:
+) -> Response[IconUploadResponse]:
     return Response(
         status_code=HTTPStatus(response.status_code),
         content=response.content,
@@ -61,21 +55,21 @@ def _build_response(
 def sync_detailed(
     *,
     client: AuthenticatedClient | Client,
-    body: BodyIconUpload,
-) -> Response[ErrorResponse | IconUploadResponse]:
+    body: IconUploadRequest,
+) -> Response[IconUploadResponse]:
     """Upload Icon
 
      Upload an image asset and receive a public icon URL.
 
     Args:
-        body (BodyIconUpload):
+        body (IconUploadRequest):
 
     Raises:
         errors.UnexpectedStatus: If the server returns an undocumented status code and Client.raise_on_unexpected_status is True.
         httpx.TimeoutException: If the request takes longer than Client.timeout.
 
     Returns:
-        Response[ErrorResponse | IconUploadResponse]
+        Response[IconUploadResponse]
     """
 
     kwargs = _get_kwargs(
@@ -92,21 +86,21 @@ def sync_detailed(
 def sync(
     *,
     client: AuthenticatedClient | Client,
-    body: BodyIconUpload,
-) -> ErrorResponse | IconUploadResponse | None:
+    body: IconUploadRequest,
+) -> IconUploadResponse | None:
     """Upload Icon
 
      Upload an image asset and receive a public icon URL.
 
     Args:
-        body (BodyIconUpload):
+        body (IconUploadRequest):
 
     Raises:
         errors.UnexpectedStatus: If the server returns an undocumented status code and Client.raise_on_unexpected_status is True.
         httpx.TimeoutException: If the request takes longer than Client.timeout.
 
     Returns:
-        ErrorResponse | IconUploadResponse
+        IconUploadResponse
     """
 
     return sync_detailed(
@@ -118,21 +112,21 @@ def sync(
 async def asyncio_detailed(
     *,
     client: AuthenticatedClient | Client,
-    body: BodyIconUpload,
-) -> Response[ErrorResponse | IconUploadResponse]:
+    body: IconUploadRequest,
+) -> Response[IconUploadResponse]:
     """Upload Icon
 
      Upload an image asset and receive a public icon URL.
 
     Args:
-        body (BodyIconUpload):
+        body (IconUploadRequest):
 
     Raises:
         errors.UnexpectedStatus: If the server returns an undocumented status code and Client.raise_on_unexpected_status is True.
         httpx.TimeoutException: If the request takes longer than Client.timeout.
 
     Returns:
-        Response[ErrorResponse | IconUploadResponse]
+        Response[IconUploadResponse]
     """
 
     kwargs = _get_kwargs(
@@ -147,21 +141,21 @@ async def asyncio_detailed(
 async def asyncio(
     *,
     client: AuthenticatedClient | Client,
-    body: BodyIconUpload,
-) -> ErrorResponse | IconUploadResponse | None:
+    body: IconUploadRequest,
+) -> IconUploadResponse | None:
     """Upload Icon
 
      Upload an image asset and receive a public icon URL.
 
     Args:
-        body (BodyIconUpload):
+        body (IconUploadRequest):
 
     Raises:
         errors.UnexpectedStatus: If the server returns an undocumented status code and Client.raise_on_unexpected_status is True.
         httpx.TimeoutException: If the request takes longer than Client.timeout.
 
     Returns:
-        ErrorResponse | IconUploadResponse
+        IconUploadResponse
     """
 
     return (

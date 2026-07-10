@@ -22,7 +22,7 @@ from app.core.infrastructure.jobs.streaq_job_queue import (
     get_streaq_job_queue,
 )
 from app.core.infrastructure.jobs.streaq_runtime import AppWorkerContext, streaq_task, streaq_worker
-from app.modules.agent.api.dependencies import get_conversation_service
+from app.composition.surface_agent import get_conversation_service
 from app.modules.agent_surfaces.api.dependencies import (
     get_surface_service,
     surface_repository_factory,
@@ -45,7 +45,7 @@ from app.modules.agent_surfaces.infrastructure.repositories.surface_repository i
 from app.modules.agent_surfaces.services.ingress_service import (
     AgentSurfaceIngressService,
 )
-from app.modules.connectors.api.dependencies import get_connector_service
+from app.composition.surface_connectors import get_connector_service
 from app.modules.pod.domain.events import PodDeletedEvent, PodEvents
 from app.modules.schedule.domain.events.schedule import ScheduleEvents, ScheduleFired
 

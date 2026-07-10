@@ -27,7 +27,7 @@ if TYPE_CHECKING:
     from app.modules.datastore.services.table_service import TableService
 from app.modules.datastore.domain.events import DatastoreRecordOperation
 from app.modules.datastore.services.record_events import RecordEventCoordinator
-from app.modules.identity.domain.ports import UserRepositoryPort
+from app.modules.identity.contracts import UserReader
 
 
 class RecordService:
@@ -36,7 +36,7 @@ class RecordService:
         record_repository: DatastoreRecordRepositoryPort,
         message_bus: MessageBus | None = None,
         authorization_service: object | None = None,
-        user_repository: UserRepositoryPort | None = None,
+        user_repository: UserReader | None = None,
         transactional_events: bool = False,
         event_dispatcher: Callable[[], Awaitable[int]] | None = None,
     ):

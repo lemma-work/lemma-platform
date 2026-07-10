@@ -53,9 +53,7 @@ from app.modules.agent.tools.web.pydantic_adapter import web_search_toolset
 from app.modules.agent.tools.workspace_cli.pydantic_adapter import (
     is_workspace_cli_toolset,
 )
-from app.modules.agent_surfaces.platforms.platform_capabilities import (
-    get_platform_capabilities,
-)
+from app.composition.agent_surface_runtime import platform_is_known
 
 logger = get_logger(__name__)
 
@@ -190,7 +188,7 @@ async def build_lemma_harness_tooling(
     # conversation, so it rides in the cached prefix alongside the other
     # instruction-bearing capabilities.
     surface_platform = getattr(ctx, "surface_platform", None)
-    if surface_platform and get_platform_capabilities(surface_platform) is not None:
+    if surface_platform and platform_is_known(surface_platform):
         capabilities.append(SurfacePlatformCapability(str(surface_platform)))
 
     if enable_prompt_caching:

@@ -15,6 +15,7 @@ export type ScheduleRunResponse = {
     payload: Record<string, any>;
     schedule_id: string;
     source_event_id: string;
+    source_occurred_at?: (string | null);
     started_at?: (string | null);
     status: ScheduleRunStatus;
     target_kind: string;

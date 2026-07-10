@@ -60,7 +60,8 @@ def main() -> int:
             SELECT to_regclass(name) IS NOT NULL
             FROM unnest(ARRAY[
                 'domain_event_outbox', 'domain_event_inbox', 'schedule_runs',
-                'pod_bundle_import_jobs', 'pod_bundle_import_steps'
+                'pod_bundle_jobs', 'pod_bundle_job_steps',
+                'usage_model_admission_blocks'
             ]) AS name
             """
         )

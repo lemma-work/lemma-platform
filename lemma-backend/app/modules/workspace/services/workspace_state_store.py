@@ -11,7 +11,7 @@ from uuid import UUID
 from redis.asyncio import Redis
 
 from app.core.config import settings
-from app.modules.agent.domain.workspace_entities import WorkspaceStatus
+from app.modules.workspace.contracts import WorkspaceStatus
 from app.core.log.log import get_logger
 
 logger = get_logger(__name__)

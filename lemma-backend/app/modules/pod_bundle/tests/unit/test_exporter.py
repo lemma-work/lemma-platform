@@ -198,7 +198,7 @@ def patched_exporter(monkeypatch):
         lambda uow: _FakeRecordService(rows_by_table),
     )
     monkeypatch.setattr(
-        "app.modules.datastore.services.table_context.TableContext",
+        "app.modules.datastore.contracts.TableContext",
         _FakeTableContext,
     )
     monkeypatch.setattr(

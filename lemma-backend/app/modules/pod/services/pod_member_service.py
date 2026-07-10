@@ -5,7 +5,7 @@ from __future__ import annotations
 from typing import Optional, Sequence, Tuple
 from uuid import UUID
 
-from app.modules.identity.domain.organization_entities import OrganizationRole
+from app.modules.identity.contracts import OrganizationRole
 from app.modules.pod.domain.errors import (
     PodAccessDeniedError,
     PodConflictError,

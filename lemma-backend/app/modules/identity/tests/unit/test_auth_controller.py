@@ -27,27 +27,14 @@ class _FakeUserService:
         return self.user
 
 
-class _ScalarResult:
-    def __init__(self, value):
-        self.value = value
-
-    def scalar_one_or_none(self):
-        return self.value
-
-
-class _FakeSession:
+class _FakePodMembership:
     def __init__(self, organization_id=None):
         self.organization_id = organization_id
-        self.execute_calls = []
+        self.requested_pod_ids = []
 
-    async def execute(self, statement):
-        self.execute_calls.append(statement)
-        return _ScalarResult(self.organization_id)
-
-
-class _FakeUoW:
-    def __init__(self, organization_id=None):
-        self.session = _FakeSession(organization_id)
+    async def get_pod_organization_id(self, pod_id):
+        self.requested_pod_ids.append(pod_id)
+        return self.organization_id
 
 
 @pytest.mark.asyncio
@@ -61,9 +48,13 @@ async def test_verify_token_returns_user_context():
         )
     )
 
-    uow = _FakeUoW()
+    pod_membership = _FakePodMembership()
 
-    response = await verify_token(request=request, user_service=service, uow=uow)
+    response = await verify_token(
+        request=request,
+        user_service=service,
+        pod_membership=pod_membership,
+    )
 
     assert response.user_id == user_id
     assert response.email == "lemma@lemma.work"
@@ -73,7 +64,7 @@ async def test_verify_token_returns_user_context():
     assert response.function_name is None
     assert response.scopes == []
     assert service.requested_user_ids == [user_id]
-    assert uow.session.execute_calls == []
+    assert pod_membership.requested_pod_ids == []
 
 
 @pytest.mark.asyncio
@@ -101,9 +92,13 @@ async def test_verify_token_returns_function_delegation_claims():
         )
     )
 
-    uow = _FakeUoW(organization_id)
+    pod_membership = _FakePodMembership(organization_id)
 
-    response = await verify_token(request=request, user_service=service, uow=uow)
+    response = await verify_token(
+        request=request,
+        user_service=service,
+        pod_membership=pod_membership,
+    )
 
     assert response.user_id == user_id
     assert response.pod_id == pod_id
@@ -111,4 +106,4 @@ async def test_verify_token_returns_function_delegation_claims():
     assert response.function_id == function_id
     assert response.function_name == "sync_expense"
     assert response.scopes == ["function:execute"]
-    assert len(uow.session.execute_calls) == 1
+    assert pod_membership.requested_pod_ids == [pod_id]

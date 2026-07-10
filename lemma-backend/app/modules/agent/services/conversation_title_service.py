@@ -39,11 +39,12 @@ from app.modules.agent.services.runtime_profile_service import (
     DEFAULT_SYSTEM_AGENT_RUNTIME_PROFILE_ID,
     AgentRuntimeProfileService,
 )
-from app.modules.usage.services.pydantic_ai_tracking import (
+from app.composition.agent_usage import (
     record_pydantic_ai_result_usage,
     reserve_usage_for_runtime,
+    usage_limits_for_reservation,
 )
-from app.modules.usage.services.usage_context import UsageExecutionContext
+from app.composition.agent_usage import SystemModelBudget, UsageExecutionContext
 
 logger = get_logger(__name__)
 
@@ -150,8 +151,6 @@ class ConversationTitleService:
             runtime_credentials=resolved.credentials or {},
             fallback_model_name=resolved.model_name_for_harness,
         )
-        agent = PydanticAIAgent(model, system_prompt=_TITLE_SYSTEM_PROMPT)
-
         usage_context = UsageExecutionContext(
             user_id=user_id,
             organization_id=organization_id,
@@ -162,10 +161,21 @@ class ConversationTitleService:
             organization_id=organization_id,
             user_id=user_id,
             runtime_profile=runtime_profile,
+            budget=SystemModelBudget(
+                max_input_tokens=12_000,
+                max_output_tokens=256,
+                max_requests=1,
+            ),
         )
+        if reservation is None:
+            raise RuntimeError("System title model did not create a usage reservation")
+        agent = PydanticAIAgent(model, system_prompt=_TITLE_SYSTEM_PROMPT)
         result = None
         try:
-            result = await agent.run(_build_user_prompt(user_text, reply_text))
+            result = await agent.run(
+                _build_user_prompt(user_text, reply_text),
+                usage_limits=usage_limits_for_reservation(reservation),
+            )
             await record_pydantic_ai_result_usage(
                 ctx=usage_context,
                 runtime_profile=runtime_profile,

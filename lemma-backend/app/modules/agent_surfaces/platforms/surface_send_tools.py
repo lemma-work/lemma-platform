@@ -13,7 +13,7 @@ from pydantic_ai.tools import RunContext
 from pydantic_ai.toolsets import FunctionToolset
 
 from app.core.log.log import get_logger
-from app.modules.agent.tools.context import ConversationContext
+from app.modules.agent.contracts import ConversationContext
 from app.modules.agent_surfaces.services.surface_display_delivery import (
     deliver_surface_message_to_surface,
 )

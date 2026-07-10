@@ -152,7 +152,7 @@ export class FilesNamespace {
     } = {},
   ) {
     const payload: DatastoreFileUploadRequest = {
-      data: file as unknown as string,
+      data: file,
       name: options.name ?? (file instanceof File ? file.name : undefined),
       description: options.description,
       directory_path: options.directoryPath ?? options.parentId ?? "/",
@@ -185,7 +185,7 @@ export class FilesNamespace {
 
     const payload: update = {
       path,
-      data: options.file as unknown as string | undefined,
+      data: options.file,
       description: options.description,
       new_path: resolvedNewPath,
       search_enabled: options.searchEnabled,
@@ -249,8 +249,8 @@ export class FilesNamespace {
     ): Promise<FileDetailResponse> => {
       const formData: attach = {
         path,
-        data: markdown as unknown as string,
-        images: options.images as unknown as string[] | undefined,
+        data: markdown,
+        images: options.images,
       };
       return this.client.request(() =>
         FilesService.fileMarkdownAttach(this.podId(), formData),

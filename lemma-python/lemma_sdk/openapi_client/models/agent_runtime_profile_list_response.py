@@ -18,7 +18,7 @@ T = TypeVar("T", bound="AgentRuntimeProfileListResponse")
 class AgentRuntimeProfileListResponse:
     """
     Attributes:
-        default_runtime (AgentRuntimeConfig): Agent runtime selector using a profile plus optional catalog model.
+        default_runtime (AgentRuntimeConfig): Select an agent runtime profile and optional catalog model.
         items (list[AgentRuntimeProfileResponse]):
     """
 

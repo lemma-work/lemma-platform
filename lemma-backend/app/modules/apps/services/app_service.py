@@ -42,8 +42,8 @@ from app.modules.apps.services.app_storage_phase import (
     _UploadPlan,
     _WrittenBundle,
 )
-from app.modules.pod.domain.pod_entities import PodRole
-from app.modules.pod.domain.visibility import (
+from app.modules.pod.contracts import PodRole
+from app.modules.pod.contracts import (
     PERSONAL_VISIBILITY_VALUES,
     POD_VISIBILITY_VALUES,
 )

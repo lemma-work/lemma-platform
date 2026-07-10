@@ -164,6 +164,7 @@ class ScheduleRunResponse(BaseModel):
     llm_output: dict
     error_type: str | None = None
     error_code: str | None = None
+    source_occurred_at: datetime | None = None
     started_at: datetime | None = None
     completed_at: datetime | None = None
     created_at: datetime

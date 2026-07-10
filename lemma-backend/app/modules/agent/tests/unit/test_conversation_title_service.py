@@ -13,6 +13,7 @@ from app.modules.agent.services.conversation_title_service import (
     _sanitize_title,
 )
 from app.modules.agent.services.realtime import title_updated_payload
+from app.modules.usage.domain.entities import UsageReservation
 
 
 # --- fakes ---------------------------------------------------------------
@@ -87,15 +88,26 @@ def _patch_llm(
             capture["model"] = model
             capture["system_prompt"] = system_prompt
 
-        async def run(self, prompt):
+        async def run(self, prompt, *, usage_limits=None):
             capture["run_calls"] = int(capture["run_calls"]) + 1
             capture["prompt"] = prompt
+            capture["usage_limits"] = usage_limits
             if raise_on_run:
                 raise RuntimeError("llm boom")
             return SimpleNamespace(output=output)
 
-    async def _reserve(*, organization_id, user_id, runtime_profile):
-        return None
+    async def _reserve(*, organization_id, user_id, runtime_profile, budget):
+        return UsageReservation(
+            organization_id=organization_id,
+            user_id=user_id,
+            amount_usd=0.01,
+            profile_id="system:lemma",
+            model_name="deepseek-v4-flash",
+            max_input_tokens=budget.max_input_tokens,
+            max_output_tokens=budget.max_output_tokens,
+            max_requests=budget.max_requests,
+            max_billable_units=budget.max_billable_units,
+        )
 
     async def _record(*, ctx, runtime_profile, result, status, reservation, metadata):
         capture["usage"].append(status)  # type: ignore[union-attr]

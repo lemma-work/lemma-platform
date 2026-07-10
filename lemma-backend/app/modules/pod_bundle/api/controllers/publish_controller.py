@@ -21,7 +21,7 @@ from app.core.infrastructure.channels.channel_service import (
     get_channel_service,
 )
 from app.core.infrastructure.db.uow_factory import UnitOfWorkFactory
-from app.modules.pod.api.dependencies import PodViewerDep
+from app.composition.pod_bundle_pod import PodViewerDep
 from app.modules.pod_bundle.api.dependencies import PublishUseCasesDep
 from app.modules.pod_bundle.api.schemas import (
     PublishStartRequest,

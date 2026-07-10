@@ -52,9 +52,6 @@ from app.modules.agent.infrastructure.repositories import (
 from app.modules.agent.services.runtime_profile_service import (
     AgentRuntimeProfileService,
 )
-from app.modules.identity.infrastructure.organization_repositories import (
-    OrganizationRepository,
-)
 from app.core.crypto import get_secret_cipher
 
 logger = get_logger(__name__)
@@ -68,8 +65,13 @@ async def _ensure_org_member(
     user: CurrentUser,
     uow: UoWDep,
 ) -> None:
-    member = await OrganizationRepository(uow).get_member(user.id, org_id)
-    if member is None:
+    from app.composition.identity_notifications import user_is_organization_member
+
+    if not await user_is_organization_member(
+        uow,
+        user_id=user.id,
+        organization_id=org_id,
+    ):
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="User is not a member of this organization",

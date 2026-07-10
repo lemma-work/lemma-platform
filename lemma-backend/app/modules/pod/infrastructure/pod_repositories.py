@@ -10,8 +10,7 @@ from sqlalchemy.orm import joinedload
 from app.core.domain.message_bus import MessageBus
 from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
 from app.core.authorization.models import RoleAssignmentModel, RoleModel
-from app.modules.identity.infrastructure.models.organization_models import OrganizationMember
-from app.modules.identity.infrastructure.models.user_models import User
+from app.composition.pod_identity_wiring import OrganizationMember, User
 from app.modules.pod.domain.ports import (
     PodJoinRequestRepositoryPort,
     PodMemberRepositoryPort,

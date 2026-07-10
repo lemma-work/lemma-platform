@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 from uuid import UUID
 
 from sqlalchemy import ForeignKey, Index, String, Text
@@ -16,8 +16,6 @@ from app.modules.connectors.domain.auth_config import (
 from app.modules.connectors.domain.connector import AuthProvider
 
 if TYPE_CHECKING:
-    from app.modules.identity.infrastructure.models.organization_models import Organization
-    from app.modules.identity.infrastructure.models.user_models import User
     from app.modules.connectors.infrastructure.models.connector import Connector
 
 
@@ -53,10 +51,10 @@ class AuthConfig(UUIDAuditBase):
         ForeignKey("users.id", ondelete="SET NULL"), nullable=True
     )
 
-    organization: Mapped["Organization"] = relationship("Organization")
+    organization: Mapped[Any] = relationship("Organization")
     connector: Mapped["Connector"] = relationship("Connector")
-    created_by_user: Mapped["User"] = relationship("User", foreign_keys=[created_by_user_id])
-    updated_by_user: Mapped["User"] = relationship("User", foreign_keys=[updated_by_user_id])
+    created_by_user: Mapped[Any] = relationship("User", foreign_keys=[created_by_user_id])
+    updated_by_user: Mapped[Any] = relationship("User", foreign_keys=[updated_by_user_id])
 
     __table_args__ = (
         Index(

@@ -51,6 +51,7 @@ _NAME_TO_MODULE = {
     'AgentSurfaceResponse': 'agent_surface_response',
     'AgentSurfaceStatus': 'agent_surface_status',
     'AgentToolset': 'agent_toolset',
+    'AppBundleUploadRequest': 'app_bundle_upload_request',
     'AppBundleUploadResponse': 'app_bundle_upload_response',
     'AppDetailResponse': 'app_detail_response',
     'AppListResponse': 'app_list_response',
@@ -65,6 +66,7 @@ _NAME_TO_MODULE = {
     'ApplyImportRequest': 'apply_import_request',
     'ApplyImportRequestVariables': 'apply_import_request_variables',
     'ApprovalDecisionResponse': 'approval_decision_response',
+    'Attach': 'attach',
     'AuthConfigCreateSchema': 'auth_config_create_schema',
     'AuthConfigCreateSchemaCredentialConfigType0': 'auth_config_create_schema_credential_config_type_0',
     'AuthConfigListResponseSchema': 'auth_config_list_response_schema',
@@ -77,12 +79,6 @@ _NAME_TO_MODULE = {
     'AvailableSurfaceChannelResponse': 'available_surface_channel_response',
     'AvailableSurfaceChannelsResponse': 'available_surface_channels_response',
     'AvailableSurfacesResponse': 'available_surfaces_response',
-    'BodyAppBundleUpload': 'body_app_bundle_upload',
-    'BodyFileMarkdownAttach': 'body_file_markdown_attach',
-    'BodyFileUpdate': 'body_file_update',
-    'BodyFileUpload': 'body_file_upload',
-    'BodyIconUpload': 'body_icon_upload',
-    'BodyPodBundleUpload': 'body_pod_bundle_upload',
     'BulkCreateRecordsRequest': 'bulk_create_records_request',
     'BulkCreateRecordsRequestRecordsItem': 'bulk_create_records_request_records_item',
     'BulkDeleteRecordsRequest': 'bulk_delete_records_request',
@@ -140,6 +136,7 @@ _NAME_TO_MODULE = {
     'DataStoreWorkflowStartOutput': 'data_store_workflow_start_output',
     'DatastoreCountResponse': 'datastore_count_response',
     'DatastoreDataType': 'datastore_data_type',
+    'DatastoreFileUploadRequest': 'datastore_file_upload_request',
     'DatastoreOperation': 'datastore_operation',
     'DatastoreQueryRequest': 'datastore_query_request',
     'DatastoreQueryResponse': 'datastore_query_response',
@@ -171,6 +168,7 @@ _NAME_TO_MODULE = {
     'ExportStatus': 'export_status',
     'ExportStatusResponse': 'export_status_response',
     'ExpressionInputBinding': 'expression_input_binding',
+    'FastapiCompatV2BodyPodBundleUpload': 'fastapi_compat_v2_body_pod_bundle_upload',
     'FeedbackCategory': 'feedback_category',
     'FileChildSchema': 'file_child_schema',
     'FileChildrenResponse': 'file_children_response',
@@ -227,6 +225,7 @@ _NAME_TO_MODULE = {
     'FunctionSummaryResponseConfigType0': 'function_summary_response_config_type_0',
     'FunctionType': 'function_type',
     'HarnessKind': 'harness_kind',
+    'IconUploadRequest': 'icon_upload_request',
     'IconUploadResponse': 'icon_upload_response',
     'ImportPlanResponse': 'import_plan_response',
     'ImportStartRequest': 'import_start_request',
@@ -293,7 +292,6 @@ _NAME_TO_MODULE = {
     'PodMemberUpdateRoleRequest': 'pod_member_update_role_request',
     'PodPermissionCatalogResponse': 'pod_permission_catalog_response',
     'PodPermissionResponse': 'pod_permission_response',
-    'PodProvisioningStatus': 'pod_provisioning_status',
     'PodRecipe': 'pod_recipe',
     'PodResponse': 'pod_response',
     'PodRole': 'pod_role',
@@ -387,6 +385,7 @@ _NAME_TO_MODULE = {
     'TableDetailResponseConfigType0': 'table_detail_response_config_type_0',
     'TableListResponse': 'table_list_response',
     'TableSummaryResponse': 'table_summary_response',
+    'Update': 'update',
     'UpdateAgentRequest': 'update_agent_request',
     'UpdateAgentRequestInputSchemaType0': 'update_agent_request_input_schema_type_0',
     'UpdateAgentRequestMetadataType0': 'update_agent_request_metadata_type_0',
@@ -508,6 +507,7 @@ if TYPE_CHECKING:
     from .agent_surface_response import AgentSurfaceResponse
     from .agent_surface_status import AgentSurfaceStatus
     from .agent_toolset import AgentToolset
+    from .app_bundle_upload_request import AppBundleUploadRequest
     from .app_bundle_upload_response import AppBundleUploadResponse
     from .app_detail_response import AppDetailResponse
     from .app_list_response import AppListResponse
@@ -522,6 +522,7 @@ if TYPE_CHECKING:
     from .apply_import_request import ApplyImportRequest
     from .apply_import_request_variables import ApplyImportRequestVariables
     from .approval_decision_response import ApprovalDecisionResponse
+    from .attach import Attach
     from .auth_config_create_schema import AuthConfigCreateSchema
     from .auth_config_create_schema_credential_config_type_0 import AuthConfigCreateSchemaCredentialConfigType0
     from .auth_config_list_response_schema import AuthConfigListResponseSchema
@@ -534,12 +535,6 @@ if TYPE_CHECKING:
     from .available_surface_channel_response import AvailableSurfaceChannelResponse
     from .available_surface_channels_response import AvailableSurfaceChannelsResponse
     from .available_surfaces_response import AvailableSurfacesResponse
-    from .body_app_bundle_upload import BodyAppBundleUpload
-    from .body_file_markdown_attach import BodyFileMarkdownAttach
-    from .body_file_update import BodyFileUpdate
-    from .body_file_upload import BodyFileUpload
-    from .body_icon_upload import BodyIconUpload
-    from .body_pod_bundle_upload import BodyPodBundleUpload
     from .bulk_create_records_request import BulkCreateRecordsRequest
     from .bulk_create_records_request_records_item import BulkCreateRecordsRequestRecordsItem
     from .bulk_delete_records_request import BulkDeleteRecordsRequest
@@ -597,6 +592,7 @@ if TYPE_CHECKING:
     from .data_store_workflow_start_output import DataStoreWorkflowStartOutput
     from .datastore_count_response import DatastoreCountResponse
     from .datastore_data_type import DatastoreDataType
+    from .datastore_file_upload_request import DatastoreFileUploadRequest
     from .datastore_operation import DatastoreOperation
     from .datastore_query_request import DatastoreQueryRequest
     from .datastore_query_response import DatastoreQueryResponse
@@ -628,6 +624,7 @@ if TYPE_CHECKING:
     from .export_status import ExportStatus
     from .export_status_response import ExportStatusResponse
     from .expression_input_binding import ExpressionInputBinding
+    from .fastapi_compat_v2_body_pod_bundle_upload import FastapiCompatV2BodyPodBundleUpload
     from .feedback_category import FeedbackCategory
     from .file_child_schema import FileChildSchema
     from .file_children_response import FileChildrenResponse
@@ -684,6 +681,7 @@ if TYPE_CHECKING:
     from .function_summary_response_config_type_0 import FunctionSummaryResponseConfigType0
     from .function_type import FunctionType
     from .harness_kind import HarnessKind
+    from .icon_upload_request import IconUploadRequest
     from .icon_upload_response import IconUploadResponse
     from .import_plan_response import ImportPlanResponse
     from .import_start_request import ImportStartRequest
@@ -750,7 +748,6 @@ if TYPE_CHECKING:
     from .pod_member_update_role_request import PodMemberUpdateRoleRequest
     from .pod_permission_catalog_response import PodPermissionCatalogResponse
     from .pod_permission_response import PodPermissionResponse
-    from .pod_provisioning_status import PodProvisioningStatus
     from .pod_recipe import PodRecipe
     from .pod_response import PodResponse
     from .pod_role import PodRole
@@ -844,6 +841,7 @@ if TYPE_CHECKING:
     from .table_detail_response_config_type_0 import TableDetailResponseConfigType0
     from .table_list_response import TableListResponse
     from .table_summary_response import TableSummaryResponse
+    from .update import Update
     from .update_agent_request import UpdateAgentRequest
     from .update_agent_request_input_schema_type_0 import UpdateAgentRequestInputSchemaType0
     from .update_agent_request_metadata_type_0 import UpdateAgentRequestMetadataType0
@@ -978,6 +976,7 @@ __all__ = [
     'AgentSurfaceResponse',
     'AgentSurfaceStatus',
     'AgentToolset',
+    'AppBundleUploadRequest',
     'AppBundleUploadResponse',
     'AppDetailResponse',
     'AppListResponse',
@@ -992,6 +991,7 @@ __all__ = [
     'ApplyImportRequest',
     'ApplyImportRequestVariables',
     'ApprovalDecisionResponse',
+    'Attach',
     'AuthConfigCreateSchema',
     'AuthConfigCreateSchemaCredentialConfigType0',
     'AuthConfigListResponseSchema',
@@ -1004,12 +1004,6 @@ __all__ = [
     'AvailableSurfaceChannelResponse',
     'AvailableSurfaceChannelsResponse',
     'AvailableSurfacesResponse',
-    'BodyAppBundleUpload',
-    'BodyFileMarkdownAttach',
-    'BodyFileUpdate',
-    'BodyFileUpload',
-    'BodyIconUpload',
-    'BodyPodBundleUpload',
     'BulkCreateRecordsRequest',
     'BulkCreateRecordsRequestRecordsItem',
     'BulkDeleteRecordsRequest',
@@ -1067,6 +1061,7 @@ __all__ = [
     'DataStoreWorkflowStartOutput',
     'DatastoreCountResponse',
     'DatastoreDataType',
+    'DatastoreFileUploadRequest',
     'DatastoreOperation',
     'DatastoreQueryRequest',
     'DatastoreQueryResponse',
@@ -1098,6 +1093,7 @@ __all__ = [
     'ExportStatus',
     'ExportStatusResponse',
     'ExpressionInputBinding',
+    'FastapiCompatV2BodyPodBundleUpload',
     'FeedbackCategory',
     'FileChildSchema',
     'FileChildrenResponse',
@@ -1154,6 +1150,7 @@ __all__ = [
     'FunctionSummaryResponseConfigType0',
     'FunctionType',
     'HarnessKind',
+    'IconUploadRequest',
     'IconUploadResponse',
     'ImportPlanResponse',
     'ImportStartRequest',
@@ -1220,7 +1217,6 @@ __all__ = [
     'PodMemberUpdateRoleRequest',
     'PodPermissionCatalogResponse',
     'PodPermissionResponse',
-    'PodProvisioningStatus',
     'PodRecipe',
     'PodResponse',
     'PodRole',
@@ -1314,6 +1310,7 @@ __all__ = [
     'TableDetailResponseConfigType0',
     'TableListResponse',
     'TableSummaryResponse',
+    'Update',
     'UpdateAgentRequest',
     'UpdateAgentRequestInputSchemaType0',
     'UpdateAgentRequestMetadataType0',

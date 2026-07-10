@@ -5,6 +5,13 @@ from contextlib import AbstractAsyncContextManager
 from typing import Protocol
 
 
+class RealtimeSlowConsumerError(RuntimeError):
+    """A bounded realtime subscriber failed to consume frames fast enough."""
+
+    def __init__(self) -> None:
+        super().__init__("Realtime client fell behind and was disconnected")
+
+
 class RealtimeChannel(Protocol):
     """Publish and subscribe to ephemeral fan-out messages.
 

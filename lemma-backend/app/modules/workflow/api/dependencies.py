@@ -12,13 +12,13 @@ from app.core.authorization.dependencies import (
     require_resource_action,
 )
 from app.core.authorization.permissions import Permissions
-from app.modules.icon.services.icon_service import IconService
+from app.composition.icons import create_icon_service
 from app.modules.workflow.services.workflow_service import WorkflowService
 
 
 def get_workflow_service(uow: UoWDep) -> WorkflowService:
     """Provide workflow service."""
-    return WorkflowService(uow, icon_service=IconService())
+    return WorkflowService(uow, icon_service=create_icon_service())
 
 
 WorkflowServiceDep = Annotated[WorkflowService, Depends(get_workflow_service)]

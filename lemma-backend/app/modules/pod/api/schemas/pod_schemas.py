@@ -5,13 +5,11 @@ from pydantic import EmailStr, Field, model_validator
 
 from app.core.api.schemas import BaseSchema
 from app.core.authorization.grants import ensure_grant_uses_resource_name
-from app.modules.identity.domain.organization_entities import OrganizationRole
-from app.modules.identity.api.schemas.user_schemas import UserResponse
+from app.modules.identity.contracts import OrganizationRole, UserResponse
 from app.modules.pod.domain.pod_entities import (
     PodConfig,
     PodJoinRequestStatus,
     PodRole,
-    PodProvisioningStatus,
 )
 from app.core.authorization.context import ResourceType
 
@@ -45,12 +43,6 @@ class PodResponse(BaseSchema):
     description: str | None = None
     icon_url: str | None = None
     config: PodConfig = Field(default_factory=PodConfig)
-    provisioning_status: PodProvisioningStatus
-    provisioning_attempts: int
-    provisioning_error_type: str | None = None
-    provisioning_error_code: str | None = None
-    provisioning_started_at: datetime | None = None
-    provisioning_completed_at: datetime | None = None
     created_at: datetime
     updated_at: datetime
 

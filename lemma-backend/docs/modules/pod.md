@@ -18,7 +18,7 @@ clients, and resource-level grants for users, roles, and workloads.
 
 | Table/state | Meaning |
 | --- | --- |
-| `pods` | Organization-owned workspace, typed `PodConfig`, visibility/deletion state |
+| `pods` | Organization-owned resource container with typed `PodConfig` and deletion state |
 | `pod_members` | Organization member to pod mapping plus assigned pod-role names |
 | `pod_join_requests` | Pending/approved access requests |
 | Core authorization tables | Role permission bundles and named resource/workload grants |
@@ -61,13 +61,13 @@ approval.
 ## Dependencies
 
 The module uses identity's organization/user models and the icon service. It is
-consumed by nearly every pod-scoped module. Datastore provisioning is event
-driven to keep pod creation fast, which makes reliable event handling a
-load-bearing invariant.
+consumed by nearly every pod-scoped module. The datastore consumer eagerly
+creates the physical schema from the durable `pod.created` event; first-table
+creation also performs the same idempotent bootstrap under an advisory lock.
+No infrastructure-job state is stored on the pod aggregate.
 
 ## Tests and operations
 
 Tests cover CRUD, custom roles, join policy, resource grants, authorization
-hardening, delegation, and event behavior. Current unit coverage is 62.0%
-(1,062 of 1,714 statements). See [issues.md](issues.md) for provisioning and
+hardening, delegation, and event behavior. See [issues.md](issues.md) for the
 module-coupling findings.

@@ -6,7 +6,7 @@ from abc import ABC, abstractmethod
 from typing import Optional, Any
 from uuid import UUID
 
-from app.modules.agent.domain.workspace_entities import SandboxInfo, PythonExecutionResult, ShellCommandResult
+from app.modules.workspace.contracts import SandboxInfo, PythonExecutionResult, ShellCommandResult
 
 
 class ISandbox(ABC):

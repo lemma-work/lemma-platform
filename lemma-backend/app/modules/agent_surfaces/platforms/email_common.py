@@ -268,8 +268,7 @@ async def resolve_outbound_email_attachments(
     """
     # Imported lazily to avoid a module-load cycle (email_common is imported by
     # the platform services).
-    from app.modules.agent.tools.file_access import is_datastore_path
-    from app.modules.agent.tools.pod.pod_data_access import pod_services
+    from app.composition.surface_agent import is_datastore_path, pod_services
 
     inline: list[tuple[str, bytes, str]] = []
     links: list[tuple[str, str]] = []
@@ -333,8 +332,7 @@ async def resolve_outbound_email_attachment_urls(
     returned as unresolved names (the caller notes them). Returns
     ``(url_attachments, unresolved_names)``.
     """
-    from app.modules.agent.tools.file_access import is_datastore_path
-    from app.modules.agent.tools.pod.pod_data_access import pod_services
+    from app.composition.surface_agent import is_datastore_path, pod_services
 
     resolved: list[tuple[str, str]] = []
     unresolved: list[str] = []

@@ -211,7 +211,6 @@ run `uv run python scripts/generate_route_inventory.py`.
 | POST | `/pods/{pod_id}/join-requests` | `pod.join_request.create` | Create Pod Join Request |
 | POST | `/pods/{pod_id}/join-requests/{join_request_id}/approve` | `pod.join_request.approve` | Approve Pod Join Request |
 | POST | `/pods/{pod_id}/members` | `pod.member.add` | Add Pod Member |
-| POST | `/pods/{pod_id}/provisioning/retry` | `pod.provisioning.retry` | Retry Pod Provisioning |
 | POST | `/pods/{pod_id}/roles` | `pod.roles.create` | Create Pod Role |
 | PUT | `/pods/{pod_id}` | `pod.update` | Update Pod |
 | PUT | `/pods/{pod_id}/resources/{resource_type}/{resource_name}/access/grantees/{grantee_type}/{grantee_id}` | `pod.resource_access.grant.replace` | Replace Resource Access Grant |

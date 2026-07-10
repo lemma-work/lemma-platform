@@ -500,7 +500,7 @@ class WorkflowEngine:
     ) -> None:
         if wait.assigned_pod_member_id is None or requester_user_id is None:
             return
-        from app.modules.pod.infrastructure.pod_repositories import (
+        from app.composition.workflow_pod import (
             PodMemberRepository,
         )
 

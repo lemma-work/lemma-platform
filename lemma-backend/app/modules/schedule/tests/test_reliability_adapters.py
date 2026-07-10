@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from datetime import datetime, timezone
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
 from uuid import uuid4
@@ -55,10 +56,18 @@ async def test_durable_schedule_publisher_stages_versioned_event(monkeypatch) ->
 async def test_scheduler_job_uses_uuid_and_empty_payload(monkeypatch) -> None:
     emitter = SimpleNamespace(emit_scheduled_job_event=AsyncMock())
     monkeypatch.setattr(scheduler_service, "get_event_emitter", lambda: emitter)
+    scheduled_at = datetime(2026, 7, 10, tzinfo=timezone.utc)
+    monkeypatch.setattr(
+        scheduler_service,
+        "current_scheduled_run_time",
+        lambda: scheduled_at,
+    )
     schedule_id = uuid4()
 
     await scheduler_service.execute_scheduled_job(str(schedule_id))
 
     emitter.emit_scheduled_job_event.assert_awaited_once_with(
-        schedule_id=schedule_id, payload={}
+        schedule_id=schedule_id,
+        payload={},
+        scheduled_at=scheduled_at,
     )

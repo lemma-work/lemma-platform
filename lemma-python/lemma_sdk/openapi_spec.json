@@ -950,7 +950,7 @@
         "type": "string"
       },
       "AgentRuntimeConfig": {
-        "description": "Agent runtime selector using a profile plus optional catalog model.",
+        "description": "Select an agent runtime profile and optional catalog model.",
         "properties": {
           "model_name": {
             "anyOf": [
@@ -1455,6 +1455,7 @@
             "anyOf": [
               {
                 "contentMediaType": "application/octet-stream",
+                "format": "binary",
                 "type": "string"
               },
               {
@@ -1467,6 +1468,7 @@
             "anyOf": [
               {
                 "contentMediaType": "application/octet-stream",
+                "format": "binary",
                 "type": "string"
               },
               {
@@ -1476,7 +1478,7 @@
             "title": "Source Archive"
           }
         },
-        "title": "Body_app.bundle.upload",
+        "title": "AppBundleUploadRequest",
         "type": "object"
       },
       "AppBundleUploadResponse": {
@@ -4068,6 +4070,7 @@
         "properties": {
           "data": {
             "contentMediaType": "application/octet-stream",
+            "format": "binary",
             "title": "Data",
             "type": "string"
           },
@@ -4079,12 +4082,10 @@
               {
                 "type": "null"
               }
-            ],
-            "title": "Description"
+            ]
           },
           "directory_path": {
             "default": "/",
-            "title": "Directory Path",
             "type": "string"
           },
           "name": {
@@ -4095,12 +4096,10 @@
               {
                 "type": "null"
               }
-            ],
-            "title": "Name"
+            ]
           },
           "search_enabled": {
             "default": true,
-            "title": "Search Enabled",
             "type": "boolean"
           },
           "visibility": {
@@ -4111,14 +4110,13 @@
               {
                 "type": "null"
               }
-            ],
-            "title": "Visibility"
+            ]
           }
         },
         "required": [
           "data"
         ],
-        "title": "Body_file.upload",
+        "title": "DatastoreFileUploadRequest",
         "type": "object"
       },
       "DatastoreOperation": {
@@ -6592,6 +6590,7 @@
         "properties": {
           "file": {
             "contentMediaType": "application/octet-stream",
+            "format": "binary",
             "title": "File",
             "type": "string"
           }
@@ -6599,7 +6598,7 @@
         "required": [
           "file"
         ],
-        "title": "Body_icon.upload",
+        "title": "IconUploadRequest",
         "type": "object"
       },
       "IconUploadResponse": {
@@ -8826,16 +8825,6 @@
         "title": "PodPermissionResponse",
         "type": "object"
       },
-      "PodProvisioningStatus": {
-        "enum": [
-          "UNKNOWN",
-          "PROVISIONING",
-          "READY",
-          "FAILED"
-        ],
-        "title": "PodProvisioningStatus",
-        "type": "string"
-      },
       "PodRecipe": {
         "description": "A record of a bundle installed into this pod (the durable trace of an\nimport; the ephemeral import job state is not kept). ``kind`` distinguishes an\nuploaded bundle from a GitHub-sourced one; ``repo_url`` is set for GitHub.",
         "properties": {
@@ -8942,59 +8931,6 @@
             "title": "Organization Id",
             "type": "string"
           },
-          "provisioning_attempts": {
-            "title": "Provisioning Attempts",
-            "type": "integer"
-          },
-          "provisioning_completed_at": {
-            "anyOf": [
-              {
-                "format": "date-time",
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Provisioning Completed At"
-          },
-          "provisioning_error_code": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Provisioning Error Code"
-          },
-          "provisioning_error_type": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Provisioning Error Type"
-          },
-          "provisioning_started_at": {
-            "anyOf": [
-              {
-                "format": "date-time",
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Provisioning Started At"
-          },
-          "provisioning_status": {
-            "$ref": "#/components/schemas/PodProvisioningStatus"
-          },
           "updated_at": {
             "format": "date-time",
             "title": "Updated At",
@@ -9011,8 +8947,6 @@
           "user_id",
           "organization_id",
           "name",
-          "provisioning_status",
-          "provisioning_attempts",
           "created_at",
           "updated_at"
         ],
@@ -10236,6 +10170,18 @@
           "source_event_id": {
             "title": "Source Event Id",
             "type": "string"
+          },
+          "source_occurred_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Source Occurred At"
           },
           "started_at": {
             "anyOf": [
@@ -14601,20 +14547,19 @@
         "properties": {
           "data": {
             "contentMediaType": "application/octet-stream",
-            "title": "Data",
+            "format": "binary",
             "type": "string"
           },
           "images": {
             "default": [],
             "items": {
               "contentMediaType": "application/octet-stream",
+              "format": "binary",
               "type": "string"
             },
-            "title": "Images",
             "type": "array"
           },
           "path": {
-            "title": "Path",
             "type": "string"
           }
         },
@@ -14622,13 +14567,14 @@
           "data",
           "path"
         ],
-        "title": "Body_file.markdown.attach",
+        "title": "attach",
         "type": "object"
       },
       "fastapi___compat__v2__Body_pod__bundle__upload": {
         "properties": {
           "data": {
             "contentMediaType": "application/octet-stream",
+            "format": "binary",
             "title": "Data",
             "type": "string"
           }
@@ -14636,7 +14582,7 @@
         "required": [
           "data"
         ],
-        "title": "Body_pod.bundle.upload",
+        "title": "fastapi___compat__v2__Body_pod__bundle__upload",
         "type": "object"
       },
       "update": {
@@ -14645,13 +14591,13 @@
             "anyOf": [
               {
                 "contentMediaType": "application/octet-stream",
+                "format": "binary",
                 "type": "string"
               },
               {
                 "type": "null"
               }
-            ],
-            "title": "Data"
+            ]
           },
           "description": {
             "anyOf": [
@@ -14661,8 +14607,7 @@
               {
                 "type": "null"
               }
-            ],
-            "title": "Description"
+            ]
           },
           "new_path": {
             "anyOf": [
@@ -14672,11 +14617,9 @@
               {
                 "type": "null"
               }
-            ],
-            "title": "New Path"
+            ]
           },
           "path": {
-            "title": "Path",
             "type": "string"
           },
           "search_enabled": {
@@ -14687,8 +14630,7 @@
               {
                 "type": "null"
               }
-            ],
-            "title": "Search Enabled"
+            ]
           },
           "visibility": {
             "anyOf": [
@@ -14698,14 +14640,13 @@
               {
                 "type": "null"
               }
-            ],
-            "title": "Visibility"
+            ]
           }
         },
         "required": [
           "path"
         ],
-        "title": "Body_file.update",
+        "title": "update",
         "type": "object"
       }
     }
@@ -15072,16 +15013,6 @@
               }
             },
             "description": "Successful Response"
-          },
-          "422": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorResponse"
-                }
-              }
-            },
-            "description": "Validation Error"
           }
         },
         "summary": "Upload Icon",
@@ -18670,7 +18601,8 @@
                 "$ref": "#/components/schemas/AppBundleUploadRequest"
               }
             }
-          }
+          },
+          "required": false
         },
         "responses": {
           "200": {
@@ -24318,59 +24250,6 @@
           "resource": "pod.permissions",
           "result": "entity",
           "verb": "me"
-        }
-      }
-    },
-    "/pods/{pod_id}/provisioning/retry": {
-      "post": {
-        "operationId": "pod.provisioning.retry",
-        "parameters": [
-          {
-            "in": "path",
-            "name": "pod_id",
-            "required": true,
-            "schema": {
-              "format": "uuid",
-              "title": "Pod Id",
-              "type": "string"
-            }
-          }
-        ],
-        "responses": {
-          "202": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/PodResponse"
-                }
-              }
-            },
-            "description": "Successful Response"
-          },
-          "422": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorResponse"
-                }
-              }
-            },
-            "description": "Validation Error"
-          }
-        },
-        "summary": "Retry Pod Provisioning",
-        "tags": [
-          "Pods"
-        ],
-        "x-lemma": {
-          "invalidates": [
-            "pod.provisioning"
-          ],
-          "kind": "mutation",
-          "paginates": false,
-          "resource": "pod.provisioning",
-          "result": "entity",
-          "verb": "retry"
         }
       }
     },

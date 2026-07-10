@@ -6,7 +6,7 @@ from app.core.api.dependencies import UoWDep, get_uow_factory
 from app.core.crypto import get_secret_cipher
 from app.core.infrastructure.db.uow_factory import UnitOfWorkFactory
 from app.core.infrastructure.events.message_bus import get_message_bus
-from app.modules.pod.services.authorization_factory import create_authorization_service
+from app.composition.authorization import create_authorization_service
 from app.modules.connectors.application.connector_operation_use_cases import (
     ConnectorOperationUseCases,
 )
@@ -17,7 +17,7 @@ from app.modules.connectors.infrastructure.adapters.auth_provider_registry impor
 from app.modules.connectors.infrastructure.adapters.env_system_oauth_config import (
     EnvSystemOAuthConfigAdapter,
 )
-from app.modules.connectors.infrastructure.adapters.organization_access_adapter import (
+from app.composition.connector_identity import (
     SqlAlchemyOrganizationAccessAdapter,
 )
 from app.modules.connectors.infrastructure.adapters.routing_operation_gateway import (

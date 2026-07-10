@@ -17,8 +17,8 @@ from app.core.authorization.dependencies import (
 from app.core.authorization.permissions import Permissions
 from app.core.infrastructure.events.message_bus import get_message_bus
 from app.core.infrastructure.jobs.streaq_job_queue import get_streaq_job_queue
-from app.modules.icon.services.icon_service import IconService
-from app.modules.workspace.services.workspace_tool_runtime import (
+from app.composition.icons import create_icon_service
+from app.composition.function_workspace import (
     get_function_workspace_runtime,
 )
 from app.modules.function.infrastructure.repositories import (
@@ -29,7 +29,7 @@ from app.modules.function.application.function_run_executor import FunctionRunEx
 from app.modules.function.application.function_use_cases import FunctionUseCases
 from app.modules.function.services.function_file_manager import FunctionFileManager
 from app.modules.function.services.function_service import FunctionService
-from app.modules.pod.services.authorization_factory import create_authorization_service
+from app.composition.authorization import create_authorization_service
 from app.core.config import settings
 
 
@@ -55,7 +55,7 @@ def build_function_service(uow) -> FunctionService:
         workspace_service=get_function_workspace_runtime(),
         storage_factory=_get_function_storage_factory(),
         job_queue=get_streaq_job_queue(),
-        icon_service=IconService(),
+        icon_service=create_icon_service(),
         authorization_service=create_authorization_service(uow),
     )
 

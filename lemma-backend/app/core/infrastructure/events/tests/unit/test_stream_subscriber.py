@@ -8,6 +8,11 @@ from faststream.redis import RedisRouter
 from app.core.infrastructure.events import stream_subscriber as ss
 
 
+@pytest.fixture(autouse=True)
+def _isolate_declared_topology(monkeypatch):
+    monkeypatch.setattr(ss, "_DECLARED_STREAM_GROUPS", set())
+
+
 def test_redis_stream_sub_registers_grouped_streams(monkeypatch):
     monkeypatch.setattr(ss, "_REGISTERED_STREAM_GROUPS", set())
 
@@ -95,3 +100,18 @@ async def test_ensure_consumer_groups_swallows_unexpected_errors(monkeypatch):
     created = await ss.ensure_consumer_groups(client)
 
     assert created == 0
+
+
+@pytest.mark.asyncio
+async def test_strict_stream_group_ensure_propagates_topology_failure(monkeypatch):
+    monkeypatch.setattr(ss, "_REGISTERED_STREAM_GROUPS", set())
+    monkeypatch.setattr(
+        ss,
+        "_DECLARED_STREAM_GROUPS",
+        {("agent_events", "agent-events")},
+    )
+    client = AsyncMock()
+    client.xgroup_create.side_effect = ConnectionError("redis unavailable")
+
+    with pytest.raises(ss.ConsumerGroupTopologyError):
+        await ss.ensure_stream_groups(client, "agent_events")

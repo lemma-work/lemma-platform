@@ -29,9 +29,8 @@ from app.modules.agent_surfaces.domain.surface_connectors import (
 from app.modules.agent_surfaces.services.credential_resolver import (
     has_native_credentials,
 )
-from app.modules.connectors.domain.connector import AuthProvider
-from app.modules.connectors.domain.errors import ConnectorNotFoundError
-from app.modules.connectors.services.connector_service import ConnectorService
+from app.modules.connectors.contracts import AuthProvider, ConnectorNotFoundError
+from app.composition.surface_connectors import ConnectorService
 
 logger = get_logger(__name__)
 

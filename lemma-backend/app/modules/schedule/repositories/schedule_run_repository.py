@@ -33,6 +33,7 @@ class ScheduleRunRepository:
         payload: dict,
         metadata: dict | None,
         llm_output: dict | None,
+        source_occurred_at: datetime | None = None,
     ) -> ScheduleRunEntity | None:
         now = datetime.now(timezone.utc)
         created_id = await self.session.scalar(
@@ -46,6 +47,7 @@ class ScheduleRunRepository:
                 payload=payload,
                 fire_metadata=metadata or {},
                 llm_output=llm_output or {},
+                source_occurred_at=source_occurred_at,
                 started_at=now,
             )
             .on_conflict_do_nothing(
@@ -101,13 +103,45 @@ class ScheduleRunRepository:
             target_run_id=target_run_id,
         )
 
-    async def mark_failed(self, run_id: UUID, exc: Exception) -> None:
-        await self._mark(
-            run_id,
-            status=ScheduleRunStatus.FAILED,
-            error_type=type(exc).__name__,
-            error_code=getattr(exc, "code", None),
+    async def mark_failed(self, run_id: UUID, exc: Exception) -> ScheduleRunStatus:
+        model = await self.session.get(ScheduleRun, run_id, with_for_update=True)
+        if model is None:
+            raise LookupError(f"Schedule run {run_id} no longer exists")
+        status = (
+            ScheduleRunStatus.DEAD_LETTERED
+            if model.attempts >= self.MAX_ATTEMPTS
+            else ScheduleRunStatus.FAILED
         )
+        model.status = status.value
+        model.error_type = type(exc).__name__
+        model.error_code = getattr(exc, "code", None)
+        model.completed_at = datetime.now(timezone.utc)
+        await self.session.flush()
+        return status
+
+    async def consecutive_terminal_failures(self, schedule_id: UUID) -> int:
+        """Count distinct dead-lettered runs since the latest dispatch."""
+        statuses = (
+            await self.session.scalars(
+                select(ScheduleRun.status)
+                .where(
+                    ScheduleRun.schedule_id == schedule_id,
+                    ScheduleRun.status.in_(
+                        (
+                            ScheduleRunStatus.DISPATCHED.value,
+                            ScheduleRunStatus.DEAD_LETTERED.value,
+                        )
+                    ),
+                )
+                .order_by(ScheduleRun.created_at.desc(), ScheduleRun.id.desc())
+            )
+        ).all()
+        failures = 0
+        for status in statuses:
+            if status == ScheduleRunStatus.DISPATCHED.value:
+                break
+            failures += 1
+        return failures
 
     async def _mark(
         self,

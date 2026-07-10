@@ -15,6 +15,7 @@ across non-DB work. It is never handed a live UoW.
 from __future__ import annotations
 
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Any, Callable
 from uuid import UUID
 
@@ -73,6 +74,91 @@ class FileUseCases:
     ):
         self._uow_factory = uow_factory
         self._build = service_builder
+
+    async def create_file(
+        self,
+        *,
+        pod_id: UUID,
+        name: str,
+        file_content: bytes | Path,
+        request: Request,
+        user_id: UUID,
+        description: str | None = None,
+        directory_path: str = "/",
+        search_enabled: bool = True,
+        visibility: str | None = None,
+    ) -> DatastoreFileEntity:
+        """Persist draft -> upload bytes -> finalize, with no DB connection
+        held while object storage receives the file."""
+        async with pod_context_scope(
+            self._uow_factory, request=request, user_id=user_id, pod_id=pod_id
+        ) as scope:
+            service = self._build(scope.uow)
+            plan = await service.prepare_create_file(
+                pod_id,
+                name,
+                file_content,
+                scope.ctx,
+                description=description,
+                directory_path=directory_path,
+                search_enabled=search_enabled,
+                visibility=visibility,
+            )
+
+        storage_written = False
+        try:
+            await service.write_create_file(plan, file_content)
+            storage_written = True
+        finally:
+            if not storage_written:
+                async with pod_context_scope(
+                    self._uow_factory,
+                    request=request,
+                    user_id=user_id,
+                    pod_id=pod_id,
+                ) as rollback_scope:
+                    rollback_service = self._build(rollback_scope.uow)
+                    await rollback_service.rollback_create_file(plan)
+                await service.cleanup_create_storage(plan)
+
+        async with pod_context_scope(
+            self._uow_factory, request=request, user_id=user_id, pod_id=pod_id
+        ) as finalize_scope:
+            finalize_service = self._build(finalize_scope.uow)
+            return await finalize_service.finalize_create_file(plan)
+
+    async def attach_user_markdown(
+        self,
+        *,
+        pod_id: UUID,
+        path: str,
+        markdown_content: bytes | Path,
+        images: list[tuple[str, bytes | Path]],
+        request: Request,
+        user_id: UUID,
+    ) -> DatastoreFileEntity:
+        """Authorize -> store assets -> persist metadata in short DB phases."""
+        async with pod_context_scope(
+            self._uow_factory, request=request, user_id=user_id, pod_id=pod_id
+        ) as scope:
+            service = self._build(scope.uow)
+            plan = await service.prepare_user_markdown(pod_id, path, scope.ctx)
+
+        asset_names = await service.write_user_markdown(
+            plan,
+            markdown_content,
+            images=images,
+        )
+
+        async with pod_context_scope(
+            self._uow_factory, request=request, user_id=user_id, pod_id=pod_id
+        ) as finalize_scope:
+            finalize_service = self._build(finalize_scope.uow)
+            return await finalize_service.finalize_user_markdown(
+                plan,
+                asset_names=asset_names,
+                ctx=finalize_scope.ctx,
+            )
 
     async def update_file(
         self,

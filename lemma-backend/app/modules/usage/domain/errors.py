@@ -38,6 +38,18 @@ class UsageContextMissingError(UsageDomainError):
         )
 
 
+class UsageConfigurationError(UsageDomainError):
+    """System-model admission is unsafe because cost metadata is incomplete."""
+
+    def __init__(
+        self,
+        message: str = "System model usage is temporarily unavailable",
+        *,
+        code: str = "USAGE_CONFIGURATION_ERROR",
+    ):
+        super().__init__(message, code=code, status_code=503)
+
+
 class UsageAccessDeniedError(UsageDomainError):
     """User does not have permission to view an organization's usage."""
 

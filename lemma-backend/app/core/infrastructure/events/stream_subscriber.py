@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from faststream.redis import StreamSub
 
-from app.core.config import settings
+from app.core.infrastructure.events.config import event_transport_settings
 from app.core.log.log import get_logger
 
 logger = get_logger(__name__)
@@ -11,6 +11,16 @@ logger = get_logger(__name__)
 # time (the decorators call redis_stream_sub). The worker uses this to keep the
 # Redis consumer groups alive — see ensure_consumer_groups below.
 _REGISTERED_STREAM_GROUPS: set[tuple[str, str]] = set()
+_DECLARED_STREAM_GROUPS: set[tuple[str, str]] = set()
+
+
+class ConsumerGroupTopologyError(RuntimeError):
+    """A declared Redis Stream consumer group could not be ensured."""
+
+
+def declare_stream_groups(groups) -> None:
+    """Add module-declared stream/group relationships to the process topology."""
+    _DECLARED_STREAM_GROUPS.update(groups)
 
 
 def redis_stream_sub(
@@ -26,7 +36,7 @@ def redis_stream_sub(
         stream,
         group=group,
         consumer=consumer,
-        polling_interval=settings.redis_stream_polling_interval_ms,
+        polling_interval=event_transport_settings.redis_stream_polling_interval_ms,
     )
 
 
@@ -47,8 +57,8 @@ def redis_stream_reclaim_sub(
         stream,
         group=group,
         consumer=f"{consumer}-reclaimer",
-        polling_interval=settings.redis_stream_polling_interval_ms,
-        min_idle_time=settings.redis_stream_min_idle_time_ms,
+        polling_interval=event_transport_settings.redis_stream_polling_interval_ms,
+        min_idle_time=event_transport_settings.redis_stream_min_idle_time_ms,
     )
 
 
@@ -79,7 +89,33 @@ def reliable_redis_stream_subscriber(
 
 def registered_stream_groups() -> set[tuple[str, str]]:
     """All (stream, group) pairs declared by grouped stream subscribers."""
-    return set(_REGISTERED_STREAM_GROUPS)
+    return set(_REGISTERED_STREAM_GROUPS | _DECLARED_STREAM_GROUPS)
+
+
+async def ensure_stream_groups(redis_client, stream: str) -> int:
+    """Strictly ensure every declared group for one stream before publication."""
+    created = 0
+    groups = sorted(
+        group
+        for declared_stream, group in registered_stream_groups()
+        if declared_stream == stream
+    )
+    for group in groups:
+        try:
+            await redis_client.xgroup_create(
+                name=stream,
+                groupname=group,
+                id="$",
+                mkstream=True,
+            )
+            created += 1
+        except Exception as exc:
+            if "BUSYGROUP" in str(exc):
+                continue
+            raise ConsumerGroupTopologyError(
+                f"Could not ensure consumer group {group!r} for stream {stream!r}"
+            ) from exc
+    return created
 
 
 async def ensure_consumer_groups(

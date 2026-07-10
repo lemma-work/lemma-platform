@@ -11,7 +11,6 @@ from uuid import UUID
 
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from apscheduler.jobstores.sqlalchemy import SQLAlchemyJobStore
-from apscheduler.executors.asyncio import AsyncIOExecutor
 from apscheduler.triggers.cron import CronTrigger
 from apscheduler.triggers.date import DateTrigger
 from pytz import utc
@@ -19,6 +18,10 @@ from pytz import utc
 from app.core.config import settings
 from app.core.log.log import get_logger
 from app.modules.schedule.scheduler.events import get_event_emitter
+from app.modules.schedule.scheduler.executor import (
+    ScheduledTimeAsyncIOExecutor,
+    current_scheduled_run_time,
+)
 
 logger = get_logger(__name__)
 
@@ -39,7 +42,9 @@ async def execute_scheduled_job(schedule_id: str, payload: dict | None = None):
 
     schedule_uuid = UUID(schedule_id)
     await emitter.emit_scheduled_job_event(
-        schedule_id=schedule_uuid, payload=payload or {}
+        schedule_id=schedule_uuid,
+        payload=payload or {},
+        scheduled_at=current_scheduled_run_time(),
     )
 
 
@@ -68,7 +73,7 @@ class SchedulerService:
         jobstores = {"default": SQLAlchemyJobStore(url=sync_db_url)}
 
         # Configure executors
-        executors = {"default": AsyncIOExecutor()}
+        executors = {"default": ScheduledTimeAsyncIOExecutor()}
 
         # Job defaults
         job_defaults = {

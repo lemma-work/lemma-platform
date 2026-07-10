@@ -1,9 +1,8 @@
 """Job-state models for pod bundle operations.
 
-Import snapshots and step checkpoints are durable PostgreSQL records mirrored
-to Redis. Export and publish states retain the existing Redis lifecycle. Every
-write bumps ``seq`` so SSE consumers can order a replayed snapshot against
-live events.
+All import, export, and publish snapshots and checkpoints are authoritative in
+PostgreSQL and mirrored to Redis. Every accepted compare-and-swap write bumps
+``version`` and ``seq`` so workers and realtime clients can reject stale state.
 """
 
 from __future__ import annotations
@@ -46,6 +45,12 @@ class PublishStatus(str, Enum):
     PUBLISHING = "PUBLISHING"
     COMPLETED = "COMPLETED"
     FAILED = "FAILED"
+
+
+class BundleJobKind(str, Enum):
+    IMPORT = "IMPORT"
+    EXPORT = "EXPORT"
+    PUBLISH = "PUBLISH"
 
 
 IMPORT_TERMINAL_STATUSES = frozenset(
@@ -175,10 +180,15 @@ class _BundleJobState(BaseModel):
     pod_id: UUID
     user_id: UUID
     error: str | None = None
+    error_type: str | None = None
+    error_code: str | None = None
+    version: int = 0
+    attempt: int = 1
     seq: int = 0
     created_at: datetime = Field(default_factory=_utcnow)
     updated_at: datetime = Field(default_factory=_utcnow)
     completed_at: datetime | None = None
+    heartbeat_at: datetime | None = None
 
     def touch(self) -> None:
         """Bump the write sequence and timestamp. Call exactly once per
@@ -244,8 +254,11 @@ class PublishState(_BundleJobState):
     private: bool = False
     account_id: UUID | None = None
     ai_readme: bool = False
+    staging_key: str | None = None
     repo_url: str | None = None
     repo_created: bool = False
+    repo_owner: str | None = None
+    repo_slug: str | None = None
     readme: str | None = None
     files: list[PublishFileProgress] = Field(default_factory=list)
     progress: Progress = Field(default_factory=Progress)

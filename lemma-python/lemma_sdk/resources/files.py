@@ -1,8 +1,10 @@
 from __future__ import annotations
 
+from contextlib import ExitStack
 from io import BytesIO
+import mimetypes
 from pathlib import Path
-from typing import Any, BinaryIO
+from typing import BinaryIO
 
 from ..errors import LemmaNotFoundError
 from ..openapi_client.api.files import (
@@ -21,8 +23,7 @@ from ..openapi_client.api.files import (
     file_update,
     file_url,
 )
-from ..openapi_client.models.body_file_markdown_attach import BodyFileMarkdownAttach
-from ..openapi_client.models.body_file_update import BodyFileUpdate
+from ..openapi_client.models.attach import Attach
 from ..openapi_client.models.create_folder_request import CreateFolderRequest
 from ..openapi_client.models.directory_tree_response import DirectoryTreeResponse
 from ..openapi_client.models.file_children_response import FileChildrenResponse
@@ -33,6 +34,8 @@ from ..openapi_client.models.file_search_response import FileSearchResponse
 from ..openapi_client.models.file_signed_url_request import FileSignedUrlRequest
 from ..openapi_client.models.file_signed_url_response import FileSignedUrlResponse
 from ..openapi_client.models.file_url_response import FileUrlResponse
+from ..openapi_client.models.update import Update
+from ..openapi_client.types import File
 from .base import BoundResource
 
 
@@ -101,12 +104,12 @@ class PodFiles(BoundResource):
             body_model=CreateFolderRequest,
         )
 
-    def update(self, path: str, request: BodyFileUpdate) -> FileDetailResponse:
+    def update(self, path: str, request: Update) -> FileDetailResponse:
         return self._call(file_update, self._pod_uuid(), body=request)
 
     def move(self, path: str, new_path: str) -> FileDetailResponse:
         """Move or rename a file or folder."""
-        return self.update(path, BodyFileUpdate(path=path, new_path=new_path))
+        return self.update(path, Update(path=path, new_path=new_path))
 
     def write_text(
         self,
@@ -263,7 +266,7 @@ class PodFiles(BoundResource):
         path: str,
         markdown: str,
         *,
-        images: list[str] | None = None,
+        images: list[str | Path] | None = None,
     ) -> FileDetailResponse:
         """Replace a document's agent-facing markdown (bring-your-own markdown).
 
@@ -271,15 +274,27 @@ class PodFiles(BoundResource):
         is unchanged. ``images`` are referenced by the markdown (``![](fig.png)``)
         and stored as sibling child artifacts.
         """
-        body: dict[str, Any] = {"path": path, "data": markdown}
-        if images is not None:
-            body["images"] = images
-        return self._call(
-            file_markdown_attach,
-            self._pod_uuid(),
-            body=body,
-            body_model=BodyFileMarkdownAttach,
-        )
+        with ExitStack() as files:
+            image_files = []
+            for image in images or []:
+                image_path = Path(image)
+                image_files.append(
+                    File(
+                        payload=files.enter_context(image_path.open("rb")),
+                        file_name=image_path.name,
+                        mime_type=mimetypes.guess_type(image_path.name)[0],
+                    )
+                )
+            body = Attach(
+                path=path,
+                data=File(
+                    payload=BytesIO(markdown.encode("utf-8")),
+                    file_name="document.md",
+                    mime_type="text/markdown",
+                ),
+                images=image_files,
+            )
+            return self._call(file_markdown_attach, self._pod_uuid(), body=body)
 
     def detach_markdown(self, path: str) -> FileDetailResponse:
         """Drop user-provided markdown so the document reverts to extraction."""
@@ -362,9 +377,18 @@ class PodFiles(BoundResource):
         and stay out of search. ``/me`` paths are per-user private; other paths
         are pod-shared.
         """
+        normalized_path = f"/{path.strip('/')}"
+        target_directory, _, target_name = normalized_path.rpartition("/")
+        if not target_name:
+            raise ValueError("File path must include a file name")
+
         data = {
-            "path": path,
-            "directory_path": directory_path,
+            # The streaming endpoint accepts the public name/directory fields,
+            # not the SDK-only full-path convenience argument. Derive both from
+            # ``path`` so nested paths and /me paths cannot be misplaced when
+            # callers leave ``directory_path`` at its compatibility default.
+            "directory_path": target_directory or "/",
+            "name": target_name,
             "description": description,
             "search_enabled": str(search_enabled).lower(),
             "visibility": visibility,

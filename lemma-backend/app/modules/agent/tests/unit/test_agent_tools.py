@@ -966,7 +966,7 @@ async def test_callable_function_tool_passes_flat_model_args_as_input(
             )
 
     monkeypatch.setattr(
-        "app.modules.agent.tools.callable_tool_factory.build_function_use_cases",
+        "app.modules.agent.tools.callable_tool_factory.create_function_use_cases",
         lambda uow_factory: _FakeUseCases(),
     )
 

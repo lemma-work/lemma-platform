@@ -11,7 +11,7 @@ from app.modules.agent.domain.value_objects import (
     JsonValue,
 )
 from app.modules.agent.tools.context import BaseToolResponse
-from app.modules.datastore.api.schemas.datastore_schemas import RecordFilter
+from app.modules.datastore.contracts import RecordFilter
 
 
 class DisplayResourceType(str, Enum):

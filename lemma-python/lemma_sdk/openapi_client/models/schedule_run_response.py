@@ -39,6 +39,7 @@ class ScheduleRunResponse:
         completed_at (datetime.datetime | None | Unset):
         error_code (None | str | Unset):
         error_type (None | str | Unset):
+        source_occurred_at (datetime.datetime | None | Unset):
         started_at (datetime.datetime | None | Unset):
         target_run_id (None | str | Unset):
     """
@@ -57,6 +58,7 @@ class ScheduleRunResponse:
     completed_at: datetime.datetime | None | Unset = UNSET
     error_code: None | str | Unset = UNSET
     error_type: None | str | Unset = UNSET
+    source_occurred_at: datetime.datetime | None | Unset = UNSET
     started_at: datetime.datetime | None | Unset = UNSET
     target_run_id: None | str | Unset = UNSET
     additional_properties: dict[str, Any] = _attrs_field(init=False, factory=dict)
@@ -104,6 +106,14 @@ class ScheduleRunResponse:
         else:
             error_type = self.error_type
 
+        source_occurred_at: None | str | Unset
+        if isinstance(self.source_occurred_at, Unset):
+            source_occurred_at = UNSET
+        elif isinstance(self.source_occurred_at, datetime.datetime):
+            source_occurred_at = self.source_occurred_at.isoformat()
+        else:
+            source_occurred_at = self.source_occurred_at
+
         started_at: None | str | Unset
         if isinstance(self.started_at, Unset):
             started_at = UNSET
@@ -141,6 +151,8 @@ class ScheduleRunResponse:
             field_dict["error_code"] = error_code
         if error_type is not UNSET:
             field_dict["error_type"] = error_type
+        if source_occurred_at is not UNSET:
+            field_dict["source_occurred_at"] = source_occurred_at
         if started_at is not UNSET:
             field_dict["started_at"] = started_at
         if target_run_id is not UNSET:
@@ -214,6 +226,25 @@ class ScheduleRunResponse:
 
         error_type = _parse_error_type(d.pop("error_type", UNSET))
 
+        def _parse_source_occurred_at(data: object) -> datetime.datetime | None | Unset:
+            if data is None:
+                return data
+            if isinstance(data, Unset):
+                return data
+            try:
+                if not isinstance(data, str):
+                    raise TypeError()
+                source_occurred_at_type_0 = isoparse(data)
+
+                return source_occurred_at_type_0
+            except (TypeError, ValueError, AttributeError, KeyError):
+                pass
+            return cast(datetime.datetime | None | Unset, data)
+
+        source_occurred_at = _parse_source_occurred_at(
+            d.pop("source_occurred_at", UNSET)
+        )
+
         def _parse_started_at(data: object) -> datetime.datetime | None | Unset:
             if data is None:
                 return data
@@ -255,6 +286,7 @@ class ScheduleRunResponse:
             completed_at=completed_at,
             error_code=error_code,
             error_type=error_type,
+            source_occurred_at=source_occurred_at,
             started_at=started_at,
             target_run_id=target_run_id,
         )

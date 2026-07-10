@@ -77,19 +77,21 @@ def build_system_polish_fn(
     async def _polish(readme: str) -> str:
         from pydantic_ai import Agent as PydanticAIAgent
 
-        from app.modules.agent.domain.value_objects import AgentRuntimeConfig
-        from app.modules.agent.services.runtime_model_factory import (
+        from app.core.domain.runtime import AgentRuntimeConfig
+        from app.composition.pod_bundle_readme import (
             require_pydantic_ai_model_from_runtime_profile,
         )
-        from app.modules.agent.services.runtime_profile_service import (
+        from app.composition.pod_bundle_readme import (
             DEFAULT_SYSTEM_AGENT_RUNTIME_PROFILE_ID,
             AgentRuntimeProfileService,
         )
-        from app.modules.usage.services.pydantic_ai_tracking import (
+        from app.composition.pod_bundle_readme import (
             record_pydantic_ai_result_usage,
             reserve_usage_for_runtime,
+            usage_limits_for_reservation,
         )
-        from app.modules.usage.services.usage_context import UsageExecutionContext
+        from app.modules.usage.contracts import SystemModelBudget
+        from app.composition.pod_bundle_readme import UsageExecutionContext
 
         resolved = await AgentRuntimeProfileService().resolve(
             runtime=AgentRuntimeConfig(profile_id=DEFAULT_SYSTEM_AGENT_RUNTIME_PROFILE_ID),
@@ -102,8 +104,6 @@ def build_system_polish_fn(
             runtime_credentials=resolved.credentials or {},
             fallback_model_name=resolved.model_name_for_harness,
         )
-        agent = PydanticAIAgent(model, system_prompt=_PROMPT)
-
         usage_context = UsageExecutionContext(
             user_id=user_id,
             organization_id=organization_id,
@@ -114,10 +114,21 @@ def build_system_polish_fn(
             organization_id=organization_id,
             user_id=user_id,
             runtime_profile=runtime_profile,
+            budget=SystemModelBudget(
+                max_input_tokens=64_000,
+                max_output_tokens=8_000,
+                max_requests=1,
+            ),
         )
+        if reservation is None:
+            raise RuntimeError("System README model did not create a usage reservation")
+        agent = PydanticAIAgent(model, system_prompt=_PROMPT)
         result = None
         try:
-            result = await agent.run(readme)
+            result = await agent.run(
+                readme,
+                usage_limits=usage_limits_for_reservation(reservation),
+            )
             await record_pydantic_ai_result_usage(
                 ctx=usage_context,
                 runtime_profile=runtime_profile,

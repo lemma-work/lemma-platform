@@ -7,7 +7,7 @@ import httpx
 
 from ... import errors
 from ...client import AuthenticatedClient, Client
-from ...models.body_file_markdown_attach import BodyFileMarkdownAttach
+from ...models.attach import Attach
 from ...models.error_response import ErrorResponse
 from ...models.file_detail_response import FileDetailResponse
 from ...types import Response
@@ -16,7 +16,7 @@ from ...types import Response
 def _get_kwargs(
     pod_id: UUID,
     *,
-    body: BodyFileMarkdownAttach,
+    body: Attach,
 ) -> dict[str, Any]:
     headers: dict[str, Any] = {}
 
@@ -67,7 +67,7 @@ def sync_detailed(
     pod_id: UUID,
     *,
     client: AuthenticatedClient | Client,
-    body: BodyFileMarkdownAttach,
+    body: Attach,
 ) -> Response[ErrorResponse | FileDetailResponse]:
     """Attach Document Markdown
 
@@ -77,7 +77,7 @@ def sync_detailed(
 
     Args:
         pod_id (UUID):
-        body (BodyFileMarkdownAttach):
+        body (Attach):
 
     Raises:
         errors.UnexpectedStatus: If the server returns an undocumented status code and Client.raise_on_unexpected_status is True.
@@ -103,7 +103,7 @@ def sync(
     pod_id: UUID,
     *,
     client: AuthenticatedClient | Client,
-    body: BodyFileMarkdownAttach,
+    body: Attach,
 ) -> ErrorResponse | FileDetailResponse | None:
     """Attach Document Markdown
 
@@ -113,7 +113,7 @@ def sync(
 
     Args:
         pod_id (UUID):
-        body (BodyFileMarkdownAttach):
+        body (Attach):
 
     Raises:
         errors.UnexpectedStatus: If the server returns an undocumented status code and Client.raise_on_unexpected_status is True.
@@ -134,7 +134,7 @@ async def asyncio_detailed(
     pod_id: UUID,
     *,
     client: AuthenticatedClient | Client,
-    body: BodyFileMarkdownAttach,
+    body: Attach,
 ) -> Response[ErrorResponse | FileDetailResponse]:
     """Attach Document Markdown
 
@@ -144,7 +144,7 @@ async def asyncio_detailed(
 
     Args:
         pod_id (UUID):
-        body (BodyFileMarkdownAttach):
+        body (Attach):
 
     Raises:
         errors.UnexpectedStatus: If the server returns an undocumented status code and Client.raise_on_unexpected_status is True.
@@ -168,7 +168,7 @@ async def asyncio(
     pod_id: UUID,
     *,
     client: AuthenticatedClient | Client,
-    body: BodyFileMarkdownAttach,
+    body: Attach,
 ) -> ErrorResponse | FileDetailResponse | None:
     """Attach Document Markdown
 
@@ -178,7 +178,7 @@ async def asyncio(
 
     Args:
         pod_id (UUID):
-        body (BodyFileMarkdownAttach):
+        body (Attach):
 
     Raises:
         errors.UnexpectedStatus: If the server returns an undocumented status code and Client.raise_on_unexpected_status is True.

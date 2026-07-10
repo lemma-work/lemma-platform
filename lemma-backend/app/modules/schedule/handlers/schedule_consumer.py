@@ -13,8 +13,8 @@ from app.core.infrastructure.db.session import async_session_maker
 from app.core.infrastructure.db.uow_factory import SessionUnitOfWorkFactory
 from app.core.infrastructure.jobs.streaq_runtime import streaq_task
 from app.modules.schedule.repositories.schedule_repository import ScheduleRepository
-from app.modules.schedule.services.schedule_processor import ScheduleProcessor
 from app.core.log.log import get_logger
+from app.composition.schedule_filter import create_schedule_processor
 
 router = RedisRouter()
 logger = get_logger(__name__)
@@ -52,7 +52,7 @@ async def handle_llm_filter_task(
         logger.warning("Schedule %s has no filter instruction, skipping", schedule_id)
         return
 
-    processor = ScheduleProcessor()
+    processor = create_schedule_processor()
     fired = await processor.process_event(
         schedule=schedule,
         payload=payload,

@@ -105,6 +105,7 @@ class ScheduleRunEntity(Entity):
     llm_output: dict[str, Any] = Field(default_factory=dict)
     error_type: str | None = None
     error_code: str | None = None
+    source_occurred_at: datetime | None = None
     started_at: datetime | None = None
     completed_at: datetime | None = None
 

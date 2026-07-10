@@ -1,5 +1,4 @@
 from __future__ import annotations
-
 from unittest.mock import AsyncMock
 from uuid import uuid4
 
@@ -17,7 +16,6 @@ from app.modules.pod.domain.pod_entities import (
     PodEntity,
     PodJoinPolicy,
     PodMemberEntity,
-    PodProvisioningStatus,
     PodRole,
     PodUpdateEntity,
 )
@@ -393,34 +391,3 @@ async def test_list_pods_by_org_editor_sees_only_member_pods(
         None,
     )
     pod_repository_mock.list_by_org.assert_not_called()
-
-
-@pytest.mark.asyncio
-async def test_retry_failed_provisioning_queues_one_claimable_event(
-    pod_service: PodService,
-    pod_repository_mock: AsyncMock,
-):
-    requester_id = uuid4()
-    pod = _make_pod(organization_id=uuid4(), user_id=requester_id)
-    pod.provisioning_status = PodProvisioningStatus.FAILED
-    pod.provisioning_attempts = 4
-    pod.provisioning_error_type = "ConnectionError"
-    pod.provisioning_error_code = "DATASTORE_UNAVAILABLE"
-    pod_repository_mock.get.return_value = pod
-    pod_repository_mock.update.side_effect = lambda value: value
-    ctx = AsyncMock()
-
-    result = await pod_service.retry_provisioning(
-        pod.id,
-        requester_id,
-        ctx=ctx,
-    )
-
-    assert result.provisioning_status == PodProvisioningStatus.PROVISIONING
-    assert result.provisioning_attempts == 0
-    assert result.provisioning_started_at is None
-    assert result.provisioning_error_type is None
-    events = result.collect_events()
-    assert len(events) == 1
-    assert events[0].event_type == "pod.created"
-    ctx.require.assert_awaited_once()

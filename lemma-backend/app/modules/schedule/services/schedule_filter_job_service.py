@@ -14,9 +14,13 @@ logger = get_logger(__name__)
 class ScheduleFilterJobService:
     """Processes deferred schedule filter jobs using repositories and services."""
 
-    def __init__(self, schedule_repository: ScheduleRepository):
+    def __init__(
+        self,
+        schedule_repository: ScheduleRepository,
+        processor: ScheduleProcessor,
+    ):
         self._schedule_repository = schedule_repository
-        self._processor = ScheduleProcessor()
+        self._processor = processor
 
     async def process(
         self,

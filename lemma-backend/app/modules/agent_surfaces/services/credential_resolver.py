@@ -26,8 +26,7 @@ from app.modules.agent_surfaces.domain.entities import (
 from app.modules.agent_surfaces.domain.surface_connectors import (
     SELF_MANAGED_CREDENTIAL_CONNECTOR_IDS,
 )
-from app.modules.connectors.infrastructure.models.account import Account
-from app.modules.connectors.services.connector_service import ConnectorService
+from app.composition.surface_connectors import Account, ConnectorService
 
 logger = get_logger(__name__)
 

@@ -178,6 +178,7 @@ class InboxConsumer:
                     event_type=event_type,
                     status=InboxStatus.PROCESSING.value,
                     attempts=0,
+                    delivery_count=0,
                     first_received_at=now,
                     last_received_at=now,
                 )
@@ -201,16 +202,16 @@ class InboxConsumer:
                 return None
             if (
                 row.status == InboxStatus.PROCESSING.value
-                and row.attempts > 0
+                and row.delivery_count > 0
                 and row.last_received_at > now - self.abandon_after
             ):
                 return None
             row.status = InboxStatus.PROCESSING.value
-            row.attempts += 1
+            row.delivery_count += 1
             row.last_received_at = now
             row.last_error_type = None
             row.last_error = None
-            return row.attempts
+            return row.attempts + 1
 
     async def _retry_or_dead_letter(
         self,
@@ -227,6 +228,7 @@ class InboxConsumer:
             event_id,
             status,
             error_type=type(exc).__name__,
+            failed_attempts=attempt,
         )
         retry_counter.add(1, {"consumer": consumer, "event_type": event_type})
         if terminal:
@@ -249,6 +251,7 @@ class InboxConsumer:
         status: InboxStatus,
         *,
         error_type: str | None = None,
+        failed_attempts: int | None = None,
     ) -> None:
         now = datetime.now(timezone.utc)
         async with self._session_maker() as session, session.begin():
@@ -263,6 +266,8 @@ class InboxConsumer:
             if row is None:
                 return
             row.status = status.value
+            if failed_attempts is not None:
+                row.attempts = failed_attempts
             row.last_received_at = now
             row.completed_at = (
                 now if status in {InboxStatus.COMPLETED, InboxStatus.TERMINAL} else None

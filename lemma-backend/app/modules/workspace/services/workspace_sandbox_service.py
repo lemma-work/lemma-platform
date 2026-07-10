@@ -9,11 +9,7 @@ from uuid import UUID, uuid4
 
 from app.core.config import settings
 from agentbox_client import AgentBoxClient
-from app.modules.agent.domain.workspace_entities import SandboxInfo, WorkspaceStatus
-from app.modules.identity.infrastructure.supertokens_auth.helpers import get_user_token
-from app.modules.identity.infrastructure.supertokens_auth.token_factory import (
-    build_delegation_claims,
-)
+from app.modules.workspace.contracts import SandboxInfo, WorkspaceStatus
 from app.modules.workspace.agentbox_session import AgentBoxWorkspaceSession
 from app.modules.workspace.agentbox_retry import retry_on_transient_agentbox_error
 from app.modules.workspace.services.agentbox_manager import AgentBoxSandbox, agentbox_sandbox_id
@@ -421,24 +417,18 @@ class WorkspaceSandboxService:
         scope: list[str] | None = None,
         session_id: str | None = None,
     ) -> dict[str, str]:
-        delegation_claims = None
-        if (
-            settings.authz_delegated_tokens_enabled
-            and workload_type
-            and workload_id is not None
-            and pod_id is not None
-        ):
-            delegation_claims = build_delegation_claims(
-                workload_type=workload_type,
-                workload_id=workload_id,
-                pod_id=pod_id,
-                session_id=session_id or str(uuid4()),
-                invoked_by_user_id=user_id,
-                workload_name=workload_name,
-                scope=scope,
-            )
+        from app.composition.workspace_identity import mint_workspace_token
 
-        token = await get_user_token(user_id, delegation_claims=delegation_claims)
+        token = await mint_workspace_token(
+            user_id=user_id,
+            workload_type=workload_type,
+            workload_id=workload_id,
+            pod_id=pod_id,
+            session_id=session_id or str(uuid4()),
+            workload_name=workload_name,
+            scope=scope,
+            delegated_tokens_enabled=settings.authz_delegated_tokens_enabled,
+        )
         api_url = self._resolve_workspace_api_url()
         auth_url = self._resolve_workspace_host_url(
             settings.cli_auth_frontend_url or settings.auth_frontend_url
@@ -465,20 +455,11 @@ class WorkspaceSandboxService:
     async def _resolve_organization_id(self, pod_id: UUID | None) -> str | None:
         if pod_id is None:
             return None
-        try:
-            from app.modules.pod.infrastructure.pod_reads import (
-                resolve_pod_organization_id,
-            )
+        from app.composition.workspace_identity import (
+            resolve_workspace_organization_id,
+        )
 
-            org_id = await resolve_pod_organization_id(pod_id)
-            return str(org_id) if org_id else None
-        except Exception as exc:
-            logger.debug(
-                "Unable to resolve org_id for pod %s in workspace env setup: %s",
-                pod_id,
-                exc,
-            )
-            return None
+        return await resolve_workspace_organization_id(pod_id)
 
     def _resolve_workspace_host_url(self, url: str) -> str:
         return self.resolve_workspace_host_url_for_runtime(self.runtime, url)

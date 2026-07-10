@@ -10,7 +10,7 @@ from app.core.authorization.context import (
 )
 from app.core.authorization.permissions import Permissions
 from app.core.helpers.slug import normalize_resource_name
-from app.modules.icon.services.icon_service import IconService
+from app.modules.icon.contracts import IconCleanupPort
 from app.modules.workflow.domain.workflow import (
     WorkflowEntity,
     WorkflowSummaryEntity,
@@ -34,7 +34,7 @@ class WorkflowService:
         uow: SqlAlchemyUnitOfWork,
         _schedule_adapter: object | None = None,
         authorization_service: object | None = None,
-        icon_service: IconService | None = None,
+        icon_service: IconCleanupPort | None = None,
     ):
         self.uow = uow
         self.flow_repo = SqlAlchemyWorkflowRepository(uow)

@@ -9794,7 +9794,7 @@ var LemmaClient = (() => {
   }
 
   // src/version.ts
-  var SDK_VERSION = "1.0.1";
+  var SDK_VERSION = "0.5.7";
   var CLIENT_HEADER_NAME = "X-Lemma-Client";
   var CLIENT_HEADER_VALUE = `lemma-sdk-ts/${SDK_VERSION}`;
 
@@ -12247,10 +12247,7 @@ var LemmaClient = (() => {
         method: "POST",
         url: "/icons/upload",
         formData,
-        mediaType: "multipart/form-data",
-        errors: {
-          422: `Validation Error`
-        }
+        mediaType: "multipart/form-data"
       });
     }
     /**
@@ -13832,24 +13829,6 @@ var LemmaClient = (() => {
       return request(OpenAPI, {
         method: "POST",
         url: "/pods/{pod_id}/join",
-        path: {
-          "pod_id": podId
-        },
-        errors: {
-          422: `Validation Error`
-        }
-      });
-    }
-    /**
-     * Retry Pod Provisioning
-     * @param podId
-     * @returns PodResponse Successful Response
-     * @throws ApiError
-     */
-    static podProvisioningRetry(podId) {
-      return request(OpenAPI, {
-        method: "POST",
-        url: "/pods/{pod_id}/provisioning/retry",
         path: {
           "pod_id": podId
         },

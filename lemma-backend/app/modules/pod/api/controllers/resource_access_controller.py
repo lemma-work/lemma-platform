@@ -22,10 +22,7 @@ from app.core.authorization.permissions import Permissions
 from app.core.authorization.resource_actions import RESOURCE_ACTIONS
 from app.core.authorization.resource_names import resolve_resource_id_by_name
 from app.core.authorization.service import AuthorizationDataService
-from app.modules.identity.infrastructure.models.organization_models import (
-    OrganizationMember,
-)
-from app.modules.identity.infrastructure.models.user_models import User
+from app.composition.pod_identity_wiring import OrganizationMember, User
 from app.modules.pod.api.schemas.pod_schemas import (
     ResourceAccessGrantRequest,
     ResourceAccessGrantResponse,

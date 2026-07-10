@@ -28,8 +28,11 @@ def _routers():
 
 def _event_routers():
     from app.modules.datastore.events.handlers import router
+    from app.modules.datastore.events.pod_schema_consumer import (
+        router as pod_schema_router,
+    )
 
-    return [router]
+    return [router, pod_schema_router]
 
 
 @asynccontextmanager
@@ -98,4 +101,8 @@ module = LemmaModule(
     event_routers=_event_routers,
     api_lifespans=(_backfill_query_role,),
     worker_lifespans=(_datastore_outbox_dispatcher, _close_reindex_queue),
+    stream_groups=(
+        ("datastore.events", "datastore-file-events"),
+        ("pod_events", "pod-provisioning-events"),
+    ),
 )

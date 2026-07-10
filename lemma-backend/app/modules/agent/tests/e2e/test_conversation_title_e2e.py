@@ -59,11 +59,24 @@ def _stub_llm(monkeypatch: pytest.MonkeyPatch, *, output: str) -> None:
         def __init__(self, model, system_prompt=None):
             pass
 
-        async def run(self, prompt):
+        async def run(self, prompt, *, usage_limits=None):
+            del usage_limits
             return SimpleNamespace(output=output)
 
-    async def _noop_reserve(*, organization_id, user_id, runtime_profile):
-        return None
+    async def _noop_reserve(*, organization_id, user_id, runtime_profile, budget):
+        from app.modules.usage.domain.entities import UsageReservation
+
+        return UsageReservation(
+            organization_id=organization_id,
+            user_id=user_id,
+            amount_usd=0.01,
+            profile_id="system:lemma",
+            model_name="deepseek-v4-flash",
+            max_input_tokens=budget.max_input_tokens,
+            max_output_tokens=budget.max_output_tokens,
+            max_requests=budget.max_requests,
+            max_billable_units=budget.max_billable_units,
+        )
 
     async def _noop_record(
         *, ctx, runtime_profile, result, status, reservation, metadata

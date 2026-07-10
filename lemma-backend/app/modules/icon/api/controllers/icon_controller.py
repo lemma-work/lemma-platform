@@ -4,12 +4,16 @@ from __future__ import annotations
 
 import mimetypes
 
-from fastapi import APIRouter, File, HTTPException, Request, UploadFile, status
+from fastapi import APIRouter, HTTPException, Request, status
 from fastapi.responses import Response
 
 from app.core.api.dependencies import CurrentUser
-from app.core.api.uploads import read_upload_limited
-from app.modules.agent.tools.file_access import sniff_image_mime
+from app.core.api.streaming_multipart import (
+    MultipartFileLimit,
+    stream_multipart_form,
+    streaming_multipart_openapi,
+)
+from app.core.file_types import sniff_image_mime
 from app.modules.icon.api.schemas import IconUploadResponse
 from app.modules.icon.config import icon_settings
 from app.modules.icon.services.icon_service import IconService
@@ -33,19 +37,35 @@ _SAFE_ICON_MEDIA_TYPES = frozenset(
     operation_id="icon.upload",
     summary="Upload Icon",
     description="Upload an image asset and receive a public icon URL.",
+    openapi_extra=streaming_multipart_openapi(
+        "IconUploadRequest",
+        properties={
+            "file": {
+                "type": "string",
+                "format": "binary",
+                "contentMediaType": "application/octet-stream",
+                "title": "File",
+            }
+        },
+        required=["file"],
+    ),
 )
 async def upload_icon(
     request: Request,
     user: CurrentUser,
-    file: UploadFile = File(...),
 ) -> IconUploadResponse:
-    file_content = (
-        await read_upload_limited(
-            file,
-            max_bytes=icon_settings.icon_upload_max_bytes,
-            field="icon",
-        )
-    ).data
+    async with stream_multipart_form(
+        request,
+        file_limits={
+            "file": MultipartFileLimit(
+                max_bytes=icon_settings.icon_upload_max_bytes,
+                required=True,
+                label="icon",
+            )
+        },
+        combined_max_bytes=icon_settings.icon_upload_max_bytes,
+    ) as form:
+        file_content = await form.require_file("file").read_bytes()
     if not file_content:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
