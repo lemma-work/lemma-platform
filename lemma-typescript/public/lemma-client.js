@@ -11775,21 +11775,35 @@ var LemmaClient = (() => {
   };
 
   // src/namespaces/files.ts
+  function trimLeadingSlashes(value) {
+    let start = 0;
+    while (start < value.length && value[start] === "/") {
+      start += 1;
+    }
+    return value.slice(start);
+  }
+  function trimTrailingSlashes(value) {
+    let end = value.length;
+    while (end > 0 && value[end - 1] === "/") {
+      end -= 1;
+    }
+    return value.slice(0, end);
+  }
   function joinDatastorePath(basePath, leaf) {
-    const normalizedLeaf = leaf.replace(/^\/+/, "");
+    const normalizedLeaf = trimLeadingSlashes(leaf);
     const trimmedBase = (basePath != null ? basePath : "/").trim();
     const normalizedBase = trimmedBase.length > 0 ? trimmedBase : "/";
     if (normalizedBase === "/") {
       return `/${normalizedLeaf}`;
     }
-    return `${normalizedBase.replace(/\/+$/, "")}/${normalizedLeaf}`;
+    return `${trimTrailingSlashes(normalizedBase)}/${normalizedLeaf}`;
   }
   function getDirectoryPath(path) {
     const normalized = path.trim();
     if (!normalized || normalized === "/") {
       return "/";
     }
-    const withoutTrailing = normalized.replace(/\/+$/, "");
+    const withoutTrailing = trimTrailingSlashes(normalized);
     const index = withoutTrailing.lastIndexOf("/");
     if (index <= 0) {
       return "/";
@@ -11797,7 +11811,7 @@ var LemmaClient = (() => {
     return withoutTrailing.slice(0, index);
   }
   function getBaseName(path) {
-    const normalized = path.trim().replace(/\/+$/, "");
+    const normalized = trimTrailingSlashes(path.trim());
     const index = normalized.lastIndexOf("/");
     if (index === -1) {
       return normalized;
