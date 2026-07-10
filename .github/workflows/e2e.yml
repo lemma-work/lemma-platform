@@ -160,7 +160,7 @@ jobs:
       - name: Sync dependencies
         run: uv sync
       - name: Download E2E coverage shards
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           pattern: backend-e2e-*-coverage
           path: lemma-backend/coverage-artifacts/e2e
@@ -188,7 +188,7 @@ jobs:
             --summary-json-out coverage-backend/e2e-union-summary.json
       - name: Download validated unit coverage
         if: github.event_name == 'workflow_run'
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           github-token: ${{ github.token }}
           run-id: ${{ github.event.workflow_run.id }}
