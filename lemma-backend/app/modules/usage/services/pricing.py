@@ -104,10 +104,10 @@ class UsagePricing:
         for candidate in (model_name, provider_model_name):
             if candidate and candidate.strip() in self._SYSTEM_MODEL_PRICING:
                 return self._SYSTEM_MODEL_PRICING[candidate.strip()], False
-        logger.error(
-            "Missing usage pricing for system model %r (provider=%r); using fallback",
-            model_name,
-            provider_model_name,
+        logger.warning(
+            "Missing usage pricing for system model "
+            f"{model_name!r} (provider={provider_model_name!r}); "
+            "recording with conservative fallback"
         )
         return self._FALLBACK_PRICING, True
 

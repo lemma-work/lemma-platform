@@ -16,6 +16,8 @@ import pytest
 
 from app.modules.agent.domain.value_objects import AgentRunUsage
 from app.modules.test_support.fakes import FakeUnitOfWork
+from app.modules.usage.config import UsageSettings
+from app.modules.usage.domain.ports import UsageLimitValues
 from app.modules.usage.services.usage_context import UsageExecutionContext
 from app.modules.usage.domain.entities import SystemModelBudget, UsageReservation
 from app.modules.usage.domain.errors import UsageConfigurationError
@@ -91,6 +93,14 @@ def _service() -> UsageService:
     )
 
 
+def _limited_service(repo) -> UsageService:
+    return UsageService(
+        usage_repository=repo,
+        usage_limit_port=None,
+        default_limit_values=UsageLimitValues(user_weekly_limit_usd=10.0),
+    )
+
+
 def _runtime_profile(model_name, provider_model_name=None, scope=SYSTEM):
     return {
         "profile_id": "system:lemma",
@@ -149,7 +159,7 @@ async def test_reservation_quotes_registered_worst_case_budget():
     repo.get_system_cost.return_value = 0.0
     repo.get_reserved_cost.return_value = 0.0
     repo.reserve_limit_scopes.return_value = []
-    service = UsageService(usage_repository=repo, usage_limit_port=None)
+    service = _limited_service(repo)
 
     reservation = await service.reserve_for_profile(
         organization_id=None,
@@ -170,7 +180,7 @@ async def test_admission_rejects_missing_budget_without_weak_fallback():
     UsageService._SYSTEM_MODEL_BUDGETS.pop("glm-5.2")
     repo = AsyncMock()
     repo.is_profile_admission_blocked.return_value = False
-    service = UsageService(usage_repository=repo, usage_limit_port=None)
+    service = _limited_service(repo)
 
     with pytest.raises(UsageConfigurationError) as exc_info:
         await service.reserve_for_profile(
@@ -183,6 +193,55 @@ async def test_admission_rejects_missing_budget_without_weak_fallback():
 
     assert exc_info.value.code == "USAGE_MODEL_BUDGET_MISSING"
     repo.reserve_limit_scopes.assert_not_awaited()
+
+
+async def test_unlimited_default_skips_admission_for_unpriced_custom_model():
+    repo = AsyncMock()
+    service = UsageService(usage_repository=repo, usage_limit_port=None)
+
+    reservation = await service.reserve_for_profile(
+        organization_id=uuid4(),
+        user_id=uuid4(),
+        profile_id="system:local",
+        profile_scope=SYSTEM,
+        model_name="accounts/fireworks/models/minimax-m3",
+        provider_model_name="accounts/fireworks/models/minimax-m3",
+    )
+
+    assert reservation is None
+    repo.is_profile_admission_blocked.assert_not_awaited()
+    repo.reserve_limit_scopes.assert_not_awaited()
+
+
+async def test_configured_limit_still_rejects_unpriced_custom_model():
+    repo = AsyncMock()
+    repo.is_profile_admission_blocked.return_value = False
+    service = _limited_service(repo)
+
+    with pytest.raises(UsageConfigurationError) as exc_info:
+        await service.reserve_for_profile(
+            organization_id=uuid4(),
+            user_id=uuid4(),
+            profile_id="system:limited",
+            profile_scope=SYSTEM,
+            model_name="accounts/fireworks/models/minimax-m3",
+        )
+
+    assert exc_info.value.code == "USAGE_MODEL_PRICING_MISSING"
+    repo.reserve_limit_scopes.assert_not_awaited()
+
+
+def test_usage_settings_are_unlimited_by_default_and_env_configurable():
+    defaults = UsageSettings(_env_file=None).default_limit_values()
+    assert defaults == UsageLimitValues()
+
+    configured = UsageSettings(
+        _env_file=None,
+        usage_default_org_monthly_cost_limit_usd=50,
+        usage_default_user_weekly_cost_limit_usd=10,
+    ).default_limit_values()
+    assert configured.org_monthly_limit_usd == 50
+    assert configured.user_weekly_limit_usd == 10
 
 
 def test_glm_cost_uses_glm_pricing():

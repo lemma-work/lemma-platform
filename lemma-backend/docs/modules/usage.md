@@ -3,16 +3,15 @@
 ## Purpose
 
 `app/modules/usage` meters model work, calculates system-provider cost,
-reserves budget before a run, records final usage, exposes organization/user
-reports, and provides an extension port for cloud billing/plan limits.
+optionally reserves budget before a run, records final usage, exposes
+organization/user reports, and provides an extension port for billing/plan
+limits.
 
 ## Runtime contributions
 
 | Contribution | Behavior |
 | --- | --- |
 | API router | Organization summaries/events/stats/limits and current-user usage |
-| Redis router | Registered but currently contains no subscribers |
-| API lifespan | Checks configured system model names have pricing and logs uncovered entries |
 | Domain events | Usage-recorded and limit-denied events are collected with the UoW |
 
 ## Main data model
@@ -22,9 +21,10 @@ reports, and provides an extension port for cloud billing/plan limits.
 | `usage_records` | Immutable run/profile/model/token/unit/cost/status attribution |
 | `usage_limit_counters` | Per organization/user time-window reserved amount used to constrain concurrency |
 
-System-scoped runtimes use registered per-model pricing; an intentionally
-conservative fallback prevents unknown models from becoming free. User-owned
-provider profiles are recorded but do not count as Lemma system cost.
+System-scoped runtimes use registered per-model pricing. An intentionally
+conservative fallback estimates unknown models for reporting, without blocking
+an otherwise-unlimited local/OSS run. User-owned provider profiles are recorded
+but do not count as Lemma system cost.
 
 ## API groups
 
@@ -40,21 +40,31 @@ sequenceDiagram
     participant U as Usage service
     participant DB as PostgreSQL
     A->>U: reserve(profile, model)
-    U->>DB: read used + reserved + effective limits
-    U->>DB: increment window reservations
-    U-->>A: reservation ids
+    alt an applicable monetary limit is configured
+        U->>DB: read used + reserved + effective limits
+        U->>DB: increment window reservations
+        U-->>A: reservation ids and enforced model budget
+    else no billing adapter or environment limit
+        U-->>A: no reservation (run remains allowed)
+    end
     A->>U: record actual provider usage
     U->>DB: insert usage record
-    U->>DB: release reservation
+    opt a reservation exists
+        U->>DB: consume actual cost and release remainder
+    end
 ```
 
 `UsageLimitPort` lets another composed module supply plan-specific values. The
-OSS fallback currently applies default organization-month and user-week limits
-to system-scoped model usage.
+OSS/local default is unlimited so an unregistered custom model cannot prevent
+an agent run. Deployments can opt into built-in limits with
+`USAGE_DEFAULT_ORG_MONTHLY_COST_LIMIT_USD`,
+`USAGE_DEFAULT_USER_WEEKLY_COST_LIMIT_USD`, and
+`USAGE_DEFAULT_USER_MONTHLY_COST_LIMIT_USD`, or install a `UsageLimitPort`.
+Once any applicable limit is configured, pricing and maximum-budget metadata
+are mandatory and admission fails closed if either is missing.
 
 ## Tests and operations
 
-Tests cover pricing, reservations, fallback pricing, limits, queries, and API
-authorization. Current unit coverage is 64.7% (542 of 838 statements). Atomic
-limit-enforcement and low test-file-count findings are in
+Tests cover pricing, unlimited defaults, opt-in reservations, fallback pricing,
+hard limits, queries, concurrency, and API authorization. Issue evidence is in
 [issues.md](issues.md).

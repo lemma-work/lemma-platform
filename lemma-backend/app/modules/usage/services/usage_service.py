@@ -34,10 +34,6 @@ logger = get_logger(__name__)
 class UsageService(UsagePricing):
     """Service for profile-aware usage recording and system-profile limits."""
 
-    DEFAULT_ORG_MONTHLY_COST_LIMIT_USD: float | None = 50.0
-    DEFAULT_USER_WEEKLY_COST_LIMIT_USD: float | None = 10.0
-    DEFAULT_USER_MONTHLY_COST_LIMIT_USD: float | None = None
-
     # Per-model rates (USD per 1M tokens). Keyed by both the public model name
     # and the provider model id so resolution succeeds on either. Starts empty;
     # provider-specific cloud modules register their pricing at startup via
@@ -88,9 +84,11 @@ class UsageService(UsagePricing):
         *,
         usage_repository: UsageRepository,
         usage_limit_port: UsageLimitPort | None = None,
+        default_limit_values: UsageLimitValues | None = None,
     ):
         self.usage_repository = usage_repository
         self.usage_limit_port = usage_limit_port
+        self.default_limit_values = default_limit_values or UsageLimitValues()
 
     async def reserve_for_profile(
         self,
@@ -105,6 +103,12 @@ class UsageService(UsagePricing):
         now: datetime | None = None,
     ) -> UsageReservation | None:
         if not self._is_system_scope(profile_scope):
+            return None
+        limit_values = await self._resolve_usage_limit_values(
+            organization_id=organization_id,
+            user_id=user_id,
+        )
+        if not self._has_applicable_limit(limit_values, organization_id):
             return None
         self._load_environment_metadata()
         if await self.usage_repository.is_profile_admission_blocked(profile_id):
@@ -123,6 +127,7 @@ class UsageService(UsagePricing):
             organization_id=organization_id,
             user_id=user_id,
             now=now,
+            _limit_values=limit_values,
         )
         scopes: list[UsageLimitCounterScope] = []
         org_monthly = limits["org_monthly"]
@@ -436,6 +441,7 @@ class UsageService(UsagePricing):
         organization_id: UUID | None,
         user_id: UUID,
         now: datetime | None = None,
+        _limit_values: UsageLimitValues | None = None,
     ) -> dict[str, object]:
         now = now or datetime.now(timezone.utc)
         month_start = now.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
@@ -445,9 +451,8 @@ class UsageService(UsagePricing):
             second=0,
             microsecond=0,
         )
-        limit_values = await self._resolve_usage_limit_values(
-            organization_id=organization_id,
-            user_id=user_id,
+        limit_values = _limit_values or await self._resolve_usage_limit_values(
+            organization_id=organization_id, user_id=user_id
         )
         user_limit_organization_id = (
             organization_id
@@ -546,19 +551,11 @@ class UsageService(UsagePricing):
         organization_id: UUID | None,
         user_id: UUID,
     ) -> UsageLimitValues:
-        # No external plan provider (e.g. no billing installed) -> built-in
-        # defaults. A configured provider (billing) resolves plan-based limits.
+        # No external plan provider (e.g. no billing installed) uses the
+        # module's environment-backed defaults. They are unlimited unless a
+        # deployment explicitly opts into one or more monetary limits.
         if self.usage_limit_port is None:
-            return UsageLimitValues(
-                org_monthly_limit_usd=(
-                    self.DEFAULT_ORG_MONTHLY_COST_LIMIT_USD
-                    if organization_id
-                    else None
-                ),
-                user_weekly_limit_usd=self.DEFAULT_USER_WEEKLY_COST_LIMIT_USD,
-                user_monthly_limit_usd=self.DEFAULT_USER_MONTHLY_COST_LIMIT_USD,
-                user_limit_scope="organization",
-            )
+            return self.default_limit_values
         resolved = await self.usage_limit_port.resolve_limits(
             organization_id=organization_id,
             user_id=user_id,
@@ -573,6 +570,17 @@ class UsageService(UsagePricing):
             user_weekly_limit_usd=user_weekly,
             user_monthly_limit_usd=None,
             user_limit_scope="organization",
+        )
+
+    @staticmethod
+    def _has_applicable_limit(
+        values: UsageLimitValues,
+        organization_id: UUID | None,
+    ) -> bool:
+        return bool(
+            (organization_id is not None and values.org_monthly_limit_usd is not None)
+            or values.user_weekly_limit_usd is not None
+            or values.user_monthly_limit_usd is not None
         )
 
     def _limit_scope(
