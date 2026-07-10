@@ -222,19 +222,24 @@ class DatastoreApi:
         search_enabled: bool | None = None,
         expected_status: int = status.HTTP_200_OK,
     ) -> dict:
-        data = {"path": path}
+        fields: list[tuple[str, tuple[str | None, str | bytes, str | None]]] = [
+            ("path", (None, path, None))
+        ]
         if new_path is not None:
-            data["new_path"] = new_path
+            fields.append(("new_path", (None, new_path, None)))
         if search_enabled is not None:
-            data["search_enabled"] = "true" if search_enabled else "false"
-        files = None
+            fields.append(
+                (
+                    "search_enabled",
+                    (None, "true" if search_enabled else "false", None),
+                )
+            )
         if content is not None:
-            files = {"data": (filename, content, "text/markdown")}
+            fields.append(("data", (filename, content, "text/markdown")))
         response = await self.request(
             "PATCH",
             f"/pods/{self.pod_id}/datastore/files/by-path",
-            data=data,
-            files=files,
+            files=fields,
         )
         assert response.status_code == expected_status, response.text
         return response.json() if response.content else {}

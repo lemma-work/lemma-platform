@@ -220,7 +220,10 @@ async def _update_visibility(
         response = await client.request(
             method,
             path,
-            data={"path": resource["payload"]["path"], "visibility": visibility},
+            files={
+                "path": (None, resource["payload"]["path"]),
+                "visibility": (None, visibility),
+            },
         )
     else:
         response = await client.request(method, path, json={"visibility": visibility})
