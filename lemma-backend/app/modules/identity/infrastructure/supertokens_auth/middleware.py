@@ -14,7 +14,7 @@ class CustomAuthenticationMiddleware(BaseHTTPMiddleware):
     async def dispatch(self, request: Request, call_next):
         # Skip auth for specific paths
         if request.url.path.startswith(
-            ("/st", "/docs", "/openapi.json", "/health", "/schema")
+            ("/st", "/docs", "/openapi.json", "/health", "/livez", "/schema")
         ):
             return await call_next(request)
 

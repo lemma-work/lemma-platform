@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from pathlib import Path
 import asyncio
+import threading
+import time
 
 import pytest
 
@@ -109,6 +111,36 @@ async def test_fastembed_model_initializes_once_under_concurrent_first_use(
 
 
 @pytest.mark.asyncio
+async def test_fastembed_serializes_multi_core_inference_calls():
+    active = 0
+    max_active = 0
+    state_lock = threading.Lock()
+
+    class FakeTextEmbedding:
+        def embed(self, texts, **kwargs):
+            nonlocal active, max_active
+            with state_lock:
+                active += 1
+                max_active = max(max_active, active)
+            time.sleep(0.05)
+            with state_lock:
+                active -= 1
+            return [[1.0, 0.5, -0.25] for _ in texts]
+
+    embedder = FastEmbedLocalEmbedder(
+        dimension=3,
+        model=FakeTextEmbedding(),
+    )
+
+    await asyncio.gather(
+        embedder.embed_batch(["one"]),
+        embedder.embed_batch(["two"]),
+    )
+
+    assert max_active == 1
+
+
+@pytest.mark.asyncio
 async def test_fastembed_repairs_missing_onnx_from_registered_alternate_source(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
@@ -138,6 +170,7 @@ async def test_fastembed_repairs_missing_onnx_from_registered_alternate_source(
         def retrieve_model_gcs(model_name, url, cache_dir, **kwargs):
             assert model_name == "BAAI/bge-base-en-v1.5"
             assert url == "https://models.example/model.tar.gz"
+            assert Path(cache_dir) == tmp_path
             assert kwargs["deprecated_tar_struct"] is True
             repaired.mkdir(parents=True)
             return repaired
@@ -160,7 +193,7 @@ async def test_fastembed_repairs_missing_onnx_from_registered_alternate_source(
 
 
 @pytest.mark.asyncio
-async def test_fastembed_reuses_existing_alternate_before_network_repair(
+async def test_fastembed_delegates_alternate_cache_reuse_to_library(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ):
@@ -188,8 +221,10 @@ async def test_fastembed_reuses_existing_alternate_before_network_repair(
             ]
 
         @staticmethod
-        def retrieve_model_gcs(*args, **kwargs):
-            raise AssertionError("existing alternate model must prevent a download")
+        def retrieve_model_gcs(model_name, url, cache_dir, **kwargs):
+            assert model_name == "BAAI/bge-base-en-v1.5"
+            assert Path(cache_dir) == tmp_path
+            return existing
 
         def embed(self, texts, **kwargs):
             return [[1.0, 0.5, -0.25] for _ in texts]

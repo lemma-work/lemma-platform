@@ -18,7 +18,9 @@ from app.modules.datastore.config import datastore_settings
 from app.modules.datastore.domain.document_processing import (
     DocumentExtraction,
     DocumentImage,
+    IndexingMetrics,
     DocumentPage,
+    chunks_for_index,
 )
 from app.modules.datastore.domain.errors import (
     DatastoreObjectIntegrityError,
@@ -244,7 +246,7 @@ class DatastoreFileProcessingService:
                     file_entity
                 )
                 extraction_seconds = time.perf_counter() - extraction_started
-                chunks = self._chunks_for_index(extraction)
+                chunks = chunks_for_index(extraction)
                 page_count = 0
                 has_markdown = False
                 projection_started = time.perf_counter()
@@ -269,12 +271,15 @@ class DatastoreFileProcessingService:
                     file_id, content_sha256, processing_attempt
                 )
                 indexing_started = time.perf_counter()
-                await self.search_service.index_file_chunks(
+                index_result = await self.search_service.index_file_chunks(
                     file_id,
                     chunks,
                     search_metadata,
                 )
                 indexing_seconds = time.perf_counter() - indexing_started
+                indexing_stages = (
+                    index_result if isinstance(index_result, IndexingMetrics) else None
+                )
             merged_metadata = {
                 **(file_entity.file_metadata or {}),
                 "page_count": page_count,
@@ -283,6 +288,7 @@ class DatastoreFileProcessingService:
                     "extraction_seconds": round(extraction_seconds, 6),
                     "projection_seconds": round(projection_seconds, 6),
                     "indexing_seconds": round(indexing_seconds, 6),
+                    **(indexing_stages.as_metadata() if indexing_stages else {}),
                     "page_count": page_count,
                     "chunk_count": len(chunks),
                 },
@@ -468,20 +474,6 @@ class DatastoreFileProcessingService:
             detected_languages=[],
             extraction_mode="user_markdown",
         )
-
-    def _chunks_for_index(self, extraction: DocumentExtraction) -> list[dict]:
-        """Flatten domain chunks into the ``{text, metadata}`` shape the search
-        index expects, surfacing native page spans as ``page_number``/``page_end``
-        (the columns the search SQL reads)."""
-        chunks: list[dict] = []
-        for chunk in extraction.chunks:
-            metadata = dict(chunk.metadata or {})
-            if chunk.page_start is not None:
-                metadata["page_number"] = chunk.page_start
-            if chunk.page_end is not None:
-                metadata["page_end"] = chunk.page_end
-            chunks.append({"text": chunk.text, "metadata": metadata})
-        return chunks
 
     async def _build_search_metadata(
         self,

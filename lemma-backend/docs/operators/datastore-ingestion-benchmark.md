@@ -69,6 +69,9 @@ buffers fit a smaller host.
 The defaults allocate 4 CPU/8GB to Kreuzberg and 4 CPU/4GB to the backend
 worker. Report both budgets: extraction and local embedding consume different
 containers, and constraining either one changes end-to-end throughput.
+The regular development Compose stack now uses the same 4 CPU/8GB Kreuzberg
+target by default; override `DEV_KREUZBERG_CPUS` and
+`DEV_KREUZBERG_MEM_LIMIT` together when using a smaller Docker VM.
 Docker Desktop must therefore have substantially more than 12GB assigned once
 PostgreSQL, Redis, SuperTokens and the API are included. On an 8GB Docker VM,
 use the documented 2 CPU/4GB Kreuzberg and 2 CPU/3GB worker profile; otherwise
@@ -89,11 +92,18 @@ with five concurrent uploads, one end-to-end processing slot, Kreuzberg at
 - zero API/worker/Kreuzberg restarts or OOMs
 
 That cold run exposed an incomplete FastEmbed snapshot in the API process after
-the worker had already populated the shared alternate-model cache. The adapter
-now reuses that validated local ONNX artifact before attempting a network
-repair, and both API and worker preload embeddings before readiness. Against
-the preserved 20-file corpus, the rebuilt API returned 10 scoped hybrid results
-without a download or service restart.
+the worker had already populated the shared model cache. FastEmbed now owns the
+alternate download, validation, placement and reuse in its standard cache; the
+adapter only selects FastEmbed's registered alternate when an incomplete Hub
+snapshot fails during ONNX session construction. Both API and worker preload
+the process-wide singleton before readiness. A fresh process subsequently
+loaded the cached 768-dimensional model in 1.1 seconds without a download.
+
+The regular development Kreuzberg container was also exercised sequentially at
+4 CPU/8GB over all six checked-in digital-first PDFs. It completed 148 pages in
+133.9 seconds total: five 12-16-page papers took 12.9-17.9 seconds each, while a
+75-page paper with 166 extracted images took 59.3 seconds. Peak sampling showed
+about 401% CPU and 3.33GB RSS with no restart or OOM.
 
 The 4 CPU/8GB Kreuzberg target profile could not be measured on that VM: the
 entire Docker VM, not the Kreuzberg container, was capped at 7.75GB. Docker

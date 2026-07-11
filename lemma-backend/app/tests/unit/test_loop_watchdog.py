@@ -15,7 +15,12 @@ async def test_watchdog_writes_heartbeat_and_measures_low_lag(tmp_path, monkeypa
     monkeypatch.setattr(settings, "loop_lag_watchdog_interval_seconds", 0.05)
     monkeypatch.setattr(loop_watchdog, "_last_lag_seconds", 0.0)
 
-    task = asyncio.create_task(loop_watchdog.loop_lag_watchdog(service_name="test"))
+    task = asyncio.create_task(
+        loop_watchdog.loop_lag_watchdog(
+            service_name="test",
+            heartbeat_path=str(heartbeat),
+        )
+    )
     try:
         await asyncio.sleep(0.2)
         # Heartbeat file is written and holds a recent epoch second.
@@ -42,7 +47,6 @@ def test_is_loop_healthy_reflects_unhealthy_threshold(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_watchdog_disabled_heartbeat_path_is_noop(tmp_path, monkeypatch):
-    monkeypatch.setattr(settings, "worker_heartbeat_path", "")
     monkeypatch.setattr(settings, "loop_lag_watchdog_interval_seconds", 0.05)
     task = asyncio.create_task(loop_watchdog.loop_lag_watchdog(service_name="test"))
     try:
@@ -55,3 +59,13 @@ async def test_watchdog_disabled_heartbeat_path_is_noop(tmp_path, monkeypatch):
             await task
         except asyncio.CancelledError:
             pass
+
+
+def test_heartbeat_writes_are_collision_safe_across_writers(tmp_path):
+    heartbeat = tmp_path / "worker_heartbeat"
+
+    loop_watchdog._write_heartbeat(str(heartbeat))
+    loop_watchdog._write_heartbeat(str(heartbeat))
+
+    assert heartbeat.read_text().strip().isdigit()
+    assert list(tmp_path.glob(".worker_heartbeat.*")) == []

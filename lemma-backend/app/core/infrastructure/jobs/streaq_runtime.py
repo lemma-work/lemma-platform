@@ -267,7 +267,10 @@ async def worker_lifespan() -> AsyncGenerator[AppWorkerContext]:
     from app.core.observability.loop_watchdog import loop_lag_watchdog
 
     watchdog_task = asyncio.create_task(
-        loop_lag_watchdog(service_name="lemma-worker")
+        loop_lag_watchdog(
+            service_name="lemma-worker",
+            heartbeat_path=settings.worker_heartbeat_path or None,
+        )
     )
 
     try:

@@ -71,15 +71,12 @@ services:
     ports:
       - "${DEV_KREUZBERG_PORT:-8002}:8000"
     restart: unless-stopped
-    # Resource bounds so document extraction (OCR/layout is CPU+RAM heavy) can't
-    # run the host out of memory. Each Kreuzberg extraction carries a ~1.5GB
-    # model+runtime floor; the backend caps its own concurrency (2) to keep the
-    # multiplied peak under 4GB. CPUs are held at 2 on purpose: more cores let
-    # Kreuzberg parallelize pages internally, which multiplies peak RAM and
-    # OOM-kills a 4GB instance (measured: 4 CPU OOMs, 2 CPU peaks ~3.9GB). Raise
-    # mem_limit before raising cpus.
-    mem_limit: ${DEV_KREUZBERG_MEM_LIMIT:-4g}
-    cpus: ${DEV_KREUZBERG_CPUS:-2}
+    # Rich layout/table extraction is both CPU- and memory-heavy. Pair the
+    # 4-CPU local target with an 8GB ceiling: raising CPU alone increases
+    # overlapping page-model work and previously OOM-killed a 4GB container.
+    # Both values remain overridable for constrained Docker Desktop VMs.
+    mem_limit: ${DEV_KREUZBERG_MEM_LIMIT:-8g}
+    cpus: ${DEV_KREUZBERG_CPUS:-4}
     environment:
       # Reject oversized uploads at the edge (backend also guards before sending);
       # the request-body cap sits just above it for multipart overhead.

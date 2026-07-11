@@ -20,6 +20,8 @@ from __future__ import annotations
 
 import asyncio
 import os
+from pathlib import Path
+import tempfile
 import time
 
 from app.core.config import settings
@@ -43,19 +45,40 @@ def is_loop_healthy() -> bool:
 
 def _write_heartbeat(path: str) -> None:
     # Write-then-rename so a reader (the liveness probe) never sees a partial
-    # file. ~10 bytes to tmpfs — negligible on the loop.
-    tmp = f"{path}.tmp"
-    with open(tmp, "w") as handle:
-        handle.write(str(int(time.time())))
-    os.replace(tmp, path)
+    # file. The temporary path must be unique: rolling deployments, local dev,
+    # or a slow process shutdown can briefly leave two worker processes sharing
+    # the same heartbeat destination.
+    destination = Path(path)
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    tmp_path: str | None = None
+    try:
+        with tempfile.NamedTemporaryFile(
+            mode="w",
+            dir=destination.parent,
+            prefix=f".{destination.name}.",
+            delete=False,
+        ) as handle:
+            tmp_path = handle.name
+            handle.write(str(int(time.time())))
+        os.replace(tmp_path, destination)
+        tmp_path = None
+    finally:
+        if tmp_path is not None:
+            try:
+                os.unlink(tmp_path)
+            except FileNotFoundError:
+                pass
 
 
-async def loop_lag_watchdog(*, service_name: str = "lemma") -> None:
+async def loop_lag_watchdog(
+    *,
+    service_name: str = "lemma",
+    heartbeat_path: str | None = None,
+) -> None:
     """Background task: measure loop lag + refresh the liveness heartbeat."""
     global _last_lag_seconds
     interval = max(0.05, settings.loop_lag_watchdog_interval_seconds)
     warn = settings.loop_lag_warn_seconds
-    heartbeat_path = settings.worker_heartbeat_path
     logger.info(
         "Loop-lag watchdog started",
         interval_seconds=interval,

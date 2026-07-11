@@ -28,6 +28,7 @@ EXCLUDED_PATHS = (
     "/redoc",
     "/openapi.json",
     "/health",
+    "/livez",
     "/public/icons",
     "/public/apps",
     "/public/sdk",  # browser SDK bundle for no-build apps

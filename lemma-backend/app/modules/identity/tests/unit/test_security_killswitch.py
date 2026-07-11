@@ -54,6 +54,18 @@ def _patch(monkeypatch, *, flag: bool, payload: dict):
 
 
 @pytest.mark.asyncio
+async def test_livez_bypasses_session_authentication(monkeypatch):
+    conn = _connection()
+    conn.url.path = "/livez"
+    get_session = AsyncMock(side_effect=AssertionError("must not authenticate"))
+    monkeypatch.setattr(security, "get_session", get_session)
+
+    await security.verify_auth(conn)
+
+    get_session.assert_not_awaited()
+
+
+@pytest.mark.asyncio
 async def test_impersonation_token_rejected_when_delegation_disabled(monkeypatch):
     _patch(monkeypatch, flag=False, payload={"isImpersonation": True})
 

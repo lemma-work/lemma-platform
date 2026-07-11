@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from collections.abc import Iterable
+import time
 from uuid import UUID
 
 from sqlalchemy.sql import text
@@ -10,6 +11,7 @@ from app.modules.datastore.domain.file_entities import (
     DatastoreFileSearchResult,
     SearchMethod,
 )
+from app.modules.datastore.domain.document_processing import IndexingMetrics
 from app.modules.datastore.infrastructure.file_chunk_repository import (
     DatastoreFileChunkRepository,
 )
@@ -185,16 +187,25 @@ class PostgresSearchService:
         file_id: UUID,
         chunks: list[dict],
         metadata: dict | None = None,
-    ) -> bool:
+    ) -> IndexingMetrics:
+        schema_started = time.perf_counter()
         await self.ensure_schema()
+        schema_seconds = time.perf_counter() - schema_started
 
         if not chunks:
             logger.warning("No chunks for %s", file_id)
-            return False
+            return IndexingMetrics(
+                chunk_count=0,
+                schema_seconds=schema_seconds,
+                embedding_seconds=0.0,
+                persistence_seconds=0.0,
+            )
 
         try:
             texts = [c["text"] for c in chunks]
+            embedding_started = time.perf_counter()
             embeddings = await self.embedder.embed_batch(texts)
+            embedding_seconds = time.perf_counter() - embedding_started
             if len(embeddings) != len(chunks):
                 raise ValueError(
                     f"Embedding provider returned {len(embeddings)} vectors for "
@@ -202,8 +213,26 @@ class PostgresSearchService:
                 )
             # add_chunks replaces the prior revision in one transaction. The old
             # searchable revision remains intact if embedding generation fails.
+            persistence_started = time.perf_counter()
             await self.chunk_repo.add_chunks(file_id, chunks, embeddings, metadata)
-            return True
+            persistence_seconds = time.perf_counter() - persistence_started
+            metrics = IndexingMetrics(
+                chunk_count=len(chunks),
+                schema_seconds=schema_seconds,
+                embedding_seconds=embedding_seconds,
+                persistence_seconds=persistence_seconds,
+            )
+            logger.info(
+                "Datastore indexing stages file=%s chunks=%d schema=%.3fs "
+                "embed=%.3fs persist=%.3fs throughput=%.2f_chunks_per_second",
+                file_id,
+                len(chunks),
+                schema_seconds,
+                embedding_seconds,
+                persistence_seconds,
+                len(chunks) / max(embedding_seconds, 0.001),
+            )
+            return metrics
         except Exception as exc:
             logger.error("Failed to add file to search: %s", exc)
             raise

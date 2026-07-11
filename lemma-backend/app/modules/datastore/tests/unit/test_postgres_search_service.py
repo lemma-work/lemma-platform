@@ -156,3 +156,34 @@ async def test_index_rejects_embedding_count_mismatch():
         await service.index_file_chunks(uuid4(), [{"text": "one"}, {"text": "two"}])
 
     service.chunk_repo.add_chunks.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_index_reports_schema_embedding_and_persistence_timings():
+    service = _search_service()
+    service.ensure_schema = AsyncMock()
+    service.chunk_repo.add_chunks = AsyncMock()
+
+    result = await service.index_file_chunks(
+        uuid4(),
+        [{"text": "one"}, {"text": "two"}],
+    )
+
+    assert result.chunk_count == 2
+    assert result.schema_seconds >= 0
+    assert result.embedding_seconds >= 0
+    assert result.persistence_seconds >= 0
+
+
+@pytest.mark.asyncio
+async def test_index_reports_zero_work_for_empty_chunk_set():
+    service = _search_service()
+    service.ensure_schema = AsyncMock()
+    service.chunk_repo.add_chunks = AsyncMock()
+
+    result = await service.index_file_chunks(uuid4(), [])
+
+    assert result.chunk_count == 0
+    assert result.embedding_seconds == 0
+    assert result.persistence_seconds == 0
+    service.chunk_repo.add_chunks.assert_not_awaited()

@@ -130,8 +130,10 @@ async def lifespan(app: FastAPI):
         from app.core.observability.loop_watchdog import loop_lag_watchdog
 
         configure_thread_pool()
-        watchdog_task = asyncio.create_task(
-            loop_lag_watchdog(service_name="lemma-api")
+        watchdog_task = (
+            None
+            if getattr(app.state, "embedded_worker", False)
+            else asyncio.create_task(loop_lag_watchdog(service_name="lemma-api"))
         )
         initialize_supertokens()
         await channel_service.connect()
@@ -153,7 +155,7 @@ async def lifespan(app: FastAPI):
         finally:
             # Core closers — explicit and last so they tear down after modules.
             logger.info("Application shutting down")
-            if not watchdog_task.done():
+            if watchdog_task is not None and not watchdog_task.done():
                 watchdog_task.cancel()
                 try:
                     await watchdog_task

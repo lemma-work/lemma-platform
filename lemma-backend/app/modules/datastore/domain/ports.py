@@ -14,7 +14,10 @@ from app.modules.datastore.domain.datastore_entities import (
     DatastoreTableEntity,
     DatastoreTableSummaryEntity,
 )
-from app.modules.datastore.domain.document_processing import DocumentExtraction
+from app.modules.datastore.domain.document_processing import (
+    DocumentExtraction,
+    IndexingMetrics,
+)
 from app.modules.datastore.domain.file_entities import (
     DatastoreFileEntity,
     DatastoreFileSearchResult,
@@ -364,7 +367,7 @@ class DatastoreSearchPort(Protocol):
         file_id: UUID,
         chunks: list[dict],
         metadata: dict | None = None,
-    ) -> bool: ...
+    ) -> IndexingMetrics: ...
 
     async def remove_file(self, file_id: UUID) -> None: ...
 

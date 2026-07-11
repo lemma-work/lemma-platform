@@ -36,6 +36,10 @@ class FastEmbedLocalEmbedder(Embedder):
         ).expanduser()
         self._model = model
         self._model_lock = Lock()
+        # ONNX sessions use their own multi-core thread pools. Concurrent calls
+        # on the same local model oversubscribe the CPU, increase per-file
+        # latency, and can starve the API event loop in standalone mode.
+        self._inference_lock = Lock()
 
     async def embed(self, text: str) -> List[float]:
         embeddings = await self.embed_batch([text])
@@ -70,7 +74,7 @@ class FastEmbedLocalEmbedder(Embedder):
                 except Exception as exc:
                     if not self._is_missing_model_artifact(exc):
                         raise
-                    self._model = self._repair_from_alternate_source(TextEmbedding, exc)
+                    self._model = self._load_registered_alternate(TextEmbedding, exc)
         return self._model
 
     @staticmethod
@@ -82,14 +86,15 @@ class FastEmbedLocalEmbedder(Embedder):
             or ("model" in message and "file doesn't exist" in message)
         )
 
-    def _repair_from_alternate_source(self, text_embedding_type, exc: Exception):
-        """Recover FastEmbed's known incomplete-HF-snapshot failure.
+    def _load_registered_alternate(self, text_embedding_type, exc: Exception):
+        """Let FastEmbed resolve/cache its registered alternate model source.
 
-        Some hub transports return a snapshot directory even though the large
-        ONNX artifact is absent. FastEmbed then skips its configured alternate
-        URL because the hub call itself appeared successful. Download that same
-        registered model from the alternate source into an isolated cache and
-        bind the model to the explicit repaired path; never delete a shared cache.
+        FastEmbed normally tries its Hugging Face source and registered URL in
+        order. A Hub snapshot can occasionally resolve even though its ONNX
+        artifact is absent, failing during session construction before the
+        library reaches that alternate. We select the same registered source,
+        but leave download validation, atomic placement, and cache reuse entirely
+        to FastEmbed's model manager.
         """
         description = next(
             (
@@ -104,35 +109,16 @@ class FastEmbedLocalEmbedder(Embedder):
         if not alternate_url:
             raise exc
 
-        deprecated_tar_struct = bool(sources.get("_deprecated_tar_struct"))
-        alternate_directory_name = (
-            f"{'fast-' if deprecated_tar_struct else ''}"
-            f"{self.model_name.split('/')[-1]}"
-        )
-        existing_alternate = self.cache_dir / alternate_directory_name
-        if existing_alternate.is_dir() and any(existing_alternate.glob("*.onnx")):
-            logger.info(
-                "Reusing existing alternate FastEmbed model for %s",
-                self.model_name,
-            )
-            return text_embedding_type(
-                model_name=self.model_name,
-                cache_dir=str(self.cache_dir),
-                specific_model_path=str(existing_alternate),
-            )
-
-        repair_cache = self.cache_dir / "alternate-source"
-        repair_cache.mkdir(parents=True, exist_ok=True)
         logger.warning(
-            "FastEmbed cache is missing its ONNX artifact; repairing model %s "
-            "from its registered alternate source",
+            "FastEmbed's Hugging Face model is missing its ONNX artifact; "
+            "using FastEmbed's registered alternate cache/source for %s",
             self.model_name,
         )
         repaired_path = text_embedding_type.retrieve_model_gcs(
             self.model_name,
             str(alternate_url),
-            str(repair_cache),
-            deprecated_tar_struct=deprecated_tar_struct,
+            str(self.cache_dir),
+            deprecated_tar_struct=bool(sources.get("_deprecated_tar_struct")),
             local_files_only=False,
         )
         return text_embedding_type(
@@ -142,8 +128,9 @@ class FastEmbedLocalEmbedder(Embedder):
         )
 
     def _encode_batch(self, texts: list[str]) -> list[list[float]]:
-        model = self._load_model()
-        raw_embeddings = list(model.embed(texts, batch_size=self.batch_size))
+        with self._inference_lock:
+            model = self._load_model()
+            raw_embeddings = list(model.embed(texts, batch_size=self.batch_size))
         if len(raw_embeddings) != len(texts):
             raise ValueError(
                 f"Local embedding model {self.model_name!r} returned "

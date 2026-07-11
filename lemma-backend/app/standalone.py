@@ -36,6 +36,7 @@ def build_standalone_app(api_app: FastAPI, worker) -> FastAPI:
     """Embed the streaq worker + scheduler into ``api_app`` for single-process
     local dev. The caller passes the composed api_app (OSS or cloud) and the
     matching streaq worker."""
+    api_app.state.embedded_worker = True
     api_lifespan = api_app.router.lifespan_context
 
     @asynccontextmanager
