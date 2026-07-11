@@ -2,6 +2,7 @@ import re
 
 
 _SLUG_PATTERN = re.compile(r"^[a-z0-9]+(?:-[a-z0-9]+)*$")
+_MAX_SLUG_LENGTH = 255
 
 
 def slugify(text: str) -> str:
@@ -14,6 +15,8 @@ def is_valid_slug(value: str) -> bool:
 
 def validate_slug(value: str) -> str:
     normalized = value.strip()
+    if len(normalized) > _MAX_SLUG_LENGTH:
+        raise ValueError("Slug must be 255 characters or fewer")
     if not is_valid_slug(normalized):
         raise ValueError("Slug must contain only lowercase letters, numbers, and hyphens")
     return normalized

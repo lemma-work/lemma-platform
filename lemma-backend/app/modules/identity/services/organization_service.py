@@ -4,8 +4,7 @@ from datetime import datetime, timezone
 from typing import Optional, Sequence, Tuple
 from uuid import UUID
 
-from app.core.helpers.slug import slugify, validate_slug
-from app.modules.identity.domain.email import normalize_identity_email
+from app.core.helpers.slug import slugify
 from app.modules.identity.domain.errors import (
     IdentityAccessDeniedError,
     IdentityValidationError,
@@ -15,6 +14,7 @@ from app.modules.identity.domain.errors import (
     OrganizationNotFoundError,
     UserNotFoundError,
 )
+from app.modules.identity.domain.organization_slugs import normalize_organization_slug
 from app.modules.identity.domain.organization_entities import (
     OrganizationEntity,
     OrganizationInvitationEntity,
@@ -166,15 +166,7 @@ class OrganizationService:
                 "Organization with this name already exists"
             )
 
-        if not entity.slug:
-            entity.slug = slugify(entity.name)
-        else:
-            try:
-                entity.slug = validate_slug(entity.slug)
-            except ValueError as exc:
-                raise IdentityValidationError(str(exc)) from exc
-        if not entity.slug:
-            raise IdentityValidationError("Organization slug is required")
+        entity.slug = normalize_organization_slug(entity.slug, entity.name)
 
         existing_slug = await self.organization_repository.get_by_slug(entity.slug)
         if existing_slug:
@@ -368,7 +360,6 @@ class OrganizationService:
         entity: OrganizationInvitationEntity,
         inviter_user_id: UUID,
     ) -> OrganizationInvitationEntity:
-        entity.email = normalize_identity_email(entity.email)
         organization = await self.organization_repository.get(entity.organization_id)
         if not organization:
             raise OrganizationNotFoundError()
@@ -389,11 +380,8 @@ class OrganizationService:
                 "User is already a member of this organization"
             )
 
-        existing_invitation = (
-            await self.organization_repository.get_invitation_by_email(
-                entity.organization_id,
-                entity.email,
-            )
+        existing_invitation = await self.organization_repository.get_invitation_by_email(
+            entity.organization_id, entity.email
         )
         if existing_invitation:
             existing_invitation = await self._mark_invitation_expired_if_needed(
@@ -480,10 +468,7 @@ class OrganizationService:
             raise UserNotFoundError()
 
         invitations, next_cursor = await self.organization_repository.list_user_invitations(
-            user_email=normalize_identity_email(user.email),
-            status=status,
-            limit=limit,
-            cursor=cursor,
+            user_email=str(user.email), status=status, limit=limit, cursor=cursor
         )
         return (
             await self._enrich_invitation_list_display_fields(invitations),

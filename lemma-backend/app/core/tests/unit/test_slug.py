@@ -13,6 +13,11 @@ def test_validate_slug_allows_dns_safe_slug():
     assert validate_slug("rahul-s-research-ops") == "rahul-s-research-ops"
 
 
+def test_validate_slug_rejects_values_longer_than_database_column():
+    with pytest.raises(ValueError, match="255 characters or fewer"):
+        validate_slug("a" * 256)
+
+
 @pytest.mark.parametrize(
     "value",
     [

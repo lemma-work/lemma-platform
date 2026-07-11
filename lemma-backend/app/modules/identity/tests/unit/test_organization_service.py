@@ -130,6 +130,21 @@ async def test_create_organization_rejects_invalid_provided_slug(
 
 
 @pytest.mark.asyncio
+async def test_create_organization_rejects_generated_slug_over_255_characters(
+    organization_service: OrganizationService,
+    organization_repository_mock: AsyncMock,
+):
+    org = OrganizationEntity(name="a" * 256, slug="")
+
+    organization_repository_mock.get_by_name.return_value = None
+
+    with pytest.raises(IdentityValidationError, match="255 characters or fewer"):
+        await organization_service.create_organization(org, uuid4())
+
+    organization_repository_mock.create.assert_not_awaited()
+
+
+@pytest.mark.asyncio
 async def test_get_organization_requires_membership(
     organization_service: OrganizationService,
     organization_repository_mock: AsyncMock,
