@@ -4,6 +4,7 @@ import json
 
 import pytest
 import typer
+from click import unstyle
 from types import SimpleNamespace
 
 from typer.testing import CliRunner
@@ -1931,7 +1932,7 @@ def test_connectors_account_create_requires_exactly_one_selector(selector_args):
     )
 
     assert result.exit_code != 0
-    assert "Use exactly one: --auth-config or --auth-config-id" in result.output
+    assert "Use exactly one: --auth-config or --auth-config-id" in unstyle(result.output)
 
 
 def test_connectors_triggers_list_passes_auth_config(monkeypatch):
