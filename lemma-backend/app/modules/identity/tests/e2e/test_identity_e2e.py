@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 from datetime import datetime, timedelta, timezone
 from uuid import UUID, uuid4
 
@@ -129,6 +130,49 @@ async def test_signup_does_not_create_personal_org(
     list_org_resp = await async_client.get("/organizations", headers=headers)
     assert list_org_resp.status_code == 200
     assert list_org_resp.json()["items"] == []
+
+
+@pytest.mark.asyncio
+async def test_emailpassword_signup_and_signin_normalize_email(
+    async_client: AsyncClient,
+):
+    unique = uuid4().hex[:10]
+    signup_email = f"TEST+EMAIL-CASE-{unique}@EXAMPLE.COM"
+    signin_email = f"Test+Email-Case-{unique}@Example.Com"
+    normalized_email = signup_email.lower()
+    password = "TestPassword@123"
+
+    signup_response = await async_client.post(
+        "/st/auth/signup",
+        json=_emailpassword_payload(signup_email, password),
+    )
+    signup_payload = signup_response.json()
+    assert signup_response.status_code == 200
+    assert signup_payload["status"] == "OK", signup_payload
+    assert signup_payload["user"]["emails"] == [normalized_email]
+
+    signup_token = signup_response.headers.get(
+        "st-access-token"
+    ) or signup_response.cookies.get("sAccessToken")
+    assert signup_token
+
+    me_response = await async_client.get(
+        "/users/me",
+        headers=_auth_headers(signup_token),
+    )
+    assert me_response.status_code == 200, me_response.text
+    assert me_response.json()["email"] == normalized_email
+
+    async_client.cookies.clear()
+    signin_response = await async_client.post(
+        "/st/auth/signin",
+        json=_emailpassword_payload(signin_email, password),
+    )
+    signin_payload = signin_response.json()
+    assert signin_response.status_code == 200
+    assert signin_payload["status"] == "OK", signin_payload
+    assert signin_payload["user"]["id"] == signup_payload["user"]["id"]
+    assert signin_payload["user"]["emails"] == [normalized_email]
 
 
 @pytest.mark.asyncio
@@ -441,6 +485,56 @@ async def test_invitation_email_validation_and_normalization(
         json={"email": "invitee+case@example.com", "role": "ORG_MEMBER"},
     )
     assert duplicate_resp.status_code == 409, duplicate_resp.text
+
+
+@pytest.mark.asyncio
+async def test_concurrent_invitations_for_normalized_email_create_only_one(
+    async_client: AsyncClient,
+    signup_user,
+):
+    owner = await signup_user()
+    owner_headers = _auth_headers(owner["token"])
+
+    create_org_resp = await async_client.post(
+        "/organizations",
+        headers=owner_headers,
+        json={"name": f"Concurrent Invite Org {uuid4().hex[:8]}"},
+    )
+    assert create_org_resp.status_code == 201, create_org_resp.text
+    org_id = create_org_resp.json()["id"]
+
+    unique = uuid4().hex[:10]
+    normalized_email = f"concurrent-{unique}@example.com"
+    responses = await asyncio.gather(
+        async_client.post(
+            f"/organizations/{org_id}/invitations",
+            headers=owner_headers,
+            json={"email": normalized_email.upper(), "role": "ORG_MEMBER"},
+        ),
+        async_client.post(
+            f"/organizations/{org_id}/invitations",
+            headers=owner_headers,
+            json={"email": normalized_email, "role": "ORG_MEMBER"},
+        ),
+    )
+
+    assert sorted(response.status_code for response in responses) == [201, 409], [
+        response.text for response in responses
+    ]
+    created = next(response for response in responses if response.status_code == 201)
+    assert created.json()["email"] == normalized_email
+
+    list_response = await async_client.get(
+        f"/organizations/{org_id}/invitations",
+        headers=owner_headers,
+    )
+    assert list_response.status_code == 200, list_response.text
+    matching = [
+        invitation
+        for invitation in list_response.json()["items"]
+        if invitation["email"] == normalized_email
+    ]
+    assert len(matching) == 1
 
 
 @pytest.mark.asyncio
