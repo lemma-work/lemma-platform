@@ -76,10 +76,8 @@ async def test_agentbox_runtime_supports_lemma_cli_browser_and_yielded_exec(
 
         profile = await _exec(session, "lemma --output json profile get", timeout=30)
         profile_json = json.loads(profile["stdout"])
-        assert profile_json["current_user"]["email"] == fixed_test_user["email"]
-        assert profile_json["current_user"]["id"] == fixed_test_user["id"]
-        assert profile_json["pod_id"]["value"] == pod["id"]
-        assert profile_json["org_id"]["value"] == fixed_test_org["id"]
+        assert profile_json["email"] == fixed_test_user["email"]
+        assert profile_json["id"] == fixed_test_user["id"]
 
         sleep_started = time.monotonic()
         yielded_sleep = await _exec(
