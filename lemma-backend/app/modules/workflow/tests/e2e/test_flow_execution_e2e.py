@@ -635,6 +635,7 @@ async def _assigned_waits(
 
 
 @pytest.mark.asyncio
+@pytest.mark.mock_sandbox_only
 async def test_user_assigned_manual_workflow_runs_through_all_node_types(
     authenticated_client: AsyncClient,
     async_client: AsyncClient,
@@ -886,6 +887,7 @@ async def test_non_form_manual_workflow_runs_immediately(
 
 
 @pytest.mark.asyncio
+@pytest.mark.mock_sandbox_only
 async def test_scheduled_single_api_function_workflow_completes_inline(
     authenticated_client: AsyncClient,
     fixed_test_org,
