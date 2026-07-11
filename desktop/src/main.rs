@@ -20,6 +20,9 @@ use tauri_plugin_autostart::ManagerExt as _;
 
 const DEFAULT_HOSTED_URL: &str = "https://lemma.work";
 const DEFAULT_LOCAL_URL: &str = "http://localhost:3711";
+// Legacy development builds persisted a mode before the released chooser
+// contract was stable. Require that chooser once, then retain the new choice.
+const CONNECTION_MODE_PROMPT_REVISION: u64 = 1;
 
 #[derive(Clone, Serialize, Default)]
 #[serde(rename_all = "camelCase")]
@@ -97,7 +100,14 @@ fn connection_mode() -> String {
             return mode;
         }
     }
-    match read_config()["connectionMode"].as_str() {
+    configured_connection_mode(&read_config())
+}
+
+fn configured_connection_mode(config: &Value) -> String {
+    if config["connectionModePromptRevision"].as_u64() != Some(CONNECTION_MODE_PROMPT_REVISION) {
+        return "undecided".into();
+    }
+    match config["connectionMode"].as_str() {
         Some("hosted") => "hosted".into(),
         Some("local") => "local".into(),
         // First launch: the splash asks the user to choose.
@@ -360,73 +370,6 @@ fn open_app_window(app: &AppHandle, url: &str) -> Result<(), String> {
     Ok(())
 }
 
-fn open_local_auth_window(app: &AppHandle, url: &str) -> Result<(), String> {
-    let target = tauri::Url::parse(url).map_err(|error| format!("invalid auth URL: {error}"))?;
-    let window = if let Some(window) = app.get_webview_window("auth") {
-        window
-            .navigate(target)
-            .map_err(|error| format!("could not open account setup: {error}"))?;
-        window
-    } else {
-        build_local_auth_window(app, target)?
-    };
-    window
-        .show()
-        .map_err(|error| format!("could not show account setup: {error}"))?;
-    window
-        .set_focus()
-        .map_err(|error| format!("could not focus account setup: {error}"))?;
-    if let Some(main) = app.get_webview_window("main") {
-        let _ = main.hide();
-    }
-    Ok(())
-}
-
-fn build_local_auth_window(
-    app: &AppHandle,
-    target: tauri::Url,
-) -> Result<tauri::WebviewWindow, String> {
-    let navigation_handle = app.clone();
-    let new_window_handle = app.clone();
-    let window = WebviewWindowBuilder::new(app, "auth", WebviewUrl::External(target))
-        .title("Lemma account setup")
-        .inner_size(1080.0, 780.0)
-        .min_inner_size(860.0, 620.0)
-        .on_navigation(move |url| {
-            if navigation_allowed_for_app(&navigation_handle, url) {
-                true
-            } else {
-                open_external(url.as_str());
-                false
-            }
-        })
-        .on_new_window(move |url, _features| {
-            if url.as_str() != "about:blank" {
-                if navigation_allowed_for_app(&new_window_handle, &url) {
-                    if let Some(auth) = new_window_handle.get_webview_window("auth") {
-                        let _ = auth.navigate(url);
-                    }
-                } else {
-                    open_external(url.as_str());
-                }
-            }
-            NewWindowResponse::Deny
-        })
-        .build()
-        .map_err(|error| format!("could not create account window: {error}"))?;
-
-    let close_handle = app.clone();
-    let close_window = window.clone();
-    window.on_window_event(move |event| {
-        if let tauri::WindowEvent::CloseRequested { api, .. } = event {
-            api.prevent_close();
-            let _ = close_window.hide();
-            show_splash(&close_handle);
-        }
-    });
-    Ok(window)
-}
-
 fn navigate_app_window(app: &AppHandle, url: &str) -> Result<(), String> {
     open_app_window(app, url)
 }
@@ -554,6 +497,7 @@ fn set_mode(app: &AppHandle, mode: &str) {
     }
     write_config(|config| {
         config["connectionMode"] = json!(mode);
+        config["connectionModePromptRevision"] = json!(CONNECTION_MODE_PROMPT_REVISION);
     });
 }
 
@@ -599,6 +543,11 @@ fn handle_deep_link(app: &AppHandle, url: &tauri::Url) {
         let _ = window.show();
         let _ = window.set_focus();
     }
+    // Older builds used a second native auth webview. Hide it if it still
+    // exists; the main window now owns the one-time session exchange.
+    if let Some(window) = app.get_webview_window("auth") {
+        let _ = window.hide();
+    }
 }
 
 fn desktop_context_script(mode: &str) -> String {
@@ -627,12 +576,11 @@ fn app_base_url(app: &AppHandle) -> String {
     }
 }
 
-fn local_auth_path(mode: &str) -> &'static str {
-    if mode == "signup" {
-        "auth/signup"
-    } else {
-        "auth"
-    }
+fn desktop_auth_url(base: &str, auth_mode: &str) -> String {
+    format!(
+        "{}/auth/desktop?mode={auth_mode}",
+        base.trim_end_matches('/'),
+    )
 }
 
 #[tauri::command]
@@ -643,24 +591,10 @@ async fn login(app: AppHandle, mode: Option<String>) -> Result<(), String> {
     } else {
         "signin"
     };
-    if current_mode(&app) == "local" {
-        open_local_auth_window(
-            &app,
-            &format!(
-                "{}/{}",
-                base.trim_end_matches('/'),
-                local_auth_path(auth_mode),
-            ),
-        )
-    } else {
-        open_app_window(
-            &app,
-            &format!(
-                "{}/auth/desktop?mode={auth_mode}",
-                base.trim_end_matches('/'),
-            ),
-        )
-    }
+    // Keep `main` as the waiting/exchange surface in both modes. The frontend
+    // creates a short-lived request, opens marked auth in the system browser,
+    // and consumes the result when `lemma://auth/complete` returns.
+    open_app_window(&app, &desktop_auth_url(&base, auth_mode))
 }
 
 fn build_tray(app: &AppHandle) -> tauri::Result<()> {
@@ -980,8 +914,29 @@ mod tests {
     }
 
     #[test]
-    fn local_account_creation_opens_the_supertokens_signup_route() {
-        assert_eq!(local_auth_path("signup"), "auth/signup");
-        assert_eq!(local_auth_path("signin"), "auth");
+    fn legacy_connection_preferences_require_the_released_chooser_once() {
+        assert_eq!(
+            configured_connection_mode(&json!({"connectionMode": "hosted"})),
+            "undecided"
+        );
+        assert_eq!(
+            configured_connection_mode(&json!({
+                "connectionMode": "local",
+                "connectionModePromptRevision": CONNECTION_MODE_PROMPT_REVISION,
+            })),
+            "local"
+        );
+    }
+
+    #[test]
+    fn desktop_auth_uses_the_browser_handoff_in_every_mode() {
+        assert_eq!(
+            desktop_auth_url("https://lemma.work", "signup"),
+            "https://lemma.work/auth/desktop?mode=signup"
+        );
+        assert_eq!(
+            desktop_auth_url("http://localhost:3711/", "signin"),
+            "http://localhost:3711/auth/desktop?mode=signin"
+        );
     }
 }
