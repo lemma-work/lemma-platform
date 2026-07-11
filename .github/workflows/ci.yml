@@ -24,6 +24,7 @@ jobs:
       typescript: ${{ steps.filter.outputs.typescript }}
       frontend: ${{ steps.filter.outputs.frontend }}
       codegen: ${{ steps.filter.outputs.codegen }}
+      desktop: ${{ steps.filter.outputs.desktop }}
     steps:
       - uses: actions/checkout@v7
       - uses: dorny/paths-filter@v4
@@ -58,6 +59,13 @@ jobs:
               - 'lemma-typescript/scripts/generate_l2.mjs'
               - 'lemma-typescript/scripts/patch_generated_imports.mjs'
               - '.github/workflows/ci.yml'
+            desktop:
+              - 'desktop/**'
+              - 'lemma-stack/**'
+              - 'lemma-frontend/lib/education/concepts.ts'
+              - '.github/actions/setup-apple-signing/**'
+              - '.github/workflows/ci.yml'
+              - '.github/workflows/release-desktop.yml'
 
   backend-unit:
     name: lemma-backend unit
@@ -383,6 +391,105 @@ jobs:
           if ($content -notmatch "ErrorActionPreference") { Write-Error "install.ps1 missing error handling"; exit 1 }
           Write-Host "install.ps1 validation passed"
 
+  desktop:
+    name: macOS desktop build + codesign
+    needs: changes
+    if: needs.changes.outputs.desktop == 'true'
+    runs-on: macos-14
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 22
+
+      - uses: astral-sh/setup-uv@v6
+        with:
+          enable-cache: true
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache Cargo
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            desktop/target
+          key: desktop-ci-cargo-${{ runner.os }}-${{ hashFiles('desktop/Cargo.lock') }}
+          restore-keys: desktop-ci-cargo-${{ runner.os }}-
+
+      - name: Import Developer ID certificate
+        id: apple-signing
+        if: github.event_name != 'pull_request' && github.ref == 'refs/heads/main'
+        uses: ./.github/actions/setup-apple-signing
+        with:
+          certificate: ${{ secrets.APPLE_CERTIFICATE }}
+          certificate-password: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+
+      - name: Select Developer ID signing
+        if: steps.apple-signing.outcome == 'success'
+        env:
+          SIGNING_IDENTITY: ${{ steps.apple-signing.outputs.signing-identity }}
+        run: |
+          echo "APPLE_SIGNING_IDENTITY=${SIGNING_IDENTITY}" >> "${GITHUB_ENV}"
+          echo "LEMMA_EXPECTED_SIGNING=developer-id" >> "${GITHUB_ENV}"
+
+      - name: Select ad-hoc signing for untrusted builds
+        if: steps.apple-signing.outcome == 'skipped'
+        run: |
+          echo "APPLE_SIGNING_IDENTITY=-" >> "${GITHUB_ENV}"
+          echo "LEMMA_EXPECTED_SIGNING=adhoc" >> "${GITHUB_ENV}"
+
+      - name: Bake splash concepts
+        run: node desktop/scripts/extract-concepts.mjs
+
+      - name: Verify baked splash concepts are committed
+        run: git diff --exit-code desktop/ui/concepts.gen.json
+
+      - name: Build supervisor sidecar
+        run: desktop/scripts/build-sidecar.sh
+
+      - name: Run desktop tests
+        working-directory: desktop
+        run: cargo test --locked
+
+      - name: Build and codesign DMG
+        working-directory: desktop
+        run: npx -y @tauri-apps/cli@2.11.4 build --config tauri.dist.conf.json
+
+      - name: Verify application signature
+        shell: bash
+        run: |
+          set -euo pipefail
+          app="desktop/target/release/bundle/macos/Lemma.app"
+          sidecar="${app}/Contents/MacOS/lemma-supervisor"
+
+          test -d "${app}"
+          test -x "${sidecar}"
+          codesign --verify --deep --strict --verbose=2 "${app}"
+          codesign --verify --strict --verbose=2 "${sidecar}"
+
+          signature_info="$(codesign -dvvv "${app}" 2>&1)"
+          printf '%s\n' "${signature_info}"
+          if [[ "${LEMMA_EXPECTED_SIGNING}" == "developer-id" ]]; then
+            grep -F "Authority=Developer ID Application:" <<< "${signature_info}"
+          else
+            grep -F "Signature=adhoc" <<< "${signature_info}"
+          fi
+
+      - name: Upload macOS DMG
+        uses: actions/upload-artifact@v4
+        with:
+          name: lemma-desktop-macos-${{ github.sha }}
+          path: desktop/target/release/bundle/dmg/Lemma_*_aarch64.dmg
+          if-no-files-found: error
+          retention-days: 7
+
+      - name: Remove temporary signing keychain
+        if: always() && steps.apple-signing.outcome == 'success'
+        run: security delete-keychain "${{ steps.apple-signing.outputs.keychain-path }}"
+
   ci:
     name: CI passed
     if: always()
@@ -398,6 +505,7 @@ jobs:
       - frontend-build
       - install-experience
       - windows-cli
+      - desktop
     runs-on: ubuntu-latest
     steps:
       - name: Fail if any required suite failed

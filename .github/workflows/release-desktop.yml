@@ -2,9 +2,8 @@ name: Release Lemma Desktop
 
 # Builds the Tauri macOS app (arm64) and attaches the DMG to the GitHub
 # release. The DMG contains the thin Rust shell + the compiled lemma-stack
-# supervisor sidecar (PyInstaller). Signing/notarization happens only when
-# the APPLE_* secrets are present; otherwise the DMG is built unsigned
-# (still hardened-runtime, just not notarized).
+# supervisor sidecar (PyInstaller). Public releases require Developer ID
+# signing and Apple notarization; missing credentials fail before the build.
 
 on:
   release:
@@ -13,7 +12,7 @@ on:
   workflow_dispatch:
     inputs:
       version:
-        description: "Version to build, for example 0.2.1 or v0.2.1"
+        description: "Version to build, for example 0.6.0 or v0.6.0"
         required: true
 
 permissions:
@@ -37,6 +36,26 @@ jobs:
         with:
           token: ${{ secrets.GITHUB_TOKEN }}
           sha: ${{ github.sha }}
+
+      - name: Import Developer ID certificate
+        id: apple-signing
+        uses: ./.github/actions/setup-apple-signing
+        with:
+          certificate: ${{ secrets.APPLE_CERTIFICATE }}
+          certificate-password: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+
+      - name: Require notarization credentials
+        shell: bash
+        env:
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+        run: |
+          set -euo pipefail
+          if [[ -z "${APPLE_ID}" || -z "${APPLE_PASSWORD}" || -z "${APPLE_TEAM_ID}" ]]; then
+            echo "::error::APPLE_ID, APPLE_PASSWORD, and APPLE_TEAM_ID are required for notarized macOS releases."
+            exit 1
+          fi
 
       - name: Resolve version
         id: version
@@ -99,20 +118,38 @@ jobs:
       - name: Bake splash concepts
         run: node desktop/scripts/extract-concepts.mjs
 
+      - name: Verify baked splash concepts are committed
+        run: git diff --exit-code desktop/ui/concepts.gen.json
+
       - name: Build supervisor sidecar
         run: desktop/scripts/build-sidecar.sh
 
       - name: Build DMG
         working-directory: desktop
-        run: npx -y @tauri-apps/cli@latest build --config tauri.dist.conf.json
+        run: npx -y @tauri-apps/cli@2.11.4 build --config tauri.dist.conf.json
         env:
-          # Signing/notarization only when secrets are present.
-          APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
+          APPLE_SIGNING_IDENTITY: ${{ steps.apple-signing.outputs.signing-identity }}
           APPLE_ID: ${{ secrets.APPLE_ID }}
           APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
           APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+
+      - name: Verify Developer ID signature and notarization staple
+        shell: bash
+        run: |
+          set -euo pipefail
+          app="desktop/target/release/bundle/macos/Lemma.app"
+          sidecar="${app}/Contents/MacOS/lemma-supervisor"
+
+          codesign --verify --deep --strict --verbose=2 "${app}"
+          codesign --verify --strict --verbose=2 "${sidecar}"
+          codesign -dvvv "${app}" 2>&1 | grep -F "Authority=Developer ID Application:"
+          xcrun stapler validate "${app}"
 
       - name: Upload DMG to release
         uses: softprops/action-gh-release@v2
         with:
           files: desktop/target/release/bundle/dmg/Lemma_*_aarch64.dmg
+
+      - name: Remove temporary signing keychain
+        if: always() && steps.apple-signing.outcome == 'success'
+        run: security delete-keychain "${{ steps.apple-signing.outputs.keychain-path }}"

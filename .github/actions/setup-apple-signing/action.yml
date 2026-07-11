@@ -1,0 +1,71 @@
+name: Setup Apple code signing
+description: Import a Developer ID Application certificate into an ephemeral macOS keychain.
+
+inputs:
+  certificate:
+    description: Base64-encoded Developer ID Application certificate in PKCS#12 format.
+    required: true
+  certificate-password:
+    description: Password used when exporting the PKCS#12 certificate.
+    required: true
+
+outputs:
+  signing-identity:
+    description: Developer ID Application identity imported into the temporary keychain.
+    value: ${{ steps.import.outputs.signing-identity }}
+  keychain-path:
+    description: Temporary keychain path to delete after the build.
+    value: ${{ steps.import.outputs.keychain-path }}
+
+runs:
+  using: composite
+  steps:
+    - name: Import Developer ID certificate
+      id: import
+      shell: bash
+      env:
+        APPLE_CERTIFICATE: ${{ inputs.certificate }}
+        APPLE_CERTIFICATE_PASSWORD: ${{ inputs.certificate-password }}
+      run: |
+        set -euo pipefail
+
+        if [[ -z "${APPLE_CERTIFICATE}" || -z "${APPLE_CERTIFICATE_PASSWORD}" ]]; then
+          echo "::error::APPLE_CERTIFICATE and APPLE_CERTIFICATE_PASSWORD are required for Developer ID signing."
+          exit 1
+        fi
+
+        certificate_path="${RUNNER_TEMP}/lemma-developer-id.p12"
+        keychain_path="${RUNNER_TEMP}/lemma-signing.keychain-db"
+        keychain_password="$(openssl rand -hex 32)"
+
+        printf '%s' "${APPLE_CERTIFICATE}" | base64 --decode > "${certificate_path}"
+        security create-keychain -p "${keychain_password}" "${keychain_path}"
+        security default-keychain -s "${keychain_path}"
+        security set-keychain-settings -lut 21600 "${keychain_path}"
+        security unlock-keychain -p "${keychain_password}" "${keychain_path}"
+        security import "${certificate_path}" \
+          -k "${keychain_path}" \
+          -P "${APPLE_CERTIFICATE_PASSWORD}" \
+          -T /usr/bin/codesign
+        security set-key-partition-list \
+          -S apple-tool:,apple:,codesign: \
+          -s \
+          -k "${keychain_password}" \
+          "${keychain_path}"
+        security list-keychains -d user -s "${keychain_path}"
+
+        signing_identity="$(
+          security find-identity -v -p codesigning "${keychain_path}" \
+            | sed -n 's/.*"\(Developer ID Application:[^"]*\)".*/\1/p' \
+            | head -n 1
+        )"
+        if [[ -z "${signing_identity}" ]]; then
+          echo "::error::The imported certificate does not contain a Developer ID Application identity."
+          security find-identity -v -p codesigning "${keychain_path}"
+          exit 1
+        fi
+
+        echo "Imported ${signing_identity}"
+        echo "signing-identity=${signing_identity}" >> "${GITHUB_OUTPUT}"
+        echo "keychain-path=${keychain_path}" >> "${GITHUB_OUTPUT}"
+        rm -f "${certificate_path}"

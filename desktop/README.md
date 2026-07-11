@@ -75,8 +75,28 @@ A distribution build runs the sidecar build then bundles with
 ```sh
 node desktop/scripts/extract-concepts.mjs
 desktop/scripts/build-sidecar.sh
-cd desktop && npx -y @tauri-apps/cli@latest build --config tauri.dist.conf.json
+cd desktop && npx -y @tauri-apps/cli@2.11.4 build --config tauri.dist.conf.json
 ```
+
+## CI and code signing
+
+The main CI workflow builds the supervisor sidecar and DMG, then verifies the
+application and bundled sidecar signatures. Pull requests use Tauri's ad-hoc
+signing identity (`-`) so untrusted code never receives Apple credentials.
+Trusted runs from `main` import a Developer ID Application certificate into an
+ephemeral keychain and verify that the resulting app has a Developer ID
+authority.
+
+Developer ID signing requires these Actions secrets:
+
+- `APPLE_CERTIFICATE` — base64-encoded `.p12` export containing the certificate
+  and private key
+- `APPLE_CERTIFICATE_PASSWORD` — password used when exporting the `.p12`
+
+The release workflow uses the same certificate import path and additionally
+requires `APPLE_ID`, `APPLE_PASSWORD` (an app-specific password), and
+`APPLE_TEAM_ID` for notarization. It verifies the Developer ID signature and
+notarization staple before uploading the DMG.
 
 Supervisor resolution order in the shell: `LEMMA_DESKTOP_SUPERVISOR_BIN` →
 bundled sidecar next to the app executable → `uv run --project lemma-stack

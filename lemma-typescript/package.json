@@ -1,6 +1,6 @@
 {
   "name": "lemma-sdk",
-  "version": "0.5.7",
+  "version": "0.6.0",
   "description": "Official TypeScript SDK for Lemma APIs, optimized around pod-scoped workflows",
   "license": "Apache-2.0",
   "author": "Lemma",
@@ -8,11 +8,11 @@
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
   "bin": {
-    "lemma-sdk": "./bin/lemma-sdk.js"
+    "lemma-sdk": "bin/lemma-sdk.js"
   },
   "repository": {
     "type": "git",
-    "url": "https://github.com/lemma-work/lemma-platform.git",
+    "url": "git+https://github.com/lemma-work/lemma-platform.git",
     "directory": "lemma-typescript"
   },
   "homepage": "https://github.com/lemma-work/lemma-platform/tree/main/lemma-typescript#readme",

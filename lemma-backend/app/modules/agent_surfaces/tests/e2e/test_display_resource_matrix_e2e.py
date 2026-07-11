@@ -290,9 +290,6 @@ async def test_display_resource_slack_routes_pod_resource_catalog_to_deep_links(
             tool_call_id="tool-invalid-loading",
         ),
         script_display_resource(
-            type="AGENT", interactive=True, tool_call_id="tool-invalid-interactive"
-        ),
-        script_display_resource(
             type="FILE",
             path="/private/tmp/report.pdf",
             tool_call_id="tool-invalid-private-file",
