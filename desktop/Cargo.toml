@@ -1,6 +1,6 @@
 [package]
 name = "lemma-desktop"
-version = "0.6.0"
+version = "0.6.1"
 description = "Lemma desktop shell"
 edition = "2021"
 
