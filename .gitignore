@@ -10,6 +10,9 @@ build/
 .env.*
 !.env.example
 
+# Local runtime data (object storage, generated files, model caches)
+/.local/
+
 # Coverage reports
 .coverage
 .coverage.*
