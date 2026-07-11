@@ -257,7 +257,6 @@ class AppService:
         ctx: Context | None = None,
     ) -> AppEntity:
         """Promote a resolved widget into a persisted app.
-
         The widget and the app share the same HTML runtime at two lifecycle stages:
         the stored HTML is wrapped as a standalone document (no embed bridge)
         and deployed as the app's bundle — identical to what the widget showed.
