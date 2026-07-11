@@ -1845,6 +1845,95 @@ def test_connectors_account_create_forwards_credentials(monkeypatch):
     assert captured["credentials"] == {"bot_token": "token"}
 
 
+@pytest.mark.parametrize(
+    ("selector_args", "expected_selector"),
+    [
+        (["--auth-config", "telegram"], {"auth_config_name": "telegram"}),
+        (
+            ["--auth-config-id", "00000000-0000-0000-0000-000000000002"],
+            {"auth_config_id": "00000000-0000-0000-0000-000000000002"},
+        ),
+    ],
+)
+def test_connectors_account_create_modern_facade_preserves_selector(
+    monkeypatch, selector_args, expected_selector
+):
+    captured: dict[str, object] = {}
+
+    class FakeAccounts:
+        def create(self, auth_config, request):
+            captured["auth_config"] = auth_config
+            captured["request"] = request.to_dict()
+            return {"id": "account-1"}
+
+    fake_client = SimpleNamespace(
+        connectors=SimpleNamespace(accounts=FakeAccounts())
+    )
+
+    def fake_run_with_client(ctx, fn):
+        return fn(fake_client, SimpleNamespace(config={"_runtime": {"org": "org-1"}}))
+
+    monkeypatch.setattr(connectors, "run_with_client", fake_run_with_client)
+
+    result = runner.invoke(
+        app,
+        [
+            "--org",
+            "org-1",
+            "connectors",
+            "accounts",
+            "create",
+            *selector_args,
+            "--data",
+            json.dumps({"bot_token": "token"}),
+        ],
+    )
+
+    assert result.exit_code == 0, result.stdout
+    request = captured["request"]
+    assert isinstance(request, dict)
+    for key, value in expected_selector.items():
+        assert request[key] == value
+    other_key = (
+        "auth_config_id"
+        if "auth_config_name" in expected_selector
+        else "auth_config_name"
+    )
+    assert other_key not in request
+
+
+@pytest.mark.parametrize(
+    "selector_args",
+    [
+        [],
+        [
+            "--auth-config",
+            "telegram",
+            "--auth-config-id",
+            "00000000-0000-0000-0000-000000000002",
+        ],
+    ],
+)
+def test_connectors_account_create_requires_exactly_one_selector(selector_args):
+    result = runner.invoke(
+        app,
+        [
+            "--org",
+            "org-1",
+            "connectors",
+            "accounts",
+            "create",
+            *selector_args,
+            "--data",
+            json.dumps({"bot_token": "token"}),
+        ],
+        terminal_width=200,
+    )
+
+    assert result.exit_code != 0
+    assert "Use exactly one: --auth-config or --auth-config-id" in result.output
+
+
 def test_connectors_triggers_list_passes_auth_config(monkeypatch):
     captured: dict[str, object] = {}
 

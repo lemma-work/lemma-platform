@@ -20,7 +20,7 @@ from ..mcp import (
     provider_environment,
     write_provider_mcp_files,
 )
-from ..process import STREAM_READER_LIMIT, drain_stream, terminate_gracefully
+from ..process import create_subprocess, drain_stream, terminate_gracefully
 
 
 class ClaudeCodeHarness:
@@ -82,14 +82,12 @@ async def _run_claude_code_provider(
     write_provider_mcp_files(harness_kind, cwd, mcp)
     env = provider_environment(harness_kind=harness_kind, mcp=mcp)
     daemon_log("start stream provider", {"harness_kind": harness_kind, "command": command, "cwd": str(cwd)})
-    process = await asyncio.create_subprocess_exec(
-        *command,
-        stdin=asyncio.subprocess.PIPE if stdin_text is not None else None,
-        stdout=asyncio.subprocess.PIPE,
-        stderr=asyncio.subprocess.PIPE,
-        cwd=str(cwd),
+    process = await create_subprocess(
+        command,
+        cwd=cwd,
         env=env,
-        limit=STREAM_READER_LIMIT,
+        harness_kind=harness_kind,
+        stdin=stdin_text is not None,
     )
     stdout_parts: list[str] = []
     raw_stdout_parts: list[str] = []

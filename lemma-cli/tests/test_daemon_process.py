@@ -9,11 +9,86 @@ from __future__ import annotations
 
 import os
 import sys
+from pathlib import Path
 
 import pytest
 
 from lemma_cli.daemon import commands as daemon_commands
 from lemma_cli.daemon import config as daemon_config
+from lemma_cli.daemon import process as daemon_process
+
+
+def test_resolve_executable_uses_child_path(monkeypatch):
+    captured = {}
+
+    def fake_which(binary, *, path):
+        captured["binary"] = binary
+        captured["path"] = path
+        return "/resolved/codex"
+
+    monkeypatch.setattr(daemon_process.shutil, "which", fake_which)
+
+    command = daemon_process.resolve_executable(
+        ["codex", "app-server"],
+        cwd=Path("/workspace"),
+        env={"PATH": "/child/bin"},
+        harness_kind="CODEX",
+    )
+
+    assert command == ["/resolved/codex", "app-server"]
+    assert captured == {"binary": "codex", "path": "/child/bin"}
+
+
+def test_resolve_executable_reports_harness(monkeypatch):
+    monkeypatch.setattr(daemon_process.shutil, "which", lambda *_args, **_kwargs: None)
+
+    with pytest.raises(
+        FileNotFoundError,
+        match="CODEX executable 'codex' was not found on PATH",
+    ):
+        daemon_process.resolve_executable(
+            ["codex", "app-server"],
+            cwd=Path("/workspace"),
+            env={"PATH": ""},
+            harness_kind="CODEX",
+        )
+
+
+@pytest.mark.asyncio
+async def test_create_subprocess_runs_resolved_executable(tmp_path):
+    process = await daemon_process.create_subprocess(
+        [sys.executable, "-c", "print('provider-ok')"],
+        cwd=tmp_path,
+        env=os.environ.copy(),
+        harness_kind="TEST",
+    )
+    stdout, stderr = await process.communicate()
+
+    assert process.returncode == 0, stderr.decode(errors="replace")
+    assert stdout.decode().strip() == "provider-ok"
+
+
+@pytest.mark.skipif(sys.platform != "win32", reason="requires Windows command shims")
+@pytest.mark.asyncio
+async def test_create_subprocess_runs_windows_cmd_shim(tmp_path):
+    shim = tmp_path / "codex.cmd"
+    shim.write_text(
+        '@echo off\r\npython -c "print(\'codex-shim-ok\')"\r\n',
+        encoding="utf-8",
+    )
+    env = os.environ.copy()
+    env["PATH"] = f"{tmp_path}{os.pathsep}{env.get('PATH', '')}"
+
+    process = await daemon_process.create_subprocess(
+        ["codex"],
+        cwd=tmp_path,
+        env=env,
+        harness_kind="CODEX",
+    )
+    stdout, stderr = await process.communicate()
+
+    assert process.returncode == 0, stderr.decode(errors="replace")
+    assert stdout.decode().strip() == "codex-shim-ok"
 
 
 def test_process_is_running_true_for_current_process():

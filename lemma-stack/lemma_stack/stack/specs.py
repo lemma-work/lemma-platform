@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import platform
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -77,7 +78,19 @@ class ServiceSpec:
 
 
 def selinux_enforcing() -> bool:
+    """Return whether the host Linux kernel reports SELinux support."""
     return Path("/sys/fs/selinux/enforce").exists()
+
+
+def agentbox_socket_requires_label_disable(provider: str) -> bool:
+    """Return whether the nested runtime socket needs an unconfined label.
+
+    Podman on macOS and Windows runs containers inside an SELinux-enforcing
+    Fedora CoreOS VM, so checking only the host filesystem misses that case.
+    """
+    if selinux_enforcing():
+        return True
+    return provider == "podman" and platform.system() in {"Darwin", "Windows"}
 
 
 def run_args(spec: ServiceSpec, *, selinux: bool | None = None) -> list[str]:
@@ -219,7 +232,9 @@ def build_specs(
             ),
             user="root",
             # the mounted API socket must not be relabeled by SELinux
-            security_opts=("label=disable",) if selinux_enforcing() else (),
+            security_opts=("label=disable",)
+            if agentbox_socket_requires_label_disable(provider)
+            else (),
         )
     )
 

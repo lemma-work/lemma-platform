@@ -126,6 +126,48 @@ def test_agentbox_docker_wiring(config, paths, manifest):
     assert mounts["/var/run/docker.sock"] == "/var/run/docker.sock"
 
 
+@pytest.mark.parametrize(
+    ("host_platform", "host_selinux", "provider", "expected"),
+    [
+        ("Linux", True, "podman", ("label=disable",)),
+        ("Linux", True, "docker", ("label=disable",)),
+        ("Linux", False, "podman", ()),
+        ("Darwin", False, "podman", ("label=disable",)),
+        ("Windows", False, "podman", ("label=disable",)),
+        ("Darwin", False, "docker", ()),
+        ("Windows", False, "docker", ()),
+    ],
+)
+def test_agentbox_socket_selinux_guard_matrix(
+    monkeypatch,
+    config,
+    paths,
+    manifest,
+    host_platform,
+    host_selinux,
+    provider,
+    expected,
+):
+    monkeypatch.setattr(specs_mod.platform, "system", lambda: host_platform)
+    monkeypatch.setattr(specs_mod, "selinux_enforcing", lambda: host_selinux)
+
+    spec = by_name(build(config, paths, manifest, provider=provider), "agentbox")
+
+    assert spec.security_opts == expected
+
+
+def test_agentbox_security_opts_change_config_hash(config, paths, manifest, monkeypatch):
+    monkeypatch.setattr(specs_mod.platform, "system", lambda: "Linux")
+    monkeypatch.setattr(specs_mod, "selinux_enforcing", lambda: False)
+    unconfined = by_name(build(config, paths, manifest, provider="podman"), "agentbox")
+    monkeypatch.setattr(specs_mod.platform, "system", lambda: "Darwin")
+    guarded = by_name(build(config, paths, manifest, provider="podman"), "agentbox")
+
+    assert unconfined.security_opts == ()
+    assert guarded.security_opts == ("label=disable",)
+    assert unconfined.config_hash() != guarded.config_hash()
+
+
 def test_config_hash_changes_with_image_and_env(config, paths, manifest):
     spec = by_name(build(config, paths, manifest), "backend")
     base_hash = spec.config_hash()

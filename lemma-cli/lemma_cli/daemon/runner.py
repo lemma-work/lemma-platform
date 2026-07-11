@@ -21,6 +21,7 @@ from .mcp import (
     provider_cwd_for_run,
     provider_environment,
 )
+from .process import create_subprocess
 
 # Reconnect backoff: a dropped backend connection must not kill the daemon — it
 # should wait and reconnect so it keeps serving runs. Full-jitter exponential
@@ -745,13 +746,12 @@ async def run_provider_command(
     cwd = provider_cwd_for_run(harness_kind, mcp)
     env = provider_environment(harness_kind=harness_kind, mcp=mcp)
     daemon_log("start one-shot provider", {"harness_kind": harness_kind, "command": command, "cwd": str(cwd)})
-    process = await asyncio.create_subprocess_exec(
-        *command,
-        stdin=asyncio.subprocess.PIPE if stdin_text is not None else None,
-        stdout=asyncio.subprocess.PIPE,
-        stderr=asyncio.subprocess.PIPE,
-        cwd=str(cwd),
+    process = await create_subprocess(
+        command,
+        cwd=cwd,
         env=env,
+        harness_kind=harness_kind,
+        stdin=stdin_text is not None,
     )
     try:
         stdout_bytes, stderr_bytes = await process.communicate(

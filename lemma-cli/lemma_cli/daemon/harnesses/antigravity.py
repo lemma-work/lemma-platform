@@ -14,7 +14,7 @@ from ..mcp import (
     provider_environment,
     write_provider_mcp_files,
 )
-from ..process import STREAM_READER_LIMIT, terminate_gracefully
+from ..process import create_subprocess, terminate_gracefully
 
 
 class AntigravityHarness:
@@ -55,14 +55,12 @@ class AntigravityHarness:
         write_provider_mcp_files("ANTIGRAVITY", cwd, mcp)
         env = provider_environment(harness_kind="ANTIGRAVITY", mcp=mcp)
         daemon_log("start antigravity provider", {"harness_kind": "ANTIGRAVITY", "command": command, "cwd": str(cwd)})
-        process = await asyncio.create_subprocess_exec(
-            *command,
-            stdin=asyncio.subprocess.PIPE,
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.PIPE,
-            cwd=str(cwd),
+        process = await create_subprocess(
+            command,
+            cwd=cwd,
             env=env,
-            limit=STREAM_READER_LIMIT,
+            harness_kind="ANTIGRAVITY",
+            stdin=True,
         )
         try:
             async with asyncio.timeout(daemon_turn_timeout_seconds()):

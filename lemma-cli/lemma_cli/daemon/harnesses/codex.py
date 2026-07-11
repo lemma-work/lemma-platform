@@ -24,7 +24,7 @@ from ..mcp import (
     provider_cwd_for_run,
     provider_environment,
 )
-from ..process import STREAM_READER_LIMIT
+from ..process import create_subprocess
 
 CODEX_WORKER_TTL_SECONDS_ENV = "LEMMA_DAEMON_CODEX_WORKER_TTL_SECONDS"
 DAEMON_TURN_TIMEOUT_SECONDS_ENV = "LEMMA_DAEMON_TURN_TIMEOUT_SECONDS"
@@ -78,14 +78,12 @@ class JsonRpcProcess:
 
     async def start(self) -> None:
         daemon_log("jsonrpc process start", {"command": self.command, "cwd": str(self.cwd)})
-        self.process = await asyncio.create_subprocess_exec(
-            *self.command,
-            stdin=asyncio.subprocess.PIPE,
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.PIPE,
-            cwd=str(self.cwd),
+        self.process = await create_subprocess(
+            self.command,
+            cwd=self.cwd,
             env=self.env,
-            limit=STREAM_READER_LIMIT,
+            harness_kind="CODEX",
+            stdin=True,
         )
         self._tasks = [
             asyncio.create_task(self._read_stdout()),

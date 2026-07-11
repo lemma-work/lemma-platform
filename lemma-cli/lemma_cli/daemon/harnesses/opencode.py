@@ -24,7 +24,7 @@ from ..mcp import (
     provider_cwd_for_run,
     provider_environment,
 )
-from ..process import STREAM_READER_LIMIT
+from ..process import create_subprocess
 
 
 def _opencode_debug_logs_enabled() -> bool:
@@ -103,13 +103,11 @@ async def _run_opencode_server_provider(
             "opencode_config": env.get("OPENCODE_CONFIG_CONTENT"),
         },
     )
-    process = await asyncio.create_subprocess_exec(
-        *command,
-        cwd=str(cwd),
+    process = await create_subprocess(
+        command,
+        cwd=cwd,
         env=env,
-        stdout=asyncio.subprocess.PIPE,
-        stderr=asyncio.subprocess.PIPE,
-        limit=STREAM_READER_LIMIT,
+        harness_kind="OPENCODE",
     )
     server_output: list[str] = []
     log_tasks: list[asyncio.Task[None]] = []

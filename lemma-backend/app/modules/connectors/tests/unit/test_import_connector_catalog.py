@@ -430,6 +430,93 @@ async def test_sync_composio_catalog_keeps_composio_operations_for_non_native_ap
 
 
 @pytest.mark.asyncio
+async def test_sync_composio_catalog_imports_apollo_api_key_and_contact_operations():
+    connector_repository = SimpleNamespace(get=AsyncMock(return_value=None))
+    operation_repository = SimpleNamespace()
+    trigger_repository = SimpleNamespace()
+
+    toolkit_item = _toolkit("apollo", name="Apollo")
+    toolkit_item.auth_schemes = ["API_KEY"]
+    api_key_field = SimpleNamespace(
+        name="generic_api_key",
+        display_name="API Key",
+        description="Apollo API key",
+        type="string",
+        default=None,
+        is_secret=True,
+        required=True,
+    )
+    toolkit_detail = SimpleNamespace(
+        auth_config_details=[
+            SimpleNamespace(
+                mode="API_KEY",
+                fields=SimpleNamespace(
+                    connected_account_initiation=SimpleNamespace(
+                        required=[api_key_field],
+                        optional=[],
+                    )
+                ),
+            )
+        ]
+    )
+    operation_names = [
+        "APOLLO_SEARCH_CONTACTS",
+        "APOLLO_PEOPLE_SEARCH",
+        "APOLLO_PEOPLE_ENRICHMENT",
+        "APOLLO_LIST_EMAIL_ACCOUNTS",
+    ]
+    composio = SimpleNamespace(
+        toolkits=SimpleNamespace(get=MagicMock(return_value=toolkit_detail))
+    )
+
+    with (
+        patch.dict(os.environ, {"COMPOSIO_API_KEY": "test-api-key"}, clear=False),
+        patch.object(importer, "Composio", return_value=composio),
+        patch.object(importer, "_list_composio_toolkits", return_value=[toolkit_item]),
+        patch.object(
+            importer,
+            "_paginate_tools",
+            return_value=iter([_tool(name) for name in operation_names]),
+        ),
+        patch.object(importer, "_paginate_triggers", return_value=iter([])),
+        patch.object(importer, "_upsert_connector", AsyncMock()) as upsert_connector,
+        patch.object(importer, "_upsert_operation", AsyncMock()) as upsert_operation,
+    ):
+        totals = await importer._sync_composio_catalog(
+            connector_repository,
+            operation_repository,
+            trigger_repository,
+            app_filters={"apollo"},
+            managed_by="composio",
+            page_size=100,
+            max_composio_apps=10,
+        )
+
+    assert totals == (1, 4, 0)
+    entity = upsert_connector.await_args.args[1]
+    assert entity.id == "apollo"
+    capability = _capability(entity, AuthProvider.COMPOSIO)
+    assert capability.auth_scheme == AuthMethod.API_KEY
+    assert capability.auth_config_schema == {
+        "type": "object",
+        "properties": {
+            "generic_api_key": {
+                "type": "string",
+                "title": "API Key",
+                "description": "Apollo API key",
+                "format": "password",
+            }
+        },
+        "additionalProperties": False,
+        "required": ["generic_api_key"],
+    }
+    imported_operations = {
+        call.kwargs["public_name"] for call in upsert_operation.await_args_list
+    }
+    assert imported_operations == set(operation_names)
+
+
+@pytest.mark.asyncio
 async def test_sync_composio_catalog_preserves_exact_composio_app_and_operation_names():
     connector_repository = SimpleNamespace(get=AsyncMock(return_value=None))
     operation_repository = SimpleNamespace()
@@ -907,6 +994,7 @@ def test_list_composio_toolkits_uses_curated_allowlist_and_env_append():
     assert "metaads" in fetched_slugs
     assert "zoho_mail" in fetched_slugs
     assert "asana" in fetched_slugs
+    assert "apollo" in fetched_slugs
     assert "custom_app" in fetched_slugs
     assert "composio" not in fetched_slugs
     composio.toolkits.get.assert_any_call("custom_app")

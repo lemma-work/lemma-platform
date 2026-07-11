@@ -100,7 +100,7 @@ jobs:
           Write-Host "daemon lifecycle ok"
           exit 0
 
-      - name: Unit tests — cross-platform process helpers (real Windows)
+      - name: Unit tests — process lifecycle and command shims (real Windows)
         run: |
           $ErrorActionPreference = "Stop"
           # Plain pip (unlike uv) ignores [tool.uv.sources], so it cannot resolve

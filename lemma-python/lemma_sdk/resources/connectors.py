@@ -125,10 +125,19 @@ class ConnectorAccounts:
         )
 
     def create(self, auth_config: str, request: AccountCreateSchema) -> AccountResponseSchema:
+        body = request.to_dict()
+        auth_config_name = body.get("auth_config_name")
+        auth_config_id = body.get("auth_config_id")
+        if auth_config_name and auth_config_id:
+            raise ValueError("Specify only one of auth_config_name or auth_config_id")
+        if not auth_config_name and not auth_config_id:
+            if not auth_config:
+                raise ValueError("Either auth_config_name or auth_config_id is required")
+            body["auth_config_name"] = auth_config
+        request = AccountCreateSchema.from_dict(body)
         return self._parent._call(
             connector_account_create,
             self._parent._org_uuid(),
-            auth_config,
             body=request,
         )
 

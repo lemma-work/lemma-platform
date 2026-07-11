@@ -144,6 +144,7 @@ DEFAULT_COMPOSIO_CONNECTOR_IDS: tuple[str, ...] = (
     "googledocs",
     "googlesheets",
     "airtable",
+    "apollo",
     "asana",
     "box",
     "cal",
