@@ -388,8 +388,8 @@ export function currentToolStatusLabel({
 }: {
   messages: AssistantRenderableMessage[];
   isConversationBusy: boolean;
-  streamingTool?: { toolName: string; args?: Record<string, unknown> } | null;
-}): { label: string; shimmer: boolean } | null {
+  streamingTool?: { toolCallId?: string; toolName: string; args?: Record<string, unknown> } | null;
+}): InlineToolStatus | null {
   if (!isConversationBusy) return null;
 
   if (streamingTool) {
@@ -397,6 +397,8 @@ export function currentToolStatusLabel({
     return {
       label: friendlyLabel || formatActiveToolSummary(streamingTool.toolName, streamingTool.args || {}),
       shimmer: true,
+      toolCallId: streamingTool.toolCallId,
+      toolName: streamingTool.toolName,
     };
   }
 
@@ -414,12 +416,63 @@ export function currentToolStatusLabel({
         return {
           label: friendlyLabel || formatActiveToolSummary(invocation.toolName, invocation.args),
           shimmer: true,
+          toolCallId: invocation.toolCallId,
+          toolName: invocation.toolName,
         };
       }
     }
   }
 
   return { label: "Thinking", shimmer: true };
+}
+
+export interface InlineToolStatus {
+  label: string;
+  shimmer: boolean;
+  toolCallId?: string;
+  toolName?: string;
+}
+
+/**
+ * The streaming status is a low-latency placeholder. Once the same call is in
+ * the current run's durable rows, that row owns the UI so the handoff happens
+ * in one render without briefly showing both representations.
+ */
+export function isInlineToolStatusAlreadyVisible({
+  rows,
+  latestUser,
+  status,
+}: {
+  rows: DisplayMessageRow[];
+  latestUser: number;
+  status: InlineToolStatus | null | undefined;
+}): boolean {
+  if (!status) return false;
+
+  for (let rowIndex = rows.length - 1; rowIndex >= 0; rowIndex -= 1) {
+    const row = rows[rowIndex];
+    if (!rowIsAfterIndex(row, latestUser)) continue;
+
+    const invocations = dedupToolInvocations(row.message);
+    for (let invocationIndex = invocations.length - 1; invocationIndex >= 0; invocationIndex -= 1) {
+      const invocation = invocations[invocationIndex];
+      if (status.toolCallId && invocation.toolCallId === status.toolCallId) return true;
+
+      // Partial stream tokens may expose the tool name before the call id. In
+      // that short window, an active row with the same name is the same handoff
+      // candidate; completed rows do not suppress a genuinely new call.
+      if (
+        !status.toolCallId
+        && status.toolName
+        && invocation.toolName === status.toolName
+        && isToolInvocationActive(invocation)
+      ) {
+        return true;
+      }
+    }
+  }
+
+  return false;
 }
 
 export function getActiveToolBanner(messages: AssistantRenderableMessage[]): ActiveToolBanner | null {

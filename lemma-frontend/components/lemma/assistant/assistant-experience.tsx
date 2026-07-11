@@ -46,6 +46,7 @@ import {
 import {
   currentRunStatusLabel,
   currentToolStatusLabel,
+  isInlineToolStatusAlreadyVisible,
   stringifyAssistantError,
 } from "./assistant-format";
 // Message rendering cluster (tool rollups, run traces, approvals, resource cards,
@@ -557,6 +558,11 @@ export function AssistantExperienceView({
     </>
   );
   const currentRunLatestUserIndex = latestUserIndex(controllerMessages);
+  const inlineToolStatusAlreadyVisible = isInlineToolStatusAlreadyVisible({
+    rows: displayMessageRows,
+    latestUser: currentRunLatestUserIndex,
+    status: inlineToolStatus,
+  });
   const activePendingApprovalInvocation = findPendingUserApprovalInvocation(displayMessageRows, currentRunLatestUserIndex);
   const displayResourcePodId = currentPodIdFromBrowserPath();
   const displayResourceCardsByRow = useMemo(
@@ -577,6 +583,7 @@ export function AssistantExperienceView({
     && !!inlineToolStatus
     && !showInlineStatusAtBottom
     && !activePendingApprovalInvocation
+    && !inlineToolStatusAlreadyVisible
     && inlineToolStatus.label !== inlineRunStatus?.label;
   const resolvedHeaderBadge = badge === undefined
     ? <LemmaMarkIcon className="size-4.5 text-[var(--text-on-brand)]" />
