@@ -1,8 +1,7 @@
 """App module dependencies."""
 
-from functools import partial
-from pathlib import Path
 from typing import Annotated
+from uuid import UUID
 
 from fastapi import Depends
 
@@ -16,6 +15,7 @@ from app.core.authorization.dependencies import (
 )
 from app.core.authorization.permissions import Permissions
 from app.core.config import settings
+from app.core.object_storage import build_object_store, local_file_storage_path
 from app.core.infrastructure.db.uow_factory import UnitOfWorkFactory
 from app.core.infrastructure.events.message_bus import get_message_bus
 from app.core.ports.widget_content import WidgetContentReader
@@ -28,14 +28,20 @@ from app.composition.authorization import create_authorization_service
 
 
 def _get_app_storage_factory():
-    if settings.effective_storage_backend() == "gcs":
-        if not settings.gcs_storage_bucket:
-            raise ValueError("GCS storage requires GCS_STORAGE_BUCKET")
-        return partial(AppFileManager, bucket_name=settings.gcs_storage_bucket)
-    return partial(
-        AppFileManager,
-        root_path=Path(settings.local_file_storage_root) / "common",
-    )
+    root = local_file_storage_path("common")
+
+    def build(app_id: UUID) -> AppFileManager:
+        if settings.effective_storage_backend() == "local":
+            return AppFileManager(app_id, root_path=root)
+        return AppFileManager(
+            app_id,
+            store=build_object_store(
+                local_prefix=root,
+                remote_prefix=f"apps/{app_id}",
+            ),
+        )
+
+    return build
 
 
 def build_app_service(uow) -> AppService:

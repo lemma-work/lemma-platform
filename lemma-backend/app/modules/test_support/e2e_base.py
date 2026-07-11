@@ -246,7 +246,7 @@ def e2e_settings(test_database_url, test_redis_url, supertokens_container):
     shutil.rmtree(settings.email_output_dir, ignore_errors=True)
     Path(settings.email_output_dir).mkdir(parents=True, exist_ok=True)
     settings.local_file_storage_root = f"/tmp/lemma-files-tests{worker_suffix}"
-    settings.gcs_storage_bucket = None
+    settings.storage_bucket = None
     settings.public_bucket_name = None
     settings.storage_backend = "local"
     settings.embedding_provider = "local"
@@ -466,6 +466,7 @@ async def worker(e2e_settings):
                 "EMAIL_TRANSPORT": "filesystem",
                 "EMAIL_OUTPUT_DIR": e2e_settings.email_output_dir,
                 "GCS_STORAGE_BUCKET": "",
+                "STORAGE_BUCKET": "",
                 "PUBLIC_BUCKET_NAME": "",
                 "STORAGE_BACKEND": "local",
                 "EMBEDDING_PROVIDER": "local",

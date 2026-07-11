@@ -1,8 +1,8 @@
 """Function module dependencies."""
 
-from functools import partial
-from pathlib import Path
 from typing import Annotated
+from uuid import UUID
+
 from fastapi import Depends
 
 from app.core.api.dependencies import UoWDep, get_uow_factory
@@ -31,17 +31,24 @@ from app.modules.function.services.function_file_manager import FunctionFileMana
 from app.modules.function.services.function_service import FunctionService
 from app.composition.authorization import create_authorization_service
 from app.core.config import settings
+from app.core.object_storage import build_object_store, local_file_storage_path
 
 
-def _get_function_storage_factory():
-    if settings.effective_storage_backend() == "gcs":
-        if not settings.gcs_storage_bucket:
-            raise ValueError("GCS storage requires GCS_STORAGE_BUCKET")
-        return partial(FunctionFileManager, bucket_name=settings.gcs_storage_bucket)
-    return partial(
-        FunctionFileManager,
-        root_path=Path(settings.local_file_storage_root) / "common",
-    )
+def get_function_storage_factory():
+    root = local_file_storage_path("common")
+
+    def build(function_id: UUID) -> FunctionFileManager:
+        if settings.effective_storage_backend() == "local":
+            return FunctionFileManager(function_id, root_path=root)
+        return FunctionFileManager(
+            function_id,
+            store=build_object_store(
+                local_prefix=root,
+                remote_prefix=f"functions/{function_id}",
+            ),
+        )
+
+    return build
 
 
 def build_function_service(uow) -> FunctionService:
@@ -53,7 +60,7 @@ def build_function_service(uow) -> FunctionService:
         function_repository=FunctionRepository(uow, message_bus=message_bus),
         run_repository=FunctionRunRepository(uow, message_bus=message_bus),
         workspace_service=get_function_workspace_runtime(),
-        storage_factory=_get_function_storage_factory(),
+        storage_factory=get_function_storage_factory(),
         job_queue=get_streaq_job_queue(),
         icon_service=create_icon_service(),
         authorization_service=create_authorization_service(uow),
@@ -71,7 +78,7 @@ def build_function_run_executor(uow_factory: UnitOfWorkFactory) -> FunctionRunEx
     return FunctionRunExecutor(
         uow_factory=uow_factory,
         workspace_service=get_function_workspace_runtime(),
-        storage_factory=_get_function_storage_factory(),
+        storage_factory=get_function_storage_factory(),
     )
 
 

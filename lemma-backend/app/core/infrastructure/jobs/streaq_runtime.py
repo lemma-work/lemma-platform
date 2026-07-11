@@ -6,8 +6,6 @@ import asyncio
 from collections.abc import AsyncGenerator, Awaitable, Callable
 from contextlib import AsyncExitStack, asynccontextmanager
 from dataclasses import dataclass
-from functools import partial
-from pathlib import Path
 
 from faststream.redis import RedisBroker
 from streaq import Worker
@@ -53,16 +51,11 @@ class AppWorkerContext:
         return self.uow_factory()
 
     def build_function_storage_factory(self):
-        from app.modules.function.services.function_file_manager import FunctionFileManager
-
-        if settings.effective_storage_backend() == "gcs":
-            if not settings.gcs_storage_bucket:
-                raise ValueError("GCS storage requires GCS_STORAGE_BUCKET")
-            return partial(FunctionFileManager, bucket_name=settings.gcs_storage_bucket)
-        return partial(
-            FunctionFileManager,
-            root_path=Path(settings.local_file_storage_root) / "common",
+        from app.modules.function.api.dependencies import (
+            get_function_storage_factory,
         )
+
+        return get_function_storage_factory()
 
     def build_function_service(self, uow: SqlAlchemyUnitOfWork):
         from app.core.infrastructure.events.message_bus import get_message_bus

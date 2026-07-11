@@ -19,7 +19,6 @@ from uuid import UUID
 import obstore as obs
 from obstore.store import ObjectStore
 
-from app.core.config import settings
 from app.core.log.log import get_logger
 from app.core.object_storage import build_object_store, local_object_storage_path
 from app.modules.pod_bundle.config import pod_bundle_settings
@@ -39,7 +38,6 @@ class BundleStagingStorage:
             local_prefix=local_object_storage_path(
                 pod_bundle_settings.pod_bundle_staging_prefix
             ),
-            bucket_name=settings.gcs_storage_bucket,
         )
 
     async def put_archive(

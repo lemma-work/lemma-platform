@@ -7,6 +7,9 @@ file tree. It manages dynamic PostgreSQL schemas, row-level authorization,
 object storage, document-to-Markdown conversion, embeddings/search, signed
 downloads, and live record-change streams.
 
+Operator configuration for local, GCS, S3, and Azure storage is documented in
+[Object storage](../operators/object-storage.md).
+
 ## Runtime contributions
 
 | Contribution | Behavior |

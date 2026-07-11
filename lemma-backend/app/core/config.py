@@ -1,7 +1,7 @@
 from pathlib import Path
 from typing import Literal, Optional
 
-from pydantic import Field, SecretStr, field_validator, model_validator
+from pydantic import AliasChoices, Field, SecretStr, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 from app.core.settings_env import dotenv_path
 
@@ -477,16 +477,26 @@ class Settings(BaseSettings):
     # app/modules/datastore/config.py
     # datastore signed-url config moved to app/modules/datastore/config.py
     # Object Storage Settings
-    storage_backend: Literal["auto", "local", "gcs"] = Field(
+    storage_backend: Literal["auto", "local", "gcs", "s3", "azure"] = Field(
         default="auto",
         description=(
-            "Object storage backend. 'auto' uses local storage in local/testing and "
-            "GCS when a bucket is configured elsewhere."
+            "Private object storage backend. 'auto' preserves the historical "
+            "local-or-GCS selection. Supported explicit cloud adapters: GCS, "
+            "Amazon S3 (and S3-compatible endpoints), and Azure Blob Storage."
         ),
     )
-    gcs_storage_bucket: Optional[str] = Field(
+    storage_bucket: Optional[str] = Field(
         default=None,
-        description="Google Cloud Storage bucket name for document storage",
+        validation_alias=AliasChoices(
+            "storage_bucket",
+            "STORAGE_BUCKET",
+            "GCS_STORAGE_BUCKET",
+        ),
+        description=(
+            "Private storage location: a filesystem directory for local, bucket "
+            "name for GCS/S3, or container name for Azure. GCS_STORAGE_BUCKET is "
+            "accepted as a backward-compatible environment alias."
+        ),
     )
     public_bucket_name: Optional[str] = Field(
         default=None,
@@ -794,16 +804,25 @@ class Settings(BaseSettings):
     def is_local_mode(self) -> bool:
         return self.environment in {"local", "testing"}
 
-    def effective_storage_backend(self) -> Literal["local", "gcs"]:
+    def effective_storage_backend(self) -> Literal["local", "gcs", "s3", "azure"]:
         if self.storage_backend != "auto":
             return self.storage_backend
         if self.is_local_mode():
             return "local"
-        return "gcs" if self.gcs_storage_bucket else "local"
+        # Preserve the historical production behavior where a configured bucket
+        # implied GCS. New S3/Azure deployments must select their backend.
+        return "gcs" if self.storage_bucket else "local"
 
     def effective_public_storage_backend(self) -> Literal["local", "gcs"]:
-        if self.storage_backend != "auto":
-            return self.storage_backend
+        # Public icon storage remains an intentionally separate local/GCS
+        # concern. S3/Azure private-object selection must not accidentally turn
+        # the existing public-assets path into a differently configured backend.
+        if self.storage_backend == "gcs":
+            return "gcs"
+        if self.storage_backend == "local":
+            return "local"
+        if self.storage_backend in {"s3", "azure"}:
+            return "gcs" if self.public_bucket_name else "local"
         if self.is_local_mode():
             return "local"
         return "gcs" if self.public_bucket_name else "local"

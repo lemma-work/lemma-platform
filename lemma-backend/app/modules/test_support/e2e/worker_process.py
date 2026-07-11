@@ -90,6 +90,7 @@ async def production_worker_process(
         "EMAIL_TRANSPORT": "filesystem",
         "EMAIL_OUTPUT_DIR": e2e_settings.email_output_dir,
         "GCS_STORAGE_BUCKET": "",
+        "STORAGE_BUCKET": "",
         "PUBLIC_BUCKET_NAME": "",
         "STORAGE_BACKEND": "local",
         "EMBEDDING_PROVIDER": "local",

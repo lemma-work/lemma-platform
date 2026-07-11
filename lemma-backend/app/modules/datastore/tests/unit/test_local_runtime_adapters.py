@@ -11,8 +11,10 @@ from app.core.embeddings.factory import create_embedder
 from app.core.embeddings.local_embedder import FastEmbedLocalEmbedder
 from app.modules.test_support.embeddings import DeterministicTestEmbedder
 from app.modules.datastore.infrastructure.storage import (
+    AzureDatastoreStorage,
     GCSDatastoreStorage,
     LocalDatastoreStorage,
+    S3DatastoreStorage,
     create_datastore_storage,
 )
 
@@ -25,7 +27,7 @@ def test_local_environment_uses_local_storage_and_embeddings(
     monkeypatch.setattr(settings, "storage_backend", "auto")
     monkeypatch.setattr(settings, "embedding_provider", "auto")
     monkeypatch.setattr(settings, "local_object_storage_root", str(tmp_path))
-    monkeypatch.setattr(settings, "gcs_storage_bucket", "cloud-bucket")
+    monkeypatch.setattr(settings, "storage_bucket", str(tmp_path / "storage"))
 
     assert settings.effective_storage_backend() == "local"
     assert isinstance(create_datastore_storage(), LocalDatastoreStorage)
@@ -217,12 +219,42 @@ async def test_deterministic_test_embedder_is_stable_and_dimensioned():
     assert any(first)
 
 
-def test_production_with_bucket_uses_gcs_storage(
+@pytest.mark.parametrize(
+    ("backend", "storage_type"),
+    [
+        ("gcs", GCSDatastoreStorage),
+        ("s3", S3DatastoreStorage),
+        ("azure", AzureDatastoreStorage),
+    ],
+)
+def test_explicit_cloud_backend_selects_datastore_adapter(
+    monkeypatch: pytest.MonkeyPatch,
+    backend: str,
+    storage_type: type,
+):
+    from obstore.store import MemoryStore
+
+    from app.modules.datastore.infrastructure import storage as storage_mod
+
+    monkeypatch.setattr(settings, "storage_backend", backend)
+    monkeypatch.setattr(settings, "storage_bucket", "cloud-bucket")
+    monkeypatch.setattr(storage_mod, "build_object_store", lambda **_: MemoryStore())
+
+    assert settings.effective_storage_backend() == backend
+    assert isinstance(create_datastore_storage(), storage_type)
+
+
+def test_production_auto_with_legacy_bucket_still_uses_gcs(
     monkeypatch: pytest.MonkeyPatch,
 ):
+    from obstore.store import MemoryStore
+
+    from app.modules.datastore.infrastructure import storage as storage_mod
+
     monkeypatch.setattr(settings, "environment", "production")
     monkeypatch.setattr(settings, "storage_backend", "auto")
-    monkeypatch.setattr(settings, "gcs_storage_bucket", "cloud-bucket")
+    monkeypatch.setattr(settings, "storage_bucket", "cloud-bucket")
+    monkeypatch.setattr(storage_mod, "build_object_store", lambda **_: MemoryStore())
 
     assert settings.effective_storage_backend() == "gcs"
     assert isinstance(create_datastore_storage(), GCSDatastoreStorage)

@@ -1,7 +1,10 @@
 from uuid import uuid4
 
 import pytest
+from obstore.store import MemoryStore
 
+from app.core.config import settings
+from app.modules.function.api import dependencies
 from app.modules.function.services.function_file_manager import FunctionFileManager
 
 
@@ -27,3 +30,30 @@ async def test_function_file_manager_missing_file_raises(tmp_path):
 
     with pytest.raises(FileNotFoundError):
         await manager.read_file("handler.py")
+
+
+@pytest.mark.asyncio
+async def test_function_file_manager_accepts_any_obstore_adapter():
+    manager = FunctionFileManager(uuid4(), store=MemoryStore())
+
+    await manager.write_file("handler.py", "print('portable')")
+
+    assert await manager.read_file("handler.py") == "print('portable')"
+
+
+def test_function_storage_composition_uses_selected_cloud_adapter(monkeypatch):
+    function_id = uuid4()
+    captured: dict[str, object] = {}
+
+    def build_store(**kwargs):
+        captured.update(kwargs)
+        return MemoryStore()
+
+    monkeypatch.setattr(settings, "storage_backend", "azure")
+    monkeypatch.setattr(settings, "storage_bucket", "documents")
+    monkeypatch.setattr(dependencies, "build_object_store", build_store)
+
+    manager = dependencies.get_function_storage_factory()(function_id)
+
+    assert isinstance(manager, FunctionFileManager)
+    assert captured["remote_prefix"] == f"functions/{function_id}"

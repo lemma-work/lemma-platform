@@ -25,6 +25,7 @@ from urllib.parse import quote
 from uuid import UUID
 
 from app.core.config import settings
+from app.core.object_storage import storage_supports_native_signed_urls
 from app.core.crypto import get_secret_signer
 from app.modules.datastore.config import datastore_settings
 from app.core.infrastructure.cache.redis_json_cache import RedisJsonCache
@@ -156,7 +157,7 @@ async def build_object_url(
     expires_at_epoch = now + expires_seconds
     expires_at = datetime.fromtimestamp(expires_at_epoch, tz=timezone.utc)
 
-    if settings.effective_storage_backend() == "gcs":
+    if storage_supports_native_signed_urls():
         expires_hours = max(1, round(expires_seconds / 3600))
         url = await storage.get_signed_url(object_key, expires_hours=expires_hours)
     else:
