@@ -502,9 +502,25 @@ fn set_mode(app: &AppHandle, mode: &str) {
 }
 
 // ---------------------------------------------------------------------------
-// Navigation policy: keep only the configured frontend origins in the primary
-// webview. OAuth and untrusted/external content belong in the system browser.
+// Navigation policy: ordinary web navigations stay in the primary webview so
+// cross-origin app and widget iframes behave exactly as they do in a browser.
+// Explicit new-window requests and marked desktop auth still belong in the
+// system browser.
 // ---------------------------------------------------------------------------
+
+#[derive(Debug, PartialEq, Eq)]
+enum NavigationDisposition {
+    Allow,
+    OpenExternal,
+    Deny,
+}
+
+#[derive(Debug, PartialEq, Eq)]
+enum NewWindowDisposition {
+    NavigateInApp,
+    OpenExternal,
+    Deny,
+}
 
 fn same_origin(url: &tauri::Url, target: &str) -> bool {
     let Ok(target) = tauri::Url::parse(target) else {
@@ -527,8 +543,26 @@ fn navigation_allowed(url: &tauri::Url) -> bool {
     url.scheme() == "tauri" || same_origin(url, &hosted_url()) || same_origin(url, &local_url())
 }
 
-fn navigation_allowed_for_app(app: &AppHandle, url: &tauri::Url) -> bool {
-    navigation_allowed(url) || same_origin(url, &app_base_url(app))
+fn navigation_disposition(url: &tauri::Url) -> NavigationDisposition {
+    if is_desktop_browser_auth_url(url) {
+        NavigationDisposition::OpenExternal
+    } else if matches!(url.scheme(), "tauri" | "http" | "https") {
+        NavigationDisposition::Allow
+    } else {
+        NavigationDisposition::Deny
+    }
+}
+
+fn new_window_disposition(url: &tauri::Url, app_base: &str) -> NewWindowDisposition {
+    if url.as_str() == "about:blank" {
+        NewWindowDisposition::Deny
+    } else if is_desktop_browser_auth_url(url) {
+        NewWindowDisposition::OpenExternal
+    } else if navigation_allowed(url) || same_origin(url, app_base) {
+        NewWindowDisposition::NavigateInApp
+    } else {
+        NewWindowDisposition::OpenExternal
+    }
 }
 
 fn open_external(url: &str) {
@@ -776,32 +810,26 @@ fn main() {
                 .inner_size(1280.0, 860.0)
                 .min_inner_size(980.0, 680.0)
                 .initialization_script(desktop_context_script(&mode))
-                .on_navigation({
-                    let handle = handle.clone();
-                    move |url| {
-                        if is_desktop_browser_auth_url(url) {
-                            open_external(url.as_str());
-                            false
-                        } else if navigation_allowed_for_app(&handle, url) {
-                            true
-                        } else {
-                            open_external(url.as_str());
-                            false
-                        }
+                .on_navigation(move |url| match navigation_disposition(url) {
+                    NavigationDisposition::Allow => true,
+                    NavigationDisposition::OpenExternal => {
+                        open_external(url.as_str());
+                        false
                     }
+                    NavigationDisposition::Deny => false,
                 })
                 .on_new_window({
                     let handle = handle.clone();
                     move |url, _features| {
-                        if url.as_str() == "about:blank" {
-                            return NewWindowResponse::Deny;
-                        }
-                        if is_desktop_browser_auth_url(&url) {
-                            open_external(url.as_str());
-                        } else if navigation_allowed_for_app(&handle, &url) {
-                            let _ = navigate_app_window(&handle, url.as_str());
-                        } else {
-                            open_external(url.as_str());
+                        let app_base = app_base_url(&handle);
+                        match new_window_disposition(&url, &app_base) {
+                            NewWindowDisposition::NavigateInApp => {
+                                let _ = navigate_app_window(&handle, url.as_str());
+                            }
+                            NewWindowDisposition::OpenExternal => {
+                                open_external(url.as_str());
+                            }
+                            NewWindowDisposition::Deny => {}
                         }
                         NewWindowResponse::Deny
                     }
@@ -876,6 +904,54 @@ mod tests {
     }
 
     #[test]
+    fn ordinary_web_navigation_stays_in_the_webview() {
+        let urls = [
+            "https://sales.apps.lemma.work/",
+            "https://api.lemma.work/widgets/serve/conversation/tool",
+            "http://sales.127-0-0-1.sslip.io:8711/",
+            "https://widgets.example.com/report",
+        ];
+
+        for raw_url in urls {
+            let url = tauri::Url::parse(raw_url).unwrap();
+            assert_eq!(navigation_disposition(&url), NavigationDisposition::Allow);
+        }
+    }
+
+    #[test]
+    fn unsupported_navigation_schemes_are_denied() {
+        for raw_url in [
+            "file:///tmp/report.html",
+            "javascript:alert(1)",
+            "lemma://other",
+        ] {
+            let url = tauri::Url::parse(raw_url).unwrap();
+            assert_eq!(navigation_disposition(&url), NavigationDisposition::Deny);
+        }
+    }
+
+    #[test]
+    fn explicit_new_windows_keep_the_browser_policy() {
+        let app_base = "https://lemma.work";
+        let first_party = tauri::Url::parse("https://lemma.work/docs").unwrap();
+        let external = tauri::Url::parse("https://widgets.example.com/report").unwrap();
+        let blank = tauri::Url::parse("about:blank").unwrap();
+
+        assert_eq!(
+            new_window_disposition(&first_party, app_base),
+            NewWindowDisposition::NavigateInApp
+        );
+        assert_eq!(
+            new_window_disposition(&external, app_base),
+            NewWindowDisposition::OpenExternal
+        );
+        assert_eq!(
+            new_window_disposition(&blank, app_base),
+            NewWindowDisposition::Deny
+        );
+    }
+
+    #[test]
     fn desktop_browser_login_is_explicitly_marked() {
         let desktop = tauri::Url::parse(
             "https://lemma.work/auth?desktop_browser=1&desktop_request=request-1234567890",
@@ -887,6 +963,14 @@ mod tests {
         assert!(is_desktop_browser_auth_url(&desktop));
         assert!(!is_desktop_browser_auth_url(&ordinary));
         assert!(!is_desktop_browser_auth_url(&unrelated));
+        assert_eq!(
+            navigation_disposition(&desktop),
+            NavigationDisposition::OpenExternal
+        );
+        assert_eq!(
+            new_window_disposition(&desktop, "https://lemma.work"),
+            NewWindowDisposition::OpenExternal
+        );
     }
 
     #[test]
@@ -905,12 +989,14 @@ mod tests {
     }
 
     #[test]
-    fn macos_allows_only_the_local_http_frontend() {
+    fn macos_allows_only_the_local_http_frontend_and_app_subdomains() {
         let plist = include_str!("../Info.plist");
 
         assert!(plist.contains("NSAllowsLocalNetworking"));
         assert!(plist.contains("127-0-0-1.sslip.io"));
+        assert!(plist.contains("NSIncludesSubdomains"));
         assert!(!plist.contains("NSAllowsArbitraryLoads"));
+        assert!(!plist.contains("NSAllowsArbitraryLoadsInWebContent"));
     }
 
     #[test]
