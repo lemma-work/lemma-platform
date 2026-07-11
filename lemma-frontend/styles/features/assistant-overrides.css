@@ -216,6 +216,36 @@
   display: none;
 }
 
+.lemma-assistant-inline-tool-button,
+.lemma-assistant-inline-approval-button {
+  color: var(--text-secondary);
+  font-family: var(--font-body-family);
+  font-size: 0.8125rem;
+  font-weight: 400;
+  letter-spacing: 0;
+  line-height: 1.25rem;
+}
+
+.lemma-assistant-inline-tool-button:hover,
+.lemma-assistant-inline-tool-button[data-selected="true"],
+.lemma-assistant-inline-approval-button:hover,
+.lemma-assistant-inline-approval-button[data-selected="true"] {
+  color: var(--text-primary);
+}
+
+.lemma-assistant-run-trace-header {
+  color: var(--text-secondary);
+  font-family: var(--font-body-family);
+  font-size: 0.875rem;
+  font-weight: 400;
+  letter-spacing: 0;
+  line-height: 1.5rem;
+}
+
+button.lemma-assistant-run-trace-header:hover {
+  color: var(--text-primary);
+}
+
 /* ============================================================
    LEMMA GLOBAL STYLES
    Design philosophy: warm clarity · operational calm · anti-corporate

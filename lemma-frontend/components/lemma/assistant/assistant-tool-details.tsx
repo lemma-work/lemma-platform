@@ -294,7 +294,7 @@ function InlineToolCall({
     <button
       type="button"
       onClick={onClick}
-      className="lemma-assistant-inline-tool-button inline-flex max-w-full items-center gap-2 border-0 bg-transparent p-0 text-left text-[13px] font-normal leading-5 tracking-normal text-[var(--text-secondary)] [font-family:var(--font-body-family)] transition-colors hover:text-[var(--text-primary)] data-[selected=true]:text-[var(--text-primary)]"
+      className="lemma-assistant-inline-tool-button inline-flex max-w-full items-center gap-2 border-0 bg-transparent p-0 text-left transition-colors"
       data-state={isExecuting ? "executing" : isFailed ? "failed" : "complete"}
       data-selected={isSelected}
     >
@@ -429,14 +429,14 @@ export function RunTraceHeader({
       {isInteractive ? (
         <button
           type="button"
-          className="flex w-fit max-w-full items-center gap-1.5 border-0 bg-transparent p-0 text-left text-sm font-normal leading-6 tracking-normal text-[var(--text-secondary)] [font-family:var(--font-body-family)] transition-colors hover:text-[var(--text-primary)]"
+          className="lemma-assistant-run-trace-header flex w-fit max-w-full items-center gap-1.5 border-0 bg-transparent p-0 text-left transition-colors"
           onClick={onToggle}
           aria-expanded={isExpanded}
         >
           {content}
         </button>
       ) : (
-        <div className="flex w-fit max-w-full items-center gap-1.5 text-sm font-normal leading-6 tracking-normal text-[var(--text-secondary)] [font-family:var(--font-body-family)]">
+        <div className="lemma-assistant-run-trace-header flex w-fit max-w-full items-center gap-1.5">
           {content}
         </div>
       )}

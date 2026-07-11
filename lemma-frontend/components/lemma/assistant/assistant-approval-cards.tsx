@@ -286,7 +286,7 @@ export function InlineUserApprovalCall({
     <button
       type="button"
       onClick={onClick}
-      className="lemma-assistant-inline-approval-button inline-flex max-w-full items-center gap-2 border-0 bg-transparent p-0 text-left text-[13px] font-normal leading-5 tracking-normal text-[var(--text-secondary)] [font-family:var(--font-body-family)] transition-colors hover:text-[var(--text-primary)] data-[selected=true]:text-[var(--text-primary)]"
+      className="lemma-assistant-inline-approval-button inline-flex max-w-full items-center gap-2 border-0 bg-transparent p-0 text-left transition-colors"
       data-selected={isSelected}
     >
       <span className="flex size-3.5 flex-shrink-0 items-center justify-center text-current opacity-80" aria-hidden="true">
