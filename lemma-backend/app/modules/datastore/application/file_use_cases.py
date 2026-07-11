@@ -20,6 +20,7 @@ from typing import Any, Callable
 from uuid import UUID
 
 from fastapi import Request
+from sqlalchemy.exc import SQLAlchemyError
 
 from app.core.authorization.scope import pod_context_scope
 from app.core.config import settings
@@ -29,6 +30,7 @@ from app.modules.datastore.domain.file_entities import (
     DatastoreFileEntity,
     DatastoreFileUpdateEntity,
 )
+from app.modules.datastore.domain.errors import DatastoreDomainError
 from app.modules.datastore.infrastructure.reindex_queue import (
     enqueue_datastore_path_cleanup,
 )
@@ -121,11 +123,25 @@ class FileUseCases:
                     await rollback_service.rollback_create_file(plan)
                 await service.cleanup_create_storage(plan)
 
-        async with pod_context_scope(
-            self._uow_factory, request=request, user_id=user_id, pod_id=pod_id
-        ) as finalize_scope:
-            finalize_service = self._build(finalize_scope.uow)
-            return await finalize_service.finalize_create_file(plan)
+        try:
+            async with pod_context_scope(
+                self._uow_factory, request=request, user_id=user_id, pod_id=pod_id
+            ) as finalize_scope:
+                finalize_service = self._build(finalize_scope.uow)
+                return await finalize_service.finalize_create_file(plan)
+        except SQLAlchemyError, DatastoreDomainError:
+            try:
+                async with pod_context_scope(
+                    self._uow_factory,
+                    request=request,
+                    user_id=user_id,
+                    pod_id=pod_id,
+                ) as rollback_scope:
+                    rollback_service = self._build(rollback_scope.uow)
+                    await rollback_service.rollback_create_file(plan)
+            finally:
+                await service.cleanup_create_storage(plan)
+            raise
 
     async def attach_user_markdown(
         self,
@@ -176,17 +192,23 @@ class FileUseCases:
             self._uow_factory, request=request, user_id=user_id, pod_id=pod_id
         ) as scope:
             service = self._build(scope.uow)
-            plan = await service.resolve_update_file(pod_id, update_entity, ctx=scope.ctx)
+            plan = await service.resolve_update_file(
+                pod_id, update_entity, ctx=scope.ctx
+            )
 
         # Storage phase — no DB connection held (delegates to FileStoragePhase).
         await service.write_update_storage(plan, update_entity)
 
-        async with pod_context_scope(
-            self._uow_factory, request=request, user_id=user_id, pod_id=pod_id
-        ) as scope2:
-            service = self._build(scope2.uow)
-            updated = await service.persist_update_file(plan)
-            entity = await service.get_file(updated.id, ctx=scope2.ctx)
+        try:
+            async with pod_context_scope(
+                self._uow_factory, request=request, user_id=user_id, pod_id=pod_id
+            ) as scope2:
+                service = self._build(scope2.uow)
+                updated = await service.persist_update_file(plan)
+                entity = await service.get_file(updated.id, ctx=scope2.ctx)
+        except SQLAlchemyError, DatastoreDomainError:
+            await service.cleanup_uncommitted_update(plan)
+            raise
 
         # Storage + search sync (delete-old blob last) — no DB connection held.
         await service.finalize_update_file(plan, updated)
@@ -286,7 +308,9 @@ class FileUseCases:
             self._uow_factory, request=request, user_id=user_id, pod_id=pod_id
         ) as scope:
             service = self._build(scope.uow)
-            entity, artifact_rel = await service.resolve_child(pod_id, path, ctx=scope.ctx)
+            entity, artifact_rel = await service.resolve_child(
+                pod_id, path, ctx=scope.ctx
+            )
         artifact_name, content, content_type = await service.read_child_content(
             entity,
             artifact_rel,

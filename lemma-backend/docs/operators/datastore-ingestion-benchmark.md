@@ -1,0 +1,86 @@
+# Datastore ingestion benchmark
+
+This benchmark exercises the real public pipeline: multipart upload, durable
+event delivery, worker extraction through Kreuzberg, derived Markdown/images,
+local embeddings, PostgreSQL chunk replacement, and terminal file status.
+
+It cycles the checked-in Arxiv PDF fixtures to submit 20 uniquely named files.
+OCR is disabled; layout, table and image extraction remain enabled.
+Stack readiness includes eager Kreuzberg core-model warming, so concurrent
+first uploads cannot race lazy Hugging Face model downloads and silently lose
+layout detection.
+
+## Run
+
+From `lemma-backend`:
+
+```bash
+make load-test-build
+make load-test-datastore-up
+make load-test-datastore-setup
+make load-test-datastore-files
+make load-test-datastore-stats
+make load-test-datastore-down
+```
+
+The run fails unless every file reaches `COMPLETED`, exposes a generated
+`document.md`, and the run directory returns a hybrid search result. Its JSON report defaults to
+`/tmp/lemma-datastore-ingestion-report.json` and contains upload latency,
+end-to-end ready latency, attempts, terminal phase/error, throughput and p95.
+Each invocation uses a timestamped child directory, so warm-cache repeats do
+not collide with files from earlier runs. Pass `--run-id` directly to the
+Python entry point when a stable run label is useful.
+
+## Resource and concurrency matrix
+
+Use the same corpus for every run and clear volumes only when measuring a cold
+cache. Useful overrides:
+
+```bash
+DATASTORE_KREUZBERG_CPUS=2.0 \
+DATASTORE_KREUZBERG_MEMORY=4G \
+DATASTORE_WORKER_CPUS=2.0 \
+DATASTORE_WORKER_MEMORY=3G \
+DATASTORE_EXTRACTION_CONCURRENCY=1 \
+DATASTORE_KREUZBERG_TIMEOUT_SECONDS=600 \
+make load-test-datastore-up
+
+DATASTORE_BENCH_CONCURRENCY=5 \
+DATASTORE_BENCH_TIMEOUT=3600 \
+DATASTORE_BENCH_REPORT=/tmp/datastore-2c4g-c1.json \
+make load-test-datastore-files
+```
+
+Repeat for extraction concurrency 1, 2, 3 and 5 on both 2 CPU/4GB and 4 CPU/8GB.
+Capture container CPU/RSS with `make load-test-datastore-stats`. A valid result
+requires 20/20 completion, no unhealthy/OOM container, preserved originals and
+search-ready chunks. Cold-cache runs include model acquisition; warm-cache runs
+measure steady state.
+
+The defaults allocate 4 CPU/8GB to Kreuzberg and 4 CPU/4GB to the backend
+worker. Report both budgets: extraction and local embedding consume different
+containers, and constraining either one changes end-to-end throughput.
+Docker Desktop must therefore have substantially more than 12GB assigned once
+PostgreSQL, Redis, SuperTokens and the API are included. On an 8GB Docker VM,
+use the documented 2 CPU/4GB Kreuzberg and 2 CPU/3GB worker profile; otherwise
+the kernel can OOM-kill a healthy extractor even though its own limit says 8GB.
+
+## Verified local baseline
+
+On 2026-07-11, the full checked-in corpus passed on an 8GB Docker Desktop VM
+with five concurrent uploads, one end-to-end processing slot, Kreuzberg at
+2 CPU/4GB, and the worker at 4 CPU/3GB:
+
+- 20/20 `COMPLETED`; 20 immutable keys and SHA-256 digests
+- 20/20 generated `document.md`; hybrid search returned results
+- 2,186 indexed chunks across all 20 files
+- 22m36s wall time (0.88 documents/minute)
+- extraction p95 62.5s; indexing p95 143.7s
+- end-to-end p95 19m15s, including intentional queue wait
+- zero API/worker/Kreuzberg restarts or OOMs
+
+The 4 CPU/8GB Kreuzberg target profile could not be measured on that VM: the
+entire Docker VM, not the Kreuzberg container, was capped at 7.75GB. Docker
+recorded exit 137/OOM when the extractor and real FastEmbed worker peaked
+together. Run that target only with enough host memory for both budgets plus
+the API and infrastructure services.

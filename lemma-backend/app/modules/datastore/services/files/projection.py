@@ -16,6 +16,9 @@ logger = get_logger(__name__)
 
 def datastore_storage_key(file_entity: DatastoreFileEntity) -> str:
     """Storage object key for a file entity. Reusable outside the projection."""
+    stored_key = getattr(file_entity, "storage_key", None)
+    if stored_key:
+        return stored_key
     return build_datastore_file_storage_key(
         file_entity.pod_id,
         file_entity.path,
@@ -49,7 +52,10 @@ class FileProjection:
             )
         except Exception as exc:
             logger.warning(
-                "Failed to delete derived child artifacts for %s: %s", path, exc, exc_info=True
+                "Failed to delete derived child artifacts for %s: %s",
+                path,
+                exc,
+                exc_info=True,
             )
 
     async def delete_single_entity(
@@ -64,7 +70,9 @@ class FileProjection:
             try:
                 await self.storage.delete_file(self.storage_key(file_entity))
             except Exception as exc:
-                logger.warning("Failed to delete file %s: %s", file_entity.path, exc, exc_info=True)
+                logger.warning(
+                    "Failed to delete file %s: %s", file_entity.path, exc, exc_info=True
+                )
             await self.delete_child_artifacts(file_entity.pod_id, file_entity.path)
 
         if file_entity.is_file:
@@ -72,7 +80,10 @@ class FileProjection:
                 await search_service.remove_file(file_entity.id)
             except Exception as exc:
                 logger.warning(
-                    "Failed to remove indexed chunks for %s: %s", file_entity.id, exc, exc_info=True
+                    "Failed to remove indexed chunks for %s: %s",
+                    file_entity.id,
+                    exc,
+                    exc_info=True,
                 )
 
         file_entity.mark_deleted(actor_id)

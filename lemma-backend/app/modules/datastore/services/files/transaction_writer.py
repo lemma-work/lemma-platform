@@ -7,7 +7,11 @@ from pathlib import Path
 from typing import Any
 from uuid import UUID
 
-from app.core.api.uploads import upload_source_has_content, upload_source_size
+from app.core.api.uploads import (
+    upload_source_has_content,
+    upload_source_sha256,
+    upload_source_size,
+)
 from app.core.authorization.context import Context
 from app.core.log.log import get_logger
 from app.modules.datastore.domain.errors import (
@@ -28,6 +32,7 @@ from app.modules.datastore.domain.indexing_policy import (
 from app.modules.datastore.infrastructure.storage_paths import (
     build_datastore_child_artifact_key,
     build_datastore_child_user_markdown_key,
+    build_datastore_versioned_file_storage_key,
 )
 from app.modules.datastore.services.files.write_plans import (
     CreateFilePlan,
@@ -36,9 +41,7 @@ from app.modules.datastore.services.files.write_plans import (
 
 logger = get_logger(__name__)
 
-_ALREADY_TEXT_MIME_TYPES = frozenset(
-    {"text/markdown", "text/x-markdown", "text/plain"}
-)
+_ALREADY_TEXT_MIME_TYPES = frozenset({"text/markdown", "text/x-markdown", "text/plain"})
 _MARKDOWN_SOURCE_KEY = "markdown_source"
 _USER_MARKDOWN_SOURCE = "user"
 _MARKDOWN_ASSET_NAMES_KEY = "markdown_asset_names"
@@ -101,7 +104,10 @@ class FileTransactionWriter:
             uploaded = True
         finally:
             if not uploaded:
-                await self.rollback_create_file(plan)
+                try:
+                    await self.rollback_create_file(plan)
+                finally:
+                    await self.cleanup_create_storage(plan)
         return await self.finalize_create_file(plan, reload=False)
 
     async def prepare_create_file(
@@ -159,11 +165,22 @@ class FileTransactionWriter:
             metadata=metadata,
         )
         entity = await self.file_repository.create(draft)
+        content_revision = 1
+        content_sha256 = await asyncio.to_thread(upload_source_sha256, file_content)
+        storage_key = build_datastore_versioned_file_storage_key(
+            pod_id, entity.id, content_revision
+        )
+        entity.storage_key = storage_key
+        entity.content_sha256 = content_sha256
+        entity.content_revision = content_revision
         return CreateFilePlan(
             entity=entity,
-            storage_key=self.projection.storage_key(entity),
+            storage_key=storage_key,
             requester_user_id=requester_user_id,
             emit_created_event=self.paths._should_sync_projections(True, entity),
+            content_sha256=content_sha256,
+            content_revision=content_revision,
+            expected_size=entity.size_bytes,
         )
 
     async def write_create_file(
@@ -171,17 +188,25 @@ class FileTransactionWriter:
     ) -> None:
         try:
             await self.storage.upload_file(plan.storage_key, file_content)
+            stored_size = await self.storage.stat_file(plan.storage_key)
+            if stored_size != plan.expected_size:
+                raise DatastoreInfrastructureError(
+                    "Uploaded object size does not match staged content"
+                )
         except Exception as exc:
-            raise DatastoreInfrastructureError(
-                "Failed to upload file content"
-            ) from exc
+            raise DatastoreInfrastructureError("Failed to upload file content") from exc
 
     async def finalize_create_file(
         self, plan: CreateFilePlan, *, reload: bool = True
     ) -> DatastoreFileEntity:
-        entity = await self.file_repository.get(plan.entity.id) if reload else plan.entity
+        entity = (
+            await self.file_repository.get(plan.entity.id) if reload else plan.entity
+        )
         if entity is None:
             raise DatastoreFileNotFoundError("File draft no longer exists")
+        entity.storage_key = plan.storage_key
+        entity.content_sha256 = plan.content_sha256
+        entity.content_revision = plan.content_revision
         if plan.emit_created_event:
             entity.mark_created(plan.requester_user_id)
         return await self.file_repository.update(entity)

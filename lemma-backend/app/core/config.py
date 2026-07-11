@@ -737,6 +737,35 @@ class Settings(BaseSettings):
         default="BAAI/bge-base-en-v1.5",
         description="FastEmbed model used for local CPU embeddings.",
     )
+    local_embedding_cache_dir: str = Field(
+        default="~/.cache/lemma/fastembed",
+        description=(
+            "Persistent FastEmbed model cache. Model initialization is guarded by "
+            "a process-safe lock so concurrent document workers cannot corrupt a "
+            "cold download. Env: ``LOCAL_EMBEDDING_CACHE_DIR``."
+        ),
+    )
+    e2e_deterministic_embeddings: bool = Field(
+        default=False,
+        description=(
+            "Use the dependency-free deterministic embedding adapter in hermetic "
+            "worker E2E tests. Never enable for real search workloads."
+        ),
+    )
+    local_embedding_preload: bool = Field(
+        default=True,
+        description=(
+            "Initialize local embeddings during worker startup so model/cache "
+            "failures surface before document jobs are accepted."
+        ),
+    )
+    local_embedding_preload_timeout_seconds: float = Field(
+        default=900.0,
+        description=(
+            "Maximum worker-startup time allowed for local model preload, including "
+            "a first-run model download."
+        ),
+    )
     openai_compat_embedding_model: str = Field(
         default="nomic-ai/nomic-embed-text-v1.5",
         description=(

@@ -151,6 +151,15 @@ class DatastoreSettings(BaseSettings):
             "``DOCUMENT_PROCESSING_OCR_ENABLED``."
         ),
     )
+    document_processing_layout_enabled: bool = Field(
+        default=True,
+        description=(
+            "Enable Kreuzberg PDF layout and table models. Keep enabled for "
+            "production-quality digital PDFs; the switch exists for hermetic tests "
+            "and emergency low-resource operation. Env: "
+            "``DOCUMENT_PROCESSING_LAYOUT_ENABLED``."
+        ),
+    )
 
     # Document-processor adapter selection
     document_processor: Literal["auto", "kreuzberg", "markitdown", "docling"] = Field(
@@ -194,11 +203,11 @@ class DatastoreSettings(BaseSettings):
         description="Kreuzberg API URL for document processing",
     )
     kreuzberg_request_timeout_seconds: float = Field(
-        default=180.0,
+        default=600.0,
         description=(
             "Total HTTP timeout (seconds) for a Kreuzberg extract/chunk request. "
-            "Kept long because a connected-but-slow OCR of a large PDF can "
-            "legitimately take minutes. A DOWN endpoint no longer waits this long "
+            "Includes cold layout/table-model initialization and long digital PDFs; "
+            "a DOWN endpoint no longer waits this long "
             "— see kreuzberg_connect_timeout_seconds."
         ),
     )

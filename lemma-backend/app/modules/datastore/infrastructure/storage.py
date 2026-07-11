@@ -5,6 +5,7 @@ from datetime import timedelta
 from pathlib import Path
 
 import obstore as obs
+from obstore.exceptions import BaseError as ObstoreError
 from app.core.config import settings
 from app.core.object_storage import local_object_storage_path
 from app.modules.datastore.domain.errors import (
@@ -38,7 +39,7 @@ class ObstoreDatastoreStorage:
             response = await obs.get_async(self.store, source_blob_name)
             data = await response.bytes_async()
             return data.to_bytes()
-        except Exception as exc:
+        except (ObstoreError, FileNotFoundError) as exc:
             # A blob the metadata still points at can be absent (deleted out of
             # band, never written). Surface that as a typed not-found so callers
             # can return a clean 404 rather than leaking a storage 500.
@@ -48,9 +49,20 @@ class ObstoreDatastoreStorage:
                 ) from exc
             raise
 
-    async def iter_download(
-        self, source_blob_name: str
-    ) -> AsyncIterator[bytes]:
+    async def stat_file(self, source_blob_name: str) -> int:
+        """Return an object's stored byte length, raising the typed not-found
+        error used by downloads when metadata points at a missing object."""
+        try:
+            metadata = await obs.head_async(self.store, source_blob_name)
+            return int(metadata["size"])
+        except (ObstoreError, FileNotFoundError) as exc:
+            if self._is_missing_object_error(exc):
+                raise DatastoreObjectNotFoundError(
+                    f"Storage object not found: {source_blob_name}"
+                ) from exc
+            raise
+
+    async def iter_download(self, source_blob_name: str) -> AsyncIterator[bytes]:
         """Stream an object as byte chunks without loading it fully into memory.
 
         Used for large originals (e.g. a PDF being shipped to Kreuzberg for page
@@ -78,7 +90,9 @@ class ObstoreDatastoreStorage:
             return True
         except Exception as exc:
             if self._is_missing_object_error(exc):
-                logger.info("Skipping delete for missing datastore object %s", blob_name)
+                logger.info(
+                    "Skipping delete for missing datastore object %s", blob_name
+                )
                 return False
             logger.error("Error deleting datastore file: %s", exc)
             raise DatastoreInfrastructureError("Failed to delete file")
@@ -117,8 +131,10 @@ class ObstoreDatastoreStorage:
 
 class LocalDatastoreStorage(ObstoreDatastoreStorage):
     def __init__(self, root_path: str | Path | None = None):
-        root = Path(root_path) if root_path is not None else local_object_storage_path(
-            "datastore"
+        root = (
+            Path(root_path)
+            if root_path is not None
+            else local_object_storage_path("datastore")
         )
         super().__init__(LocalStore(prefix=root.expanduser(), mkdir=True))
 

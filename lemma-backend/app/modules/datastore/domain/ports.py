@@ -62,6 +62,8 @@ class DatastoreTableRepositoryPort(Protocol):
 
 
 class DatastoreFileRepositoryPort(Protocol):
+    async def acquire_path_lock(self, pod_id: UUID, path: str) -> None: ...
+
     async def create(self, entity: DatastoreFileEntity) -> DatastoreFileEntity: ...
 
     async def get(self, id: UUID) -> Optional[DatastoreFileEntity]: ...
@@ -282,6 +284,7 @@ class DatastoreRecordRepositoryPort(Protocol):
         enforce_user_scope: bool = True,
     ) -> bool: ...
 
+
 class DatastoreStoragePort(Protocol):
     async def upload_file(
         self, destination_blob_name: str, file_content: bytes | Path
@@ -289,9 +292,9 @@ class DatastoreStoragePort(Protocol):
 
     async def download_file(self, source_blob_name: str) -> bytes: ...
 
-    def iter_download(
-        self, source_blob_name: str
-    ) -> AsyncIterator[bytes]: ...
+    async def stat_file(self, source_blob_name: str) -> int: ...
+
+    def iter_download(self, source_blob_name: str) -> AsyncIterator[bytes]: ...
 
     async def get_signed_url(self, blob_name: str, expires_hours: int = 1) -> str: ...
 

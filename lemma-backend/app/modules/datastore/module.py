@@ -1,11 +1,41 @@
 """Datastore module registration."""
 
+import asyncio
 from contextlib import asynccontextmanager
 
 from app.core.log.log import get_logger
 from app.core.registry import LemmaModule
 
 logger = get_logger(__name__)
+
+
+@asynccontextmanager
+async def _preload_local_embeddings(context):
+    """Fail worker readiness when its local embedding model is unusable."""
+    del context
+    from app.core.config import settings
+
+    should_preload = (
+        settings.local_embedding_preload
+        and (
+            settings.e2e_deterministic_embeddings
+            or settings.effective_embedding_provider() == "local"
+        )
+        and (settings.environment != "testing" or settings.e2e_deterministic_embeddings)
+    )
+    if should_preload:
+        from app.core.embeddings.factory import create_embedder
+
+        timeout = max(1.0, settings.local_embedding_preload_timeout_seconds)
+        logger.info("Preloading local embedding model")
+        async with asyncio.timeout(timeout):
+            vector = await create_embedder().embed("lemma embedding readiness")
+        if len(vector) != settings.embedding_dimension:
+            raise RuntimeError(
+                "Local embedding preload returned an unexpected vector dimension"
+            )
+        logger.info("Local embedding model is ready")
+    yield
 
 
 def _routers():
@@ -100,7 +130,11 @@ module = LemmaModule(
     routers=_routers,
     event_routers=_event_routers,
     api_lifespans=(_backfill_query_role,),
-    worker_lifespans=(_datastore_outbox_dispatcher, _close_reindex_queue),
+    worker_lifespans=(
+        _preload_local_embeddings,
+        _datastore_outbox_dispatcher,
+        _close_reindex_queue,
+    ),
     stream_groups=(
         ("datastore.events", "datastore-file-events"),
         ("pod_events", "pod-provisioning-events"),

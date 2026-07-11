@@ -24,22 +24,19 @@ from app.core.log.log import get_logger
 
 logger = get_logger(__name__)
 
-# Bounded retry for transient connection/timeout failures talking to Kreuzberg.
-# A refused connection or timeout is almost always the service being briefly
-# unavailable (restart, GC pause, burst load), not a bad request — so retry the
-# same request with exponential backoff rather than failing the extraction
-# outright (which would mark the file FAILED and wait on the recovery cron).
-# HTTP 4xx/5xx responses are NOT retried here; those are handled by the
-# config-fallback layer.
-# These module constants are only a FALLBACK for a misconfiguration (setting <= 0);
-# the real values come from datastore_settings (read at call time). Defaults: 3
-# attempts with 1.0s base ⇒ backoff 1+2 = 3s of waiting (total =
-# base*(2^(attempts-1)-1)). A short connect timeout (kreuzberg_connect_timeout_
-# seconds) keeps each attempt cheap when the extractor is down, and the circuit
-# breaker short-circuits sustained outages, so a small attempt count no longer
-# risks failing files on a brief blip.
+# Fallbacks for invalid retry settings. Connection failures use bounded backoff;
+# timeouts are re-driven later to avoid duplicating accepted extraction work.
+# Request-schema 400/422 responses alone use the compatibility-config fallback.
 _TRANSIENT_RETRY_ATTEMPTS = 3
 _TRANSIENT_RETRY_BASE_DELAY_SECONDS = 1.0
+
+
+class KreuzbergTransientError(RuntimeError):
+    """The extractor was unreachable or timed out; retry as a later job."""
+
+
+class KreuzbergCompatibilityError(RuntimeError):
+    """The extractor rejected the request schema and a legacy config may work."""
 
 
 class KreuzbergExtractionResult:
@@ -107,7 +104,7 @@ class KreuzbergExtractionResult:
             page_number = page.get("page_number", page.get("pageNumber", index + 1))
             try:
                 page_number = int(page_number)
-            except (TypeError, ValueError):
+            except TypeError, ValueError:
                 page_number = index + 1
             formatted.append(
                 {
@@ -149,7 +146,7 @@ class KreuzbergExtractionResult:
             elif page_number is not None:
                 try:
                     normalized_page_number = int(page_number)
-                except (TypeError, ValueError):
+                except TypeError, ValueError:
                     normalized_page_number = default_page_number or index + 1
                 generated_name = (
                     f"page_{normalized_page_number:04d}_image_{index}.{image_format}"
@@ -178,7 +175,7 @@ class KreuzbergExtractionResult:
                 )
                 try:
                     content = base64.b64decode(payload, validate=True)
-                except (binascii.Error, ValueError):
+                except binascii.Error, ValueError:
                     continue
             elif isinstance(raw_data, list) and all(
                 isinstance(item, int) for item in raw_data
@@ -201,7 +198,9 @@ class KreuzbergExtractionResult:
 class KreuzbergHelper:
     def __init__(self):
         self.base_url = (
-            datastore_settings.kreuzberg_url.rstrip("/") if datastore_settings.kreuzberg_url else None
+            datastore_settings.kreuzberg_url.rstrip("/")
+            if datastore_settings.kreuzberg_url
+            else None
         )
         # A long `total` covers a connected-but-slow OCR of a large PDF, but
         # `connect`/`sock_connect` make a DOWN endpoint fail within seconds
@@ -231,18 +230,9 @@ class KreuzbergHelper:
         if not mime_type:
             mime_type = "application/octet-stream"
 
-        # Decide scanned-vs-native up front (PDF only) with pypdfium2 so we run a
-        # SINGLE extraction with the right force_ocr + image DPI instead of the
-        # old "extract direct, then reactively re-extract with OCR" double pass.
-        # Native → force_ocr=False + 150-DPI images (the text layer yields headers
-        # + image refs); scanned → force_ocr=True + 300 DPI. The structure/table
-        # config is kept on both paths. Any probe failure falls back to the native
-        # (direct) path — the prior default behavior.
-        #
-        # OCR is opt-in: with document_processing_ocr_enabled off (the default)
-        # we skip the probe entirely and always take the fast native path, so no
-        # document ever incurs the 300-DPI Tesseract spike. Scanned docs then
-        # degrade to their text layer (see _should_retry_with_forced_ocr).
+        # Opt-in OCR probes PDFs once up front: native uses 150 DPI; scanned uses
+        # forced OCR at 300 DPI. Probe failures and the default OCR-off path stay
+        # digital-first, avoiding the old reactive double extraction.
         ocr_enabled = datastore_settings.document_processing_ocr_enabled
         initial_force_ocr = False
         if ocr_enabled and mime_type == "application/pdf":
@@ -325,9 +315,7 @@ class KreuzbergHelper:
 
         async def _probe(path: str) -> bool:
             try:
-                pages_sampled, total_chars = await anyio.to_thread.run_sync(
-                    probe, path
-                )
+                pages_sampled, total_chars = await anyio.to_thread.run_sync(probe, path)
             except Exception:
                 logger.debug(
                     "pdfium OCR probe failed; defaulting to native extraction path",
@@ -393,40 +381,30 @@ class KreuzbergHelper:
                 "target_dpi": 300 if force_ocr else 150,
             }
         if mime_type == "application/pdf":
-            # The RT-DETR layout + table-transformer (tatr) + hierarchy run on
-            # EVERY PDF: they are what reconstruct the standardized rich markdown
-            # — headers, *text tables*, and embedded images — and validation
-            # against the live service showed dropping them loses tables on
-            # born-digital PDFs (the cheap allow_single_column_tables heuristic
-            # alone produced zero). The model cost turned out NOT to be the memory
-            # driver (a layout-free run used the same RAM); peak is bounded
-            # instead by extraction concurrency (2) + the kreuzberg container at
-            # cpus=2, the 150-DPI native image render, and the single-pass OCR
-            # decision (no reactive double extraction). Build fresh dicts each
-            # call so the shallow copy in _build_compat_extract_config can't
-            # mutate a shared sub-dict.
+            # Layout + TATR reconstruct rich markdown and text tables for digital
+            # PDFs. Fresh nested dicts keep compatibility fallback mutation-safe.
             config["pdf_options"] = {
                 "extract_images": True,
                 "extract_metadata": True,
                 "allow_single_column_tables": True,
-                "hierarchy": {
+            }
+            if datastore_settings.document_processing_layout_enabled:
+                config["pdf_options"]["hierarchy"] = {
                     "enabled": True,
                     "k_clusters": 6,
                     "include_bbox": False,
-                },
-            }
-            config["layout"] = {
-                # "fast" = YOLO DocLayNet (11-class), lighter than the default
-                # "accurate" RT-DETR v2 (17-class) layout model — lower peak RAM
-                # with no measured loss of table quality (validated against the
-                # live service: identical table count vs no preset). "tatr" is the
-                # smallest table-structure model (~30MB) and is what reconstructs
-                # the markdown tables (slanet_plus was lighter but lost tables).
-                "preset": "fast",
-                "confidence_threshold": 0.5,
-                "apply_heuristics": True,
-                "table_model": "tatr",
-            }
+                }
+                config["layout"] = {
+                    # "fast" = YOLO DocLayNet (11-class), lighter than the default
+                    # "accurate" RT-DETR v2 (17-class) layout model — lower peak
+                    # RAM with no measured loss of table quality. "tatr" is the
+                    # smallest table-structure model and reconstructs markdown
+                    # tables (slanet_plus was lighter but lost tables).
+                    "preset": "fast",
+                    "confidence_threshold": 0.5,
+                    "apply_heuristics": True,
+                    "table_model": "tatr",
+                }
         if force_ocr:
             config["force_ocr"] = True
         return config
@@ -492,7 +470,7 @@ class KreuzbergHelper:
             ),
         ]
         attempted_configs: list[dict[str, Any]] = []
-        last_error: RuntimeError | None = None
+        last_error: KreuzbergCompatibilityError | None = None
 
         for candidate in [config, *fallback_configs]:
             if candidate in attempted_configs:
@@ -507,7 +485,7 @@ class KreuzbergHelper:
                     config=candidate,
                     content_path=content_path,
                 )
-            except RuntimeError as exc:
+            except KreuzbergCompatibilityError as exc:
                 last_error = exc
                 if candidate == config:
                     logger.warning(
@@ -604,9 +582,19 @@ class KreuzbergHelper:
                     raise RuntimeError(
                         "Unexpected response from Kreuzberg extract endpoint"
                     )
-            except (aiohttp.ClientConnectionError, asyncio.TimeoutError, TimeoutError) as exc:
-                # Transient: the service was briefly unreachable. Count it toward
-                # the circuit breaker and retry with backoff before giving up.
+            except (asyncio.TimeoutError, TimeoutError) as exc:
+                # A timeout may happen after Kreuzberg accepted the upload and
+                # started CPU-heavy work. Retrying immediately can duplicate that
+                # work because disconnecting the HTTP client does not guarantee
+                # server-side cancellation. Re-drive later through datastore
+                # recovery instead of multiplying full-document extractions.
+                circuit.record_failure()
+                raise KreuzbergTransientError(
+                    "Kreuzberg extract request timed out"
+                ) from exc
+            except aiohttp.ClientConnectionError as exc:
+                # Connection establishment/transport failure: a bounded retry is
+                # useful here because no successful response was received.
                 circuit.record_failure()
                 if attempt < max_attempts - 1:
                     delay = base_delay * (2**attempt)
@@ -620,7 +608,12 @@ class KreuzbergHelper:
                     )
                     await asyncio.sleep(delay)
                     continue
-                raise RuntimeError("Kreuzberg extract request failed") from exc
+                raise KreuzbergTransientError(
+                    "Kreuzberg extract connection failed"
+                ) from exc
+            except KreuzbergTransientError:
+                circuit.record_failure()
+                raise
             except aiohttp.ClientError as exc:
                 # Non-connection client error — not worth a same-request retry.
                 raise RuntimeError("Kreuzberg extract request failed") from exc
@@ -628,7 +621,7 @@ class KreuzbergHelper:
                 if file_obj is not None:
                     file_obj.close()
         # Unreachable: the loop either returns or raises on the final attempt.
-        raise RuntimeError("Kreuzberg extract request failed")
+        raise KreuzbergTransientError("Kreuzberg extract request failed")
 
     async def _chunk_content(
         self,
@@ -697,6 +690,9 @@ class KreuzbergHelper:
         if response.status < 400:
             return
         body = await response.text()
-        raise RuntimeError(
-            f"Kreuzberg request failed with status {response.status}: {body}"
-        )
+        message = f"Kreuzberg request failed with status {response.status}: {body}"
+        if response.status in {400, 422}:
+            raise KreuzbergCompatibilityError(message)
+        if response.status in {408, 429} or response.status >= 500:
+            raise KreuzbergTransientError(message)
+        raise RuntimeError(message)

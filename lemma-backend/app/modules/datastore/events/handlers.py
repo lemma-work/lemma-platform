@@ -41,7 +41,12 @@ from app.modules.datastore.services.file_processing_service import (
 from app.modules.datastore.services.file_recovery_service import (
     DatastoreFileRecoveryService,
 )
-from app.core.infrastructure.jobs.streaq_runtime import AppWorkerContext, streaq_cron, streaq_task, streaq_worker
+from app.core.infrastructure.jobs.streaq_runtime import (
+    AppWorkerContext,
+    streaq_cron,
+    streaq_task,
+    streaq_worker,
+)
 from app.core.log.log import get_logger
 
 logger = get_logger(__name__)
@@ -71,7 +76,9 @@ def _content_update_defer_until(occurred_at: datetime) -> datetime | None:
         return None
 
     occurred_at_utc = occurred_at.astimezone(timezone.utc)
-    scheduled_epoch = math.ceil(occurred_at_utc.timestamp() / debounce_seconds) * debounce_seconds
+    scheduled_epoch = (
+        math.ceil(occurred_at_utc.timestamp() / debounce_seconds) * debounce_seconds
+    )
     scheduled_at = datetime.fromtimestamp(scheduled_epoch, tz=timezone.utc)
     if scheduled_at <= occurred_at_utc:
         scheduled_at = occurred_at_utc + timedelta(seconds=debounce_seconds)
@@ -137,7 +144,10 @@ async def on_datastore_file_event(
     await inbox.process("datastore.file-processing", event, process)
 
 
-@streaq_task(name="process_datastore_file_task")
+# The datastore row state machine owns retries: a failure records FAILED and the
+# recovery cron re-drives it after backoff. An immediate Streaq retry would see a
+# non-PENDING row and no-op, so keep this task single-attempt.
+@streaq_task(name="process_datastore_file_task", max_tries=1)
 async def process_datastore_file_task(
     _task_context=None,
     *,
@@ -166,9 +176,7 @@ async def process_datastore_file_task(
                 if worker_ctx is not None
                 else SessionUnitOfWorkFactory(async_session_maker)
             )
-            service = DatastoreFileProcessingService(
-                pod_uuid, uow_factory=uow_factory
-            )
+            service = DatastoreFileProcessingService(pod_uuid, uow_factory=uow_factory)
             await service.process_file_async(file_uuid, metadata or {})
         logger.info("FINISHED process_datastore_file_task for %s", file_uuid)
     except Exception as exc:
@@ -223,8 +231,7 @@ async def cleanup_deleted_datastore_paths_task(
 
 
 @streaq_cron("*/15 * * * *", name="recover_stuck_processing_files")
-async def recover_stuck_processing_files(
-) -> None:
+async def recover_stuck_processing_files() -> None:
     """
     Find files stuck in PENDING or PROCESSING and make sure they get queued.
 
@@ -244,7 +251,9 @@ async def recover_stuck_processing_files(
                 reindex_queue=get_datastore_reindex_queue(),
                 uow=uow,
             )
-            summary = await recovery_service.recover_stale_files(now=datetime.now(timezone.utc))
+            summary = await recovery_service.recover_stale_files(
+                now=datetime.now(timezone.utc)
+            )
 
         logger.info(
             "Running datastore file recovery (pending_cutoff=%s, processing_cutoff=%s)",

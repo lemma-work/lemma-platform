@@ -40,6 +40,9 @@ class _RecordingStorage:
     async def download_file(self, key: str) -> bytes:
         return self.uploaded.get(key, b"OLD-CONTENT")
 
+    async def stat_file(self, key: str) -> int:
+        return len(self.uploaded[key])
+
     async def delete_file(self, key: str) -> None:
         self.deleted.append(key)
 
@@ -63,7 +66,9 @@ def _storage_phase(storage, search):
     # Projection backed by an exploding repo: the storage phase must only call its
     # repo-free methods (storage_key / delete_child_artifacts).
     projection = FileProjection(storage, _ExplodingRepo())
-    return FileStoragePhase(storage, lambda: (lambda pod_id: search), projection, PathResolver())
+    return FileStoragePhase(
+        storage, lambda: lambda pod_id: search, projection, PathResolver()
+    )
 
 
 def _file_entity(path: str, file_id):
@@ -76,6 +81,7 @@ def _file_entity(path: str, file_id):
         search_enabled=True,
         mime_type="text/plain",
         id=file_id,
+        size_bytes=3,
     )
 
 
@@ -106,6 +112,28 @@ async def test_write_update_uploads_new_content_without_db():
 
 
 @pytest.mark.asyncio
+async def test_failed_update_persistence_cleans_only_new_blob_without_db():
+    storage = _RecordingStorage()
+    sp = _storage_phase(storage, _FakeSearch())
+    entity = _file_entity("/p/f.txt", uuid4())
+    plan = _UpdatePlan(
+        file_entity=entity,
+        previous_path="/p/f.txt",
+        previous_search_enabled=True,
+        previous_storage_key="pod/revisions/1",
+        new_storage_key="pod/revisions/2",
+        has_content=True,
+        rename_moved=False,
+        should_sync=True,
+        requester_user_id=uuid4(),
+    )
+
+    await sp.cleanup_uncommitted_update(plan)
+
+    assert storage.deleted == ["pod/revisions/2"]
+
+
+@pytest.mark.asyncio
 async def test_finalize_update_after_rename_deletes_old_blob_without_db():
     storage = _RecordingStorage()
     search = _FakeSearch()
@@ -128,6 +156,28 @@ async def test_finalize_update_after_rename_deletes_old_blob_without_db():
 
 
 @pytest.mark.asyncio
+async def test_finalize_content_update_deletes_superseded_revision_without_db():
+    storage = _RecordingStorage()
+    sp = _storage_phase(storage, _FakeSearch())
+    updated = _file_entity("/p/f.txt", uuid4())
+    plan = _UpdatePlan(
+        file_entity=updated,
+        previous_path=updated.path,
+        previous_search_enabled=True,
+        previous_storage_key="pod/.objects/file/revisions/1",
+        new_storage_key="pod/.objects/file/revisions/2",
+        has_content=True,
+        rename_moved=False,
+        should_sync=True,
+        requester_user_id=uuid4(),
+    )
+
+    await sp.finalize_update(plan, updated)
+
+    assert storage.deleted == ["pod/.objects/file/revisions/1"]
+
+
+@pytest.mark.asyncio
 async def test_cleanup_deleted_paths_purges_storage_and_index_without_db():
     storage = _RecordingStorage()
     search = _FakeSearch()
@@ -137,7 +187,9 @@ async def test_cleanup_deleted_paths_purges_storage_and_index_without_db():
         uuid4(),
         is_folder=False,
         folder_prefix=None,
-        files=[{"file_id": str(file_id), "path": "/p/f.txt", "storage_key": "pod/f.txt"}],
+        files=[
+            {"file_id": str(file_id), "path": "/p/f.txt", "storage_key": "pod/f.txt"}
+        ],
     )
     assert "pod/f.txt" in storage.deleted
     assert file_id in search.removed

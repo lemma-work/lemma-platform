@@ -1,13 +1,17 @@
 from __future__ import annotations
 
 from pathlib import Path
+import asyncio
 
 import pytest
 
 from app.core.config import settings
 from app.core.embeddings.embeddings import Embedder
 from app.core.embeddings.factory import create_embedder
-from app.core.embeddings.local_embedder import FastEmbedLocalEmbedder
+from app.core.embeddings.local_embedder import (
+    DeterministicTestEmbedder,
+    FastEmbedLocalEmbedder,
+)
 from app.modules.datastore.infrastructure.storage import (
     GCSDatastoreStorage,
     LocalDatastoreStorage,
@@ -66,6 +70,106 @@ async def test_fastembed_local_embedder_rejects_wrong_dimension():
         await embedder.embed("too short")
 
 
+@pytest.mark.asyncio
+async def test_fastembed_local_embedder_rejects_missing_vectors():
+    class TruncatingFastEmbed:
+        def embed(self, texts, **kwargs):
+            return [[1.0, 0.5, -0.25]]
+
+    embedder = FastEmbedLocalEmbedder(dimension=3, model=TruncatingFastEmbed())
+
+    with pytest.raises(ValueError, match="1 vectors for 2 texts"):
+        await embedder.embed_batch(["one", "two"])
+
+
+@pytest.mark.asyncio
+async def test_fastembed_model_initializes_once_under_concurrent_first_use(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+):
+    calls = 0
+
+    class FakeTextEmbedding:
+        def __init__(self, *, model_name, cache_dir):
+            nonlocal calls
+            calls += 1
+            assert Path(cache_dir) == tmp_path
+
+        def embed(self, texts, **kwargs):
+            return [[1.0, 0.5, -0.25] for _ in texts]
+
+    import fastembed
+
+    monkeypatch.setattr(fastembed, "TextEmbedding", FakeTextEmbedding)
+    embedder = FastEmbedLocalEmbedder(dimension=3, cache_dir=tmp_path)
+
+    await asyncio.gather(*(embedder.embed(f"text-{index}") for index in range(8)))
+
+    assert calls == 1
+
+
+@pytest.mark.asyncio
+async def test_fastembed_repairs_missing_onnx_from_registered_alternate_source(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+):
+    repaired = tmp_path / "alternate-source" / "model"
+    constructor_calls: list[dict] = []
+
+    class FakeTextEmbedding:
+        def __init__(self, **kwargs):
+            constructor_calls.append(kwargs)
+            if "specific_model_path" not in kwargs:
+                raise RuntimeError("NO_SUCHFILE: model file doesn't exist")
+
+        @staticmethod
+        def list_supported_models():
+            return [
+                {
+                    "model": "BAAI/bge-base-en-v1.5",
+                    "sources": {
+                        "url": "https://models.example/model.tar.gz",
+                        "_deprecated_tar_struct": True,
+                    },
+                }
+            ]
+
+        @staticmethod
+        def retrieve_model_gcs(model_name, url, cache_dir, **kwargs):
+            assert model_name == "BAAI/bge-base-en-v1.5"
+            assert url == "https://models.example/model.tar.gz"
+            assert kwargs["deprecated_tar_struct"] is True
+            repaired.mkdir(parents=True)
+            return repaired
+
+        def embed(self, texts, **kwargs):
+            return [[1.0, 0.5, -0.25] for _ in texts]
+
+    import fastembed
+
+    monkeypatch.setattr(fastembed, "TextEmbedding", FakeTextEmbedding)
+    embedder = FastEmbedLocalEmbedder(
+        model_name="BAAI/bge-base-en-v1.5",
+        dimension=3,
+        cache_dir=tmp_path,
+    )
+
+    assert await embedder.embed("repaired") == [1.0, 0.5, -0.25]
+    assert len(constructor_calls) == 2
+    assert constructor_calls[-1]["specific_model_path"] == str(repaired)
+
+
+@pytest.mark.asyncio
+async def test_deterministic_test_embedder_is_stable_and_dimensioned():
+    embedder = DeterministicTestEmbedder(16)
+
+    first, second = await embedder.embed_batch(["alpha beta", "alpha beta"])
+
+    assert first == second
+    assert len(first) == 16
+    assert any(first)
+
+
 def test_production_with_bucket_uses_gcs_storage(
     monkeypatch: pytest.MonkeyPatch,
 ):
@@ -82,6 +186,7 @@ async def test_local_datastore_storage_round_trips_with_obstore(tmp_path: Path):
     storage = LocalDatastoreStorage(tmp_path)
 
     assert await storage.upload_file("pod/file.txt", b"hello") is True
+    assert await storage.stat_file("pod/file.txt") == 5
     assert await storage.download_file("pod/file.txt") == b"hello"
     assert await storage.delete_prefix("pod") == 1
     assert not (tmp_path / "pod" / "file.txt").exists()

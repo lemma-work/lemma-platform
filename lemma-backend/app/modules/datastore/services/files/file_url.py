@@ -30,9 +30,7 @@ from app.core.infrastructure.cache.redis_json_cache import RedisJsonCache
 from app.core.log.log import get_logger
 from app.modules.datastore.domain.file_entities import DatastoreFileEntity
 from app.modules.datastore.domain.ports import DatastoreStoragePort
-from app.modules.datastore.infrastructure.storage_paths import (
-    build_datastore_file_storage_key,
-)
+from app.modules.datastore.services.files.projection import datastore_storage_key
 
 logger = get_logger(__name__)
 
@@ -96,7 +94,9 @@ def _get_url_cache() -> RedisJsonCache | None:
                 key_prefix="datastore:fileurl",
                 # Expire the cache entry a minute before the URL itself so we never
                 # hand back an about-to-expire URL.
-                ttl_seconds=max(60, datastore_settings.datastore_file_url_expiry_seconds - 60),
+                ttl_seconds=max(
+                    60, datastore_settings.datastore_file_url_expiry_seconds - 60
+                ),
             )
         except Exception as exc:
             logger.warning("File-URL cache unavailable: %s", exc)
@@ -111,7 +111,9 @@ async def build_object_url(
     expires_seconds: int | None = None,
 ) -> tuple[str, datetime]:
     """Build a short-lived URL for an arbitrary datastore object key."""
-    expires_seconds = expires_seconds or datastore_settings.datastore_file_url_expiry_seconds
+    expires_seconds = (
+        expires_seconds or datastore_settings.datastore_file_url_expiry_seconds
+    )
     cache = _get_url_cache()
 
     if cache is not None:
@@ -156,7 +158,7 @@ async def build_file_url(
     expires_seconds: int | None = None,
 ) -> tuple[str, datetime]:
     """Short-lived URL for a file entity's original bytes."""
-    key = build_datastore_file_storage_key(entity.pod_id, entity.path)
+    key = datastore_storage_key(entity)
     return await build_object_url(storage, key, expires_seconds=expires_seconds)
 
 

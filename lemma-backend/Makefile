@@ -19,6 +19,7 @@ E2E_PARALLEL := -n $(E2E_WORKERS) --dist loadscope
 # Load test settings (override on the command line)
 LOAD_TEST_COMPOSE := load_tests/docker-compose.load-test.yml
 LOAD_TEST_ENV     := load_tests/.env.load_test
+DATASTORE_LOAD_TEST_COMPOSE := -f $(LOAD_TEST_COMPOSE) -f load_tests/docker-compose.datastore.yml
 MAX_SUBSCRIBERS   ?= 100
 WRITER_VUS        ?= 2
 # Full-journey load test (load-test-journey): each VU self-provisions then loops
@@ -32,7 +33,7 @@ BACKEND_COVERAGE_FILE ?= $(CURDIR)/.coverage.backend
 BACKEND_COVERAGE_RUN_ENV = COVERAGE_PROCESS_START=$(CURDIR)/.coveragerc COVERAGE_FILE=$(BACKEND_COVERAGE_FILE)
 BACKEND_COVERAGE_DATA_ENV = COVERAGE_FILE=$(BACKEND_COVERAGE_FILE)
 
-.PHONY: help test test-unit test-e2e test-e2e-real test-e2e-fast test-e2e-runtime test-module coverage coverage-unit coverage-e2e coverage-backend-unit coverage-backend-e2e-shard coverage-backend-report coverage-backend-gate test-collect lint lint-async typecheck-critical architecture migrate docker-build docker-build-cloud docker-build-arm64 docker-build-amd64 agentbox-build teams-manifest-zip load-test-build load-test-up load-test-migrate load-test-setup load-test-run load-test-sse load-test-journey load-test-monitor load-test-down load-test
+.PHONY: help test test-unit test-e2e test-e2e-real test-e2e-fast test-e2e-runtime test-module coverage coverage-unit coverage-e2e coverage-backend-unit coverage-backend-e2e-shard coverage-backend-report coverage-backend-gate test-collect lint lint-async typecheck-critical architecture migrate docker-build docker-build-cloud docker-build-arm64 docker-build-amd64 agentbox-build teams-manifest-zip load-test-build load-test-up load-test-migrate load-test-setup load-test-run load-test-sse load-test-journey load-test-datastore-up load-test-datastore-setup load-test-datastore-files load-test-datastore-stats load-test-datastore-down load-test-monitor load-test-down load-test
 
 help:
 	@echo "Lemma backend:"
@@ -67,6 +68,8 @@ help:
 	@echo "  make load-test-run     # run k6 WebSocket load test (reads .env.load_test)"
 	@echo "  make load-test-sse     # run k6 SSE streaming load test"
 	@echo "  make load-test-journey # run k6 full chat-journey test (self-provisioning, mock LLM)"
+	@echo "  make load-test-datastore-files # upload and fully process 20 fixture PDFs"
+	@echo "                         #   see docs/operators/datastore-ingestion-benchmark.md"
 	@echo "                         #   knobs: MAX_USERS=100 THINK_MS=500"
 	@echo "  make load-test-monitor # monitor DB connections (pg_stat_activity poller)"
 	@echo "  make load-test-down    # tear down containers and clean up"
@@ -250,6 +253,38 @@ teams-manifest-zip:
 load-test-build:
 	@echo "Building lemma-backend:load-test image from monorepo root…"
 	cd .. && docker build -f lemma-backend/Dockerfile -t lemma-backend:load-test .
+
+load-test-datastore-files:
+	uv run python load_tests/datastore_ingestion.py \
+		--count "$${DATASTORE_BENCH_COUNT:-20}" \
+		--upload-concurrency "$${DATASTORE_BENCH_CONCURRENCY:-5}" \
+		--processing-timeout "$${DATASTORE_BENCH_TIMEOUT:-3600}" \
+		--report "$${DATASTORE_BENCH_REPORT:-/tmp/lemma-datastore-ingestion-report.json}"
+
+load-test-datastore-up:
+	docker compose $(DATASTORE_LOAD_TEST_COMPOSE) up -d
+	@until docker compose $(DATASTORE_LOAD_TEST_COMPOSE) exec -T api python -c "import urllib.request; urllib.request.urlopen('http://localhost:8000/health')" > /dev/null 2>&1; do \
+		printf '.'; sleep 3; \
+	done
+	@until docker compose $(DATASTORE_LOAD_TEST_COMPOSE) logs worker 2>&1 | grep -q "Local embedding model is ready"; do \
+		test -n "$$(docker compose $(DATASTORE_LOAD_TEST_COMPOSE) ps -q worker)" || { \
+			echo " Datastore worker stopped during startup."; \
+			docker compose $(DATASTORE_LOAD_TEST_COMPOSE) logs --tail=100 worker; \
+			exit 1; \
+		}; \
+		printf '.'; sleep 3; \
+	done
+	@echo " Datastore benchmark stack is ready."
+
+load-test-datastore-setup:
+	docker compose $(DATASTORE_LOAD_TEST_COMPOSE) exec -T api alembic upgrade head
+	uv run python load_tests/setup.py --api-url $(LEMMA_API_URL)
+
+load-test-datastore-stats:
+	docker stats lemma-load-api lemma-load-worker lemma-load-kreuzberg --no-stream
+
+load-test-datastore-down:
+	docker compose $(DATASTORE_LOAD_TEST_COMPOSE) down -v
 
 load-test-up:
 	docker compose -f $(LOAD_TEST_COMPOSE) up -d

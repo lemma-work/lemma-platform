@@ -3,11 +3,14 @@ from __future__ import annotations
 import json
 import mimetypes
 import os
+import time
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from datetime import datetime, timezone
+from pathlib import Path
 from uuid import UUID
 
+from app.core.api.uploads import upload_source_sha256
 from app.core.concurrency.offload import run_blocking
 from app.core.redaction import redact_value
 from app.core.infrastructure.db.uow_factory import UnitOfWorkFactory
@@ -17,7 +20,10 @@ from app.modules.datastore.domain.document_processing import (
     DocumentImage,
     DocumentPage,
 )
-from app.modules.datastore.domain.errors import DatastoreObjectNotFoundError
+from app.modules.datastore.domain.errors import (
+    DatastoreObjectIntegrityError,
+    DatastoreObjectNotFoundError,
+)
 from app.modules.datastore.domain.file_entities import FileStatus
 from app.modules.datastore.domain.ports import DocumentProcessorPort
 from app.modules.datastore.infrastructure.document_processor import (
@@ -52,6 +58,11 @@ from app.modules.datastore.services.search.postgres_search_service import (
 import logging
 
 logger = logging.getLogger(__name__)
+
+
+class _StaleProcessingRevision(Exception):
+    pass
+
 
 # Manifest format version for the colocated child container.
 _MANIFEST_VERSION = 3
@@ -167,6 +178,7 @@ class DatastoreFileProcessingService:
                 return
 
             search_enabled = bool(file_entity.search_enabled)
+            content_revision = int(getattr(file_entity, "content_revision", 1) or 1)
 
         # Safety net: the indexing-eligibility policy is applied early (at write
         # time) and the reindex queue only enqueues PENDING + search_enabled
@@ -213,7 +225,9 @@ class DatastoreFileProcessingService:
         # claim is durable before the long extraction begins. A crash mid-work
         # then leaves a recoverable PROCESSING row for recover_stuck_processing_files.
         async with self._file_repo() as files:
-            claimed = await files.claim_for_processing(file_id)
+            claimed = await files.claim_for_processing(
+                file_id, content_revision=content_revision
+            )
         if not claimed:
             logger.info(
                 "Skipping processing for %s because another worker already claimed it",
@@ -222,26 +236,30 @@ class DatastoreFileProcessingService:
             return
 
         try:
-            # --- External I/O: NO DB connection held across any of this. ---
             # Reserve this file's bytes against the aggregate in-flight budget
             # (soft cap; disabled by default) so concurrent large documents can't
             # stack to an OOM. Held only for the memory-heavy extract+index span,
-            # then released before the DB write below.
             async with get_inflight_byte_budget().reserve(size_bytes):
                 current_metadata = dict(metadata or {})
                 current_metadata.update(file_entity.file_metadata or {})
                 search_metadata = await self._build_search_metadata(
                     file_entity, current_metadata
                 )
+                extraction_started = time.perf_counter()
                 extraction, user_markdown_bytes = await self._build_extraction(
                     file_entity
                 )
+                extraction_seconds = time.perf_counter() - extraction_started
                 chunks = self._chunks_for_index(extraction)
                 page_count = 0
                 has_markdown = False
+                projection_started = time.perf_counter()
                 if self._should_store_converted_projection(file_entity):
                     page_count = extraction.page_count
                     has_markdown = extraction.has_markdown
+                    await self._set_phase_if_current(
+                        file_id, content_revision, "PROJECT"
+                    )
                     await self._write_converted_projection(
                         file_entity,
                         extraction,
@@ -252,27 +270,48 @@ class DatastoreFileProcessingService:
                     await self._file_projection.delete_child_artifacts(
                         self.pod_id, file_entity.path
                     )
+                projection_seconds = time.perf_counter() - projection_started
+                await self._set_phase_if_current(file_id, content_revision, "INDEX")
+                indexing_started = time.perf_counter()
                 await self.search_service.index_file_chunks(
                     file_id,
                     chunks,
                     search_metadata,
                 )
-            # Persist page metadata so listing/markdown tools can report page
-            # count without a storage round-trip.
+                indexing_seconds = time.perf_counter() - indexing_started
             merged_metadata = {
                 **(file_entity.file_metadata or {}),
                 "page_count": page_count,
                 "has_markdown": has_markdown,
+                "processing_metrics": {
+                    "extraction_seconds": round(extraction_seconds, 6),
+                    "projection_seconds": round(projection_seconds, 6),
+                    "indexing_seconds": round(indexing_seconds, 6),
+                    "page_count": page_count,
+                    "chunk_count": len(chunks),
+                },
             }
             async with self._file_repo() as files:
                 completed = await files.mark_completed(
-                    file_id, file_metadata=merged_metadata
-                )
-            if not completed:
-                logger.info(
-                    "Skipped marking %s as COMPLETED because a newer update already reset it",
                     file_id,
+                    content_revision=content_revision,
+                    file_metadata=merged_metadata,
                 )
+            logger.info(
+                "Datastore completion persisted=%s file=%s revision=%d pages=%d "
+                "chunks=%d extract=%.3fs project=%.3fs index=%.3fs",
+                completed,
+                file_id,
+                content_revision,
+                page_count,
+                len(chunks),
+                extraction_seconds,
+                projection_seconds,
+                indexing_seconds,
+            )
+        except _StaleProcessingRevision:
+            logger.info("Abandoning stale processing revision for %s", file_id)
+            return
         except Exception as exc:
             logger.error(
                 "Search processing failed for %s",
@@ -280,14 +319,20 @@ class DatastoreFileProcessingService:
                 extra={"error": redact_value(exc)},
             )
             async with self._file_repo() as files:
-                failed = await files.mark_failed(
-                    file_id, error=self._sanitize_error(exc)
+                missing_original = isinstance(
+                    exc, (DatastoreObjectNotFoundError, DatastoreObjectIntegrityError)
                 )
-            if not failed:
-                logger.info(
-                    "Skipped marking %s as FAILED because a newer update already reset it",
+                method_name = {
+                    True: "mark_missing_original",
+                    False: "mark_failed",
+                }[missing_original]
+                mark_failure = getattr(files, method_name)
+                failed = await mark_failure(
                     file_id,
+                    content_revision=content_revision,
+                    error=self._sanitize_error(exc),
                 )
+            logger.info("Datastore failure persisted=%s file=%s", failed, file_id)
             raise
 
     async def _build_extraction(
@@ -331,9 +376,20 @@ class DatastoreFileProcessingService:
         # memory. The processor extracts from the path (Kreuzberg streams it to
         # its multipart body; markitdown/docling read it off the loop), so peak
         # memory stays ~one chunk rather than the file plus a BytesIO copy.
-        storage_key = build_datastore_file_storage_key(self.pod_id, file_entity.path)
+        storage_key = getattr(file_entity, "storage_key", None) or (
+            build_datastore_file_storage_key(self.pod_id, file_entity.path)
+        )
         tmp_path = await stream_to_tempfile(self.storage.iter_download(storage_key))
         try:
+            expected_sha256 = getattr(file_entity, "content_sha256", None)
+            if expected_sha256:
+                actual_sha256 = await run_blocking(
+                    upload_source_sha256,
+                    Path(tmp_path),
+                    limiter="cpu_bound",
+                )
+                if actual_sha256 != expected_sha256:
+                    raise DatastoreObjectIntegrityError()
             extraction = await self.document_processor.extract(
                 None,
                 file_entity.name,
@@ -346,6 +402,18 @@ class DatastoreFileProcessingService:
             except OSError:
                 pass
         return extraction, None
+
+    async def _set_phase_if_current(
+        self, file_id: UUID, content_revision: int, phase: str
+    ) -> None:
+        async with self._file_repo() as files:
+            current = await files.set_processing_phase(
+                file_id,
+                content_revision=content_revision,
+                phase=phase,
+            )
+        if not current:
+            raise _StaleProcessingRevision
 
     async def _load_user_markdown_images(
         self, file_entity: DatastoreFile
@@ -422,6 +490,7 @@ class DatastoreFileProcessingService:
         metadata: dict,
     ) -> dict:
         enriched = dict(metadata)
+        enriched.pop("processing_metrics", None)
         enriched["parent_path"] = None
         enriched["path"] = file_entity.path
         owner_user_id = getattr(file_entity, "owner_user_id", None)
@@ -468,6 +537,8 @@ class DatastoreFileProcessingService:
             "source_path": file_entity.path,
             "source_name": file_entity.name,
             "source_mime_type": file_entity.mime_type,
+            "source_content_revision": getattr(file_entity, "content_revision", 1),
+            "source_sha256": getattr(file_entity, "content_sha256", None),
             "generated_at": datetime.now(timezone.utc).isoformat(),
             "markdown_source": (
                 _USER_MARKDOWN_SOURCE

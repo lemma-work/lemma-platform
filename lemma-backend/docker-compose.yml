@@ -57,6 +57,17 @@ services:
     # namespace. The -core image is smaller (~580MB) and downloads OCR models on
     # first use into the kreuzberg_cache volume. Overridable via DEV_KREUZBERG_IMAGE.
     image: ${DEV_KREUZBERG_IMAGE:-ghcr.io/xberg-io/kreuzberg:4.9.9-core}
+    # Warm only the no-OCR layout/table path before the HTTP port opens. The
+    # broader `cache warm` command also downloads PaddleOCR models we do not use.
+    # If concurrent first requests trigger lazy downloads, one can lose the Hugging
+    # Face file lock and silently continue without layout detection.
+    entrypoint: ["sh", "-c"]
+    command:
+      - >-
+        kreuzberg extract /opt/lemma/prewarm.pdf --disable-ocr true
+        --layout true --layout-table-model tatr --extract-pages true
+        --content-format markdown --extract-images true --target-dpi 150
+        >/dev/null && exec kreuzberg serve --host 0.0.0.0 --port 8000
     ports:
       - "${DEV_KREUZBERG_PORT:-8002}:8000"
     restart: unless-stopped
@@ -81,14 +92,16 @@ services:
       RUST_LOG: "${DEV_KREUZBERG_LOG_LEVEL:-info}"
     volumes:
       - kreuzberg_cache:/app/.kreuzberg
+      - ./app/modules/datastore/tests/fixtures/arxiv/seq2seq.pdf:/opt/lemma/prewarm.pdf:ro
     stop_grace_period: 30s
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
       interval: 30s
       timeout: 10s
       retries: 5
-      # Models can load on first boot; don't fail health while warming.
-      start_period: 40s
+      # A cold cache can take several minutes on a slow registry connection.
+      # A successful probe still marks the container healthy immediately.
+      start_period: 15m
 
 volumes:
   postgres_data:

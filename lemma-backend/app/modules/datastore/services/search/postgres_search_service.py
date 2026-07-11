@@ -39,7 +39,7 @@ class PostgresSearchService:
         self.pod_id = pod_id
         self.engine = engine or get_datastore_engine()
         self.session_factory = session_factory or get_datastore_session_maker()
-        self.schema_name = f'pod_{str(pod_id).replace("-", "_")}'
+        self.schema_name = f"pod_{str(pod_id).replace('-', '_')}"
         self.chunk_repo = DatastoreFileChunkRepository(
             self.session_factory,
             self.schema_name,
@@ -64,7 +64,9 @@ class PostgresSearchService:
                 {"key": self._ENSURE_SCHEMA_LOCK_KEY},
             )
             await conn.execute(text("CREATE EXTENSION IF NOT EXISTS vector"))
-            await conn.execute(text(f'CREATE SCHEMA IF NOT EXISTS "{self.schema_name}"'))
+            await conn.execute(
+                text(f'CREATE SCHEMA IF NOT EXISTS "{self.schema_name}"')
+            )
             await conn.execute(
                 text(
                     f'''
@@ -134,14 +136,22 @@ class PostgresSearchService:
         dim = settings.embedding_dimension
         # Retire the older full-precision hnsw / ivfflat indexes (lazy per-schema
         # migration — this runs on next access for each existing pod schema).
-        for legacy in ("ix_reserved_chunks_embedding_hnsw", "ix_reserved_chunks_embedding_ivfflat"):
+        for legacy in (
+            "ix_reserved_chunks_embedding_hnsw",
+            "ix_reserved_chunks_embedding_ivfflat",
+        ):
             try:
                 async with self.engine.begin() as conn:
                     await conn.execute(
                         text(f'DROP INDEX IF EXISTS "{self.schema_name}".{legacy}')
                     )
             except Exception as exc:
-                logger.info("Could not drop legacy index %s for %s: %s", legacy, self.schema_name, exc)
+                logger.info(
+                    "Could not drop legacy index %s for %s: %s",
+                    legacy,
+                    self.schema_name,
+                    exc,
+                )
         try:
             async with self.engine.begin() as conn:
                 await conn.execute(
@@ -156,7 +166,9 @@ class PostgresSearchService:
                 )
         except Exception as exc:
             lower_msg = str(exc).lower()
-            if "extension" in lower_msg and ("does not exist" in lower_msg or "not installed" in lower_msg):
+            if "extension" in lower_msg and (
+                "does not exist" in lower_msg or "not installed" in lower_msg
+            ):
                 logger.info(
                     "Skipping halfvec vector index for %s: extension not available",
                     self.schema_name,
@@ -176,7 +188,6 @@ class PostgresSearchService:
         metadata: dict | None = None,
     ) -> bool:
         await self.ensure_schema()
-        await self.remove_file(file_id)
 
         if not chunks:
             logger.warning("No chunks for %s", file_id)
@@ -185,6 +196,13 @@ class PostgresSearchService:
         try:
             texts = [c["text"] for c in chunks]
             embeddings = await self.embedder.embed_batch(texts)
+            if len(embeddings) != len(chunks):
+                raise ValueError(
+                    f"Embedding provider returned {len(embeddings)} vectors for "
+                    f"{len(chunks)} chunks"
+                )
+            # add_chunks replaces the prior revision in one transaction. The old
+            # searchable revision remains intact if embedding generation fails.
             await self.chunk_repo.add_chunks(file_id, chunks, embeddings, metadata)
             return True
         except Exception as exc:

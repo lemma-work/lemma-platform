@@ -56,6 +56,10 @@ RUN mkdir -p /app/.composio && chown -R appuser:appuser /app/.composio
 # Copy virtual environment from builder
 COPY --from=builder --chown=appuser:appuser /app/.venv /app/.venv
 COPY --from=builder --chown=appuser:appuser /agentbox-client /agentbox-client
+# uv installs monorepo path dependencies as editable links. Keep the linked
+# source in the runtime image (as we already do for agentbox-client), otherwise
+# importing lemma_pod_bundle fails after the builder stage is discarded.
+COPY --from=builder --chown=appuser:appuser /lemma-pod-bundle /lemma-pod-bundle
 # Copy skills from the builder stage explicitly instead of relying on the blanket repo copy.
 COPY --from=builder --chown=appuser:appuser /app/lemma-skills /app/lemma-skills
 

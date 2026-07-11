@@ -20,6 +20,11 @@ from typing import Callable
 from uuid import UUID
 
 from app.core.log.log import get_logger
+from app.modules.datastore.domain.errors import (
+    DatastoreDomainError,
+    DatastoreInfrastructureError,
+    DatastoreObjectNotFoundError,
+)
 from app.modules.datastore.domain.file_entities import (
     DatastoreFileEntity,
     DatastoreFileUpdateEntity,
@@ -29,7 +34,6 @@ from app.modules.datastore.domain.ports import (
     DatastoreSearchFactoryPort,
     DatastoreStoragePort,
 )
-from app.modules.datastore.domain.errors import DatastoreInfrastructureError
 from app.modules.datastore.services.files.path_resolver import PathResolver
 from app.modules.datastore.services.files.projection import FileProjection
 
@@ -89,15 +93,28 @@ class FileStoragePhase:
         persisted — so a mid-flight failure can only orphan a blob, never lose
         data."""
         if plan.has_content:
+            if plan.new_storage_key is None or update_entity.content is None:
+                raise DatastoreInfrastructureError(
+                    "Content update is missing its immutable storage target"
+                )
             try:
                 await self.storage.upload_file(
                     plan.new_storage_key, update_entity.content
                 )
-            except Exception as exc:
+                stored_size = await self.storage.stat_file(plan.new_storage_key)
+                if stored_size != plan.file_entity.size_bytes:
+                    raise DatastoreInfrastructureError(
+                        "Uploaded object size does not match staged content"
+                    )
+            except DatastoreDomainError as exc:
                 raise DatastoreInfrastructureError(
                     "Failed to upload updated file content"
                 ) from exc
         elif plan.rename_moved:
+            if plan.previous_storage_key is None or plan.new_storage_key is None:
+                raise DatastoreInfrastructureError(
+                    "File rename is missing a source or destination storage key"
+                )
             try:
                 existing_content = await self.storage.download_file(
                     plan.previous_storage_key
@@ -115,7 +132,7 @@ class FileStoragePhase:
         connection; best-effort throughout (orphans are swept, never torn rows)."""
         # Delete the old blob only now that the row points at the new key.
         if (
-            plan.rename_moved
+            (plan.has_content or plan.rename_moved)
             and plan.previous_storage_key
             and plan.previous_storage_key != plan.new_storage_key
         ):
@@ -123,7 +140,7 @@ class FileStoragePhase:
                 await self.storage.delete_file(plan.previous_storage_key)
             except Exception as exc:
                 logger.warning(
-                    "Failed to delete old blob after rename %s: %s",
+                    "Failed to delete superseded original %s: %s",
                     plan.previous_storage_key,
                     exc,
                 )
@@ -140,9 +157,7 @@ class FileStoragePhase:
         search_service = self._search_factory_provider()(updated_entity.pod_id)
         if updated_entity.is_file and (
             not updated_entity.search_enabled
-            or not is_indexable_mime_type(
-                updated_entity.mime_type, updated_entity.name
-            )
+            or not is_indexable_mime_type(updated_entity.mime_type, updated_entity.name)
         ):
             try:
                 await search_service.remove_file(updated_entity.id)
@@ -178,6 +193,27 @@ class FileStoragePhase:
                 plan.previous_path,
             )
 
+    async def cleanup_uncommitted_update(self, plan: _UpdatePlan) -> None:
+        """Delete a newly written object when the following DB phase fails.
+
+        The previous key is never touched, so the committed row remains readable.
+        """
+        if (
+            (plan.has_content or plan.rename_moved)
+            and plan.new_storage_key
+            and plan.new_storage_key != plan.previous_storage_key
+        ):
+            try:
+                await self.storage.delete_file(plan.new_storage_key)
+            except DatastoreObjectNotFoundError:
+                return
+            except Exception as exc:
+                logger.warning(
+                    "Failed to clean up uncommitted datastore object %s: %s",
+                    plan.new_storage_key,
+                    exc,
+                )
+
     async def cleanup_deleted_paths(
         self,
         pod_id: UUID,
@@ -194,7 +230,7 @@ class FileStoragePhase:
             if folder_prefix:
                 try:
                     await self.storage.delete_prefix(folder_prefix)
-                except Exception as exc:
+                except DatastoreDomainError as exc:
                     logger.warning(
                         "Failed to delete folder contents from storage %s: %s",
                         folder_prefix,
@@ -203,6 +239,14 @@ class FileStoragePhase:
             # Child containers (converted markdown, figures, rendered pages) are
             # colocated under the folder prefix, so the delete above removed them.
             for item in files:
+                # Immutable originals are keyed by file id rather than folder
+                # path, so purge each captured key explicitly. Legacy path-based
+                # keys were already removed by the prefix delete; this is
+                # intentionally idempotent.
+                try:
+                    await self.storage.delete_file(item["storage_key"])
+                except Exception as exc:
+                    logger.warning("Failed to delete file %s: %s", item["path"], exc)
                 try:
                     await search_service.remove_file(UUID(item["file_id"]))
                 except Exception as exc:

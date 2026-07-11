@@ -4,7 +4,7 @@ from datetime import datetime, timezone
 from typing import Optional, Sequence, Tuple
 from uuid import UUID
 
-from sqlalchemy import and_, delete, or_, select, update
+from sqlalchemy import and_, delete, or_, select, text, update
 
 from app.core.authorization.context import Context, ResourceType, ResourceVisibility
 from app.core.authorization.grants import delete_resource_sharing_grants
@@ -57,6 +57,16 @@ def _file_payload(entity: DatastoreFileEntity) -> dict:
 class DatastoreFileRepository(DatastoreRepositoryBase, DatastoreFileRepositoryPort):
     """Persistence for file/folder metadata (the application DB)."""
 
+    async def acquire_path_lock(self, pod_id: UUID, path: str) -> None:
+        """Serialize mkdir-p decisions for one pod/path until transaction end."""
+        await self.session.execute(
+            text(
+                "SELECT pg_advisory_xact_lock("
+                "hashtextextended(CAST(:path_key AS text), 0))"
+            ),
+            {"path_key": f"{pod_id}:{path}"},
+        )
+
     async def create(self, entity: DatastoreFileEntity) -> DatastoreFileEntity:
         instance = DatastoreFile(**_file_payload(entity))
         self.session.add(instance)
@@ -90,28 +100,50 @@ class DatastoreFileRepository(DatastoreRepositoryBase, DatastoreFileRepositoryPo
             .values(status=FileStatus.NOT_REQUIRED.value, indexed_at=None)
         )
 
-    async def claim_for_processing(self, file_id: UUID) -> bool:
+    async def claim_for_processing(
+        self, file_id: UUID, *, content_revision: int
+    ) -> bool:
         """Atomically move PENDING -> PROCESSING; False if already claimed."""
         result = await self.session.execute(
             update(DatastoreFile)
             .where(
                 DatastoreFile.id == file_id,
                 DatastoreFile.status == FileStatus.PENDING.value,
+                DatastoreFile.content_revision == content_revision,
             )
             .values(
                 status=FileStatus.PROCESSING.value,
                 processing_attempts=DatastoreFile.processing_attempts + 1,
+                processing_phase="EXTRACT",
+                processing_started_at=datetime.now(timezone.utc),
             )
         )
         return result.rowcount > 0
 
-    async def mark_completed(self, file_id: UUID, *, file_metadata: dict) -> bool:
+    async def set_processing_phase(
+        self, file_id: UUID, *, content_revision: int, phase: str
+    ) -> bool:
+        result = await self.session.execute(
+            update(DatastoreFile)
+            .where(
+                DatastoreFile.id == file_id,
+                DatastoreFile.status == FileStatus.PROCESSING.value,
+                DatastoreFile.content_revision == content_revision,
+            )
+            .values(processing_phase=phase)
+        )
+        return result.rowcount > 0
+
+    async def mark_completed(
+        self, file_id: UUID, *, content_revision: int, file_metadata: dict
+    ) -> bool:
         """PROCESSING -> COMPLETED; False if a newer update already reset it."""
         result = await self.session.execute(
             update(DatastoreFile)
             .where(
                 DatastoreFile.id == file_id,
                 DatastoreFile.status == FileStatus.PROCESSING.value,
+                DatastoreFile.content_revision == content_revision,
             )
             .values(
                 status=FileStatus.COMPLETED.value,
@@ -119,19 +151,46 @@ class DatastoreFileRepository(DatastoreRepositoryBase, DatastoreFileRepositoryPo
                 last_processing_error=None,
                 processing_attempts=0,
                 file_metadata=file_metadata,
+                processing_phase=None,
+                processing_started_at=None,
             )
         )
         return result.rowcount > 0
 
-    async def mark_failed(self, file_id: UUID, *, error: str) -> bool:
+    async def mark_failed(
+        self, file_id: UUID, *, content_revision: int, error: str
+    ) -> bool:
         """PROCESSING -> FAILED; False if a newer update already reset it."""
         result = await self.session.execute(
             update(DatastoreFile)
             .where(
                 DatastoreFile.id == file_id,
                 DatastoreFile.status == FileStatus.PROCESSING.value,
+                DatastoreFile.content_revision == content_revision,
             )
-            .values(status=FileStatus.FAILED.value, last_processing_error=error)
+            .values(
+                status=FileStatus.FAILED.value,
+                last_processing_error=error,
+                processing_started_at=None,
+            )
+        )
+        return result.rowcount > 0
+
+    async def mark_missing_original(
+        self, file_id: UUID, *, content_revision: int, error: str
+    ) -> bool:
+        result = await self.session.execute(
+            update(DatastoreFile)
+            .where(
+                DatastoreFile.id == file_id,
+                DatastoreFile.status == FileStatus.PROCESSING.value,
+                DatastoreFile.content_revision == content_revision,
+            )
+            .values(
+                status=FileStatus.FAILED_PERMANENT.value,
+                last_processing_error=error,
+                processing_started_at=None,
+            )
         )
         return result.rowcount > 0
 

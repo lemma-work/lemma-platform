@@ -11,8 +11,10 @@ from app.modules.datastore.infrastructure.kreuzberg_circuit import (
     reset_kreuzberg_circuit,
 )
 from app.modules.datastore.infrastructure.kreuzberg_helper import (
+    KreuzbergCompatibilityError,
     KreuzbergExtractionResult,
     KreuzbergHelper,
+    KreuzbergTransientError,
 )
 
 
@@ -60,6 +62,24 @@ class _FlakyPost:
         return _PostContext(self)
 
 
+class _AlwaysTimeoutPost:
+    def __init__(self):
+        self.attempts = 0
+
+    def __call__(self, *args, **kwargs):
+        owner = self
+
+        class _Context:
+            async def __aenter__(self):
+                owner.attempts += 1
+                raise TimeoutError("request timed out")
+
+            async def __aexit__(self, exc_type, exc, tb):
+                return None
+
+        return _Context()
+
+
 def _fake_client_session_factory(calls: list[dict]):
     def _factory(**kwargs):
         calls.append(kwargs)
@@ -78,12 +98,16 @@ async def test_process_file_uses_native_pdf_config_with_150_dpi(monkeypatch):
 
     monkeypatch.setattr(helper, "_pdf_needs_ocr", AsyncMock(return_value=False))
     extract_mock = AsyncMock(
-        return_value=KreuzbergExtractionResult({"content": "native text", "chunks": None})
+        return_value=KreuzbergExtractionResult(
+            {"content": "native text", "chunks": None}
+        )
     )
     chunk_mock = AsyncMock(return_value=[{"text": "native text", "metadata": {}}])
     session_calls: list[dict] = []
 
-    monkeypatch.setattr("aiohttp.ClientSession", _fake_client_session_factory(session_calls))
+    monkeypatch.setattr(
+        "aiohttp.ClientSession", _fake_client_session_factory(session_calls)
+    )
     monkeypatch.setattr(helper, "_extract", extract_mock)
     monkeypatch.setattr(helper, "_chunk_content", chunk_mock)
 
@@ -120,7 +144,9 @@ async def test_process_file_uses_heavy_pdf_config_for_scanned_pdf(monkeypatch):
     chunk_mock = AsyncMock(return_value=[{"text": "ocr text", "metadata": {}}])
     session_calls: list[dict] = []
 
-    monkeypatch.setattr("aiohttp.ClientSession", _fake_client_session_factory(session_calls))
+    monkeypatch.setattr(
+        "aiohttp.ClientSession", _fake_client_session_factory(session_calls)
+    )
     monkeypatch.setattr(helper, "_extract", extract_mock)
     monkeypatch.setattr(helper, "_chunk_content", chunk_mock)
 
@@ -149,7 +175,9 @@ async def test_process_file_ocr_disabled_by_default_skips_probe_and_uses_native(
     probe = AsyncMock(return_value=True)
     monkeypatch.setattr(helper, "_pdf_needs_ocr", probe)
     extract_mock = AsyncMock(
-        return_value=KreuzbergExtractionResult({"content": "native text", "chunks": None})
+        return_value=KreuzbergExtractionResult(
+            {"content": "native text", "chunks": None}
+        )
     )
     monkeypatch.setattr("aiohttp.ClientSession", _fake_client_session_factory([]))
     monkeypatch.setattr(helper, "_extract", extract_mock)
@@ -199,6 +227,20 @@ def test_build_extract_config_native_pdf_uses_150_dpi_keeps_layout():
     assert config["pdf_options"]["allow_single_column_tables"] is True
 
 
+def test_build_extract_config_can_disable_model_backed_layout(monkeypatch):
+    monkeypatch.setattr(
+        kreuzberg_module.datastore_settings,
+        "document_processing_layout_enabled",
+        False,
+    )
+
+    config = KreuzbergHelper()._build_extract_config("application/pdf", force_ocr=False)
+
+    assert "layout" not in config
+    assert "hierarchy" not in config["pdf_options"]
+    assert config["pdf_options"]["extract_images"] is True
+
+
 def test_build_extract_config_scanned_pdf_forces_ocr_at_300_dpi():
     helper = KreuzbergHelper()
     config = helper._build_extract_config("application/pdf", force_ocr=True)
@@ -214,7 +256,9 @@ def test_build_extract_config_scanned_pdf_forces_ocr_at_300_dpi():
 async def test_pdf_needs_ocr_true_for_low_text_density(monkeypatch):
     helper = KreuzbergHelper()
     # 5 pages, 50 chars total → avg 10 < 100 threshold → scanned.
-    monkeypatch.setattr(kreuzberg_module, "get_pdf_text_sample", lambda *a, **k: (5, 50))
+    monkeypatch.setattr(
+        kreuzberg_module, "get_pdf_text_sample", lambda *a, **k: (5, 50)
+    )
     assert await helper._pdf_needs_ocr(b"pdf-bytes") is True
 
 
@@ -222,7 +266,9 @@ async def test_pdf_needs_ocr_true_for_low_text_density(monkeypatch):
 async def test_pdf_needs_ocr_false_for_high_text_density(monkeypatch):
     helper = KreuzbergHelper()
     # 5 pages, 5000 chars total → avg 1000 ≥ 100 → native.
-    monkeypatch.setattr(kreuzberg_module, "get_pdf_text_sample", lambda *a, **k: (5, 5000))
+    monkeypatch.setattr(
+        kreuzberg_module, "get_pdf_text_sample", lambda *a, **k: (5, 5000)
+    )
     assert await helper._pdf_needs_ocr(b"pdf-bytes") is False
 
 
@@ -267,7 +313,9 @@ async def test_process_file_retries_with_forced_ocr_when_initial_pdf_extract_is_
     chunk_mock = AsyncMock(return_value=[{"text": "ocr text", "metadata": {}}])
     session_calls: list[dict] = []
 
-    monkeypatch.setattr("aiohttp.ClientSession", _fake_client_session_factory(session_calls))
+    monkeypatch.setattr(
+        "aiohttp.ClientSession", _fake_client_session_factory(session_calls)
+    )
     monkeypatch.setattr(helper, "_extract", extract_mock)
     monkeypatch.setattr(helper, "_chunk_content", chunk_mock)
 
@@ -297,7 +345,9 @@ async def test_process_file_falls_back_to_full_content_when_chunking_returns_not
     chunk_mock = AsyncMock(return_value=[])
     session_calls: list[dict] = []
 
-    monkeypatch.setattr("aiohttp.ClientSession", _fake_client_session_factory(session_calls))
+    monkeypatch.setattr(
+        "aiohttp.ClientSession", _fake_client_session_factory(session_calls)
+    )
     monkeypatch.setattr(helper, "_extract", extract_mock)
     monkeypatch.setattr(helper, "_chunk_content", chunk_mock)
 
@@ -400,6 +450,73 @@ async def test_extract_retries_transient_connection_error_then_succeeds(monkeypa
 
 
 @pytest.mark.asyncio
+async def test_extract_does_not_immediately_retry_timeout():
+    post = _AlwaysTimeoutPost()
+    helper = KreuzbergHelper()
+
+    with pytest.raises(KreuzbergTransientError, match="timed out"):
+        await helper._extract(
+            SimpleNamespace(post=post),
+            file_content=b"bytes",
+            filename="book.pdf",
+            mime_type="application/pdf",
+        )
+
+    assert post.attempts == 1
+
+
+@pytest.mark.asyncio
+async def test_config_fallback_only_handles_schema_compatibility(monkeypatch):
+    helper = KreuzbergHelper()
+    extraction = KreuzbergExtractionResult({"content": "ok"})
+    extract = AsyncMock(
+        side_effect=[KreuzbergCompatibilityError("unsupported field"), extraction]
+    )
+    monkeypatch.setattr(helper, "_extract", extract)
+
+    result = await helper._extract_with_config_fallback(
+        SimpleNamespace(),
+        file_content=b"bytes",
+        filename="book.pdf",
+        mime_type="application/pdf",
+        config=helper._build_extract_config("application/pdf", force_ocr=False),
+    )
+
+    assert result is extraction
+    assert extract.await_count == 2
+
+
+@pytest.mark.asyncio
+async def test_config_fallback_does_not_multiply_transient_failure(monkeypatch):
+    helper = KreuzbergHelper()
+    extract = AsyncMock(side_effect=KreuzbergTransientError("service busy"))
+    monkeypatch.setattr(helper, "_extract", extract)
+
+    with pytest.raises(KreuzbergTransientError, match="service busy"):
+        await helper._extract_with_config_fallback(
+            SimpleNamespace(),
+            file_content=b"bytes",
+            filename="book.pdf",
+            mime_type="application/pdf",
+            config=helper._build_extract_config("application/pdf", force_ocr=False),
+        )
+
+    assert extract.await_count == 1
+
+
+@pytest.mark.asyncio
+async def test_http_503_is_transient_but_not_same_request_retried():
+    helper = KreuzbergHelper()
+    response = SimpleNamespace(
+        status=503,
+        text=AsyncMock(return_value="busy"),
+    )
+
+    with pytest.raises(KreuzbergTransientError, match="status 503"):
+        await helper._raise_for_status(response)
+
+
+@pytest.mark.asyncio
 async def test_extract_streams_content_path_instead_of_buffering(monkeypatch, tmp_path):
     """When given a content_path, _extract streams the file from disk (opens it)
     rather than holding a BytesIO copy of the bytes."""
@@ -450,7 +567,7 @@ async def test_extract_raises_after_exhausting_transient_retries(monkeypatch):
     session = SimpleNamespace(post=_FlakyPost(fail_times=99, response=None))
 
     helper = KreuzbergHelper()
-    with pytest.raises(RuntimeError, match="Kreuzberg extract request failed"):
+    with pytest.raises(KreuzbergTransientError, match="connection failed"):
         await helper._extract(
             session,
             file_content=b"bytes",

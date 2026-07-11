@@ -58,7 +58,7 @@ EXPECTED = [
     ("docling_serve_url", "DOCLING_SERVE_URL", None),
     ("docling_request_timeout_seconds", "DOCLING_REQUEST_TIMEOUT_SECONDS", 300.0),
     ("kreuzberg_url", "KREUZBERG_URL", "http://localhost:8002"),
-    ("kreuzberg_request_timeout_seconds", "KREUZBERG_REQUEST_TIMEOUT_SECONDS", 180.0),
+    ("kreuzberg_request_timeout_seconds", "KREUZBERG_REQUEST_TIMEOUT_SECONDS", 600.0),
     ("kreuzberg_connect_timeout_seconds", "KREUZBERG_CONNECT_TIMEOUT_SECONDS", 8.0),
     ("kreuzberg_transient_retry_attempts", "KREUZBERG_TRANSIENT_RETRY_ATTEMPTS", 3),
     (
@@ -97,6 +97,7 @@ EXPECTED = [
 # cannot exercise — validated with dedicated tests instead.
 EXTRA_FIELDS = [
     ("document_processing_ocr_enabled", "DOCUMENT_PROCESSING_OCR_ENABLED", False),
+    ("document_processing_layout_enabled", "DOCUMENT_PROCESSING_LAYOUT_ENABLED", True),
     ("document_processor", "DOCUMENT_PROCESSOR", "auto"),
 ]
 
@@ -156,6 +157,13 @@ def test_effective_document_processor_auto_never_selects_docling(monkeypatch):
         DatastoreSettings(document_processor="docling").effective_document_processor()
         == "docling"
     )
+
+
+def test_document_processing_layout_enabled_reads_env(monkeypatch):
+    monkeypatch.delenv("DOCUMENT_PROCESSING_LAYOUT_ENABLED", raising=False)
+    assert DatastoreSettings().document_processing_layout_enabled is True
+    monkeypatch.setenv("DOCUMENT_PROCESSING_LAYOUT_ENABLED", "false")
+    assert DatastoreSettings().document_processing_layout_enabled is False
 
 
 @pytest.mark.parametrize("field,env,_default", EXPECTED)

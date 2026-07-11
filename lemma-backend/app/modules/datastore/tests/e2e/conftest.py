@@ -15,6 +15,7 @@ from httpx import AsyncClient
 from sqlalchemy import select
 
 from app.core.infrastructure.db.uow_factory import SessionUnitOfWorkFactory
+from app.core.config import settings
 from app.core.test_utils import shared_kreuzberg
 from app.modules.datastore.tests.e2e.harness import (
     DatastoreApi,
@@ -30,6 +31,21 @@ from app.modules.test_support.e2e import fixtures as e2e_fixtures
 from app.modules.test_support.e2e.worker_process import production_worker_process
 
 pytestmark = pytest.mark.e2e
+
+
+@pytest.fixture(scope="session", autouse=True)
+def hermetic_datastore_runtime():
+    """Avoid model-network dependencies in routine datastore E2E tests."""
+    previous_embeddings = settings.e2e_deterministic_embeddings
+    previous_layout = datastore_settings.document_processing_layout_enabled
+    settings.e2e_deterministic_embeddings = True
+    datastore_settings.document_processing_layout_enabled = False
+    try:
+        yield
+    finally:
+        settings.e2e_deterministic_embeddings = previous_embeddings
+        datastore_settings.document_processing_layout_enabled = previous_layout
+
 
 # Use the base session settings unchanged. Kreuzberg is NOT wired in here: it is
 # a RAM-heavy ML container, so only the fixtures that actually extract documents
@@ -92,16 +108,25 @@ def document_worker(
             "DOCLING_SERVE_URL": fake_document_processor_server.base_url,
             "DOCLING_REQUEST_TIMEOUT_SECONDS": "2",
             "DOCUMENT_PROCESSING_DEBOUNCE_SECONDS": "0",
+            # The worker journey validates extraction/projection/indexing, not
+            # model acquisition. Keep it hermetic and deterministic so a cold or
+            # corrupt FastEmbed cache cannot make the contract test flaky.
+            "E2E_DETERMINISTIC_EMBEDDINGS": "true",
         }
         if processor == "markitdown":
             fake_dependencies = Path(__file__).parent / "fake_processor_deps"
             extra_env["PYTHONPATH"] = f"{fake_dependencies}:."
-        async with production_worker_process(
-            e2e_settings,
-            log_prefix=f"lemma_datastore_{processor}_worker",
-            extra_env=extra_env,
-        ) as process:
-            yield process
+        previous_test_embeddings = settings.e2e_deterministic_embeddings
+        settings.e2e_deterministic_embeddings = True
+        try:
+            async with production_worker_process(
+                e2e_settings,
+                log_prefix=f"lemma_datastore_{processor}_worker",
+                extra_env=extra_env,
+            ) as process:
+                yield process
+        finally:
+            settings.e2e_deterministic_embeddings = previous_test_embeddings
 
     return _start
 

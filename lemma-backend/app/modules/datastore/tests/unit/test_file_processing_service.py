@@ -14,7 +14,10 @@ from app.modules.datastore.domain.document_processing import (
     DocumentImage,
     DocumentPage,
 )
-from app.modules.datastore.domain.errors import DatastoreObjectNotFoundError
+from app.modules.datastore.domain.errors import (
+    DatastoreObjectIntegrityError,
+    DatastoreObjectNotFoundError,
+)
 from app.modules.datastore.services.file_processing_service import (
     DatastoreFileProcessingService,
 )
@@ -50,7 +53,7 @@ class _RecordingUowFactory:
 
     @asynccontextmanager
     async def __call__(self):
-        result = self._results.pop(0)
+        result = self._results.pop(0) if self._results else _ExecuteResult()
         session = AsyncMock()
         session.execute = AsyncMock(side_effect=[result])
         self.sessions.append(session)
@@ -322,7 +325,7 @@ async def test_process_file_async_byo_holds_no_db_session_during_io():
 
     service.document_processor.extract.assert_not_awaited()
     # get_model, claim, mark_completed — all short UoWs, none left open.
-    assert factory.opened == 3
+    assert factory.opened == 5
     assert factory.active == 0
 
 
@@ -512,7 +515,7 @@ async def test_process_file_async_uses_latest_file_metadata_over_stale_job_metad
         == "frontend"
     )
     # Three short UoWs: get_model, claim_for_processing, mark_completed.
-    assert factory.opened == 3
+    assert factory.opened == 5
 
 
 @pytest.mark.asyncio
@@ -625,11 +628,11 @@ async def test_process_file_async_scopes_short_uows_and_holds_no_session_during_
 
     await service.process_file_async(file_id, {"source": "test"})
 
-    # Three distinct short UoWs opened (get_model, claim, mark_completed),
-    # all closed (none left dangling), each issuing exactly one statement.
-    assert factory.opened == 3
+    # Five distinct short UoWs opened (get, claim, two phase transitions,
+    # completion), all closed and each issuing exactly one statement.
+    assert factory.opened == 5
     assert factory.active == 0
-    assert [s.execute.await_count for s in factory.sessions] == [1, 1, 1]
+    assert [s.execute.await_count for s in factory.sessions] == [1, 1, 1, 1, 1]
     service.search_service.index_file_chunks.assert_awaited_once()
     # PDF projection uploads document.md + manifest.json (no images here).
     assert service.storage.upload_file.await_count == 2
@@ -665,6 +668,69 @@ async def test_process_file_async_marks_failed_in_own_uow_on_error():
     # get_model + claim + mark_failed, all closed.
     assert factory.opened == 3
     assert factory.active == 0
+
+
+@pytest.mark.asyncio
+async def test_process_file_async_terminally_fails_missing_immutable_original():
+    file_id = uuid4()
+    file_model = SimpleNamespace(
+        id=file_id,
+        kind="FILE",
+        status="PENDING",
+        search_enabled=True,
+        name="missing.pdf",
+        path="/manuals/missing.pdf",
+        mime_type="application/pdf",
+        file_metadata={},
+        content_revision=3,
+        storage_key=f"pods/test/files/.objects/{file_id}/revisions/3",
+    )
+    factory = _RecordingUowFactory(
+        results=[_ScalarResult(file_model), _ExecuteResult(), _ExecuteResult()]
+    )
+    service = _build_service(factory)
+    service.storage.iter_download = _make_iter_download_raising(
+        DatastoreObjectNotFoundError("missing")
+    )
+
+    with pytest.raises(DatastoreObjectNotFoundError):
+        await service.process_file_async(file_id)
+
+    terminal_stmt = factory.sessions[-1].execute.await_args.args[0]
+    compiled = str(terminal_stmt.compile().params)
+    assert "FAILED_PERMANENT" in compiled
+    assert "content_revision" in str(terminal_stmt)
+    service.document_processor.extract.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_process_file_async_terminally_fails_corrupt_immutable_original():
+    file_id = uuid4()
+    file_model = SimpleNamespace(
+        id=file_id,
+        kind="FILE",
+        status="PENDING",
+        search_enabled=True,
+        name="corrupt.pdf",
+        path="/manuals/corrupt.pdf",
+        mime_type="application/pdf",
+        file_metadata={},
+        content_revision=2,
+        content_sha256="0" * 64,
+        storage_key=f"pods/test/files/.objects/{file_id}/revisions/2",
+    )
+    factory = _RecordingUowFactory(
+        results=[_ScalarResult(file_model), _ExecuteResult(), _ExecuteResult()]
+    )
+    service = _build_service(factory)
+    _set_source_bytes(service, b"tampered bytes")
+
+    with pytest.raises(DatastoreObjectIntegrityError):
+        await service.process_file_async(file_id)
+
+    terminal_stmt = factory.sessions[-1].execute.await_args.args[0]
+    assert "FAILED_PERMANENT" in str(terminal_stmt.compile().params)
+    service.document_processor.extract.assert_not_awaited()
 
 
 def test_processing_error_summary_never_persists_provider_payload():
