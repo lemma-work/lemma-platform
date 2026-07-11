@@ -32,6 +32,14 @@ class ConnectorSettings(BaseSettings):
     composio_webhook_secret: Optional[str] = Field(
         default=None, description="Composio webhook secret"
     )
+    composio_sdk_telemetry_enabled: bool = Field(
+        default=False,
+        description=(
+            "Allow the Composio SDK to send invocation telemetry to Composio. "
+            "Disabled by default so connector names, failures, and execution "
+            "metadata do not leave the deployment unexpectedly."
+        ),
+    )
     connector_operation_timeout_seconds: float = Field(
         default=45.0,
         description=(

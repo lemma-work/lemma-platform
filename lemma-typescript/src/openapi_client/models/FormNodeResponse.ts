@@ -10,4 +10,3 @@ export type FormNodeResponse = {
     position?: (Record<string, number> | null);
     type?: string;
 };
-

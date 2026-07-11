@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from collections.abc import Awaitable, Callable
+from functools import partial
 from typing import TYPE_CHECKING, Any
 from uuid import UUID
 
@@ -23,15 +25,9 @@ from app.modules.datastore.services.table_context import TableContext
 
 if TYPE_CHECKING:
     from app.modules.datastore.services.table_service import TableService
-from app.modules.datastore.domain.events import (
-    DATASTORE_EVENTS_STREAM,
-    DatastoreRecordEvent,
-    DatastoreRecordOperation,
-)
-from app.modules.identity.domain.ports import UserRepositoryPort
-from app.core.log.log import get_logger
-
-logger = get_logger(__name__)
+from app.modules.datastore.domain.events import DatastoreRecordOperation
+from app.modules.datastore.services.record_events import RecordEventCoordinator
+from app.modules.identity.contracts import UserReader
 
 
 class RecordService:
@@ -40,7 +36,9 @@ class RecordService:
         record_repository: DatastoreRecordRepositoryPort,
         message_bus: MessageBus | None = None,
         authorization_service: object | None = None,
-        user_repository: UserRepositoryPort | None = None,
+        user_repository: UserReader | None = None,
+        transactional_events: bool = False,
+        event_dispatcher: Callable[[], Awaitable[int]] | None = None,
     ):
         self.record_repository = record_repository
         self.message_bus = message_bus or get_message_bus()
@@ -51,6 +49,12 @@ class RecordService:
             else None
         )
         self.user_repository = user_repository
+        self.transactional_events = transactional_events
+        self.events = RecordEventCoordinator(
+            self.message_bus,
+            transactional=transactional_events,
+            dispatcher=event_dispatcher,
+        )
 
     async def _require_datastore_read(
         self,
@@ -91,38 +95,6 @@ class RecordService:
             ctx=ctx,
             admin_mode=admin_mode,
         )
-
-    async def _emit_record_event(
-        self,
-        ctx: TableContext,
-        record_id: str,
-        operation: DatastoreRecordOperation,
-        payload: dict[str, Any],
-        user_id: UUID,
-        owner_user_id: UUID | None = None,
-    ) -> None:
-        if not ctx.events_enabled:
-            return
-
-        try:
-            # Only RLS tables carry an owner; for everyone else the row is shared
-            # across the pod, so subscribers must not scope it to a single user.
-            # On RLS tables the owner defaults to the acting user, which is correct
-            # for inserts and self-edits (RLS forces ``user_id == caller``); an
-            # admin-mode write to another user's row passes the resolved owner.
-            event_owner = (owner_user_id or user_id) if ctx.enable_rls else None
-            event = DatastoreRecordEvent.create(
-                pod_id=ctx.pod_id,
-                table_name=ctx.table_name,
-                record_id=str(record_id),
-                operation=operation,
-                payload=payload,
-                actor_id=user_id,
-                owner_user_id=event_owner,
-            )
-            await self.message_bus.publish(DATASTORE_EVENTS_STREAM, event)
-        except Exception as exc:
-            logger.error("Failed to emit record event: %s", exc)
 
     def _validate_update_payload(
         self,
@@ -219,15 +191,33 @@ class RecordService:
             )
 
         await self._validate_user_reference_columns(ctx, sanitized_data)
-        record = await self.record_repository.create_record(ctx, sanitized_data, user_id)
-        await self._emit_record_event(
-            ctx,
-            str(record.id),
-            DatastoreRecordOperation.INSERT,
-            sanitized_data,
-            user_id,
-            owner_user_id=record.user_id,
-        )
+        if self.transactional_events and ctx.events_enabled:
+            event_factory = partial(
+                self.events.required_for_record,
+                ctx=ctx,
+                operation=DatastoreRecordOperation.INSERT,
+                payload=sanitized_data,
+                user_id=user_id,
+            )
+            record = await self.record_repository.create_record(
+                ctx,
+                sanitized_data,
+                user_id,
+                event_factory=event_factory,
+            )
+            await self.events.dispatch()
+        else:
+            record = await self.record_repository.create_record(
+                ctx, sanitized_data, user_id
+            )
+            await self.events.emit_compat(
+                ctx,
+                str(record.id),
+                DatastoreRecordOperation.INSERT,
+                sanitized_data,
+                user_id,
+                owner_user_id=record.user_id,
+            )
         return record
 
     async def get_record(
@@ -360,25 +350,44 @@ class RecordService:
         self._validate_update_payload(ctx, sanitized_data)
         await self._validate_user_reference_columns(ctx, sanitized_data)
 
-        record = await self.record_repository.update_record(
-            ctx,
-            record_id,
-            sanitized_data,
-            user_id,
-            enforce_user_scope=await self._should_enforce_user_scope(
-                user_id=user_id,
+        enforce_user_scope = await self._should_enforce_user_scope(
+            user_id=user_id,
+            ctx=ctx,
+            admin_mode=admin_mode,
+        )
+        if self.transactional_events and ctx.events_enabled:
+            event_factory = partial(
+                self.events.required_for_record,
                 ctx=ctx,
-                admin_mode=admin_mode,
-            ),
-        )
-        await self._emit_record_event(
-            ctx,
-            str(record.id),
-            DatastoreRecordOperation.UPDATE,
-            sanitized_data,
-            user_id,
-            owner_user_id=record.user_id,
-        )
+                operation=DatastoreRecordOperation.UPDATE,
+                payload=sanitized_data,
+                user_id=user_id,
+            )
+            record = await self.record_repository.update_record(
+                ctx,
+                record_id,
+                sanitized_data,
+                user_id,
+                enforce_user_scope=enforce_user_scope,
+                event_factory=event_factory,
+            )
+            await self.events.dispatch()
+        else:
+            record = await self.record_repository.update_record(
+                ctx,
+                record_id,
+                sanitized_data,
+                user_id,
+                enforce_user_scope=enforce_user_scope,
+            )
+            await self.events.emit_compat(
+                ctx,
+                str(record.id),
+                DatastoreRecordOperation.UPDATE,
+                sanitized_data,
+                user_id,
+                owner_user_id=record.user_id,
+            )
         return record
 
     async def delete_record(
@@ -390,20 +399,32 @@ class RecordService:
         admin_mode: bool = False,
     ) -> bool:
         await self._require_record_write(user_id=user_id, ctx=ctx)
-        deleted = await self.record_repository.delete_record(
-            ctx,
-            record_id,
-            user_id,
-            enforce_user_scope=await self._should_enforce_user_scope(
-                user_id=user_id,
-                ctx=ctx,
-                admin_mode=admin_mode,
-            ),
+        enforce_user_scope = await self._should_enforce_user_scope(
+            user_id=user_id,
+            ctx=ctx,
+            admin_mode=admin_mode,
         )
-        if deleted:
-            await self._emit_record_event(
-                ctx, str(record_id), DatastoreRecordOperation.DELETE, {}, user_id
+        event = self.events.build(
+            ctx, str(record_id), DatastoreRecordOperation.DELETE, {}, user_id
+        )
+        if self.transactional_events and event is not None:
+            deleted = await self.record_repository.delete_record(
+                ctx,
+                record_id,
+                user_id,
+                enforce_user_scope=enforce_user_scope,
+                event=event,
             )
+            await self.events.dispatch()
+        else:
+            deleted = await self.record_repository.delete_record(
+                ctx,
+                record_id,
+                user_id,
+                enforce_user_scope=enforce_user_scope,
+            )
+            if deleted and event is not None:
+                await self.events.publish(event)
         return deleted
 
     async def bulk_create_records(
@@ -432,28 +453,36 @@ class RecordService:
                 )
             await self._validate_user_reference_columns(ctx, record)
 
-        if upsert:
-            written = await self.record_repository.bulk_upsert_records(
-                ctx, sanitized_records, user_id
-            )
-        else:
-            written = await self.record_repository.bulk_create_records(
-                ctx, sanitized_records, user_id
-            )
-
         # The bulk repository methods return only a count, not the created rows,
         # so emit one INSERT event per submitted record using its primary key
         # when present. Schedules match on pod/table/operation, so this is
         # sufficient to fire on bulk inserts.
+        events = []
         for record in sanitized_records:
             record_id = record.get(ctx.primary_key_column) or record.get("id")
-            await self._emit_record_event(
+            event = self.events.build(
                 ctx,
                 str(record_id) if record_id is not None else "",
                 DatastoreRecordOperation.INSERT,
                 record,
                 user_id,
             )
+            if event is not None:
+                events.append(event)
+
+        write_records = (
+            self.record_repository.bulk_upsert_records
+            if upsert
+            else self.record_repository.bulk_create_records
+        )
+        event_args = {"events": events} if self.transactional_events else {}
+        written = await write_records(ctx, sanitized_records, user_id, **event_args)
+
+        if not self.transactional_events:
+            for event in events:
+                await self.events.publish(event)
+        elif events:
+            await self.events.dispatch()
 
         return written
 

@@ -6,4 +6,3 @@ import type { AgentResourcePermissionRequest } from './AgentResourcePermissionRe
 export type AgentPermissionsReplaceRequest = {
     grants?: Array<AgentResourcePermissionRequest>;
 };
-

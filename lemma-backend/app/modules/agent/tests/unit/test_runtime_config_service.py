@@ -925,9 +925,10 @@ def test_lemma_harness_builds_dynamic_anthropic_compatible_model():
 
 def test_default_runtime_uses_system_profile(monkeypatch, tmp_path):
     from app.core.config import settings
+    from app.modules.agent.config import agent_settings
 
     monkeypatch.setattr(
-        settings,
+        agent_settings,
         "local_agent_runtime_config_path",
         str(tmp_path / "missing-runtime.json"),
     )

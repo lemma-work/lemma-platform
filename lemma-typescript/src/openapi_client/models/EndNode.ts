@@ -13,4 +13,3 @@ export type EndNode = {
     position?: (Record<string, number> | null);
     type?: string;
 };
-

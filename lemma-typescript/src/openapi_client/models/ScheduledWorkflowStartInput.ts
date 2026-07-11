@@ -2,15 +2,14 @@
 /* istanbul ignore file */
 /* tslint:disable */
 /* eslint-disable */
-import type { ScheduledFlowStartInput } from './ScheduledFlowStartInput.js';
+import type { ScheduledWorkflowStartConfigInput } from './ScheduledWorkflowStartConfigInput.js';
 export type ScheduledWorkflowStartInput = {
     /**
      * Scheduled workflow definition payload.
      */
-    config: ScheduledFlowStartInput;
+    config: ScheduledWorkflowStartConfigInput;
     /**
      * Scheduled workflow start.
      */
     type?: string;
 };
-

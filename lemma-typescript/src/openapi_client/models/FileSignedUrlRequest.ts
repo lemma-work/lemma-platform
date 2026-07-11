@@ -6,4 +6,3 @@ export type FileSignedUrlRequest = {
     expires_seconds?: (number | null);
     max_hits?: (number | null);
 };
-

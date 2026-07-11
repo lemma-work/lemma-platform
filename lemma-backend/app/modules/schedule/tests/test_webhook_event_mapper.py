@@ -19,6 +19,7 @@ def test_extract_slack_metadata_from_fixture(slack_user_dm_event):
     assert metadata["event_type"] == "message"
     assert metadata["channel_type"] == "im"
     assert metadata["thread_ts"] == "1766236791.639079"
+    assert metadata["source_event_id"] == "1766236791.639079"
 
 
 def test_extract_composio_metadata_from_fixture(composio_gmail_event):
@@ -54,4 +55,5 @@ def test_extract_composio_metadata_from_v3_payload():
     assert metadata["event_type"] == "GOOGLECALENDAR_GOOGLE_CALENDAR_EVENT_SYNC_TRIGGER"
     assert metadata["connected_account_id"] == "ca_123"
     assert metadata["webhook_event_type"] == "composio.trigger.message"
+    assert metadata["source_event_id"] == "evt_123"
     assert event_payload["event_id"] == "evt_123"

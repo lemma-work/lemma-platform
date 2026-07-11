@@ -15,4 +15,3 @@ export type FunctionRunSummaryResponse = {
     status: FunctionRunStatus;
     user_id: string;
 };
-

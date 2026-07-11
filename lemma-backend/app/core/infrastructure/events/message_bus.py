@@ -4,10 +4,14 @@ from __future__ import annotations
 
 import asyncio
 import logging
+from collections.abc import Mapping
+from typing import Any
 from pydantic import BaseModel
 from faststream.redis import RedisBroker
 
 from app.core.config import settings
+from app.core.infrastructure.events.config import event_transport_settings
+from app.core.infrastructure.events.stream_subscriber import ensure_stream_groups
 
 logger = logging.getLogger(__name__)
 
@@ -27,7 +31,20 @@ class FastStreamRedisMessageBus:
         async with self._lock:
             if not self._broker:
                 broker = RedisBroker(self._redis_url)
-                await broker.connect()
+                try:
+                    await broker.connect()
+                except asyncio.CancelledError:
+                    try:
+                        await broker.stop()
+                    except Exception:
+                        logger.warning("Failed closing cancelled Redis connection")
+                    raise
+                except Exception:
+                    try:
+                        await broker.stop()
+                    except Exception:
+                        logger.warning("Failed closing partial Redis connection")
+                    raise
                 self._broker = broker
         return self._broker
 
@@ -35,9 +52,26 @@ class FastStreamRedisMessageBus:
         """Eagerly initialize the shared broker connection."""
         return await self._get_broker()
 
-    async def publish(self, stream: str, event: BaseModel) -> None:
+    async def publish(
+        self, stream: str, event: BaseModel | Mapping[str, Any]
+    ) -> None:
         broker = await self._get_broker()
-        await broker.publish(event, stream=stream)
+        payload = (
+            event.model_dump(mode="json")
+            if isinstance(event, BaseModel)
+            else dict(event)
+        )
+        redis_client = getattr(broker, "_connection", None)
+        if redis_client is None:
+            raise ConnectionError("Redis message bus has no active connection")
+        async with asyncio.timeout(
+            event_transport_settings.event_publish_timeout_seconds
+        ):
+            # XGROUP must succeed before XADD. If this times out after an
+            # ambiguous XADD, the outbox retries and inbox idempotency contains
+            # the duplicate.
+            await ensure_stream_groups(redis_client, stream)
+            await broker.publish(payload, stream=stream)
 
     async def close(self) -> None:
         if not self._broker:

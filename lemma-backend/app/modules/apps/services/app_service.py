@@ -2,14 +2,15 @@
 
 from __future__ import annotations
 
-import hashlib
+import asyncio
 from io import BytesIO
-from pathlib import PurePosixPath
+from pathlib import Path, PurePosixPath
 from uuid import UUID
 from zipfile import ZIP_DEFLATED, ZipFile
 
 import structlog
 
+from app.core.api.uploads import upload_source_sha256
 from app.core.authorization.context import Context, ResourceRef, ResourceType, ResourceVisibility
 from app.core.html_document import wrap_html_fragment
 from app.core.ports.widget_content import WidgetArtifact
@@ -41,14 +42,13 @@ from app.modules.apps.services.app_storage_phase import (
     _UploadPlan,
     _WrittenBundle,
 )
-from app.modules.pod.domain.pod_entities import PodRole
-from app.modules.pod.domain.visibility import (
+from app.modules.pod.contracts import PodRole
+from app.modules.pod.contracts import (
     PERSONAL_VISIBILITY_VALUES,
     POD_VISIBILITY_VALUES,
 )
 
 logger = structlog.get_logger()
-
 
 class AppService:
     def __init__(
@@ -428,7 +428,7 @@ class AppService:
         user_id: UUID,
         *,
         has_source: bool,
-        dist_archive_bytes: bytes | None,
+        dist_archive_bytes: bytes | Path | None,
         ctx: Context | None = None,
     ) -> _UploadPlan:
         """Authorize + dedup (DB only). The storage writes happen outside this UoW
@@ -459,8 +459,8 @@ class AppService:
             # Validate the bundle up front (raises AppValidationError on a missing
             # root index.html), regardless of dedup — matches prior behavior and
             # ensures no storage write happens for an invalid bundle.
-            load_app_dist_bundle(dist_archive_bytes)
-            version = hashlib.sha256(dist_archive_bytes).hexdigest()
+            await asyncio.to_thread(load_app_dist_bundle, dist_archive_bytes)
+            version = await asyncio.to_thread(upload_source_sha256, dist_archive_bytes)
             release_root = f"releases/{version}/dist/"
             existing = await self.repository.get_release_by_version(app.id, version)
             existing_release_id = existing.id if existing is not None else None
@@ -479,8 +479,8 @@ class AppService:
     async def write_bundle_storage(
         self,
         plan: _UploadPlan,
-        source_archive_bytes: bytes | None,
-        dist_archive_bytes: bytes | None,
+        source_archive_bytes: bytes | Path | None,
+        dist_archive_bytes: bytes | Path | None,
     ) -> _WrittenBundle:
         """Write uploaded bytes to storage — delegated to the repo-free
         ``AppStoragePhase`` (holds no DB connection). Call between
@@ -515,18 +515,27 @@ class AppService:
         app.user_id = user_id
         return await self.repository.update(app)
 
+    async def cleanup_written_bundle(
+        self, plan: _UploadPlan, written: _WrittenBundle
+    ) -> None:
+        await self._storage_phase.cleanup_written_bundle(plan, written)
+
     async def upload_bundle(
         self,
         pod_id: UUID,
         name: str,
         user_id: UUID,
         *,
-        source_archive_bytes: bytes | None,
-        dist_archive_bytes: bytes | None,
+        source_archive_bytes: bytes | Path | None,
+        dist_archive_bytes: bytes | Path | None,
         ctx: Context | None = None,
     ) -> AppEntity:
         # Back-compat single-call path (holds the connection across storage). The
         # controller uses resolve/write/finalize so storage holds no connection.
+        from app.modules.apps.services.archive_validation import inspect_app_archive
+
+        if source_archive_bytes is not None:
+            inspect_app_archive(source_archive_bytes, label="Source archive")
         plan = await self.resolve_upload_bundle(
             pod_id,
             name,
@@ -538,7 +547,11 @@ class AppService:
         written = await self.write_bundle_storage(
             plan, source_archive_bytes, dist_archive_bytes
         )
-        return await self.finalize_upload_bundle(plan, written, user_id)
+        try:
+            return await self.finalize_upload_bundle(plan, written, user_id)
+        except BaseException:
+            await self.cleanup_written_bundle(plan, written)
+            raise
 
     async def resolve_app_asset(
         self,

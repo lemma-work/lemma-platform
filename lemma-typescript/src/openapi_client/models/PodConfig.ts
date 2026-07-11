@@ -14,4 +14,3 @@ export type PodConfig = {
     join_policy?: PodJoinPolicy;
     recipes?: Array<PodRecipe>;
 };
-

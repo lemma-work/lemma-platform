@@ -49,3 +49,21 @@ def test_env_py_imports_every_model_module() -> None:
         "`alembic revision --autogenerate` drops their tables from the baseline: "
         f"{missing}"
     )
+
+
+def test_schedule_run_ledger_uses_only_the_new_table_name() -> None:
+    from app.core.infrastructure.db.base import Base
+    from app.modules.schedule.infrastructure import models as schedule_models  # noqa: F401
+
+    assert "schedule_runs" in Base.metadata.tables
+    assert "schedule_fires" not in Base.metadata.tables
+
+
+def test_pod_bundle_uses_unified_durable_job_tables() -> None:
+    from app.core.infrastructure.db.base import Base
+    from app.modules.pod_bundle.infrastructure import models as bundle_models  # noqa: F401
+
+    assert "pod_bundle_jobs" in Base.metadata.tables
+    assert "pod_bundle_job_steps" in Base.metadata.tables
+    assert "pod_bundle_import_jobs" not in Base.metadata.tables
+    assert "pod_bundle_import_steps" not in Base.metadata.tables

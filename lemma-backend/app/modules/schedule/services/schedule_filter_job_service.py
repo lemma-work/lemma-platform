@@ -14,9 +14,13 @@ logger = get_logger(__name__)
 class ScheduleFilterJobService:
     """Processes deferred schedule filter jobs using repositories and services."""
 
-    def __init__(self, schedule_repository: ScheduleRepository):
+    def __init__(
+        self,
+        schedule_repository: ScheduleRepository,
+        processor: ScheduleProcessor,
+    ):
         self._schedule_repository = schedule_repository
-        self._processor = ScheduleProcessor()
+        self._processor = processor
 
     async def process(
         self,
@@ -24,6 +28,7 @@ class ScheduleFilterJobService:
         schedule_id: str | None = None,
         payload: dict,
         metadata: dict,
+        source_event_id: str,
     ) -> None:
         if schedule_id is None:
             raise ValueError("schedule_id is required")
@@ -40,6 +45,7 @@ class ScheduleFilterJobService:
             schedule=schedule,
             payload=payload,
             metadata=metadata,
+            source_event_id=source_event_id,
         )
         if not fired:
             logger.info("Schedule %s filtered out by LLM, skipping event", schedule_id)

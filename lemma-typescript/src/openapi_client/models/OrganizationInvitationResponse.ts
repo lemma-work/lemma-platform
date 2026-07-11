@@ -25,4 +25,3 @@ export type OrganizationInvitationResponse = {
     status: OrganizationInvitationStatus;
     updated_at: string;
 };
-

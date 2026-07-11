@@ -21,4 +21,3 @@ export type UserResponse = {
     timezone?: (string | null);
     updated_at: string;
 };
-

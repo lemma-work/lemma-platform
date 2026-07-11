@@ -11,4 +11,3 @@ export type RecordListResponse = {
     next_page_token?: (string | null);
     total?: (number | null);
 };
-

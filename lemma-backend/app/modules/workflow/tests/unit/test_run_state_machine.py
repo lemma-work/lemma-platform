@@ -6,16 +6,16 @@ import pytest
 
 from app.modules.workflow.domain.context import TriggerContext
 from app.modules.workflow.domain.run import (
-    FlowRunEntity,
-    FlowRunStatus,
+    WorkflowRunEntity,
+    WorkflowRunStatus,
     StepStatus,
     summarize_error,
 )
-from app.modules.workflow.domain.start import FlowStartType
+from app.modules.workflow.domain.start import WorkflowStartType
 
 
-def _run(trigger: TriggerContext | None = None) -> FlowRunEntity:
-    return FlowRunEntity.create(
+def _run(trigger: TriggerContext | None = None) -> WorkflowRunEntity:
+    return WorkflowRunEntity.create(
         flow_id=uuid4(),
         pod_id=uuid4(),
         user_id=uuid4(),
@@ -26,7 +26,7 @@ def _run(trigger: TriggerContext | None = None) -> FlowRunEntity:
 
 def test_create_manual_run():
     run = _run()
-    assert run.status == FlowRunStatus.RUNNING
+    assert run.status == WorkflowRunStatus.RUNNING
     assert run.start_type == "MANUAL"
     assert run.current_node_id == "intake"
     assert run.execution_context.start is None
@@ -36,7 +36,7 @@ def test_create_manual_run():
 def test_create_triggered_run_sets_start_type_from_trigger():
     run = _run(
         TriggerContext(
-            trigger_type=FlowStartType.DATASTORE_EVENT,
+            trigger_type=WorkflowStartType.DATASTORE_EVENT,
             payload={"record": 1},
         )
     )
@@ -52,13 +52,13 @@ def test_resume_requires_waiting_and_matching_node():
 
     step = run.begin_step("intake")
     run.suspend_step(step, None, human_wait=True)
-    assert run.status == FlowRunStatus.WAITING
+    assert run.status == WorkflowRunStatus.WAITING
 
     with pytest.raises(ValueError, match="suspended on node"):
         run.resume("other", {})
 
     run.resume("intake", {"amount": 1})
-    assert run.status == FlowRunStatus.RUNNING
+    assert run.status == WorkflowRunStatus.RUNNING
     assert run.step_history[-1].status == StepStatus.COMPLETED
     assert run.step_history[-1].output_data == {"amount": 1}
     assert run.execution_context.to_view()["intake"] == {"amount": 1}
@@ -70,12 +70,12 @@ def test_machine_suspend_keeps_run_running_and_resumes_open_step():
     run.current_node_id = "agent"
     run.suspend_step(step, None, human_wait=False)
 
-    assert run.status == FlowRunStatus.RUNNING
+    assert run.status == WorkflowRunStatus.RUNNING
     assert run.step_history[-1].status == StepStatus.RUNNING
 
     run.resume("agent", {"answer": 42})
 
-    assert run.status == FlowRunStatus.RUNNING
+    assert run.status == WorkflowRunStatus.RUNNING
     assert run.step_history[-1].status == StepStatus.COMPLETED
     assert run.execution_context.to_view()["agent"] == {"answer": 42}
 
@@ -85,7 +85,7 @@ def test_cancel_from_waiting_cancels_step():
     step = run.begin_step("intake")
     run.suspend_step(step, None, human_wait=True)
     run.cancel()
-    assert run.status == FlowRunStatus.CANCELLED
+    assert run.status == WorkflowRunStatus.CANCELLED
     assert run.completed_at is not None
     assert run.step_history[-1].status == StepStatus.CANCELLED
 
@@ -102,7 +102,7 @@ def test_fail_marks_last_open_step_and_truncates():
     run.begin_step("intake")
     long_error = "x" * 5000
     run.fail(long_error, node_id="intake")
-    assert run.status == FlowRunStatus.FAILED
+    assert run.status == WorkflowRunStatus.FAILED
     assert run.failed_node_id == "intake"
     assert len(run.error) <= 2000
     assert run.step_history[-1].status == StepStatus.FAILED

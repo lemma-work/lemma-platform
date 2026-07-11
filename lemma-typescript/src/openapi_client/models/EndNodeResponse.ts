@@ -10,4 +10,3 @@ export type EndNodeResponse = {
     position?: (Record<string, number> | null);
     type?: string;
 };
-

@@ -37,4 +37,5 @@ module = LemmaModule(
     routers=_routers,
     event_routers=_event_routers,
     api_lifespans=(_close_user_cache,),
+    stream_groups=(("identity_events", "identity-email-events"),),
 )

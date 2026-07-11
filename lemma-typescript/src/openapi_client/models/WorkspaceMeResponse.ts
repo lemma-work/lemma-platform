@@ -11,4 +11,3 @@ export type WorkspaceMeResponse = {
     sandbox: WorkspaceMeSandbox;
     user_id: string;
 };
-

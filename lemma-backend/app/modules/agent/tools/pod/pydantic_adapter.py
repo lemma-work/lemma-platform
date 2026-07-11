@@ -32,13 +32,12 @@ from app.modules.agent.tools.pod.models import (
 )
 from app.modules.agent.tools.pod.pod_data_access import PodServices, pod_services
 from app.modules.agent.tools.tool_errors import approval_error_result
-from app.modules.datastore.domain.errors import DatastoreConflictError
-from app.modules.datastore.domain.file_entities import DatastoreFileUpdateEntity
-from app.modules.datastore.services.files.file_url import (
-    build_file_app_url,
-    build_object_url,
+from app.modules.datastore.contracts import (
+    DatastoreConflictError,
+    DatastoreFileUpdateEntity,
+    TableContext,
 )
-from app.modules.datastore.services.table_context import TableContext
+from app.composition.agent_datastore import build_file_app_url, build_object_url
 
 
 def _resolve_pod_path(deps: BaseAgentContext, path: str) -> str:

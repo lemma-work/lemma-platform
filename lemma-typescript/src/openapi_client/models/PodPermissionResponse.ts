@@ -9,4 +9,3 @@ export type PodPermissionResponse = {
     scope: string;
     system_only: boolean;
 };
-

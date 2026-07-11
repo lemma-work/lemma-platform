@@ -93,6 +93,31 @@ async def test_download_file_resolves_in_uow_then_reads_after_release():
     assert result.entity is entity
 
 
+@pytest.mark.asyncio
+async def test_conditional_download_authorizes_but_skips_storage_read():
+    factory = _TrackingUowFactory()
+    digest = "a" * 64
+    entity = SimpleNamespace(
+        content_type="text/plain",
+        name="notes.txt",
+        content_sha256=digest,
+    )
+    service = _FakeFileService(factory.state, b"DOWNLOAD-BYTES", entity)
+
+    result = await _use_cases(factory, service).download_file(
+        pod_id=uuid4(),
+        path="/notes.txt",
+        request=SimpleNamespace(),
+        user_id=uuid4(),
+        if_none_match=f'W/"{digest}"',
+    )
+
+    assert service.resolved_while_open is True
+    assert service.read_while_open is None
+    assert result.not_modified is True
+    assert result.content is None
+
+
 class _FakeChildService:
     def __init__(self, state, content):
         self._state = state
@@ -102,9 +127,13 @@ class _FakeChildService:
 
     async def resolve_child(self, pod_id, path, ctx):
         self.resolved_while_open = self._state["open"]
-        return SimpleNamespace(content_type="text/markdown", name="report.pdf"), "doc.md"
+        return SimpleNamespace(
+            content_type="text/markdown", name="report.pdf"
+        ), "doc.md"
 
-    async def read_child_content(self, file_entity, artifact_rel, *, page_start, page_end):
+    async def read_child_content(
+        self, file_entity, artifact_rel, *, page_start, page_end
+    ):
         self.read_while_open = self._state["open"]
         return "doc.md", self._content, "text/markdown"
 

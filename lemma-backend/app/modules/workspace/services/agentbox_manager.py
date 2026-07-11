@@ -7,7 +7,7 @@ from agentbox_client import AgentBoxClient
 from agentbox_client.generated.manager.models import SandboxSummary
 
 from app.core.config import settings
-from app.modules.agent.domain.workspace_entities import SandboxInfo
+from app.modules.workspace.contracts import SandboxInfo
 from app.modules.workspace.services.interfaces import ISandbox
 
 

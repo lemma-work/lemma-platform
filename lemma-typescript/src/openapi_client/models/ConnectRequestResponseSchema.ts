@@ -17,4 +17,3 @@ export type ConnectRequestResponseSchema = {
     updated_at: string;
     user_id: string;
 };
-

@@ -14,4 +14,3 @@ export type SurfaceConfigResponse = {
     identity?: SurfaceIdentityConfigResponse;
     send_policy?: SurfaceSendPolicyConfig;
 };
-

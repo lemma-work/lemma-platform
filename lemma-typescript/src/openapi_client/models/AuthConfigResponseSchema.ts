@@ -15,4 +15,3 @@ export type AuthConfigResponseSchema = {
     status: string;
     updated_at: string;
 };
-

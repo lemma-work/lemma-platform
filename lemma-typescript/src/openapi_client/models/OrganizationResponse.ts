@@ -15,4 +15,3 @@ export type OrganizationResponse = {
     slug: string;
     updated_at: string;
 };
-

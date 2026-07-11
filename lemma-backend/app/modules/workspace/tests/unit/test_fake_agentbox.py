@@ -11,7 +11,10 @@ from agentbox_client.apps.function_executor import (
     FunctionExecutorClient,
 )
 from agentbox_client.client import AgentBoxClient
-from app.modules.workspace.testing.fake_agentbox import create_fake_agentbox_app
+from app.modules.workspace.testing.fake_agentbox import (
+    FakeAgentBoxState,
+    create_fake_agentbox_app,
+)
 
 
 async def _client(app) -> AgentBoxClient:
@@ -111,6 +114,51 @@ async def test_fake_agentbox_function_executor_runs_and_echoes_input():
 
 
 @pytest.mark.asyncio
+async def test_fake_function_executor_scripted_failure_and_state_controls():
+    app = create_fake_agentbox_app()
+    transport = httpx.ASGITransport(app=app)
+    async with httpx.AsyncClient(
+        transport=transport,
+        base_url="http://fake-agentbox",
+    ) as control:
+        configured = await control.post(
+            "/__test__/function-executor/configure",
+            json={
+                "modes": ["failed"],
+                "error_message": "scripted",
+                "log_message": "logged",
+            },
+        )
+        assert configured.status_code == 200
+
+        fe = FunctionExecutorClient(
+            manager_base_url="http://fake-agentbox",
+            manager_api_key="k",
+            lemma_token="t",
+            client=control,
+        )
+        response = await fe.execute(
+            sandbox_id="sb",
+            pod_id=uuid4(),
+            function_name="fails",
+            request=FunctionExecuteRequest(
+                run_id=uuid4(),
+                input_data={},
+                async_job=False,
+                timeout_seconds=30,
+            ),
+        )
+        assert response.status == "failed"
+        assert response.error is not None
+        assert response.error.message == "scripted"
+        assert response.logs[0].message == "logged"
+
+        state = (await control.get("/__test__/function-executor/state")).json()
+        assert state["invocations"] == 1
+        assert state["remaining_modes"] == []
+
+
+@pytest.mark.asyncio
 async def test_fake_agentbox_get_and_delete_sandbox():
     client = await _client(create_fake_agentbox_app())
     try:
@@ -122,3 +170,16 @@ async def test_fake_agentbox_get_and_delete_sandbox():
         assert await client.get_sandbox("sb2") is None
     finally:
         await client.close()
+
+
+def test_fake_agentbox_hashes_ids_and_contains_cwd_traversal(tmp_path):
+    state = FakeAgentBoxState(tmp_path)
+
+    sandbox = state.ensure_sandbox("../../outside", {})
+    resolved = state.resolve(sandbox, "../../also-outside")
+
+    assert sandbox.root.parent == tmp_path.resolve()
+    assert sandbox.root.name != "outside"
+    assert resolved == sandbox.root
+    assert not (tmp_path.parent / "outside").exists()
+    assert not (tmp_path.parent / "also-outside").exists()

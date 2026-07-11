@@ -26,6 +26,7 @@ from fastapi.responses import JSONResponse
 from app.core.domain.errors import DomainError
 from app.core.log.log import get_logger
 from app.core.observability.telemetry import record_exception_on_current_span
+from app.core.redaction import redact_text, redact_value
 
 logger = get_logger(__name__)
 
@@ -33,7 +34,7 @@ logger = get_logger(__name__)
 def _sanitize_validation_payload(value: object) -> object:
     """Convert non-JSON-safe validation payload values into serializable forms."""
     if isinstance(value, BaseException):
-        return str(value)
+        return {"type": type(value).__name__}
     if isinstance(value, Mapping):
         return {key: _sanitize_validation_payload(item) for key, item in value.items()}
     if isinstance(value, Sequence) and not isinstance(value, (str, bytes, bytearray)):
@@ -41,9 +42,19 @@ def _sanitize_validation_payload(value: object) -> object:
     return value
 
 
-def _error_body(message: str, code: str, details: object | None = None) -> dict:
+def _error_body(
+    request: Request,
+    message: str,
+    code: str,
+    details: object | None = None,
+) -> dict:
     """The unified error envelope shared by every handler."""
-    return {"message": message, "code": code, "details": details}
+    return {
+        "message": redact_text(message),
+        "code": code,
+        "request_id": request.headers.get("x-request-id"),
+        "details": redact_value(details),
+    }
 
 
 def register_exception_handlers(app: FastAPI) -> None:
@@ -68,11 +79,11 @@ def register_exception_handlers(app: FastAPI) -> None:
             code=exc.code,
             status_code=exc.status_code,
             message=exc.message,
-            details=exc.details,
+            details=redact_value(exc.details),
         )
         return JSONResponse(
             status_code=exc.status_code,
-            content=_error_body(exc.message, exc.code, exc.details),
+            content=_error_body(request, exc.message, exc.code, exc.details),
         )
 
     @app.exception_handler(RequestValidationError)
@@ -96,7 +107,7 @@ def register_exception_handlers(app: FastAPI) -> None:
         return JSONResponse(
             status_code=422,
             content=_error_body(
-                "Request validation failed", "VALIDATION_ERROR", errors
+                request, "Request validation failed", "VALIDATION_ERROR", errors
             ),
         )
 
@@ -113,11 +124,13 @@ def register_exception_handlers(app: FastAPI) -> None:
             path=request.url.path,
             method=request.method,
             status_code=exc.status_code,
-            detail=str(exc.detail),
+            detail=redact_value(exc.detail),
         )
         return JSONResponse(
             status_code=exc.status_code,
-            content=_error_body(str(exc.detail), f"HTTP_{exc.status_code}"),
+            content=_error_body(
+                request, str(redact_value(exc.detail)), f"HTTP_{exc.status_code}"
+            ),
         )
 
     @app.exception_handler(Exception)
@@ -138,5 +151,5 @@ def register_exception_handlers(app: FastAPI) -> None:
         )
         return JSONResponse(
             status_code=500,
-            content=_error_body("Internal server error", "INTERNAL_ERROR"),
+            content=_error_body(request, "Internal server error", "INTERNAL_ERROR"),
         )

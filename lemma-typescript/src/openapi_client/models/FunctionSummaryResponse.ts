@@ -29,4 +29,3 @@ export type FunctionSummaryResponse = {
     user_id: string;
     visibility?: string;
 };
-

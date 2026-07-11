@@ -26,15 +26,15 @@ from app.core.infrastructure.db.session import async_session_maker
 from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
 from app.core.infrastructure.db.uow_factory import SessionUnitOfWorkFactory
 from app.modules.agent.tools.context import BaseAgentContext
-from app.modules.datastore.api.dependencies import (
+from app.composition.agent_datastore import (
+    DatastoreFileService,
+    RecordService,
+    TableService,
     build_file_service,
     build_record_service,
     build_table_service,
 )
-from app.modules.datastore.services.file_service import DatastoreFileService
-from app.modules.datastore.services.record_service import RecordService
-from app.modules.datastore.services.table_service import TableService
-from app.modules.pod.services.authorization_factory import (
+from app.composition.authorization import (
     create_authorization_service,
 )
 

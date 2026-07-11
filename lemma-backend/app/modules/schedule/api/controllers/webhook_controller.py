@@ -10,15 +10,10 @@ from app.modules.schedule.api.dependencies import (
     WebhookHandlerDep,
     ComposioWebhookVerifierDep,
 )
-from app.core.infrastructure.events.message_bus import (
-    FastStreamRedisMessageBus,
-    get_message_bus,
-)
-from fastapi import Depends
 from app.core.domain.events import RawWebhookReceivedEvent
-from app.modules.agent_surfaces.infrastructure.debug.raw_webhook_file_logger import (
-    log_raw_webhook_event,
-)
+from app.core.infrastructure.events.inbox import stable_event_id
+from app.core.infrastructure.events.publisher import EventPublisher
+from app.core.redaction import redact_value
 
 logger = get_logger(__name__)
 
@@ -68,7 +63,6 @@ async def handle_webhook(
     request: Request,
     webhook_handler: WebhookHandlerDep,
     composio_webhook_verifier: ComposioWebhookVerifierDep,
-    message_bus: FastStreamRedisMessageBus = Depends(get_message_bus),
 ) -> Dict[str, Any]:
     """Handle webhook from a source.
 
@@ -96,8 +90,11 @@ async def handle_webhook(
                 if isinstance(normalized_payload, dict)
                 else {"data": verification_result.get("raw_payload")}
             )
-        except Exception as e:
-            logger.error(f"Failed to verify Composio webhook: {e}")
+        except Exception as exc:
+            logger.warning(
+                "Failed to verify Composio webhook",
+                error_type=type(exc).__name__,
+            )
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,
                 detail="Invalid webhook signature",
@@ -119,19 +116,21 @@ async def handle_webhook(
             detail="Unsupported or unverified webhook source",
         )
 
-    await log_raw_webhook_event(source=source, payload=payload, headers=headers)
-
     # Handle Slack URL verification challenge
     if source == "slack" and payload.get("type") == "url_verification":
         return {"challenge": payload.get("challenge")}
 
     # Publish raw webhook event for other modules (e.g. assistant surfaces) to listen to
+    source_event_id = payload.get("id") or payload.get("metadata", {}).get("log_id")
     event = RawWebhookReceivedEvent(
+        event_id=stable_event_id(
+            {"event_id": f"schedule-webhook:{source}:{source_event_id}"}
+        ),
         source=source,
         payload=payload,
-        headers=headers,
+        headers=redact_value(headers),
     )
-    await message_bus.publish(stream=event.stream_name(), event=event)
+    await EventPublisher.publish(event.stream_name(), event)
 
     # Handle webhook
     schedule_ids = await webhook_handler.handle_webhook(

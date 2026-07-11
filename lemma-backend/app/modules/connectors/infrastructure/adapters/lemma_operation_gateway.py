@@ -40,20 +40,21 @@ class LemmaOperationGateway(AppOperationGatewayPort):
     ) -> Exception:
         details = getattr(exc, "details", None)
         status_code = getattr(exc, "status_code", None)
-        upstream_message = str(exc)
-        normalized_error = upstream_message.lower()
-        payload = {
-            "upstream_message": upstream_message,
-        }
+        # Exception text is useful for local classification but may contain
+        # provider request bodies, callback URLs, or credentials. Never attach
+        # it to a domain error or log record.
+        normalized_error = str(exc).lower()
+        payload: dict[str, object] = {"error_type": type(exc).__name__}
+        if isinstance(status_code, int):
+            payload["upstream_status"] = status_code
         if isinstance(details, dict):
-            payload.update(details)
             error_value = details.get("error")
             if isinstance(error_value, str):
                 normalized_error = error_value.lower()
+                if len(error_value) <= 100:
+                    payload["upstream_code"] = error_value
 
-        message = upstream_message or (
-            f"Failed to execute '{operation_name}' for '{connector_id}'."
-        )
+        message = f"Connector operation '{operation_name}' failed."
         if status_code == 400 or any(
             token in normalized_error
             for token in ("bad_request", "invalid", "validation")

@@ -6,12 +6,20 @@ from datetime import datetime
 from typing import Sequence
 from uuid import UUID
 
-from sqlalchemy import func, or_, select
+from sqlalchemy import and_, func, or_, select
+from sqlalchemy.dialects.postgresql import insert
 
 from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
-from app.modules.usage.domain.entities import UsageRecord, UsageSummary
+from app.modules.usage.domain.entities import (
+    UsageLimitCounterScope,
+    UsageRecord,
+    UsageSummary,
+)
 from app.modules.usage.domain.ports import UsageRepositoryPort
-from app.modules.usage.infrastructure.models import UsageLimitCounter, UsageRecord as UsageRecordModel
+from app.modules.usage.infrastructure.models import (
+    UsageLimitCounter,
+    UsageRecord as UsageRecordModel,
+)
 
 
 class UsageRepository(UsageRepositoryPort):
@@ -254,6 +262,94 @@ class UsageRepository(UsageRepositoryPort):
         await self.session.flush()
         return counter.id
 
+    async def reserve_limit_scopes(
+        self,
+        *,
+        scopes: list[UsageLimitCounterScope],
+        amount_usd: float,
+    ) -> list[UUID] | None:
+        """Atomically admit and reserve every applicable limit scope.
+
+        ``None`` means at least one locked scope would exceed its cap. An empty
+        list means no limit applies. The caller owns the surrounding UoW, so all
+        increments commit or roll back together.
+        """
+        if not scopes:
+            return []
+
+        ordered = sorted(
+            scopes,
+            key=lambda item: (
+                item.window_kind,
+                str(item.organization_id or ""),
+                str(item.user_id or ""),
+                item.window_start.isoformat(),
+            ),
+        )
+        counters: list[UsageLimitCounter] = []
+        for scope in ordered:
+            await self.session.execute(
+                insert(UsageLimitCounter)
+                .values(
+                    organization_id=scope.organization_id,
+                    user_id=scope.user_id,
+                    window_kind=scope.window_kind,
+                    window_start=scope.window_start,
+                    window_end=scope.window_end,
+                    used_usd=scope.initial_used_usd,
+                    reserved_usd=0.0,
+                )
+                .on_conflict_do_nothing(
+                    index_elements=(
+                        UsageLimitCounter.organization_id,
+                        UsageLimitCounter.user_id,
+                        UsageLimitCounter.window_kind,
+                        UsageLimitCounter.window_start,
+                    )
+                )
+            )
+            conditions = [
+                UsageLimitCounter.window_kind == scope.window_kind,
+                UsageLimitCounter.window_start == scope.window_start,
+                (
+                    UsageLimitCounter.organization_id.is_(None)
+                    if scope.organization_id is None
+                    else UsageLimitCounter.organization_id == scope.organization_id
+                ),
+                (
+                    UsageLimitCounter.user_id.is_(None)
+                    if scope.user_id is None
+                    else UsageLimitCounter.user_id == scope.user_id
+                ),
+            ]
+            counter = (
+                await self.session.scalars(
+                    select(UsageLimitCounter)
+                    .where(and_(*conditions))
+                    .with_for_update()
+                )
+            ).one()
+            # Synchronize pre-migration/history spend without ever lowering the
+            # transactionally maintained counter.
+            counter.used_usd = max(
+                float(counter.used_usd or 0.0), scope.initial_used_usd
+            )
+            counters.append(counter)
+
+        if any(
+            float(counter.used_usd or 0.0)
+            + float(counter.reserved_usd or 0.0)
+            + amount_usd
+            > scope.limit_usd
+            for counter, scope in zip(counters, ordered, strict=True)
+        ):
+            return None
+
+        for counter in counters:
+            counter.reserved_usd = float(counter.reserved_usd or 0.0) + amount_usd
+        await self.session.flush()
+        return [counter.id for counter in counters]
+
     async def release_reservation(
         self,
         *,
@@ -269,6 +365,28 @@ class UsageRepository(UsageRepositoryPort):
                 0.0,
                 float(counter.reserved_usd or 0.0) - amount_usd,
             )
+        await self.session.flush()
+
+    async def consume_reservation(
+        self,
+        *,
+        counter_ids: list[UUID],
+        reserved_usd: float,
+        actual_usd: float,
+    ) -> None:
+        if not counter_ids:
+            return
+        result = await self.session.execute(
+            select(UsageLimitCounter)
+            .where(UsageLimitCounter.id.in_(counter_ids))
+            .order_by(UsageLimitCounter.id)
+            .with_for_update()
+        )
+        for counter in result.scalars().all():
+            counter.reserved_usd = max(
+                0.0, float(counter.reserved_usd or 0.0) - reserved_usd
+            )
+            counter.used_usd = max(0.0, float(counter.used_usd or 0.0) + actual_usd)
         await self.session.flush()
 
     async def get_usage_stats(

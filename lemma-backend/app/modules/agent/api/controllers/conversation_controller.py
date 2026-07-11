@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import anyio
 from collections.abc import AsyncGenerator, Iterable
 from uuid import UUID
 
@@ -14,6 +15,7 @@ from app.core.authorization.dependencies import PodContextDep
 from app.core.authorization.scope import pod_context_scope
 from app.core.domain.errors import BadRequestError
 from app.core.infrastructure.db.uow_factory import UnitOfWorkFactory
+from app.core.log.log import get_logger
 from app.modules.agent.api.controllers.shared import (
     ChannelServiceDep,
     conversation_channel,
@@ -49,9 +51,10 @@ from app.modules.agent.infrastructure.repositories import (
     ConversationRepository,
 )
 from app.modules.agent.services.conversation_service import ConversationService
-from app.modules.pod.services.authorization_factory import create_authorization_service
-from app.modules.usage.services.usage_service_factory import build_usage_service
-from app.modules.usage.domain.errors import UsageLimitExceededError
+from app.composition.authorization import create_authorization_service
+from app.composition.agent_usage import build_usage_service, UsageLimitExceededError
+
+logger = get_logger(__name__)
 
 router = APIRouter(
     prefix="/pods/{pod_id}/conversations",
@@ -82,7 +85,7 @@ def _parse_metadata_filters(
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail="Metadata filters must use metadata.<key>=value format.",
-        )
+            )
         filters[key] = value
     return filters or None
 
@@ -264,7 +267,9 @@ async def list_messages(
         conversation_id=conversation_id,
         user_id=user.id,
         pod_id=pod_id,
-        before_sequence=token_sequence if token_sequence is not None else before_sequence,
+        before_sequence=token_sequence
+        if token_sequence is not None
+        else before_sequence,
         after_sequence=after_sequence,
         limit=limit,
     )
@@ -375,7 +380,8 @@ async def send_message(
         traceback=None,
     ) -> None:
         try:
-            await subscription.__aexit__(exc_type, exc, traceback)
+            with anyio.CancelScope(shield=True):
+                await subscription.__aexit__(exc_type, exc, traceback)
         except Exception:
             return
 
@@ -399,7 +405,7 @@ async def send_message(
     except UsageLimitExceededError as exc:
         await close_subscription(type(exc), exc, exc.__traceback__)
         raise
-    except Exception as exc:
+    except BaseException as exc:
         await close_subscription(type(exc), exc, exc.__traceback__)
         raise
 
@@ -407,10 +413,15 @@ async def send_message(
         try:
             async for chunk in iter_subscription(iterator, result.agent_run_id):
                 yield chunk
-        except Exception as exc:
+        except Exception:
+            logger.exception(
+                "Agent realtime subscription failed",
+                conversation_id=str(conversation_id),
+                agent_run_id=str(result.agent_run_id),
+            )
             yield encode_stream_chunk(
                 event_type="error",
-                data=str(exc),
+                data="Realtime stream interrupted. Reconnect to continue.",
                 agent_run_id=result.agent_run_id,
             )
         finally:

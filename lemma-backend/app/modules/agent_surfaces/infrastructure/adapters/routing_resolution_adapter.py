@@ -5,12 +5,8 @@ from uuid import UUID
 from sqlalchemy import select
 
 from app.modules.agent_surfaces.domain.ports import SurfacePodMembershipPort
-from app.modules.identity.domain.user_preferences import UserPreferences
-from app.modules.identity.infrastructure.models.user_models import User
-from app.modules.identity.infrastructure.models.organization_models import (
-    OrganizationMember,
-)
-from app.modules.pod.infrastructure.models.pod_models import PodMember
+from app.modules.identity.contracts import UserPreferences
+from app.composition.surface_identity import OrganizationMember, PodMember, User
 
 
 class SqlAlchemySurfaceRoutingResolutionAdapter(SurfacePodMembershipPort):

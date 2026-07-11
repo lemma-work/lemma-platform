@@ -15,18 +15,15 @@ from openinference.semconv.trace import OpenInferenceSpanKindValues, SpanAttribu
 from opentelemetry import trace
 from app.core.config import settings
 from app.core.infrastructure.db.uow_factory import UnitOfWorkFactory
-from app.core.infrastructure.events.publisher import EventPublisher
 from app.core.log.log import get_logger
 from app.core.observability.telemetry import agent_run_telemetry_context
+from app.modules.agent.config import agent_settings
 from app.modules.agent.domain.entities import Agent, AgentRun, Conversation, Message
 from app.modules.agent.domain.errors import (
     AgentNotFoundError,
     ConversationNotFoundError,
 )
-from app.modules.agent.domain.events import (
-    AGENT_EVENTS_STREAM,
-    AgentRunCompletedEvent,
-)
+from app.modules.agent.domain.events import AgentRunCompletedEvent
 from app.modules.agent.domain.value_objects import (
     AgentEvent,
     AgentEventType,
@@ -72,6 +69,11 @@ from app.modules.agent.services.realtime import (
 from app.modules.agent.services.agent_context_brief import AgentContextBriefBuilder
 from app.modules.agent.services.run_message_writer import RunMessageWriter
 from app.modules.agent.services.run_usage_recorder import RunUsageRecorder
+from app.composition.agent_usage import (
+    UsageReservation,
+    usage_context_from_agent_context,
+    usage_execution_context,
+)
 from app.modules.agent.services.workspace_location import (
     resolve_pod_cwd,
     resolve_workspace_location,
@@ -84,16 +86,8 @@ from app.modules.agent.tools.workspace_cli.pydantic_adapter import view_image_to
 from app.modules.agent.tools.tool_assembler import RunToolAssembler
 from app.core.crypto import get_secret_cipher
 from app.core.authorization.delegation import DEFAULT_POD_AGENT_NAME
-from app.modules.usage.domain.entities import UsageReservation
-from app.modules.usage.services.usage_context import (
-    usage_context_from_agent_context,
-    usage_execution_context,
-)
-
 logger = get_logger(__name__)
-
 FULL_HISTORY_AGENT_RUN_COUNT = 5
-
 
 async def _finalize_safely(coro: Awaitable[None], *, agent_run_id: UUID) -> None:
     """Await a finalization coroutine, swallowing all errors.
@@ -110,9 +104,9 @@ async def _finalize_safely(coro: Awaitable[None], *, agent_run_id: UUID) -> None
         )
     except Exception as exc:
         logger.error(
-            "Agent run finalization failed run=%s: %s",
+            "Agent run finalization failed run=%s error_type=%s",
             agent_run_id,
-            exc,
+            type(exc).__name__,
             exc_info=True,
         )
 
@@ -313,12 +307,18 @@ class AgentRunnerService:
                     ),
                 )
                 harness_toolsets = []
+            usage_reservation = await self.usage_recorder.reserve(
+                organization_id=conversation.organization_id,
+                user_id=user_id,
+                runtime_profile=runtime_profile_snapshot,
+            )
+            enforced_usage_limits = self.fixed_usage_limits
             options = HarnessOptions(
                 model_name=resolved_runtime.model_name_for_harness,
                 toolsets=harness_toolsets,
                 capabilities=harness_capabilities,
                 model_settings=harness_model_settings,
-                usage_limits=self.fixed_usage_limits,
+                usage_limits=enforced_usage_limits,
                 output_type=self._resolve_output_type(agent, conversation),
                 should_stop=self._make_stop_checker(agent_run_id),
                 extra={
@@ -326,12 +326,6 @@ class AgentRunnerService:
                     "runtime_credentials": runtime_credentials,
                 },
             )
-            usage_reservation = await self.usage_recorder.reserve(
-                organization_id=conversation.organization_id,
-                user_id=user_id,
-                runtime_profile=runtime_profile_snapshot,
-            )
-
             terminal_event_seen = False
             observer_started = False
             harness_agent = self._agent_with_resolved_runtime_metadata(
@@ -544,7 +538,7 @@ class AgentRunnerService:
         sticks (no further queries). A stop request is still honored within the
         poll interval. Interval ``0`` disables throttling (every call queries).
         """
-        interval = settings.agent_run_stop_poll_interval_seconds
+        interval = agent_settings.agent_run_stop_poll_interval_seconds
         stopped = False
         last_checked: float | None = None
 
@@ -818,6 +812,8 @@ class AgentRunnerService:
         usage_reservation: UsageReservation | None = None,
     ) -> None:
         try:
+            event: AgentRunCompletedEvent | None = None
+            event_data: JsonObject = {}
             async with self.uow_factory() as uow:
                 finish_result = await ConversationRepository(uow).finish_agent_run(
                     agent_run_id=agent_run_id,
@@ -826,25 +822,27 @@ class AgentRunnerService:
                     error=error,
                     output_data=output_data,
                 )
+                if finish_result is not None and finish_result.updated:
+                    status = finish_result.status
+                    conversation_status = finish_result.conversation_status
+                    if status == AgentRunStatus.STOPPED:
+                        error = None
+                    if error:
+                        event_data["error"] = error
+                    if output_data is not None:
+                        event_data["output_data"] = output_data
+                    event_data["conversation_status"] = conversation_status.value
+                    event = AgentRunCompletedEvent(
+                        conversation_id=conversation_id,
+                        agent_run_id=agent_run_id,
+                        status=status,
+                        data=event_data or None,
+                    )
+                    uow.collect_events([event])
             if finish_result is None or not finish_result.updated:
                 await self.usage_recorder.release(usage_reservation)
                 return
-            status = finish_result.status
-            conversation_status = finish_result.conversation_status
-            if status == AgentRunStatus.STOPPED:
-                error = None
-            event_data: JsonObject = {}
-            if error:
-                event_data["error"] = error
-            if output_data is not None:
-                event_data["output_data"] = output_data
-            event_data["conversation_status"] = conversation_status.value
-            event = AgentRunCompletedEvent(
-                conversation_id=conversation_id,
-                agent_run_id=agent_run_id,
-                status=status,
-                data=event_data or None,
-            )
+            assert event is not None
             if status == AgentRunStatus.FAILED:
                 await publish_conversation_event(
                     conversation_id,
@@ -859,7 +857,6 @@ class AgentRunnerService:
                     data=event_data or None,
                 ),
             )
-            await self._publish_lifecycle_event(event)
             await self._publish_usage_event(
                 conversation_id=conversation_id,
                 agent_run_id=agent_run_id,
@@ -875,20 +872,20 @@ class AgentRunnerService:
             )
         except Exception as exc:
             logger.error(
-                "Failed to finalize agent run run=%s: %s", agent_run_id, exc, exc_info=True
+                "Failed to finalize agent run run=%s error_type=%s",
+                agent_run_id,
+                type(exc).__name__,
+                exc_info=True,
             )
             try:
                 await self.usage_recorder.release(usage_reservation)
             except Exception as release_exc:
                 logger.warning(
-                    "Failed to release usage reservation run=%s: %s",
+                    "Failed to release usage reservation run=%s error_type=%s",
                     agent_run_id,
-                    release_exc,
+                    type(release_exc).__name__,
                 )
-            return
-
-    async def _publish_lifecycle_event(self, event: object) -> None:
-        await EventPublisher.publish(AGENT_EVENTS_STREAM, event)
+            raise
 
     async def _publish_usage_event(
         self,
@@ -1028,14 +1025,11 @@ class AgentRunnerService:
         surface_metadata = None
         if isinstance(surface_metadata_payload, dict):
             try:
-                from app.modules.agent_surfaces.domain.surface_event_metadata import (
-                    SurfaceEventMetadata,
+                from app.composition.agent_surface_runtime import (
+                    parse_surface_event_metadata,
                 )
-                from pydantic import TypeAdapter
 
-                surface_metadata = TypeAdapter(SurfaceEventMetadata).validate_python(
-                    surface_metadata_payload
-                )
+                surface_metadata = parse_surface_event_metadata(surface_metadata_payload)
             except Exception:
                 surface_metadata = surface_metadata_payload
         return {

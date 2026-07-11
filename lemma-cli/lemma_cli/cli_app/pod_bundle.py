@@ -93,7 +93,7 @@ from lemma_sdk.openapi_client.models.add_column_request import AddColumnRequest
 from lemma_sdk.openapi_client.models.agent_permissions_replace_request import (
     AgentPermissionsReplaceRequest,
 )
-from lemma_sdk.openapi_client.models.body_file_update import BodyFileUpdate
+from lemma_sdk.openapi_client.models.update import Update
 from lemma_sdk.openapi_client.models.create_agent_request import CreateAgentRequest
 from lemma_sdk.openapi_client.models.create_app_request import CreateAppRequest
 from lemma_sdk.openapi_client.models.create_function_request import CreateFunctionRequest
@@ -1453,7 +1453,7 @@ def _import_pod_files(
         _progress_start("file", path_key, "updating folder")
         updated = to_plain(pod_sdk.files.update(
             "/" + path_key,
-            BodyFileUpdate.from_dict({"path": "/" + path_key, **update_args}),
+            Update.from_dict({"path": "/" + path_key, **update_args}),
         ))
         folders_by_path[path_key] = updated
         folder_summaries.append(f"updated-folder:{path_key}")

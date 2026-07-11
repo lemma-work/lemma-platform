@@ -9,4 +9,3 @@ export type InstalledAppSummary = {
     status: string;
     title?: (string | null);
 };
-

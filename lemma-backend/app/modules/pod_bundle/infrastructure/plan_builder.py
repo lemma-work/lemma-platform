@@ -282,15 +282,15 @@ class ServiceExistingResources:
         self._user_id = user_id
 
     async def table_names(self) -> set[str]:
-        from app.modules.datastore.api.dependencies import build_table_service
+        from app.composition.pod_bundle_resources import build_table_service
 
         service = build_table_service(self._uow)
         tables, _ = await service.list_tables(self._pod_id, self._ctx, limit=1000)
         return {str(t.name or "") for t in tables}
 
     async def table_manifest(self, name: str) -> dict[str, Any] | None:
-        from app.modules.datastore.api.dependencies import build_table_service
-        from app.modules.datastore.api.schemas.datastore_schemas import TableResponse
+        from app.composition.pod_bundle_resources import build_table_service
+        from app.modules.datastore.contracts import TableResponse
 
         service = build_table_service(self._uow)
         table = await service.get_table(self._pod_id, name, self._ctx)
@@ -299,7 +299,7 @@ class ServiceExistingResources:
         return TableResponse.model_validate(table).model_dump(mode="json")
 
     async def function_names(self) -> set[str]:
-        from app.modules.function.api.dependencies import build_function_service
+        from app.composition.pod_bundle_resources import build_function_service
 
         service = build_function_service(self._uow)
         functions, _ = await service.list_functions(
@@ -308,7 +308,7 @@ class ServiceExistingResources:
         return {str(f.name or "") for f in functions}
 
     async def agent_names(self) -> set[str]:
-        from app.modules.agent.api.dependencies import get_agent_service
+        from app.composition.pod_bundle_resources import get_agent_service
 
         service = get_agent_service(self._uow)
         agents, _ = await service.list_agents(
@@ -317,16 +317,16 @@ class ServiceExistingResources:
         return {str(a.name or "") for a in agents}
 
     async def workflow_names(self) -> set[str]:
-        from app.modules.workflow.api.dependencies import get_flow_service
+        from app.composition.pod_bundle_resources import get_workflow_service
 
-        service = get_flow_service(self._uow)
-        flows, _ = await service.list_flows(
+        service = get_workflow_service(self._uow)
+        flows, _ = await service.list_workflows(
             self._pod_id, limit=1000, requester_user_id=self._user_id, ctx=self._ctx
         )
         return {str(f.name or "") for f in flows}
 
     async def schedule_names(self) -> set[str]:
-        from app.modules.schedule.api.dependencies import get_schedule_service
+        from app.composition.pod_bundle_resources import get_schedule_service
 
         service = get_schedule_service(self._uow)
         schedules, _ = await service.list_schedules(
@@ -335,7 +335,7 @@ class ServiceExistingResources:
         return {str(s.name or "") for s in schedules}
 
     async def app_names(self) -> set[str]:
-        from app.modules.apps.api.dependencies import build_app_service
+        from app.composition.pod_bundle_resources import build_app_service
 
         service = build_app_service(self._uow)
         apps, _ = await service.list_apps(
@@ -345,7 +345,7 @@ class ServiceExistingResources:
 
     async def surface_platforms(self) -> set[str]:
         try:
-            from app.modules.agent_surfaces.api.dependencies import get_surface_service
+            from app.composition.pod_bundle_resources import get_surface_service
 
             service = get_surface_service(self._uow)
             surfaces, _ = await service.list_surfaces_by_pod(self._pod_id, limit=100)

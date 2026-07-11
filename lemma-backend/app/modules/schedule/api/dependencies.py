@@ -5,13 +5,7 @@ from uuid import UUID
 from fastapi import Depends, Request
 
 from app.core.api.dependencies import UoWDep
-from app.modules.connectors.infrastructure.repositories.connector_trigger_repository import (
-    ConnectorTriggerRepository,
-)
 from app.modules.schedule.repositories.schedule_repository import ScheduleRepository
-from app.modules.schedule.infrastructure.adapters.composio_webhook_verifier import (
-    ComposioWebhookVerifier,
-)
 from app.modules.schedule.services.schedule_service import ScheduleService
 from app.modules.schedule.services.webhook_schedule_matcher import WebhookScheduleMatcher
 from app.modules.schedule.services.webhook_handler import WebhookHandler
@@ -27,7 +21,6 @@ def get_webhook_handler(uow: UoWDep) -> WebhookHandler:
     schedule_repository = ScheduleRepository(uow=uow)
     matcher = WebhookScheduleMatcher(
         schedule_repository=schedule_repository,
-        connector_trigger_repository=ConnectorTriggerRepository(uow=uow),
     )
     return WebhookHandler(
         schedule_repository=schedule_repository,
@@ -37,6 +30,8 @@ def get_webhook_handler(uow: UoWDep) -> WebhookHandler:
 
 def get_composio_webhook_verifier() -> WebhookVerifier:
     """Provide Composio webhook verifier."""
+    from app.composition.schedule_connectors import ComposioWebhookVerifier
+
     return ComposioWebhookVerifier()
 
 

@@ -8,9 +8,7 @@ from sqlalchemy import select
 
 from app.core.authorization.models import RoleAssignmentModel, RoleModel
 from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
-from app.modules.identity.infrastructure.models.organization_models import (
-    OrganizationMember,
-)
+from app.composition.pod_identity_wiring import OrganizationMember
 from app.modules.pod.domain.role_entities import PodRoleEntity
 from app.modules.pod.infrastructure.models.pod_models import PodMember
 

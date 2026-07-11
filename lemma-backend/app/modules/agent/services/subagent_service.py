@@ -33,8 +33,8 @@ from app.modules.agent.infrastructure.repositories import (
     ConversationRepository,
 )
 from app.modules.agent.services.conversation_service import ConversationService
-from app.modules.pod.services.authorization_factory import create_authorization_service
-from app.modules.usage.services.usage_service_factory import build_usage_service
+from app.composition.authorization import create_authorization_service
+from app.composition.agent_usage import build_usage_service
 
 
 class SubAgentError(RuntimeError):

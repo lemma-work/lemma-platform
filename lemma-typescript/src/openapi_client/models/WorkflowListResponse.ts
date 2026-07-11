@@ -2,10 +2,9 @@
 /* istanbul ignore file */
 /* tslint:disable */
 /* eslint-disable */
-import type { FlowSummaryResponse } from './FlowSummaryResponse.js';
+import type { WorkflowSummaryResponse } from './WorkflowSummaryResponse.js';
 export type WorkflowListResponse = {
-    items: Array<FlowSummaryResponse>;
+    items: Array<WorkflowSummaryResponse>;
     limit: number;
     next_page_token?: (string | null);
 };
-

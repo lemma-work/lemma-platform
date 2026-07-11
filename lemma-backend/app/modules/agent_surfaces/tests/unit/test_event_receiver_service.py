@@ -4,6 +4,7 @@ import asyncio
 
 import httpx
 import pytest
+from unittest.mock import AsyncMock
 from uuid import UUID
 
 from app.modules.agent_surfaces.services import event_receiver_service
@@ -14,6 +15,7 @@ from app.modules.agent_surfaces.domain.entities import (
 from app.modules.agent_surfaces.platforms.telegram.client import normalize_bot_base_url
 from app.modules.agent_surfaces.services.event_receiver_service import (
     NativeReceiverCandidate,
+    NativeSurfaceReceiverCoordinator,
     TelegramPollingReceiverRunner,
     _candidate_from_surface,
     _publish_native_receiver_event,
@@ -52,6 +54,28 @@ def test_slack_candidate_uses_app_token_and_account_scoped_key():
     assert candidate.platform is SurfacePlatform.SLACK
     assert candidate.credential_label == str(account_id)
     assert candidate.key.startswith(f"slack:{account_id}:")
+
+
+@pytest.mark.asyncio
+async def test_coordinator_stop_signals_before_run_loop_releases_redis():
+    coordinator = NativeSurfaceReceiverCoordinator(
+        uow_factory=lambda: None,
+        scan_interval_seconds=1,
+        redis_url="redis://unused",
+    )
+    redis_client = AsyncMock()
+    coordinator._redis = redis_client
+
+    await coordinator.stop()
+
+    assert coordinator._stopping is True
+    assert coordinator._wakeup.is_set()
+    assert coordinator._redis is redis_client
+    redis_client.aclose.assert_not_awaited()
+
+    await coordinator._shutdown()
+    assert coordinator._redis is None
+    redis_client.aclose.assert_awaited_once()
 
 
 @pytest.mark.asyncio
@@ -98,14 +122,13 @@ async def test_telegram_polling_retries_transient_conflict_after_resetting_webho
 async def test_publish_native_receiver_event_emits_surface_webhook_event(monkeypatch):
     published = []
 
-    class MessageBus:
-        async def publish(self, *, stream, event):
-            published.append((stream, event))
+    async def publish(stream, event):
+        published.append((stream, event))
 
     monkeypatch.setattr(
-        event_receiver_service,
-        "get_message_bus",
-        lambda: MessageBus(),
+        event_receiver_service.EventPublisher,
+        "publish",
+        publish,
     )
 
     await _publish_native_receiver_event(

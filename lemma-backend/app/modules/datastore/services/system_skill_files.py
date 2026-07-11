@@ -211,7 +211,7 @@ class SystemSkillFileProvider:
         kind: FileKind,
         source_path: Path | None = None,
     ) -> DatastoreFileEntity:
-        from app.modules.agent.domain.file_entities import get_content_type
+        from app.core.file_types import get_content_type
 
         stat = None
         if source_path is not None:

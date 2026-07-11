@@ -18,4 +18,3 @@ export type SurfaceUpdateRequest = {
     default_agent_name?: (string | null);
     is_enabled?: (boolean | null);
 };
-

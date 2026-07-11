@@ -3,11 +3,10 @@
 /* tslint:disable */
 /* eslint-disable */
 export type DatastoreFileUploadRequest = {
-    data: string;
+    data: Blob;
     description?: (string | null);
     directory_path?: string;
     name?: (string | null);
     search_enabled?: boolean;
     visibility?: (string | null);
 };
-

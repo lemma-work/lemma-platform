@@ -4,7 +4,7 @@ from uuid import uuid4
 
 import pytest
 
-from app.modules.workflow.domain.flow import FlowEntity
+from app.modules.workflow.domain.workflow import WorkflowEntity
 from app.modules.workflow.domain.graph import WorkflowEdge
 from app.modules.workflow.domain.nodes import (
     AgentNode,
@@ -22,7 +22,7 @@ from app.modules.workflow.domain.nodes import (
     WaitUntilNode,
     WaitUntilNodeConfig,
 )
-from app.modules.workflow.domain.run import FlowRunEntity, FlowRunStatus, StepStatus
+from app.modules.workflow.domain.run import WorkflowRunEntity, WorkflowRunStatus, StepStatus
 from app.modules.workflow.domain.wait import WorkflowRunWaitType
 from app.modules.workflow.execution.stepper import RunStepper
 
@@ -62,8 +62,8 @@ class StubSchedulePort:
         return run_id
 
 
-def _flow(nodes, edges) -> FlowEntity:
-    flow = FlowEntity(
+def _flow(nodes, edges) -> WorkflowEntity:
+    flow = WorkflowEntity(
         id=uuid4(),
         pod_id=uuid4(),
         name="test-flow",
@@ -74,8 +74,8 @@ def _flow(nodes, edges) -> FlowEntity:
     return flow
 
 
-def _run(flow: FlowEntity) -> FlowRunEntity:
-    return FlowRunEntity.create(
+def _run(flow: WorkflowEntity) -> WorkflowRunEntity:
+    return WorkflowRunEntity.create(
         flow_id=flow.id,
         pod_id=flow.pod_id,
         user_id=uuid4(),
@@ -106,7 +106,7 @@ async def test_linear_flow_completes_and_records_outputs():
     result = await _stepper({"fn_a": {"x": 1}, "fn_b": {"y": 2}}).advance(run, flow)
 
     assert result.wait is None
-    assert run.status == FlowRunStatus.COMPLETED
+    assert run.status == WorkflowRunStatus.COMPLETED
     view = run.execution_context.to_view()
     assert view["a"] == {"x": 1}
     assert view["b"] == {"y": 2}
@@ -123,7 +123,7 @@ async def test_form_entry_suspends_immediately_with_human_wait():
     run = _run(flow)
     result = await _stepper().advance(run, flow)
 
-    assert run.status == FlowRunStatus.WAITING
+    assert run.status == WorkflowRunStatus.WAITING
     assert run.current_node_id == "intake"
     assert result.wait is not None
     assert result.wait.wait_type == WorkflowRunWaitType.HUMAN
@@ -159,7 +159,7 @@ async def test_form_resolves_schema_expr_against_context():
         {"fn": {"labels": ["a", "b"], "draft": "hello"}}
     ).advance(run, flow)
 
-    assert run.status == FlowRunStatus.WAITING
+    assert run.status == WorkflowRunStatus.WAITING
     schema = result.wait.payload["input_schema"]
     assert schema["properties"]["category"]["enum"] == ["a", "b"]
     assert schema["properties"]["body"]["default"] == "hello"
@@ -189,7 +189,7 @@ async def test_form_fails_when_required_binding_resolves_to_nothing():
     result = await _stepper({"fn": {"labels": ["a"]}}).advance(run, flow)
 
     assert result.wait is None
-    assert run.status == FlowRunStatus.FAILED
+    assert run.status == WorkflowRunStatus.FAILED
     assert run.failed_node_id == "intake"
     # A required expression binding that resolves to nothing fails the node,
     # naming the expression — same as input_mapping.
@@ -221,7 +221,7 @@ async def test_resume_after_form_continues_to_completion():
     result = await stepper.continue_after(run, flow, "intake")
 
     assert result.wait is None
-    assert run.status == FlowRunStatus.COMPLETED
+    assert run.status == WorkflowRunStatus.COMPLETED
     assert function.calls == [{"function_name": "fn", "inputs": {"amount": 42}}]
     assert run.execution_context.to_view()["intake"] == {"amount": 42}
 
@@ -251,7 +251,7 @@ async def test_decision_routes_by_first_truthy_rule():
     run.resume("intake", {"approved": True})
     await stepper.continue_after(run, flow, "intake")
 
-    assert run.status == FlowRunStatus.COMPLETED
+    assert run.status == WorkflowRunStatus.COMPLETED
     assert [s.node_id for s in run.step_history] == ["intake", "route", "approved_end"]
 
 
@@ -279,7 +279,7 @@ async def test_decision_without_match_falls_through_default_edge():
     )
     run = _run(flow)
     await _stepper().advance(run, flow)
-    assert run.status == FlowRunStatus.COMPLETED
+    assert run.status == WorkflowRunStatus.COMPLETED
     assert run.execution_context.to_view()["route"] == {"matched_condition": None}
 
 
@@ -322,7 +322,7 @@ async def test_loop_iterates_body_and_aggregates_results():
     )
     await _stepper(function=function).advance(run, flow)
 
-    assert run.status == FlowRunStatus.COMPLETED
+    assert run.status == WorkflowRunStatus.COMPLETED
     view = run.execution_context.to_view()
     assert view["each"] == {
         "results": [{"recorded": "Uber"}, {"recorded": "Payroll"}],
@@ -353,7 +353,7 @@ async def test_loop_with_zero_items_advances_past_loop():
     function = StubFunctionPort({"fetch": {"items": []}})
     await _stepper(function=function).advance(run, flow)
 
-    assert run.status == FlowRunStatus.COMPLETED
+    assert run.status == WorkflowRunStatus.COMPLETED
     assert run.execution_context.to_view()["each"] == {"results": [], "count": 0}
     assert all(c["function_name"] != "record" for c in function.calls)
 
@@ -376,17 +376,17 @@ async def test_suspend_inside_loop_body_resumes_iteration():
     stepper = _stepper(function=StubFunctionPort({"fetch": {"items": [1, 2]}}))
 
     result = await stepper.advance(run, flow)
-    assert run.status == FlowRunStatus.WAITING
+    assert run.status == WorkflowRunStatus.WAITING
     assert run.current_node_id == "ask"
     assert result.wait is not None
 
     run.resume("ask", {"answer": "first"})
     await stepper.continue_after(run, flow, "ask")
-    assert run.status == FlowRunStatus.WAITING  # second iteration waits again
+    assert run.status == WorkflowRunStatus.WAITING  # second iteration waits again
 
     run.resume("ask", {"answer": "second"})
     await stepper.continue_after(run, flow, "ask")
-    assert run.status == FlowRunStatus.COMPLETED
+    assert run.status == WorkflowRunStatus.COMPLETED
     assert run.execution_context.to_view()["each"] == {
         "results": [{"answer": "first"}, {"answer": "second"}],
         "count": 2,
@@ -428,7 +428,7 @@ async def test_nested_loops():
     )
     await _stepper(function=function).advance(run, flow)
 
-    assert run.status == FlowRunStatus.COMPLETED
+    assert run.status == WorkflowRunStatus.COMPLETED
     recorded = [
         c["inputs"]["value"] for c in function.calls if c["function_name"] == "record"
     ]
@@ -445,7 +445,7 @@ async def test_agent_node_suspends_with_external_ref():
     run = _run(flow)
     result = await _stepper().advance(run, flow)
 
-    assert run.status == FlowRunStatus.RUNNING
+    assert run.status == WorkflowRunStatus.RUNNING
     assert run.step_history[-1].status == StepStatus.RUNNING
     assert result.wait.wait_type == WorkflowRunWaitType.AGENT
     assert result.wait.external_ref
@@ -468,7 +468,7 @@ async def test_job_function_suspends_with_function_wait_but_run_stays_running():
         }
     ).advance(run, flow)
 
-    assert run.status == FlowRunStatus.RUNNING
+    assert run.status == WorkflowRunStatus.RUNNING
     assert run.current_node_id == "export"
     assert run.step_history[-1].status == StepStatus.RUNNING
     assert result.wait is not None
@@ -491,7 +491,7 @@ async def test_function_node_suspends_on_dispatched_run():
         {"api_fn": {"run_id": str(run_id), "status": "PENDING"}}
     ).advance(run, flow)
 
-    assert run.status == FlowRunStatus.RUNNING
+    assert run.status == WorkflowRunStatus.RUNNING
     assert result.wait is not None
     assert result.wait.wait_type == WorkflowRunWaitType.FUNCTION
     assert result.wait.external_ref == str(run_id)
@@ -506,7 +506,7 @@ async def test_wait_until_suspends_with_time_wait():
     run = _run(flow)
     result = await _stepper().advance(run, flow)
 
-    assert run.status == FlowRunStatus.RUNNING
+    assert run.status == WorkflowRunStatus.RUNNING
     assert run.step_history[-1].status == StepStatus.RUNNING
     assert result.wait.wait_type == WorkflowRunWaitType.TIME
     assert result.wait.external_ref == str(run.id)
@@ -530,7 +530,7 @@ async def test_missing_required_input_fails_run_with_path_in_error():
     run = _run(flow)
     await _stepper().advance(run, flow)
 
-    assert run.status == FlowRunStatus.FAILED
+    assert run.status == WorkflowRunStatus.FAILED
     assert run.failed_node_id == "save"
     assert "intake.amount" in run.error
     assert "amount" in run.error
@@ -549,7 +549,7 @@ async def test_executor_exception_fails_run():
     run = _run(flow)
     await _stepper(function=ExplodingFunctionPort()).advance(run, flow)
 
-    assert run.status == FlowRunStatus.FAILED
+    assert run.status == WorkflowRunStatus.FAILED
     assert run.failed_node_id == "save"
     assert "boom" in run.error
     assert run.step_history[-1].status == StepStatus.FAILED

@@ -5,7 +5,9 @@ from app.core.config import settings
 from app.modules.identity.infrastructure.supertokens_auth.initialization import (
     build_supertokens_app_info,
     build_thirdparty_providers,
+    initialize_supertokens,
 )
+from app.modules.test_support.e2e_base import _reset_supertokens_testing_state
 
 
 def test_build_supertokens_app_info_uses_full_urls():
@@ -27,6 +29,19 @@ def test_build_supertokens_app_info_uses_full_urls():
     assert app_info.api_domain == "https://api.lemma.work"
     assert app_info.website_domain == "https://auth.lemma.work"
     assert app_info.website_base_path == "/auth"
+
+
+def test_e2e_reset_allows_repeated_supertokens_initialization(monkeypatch):
+    """Every SDK-owned singleton must be reset between function-scoped apps."""
+
+    monkeypatch.setenv("SUPERTOKENS_ENV", "testing")
+    _reset_supertokens_testing_state()
+    try:
+        initialize_supertokens()
+        _reset_supertokens_testing_state()
+        initialize_supertokens()
+    finally:
+        _reset_supertokens_testing_state()
 
 
 def test_build_supertokens_app_info_uses_origin_when_gateway_contains_api_prefix():

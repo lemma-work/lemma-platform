@@ -25,7 +25,6 @@ from app.modules.connectors.domain.ports import (
     ConnectorOperationRepositoryPort,
     ConnectorRepositoryPort,
     AppOperationGatewayPort,
-    SchemaCompilerPort,
 )
 from app.modules.connectors.services.account_resolution_service import (
     AccountResolutionService,
@@ -60,14 +59,12 @@ class ConnectorOperationService:
         connector_repository: ConnectorRepositoryPort,
         operation_repository: ConnectorOperationRepositoryPort,
         operation_gateway: AppOperationGatewayPort,
-        schema_compiler: SchemaCompilerPort,
         account_resolution_service: AccountResolutionService,
         connector_service: ConnectorService | None = None,
     ):
         self.connector_repository = connector_repository
         self.operation_repository = operation_repository
         self.operation_gateway = operation_gateway
-        self.schema_compiler = schema_compiler
         self.account_resolution_service = account_resolution_service
         self.connector_service = connector_service
 
@@ -228,12 +225,14 @@ class ConnectorOperationService:
         )
 
     def _exception_details(self, exc: Exception) -> dict[str, Any]:
-        details = getattr(exc, "details", None)
-        if isinstance(details, dict):
-            return details
-        if details is not None:
-            return {"upstream": details}
-        return {"upstream_message": str(exc)}
+        details: dict[str, Any] = {"error_type": type(exc).__name__}
+        status_code = getattr(exc, "status_code", None)
+        if isinstance(status_code, int):
+            details["upstream_status"] = status_code
+        code = getattr(exc, "code", None)
+        if isinstance(code, str) and len(code) <= 100:
+            details["upstream_code"] = code
+        return details
 
     def _normalize_execution_result(self, value: Any) -> Any:
         model_dump = getattr(value, "model_dump", None)
@@ -612,8 +611,7 @@ class ConnectorOperationService:
             raise
         except Exception as exc:
             raise OperationExecutionInfrastructureError(
-                f"Failed to execute '{resolved.operation_execution_name}' for "
-                f"'{resolved.connector_id}'.",
+                "Connector provider is temporarily unavailable.",
                 details=self._exception_details(exc),
             ) from exc
         return OperationExecutionResponse(

@@ -2,8 +2,6 @@
 
 from __future__ import annotations
 
-import pytest
-
 from app.modules.datastore.domain.datastore_entities import ColumnSchema, DatastoreDataType, ForeignKeySpec
 from app.modules.datastore.domain.errors import (
     DatastoreConflictError,
@@ -13,7 +11,6 @@ from app.modules.datastore.domain.errors import (
 from app.modules.datastore.infrastructure.db_error_parser import parse_db_error
 from app.modules.datastore.services.record_validator import RecordValidator
 from app.modules.datastore.services.table_context import TableContext
-from app.modules.datastore.domain.datastore_entities import DatastoreTableEntity
 
 
 def _make_ctx(

@@ -6,6 +6,7 @@ from uuid import UUID
 from pydantic import BaseModel, Field, model_validator
 
 from app.modules.schedule.domain.schedule import (
+    ScheduleRunStatus,
     ScheduleFireStatus,
     ScheduleType,
     normalize_datastore_schedule_config,
@@ -148,6 +149,33 @@ class ScheduleListResponse(BaseModel):
     items: list[ScheduleDetailResponse]
     limit: int
     next_page_token: str | None = None
+
+
+class ScheduleRunResponse(BaseModel):
+    id: UUID
+    schedule_id: UUID
+    source_event_id: str
+    status: ScheduleRunStatus
+    attempts: int
+    target_kind: str
+    target_run_id: str | None = None
+    payload: dict
+    metadata: dict
+    llm_output: dict
+    error_type: str | None = None
+    error_code: str | None = None
+    source_occurred_at: datetime | None = None
+    started_at: datetime | None = None
+    completed_at: datetime | None = None
+    created_at: datetime
+    updated_at: datetime
+
+    model_config = {"from_attributes": True}
+
+
+class ScheduleRunListResponse(BaseModel):
+    items: list[ScheduleRunResponse]
+    limit: int
 
 
 class MessageResponse(BaseModel):

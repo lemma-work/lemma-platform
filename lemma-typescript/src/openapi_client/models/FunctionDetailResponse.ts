@@ -40,4 +40,3 @@ export type FunctionDetailResponse = {
     user_id: string;
     visibility?: string;
 };
-

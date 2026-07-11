@@ -1,15 +1,22 @@
 from __future__ import annotations
 
-from uuid import uuid4
+import asyncio
+from datetime import datetime, timedelta, timezone
+from uuid import UUID, uuid4
 
 from httpx import AsyncClient
 import pytest
+from sqlalchemy import update
 from supertokens_python.recipe.thirdparty.providers import config_utils
 from supertokens_python.recipe.thirdparty.providers.custom import GenericProvider
 from supertokens_python.recipe.thirdparty.types import (
     RawUserInfoFromProvider,
     UserInfo,
     UserInfoEmail,
+)
+
+from app.modules.identity.infrastructure.models.organization_models import (
+    OrganizationInvitation,
 )
 
 pytestmark = pytest.mark.e2e
@@ -126,6 +133,49 @@ async def test_signup_does_not_create_personal_org(
 
 
 @pytest.mark.asyncio
+async def test_emailpassword_signup_and_signin_normalize_email(
+    async_client: AsyncClient,
+):
+    unique = uuid4().hex[:10]
+    signup_email = f"TEST+EMAIL-CASE-{unique}@EXAMPLE.COM"
+    signin_email = f"Test+Email-Case-{unique}@Example.Com"
+    normalized_email = signup_email.lower()
+    password = "TestPassword@123"
+
+    signup_response = await async_client.post(
+        "/st/auth/signup",
+        json=_emailpassword_payload(signup_email, password),
+    )
+    signup_payload = signup_response.json()
+    assert signup_response.status_code == 200
+    assert signup_payload["status"] == "OK", signup_payload
+    assert signup_payload["user"]["emails"] == [normalized_email]
+
+    signup_token = signup_response.headers.get(
+        "st-access-token"
+    ) or signup_response.cookies.get("sAccessToken")
+    assert signup_token
+
+    me_response = await async_client.get(
+        "/users/me",
+        headers=_auth_headers(signup_token),
+    )
+    assert me_response.status_code == 200, me_response.text
+    assert me_response.json()["email"] == normalized_email
+
+    async_client.cookies.clear()
+    signin_response = await async_client.post(
+        "/st/auth/signin",
+        json=_emailpassword_payload(signin_email, password),
+    )
+    signin_payload = signin_response.json()
+    assert signin_response.status_code == 200
+    assert signin_payload["status"] == "OK", signin_payload
+    assert signin_payload["user"]["id"] == signup_payload["user"]["id"]
+    assert signin_payload["user"]["emails"] == [normalized_email]
+
+
+@pytest.mark.asyncio
 async def test_org_domain_slug_availability_and_suggestions(
     async_client: AsyncClient,
     signup_user,
@@ -158,6 +208,23 @@ async def test_org_domain_slug_availability_and_suggestions(
     assert org["slug"] == "acme-auto-join"
     assert org["email_domain"] == "acme-example.com"
     assert org["join_policy"] == "EMAIL_DOMAIN"
+
+    special_name_resp = await async_client.post(
+        "/organizations",
+        headers=owner_headers,
+        json={"name": f"Acme's Special Ops {uuid4().hex[:6]}"},
+    )
+    assert special_name_resp.status_code == 201, special_name_resp.text
+    assert "'" not in special_name_resp.json()["slug"]
+    assert special_name_resp.json()["slug"].startswith("acme-s-special-ops-")
+
+    invalid_slug_resp = await async_client.post(
+        "/organizations",
+        headers=owner_headers,
+        json={"name": f"Invalid Slug Org {uuid4().hex[:6]}", "slug": "bad'slug"},
+    )
+    assert invalid_slug_resp.status_code == 400, invalid_slug_resp.text
+    assert "slug" in invalid_slug_resp.json()["message"].lower()
 
     available_after_resp = await async_client.get(
         "/organizations/slug-availability",
@@ -379,6 +446,216 @@ async def test_organization_full_api_flow(
     )
     assert revoked_invite_resp.status_code == 200
     assert revoked_invite_resp.json()["status"] == "REVOKED"
+
+
+@pytest.mark.asyncio
+async def test_invitation_email_validation_and_normalization(
+    async_client: AsyncClient,
+    signup_user,
+):
+    owner = await signup_user()
+    owner_headers = _auth_headers(owner["token"])
+
+    create_org_resp = await async_client.post(
+        "/organizations",
+        headers=owner_headers,
+        json={"name": f"Email Normalize Org {uuid4().hex[:8]}"},
+    )
+    assert create_org_resp.status_code == 201, create_org_resp.text
+    org_id = create_org_resp.json()["id"]
+
+    invalid_resp = await async_client.post(
+        f"/organizations/{org_id}/invitations",
+        headers=owner_headers,
+        json={"email": "not-an-email", "role": "ORG_MEMBER"},
+    )
+    assert invalid_resp.status_code == 422, invalid_resp.text
+
+    invite_resp = await async_client.post(
+        f"/organizations/{org_id}/invitations",
+        headers=owner_headers,
+        json={"email": "Invitee+Case@Example.COM", "role": "ORG_MEMBER"},
+    )
+    assert invite_resp.status_code == 201, invite_resp.text
+    assert invite_resp.json()["email"] == "invitee+case@example.com"
+
+    duplicate_resp = await async_client.post(
+        f"/organizations/{org_id}/invitations",
+        headers=owner_headers,
+        json={"email": "invitee+case@example.com", "role": "ORG_MEMBER"},
+    )
+    assert duplicate_resp.status_code == 409, duplicate_resp.text
+
+
+@pytest.mark.asyncio
+async def test_concurrent_invitations_for_normalized_email_create_only_one(
+    async_client: AsyncClient,
+    signup_user,
+):
+    owner = await signup_user()
+    owner_headers = _auth_headers(owner["token"])
+
+    create_org_resp = await async_client.post(
+        "/organizations",
+        headers=owner_headers,
+        json={"name": f"Concurrent Invite Org {uuid4().hex[:8]}"},
+    )
+    assert create_org_resp.status_code == 201, create_org_resp.text
+    org_id = create_org_resp.json()["id"]
+
+    unique = uuid4().hex[:10]
+    normalized_email = f"concurrent-{unique}@example.com"
+    responses = await asyncio.gather(
+        async_client.post(
+            f"/organizations/{org_id}/invitations",
+            headers=owner_headers,
+            json={"email": normalized_email.upper(), "role": "ORG_MEMBER"},
+        ),
+        async_client.post(
+            f"/organizations/{org_id}/invitations",
+            headers=owner_headers,
+            json={"email": normalized_email, "role": "ORG_MEMBER"},
+        ),
+    )
+
+    assert sorted(response.status_code for response in responses) == [201, 409], [
+        response.text for response in responses
+    ]
+    created = next(response for response in responses if response.status_code == 201)
+    assert created.json()["email"] == normalized_email
+
+    list_response = await async_client.get(
+        f"/organizations/{org_id}/invitations",
+        headers=owner_headers,
+    )
+    assert list_response.status_code == 200, list_response.text
+    matching = [
+        invitation
+        for invitation in list_response.json()["items"]
+        if invitation["email"] == normalized_email
+    ]
+    assert len(matching) == 1
+
+
+@pytest.mark.asyncio
+async def test_revoked_and_expired_invitations_do_not_block_reinvite(
+    async_client: AsyncClient,
+    signup_user,
+    db_session,
+):
+    owner = await signup_user()
+    invitee = await signup_user()
+    owner_headers = _auth_headers(owner["token"])
+    invitee_headers = _auth_headers(invitee["token"])
+
+    create_org_resp = await async_client.post(
+        "/organizations",
+        headers=owner_headers,
+        json={"name": f"Reinvite Org {uuid4().hex[:8]}"},
+    )
+    assert create_org_resp.status_code == 201, create_org_resp.text
+    org_id = create_org_resp.json()["id"]
+
+    first_invite_resp = await async_client.post(
+        f"/organizations/{org_id}/invitations",
+        headers=owner_headers,
+        json={"email": invitee["email"].upper(), "role": "ORG_MEMBER"},
+    )
+    assert first_invite_resp.status_code == 201, first_invite_resp.text
+    first_invite_id = first_invite_resp.json()["id"]
+
+    revoke_resp = await async_client.delete(
+        f"/organizations/invitations/{first_invite_id}",
+        headers=owner_headers,
+    )
+    assert revoke_resp.status_code == 204, revoke_resp.text
+
+    second_invite_resp = await async_client.post(
+        f"/organizations/{org_id}/invitations",
+        headers=owner_headers,
+        json={"email": invitee["email"], "role": "ORG_MEMBER"},
+    )
+    assert second_invite_resp.status_code == 201, second_invite_resp.text
+    second_invite_id = second_invite_resp.json()["id"]
+    assert second_invite_id != first_invite_id
+
+    await db_session.execute(
+        update(OrganizationInvitation)
+        .where(OrganizationInvitation.id == UUID(second_invite_id))
+        .values(expires_at=datetime.now(timezone.utc) - timedelta(minutes=1))
+    )
+    await db_session.commit()
+
+    third_invite_resp = await async_client.post(
+        f"/organizations/{org_id}/invitations",
+        headers=owner_headers,
+        json={"email": invitee["email"], "role": "ORG_MEMBER"},
+    )
+    assert third_invite_resp.status_code == 201, third_invite_resp.text
+    third_invite_id = third_invite_resp.json()["id"]
+    assert third_invite_id not in {first_invite_id, second_invite_id}
+
+    accept_resp = await async_client.post(
+        f"/organizations/invitations/{third_invite_id}/accept",
+        headers=invitee_headers,
+    )
+    assert accept_resp.status_code == 200, accept_resp.text
+
+
+@pytest.mark.asyncio
+async def test_accepted_invitation_does_not_block_reinvite_after_member_removed(
+    async_client: AsyncClient,
+    signup_user,
+):
+    owner = await signup_user()
+    invitee = await signup_user()
+    owner_headers = _auth_headers(owner["token"])
+    invitee_headers = _auth_headers(invitee["token"])
+
+    create_org_resp = await async_client.post(
+        "/organizations",
+        headers=owner_headers,
+        json={"name": f"Accepted Reinvite Org {uuid4().hex[:8]}"},
+    )
+    assert create_org_resp.status_code == 201, create_org_resp.text
+    org_id = create_org_resp.json()["id"]
+
+    invite_resp = await async_client.post(
+        f"/organizations/{org_id}/invitations",
+        headers=owner_headers,
+        json={"email": invitee["email"], "role": "ORG_MEMBER"},
+    )
+    assert invite_resp.status_code == 201, invite_resp.text
+    accept_resp = await async_client.post(
+        f"/organizations/invitations/{invite_resp.json()['id']}/accept",
+        headers=invitee_headers,
+    )
+    assert accept_resp.status_code == 200, accept_resp.text
+
+    members_resp = await async_client.get(
+        f"/organizations/{org_id}/members",
+        headers=owner_headers,
+    )
+    assert members_resp.status_code == 200, members_resp.text
+    invitee_member = next(
+        member
+        for member in members_resp.json()["items"]
+        if member.get("user", {}).get("email") == invitee["email"]
+    )
+
+    remove_resp = await async_client.delete(
+        f"/organizations/{org_id}/members/{invitee_member['id']}",
+        headers=owner_headers,
+    )
+    assert remove_resp.status_code == 204, remove_resp.text
+
+    reinvite_resp = await async_client.post(
+        f"/organizations/{org_id}/invitations",
+        headers=owner_headers,
+        json={"email": invitee["email"].upper(), "role": "ORG_MEMBER"},
+    )
+    assert reinvite_resp.status_code == 201, reinvite_resp.text
+    assert reinvite_resp.json()["email"] == invitee["email"]
 
 
 @pytest.mark.asyncio
@@ -619,6 +896,84 @@ async def test_invite_with_pod_id_adds_user_to_pod_on_accept(
     pod_members = pod_members_resp.json().get("items", [])
     invitee_pod_member = next(
         (m for m in pod_members if m["user_id"] == invitee_member["user"]["id"]),
+        None,
+    )
+    assert invitee_pod_member is not None
+    assert invitee_pod_member["roles"] == ["POD_EDITOR"]
+
+
+@pytest.mark.asyncio
+async def test_revoked_pod_invitation_can_be_reinvited_and_accepted(
+    async_client: AsyncClient,
+    signup_user,
+):
+    owner = await signup_user()
+    invitee = await signup_user()
+    owner_headers = _auth_headers(owner["token"])
+    invitee_headers = _auth_headers(invitee["token"])
+
+    create_org_resp = await async_client.post(
+        "/organizations",
+        headers=owner_headers,
+        json={"name": f"Pod Reinvite Org {uuid4().hex[:8]}"},
+    )
+    assert create_org_resp.status_code == 201, create_org_resp.text
+    org_id = create_org_resp.json()["id"]
+
+    create_pod_resp = await async_client.post(
+        "/pods",
+        headers=owner_headers,
+        json={
+            "name": f"Pod Reinvite Pod {uuid4().hex[:8]}",
+            "organization_id": org_id,
+        },
+    )
+    assert create_pod_resp.status_code == 201, create_pod_resp.text
+    pod_id = create_pod_resp.json()["id"]
+
+    first_invite_resp = await async_client.post(
+        f"/organizations/{org_id}/invitations",
+        headers=owner_headers,
+        json={
+            "email": invitee["email"].upper(),
+            "role": "ORG_MEMBER",
+            "pod_id": pod_id,
+            "pod_role": "POD_EDITOR",
+        },
+    )
+    assert first_invite_resp.status_code == 201, first_invite_resp.text
+
+    revoke_resp = await async_client.delete(
+        f"/organizations/invitations/{first_invite_resp.json()['id']}",
+        headers=owner_headers,
+    )
+    assert revoke_resp.status_code == 204, revoke_resp.text
+
+    second_invite_resp = await async_client.post(
+        f"/organizations/{org_id}/invitations",
+        headers=owner_headers,
+        json={
+            "email": invitee["email"],
+            "role": "ORG_MEMBER",
+            "pod_id": pod_id,
+            "pod_role": "POD_EDITOR",
+        },
+    )
+    assert second_invite_resp.status_code == 201, second_invite_resp.text
+
+    accept_resp = await async_client.post(
+        f"/organizations/invitations/{second_invite_resp.json()['id']}/accept",
+        headers=invitee_headers,
+    )
+    assert accept_resp.status_code == 200, accept_resp.text
+
+    pod_members_resp = await async_client.get(
+        f"/pods/{pod_id}/members",
+        headers=owner_headers,
+    )
+    assert pod_members_resp.status_code == 200, pod_members_resp.text
+    invitee_pod_member = next(
+        (m for m in pod_members_resp.json()["items"] if m["email"] == invitee["email"]),
         None,
     )
     assert invitee_pod_member is not None

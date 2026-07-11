@@ -15,4 +15,3 @@ export type BulkCreateRecordsRequest = {
      */
     upsert?: boolean;
 };
-

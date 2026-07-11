@@ -5,6 +5,8 @@ from supertokens_python.recipe.thirdparty.types import ThirdPartyInfo
 from supertokens_python.types import User
 from supertokens_python.types.base import AccountInfoInput
 
+from app.modules.identity.domain.email import normalize_identity_email
+
 
 EMAIL_PASSWORD_SIGN_IN_METHOD = "email and password"
 GOOGLE_SIGN_IN_METHOD = "Google"
@@ -16,6 +18,7 @@ async def list_users_by_email(
     email: str,
     user_context: Dict[str, Any],
 ) -> list[User]:
+    email = normalize_identity_email(email)
     return await list_users_by_account_info(
         tenant_id=tenant_id,
         account_info=AccountInfoInput(email=email),
@@ -25,6 +28,7 @@ async def list_users_by_email(
 
 
 def has_emailpassword_login_method(users: list[User], email: str) -> bool:
+    email = normalize_identity_email(email)
     return any(
         login_method.recipe_id == "emailpassword" and login_method.has_same_email_as(email)
         for user in users
@@ -39,6 +43,7 @@ def has_thirdparty_login_method(
     third_party_id: str | None = None,
     third_party_user_id: str | None = None,
 ) -> bool:
+    email = normalize_identity_email(email)
     return any(
         _matches_thirdparty_login_method(
             login_method,
@@ -52,6 +57,7 @@ def has_thirdparty_login_method(
 
 
 def get_conflicting_thirdparty_id(users: list[User], *, email: str) -> str | None:
+    email = normalize_identity_email(email)
     for user in users:
         for login_method in user.login_methods:
             if login_method.recipe_id != "thirdparty" or not login_method.has_same_email_as(email):
@@ -77,6 +83,7 @@ def _matches_thirdparty_login_method(
     third_party_id: str | None,
     third_party_user_id: str | None,
 ) -> bool:
+    email = normalize_identity_email(email)
     if login_method.recipe_id != "thirdparty" or not login_method.has_same_email_as(email):
         return False
 

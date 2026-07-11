@@ -3,12 +3,13 @@
 from __future__ import annotations
 
 from io import BytesIO
-from pathlib import PurePosixPath
+from pathlib import Path, PurePosixPath
 from zipfile import BadZipFile, ZipFile
 
 from pydantic import BaseModel
 
 from app.modules.apps.domain.errors import AppValidationError
+from app.modules.apps.services.archive_validation import inspect_app_archive
 
 
 class AppDistFile(BaseModel):
@@ -31,9 +32,14 @@ def _normalize_archive_path(raw_path: str) -> str:
     return path.as_posix()
 
 
-def load_app_dist_bundle(dist_archive_bytes: bytes) -> AppDistBundle:
+def load_app_dist_bundle(dist_archive_bytes: bytes | Path) -> AppDistBundle:
+    inspect_app_archive(dist_archive_bytes, label="Dist archive")
     try:
-        archive = ZipFile(BytesIO(dist_archive_bytes))
+        archive = ZipFile(
+            dist_archive_bytes
+            if isinstance(dist_archive_bytes, Path)
+            else BytesIO(dist_archive_bytes)
+        )
     except BadZipFile as exc:
         raise AppValidationError("Dist archive must be a valid zip file") from exc
 

@@ -8,4 +8,3 @@ export type ConnectorStatusResponse = {
     accounts: Array<ConnectedAccountSummary>;
     installed: Array<InstalledAppSummary>;
 };
-

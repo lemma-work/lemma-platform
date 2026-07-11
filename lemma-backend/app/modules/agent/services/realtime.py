@@ -4,8 +4,8 @@ from __future__ import annotations
 
 from uuid import UUID
 
+from app.core.domain.realtime import RealtimeChannel
 from app.core.infrastructure.channels.channel_service import (
-    ChannelService,
     get_channel_service,
 )
 from app.core.log.log import get_logger
@@ -21,7 +21,7 @@ async def publish_conversation_event(
     conversation_id: UUID,
     payload: dict[str, object],
     *,
-    channel_service: ChannelService | None = None,
+    channel_service: RealtimeChannel | None = None,
 ) -> None:
     """Publish a best-effort transient event to active SSE subscribers."""
 
@@ -30,9 +30,9 @@ async def publish_conversation_event(
         await service.publish(conversation_channel(conversation_id), payload)
     except Exception as exc:
         logger.warning(
-            "Failed publishing agent realtime event for conversation %s: %s",
-            conversation_id,
-            exc,
+            "Failed publishing agent realtime event",
+            conversation_id=str(conversation_id),
+            error_type=type(exc).__name__,
         )
 
 

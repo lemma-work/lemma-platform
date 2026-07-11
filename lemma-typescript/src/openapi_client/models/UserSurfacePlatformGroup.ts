@@ -14,4 +14,3 @@ export type UserSurfacePlatformGroup = {
     platform: SurfacePlatform;
     surfaces: Array<UserSurfaceItem>;
 };
-

@@ -12,4 +12,3 @@ export type OAuth2DefaultsResponseSchema = {
     token_url?: (string | null);
     userinfo_url?: (string | null);
 };
-

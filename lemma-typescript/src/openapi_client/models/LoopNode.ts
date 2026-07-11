@@ -14,4 +14,3 @@ export type LoopNode = {
     position?: (Record<string, number> | null);
     type?: string;
 };
-

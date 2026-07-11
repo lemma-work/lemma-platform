@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 from enum import Enum
+from pathlib import Path
 from typing import Any
 from uuid import UUID
 
@@ -54,6 +55,7 @@ class DatastoreFileEntity(AggregateRoot):
     indexed_at: datetime | None = None
     last_processing_error: str | None = None
     processing_attempts: int = 0
+    content_sha256: str | None = None
     allowed_actions: list[str] = Field(default_factory=list)
 
     @property
@@ -70,7 +72,7 @@ class DatastoreFileEntity(AggregateRoot):
             return self.mime_type
         if self.is_folder:
             return "application/x-directory"
-        from app.modules.agent.domain.file_entities import get_content_type
+        from app.core.file_types import get_content_type
 
         return get_content_type(self.name)
 
@@ -106,6 +108,7 @@ class DatastoreFileEntity(AggregateRoot):
             self.status = FileStatus.PENDING
             self.indexed_at = None
             self.processing_attempts = 0
+            self.last_processing_error = None
         else:
             self.status = FileStatus.NOT_REQUIRED
             self.indexed_at = None
@@ -143,6 +146,7 @@ class DatastoreFileEntity(AggregateRoot):
             self.indexed_at = None
             # New content gets a fresh processing-retry budget.
             self.processing_attempts = 0
+            self.last_processing_error = None
         else:
             self.status = FileStatus.NOT_REQUIRED
             self.indexed_at = None
@@ -193,7 +197,7 @@ class DatastoreFileUpdateEntity(BaseModel):
     metadata: dict[str, Any] | None = None
     visibility: str | None = None
     search_enabled: bool | None = None
-    content: bytes | None = None
+    content: bytes | Path | None = None
 
 
 class DatastoreFileSearchResult(BaseModel):

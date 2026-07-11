@@ -7,7 +7,9 @@ are DB-free by construction and can run after the resolving UoW has closed.
 
 from __future__ import annotations
 
+from io import BytesIO
 from uuid import uuid4
+from zipfile import ZipFile
 
 import pytest
 
@@ -15,7 +17,10 @@ from app.modules.apps.services.app_storage_phase import (
     AppStoragePhase,
     _AppDeletionCleanup,
     _AssetReadInputs,
+    _UploadPlan,
+    _WrittenBundle,
 )
+from app.modules.apps.domain.entities import AppReleaseEntity
 
 
 class _RecordingStorage:
@@ -82,3 +87,89 @@ async def test_cleanup_storage_purges_without_db():
     await _phase(storage).cleanup_storage(cleanup)
     assert "source/archive.zip" in storage.deleted
     assert "" in storage.deleted_prefixes
+
+
+@pytest.mark.asyncio
+async def test_cleanup_written_bundle_removes_source_and_release_prefix():
+    storage = _RecordingStorage()
+    plan = _UploadPlan(
+        app_id=uuid4(),
+        pod_id=uuid4(),
+        name="dashboard",
+        has_source=True,
+        version="v1",
+        release_root="releases/v1/dist/",
+        existing_release_id=None,
+        needs_dist_write=True,
+    )
+
+    await _phase(storage).cleanup_written_bundle(
+        plan,
+        _WrittenBundle(
+            source_path="source/hash/archive.zip",
+            dist_archive_path="releases/v1/dist/archive.zip",
+        ),
+    )
+
+    assert storage.deleted == ["source/hash/archive.zip"]
+    assert storage.deleted_prefixes == ["releases/v1/dist/"]
+
+
+@pytest.mark.asyncio
+async def test_bundle_write_failure_rolls_back_every_partial_object():
+    class _FailingStorage(_RecordingStorage):
+        async def write_file(self, key: str, content) -> None:
+            if key.endswith("archive.zip") and key.startswith("releases/"):
+                raise OSError("object storage write failed")
+            await super().write_file(key, content)
+
+    def archive(files: dict[str, str]) -> bytes:
+        buffer = BytesIO()
+        with ZipFile(buffer, "w") as output:
+            for path, content in files.items():
+                output.writestr(path, content)
+        return buffer.getvalue()
+
+    storage = _FailingStorage()
+    plan = _UploadPlan(
+        app_id=uuid4(),
+        pod_id=uuid4(),
+        name="dashboard",
+        has_source=True,
+        version="v1",
+        release_root="releases/v1/dist/",
+        existing_release_id=None,
+        needs_dist_write=True,
+    )
+
+    with pytest.raises(OSError, match="object storage write failed"):
+        await _phase(storage).write_bundle(
+            plan,
+            archive({"src/main.ts": "export {}"}),
+            archive({"index.html": "<html></html>"}),
+        )
+
+    assert len(storage.deleted) == 1
+    assert storage.deleted[0].startswith("source/")
+    assert storage.deleted_prefixes == ["releases/v1/dist/"]
+
+
+@pytest.mark.asyncio
+async def test_cleanup_storage_deletes_release_archive_outside_dist_prefix():
+    storage = _RecordingStorage()
+    release = AppReleaseEntity(
+        app_id=uuid4(),
+        version="v1",
+        dist_root_path="releases/v1/dist/",
+        dist_archive_path="releases/v1/archive.zip",
+    )
+    cleanup = _AppDeletionCleanup(
+        app_id=release.app_id,
+        source_archive_path=None,
+        releases=(release,),
+    )
+
+    await _phase(storage).cleanup_storage(cleanup)
+
+    assert storage.deleted_prefixes == ["releases/v1/dist/", ""]
+    assert storage.deleted == ["releases/v1/archive.zip"]

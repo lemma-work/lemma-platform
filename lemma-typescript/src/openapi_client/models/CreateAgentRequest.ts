@@ -22,4 +22,3 @@ export type CreateAgentRequest = {
     toolsets?: Array<AgentToolset>;
     visibility?: ResourceVisibility;
 };
-

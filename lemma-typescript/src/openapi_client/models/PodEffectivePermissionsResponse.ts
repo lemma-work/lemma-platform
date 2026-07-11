@@ -6,4 +6,3 @@ export type PodEffectivePermissionsResponse = {
     actions: Array<string>;
     pod_id: string;
 };
-

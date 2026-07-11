@@ -5,6 +5,7 @@ from typing import Any
 from ..errors import LemmaNotFoundError
 from ..openapi_client.api.agent_surfaces import (
     agent_surface_channels,
+    agent_surface_available,
     agent_surface_create,
     agent_surface_delete,
     agent_surface_get,
@@ -23,6 +24,7 @@ from ..openapi_client.models.agent_surface_response import AgentSurfaceResponse
 from ..openapi_client.models.available_surface_channels_response import (
     AvailableSurfaceChannelsResponse,
 )
+from ..openapi_client.models.available_surfaces_response import AvailableSurfacesResponse
 from ..openapi_client.models.set_default_surface_request import SetDefaultSurfaceRequest
 from ..openapi_client.models.surface_create_request import SurfaceCreateRequest
 from ..openapi_client.models.surface_platform_setup_guide import SurfacePlatformSetupGuide
@@ -47,6 +49,9 @@ class PodSurfaces(BoundResource):
 
     def list(self, *, limit: int = 100) -> AgentSurfaceListResponse:
         return self._call(agent_surface_list, self._pod_uuid(), limit=limit)
+
+    def available(self) -> AvailableSurfacesResponse:
+        return self._call(agent_surface_available, self._pod_uuid())
 
     def create(
         self, request: SurfaceCreateRequest | dict

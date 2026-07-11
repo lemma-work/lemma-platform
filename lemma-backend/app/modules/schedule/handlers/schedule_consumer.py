@@ -13,8 +13,8 @@ from app.core.infrastructure.db.session import async_session_maker
 from app.core.infrastructure.db.uow_factory import SessionUnitOfWorkFactory
 from app.core.infrastructure.jobs.streaq_runtime import streaq_task
 from app.modules.schedule.repositories.schedule_repository import ScheduleRepository
-from app.modules.schedule.services.schedule_processor import ScheduleProcessor
 from app.core.log.log import get_logger
+from app.composition.schedule_filter import create_schedule_processor
 
 router = RedisRouter()
 logger = get_logger(__name__)
@@ -25,6 +25,7 @@ async def handle_llm_filter_task(
     payload: dict[str, Any],
     metadata: dict[str, Any],
     schedule_id: str | None = None,
+    source_event_id: str | None = None,
 ) -> None:
     """Apply LLM filtering to a webhook event.
 
@@ -34,6 +35,8 @@ async def handle_llm_filter_task(
     """
     if schedule_id is None:
         raise ValueError("schedule_id is required")
+    if source_event_id is None:
+        raise ValueError("source_event_id is required")
     logger.info(f"Processing LLM filtering for schedule {schedule_id}")
 
     uow_factory = SessionUnitOfWorkFactory(async_session_maker)
@@ -49,11 +52,12 @@ async def handle_llm_filter_task(
         logger.warning("Schedule %s has no filter instruction, skipping", schedule_id)
         return
 
-    processor = ScheduleProcessor()
+    processor = create_schedule_processor()
     fired = await processor.process_event(
         schedule=schedule,
         payload=payload,
         metadata=metadata,
+        source_event_id=source_event_id,
     )
     if not fired:
         logger.info("Schedule %s filtered out by LLM, skipping event", schedule_id)

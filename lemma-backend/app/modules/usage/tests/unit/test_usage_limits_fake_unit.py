@@ -108,8 +108,8 @@ async def test_user_monthly_limit_blocks_when_exceeded():
     assert limits["user_monthly"]["remaining_usd"] == 0.0
 
 
-async def test_falls_back_to_builtin_defaults_without_billing():
-    # No UsageLimitPort (the OSS build) -> usage's built-in default limits.
+async def test_defaults_to_unlimited_without_billing_or_environment_limits():
+    # No UsageLimitPort (the OSS build) and no configured defaults -> unlimited.
     service = UsageService(
         usage_repository=_StubUsageRepository(used_usd=0.0),
         usage_limit_port=None,
@@ -117,11 +117,10 @@ async def test_falls_back_to_builtin_defaults_without_billing():
 
     limits = await service.get_usage_limits(organization_id=None, user_id=uuid4())
 
-    assert (
-        limits["user_weekly"]["limit_usd"]
-        == UsageService.DEFAULT_USER_WEEKLY_COST_LIMIT_USD
-    )
+    assert limits["org_monthly"]["limit_usd"] is None
+    assert limits["user_weekly"]["limit_usd"] is None
     assert limits["user_monthly"]["limit_usd"] is None
+    assert limits["allowed"] is True
 
 
 async def test_org_scoped_user_limits_count_only_selected_org():

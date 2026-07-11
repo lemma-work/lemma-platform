@@ -6,4 +6,3 @@ export type SurfaceIdentityConfigResponse = {
     allowed_domains?: Array<string>;
     allowed_email_addresses?: Array<string>;
 };
-

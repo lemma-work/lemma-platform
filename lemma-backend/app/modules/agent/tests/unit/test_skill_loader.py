@@ -260,3 +260,36 @@ async def test_load_skill_appends_local_workspace_override(
     assert "Run `lemma pods create demo`." in result.content
     assert "Local Lemma Workspace Override" in result.content
     assert "run CLI examples through `lemma_exec_command`" in result.content
+
+
+@pytest.mark.asyncio
+async def test_skill_download_releases_uow_before_storage_read():
+    order: list[str] = []
+
+    class _UoW:
+        async def commit(self):
+            order.append("commit")
+
+    class _TwoPhaseFileService:
+        file_repository = SimpleNamespace(uow=_UoW())
+
+        async def resolve_readable_file(self, pod_id, path, ctx):
+            del pod_id, path, ctx
+            order.append("resolve")
+            return object()
+
+        async def read_file_content(self, entity):
+            del entity
+            order.append("read")
+            return b"content"
+
+    content = await skill_loader._download_text_file(
+        _TwoPhaseFileService(),
+        pod_id=uuid4(),
+        user_id=uuid4(),
+        path="/skills/example/SKILL.md",
+        ctx=object(),  # type: ignore[arg-type]
+    )
+
+    assert content == "content"
+    assert order == ["resolve", "commit", "read"]

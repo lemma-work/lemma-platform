@@ -25,8 +25,21 @@ if TYPE_CHECKING:
 logger = get_logger(__name__)
 
 
+def configure_stream_topology(modules: Sequence[LemmaModule]) -> None:
+    from app.core.infrastructure.events.stream_subscriber import (
+        declare_stream_groups,
+    )
+
+    declare_stream_groups(
+        group
+        for module in modules
+        for group in module.stream_groups
+    )
+
+
 def include_module_routers(app: "FastAPI", modules: Sequence[LemmaModule]) -> None:
     """Include every module's API routers, in module-list then thunk order."""
+    configure_stream_topology(modules)
     for module in modules:
         if module.routers is None:
             continue
@@ -50,6 +63,7 @@ def wire_module_events(
     modules: Sequence[LemmaModule], broker: "RedisBroker"
 ) -> None:
     """Register streaq tasks then include every module's FastStream routers."""
+    configure_stream_topology(modules)
     register_streaq_tasks(modules)
     for module in modules:
         if module.event_routers is None:

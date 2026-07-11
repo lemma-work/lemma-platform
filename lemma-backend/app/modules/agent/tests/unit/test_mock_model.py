@@ -4,6 +4,11 @@ from types import SimpleNamespace
 
 import pytest
 from pydantic_ai import Agent
+from pydantic_ai.exceptions import (
+    ModelHTTPError,
+    UnexpectedModelBehavior,
+    UsageLimitExceeded,
+)
 
 from app.modules.agent.infrastructure.harnesses.mock_model import (
     MOCK_SCRIPT_METADATA_KEY,
@@ -71,7 +76,11 @@ async def test_script_exhaustion_closes_run():
     # Script has only a tool turn; after the tool runs the model is asked again
     # with no turn left → it must close out rather than loop forever.
     conv = _conversation(
-        {MOCK_SCRIPT_METADATA_KEY: [{"tool_calls": [{"tool_name": "noop", "args": {}}]}]}
+        {
+            MOCK_SCRIPT_METADATA_KEY: [
+                {"tool_calls": [{"tool_name": "noop", "args": {}}]}
+            ]
+        }
     )
     agent = Agent(build_mock_model(conv))
 
@@ -81,3 +90,41 @@ async def test_script_exhaustion_closes_run():
 
     result = await agent.run("go")
     assert result.output == "[mock] done"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("kind", "expected_error"),
+    [
+        ("model_http", ModelHTTPError),
+        ("unexpected_model_behavior", UnexpectedModelBehavior),
+        ("usage_limit", UsageLimitExceeded),
+        ("generic", RuntimeError),
+    ],
+)
+async def test_scripted_provider_errors_reach_the_real_harness_handler(
+    kind: str,
+    expected_error: type[Exception],
+):
+    conv = _conversation(
+        {
+            MOCK_SCRIPT_METADATA_KEY: [
+                {
+                    "error": {
+                        "kind": kind,
+                        "message": "CANARY_MODEL_ERROR",
+                        "status_code": 429,
+                    }
+                }
+            ]
+        }
+    )
+    agent = Agent(build_mock_model(conv))
+
+    with pytest.raises(expected_error) as captured:
+        await agent.run("trigger the provider failure")
+
+    assert "CANARY_MODEL_ERROR" in str(captured.value)
+    if kind == "model_http":
+        assert isinstance(captured.value, ModelHTTPError)
+        assert captured.value.status_code == 429

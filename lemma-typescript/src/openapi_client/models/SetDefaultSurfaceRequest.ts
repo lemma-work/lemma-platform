@@ -10,4 +10,3 @@ export type SetDefaultSurfaceRequest = {
     platform: SurfacePlatform;
     surface_id: string;
 };
-

@@ -1,4 +1,4 @@
-import { ScheduledFlowStartType } from 'lemma-sdk';
+import { ScheduledWorkflowStartConfigType } from 'lemma-sdk';
 
 import {
     getAgentNodeName,
@@ -692,9 +692,9 @@ export function createStart(type: FlowStartType, config: Record<string, unknown>
         return {
             type,
             config: {
-                schedule_type: config.schedule_type === ScheduledFlowStartType.ONCE
-                    ? ScheduledFlowStartType.ONCE
-                    : ScheduledFlowStartType.CRON,
+                schedule_type: config.schedule_type === ScheduledWorkflowStartConfigType.ONCE
+                    ? ScheduledWorkflowStartConfigType.ONCE
+                    : ScheduledWorkflowStartConfigType.CRON,
             },
         };
     }

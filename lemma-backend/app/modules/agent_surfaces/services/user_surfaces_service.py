@@ -15,8 +15,7 @@ from app.modules.agent_surfaces.domain.ports import (
     SurfaceInstallationRepositoryPort,
     SurfacePodMembershipPort,
 )
-from app.modules.identity.domain.ports import UserRepositoryPort
-from app.modules.identity.domain.user_preferences import UserPreferences
+from app.modules.identity.contracts import UserPreferences, UserRepositoryPort
 
 
 @dataclass(frozen=True)

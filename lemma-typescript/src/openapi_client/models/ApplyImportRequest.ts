@@ -15,4 +15,3 @@ export type ApplyImportRequest = {
      */
     variables?: Record<string, string>;
 };
-

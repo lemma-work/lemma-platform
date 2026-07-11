@@ -3,14 +3,17 @@
 /* tslint:disable */
 /* eslint-disable */
 export type VariableSpecResponse = {
+    /**
+     * For a connector account variable, the connector the account must belong to (e.g. 'slack'), so the importer can connect the right connector. Null for non-connector variables.
+     */
+    connector?: (string | null);
     default?: (string | null);
     description?: (string | null);
     kind: string;
     name: string;
     /**
-     * For a connector account variable, the platform the account must belong to (e.g. 'slack'), so the importer can connect the right connector. Null for non-connector variables.
+     * For a connector account variable, the auth provider backing the connector ('LEMMA' or 'COMPOSIO'), so the importer connects/selects an account through the right provider. Null for non-connector variables.
      */
-    platform?: (string | null);
+    provider?: (string | null);
     required?: boolean;
 };
-

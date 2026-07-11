@@ -347,6 +347,27 @@ async def test_create_pod_rejects_duplicate_name_in_same_organization(
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("invalid_name", ["Team's Pod", "Billing/Finance", "Ops!"])
+async def test_create_pod_rejects_invalid_name(
+    authenticated_client,
+    fixed_test_org,
+    invalid_name: str,
+):
+    response = await authenticated_client.post(
+        "/pods",
+        json={
+            "name": invalid_name,
+            "organization_id": fixed_test_org["id"],
+            "description": "invalid name should fail",
+        },
+        follow_redirects=True,
+    )
+
+    assert response.status_code == 400, response.text
+    assert response.json()["code"] == "POD_VALIDATION_ERROR"
+
+
+@pytest.mark.asyncio
 async def test_update_pod_rejects_duplicate_name_in_same_organization(
     authenticated_client,
     fixed_test_org,
@@ -365,6 +386,24 @@ async def test_update_pod_rejects_duplicate_name_in_same_organization(
 
     assert duplicate.status_code == 409, duplicate.text
     assert duplicate.json()["code"] == "POD_CONFLICT"
+
+
+@pytest.mark.asyncio
+async def test_update_pod_rejects_invalid_name(
+    authenticated_client,
+    fixed_test_org,
+):
+    org_id = fixed_test_org["id"]
+    pod = await _create_pod(authenticated_client, org_id, name="Rename Target Pod")
+
+    response = await authenticated_client.put(
+        f"/pods/{pod['id']}",
+        json={"name": "Team's Pod"},
+        follow_redirects=True,
+    )
+
+    assert response.status_code == 400, response.text
+    assert response.json()["code"] == "POD_VALIDATION_ERROR"
 
 
 @pytest.mark.asyncio

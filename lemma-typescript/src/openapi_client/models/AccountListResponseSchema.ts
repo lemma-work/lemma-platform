@@ -11,4 +11,3 @@ export type AccountListResponseSchema = {
     limit: number;
     next_page_token?: (string | null);
 };
-

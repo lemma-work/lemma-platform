@@ -3,7 +3,8 @@
 from __future__ import annotations
 
 import mimetypes
-from pathlib import Path, PurePosixPath
+import re
+from pathlib import Path
 from urllib.parse import urlparse
 from uuid import UUID, uuid4
 
@@ -14,6 +15,26 @@ from app.core.config import settings
 from app.core.log.log import get_logger
 
 logger = get_logger(__name__)
+
+_STORAGE_PATH_PATTERN = re.compile(
+    r"\Aicons/([^/]+)/([0-9a-fA-F]{32})(\.[A-Za-z0-9]{1,10})\Z"
+)
+_CANONICAL_EXTENSIONS = {
+    extension: extension
+    for extension in (
+        ".bmp",
+        ".bin",
+        ".gif",
+        ".ico",
+        ".jpeg",
+        ".jpg",
+        ".png",
+        ".svg",  # legacy assets are served only as attachment by the controller
+        ".tif",
+        ".tiff",
+        ".webp",
+    )
+}
 
 
 class IconUploadResult(BaseModel):
@@ -45,20 +66,28 @@ class IconService:
         self._local_base.mkdir(parents=True, exist_ok=True)
 
     def _normalize_storage_path(self, storage_path: str) -> str:
-        stripped_path = storage_path.strip("/")
-        raw_parts = stripped_path.split("/")
-        if (
-            not stripped_path
-            or any(part in {"", "..", "."} for part in raw_parts)
-        ):
+        match = _STORAGE_PATH_PATTERN.fullmatch(storage_path)
+        if match is None:
             raise ValueError("Invalid icon storage path")
-        normalized = PurePosixPath(stripped_path)
-        return normalized.as_posix()
+        raw_user_id, raw_asset_id, raw_extension = match.groups()
+        try:
+            user_id = UUID(raw_user_id)
+            asset_id = UUID(hex=raw_asset_id)
+        except ValueError as exc:
+            raise ValueError("Invalid icon storage path") from exc
+        extension = _CANONICAL_EXTENSIONS.get(raw_extension.lower())
+        if extension is None:
+            raise ValueError("Invalid icon storage path")
+        return f"icons/{user_id}/{asset_id.hex}{extension}"
 
     def _local_path(self, storage_path: str) -> Path:
         if not self._local_base:
             raise RuntimeError("Local icon storage is not configured")
-        return self._local_base / self._normalize_storage_path(storage_path)
+        base = self._local_base.resolve()
+        candidate = (base / self._normalize_storage_path(storage_path)).resolve()
+        if not candidate.is_relative_to(base):
+            raise ValueError("Invalid icon storage path")
+        return candidate
 
     def _guess_extension(self, filename: str | None, content_type: str | None) -> str:
         suffix = Path(filename or "").suffix.lower()
@@ -89,7 +118,7 @@ class IconService:
         try:
             return self._normalize_storage_path(candidate)
         except ValueError:
-            logger.warning("Ignoring malformed managed icon URL: %s", icon_url)
+            logger.warning("Ignoring malformed managed icon URL")
             return None
 
     async def upload_icon(
@@ -150,7 +179,9 @@ class IconService:
         except FileNotFoundError:
             return
         except Exception as exc:
-            logger.warning("Failed to delete icon asset %s: %s", normalized, exc)
+            logger.warning(
+                f"Failed to delete icon asset {normalized}: {type(exc).__name__}"
+            )
 
     async def delete_by_url(self, icon_url: str | None) -> None:
         storage_path = self.get_managed_storage_path(icon_url)

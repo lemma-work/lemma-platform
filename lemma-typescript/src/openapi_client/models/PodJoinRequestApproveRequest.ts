@@ -8,4 +8,3 @@ export type PodJoinRequestApproveRequest = {
     org_role?: OrganizationRole;
     pod_role?: PodRole;
 };
-

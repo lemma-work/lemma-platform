@@ -10,12 +10,9 @@ from app.core.authorization.dependencies import reject_delegated_workload
 from app.modules.connectors.api.dependencies import ConnectorServiceDep
 from app.modules.connectors.api.schemas import (
     AccountCreateSchema,
-    AccountCredentialsResponseSchema,
     AccountListResponseSchema,
     AccountResponseSchema,
-    CredentialTypes,
     MessageResponseSchema,
-    OauthCredentialsResponseSchema,
 )
 
 router = APIRouter(
@@ -108,36 +105,6 @@ async def get_account(
 ) -> AccountResponseSchema:
     account = await connector_service.get_account(account_id, user.id, organization_id)
     return await _account_response(connector_service, account)
-
-
-@router.get(
-    "/{account_id}/credentials",
-    response_model=AccountCredentialsResponseSchema,
-    operation_id="connector.account.credentials.get",
-    summary="Get Credentials",
-    description="Get the credentials for a specific account",
-)
-async def get_credentials(
-    user: CurrentUser,
-    organization_id: UUID,
-    account_id: UUID,
-    connector_service: ConnectorServiceDep,
-) -> AccountCredentialsResponseSchema:
-    credentials = await connector_service.get_account_credentials(
-        account_id, user.id, organization_id
-    )
-
-    return AccountCredentialsResponseSchema(
-        type=CredentialTypes.OAUTH2,
-        data=OauthCredentialsResponseSchema(
-            access_token=credentials.access_token,
-            expires_at=credentials.expires_at
-            if hasattr(credentials, "expires_at")
-            else None,
-            connection_id=getattr(credentials, "connection_id", None),
-        ),
-        user_data=credentials.user_data if hasattr(credentials, "user_data") else None,
-    )
 
 
 @router.delete(

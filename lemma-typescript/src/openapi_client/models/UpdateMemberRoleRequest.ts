@@ -9,4 +9,3 @@ import type { OrganizationRole } from './OrganizationRole.js';
 export type UpdateMemberRoleRequest = {
     role: OrganizationRole;
 };
-

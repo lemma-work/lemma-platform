@@ -121,9 +121,7 @@ def build_agent_instructions(
         # agent -> agent_surfaces module-load cycle.
         surface_platform = getattr(ctx, "surface_platform", None)
         if surface_platform:
-            from app.modules.agent_surfaces.platforms.platform_capabilities import (
-                platform_agent_guidance,
-            )
+            from app.composition.agent_surface_runtime import platform_agent_guidance
 
             fragment = platform_agent_guidance(surface_platform)
             if fragment:

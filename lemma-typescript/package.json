@@ -1,6 +1,6 @@
 {
   "name": "lemma-sdk",
-  "version": "0.5.6",
+  "version": "0.5.7",
   "description": "Official TypeScript SDK for Lemma APIs, optimized around pod-scoped workflows",
   "license": "Apache-2.0",
   "author": "Lemma",
@@ -88,6 +88,6 @@
     "openapi-typescript-codegen": "^0.29.0",
     "shadcn": "^4.2.0",
     "typescript": "^5.6.3",
-    "vitest": "^2.0.5"
+    "vitest": "^4.1.10"
   }
 }

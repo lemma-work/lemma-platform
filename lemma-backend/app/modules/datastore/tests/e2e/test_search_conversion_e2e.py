@@ -252,6 +252,17 @@ class TestDatastoreSearchAndConversion:
         )
         assert response.status_code == 200, response.text
         assert response.content == content
+        etag = f'"{uploaded["content_sha256"]}"'
+        assert response.headers["etag"] == etag
+        assert "immutable" in response.headers["cache-control"]
+
+        not_modified = await pod_api.client.get(
+            "/public/datastore/files",
+            params={"token": token},
+            headers={"If-None-Match": etag},
+        )
+        assert not_modified.status_code == 304
+        assert not not_modified.content
 
         # A garbage token is rejected.
         bad = await pod_api.client.get(

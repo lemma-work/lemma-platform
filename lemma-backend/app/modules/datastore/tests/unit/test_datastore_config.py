@@ -10,23 +10,55 @@ pytestmark = pytest.mark.unit
 
 # (field, ENV var, default) transcribed from the former app/core/config.py.
 EXPECTED = [
+    ("datastore_upload_max_bytes", "DATASTORE_UPLOAD_MAX_BYTES", 100 * 1024 * 1024),
+    ("datastore_markdown_max_bytes", "DATASTORE_MARKDOWN_MAX_BYTES", 25 * 1024 * 1024),
+    (
+        "datastore_markdown_image_max_bytes",
+        "DATASTORE_MARKDOWN_IMAGE_MAX_BYTES",
+        10 * 1024 * 1024,
+    ),
+    (
+        "datastore_markdown_batch_max_bytes",
+        "DATASTORE_MARKDOWN_BATCH_MAX_BYTES",
+        50 * 1024 * 1024,
+    ),
     ("datastore_query_role", "DATASTORE_QUERY_ROLE", "lemma_datastore_query"),
-    ("datastore_query_statement_timeout_ms", "DATASTORE_QUERY_STATEMENT_TIMEOUT_MS", 5000),
+    (
+        "datastore_query_statement_timeout_ms",
+        "DATASTORE_QUERY_STATEMENT_TIMEOUT_MS",
+        5000,
+    ),
     ("datastore_query_max_rows", "DATASTORE_QUERY_MAX_ROWS", 1000),
     ("datastore_query_max_cost", "DATASTORE_QUERY_MAX_COST", 1_000_000.0),
     ("datastore_query_max_plan_rows", "DATASTORE_QUERY_MAX_PLAN_ROWS", 5_000_000),
     ("document_processing_max_concurrency", "DOCUMENT_PROCESSING_MAX_CONCURRENCY", 2),
-    ("document_processing_debounce_seconds", "DOCUMENT_PROCESSING_DEBOUNCE_SECONDS", 300),
+    (
+        "document_processing_debounce_seconds",
+        "DOCUMENT_PROCESSING_DEBOUNCE_SECONDS",
+        300,
+    ),
     ("recovery_enqueue_batch_size", "RECOVERY_ENQUEUE_BATCH_SIZE", 10),
     ("datastore_recovery_max_attempts", "DATASTORE_RECOVERY_MAX_ATTEMPTS", 3),
-    ("document_processing_max_file_bytes", "DOCUMENT_PROCESSING_MAX_FILE_BYTES", 104_857_600),
-    ("document_processing_max_inflight_bytes", "DOCUMENT_PROCESSING_MAX_INFLIGHT_BYTES", 0),
+    (
+        "document_processing_max_file_bytes",
+        "DOCUMENT_PROCESSING_MAX_FILE_BYTES",
+        104_857_600,
+    ),
+    (
+        "document_processing_max_inflight_bytes",
+        "DOCUMENT_PROCESSING_MAX_INFLIGHT_BYTES",
+        0,
+    ),
     ("pdf_ocr_detection_sample_pages", "PDF_OCR_DETECTION_SAMPLE_PAGES", 5),
-    ("pdf_ocr_detection_min_chars_per_page", "PDF_OCR_DETECTION_MIN_CHARS_PER_PAGE", 100),
+    (
+        "pdf_ocr_detection_min_chars_per_page",
+        "PDF_OCR_DETECTION_MIN_CHARS_PER_PAGE",
+        100,
+    ),
     ("docling_serve_url", "DOCLING_SERVE_URL", None),
     ("docling_request_timeout_seconds", "DOCLING_REQUEST_TIMEOUT_SECONDS", 300.0),
     ("kreuzberg_url", "KREUZBERG_URL", "http://localhost:8002"),
-    ("kreuzberg_request_timeout_seconds", "KREUZBERG_REQUEST_TIMEOUT_SECONDS", 180.0),
+    ("kreuzberg_request_timeout_seconds", "KREUZBERG_REQUEST_TIMEOUT_SECONDS", 600.0),
     ("kreuzberg_connect_timeout_seconds", "KREUZBERG_CONNECT_TIMEOUT_SECONDS", 8.0),
     ("kreuzberg_transient_retry_attempts", "KREUZBERG_TRANSIENT_RETRY_ATTEMPTS", 3),
     (
@@ -42,9 +74,21 @@ EXPECTED = [
     ("pdf_render_max_pages_per_call", "PDF_RENDER_MAX_PAGES_PER_CALL", 10),
     ("pdf_render_concurrency", "PDF_RENDER_CONCURRENCY", 2),
     ("datastore_file_url_expiry_seconds", "DATASTORE_FILE_URL_EXPIRY_SECONDS", 3600),
-    ("datastore_signed_url_default_expiry_seconds", "DATASTORE_SIGNED_URL_DEFAULT_EXPIRY_SECONDS", 10800),
-    ("datastore_signed_url_max_expiry_seconds", "DATASTORE_SIGNED_URL_MAX_EXPIRY_SECONDS", 86400),
-    ("datastore_signed_url_default_max_hits", "DATASTORE_SIGNED_URL_DEFAULT_MAX_HITS", 50),
+    (
+        "datastore_signed_url_default_expiry_seconds",
+        "DATASTORE_SIGNED_URL_DEFAULT_EXPIRY_SECONDS",
+        10800,
+    ),
+    (
+        "datastore_signed_url_max_expiry_seconds",
+        "DATASTORE_SIGNED_URL_MAX_EXPIRY_SECONDS",
+        86400,
+    ),
+    (
+        "datastore_signed_url_default_max_hits",
+        "DATASTORE_SIGNED_URL_DEFAULT_MAX_HITS",
+        50,
+    ),
     ("datastore_signed_url_max_hits", "DATASTORE_SIGNED_URL_MAX_HITS", 100),
     ("datastore_signed_url_code_bytes", "DATASTORE_SIGNED_URL_CODE_BYTES", 9),
 ]
@@ -53,6 +97,7 @@ EXPECTED = [
 # cannot exercise — validated with dedicated tests instead.
 EXTRA_FIELDS = [
     ("document_processing_ocr_enabled", "DOCUMENT_PROCESSING_OCR_ENABLED", False),
+    ("document_processing_layout_enabled", "DOCUMENT_PROCESSING_LAYOUT_ENABLED", True),
     ("document_processor", "DOCUMENT_PROCESSOR", "auto"),
 ]
 
@@ -112,6 +157,13 @@ def test_effective_document_processor_auto_never_selects_docling(monkeypatch):
         DatastoreSettings(document_processor="docling").effective_document_processor()
         == "docling"
     )
+
+
+def test_document_processing_layout_enabled_reads_env(monkeypatch):
+    monkeypatch.delenv("DOCUMENT_PROCESSING_LAYOUT_ENABLED", raising=False)
+    assert DatastoreSettings().document_processing_layout_enabled is True
+    monkeypatch.setenv("DOCUMENT_PROCESSING_LAYOUT_ENABLED", "false")
+    assert DatastoreSettings().document_processing_layout_enabled is False
 
 
 @pytest.mark.parametrize("field,env,_default", EXPECTED)

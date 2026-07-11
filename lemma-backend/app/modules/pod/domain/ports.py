@@ -5,7 +5,7 @@ from __future__ import annotations
 from typing import Optional, Protocol, Sequence, Tuple
 from uuid import UUID
 
-from app.modules.identity.domain.organization_entities import (
+from app.modules.identity.contracts import (
     OrganizationMemberEntity,
 )
 from app.modules.pod.domain.pod_entities import (

@@ -16,8 +16,7 @@ from app.core.authorization.dependencies import PodContextDep
 from app.core.api.pagination import parse_uuid_page_token
 from app.core.helpers.slug import normalize_resource_name
 
-from app.modules.identity.domain.user_entities import UserEntity
-from app.modules.identity.infrastructure.user_repositories import UserRepository
+from app.modules.identity.contracts import AuthenticatedUser as UserEntity
 from app.modules.function.api.schemas.function_schemas import (
     CreateFunctionRequest,
     ExecuteFunctionRequest,
@@ -48,7 +47,7 @@ from app.modules.function.api.dependencies import (
     FunctionResourceAdminDep,
     FunctionResourceViewerDep,
 )
-from app.modules.workspace.services.workspace_tool_runtime import (
+from app.composition.function_workspace import (
     invalidate_function_workspace_env_cache,
 )
 
@@ -351,8 +350,9 @@ async def execute_function(
     user_email = getattr(user, "email", None)
     if user_email is None:
         async with uow_factory() as uow:
-            resolved_user = await UserRepository(uow).get(user_id)
-        user_email = str(resolved_user.email) if resolved_user is not None else None
+            from app.composition.identity_notifications import resolve_user_email
+
+            user_email = await resolve_user_email(uow, user_id)
 
     run = await use_cases.execute_function(
         pod_id=pod_id,

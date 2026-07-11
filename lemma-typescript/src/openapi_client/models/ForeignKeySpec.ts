@@ -11,4 +11,3 @@ export type ForeignKeySpec = {
      */
     references: string;
 };
-

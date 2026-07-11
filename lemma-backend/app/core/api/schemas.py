@@ -19,4 +19,5 @@ class ErrorResponse(BaseModel):
 
     message: str
     code: str
+    request_id: str | None = None
     details: Any | None = None

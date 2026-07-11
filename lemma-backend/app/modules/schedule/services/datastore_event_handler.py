@@ -63,6 +63,7 @@ class DatastoreEventHandler:
                     schedule=schedule,
                     payload=event.payload or {},
                     metadata=metadata,
+                    source_event_id=str(event.event_id),
                 )
             except Exception as exc:
                 logger.error(
@@ -77,7 +78,7 @@ class DatastoreEventHandler:
                 await self._record_fire(
                     schedule.id, status=ScheduleFireStatus.ERROR, error=str(exc)
                 )
-                continue
+                raise
 
             latency_ms = int(
                 (datetime.now(timezone.utc) - event.occurred_at).total_seconds() * 1000

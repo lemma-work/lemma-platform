@@ -281,10 +281,7 @@ class AgentSurfaceEntity(AggregateRoot):
 
         initial_status = (
             AgentSurfaceStatus.PENDING_ADMIN_CONSENT
-            if (
-                resolved is SurfacePlatform.TEAMS
-                and account_id is None
-            )
+            if resolved is SurfacePlatform.TEAMS
             else AgentSurfaceStatus.ACTIVE
         )
 
@@ -317,7 +314,7 @@ class AgentSurfaceEntity(AggregateRoot):
         mode: SurfaceMode | str | None,
     ) -> SurfaceMode:
         if mode is not None:
-            return SurfaceMode(mode.value if hasattr(mode, "value") else str(mode))
+            return SurfaceMode(mode.value if isinstance(mode, SurfaceMode) else mode)
         return SurfaceMode.EMAIL if surface_type.is_email else SurfaceMode.DM
 
     @staticmethod
@@ -361,7 +358,9 @@ class AgentSurfaceEntity(AggregateRoot):
     ) -> SurfaceEventMode:
         if event_mode is not None:
             return SurfaceEventMode(
-                event_mode.value if hasattr(event_mode, "value") else str(event_mode)
+                event_mode.value
+                if isinstance(event_mode, SurfaceEventMode)
+                else event_mode
             )
         # Resend uses a native inbound webhook; Gmail/Outlook use Composio triggers.
         if surface_type is SurfacePlatform.RESEND:

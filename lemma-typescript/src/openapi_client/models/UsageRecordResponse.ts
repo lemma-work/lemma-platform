@@ -27,4 +27,3 @@ export type UsageRecordResponse = {
     usage_kind: string;
     user_id: string;
 };
-

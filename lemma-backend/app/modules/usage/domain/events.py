@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-from datetime import datetime
 from uuid import UUID
 
 from app.core.domain.events import DomainEvent
@@ -35,7 +34,6 @@ class ModelUsageEvent(DomainEvent):
     cost_usd: float | None = None
     status: str | None = None
     metadata: dict[str, object] | None = None
-    occurred_at: datetime
 
     @classmethod
     def stream_name(cls) -> str:

@@ -1014,20 +1014,13 @@ async def test_execute_waits_for_readiness_before_executing(
     assert clients[0].event_order[: clients[0].event_order.index("execute")] == ["ready"]
 
 
-async def test_execute_retries_transient_502_then_succeeds(
+async def test_sync_execute_does_not_retry_ambiguous_502(
     service: FunctionService,
     function_repo: AsyncMock,
     run_repo: AsyncMock,
     workspace_service: AsyncMock,
     ctx: Context,
-    monkeypatch,
 ):
-    import app.modules.function.application.function_run_executor as fs
-    import app.modules.workspace.agentbox_retry as retry_mod
-
-    monkeypatch.setattr(fs, "_FUNCTION_EXECUTE_RETRY_MAX_ATTEMPTS", 3)
-    monkeypatch.setattr(retry_mod.asyncio, "sleep", AsyncMock())
-
     result, _run, clients = await _run_api_function(
         service,
         function_repo,
@@ -1037,8 +1030,9 @@ async def test_execute_retries_transient_502_then_succeeds(
         [_http_error(502), _completed_response()],
     )
 
-    assert result.status == FunctionRunStatus.COMPLETED
-    assert len(clients[0].execute_calls) == 2  # retried once past the 502
+    assert result.status == FunctionRunStatus.FAILED
+    assert "temporarily unavailable" in (result.error or "").lower()
+    assert len(clients[0].execute_calls) == 1
 
 
 async def test_execute_does_not_retry_failed_response(

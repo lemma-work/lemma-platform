@@ -18,6 +18,14 @@ async def _mock_uow_factory(uow_mock):
     yield uow_mock
 
 
+class _Inbox:
+    async def process(self, consumer, event, handler):
+        assert consumer == "schedule-pod-events"
+        del event
+        await handler()
+        return True
+
+
 @pytest.mark.asyncio
 async def test_on_pod_deleted_cleans_up_pod_schedules(monkeypatch):
     service = AsyncMock()
@@ -38,6 +46,7 @@ async def test_on_pod_deleted_cleans_up_pod_schedules(monkeypatch):
         event,
         logging.getLogger("test"),
         uow_factory=partial(_mock_uow_factory, uow_mock),
+        inbox=_Inbox(),
     )
 
     service.delete_all_for_pod.assert_awaited_once_with(pod_id)
@@ -61,6 +70,7 @@ async def test_on_pod_deleted_ignores_other_pod_events(monkeypatch):
         event,
         logging.getLogger("test"),
         uow_factory=partial(_mock_uow_factory, uow_mock),
+        inbox=_Inbox(),
     )
 
     service.delete_all_for_pod.assert_not_awaited()

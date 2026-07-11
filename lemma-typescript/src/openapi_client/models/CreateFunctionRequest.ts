@@ -22,4 +22,3 @@ export type CreateFunctionRequest = {
     type?: FunctionType;
     visibility?: ResourceVisibility;
 };
-

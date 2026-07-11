@@ -11,4 +11,3 @@ export type ScheduleListResponse = {
     limit: number;
     next_page_token?: (string | null);
 };
-

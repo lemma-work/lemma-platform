@@ -40,6 +40,7 @@ class AccountResponseSchema:
         connector (ConnectorResponseSchema | None | Unset):
         display_name (None | str | Unset):
         is_default (bool | Unset):  Default: False.
+        provider (None | str | Unset):
         provider_account_id (None | str | Unset):
     """
 
@@ -57,6 +58,7 @@ class AccountResponseSchema:
     connector: ConnectorResponseSchema | None | Unset = UNSET
     display_name: None | str | Unset = UNSET
     is_default: bool | Unset = False
+    provider: None | str | Unset = UNSET
     provider_account_id: None | str | Unset = UNSET
     additional_properties: dict[str, Any] = _attrs_field(init=False, factory=dict)
 
@@ -114,6 +116,12 @@ class AccountResponseSchema:
 
         is_default = self.is_default
 
+        provider: None | str | Unset
+        if isinstance(self.provider, Unset):
+            provider = UNSET
+        else:
+            provider = self.provider
+
         provider_account_id: None | str | Unset
         if isinstance(self.provider_account_id, Unset):
             provider_account_id = UNSET
@@ -143,6 +151,8 @@ class AccountResponseSchema:
             field_dict["display_name"] = display_name
         if is_default is not UNSET:
             field_dict["is_default"] = is_default
+        if provider is not UNSET:
+            field_dict["provider"] = provider
         if provider_account_id is not UNSET:
             field_dict["provider_account_id"] = provider_account_id
 
@@ -242,6 +252,15 @@ class AccountResponseSchema:
 
         is_default = d.pop("is_default", UNSET)
 
+        def _parse_provider(data: object) -> None | str | Unset:
+            if data is None:
+                return data
+            if isinstance(data, Unset):
+                return data
+            return cast(None | str | Unset, data)
+
+        provider = _parse_provider(d.pop("provider", UNSET))
+
         def _parse_provider_account_id(data: object) -> None | str | Unset:
             if data is None:
                 return data
@@ -268,6 +287,7 @@ class AccountResponseSchema:
             connector=connector,
             display_name=display_name,
             is_default=is_default,
+            provider=provider,
             provider_account_id=provider_account_id,
         )
 

@@ -45,7 +45,7 @@ export type {
 export {
   normalizeRunStatus,
   isTerminalFunctionStatus,
-  isTerminalFlowStatus,
+  isTerminalWorkflowStatus,
   sleep,
   nextBackoffDelay,
 } from "./run-utils.js";

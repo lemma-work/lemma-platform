@@ -12,4 +12,3 @@ export type PodListResponse = {
     next_page_token?: (string | null);
     total: number;
 };
-

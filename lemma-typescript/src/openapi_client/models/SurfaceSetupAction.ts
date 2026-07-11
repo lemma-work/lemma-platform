@@ -19,4 +19,3 @@ export type SurfaceSetupAction = {
     steps?: Array<string>;
     title: string;
 };
-

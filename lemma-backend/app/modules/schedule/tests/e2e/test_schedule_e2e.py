@@ -675,7 +675,7 @@ async def test_time_schedules_start_workflow_and_agent_targets(
             ).isoformat(),
             "payload": {"source": "duplicate"},
         },
-        expected_status=400,
+        expected_status=422,
     )
     assert "already has a schedule" in duplicate["message"]
 
@@ -860,7 +860,7 @@ async def test_webhook_workflow_schedule_contract_derives_start_config(
         schedule_type=ScheduleType.WEBHOOK.value,
         workflow_name=workflow["name"],
         config={"source": "composio", "labelIds": "SENT"},
-        expected_status=400,
+        expected_status=422,
     )
     assert "trigger_config" in conflicting_config["message"]
 
@@ -900,7 +900,7 @@ async def test_webhook_workflow_schedule_requires_event_start(
         schedule_type=ScheduleType.WEBHOOK.value,
         workflow_name=workflow["name"],
         config={"source": "composio"},
-        expected_status=400,
+        expected_status=422,
     )
     assert "EVENT workflow start" in response["message"]
 
@@ -1058,7 +1058,7 @@ async def test_schedule_crud_uses_new_pod_scoped_routes(
         f"/pods/{pod_id}/schedules",
         params={"workflow_name": workflow["name"], "agent_name": "reviewer"},
     )
-    assert invalid_filter.status_code == 400, invalid_filter.text
+    assert invalid_filter.status_code == 422, invalid_filter.text
 
     updated = await authenticated_client.patch(
         f"/pods/{pod_id}/schedules/{schedule['id']}",
@@ -1108,7 +1108,7 @@ async def test_schedule_name_is_pod_scoped_unique_and_filterable(
             ).isoformat(),
             "payload": {"source": "duplicate"},
         },
-        expected_status=400,
+        expected_status=422,
     )
     assert "already exists" in duplicate["message"]
 

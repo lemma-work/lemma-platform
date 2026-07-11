@@ -15,13 +15,19 @@ from uuid import UUID
 from app.core.authorization.context import Context
 from app.modules.datastore.config import datastore_settings
 from app.core.log.log import get_logger
-from app.modules.datastore.domain.errors import DatastoreObjectNotFoundError, DatastoreValidationError
+from app.modules.datastore.domain.errors import (
+    DatastoreObjectNotFoundError,
+    DatastoreValidationError,
+)
 from app.modules.datastore.domain.file_entities import DatastoreFileEntity
-from app.modules.datastore.domain.ports import DatastoreStoragePort, DocumentProcessorPort
+from app.modules.datastore.domain.ports import (
+    DatastoreStoragePort,
+    DocumentProcessorPort,
+)
 from app.modules.datastore.infrastructure.storage_paths import (
     build_datastore_child_page_key,
-    build_datastore_file_storage_key,
 )
+from app.modules.datastore.services.files.projection import datastore_storage_key
 
 logger = get_logger(__name__)
 
@@ -95,7 +101,9 @@ class FilePageRenderer:
         results: dict[int, RenderedPage] = {}
         missing: list[int] = []
         for page_number in page_numbers:
-            key = build_datastore_child_page_key(entity.pod_id, entity.path, page_number)
+            key = build_datastore_child_page_key(
+                entity.pod_id, entity.path, page_number
+            )
             cached = await self._load_cached(key)
             if cached is not None:
                 results[page_number] = RenderedPage(page_number, cached, True, key)
@@ -149,7 +157,7 @@ class FilePageRenderer:
     async def _render_missing(
         self, entity: DatastoreFileEntity, page_numbers: list[int]
     ) -> dict[int, bytes]:
-        source_key = build_datastore_file_storage_key(entity.pod_id, entity.path)
+        source_key = datastore_storage_key(entity)
         pdf_content = await self.storage.download_file(source_key)
         return await self.document_processor.render_pages(
             pdf_content,

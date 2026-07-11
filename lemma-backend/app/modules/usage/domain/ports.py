@@ -86,7 +86,7 @@ class UsageLimitPort(Protocol):
     """What usage needs from an external billing/plan provider: the spend limits
     that apply to an org+user. Implemented by the billing module (dependency
     inverts to billing -> usage); absent in builds without billing, where usage
-    falls back to its built-in default limits."""
+    records metering data without monetary admission."""
 
     async def resolve_limits(
         self,

@@ -126,7 +126,7 @@ def test_gmail_client_construction_does_not_load_all_resources():
     from lemma_connectors.core.auth import OAuth2Credentials
 
     gmail_client_module = importlib.import_module("lemma_connectors.gmail.client")
-    client = gmail_client_module.GmailClient(
+    gmail_client_module.GmailClient(
         credentials=OAuth2Credentials(access_token="t", token_type="Bearer"),
     )
     resource_modules_loaded = [

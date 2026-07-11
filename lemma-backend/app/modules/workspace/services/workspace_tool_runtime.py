@@ -74,6 +74,7 @@ class WorkspaceToolRuntime:
         workload_type: str | None,
         workload_id: UUID | None,
         workload_name: str | None,
+        session_id: str | None,
     ) -> str:
         parts = [
             str(user_id),
@@ -84,6 +85,7 @@ class WorkspaceToolRuntime:
             str(workload_id) if workload_id else "none",
             workload_name or "none",
             ",".join(sorted(scope or [])) or "none",
+            session_id or "none",
         ]
         return ":".join(parts)
 
@@ -111,7 +113,6 @@ class WorkspaceToolRuntime:
         scope: list[str] | None,
         session_id: str | None,
     ) -> str:
-        del session_id  # Delegated tokens are intentionally reused per workload.
         return self._build_env_cache_key(
             user_id=user_id,
             scope_key=scope_key,
@@ -121,6 +122,7 @@ class WorkspaceToolRuntime:
             workload_type=workload_type,
             workload_id=workload_id,
             workload_name=workload_name,
+            session_id=session_id,
         )
 
     async def get_session(

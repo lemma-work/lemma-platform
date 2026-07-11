@@ -1,20 +1,20 @@
-"""Adapter for publishing schedule fired events to pubsub."""
+"""Durable adapter for publishing schedule-fired domain events."""
 
 from __future__ import annotations
 
 from typing import Any, Dict, Optional
 
-from app.modules.schedule.domain.events.schedule import ScheduleEvents, ScheduleFired
+from app.core.infrastructure.events.publisher import EventPublisher
+from app.modules.schedule.domain.events.schedule import ScheduleFired
 from app.modules.schedule.domain.interfaces import ScheduleEventPublisher
 from app.modules.schedule.domain.schedule import ScheduleEntity
 from app.core.log.log import get_logger
-from app.core.pubsub.publisher import PubSubPublisher
 
 logger = get_logger(__name__)
 
 
-class RedisScheduleEventPublisher(ScheduleEventPublisher):
-    """Publish ScheduleFired events to Redis stream."""
+class DurableScheduleEventPublisher(ScheduleEventPublisher):
+    """Stage ScheduleFired events in PostgreSQL for outbox delivery."""
 
     async def publish_schedule_fired(
         self,
@@ -22,6 +22,7 @@ class RedisScheduleEventPublisher(ScheduleEventPublisher):
         payload: Dict[str, Any],
         metadata: Optional[Dict[str, Any]] = None,
         llm_output: Optional[Dict[str, Any]] = None,
+        source_event_id: str | None = None,
     ) -> None:
         event = ScheduleFired(
             schedule_id=schedule.id,
@@ -32,20 +33,11 @@ class RedisScheduleEventPublisher(ScheduleEventPublisher):
             account_id=schedule.account_id,
             pod_id=schedule.pod_id,
             llm_output=llm_output,
+            source_event_id=source_event_id,
         )
-
-        async with PubSubPublisher() as publisher:
-            # Pass the declared consumer groups explicitly: this publisher runs in
-            # the worker (datastore-fired schedules) AND the API pod (webhook-fired
-            # schedules), and the API pod never imports the consuming subscribers,
-            # so the subscriber registry alone would miss the group there.
-            await publisher.publish(
-                ScheduleEvents.STREAM,
-                event,
-                ensure_groups=ScheduleEvents.CONSUMER_GROUPS,
-            )
-            logger.info(
-                "Published schedule event for schedule %s to %s",
-                schedule.id,
-                ScheduleEvents.STREAM,
-            )
+        await EventPublisher.publish(event.stream_name(), event)
+        logger.info(
+            "Staged schedule event for schedule %s source=%s",
+            schedule.id,
+            source_event_id,
+        )

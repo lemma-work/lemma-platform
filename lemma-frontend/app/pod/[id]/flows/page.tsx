@@ -219,7 +219,8 @@ export default function FlowsIndexPage({
         return (waitAssignmentsData?.items || [])
             .map((assignment) => ({
                 assignment,
-                flow: flowByIdOrName.get(assignment.wait.flow_id) || flowByIdOrName.get(assignment.run.flow_id),
+                flow: flowByIdOrName.get(assignment.wait.workflow_id)
+                    || flowByIdOrName.get(assignment.run.workflow_id),
             }))
             .filter((item): item is { assignment: WorkflowRunWaitAssignment; flow: WorkflowType } => Boolean(item.flow));
     }, [flowByIdOrName, waitAssignmentsData?.items]);

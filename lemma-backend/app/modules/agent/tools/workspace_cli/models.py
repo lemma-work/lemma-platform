@@ -7,15 +7,6 @@ from pydantic import BaseModel, Field
 from app.modules.agent.tools.context import BaseToolResponse
 
 
-class PlanItem(BaseModel):
-    step: str = Field(
-        description="Short, concrete description of one task step to show in the plan."
-    )
-    status: Literal["pending", "in_progress", "completed"] = Field(
-        description="Execution state for this step. Use exactly one of: pending, in_progress, completed."
-    )
-
-
 WORKSPACE_TOOL_COMMENT_DESC = "Short, one-line goal statement for this tool call to show users what is being worked on."
 
 
@@ -173,29 +164,6 @@ class ExecutePythonRequest(BaseModel):
     )
 
 
-class UpdatePlanRequest(BaseModel):
-    plan: List[PlanItem] = Field(
-        min_length=1, description="Ordered list of task steps to write into `plan.md`."
-    )
-    comment: Optional[str] = Field(
-        default=None,
-        description=WORKSPACE_TOOL_COMMENT_DESC,
-    )
-
-
-class ApplyPatchRequest(BaseModel):
-    comment: Optional[str] = Field(
-        default=None,
-        description=WORKSPACE_TOOL_COMMENT_DESC,
-    )
-    patch: str = Field(
-        description=(
-            "Full Codex patch text. Must start with `*** Begin Patch` and end with "
-            "`*** End Patch`."
-        )
-    )
-
-
 class ViewImageRequest(BaseModel):
     pod_file_path: Optional[str] = Field(
         default=None,
@@ -283,15 +251,4 @@ class ViewImageResponse(BaseToolResponse):
     size_bytes: Optional[int] = Field(
         default=None,
         description="Size of the image in bytes.",
-    )
-
-
-class UpdatePlanResult(BaseToolResponse):
-    file_path: str = Field(
-        default="plan.md",
-        description="Workspace-relative path of the updated plan file.",
-    )
-    content: Optional[str] = Field(
-        default=None,
-        description="Rendered Markdown content written to the plan file.",
     )

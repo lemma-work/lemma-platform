@@ -13,7 +13,7 @@ T = TypeVar("T", bound="AgentRuntimeConfig")
 
 @_attrs_define
 class AgentRuntimeConfig:
-    """Agent runtime selector using a profile plus optional catalog model.
+    """Select an agent runtime profile and optional catalog model.
 
     Attributes:
         profile_id (str):

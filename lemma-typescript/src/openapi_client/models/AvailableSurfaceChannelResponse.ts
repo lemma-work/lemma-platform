@@ -10,4 +10,3 @@ export type AvailableSurfaceChannelResponse = {
     is_member?: (boolean | null);
     name?: (string | null);
 };
-

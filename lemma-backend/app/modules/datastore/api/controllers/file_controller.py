@@ -1,25 +1,30 @@
 from __future__ import annotations
 
-import unicodedata
-from io import BytesIO
 from typing import Optional
-from urllib.parse import quote
 from uuid import UUID
 
 from fastapi import (
     APIRouter,
-    File,
-    Form,
     Query,
     Request,
     Response,
-    UploadFile,
     status,
 )
 from fastapi.responses import StreamingResponse
 
 from app.core.api.pagination import parse_uuid_page_token
+from app.core.api.streaming_multipart import (
+    MultipartFileLimit,
+    stream_multipart_form,
+)
 from app.core.api.dependencies import CurrentUser
+from app.modules.datastore.config import datastore_settings
+from app.modules.datastore.api.file_upload_openapi import (
+    BINARY_FILE_RESPONSE,
+    FILE_UPDATE_OPENAPI,
+    FILE_UPLOAD_OPENAPI,
+    MARKDOWN_ATTACH_OPENAPI,
+)
 from app.core.authorization.dependencies import PodContextDep
 from app.modules.datastore.api.dependencies import FileServiceDep, FileUseCasesDep
 from app.modules.datastore.api.schemas.datastore_schemas import (
@@ -41,22 +46,11 @@ from app.modules.datastore.api.schemas.datastore_schemas import (
 from app.modules.datastore.domain.errors import DatastoreValidationError
 from app.modules.datastore.domain.file_entities import DatastoreFileUpdateEntity
 from app.modules.datastore.services.files.file_url import build_file_app_url
-
-
-def build_content_disposition(disposition_type: str, filename: str) -> str:
-    """Build a Content-Disposition header value with an ASCII fallback and a
-    UTF-8 ``filename*`` for non-ASCII names."""
-    normalized_ascii = (
-        unicodedata.normalize("NFKD", filename)
-        .encode("ascii", "ignore")
-        .decode("ascii")
-    )
-    ascii_filename = (normalized_ascii or "download").replace("\\", "_").replace('"', "_")
-    encoded_filename = quote(filename, safe="")
-    return (
-        f'{disposition_type}; filename="{ascii_filename}"; '
-        f"filename*=UTF-8''{encoded_filename}"
-    )
+from app.modules.datastore.api.file_download_response import (
+    build_child_download_response,
+    build_content_disposition as build_content_disposition,
+    build_original_download_response,
+)
 
 router = APIRouter(
     prefix="/pods/{pod_id}/datastore/files",
@@ -64,16 +58,6 @@ router = APIRouter(
     redirect_slashes=False,
 )
 
-BINARY_FILE_RESPONSE = {
-    200: {
-        "description": "File bytes",
-        "content": {
-            "application/octet-stream": {
-                "schema": {"type": "string", "format": "binary"}
-            }
-        },
-    }
-}
 
 def _ensure_file_in_pod(file_entity: FileResponse, pod_id: UUID) -> None:
     if file_entity.pod_id != pod_id:
@@ -139,32 +123,45 @@ def _to_public_tree_paths(node: dict, *, current_user_id: UUID) -> dict:
     status_code=status.HTTP_201_CREATED,
     operation_id="file.upload",
     summary="Upload File",
+    openapi_extra=FILE_UPLOAD_OPENAPI,
 )
 async def upload_file(
     pod_id: UUID,
-    file_service: FileServiceDep,
+    request: Request,
+    use_cases: FileUseCasesDep,
     user: CurrentUser,
-    ctx: PodContextDep,
-    data: UploadFile = File(...),
-    name: Optional[str] = Form(None),
-    description: Optional[str] = Form(None),
-    directory_path: str = Form("/"),
-    search_enabled: bool = Form(True),
-    visibility: str | None = Form(default=None),
 ) -> FileDetailResponse:
-    file_content = await data.read()
-    file_name = name or data.filename or "untitled"
-
-    file_entity = await file_service.create_file(
-        pod_id=pod_id,
-        name=file_name,
-        file_content=file_content,
-        ctx=ctx,
-        description=description,
-        directory_path=directory_path,
-        search_enabled=search_enabled,
-        visibility=visibility,
-    )
+    async with stream_multipart_form(
+        request,
+        file_limits={
+            "data": MultipartFileLimit(
+                max_bytes=datastore_settings.datastore_upload_max_bytes,
+                required=True,
+                label="file",
+            )
+        },
+        text_fields={
+            "name",
+            "description",
+            "directory_path",
+            "search_enabled",
+            "visibility",
+        },
+        combined_max_bytes=datastore_settings.datastore_upload_max_bytes,
+    ) as form:
+        data = form.require_file("data")
+        file_name = form.text("name") or data.filename or "untitled"
+        file_entity = await use_cases.create_file(
+            pod_id=pod_id,
+            name=file_name,
+            file_content=data.path,
+            request=request,
+            user_id=user.id,
+            description=form.text("description"),
+            directory_path=form.text("directory_path", "/") or "/",
+            search_enabled=bool(form.boolean("search_enabled", True)),
+            visibility=form.text("visibility"),
+        )
     return await _file_detail_response(file_entity, user.id)
 
 
@@ -275,40 +272,52 @@ async def get_file(
     status_code=status.HTTP_200_OK,
     operation_id="file.update",
     summary="Update File",
+    openapi_extra=FILE_UPDATE_OPENAPI,
 )
 async def update_file(
     pod_id: UUID,
     request: Request,
     user: CurrentUser,
     use_cases: FileUseCasesDep,
-    data: UploadFile | None = File(default=None),
-    path: str = Form(...),
-    new_path: Optional[str] = Form(None),
-    description: Optional[str] = Form(None),
-    search_enabled: Optional[bool] = Form(None),
-    visibility: str | None = Form(default=None),
 ) -> FileDetailResponse:
-    form = await request.form()
-    provided_fields = set(form.keys())
-    file_content = await data.read() if data is not None else None
+    async with stream_multipart_form(
+        request,
+        file_limits={
+            "data": MultipartFileLimit(
+                max_bytes=datastore_settings.datastore_upload_max_bytes,
+                label="file",
+            )
+        },
+        text_fields={
+            "path",
+            "new_path",
+            "description",
+            "search_enabled",
+            "visibility",
+        },
+        combined_max_bytes=datastore_settings.datastore_upload_max_bytes,
+    ) as form:
+        staged = form.file("data")
+        update_payload: dict[str, object | None] = {}
+        update_payload["path"] = form.require_text("path")
+        if form.has("visibility"):
+            update_payload["visibility"] = form.text("visibility")
+        if form.has("new_path"):
+            update_payload["new_path"] = form.text("new_path")
+        if form.has("description"):
+            update_payload["description"] = form.text("description")
+        if form.has("search_enabled"):
+            update_payload["search_enabled"] = form.boolean("search_enabled")
+        if staged is not None:
+            update_payload["content"] = staged.path
 
-    update_payload: dict[str, object | None] = {}
-    update_payload["path"] = path
-    if "visibility" in provided_fields:
-        update_payload["visibility"] = visibility
-    if "new_path" in provided_fields:
-        update_payload["new_path"] = new_path
-    if "description" in provided_fields:
-        update_payload["description"] = description
-    if "search_enabled" in provided_fields:
-        update_payload["search_enabled"] = search_enabled
-    if data is not None:
-        update_payload["content"] = file_content
-
-    update_entity = DatastoreFileUpdateEntity(**update_payload)
-    file_entity = await use_cases.update_file(
-        pod_id=pod_id, update_entity=update_entity, request=request, user_id=user.id
-    )
+        update_entity = DatastoreFileUpdateEntity(**update_payload)
+        file_entity = await use_cases.update_file(
+            pod_id=pod_id,
+            update_entity=update_entity,
+            request=request,
+            user_id=user.id,
+        )
     response = await _file_detail_response(file_entity, user.id)
     _ensure_file_in_pod(response, pod_id)
     return response
@@ -320,39 +329,47 @@ async def update_file(
     status_code=status.HTTP_200_OK,
     operation_id="file.markdown.attach",
     summary="Attach Document Markdown",
+    openapi_extra=MARKDOWN_ATTACH_OPENAPI,
 )
 async def attach_document_markdown(
     pod_id: UUID,
-    file_service: FileServiceDep,
+    request: Request,
+    use_cases: FileUseCasesDep,
     user: CurrentUser,
-    ctx: PodContextDep,
-    data: UploadFile = File(...),
-    path: str = Form(...),
-    images: list[UploadFile] = File(default=[]),
 ) -> FileDetailResponse:
-    """Attach (or replace) a user-authored markdown version of a document, plus
-    any images it references.
+    """Attach user-authored markdown and referenced images to a document.
 
-    The uploaded markdown becomes the document's agent-facing ``document.md`` and
-    is chunked/indexed on the original's behalf; the source file is unchanged.
-    Each uploaded image is stored as a sibling child artifact so a reference like
-    ``![](fig1.png)`` resolves through the children endpoint — send the images
-    under repeated ``images`` fields, named to match the markdown references.
-    Applies to non-markdown documents (PDF, Word/ODT, HTML, RTF, EPUB, …).
+    The source file remains unchanged; the markdown is indexed for agent use.
     """
-    markdown_content = await data.read()
-    image_files = [
-        (image.filename or "image", await image.read())
-        for image in images
-        if image is not None
-    ]
-    file_entity = await file_service.attach_user_markdown(
-        pod_id=pod_id,
-        path=path,
-        markdown_content=markdown_content,
-        ctx=ctx,
-        images=image_files,
-    )
+    async with stream_multipart_form(
+        request,
+        file_limits={
+            "data": MultipartFileLimit(
+                max_bytes=datastore_settings.datastore_markdown_max_bytes,
+                required=True,
+                label="markdown",
+            ),
+            "images": MultipartFileLimit(
+                max_bytes=datastore_settings.datastore_markdown_image_max_bytes,
+                multiple=True,
+                label="markdown image",
+            ),
+        },
+        text_fields={"path"},
+        combined_max_bytes=datastore_settings.datastore_markdown_batch_max_bytes,
+    ) as form:
+        markdown = form.require_file("data")
+        image_files = [
+            (image.filename or "image", image.path) for image in form.files("images")
+        ]
+        file_entity = await use_cases.attach_user_markdown(
+            pod_id=pod_id,
+            path=form.require_text("path"),
+            markdown_content=markdown.path,
+            images=image_files,
+            request=request,
+            user_id=user.id,
+        )
     return await _file_detail_response(file_entity, user.id)
 
 
@@ -409,37 +426,19 @@ async def download_file(
     request: Request,
     use_cases: FileUseCasesDep,
     path: str = Query(...),
-) -> StreamingResponse:
+) -> Response:
     download = await use_cases.download_file(
-        pod_id=pod_id, path=path, request=request, user_id=user.id
+        pod_id=pod_id,
+        path=path,
+        request=request,
+        user_id=user.id,
+        if_none_match=request.headers.get("if-none-match"),
     )
     file_entity = download.entity
-    content = download.content
     response = _to_file_response(file_entity, user.id)
     _ensure_file_in_pod(response, pod_id)
 
-    content_type = file_entity.content_type
-    disposition_type = (
-        "inline"
-        if (
-            content_type.startswith("application/pdf")
-            or content_type.startswith("image/")
-            or content_type.startswith("text/")
-        )
-        else "attachment"
-    )
-    headers = {
-        "Content-Disposition": build_content_disposition(
-            disposition_type,
-            file_entity.name,
-        )
-    }
-
-    return StreamingResponse(
-        BytesIO(content),
-        media_type=content_type,
-        headers=headers,
-    )
+    return build_original_download_response(file_entity, download)
 
 
 @router.get(
@@ -512,7 +511,12 @@ async def create_file_signed_url(
     body: FileSignedUrlRequest | None = None,
 ) -> FileSignedUrlResponse:
     body = body or FileSignedUrlRequest()
-    file_entity, signed_url, expires_at, max_hits = await file_service.create_signed_url(
+    (
+        file_entity,
+        signed_url,
+        expires_at,
+        max_hits,
+    ) = await file_service.create_signed_url(
         pod_id,
         path,
         ctx=ctx,
@@ -548,7 +552,7 @@ async def download_file_child(
     ),
     page_start: Optional[int] = Query(default=None, ge=1),
     page_end: Optional[int] = Query(default=None, ge=1),
-) -> StreamingResponse:
+) -> Response:
     result = await use_cases.download_child(
         pod_id=pod_id,
         path=path,
@@ -564,22 +568,11 @@ async def download_file_child(
     response = _to_file_response(file_entity, user.id)
     _ensure_file_in_pod(response, pod_id)
 
-    disposition_type = (
-        "inline"
-        if content_type.startswith(("text/", "image/", "application/json"))
-        else "attachment"
-    )
-    download_name = artifact_name.rsplit("/", 1)[-1]
-    headers = {
-        "Content-Disposition": build_content_disposition(
-            disposition_type,
-            download_name,
-        )
-    }
-    return StreamingResponse(
-        BytesIO(content),
-        media_type=content_type,
-        headers=headers,
+    return build_child_download_response(
+        request_if_none_match=request.headers.get("if-none-match"),
+        artifact_name=artifact_name,
+        content=content,
+        content_type=content_type,
     )
 
 

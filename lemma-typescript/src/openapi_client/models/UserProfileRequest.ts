@@ -14,4 +14,3 @@ export type UserProfileRequest = {
     telegram_username?: (string | null);
     timezone?: (string | null);
 };
-

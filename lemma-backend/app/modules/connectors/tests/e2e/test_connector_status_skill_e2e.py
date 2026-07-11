@@ -1,16 +1,14 @@
 """E2E tests for connector status and skill endpoints."""
 from __future__ import annotations
 
-import tempfile
 from pathlib import Path
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import patch
 from uuid import uuid4
 
 import pytest
 from httpx import AsyncClient
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.modules.connectors.domain.connector import AuthMethod, AuthProvider
 from app.modules.connectors.domain.auth_config import AuthConfigSource
 from app.modules.connectors.infrastructure.models.account import Account
 from app.modules.connectors.infrastructure.models.connector import Connector
@@ -174,7 +172,7 @@ async def test_connector_status_shows_connected_accounts(
         app_id=app_id,
         organization_id=org_id,
     )
-    account = await _seed_account(
+    await _seed_account(
         db_session,
         app_id=app_id,
         user_id=user_id,
@@ -215,7 +213,7 @@ async def test_connector_status_dual_provider_app(
     await db_session.flush()
 
     # Install with LEMMA provider
-    auth_cfg = await _seed_auth_config(
+    await _seed_auth_config(
         db_session,
         app_id=app_id,
         organization_id=org_id,
@@ -253,7 +251,7 @@ async def test_connector_status_multiple_apps(
     await db_session.flush()
 
     cfg_a = await _seed_auth_config(db_session, app_id=app_a_id, organization_id=org_id)
-    cfg_b = await _seed_auth_config(db_session, app_id=app_b_id, organization_id=org_id)
+    await _seed_auth_config(db_session, app_id=app_b_id, organization_id=org_id)
     await _seed_account(
         db_session,
         app_id=app_a_id,

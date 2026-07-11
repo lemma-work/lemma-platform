@@ -35,6 +35,23 @@ class DatastoreFileChunkRepository:
         embeddings: list[list[float]],
         metadata: dict | None = None,
     ) -> int:
+        if len(chunks) != len(embeddings):
+            raise ValueError(
+                f"Cannot index {len(chunks)} chunks with {len(embeddings)} embeddings"
+            )
+        rows = []
+        for idx, (chunk, embedding) in enumerate(zip(chunks, embeddings, strict=True)):
+            final_meta = {**(metadata or {}), **chunk.get("metadata", {})}
+            rows.append(
+                {
+                    "chunk_index": idx,
+                    "file_id": file_id,
+                    "content": chunk.get("text", ""),
+                    "embedding": "[" + ",".join(str(x) for x in embedding) + "]",
+                    "metadata": json.dumps(final_meta),
+                }
+            )
+
         async with self._session_factory() as session:
             await session.execute(
                 text(f'SET search_path TO "{self.schema_name}", public')
@@ -46,20 +63,12 @@ class DatastoreFileChunkRepository:
                 {"file_id": file_id},
             )
 
-            for idx, (chunk, embedding) in enumerate(zip(chunks, embeddings)):
-                final_meta = {**(metadata or {}), **chunk.get("metadata", {})}
-                embedding_str = "[" + ",".join(str(x) for x in embedding) + "]"
+            if rows:
                 await session.execute(
                     text(
-                        f'''INSERT INTO "{self.schema_name}".reserved_chunks (chunk_index, file_id, content, embedding, chunk_metadata) VALUES (:chunk_index, :file_id, :content, CAST(:embedding AS vector), :metadata)'''
+                        f'''INSERT INTO "{self.schema_name}".reserved_chunks (chunk_index, file_id, content, embedding, chunk_metadata) VALUES (:chunk_index, :file_id, :content, CAST(:embedding AS vector), CAST(:metadata AS jsonb))'''
                     ),
-                    {
-                        "chunk_index": idx,
-                        "file_id": file_id,
-                        "content": chunk.get("text", ""),
-                        "embedding": embedding_str,
-                        "metadata": json.dumps(final_meta),
-                    },
+                    rows,
                 )
             await session.commit()
             return len(chunks)
@@ -140,7 +149,9 @@ class DatastoreFileChunkRepository:
             # are pgvector 0.8+ GUCs; harmless placeholders if the extension
             # isn't yet loaded in the session.
             await session.execute(text(f"SET LOCAL hnsw.ef_search = {_HNSW_EF_SEARCH}"))
-            await session.execute(text("SET LOCAL hnsw.iterative_scan = 'relaxed_order'"))
+            await session.execute(
+                text("SET LOCAL hnsw.iterative_scan = 'relaxed_order'")
+            )
             file_filter = ""
             params: dict[str, Any] = {
                 "vec": embedding_str,

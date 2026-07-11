@@ -2,8 +2,8 @@
 
 from __future__ import annotations
 
+from collections.abc import Sequence
 from datetime import datetime, timedelta, timezone
-from enum import Enum
 from uuid import UUID
 
 from sqlalchemy import func, literal, select, update
@@ -59,27 +59,14 @@ from app.modules.agent.infrastructure.models import (
     ConversationModel,
     MessageModel,
 )
-from app.modules.connectors.domain.ports import SecretEncryptionPort
-
-
-def _enum_status_values_for_db(statuses: object, enum_type: type[Enum]) -> list[str]:
-    if isinstance(statuses, (enum_type, str)):
-        normalized_statuses = [statuses]
-    else:
-        normalized_statuses = list(statuses)
-    values: list[str] = []
-    for status in normalized_statuses:
-        status = enum_type(status)
-        values.extend([status.value, status.value.lower()])
-    return list(dict.fromkeys(values))
-
-
-def _run_status_values_for_db(statuses: object) -> list[str]:
-    return _enum_status_values_for_db(statuses, AgentRunStatus)
-
-
-def _conversation_status_values_for_db(statuses: object) -> list[str]:
-    return _enum_status_values_for_db(statuses, ConversationStatus)
+from app.modules.agent.infrastructure.conversation_origin_store import (
+    create_conversation_for_origin,
+)
+from app.modules.agent.infrastructure.repository_status import (
+    conversation_status_values_for_db as _conversation_status_values_for_db,
+    run_status_values_for_db as _run_status_values_for_db,
+)
+from app.modules.connectors.contracts import SecretEncryptionPort
 
 
 _ACTIVE_AGENT_RUN_STATUS_VALUES = _run_status_values_for_db(ACTIVE_AGENT_RUN_STATUSES)
@@ -558,7 +545,7 @@ class ConversationRepository:
         self.uow = uow
         self.session = uow.session
 
-    def collect_events(self, events: list[AgentDomainEvent]) -> None:
+    def collect_events(self, events: Sequence[AgentDomainEvent]) -> None:
         self.uow.collect_events(events)
 
     async def create_conversation(
@@ -580,6 +567,8 @@ class ConversationRepository:
                 if conversation.agent_runtime
                 else None
             ),
+            origin_type=conversation.origin_type,
+            origin_id=conversation.origin_id,
             conversation_type=conversation.type.value,
             status=conversation.status.value if conversation.status else None,
             output_data=conversation.output,
@@ -589,6 +578,13 @@ class ConversationRepository:
         self.session.add(model)
         await self.session.flush()
         return model.to_entity()
+
+    async def create_conversation_once(
+        self,
+        conversation: ConversationEntity,
+    ) -> tuple[ConversationEntity, bool]:
+        """Create one conversation for a durable external invocation origin."""
+        return await create_conversation_for_origin(self.session, conversation)
 
     async def update_conversation(
         self,

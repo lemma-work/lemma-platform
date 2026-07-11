@@ -34,6 +34,11 @@ from pydantic_ai.messages import (
     ToolReturnPart,
     UserPromptPart,
 )
+from pydantic_ai.exceptions import (
+    ModelHTTPError,
+    UnexpectedModelBehavior,
+    UsageLimitExceeded,
+)
 from pydantic_ai.models.function import AgentInfo, DeltaToolCall, FunctionModel
 
 from app.core.config import settings
@@ -113,6 +118,7 @@ def _resolve_turn(
     if script is not None:
         if turn_index < len(script):
             turn = script[turn_index]
+            _raise_scripted_error(turn.get("error"))
             return turn.get("text"), list(turn.get("tool_calls") or [])
         # Script exhausted (e.g. an extra request after the last tool round) —
         # close out the run with a final answer.
@@ -123,14 +129,37 @@ def _resolve_turn(
         # Structured-output agent: best-effort call the output tool so the run
         # completes; tests needing specific output should script it.
         logger.warning(
-            "Mock LLM: structured output required but unscripted; calling '%s' with {}",
-            info.output_tools[0].name,
+            "Mock LLM: structured output required but unscripted; "
+            f"calling '{info.output_tools[0].name}' with {{}}"
         )
         return None, [
-            {"tool_name": info.output_tools[0].name, "args": {}, "tool_call_id": "mock-output"}
+            {
+                "tool_name": info.output_tools[0].name,
+                "args": {},
+                "tool_call_id": "mock-output",
+            }
         ]
     user_text = _last_user_text(messages)
     return (f"[mock] {user_text}" if user_text else "[mock] ok"), []
+
+
+def _raise_scripted_error(error: object) -> None:
+    """Translate the E2E DSL's failure control into real model exceptions."""
+    if not isinstance(error, dict):
+        return
+    kind = str(error.get("kind") or "generic")
+    message = str(error.get("message") or "scripted model failure")
+    if kind == "model_http":
+        raise ModelHTTPError(
+            status_code=int(error.get("status_code") or 502),
+            model_name="mock",
+            body={"message": message},
+        )
+    if kind == "unexpected_model_behavior":
+        raise UnexpectedModelBehavior(message)
+    if kind == "usage_limit":
+        raise UsageLimitExceeded(message)
+    raise RuntimeError(message)
 
 
 def build_mock_model(conversation: Any) -> FunctionModel:

@@ -64,7 +64,9 @@ async def test_close_if_ping_stale_closes_after_threshold(monkeypatch):
     # The reaper's poll interval is max(1.0, threshold/3) -- it can't fire
     # faster than ~1s regardless of how small the threshold is, so the test
     # timeout must clear that floor with margin.
-    monkeypatch.setattr(controller.settings, "daemon_ws_ping_stale_after_seconds", 0.03)
+    monkeypatch.setattr(
+        controller.agent_settings, "daemon_ws_ping_stale_after_seconds", 0.03
+    )
     websocket = _FakeWebSocket()
     last_ping = _MutableMonotonic()
 
@@ -80,7 +82,9 @@ async def test_close_if_ping_stale_does_not_close_while_pings_keep_arriving(monk
     import app.modules.agent.api.controllers.runtime_config_controller as controller
     import time
 
-    monkeypatch.setattr(controller.settings, "daemon_ws_ping_stale_after_seconds", 0.05)
+    monkeypatch.setattr(
+        controller.agent_settings, "daemon_ws_ping_stale_after_seconds", 0.05
+    )
     websocket = _FakeWebSocket()
     last_ping = _MutableMonotonic()
 

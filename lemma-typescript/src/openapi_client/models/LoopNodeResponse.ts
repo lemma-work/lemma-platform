@@ -10,4 +10,3 @@ export type LoopNodeResponse = {
     position?: (Record<string, number> | null);
     type?: string;
 };
-

@@ -8,14 +8,15 @@ import time
 from uuid import UUID
 
 from fastapi import APIRouter, HTTPException, WebSocket, WebSocketDisconnect, status
-from supertokens_python.recipe.session.asyncio import get_session_without_request_response
+from supertokens_python.recipe.session.asyncio import (
+    get_session_without_request_response,
+)
 from supertokens_python.recipe.session.exceptions import TryRefreshTokenError
 
 from app.core.api.dependencies import CurrentUser, UoWDep
 from app.core.authorization.context import ResourceRef
 from app.core.authorization.dependencies import OrgContextDep
 from app.core.authorization.permissions import Permissions
-from app.core.config import settings
 from app.core.infrastructure.db.session import async_session_maker
 from app.core.infrastructure.db.uow_factory import SessionUnitOfWorkFactory
 from app.core.log.log import get_logger
@@ -30,6 +31,7 @@ from app.modules.agent.api.schemas import (
     CreateUserDaemonRuntimeProfileRequest,
 )
 from app.modules.agent.agent_runtime_defaults import AgentRuntimeDefaultService
+from app.modules.agent.config import agent_settings
 from app.modules.agent.domain.value_objects import HarnessKind
 from app.modules.agent.domain.runtime_profiles import (
     AgentRuntimeProfile,
@@ -38,6 +40,8 @@ from app.modules.agent.domain.runtime_profiles import (
 )
 from app.modules.agent.infrastructure.daemon_hub import (
     agent_runtime_daemon_hub,
+)
+from app.modules.agent.infrastructure.agent_runtime_redis import (
     clear_daemon_capacity,
     set_daemon_capacity,
 )
@@ -45,9 +49,8 @@ from app.modules.agent.infrastructure.repositories import (
     AgentRuntimeDaemonRepository,
     AgentRuntimeProfileRepository,
 )
-from app.modules.agent.services.runtime_profile_service import AgentRuntimeProfileService
-from app.modules.identity.infrastructure.organization_repositories import (
-    OrganizationRepository,
+from app.modules.agent.services.runtime_profile_service import (
+    AgentRuntimeProfileService,
 )
 from app.core.crypto import get_secret_cipher
 
@@ -62,8 +65,13 @@ async def _ensure_org_member(
     user: CurrentUser,
     uow: UoWDep,
 ) -> None:
-    member = await OrganizationRepository(uow).get_member(user.id, org_id)
-    if member is None:
+    from app.composition.identity_notifications import user_is_organization_member
+
+    if not await user_is_organization_member(
+        uow,
+        user_id=user.id,
+        organization_id=org_id,
+    ):
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="User is not a member of this organization",
@@ -124,7 +132,9 @@ async def _daemon_status_payload(
         }
     catalog = _json_object(getattr(daemon, "harness_catalog", None))
     raw_info = catalog.get(profile.derived_harness_kind().value)
-    harness_available = isinstance(raw_info, dict) and raw_info.get("available") is not False
+    harness_available = (
+        isinstance(raw_info, dict) and raw_info.get("available") is not False
+    )
     if profile.scope.value == "PERSONAL" and profile.user_id != user_id:
         availability_status = "UNAVAILABLE_FOR_YOU"
     elif daemon.status != "ONLINE":
@@ -373,6 +383,7 @@ async def daemon_websocket(websocket: WebSocket) -> None:
             await agent_runtime_daemon_hub.unregister(
                 daemon_id=daemon_id,
                 user_id=user_id,
+                websocket=websocket,
             )
             # A disconnected daemon's last-known capacity has no actionable
             # meaning -- clear it immediately rather than relying solely on
@@ -415,7 +426,7 @@ async def _close_if_ping_stale(
     ``WebSocketDisconnect`` elsewhere in this route -- this only fires when the
     transport looks alive but has stopped carrying heartbeats.
     """
-    threshold = settings.daemon_ws_ping_stale_after_seconds
+    threshold = agent_settings.daemon_ws_ping_stale_after_seconds
     poll_interval = max(1.0, threshold / 3)
     while True:
         await asyncio.sleep(poll_interval)
@@ -426,7 +437,9 @@ async def _close_if_ping_stale(
                 threshold_seconds=threshold,
             )
             with contextlib.suppress(Exception):
-                await websocket.close(code=status.WS_1001_GOING_AWAY, reason="Heartbeat timeout")
+                await websocket.close(
+                    code=status.WS_1001_GOING_AWAY, reason="Heartbeat timeout"
+                )
             return
 
 
@@ -455,7 +468,9 @@ async def _store_capacity_if_present(daemon_id: UUID, raw_capacity: object) -> N
     cap = raw_capacity.get("max_concurrent_runs")
     if not isinstance(active, int) or not isinstance(cap, int):
         return
-    await set_daemon_capacity(daemon_id=daemon_id, active_run_count=active, max_concurrent_runs=cap)
+    await set_daemon_capacity(
+        daemon_id=daemon_id, active_run_count=active, max_concurrent_runs=cap
+    )
 
 
 async def _daemon_websocket_session(websocket: WebSocket):
@@ -468,8 +483,6 @@ async def _daemon_websocket_session(websocket: WebSocket):
         anti_csrf_check=False,
         session_required=True,
     )
-
-
 
 
 def _harness_infos_from_daemons(daemons: list[object]) -> list[AgentHarnessInfo]:
@@ -488,13 +501,9 @@ def _harness_infos_from_daemons(daemons: list[object]) -> list[AgentHarnessInfo]
             available = raw_info.get("available") is not False
             raw_models = raw_info.get("models") or []
             models = [
-                str(item)
-                for item in raw_models
-                if available and str(item).strip()
+                str(item) for item in raw_models if available and str(item).strip()
             ]
-            model_catalog = (
-                _harness_model_catalog(raw_info) if available else []
-            )
+            model_catalog = _harness_model_catalog(raw_info) if available else []
             items.append(
                 AgentHarnessInfo(
                     harness_kind=harness_kind,
@@ -531,7 +540,9 @@ def _harness_model_catalog(raw_info: dict) -> list[RuntimeModelCatalogEntry]:
             name = str(item.get("name") or "").strip()
             if not name:
                 continue
-            provider_model_name = str(item.get("provider_model_name") or name).strip() or name
+            provider_model_name = (
+                str(item.get("provider_model_name") or name).strip() or name
+            )
             display_name = str(item.get("display_name") or "").strip() or name
             metadata = item.get("metadata")
             entries.append(

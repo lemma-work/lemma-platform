@@ -8,7 +8,7 @@ from uuid import UUID
 from app.core.config import settings
 from app.core.log.log import get_logger
 from app.modules.agent_surfaces.platforms.rendering import sanitize_user_visible_text
-from app.modules.agent.tools.user_interaction.models import (
+from app.modules.agent.contracts import (
     AskUserRequest,
     DisplayResourceRequest,
     DisplayResourceType,

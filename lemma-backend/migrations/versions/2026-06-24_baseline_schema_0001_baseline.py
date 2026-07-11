@@ -7,14 +7,11 @@ Create Date: 2026-06-24 15:05:38.160706
 """
 
 import warnings
-from typing import TYPE_CHECKING
 
 import sqlalchemy as sa
 from alembic import op
 from sqlalchemy import Text  # noqa: F401
 from sqlalchemy.dialects import postgresql
-if TYPE_CHECKING:
-    from collections.abc import Sequence
 
 __all__ = ["downgrade", "upgrade", "schema_upgrades", "schema_downgrades", "data_upgrades", "data_downgrades"]
 

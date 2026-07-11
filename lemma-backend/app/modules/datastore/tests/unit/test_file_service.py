@@ -130,7 +130,21 @@ def file_repository_mock() -> AsyncMock:
 
 @pytest.fixture
 def storage_mock() -> AsyncMock:
-    return AsyncMock()
+    storage = AsyncMock()
+
+    async def _stat_uploaded(key: str) -> int:
+        for call in reversed(storage.upload_file.await_args_list):
+            if call.args[0] == key:
+                content = call.args[1]
+                return (
+                    len(content)
+                    if isinstance(content, bytes)
+                    else content.stat().st_size
+                )
+        return 0
+
+    storage.stat_file.side_effect = _stat_uploaded
+    return storage
 
 
 @pytest.fixture
@@ -149,6 +163,7 @@ def file_service(
         file_repository=file_repository_mock,
         storage=storage_mock,
         authorization_service=authorization_service_mock,
+        search_service_factory=lambda _pod_id: AsyncMock(),
     )
 
 
@@ -222,7 +237,8 @@ async def test_update_pod_folder_rename_into_duplicate_raises_conflict(
         DatastoreConflictError,
         match="already exists at '/research'",
     ):
-        await _update_file_by_path(file_service, 
+        await _update_file_by_path(
+            file_service,
             pod_id,
             DatastoreFileUpdateEntity(path=folder.path, new_path="/research"),
             ctx=_ctx(user_id),
@@ -269,7 +285,8 @@ async def test_update_pod_folder_move_into_duplicate_parent_raises_conflict(
         DatastoreConflictError,
         match=f"already exists at '{destination_folder.path}/research'",
     ):
-        await _update_file_by_path(file_service, 
+        await _update_file_by_path(
+            file_service,
             pod_id,
             DatastoreFileUpdateEntity(
                 path=folder.path,
@@ -279,6 +296,42 @@ async def test_update_pod_folder_move_into_duplicate_parent_raises_conflict(
         )
 
     file_repository_mock.update.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_content_update_overwrites_canonical_path_and_updates_hash(
+    file_service: DatastoreFileService,
+    file_repository_mock: AsyncMock,
+    storage_mock: AsyncMock,
+):
+    user_id = uuid4()
+    pod_id = uuid4()
+    existing = _make_file(
+        pod_id=pod_id,
+        name="guide.txt",
+        owner_user_id=user_id,
+        visibility="PERSONAL",
+    )
+    existing.search_enabled = True
+    existing.status = FileStatus.COMPLETED
+    existing.content_sha256 = "a" * 64
+    file_repository_mock.get_by_path.return_value = existing
+    file_repository_mock.update.side_effect = lambda entity: entity
+
+    updated = await _update_file_by_path(
+        file_service,
+        pod_id,
+        DatastoreFileUpdateEntity(path=existing.path, content=b"new body"),
+        ctx=_ctx(user_id),
+    )
+
+    canonical_key = f"pods/{pod_id}/files/{existing.path.lstrip('/')}"
+    storage_mock.upload_file.assert_awaited_once_with(canonical_key, b"new body")
+    storage_mock.delete_file.assert_not_awaited()
+    assert updated.content_sha256 == (
+        "ae907ab9a383483e5c37beee966723544b9e6f12148a7dcd56ceea7ad44c5a7b"
+    )
+    assert updated.status == FileStatus.PENDING
 
 
 @pytest.mark.asyncio
@@ -314,6 +367,9 @@ async def test_create_file_under_me_uses_personal_visibility(
     storage_mock.upload_file.assert_awaited_once_with(
         f"pods/{pod_id}/files/{user_id}/artifact.txt",
         b"hello",
+    )
+    assert created.content_sha256 == (
+        "2cf24dba5fb0a30e26e83b2ac5b9e29e1b161e5c1fa7425e73043362938b9824"
     )
 
 
@@ -777,7 +833,8 @@ async def test_system_skill_paths_are_read_only(
     file_service.system_skill_files.skills_root = skills_root
 
     with pytest.raises(DatastoreValidationError, match="System skills are read-only"):
-        await _update_file_by_path(file_service, 
+        await _update_file_by_path(
+            file_service,
             pod_id,
             DatastoreFileUpdateEntity(
                 path="/skills/builtin-skill/SKILL.md",
@@ -1079,17 +1136,23 @@ async def test_delete_path_by_path_removes_folder_descendants_from_storage_and_s
     search_service.engine = None
     file_service.search_service_factory = lambda _pod_id: search_service
 
-    await _delete_path_by_path(file_service, pod_id, root_folder.path, ctx=_ctx(user_id))
+    await _delete_path_by_path(
+        file_service, pod_id, root_folder.path, ctx=_ctx(user_id)
+    )
 
     deleted_prefixes = [
         call.args[0] for call in storage_mock.delete_prefix.await_args_list
     ]
-    # Derived child containers are colocated under the folder prefix, so the
-    # single folder-storage delete already removes them.
+    # The folder prefix removes canonical originals and derived artifacts;
+    # captured exact deletes remain intentionally idempotent.
     assert deleted_prefixes == [
         f"pods/{pod_id}/files/research/",
     ]
-    storage_mock.delete_file.assert_not_awaited()
+    assert storage_mock.delete_file.await_count == 2
+    assert {call.args[0] for call in storage_mock.delete_file.await_args_list} == {
+        f"pods/{pod_id}/files/research/notes/draft.md",
+        f"pods/{pod_id}/files/research/summary.md",
+    }
     assert search_service.remove_file.await_count == 2
     deleted_ids = {call.args[0] for call in search_service.remove_file.await_args_list}
     assert deleted_ids == {nested_file.id, sibling_file.id}

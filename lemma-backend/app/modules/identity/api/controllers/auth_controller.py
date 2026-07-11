@@ -4,11 +4,8 @@ from uuid import UUID
 
 from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel, EmailStr, Field
-from sqlalchemy import select
-
-from app.core.api.dependencies import UoWDep
 from app.core.config import settings
-from app.modules.identity.api.dependencies import UserServiceDep
+from app.modules.identity.api.dependencies import PodMembershipDep, UserServiceDep
 from app.modules.identity.domain.user_entities import UserEntity
 from app.modules.identity.infrastructure.supertokens_auth.helpers import (
     create_cli_session_tokens,
@@ -22,7 +19,6 @@ from app.core.authorization.delegation import (
     CLAIM_SCOPE,
     WorkloadPrincipalType,
 )
-from app.modules.pod.infrastructure.models.pod_models import Pod
 
 router = APIRouter(
     prefix="/auth",
@@ -70,7 +66,7 @@ class CliRefreshRequest(BaseModel):
 async def verify_token(
     request: Request,
     user_service: UserServiceDep,
-    uow: UoWDep,
+    pod_membership: PodMembershipDep,
 ) -> VerifyTokenResponse:
     user: UserEntity = request.state.user
     user_data = await user_service.get_user(user.id)
@@ -89,7 +85,11 @@ async def verify_token(
         raw_function_id = auth_claims.get(CLAIM_ACTOR_ID)
         function_id = UUID(str(raw_function_id)) if raw_function_id is not None else None
         function_name = auth_claims.get(CLAIM_ACTOR_NAME)
-    organization_id = await _resolve_pod_organization_id(uow, pod_id)
+    organization_id = (
+        await pod_membership.get_pod_organization_id(pod_id)
+        if pod_id is not None
+        else None
+    )
     return VerifyTokenResponse(
         user_id=user.id,
         email=user_data.email,
@@ -99,15 +99,6 @@ async def verify_token(
         function_name=function_name if isinstance(function_name, str) else None,
         scopes=scopes,
     )
-
-
-async def _resolve_pod_organization_id(uow: UoWDep, pod_id: UUID | None) -> UUID | None:
-    if pod_id is None:
-        return None
-    result = await uow.session.execute(
-        select(Pod.organization_id).where(Pod.id == pod_id)
-    )
-    return result.scalar_one_or_none()
 
 
 @router.get(
@@ -172,7 +163,7 @@ async def cli_refresh_session(
             detail={
                 "code": "INVALID_REFRESH_TOKEN",
                 "message": "Unable to refresh CLI session.",
-                "details": str(exc),
+                "details": {"error_type": type(exc).__name__},
             },
         ) from exc
 

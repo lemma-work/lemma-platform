@@ -12,6 +12,7 @@ from app.modules.function.domain.events import (
     FunctionRunFailedEvent,
 )
 from app.modules.workflow.events import handlers
+from app.modules.test_support.fakes import PassthroughEventInbox
 
 
 class _FakeLogger:
@@ -76,6 +77,7 @@ async def test_workflow_ignores_agent_completion_without_waiting_run(monkeypatch
         _FakeLogger(),
         job_queue=job_queue,
         uow_factory=_FakeUoWFactory(),
+        inbox=PassthroughEventInbox(),
     )
 
     assert job_queue.enqueued == []
@@ -103,6 +105,7 @@ async def test_workflow_enqueues_agent_completion_with_waiting_run(monkeypatch):
         _FakeLogger(),
         job_queue=job_queue,
         uow_factory=_FakeUoWFactory(),
+        inbox=PassthroughEventInbox(),
     )
 
     assert job_queue.enqueued == [
@@ -127,7 +130,10 @@ async def test_workflow_enqueues_function_completion_with_output():
     ).model_dump(mode="json")
 
     await handlers.handle_function_run_event(
-        event, _FakeLogger(), job_queue=job_queue
+        event,
+        _FakeLogger(),
+        job_queue=job_queue,
+        inbox=PassthroughEventInbox(),
     )
 
     assert job_queue.enqueued == [
@@ -154,7 +160,10 @@ async def test_workflow_enqueues_function_failure_with_error():
     ).model_dump(mode="json")
 
     await handlers.handle_function_run_event(
-        event, _FakeLogger(), job_queue=job_queue
+        event,
+        _FakeLogger(),
+        job_queue=job_queue,
+        inbox=PassthroughEventInbox(),
     )
 
     assert job_queue.enqueued == [

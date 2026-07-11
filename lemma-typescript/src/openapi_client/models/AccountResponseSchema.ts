@@ -18,9 +18,9 @@ export type AccountResponseSchema = {
     is_default?: boolean;
     organization_id: string;
     preferences: (Record<string, any> | null);
+    provider?: (string | null);
     provider_account_id?: (string | null);
     status: string;
     updated_at: string;
     user_id: string;
 };
-

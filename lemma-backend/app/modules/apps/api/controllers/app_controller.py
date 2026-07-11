@@ -6,20 +6,24 @@ from uuid import UUID
 
 from fastapi import (
     APIRouter,
-    File,
     HTTPException,
     Query,
     Request,
-    UploadFile,
     status,
 )
 from fastapi.responses import Response, StreamingResponse
 
 from app.core.api.dependencies import CurrentUser
 from app.core.api.pagination import parse_uuid_page_token
+from app.core.api.streaming_multipart import (
+    MultipartFileLimit,
+    stream_multipart_form,
+    streaming_multipart_openapi,
+)
 from app.core.authorization.dependencies import PodContextDep
 from app.core.helpers.slug import normalize_resource_name
 from app.modules.apps.api.asset_response import app_asset_response
+from app.modules.apps.config import apps_settings
 from app.modules.apps.api.dependencies import (
     AppServiceDep,
     AppUseCasesDep,
@@ -238,6 +242,33 @@ async def delete_app(
     status_code=status.HTTP_200_OK,
     operation_id="app.bundle.upload",
     summary="Upload App Bundle",
+    openapi_extra=streaming_multipart_openapi(
+        "AppBundleUploadRequest",
+        properties={
+            "source_archive": {
+                "anyOf": [
+                    {
+                        "type": "string",
+                        "format": "binary",
+                        "contentMediaType": "application/octet-stream",
+                    },
+                    {"type": "null"},
+                ],
+                "title": "Source Archive",
+            },
+            "dist_archive": {
+                "anyOf": [
+                    {
+                        "type": "string",
+                        "format": "binary",
+                        "contentMediaType": "application/octet-stream",
+                    },
+                    {"type": "null"},
+                ],
+                "title": "Dist Archive",
+            },
+        },
+    ),
 )
 async def upload_app_bundle(
     request: Request,
@@ -245,24 +276,31 @@ async def upload_app_bundle(
     app_name: str,
     user: CurrentUser,
     use_cases: AppUseCasesDep,
-    source_archive: UploadFile | None = File(default=None),
-    dist_archive: UploadFile | None = File(default=None),
 ) -> AppBundleUploadResponse:
-    source_archive_bytes: bytes | None = None
-    dist_archive_bytes: bytes | None = None
-    if source_archive is not None:
-        source_archive_bytes = await source_archive.read()
-    if dist_archive is not None:
-        dist_archive_bytes = await dist_archive.read()
-
-    app = await use_cases.upload_bundle(
-        pod_id=pod_id,
-        app_name=app_name,
-        request=request,
-        user_id=user.id,
-        source_archive_bytes=source_archive_bytes,
-        dist_archive_bytes=dist_archive_bytes,
-    )
+    async with stream_multipart_form(
+        request,
+        file_limits={
+            "source_archive": MultipartFileLimit(
+                max_bytes=apps_settings.app_source_archive_max_bytes,
+                label="source archive",
+            ),
+            "dist_archive": MultipartFileLimit(
+                max_bytes=apps_settings.app_dist_archive_max_bytes,
+                label="dist archive",
+            ),
+        },
+        combined_max_bytes=apps_settings.app_bundle_upload_max_bytes,
+    ) as form:
+        source_staged = form.file("source_archive")
+        dist_staged = form.file("dist_archive")
+        app = await use_cases.upload_bundle(
+            pod_id=pod_id,
+            app_name=app_name,
+            request=request,
+            user_id=user.id,
+            source_archive_bytes=source_staged.path if source_staged else None,
+            dist_archive_bytes=dist_staged.path if dist_staged else None,
+        )
     return AppBundleUploadResponse(
         message="Bundle uploaded successfully",
         app=AppDetailResponse.model_validate(app),

@@ -2,17 +2,20 @@ from __future__ import annotations
 
 import asyncio
 from types import SimpleNamespace
+from unittest.mock import AsyncMock
 from uuid import UUID
 
 import pytest
 
-from app.modules.agent.domain.value_objects import AgentRunStatus
+from app.modules.agent.domain.value_objects import AgentRunStatus, ConversationStatus
 from app.modules.agent.infrastructure.harnesses.registry import HarnessRegistry
+from app.modules.agent.services import agent_runner_service as runner_module
 from app.modules.agent.services.agent_runner_service import (
     AgentRunnerService,
     _finalize_safely,
     _rejected_run_error_message,
 )
+from app.modules.test_support.fakes import FakeUnitOfWork
 
 
 def test_rejected_run_error_message_uses_structured_capacity_data():
@@ -52,20 +55,74 @@ class _FailingUowFactory:
 
 
 @pytest.mark.asyncio
-async def test_finish_agent_run_swallows_db_errors() -> None:
-    """Finalizing a run must never crash the worker, even if the DB is down."""
+async def test_finish_agent_run_rethrows_db_errors_for_boundary_retry() -> None:
+    """Infrastructure failure must reach the finalization process boundary."""
     service = AgentRunnerService(
         uow_factory=_FailingUowFactory(),
         harness_registry=HarnessRegistry({}),
     )
 
-    # Should not raise.
-    await service._finish_agent_run(
-        conversation_id=UUID("00000000-0000-0000-0000-000000000001"),
-        agent_run_id=UUID("00000000-0000-0000-0000-000000000002"),
-        status=AgentRunStatus.FAILED,
-        error="Something went wrong",
+    with pytest.raises(RuntimeError, match="db connection lost"):
+        await service._finish_agent_run(
+            conversation_id=UUID("00000000-0000-0000-0000-000000000001"),
+            agent_run_id=UUID("00000000-0000-0000-0000-000000000002"),
+            status=AgentRunStatus.FAILED,
+            error="Something went wrong",
+        )
+
+
+@pytest.mark.asyncio
+async def test_finish_agent_run_uses_committed_terminal_state_and_collects_event(
+    monkeypatch,
+) -> None:
+    """Completion publication must reflect the state won by the DB transition."""
+    uow = FakeUnitOfWork()
+
+    class _Factory:
+        def __call__(self):
+            return uow
+
+    finish_result = SimpleNamespace(
+        updated=True,
+        status=AgentRunStatus.STOPPED,
+        conversation_status=ConversationStatus.STOPPED,
     )
+    repository = SimpleNamespace(finish_agent_run=AsyncMock(return_value=finish_result))
+    monkeypatch.setattr(
+        runner_module, "ConversationRepository", lambda _uow: repository
+    )
+    publish = AsyncMock()
+    monkeypatch.setattr(runner_module, "publish_conversation_event", publish)
+
+    service = AgentRunnerService(
+        uow_factory=_Factory(),
+        harness_registry=HarnessRegistry({}),
+    )
+    publish_usage = AsyncMock()
+    monkeypatch.setattr(service, "_publish_usage_event", publish_usage)
+    conversation_id = UUID("00000000-0000-0000-0000-000000000101")
+    run_id = UUID("00000000-0000-0000-0000-000000000102")
+
+    await service._finish_agent_run(
+        conversation_id=conversation_id,
+        agent_run_id=run_id,
+        status=AgentRunStatus.FAILED,
+        conversation_status=ConversationStatus.FAILED,
+        error="stale pre-transition error",
+        output_data={"partial": True},
+    )
+
+    assert uow.committed is True
+    assert len(uow.collected_events) == 1
+    event = uow.collected_events[0]
+    assert event.status is AgentRunStatus.STOPPED
+    assert event.data == {
+        "output_data": {"partial": True},
+        "conversation_status": "STOPPED",
+    }
+    assert publish.await_count == 1
+    assert publish.await_args.args[1]["type"] == "completed"
+    publish_usage.assert_awaited_once()
 
 
 @pytest.mark.asyncio

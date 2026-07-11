@@ -15,4 +15,3 @@ export type FileChildSchema = {
     path: string;
     size_bytes?: (number | null);
 };
-

@@ -71,7 +71,7 @@ from app.modules.pod.domain.visibility import (
 )
 from app.modules.pod.infrastructure.models.pod_models import Pod, PodMember
 from app.modules.schedule.infrastructure.models.schedule import Schedule
-from app.modules.workflow.infrastructure.models import FlowModel
+from app.modules.workflow.infrastructure.models import WorkflowModel
 
 
 SYSTEM_ORG_ROLES = {"ORG_MEMBER", "ORG_EDITOR", "ORG_OWNER"}
@@ -319,7 +319,7 @@ class AuthorizationDataService:
         elif resource_type == ResourceType.DATASTORE_TABLE:
             stmt = select(DatastoreTable.user_id).where(DatastoreTable.id == resource_id)
         elif resource_type == ResourceType.WORKFLOW:
-            stmt = select(FlowModel.user_id).where(FlowModel.id == resource_id)
+            stmt = select(WorkflowModel.user_id).where(WorkflowModel.id == resource_id)
         elif resource_type == ResourceType.SCHEDULE:
             stmt = select(Schedule.user_id).where(Schedule.id == resource_id)
         else:
@@ -1416,11 +1416,11 @@ class Authorizer:
                 AppModel.visibility,
             ),
             ResourceType.WORKFLOW: (
-                FlowModel,
-                FlowModel.id,
-                FlowModel.pod_id,
-                FlowModel.user_id,
-                FlowModel.visibility,
+                WorkflowModel,
+                WorkflowModel.id,
+                WorkflowModel.pod_id,
+                WorkflowModel.user_id,
+                WorkflowModel.visibility,
             ),
             ResourceType.SCHEDULE: (
                 Schedule,

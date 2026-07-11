@@ -238,7 +238,7 @@ class ApplyImportRequest(BaseModel):
 
 
 class ImportStatusResponse(BaseModel):
-    """Status of a pod import job (pure Redis read)."""
+    """Status of a durable pod import job."""
 
     import_id: UUID
     pod_id: UUID
@@ -248,6 +248,9 @@ class ImportStatusResponse(BaseModel):
     progress: ExportProgressResponse = Field(default_factory=ExportProgressResponse)
     events_url: str
     error: str | None = None
+    cancel_requested_at: datetime | None = None
+    current_step: int | None = None
+    committed_steps: list[int] = Field(default_factory=list)
 
     @classmethod
     def from_state(cls, state: ImportState) -> "ImportStatusResponse":
@@ -262,6 +265,9 @@ class ImportStatusResponse(BaseModel):
                 f"/pods/{state.pod_id}/bundle/imports/{state.import_id}/events"
             ),
             error=state.error,
+            cancel_requested_at=state.cancel_requested_at,
+            current_step=state.current_step,
+            committed_steps=state.committed_steps,
         )
 
 

@@ -22,8 +22,8 @@ from app.core.infrastructure.db.base import UUIDAuditBase
 from app.modules.workflow.domain.nodes import WORKFLOW_NODE_ADAPTER
 
 
-class FlowModel(UUIDAuditBase):
-    """Flow definitions table."""
+class WorkflowModel(UUIDAuditBase):
+    """Workflow definitions table."""
 
     __tablename__ = "workflow_flows"
     __table_args__ = (
@@ -55,21 +55,21 @@ class FlowModel(UUIDAuditBase):
     is_active: Mapped[bool] = mapped_column(Boolean, default=True)
     visibility: Mapped[str] = mapped_column(String(30), default="POD", nullable=False)
 
-    runs: Mapped[list["FlowRunModel"]] = relationship(
-        "FlowRunModel", back_populates="flow", cascade="all, delete-orphan"
+    runs: Mapped[list["WorkflowRunModel"]] = relationship(
+        "WorkflowRunModel", back_populates="flow", cascade="all, delete-orphan"
     )
 
     def __str__(self) -> str:
         return self.name or str(self.id)
 
     def to_entity(self):
-        from app.modules.workflow.domain.flow import FlowEntity
+        from app.modules.workflow.domain.workflow import WorkflowEntity
         from app.modules.workflow.domain.graph import WorkflowEdge
-        from app.modules.workflow.domain.start import FlowStart
+        from app.modules.workflow.domain.start import WorkflowStart
 
         nodes = [WORKFLOW_NODE_ADAPTER.validate_python(n) for n in self.nodes]
         edges = [WorkflowEdge(**e) for e in self.edges]
-        return FlowEntity(
+        return WorkflowEntity(
             id=self.id,
             pod_id=self.pod_id,
             user_id=self.user_id,
@@ -79,7 +79,7 @@ class FlowModel(UUIDAuditBase):
             nodes=nodes,
             edges=edges,
             entry_node_id=self.entry_node_id,
-            start=FlowStart(**self.start) if self.start else None,
+            start=WorkflowStart(**self.start) if self.start else None,
             mode=self.mode,
             is_active=self.is_active,
             visibility=self.visibility,
@@ -88,8 +88,8 @@ class FlowModel(UUIDAuditBase):
         )
 
 
-class FlowRunModel(UUIDAuditBase):
-    """Flow execution instances table.
+class WorkflowRunModel(UUIDAuditBase):
+    """Workflow execution instances table.
 
     External wait refs live exclusively on workflow_run_waits — there are no
     waiting_* columns here.
@@ -138,13 +138,13 @@ class FlowRunModel(UUIDAuditBase):
     started_at: Mapped[datetime | None] = mapped_column(nullable=True)
     completed_at: Mapped[datetime | None] = mapped_column(nullable=True)
 
-    flow: Mapped["FlowModel"] = relationship("FlowModel", back_populates="runs")
+    flow: Mapped["WorkflowModel"] = relationship("WorkflowModel", back_populates="runs")
 
     def to_entity(self):
         from app.modules.workflow.domain.context import RunContext
         from app.modules.workflow.domain.run import (
-            FlowRunEntity,
-            FlowRunStatus,
+            WorkflowRunEntity,
+            WorkflowRunStatus,
             LoopFrame,
             StepRecord,
         )
@@ -157,7 +157,7 @@ class FlowRunModel(UUIDAuditBase):
             if self.execution_stack
             else []
         )
-        return FlowRunEntity(
+        return WorkflowRunEntity(
             id=self.id,
             created_at=self.created_at,
             updated_at=self.updated_at,
@@ -167,7 +167,7 @@ class FlowRunModel(UUIDAuditBase):
             start_type=self.start_type,
             schedule_event_id=self.schedule_event_id,
             start_payload=self.start_payload or {},
-            status=FlowRunStatus(self.status),
+            status=WorkflowRunStatus(self.status),
             current_node_id=self.current_node_id,
             execution_context=RunContext.model_validate(self.execution_context or {}),
             execution_stack=execution_stack,

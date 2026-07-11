@@ -20,6 +20,7 @@ from __future__ import annotations
 
 import mimetypes
 
+from app.core.file_types import sniff_image_mime
 from app.modules.agent.tools.context import BaseAgentContext
 from app.modules.agent.tools.pod.pod_data_access import pod_services
 
@@ -34,26 +35,6 @@ def is_datastore_path(path: str) -> bool:
     if not candidate.startswith("/"):
         return False
     return candidate != "/workspace" and not candidate.startswith("/workspace/")
-
-
-def sniff_image_mime(content: bytes) -> str | None:
-    """Best-effort image mime from magic bytes, for files with no usable extension.
-
-    Used only as a fallback when ``mimetypes.guess_type`` yields nothing (e.g. a
-    sandbox screenshot saved without an extension). Never used to route between
-    stores.
-    """
-    if content.startswith(b"\x89PNG\r\n\x1a\n"):
-        return "image/png"
-    if content.startswith(b"\xff\xd8\xff"):
-        return "image/jpeg"
-    if content.startswith(b"GIF87a") or content.startswith(b"GIF89a"):
-        return "image/gif"
-    if content.startswith(b"RIFF") and content[8:12] == b"WEBP":
-        return "image/webp"
-    if content.startswith(b"BM"):
-        return "image/bmp"
-    return None
 
 
 async def read_pod_file_bytes(

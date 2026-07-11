@@ -27,4 +27,3 @@ export type SurfaceCreateRequest = {
     name?: (string | null);
     platform: SurfacePlatform;
 };
-

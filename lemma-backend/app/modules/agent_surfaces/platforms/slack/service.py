@@ -7,7 +7,7 @@ import httpx
 from pydantic_ai.tools import RunContext
 from slack_sdk.errors import SlackApiError
 
-from app.modules.agent.tools.context import ConversationContext
+from app.modules.agent.contracts import ConversationContext
 from app.modules.agent_surfaces.domain.entities import ParsedInboundSurfaceEvent
 from app.modules.agent_surfaces.domain.models import (
     OTHER_ANSWER_SUFFIX as _OTHER_SUFFIX,

@@ -24,4 +24,3 @@ export type WebSearchResponse = {
      */
     success: boolean;
 };
-

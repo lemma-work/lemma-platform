@@ -86,43 +86,6 @@
         "title": "AccountCreateSchema",
         "type": "object"
       },
-      "AccountCredentialsResponseSchema": {
-        "description": "Schema for account credentials response.",
-        "properties": {
-          "data": {
-            "anyOf": [
-              {
-                "$ref": "#/components/schemas/OauthCredentialsResponseSchema"
-              },
-              {
-                "$ref": "#/components/schemas/ApiKeyCredentialsResponseSchema"
-              }
-            ],
-            "title": "Data"
-          },
-          "type": {
-            "$ref": "#/components/schemas/CredentialTypes",
-            "default": "oauth2"
-          },
-          "user_data": {
-            "anyOf": [
-              {
-                "additionalProperties": true,
-                "type": "object"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "User Data"
-          }
-        },
-        "required": [
-          "data"
-        ],
-        "title": "AccountCredentialsResponseSchema",
-        "type": "object"
-      },
       "AccountListResponseSchema": {
         "description": "Schema for account list response.",
         "properties": {
@@ -245,6 +208,17 @@
               }
             ],
             "title": "Preferences"
+          },
+          "provider": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Provider"
           },
           "provider_account_id": {
             "anyOf": [
@@ -976,7 +950,7 @@
         "type": "string"
       },
       "AgentRuntimeConfig": {
-        "description": "Agent runtime selector using a profile plus optional catalog model.",
+        "description": "Select an agent runtime profile and optional catalog model.",
         "properties": {
           "model_name": {
             "anyOf": [
@@ -1374,9 +1348,30 @@
             "title": "Pod Id",
             "type": "string"
           },
+          "reach": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/SurfaceReach"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
           "status": {
             "$ref": "#/components/schemas/AgentSurfaceStatus",
             "default": "ACTIVE"
+          },
+          "surface_identity_email": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Surface Identity Email"
           },
           "surface_identity_id": {
             "anyOf": [
@@ -1454,37 +1449,13 @@
         "title": "AgentToolset",
         "type": "string"
       },
-      "ApiKeyCredentialsResponseSchema": {
-        "description": "Schema for API key credentials response.",
-        "properties": {
-          "api_key": {
-            "title": "Api Key",
-            "type": "string"
-          },
-          "api_secret": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Api Secret"
-          }
-        },
-        "required": [
-          "api_key"
-        ],
-        "title": "ApiKeyCredentialsResponseSchema",
-        "type": "object"
-      },
       "AppBundleUploadRequest": {
         "properties": {
           "dist_archive": {
             "anyOf": [
               {
                 "contentMediaType": "application/octet-stream",
+                "format": "binary",
                 "type": "string"
               },
               {
@@ -1497,6 +1468,7 @@
             "anyOf": [
               {
                 "contentMediaType": "application/octet-stream",
+                "format": "binary",
                 "type": "string"
               },
               {
@@ -1506,7 +1478,7 @@
             "title": "Source Archive"
           }
         },
-        "title": "Body_app.bundle.upload",
+        "title": "AppBundleUploadRequest",
         "type": "object"
       },
       "AppBundleUploadResponse": {
@@ -2078,6 +2050,85 @@
         "title": "AuthScheme",
         "type": "string"
       },
+      "AvailableSurface": {
+        "description": "One connectable surface platform. ``supported_credential_modes`` is the\nsingle source of truth for how it can be set up: ``[CUSTOM]`` means an account\nmust be connected; ``[CUSTOM, SYSTEM]`` means a Lemma-managed bot can also run\nwith no account. The frontend derives ``account_needed = SYSTEM not in modes``\nand ``system_bot_available = SYSTEM in modes``.",
+        "properties": {
+          "connect": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/SurfaceConnectDescriptor"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "connector_available": {
+            "default": true,
+            "title": "Connector Available",
+            "type": "boolean"
+          },
+          "connector_id": {
+            "title": "Connector Id",
+            "type": "string"
+          },
+          "description": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Description"
+          },
+          "icon": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Icon"
+          },
+          "platform": {
+            "$ref": "#/components/schemas/SurfacePlatform"
+          },
+          "provider": {
+            "title": "Provider",
+            "type": "string"
+          },
+          "supported_credential_modes": {
+            "items": {
+              "$ref": "#/components/schemas/SurfaceCredentialMode"
+            },
+            "title": "Supported Credential Modes",
+            "type": "array"
+          },
+          "title": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Title"
+          }
+        },
+        "required": [
+          "platform",
+          "connector_id",
+          "provider",
+          "supported_credential_modes"
+        ],
+        "title": "AvailableSurface",
+        "type": "object"
+      },
       "AvailableSurfaceChannelResponse": {
         "description": "A channel/group the surface bot can be configured to respond in.",
         "properties": {
@@ -2125,6 +2176,19 @@
           }
         },
         "title": "AvailableSurfaceChannelsResponse",
+        "type": "object"
+      },
+      "AvailableSurfacesResponse": {
+        "properties": {
+          "surfaces": {
+            "items": {
+              "$ref": "#/components/schemas/AvailableSurface"
+            },
+            "title": "Surfaces",
+            "type": "array"
+          }
+        },
+        "title": "AvailableSurfacesResponse",
         "type": "object"
       },
       "BulkCreateRecordsRequest": {
@@ -3884,16 +3948,7 @@
         "title": "CreateUserDaemonRuntimeProfileRequest",
         "type": "object"
       },
-      "CredentialTypes": {
-        "description": "Credential types.",
-        "enum": [
-          "oauth2",
-          "api_key"
-        ],
-        "title": "CredentialTypes",
-        "type": "string"
-      },
-      "DataStoreFlowStartInput": {
+      "DataStoreWorkflowStartConfigInput": {
         "properties": {
           "operations": {
             "description": "Datastore operations that should trigger this flow. One or more of INSERT, UPDATE, DELETE.",
@@ -3912,10 +3967,10 @@
         "required": [
           "table_name"
         ],
-        "title": "DataStoreFlowStartInput",
+        "title": "DataStoreWorkflowStartConfigInput",
         "type": "object"
       },
-      "DataStoreFlowStartOutput": {
+      "DataStoreWorkflowStartConfigOutput": {
         "properties": {
           "operations": {
             "description": "Datastore operations that should trigger this flow. One or more of INSERT, UPDATE, DELETE.",
@@ -3934,13 +3989,13 @@
         "required": [
           "table_name"
         ],
-        "title": "DataStoreFlowStartOutput",
+        "title": "DataStoreWorkflowStartConfigOutput",
         "type": "object"
       },
       "DataStoreWorkflowStartInput": {
         "properties": {
           "config": {
-            "$ref": "#/components/schemas/DataStoreFlowStartInput",
+            "$ref": "#/components/schemas/DataStoreWorkflowStartConfigInput",
             "description": "Datastore trigger configuration for this workflow."
           },
           "type": {
@@ -3960,7 +4015,7 @@
       "DataStoreWorkflowStartOutput": {
         "properties": {
           "config": {
-            "$ref": "#/components/schemas/DataStoreFlowStartOutput",
+            "$ref": "#/components/schemas/DataStoreWorkflowStartConfigOutput",
             "description": "Datastore trigger configuration for this workflow."
           },
           "type": {
@@ -4015,6 +4070,7 @@
         "properties": {
           "data": {
             "contentMediaType": "application/octet-stream",
+            "format": "binary",
             "title": "Data",
             "type": "string"
           },
@@ -4026,12 +4082,10 @@
               {
                 "type": "null"
               }
-            ],
-            "title": "Description"
+            ]
           },
           "directory_path": {
             "default": "/",
-            "title": "Directory Path",
             "type": "string"
           },
           "name": {
@@ -4042,12 +4096,10 @@
               {
                 "type": "null"
               }
-            ],
-            "title": "Name"
+            ]
           },
           "search_enabled": {
             "default": true,
-            "title": "Search Enabled",
             "type": "boolean"
           },
           "visibility": {
@@ -4058,14 +4110,13 @@
               {
                 "type": "null"
               }
-            ],
-            "title": "Visibility"
+            ]
           }
         },
         "required": [
           "data"
         ],
-        "title": "Body_file.upload",
+        "title": "DatastoreFileUploadRequest",
         "type": "object"
       },
       "DatastoreOperation": {
@@ -4435,6 +4486,18 @@
           "message": {
             "title": "Message",
             "type": "string"
+          },
+          "request_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Request Id"
           }
         },
         "required": [
@@ -4444,7 +4507,7 @@
         "title": "ErrorResponse",
         "type": "object"
       },
-      "EventFlowStartInput": {
+      "EventWorkflowStartConfigInput": {
         "properties": {
           "connector_id": {
             "description": "Connector connector identifier.",
@@ -4466,10 +4529,10 @@
           "connector_trigger_id",
           "connector_id"
         ],
-        "title": "EventFlowStartInput",
+        "title": "EventWorkflowStartConfigInput",
         "type": "object"
       },
-      "EventFlowStartOutput": {
+      "EventWorkflowStartConfigOutput": {
         "properties": {
           "connector_id": {
             "description": "Connector connector identifier.",
@@ -4491,13 +4554,13 @@
           "connector_trigger_id",
           "connector_id"
         ],
-        "title": "EventFlowStartOutput",
+        "title": "EventWorkflowStartConfigOutput",
         "type": "object"
       },
       "EventWorkflowStartInput": {
         "properties": {
           "config": {
-            "$ref": "#/components/schemas/EventFlowStartInput",
+            "$ref": "#/components/schemas/EventWorkflowStartConfigInput",
             "description": "Connector trigger configuration for this workflow."
           },
           "type": {
@@ -4517,7 +4580,7 @@
       "EventWorkflowStartOutput": {
         "properties": {
           "config": {
-            "$ref": "#/components/schemas/EventFlowStartOutput",
+            "$ref": "#/components/schemas/EventWorkflowStartConfigOutput",
             "description": "Connector trigger configuration for this workflow."
           },
           "type": {
@@ -5370,297 +5433,6 @@
           "expires_at"
         ],
         "title": "FileUrlResponse",
-        "type": "object"
-      },
-      "FlowDetailResponse": {
-        "properties": {
-          "allowed_actions": {
-            "items": {
-              "type": "string"
-            },
-            "title": "Allowed Actions",
-            "type": "array"
-          },
-          "created_at": {
-            "anyOf": [
-              {
-                "format": "date-time",
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Created At"
-          },
-          "description": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Description"
-          },
-          "edges": {
-            "items": {
-              "$ref": "#/components/schemas/WorkflowEdge"
-            },
-            "title": "Edges",
-            "type": "array"
-          },
-          "icon_url": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Icon Url"
-          },
-          "id": {
-            "format": "uuid",
-            "title": "Id",
-            "type": "string"
-          },
-          "is_active": {
-            "default": true,
-            "title": "Is Active",
-            "type": "boolean"
-          },
-          "mode": {
-            "$ref": "#/components/schemas/WorkflowMode",
-            "default": "GLOBAL"
-          },
-          "name": {
-            "title": "Name",
-            "type": "string"
-          },
-          "nodes": {
-            "items": {
-              "discriminator": {
-                "mapping": {
-                  "AGENT": "#/components/schemas/AgentNodeResponse",
-                  "DECISION": "#/components/schemas/DecisionNodeResponse",
-                  "END": "#/components/schemas/EndNodeResponse",
-                  "FORM": "#/components/schemas/FormNodeResponse",
-                  "FUNCTION": "#/components/schemas/FunctionNodeResponse",
-                  "LOOP": "#/components/schemas/LoopNodeResponse",
-                  "WAIT_UNTIL": "#/components/schemas/WaitUntilNodeResponse"
-                },
-                "propertyName": "type"
-              },
-              "oneOf": [
-                {
-                  "$ref": "#/components/schemas/FormNodeResponse"
-                },
-                {
-                  "$ref": "#/components/schemas/AgentNodeResponse"
-                },
-                {
-                  "$ref": "#/components/schemas/FunctionNodeResponse"
-                },
-                {
-                  "$ref": "#/components/schemas/DecisionNodeResponse"
-                },
-                {
-                  "$ref": "#/components/schemas/LoopNodeResponse"
-                },
-                {
-                  "$ref": "#/components/schemas/WaitUntilNodeResponse"
-                },
-                {
-                  "$ref": "#/components/schemas/EndNodeResponse"
-                }
-              ]
-            },
-            "title": "Nodes",
-            "type": "array"
-          },
-          "pod_id": {
-            "format": "uuid",
-            "title": "Pod Id",
-            "type": "string"
-          },
-          "start": {
-            "anyOf": [
-              {
-                "discriminator": {
-                  "mapping": {
-                    "DATASTORE_EVENT": "#/components/schemas/DataStoreWorkflowStartOutput",
-                    "EVENT": "#/components/schemas/EventWorkflowStartOutput",
-                    "MANUAL": "#/components/schemas/ManualWorkflowStartOutput",
-                    "SCHEDULED": "#/components/schemas/ScheduledWorkflowStartOutput"
-                  },
-                  "propertyName": "type"
-                },
-                "oneOf": [
-                  {
-                    "$ref": "#/components/schemas/ManualWorkflowStartOutput"
-                  },
-                  {
-                    "$ref": "#/components/schemas/ScheduledWorkflowStartOutput"
-                  },
-                  {
-                    "$ref": "#/components/schemas/EventWorkflowStartOutput"
-                  },
-                  {
-                    "$ref": "#/components/schemas/DataStoreWorkflowStartOutput"
-                  }
-                ]
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Start"
-          },
-          "updated_at": {
-            "anyOf": [
-              {
-                "format": "date-time",
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Updated At"
-          },
-          "visibility": {
-            "default": "POD",
-            "title": "Visibility",
-            "type": "string"
-          }
-        },
-        "required": [
-          "id",
-          "name",
-          "pod_id"
-        ],
-        "title": "FlowDetailResponse",
-        "type": "object"
-      },
-      "FlowRunStatus": {
-        "description": "Status of a flow run.\n\nPENDING exists only in memory before the first advance; persisted runs\nare RUNNING, WAITING, or terminal. WAITING is reserved for human form\nwaits. Runs suspended on platform work such as an agent, function job, or\ntimer remain RUNNING; the active wait row records the exact wait_type.",
-        "enum": [
-          "PENDING",
-          "RUNNING",
-          "WAITING",
-          "COMPLETED",
-          "FAILED",
-          "CANCELLED"
-        ],
-        "title": "FlowRunStatus",
-        "type": "string"
-      },
-      "FlowSummaryResponse": {
-        "description": "Lean workflow shape for list responses.\n\nOmits the full graph (`nodes`/`edges`/`start`) \u2014 fetch those from\n`workflow.get`. Carries cheap derived `node_count`/`node_types` so list\nviews can show step counts and participant badges without the graph.",
-        "properties": {
-          "allowed_actions": {
-            "items": {
-              "type": "string"
-            },
-            "title": "Allowed Actions",
-            "type": "array"
-          },
-          "created_at": {
-            "anyOf": [
-              {
-                "format": "date-time",
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Created At"
-          },
-          "description": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Description"
-          },
-          "icon_url": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Icon Url"
-          },
-          "id": {
-            "format": "uuid",
-            "title": "Id",
-            "type": "string"
-          },
-          "is_active": {
-            "default": true,
-            "title": "Is Active",
-            "type": "boolean"
-          },
-          "mode": {
-            "$ref": "#/components/schemas/WorkflowMode",
-            "default": "GLOBAL"
-          },
-          "name": {
-            "title": "Name",
-            "type": "string"
-          },
-          "node_count": {
-            "default": 0,
-            "title": "Node Count",
-            "type": "integer"
-          },
-          "node_types": {
-            "items": {
-              "type": "string"
-            },
-            "title": "Node Types",
-            "type": "array"
-          },
-          "pod_id": {
-            "format": "uuid",
-            "title": "Pod Id",
-            "type": "string"
-          },
-          "updated_at": {
-            "anyOf": [
-              {
-                "format": "date-time",
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Updated At"
-          },
-          "visibility": {
-            "default": "POD",
-            "title": "Visibility",
-            "type": "string"
-          }
-        },
-        "required": [
-          "id",
-          "name",
-          "pod_id"
-        ],
-        "title": "FlowSummaryResponse",
         "type": "object"
       },
       "ForeignKeySpec": {
@@ -6818,6 +6590,7 @@
         "properties": {
           "file": {
             "contentMediaType": "application/octet-stream",
+            "format": "binary",
             "title": "File",
             "type": "string"
           }
@@ -6825,7 +6598,7 @@
         "required": [
           "file"
         ],
-        "title": "Body_icon.upload",
+        "title": "IconUploadRequest",
         "type": "object"
       },
       "IconUploadResponse": {
@@ -6984,16 +6757,48 @@
           "PLANNING",
           "AWAITING_CONFIRMATION",
           "APPLYING",
+          "CANCELLING",
           "COMPLETED",
           "FAILED",
-          "CANCELLED"
+          "CANCELLED",
+          "PARTIALLY_CANCELLED"
         ],
         "title": "ImportStatus",
         "type": "string"
       },
       "ImportStatusResponse": {
-        "description": "Status of a pod import job (pure Redis read).",
+        "description": "Status of a durable pod import job.",
         "properties": {
+          "cancel_requested_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Cancel Requested At"
+          },
+          "committed_steps": {
+            "items": {
+              "type": "integer"
+            },
+            "title": "Committed Steps",
+            "type": "array"
+          },
+          "current_step": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Current Step"
+          },
           "error": {
             "anyOf": [
               {
@@ -7592,47 +7397,6 @@
           "authorization_url"
         ],
         "title": "OAuth2DefaultsResponseSchema",
-        "type": "object"
-      },
-      "OauthCredentialsResponseSchema": {
-        "description": "Schema for OAuth credentials response.",
-        "properties": {
-          "access_token": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Access Token"
-          },
-          "connection_id": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Connection Id"
-          },
-          "expires_at": {
-            "anyOf": [
-              {
-                "format": "date-time",
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Expires At"
-          }
-        },
-        "title": "OauthCredentialsResponseSchema",
         "type": "object"
       },
       "OperationDetail": {
@@ -10312,6 +10076,177 @@
         "title": "ScheduleListResponse",
         "type": "object"
       },
+      "ScheduleRunListResponse": {
+        "properties": {
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/ScheduleRunResponse"
+            },
+            "title": "Items",
+            "type": "array"
+          },
+          "limit": {
+            "title": "Limit",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "items",
+          "limit"
+        ],
+        "title": "ScheduleRunListResponse",
+        "type": "object"
+      },
+      "ScheduleRunResponse": {
+        "properties": {
+          "attempts": {
+            "title": "Attempts",
+            "type": "integer"
+          },
+          "completed_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Completed At"
+          },
+          "created_at": {
+            "format": "date-time",
+            "title": "Created At",
+            "type": "string"
+          },
+          "error_code": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Error Code"
+          },
+          "error_type": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Error Type"
+          },
+          "id": {
+            "format": "uuid",
+            "title": "Id",
+            "type": "string"
+          },
+          "llm_output": {
+            "additionalProperties": true,
+            "title": "Llm Output",
+            "type": "object"
+          },
+          "metadata": {
+            "additionalProperties": true,
+            "title": "Metadata",
+            "type": "object"
+          },
+          "payload": {
+            "additionalProperties": true,
+            "title": "Payload",
+            "type": "object"
+          },
+          "schedule_id": {
+            "format": "uuid",
+            "title": "Schedule Id",
+            "type": "string"
+          },
+          "source_event_id": {
+            "title": "Source Event Id",
+            "type": "string"
+          },
+          "source_occurred_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Source Occurred At"
+          },
+          "started_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Started At"
+          },
+          "status": {
+            "$ref": "#/components/schemas/ScheduleRunStatus"
+          },
+          "target_kind": {
+            "title": "Target Kind",
+            "type": "string"
+          },
+          "target_run_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Target Run Id"
+          },
+          "updated_at": {
+            "format": "date-time",
+            "title": "Updated At",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "schedule_id",
+          "source_event_id",
+          "status",
+          "attempts",
+          "target_kind",
+          "payload",
+          "metadata",
+          "llm_output",
+          "created_at",
+          "updated_at"
+        ],
+        "title": "ScheduleRunResponse",
+        "type": "object"
+      },
+      "ScheduleRunStatus": {
+        "enum": [
+          "RECEIVED",
+          "PROCESSING",
+          "DISPATCHED",
+          "FILTERED",
+          "FAILED",
+          "DEAD_LETTERED"
+        ],
+        "title": "ScheduleRunStatus",
+        "type": "string"
+      },
       "ScheduleType": {
         "description": "Type of schedule source.",
         "enum": [
@@ -10322,44 +10257,44 @@
         "title": "ScheduleType",
         "type": "string"
       },
-      "ScheduledFlowStartInput": {
+      "ScheduledWorkflowStartConfigInput": {
         "properties": {
           "schedule_type": {
-            "$ref": "#/components/schemas/ScheduledFlowStartType",
+            "$ref": "#/components/schemas/ScheduledWorkflowStartConfigType",
             "description": "Time trigger mode for this workflow definition. Concrete schedule values are provided by pod schedules."
           }
         },
         "required": [
           "schedule_type"
         ],
-        "title": "ScheduledFlowStartInput",
+        "title": "ScheduledWorkflowStartConfigInput",
         "type": "object"
       },
-      "ScheduledFlowStartOutput": {
+      "ScheduledWorkflowStartConfigOutput": {
         "properties": {
           "schedule_type": {
-            "$ref": "#/components/schemas/ScheduledFlowStartType",
+            "$ref": "#/components/schemas/ScheduledWorkflowStartConfigType",
             "description": "Time trigger mode for this workflow definition. Concrete schedule values are provided by pod schedules."
           }
         },
         "required": [
           "schedule_type"
         ],
-        "title": "ScheduledFlowStartOutput",
+        "title": "ScheduledWorkflowStartConfigOutput",
         "type": "object"
       },
-      "ScheduledFlowStartType": {
+      "ScheduledWorkflowStartConfigType": {
         "enum": [
           "ONCE",
           "CRON"
         ],
-        "title": "ScheduledFlowStartType",
+        "title": "ScheduledWorkflowStartConfigType",
         "type": "string"
       },
       "ScheduledWorkflowStartInput": {
         "properties": {
           "config": {
-            "$ref": "#/components/schemas/ScheduledFlowStartInput",
+            "$ref": "#/components/schemas/ScheduledWorkflowStartConfigInput",
             "description": "Scheduled workflow definition payload."
           },
           "type": {
@@ -10379,7 +10314,7 @@
       "ScheduledWorkflowStartOutput": {
         "properties": {
           "config": {
-            "$ref": "#/components/schemas/ScheduledFlowStartOutput",
+            "$ref": "#/components/schemas/ScheduledWorkflowStartConfigOutput",
             "description": "Scheduled workflow definition payload."
           },
           "type": {
@@ -10716,6 +10651,53 @@
         "title": "SurfaceConfigResponse",
         "type": "object"
       },
+      "SurfaceConnectDescriptor": {
+        "description": "What the frontend needs to render the \"connect an account\" (CUSTOM) flow\nfor a surface's connector \u2014 a slim projection of the connector's LEMMA\ncapability. ``system_oauth_available`` means the platform supplies the OAuth\napp so the user connects without registering their own (distinct from whether\na fully-managed SYSTEM bot exists \u2014 that's ``supported_credential_modes``).",
+        "properties": {
+          "auth_config_schema": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Auth Config Schema"
+          },
+          "auth_scheme": {
+            "$ref": "#/components/schemas/AuthScheme"
+          },
+          "credential_schema": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Credential Schema"
+          },
+          "supports_org_custom_oauth": {
+            "default": false,
+            "title": "Supports Org Custom Oauth",
+            "type": "boolean"
+          },
+          "system_oauth_available": {
+            "default": false,
+            "title": "System Oauth Available",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "auth_scheme"
+        ],
+        "title": "SurfaceConnectDescriptor",
+        "type": "object"
+      },
       "SurfaceConnectorSetupGuide": {
         "properties": {
           "docs_path": {
@@ -10930,6 +10912,35 @@
           "docs_path"
         ],
         "title": "SurfacePlatformSetupGuide",
+        "type": "object"
+      },
+      "SurfaceReach": {
+        "description": "How a human reaches this surface.\n\n``handle`` is the platform-native name a person types/sees to message the\nbot (Slack/Teams bot display name, Telegram ``@username``, WhatsApp phone,\nor the account/email for email surfaces). ``email`` is the surface's email\naddress, when it has one.",
+        "properties": {
+          "email": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Email"
+          },
+          "handle": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Handle"
+          }
+        },
+        "title": "SurfaceReach",
         "type": "object"
       },
       "SurfaceSendPolicyConfig": {
@@ -11965,6 +11976,10 @@
             "title": "Reset At",
             "type": "string"
           },
+          "scope": {
+            "title": "Scope",
+            "type": "string"
+          },
           "used_usd": {
             "title": "Used Usd",
             "type": "number"
@@ -11976,6 +11991,7 @@
           }
         },
         "required": [
+          "scope",
           "used_usd",
           "reserved_usd",
           "allowed",
@@ -12011,6 +12027,9 @@
             "title": "User Id",
             "type": "string"
           },
+          "user_monthly": {
+            "$ref": "#/components/schemas/UsageLimitScopeResponse"
+          },
           "user_weekly": {
             "$ref": "#/components/schemas/UsageLimitScopeResponse"
           }
@@ -12020,6 +12039,7 @@
           "user_id",
           "org_monthly",
           "user_weekly",
+          "user_monthly",
           "allowed"
         ],
         "title": "UsageLimitsResponse",
@@ -12799,6 +12819,18 @@
       },
       "VariableSpecResponse": {
         "properties": {
+          "connector": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "For a connector account variable, the connector the account must belong to (e.g. 'slack'), so the importer can connect the right connector. Null for non-connector variables.",
+            "title": "Connector"
+          },
           "default": {
             "anyOf": [
               {
@@ -12829,7 +12861,7 @@
             "title": "Name",
             "type": "string"
           },
-          "platform": {
+          "provider": {
             "anyOf": [
               {
                 "type": "string"
@@ -12838,8 +12870,8 @@
                 "type": "null"
               }
             ],
-            "description": "For a connector account variable, the platform the account must belong to (e.g. 'slack'), so the importer can connect the right connector. Null for non-connector variables.",
-            "title": "Platform"
+            "description": "For a connector account variable, the auth provider backing the connector ('LEMMA' or 'COMPOSIO'), so the importer connects/selects an account through the right provider. Null for non-connector variables.",
+            "title": "Provider"
           },
           "required": {
             "default": false,
@@ -13250,6 +13282,179 @@
         "title": "WorkflowCreateRequest",
         "type": "object"
       },
+      "WorkflowDetailResponse": {
+        "properties": {
+          "allowed_actions": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Allowed Actions",
+            "type": "array"
+          },
+          "created_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Created At"
+          },
+          "description": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Description"
+          },
+          "edges": {
+            "items": {
+              "$ref": "#/components/schemas/WorkflowEdge"
+            },
+            "title": "Edges",
+            "type": "array"
+          },
+          "icon_url": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Icon Url"
+          },
+          "id": {
+            "format": "uuid",
+            "title": "Id",
+            "type": "string"
+          },
+          "is_active": {
+            "default": true,
+            "title": "Is Active",
+            "type": "boolean"
+          },
+          "mode": {
+            "$ref": "#/components/schemas/WorkflowMode",
+            "default": "GLOBAL"
+          },
+          "name": {
+            "title": "Name",
+            "type": "string"
+          },
+          "nodes": {
+            "items": {
+              "discriminator": {
+                "mapping": {
+                  "AGENT": "#/components/schemas/AgentNodeResponse",
+                  "DECISION": "#/components/schemas/DecisionNodeResponse",
+                  "END": "#/components/schemas/EndNodeResponse",
+                  "FORM": "#/components/schemas/FormNodeResponse",
+                  "FUNCTION": "#/components/schemas/FunctionNodeResponse",
+                  "LOOP": "#/components/schemas/LoopNodeResponse",
+                  "WAIT_UNTIL": "#/components/schemas/WaitUntilNodeResponse"
+                },
+                "propertyName": "type"
+              },
+              "oneOf": [
+                {
+                  "$ref": "#/components/schemas/FormNodeResponse"
+                },
+                {
+                  "$ref": "#/components/schemas/AgentNodeResponse"
+                },
+                {
+                  "$ref": "#/components/schemas/FunctionNodeResponse"
+                },
+                {
+                  "$ref": "#/components/schemas/DecisionNodeResponse"
+                },
+                {
+                  "$ref": "#/components/schemas/LoopNodeResponse"
+                },
+                {
+                  "$ref": "#/components/schemas/WaitUntilNodeResponse"
+                },
+                {
+                  "$ref": "#/components/schemas/EndNodeResponse"
+                }
+              ]
+            },
+            "title": "Nodes",
+            "type": "array"
+          },
+          "pod_id": {
+            "format": "uuid",
+            "title": "Pod Id",
+            "type": "string"
+          },
+          "start": {
+            "anyOf": [
+              {
+                "discriminator": {
+                  "mapping": {
+                    "DATASTORE_EVENT": "#/components/schemas/DataStoreWorkflowStartOutput",
+                    "EVENT": "#/components/schemas/EventWorkflowStartOutput",
+                    "MANUAL": "#/components/schemas/ManualWorkflowStartOutput",
+                    "SCHEDULED": "#/components/schemas/ScheduledWorkflowStartOutput"
+                  },
+                  "propertyName": "type"
+                },
+                "oneOf": [
+                  {
+                    "$ref": "#/components/schemas/ManualWorkflowStartOutput"
+                  },
+                  {
+                    "$ref": "#/components/schemas/ScheduledWorkflowStartOutput"
+                  },
+                  {
+                    "$ref": "#/components/schemas/EventWorkflowStartOutput"
+                  },
+                  {
+                    "$ref": "#/components/schemas/DataStoreWorkflowStartOutput"
+                  }
+                ]
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Start"
+          },
+          "updated_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Updated At"
+          },
+          "visibility": {
+            "default": "POD",
+            "title": "Visibility",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "name",
+          "pod_id"
+        ],
+        "title": "WorkflowDetailResponse",
+        "type": "object"
+      },
       "WorkflowEdge": {
         "description": "An edge in the workflow graph.",
         "properties": {
@@ -13417,7 +13622,7 @@
         "properties": {
           "items": {
             "items": {
-              "$ref": "#/components/schemas/FlowSummaryResponse"
+              "$ref": "#/components/schemas/WorkflowSummaryResponse"
             },
             "title": "Items",
             "type": "array"
@@ -13583,11 +13788,6 @@
             ],
             "title": "Failed Node Id"
           },
-          "flow_id": {
-            "format": "uuid",
-            "title": "Flow Id",
-            "type": "string"
-          },
           "id": {
             "format": "uuid",
             "title": "Id",
@@ -13627,7 +13827,7 @@
             "title": "Started At"
           },
           "status": {
-            "$ref": "#/components/schemas/FlowRunStatus",
+            "$ref": "#/components/schemas/WorkflowRunStatus",
             "default": "PENDING"
           },
           "step_history": {
@@ -13653,16 +13853,34 @@
             "format": "uuid",
             "title": "User Id",
             "type": "string"
+          },
+          "workflow_id": {
+            "format": "uuid",
+            "title": "Workflow Id",
+            "type": "string"
           }
         },
         "required": [
           "id",
-          "flow_id",
+          "workflow_id",
           "pod_id",
           "user_id"
         ],
         "title": "WorkflowRunResponse",
         "type": "object"
+      },
+      "WorkflowRunStatus": {
+        "description": "Status of a flow run.\n\nPENDING exists only in memory before the first advance; persisted runs\nare RUNNING, WAITING, or terminal. WAITING is reserved for human form\nwaits. Runs suspended on platform work such as an agent, function job, or\ntimer remain RUNNING; the active wait row records the exact wait_type.",
+        "enum": [
+          "PENDING",
+          "RUNNING",
+          "WAITING",
+          "COMPLETED",
+          "FAILED",
+          "CANCELLED"
+        ],
+        "title": "WorkflowRunStatus",
+        "type": "string"
       },
       "WorkflowRunSummaryResponse": {
         "properties": {
@@ -13723,11 +13941,6 @@
             ],
             "title": "Failed Node Id"
           },
-          "flow_id": {
-            "format": "uuid",
-            "title": "Flow Id",
-            "type": "string"
-          },
           "id": {
             "format": "uuid",
             "title": "Id",
@@ -13767,7 +13980,7 @@
             "title": "Started At"
           },
           "status": {
-            "$ref": "#/components/schemas/FlowRunStatus",
+            "$ref": "#/components/schemas/WorkflowRunStatus",
             "default": "PENDING"
           },
           "updated_at": {
@@ -13786,11 +13999,16 @@
             "format": "uuid",
             "title": "User Id",
             "type": "string"
+          },
+          "workflow_id": {
+            "format": "uuid",
+            "title": "Workflow Id",
+            "type": "string"
           }
         },
         "required": [
           "id",
-          "flow_id",
+          "workflow_id",
           "pod_id",
           "user_id"
         ],
@@ -13894,11 +14112,6 @@
             ],
             "title": "External Ref"
           },
-          "flow_id": {
-            "format": "uuid",
-            "title": "Flow Id",
-            "type": "string"
-          },
           "id": {
             "format": "uuid",
             "title": "Id",
@@ -13928,12 +14141,17 @@
           },
           "wait_type": {
             "$ref": "#/components/schemas/WorkflowRunWaitType"
+          },
+          "workflow_id": {
+            "format": "uuid",
+            "title": "Workflow Id",
+            "type": "string"
           }
         },
         "required": [
           "id",
           "run_id",
-          "flow_id",
+          "workflow_id",
           "pod_id",
           "node_id",
           "wait_type",
@@ -13961,6 +14179,111 @@
         ],
         "title": "WorkflowRunWaitType",
         "type": "string"
+      },
+      "WorkflowSummaryResponse": {
+        "description": "Lean workflow shape for list responses.\n\nOmits the full graph (`nodes`/`edges`/`start`) \u2014 fetch those from\n`workflow.get`. Carries cheap derived `node_count`/`node_types` so list\nviews can show step counts and participant badges without the graph.",
+        "properties": {
+          "allowed_actions": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Allowed Actions",
+            "type": "array"
+          },
+          "created_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Created At"
+          },
+          "description": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Description"
+          },
+          "icon_url": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Icon Url"
+          },
+          "id": {
+            "format": "uuid",
+            "title": "Id",
+            "type": "string"
+          },
+          "is_active": {
+            "default": true,
+            "title": "Is Active",
+            "type": "boolean"
+          },
+          "mode": {
+            "$ref": "#/components/schemas/WorkflowMode",
+            "default": "GLOBAL"
+          },
+          "name": {
+            "title": "Name",
+            "type": "string"
+          },
+          "node_count": {
+            "default": 0,
+            "title": "Node Count",
+            "type": "integer"
+          },
+          "node_types": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Node Types",
+            "type": "array"
+          },
+          "pod_id": {
+            "format": "uuid",
+            "title": "Pod Id",
+            "type": "string"
+          },
+          "updated_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Updated At"
+          },
+          "visibility": {
+            "default": "POD",
+            "title": "Visibility",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "name",
+          "pod_id"
+        ],
+        "title": "WorkflowSummaryResponse",
+        "type": "object"
       },
       "WorkflowUpdateRequest": {
         "properties": {
@@ -14224,20 +14547,19 @@
         "properties": {
           "data": {
             "contentMediaType": "application/octet-stream",
-            "title": "Data",
+            "format": "binary",
             "type": "string"
           },
           "images": {
             "default": [],
             "items": {
               "contentMediaType": "application/octet-stream",
+              "format": "binary",
               "type": "string"
             },
-            "title": "Images",
             "type": "array"
           },
           "path": {
-            "title": "Path",
             "type": "string"
           }
         },
@@ -14245,13 +14567,14 @@
           "data",
           "path"
         ],
-        "title": "Body_file.markdown.attach",
+        "title": "attach",
         "type": "object"
       },
       "fastapi___compat__v2__Body_pod__bundle__upload": {
         "properties": {
           "data": {
             "contentMediaType": "application/octet-stream",
+            "format": "binary",
             "title": "Data",
             "type": "string"
           }
@@ -14259,7 +14582,7 @@
         "required": [
           "data"
         ],
-        "title": "Body_pod.bundle.upload",
+        "title": "fastapi___compat__v2__Body_pod__bundle__upload",
         "type": "object"
       },
       "update": {
@@ -14268,13 +14591,13 @@
             "anyOf": [
               {
                 "contentMediaType": "application/octet-stream",
+                "format": "binary",
                 "type": "string"
               },
               {
                 "type": "null"
               }
-            ],
-            "title": "Data"
+            ]
           },
           "description": {
             "anyOf": [
@@ -14284,8 +14607,7 @@
               {
                 "type": "null"
               }
-            ],
-            "title": "Description"
+            ]
           },
           "new_path": {
             "anyOf": [
@@ -14295,11 +14617,9 @@
               {
                 "type": "null"
               }
-            ],
-            "title": "New Path"
+            ]
           },
           "path": {
-            "title": "Path",
             "type": "string"
           },
           "search_enabled": {
@@ -14310,8 +14630,7 @@
               {
                 "type": "null"
               }
-            ],
-            "title": "Search Enabled"
+            ]
           },
           "visibility": {
             "anyOf": [
@@ -14321,14 +14640,13 @@
               {
                 "type": "null"
               }
-            ],
-            "title": "Visibility"
+            ]
           }
         },
         "required": [
           "path"
         ],
-        "title": "Body_file.update",
+        "title": "update",
         "type": "object"
       }
     }
@@ -14336,7 +14654,7 @@
   "info": {
     "description": "Authentication API with JWT, user management, and OAuth support",
     "title": "Lemma Backend",
-    "version": "3.4.0"
+    "version": "4.0.1"
   },
   "openapi": "3.1.0",
   "paths": {
@@ -14695,16 +15013,6 @@
               }
             },
             "description": "Successful Response"
-          },
-          "422": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorResponse"
-                }
-              }
-            },
-            "description": "Validation Error"
           }
         },
         "summary": "Upload Icon",
@@ -16109,67 +16417,6 @@
           "kind": "query",
           "paginates": false,
           "resource": "connector.account",
-          "result": "entity",
-          "verb": "get"
-        }
-      }
-    },
-    "/organizations/{organization_id}/connectors/accounts/{account_id}/credentials": {
-      "get": {
-        "description": "Get the credentials for a specific account",
-        "operationId": "connector.account.credentials.get",
-        "parameters": [
-          {
-            "in": "path",
-            "name": "organization_id",
-            "required": true,
-            "schema": {
-              "format": "uuid",
-              "title": "Organization Id",
-              "type": "string"
-            }
-          },
-          {
-            "in": "path",
-            "name": "account_id",
-            "required": true,
-            "schema": {
-              "format": "uuid",
-              "title": "Account Id",
-              "type": "string"
-            }
-          }
-        ],
-        "responses": {
-          "200": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/AccountCredentialsResponseSchema"
-                }
-              }
-            },
-            "description": "Successful Response"
-          },
-          "422": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorResponse"
-                }
-              }
-            },
-            "description": "Validation Error"
-          }
-        },
-        "summary": "Get Credentials",
-        "tags": [
-          "Connectors"
-        ],
-        "x-lemma": {
-          "kind": "query",
-          "paginates": false,
-          "resource": "connector.account.credentials",
           "result": "entity",
           "verb": "get"
         }
@@ -18354,7 +18601,8 @@
                 "$ref": "#/components/schemas/AppBundleUploadRequest"
               }
             }
-          }
+          },
+          "required": false
         },
         "responses": {
           "200": {
@@ -18511,6 +18759,57 @@
           "resource": "app.source.archive",
           "result": "entity",
           "verb": "get"
+        }
+      }
+    },
+    "/pods/{pod_id}/available-surfaces": {
+      "get": {
+        "description": "The connectable-surface catalog: every surface platform with its connector,\nsupported credential modes, and the schema to connect an account. Platform-\nlevel (no surface need exist); the pod scopes authorization only.",
+        "operationId": "agent.surface.available",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "pod_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Pod Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AvailableSurfacesResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "List Available Surfaces",
+        "tags": [
+          "Agent Surfaces"
+        ],
+        "x-lemma": {
+          "kind": "query",
+          "paginates": false,
+          "resource": "agent.surface",
+          "result": "entity",
+          "verb": "available"
         }
       }
     },
@@ -18730,7 +19029,14 @@
           }
         ],
         "responses": {
-          "204": {
+          "202": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ImportStatusResponse"
+                }
+              }
+            },
             "description": "Successful Response"
           },
           "422": {
@@ -20445,7 +20751,7 @@
         }
       },
       "put": {
-        "description": "Attach (or replace) a user-authored markdown version of a document, plus\nany images it references.\n\nThe uploaded markdown becomes the document's agent-facing ``document.md`` and\nis chunked/indexed on the original's behalf; the source file is unchanged.\nEach uploaded image is stored as a sibling child artifact so a reference like\n``![](fig1.png)`` resolves through the children endpoint \u2014 send the images\nunder repeated ``images`` fields, named to match the markdown references.\nApplies to non-markdown documents (PDF, Word/ODT, HTML, RTF, EPUB, \u2026).",
+        "description": "Attach user-authored markdown and referenced images to a document.\n\nThe source file remains unchanged; the markdown is indexed for agent use.",
         "operationId": "file.markdown.attach",
         "parameters": [
           {
@@ -24972,6 +25278,149 @@
         }
       }
     },
+    "/pods/{pod_id}/schedules/{schedule_id}/runs": {
+      "get": {
+        "operationId": "schedule.run.list",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "pod_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Pod Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "schedule_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Schedule Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "default": 100,
+              "title": "Limit",
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ScheduleRunListResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "List Schedule Runs",
+        "tags": [
+          "Schedules"
+        ],
+        "x-lemma": {
+          "kind": "query",
+          "paginates": true,
+          "resource": "schedule.run",
+          "result": "collection",
+          "verb": "list"
+        }
+      }
+    },
+    "/pods/{pod_id}/schedules/{schedule_id}/runs/{run_id}/retry": {
+      "post": {
+        "operationId": "schedule.run.retry",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "pod_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Pod Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "schedule_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Schedule Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "run_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Run Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "202": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ScheduleRunResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Retry Schedule Run",
+        "tags": [
+          "Schedules"
+        ],
+        "x-lemma": {
+          "invalidates": [
+            "schedule.run"
+          ],
+          "kind": "mutation",
+          "paginates": false,
+          "resource": "schedule.run",
+          "result": "entity",
+          "verb": "retry"
+        }
+      }
+    },
     "/pods/{pod_id}/surface-setup/{platform}": {
       "get": {
         "description": "The static pre-creation checklist for a platform (env/OAuth\nprerequisites) \u2014 works before any surface of this platform exists.",
@@ -26095,7 +26544,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/FlowDetailResponse"
+                  "$ref": "#/components/schemas/WorkflowDetailResponse"
                 }
               }
             },
@@ -26212,7 +26661,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/FlowDetailResponse"
+                  "$ref": "#/components/schemas/WorkflowDetailResponse"
                 }
               }
             },
@@ -26280,7 +26729,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/FlowDetailResponse"
+                  "$ref": "#/components/schemas/WorkflowDetailResponse"
                 }
               }
             },
@@ -26353,7 +26802,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/FlowDetailResponse"
+                  "$ref": "#/components/schemas/WorkflowDetailResponse"
                 }
               }
             },

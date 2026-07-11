@@ -15,4 +15,3 @@ export type SurfaceSendRequest = {
      */
     user_id: string;
 };
-

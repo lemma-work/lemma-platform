@@ -13,16 +13,16 @@ from app.core.authorization.current import reset_current_context, set_current_co
 from app.core.authorization.factory import create_authorization_data_service
 from app.core.config import settings
 from app.core.infrastructure.db.uow_factory import UnitOfWorkFactory
-from app.modules.agent.domain.value_objects import AgentRunApprovalDecision
-from app.modules.agent.services.conversation_service import ConversationService
-from app.modules.agent.tools.user_interaction.models import (
+from app.modules.agent.contracts import AgentRunApprovalDecision
+from app.composition.surface_agent import ConversationService
+from app.modules.agent.contracts import (
     AskUserRequest,
     DisplayResourceRequest,
     DisplayResourceType,
 )
 from app.modules.agent_surfaces.platforms.attachment_limits import fits_inline
 from app.modules.agent_surfaces.platforms.rendering import sanitize_user_visible_text
-from app.modules.datastore.api.dependencies import build_file_service
+from app.composition.surface_datastore import build_file_service
 from app.modules.agent_surfaces.domain.entities import (
     AgentSurfaceConversationLink,
     AgentSurfaceEntity,
@@ -86,7 +86,7 @@ from app.modules.agent_surfaces.services.display_resource_renderer import (
     parse_callback_id,
     render_questions_as_text,
 )
-from app.modules.connectors.services.connector_service import ConnectorService
+from app.composition.surface_connectors import ConnectorService
 from app.core.log.log import get_logger
 
 logger = get_logger(__name__)
@@ -586,7 +586,7 @@ class AgentSurfaceIngressService:
         provider = None
         if to_transcribe:
             try:
-                from app.modules.agent.tools.speech.provider import get_speech_provider
+                from app.composition.surface_agent import get_speech_provider
 
                 provider = get_speech_provider()
             except Exception as exc:
@@ -2210,7 +2210,7 @@ def _parse_approval_decision(text: str) -> "AgentRunApprovalDecision":
     "approve", "yes", "y", "ok", "confirm", "1", "run", "allow" → APPROVE_ONCE.
     Anything else → DENY (safe default).
     """
-    from app.modules.agent.domain.value_objects import AgentRunApprovalDecision
+    from app.modules.agent.contracts import AgentRunApprovalDecision
 
     _APPROVE_WORDS = {"approve", "yes", "y", "ok", "okay", "confirm", "1", "run", "allow", "go"}
     if text.strip().lower() in _APPROVE_WORDS:

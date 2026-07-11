@@ -9,14 +9,18 @@ from faststream import Depends, Logger
 from faststream.redis import RedisRouter
 from streaq.task import TaskStatus
 
-from app.core.config import settings
 from app.core.infrastructure.db.session import async_session_maker
 from app.core.infrastructure.db.uow_factory import (
     SessionUnitOfWorkFactory,
     UnitOfWorkFactory,
 )
-from app.core.infrastructure.events.publisher import EventPublisher
-from app.core.infrastructure.events.stream_subscriber import redis_stream_sub
+from app.core.infrastructure.events.inbox import (
+    EventInboxPort,
+    provide_domain_event_inbox,
+)
+from app.core.infrastructure.events.stream_subscriber import (
+    reliable_redis_stream_subscriber,
+)
 from app.core.infrastructure.jobs.streaq_job_queue import (
     SharedStreaqJobQueue,
     get_streaq_job_queue,
@@ -34,6 +38,7 @@ from app.modules.agent.domain.events import (
     AgentRunStartedEvent,
     AgentRunStopRequestedEvent,
 )
+from app.modules.agent.config import agent_settings
 from app.modules.agent.domain.value_objects import AgentRunStatus
 from app.modules.agent.domain.value_objects import HarnessKind
 from app.modules.agent.infrastructure.harnesses import (
@@ -63,6 +68,7 @@ CONTROL_EVENT_MODELS = {
 def conversation_title_job_id(conversation_id: UUID) -> str:
     return f"conv-title:{conversation_id}"
 
+
 def provide_job_queue() -> SharedStreaqJobQueue:
     return get_streaq_job_queue()
 
@@ -72,15 +78,25 @@ def provide_uow_factory() -> UnitOfWorkFactory:
 
 
 def build_harness_registry() -> HarnessRegistry:
-    reconnect_grace_seconds = settings.daemon_reconnect_grace_seconds
+    reconnect_grace_seconds = agent_settings.daemon_reconnect_grace_seconds
     return HarnessRegistry(
         [
             PydanticAIHarness(),
-            DaemonHarness(HarnessKind.CODEX, reconnect_grace_seconds=reconnect_grace_seconds),
-            DaemonHarness(HarnessKind.CLAUDE_CODE, reconnect_grace_seconds=reconnect_grace_seconds),
-            DaemonHarness(HarnessKind.OPENCODE, reconnect_grace_seconds=reconnect_grace_seconds),
-            DaemonHarness(HarnessKind.CURSOR, reconnect_grace_seconds=reconnect_grace_seconds),
-            DaemonHarness(HarnessKind.ANTIGRAVITY, reconnect_grace_seconds=reconnect_grace_seconds),
+            DaemonHarness(
+                HarnessKind.CODEX, reconnect_grace_seconds=reconnect_grace_seconds
+            ),
+            DaemonHarness(
+                HarnessKind.CLAUDE_CODE, reconnect_grace_seconds=reconnect_grace_seconds
+            ),
+            DaemonHarness(
+                HarnessKind.OPENCODE, reconnect_grace_seconds=reconnect_grace_seconds
+            ),
+            DaemonHarness(
+                HarnessKind.CURSOR, reconnect_grace_seconds=reconnect_grace_seconds
+            ),
+            DaemonHarness(
+                HarnessKind.ANTIGRAVITY, reconnect_grace_seconds=reconnect_grace_seconds
+            ),
         ]
     )
 
@@ -89,24 +105,42 @@ def agent_run_job_id(agent_run_id: UUID) -> str:
     return f"agent-run:{agent_run_id}"
 
 
-@router.subscriber(
-    stream=redis_stream_sub(
-        AGENT_EVENTS_STREAM,
-        group="agent-events",
-        consumer="agent-events-consumer",
-    )
+@reliable_redis_stream_subscriber(
+    router,
+    AGENT_EVENTS_STREAM,
+    group="agent-events",
+    consumer="agent-events-consumer",
 )
 async def handle_agent_control_event(
     event: dict,
     fs_logger: Logger,
     job_queue: SharedStreaqJobQueue = Depends(provide_job_queue),
     uow_factory: UnitOfWorkFactory = Depends(provide_uow_factory),
+    inbox: EventInboxPort = Depends(provide_domain_event_inbox),
 ):
     event_model = CONTROL_EVENT_MODELS.get(event.get("event_type"))
     if event_model is None:
         return
 
-    parsed = event_model.model_validate(event)
+    async def process() -> None:
+        parsed = event_model.model_validate(event)
+        await _process_agent_control_event(
+            parsed,
+            fs_logger=fs_logger,
+            job_queue=job_queue,
+            uow_factory=uow_factory,
+        )
+
+    await inbox.process("agent.control", event, process)
+
+
+async def _process_agent_control_event(
+    parsed: AgentRunStartedEvent | AgentRunStopRequestedEvent | AgentRunCompletedEvent,
+    *,
+    fs_logger: Logger,
+    job_queue: SharedStreaqJobQueue,
+    uow_factory: UnitOfWorkFactory,
+) -> None:
     if isinstance(parsed, AgentRunStartedEvent):
         await enqueue_agent_run(parsed, fs_logger=fs_logger, job_queue=job_queue)
         return
@@ -134,11 +168,27 @@ async def handle_agent_control_event(
         # between status() and abort(), and aborting that internal cancel scope
         # can poison the worker task. Mark the run terminal instead; if the
         # streaq task later starts, process_agent_run exits as a no-op.
+        event_data = {
+            "aborted": False,
+            "task_status": task_status.value,
+        }
         async with uow_factory() as uow:
-            finish_result = await ConversationRepository(uow).finish_agent_run(
+            repo = ConversationRepository(uow)
+            finish_result = await repo.finish_agent_run(
                 agent_run_id=parsed.agent_run_id,
                 status=AgentRunStatus.STOPPED,
             )
+            if finish_result is not None and finish_result.updated:
+                repo.collect_events(
+                    [
+                        AgentRunCompletedEvent(
+                            conversation_id=parsed.conversation_id,
+                            agent_run_id=parsed.agent_run_id,
+                            status=finish_result.status,
+                            data=event_data,
+                        )
+                    ]
+                )
         if finish_result is None or not finish_result.updated:
             return
 
@@ -146,25 +196,12 @@ async def handle_agent_control_event(
             "Agent run stopped before worker execution: %s",
             parsed.agent_run_id,
         )
-        event_data = {
-            "aborted": False,
-            "task_status": task_status.value,
-        }
         await publish_conversation_event(
             parsed.conversation_id,
             completed_payload(
                 conversation_id=parsed.conversation_id,
                 agent_run_id=parsed.agent_run_id,
                 status=finish_result.status.value,
-                data=event_data,
-            ),
-        )
-        await EventPublisher.publish(
-            AGENT_EVENTS_STREAM,
-            AgentRunCompletedEvent(
-                conversation_id=parsed.conversation_id,
-                agent_run_id=parsed.agent_run_id,
-                status=finish_result.status,
                 data=event_data,
             ),
         )
@@ -208,9 +245,7 @@ async def process_agent_run(
         uow_factory=worker_ctx.uow_factory,
         harness_registry=build_harness_registry(),
     )
-    from app.modules.agent_surfaces.services.progress_observer import (
-        SurfaceAgentRunProgressObserver,
-    )
+    from app.composition.agent_surface_runtime import build_progress_observer
 
     # Safety net: if a cancellation arrives before/during runner.execute (e.g.
     # streaq task timeout, worker shutdown) and propagates as CancelledError
@@ -225,7 +260,7 @@ async def process_agent_run(
             user_id=user_id,
             pod_id=pod_id,
             agent_name=agent_name,
-            observer=SurfaceAgentRunProgressObserver(
+            observer=build_progress_observer(
                 uow_factory=worker_ctx.uow_factory,
                 service_factory=worker_ctx.build_surface_event_handler,
             ),
@@ -281,6 +316,19 @@ async def reconcile_orphaned_agent_runs() -> None:
                     error="Agent run was interrupted (worker restart or crash)",
                 )
                 if finish_result is not None and finish_result.updated:
+                    event_data = {
+                        "error": "Agent run was interrupted (worker restart or crash)"
+                    }
+                    repo.collect_events(
+                        [
+                            AgentRunCompletedEvent(
+                                conversation_id=run.conversation_id,
+                                agent_run_id=run.id,
+                                status=finish_result.status,
+                                data=event_data,
+                            )
+                        ]
+                    )
                     finalized.append(
                         (run.conversation_id, run.id, finish_result.status)
                     )
@@ -291,9 +339,7 @@ async def reconcile_orphaned_agent_runs() -> None:
     if not finalized:
         return
 
-    logger.warning(
-        "Reconciled %d orphaned agent run(s) to FAILED", len(finalized)
-    )
+    logger.warning("Reconciled %d orphaned agent run(s) to FAILED", len(finalized))
     # Publish outside the UoW (mirrors handle_agent_control_event's stop path)
     # so SSE clients refresh and workflow waits resume promptly.
     for conversation_id, agent_run_id, status in finalized:
@@ -308,18 +354,9 @@ async def reconcile_orphaned_agent_runs() -> None:
                     data=event_data,
                 ),
             )
-            await EventPublisher.publish(
-                AGENT_EVENTS_STREAM,
-                AgentRunCompletedEvent(
-                    conversation_id=conversation_id,
-                    agent_run_id=agent_run_id,
-                    status=status,
-                    data=event_data,
-                ),
-            )
         except Exception as exc:
             logger.error(
-                "Failed publishing reconciled-run events run=%s: %s",
+                "Failed publishing reconciled-run realtime update run=%s error_type=%s",
                 agent_run_id,
-                exc,
+                type(exc).__name__,
             )

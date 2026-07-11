@@ -5,4 +5,3 @@
 export type ResourceAccessGrantRequest = {
     permission_ids?: Array<string>;
 };
-

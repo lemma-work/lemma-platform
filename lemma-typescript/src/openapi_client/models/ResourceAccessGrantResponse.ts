@@ -14,4 +14,3 @@ export type ResourceAccessGrantResponse = {
     role_name?: (string | null);
     user_id?: (string | null);
 };
-

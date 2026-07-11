@@ -9,4 +9,3 @@ export type ConnectedAccountSummary = {
     status: string;
     title?: (string | null);
 };
-

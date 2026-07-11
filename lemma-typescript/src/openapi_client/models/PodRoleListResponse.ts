@@ -9,4 +9,3 @@ import type { PodRoleResponse } from './PodRoleResponse.js';
 export type PodRoleListResponse = {
     items: Array<PodRoleResponse>;
 };
-

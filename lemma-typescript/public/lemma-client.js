@@ -9794,7 +9794,7 @@ var LemmaClient = (() => {
   }
 
   // src/version.ts
-  var SDK_VERSION = "0.5.6";
+  var SDK_VERSION = "0.5.7";
   var CLIENT_HEADER_NAME = "X-Lemma-Client";
   var CLIENT_HEADER_VALUE = `lemma-sdk-ts/${SDK_VERSION}`;
 
@@ -10196,7 +10196,7 @@ var LemmaClient = (() => {
   // src/openapi_client/core/OpenAPI.ts
   var OpenAPI = {
     BASE: "",
-    VERSION: "3.4.0",
+    VERSION: "4.0.1",
     WITH_CREDENTIALS: false,
     CREDENTIALS: "include",
     TOKEN: void 0,
@@ -11567,15 +11567,9 @@ var LemmaClient = (() => {
     }
     /**
      * Attach Document Markdown
-     * Attach (or replace) a user-authored markdown version of a document, plus
-     * any images it references.
+     * Attach user-authored markdown and referenced images to a document.
      *
-     * The uploaded markdown becomes the document's agent-facing ``document.md`` and
-     * is chunked/indexed on the original's behalf; the source file is unchanged.
-     * Each uploaded image is stored as a sibling child artifact so a reference like
-     * ``![](fig1.png)`` resolves through the children endpoint — send the images
-     * under repeated ``images`` fields, named to match the markdown references.
-     * Applies to non-markdown documents (PDF, Word/ODT, HTML, RTF, EPUB, …).
+     * The source file remains unchanged; the markdown is indexed for agent use.
      * @param podId
      * @param formData
      * @returns FileDetailResponse Successful Response
@@ -11781,21 +11775,35 @@ var LemmaClient = (() => {
   };
 
   // src/namespaces/files.ts
+  function trimLeadingSlashes(value) {
+    let start = 0;
+    while (start < value.length && value[start] === "/") {
+      start += 1;
+    }
+    return value.slice(start);
+  }
+  function trimTrailingSlashes(value) {
+    let end = value.length;
+    while (end > 0 && value[end - 1] === "/") {
+      end -= 1;
+    }
+    return value.slice(0, end);
+  }
   function joinDatastorePath(basePath, leaf) {
-    const normalizedLeaf = leaf.replace(/^\/+/, "");
+    const normalizedLeaf = trimLeadingSlashes(leaf);
     const trimmedBase = (basePath != null ? basePath : "/").trim();
     const normalizedBase = trimmedBase.length > 0 ? trimmedBase : "/";
     if (normalizedBase === "/") {
       return `/${normalizedLeaf}`;
     }
-    return `${normalizedBase.replace(/\/+$/, "")}/${normalizedLeaf}`;
+    return `${trimTrailingSlashes(normalizedBase)}/${normalizedLeaf}`;
   }
   function getDirectoryPath(path) {
     const normalized = path.trim();
     if (!normalized || normalized === "/") {
       return "/";
     }
-    const withoutTrailing = normalized.replace(/\/+$/, "");
+    const withoutTrailing = trimTrailingSlashes(normalized);
     const index = withoutTrailing.lastIndexOf("/");
     if (index <= 0) {
       return "/";
@@ -11803,7 +11811,7 @@ var LemmaClient = (() => {
     return withoutTrailing.slice(0, index);
   }
   function getBaseName(path) {
-    const normalized = path.trim().replace(/\/+$/, "");
+    const normalized = trimTrailingSlashes(path.trim());
     const index = normalized.lastIndexOf("/");
     if (index === -1) {
       return normalized;
@@ -12253,10 +12261,7 @@ var LemmaClient = (() => {
         method: "POST",
         url: "/icons/upload",
         formData,
-        mediaType: "multipart/form-data",
-        errors: {
-          422: `Validation Error`
-        }
+        mediaType: "multipart/form-data"
       });
     }
     /**
@@ -12464,27 +12469,6 @@ var LemmaClient = (() => {
       return request(OpenAPI, {
         method: "GET",
         url: "/organizations/{organization_id}/connectors/accounts/{account_id}",
-        path: {
-          "organization_id": organizationId,
-          "account_id": accountId
-        },
-        errors: {
-          422: `Validation Error`
-        }
-      });
-    }
-    /**
-     * Get Credentials
-     * Get the credentials for a specific account
-     * @param organizationId
-     * @param accountId
-     * @returns AccountCredentialsResponseSchema Successful Response
-     * @throws ApiError
-     */
-    static connectorAccountCredentialsGet(organizationId, accountId) {
-      return request(OpenAPI, {
-        method: "GET",
-        url: "/organizations/{organization_id}/connectors/accounts/{account_id}/credentials",
         path: {
           "organization_id": organizationId,
           "account_id": accountId
@@ -12850,10 +12834,6 @@ var LemmaClient = (() => {
           payload
         )),
         get: (organizationId, accountId) => this.client.request(() => ConnectorsService.connectorAccountGet(
-          organizationId,
-          accountId
-        )),
-        credentials: (organizationId, accountId) => this.client.request(() => ConnectorsService.connectorAccountCredentialsGet(
           organizationId,
           accountId
         )),
@@ -14076,6 +14056,27 @@ var LemmaClient = (() => {
   // src/openapi_client/services/AgentSurfacesService.ts
   var AgentSurfacesService = class {
     /**
+     * List Available Surfaces
+     * The connectable-surface catalog: every surface platform with its connector,
+     * supported credential modes, and the schema to connect an account. Platform-
+     * level (no surface need exist); the pod scopes authorization only.
+     * @param podId
+     * @returns AvailableSurfacesResponse Successful Response
+     * @throws ApiError
+     */
+    static agentSurfaceAvailable(podId) {
+      return request(OpenAPI, {
+        method: "GET",
+        url: "/pods/{pod_id}/available-surfaces",
+        path: {
+          "pod_id": podId
+        },
+        errors: {
+          422: `Validation Error`
+        }
+      });
+    }
+    /**
      * Get Surface Setup Guide
      * The static pre-creation checklist for a platform (env/OAuth
      * prerequisites) — works before any surface of this platform exists.
@@ -14952,6 +14953,52 @@ var LemmaClient = (() => {
         }
       });
     }
+    /**
+     * List Schedule Runs
+     * @param podId
+     * @param scheduleId
+     * @param limit
+     * @returns ScheduleRunListResponse Successful Response
+     * @throws ApiError
+     */
+    static scheduleRunList(podId, scheduleId, limit = 100) {
+      return request(OpenAPI, {
+        method: "GET",
+        url: "/pods/{pod_id}/schedules/{schedule_id}/runs",
+        path: {
+          "pod_id": podId,
+          "schedule_id": scheduleId
+        },
+        query: {
+          "limit": limit
+        },
+        errors: {
+          422: `Validation Error`
+        }
+      });
+    }
+    /**
+     * Retry Schedule Run
+     * @param podId
+     * @param scheduleId
+     * @param runId
+     * @returns ScheduleRunResponse Successful Response
+     * @throws ApiError
+     */
+    static scheduleRunRetry(podId, scheduleId, runId) {
+      return request(OpenAPI, {
+        method: "POST",
+        url: "/pods/{pod_id}/schedules/{schedule_id}/runs/{run_id}/retry",
+        path: {
+          "pod_id": podId,
+          "schedule_id": scheduleId,
+          "run_id": runId
+        },
+        errors: {
+          422: `Validation Error`
+        }
+      });
+    }
   };
 
   // src/namespaces/schedules.ts
@@ -15404,7 +15451,7 @@ var LemmaClient = (() => {
      * Create a workflow definition. The graph (`nodes`/`edges`) can be included in this call to create a ready-to-run workflow in one step, or omitted to create a shell and upload the graph later with `workflow.graph.update`.
      * @param podId
      * @param requestBody
-     * @returns FlowDetailResponse Successful Response
+     * @returns WorkflowDetailResponse Successful Response
      * @throws ApiError
      */
     static workflowCreate(podId, requestBody) {
@@ -15447,7 +15494,7 @@ var LemmaClient = (() => {
      * Get a single workflow definition including graph and start configuration.
      * @param podId
      * @param workflowName
-     * @returns FlowDetailResponse Successful Response
+     * @returns WorkflowDetailResponse Successful Response
      * @throws ApiError
      */
     static workflowGet(podId, workflowName) {
@@ -15469,7 +15516,7 @@ var LemmaClient = (() => {
      * @param podId
      * @param workflowName
      * @param requestBody
-     * @returns FlowDetailResponse Successful Response
+     * @returns WorkflowDetailResponse Successful Response
      * @throws ApiError
      */
     static workflowUpdate(podId, workflowName, requestBody) {
@@ -15493,7 +15540,7 @@ var LemmaClient = (() => {
      * @param podId
      * @param workflowName
      * @param requestBody
-     * @returns FlowDetailResponse Successful Response
+     * @returns WorkflowDetailResponse Successful Response
      * @throws ApiError
      */
     static workflowGraphUpdate(podId, workflowName, requestBody) {

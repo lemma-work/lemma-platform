@@ -1,6 +1,19 @@
 """Connector module domain/connector errors."""
 
 from app.core.domain.errors import DomainError
+from app.core.redaction import redact_value
+
+
+def _safe_connector_details(details: object | None) -> dict | None:
+    if not isinstance(details, dict):
+        return None
+    allowed = {
+        key: value
+        for key, value in details.items()
+        if str(key).lower()
+        in {"status", "status_code", "code", "error", "reason", "error_type", "upstream_status", "upstream_code"}
+    }
+    return redact_value(allowed) if allowed else None
 
 
 class ConnectorDomainError(DomainError):
@@ -49,7 +62,7 @@ class ConnectorUnauthorizedError(ConnectorDomainError):
         )
 
 
-class ConnectorNotFoundError(ConnectorDomainError):
+class _ConnectorNotFoundBase(ConnectorDomainError):
     def __init__(self, message: str, details: object | None = None):
         super().__init__(
             message=message,
@@ -74,8 +87,8 @@ class ConnectorInfrastructureError(ConnectorDomainError):
         super().__init__(
             message=message,
             code="CONNECTOR_INFRA_ERROR",
-            status_code=500,
-            details=details,
+            status_code=503,
+            details=_safe_connector_details(details),
         )
 
 
@@ -85,7 +98,7 @@ class UnsupportedAuthProviderError(ConnectorValidationError):
         self.code = "UNSUPPORTED_AUTH_PROVIDER"
 
 
-class ConnectorNotFoundError(ConnectorNotFoundError):
+class ConnectorNotFoundError(_ConnectorNotFoundBase):
     def __init__(self, connector_id: str):
         super().__init__(f"Connector '{connector_id}' not found")
         self.code = "CONNECTOR_NOT_FOUND"
@@ -129,9 +142,15 @@ class ConnectRequestStateRequiredError(ConnectorValidationError):
         self.code = "CONNECT_REQUEST_STATE_REQUIRED"
 
 
-class OAuthFlowError(ConnectorValidationError):
+class OAuthWorkflowError(ConnectorValidationError):
     def __init__(self, message: str, details: object | None = None):
-        super().__init__(message, details=details)
+        ConnectorDomainError.__init__(
+            self,
+            message=message,
+            code="OAUTH_FLOW_ERROR",
+            status_code=502,
+            details=_safe_connector_details(details),
+        )
         self.code = "OAUTH_FLOW_ERROR"
 
 
@@ -186,58 +205,58 @@ class OperationExecutionError(ConnectorDomainError):
 class OperationExecutionTimeoutError(OperationExecutionError):
     def __init__(self, message: str, details: object | None = None):
         super().__init__(
-            message=message,
+            message="Connector operation timed out.",
             code="OPERATION_EXECUTION_TIMEOUT",
             status_code=504,
-            details=details,
+            details=_safe_connector_details(details),
         )
 
 
 class OperationExecutionValidationError(OperationExecutionError):
     def __init__(self, message: str, details: object | None = None):
         super().__init__(
-            message=message,
+            message="Connector rejected the operation request.",
             code="OPERATION_EXECUTION_VALIDATION_ERROR",
-            status_code=400,
-            details=details,
+            status_code=422,
+            details=_safe_connector_details(details),
         )
 
 
 class OperationExecutionUnauthorizedError(OperationExecutionError):
     def __init__(self, message: str, details: object | None = None):
         super().__init__(
-            message=message,
+            message="Connector account authorization failed.",
             code="OPERATION_EXECUTION_UNAUTHORIZED",
             status_code=401,
-            details=details,
+            details=_safe_connector_details(details),
         )
 
 
 class OperationExecutionAccessDeniedError(OperationExecutionError):
     def __init__(self, message: str, details: object | None = None):
         super().__init__(
-            message=message,
+            message="Connector operation access denied.",
             code="OPERATION_EXECUTION_ACCESS_DENIED",
             status_code=403,
-            details=details,
+            details=_safe_connector_details(details),
         )
 
 
 class OperationExecutionNotFoundError(OperationExecutionError):
     def __init__(self, message: str, details: object | None = None):
         super().__init__(
-            message=message,
+            message="Connector operation was not found by the provider.",
             code="OPERATION_EXECUTION_NOT_FOUND",
             status_code=404,
-            details=details,
+            details=_safe_connector_details(details),
         )
 
 
 class OperationExecutionInfrastructureError(OperationExecutionError):
     def __init__(self, message: str, details: object | None = None):
         super().__init__(
-            message=message,
+            message="Connector provider is temporarily unavailable.",
             code="OPERATION_EXECUTION_INFRA_ERROR",
-            status_code=500,
-            details=details,
+            status_code=503,
+            details=_safe_connector_details(details),
         )

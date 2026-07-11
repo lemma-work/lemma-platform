@@ -6,14 +6,11 @@ from uuid import uuid4
 import pytest
 from streaq.task import TaskStatus
 
-from app.modules.agent.domain.events import (
-    AGENT_EVENTS_STREAM,
-    AgentRunCompletedEvent,
-    AgentRunStopRequestedEvent,
-)
+from app.modules.agent.domain.events import AgentRunCompletedEvent, AgentRunStopRequestedEvent
 from app.modules.agent.events.handlers import conversation_title_job_id
 from app.modules.agent.domain.value_objects import AgentRunStatus
 from app.modules.agent.events import handlers
+from app.modules.test_support.fakes import PassthroughEventInbox
 
 
 class _Logger:
@@ -43,6 +40,9 @@ class _JobQueue:
 
 
 class _UowFactory:
+    def __init__(self) -> None:
+        self.events: list[object] = []
+
     def __call__(self):
         return self
 
@@ -51,6 +51,9 @@ class _UowFactory:
 
     async def __aexit__(self, exc_type, exc, tb) -> None:
         return None
+
+    def collect_events(self, events: list[object]) -> None:
+        self.events.extend(events)
 
 
 class _ConversationRepository:
@@ -65,22 +68,20 @@ class _ConversationRepository:
     ):
         return SimpleNamespace(status=status, updated=True)
 
+    def collect_events(self, events: list[object]) -> None:
+        self.uow.collect_events(events)
+
 
 @pytest.mark.asyncio
 async def test_stop_requested_for_queued_run_finishes_without_streaq_abort(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    published: list[tuple[str, object]] = []
     realtime: list[tuple[object, dict[str, object]]] = []
-
-    async def publish(stream: str, event: object) -> None:
-        published.append((stream, event))
 
     async def publish_realtime(conversation_id, payload) -> None:
         realtime.append((conversation_id, payload))
 
     monkeypatch.setattr(handlers, "ConversationRepository", _ConversationRepository)
-    monkeypatch.setattr(handlers.EventPublisher, "publish", publish)
     monkeypatch.setattr(handlers, "publish_conversation_event", publish_realtime)
 
     job_queue = _JobQueue(TaskStatus.SCHEDULED)
@@ -90,17 +91,18 @@ async def test_stop_requested_for_queued_run_finishes_without_streaq_abort(
         user_id=uuid4(),
     )
 
+    uow_factory = _UowFactory()
     await handlers.handle_agent_control_event(
         stop_event.model_dump(mode="json"),
         fs_logger=_Logger(),
         job_queue=job_queue,
-        uow_factory=_UowFactory(),
+        uow_factory=uow_factory,
+        inbox=PassthroughEventInbox(),
     )
 
     assert job_queue.abort_called is False
-    assert len(published) == 1
-    stream, event = published[0]
-    assert stream == AGENT_EVENTS_STREAM
+    assert len(uow_factory.events) == 1
+    event = uow_factory.events[0]
     assert isinstance(event, AgentRunCompletedEvent)
     assert event.status == AgentRunStatus.STOPPED
     assert event.data == {
@@ -147,6 +149,7 @@ async def test_completed_event_enqueues_dedup_title_job() -> None:
         fs_logger=_Logger(),
         job_queue=job_queue,
         uow_factory=_UowFactory(),
+        inbox=PassthroughEventInbox(),
     )
 
     assert job_queue.enqueued == [
@@ -172,6 +175,7 @@ async def test_stop_requested_for_running_run_is_left_for_cooperative_stop() -> 
         fs_logger=_Logger(),
         job_queue=job_queue,
         uow_factory=_UowFactory(),
+        inbox=PassthroughEventInbox(),
     )
 
     assert job_queue.abort_called is False
@@ -196,7 +200,6 @@ async def test_reconcile_orphaned_agent_runs_finalizes_and_publishes(
         SimpleNamespace(id=run2, conversation_id=conv2),
     ]
     finished: list[object] = []
-    published: list[tuple[str, object]] = []
     realtime: list[tuple[object, dict]] = []
 
     class _Repo:
@@ -211,19 +214,19 @@ async def test_reconcile_orphaned_agent_runs_finalizes_and_publishes(
             # run2 was already terminal (race) -> not updated -> no events.
             return SimpleNamespace(updated=agent_run_id == run1, status=status)
 
-    async def publish(stream: str, event: object) -> None:
-        published.append((stream, event))
+        def collect_events(self, events: list[object]) -> None:
+            self.uow.collect_events(events)
 
     async def publish_realtime(conversation_id, payload) -> None:
         realtime.append((conversation_id, payload))
 
     monkeypatch.setattr(handlers, "ConversationRepository", _Repo)
-    monkeypatch.setattr(handlers.EventPublisher, "publish", publish)
     monkeypatch.setattr(handlers, "publish_conversation_event", publish_realtime)
+    uow_factory = _UowFactory()
     monkeypatch.setattr(
         handlers,
         "streaq_worker",
-        SimpleNamespace(context=SimpleNamespace(uow=lambda: _UowFactory())),
+        SimpleNamespace(context=SimpleNamespace(uow=lambda: uow_factory)),
     )
 
     await handlers.reconcile_orphaned_agent_runs()
@@ -231,9 +234,8 @@ async def test_reconcile_orphaned_agent_runs_finalizes_and_publishes(
     # Both stale runs were attempted...
     assert finished == [run1, run2]
     # ...but only the one that actually transitioned publishes events.
-    assert len(published) == 1
-    stream, event = published[0]
-    assert stream == AGENT_EVENTS_STREAM
+    assert len(uow_factory.events) == 1
+    event = uow_factory.events[0]
     assert isinstance(event, AgentRunCompletedEvent)
     assert event.agent_run_id == run1
     assert event.status == AgentRunStatus.FAILED

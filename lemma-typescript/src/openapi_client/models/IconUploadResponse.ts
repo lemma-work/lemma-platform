@@ -10,4 +10,3 @@ export type IconUploadResponse = {
     icon_url: string;
     storage_path: string;
 };
-

@@ -200,16 +200,32 @@ async def test_apply_destructive_requires_confirmation(
     assert "score" not in col_names
 
 
-async def test_cancel_deletes_import(authenticated_client, test_pod, worker, tmp_path):
+async def test_cancel_persists_terminal_tombstone(
+    authenticated_client, test_pod, worker, tmp_path
+):
     pod_id = test_pod["id"]
     zip_bytes = _make_bundle(tmp_path, table=("temp", _COLS))
     import_id = await _upload(authenticated_client, pod_id, zip_bytes)
     await _wait(authenticated_client, pod_id, import_id, until={"AWAITING_CONFIRMATION"})
 
     cancel = await authenticated_client.delete(f"/pods/{pod_id}/bundle/imports/{import_id}")
-    assert cancel.status_code == status.HTTP_204_NO_CONTENT, cancel.text
-    gone = await authenticated_client.get(f"/pods/{pod_id}/bundle/imports/{import_id}")
-    assert gone.status_code == status.HTTP_410_GONE
+    assert cancel.status_code == status.HTTP_202_ACCEPTED, cancel.text
+    assert cancel.json()["status"] == "CANCELLING"
+
+    final = await _wait(
+        authenticated_client,
+        pod_id,
+        import_id,
+        until={"CANCELLED", "PARTIALLY_CANCELLED", "FAILED"},
+    )
+    assert final["status"] == "CANCELLED", final
+    assert final["cancel_requested_at"] is not None
+    assert final["committed_steps"] == []
+
+    # Cancellation is a durable, queryable terminal outcome, not deletion.
+    again = await authenticated_client.get(f"/pods/{pod_id}/bundle/imports/{import_id}")
+    assert again.status_code == status.HTTP_200_OK, again.text
+    assert again.json()["status"] == "CANCELLED"
 
 
 @pytest.mark.workspace

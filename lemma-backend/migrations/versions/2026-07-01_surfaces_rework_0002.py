@@ -33,14 +33,10 @@ Create Date: 2026-07-01
 """
 
 import warnings
-from typing import TYPE_CHECKING
 
 import sqlalchemy as sa
 from alembic import op
 from sqlalchemy.dialects import postgresql
-
-if TYPE_CHECKING:
-    from collections.abc import Sequence
 
 __all__ = ["downgrade", "upgrade", "schema_upgrades", "schema_downgrades", "data_upgrades", "data_downgrades"]
 

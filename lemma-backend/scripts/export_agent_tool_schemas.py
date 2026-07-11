@@ -26,9 +26,8 @@ import argparse
 import asyncio
 import json
 import sys
-import types
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 from uuid import UUID
 
 # Make ``app...`` importable regardless of the current working directory.
@@ -41,12 +40,10 @@ from pydantic_ai.toolsets import AbstractToolset, FunctionToolset  # noqa: E402
 from pydantic_ai.usage import RunUsage  # noqa: E402
 
 from app.modules.agent.capabilities.todo import build_todo_toolset  # noqa: E402
+from app.modules.agent.domain.entities import Agent  # noqa: E402
 from app.modules.agent.domain.value_objects import AgentToolset  # noqa: E402
 from app.modules.agent.tools.final_answer.final_answer_tool import (  # noqa: E402
     get_final_answer_tool,
-)
-from app.modules.agent.tools.connectors.connectors import (  # noqa: E402
-    connector_info_toolset,
 )
 from app.modules.agent.tools.registry import resolve_agent_toolsets  # noqa: E402
 
@@ -62,7 +59,6 @@ def _build_toolsets() -> list[tuple[str, AbstractToolset[Any]]]:
     - ``TODO`` is capability-only (realized per-conversation), so it is built
       directly. ``uow_factory``/``conversation_id`` are never exercised during
       schema extraction — the tool is not invoked — so placeholders are fine.
-    - ``connectors`` exposes the connector-helper operation tools.
     - ``final_answer`` is a per-agent factory; with no output schema it degrades
       to a plain string output, which is all we need to describe its shape.
     """
@@ -71,7 +67,9 @@ def _build_toolsets() -> list[tuple[str, AbstractToolset[Any]]]:
     for member in AgentToolset:
         # Capability-only toolsets (e.g. TODO) resolve to nothing here.
         for toolset in resolve_agent_toolsets([member]):
-            labelled.append((member.value, toolset))
+            labelled.append(
+                (member.value, cast(AbstractToolset[Any], toolset))
+            )
 
     labelled.append(
         (
@@ -79,12 +77,11 @@ def _build_toolsets() -> list[tuple[str, AbstractToolset[Any]]]:
             build_todo_toolset(uow_factory=None, conversation_id=UUID(int=0)),  # type: ignore[arg-type]
         )
     )
-    labelled.append(("CONNECTORS", connector_info_toolset))
     labelled.append(
         (
             "FINAL_ANSWER",
             FunctionToolset(
-                tools=[get_final_answer_tool(types.SimpleNamespace(output_schema=None))]
+                tools=[get_final_answer_tool(Agent.model_construct(output_schema=None))]
             ),
         )
     )

@@ -169,6 +169,7 @@ async def test_upload_bundle_sets_ready_and_persists_release_assets():
             "assets/app.js": "console.log('ok')",
         }
     )
+    source_archive = make_dist_zip({"src/index.ts": "export default {}"})
 
     repo.get_by_name.return_value = app
     repo.update.side_effect = lambda entity: entity
@@ -185,16 +186,18 @@ async def test_upload_bundle_sets_ready_and_persists_release_assets():
         pod_id,
         "dashboard",
         user_id,
-        source_archive_bytes=b"source-zip",
+        source_archive_bytes=source_archive,
         dist_archive_bytes=dist_archive,
         ctx=allow_all_context(user_id=user_id, pod_id=pod_id),
     )
 
     assert updated.status == AppStatus.READY
-    assert updated.source_archive_path == "source/archive.zip"
+    assert updated.source_archive_path is not None
+    assert updated.source_archive_path.startswith("source/")
+    assert updated.source_archive_path.endswith("/archive.zip")
     assert updated.current_release_id == release_id
     written_paths = [args.args[0] for args in storage.write_file.await_args_list]
-    assert "source/archive.zip" in written_paths
+    assert updated.source_archive_path in written_paths
     assert any(path.endswith("/dist/index.html") for path in written_paths)
     assert any(path.endswith("/dist/assets/app.js") for path in written_paths)
     assert any(path.endswith("/dist/archive.zip") for path in written_paths)

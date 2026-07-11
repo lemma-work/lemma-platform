@@ -11,4 +11,3 @@ export type ConnectorListResponseSchema = {
     limit: number;
     next_page_token?: (string | null);
 };
-

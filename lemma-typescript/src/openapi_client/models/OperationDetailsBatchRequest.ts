@@ -11,4 +11,3 @@ export type OperationDetailsBatchRequest = {
      */
     operation_names?: (Array<string> | null);
 };
-

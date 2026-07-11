@@ -17,4 +17,3 @@ export type AgentNodeConfig = {
      */
     input_mapping?: Record<string, (ExpressionInputBinding | LiteralInputBinding)>;
 };
-

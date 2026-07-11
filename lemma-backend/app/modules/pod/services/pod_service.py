@@ -6,12 +6,14 @@ from typing import Optional
 
 from app.core.authorization.context import Context, ResourceRef
 from app.core.authorization.permissions import Permissions
-from app.modules.identity.domain.organization_entities import OrganizationRole
-from app.modules.icon.services.icon_service import IconService
+from app.modules.identity.contracts import OrganizationRole
+from app.modules.icon.contracts import IconCleanupPort
 from app.modules.pod.domain.errors import (
     PodAccessDeniedError,
     PodNotFoundError,
+    PodValidationError,
 )
+from app.modules.pod.domain.pod_names import normalize_pod_name
 from app.modules.pod.domain.pod_entities import (
     PodEntity,
     PodMemberEntity,
@@ -35,7 +37,7 @@ class PodService:
         organization_repository: OrganizationMembershipPort,
         pod_role_service: PodRoleService | None = None,
         authorization_service: object | None = None,
-        icon_service: IconService | None = None,
+        icon_service: IconCleanupPort | None = None,
     ):
         self.pod_repository = pod_repository
         self.pod_member_repository = pod_member_repository
@@ -52,6 +54,8 @@ class PodService:
             raise PodAccessDeniedError(
                 "User must be a member of the organization to create a pod"
             )
+
+        entity.name = self._normalize_name(entity.name)
 
         # Aggregate method registers pod.created event.
         entity.mark_created(creator_user_id)
@@ -115,6 +119,9 @@ class PodService:
 
         merged_dict = pod_entity.model_dump()
         update_data = data.model_dump(exclude_unset=True)
+        if "name" in update_data and update_data["name"] is not None:
+            update_data["name"] = self._normalize_name(update_data["name"])
+
         # Config is a typed multi-field blob; merge field-wise so a partial
         # update (e.g. only default_runtime, or only join_policy) preserves
         # the other fields instead of resetting them to their defaults.
@@ -140,6 +147,12 @@ class PodService:
             await self.icon_service.delete_by_url(pod_entity.icon_url)
 
         return updated
+
+    def _normalize_name(self, name: str) -> str:
+        try:
+            return normalize_pod_name(name)
+        except ValueError as exc:
+            raise PodValidationError(str(exc)) from exc
 
     async def delete_pod(self, pod_id: UUID, requester_user_id: UUID) -> bool:
         pod = await self.pod_repository.get(pod_id)

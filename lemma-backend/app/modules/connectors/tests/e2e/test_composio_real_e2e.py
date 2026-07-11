@@ -69,8 +69,12 @@ from app.modules.connectors.infrastructure.repositories.connector_trigger_reposi
 )
 
 # --- load the import script as a module (real catalog sync helpers) -----------
-_IMPORTER_PATH = Path(__file__).resolve().parents[5] / "scripts" / "import_connector_catalog.py"
-_IMPORTER_SPEC = importlib.util.spec_from_file_location("import_connector_catalog", _IMPORTER_PATH)
+_IMPORTER_PATH = (
+    Path(__file__).resolve().parents[5] / "scripts" / "import_connector_catalog.py"
+)
+_IMPORTER_SPEC = importlib.util.spec_from_file_location(
+    "import_connector_catalog", _IMPORTER_PATH
+)
 assert _IMPORTER_SPEC and _IMPORTER_SPEC.loader
 importer = importlib.util.module_from_spec(_IMPORTER_SPEC)
 _IMPORTER_SPEC.loader.exec_module(importer)
@@ -117,7 +121,9 @@ async def _reseed_composio_app(db_session, connector_id: str) -> None:
         delete(ConnectorTrigger).where(ConnectorTrigger.connector_id == connector_id)
     )
     await db_session.execute(
-        delete(ConnectorOperation).where(ConnectorOperation.connector_id == connector_id)
+        delete(ConnectorOperation).where(
+            ConnectorOperation.connector_id == connector_id
+        )
     )
     await db_session.execute(delete(Connector).where(Connector.id == connector_id))
     await db_session.commit()
@@ -135,7 +141,9 @@ async def _reseed_composio_app(db_session, connector_id: str) -> None:
     await uow.commit()
 
 
-async def _seed_composio_auth_config(db_session, connector_id: str, org_id) -> AuthConfig:
+async def _seed_composio_auth_config(
+    db_session, connector_id: str, org_id
+) -> AuthConfig:
     auth_config = AuthConfig(
         organization_id=org_id,
         connector_id=connector_id,
@@ -205,12 +213,12 @@ async def test_composio_api_key_connect_and_execute(
         assert account["status"] == AccountStatus.CONNECTED.value
         account_id = account["id"]
 
-        # A real connected account was created on Composio's side.
+        # A real connected account was created on Composio's side, while the
+        # public API must not expose its provider credentials.
         creds_resp = await authenticated_client.get(
             f"{accounts_url}/{account_id}/credentials"
         )
-        assert creds_resp.status_code == 200, creds_resp.text
-        assert creds_resp.json()["data"].get("connection_id")
+        assert creds_resp.status_code == 404, creds_resp.text
 
         ops_url = (
             f"/organizations/{org_id}/connectors/{auth_config.name}/operations/"
@@ -218,7 +226,10 @@ async def test_composio_api_key_connect_and_execute(
         )
         exec_resp = await authenticated_client.post(
             ops_url,
-            json={"payload": {"q": "London", "units": "metric"}, "account_id": account_id},
+            json={
+                "payload": {"q": "London", "units": "metric"},
+                "account_id": account_id,
+            },
         )
         assert exec_resp.status_code == 200, exec_resp.text
         # OpenWeather echoes the resolved city in the response.
@@ -293,7 +304,9 @@ _SMOKE_OPS: dict[str, tuple[str, dict]] = {
 }
 
 
-def _wait_for_active_connection(composio: Composio, connection_id: str, timeout: float = 300.0):
+def _wait_for_active_connection(
+    composio: Composio, connection_id: str, timeout: float = 300.0
+):
     deadline = time.time() + timeout
     last_status = None
     while time.time() < deadline:
@@ -303,11 +316,15 @@ def _wait_for_active_connection(composio: Composio, connection_id: str, timeout:
             if str(last_status).upper() == "ACTIVE":
                 return account
             if str(last_status).upper() in {"FAILED", "EXPIRED", "REVOKED"}:
-                pytest.fail(f"Connection {connection_id} entered terminal state {last_status}")
+                pytest.fail(
+                    f"Connection {connection_id} entered terminal state {last_status}"
+                )
         except Exception:
             pass
         time.sleep(3)
-    pytest.fail(f"Timed out waiting for {connection_id} to become ACTIVE (last={last_status})")
+    pytest.fail(
+        f"Timed out waiting for {connection_id} to become ACTIVE (last={last_status})"
+    )
 
 
 @pytest.mark.provider
@@ -352,14 +369,22 @@ async def test_composio_oauth_connect_and_reconnect_human(
         assert resp.status_code == 200, resp.text
         body = resp.json()
         attributes = body["attributes"] or {}
-        return attributes["state"], attributes["provider_state"], body["authorization_url"]
+        return (
+            attributes["state"],
+            attributes["provider_state"],
+            body["authorization_url"],
+        )
 
     async def _complete(state: str, connection_id: str) -> dict:
         # Drive our real callback in-process (the e2e app is ASGI, not on a
         # reachable port) — this exercises exchange_code_for_credentials for real.
         cb = await authenticated_client.get(
             callback_url,
-            params={"state": state, "connectedAccountId": connection_id, "format": "json"},
+            params={
+                "state": state,
+                "connectedAccountId": connection_id,
+                "format": "json",
+            },
         )
         assert cb.status_code == 200, cb.text
         return cb.json()
@@ -409,7 +434,9 @@ async def test_composio_oauth_connect_and_reconnect_human(
 # =============================================================================
 @pytest.mark.provider
 def test_composio_webhook_signature_verification():
-    secret = connector_settings.composio_webhook_secret or _env_value("COMPOSIO_WEBHOOK_SECRET")
+    secret = connector_settings.composio_webhook_secret or _env_value(
+        "COMPOSIO_WEBHOOK_SECRET"
+    )
     if not secret:
         pytest.skip("Webhook verification requires COMPOSIO_WEBHOOK_SECRET.")
 
@@ -429,7 +456,9 @@ def test_composio_webhook_signature_verification():
     webhook_id = "msg_test_123"
     timestamp = str(int(time.time()))
     to_sign = f"{webhook_id}.{timestamp}.{payload}"
-    digest = hmac.new(secret.encode("utf-8"), to_sign.encode("utf-8"), hashlib.sha256).digest()
+    digest = hmac.new(
+        secret.encode("utf-8"), to_sign.encode("utf-8"), hashlib.sha256
+    ).digest()
     signature = "v1," + base64.b64encode(digest).decode("utf-8")
 
     headers = {
@@ -443,6 +472,9 @@ def test_composio_webhook_signature_verification():
     assert result["raw_payload"]["connection_id"] == "ca_test_connection"
 
     # A tampered signature is rejected.
-    bad_headers = {**headers, "webhook-signature": "v1," + base64.b64encode(b"wrong").decode()}
+    bad_headers = {
+        **headers,
+        "webhook-signature": "v1," + base64.b64encode(b"wrong").decode(),
+    }
     with pytest.raises(Exception):
         verifier.verify(payload, bad_headers)

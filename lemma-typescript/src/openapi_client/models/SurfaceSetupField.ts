@@ -12,4 +12,3 @@ export type SurfaceSetupField = {
     secret?: boolean;
     source: SurfaceSetupFieldSource;
 };
-

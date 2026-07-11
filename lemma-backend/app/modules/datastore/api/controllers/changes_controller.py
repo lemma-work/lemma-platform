@@ -9,7 +9,7 @@ Design notes
 ------------
 * **Source.** Record writes already publish ``DatastoreRecordEvent`` to the
   unified ``datastore.events`` Redis stream. This handler tails that stream
-  directly (per connection) via :class:`PubSubSubscriber`, so nothing new is
+  directly (per connection) via :class:`RedisStreamReader`, so nothing new is
   published and there is no dependency on the worker process.
 * **Auth.** ``verify_auth`` skips this path for websockets (it cannot run the
   session machinery without an HTTP response), so the session is resolved here
@@ -42,7 +42,7 @@ from app.core.authorization.service import AuthorizationDataService
 from app.core.infrastructure.db.session import async_session_maker
 from app.core.infrastructure.db.uow_factory import SessionUnitOfWorkFactory
 from app.core.log.log import get_logger
-from app.core.pubsub.subscriber import PubSubSubscriber
+from app.core.pubsub.subscriber import RedisStreamReader
 from app.modules.datastore.api.dependencies import build_table_service
 from app.modules.datastore.domain.errors import DatastoreDomainError
 from app.modules.datastore.domain.events import DATASTORE_EVENTS_STREAM
@@ -150,7 +150,7 @@ async def _forward_changes(
     and announces it in a ``ready`` frame, so the client knows the stream is live
     and holds a resume cursor before any change frames arrive.
     """
-    subscriber = PubSubSubscriber(DATASTORE_EVENTS_STREAM)
+    subscriber = RedisStreamReader(DATASTORE_EVENTS_STREAM)
     async with subscriber:
         start_id = since or await subscriber.current_last_id()
         await websocket.send_json({"type": "ready", "since": start_id})

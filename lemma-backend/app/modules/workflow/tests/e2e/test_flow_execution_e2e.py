@@ -25,7 +25,7 @@ from app.modules.test_support.e2e_authz import (
     item_names,
 )
 from app.modules.workflow.domain.context import TriggerContext
-from app.modules.workflow.domain.start import FlowStartType
+from app.modules.workflow.domain.start import WorkflowStartType
 from app.modules.workflow.events import handlers as wf_handlers
 from app.modules.workflow.execution.engine import WorkflowEngine
 from app.modules.workflow.services.run_resume_service import RunResumeService
@@ -915,7 +915,7 @@ async def test_scheduled_single_api_function_workflow_completes_inline(
             flow.id,
             flow.user_id,
             trigger=TriggerContext(
-                trigger_type=FlowStartType.SCHEDULED,
+                trigger_type=WorkflowStartType.SCHEDULED,
                 payload={"merchant": "Uber", "amount": 23.5},
                 metadata={"schedule_type": "TIME"},
             ),
@@ -1210,7 +1210,7 @@ async def test_triggered_run_reads_start_namespace_only(
             flow.id,
             flow.user_id,
             trigger=TriggerContext(
-                trigger_type=FlowStartType.DATASTORE_EVENT,
+                trigger_type=WorkflowStartType.DATASTORE_EVENT,
                 payload={"record": {"id": "r1"}},
                 metadata={"table_name": "records", "operation": "INSERT"},
             ),

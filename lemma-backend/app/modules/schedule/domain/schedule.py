@@ -1,6 +1,6 @@
 from datetime import datetime
 from enum import Enum
-from typing import ClassVar
+from typing import Any, ClassVar
 from uuid import UUID
 
 from pydantic import BaseModel, Field, field_validator, model_validator
@@ -57,7 +57,9 @@ class DatastoreScheduleConfig(BaseModel):
         return normalize_datastore_operations(value)
 
 
-def normalize_datastore_schedule_config(config: dict) -> dict:
+def normalize_datastore_schedule_config(
+    config: dict[str, Any],
+) -> dict[str, Any]:
     """Normalize a DATASTORE schedule config for storage.
 
     Operations are required and explicit: workflows are often not built to
@@ -82,6 +84,32 @@ class ScheduleFireStatus(str, Enum):
     ERROR = "ERROR"
 
 
+class ScheduleRunStatus(str, Enum):
+    RECEIVED = "RECEIVED"
+    PROCESSING = "PROCESSING"
+    DISPATCHED = "DISPATCHED"
+    FILTERED = "FILTERED"
+    FAILED = "FAILED"
+    DEAD_LETTERED = "DEAD_LETTERED"
+
+
+class ScheduleRunEntity(Entity):
+    schedule_id: UUID
+    source_event_id: str
+    status: ScheduleRunStatus
+    attempts: int = 0
+    target_kind: str
+    target_run_id: str | None = None
+    payload: dict[str, Any] = Field(default_factory=dict)
+    metadata: dict[str, Any] = Field(default_factory=dict)
+    llm_output: dict[str, Any] = Field(default_factory=dict)
+    error_type: str | None = None
+    error_code: str | None = None
+    source_occurred_at: datetime | None = None
+    started_at: datetime | None = None
+    completed_at: datetime | None = None
+
+
 class ScheduleEntity(Entity):
     """Schedule entity for time and event-driven activation."""
 
@@ -96,11 +124,11 @@ class ScheduleEntity(Entity):
     agent_name: str | None = None
     workflow_name: str | None = None
     # Type-specific config
-    config: dict = Field(default_factory=dict)
+    config: dict[str, Any] = Field(default_factory=dict)
 
     # LLM-based event filtering
     filter_instruction: str | None = None
-    filter_output_schema: dict | None = None
+    filter_output_schema: dict[str, Any] | None = None
 
     # For WEBHOOK schedules backed by connector provider triggers.
     account_id: UUID | None = None
@@ -119,6 +147,7 @@ class ScheduleEntity(Entity):
     last_run_id: str | None = None
     last_fire_status: ScheduleFireStatus | None = None
     last_error: str | None = None
+    consecutive_failures: int = 0
 
     @property
     def time_config(self) -> TimeScheduleConfig | None:
@@ -150,9 +179,9 @@ class ScheduleCreateEntity(BaseModel):
     workflow_id: UUID | None = None
     agent_name: str | None = None
     workflow_name: str | None = None
-    config: dict = Field(default_factory=dict)
+    config: dict[str, Any] = Field(default_factory=dict)
     filter_instruction: str | None = None
-    filter_output_schema: dict | None = None
+    filter_output_schema: dict[str, Any] | None = None
     account_id: UUID | None = None
     connector_trigger_id: str | None = None
     # None means "caller did not specify": the service derives the default
@@ -170,13 +199,13 @@ class ScheduleCreateEntity(BaseModel):
 class ScheduleUpdateEntity(BaseModel):
     """Entity for updating a schedule."""
 
-    config: dict | None = None
+    config: dict[str, Any] | None = None
     name: str | None = None
     agent_id: UUID | None = None
     workflow_id: UUID | None = None
     agent_name: str | None = None
     workflow_name: str | None = None
     filter_instruction: str | None = None
-    filter_output_schema: dict | None = None
+    filter_output_schema: dict[str, Any] | None = None
     is_active: bool | None = None
     visibility: str | None = None

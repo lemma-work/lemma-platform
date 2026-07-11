@@ -8,7 +8,7 @@ import httpx
 from ... import errors
 from ...client import AuthenticatedClient, Client
 from ...models.error_response import ErrorResponse
-from ...models.flow_detail_response import FlowDetailResponse
+from ...models.workflow_detail_response import WorkflowDetailResponse
 from ...types import Response
 
 
@@ -30,9 +30,9 @@ def _get_kwargs(
 
 def _parse_response(
     *, client: AuthenticatedClient | Client, response: httpx.Response
-) -> ErrorResponse | FlowDetailResponse | None:
+) -> ErrorResponse | WorkflowDetailResponse | None:
     if response.status_code == 200:
-        response_200 = FlowDetailResponse.from_dict(response.json())
+        response_200 = WorkflowDetailResponse.from_dict(response.json())
 
         return response_200
 
@@ -49,7 +49,7 @@ def _parse_response(
 
 def _build_response(
     *, client: AuthenticatedClient | Client, response: httpx.Response
-) -> Response[ErrorResponse | FlowDetailResponse]:
+) -> Response[ErrorResponse | WorkflowDetailResponse]:
     return Response(
         status_code=HTTPStatus(response.status_code),
         content=response.content,
@@ -63,7 +63,7 @@ def sync_detailed(
     workflow_name: str,
     *,
     client: AuthenticatedClient | Client,
-) -> Response[ErrorResponse | FlowDetailResponse]:
+) -> Response[ErrorResponse | WorkflowDetailResponse]:
     """Get Workflow
 
      Get a single workflow definition including graph and start configuration.
@@ -77,7 +77,7 @@ def sync_detailed(
         httpx.TimeoutException: If the request takes longer than Client.timeout.
 
     Returns:
-        Response[ErrorResponse | FlowDetailResponse]
+        Response[ErrorResponse | WorkflowDetailResponse]
     """
 
     kwargs = _get_kwargs(
@@ -97,7 +97,7 @@ def sync(
     workflow_name: str,
     *,
     client: AuthenticatedClient | Client,
-) -> ErrorResponse | FlowDetailResponse | None:
+) -> ErrorResponse | WorkflowDetailResponse | None:
     """Get Workflow
 
      Get a single workflow definition including graph and start configuration.
@@ -111,7 +111,7 @@ def sync(
         httpx.TimeoutException: If the request takes longer than Client.timeout.
 
     Returns:
-        ErrorResponse | FlowDetailResponse
+        ErrorResponse | WorkflowDetailResponse
     """
 
     return sync_detailed(
@@ -126,7 +126,7 @@ async def asyncio_detailed(
     workflow_name: str,
     *,
     client: AuthenticatedClient | Client,
-) -> Response[ErrorResponse | FlowDetailResponse]:
+) -> Response[ErrorResponse | WorkflowDetailResponse]:
     """Get Workflow
 
      Get a single workflow definition including graph and start configuration.
@@ -140,7 +140,7 @@ async def asyncio_detailed(
         httpx.TimeoutException: If the request takes longer than Client.timeout.
 
     Returns:
-        Response[ErrorResponse | FlowDetailResponse]
+        Response[ErrorResponse | WorkflowDetailResponse]
     """
 
     kwargs = _get_kwargs(
@@ -158,7 +158,7 @@ async def asyncio(
     workflow_name: str,
     *,
     client: AuthenticatedClient | Client,
-) -> ErrorResponse | FlowDetailResponse | None:
+) -> ErrorResponse | WorkflowDetailResponse | None:
     """Get Workflow
 
      Get a single workflow definition including graph and start configuration.
@@ -172,7 +172,7 @@ async def asyncio(
         httpx.TimeoutException: If the request takes longer than Client.timeout.
 
     Returns:
-        ErrorResponse | FlowDetailResponse
+        ErrorResponse | WorkflowDetailResponse
     """
 
     return (

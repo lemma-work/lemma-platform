@@ -12,15 +12,21 @@ Mounted under ``/public/datastore`` which is auth-excluded in ``security.py``.
 from __future__ import annotations
 
 import mimetypes
+import time
 
-from fastapi import APIRouter, HTTPException, Query
+from fastapi import APIRouter, HTTPException, Query, Request, Response, status
 from fastapi.responses import StreamingResponse
 
 from app.modules.datastore.domain.errors import DatastoreObjectNotFoundError
 from app.modules.datastore.infrastructure.storage import create_datastore_storage
 from app.modules.datastore.services.files.file_url import (
     InvalidFileUrlToken,
-    verify_object_token,
+    verify_object_token_claims,
+)
+from app.modules.datastore.services.files.http_cache import (
+    file_cache_headers,
+    if_none_match_matches,
+    quote_content_etag,
 )
 
 router = APIRouter(
@@ -31,14 +37,26 @@ router = APIRouter(
 
 
 @router.get("", include_in_schema=False)
-async def serve_signed_file(token: str = Query(...)) -> StreamingResponse:
+async def serve_signed_file(request: Request, token: str = Query(...)) -> Response:
     try:
-        object_key = verify_object_token(token)
+        claims = verify_object_token_claims(token)
     except InvalidFileUrlToken:
         raise HTTPException(status_code=403, detail="Invalid or expired file token")
 
     storage = create_datastore_storage()
-    key = object_key
+    key = claims.object_key
+    content_sha256 = claims.content_sha256
+    remaining_ttl = max(0, claims.expires_at_epoch - int(time.time()))
+    cache_control = (
+        f"public, max-age={remaining_ttl}, immutable"
+        if content_sha256
+        else "public, no-cache"
+    )
+    cache_headers = file_cache_headers(content_sha256, cache_control=cache_control)
+    if if_none_match_matches(
+        request.headers.get("if-none-match"), quote_content_etag(content_sha256)
+    ):
+        return Response(status_code=status.HTTP_304_NOT_MODIFIED, headers=cache_headers)
     content_type = mimetypes.guess_type(key)[0] or "application/octet-stream"
     filename = key.rsplit("/", 1)[-1] or "file"
 
@@ -63,5 +81,8 @@ async def serve_signed_file(token: str = Query(...)) -> StreamingResponse:
     return StreamingResponse(
         _stream(),
         media_type=content_type,
-        headers={"Content-Disposition": f'inline; filename="{filename}"'},
+        headers={
+            **cache_headers,
+            "Content-Disposition": f'inline; filename="{filename}"',
+        },
     )

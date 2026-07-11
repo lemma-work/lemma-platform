@@ -1,9 +1,19 @@
 """Background job handlers and FastStream event consumers for Workflow module."""
 
+import hashlib
+import json
+from datetime import datetime
+
 from faststream import Depends, Logger
 from faststream.redis import RedisRouter
 
-from app.core.infrastructure.events.stream_subscriber import redis_stream_sub
+from app.core.infrastructure.events.stream_subscriber import (
+    reliable_redis_stream_subscriber,
+)
+from app.core.infrastructure.events.inbox import (
+    EventInboxPort,
+    provide_domain_event_inbox,
+)
 from app.core.infrastructure.db.session import async_session_maker
 from app.core.infrastructure.db.uow_factory import (
     SessionUnitOfWorkFactory,
@@ -52,103 +62,92 @@ def provide_uow_factory() -> UnitOfWorkFactory:
     return SessionUnitOfWorkFactory(async_session_maker)
 
 
-@router.subscriber(
-    stream=redis_stream_sub(
-        FUNCTION_RUN_EVENTS_STREAM,
-        group="workflow-function-events",
-        consumer="workflow-function-events-consumer",
-    )
+@reliable_redis_stream_subscriber(
+    router,
+    FUNCTION_RUN_EVENTS_STREAM,
+    group="workflow-function-events",
+    consumer="workflow-function-events-consumer",
 )
 async def handle_function_run_event(
     event: dict,
     fs_logger: Logger,
     job_queue: SharedStreaqJobQueue = Depends(provide_job_queue),
+    inbox: EventInboxPort = Depends(provide_domain_event_inbox),
 ):
     """Handle function run events for workflow resumption."""
     event_type = event.get("event_type")
 
-    if event_type == FunctionRunCompletedEvent.get_event_type():
-        run_id = event.get("run_id")
-        output = event.get("output_data")
-        fs_logger.info(f"Workflow: Received FunctionRunCompleted for {run_id}")
-        try:
-            await job_queue.enqueue(
-                "resume_workflow_run_for_function",
-                function_run_id=str(run_id),
-                run_status="COMPLETED",
-                output=output,
-                _job_id=f"workflow-resume-function:{run_id}:COMPLETED",
-            )
-        except Exception as e:
-            fs_logger.error(
-                f"Failed to enqueue workflow resume job for function run {run_id}: {e}"
-            )
+    if event_type not in {
+        FunctionRunCompletedEvent.get_event_type(),
+        FunctionRunFailedEvent.get_event_type(),
+    }:
+        return
 
-    elif event_type == FunctionRunFailedEvent.get_event_type():
-        run_id = event.get("run_id")
-        error = event.get("error")
-        fs_logger.info(f"Workflow: Received FunctionRunFailed for {run_id}")
-        try:
-            await job_queue.enqueue(
-                "resume_workflow_run_for_function",
-                function_run_id=str(run_id),
-                run_status="FAILED",
-                output={"error": error},
-                _job_id=f"workflow-resume-function:{run_id}:FAILED",
-            )
-        except Exception as e:
-            fs_logger.error(
-                f"Failed to enqueue workflow resume job for function run {run_id}: {e}"
-            )
+    async def process() -> None:
+        if event_type == FunctionRunCompletedEvent.get_event_type():
+            parsed = FunctionRunCompletedEvent.model_validate(event)
+            status = "COMPLETED"
+            output = parsed.output_data
+        else:
+            parsed = FunctionRunFailedEvent.model_validate(event)
+            status = "FAILED"
+            output = {"error": parsed.error}
+        fs_logger.info("Workflow: Received function run %s for %s", status, parsed.run_id)
+        await job_queue.enqueue(
+            "resume_workflow_run_for_function",
+            function_run_id=str(parsed.run_id),
+            run_status=status,
+            output=output,
+            _job_id=f"workflow-resume-function:{parsed.run_id}:{status}",
+        )
+
+    await inbox.process("workflow.function-resume", event, process)
 
 
-@router.subscriber(
-    stream=redis_stream_sub(
-        AGENT_EVENTS_STREAM,
-        group="workflow-agent-events",
-        consumer="workflow-agent-events-consumer",
-    )
+@reliable_redis_stream_subscriber(
+    router,
+    AGENT_EVENTS_STREAM,
+    group="workflow-agent-events",
+    consumer="workflow-agent-events-consumer",
 )
 async def handle_agent_run_event(
     event: dict,
     fs_logger: Logger,
     job_queue: SharedStreaqJobQueue = Depends(provide_job_queue),
     uow_factory: UnitOfWorkFactory = Depends(provide_uow_factory),
+    inbox: EventInboxPort = Depends(provide_domain_event_inbox),
 ):
     """Handle completed agent executions for workflow resumption."""
 
     if event.get("event_type") != AgentRunCompletedEvent.get_event_type():
         return
 
-    parsed = AgentRunCompletedEvent.model_validate(event)
-    fs_logger.info(
-        "Workflow: Received AgentRunCompleted for conversation %s",
-        parsed.conversation_id,
-    )
-    async with uow_factory() as uow:
-        waiting = await SqlAlchemyWorkflowRunWaitRepository(
-            uow
-        ).find_active_by_external_ref(
-            WorkflowRunWaitType.AGENT, str(parsed.conversation_id)
-        )
-    if waiting is None:
-        fs_logger.debug(
-            "Workflow: Ignoring AgentRunCompleted for non-workflow conversation %s",
+    async def process() -> None:
+        parsed = AgentRunCompletedEvent.model_validate(event)
+        fs_logger.info(
+            "Workflow: Received AgentRunCompleted for conversation %s",
             parsed.conversation_id,
         )
-        return
+        async with uow_factory() as uow:
+            waiting = await SqlAlchemyWorkflowRunWaitRepository(
+                uow
+            ).find_active_by_external_ref(
+                WorkflowRunWaitType.AGENT, str(parsed.conversation_id)
+            )
+        if waiting is None:
+            fs_logger.debug(
+                "Workflow: Ignoring AgentRunCompleted for non-workflow conversation %s",
+                parsed.conversation_id,
+            )
+            return
 
-    try:
         await job_queue.enqueue(
             "resume_workflow_run_for_agent",
             agent_conversation_id=str(parsed.conversation_id),
             _job_id=f"workflow-resume-agent:{parsed.agent_run_id}",
         )
-    except Exception as e:
-        fs_logger.error(
-            "Failed to enqueue workflow resume job for agent conversation "
-            f"{parsed.conversation_id}: {e}"
-        )
+
+    await inbox.process("workflow.agent-resume", event, process)
 
 
 @streaq_task(name="resume_workflow_run_for_function")
@@ -182,8 +181,8 @@ async def resume_workflow_run_for_agent(
 
     _ = attempt
     logger.info(
-        "Job: Resuming workflow run waiting for agent conversation %s",
-        agent_conversation_id,
+        "Job: Resuming workflow run waiting for agent conversation",
+        agent_conversation_id=agent_conversation_id,
     )
 
     async with worker_ctx.uow() as uow:
@@ -205,23 +204,28 @@ async def reconcile_workflow_waits():
 # --- Schedule Integration ---
 
 
-@router.subscriber(
-    stream=redis_stream_sub(
-        "schedule_events",
-        group="workflow-schedule-events",
-        consumer="workflow-schedule-events-consumer",
-    )
+@reliable_redis_stream_subscriber(
+    router,
+    "schedule_events",
+    group="workflow-schedule-events",
+    consumer="workflow-schedule-events-consumer",
 )
 async def handle_schedule_events(
     event: dict,
     fs_logger: Logger,
     job_queue: SharedStreaqJobQueue = Depends(provide_job_queue),
+    inbox: EventInboxPort = Depends(provide_domain_event_inbox),
 ):
     """Handle schedule events to launch workflows."""
     event_type = event.get("event_type")
 
-    if event_type == "schedule.fired":
+    if event_type != "schedule.fired":
+        return
+
+    async def process() -> None:
         await on_schedule_fired(event, fs_logger, job_queue)
+
+    await inbox.process("workflow.schedule-start", event, process)
 
 
 async def on_schedule_fired(
@@ -234,12 +238,17 @@ async def on_schedule_fired(
     payload = event.get("payload")
     metadata = event.get("metadata")
     llm_output = event.get("llm_output")
+    source_occurred_at = event.get("scheduled_at") or event.get("occurred_at")
     schedule_event_id = (
-        event.get("event_id")
+        event.get("source_event_id")
+        or event.get("event_id")
         or event.get("id")
         or event.get("message_id")
         or event.get("occurred_at")
     )
+    if not schedule_event_id:
+        canonical = json.dumps(event, sort_keys=True, separators=(",", ":"), default=str)
+        schedule_event_id = f"legacy:{hashlib.sha256(canonical.encode()).hexdigest()}"
 
     if not schedule_id:
         return
@@ -252,28 +261,26 @@ async def on_schedule_fired(
     # this handler receiving the event and ack-ing it. Durable idempotency across
     # the full window still rests on the run's unique constraint (workflow target)
     # and the Redis dedup key (agent target) inside handle_schedule_fired. Only set
-    # a _job_id when we have a stable event id to key on; otherwise fall back to
-    # streaq's random id (matches prior behavior).
-    dedup_kwargs: dict[str, str] = {}
-    if schedule_event_id:
-        dedup_kwargs["_job_id"] = (
-            f"workflow-schedule-fire:{schedule_id}:{schedule_event_id}"
-        )
+    dedup_kwargs = {
+        "_job_id": f"workflow-schedule-fire:{schedule_id}:{schedule_event_id}"
+    }
 
-    try:
-        await job_queue.enqueue(
-            "check_and_start_flows_for_schedule",
-            schedule_id=str(schedule_id),
-            payload=payload or {},
-            metadata=metadata or {},
-            llm_output=llm_output,
-            schedule_event_id=str(schedule_event_id) if schedule_event_id else None,
-            **dedup_kwargs,
-        )
-    except Exception as e:
-        fs_logger.error(
-            f"Failed to enqueue flow start job for schedule {schedule_id}: {e}"
-        )
+    await job_queue.enqueue(
+        "check_and_start_flows_for_schedule",
+        schedule_id=str(schedule_id),
+        payload=payload or {},
+        metadata=metadata or {},
+        llm_output=llm_output,
+        schedule_event_id=str(schedule_event_id),
+        source_occurred_at=(
+            source_occurred_at.isoformat()
+            if isinstance(source_occurred_at, datetime)
+            else str(source_occurred_at)
+            if source_occurred_at
+            else None
+        ),
+        **dedup_kwargs,
+    )
 
 
 @streaq_task(name="check_and_start_flows_for_schedule")
@@ -283,6 +290,7 @@ async def check_and_start_flows_for_schedule(
     metadata: dict | None = None,
     llm_output: dict | None = None,
     schedule_event_id: str | None = None,
+    source_occurred_at: str | None = None,
 ):
     """Check schedules and start or wake workflow runs."""
     worker_ctx: AppWorkerContext = streaq_worker.context
@@ -296,4 +304,9 @@ async def check_and_start_flows_for_schedule(
             metadata=metadata,
             llm_output=llm_output,
             schedule_event_id=schedule_event_id,
+            source_occurred_at=(
+                datetime.fromisoformat(source_occurred_at.replace("Z", "+00:00"))
+                if source_occurred_at
+                else None
+            ),
         )

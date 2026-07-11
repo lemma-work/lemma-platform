@@ -7,4 +7,3 @@ export type ResolveUserApprovalRequest = {
     decision: AgentRunApprovalDecision;
     response?: (Record<string, any> | null);
 };
-

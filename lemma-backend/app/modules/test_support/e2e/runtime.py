@@ -20,6 +20,7 @@ import httpx
 import uvicorn
 
 from app.core.config import settings
+from app.modules.schedule.config import schedule_settings
 from app.modules.agent.tests.e2e.system_lemma_helpers import (
     skip_unless_system_lemma,
     system_lemma_api_key,
@@ -87,14 +88,20 @@ def _agentbox_image_fingerprint(repo_root: Path) -> str | None:
         ).stdout
         untracked = subprocess.run(
             [
-                "git", "-C", str(repo_root), "ls-files",
-                "--others", "--exclude-standard", "--", *paths,
+                "git",
+                "-C",
+                str(repo_root),
+                "ls-files",
+                "--others",
+                "--exclude-standard",
+                "--",
+                *paths,
             ],
             check=True,
             capture_output=True,
             text=True,
         ).stdout
-    except (subprocess.CalledProcessError, FileNotFoundError):
+    except subprocess.CalledProcessError, FileNotFoundError:
         return None
 
     digest = hashlib.sha256()
@@ -319,7 +326,9 @@ async def local_agentbox_server(
                 break
             if server_task.done():
                 exc = server_task.exception()
-                raise RuntimeError("Local AgentBox server exited before startup") from exc
+                raise RuntimeError(
+                    "Local AgentBox server exited before startup"
+                ) from exc
             await asyncio.sleep(0.1)
         else:
             raise RuntimeError("Timed out starting local AgentBox server")
@@ -412,10 +421,10 @@ async def scheduler_api_server(e2e_settings) -> AsyncGenerator[str, None]:
     from app.scheduler import app as scheduler_app
 
     port = _available_port()
-    original_scheduler_url = settings.scheduler_api_url
+    original_scheduler_url = schedule_settings.scheduler_api_url
     original_scheduler_env = os.environ.get("SCHEDULER_API_URL")
-    settings.scheduler_api_url = f"http://127.0.0.1:{port}"
-    os.environ["SCHEDULER_API_URL"] = settings.scheduler_api_url
+    schedule_settings.scheduler_api_url = f"http://127.0.0.1:{port}"
+    os.environ["SCHEDULER_API_URL"] = schedule_settings.scheduler_api_url
 
     config = uvicorn.Config(
         app=scheduler_app,
@@ -435,11 +444,13 @@ async def scheduler_api_server(e2e_settings) -> AsyncGenerator[str, None]:
                 break
             if server_task.done():
                 exc = server_task.exception()
-                raise RuntimeError("Scheduler API server exited before startup") from exc
+                raise RuntimeError(
+                    "Scheduler API server exited before startup"
+                ) from exc
             await asyncio.sleep(0.1)
         else:
             raise RuntimeError("Timed out starting scheduler API server")
-        yield settings.scheduler_api_url
+        yield schedule_settings.scheduler_api_url
     finally:
         server.should_exit = True
         try:
@@ -448,7 +459,7 @@ async def scheduler_api_server(e2e_settings) -> AsyncGenerator[str, None]:
             server_task.cancel()
             with contextlib.suppress(asyncio.CancelledError):
                 await server_task
-        settings.scheduler_api_url = original_scheduler_url
+        schedule_settings.scheduler_api_url = original_scheduler_url
         if original_scheduler_env is None:
             os.environ.pop("SCHEDULER_API_URL", None)
         else:
@@ -518,6 +529,7 @@ async def full_stack(
         "EMAIL_TRANSPORT": "filesystem",
         "EMAIL_OUTPUT_DIR": settings.email_output_dir,
         "GCS_STORAGE_BUCKET": "",
+        "STORAGE_BUCKET": "",
         "PUBLIC_BUCKET_NAME": "",
         "STORAGE_BACKEND": "local",
         "EMBEDDING_PROVIDER": "local",

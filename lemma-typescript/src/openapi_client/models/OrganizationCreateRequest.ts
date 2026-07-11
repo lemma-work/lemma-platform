@@ -11,4 +11,3 @@ export type OrganizationCreateRequest = {
     join_policy?: OrganizationJoinPolicy;
     name: string;
 };
-

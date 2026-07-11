@@ -17,4 +17,3 @@ export type FunctionNodeConfig = {
      */
     input_mapping?: Record<string, (ExpressionInputBinding | LiteralInputBinding)>;
 };
-

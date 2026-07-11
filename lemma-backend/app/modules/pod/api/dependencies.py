@@ -9,15 +9,13 @@ from app.core.infrastructure.events.message_bus import get_message_bus
 from app.modules.pod.services.pod_service import PodService
 from app.modules.pod.services.pod_member_service import PodMemberService
 from app.modules.pod.services.pod_join_request_service import PodJoinRequestService
-from app.modules.icon.services.icon_service import IconService
+from app.composition.icons import create_icon_service
 from app.modules.pod.infrastructure.pod_repositories import (
     PodJoinRequestRepository,
     PodRepository,
     PodMemberRepository,
 )
-from app.modules.identity.infrastructure.organization_repositories import (
-    OrganizationRepository,
-)
+from app.composition.pod_identity_wiring import create_organization_repository
 from app.core.authorization.permissions import Permissions
 
 from app.modules.pod.domain.pod_entities import PodRole
@@ -33,10 +31,10 @@ def get_pod_service(
     return PodService(
         pod_repository=PodRepository(uow, message_bus=message_bus),
         pod_member_repository=PodMemberRepository(uow, message_bus=message_bus),
-        organization_repository=OrganizationRepository(uow),
+        organization_repository=create_organization_repository(uow),
         pod_role_service=PodRoleService(uow),
         authorization_service=create_authorization_service(uow),
-        icon_service=IconService(),
+        icon_service=create_icon_service(),
     )
 
 
@@ -48,7 +46,7 @@ def get_pod_member_service(
     return PodMemberService(
         pod_member_repository=PodMemberRepository(uow, message_bus=message_bus),
         pod_repository=PodRepository(uow, message_bus=message_bus),
-        organization_repository=OrganizationRepository(uow),
+        organization_repository=create_organization_repository(uow),
         pod_role_service=PodRoleService(uow),
     )
 
@@ -74,7 +72,7 @@ def get_pod_join_request_service(
         ),
         pod_member_repository=PodMemberRepository(uow, message_bus=message_bus),
         pod_repository=PodRepository(uow, message_bus=message_bus),
-        organization_repository=OrganizationRepository(uow),
+        organization_repository=create_organization_repository(uow),
         pod_role_service=PodRoleService(uow),
     )
 

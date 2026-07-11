@@ -11,4 +11,3 @@ export type UsageStatsResponse = {
     start_date: string;
     total: number;
 };
-

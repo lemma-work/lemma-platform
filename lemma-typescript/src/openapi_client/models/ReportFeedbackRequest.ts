@@ -32,4 +32,3 @@ export type ReportFeedbackRequest = {
      */
     suggested_next_steps?: (string | null);
 };
-

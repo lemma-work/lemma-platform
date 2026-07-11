@@ -62,7 +62,11 @@ normalize_json_file "$SPEC_TMP"
   "$CLIENT_SPEC_TMP" \
   --exclude-tag billing-subscriptions \
   --exclude-tag billing-webhooks \
-  --exclude-prefix /billing
+  --exclude-tag scheduler \
+  --exclude-tag webhooks \
+  --exclude-prefix /billing \
+  --exclude-prefix /scheduler \
+  --exclude-prefix /webhooks
 normalize_json_file "$CLIENT_SPEC_TMP"
 
 cd "$SDK_DIR"

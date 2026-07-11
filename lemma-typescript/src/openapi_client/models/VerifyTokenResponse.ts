@@ -11,4 +11,3 @@ export type VerifyTokenResponse = {
     scopes?: Array<string>;
     user_id: string;
 };
-

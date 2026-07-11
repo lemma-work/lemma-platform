@@ -11,4 +11,3 @@ export type UpdateRecordRequest = {
      */
     data: Record<string, any>;
 };
-

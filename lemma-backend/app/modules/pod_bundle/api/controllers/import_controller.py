@@ -17,18 +17,24 @@ from collections.abc import AsyncGenerator
 from typing import Annotated
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, File, Request, UploadFile, status
+from fastapi import APIRouter, Depends, Request, status
 from fastapi.responses import StreamingResponse
 
 from app.core.api.dependencies import CurrentUser, get_uow_factory
+from app.core.api.streaming_multipart import (
+    MultipartFileLimit,
+    stream_multipart_form,
+    streaming_multipart_openapi,
+)
 from app.core.authorization.scope import pod_context_scope
+from app.core.domain.realtime import RealtimeChannel
 from app.core.infrastructure.channels.channel_service import (
-    ChannelService,
     get_channel_service,
 )
 from app.core.infrastructure.db.uow_factory import UnitOfWorkFactory
-from app.modules.pod.api.dependencies import PodEditorDep, PodViewerDep
+from app.composition.pod_bundle_pod import PodEditorDep, PodViewerDep
 from app.modules.pod_bundle.api.dependencies import ImportUseCasesDep
+from app.modules.pod_bundle.config import pod_bundle_settings
 from app.modules.pod_bundle.api.schemas import (
     ApplyImportRequest,
     ImportStartRequest,
@@ -43,7 +49,7 @@ from app.modules.pod_bundle.infrastructure.state_store import (
 
 router = APIRouter(prefix="/pods", tags=["Pod Bundle"], redirect_slashes=False)
 
-ChannelServiceDep = Annotated[ChannelService, Depends(get_channel_service)]
+ChannelServiceDep = Annotated[RealtimeChannel, Depends(get_channel_service)]
 
 _TERMINAL_EVENT_TYPES = {"completed", "error", "expired"}
 
@@ -94,17 +100,43 @@ async def start_import(
         "it stages bytes and mints a URL, nothing more."
     ),
     dependencies=[PodEditorDep],
+    openapi_extra=streaming_multipart_openapi(
+        "fastapi___compat__v2__Body_pod__bundle__upload",
+        properties={
+            "data": {
+                "type": "string",
+                "format": "binary",
+                "contentMediaType": "application/octet-stream",
+                "title": "Data",
+            }
+        },
+        required=["data"],
+    ),
 )
 async def upload_bundle(
     pod_id: UUID,
+    request: Request,
     user: CurrentUser,
     use_cases: ImportUseCasesDep,
-    data: UploadFile = File(...),
 ) -> UploadResponse:
-    content = await data.read()
-    url, expires_at = await use_cases.stage_upload(
-        pod_id=pod_id, user_id=user.id, filename=data.filename, data=content
-    )
+    async with stream_multipart_form(
+        request,
+        file_limits={
+            "data": MultipartFileLimit(
+                max_bytes=pod_bundle_settings.pod_bundle_max_archive_bytes,
+                required=True,
+                label="pod bundle",
+            )
+        },
+        combined_max_bytes=pod_bundle_settings.pod_bundle_max_archive_bytes,
+    ) as form:
+        data = form.require_file("data")
+        url, expires_at = await use_cases.stage_upload(
+            pod_id=pod_id,
+            user_id=user.id,
+            filename=data.filename,
+            data=data.path,
+        )
     return UploadResponse(url=url, expires_at=expires_at)
 
 
@@ -182,7 +214,8 @@ async def replan_import(
 
 @router.delete(
     "/{pod_id}/bundle/imports/{import_id}",
-    status_code=status.HTTP_204_NO_CONTENT,
+    response_model=ImportStatusResponse,
+    status_code=status.HTTP_202_ACCEPTED,
     operation_id="pod.bundle.import.cancel",
     summary="Cancel Pod Import",
     description="Abort a running import and delete its state + staged archive.",
@@ -193,8 +226,11 @@ async def cancel_import(
     import_id: UUID,
     user: CurrentUser,
     use_cases: ImportUseCasesDep,
-) -> None:
-    await use_cases.cancel_import(pod_id=pod_id, import_id=import_id, user_id=user.id)
+) -> ImportStatusResponse:
+    state = await use_cases.cancel_import(
+        pod_id=pod_id, import_id=import_id, user_id=user.id
+    )
+    return ImportStatusResponse.from_state(state)
 
 
 @router.get(
@@ -232,7 +268,7 @@ async def stream_import_events(
 
 async def import_event_stream(
     store,
-    channel_service: ChannelService,
+    channel_service: RealtimeChannel,
     pod_id: UUID,
     import_id: UUID,
 ) -> AsyncGenerator[str, None]:

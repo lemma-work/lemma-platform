@@ -21,7 +21,7 @@ from typing import Any
 
 import httpx
 
-from app.modules.connectors.infrastructure.adapters.composio_operation_gateway import (
+from app.composition.surface_connectors import (
     ComposioOperationGateway,
 )
 

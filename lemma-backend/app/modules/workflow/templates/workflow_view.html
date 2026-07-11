@@ -1,0 +1,179 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Workflow Visualization</title>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/cytoscape/3.28.1/cytoscape.min.js" integrity="sha384-J7Q85oZE4GJ/e7+n2aOQsLXfDwwfnA8S2nZAL5BpFsfpCF84zQD7LroZ/dMnLgex" crossorigin="anonymous"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/dagre/0.8.5/dagre.min.js" integrity="sha384-2IH3T69EIKYC4c+RXZifZRvaH5SRUdacJW7j6HtE5rQbvLhKKdawxq6vpIzJ7j9M" crossorigin="anonymous"></script>
+    <script src="https://cdn.jsdelivr.net/npm/cytoscape-dagre@2.5.0/cytoscape-dagre.min.js" integrity="sha384-EHCdyFVbhtbpgI+4x7ETlZUvJwOkxJublmhTpH114NSk3fqfiUgcLl6pQm8JQwg9" crossorigin="anonymous"></script>
+    <style>
+        body { font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; margin: 0; padding: 0; display: flex; height: 100vh; overflow: hidden; }
+        #cy { flex-grow: 1; height: 100%; border-right: 1px solid #ccc; background-color: #f9f9f9; }
+        #sidebar { width: 350px; padding: 20px; box-sizing: border-box; background: #fff; overflow-y: auto; border-left: 1px solid #ddd; box-shadow: -2px 0 5px rgba(0,0,0,0.05); }
+        .node-details h3 { margin-top: 0; color: #333; border-bottom: 2px solid #007bff; padding-bottom: 10px; }
+        .node-details pre { background: #f4f4f4; padding: 10px; border-radius: 4px; overflow-x: auto; font-size: 12px; border: 1px solid #eee; }
+        .meta-info { font-size: 0.9em; color: #666; margin-bottom: 20px; }
+        .badge { display: inline-block; padding: 2px 6px; border-radius: 4px; font-size: 0.8em; margin-right: 5px; color: white;}
+        .badge-AGENT { background-color: #007bff; }
+        .badge-FUNCTION { background-color: #28a745; }
+        .badge-DECISION { background-color: #ffc107; color: #333; }
+        .header { position: absolute; top: 10px; left: 10px; z-index: 10; background: rgba(255,255,255,0.9); padding: 10px 15px; border-radius: 4px; box-shadow: 0 2px 5px rgba(0,0,0,0.1); }
+        .section-title { font-weight: bold; margin-top: 15px; margin-bottom: 5px; color: #555; }
+    </style>
+</head>
+<body>
+    <div class="header">
+        <h2 style="margin:0;">{{ workflow.name }}</h2>
+        <p style="margin:5px 0 0 0; color:#666; font-size:0.9em;">ID: {{ workflow.id }}</p>
+    </div>
+    <div id="cy"></div>
+    <div id="sidebar">
+        <div id="default-msg" style="color: #777; text-align: center; margin-top: 100px;">
+            Select a node to view details
+        </div>
+        <div id="details-content" style="display: none;" class="node-details">
+            <h3 id="detail-title">Node Name</h3>
+            <div class="meta-info">
+                <span id="detail-type" class="badge">TYPE</span>
+                <span id="detail-id">ID</span>
+            </div>
+            
+            <div class="section-title">Description</div>
+            <div id="detail-desc"></div>
+
+            <div class="section-title">Config</div>
+            <pre id="detail-config"></pre>
+
+            <div class="section-title">Input Mapping</div>
+            <pre id="detail-inputs"></pre>
+        </div>
+    </div>
+
+    <script>
+        const flowData = {{ workflow | tojson }};
+        const nodeDataMap = {}; // Map workflow node id to extra details if needed
+
+        // Transform nodes
+        const elements = [];
+        
+        // Start Node
+        if (flowData.start) {
+             elements.push({
+                data: { 
+                    id: 'start', 
+                    label: 'Start (' + flowData.start.type + ')',
+                    type: 'START',
+                    color: '#6c757d'
+                }
+            });
+            // If there's a first node, we might not know it implicitly without edges from 'start'. 
+            // Usually 'start' is virtual or points to first nodes via implicit logic or we visualize it.
+            // For now let's just show main nodes.
+        }
+
+        flowData.nodes.forEach(node => {
+            let color = '#ccc';
+            if (node.type === 'AGENT') color = '#007bff';
+            if (node.type === 'FUNCTION') color = '#28a745';
+            if (node.type === 'DECISION') color = '#ffc107';
+
+            elements.push({
+                data: {
+                    id: node.id,
+                    label: node.label || node.id,
+                    type: node.type,
+                    color: color,
+                    raw: node
+                }
+            });
+        });
+
+        // Edges
+        flowData.edges.forEach(edge => {
+            elements.push({
+                data: {
+                    id: edge.id,
+                    source: edge.source,
+                    target: edge.target,
+                    label: edge.condition || ''
+                }
+            });
+        });
+
+        const cy = cytoscape({
+            container: document.getElementById('cy'),
+            elements: elements,
+            style: [
+                {
+                    selector: 'node',
+                    style: {
+                        'background-color': 'data(color)',
+                        'label': 'data(label)',
+                        'color': '#333',
+                        'text-valign': 'center',
+                        'text-halign': 'center',
+                        'width': 'label',
+                        'height': 40,
+                        'padding': 10,
+                        'shape': 'round-rectangle',
+                        'font-size': 12,
+                        'text-wrap': 'wrap',
+                        'text-max-width': 100
+                    }
+                },
+                {
+                    selector: 'edge',
+                    style: {
+                        'width': 2,
+                        'line-color': '#999',
+                        'target-arrow-color': '#999',
+                        'target-arrow-shape': 'triangle',
+                        'curve-style': 'bezier',
+                        'label': 'data(label)',
+                        'font-size': 10,
+                        'text-background-color': '#fff',
+                        'text-background-opacity': 0.8
+                    }
+                },
+                {
+                    selector: 'node[type="START"]',
+                    style: {
+                        'shape': 'ellipse',
+                        'width': 60,
+                        'height': 60
+                    }
+                }
+            ],
+            layout: {
+                name: 'dagre', // requires cytoscape-dagre
+                rankDir: 'LR',
+                padding: 50
+            }
+        });
+
+        cy.on('tap', 'node', function(evt){
+            const node = evt.target;
+            const data = node.data().raw;
+            if (!data) return;
+
+            document.getElementById('default-msg').style.display = 'none';
+            const details = document.getElementById('details-content');
+            details.style.display = 'block';
+
+            document.getElementById('detail-title').innerText = data.label || data.id;
+            document.getElementById('detail-id').innerText = data.id;
+            
+            const badge = document.getElementById('detail-type');
+            badge.innerText = data.type;
+            badge.className = 'badge badge-' + data.type;
+
+            document.getElementById('detail-desc').innerText = "Node type: " + data.type; // Could fetch more description
+            
+            document.getElementById('detail-config').innerText = JSON.stringify(data.config, null, 2);
+            document.getElementById('detail-inputs').innerText = JSON.stringify(data.config.input_mapping || {}, null, 2);
+        });
+
+    </script>
+</body>
+</html>

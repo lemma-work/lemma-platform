@@ -8,15 +8,15 @@ from typing import Any
 from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
 from app.core.infrastructure.db.uow_factory import UnitOfWorkFactory
 from app.core.log.log import get_logger
-from app.modules.agent.domain.entities import Conversation
-from app.modules.agent.domain.value_objects import (
+from app.modules.agent.contracts import Conversation
+from app.modules.agent.contracts import (
     AgentEvent,
     AgentEventType,
     MessageDraft,
     MessageKind,
     MessageRole,
 )
-from app.modules.agent.tools.context import ConversationContext
+from app.modules.agent.contracts import ConversationContext
 from app.modules.agent_surfaces.domain.entities import SurfacePlatform
 from app.modules.agent_surfaces.platforms.platform_capabilities import (
     PLATFORM_CAPABILITIES,

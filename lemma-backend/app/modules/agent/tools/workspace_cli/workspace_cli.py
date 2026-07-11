@@ -1,8 +1,6 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import datetime, timezone
-from pathlib import PurePosixPath
 from typing import Any
 
 from app.core.domain.errors import DomainError
@@ -14,7 +12,6 @@ from app.modules.agent.tools.file_access import (
 )
 from app.modules.agent.tools.tool_errors import approval_error_result
 from app.modules.agent.tools.workspace_cli.models import (
-    ApplyPatchRequest,
     ExecCommandRequest,
     ExecCommandResult,
     ExecutePythonRequest,
@@ -22,18 +19,15 @@ from app.modules.agent.tools.workspace_cli.models import (
     ListProcessesResult,
     ProcessInfo,
     TerminateProcessRequest,
-    UpdatePlanRequest,
-    UpdatePlanResult,
     ViewImageRequest,
     ViewImageResponse,
     WriteStdinRequest,
 )
 from app.modules.agent.tools.workspace_cli.helper import trim_python_result
 from app.modules.agent.tools.workspace_entities import PythonExecutionResult
-from app.modules.workspace.services.workspace_tool_runtime import (
+from app.composition.agent_workspace import (
     get_workspace_tool_runtime,
 )
-from app.core.file_editor.file_editor import apply_edits
 from pydantic_ai import ToolReturn, BinaryContent
 import mimetypes
 
@@ -88,7 +82,9 @@ def _workspace_tool_failure(
     )
 
 
-def _python_workspace_tool_failure(exc: Exception, *, operation: str) -> PythonExecutionResult:
+def _python_workspace_tool_failure(
+    exc: Exception, *, operation: str
+) -> PythonExecutionResult:
     logger.warning("Workspace CLI %s failed: %s", operation, exc, exc_info=True)
     return PythonExecutionResult(
         success=False,
@@ -327,152 +323,6 @@ async def execute_python_internal(ctx: BaseAgentContext, request: ExecutePythonR
         return _python_workspace_tool_failure(exc, operation="execute_python")
 
 
-async def update_plan_internal(
-    ctx: BaseAgentContext,
-    request: UpdatePlanRequest,
-) -> UpdatePlanResult:
-    timestamp = datetime.now(timezone.utc).isoformat()
-    lines = ["# Task Plan", "", f"- Updated: `{timestamp}`", ""]
-    if request.comment:
-        lines.extend(["## Explanation", request.comment.strip(), ""])
-    lines.append("## Steps")
-    lines.append("")
-    for item in request.plan:
-        marker = "x" if item.status == "completed" else " "
-        lines.append(f"- [{marker}] `{item.status}` {item.step}")
-    content = "\n".join(lines) + "\n"
-    await ctx.file_manager.write_file("plan.md", content)
-    return UpdatePlanResult(success=True, file_path="plan.md", content=content)
-
-
-def _validate_patch_path(path: str) -> str:
-    cleaned = path.strip()
-    if not cleaned:
-        raise ValueError("Patch path cannot be empty")
-    if cleaned.startswith("/"):
-        raise ValueError(f"Absolute paths are not allowed in patch: {cleaned}")
-    pure = PurePosixPath(cleaned)
-    if ".." in pure.parts:
-        raise ValueError(f"Parent path traversal is not allowed in patch: {cleaned}")
-    return cleaned
-
-
-def _parse_apply_patch_blocks(
-    patch_text: str,
-) -> list[tuple[str, str, str, str | None]]:
-    lines = patch_text.splitlines()
-    if not lines or lines[0].strip() != "*** Begin Patch":
-        raise ValueError("Patch must start with '*** Begin Patch'")
-    if lines[-1].strip() != "*** End Patch":
-        raise ValueError("Patch must end with '*** End Patch'")
-
-    blocks: list[list[str]] = []
-    current: list[str] = []
-    for line in lines[1:-1]:
-        if (
-            line.startswith("*** Add File: ")
-            or line.startswith("*** Update File: ")
-            or line.startswith("*** Delete File: ")
-        ):
-            if current:
-                blocks.append(current)
-            current = [line]
-        else:
-            current.append(line)
-    if current:
-        blocks.append(current)
-
-    parsed: list[tuple[str, str, str, str | None]] = []
-    for block in blocks:
-        header = block[0]
-        if header.startswith("*** Add File: "):
-            path = _validate_patch_path(header[len("*** Add File: ") :])
-            content_lines = [ln[1:] for ln in block[1:] if ln.startswith("+")]
-            parsed.append(
-                (
-                    "add",
-                    path,
-                    "\n".join(content_lines) + ("\n" if content_lines else ""),
-                    None,
-                )
-            )
-            continue
-        if header.startswith("*** Delete File: "):
-            path = _validate_patch_path(header[len("*** Delete File: ") :])
-            parsed.append(("delete", path, "", None))
-            continue
-        if header.startswith("*** Update File: "):
-            path = _validate_patch_path(header[len("*** Update File: ") :])
-            move_to: str | None = None
-            body_lines = block[1:]
-            if body_lines and body_lines[0].startswith("*** Move to: "):
-                move_to = _validate_patch_path(body_lines[0][len("*** Move to: ") :])
-                body_lines = body_lines[1:]
-            parsed.append(("update", path, "\n".join(body_lines), move_to))
-            continue
-        raise ValueError(f"Unsupported block header: {header}")
-    return parsed
-
-
-def _split_hunks(update_content: str) -> list[list[str]]:
-    hunks: list[list[str]] = []
-    current: list[str] = []
-    for line in update_content.splitlines():
-        if line.startswith("@@"):
-            if current:
-                hunks.append(current)
-            current = []
-            continue
-        if line.startswith("***"):
-            continue
-        if line[:1] in {" ", "-", "+"}:
-            current.append(line)
-    if current:
-        hunks.append(current)
-    return hunks
-
-
-async def apply_patch_internal(
-    ctx: BaseAgentContext, request: ApplyPatchRequest
-) -> ExecCommandResult:
-    try:
-        blocks = _parse_apply_patch_blocks(request.patch)
-        for kind, file_path, payload, move_to in blocks:
-            if kind == "add":
-                await ctx.file_manager.write_file(file_path, payload)
-                continue
-
-            if kind == "delete":
-                await ctx.file_manager.delete_file(file_path)
-                continue
-
-            existing = await ctx.file_manager.read_file(file_path)
-            if isinstance(existing, bytes):
-                return ExecCommandResult(
-                    success=False, error=f"Cannot patch binary file: {file_path}"
-                )
-
-            updated = existing
-            for hunk in _split_hunks(payload):
-                search = "".join(
-                    f"{line[1:]}\n" for line in hunk if line[0] in {" ", "-"}
-                )
-                replace = "".join(
-                    f"{line[1:]}\n" for line in hunk if line[0] in {" ", "+"}
-                )
-                edit = f"<<<<<<< SEARCH\n{search}=======\n{replace}>>>>>>> REPLACE\n"
-                updated = apply_edits(updated, edit)
-
-            target_path = move_to or file_path
-            await ctx.file_manager.write_file(target_path, updated)
-            if move_to and move_to != file_path:
-                await ctx.file_manager.delete_file(file_path)
-
-        return ExecCommandResult(success=True, message="Patch applied successfully")
-    except Exception as exc:
-        return ExecCommandResult(success=False, error=str(exc))
-
-
 async def view_image_internal(
     ctx: BaseAgentContext,
     request: ViewImageRequest,
@@ -679,67 +529,6 @@ async def execute_python(
     here.
     """
     return await execute_python_internal(ctx, request)
-
-
-async def update_plan(
-    ctx: BaseAgentContext,
-    request: UpdatePlanRequest,
-) -> UpdatePlanResult:
-    """
-    Write or replace `plan.md` for the current private conversation workspace.
-
-    Use this when the agent should expose a clear execution plan to the user.
-    Provide ordered steps in `request.plan` and optionally summarize the reason
-    for the latest change in `request.comment`.
-    """
-    return await update_plan_internal(ctx, request)
-
-
-async def apply_patch(
-    ctx: BaseAgentContext,
-    request: ApplyPatchRequest,
-) -> ExecCommandResult:
-    """
-    Apply a Codex-style patch block to private workspace files.
-
-    Input contract:
-    - Tool arguments must be a JSON object matching `ApplyPatchRequest`.
-    - Put the full patch text in `request.patch`.
-    - Do not send raw patch text as top-level args.
-
-    Minimal request object:
-    `{"patch":"*** Begin Patch\\n*** Update File: path/to/file.py\\n@@\\n-old\\n+new\\n*** End Patch"}`
-
-    Patch format:
-    - Must start with `*** Begin Patch`
-    - Must end with `*** End Patch`
-    - Include one or more file operation blocks
-
-    Supported file operation blocks:
-    - `*** Add File: <path>`
-    - `*** Update File: <path>`
-    - `*** Delete File: <path>`
-    - optional after update header: `*** Move to: <new-path>`
-
-    Path constraints:
-    - Paths must be relative to workspace
-    - Absolute paths are rejected
-    - Parent traversal (`..`) is rejected
-
-    Update hunk rules:
-    - Use `@@` to start a hunk
-    - In hunk lines, use:
-      - ` ` (space) for context
-      - `-` for removed lines
-      - `+` for added lines
-
-    Example:
-    `{"patch":"*** Begin Patch\\n*** Add File: notes/todo.txt\\n+first\\n*** Update File: src/main.py\\n@@\\n-print('old')\\n+print('new')\\n*** End Patch"}`
-
-    Use this when precise multi-file edits are needed and shell text manipulation
-    would be brittle.
-    """
-    return await apply_patch_internal(ctx, request)
 
 
 async def view_image(

@@ -1,4 +1,4 @@
-"""FlowRun aggregate: the run state machine.
+"""WorkflowRun aggregate: the run state machine.
 
 The stepping loop lives in execution/stepper.py — this entity owns state
 transitions, step history, and the typed run context.
@@ -39,7 +39,7 @@ def summarize_error(error: str | None) -> str | None:
     return f"{head} … [truncated] … {tail}"
 
 
-class FlowRunStatus(str, Enum):
+class WorkflowRunStatus(str, Enum):
     """Status of a flow run.
 
     PENDING exists only in memory before the first advance; persisted runs
@@ -57,9 +57,9 @@ class FlowRunStatus(str, Enum):
 
 
 TERMINAL_STATUSES = {
-    FlowRunStatus.COMPLETED,
-    FlowRunStatus.FAILED,
-    FlowRunStatus.CANCELLED,
+    WorkflowRunStatus.COMPLETED,
+    WorkflowRunStatus.FAILED,
+    WorkflowRunStatus.CANCELLED,
 }
 
 
@@ -94,8 +94,8 @@ class StepRecord(BaseModel):
     error: str | None = None
 
 
-class FlowRunEntity(AggregateRoot):
-    """FlowRun aggregate representing an execution of a flow."""
+class WorkflowRunEntity(AggregateRoot):
+    """WorkflowRun aggregate representing an execution of a flow."""
 
     flow_id: UUID
     pod_id: UUID
@@ -106,7 +106,7 @@ class FlowRunEntity(AggregateRoot):
     # execution_context.start.
     start_payload: Dict[str, Any] = Field(default_factory=dict)
 
-    status: FlowRunStatus = FlowRunStatus.PENDING
+    status: WorkflowRunStatus = WorkflowRunStatus.PENDING
 
     current_node_id: str | None = None
     execution_stack: List[LoopFrame] = Field(default_factory=list)
@@ -136,7 +136,7 @@ class FlowRunEntity(AggregateRoot):
         entry_node_id: str,
         trigger: TriggerContext | None = None,
         schedule_event_id: str | None = None,
-    ) -> "FlowRunEntity":
+    ) -> "WorkflowRunEntity":
         """Create a run positioned at the entry node.
 
         start_type comes from the trigger (the call site is the source of
@@ -149,7 +149,7 @@ class FlowRunEntity(AggregateRoot):
             start_type=trigger.trigger_type.value if trigger else "MANUAL",
             schedule_event_id=schedule_event_id,
             start_payload=trigger.to_context_value() if trigger else {},
-            status=FlowRunStatus.RUNNING,
+            status=WorkflowRunStatus.RUNNING,
             current_node_id=entry_node_id,
             started_at=datetime.now(timezone.utc),
         )
@@ -184,7 +184,7 @@ class FlowRunEntity(AggregateRoot):
         step.output_data = output
         if human_wait:
             step.status = StepStatus.WAITING
-            self.status = FlowRunStatus.WAITING
+            self.status = WorkflowRunStatus.WAITING
 
     def record_node_output(self, node_id: str, output: Any) -> dict[str, Any]:
         normalized = normalize_node_output(output)
@@ -195,7 +195,7 @@ class FlowRunEntity(AggregateRoot):
 
     def resume(self, node_id: str, output: Dict[str, Any]) -> None:
         """Complete the suspend on node_id with its output and return to RUNNING."""
-        if self.status not in (FlowRunStatus.WAITING, FlowRunStatus.RUNNING):
+        if self.status not in (WorkflowRunStatus.WAITING, WorkflowRunStatus.RUNNING):
             raise ValueError(f"Cannot resume flow run in {self.status.value} state")
         if self.current_node_id != node_id:
             raise ValueError(
@@ -210,10 +210,10 @@ class FlowRunEntity(AggregateRoot):
         last_step.status = StepStatus.COMPLETED
         last_step.completed_at = datetime.now(timezone.utc)
         last_step.output_data = normalized
-        self.status = FlowRunStatus.RUNNING
+        self.status = WorkflowRunStatus.RUNNING
 
     def complete(self) -> None:
-        self.status = FlowRunStatus.COMPLETED
+        self.status = WorkflowRunStatus.COMPLETED
         self.current_node_id = None
         self.completed_at = datetime.now(timezone.utc)
 
@@ -228,7 +228,7 @@ class FlowRunEntity(AggregateRoot):
         if waiting_step is not None:
             waiting_step.status = StepStatus.CANCELLED
             waiting_step.completed_at = datetime.now(timezone.utc)
-        self.status = FlowRunStatus.CANCELLED
+        self.status = WorkflowRunStatus.CANCELLED
         self.completed_at = datetime.now(timezone.utc)
 
     def fail(self, error: str, *, node_id: str | None = None) -> None:
@@ -243,7 +243,7 @@ class FlowRunEntity(AggregateRoot):
                 last_step.status = StepStatus.FAILED
                 last_step.completed_at = datetime.now(timezone.utc)
                 last_step.error = summarize_error(error)
-        self.status = FlowRunStatus.FAILED
+        self.status = WorkflowRunStatus.FAILED
         self.error = summarize_error(error)
         self.failed_node_id = failed_node
         self.completed_at = datetime.now(timezone.utc)

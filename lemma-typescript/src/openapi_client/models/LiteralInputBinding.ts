@@ -12,4 +12,3 @@ export type LiteralInputBinding = {
      */
     value: any;
 };
-

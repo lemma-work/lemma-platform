@@ -13,4 +13,3 @@ export type AgentNode = {
     position?: (Record<string, number> | null);
     type?: string;
 };
-

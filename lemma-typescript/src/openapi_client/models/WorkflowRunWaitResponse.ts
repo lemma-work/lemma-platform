@@ -9,7 +9,6 @@ export type WorkflowRunWaitResponse = {
     completed_at?: (string | null);
     created_at?: (string | null);
     external_ref?: (string | null);
-    flow_id: string;
     id: string;
     node_id: string;
     payload?: Record<string, any>;
@@ -17,5 +16,5 @@ export type WorkflowRunWaitResponse = {
     run_id: string;
     status: WorkflowRunWaitStatus;
     wait_type: WorkflowRunWaitType;
+    workflow_id: string;
 };
-

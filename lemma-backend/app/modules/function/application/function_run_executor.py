@@ -38,6 +38,7 @@ from agentbox_client.apps.function_executor import (
 from app.core.config import settings
 from app.core.domain.events import DomainEvent
 from app.core.log.log import get_logger
+from app.core.redaction import redact_text
 from app.modules.function.domain.entities import (
     FunctionEntity,
     FunctionRunEntity,
@@ -53,14 +54,14 @@ from app.modules.function.domain.events import (
 from app.modules.function.services.function_runtime_command import (
     function_workspace_cwd,
 )
-from app.modules.workspace.agentbox_retry import (
+from app.composition.function_workspace import (
     CONNECT_PHASE_TRANSPORT_ERRORS,
     RETRYABLE_HTTP_STATUS_CODES,
     RETRYABLE_TRANSPORT_ERRORS,
     retry_on_transient_agentbox_error,
     truncate_message,
 )
-from app.modules.workspace.services.agentbox_manager import agentbox_sandbox_id
+from app.composition.function_workspace import agentbox_sandbox_id
 
 logger = get_logger(__name__)
 
@@ -655,22 +656,16 @@ class FunctionRunExecutor:
                     ),
                 )
 
-            # A synchronous execute is non-idempotent: a 504 means the request
-            # reached the in-sandbox app and it ran past its budget without
-            # responding, so re-sending could run the function again. Drop 504
-            # from the retryable set for sync and surface a timeout instead. For
-            # the same reason, drop the response-leg transport errors (read /
-            # remote-protocol / write / OSError such as "connection reset by
-            # peer"): each can fire *after* the function already ran and produced
-            # its side effect, so retrying would duplicate it -- the bug behind
-            # the Outlook duplicate-draft storm. Only connect-phase errors
-            # (ConnectError/ConnectTimeout) are safe, and they still cover the
-            # cold-start "app not ready" race. An async_job execute returns
-            # immediately, so it keeps the full sets.
+            # A synchronous execute is non-idempotent. Every upstream 5xx is
+            # ambiguous: the function may have completed its side effect before
+            # the response failed. Only 404/409 (the manager could not route to a
+            # running app) and connect-phase failures prove the execute request
+            # did not reach the function. An async job submission is safely
+            # deduplicated by run_id, so it retains the broader transient set.
             retryable_status_codes = (
                 RETRYABLE_HTTP_STATUS_CODES
                 if async_job
-                else RETRYABLE_HTTP_STATUS_CODES - {504}
+                else _NON_IDEMPOTENT_RECOVERABLE_SANDBOX_STATUS_CODES
             )
             retryable_transport_errors = (
                 RETRYABLE_TRANSPORT_ERRORS
@@ -785,7 +780,7 @@ class FunctionRunExecutor:
         response: FunctionInvokeResponse,
     ) -> None:
         run.logs = "\n".join(
-            entry.message for entry in response.logs if entry.message
+            redact_text(entry.message) for entry in response.logs if entry.message
         ) or None
         if response.status == "completed":
             run.status = FunctionRunStatus.COMPLETED
@@ -793,7 +788,7 @@ class FunctionRunExecutor:
             return
         run.status = FunctionRunStatus.FAILED
         if response.error is not None:
-            run.error = response.error.message
+            run.error = redact_text(response.error.message)
         else:
             run.error = f"Function executor returned status {response.status}"
 
@@ -899,7 +894,10 @@ class FunctionRunExecutor:
         """
         if isinstance(exc, FunctionValidationError):
             # Already authored to be user-facing (e.g. schema mismatch).
-            return truncate_message(str(exc)) or "Function validation failed."
+            return (
+                truncate_message(redact_text(str(exc)))
+                or "Function validation failed."
+            )
         if isinstance(exc, httpx.HTTPStatusError):
             status_code = exc.response.status_code
             if status_code in (502, 503, 504):

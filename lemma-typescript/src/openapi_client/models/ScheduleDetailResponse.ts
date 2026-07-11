@@ -33,4 +33,3 @@ export type ScheduleDetailResponse = {
     workflow_id: (string | null);
     workflow_name?: (string | null);
 };
-

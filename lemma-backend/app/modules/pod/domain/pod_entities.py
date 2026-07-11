@@ -4,9 +4,8 @@ from typing import Mapping, Optional
 from uuid import UUID
 from pydantic import BaseModel, Field, ValidationError, field_validator, model_serializer, model_validator
 from app.core.domain.aggregate import AggregateRoot
-from app.modules.agent.domain.value_objects import AgentRuntimeConfig
-from app.modules.identity.domain.organization_entities import OrganizationRole
-from app.modules.identity.domain.user_entities import UserEntity
+from app.core.domain.runtime import AgentRuntimeConfig
+from app.modules.identity.contracts import OrganizationRole, UserEntity
 from app.modules.pod.domain.roles import PodRole
 
 
@@ -125,7 +124,6 @@ class PodEntity(AggregateRoot):
                 organization_id=self.organization_id,
             )
         )
-
 
 class PodUpdateEntity(BaseModel):
     """Pod update entity."""

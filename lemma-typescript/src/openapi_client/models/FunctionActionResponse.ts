@@ -38,4 +38,3 @@ export type FunctionActionResponse = {
     user_id: string;
     visibility?: string;
 };
-

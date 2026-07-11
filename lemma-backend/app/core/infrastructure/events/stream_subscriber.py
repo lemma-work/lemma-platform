@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from faststream.redis import StreamSub
 
-from app.core.config import settings
+from app.core.infrastructure.events.config import event_transport_settings
 from app.core.log.log import get_logger
 
 logger = get_logger(__name__)
@@ -11,6 +11,16 @@ logger = get_logger(__name__)
 # time (the decorators call redis_stream_sub). The worker uses this to keep the
 # Redis consumer groups alive — see ensure_consumer_groups below.
 _REGISTERED_STREAM_GROUPS: set[tuple[str, str]] = set()
+_DECLARED_STREAM_GROUPS: set[tuple[str, str]] = set()
+
+
+class ConsumerGroupTopologyError(RuntimeError):
+    """A declared Redis Stream consumer group could not be ensured."""
+
+
+def declare_stream_groups(groups) -> None:
+    """Add module-declared stream/group relationships to the process topology."""
+    _DECLARED_STREAM_GROUPS.update(groups)
 
 
 def redis_stream_sub(
@@ -26,13 +36,86 @@ def redis_stream_sub(
         stream,
         group=group,
         consumer=consumer,
-        polling_interval=settings.redis_stream_polling_interval_ms,
+        polling_interval=event_transport_settings.redis_stream_polling_interval_ms,
     )
+
+
+def redis_stream_reclaim_sub(
+    stream: str,
+    *,
+    group: str,
+    consumer: str,
+) -> StreamSub:
+    """Build the companion subscriber that only reclaims abandoned deliveries.
+
+    FastStream's ``min_idle_time`` mode uses XAUTOCLAIM exclusively and does not
+    read new ``>`` entries. It must therefore run alongside, never instead of,
+    the normal XREADGROUP subscriber.
+    """
+    _REGISTERED_STREAM_GROUPS.add((stream, group))
+    return StreamSub(
+        stream,
+        group=group,
+        consumer=f"{consumer}-reclaimer",
+        polling_interval=event_transport_settings.redis_stream_polling_interval_ms,
+        min_idle_time=event_transport_settings.redis_stream_min_idle_time_ms,
+    )
+
+
+def reliable_redis_stream_subscriber(
+    router,
+    stream: str,
+    *,
+    group: str,
+    consumer: str,
+):
+    """Register normal delivery plus 60-second abandoned-message reclaim."""
+
+    def decorator(handler):
+        normal = router.subscriber(
+            stream=redis_stream_sub(stream, group=group, consumer=consumer)
+        )(handler)
+        router.subscriber(
+            stream=redis_stream_reclaim_sub(
+                stream,
+                group=group,
+                consumer=consumer,
+            )
+        )(handler)
+        return normal
+
+    return decorator
 
 
 def registered_stream_groups() -> set[tuple[str, str]]:
     """All (stream, group) pairs declared by grouped stream subscribers."""
-    return set(_REGISTERED_STREAM_GROUPS)
+    return set(_REGISTERED_STREAM_GROUPS | _DECLARED_STREAM_GROUPS)
+
+
+async def ensure_stream_groups(redis_client, stream: str) -> int:
+    """Strictly ensure every declared group for one stream before publication."""
+    created = 0
+    groups = sorted(
+        group
+        for declared_stream, group in registered_stream_groups()
+        if declared_stream == stream
+    )
+    for group in groups:
+        try:
+            await redis_client.xgroup_create(
+                name=stream,
+                groupname=group,
+                id="$",
+                mkstream=True,
+            )
+            created += 1
+        except Exception as exc:
+            if "BUSYGROUP" in str(exc):
+                continue
+            raise ConsumerGroupTopologyError(
+                f"Could not ensure consumer group {group!r} for stream {stream!r}"
+            ) from exc
+    return created
 
 
 async def ensure_consumer_groups(
@@ -70,23 +153,23 @@ async def ensure_consumer_groups(
             created += 1
             if warn_on_create:
                 logger.warning(
-                    "Recreated missing Redis consumer group '%s' on stream '%s'",
-                    group,
-                    stream,
+                    "Recreated missing Redis consumer group",
+                    group=group,
+                    stream=stream,
                 )
             else:
                 logger.debug(
-                    "Created Redis consumer group '%s' on stream '%s'",
-                    group,
-                    stream,
+                    "Created Redis consumer group",
+                    group=group,
+                    stream=stream,
                 )
         except Exception as exc:  # BUSYGROUP (already exists) is the happy path
             if "BUSYGROUP" not in str(exc):
                 logger.warning(
-                    "Failed ensuring consumer group '%s' on stream '%s': %s",
-                    group,
-                    stream,
-                    exc,
+                    "Failed ensuring consumer group",
+                    group=group,
+                    stream=stream,
+                    error_type=type(exc).__name__,
                 )
     return created
 
@@ -111,16 +194,16 @@ async def ensure_named_groups(
             created += 1
             if warn_on_create:
                 logger.warning(
-                    "Recreated missing Redis consumer group '%s' on stream '%s'",
-                    group,
-                    stream,
+                    "Recreated missing Redis consumer group",
+                    group=group,
+                    stream=stream,
                 )
         except Exception as exc:  # BUSYGROUP (already exists) is the happy path
             if "BUSYGROUP" not in str(exc):
                 logger.warning(
-                    "Failed ensuring consumer group '%s' on stream '%s': %s",
-                    group,
-                    stream,
-                    exc,
+                    "Failed ensuring consumer group",
+                    group=group,
+                    stream=stream,
+                    error_type=type(exc).__name__,
                 )
     return created

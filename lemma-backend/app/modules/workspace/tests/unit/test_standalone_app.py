@@ -60,6 +60,7 @@ async def test_standalone_lifespan_starts_api_scheduler_and_worker(monkeypatch) 
     )
 
     app = standalone_app.create_standalone_app()
+    assert app.state.embedded_worker is True
 
     async with app.router.lifespan_context(app):
         async with AsyncClient(

@@ -12,8 +12,6 @@ _NAME_TO_MODULE = {
     'AccountCreateSchema': 'account_create_schema',
     'AccountCreateSchemaCredentials': 'account_create_schema_credentials',
     'AccountCreateSchemaPreferencesType0': 'account_create_schema_preferences_type_0',
-    'AccountCredentialsResponseSchema': 'account_credentials_response_schema',
-    'AccountCredentialsResponseSchemaUserDataType0': 'account_credentials_response_schema_user_data_type_0',
     'AccountListResponseSchema': 'account_list_response_schema',
     'AccountResponseSchema': 'account_response_schema',
     'AccountResponseSchemaPreferencesType0': 'account_response_schema_preferences_type_0',
@@ -53,7 +51,7 @@ _NAME_TO_MODULE = {
     'AgentSurfaceResponse': 'agent_surface_response',
     'AgentSurfaceStatus': 'agent_surface_status',
     'AgentToolset': 'agent_toolset',
-    'ApiKeyCredentialsResponseSchema': 'api_key_credentials_response_schema',
+    'AppBundleUploadRequest': 'app_bundle_upload_request',
     'AppBundleUploadResponse': 'app_bundle_upload_response',
     'AppDetailResponse': 'app_detail_response',
     'AppListResponse': 'app_list_response',
@@ -68,6 +66,7 @@ _NAME_TO_MODULE = {
     'ApplyImportRequest': 'apply_import_request',
     'ApplyImportRequestVariables': 'apply_import_request_variables',
     'ApprovalDecisionResponse': 'approval_decision_response',
+    'Attach': 'attach',
     'AuthConfigCreateSchema': 'auth_config_create_schema',
     'AuthConfigCreateSchemaCredentialConfigType0': 'auth_config_create_schema_credential_config_type_0',
     'AuthConfigListResponseSchema': 'auth_config_list_response_schema',
@@ -76,14 +75,10 @@ _NAME_TO_MODULE = {
     'AuthConfigResponseSchemaMetadataType0': 'auth_config_response_schema_metadata_type_0',
     'AuthProvider': 'auth_provider',
     'AuthScheme': 'auth_scheme',
+    'AvailableSurface': 'available_surface',
     'AvailableSurfaceChannelResponse': 'available_surface_channel_response',
     'AvailableSurfaceChannelsResponse': 'available_surface_channels_response',
-    'BodyAppBundleUpload': 'body_app_bundle_upload',
-    'BodyFileMarkdownAttach': 'body_file_markdown_attach',
-    'BodyFileUpdate': 'body_file_update',
-    'BodyFileUpload': 'body_file_upload',
-    'BodyIconUpload': 'body_icon_upload',
-    'BodyPodBundleUpload': 'body_pod_bundle_upload',
+    'AvailableSurfacesResponse': 'available_surfaces_response',
     'BulkCreateRecordsRequest': 'bulk_create_records_request',
     'BulkCreateRecordsRequestRecordsItem': 'bulk_create_records_request_records_item',
     'BulkDeleteRecordsRequest': 'bulk_delete_records_request',
@@ -135,13 +130,13 @@ _NAME_TO_MODULE = {
     'CreateTableRequest': 'create_table_request',
     'CreateTableRequestConfigType0': 'create_table_request_config_type_0',
     'CreateUserDaemonRuntimeProfileRequest': 'create_user_daemon_runtime_profile_request',
-    'CredentialTypes': 'credential_types',
-    'DataStoreFlowStartInput': 'data_store_flow_start_input',
-    'DataStoreFlowStartOutput': 'data_store_flow_start_output',
+    'DataStoreWorkflowStartConfigInput': 'data_store_workflow_start_config_input',
+    'DataStoreWorkflowStartConfigOutput': 'data_store_workflow_start_config_output',
     'DataStoreWorkflowStartInput': 'data_store_workflow_start_input',
     'DataStoreWorkflowStartOutput': 'data_store_workflow_start_output',
     'DatastoreCountResponse': 'datastore_count_response',
     'DatastoreDataType': 'datastore_data_type',
+    'DatastoreFileUploadRequest': 'datastore_file_upload_request',
     'DatastoreOperation': 'datastore_operation',
     'DatastoreQueryRequest': 'datastore_query_request',
     'DatastoreQueryResponse': 'datastore_query_response',
@@ -160,10 +155,10 @@ _NAME_TO_MODULE = {
     'EndNodeResponse': 'end_node_response',
     'EndNodeResponsePositionType0': 'end_node_response_position_type_0',
     'ErrorResponse': 'error_response',
-    'EventFlowStartInput': 'event_flow_start_input',
-    'EventFlowStartInputTriggerConfig': 'event_flow_start_input_trigger_config',
-    'EventFlowStartOutput': 'event_flow_start_output',
-    'EventFlowStartOutputTriggerConfig': 'event_flow_start_output_trigger_config',
+    'EventWorkflowStartConfigInput': 'event_workflow_start_config_input',
+    'EventWorkflowStartConfigInputTriggerConfig': 'event_workflow_start_config_input_trigger_config',
+    'EventWorkflowStartConfigOutput': 'event_workflow_start_config_output',
+    'EventWorkflowStartConfigOutputTriggerConfig': 'event_workflow_start_config_output_trigger_config',
     'EventWorkflowStartInput': 'event_workflow_start_input',
     'EventWorkflowStartOutput': 'event_workflow_start_output',
     'ExecuteFunctionRequest': 'execute_function_request',
@@ -173,6 +168,7 @@ _NAME_TO_MODULE = {
     'ExportStatus': 'export_status',
     'ExportStatusResponse': 'export_status_response',
     'ExpressionInputBinding': 'expression_input_binding',
+    'FastapiCompatV2BodyPodBundleUpload': 'fastapi_compat_v2_body_pod_bundle_upload',
     'FeedbackCategory': 'feedback_category',
     'FileChildSchema': 'file_child_schema',
     'FileChildrenResponse': 'file_children_response',
@@ -188,9 +184,6 @@ _NAME_TO_MODULE = {
     'FileSignedUrlResponse': 'file_signed_url_response',
     'FileSummaryResponse': 'file_summary_response',
     'FileUrlResponse': 'file_url_response',
-    'FlowDetailResponse': 'flow_detail_response',
-    'FlowRunStatus': 'flow_run_status',
-    'FlowSummaryResponse': 'flow_summary_response',
     'ForeignKeySpec': 'foreign_key_spec',
     'FormNode': 'form_node',
     'FormNodeConfig': 'form_node_config',
@@ -232,6 +225,7 @@ _NAME_TO_MODULE = {
     'FunctionSummaryResponseConfigType0': 'function_summary_response_config_type_0',
     'FunctionType': 'function_type',
     'HarnessKind': 'harness_kind',
+    'IconUploadRequest': 'icon_upload_request',
     'IconUploadResponse': 'icon_upload_response',
     'ImportPlanResponse': 'import_plan_response',
     'ImportStartRequest': 'import_start_request',
@@ -256,7 +250,6 @@ _NAME_TO_MODULE = {
     'MessageResponseSchema': 'message_response_schema',
     'OAuth2DefaultsResponseSchema': 'o_auth_2_defaults_response_schema',
     'OAuth2DefaultsResponseSchemaExtraParams': 'o_auth_2_defaults_response_schema_extra_params',
-    'OauthCredentialsResponseSchema': 'oauth_credentials_response_schema',
     'OperationDetail': 'operation_detail',
     'OperationDetailInputSchema': 'operation_detail_input_schema',
     'OperationDetailOutputSchemaType0': 'operation_detail_output_schema_type_0',
@@ -341,10 +334,16 @@ _NAME_TO_MODULE = {
     'ScheduleDetailResponseFilterOutputSchemaType0': 'schedule_detail_response_filter_output_schema_type_0',
     'ScheduleFireStatus': 'schedule_fire_status',
     'ScheduleListResponse': 'schedule_list_response',
+    'ScheduleRunListResponse': 'schedule_run_list_response',
+    'ScheduleRunResponse': 'schedule_run_response',
+    'ScheduleRunResponseLlmOutput': 'schedule_run_response_llm_output',
+    'ScheduleRunResponseMetadata': 'schedule_run_response_metadata',
+    'ScheduleRunResponsePayload': 'schedule_run_response_payload',
+    'ScheduleRunStatus': 'schedule_run_status',
     'ScheduleType': 'schedule_type',
-    'ScheduledFlowStartInput': 'scheduled_flow_start_input',
-    'ScheduledFlowStartOutput': 'scheduled_flow_start_output',
-    'ScheduledFlowStartType': 'scheduled_flow_start_type',
+    'ScheduledWorkflowStartConfigInput': 'scheduled_workflow_start_config_input',
+    'ScheduledWorkflowStartConfigOutput': 'scheduled_workflow_start_config_output',
+    'ScheduledWorkflowStartConfigType': 'scheduled_workflow_start_config_type',
     'ScheduledWorkflowStartInput': 'scheduled_workflow_start_input',
     'ScheduledWorkflowStartOutput': 'scheduled_workflow_start_output',
     'SearchMethod': 'search_method',
@@ -359,6 +358,9 @@ _NAME_TO_MODULE = {
     'SurfaceChannelRouteInput': 'surface_channel_route_input',
     'SurfaceChannelRouteResponse': 'surface_channel_route_response',
     'SurfaceConfigResponse': 'surface_config_response',
+    'SurfaceConnectDescriptor': 'surface_connect_descriptor',
+    'SurfaceConnectDescriptorAuthConfigSchemaType0': 'surface_connect_descriptor_auth_config_schema_type_0',
+    'SurfaceConnectDescriptorCredentialSchemaType0': 'surface_connect_descriptor_credential_schema_type_0',
     'SurfaceConnectorSetupGuide': 'surface_connector_setup_guide',
     'SurfaceCreateRequest': 'surface_create_request',
     'SurfaceCredentialMode': 'surface_credential_mode',
@@ -366,6 +368,7 @@ _NAME_TO_MODULE = {
     'SurfaceIdentityConfigResponse': 'surface_identity_config_response',
     'SurfacePlatform': 'surface_platform',
     'SurfacePlatformSetupGuide': 'surface_platform_setup_guide',
+    'SurfaceReach': 'surface_reach',
     'SurfaceSendPolicyConfig': 'surface_send_policy_config',
     'SurfaceSendRequest': 'surface_send_request',
     'SurfaceSendResponse': 'surface_send_response',
@@ -382,6 +385,7 @@ _NAME_TO_MODULE = {
     'TableDetailResponseConfigType0': 'table_detail_response_config_type_0',
     'TableListResponse': 'table_list_response',
     'TableSummaryResponse': 'table_summary_response',
+    'Update': 'update',
     'UpdateAgentRequest': 'update_agent_request',
     'UpdateAgentRequestInputSchemaType0': 'update_agent_request_input_schema_type_0',
     'UpdateAgentRequestMetadataType0': 'update_agent_request_metadata_type_0',
@@ -431,6 +435,7 @@ _NAME_TO_MODULE = {
     'WebSearchResponse': 'web_search_response',
     'WidgetEmbedUrlResponse': 'widget_embed_url_response',
     'WorkflowCreateRequest': 'workflow_create_request',
+    'WorkflowDetailResponse': 'workflow_detail_response',
     'WorkflowEdge': 'workflow_edge',
     'WorkflowGraphUpdateRequest': 'workflow_graph_update_request',
     'WorkflowListResponse': 'workflow_list_response',
@@ -440,6 +445,7 @@ _NAME_TO_MODULE = {
     'WorkflowRunListResponse': 'workflow_run_list_response',
     'WorkflowRunResponse': 'workflow_run_response',
     'WorkflowRunResponseExecutionContext': 'workflow_run_response_execution_context',
+    'WorkflowRunStatus': 'workflow_run_status',
     'WorkflowRunSummaryResponse': 'workflow_run_summary_response',
     'WorkflowRunWaitAssignment': 'workflow_run_wait_assignment',
     'WorkflowRunWaitAssignmentListResponse': 'workflow_run_wait_assignment_list_response',
@@ -447,6 +453,7 @@ _NAME_TO_MODULE = {
     'WorkflowRunWaitResponsePayload': 'workflow_run_wait_response_payload',
     'WorkflowRunWaitStatus': 'workflow_run_wait_status',
     'WorkflowRunWaitType': 'workflow_run_wait_type',
+    'WorkflowSummaryResponse': 'workflow_summary_response',
     'WorkflowUpdateRequest': 'workflow_update_request',
     'WorkspaceAppAccessRequest': 'workspace_app_access_request',
     'WorkspaceAppAccessResponse': 'workspace_app_access_response',
@@ -461,8 +468,6 @@ if TYPE_CHECKING:
     from .account_create_schema import AccountCreateSchema
     from .account_create_schema_credentials import AccountCreateSchemaCredentials
     from .account_create_schema_preferences_type_0 import AccountCreateSchemaPreferencesType0
-    from .account_credentials_response_schema import AccountCredentialsResponseSchema
-    from .account_credentials_response_schema_user_data_type_0 import AccountCredentialsResponseSchemaUserDataType0
     from .account_list_response_schema import AccountListResponseSchema
     from .account_response_schema import AccountResponseSchema
     from .account_response_schema_preferences_type_0 import AccountResponseSchemaPreferencesType0
@@ -502,7 +507,7 @@ if TYPE_CHECKING:
     from .agent_surface_response import AgentSurfaceResponse
     from .agent_surface_status import AgentSurfaceStatus
     from .agent_toolset import AgentToolset
-    from .api_key_credentials_response_schema import ApiKeyCredentialsResponseSchema
+    from .app_bundle_upload_request import AppBundleUploadRequest
     from .app_bundle_upload_response import AppBundleUploadResponse
     from .app_detail_response import AppDetailResponse
     from .app_list_response import AppListResponse
@@ -517,6 +522,7 @@ if TYPE_CHECKING:
     from .apply_import_request import ApplyImportRequest
     from .apply_import_request_variables import ApplyImportRequestVariables
     from .approval_decision_response import ApprovalDecisionResponse
+    from .attach import Attach
     from .auth_config_create_schema import AuthConfigCreateSchema
     from .auth_config_create_schema_credential_config_type_0 import AuthConfigCreateSchemaCredentialConfigType0
     from .auth_config_list_response_schema import AuthConfigListResponseSchema
@@ -525,14 +531,10 @@ if TYPE_CHECKING:
     from .auth_config_response_schema_metadata_type_0 import AuthConfigResponseSchemaMetadataType0
     from .auth_provider import AuthProvider
     from .auth_scheme import AuthScheme
+    from .available_surface import AvailableSurface
     from .available_surface_channel_response import AvailableSurfaceChannelResponse
     from .available_surface_channels_response import AvailableSurfaceChannelsResponse
-    from .body_app_bundle_upload import BodyAppBundleUpload
-    from .body_file_markdown_attach import BodyFileMarkdownAttach
-    from .body_file_update import BodyFileUpdate
-    from .body_file_upload import BodyFileUpload
-    from .body_icon_upload import BodyIconUpload
-    from .body_pod_bundle_upload import BodyPodBundleUpload
+    from .available_surfaces_response import AvailableSurfacesResponse
     from .bulk_create_records_request import BulkCreateRecordsRequest
     from .bulk_create_records_request_records_item import BulkCreateRecordsRequestRecordsItem
     from .bulk_delete_records_request import BulkDeleteRecordsRequest
@@ -584,13 +586,13 @@ if TYPE_CHECKING:
     from .create_table_request import CreateTableRequest
     from .create_table_request_config_type_0 import CreateTableRequestConfigType0
     from .create_user_daemon_runtime_profile_request import CreateUserDaemonRuntimeProfileRequest
-    from .credential_types import CredentialTypes
-    from .data_store_flow_start_input import DataStoreFlowStartInput
-    from .data_store_flow_start_output import DataStoreFlowStartOutput
+    from .data_store_workflow_start_config_input import DataStoreWorkflowStartConfigInput
+    from .data_store_workflow_start_config_output import DataStoreWorkflowStartConfigOutput
     from .data_store_workflow_start_input import DataStoreWorkflowStartInput
     from .data_store_workflow_start_output import DataStoreWorkflowStartOutput
     from .datastore_count_response import DatastoreCountResponse
     from .datastore_data_type import DatastoreDataType
+    from .datastore_file_upload_request import DatastoreFileUploadRequest
     from .datastore_operation import DatastoreOperation
     from .datastore_query_request import DatastoreQueryRequest
     from .datastore_query_response import DatastoreQueryResponse
@@ -609,10 +611,10 @@ if TYPE_CHECKING:
     from .end_node_response import EndNodeResponse
     from .end_node_response_position_type_0 import EndNodeResponsePositionType0
     from .error_response import ErrorResponse
-    from .event_flow_start_input import EventFlowStartInput
-    from .event_flow_start_input_trigger_config import EventFlowStartInputTriggerConfig
-    from .event_flow_start_output import EventFlowStartOutput
-    from .event_flow_start_output_trigger_config import EventFlowStartOutputTriggerConfig
+    from .event_workflow_start_config_input import EventWorkflowStartConfigInput
+    from .event_workflow_start_config_input_trigger_config import EventWorkflowStartConfigInputTriggerConfig
+    from .event_workflow_start_config_output import EventWorkflowStartConfigOutput
+    from .event_workflow_start_config_output_trigger_config import EventWorkflowStartConfigOutputTriggerConfig
     from .event_workflow_start_input import EventWorkflowStartInput
     from .event_workflow_start_output import EventWorkflowStartOutput
     from .execute_function_request import ExecuteFunctionRequest
@@ -622,6 +624,7 @@ if TYPE_CHECKING:
     from .export_status import ExportStatus
     from .export_status_response import ExportStatusResponse
     from .expression_input_binding import ExpressionInputBinding
+    from .fastapi_compat_v2_body_pod_bundle_upload import FastapiCompatV2BodyPodBundleUpload
     from .feedback_category import FeedbackCategory
     from .file_child_schema import FileChildSchema
     from .file_children_response import FileChildrenResponse
@@ -637,9 +640,6 @@ if TYPE_CHECKING:
     from .file_signed_url_response import FileSignedUrlResponse
     from .file_summary_response import FileSummaryResponse
     from .file_url_response import FileUrlResponse
-    from .flow_detail_response import FlowDetailResponse
-    from .flow_run_status import FlowRunStatus
-    from .flow_summary_response import FlowSummaryResponse
     from .foreign_key_spec import ForeignKeySpec
     from .form_node import FormNode
     from .form_node_config import FormNodeConfig
@@ -681,6 +681,7 @@ if TYPE_CHECKING:
     from .function_summary_response_config_type_0 import FunctionSummaryResponseConfigType0
     from .function_type import FunctionType
     from .harness_kind import HarnessKind
+    from .icon_upload_request import IconUploadRequest
     from .icon_upload_response import IconUploadResponse
     from .import_plan_response import ImportPlanResponse
     from .import_start_request import ImportStartRequest
@@ -705,7 +706,6 @@ if TYPE_CHECKING:
     from .message_response_schema import MessageResponseSchema
     from .o_auth_2_defaults_response_schema import OAuth2DefaultsResponseSchema
     from .o_auth_2_defaults_response_schema_extra_params import OAuth2DefaultsResponseSchemaExtraParams
-    from .oauth_credentials_response_schema import OauthCredentialsResponseSchema
     from .operation_detail import OperationDetail
     from .operation_detail_input_schema import OperationDetailInputSchema
     from .operation_detail_output_schema_type_0 import OperationDetailOutputSchemaType0
@@ -790,10 +790,16 @@ if TYPE_CHECKING:
     from .schedule_detail_response_filter_output_schema_type_0 import ScheduleDetailResponseFilterOutputSchemaType0
     from .schedule_fire_status import ScheduleFireStatus
     from .schedule_list_response import ScheduleListResponse
+    from .schedule_run_list_response import ScheduleRunListResponse
+    from .schedule_run_response import ScheduleRunResponse
+    from .schedule_run_response_llm_output import ScheduleRunResponseLlmOutput
+    from .schedule_run_response_metadata import ScheduleRunResponseMetadata
+    from .schedule_run_response_payload import ScheduleRunResponsePayload
+    from .schedule_run_status import ScheduleRunStatus
     from .schedule_type import ScheduleType
-    from .scheduled_flow_start_input import ScheduledFlowStartInput
-    from .scheduled_flow_start_output import ScheduledFlowStartOutput
-    from .scheduled_flow_start_type import ScheduledFlowStartType
+    from .scheduled_workflow_start_config_input import ScheduledWorkflowStartConfigInput
+    from .scheduled_workflow_start_config_output import ScheduledWorkflowStartConfigOutput
+    from .scheduled_workflow_start_config_type import ScheduledWorkflowStartConfigType
     from .scheduled_workflow_start_input import ScheduledWorkflowStartInput
     from .scheduled_workflow_start_output import ScheduledWorkflowStartOutput
     from .search_method import SearchMethod
@@ -808,6 +814,9 @@ if TYPE_CHECKING:
     from .surface_channel_route_input import SurfaceChannelRouteInput
     from .surface_channel_route_response import SurfaceChannelRouteResponse
     from .surface_config_response import SurfaceConfigResponse
+    from .surface_connect_descriptor import SurfaceConnectDescriptor
+    from .surface_connect_descriptor_auth_config_schema_type_0 import SurfaceConnectDescriptorAuthConfigSchemaType0
+    from .surface_connect_descriptor_credential_schema_type_0 import SurfaceConnectDescriptorCredentialSchemaType0
     from .surface_connector_setup_guide import SurfaceConnectorSetupGuide
     from .surface_create_request import SurfaceCreateRequest
     from .surface_credential_mode import SurfaceCredentialMode
@@ -815,6 +824,7 @@ if TYPE_CHECKING:
     from .surface_identity_config_response import SurfaceIdentityConfigResponse
     from .surface_platform import SurfacePlatform
     from .surface_platform_setup_guide import SurfacePlatformSetupGuide
+    from .surface_reach import SurfaceReach
     from .surface_send_policy_config import SurfaceSendPolicyConfig
     from .surface_send_request import SurfaceSendRequest
     from .surface_send_response import SurfaceSendResponse
@@ -831,6 +841,7 @@ if TYPE_CHECKING:
     from .table_detail_response_config_type_0 import TableDetailResponseConfigType0
     from .table_list_response import TableListResponse
     from .table_summary_response import TableSummaryResponse
+    from .update import Update
     from .update_agent_request import UpdateAgentRequest
     from .update_agent_request_input_schema_type_0 import UpdateAgentRequestInputSchemaType0
     from .update_agent_request_metadata_type_0 import UpdateAgentRequestMetadataType0
@@ -880,6 +891,7 @@ if TYPE_CHECKING:
     from .web_search_response import WebSearchResponse
     from .widget_embed_url_response import WidgetEmbedUrlResponse
     from .workflow_create_request import WorkflowCreateRequest
+    from .workflow_detail_response import WorkflowDetailResponse
     from .workflow_edge import WorkflowEdge
     from .workflow_graph_update_request import WorkflowGraphUpdateRequest
     from .workflow_list_response import WorkflowListResponse
@@ -889,6 +901,7 @@ if TYPE_CHECKING:
     from .workflow_run_list_response import WorkflowRunListResponse
     from .workflow_run_response import WorkflowRunResponse
     from .workflow_run_response_execution_context import WorkflowRunResponseExecutionContext
+    from .workflow_run_status import WorkflowRunStatus
     from .workflow_run_summary_response import WorkflowRunSummaryResponse
     from .workflow_run_wait_assignment import WorkflowRunWaitAssignment
     from .workflow_run_wait_assignment_list_response import WorkflowRunWaitAssignmentListResponse
@@ -896,6 +909,7 @@ if TYPE_CHECKING:
     from .workflow_run_wait_response_payload import WorkflowRunWaitResponsePayload
     from .workflow_run_wait_status import WorkflowRunWaitStatus
     from .workflow_run_wait_type import WorkflowRunWaitType
+    from .workflow_summary_response import WorkflowSummaryResponse
     from .workflow_update_request import WorkflowUpdateRequest
     from .workspace_app_access_request import WorkspaceAppAccessRequest
     from .workspace_app_access_response import WorkspaceAppAccessResponse
@@ -923,8 +937,6 @@ __all__ = [
     'AccountCreateSchema',
     'AccountCreateSchemaCredentials',
     'AccountCreateSchemaPreferencesType0',
-    'AccountCredentialsResponseSchema',
-    'AccountCredentialsResponseSchemaUserDataType0',
     'AccountListResponseSchema',
     'AccountResponseSchema',
     'AccountResponseSchemaPreferencesType0',
@@ -964,7 +976,7 @@ __all__ = [
     'AgentSurfaceResponse',
     'AgentSurfaceStatus',
     'AgentToolset',
-    'ApiKeyCredentialsResponseSchema',
+    'AppBundleUploadRequest',
     'AppBundleUploadResponse',
     'AppDetailResponse',
     'AppListResponse',
@@ -979,6 +991,7 @@ __all__ = [
     'ApplyImportRequest',
     'ApplyImportRequestVariables',
     'ApprovalDecisionResponse',
+    'Attach',
     'AuthConfigCreateSchema',
     'AuthConfigCreateSchemaCredentialConfigType0',
     'AuthConfigListResponseSchema',
@@ -987,14 +1000,10 @@ __all__ = [
     'AuthConfigResponseSchemaMetadataType0',
     'AuthProvider',
     'AuthScheme',
+    'AvailableSurface',
     'AvailableSurfaceChannelResponse',
     'AvailableSurfaceChannelsResponse',
-    'BodyAppBundleUpload',
-    'BodyFileMarkdownAttach',
-    'BodyFileUpdate',
-    'BodyFileUpload',
-    'BodyIconUpload',
-    'BodyPodBundleUpload',
+    'AvailableSurfacesResponse',
     'BulkCreateRecordsRequest',
     'BulkCreateRecordsRequestRecordsItem',
     'BulkDeleteRecordsRequest',
@@ -1046,13 +1055,13 @@ __all__ = [
     'CreateTableRequest',
     'CreateTableRequestConfigType0',
     'CreateUserDaemonRuntimeProfileRequest',
-    'CredentialTypes',
-    'DataStoreFlowStartInput',
-    'DataStoreFlowStartOutput',
+    'DataStoreWorkflowStartConfigInput',
+    'DataStoreWorkflowStartConfigOutput',
     'DataStoreWorkflowStartInput',
     'DataStoreWorkflowStartOutput',
     'DatastoreCountResponse',
     'DatastoreDataType',
+    'DatastoreFileUploadRequest',
     'DatastoreOperation',
     'DatastoreQueryRequest',
     'DatastoreQueryResponse',
@@ -1071,10 +1080,10 @@ __all__ = [
     'EndNodeResponse',
     'EndNodeResponsePositionType0',
     'ErrorResponse',
-    'EventFlowStartInput',
-    'EventFlowStartInputTriggerConfig',
-    'EventFlowStartOutput',
-    'EventFlowStartOutputTriggerConfig',
+    'EventWorkflowStartConfigInput',
+    'EventWorkflowStartConfigInputTriggerConfig',
+    'EventWorkflowStartConfigOutput',
+    'EventWorkflowStartConfigOutputTriggerConfig',
     'EventWorkflowStartInput',
     'EventWorkflowStartOutput',
     'ExecuteFunctionRequest',
@@ -1084,6 +1093,7 @@ __all__ = [
     'ExportStatus',
     'ExportStatusResponse',
     'ExpressionInputBinding',
+    'FastapiCompatV2BodyPodBundleUpload',
     'FeedbackCategory',
     'FileChildSchema',
     'FileChildrenResponse',
@@ -1099,9 +1109,6 @@ __all__ = [
     'FileSignedUrlResponse',
     'FileSummaryResponse',
     'FileUrlResponse',
-    'FlowDetailResponse',
-    'FlowRunStatus',
-    'FlowSummaryResponse',
     'ForeignKeySpec',
     'FormNode',
     'FormNodeConfig',
@@ -1143,6 +1150,7 @@ __all__ = [
     'FunctionSummaryResponseConfigType0',
     'FunctionType',
     'HarnessKind',
+    'IconUploadRequest',
     'IconUploadResponse',
     'ImportPlanResponse',
     'ImportStartRequest',
@@ -1167,7 +1175,6 @@ __all__ = [
     'MessageResponseSchema',
     'OAuth2DefaultsResponseSchema',
     'OAuth2DefaultsResponseSchemaExtraParams',
-    'OauthCredentialsResponseSchema',
     'OperationDetail',
     'OperationDetailInputSchema',
     'OperationDetailOutputSchemaType0',
@@ -1252,10 +1259,16 @@ __all__ = [
     'ScheduleDetailResponseFilterOutputSchemaType0',
     'ScheduleFireStatus',
     'ScheduleListResponse',
+    'ScheduleRunListResponse',
+    'ScheduleRunResponse',
+    'ScheduleRunResponseLlmOutput',
+    'ScheduleRunResponseMetadata',
+    'ScheduleRunResponsePayload',
+    'ScheduleRunStatus',
     'ScheduleType',
-    'ScheduledFlowStartInput',
-    'ScheduledFlowStartOutput',
-    'ScheduledFlowStartType',
+    'ScheduledWorkflowStartConfigInput',
+    'ScheduledWorkflowStartConfigOutput',
+    'ScheduledWorkflowStartConfigType',
     'ScheduledWorkflowStartInput',
     'ScheduledWorkflowStartOutput',
     'SearchMethod',
@@ -1270,6 +1283,9 @@ __all__ = [
     'SurfaceChannelRouteInput',
     'SurfaceChannelRouteResponse',
     'SurfaceConfigResponse',
+    'SurfaceConnectDescriptor',
+    'SurfaceConnectDescriptorAuthConfigSchemaType0',
+    'SurfaceConnectDescriptorCredentialSchemaType0',
     'SurfaceConnectorSetupGuide',
     'SurfaceCreateRequest',
     'SurfaceCredentialMode',
@@ -1277,6 +1293,7 @@ __all__ = [
     'SurfaceIdentityConfigResponse',
     'SurfacePlatform',
     'SurfacePlatformSetupGuide',
+    'SurfaceReach',
     'SurfaceSendPolicyConfig',
     'SurfaceSendRequest',
     'SurfaceSendResponse',
@@ -1293,6 +1310,7 @@ __all__ = [
     'TableDetailResponseConfigType0',
     'TableListResponse',
     'TableSummaryResponse',
+    'Update',
     'UpdateAgentRequest',
     'UpdateAgentRequestInputSchemaType0',
     'UpdateAgentRequestMetadataType0',
@@ -1342,6 +1360,7 @@ __all__ = [
     'WebSearchResponse',
     'WidgetEmbedUrlResponse',
     'WorkflowCreateRequest',
+    'WorkflowDetailResponse',
     'WorkflowEdge',
     'WorkflowGraphUpdateRequest',
     'WorkflowListResponse',
@@ -1351,6 +1370,7 @@ __all__ = [
     'WorkflowRunListResponse',
     'WorkflowRunResponse',
     'WorkflowRunResponseExecutionContext',
+    'WorkflowRunStatus',
     'WorkflowRunSummaryResponse',
     'WorkflowRunWaitAssignment',
     'WorkflowRunWaitAssignmentListResponse',
@@ -1358,6 +1378,7 @@ __all__ = [
     'WorkflowRunWaitResponsePayload',
     'WorkflowRunWaitStatus',
     'WorkflowRunWaitType',
+    'WorkflowSummaryResponse',
     'WorkflowUpdateRequest',
     'WorkspaceAppAccessRequest',
     'WorkspaceAppAccessResponse',

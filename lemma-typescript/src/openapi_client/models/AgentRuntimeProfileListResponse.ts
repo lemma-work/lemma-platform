@@ -8,4 +8,3 @@ export type AgentRuntimeProfileListResponse = {
     default_runtime: AgentRuntimeConfig;
     items: Array<AgentRuntimeProfileResponse>;
 };
-

@@ -9,4 +9,3 @@ export type AuthConfigCreateSchema = {
     name?: (string | null);
     provider?: string;
 };
-

@@ -91,8 +91,8 @@ class BundleApplier:
     # --- tables ----------------------------------------------------------
 
     async def _apply_table(self, step: PlanStep) -> None:
-        from app.modules.datastore.api.dependencies import build_table_service
-        from app.modules.datastore.domain.datastore_entities import ColumnSchema
+        from app.composition.pod_bundle_resources import build_table_service
+        from app.modules.datastore.contracts import ColumnSchema
 
         service = build_table_service(self._uow)
         payload = self._load("tables", step.name)
@@ -129,11 +129,11 @@ class BundleApplier:
                 await service.remove_column(self._pod_id, step.name, name, self._ctx)
 
     async def _apply_table_data(self, step: PlanStep) -> None:
-        from app.modules.datastore.api.dependencies import (
+        from app.composition.pod_bundle_resources import (
             build_record_service,
             build_table_service,
         )
-        from app.modules.datastore.services.table_context import TableContext
+        from app.modules.datastore.contracts import TableContext
 
         data_path = self._root / "tables" / step.name / TABLE_DATA_FILE
         if not data_path.is_file():
@@ -165,7 +165,7 @@ class BundleApplier:
         """Create a bundled folder or file. Idempotent: an existing path is left
         as-is (create-once by path), so a replayed step converges. Folders are
         planned parent-first, so the parent exists by the time a child runs."""
-        from app.modules.datastore.api.dependencies import build_file_service
+        from app.composition.pod_bundle_resources import build_file_service
 
         parts = [p for p in str(step.name or "").split("/") if p]
         if not parts:
@@ -208,8 +208,8 @@ class BundleApplier:
     # --- functions -------------------------------------------------------
 
     async def _apply_function(self, step: PlanStep) -> None:
-        from app.modules.function.api.dependencies import build_function_service
-        from app.modules.function.domain.entities import (
+        from app.composition.pod_bundle_resources import build_function_service
+        from app.modules.function.contracts import (
             FunctionEntity,
             FunctionUpdateEntity,
         )
@@ -256,7 +256,7 @@ class BundleApplier:
         # cache so the new scopes take effect on the next run.
         grants = _grants_from_payload(payload)
         if grants and function.id is not None:
-            from app.modules.workspace.services.workspace_tool_runtime import (
+            from app.composition.pod_bundle_apps import (
                 invalidate_function_workspace_env_cache,
             )
 
@@ -270,7 +270,7 @@ class BundleApplier:
     # --- agents ----------------------------------------------------------
 
     async def _apply_agent(self, step: PlanStep) -> None:
-        from app.modules.agent.api.dependencies import get_agent_service
+        from app.composition.pod_bundle_resources import get_agent_service
 
         service = get_agent_service(self._uow)
         payload = self._load("agents", step.name)
@@ -315,7 +315,7 @@ class BundleApplier:
     async def _apply_agent_grants(self, step: PlanStep) -> None:
         """Deferred grant step: replace an agent's resource permission grants once
         every resource it references (tables, functions) has been applied."""
-        from app.modules.agent.api.dependencies import get_agent_service
+        from app.composition.pod_bundle_resources import get_agent_service
 
         payload = self._load("agents", step.name)
         grants = _grants_from_payload(payload)
@@ -398,7 +398,7 @@ class BundleApplier:
                 code="POD_BUNDLE_ACCOUNT_INVALID",
             ) from exc
 
-        from app.modules.connectors.api.dependencies import get_connector_service
+        from app.composition.pod_bundle_resources import get_connector_service
 
         service = get_connector_service(self._uow)
         account = await service.account_repository.get(account_uuid)
@@ -418,8 +418,8 @@ class BundleApplier:
             )
 
     async def _apply_schedule(self, step: PlanStep) -> None:
-        from app.modules.schedule.api.dependencies import get_schedule_service
-        from app.modules.schedule.domain.schedule import (
+        from app.composition.pod_bundle_resources import get_schedule_service
+        from app.modules.schedule.contracts import (
             ScheduleCreateEntity,
             ScheduleType,
         )
@@ -457,13 +457,13 @@ class BundleApplier:
     # --- workflows (best-effort) -----------------------------------------
 
     async def _apply_workflow(self, step: PlanStep) -> None:
-        from app.modules.workflow.api.dependencies import get_flow_service
+        from app.composition.pod_bundle_resources import get_workflow_service
 
-        service = get_flow_service(self._uow)
+        service = get_workflow_service(self._uow)
         payload = self._load("workflows", step.name)
         if await _flow_exists(service, self._pod_id, step.name, self._ctx):
             return
-        await service.create_flow(
+        await service.create_workflow(
             pod_id=self._pod_id,
             name=step.name,
             description=payload.get("description"),
@@ -487,18 +487,18 @@ class BundleApplier:
         upsert keyed by that name — mirroring the surface create/update
         controllers (reusing their config helpers) so an imported connector
         behaves exactly like a hand-configured one."""
-        from app.modules.agent.api.dependencies import get_agent_service
-        from app.modules.agent_surfaces.api.controllers.surface_controller import (
+        from app.composition.pod_bundle_resources import get_agent_service
+        from app.composition.pod_bundle_resources import (
             _merge_surface_config,
             _resolve_surface_config,
         )
-        from app.modules.agent_surfaces.api.dependencies import get_surface_service
-        from app.modules.agent_surfaces.api.schemas import SurfaceCreateRequest
-        from app.modules.agent_surfaces.domain.entities import (
+        from app.composition.pod_bundle_resources import get_surface_service
+        from app.modules.agent_surfaces.contracts import SurfaceCreateRequest
+        from app.modules.agent_surfaces.contracts import (
             AgentSurfaceEntity,
             SurfacePlatform,
         )
-        from app.modules.agent_surfaces.domain.errors import AgentSurfaceNotFoundError
+        from app.modules.agent_surfaces.contracts import AgentSurfaceNotFoundError
 
         payload = self._load("surfaces", step.name)
         platform_raw = payload.get("platform")
@@ -676,7 +676,7 @@ def _is_system_column(column: dict[str, Any]) -> bool:
 
 
 def _agent_runtime(payload: dict[str, Any]):
-    from app.modules.agent.domain.value_objects import AgentRuntimeConfig
+    from app.core.domain.runtime import AgentRuntimeConfig
 
     raw = payload.get("agent_runtime")
     if isinstance(raw, dict) and raw.get("profile_id"):
@@ -688,7 +688,7 @@ def _agent_toolsets(payload: dict[str, Any]) -> list[Any]:
     """Map the manifest's ``toolsets`` list to :class:`AgentToolset` values,
     dropping any the runtime doesn't recognize (forward-compat) and the reserved
     ``VIEW_IMAGE`` toolset, which is never persisted."""
-    from app.modules.agent.domain.value_objects import AgentToolset
+    from app.modules.agent.contracts import AgentToolset
 
     toolsets: list[AgentToolset] = []
     for raw in payload.get("toolsets") or []:
@@ -758,10 +758,10 @@ async def _get_schedule(service, pod_id, name, ctx):
 
 
 async def _flow_exists(service, pod_id, name, ctx) -> bool:
-    # get_flow_by_name RETURNS None for a missing flow (it does not raise), so a
+    # get_workflow_by_name RETURNS None for a missing flow (it does not raise), so a
     # bare try/except would treat "not found" as "exists" and skip the create.
     try:
-        return await service.get_flow_by_name(pod_id, name, ctx=ctx) is not None
+        return await service.get_workflow_by_name(pod_id, name, ctx=ctx) is not None
     except Exception:
         return False
 

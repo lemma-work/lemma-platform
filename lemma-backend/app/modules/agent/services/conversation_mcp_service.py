@@ -228,14 +228,11 @@ def _surface_context_from_conversation(conversation: Conversation) -> JsonObject
     surface_metadata = None
     if isinstance(surface_metadata_payload, dict):
         try:
-            from app.modules.agent_surfaces.domain.surface_event_metadata import (
-                SurfaceEventMetadata,
+            from app.composition.agent_surface_runtime import (
+                parse_surface_event_metadata,
             )
-            from pydantic import TypeAdapter
 
-            surface_metadata = TypeAdapter(SurfaceEventMetadata).validate_python(
-                surface_metadata_payload
-            )
+            surface_metadata = parse_surface_event_metadata(surface_metadata_payload)
         except Exception:
             surface_metadata = surface_metadata_payload
     return {

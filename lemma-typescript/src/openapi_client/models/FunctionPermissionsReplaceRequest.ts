@@ -6,4 +6,3 @@ import type { FunctionResourcePermissionRequest } from './FunctionResourcePermis
 export type FunctionPermissionsReplaceRequest = {
     grants?: Array<FunctionResourcePermissionRequest>;
 };
-

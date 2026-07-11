@@ -105,6 +105,29 @@ def test_facade_imports_resolve():
     from lemma_sdk import resources  # noqa: F401
 
 
+def test_schedule_run_contract_has_no_new_fire_aliases() -> None:
+    spec = json.loads(SPEC_PATH.read_text(encoding="utf-8"))
+    paths = set(spec["paths"])
+    schemas = spec["components"]["schemas"]
+
+    assert "/pods/{pod_id}/schedules/{schedule_id}/runs" in paths
+    assert "/pods/{pod_id}/schedules/{schedule_id}/runs/{run_id}/retry" in paths
+    assert not any("/fires" in path for path in paths)
+    assert "ScheduleRunResponse" in schemas
+    assert "ScheduleRunListResponse" in schemas
+    assert schemas["ScheduleRunStatus"]["enum"] == [
+        "RECEIVED",
+        "PROCESSING",
+        "DISPATCHED",
+        "FILTERED",
+        "FAILED",
+        "DEAD_LETTERED",
+    ]
+    assert "ScheduleFireStatus" in schemas
+    assert "ScheduleFireResponse" not in schemas
+    assert "ScheduleFireListResponse" not in schemas
+
+
 def test_facade_imports_exist_in_spec():
     spec_modules = {_python_name(op) for op in _spec_operation_ids()}
     imported = _facade_imported_functions()

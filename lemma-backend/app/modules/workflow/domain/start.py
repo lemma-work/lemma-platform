@@ -1,29 +1,29 @@
-"""Flow start (trigger) configuration."""
+"""Workflow start (trigger) configuration."""
 
 from enum import Enum
 from typing import Any, Dict, List, Optional, Union
 
 from pydantic import BaseModel, Field, field_validator
 
-from app.modules.schedule.domain.value_objects import (
+from app.modules.schedule.contracts import (
     DatastoreOperation,
     normalize_datastore_operations,
 )
 
 
-class FlowStartType(str, Enum):
+class WorkflowStartType(str, Enum):
     MANUAL = "MANUAL"
     SCHEDULED = "SCHEDULED"
     EVENT = "EVENT"
     DATASTORE_EVENT = "DATASTORE_EVENT"
 
 
-class ScheduledFlowStartType(str, Enum):
+class ScheduledWorkflowStartConfigType(str, Enum):
     ONCE = "ONCE"
     CRON = "CRON"
 
 
-class DataStoreFlowStart(BaseModel):
+class DataStoreWorkflowStartConfig(BaseModel):
     table_name: str = Field(
         ...,
         description="Table name inside the datastore to subscribe to.",
@@ -48,8 +48,8 @@ class DataStoreFlowStart(BaseModel):
         return normalize_datastore_operations(value)
 
 
-class ScheduledFlowStart(BaseModel):
-    schedule_type: ScheduledFlowStartType = Field(
+class ScheduledWorkflowStartConfig(BaseModel):
+    schedule_type: ScheduledWorkflowStartConfigType = Field(
         ...,
         description=(
             "Time trigger mode for this workflow definition. "
@@ -58,7 +58,7 @@ class ScheduledFlowStart(BaseModel):
     )
 
 
-class EventFlowStart(BaseModel):
+class EventWorkflowStartConfig(BaseModel):
     connector_trigger_id: str = Field(
         ...,
         description="Connector trigger identifier to subscribe to.",
@@ -70,12 +70,12 @@ class EventFlowStart(BaseModel):
     trigger_config: Dict[str, Any] = Field(default_factory=dict)
 
 
-class FlowStart(BaseModel):
-    type: FlowStartType = Field(
+class WorkflowStart(BaseModel):
+    type: WorkflowStartType = Field(
         ...,
-        description="Flow start mode: MANUAL, SCHEDULED, EVENT, or DATASTORE_EVENT.",
+        description="Workflow start mode: MANUAL, SCHEDULED, EVENT, or DATASTORE_EVENT.",
     )
-    config: Optional[Union[ScheduledFlowStart, EventFlowStart, DataStoreFlowStart]] = (
+    config: Optional[Union[ScheduledWorkflowStartConfig, EventWorkflowStartConfig, DataStoreWorkflowStartConfig]] = (
         Field(
             default=None,
             description=(

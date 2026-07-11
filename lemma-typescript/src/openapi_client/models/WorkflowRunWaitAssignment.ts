@@ -8,4 +8,3 @@ export type WorkflowRunWaitAssignment = {
     run: WorkflowRunSummaryResponse;
     wait: WorkflowRunWaitResponse;
 };
-

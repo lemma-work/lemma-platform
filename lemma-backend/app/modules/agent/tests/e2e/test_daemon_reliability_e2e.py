@@ -403,7 +403,9 @@ async def test_daemon_survives_client_network_loss_and_resumes_without_duplicate
 
     import app.modules.agent.api.controllers.runtime_config_controller as controller
 
-    monkeypatch.setattr(controller.settings, "daemon_ws_ping_stale_after_seconds", 8.0)
+    monkeypatch.setattr(
+        controller.agent_settings, "daemon_ws_ping_stale_after_seconds", 8.0
+    )
 
     daemon_dir = tmp_path / "daemon-state"
     process = start_real_daemon_process(

@@ -1,0 +1,39 @@
+name: Require fresh backend protected E2E
+description: Require a successful protected backend run for this exact commit within seven days.
+
+inputs:
+  token:
+    description: GitHub token with Actions read access.
+    required: true
+  sha:
+    description: Exact release commit SHA.
+    required: true
+
+runs:
+  using: composite
+  steps:
+    - name: Verify commit-linked protected run
+      shell: bash
+      env:
+        GH_TOKEN: ${{ inputs.token }}
+        RELEASE_SHA: ${{ inputs.sha }}
+      run: |
+        run_data="$(
+          gh api --method GET \
+            "repos/${GITHUB_REPOSITORY}/actions/workflows/backend-protected-e2e.yml/runs" \
+            -f head_sha="${RELEASE_SHA}" \
+            -f status=success \
+            -f per_page=20 \
+            --jq '.workflow_runs | sort_by(.created_at) | reverse | .[0] | [.created_at, .html_url] | @tsv'
+        )"
+        IFS=$'\t' read -r created_at run_url <<< "${run_data}"
+        if [[ -z "${created_at}" || "${created_at}" == "null" ]]; then
+          echo "No successful Backend protected E2E run exists for ${RELEASE_SHA}." >&2
+          exit 1
+        fi
+        cutoff="$(python3 -c 'from datetime import datetime, timedelta, timezone; print((datetime.now(timezone.utc) - timedelta(days=7)).strftime("%Y-%m-%dT%H:%M:%SZ"))')"
+        if [[ "${created_at}" < "${cutoff}" ]]; then
+          echo "Protected E2E run is stale: ${created_at} (required >= ${cutoff})." >&2
+          exit 1
+        fi
+        echo "Protected E2E gate passed: ${run_url} (${created_at})."

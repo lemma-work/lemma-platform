@@ -15,19 +15,23 @@ run ``create_fake_agentbox_app()`` on the pinned AgentBox port and point
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import json
 import os
 import shutil
 import subprocess
 import sys
 import tempfile
-import uuid
+import time
 from dataclasses import dataclass, field
 from pathlib import Path
+from typing import Any
 
 from fastapi import FastAPI
 
 from agentbox_client.generated.manager.models import (
+    AppAccessRequest,
+    AppAccessResponse,
     DeleteResponse,
     ExecCommandRequest,
     ExecCommandResponse,
@@ -40,6 +44,9 @@ from agentbox_client.generated.manager.models import (
     SandboxEnsureRequest,
     SandboxResponse,
     SandboxSummary,
+)
+from app.modules.workspace.testing.fake_function_executor import (
+    register_fake_function_executor,
 )
 
 _DEFAULT_TIMEOUT = 300
@@ -69,6 +76,15 @@ class _Sandbox:
     sessions: dict[str, _Session] = field(default_factory=dict)
 
 
+@dataclass
+class _FunctionExecutorBehavior:
+    modes: list[str] = field(default_factory=list)
+    delay_seconds: float = 0.0
+    error_message: str = "Scripted user-code failure"
+    log_message: str = "scripted function log"
+    job_pending_polls: int = 0
+
+
 class FakeAgentBoxState:
     """Holds sandbox temp dirs + sessions; maps sandbox-absolute paths into them."""
 
@@ -76,11 +92,35 @@ class FakeAgentBoxState:
         self.base_dir = base_dir
         self.base_dir.mkdir(parents=True, exist_ok=True)
         self.sandboxes: dict[str, _Sandbox] = {}
+        self.function_behavior = _FunctionExecutorBehavior()
+        self.function_runs: dict[str, dict[str, Any]] = {}
+        self.function_invocations = 0
+
+    def configure_function_executor(self, body: dict[str, Any]) -> None:
+        modes = body.get("modes", [])
+        self.function_behavior = _FunctionExecutorBehavior(
+            modes=[str(mode) for mode in modes],
+            delay_seconds=max(0.0, float(body.get("delay_seconds", 0.0))),
+            error_message=str(body.get("error_message", "Scripted user-code failure")),
+            log_message=str(body.get("log_message", "scripted function log")),
+            job_pending_polls=max(0, int(body.get("job_pending_polls", 0))),
+        )
+        self.function_runs.clear()
+        self.function_invocations = 0
+
+    def next_function_mode(self) -> str:
+        if self.function_behavior.modes:
+            return self.function_behavior.modes.pop(0)
+        return "success"
 
     def ensure_sandbox(self, sandbox_id: str, env: dict[str, str]) -> _Sandbox:
         sandbox = self.sandboxes.get(sandbox_id)
         if sandbox is None:
-            root = self.base_dir / sandbox_id
+            # Route parameters are untrusted even in the hermetic fake. Never
+            # use the caller's identifier as a filesystem component: a stable
+            # digest preserves sandbox reuse without allowing path traversal.
+            directory = hashlib.sha256(sandbox_id.encode("utf-8")).hexdigest()
+            root = self.base_dir / directory
             root.mkdir(parents=True, exist_ok=True)
             sandbox = _Sandbox(root=root, env=dict(env))
             self.sandboxes[sandbox_id] = sandbox
@@ -92,10 +132,13 @@ class FakeAgentBoxState:
         """Map a sandbox-absolute path (e.g. /workspace/conversations/X) into the
         sandbox temp dir, creating it. Treats the sandbox root as ``/``."""
         rel = cwd.lstrip("/") if cwd else ""
-        path = (sandbox.root / rel).resolve()
+        root = sandbox.root.resolve()
+        path = (root / rel).resolve()
         # Keep everything under the sandbox root.
-        if not str(path).startswith(str(sandbox.root.resolve())):
-            path = sandbox.root
+        try:
+            path.relative_to(root)
+        except ValueError:
+            path = root
         path.mkdir(parents=True, exist_ok=True)
         return path
 
@@ -105,7 +148,9 @@ class FakeAgentBoxState:
 
 def create_fake_agentbox_app(*, base_dir: Path | None = None) -> FastAPI:
     """Build a FastAPI app implementing the AgentBox manager HTTP contract."""
-    state = FakeAgentBoxState(base_dir or Path(tempfile.mkdtemp(prefix="fake-agentbox-")))
+    state = FakeAgentBoxState(
+        base_dir or Path(tempfile.mkdtemp(prefix="fake-agentbox-"))
+    )
     app = FastAPI(title="fake-agentbox")
     app.state.fake = state
 
@@ -113,7 +158,9 @@ def create_fake_agentbox_app(*, base_dir: Path | None = None) -> FastAPI:
         return SandboxSummary(id=sandbox_id, ready=True, status="RUNNING")
 
     @app.put("/sandboxes/{sandbox_id}")
-    async def ensure_sandbox(sandbox_id: str, body: SandboxEnsureRequest) -> SandboxResponse:
+    async def ensure_sandbox(
+        sandbox_id: str, body: SandboxEnsureRequest
+    ) -> SandboxResponse:
         state.ensure_sandbox(sandbox_id, body.env or {})
         return SandboxResponse(sandbox=_summary(sandbox_id))
 
@@ -141,7 +188,9 @@ def create_fake_agentbox_app(*, base_dir: Path | None = None) -> FastAPI:
         sandbox_id: str, session_id: str, body: RuntimeSessionRequest
     ) -> RuntimeSessionResponse:
         sandbox = state.ensure_sandbox(sandbox_id, {})
-        sandbox.sessions[session_id] = _Session(cwd=body.cwd or "/workspace", env=dict(body.env or {}))
+        sandbox.sessions[session_id] = _Session(
+            cwd=body.cwd or "/workspace", env=dict(body.env or {})
+        )
         return RuntimeSessionResponse(
             sandbox_id=sandbox_id,
             session_id=session_id,
@@ -195,11 +244,12 @@ def create_fake_agentbox_app(*, base_dir: Path | None = None) -> FastAPI:
                 return completed.returncode, completed.stdout, completed.stderr, True
             except subprocess.TimeoutExpired as exc:
                 out = exc.stdout or ""
-                err = (exc.stderr or "") + f"\ntimed out after {timeout}s"
+                err = exc.stderr or ""
                 if isinstance(out, bytes):
                     out = out.decode(errors="replace")
                 if isinstance(err, bytes):
                     err = err.decode(errors="replace")
+                err += f"\ntimed out after {timeout}s"
                 return None, out, err, False
 
         return await asyncio.to_thread(_call)
@@ -235,6 +285,17 @@ def create_fake_agentbox_app(*, base_dir: Path | None = None) -> FastAPI:
             # Function schema extraction: the real script imports the user's
             # Pydantic models, which the fake can't load. Return a permissive
             # canned schema so function create succeeds without a real sandbox.
+            if "LEMMA_TEST_SCHEMA_ERROR" in body.code:
+                return ExecutePythonResponse(
+                    sandbox_id=sandbox_id,
+                    session_id=session_id,
+                    stdout="",
+                    stderr="scripted schema extraction failure",
+                    result=None,
+                    error_name="SyntaxError",
+                    exit_code=1,
+                    status="error",
+                )
             return ExecutePythonResponse(
                 sandbox_id=sandbox_id,
                 session_id=session_id,
@@ -265,9 +326,7 @@ def create_fake_agentbox_app(*, base_dir: Path | None = None) -> FastAPI:
         )
 
     @app.post("/sandboxes/{sandbox_id}/sessions/{session_id}/stdin")
-    async def write_stdin(
-        sandbox_id: str, session_id: str
-    ) -> ExecCommandResponse:
+    async def write_stdin(sandbox_id: str, session_id: str) -> ExecCommandResponse:
         # Long-running/interactive processes aren't modelled by the fake; report
         # nothing pending so callers don't block.
         return ExecCommandResponse(success=True, stdout="", stderr="", completed=True)
@@ -283,62 +342,23 @@ def create_fake_agentbox_app(*, base_dir: Path | None = None) -> FastAPI:
         return ListProcessesResponse(processes=[])
 
     @app.post("/sandboxes/{sandbox_id}/apps/{app_name}/access")
-    async def app_access(sandbox_id: str, app_name: str) -> dict[str, str]:
-        return {"url": f"http://fake-agentbox.local/{sandbox_id}/{app_name}", "token": uuid.uuid4().hex}
+    async def app_access(
+        sandbox_id: str,
+        app_name: str,
+        request: AppAccessRequest,
+    ) -> AppAccessResponse:
+        """Mirror the manager contract consumed by ``AgentBoxClient``.
 
-    # --- function_executor app (mock) -----------------------------------
-    # Functions run against an in-sandbox "function_executor" app that the manager
-    # proxies at /sandboxes/{id}/apps/function_executor/... . The fake serves it
-    # directly with canned responses so function execute exercises the full
-    # pipeline (controller -> service -> FunctionExecutorClient -> connection
-    # release -> persist) without a real sandbox. The function is not actually
-    # run; output_data echoes the input. (See agentbox_client.apps.function_executor
-    # for the contract.)
-    _FE = "/sandboxes/{sandbox_id}/apps/function_executor"
+        The former fake returned the manager's obsolete ``{url, token}``
+        response. Pydantic therefore rejected hermetic browser-display calls
+        before they could exercise the public agent and surface path.
+        """
+        return AppAccessResponse(
+            sandbox_id=sandbox_id,
+            app=app_name,
+            url=f"http://fake-agentbox.local/{sandbox_id}/{app_name}",
+            expires_at=int(time.time()) + request.ttl_seconds,
+        )
 
-    @app.get(_FE + "/readiness")
-    async def fe_readiness(sandbox_id: str) -> dict:
-        return {"ready": True}
-
-    @app.get(_FE + "/health")
-    async def fe_health(sandbox_id: str) -> dict:
-        return {"status": "ok"}
-
-    @app.post(_FE + "/pods/{pod_id}/functions/{function_name}/execute")
-    async def fe_execute(
-        sandbox_id: str, pod_id: str, function_name: str, body: dict
-    ) -> dict:
-        run_id = body.get("run_id")
-        input_data = body.get("input_data") or {}
-        if body.get("async_job"):
-            return {
-                "status": "accepted",
-                "run_id": run_id,
-                "job_id": f"fake-{run_id}",
-            }
-        return {
-            "status": "completed",
-            "output_data": {"echo": input_data, "function": function_name},
-            "error": None,
-            "logs": [],
-            "code_hash": "fake",
-            "duration_ms": 1,
-        }
-
-    @app.get(_FE + "/runs/{run_id}")
-    async def fe_status(sandbox_id: str, run_id: str) -> dict:
-        return {
-            "run_id": run_id,
-            "job_id": f"fake-{run_id}",
-            "status": "completed",
-            "output_data": {"echo": {}},
-            "error": None,
-            "code_hash": "fake",
-            "duration_ms": 1,
-        }
-
-    @app.get(_FE + "/runs/{run_id}/logs")
-    async def fe_logs(sandbox_id: str, run_id: str) -> dict:
-        return {"run_id": run_id, "logs": []}
-
+    register_fake_function_executor(app, state)
     return app

@@ -19,7 +19,7 @@ BACKEND_ROOT = Path(__file__).resolve().parents[3] / "lemma-backend"
 
 POSTGRES_IMAGE = "docker.io/pgvector/pgvector:0.8.3-pg15"
 REDIS_IMAGE = "redis/redis-stack:7.2.0-v19"
-SUPERTOKENS_IMAGE = "docker.io/supertokens/supertokens-postgresql:11.1.0"
+SUPERTOKENS_IMAGE = "docker.io/supertokens/supertokens-postgresql:11.4.5"
 
 POSTGRES_USER = "test"
 POSTGRES_PASSWORD = "test"

@@ -8,4 +8,3 @@ export type ConnectorSkillResponse = {
     provider?: (string | null);
     title?: (string | null);
 };
-

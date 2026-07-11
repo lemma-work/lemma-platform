@@ -10,4 +10,3 @@ export type WaitUntilNodeResponse = {
     position?: (Record<string, number> | null);
     type?: string;
 };
-

@@ -3,6 +3,5 @@
 /* tslint:disable */
 /* eslint-disable */
 export type IconUploadRequest = {
-    file: string;
+    file: Blob;
 };
-

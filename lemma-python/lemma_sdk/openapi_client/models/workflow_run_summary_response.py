@@ -9,7 +9,7 @@ from attrs import define as _attrs_define
 from attrs import field as _attrs_field
 from dateutil.parser import isoparse
 
-from ..models.flow_run_status import FlowRunStatus
+from ..models.workflow_run_status import WorkflowRunStatus
 from ..types import UNSET, Unset
 
 T = TypeVar("T", bound="WorkflowRunSummaryResponse")
@@ -19,10 +19,10 @@ T = TypeVar("T", bound="WorkflowRunSummaryResponse")
 class WorkflowRunSummaryResponse:
     """
     Attributes:
-        flow_id (UUID):
         id (UUID):
         pod_id (UUID):
         user_id (UUID):
+        workflow_id (UUID):
         completed_at (datetime.datetime | None | Unset):
         created_at (datetime.datetime | None | Unset):
         current_node_id (None | str | Unset):
@@ -31,7 +31,7 @@ class WorkflowRunSummaryResponse:
         schedule_event_id (None | str | Unset):
         start_type (str | Unset):  Default: 'MANUAL'.
         started_at (datetime.datetime | None | Unset):
-        status (FlowRunStatus | Unset): Status of a flow run.
+        status (WorkflowRunStatus | Unset): Status of a flow run.
 
             PENDING exists only in memory before the first advance; persisted runs
             are RUNNING, WAITING, or terminal. WAITING is reserved for human form
@@ -40,10 +40,10 @@ class WorkflowRunSummaryResponse:
         updated_at (datetime.datetime | None | Unset):
     """
 
-    flow_id: UUID
     id: UUID
     pod_id: UUID
     user_id: UUID
+    workflow_id: UUID
     completed_at: datetime.datetime | None | Unset = UNSET
     created_at: datetime.datetime | None | Unset = UNSET
     current_node_id: None | str | Unset = UNSET
@@ -52,18 +52,18 @@ class WorkflowRunSummaryResponse:
     schedule_event_id: None | str | Unset = UNSET
     start_type: str | Unset = "MANUAL"
     started_at: datetime.datetime | None | Unset = UNSET
-    status: FlowRunStatus | Unset = UNSET
+    status: WorkflowRunStatus | Unset = UNSET
     updated_at: datetime.datetime | None | Unset = UNSET
     additional_properties: dict[str, Any] = _attrs_field(init=False, factory=dict)
 
     def to_dict(self) -> dict[str, Any]:
-        flow_id = str(self.flow_id)
-
         id = str(self.id)
 
         pod_id = str(self.pod_id)
 
         user_id = str(self.user_id)
+
+        workflow_id = str(self.workflow_id)
 
         completed_at: None | str | Unset
         if isinstance(self.completed_at, Unset):
@@ -131,10 +131,10 @@ class WorkflowRunSummaryResponse:
         field_dict.update(self.additional_properties)
         field_dict.update(
             {
-                "flow_id": flow_id,
                 "id": id,
                 "pod_id": pod_id,
                 "user_id": user_id,
+                "workflow_id": workflow_id,
             }
         )
         if completed_at is not UNSET:
@@ -163,13 +163,13 @@ class WorkflowRunSummaryResponse:
     @classmethod
     def from_dict(cls: type[T], src_dict: Mapping[str, Any]) -> T:
         d = dict(src_dict)
-        flow_id = UUID(d.pop("flow_id"))
-
         id = UUID(d.pop("id"))
 
         pod_id = UUID(d.pop("pod_id"))
 
         user_id = UUID(d.pop("user_id"))
+
+        workflow_id = UUID(d.pop("workflow_id"))
 
         def _parse_completed_at(data: object) -> datetime.datetime | None | Unset:
             if data is None:
@@ -261,11 +261,11 @@ class WorkflowRunSummaryResponse:
         started_at = _parse_started_at(d.pop("started_at", UNSET))
 
         _status = d.pop("status", UNSET)
-        status: FlowRunStatus | Unset
+        status: WorkflowRunStatus | Unset
         if isinstance(_status, Unset):
             status = UNSET
         else:
-            status = FlowRunStatus(_status)
+            status = WorkflowRunStatus(_status)
 
         def _parse_updated_at(data: object) -> datetime.datetime | None | Unset:
             if data is None:
@@ -285,10 +285,10 @@ class WorkflowRunSummaryResponse:
         updated_at = _parse_updated_at(d.pop("updated_at", UNSET))
 
         workflow_run_summary_response = cls(
-            flow_id=flow_id,
             id=id,
             pod_id=pod_id,
             user_id=user_id,
+            workflow_id=workflow_id,
             completed_at=completed_at,
             created_at=created_at,
             current_node_id=current_node_id,

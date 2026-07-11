@@ -6,4 +6,3 @@ import type { AgentHarnessInfo } from './AgentHarnessInfo.js';
 export type AgentHarnessListResponse = {
     items: Array<AgentHarnessInfo>;
 };
-

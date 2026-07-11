@@ -19,8 +19,17 @@ from app.core.settings_env import dotenv_path
 
 class DatastoreSettings(BaseSettings):
     model_config = SettingsConfigDict(
-        env_file=dotenv_path(), env_file_encoding="utf-8", case_sensitive=False, extra="ignore"
+        env_file=dotenv_path(),
+        env_file_encoding="utf-8",
+        case_sensitive=False,
+        extra="ignore",
     )
+
+    # API upload limits
+    datastore_upload_max_bytes: int = Field(default=100 * 1024 * 1024)
+    datastore_markdown_max_bytes: int = Field(default=25 * 1024 * 1024)
+    datastore_markdown_image_max_bytes: int = Field(default=10 * 1024 * 1024)
+    datastore_markdown_batch_max_bytes: int = Field(default=50 * 1024 * 1024)
 
     # Ad-hoc SQL query guardrails
     datastore_query_role: str = Field(
@@ -142,6 +151,15 @@ class DatastoreSettings(BaseSettings):
             "``DOCUMENT_PROCESSING_OCR_ENABLED``."
         ),
     )
+    document_processing_layout_enabled: bool = Field(
+        default=True,
+        description=(
+            "Enable Kreuzberg PDF layout and table models. Keep enabled for "
+            "production-quality digital PDFs; the switch exists for hermetic tests "
+            "and emergency low-resource operation. Env: "
+            "``DOCUMENT_PROCESSING_LAYOUT_ENABLED``."
+        ),
+    )
 
     # Document-processor adapter selection
     document_processor: Literal["auto", "kreuzberg", "markitdown", "docling"] = Field(
@@ -185,11 +203,11 @@ class DatastoreSettings(BaseSettings):
         description="Kreuzberg API URL for document processing",
     )
     kreuzberg_request_timeout_seconds: float = Field(
-        default=180.0,
+        default=600.0,
         description=(
             "Total HTTP timeout (seconds) for a Kreuzberg extract/chunk request. "
-            "Kept long because a connected-but-slow OCR of a large PDF can "
-            "legitimately take minutes. A DOWN endpoint no longer waits this long "
+            "Includes cold layout/table-model initialization and long digital PDFs; "
+            "a DOWN endpoint no longer waits this long "
             "— see kreuzberg_connect_timeout_seconds."
         ),
     )
@@ -314,7 +332,6 @@ class DatastoreSettings(BaseSettings):
             "secrets.token_urlsafe(9) yields a 12-character code."
         ),
     )
-
 
     def effective_document_processor(self) -> str:
         """Resolve ``document_processor`` to a concrete adapter name.

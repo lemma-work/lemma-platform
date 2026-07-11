@@ -6,7 +6,9 @@ from pathlib import Path
 
 
 def _load_reporter():
-    script = Path(__file__).resolve().parents[4] / "scripts" / "backend_coverage_report.py"
+    script = (
+        Path(__file__).resolve().parents[4] / "scripts" / "backend_coverage_report.py"
+    )
     spec = importlib.util.spec_from_file_location("backend_coverage_report", script)
     assert spec and spec.loader
     module = importlib.util.module_from_spec(spec)
@@ -52,7 +54,9 @@ def test_backend_coverage_report_groups_modules_and_escapes_markdown(tmp_path):
         '<testsuite tests="3" failures="0" errors="0" skipped="1" time="1.2" />'
     )
 
-    summary = reporter.build_summary(coverage, phase="e2e-surfaces", junit_paths=[junit])
+    summary = reporter.build_summary(
+        coverage, phase="e2e-surfaces", junit_paths=[junit]
+    )
     markdown = reporter.render_markdown(summary)
 
     assert summary["modules"] == [
@@ -100,6 +104,73 @@ def test_backend_coverage_report_missing_artifact_fallback():
 
     assert summary["missing_coverage"] is True
     assert "Coverage artifact was not found" in markdown
+
+
+def test_e2e_union_report_describes_authoritative_module_gate():
+    reporter = _load_reporter()
+    summary = reporter.build_summary(
+        {
+            "files": {},
+            "totals": {
+                "covered_lines": 0,
+                "num_statements": 0,
+                "percent_covered": 100.0,
+                "missing_lines": 0,
+            },
+        },
+        phase="e2e-union",
+        junit_paths=[],
+    )
+
+    markdown = reporter.render_markdown(summary)
+
+    assert "Authoritative E2E-only union across every shard" in markdown
+    assert "each require 80%" in markdown
+
+
+def test_overall_report_is_one_module_wise_unit_e2e_and_combined_table():
+    reporter = _load_reporter()
+
+    def coverage(*, missing: int):
+        covered = 10 - missing
+        return {
+            "files": {
+                "app/modules/agent/runtime.py": {
+                    "summary": {"num_statements": 10, "missing_lines": missing}
+                },
+                "app/app.py": {
+                    "summary": {"num_statements": 2, "missing_lines": 1}
+                },
+                "app/core/message_bus.py": {
+                    "summary": {"num_statements": 2, "missing_lines": 1}
+                },
+            },
+            "totals": {
+                "covered_lines": covered,
+                "num_statements": 10,
+                "percent_covered": covered * 10.0,
+                "missing_lines": missing,
+            },
+        }
+
+    summary = reporter.build_overall_summary(
+        coverage(missing=4),
+        coverage(missing=2),
+        coverage(missing=1),
+        unit_junit_paths=[],
+        e2e_junit_paths=[],
+    )
+    markdown = reporter.render_overall_markdown(summary)
+
+    assert reporter.comment_marker("overall") in markdown
+    assert "| Module | Unit | E2E only | Combined |" in markdown
+    assert "| agent | 60.0% | 80.0% | 90.0% |" in markdown
+    assert "| app.py |" not in markdown
+    assert "| core |" not in markdown
+    assert "Lowest-Covered Files" not in markdown
+    assert "Tests:" not in markdown
+    assert "Gates:" not in markdown
+    assert "Backend Coverage" not in markdown
 
 
 def test_backend_coverage_report_cli_writes_markdown_and_summary(tmp_path):

@@ -14,7 +14,10 @@ from app.modules.datastore.domain.document_processing import (
     DocumentImage,
     DocumentPage,
 )
-from app.modules.datastore.domain.errors import DatastoreObjectNotFoundError
+from app.modules.datastore.domain.errors import (
+    DatastoreObjectIntegrityError,
+    DatastoreObjectNotFoundError,
+)
 from app.modules.datastore.services.file_processing_service import (
     DatastoreFileProcessingService,
 )
@@ -31,6 +34,9 @@ class _ScalarResult:
 class _ExecuteResult:
     def __init__(self, rowcount: int = 1):
         self.rowcount = rowcount
+
+    def scalar_one_or_none(self):
+        return self.rowcount or None
 
 
 class _RecordingUowFactory:
@@ -50,7 +56,7 @@ class _RecordingUowFactory:
 
     @asynccontextmanager
     async def __call__(self):
-        result = self._results.pop(0)
+        result = self._results.pop(0) if self._results else _ExecuteResult()
         session = AsyncMock()
         session.execute = AsyncMock(side_effect=[result])
         self.sessions.append(session)
@@ -88,10 +94,12 @@ def _set_source_bytes(service, data: bytes) -> None:
 
 
 def _build_service(factory: _RecordingUowFactory) -> DatastoreFileProcessingService:
-    service = DatastoreFileProcessingService(uuid4(), uow_factory=factory)
+    search_service = AsyncMock()
+    service = DatastoreFileProcessingService(
+        uuid4(), uow_factory=factory, search_service=search_service
+    )
     service.storage = AsyncMock()
     service.storage.iter_download = _make_iter_download(b"")
-    service.search_service = AsyncMock()
     service.document_processor = AsyncMock()
     return service
 
@@ -143,9 +151,13 @@ async def test_process_file_async_writes_child_container_and_indexes_chunks():
         content_path=ANY,
     )
     service.search_service.index_file_chunks.assert_awaited_once()
-    assert service.search_service.index_file_chunks.await_args.args[2]["source"] == "test"
+    assert (
+        service.search_service.index_file_chunks.await_args.args[2]["source"] == "test"
+    )
     # Child artifacts are colocated under the source file's hidden container.
-    uploaded_paths = [call.args[0] for call in service.storage.upload_file.await_args_list]
+    uploaded_paths = [
+        call.args[0] for call in service.storage.upload_file.await_args_list
+    ]
     assert uploaded_paths == [
         f"pods/{pod_id}/files/manuals/.scan.pdf/document.md",
         f"pods/{pod_id}/files/manuals/.scan.pdf/image_0.png",
@@ -257,7 +269,9 @@ async def test_process_file_async_user_markdown_with_companion_images():
     await service.process_file_async(file_id)
 
     service.document_processor.extract.assert_not_awaited()
-    uploaded = {c.args[0]: c.args[1] for c in service.storage.upload_file.await_args_list}
+    uploaded = {
+        c.args[0]: c.args[1] for c in service.storage.upload_file.await_args_list
+    }
     prefix = f"pods/{pod_id}/files/manuals/.scan.pdf"
     # document.md + re-persisted source.md + the companion image + manifest.
     assert set(uploaded) == {
@@ -316,7 +330,7 @@ async def test_process_file_async_byo_holds_no_db_session_during_io():
 
     service.document_processor.extract.assert_not_awaited()
     # get_model, claim, mark_completed — all short UoWs, none left open.
-    assert factory.opened == 3
+    assert factory.opened == 5
     assert factory.active == 0
 
 
@@ -463,9 +477,7 @@ async def test_process_file_async_indexes_personal_file_when_search_enabled():
     await service.process_file_async(file_id)
 
     # The original was streamed (not buffered) from the right storage key.
-    assert streamed_keys == [
-        f"pods/{pod_id}/files/{owner_user_id}/private.txt"
-    ]
+    assert streamed_keys == [f"pods/{pod_id}/files/{owner_user_id}/private.txt"]
     service.document_processor.extract.assert_awaited_once()
     service.search_service.index_file_chunks.assert_awaited_once()
     service.search_service.remove_file.assert_not_awaited()
@@ -499,10 +511,16 @@ async def test_process_file_async_uses_latest_file_metadata_over_stale_job_metad
 
     await service.process_file_async(file_id, {"source": "stale"})
 
-    assert service.search_service.index_file_chunks.await_args.args[2]["source"] == "latest"
-    assert service.search_service.index_file_chunks.await_args.args[2]["editor"] == "frontend"
+    assert (
+        service.search_service.index_file_chunks.await_args.args[2]["source"]
+        == "latest"
+    )
+    assert (
+        service.search_service.index_file_chunks.await_args.args[2]["editor"]
+        == "frontend"
+    )
     # Three short UoWs: get_model, claim_for_processing, mark_completed.
-    assert factory.opened == 3
+    assert factory.opened == 5
 
 
 @pytest.mark.asyncio
@@ -615,11 +633,11 @@ async def test_process_file_async_scopes_short_uows_and_holds_no_session_during_
 
     await service.process_file_async(file_id, {"source": "test"})
 
-    # Three distinct short UoWs opened (get_model, claim, mark_completed),
-    # all closed (none left dangling), each issuing exactly one statement.
-    assert factory.opened == 3
+    # Five distinct short UoWs opened (get, claim, two claim checks,
+    # completion), all closed and each issuing exactly one statement.
+    assert factory.opened == 5
     assert factory.active == 0
-    assert [s.execute.await_count for s in factory.sessions] == [1, 1, 1]
+    assert [s.execute.await_count for s in factory.sessions] == [1, 1, 0, 0, 1]
     service.search_service.index_file_chunks.assert_awaited_once()
     # PDF projection uploads document.md + manifest.json (no images here).
     assert service.storage.upload_file.await_count == 2
@@ -655,6 +673,78 @@ async def test_process_file_async_marks_failed_in_own_uow_on_error():
     # get_model + claim + mark_failed, all closed.
     assert factory.opened == 3
     assert factory.active == 0
+
+
+@pytest.mark.asyncio
+async def test_process_file_async_terminally_fails_missing_original():
+    file_id = uuid4()
+    file_model = SimpleNamespace(
+        id=file_id,
+        kind="FILE",
+        status="PENDING",
+        search_enabled=True,
+        name="missing.pdf",
+        path="/manuals/missing.pdf",
+        mime_type="application/pdf",
+        file_metadata={},
+        content_sha256="a" * 64,
+    )
+    factory = _RecordingUowFactory(
+        results=[_ScalarResult(file_model), _ExecuteResult(), _ExecuteResult()]
+    )
+    service = _build_service(factory)
+    service.storage.iter_download = _make_iter_download_raising(
+        DatastoreObjectNotFoundError("missing")
+    )
+
+    with pytest.raises(DatastoreObjectNotFoundError):
+        await service.process_file_async(file_id)
+
+    terminal_stmt = factory.sessions[-1].execute.await_args.args[0]
+    compiled = str(terminal_stmt.compile().params)
+    assert "FAILED_PERMANENT" in compiled
+    assert "content_sha256" in str(terminal_stmt)
+    assert "processing_attempts" in str(terminal_stmt)
+    service.document_processor.extract.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_process_file_async_terminally_fails_corrupt_original():
+    file_id = uuid4()
+    file_model = SimpleNamespace(
+        id=file_id,
+        kind="FILE",
+        status="PENDING",
+        search_enabled=True,
+        name="corrupt.pdf",
+        path="/manuals/corrupt.pdf",
+        mime_type="application/pdf",
+        file_metadata={},
+        content_sha256="0" * 64,
+    )
+    factory = _RecordingUowFactory(
+        results=[_ScalarResult(file_model), _ExecuteResult(), _ExecuteResult()]
+    )
+    service = _build_service(factory)
+    _set_source_bytes(service, b"tampered bytes")
+
+    with pytest.raises(DatastoreObjectIntegrityError):
+        await service.process_file_async(file_id)
+
+    terminal_stmt = factory.sessions[-1].execute.await_args.args[0]
+    assert "FAILED_PERMANENT" in str(terminal_stmt.compile().params)
+    service.document_processor.extract.assert_not_awaited()
+
+
+def test_processing_error_summary_never_persists_provider_payload():
+    canary = "CANARY_DATASTORE_PROVIDER_SECRET"
+
+    summary = DatastoreFileProcessingService._sanitize_error(
+        RuntimeError(f"provider response api_key={canary}")
+    )
+
+    assert summary == "RuntimeError: document processing failed"
+    assert canary not in summary
 
 
 @pytest.mark.asyncio

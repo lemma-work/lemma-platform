@@ -5,15 +5,18 @@ from typing import Optional, Sequence, Tuple
 from uuid import UUID
 
 from sqlalchemy import and_, func, or_, select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import joinedload
 
 from app.core.domain.message_bus import MessageBus
 from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
 from app.modules.identity.domain.errors import (
+    OrganizationConflictError,
     OrganizationInvitationNotFoundError,
     OrganizationMemberNotFoundError,
     OrganizationNotFoundError,
 )
+from app.modules.identity.domain.email import normalize_identity_email
 from app.modules.identity.domain.organization_entities import (
     OrganizationEntity,
     OrganizationInvitationEntity,
@@ -211,13 +214,14 @@ class OrganizationRepository(OrganizationRepositoryPort):
     async def get_member_by_email(
         self, organization_id: UUID, email: str
     ) -> Optional[OrganizationMemberEntity]:
+        normalized = normalize_identity_email(email)
         stmt = (
             select(OrganizationMember)
             .join(User, OrganizationMember.user_id == User.id)
             .options(joinedload(OrganizationMember.user))
             .where(
                 OrganizationMember.organization_id == organization_id,
-                User.email == email,
+                func.lower(User.email) == normalized,
             )
         )
         result = await self.session.execute(stmt)
@@ -305,7 +309,14 @@ class OrganizationRepository(OrganizationRepositoryPort):
             )
         )
         self.session.add(invitation)
-        await self.session.flush()
+        try:
+            await self.session.flush()
+        except IntegrityError as exc:
+            if "uq_org_invitation_pending_email_org_lower" in str(exc.orig):
+                raise OrganizationConflictError(
+                    "An invitation already exists for this email"
+                ) from exc
+            raise
         self._collect_events(entity)
         return invitation.to_entity()
 
@@ -322,9 +333,11 @@ class OrganizationRepository(OrganizationRepositoryPort):
     async def get_invitation_by_email(
         self, organization_id: UUID, email: str
     ) -> Optional[OrganizationInvitationEntity]:
+        normalized = normalize_identity_email(email)
         stmt = select(OrganizationInvitation).where(
             OrganizationInvitation.organization_id == organization_id,
-            OrganizationInvitation.email == email,
+            func.lower(OrganizationInvitation.email) == normalized,
+            OrganizationInvitation.status == OrganizationInvitationStatus.PENDING,
         )
         result = await self.session.execute(stmt)
         invitation = result.scalars().first()
@@ -364,8 +377,9 @@ class OrganizationRepository(OrganizationRepositoryPort):
         limit: int = 100,
         cursor: Optional[str] = None,
     ) -> Tuple[Sequence[OrganizationInvitationEntity], Optional[str]]:
+        normalized = normalize_identity_email(user_email)
         query = select(OrganizationInvitation).where(
-            func.lower(OrganizationInvitation.email) == user_email.lower()
+            func.lower(OrganizationInvitation.email) == normalized
         )
         query = self._apply_invitation_status_filter(query, status=status)
 

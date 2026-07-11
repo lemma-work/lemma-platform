@@ -154,7 +154,7 @@ async def _resolve_account_connector_info(
     surface's platform or a schedule's directory name), since that guess is
     wrong for any resource type with no platform concept of its own. Returns
     ``None`` if the account (or its auth config) no longer exists."""
-    from app.modules.connectors.api.dependencies import get_connector_service
+    from app.composition.pod_bundle_resources import get_connector_service
 
     service = get_connector_service(uow)
     account = await service.account_repository.get(account_id)
@@ -226,17 +226,17 @@ class BundleExporter:
         )
 
         # Lazy imports (avoid import cycles + keep the module import cheap).
-        from app.modules.agent.api.dependencies import get_agent_service
-        from app.modules.apps.api.dependencies import build_app_service
-        from app.modules.datastore.api.dependencies import (
+        from app.composition.pod_bundle_resources import (
+            build_app_service,
             build_record_service,
             build_table_service,
+            build_function_service,
+            get_agent_service,
+            get_schedule_service,
+            get_workflow_service,
         )
-        from app.modules.datastore.services.table_context import TableContext
-        from app.modules.function.api.dependencies import build_function_service
-        from app.modules.pod.infrastructure.pod_repositories import PodRepository
-        from app.modules.schedule.api.dependencies import get_schedule_service
-        from app.modules.workflow.api.dependencies import get_flow_service
+        from app.modules.datastore.contracts import TableContext
+        from app.composition.pod_bundle_pod import PodRepository
 
         from app.core.infrastructure.events.message_bus import get_message_bus
 
@@ -387,13 +387,13 @@ class BundleExporter:
 
             # --- workflows ----------------------------------------------------
             if "workflows" in selected:
-                flow_service = get_flow_service(uow)
-                flows, _ = await flow_service.list_flows(
+                flow_service = get_workflow_service(uow)
+                flows, _ = await flow_service.list_workflows(
                     pod_id, limit=1000, requester_user_id=user_id, ctx=ctx
                 )
                 for summary in sorted(flows, key=lambda f: str(f.name or "")):
                     workflow_name = str(summary.name or "")
-                    flow = await flow_service.get_flow_by_name(
+                    flow = await flow_service.get_workflow_by_name(
                         pod_id, workflow_name, requester_user_id=user_id, ctx=ctx
                     )
                     dir_ = root / "workflows" / workflow_name
@@ -559,10 +559,10 @@ class BundleExporter:
     ) -> None:
         """Export configured surfaces best-effort: a surface that can't be
         serialized is skipped with a warning, never failing the whole export."""
-        from app.modules.agent_surfaces.api.controllers.surface_controller import (
+        from app.composition.pod_bundle_resources import (
             _surface_response,
         )
-        from app.modules.agent_surfaces.api.dependencies import get_surface_service
+        from app.composition.pod_bundle_resources import get_surface_service
 
         try:
             service = get_surface_service(uow)
@@ -620,7 +620,7 @@ class BundleExporter:
         widget/no-source app — its built ``dist.zip``. Best-effort and byte-budgeted:
         an app with neither archive, or one over budget, exports metadata-only.
         Mirrors the CLI's ``_download_app_assets`` for format parity."""
-        from app.modules.apps.domain.errors import AppNotFoundError
+        from app.modules.apps.contracts import AppNotFoundError
 
         # Prefer source (rebuildable in the target pod); the exported vite dist is
         # baked with the source pod id and is not portable.
@@ -674,7 +674,7 @@ class BundleExporter:
         failing the export."""
         from lemma_pod_bundle.layout import FILES_MANIFEST
 
-        from app.modules.datastore.api.dependencies import build_file_service
+        from app.composition.pod_bundle_resources import build_file_service
 
         try:
             service = build_file_service(uow)
@@ -825,43 +825,43 @@ async def _resource_grants_payload(
 
 
 def _pod_response_dict(pod: Any) -> dict[str, Any]:
-    from app.modules.pod.api.schemas.pod_schemas import PodResponse
+    from app.modules.pod.contracts import PodResponse
 
     return _dump_response(PodResponse.model_validate(pod))
 
 
 def _table_response_dict(table: Any) -> dict[str, Any]:
-    from app.modules.datastore.api.schemas.datastore_schemas import TableResponse
+    from app.modules.datastore.contracts import TableResponse
 
     return _dump_response(TableResponse.model_validate(table))
 
 
 def _function_response_dict(function: Any) -> dict[str, Any]:
-    from app.modules.function.api.schemas.function_schemas import FunctionResponse
+    from app.modules.function.contracts import FunctionResponse
 
     return _dump_response(FunctionResponse.model_validate(function.model_dump()))
 
 
 def _agent_response_dict(agent: Any) -> dict[str, Any]:
-    from app.modules.agent.api.schemas import AgentResponse
+    from app.modules.agent.contracts import AgentResponse
 
     return _dump_response(AgentResponse.model_validate(agent))
 
 
 def _flow_response_dict(flow: Any) -> dict[str, Any]:
-    from app.modules.workflow.api.schemas import flow_response_from_domain
+    from app.modules.workflow.contracts import workflow_response_from_domain
 
-    return _dump_response(flow_response_from_domain(flow))
+    return _dump_response(workflow_response_from_domain(flow))
 
 
 def _schedule_response_dict(schedule: Any) -> dict[str, Any]:
-    from app.modules.schedule.api.schemas.schedule_schemas import ScheduleResponse
+    from app.modules.schedule.contracts import ScheduleResponse
 
     return _dump_response(ScheduleResponse.model_validate(schedule))
 
 
 def _app_response_dict(app: Any) -> dict[str, Any]:
-    from app.modules.apps.api.schemas.app_schemas import AppDetailResponse
+    from app.modules.apps.contracts import AppDetailResponse
 
     return _dump_response(AppDetailResponse.model_validate(app))
 

@@ -9,4 +9,3 @@ export type MessageResponseSchema = {
     message: string;
     success?: boolean;
 };
-

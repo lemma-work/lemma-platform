@@ -20,4 +20,3 @@ export type TableSummaryResponse = {
     updated_at: string;
     visibility?: string;
 };
-

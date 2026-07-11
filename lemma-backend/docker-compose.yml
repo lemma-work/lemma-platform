@@ -32,7 +32,7 @@ services:
         condition: service_healthy
 
   supertokens:
-    image: docker.io/supertokens/supertokens-postgresql:11.1.0
+    image: docker.io/supertokens/supertokens-postgresql:11.4.5
     depends_on:
       db:
         condition: service_healthy
@@ -57,18 +57,26 @@ services:
     # namespace. The -core image is smaller (~580MB) and downloads OCR models on
     # first use into the kreuzberg_cache volume. Overridable via DEV_KREUZBERG_IMAGE.
     image: ${DEV_KREUZBERG_IMAGE:-ghcr.io/xberg-io/kreuzberg:4.9.9-core}
+    # Warm only the no-OCR layout/table path before the HTTP port opens. The
+    # broader `cache warm` command also downloads PaddleOCR models we do not use.
+    # If concurrent first requests trigger lazy downloads, one can lose the Hugging
+    # Face file lock and silently continue without layout detection.
+    entrypoint: ["sh", "-c"]
+    command:
+      - >-
+        kreuzberg extract /opt/lemma/prewarm.pdf --disable-ocr true
+        --layout true --layout-table-model tatr --extract-pages true
+        --content-format markdown --extract-images true --target-dpi 150
+        >/dev/null && exec kreuzberg serve --host 0.0.0.0 --port 8000
     ports:
       - "${DEV_KREUZBERG_PORT:-8002}:8000"
     restart: unless-stopped
-    # Resource bounds so document extraction (OCR/layout is CPU+RAM heavy) can't
-    # run the host out of memory. Each Kreuzberg extraction carries a ~1.5GB
-    # model+runtime floor; the backend caps its own concurrency (2) to keep the
-    # multiplied peak under 4GB. CPUs are held at 2 on purpose: more cores let
-    # Kreuzberg parallelize pages internally, which multiplies peak RAM and
-    # OOM-kills a 4GB instance (measured: 4 CPU OOMs, 2 CPU peaks ~3.9GB). Raise
-    # mem_limit before raising cpus.
-    mem_limit: ${DEV_KREUZBERG_MEM_LIMIT:-4g}
-    cpus: ${DEV_KREUZBERG_CPUS:-2}
+    # Rich layout/table extraction is both CPU- and memory-heavy. Pair the
+    # 4-CPU local target with an 8GB ceiling: raising CPU alone increases
+    # overlapping page-model work and previously OOM-killed a 4GB container.
+    # Both values remain overridable for constrained Docker Desktop VMs.
+    mem_limit: ${DEV_KREUZBERG_MEM_LIMIT:-8g}
+    cpus: ${DEV_KREUZBERG_CPUS:-4}
     environment:
       # Reject oversized uploads at the edge (backend also guards before sending);
       # the request-body cap sits just above it for multipart overhead.
@@ -81,14 +89,16 @@ services:
       RUST_LOG: "${DEV_KREUZBERG_LOG_LEVEL:-info}"
     volumes:
       - kreuzberg_cache:/app/.kreuzberg
+      - ./app/modules/datastore/tests/fixtures/arxiv/seq2seq.pdf:/opt/lemma/prewarm.pdf:ro
     stop_grace_period: 30s
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
       interval: 30s
       timeout: 10s
       retries: 5
-      # Models can load on first boot; don't fail health while warming.
-      start_period: 40s
+      # A cold cache can take several minutes on a slow registry connection.
+      # A successful probe still marks the container healthy immediately.
+      start_period: 15m
 
 volumes:
   postgres_data:

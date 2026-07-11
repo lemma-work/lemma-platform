@@ -1,7 +1,8 @@
 """Object-storage staging for bundle archives.
 
-Staged archives live under ``{staging_prefix}/pod-imports/{import_id}/bundle.zip``
-and ``…/pod-exports/{export_id}/bundle.zip`` so the API process (which accepts
+Staged archives live under ``{staging_prefix}/pod-imports/{import_id}/bundle.zip``,
+``…/pod-exports/{export_id}/bundle.zip``, and
+``…/pod-publishes/{publish_id}/bundle.zip`` so the API process (which accepts
 an upload) and the worker process (which plans/applies) can be separate
 replicas. Redis holds state JSON only — blobs never go there — and archives
 are removed on job completion with the sweep cron as backstop.
@@ -11,20 +12,20 @@ from __future__ import annotations
 
 from collections.abc import AsyncIterator
 from datetime import datetime
+from pathlib import Path
 from typing import Literal
 from uuid import UUID
 
 import obstore as obs
 from obstore.store import ObjectStore
 
-from app.core.config import settings
 from app.core.log.log import get_logger
 from app.core.object_storage import build_object_store, local_object_storage_path
 from app.modules.pod_bundle.config import pod_bundle_settings
 
 logger = get_logger(__name__)
 
-StagingKind = Literal["pod-imports", "pod-exports"]
+StagingKind = Literal["pod-imports", "pod-exports", "pod-publishes"]
 
 
 def archive_key(kind: StagingKind, job_id: UUID) -> str:
@@ -37,12 +38,19 @@ class BundleStagingStorage:
             local_prefix=local_object_storage_path(
                 pod_bundle_settings.pod_bundle_staging_prefix
             ),
-            bucket_name=settings.gcs_storage_bucket,
         )
 
-    async def put_archive(self, kind: StagingKind, job_id: UUID, data: bytes) -> str:
+    async def put_archive(
+        self, kind: StagingKind, job_id: UUID, data: bytes | Path
+    ) -> str:
         key = archive_key(kind, job_id)
-        await obs.put_async(self.store, key, data)
+        await obs.put_async(
+            self.store,
+            key,
+            data,
+            use_multipart=isinstance(data, Path),
+            chunk_size=1024 * 1024,
+        )
         return key
 
     async def get_archive(self, kind: StagingKind, job_id: UUID) -> bytes | None:

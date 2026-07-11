@@ -46,16 +46,17 @@ from app.modules.agent_surfaces.domain.ports import (
     SurfaceAuthConfigPort,
     SurfaceInstallationRepositoryPort,
 )
-from app.modules.connectors.domain.connector import AuthProvider
+from app.modules.connectors.contracts import AuthConfigSource, AuthProvider
 from app.modules.agent_surfaces.domain.setup_guides import (
     SurfacePlatformSetupGuide,
     build_surface_setup_actions,
     build_surface_setup_guide,
 )
-from app.modules.connectors.infrastructure.repositories.connector_trigger_repository import (
+from app.composition.surface_connectors import (
     ConnectorTriggerRepository,
 )
-from app.modules.schedule.domain.schedule import (
+from app.composition.surface_schedule import ScheduleService
+from app.modules.schedule.contracts import (
     ScheduleCreateEntity,
     ScheduleType,
     ScheduleUpdateEntity,
@@ -77,8 +78,6 @@ if TYPE_CHECKING:
     from app.modules.agent_surfaces.services.credential_resolver import (
         SurfaceCredentialResolver,
     )
-    from app.modules.schedule.services.schedule_service import ScheduleService
-
 _GRAPH_SCOPE = "https://graph.microsoft.com/.default"
 
 # Shared Redis cache of Teams admin-consent probe results (per-entry TTL: 60 s
@@ -482,8 +481,6 @@ class AgentSurfaceService:
             return False
         if surface.surface_type is SurfacePlatform.WHATSAPP:
             return True
-
-        from app.modules.connectors.domain.auth_config import AuthConfigSource
 
         if self._account_port is None or self._auth_config_port is None:
             return False

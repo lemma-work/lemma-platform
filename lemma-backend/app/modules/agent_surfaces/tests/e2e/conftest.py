@@ -1,8 +1,5 @@
 from __future__ import annotations
 
-import os
-import subprocess
-from pathlib import Path
 from uuid import uuid4
 
 import pytest
@@ -24,9 +21,12 @@ from app.modules.agent_surfaces.tests.e2e.helpers import (
 from app.modules.agent.tests.e2e.system_lemma_helpers import (
     skip_unless_system_lemma,
     system_lemma_api_key,
-    system_lemma_env_overlay,
+)
+from app.modules.agent_surfaces.tests.e2e.mock_infrastructure import (
+    FakeComposioServer,
 )
 from app.modules.test_support.e2e import fixtures as e2e_fixtures
+from app.modules.test_support.e2e.worker_process import production_worker_process
 
 # Re-export shared E2E fixtures so this module can run with --confcutdir.
 test_network = e2e_fixtures.test_network
@@ -36,7 +36,6 @@ redis_container = e2e_fixtures.redis_container
 test_database_url = e2e_fixtures.test_database_url
 test_redis_url = e2e_fixtures.test_redis_url
 e2e_settings = e2e_fixtures.e2e_settings
-worker = e2e_fixtures.worker
 db_manager = e2e_fixtures.db_manager
 test_app = e2e_fixtures.test_app
 async_client = e2e_fixtures.async_client
@@ -47,118 +46,71 @@ db_session = e2e_fixtures.db_session
 scenario = e2e_fixtures.scenario
 
 
-@pytest_asyncio.fixture(scope="function")
-async def system_lemma_worker(e2e_settings):
-    """Production streaq worker subprocess wired to ``system:lemma``.
+@pytest.fixture(autouse=True)
+def public_surface_api_url(monkeypatch):
+    """Advertise the HTTPS ingress boundary used by webhook E2E journeys.
+
+    The ASGI client remains in-process and fake providers remain local.  This
+    setting only models the externally reachable URL that providers require
+    when a surface is registered.  Native polling/socket tests deliberately
+    override it with localhost inside the individual scenario.
+    """
+    from app.core.config import settings
+
+    monkeypatch.setattr(settings, "api_url", "https://surface-e2e.test")
+
+
+@pytest_asyncio.fixture(scope="session")
+async def fake_composio_server():
+    server = FakeComposioServer()
+    await server.start()
+    try:
+        yield server
+    finally:
+        await server.stop()
+
+
+@pytest_asyncio.fixture(scope="session")
+async def worker(e2e_settings, fake_composio_server, request):
+    """Surface shard's production worker with a hermetic Composio transport.
 
     Default e2e mode uses the deterministic FunctionModel token source. When
     ``E2E_LLM_MODE=real`` is set, the existing system:lemma helper gates on the
-    configured LEMMA_OPENAI_* credentials.
+    configured LEMMA_OPENAI_* credentials. The local Composio API preserves the
+    real SDK/gateway boundary for Gmail and Outlook without live credentials.
     """
-    import asyncio
-
-    import redis.asyncio as redis
-
     from app.core.config import settings
 
     skip_unless_system_lemma()
-    env_overlay = system_lemma_env_overlay()
     key = system_lemma_api_key()
-    coverage_env = {
-        name: value
-        for name in ("COVERAGE_PROCESS_START", "COVERAGE_FILE")
-        if (value := os.environ.get(name))
-    }
-
     previous_setting = settings.lemma_openai_api_key
     if key:
         settings.lemma_openai_api_key = key
-
-    redis_client = redis.from_url(e2e_settings.redis_url, decode_responses=False)
-    await redis_client.flushdb()
-    await redis_client.aclose()
-
-    log_path = f"/tmp/lemma_system_lemma_surface_worker_{uuid4().hex}.log"
-    backend_root = Path(__file__).resolve().parents[5]
-
-    def _read_log() -> str:
-        try:
-            with open(log_path, "r") as handle:
-                return handle.read()
-        except FileNotFoundError:
-            return ""
-
-    # Write handle for the child; the parent reads via fresh handles so the two
-    # never contend on a shared file offset.
-    log_writer = open(log_path, "w")
     try:
-        proc = subprocess.Popen(
-            [str(backend_root / ".venv/bin/streaq"), "run", "app.events:streaq_worker"],
-            cwd=str(backend_root),
-            env={
-                **os.environ,
-                **env_overlay,
-                **coverage_env,
-                "PYTHONPATH": ".",
-                "PYTHONUNBUFFERED": "1",
-                "DATABASE_URL": e2e_settings.database_url,
-                "DATASTORE_DATABASE_URL": e2e_settings.datastore_database_url,
-                "REDIS_URL": e2e_settings.redis_url,
-                "SUPERTOKENS_CORE_URL": e2e_settings.supertokens_core_url,
-                "ENVIRONMENT": "testing",
-                "DEBUG": "true",
-                "EMAIL_TRANSPORT": "filesystem",
-                "EMAIL_OUTPUT_DIR": e2e_settings.email_output_dir,
-                "GCS_STORAGE_BUCKET": "",
-                "PUBLIC_BUCKET_NAME": "",
-                "STORAGE_BACKEND": "local",
-                "EMBEDDING_PROVIDER": "local",
-                "LOCAL_OBJECT_STORAGE_ROOT": e2e_settings.local_object_storage_root,
-                "LOCAL_FILE_STORAGE_ROOT": e2e_settings.local_file_storage_root,
-                "COMPOSIO_CACHE_DIR": "/tmp/composio",
+        async with production_worker_process(
+            e2e_settings,
+            log_prefix="lemma_system_lemma_surface_worker",
+            extra_env={
+                "COMPOSIO_API_KEY": "test",
+                "COMPOSIO_BASE_URL": fake_composio_server.base_url,
+                "MICROSOFT_BOT_APP_ID": "teams-app-id",
+                "MICROSOFT_BOT_APP_PASSWORD": "teams-app-secret",
             },
-            stdout=log_writer,
-            stderr=subprocess.STDOUT,
-            text=True,
-        )
-        readiness_markers = (
-            "`HandleAgentRunEvent` waiting for messages",
-            "`HandleScheduleEvents` waiting for messages",
-            "`HandleSurfaceWebhook` waiting for messages",
-        )
-        startup_ok = False
-        for _ in range(600):
-            if proc.poll() is not None:
-                pytest.fail(
-                    f"surface worker exited before startup (code={proc.returncode}).\n"
-                    f"{_read_log()}"
-                )
-            if all(marker in _read_log() for marker in readiness_markers):
-                startup_ok = True
-                break
-            await asyncio.sleep(0.1)
-        if not startup_ok:
-            proc.terminate()
-            try:
-                proc.wait(timeout=5)
-            except subprocess.TimeoutExpired:
-                proc.kill()
-            pytest.fail(f"Timed out waiting for surface worker.\n{_read_log()}")
-
-        try:
-            yield proc
-        finally:
-            proc.terminate()
-            try:
-                proc.wait(timeout=10)
-            except subprocess.TimeoutExpired:
-                proc.kill()
-            settings.lemma_openai_api_key = previous_setting
-            redis_client = redis.from_url(e2e_settings.redis_url, decode_responses=False)
-            await redis_client.flushdb()
-            await redis_client.aclose()
+            readiness_markers=(
+                "`HandleAgentRunEvent` waiting for messages",
+                "`HandleScheduleEvents` waiting for messages",
+                "`HandleSurfaceWebhook` waiting for messages",
+            ),
+        ) as process:
+            yield process
+            if request.session.testsfailed:
+                # The worker is a subprocess, so pytest cannot otherwise attach
+                # its exception/log context to a failed journey.  Emit only on
+                # failure to keep successful shard output concise.
+                print("\n--- surface production worker tail ---")
+                print(process.read_log_tail())
     finally:
-        log_writer.close()
+        settings.lemma_openai_api_key = previous_setting
 
 
 @pytest_asyncio.fixture
@@ -186,6 +138,7 @@ __all__ = [
     "db_session",
     "e2e_settings",
     "fake_composio_email",
+    "fake_composio_server",
     "fake_gmail",
     "fake_outlook",
     "fake_resend",
@@ -206,6 +159,5 @@ __all__ = [
     "test_network",
     "test_pod",
     "test_redis_url",
-    "system_lemma_worker",
     "worker",
 ]

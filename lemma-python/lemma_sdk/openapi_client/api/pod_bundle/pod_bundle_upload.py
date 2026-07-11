@@ -7,8 +7,10 @@ import httpx
 
 from ... import errors
 from ...client import AuthenticatedClient, Client
-from ...models.body_pod_bundle_upload import BodyPodBundleUpload
 from ...models.error_response import ErrorResponse
+from ...models.fastapi_compat_v2_body_pod_bundle_upload import (
+    FastapiCompatV2BodyPodBundleUpload,
+)
 from ...models.upload_response import UploadResponse
 from ...types import Response
 
@@ -16,7 +18,7 @@ from ...types import Response
 def _get_kwargs(
     pod_id: UUID,
     *,
-    body: BodyPodBundleUpload,
+    body: FastapiCompatV2BodyPodBundleUpload,
 ) -> dict[str, Any]:
     headers: dict[str, Any] = {}
 
@@ -67,7 +69,7 @@ def sync_detailed(
     pod_id: UUID,
     *,
     client: AuthenticatedClient | Client,
-    body: BodyPodBundleUpload,
+    body: FastapiCompatV2BodyPodBundleUpload,
 ) -> Response[ErrorResponse | UploadResponse]:
     """Stage A Local Bundle Upload
 
@@ -76,7 +78,7 @@ def sync_detailed(
 
     Args:
         pod_id (UUID):
-        body (BodyPodBundleUpload):
+        body (FastapiCompatV2BodyPodBundleUpload):
 
     Raises:
         errors.UnexpectedStatus: If the server returns an undocumented status code and Client.raise_on_unexpected_status is True.
@@ -102,7 +104,7 @@ def sync(
     pod_id: UUID,
     *,
     client: AuthenticatedClient | Client,
-    body: BodyPodBundleUpload,
+    body: FastapiCompatV2BodyPodBundleUpload,
 ) -> ErrorResponse | UploadResponse | None:
     """Stage A Local Bundle Upload
 
@@ -111,7 +113,7 @@ def sync(
 
     Args:
         pod_id (UUID):
-        body (BodyPodBundleUpload):
+        body (FastapiCompatV2BodyPodBundleUpload):
 
     Raises:
         errors.UnexpectedStatus: If the server returns an undocumented status code and Client.raise_on_unexpected_status is True.
@@ -132,7 +134,7 @@ async def asyncio_detailed(
     pod_id: UUID,
     *,
     client: AuthenticatedClient | Client,
-    body: BodyPodBundleUpload,
+    body: FastapiCompatV2BodyPodBundleUpload,
 ) -> Response[ErrorResponse | UploadResponse]:
     """Stage A Local Bundle Upload
 
@@ -141,7 +143,7 @@ async def asyncio_detailed(
 
     Args:
         pod_id (UUID):
-        body (BodyPodBundleUpload):
+        body (FastapiCompatV2BodyPodBundleUpload):
 
     Raises:
         errors.UnexpectedStatus: If the server returns an undocumented status code and Client.raise_on_unexpected_status is True.
@@ -165,7 +167,7 @@ async def asyncio(
     pod_id: UUID,
     *,
     client: AuthenticatedClient | Client,
-    body: BodyPodBundleUpload,
+    body: FastapiCompatV2BodyPodBundleUpload,
 ) -> ErrorResponse | UploadResponse | None:
     """Stage A Local Bundle Upload
 
@@ -174,7 +176,7 @@ async def asyncio(
 
     Args:
         pod_id (UUID):
-        body (BodyPodBundleUpload):
+        body (FastapiCompatV2BodyPodBundleUpload):
 
     Raises:
         errors.UnexpectedStatus: If the server returns an undocumented status code and Client.raise_on_unexpected_status is True.

@@ -26,13 +26,13 @@ T = TypeVar("T", bound="WorkflowRunWaitResponse")
 class WorkflowRunWaitResponse:
     """
     Attributes:
-        flow_id (UUID):
         id (UUID):
         node_id (str):
         pod_id (UUID):
         run_id (UUID):
         status (WorkflowRunWaitStatus):
         wait_type (WorkflowRunWaitType):
+        workflow_id (UUID):
         assigned_pod_member_id (None | Unset | UUID):
         completed_at (datetime.datetime | None | Unset):
         created_at (datetime.datetime | None | Unset):
@@ -40,13 +40,13 @@ class WorkflowRunWaitResponse:
         payload (WorkflowRunWaitResponsePayload | Unset):
     """
 
-    flow_id: UUID
     id: UUID
     node_id: str
     pod_id: UUID
     run_id: UUID
     status: WorkflowRunWaitStatus
     wait_type: WorkflowRunWaitType
+    workflow_id: UUID
     assigned_pod_member_id: None | Unset | UUID = UNSET
     completed_at: datetime.datetime | None | Unset = UNSET
     created_at: datetime.datetime | None | Unset = UNSET
@@ -55,8 +55,6 @@ class WorkflowRunWaitResponse:
     additional_properties: dict[str, Any] = _attrs_field(init=False, factory=dict)
 
     def to_dict(self) -> dict[str, Any]:
-        flow_id = str(self.flow_id)
-
         id = str(self.id)
 
         node_id = self.node_id
@@ -68,6 +66,8 @@ class WorkflowRunWaitResponse:
         status = self.status.value
 
         wait_type = self.wait_type.value
+
+        workflow_id = str(self.workflow_id)
 
         assigned_pod_member_id: None | str | Unset
         if isinstance(self.assigned_pod_member_id, Unset):
@@ -107,13 +107,13 @@ class WorkflowRunWaitResponse:
         field_dict.update(self.additional_properties)
         field_dict.update(
             {
-                "flow_id": flow_id,
                 "id": id,
                 "node_id": node_id,
                 "pod_id": pod_id,
                 "run_id": run_id,
                 "status": status,
                 "wait_type": wait_type,
+                "workflow_id": workflow_id,
             }
         )
         if assigned_pod_member_id is not UNSET:
@@ -136,8 +136,6 @@ class WorkflowRunWaitResponse:
         )
 
         d = dict(src_dict)
-        flow_id = UUID(d.pop("flow_id"))
-
         id = UUID(d.pop("id"))
 
         node_id = d.pop("node_id")
@@ -149,6 +147,8 @@ class WorkflowRunWaitResponse:
         status = WorkflowRunWaitStatus(d.pop("status"))
 
         wait_type = WorkflowRunWaitType(d.pop("wait_type"))
+
+        workflow_id = UUID(d.pop("workflow_id"))
 
         def _parse_assigned_pod_member_id(data: object) -> None | Unset | UUID:
             if data is None:
@@ -220,13 +220,13 @@ class WorkflowRunWaitResponse:
             payload = WorkflowRunWaitResponsePayload.from_dict(_payload)
 
         workflow_run_wait_response = cls(
-            flow_id=flow_id,
             id=id,
             node_id=node_id,
             pod_id=pod_id,
             run_id=run_id,
             status=status,
             wait_type=wait_type,
+            workflow_id=workflow_id,
             assigned_pod_member_id=assigned_pod_member_id,
             completed_at=completed_at,
             created_at=created_at,

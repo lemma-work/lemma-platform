@@ -86,10 +86,8 @@ class SchemaManager:
                 await self._grant_query_role_on_table(conn, schema_name, table_name)
         except Exception:  # noqa: BLE001
             logger.warning(
-                "Could not grant query role read on %s.%s; ad-hoc queries on it "
-                "will fail until grants are repaired",
-                schema_name,
-                table_name,
+                f"Could not grant query role read on {schema_name}.{table_name}; "
+                "ad-hoc queries on it will fail until grants are repaired",
                 exc_info=True,
             )
 
@@ -125,7 +123,9 @@ class SchemaManager:
 
     def _get_postgres_type(self, column: ColumnSchema) -> str:
         if column.computed:
-            return None  # Should not be called for computed
+            raise DatastoreValidationError(
+                "Computed columns do not have a direct PostgreSQL type"
+            )
 
         type_mapping = {
             DatastoreDataType.TEXT: "TEXT"
@@ -188,8 +188,7 @@ class SchemaManager:
         self._sanitize_identifier(referenced_table)
         self._sanitize_identifier(referenced_column)
         return (
-            f' REFERENCES "{schema_name}"."{referenced_table}"'
-            f'("{referenced_column}")'
+            f' REFERENCES "{schema_name}"."{referenced_table}"("{referenced_column}")'
         )
 
     def _map_db_error(
@@ -209,11 +208,38 @@ class SchemaManager:
             columns=columns,
         )
 
+    @staticmethod
+    async def _lock_schema_bootstrap(conn, schema_name: str) -> None:
+        """Serialize every creator of one pod schema across processes.
+
+        PostgreSQL's ``CREATE SCHEMA IF NOT EXISTS`` is not race-free: two
+        concurrent transactions can both observe the namespace as absent and
+        one later fails the ``pg_namespace.nspname`` unique index. The pod
+        provisioner and first table write use separate transactions/processes,
+        so they must share this transaction-scoped advisory lock.
+        """
+        await conn.execute(
+            text("SELECT pg_advisory_xact_lock(hashtext(:schema_name))"),
+            {"schema_name": schema_name},
+        )
+
     async def create_datastore_schema(self, pod_id: UUID) -> None:
         schema_name = self._get_schema_name(pod_id)
         async with self._engine.begin() as conn:
+            await self._lock_schema_bootstrap(conn, schema_name)
             await conn.execute(text(f'CREATE SCHEMA IF NOT EXISTS "{schema_name}"'))
         logger.info(f"Created schema {schema_name} for pod {pod_id}")
+
+    async def datastore_schema_exists(self, pod_id: UUID) -> bool:
+        schema_name = self._get_schema_name(pod_id)
+        async with self._engine.connect() as conn:
+            result = await conn.scalar(
+                text(
+                    "SELECT EXISTS (SELECT 1 FROM pg_namespace WHERE nspname = :name)"
+                ),
+                {"name": schema_name},
+            )
+        return bool(result)
 
     async def drop_datastore_schema(self, pod_id: UUID) -> None:
         schema_name = self._get_schema_name(pod_id)
@@ -315,14 +341,7 @@ class SchemaManager:
 
         try:
             async with self._engine.begin() as conn:
-                # Serialize schema bootstrap for a pod to avoid rare concurrent
-                # CREATE SCHEMA races in PostgreSQL (seen as pg_namespace unique violations).
-                await conn.execute(
-                    text(
-                        "SELECT pg_advisory_xact_lock(hashtext(:schema_name))"
-                    ),
-                    {"schema_name": schema_name},
-                )
+                await self._lock_schema_bootstrap(conn, schema_name)
                 await conn.execute(text(f'CREATE SCHEMA IF NOT EXISTS "{schema_name}"'))
                 await conn.execute(text(create_table_sql))
 
@@ -420,7 +439,9 @@ class SchemaManager:
         try:
             async with self._engine.begin() as conn:
                 await conn.execute(
-                    text(f'ALTER TABLE "{schema_name}"."{table_name}" ADD COLUMN {col_def}')
+                    text(
+                        f'ALTER TABLE "{schema_name}"."{table_name}" ADD COLUMN {col_def}'
+                    )
                 )
         except DBAPIError as exc:
             raise self._map_db_error(

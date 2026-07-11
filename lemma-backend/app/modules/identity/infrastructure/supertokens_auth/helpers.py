@@ -9,9 +9,6 @@ from app.core.authorization.delegation import (
     CLAIM_DELEGATION_VERSION,
     DELEGATION_VERSION,
 )
-from app.modules.identity.infrastructure.supertokens_auth.initialization import (
-    initialize_supertokens,
-)
 from app.modules.identity.infrastructure.supertokens_auth.token_factory import (
     validate_delegation_claims_payload,
 )
@@ -39,7 +36,7 @@ async def get_user_token(
         user.login_methods[0].recipe_user_id,
         payload,
     )
-    logger.info(f"Session created: {session}")
+    logger.info("Delegated session created", user_id=str(user_id))
     return session.access_token
 
 
@@ -86,12 +83,3 @@ async def refresh_cli_session_tokens(refresh_token: str) -> dict:
         "session_handle": session.get_handle(),
         "user_id": session.get_user_id(),
     }
-
-
-if __name__ == "__main__":
-    import asyncio
-
-    initialize_supertokens()
-    user_id = UUID("b94620d6-0a89-4471-b5a2-f25b5cb3090f")
-    token = asyncio.run(get_user_token(user_id))
-    print(token)

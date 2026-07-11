@@ -11,7 +11,7 @@ from urllib.parse import quote, urlparse
 import aiohttp
 from pydantic_ai.tools import RunContext
 
-from app.modules.agent.tools.context import ConversationContext
+from app.modules.agent.contracts import ConversationContext
 from app.modules.agent_surfaces.domain.entities import ParsedInboundSurfaceEvent
 from app.modules.agent_surfaces.domain.models import SurfaceContextMessage
 from app.modules.agent_surfaces.domain.surface_event_metadata import (
@@ -39,6 +39,7 @@ logger = get_logger(__name__)
 class TeamsPlatformService:
     def __init__(self, *, credentials: dict[str, Any]) -> None:
         self.credentials = credentials
+        self._graph_base = str(credentials.get("graph_api_base_url") or GRAPH_BASE).rstrip("/")
 
     async def download_attachment_bytes(
         self,
@@ -155,13 +156,13 @@ class TeamsPlatformService:
                             error="There is no current Teams thread to inspect in this conversation.",
                         )
                     url = (
-                        f"{GRAPH_BASE}/teams/{quote(str(graph_team_id))}/channels/"
+                        f"{self._graph_base}/teams/{quote(str(graph_team_id))}/channels/"
                         f"{quote(str(channel_id))}/messages/{quote(str(current_thread))}/replies"
                         f"?$top={request.limit}"
                     )
                 else:
                     url = (
-                        f"{GRAPH_BASE}/teams/{quote(str(graph_team_id))}/channels/"
+                        f"{self._graph_base}/teams/{quote(str(graph_team_id))}/channels/"
                         f"{quote(str(channel_id))}/messages?$top={request.limit}"
                     )
 
@@ -250,7 +251,7 @@ class TeamsPlatformService:
                 if not graph_team_id:
                     return []
                 base = (
-                    f"{GRAPH_BASE}/teams/{quote(str(graph_team_id))}/channels/"
+                    f"{self._graph_base}/teams/{quote(str(graph_team_id))}/channels/"
                     f"{quote(str(channel_id))}/messages"
                 )
                 url = (
@@ -341,8 +342,7 @@ class TeamsPlatformService:
             return None
 
         if _is_sharepoint_url(normalized_url):
-            # SharePoint links from Teams are often browser/share URLs rather
-            # than direct file bytes. Resolve them via Graph shares first.
+            # Resolve SharePoint browser/share URLs via Graph shares first.
             shared_item = await _resolve_shared_item_content_request(
                 session=session,
                 token=graph_token,

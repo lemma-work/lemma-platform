@@ -115,20 +115,6 @@ class SurfaceSettings(BaseSettings):
     )
 
     # Surface webhook ingress + runtime
-    surface_raw_webhook_log_dir: Optional[str] = Field(
-        default=None,
-        description=(
-            "Optional directory for appending raw surface webhook payloads as JSONL "
-            "records for debugging."
-        ),
-    )
-    surface_raw_webhook_log_sources: str = Field(
-        default="",
-        description=(
-            "Comma-separated webhook sources to log to the raw surface webhook "
-            "debug directory. Empty means log every source."
-        ),
-    )
     surface_webhook_security_enabled: bool = Field(
         default=True,
         description=(

@@ -30,7 +30,7 @@ APP_IMAGE_KEYS = ("backend", "frontend", "agentbox", "agentbox_runtime")
 DEFAULT_INFRA_IMAGES = {
     "postgres": "docker.io/pgvector/pgvector:0.8.3-pg16",
     "redis": "docker.io/redis/redis-stack:7.2.0-v19",
-    "supertokens": "docker.io/supertokens/supertokens-postgresql:11.1.0",
+    "supertokens": "docker.io/supertokens/supertokens-postgresql:11.4.5",
     "kreuzberg": "ghcr.io/kreuzberg-dev/kreuzberg:4.9.9",
 }
 

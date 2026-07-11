@@ -11,4 +11,3 @@ export type WorkflowEdge = {
     source: string;
     target: string;
 };
-

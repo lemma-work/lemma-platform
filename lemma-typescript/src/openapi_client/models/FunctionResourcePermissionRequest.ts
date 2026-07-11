@@ -8,4 +8,3 @@ export type FunctionResourcePermissionRequest = {
     resource_name: string;
     resource_type: ResourceType;
 };
-

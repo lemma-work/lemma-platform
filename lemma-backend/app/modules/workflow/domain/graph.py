@@ -35,7 +35,7 @@ class WorkflowEdge(BaseModel):
     label: str | None = None
 
 
-class FlowGraphValidator:
+class WorkflowGraphValidator:
     """Structural and expression validation for a workflow graph."""
 
     @classmethod

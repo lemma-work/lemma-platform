@@ -50,7 +50,7 @@ def gcs_backend(monkeypatch):
     them here routes upload + serving through GCS without rebuilding the app.
     """
     monkeypatch.setattr(settings, "storage_backend", "gcs")
-    monkeypatch.setattr(settings, "gcs_storage_bucket", _BUCKET)
+    monkeypatch.setattr(settings, "storage_bucket", _BUCKET)
     yield
 
 

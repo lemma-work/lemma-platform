@@ -1,9 +1,10 @@
 from __future__ import annotations
 
 from datetime import datetime
+from typing import Any
 from uuid import UUID
 
-from sqlalchemy import Boolean, DateTime, ForeignKey, Index, String, Text, text
+from sqlalchemy import Boolean, DateTime, ForeignKey, Index, Integer, String, Text, text
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 from sqlalchemy import Enum as SQLEnum
 from sqlalchemy.dialects.postgresql import JSONB
@@ -14,12 +15,6 @@ from app.modules.schedule.domain.schedule import (
     ScheduleFireStatus,
     ScheduleType,
 )
-
-from app.modules.identity.infrastructure.models.user_models import User
-from app.modules.pod.infrastructure.models import Pod
-from app.modules.agent.infrastructure.models import AgentModel
-from app.modules.workflow.infrastructure.models import FlowModel
-
 
 class Schedule(UUIDAuditBase):
     """Unified schedule model for time, webhook, and datastore event sources."""
@@ -81,15 +76,20 @@ class Schedule(UUIDAuditBase):
         SQLEnum(ScheduleFireStatus, native_enum=False, length=20), nullable=True
     )
     last_error: Mapped[str | None] = mapped_column(Text, nullable=True)
+    consecutive_failures: Mapped[int] = mapped_column(
+        Integer,
+        nullable=False,
+        default=0,
+    )
 
     # Relationships
-    user: Mapped["User"] = relationship(User, foreign_keys=[user_id])
-    pod: Mapped["Pod | None"] = relationship(Pod, foreign_keys=[pod_id])
-    workflow: Mapped["FlowModel | None"] = relationship(
-        FlowModel, foreign_keys=[workflow_id]
+    user: Mapped[Any] = relationship("User", foreign_keys=[user_id])
+    pod: Mapped[Any] = relationship("Pod", foreign_keys=[pod_id])
+    workflow: Mapped[Any] = relationship(
+        "WorkflowModel", foreign_keys=[workflow_id]
     )
-    agent: Mapped["AgentModel | None"] = relationship(
-        AgentModel, foreign_keys=[agent_id]
+    agent: Mapped[Any] = relationship(
+        "AgentModel", foreign_keys=[agent_id]
     )
 
     __table_args__ = (
