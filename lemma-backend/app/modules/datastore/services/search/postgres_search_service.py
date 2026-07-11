@@ -18,7 +18,6 @@ from app.modules.datastore.infrastructure.session import (
     get_datastore_session_maker,
 )
 from app.core.embeddings.embeddings import Embedder
-from app.core.embeddings.factory import create_embedder
 from app.modules.datastore.domain.ports import RerankerPort
 from app.modules.datastore.infrastructure.reranker import create_reranker
 import logging
@@ -33,7 +32,7 @@ class PostgresSearchService:
         *,
         engine=None,
         session_factory=None,
-        embedder: Embedder | None = None,
+        embedder: Embedder,
         reranker: RerankerPort | None = None,
     ):
         self.pod_id = pod_id
@@ -44,7 +43,7 @@ class PostgresSearchService:
             self.session_factory,
             self.schema_name,
         )
-        self.embedder = embedder or create_embedder()
+        self.embedder = embedder
         self.reranker = reranker or create_reranker()
         self._initialized = False
 

@@ -46,6 +46,12 @@ def _file_actions_expr(ctx: Context):
     )
 
 
+def _content_identity_matches(content_sha256: str | None):
+    if content_sha256 is None:
+        return DatastoreFile.content_sha256.is_(None)
+    return DatastoreFile.content_sha256 == content_sha256
+
+
 def _file_payload(entity: DatastoreFileEntity) -> dict:
     payload = entity.model_dump(exclude={"allowed_actions"})
     payload["kind"] = entity.kind.value
@@ -101,49 +107,58 @@ class DatastoreFileRepository(DatastoreRepositoryBase, DatastoreFileRepositoryPo
         )
 
     async def claim_for_processing(
-        self, file_id: UUID, *, content_revision: int
-    ) -> bool:
-        """Atomically move PENDING -> PROCESSING; False if already claimed."""
+        self, file_id: UUID, *, content_sha256: str | None
+    ) -> int | None:
+        """Atomically claim one content identity and return its attempt token."""
         result = await self.session.execute(
             update(DatastoreFile)
             .where(
                 DatastoreFile.id == file_id,
                 DatastoreFile.status == FileStatus.PENDING.value,
-                DatastoreFile.content_revision == content_revision,
+                _content_identity_matches(content_sha256),
             )
             .values(
                 status=FileStatus.PROCESSING.value,
                 processing_attempts=DatastoreFile.processing_attempts + 1,
-                processing_phase="EXTRACT",
-                processing_started_at=datetime.now(timezone.utc),
             )
+            .returning(DatastoreFile.processing_attempts)
         )
-        return result.rowcount > 0
+        return result.scalar_one_or_none()
 
-    async def set_processing_phase(
-        self, file_id: UUID, *, content_revision: int, phase: str
+    async def is_processing_claim_current(
+        self,
+        file_id: UUID,
+        *,
+        content_sha256: str | None,
+        processing_attempt: int,
     ) -> bool:
-        result = await self.session.execute(
-            update(DatastoreFile)
-            .where(
-                DatastoreFile.id == file_id,
-                DatastoreFile.status == FileStatus.PROCESSING.value,
-                DatastoreFile.content_revision == content_revision,
+        return bool(
+            await self.session.scalar(
+                select(DatastoreFile.id).where(
+                    DatastoreFile.id == file_id,
+                    DatastoreFile.status == FileStatus.PROCESSING.value,
+                    _content_identity_matches(content_sha256),
+                    DatastoreFile.processing_attempts == processing_attempt,
+                )
             )
-            .values(processing_phase=phase)
         )
-        return result.rowcount > 0
 
     async def mark_completed(
-        self, file_id: UUID, *, content_revision: int, file_metadata: dict
+        self,
+        file_id: UUID,
+        *,
+        content_sha256: str | None,
+        processing_attempt: int,
+        file_metadata: dict,
     ) -> bool:
-        """PROCESSING -> COMPLETED; False if a newer update already reset it."""
+        """Complete only the exact content identity and processing claim."""
         result = await self.session.execute(
             update(DatastoreFile)
             .where(
                 DatastoreFile.id == file_id,
                 DatastoreFile.status == FileStatus.PROCESSING.value,
-                DatastoreFile.content_revision == content_revision,
+                _content_identity_matches(content_sha256),
+                DatastoreFile.processing_attempts == processing_attempt,
             )
             .values(
                 status=FileStatus.COMPLETED.value,
@@ -151,45 +166,53 @@ class DatastoreFileRepository(DatastoreRepositoryBase, DatastoreFileRepositoryPo
                 last_processing_error=None,
                 processing_attempts=0,
                 file_metadata=file_metadata,
-                processing_phase=None,
-                processing_started_at=None,
             )
         )
         return result.rowcount > 0
 
     async def mark_failed(
-        self, file_id: UUID, *, content_revision: int, error: str
+        self,
+        file_id: UUID,
+        *,
+        content_sha256: str | None,
+        processing_attempt: int,
+        error: str,
     ) -> bool:
-        """PROCESSING -> FAILED; False if a newer update already reset it."""
+        """Fail only the exact content identity and processing claim."""
         result = await self.session.execute(
             update(DatastoreFile)
             .where(
                 DatastoreFile.id == file_id,
                 DatastoreFile.status == FileStatus.PROCESSING.value,
-                DatastoreFile.content_revision == content_revision,
+                _content_identity_matches(content_sha256),
+                DatastoreFile.processing_attempts == processing_attempt,
             )
             .values(
                 status=FileStatus.FAILED.value,
                 last_processing_error=error,
-                processing_started_at=None,
             )
         )
         return result.rowcount > 0
 
     async def mark_missing_original(
-        self, file_id: UUID, *, content_revision: int, error: str
+        self,
+        file_id: UUID,
+        *,
+        content_sha256: str | None,
+        processing_attempt: int,
+        error: str,
     ) -> bool:
         result = await self.session.execute(
             update(DatastoreFile)
             .where(
                 DatastoreFile.id == file_id,
                 DatastoreFile.status == FileStatus.PROCESSING.value,
-                DatastoreFile.content_revision == content_revision,
+                _content_identity_matches(content_sha256),
+                DatastoreFile.processing_attempts == processing_attempt,
             )
             .values(
                 status=FileStatus.FAILED_PERMANENT.value,
                 last_processing_error=error,
-                processing_started_at=None,
             )
         )
         return result.rowcount > 0

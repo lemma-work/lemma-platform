@@ -60,6 +60,20 @@ class ObstoreDatastoreStorage:
                 raise DatastoreObjectNotFoundError(
                     f"Storage object not found: {source_blob_name}"
                 ) from exc
+            raise DatastoreInfrastructureError("Failed to copy file") from exc
+
+    async def copy_file(
+        self, source_blob_name: str, destination_blob_name: str
+    ) -> bool:
+        """Copy an object without routing its bytes through the application."""
+        try:
+            await obs.copy_async(self.store, source_blob_name, destination_blob_name)
+            return True
+        except (ObstoreError, FileNotFoundError) as exc:
+            if self._is_missing_object_error(exc):
+                raise DatastoreObjectNotFoundError(
+                    f"Storage object not found: {source_blob_name}"
+                ) from exc
             raise
 
     async def iter_download(self, source_blob_name: str) -> AsyncIterator[bytes]:

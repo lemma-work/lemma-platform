@@ -35,6 +35,10 @@ from app.modules.datastore.infrastructure.reindex_queue import (
     enqueue_datastore_path_cleanup,
 )
 from app.modules.datastore.services.file_service import DatastoreFileService
+from app.modules.datastore.services.files.http_cache import (
+    if_none_match_matches,
+    quote_content_etag,
+)
 
 logger = get_logger(__name__)
 
@@ -44,7 +48,8 @@ class FileDownload:
     """A resolved, authorized file plus its bytes (read after the UoW closed)."""
 
     entity: DatastoreFileEntity
-    content: bytes
+    content: bytes | None
+    not_modified: bool = False
 
 
 @dataclass(frozen=True, slots=True)
@@ -263,6 +268,7 @@ class FileUseCases:
         path: str,
         request: Request,
         user_id: UUID,
+        if_none_match: str | None = None,
     ) -> FileDownload:
         """Resolve+authorize (short UoW), release the connection, then read the
         bytes from storage — so a slow/large download never pins a connection."""
@@ -271,6 +277,10 @@ class FileUseCases:
         ) as scope:
             service = self._build(scope.uow)
             entity = await service.resolve_readable_file(pod_id, path, ctx=scope.ctx)
+        if if_none_match_matches(
+            if_none_match, quote_content_etag(getattr(entity, "content_sha256", None))
+        ):
+            return FileDownload(entity=entity, content=None, not_modified=True)
         content = await service.read_file_content(entity)
         return FileDownload(entity=entity, content=content)
 

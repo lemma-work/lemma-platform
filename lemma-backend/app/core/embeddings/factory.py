@@ -6,15 +6,10 @@ from functools import lru_cache
 
 from app.core.config import settings
 from app.core.embeddings.embeddings import Embedder
-from app.core.embeddings.local_embedder import (
-    DeterministicTestEmbedder,
-    FastEmbedLocalEmbedder,
-)
+from app.core.embeddings.local_embedder import FastEmbedLocalEmbedder
 
 
 def create_embedder() -> Embedder:
-    if settings.e2e_deterministic_embeddings:
-        return _create_test_embedder(settings.embedding_dimension)
     return _create_embedder(
         settings.effective_embedding_provider(),
         settings.local_embedding_model,
@@ -22,11 +17,6 @@ def create_embedder() -> Embedder:
         settings.openai_compat_embedding_model,
         settings.embedding_dimension,
     )
-
-
-@lru_cache(maxsize=4)
-def _create_test_embedder(dimension: int) -> Embedder:
-    return DeterministicTestEmbedder(dimension)
 
 
 @lru_cache(maxsize=8)

@@ -60,20 +60,13 @@ import logging
 logger = logging.getLogger(__name__)
 
 
-class _StaleProcessingRevision(Exception):
+class _StaleProcessingClaim(Exception):
     pass
 
 
-# Manifest format version for the colocated child container.
 _MANIFEST_VERSION = 3
 
-# ``file_metadata["markdown_source"]`` value marking a file whose agent-facing
-# markdown is user-provided (bring-your-own) rather than engine-extracted. When
-# set, the processor chunks/indexes the stored ``source.md`` and skips the
-# document processor entirely.
 _USER_MARKDOWN_SOURCE = "user"
-# ``file_metadata["markdown_asset_names"]`` — basenames of the companion images
-# the user uploaded with their markdown (stored as sibling child artifacts).
 _MARKDOWN_ASSET_NAMES_KEY = "markdown_asset_names"
 
 _CONVERTED_MARKDOWN_MIME_TYPES: frozenset[str] = frozenset(
@@ -98,13 +91,13 @@ class DatastoreFileProcessingService:
         pod_id: UUID,
         *,
         uow_factory: UnitOfWorkFactory,
-        search_service: PostgresSearchService | None = None,
+        search_service: PostgresSearchService,
         storage: DatastoreStoragePort | None = None,
         document_processor: DocumentProcessorPort | None = None,
     ):
         self.pod_id = pod_id
         self._uow_factory = uow_factory
-        self.search_service = search_service or PostgresSearchService(pod_id)
+        self.search_service = search_service
         self.storage = storage or create_datastore_storage()
         self.document_processor = document_processor or create_document_processor()
 
@@ -132,6 +125,10 @@ class DatastoreFileProcessingService:
             return mime_type.split(";")[0].strip().lower()
         guessed, _ = mimetypes.guess_type(getattr(file_entity, "name", "") or "")
         return guessed.lower() if guessed else None
+
+    @staticmethod
+    def _exceeds_size_limit(size_bytes: int, max_file_bytes: int) -> bool:
+        return bool(max_file_bytes and size_bytes > max_file_bytes)
 
     def _should_store_converted_projection(self, file_entity: DatastoreFile) -> bool:
         mime_type = self._base_mime_type(file_entity)
@@ -178,7 +175,7 @@ class DatastoreFileProcessingService:
                 return
 
             search_enabled = bool(file_entity.search_enabled)
-            content_revision = int(getattr(file_entity, "content_revision", 1) or 1)
+            content_sha256 = getattr(file_entity, "content_sha256", None)
 
         # Safety net: the indexing-eligibility policy is applied early (at write
         # time) and the reindex queue only enqueues PENDING + search_enabled
@@ -198,12 +195,9 @@ class DatastoreFileProcessingService:
                 await files.mark_not_required(file_id)
             return
 
-        # Size guard: extraction buffers the whole document in memory, so an
-        # oversized file risks OOMing the worker. Terminally fail it (rather than
-        # claim + attempt) so it never enters the processing/recovery loop.
         max_file_bytes = datastore_settings.document_processing_max_file_bytes
         size_bytes = int(getattr(file_entity, "size_bytes", 0) or 0)
-        if max_file_bytes and size_bytes > max_file_bytes:
+        if self._exceeds_size_limit(size_bytes, max_file_bytes):
             logger.warning(
                 "File %s (%d bytes) exceeds document_processing_max_file_bytes "
                 "(%d); marking FAILED_PERMANENT without processing",
@@ -225,10 +219,10 @@ class DatastoreFileProcessingService:
         # claim is durable before the long extraction begins. A crash mid-work
         # then leaves a recoverable PROCESSING row for recover_stuck_processing_files.
         async with self._file_repo() as files:
-            claimed = await files.claim_for_processing(
-                file_id, content_revision=content_revision
+            processing_attempt = await files.claim_for_processing(
+                file_id, content_sha256=content_sha256
             )
-        if not claimed:
+        if processing_attempt is None:
             logger.info(
                 "Skipping processing for %s because another worker already claimed it",
                 file_id,
@@ -257,8 +251,8 @@ class DatastoreFileProcessingService:
                 if self._should_store_converted_projection(file_entity):
                     page_count = extraction.page_count
                     has_markdown = extraction.has_markdown
-                    await self._set_phase_if_current(
-                        file_id, content_revision, "PROJECT"
+                    await self._ensure_claim_current(
+                        file_id, content_sha256, processing_attempt
                     )
                     await self._write_converted_projection(
                         file_entity,
@@ -271,7 +265,9 @@ class DatastoreFileProcessingService:
                         self.pod_id, file_entity.path
                     )
                 projection_seconds = time.perf_counter() - projection_started
-                await self._set_phase_if_current(file_id, content_revision, "INDEX")
+                await self._ensure_claim_current(
+                    file_id, content_sha256, processing_attempt
+                )
                 indexing_started = time.perf_counter()
                 await self.search_service.index_file_chunks(
                     file_id,
@@ -294,23 +290,24 @@ class DatastoreFileProcessingService:
             async with self._file_repo() as files:
                 completed = await files.mark_completed(
                     file_id,
-                    content_revision=content_revision,
+                    content_sha256=content_sha256,
+                    processing_attempt=processing_attempt,
                     file_metadata=merged_metadata,
                 )
             logger.info(
-                "Datastore completion persisted=%s file=%s revision=%d pages=%d "
+                "Datastore completion persisted=%s file=%s sha256=%s pages=%d "
                 "chunks=%d extract=%.3fs project=%.3fs index=%.3fs",
                 completed,
                 file_id,
-                content_revision,
+                content_sha256,
                 page_count,
                 len(chunks),
                 extraction_seconds,
                 projection_seconds,
                 indexing_seconds,
             )
-        except _StaleProcessingRevision:
-            logger.info("Abandoning stale processing revision for %s", file_id)
+        except _StaleProcessingClaim:
+            logger.info("Abandoning stale processing claim for %s", file_id)
             return
         except Exception as exc:
             logger.error(
@@ -329,7 +326,8 @@ class DatastoreFileProcessingService:
                 mark_failure = getattr(files, method_name)
                 failed = await mark_failure(
                     file_id,
-                    content_revision=content_revision,
+                    content_sha256=content_sha256,
+                    processing_attempt=processing_attempt,
                     error=self._sanitize_error(exc),
                 )
             logger.info("Datastore failure persisted=%s file=%s", failed, file_id)
@@ -376,9 +374,7 @@ class DatastoreFileProcessingService:
         # memory. The processor extracts from the path (Kreuzberg streams it to
         # its multipart body; markitdown/docling read it off the loop), so peak
         # memory stays ~one chunk rather than the file plus a BytesIO copy.
-        storage_key = getattr(file_entity, "storage_key", None) or (
-            build_datastore_file_storage_key(self.pod_id, file_entity.path)
-        )
+        storage_key = build_datastore_file_storage_key(self.pod_id, file_entity.path)
         tmp_path = await stream_to_tempfile(self.storage.iter_download(storage_key))
         try:
             expected_sha256 = getattr(file_entity, "content_sha256", None)
@@ -403,17 +399,20 @@ class DatastoreFileProcessingService:
                 pass
         return extraction, None
 
-    async def _set_phase_if_current(
-        self, file_id: UUID, content_revision: int, phase: str
+    async def _ensure_claim_current(
+        self,
+        file_id: UUID,
+        content_sha256: str | None,
+        processing_attempt: int,
     ) -> None:
         async with self._file_repo() as files:
-            current = await files.set_processing_phase(
+            current = await files.is_processing_claim_current(
                 file_id,
-                content_revision=content_revision,
-                phase=phase,
+                content_sha256=content_sha256,
+                processing_attempt=processing_attempt,
             )
         if not current:
-            raise _StaleProcessingRevision
+            raise _StaleProcessingClaim
 
     async def _load_user_markdown_images(
         self, file_entity: DatastoreFile
@@ -537,7 +536,6 @@ class DatastoreFileProcessingService:
             "source_path": file_entity.path,
             "source_name": file_entity.name,
             "source_mime_type": file_entity.mime_type,
-            "source_content_revision": getattr(file_entity, "content_revision", 1),
             "source_sha256": getattr(file_entity, "content_sha256", None),
             "generated_at": datetime.now(timezone.utc).isoformat(),
             "markdown_source": (

@@ -32,7 +32,7 @@ from app.modules.datastore.domain.indexing_policy import (
 from app.modules.datastore.infrastructure.storage_paths import (
     build_datastore_child_artifact_key,
     build_datastore_child_user_markdown_key,
-    build_datastore_versioned_file_storage_key,
+    build_datastore_file_storage_key,
 )
 from app.modules.datastore.services.files.write_plans import (
     CreateFilePlan,
@@ -164,22 +164,16 @@ class FileTransactionWriter:
             status=draft_status,
             metadata=metadata,
         )
-        entity = await self.file_repository.create(draft)
-        content_revision = 1
         content_sha256 = await asyncio.to_thread(upload_source_sha256, file_content)
-        storage_key = build_datastore_versioned_file_storage_key(
-            pod_id, entity.id, content_revision
-        )
-        entity.storage_key = storage_key
-        entity.content_sha256 = content_sha256
-        entity.content_revision = content_revision
+        draft.content_sha256 = content_sha256
+        storage_key = build_datastore_file_storage_key(pod_id, path)
+        entity = await self.file_repository.create(draft)
         return CreateFilePlan(
             entity=entity,
             storage_key=storage_key,
             requester_user_id=requester_user_id,
             emit_created_event=self.paths._should_sync_projections(True, entity),
             content_sha256=content_sha256,
-            content_revision=content_revision,
             expected_size=entity.size_bytes,
         )
 
@@ -204,9 +198,7 @@ class FileTransactionWriter:
         )
         if entity is None:
             raise DatastoreFileNotFoundError("File draft no longer exists")
-        entity.storage_key = plan.storage_key
         entity.content_sha256 = plan.content_sha256
-        entity.content_revision = plan.content_revision
         if plan.emit_created_event:
             entity.mark_created(plan.requester_user_id)
         return await self.file_repository.update(entity)

@@ -163,6 +163,7 @@ def file_service(
         file_repository=file_repository_mock,
         storage=storage_mock,
         authorization_service=authorization_service_mock,
+        search_service_factory=lambda _pod_id: AsyncMock(),
     )
 
 
@@ -298,7 +299,7 @@ async def test_update_pod_folder_move_into_duplicate_parent_raises_conflict(
 
 
 @pytest.mark.asyncio
-async def test_content_update_writes_new_revision_before_deleting_old_original(
+async def test_content_update_overwrites_canonical_path_and_updates_hash(
     file_service: DatastoreFileService,
     file_repository_mock: AsyncMock,
     storage_mock: AsyncMock,
@@ -313,9 +314,7 @@ async def test_content_update_writes_new_revision_before_deleting_old_original(
     )
     existing.search_enabled = True
     existing.status = FileStatus.COMPLETED
-    existing.content_revision = 1
     existing.content_sha256 = "a" * 64
-    existing.storage_key = f"pods/{pod_id}/files/.objects/{existing.id}/revisions/1"
     file_repository_mock.get_by_path.return_value = existing
     file_repository_mock.update.side_effect = lambda entity: entity
 
@@ -326,13 +325,9 @@ async def test_content_update_writes_new_revision_before_deleting_old_original(
         ctx=_ctx(user_id),
     )
 
-    new_key = f"pods/{pod_id}/files/.objects/{existing.id}/revisions/2"
-    storage_mock.upload_file.assert_awaited_once_with(new_key, b"new body")
-    storage_mock.delete_file.assert_awaited_once_with(
-        f"pods/{pod_id}/files/.objects/{existing.id}/revisions/1"
-    )
-    assert updated.storage_key == new_key
-    assert updated.content_revision == 2
+    canonical_key = f"pods/{pod_id}/files/{existing.path.lstrip('/')}"
+    storage_mock.upload_file.assert_awaited_once_with(canonical_key, b"new body")
+    storage_mock.delete_file.assert_not_awaited()
     assert updated.content_sha256 == (
         "ae907ab9a383483e5c37beee966723544b9e6f12148a7dcd56ceea7ad44c5a7b"
     )
@@ -370,11 +365,9 @@ async def test_create_file_under_me_uses_personal_visibility(
     assert created.search_enabled is True
     assert created.status == FileStatus.PENDING
     storage_mock.upload_file.assert_awaited_once_with(
-        f"pods/{pod_id}/files/.objects/{created.id}/revisions/1",
+        f"pods/{pod_id}/files/{user_id}/artifact.txt",
         b"hello",
     )
-    assert created.storage_key.endswith(f"/.objects/{created.id}/revisions/1")
-    assert created.content_revision == 1
     assert created.content_sha256 == (
         "2cf24dba5fb0a30e26e83b2ac5b9e29e1b161e5c1fa7425e73043362938b9824"
     )
@@ -1150,8 +1143,8 @@ async def test_delete_path_by_path_removes_folder_descendants_from_storage_and_s
     deleted_prefixes = [
         call.args[0] for call in storage_mock.delete_prefix.await_args_list
     ]
-    # The folder prefix removes path-scoped derived artifacts; immutable
-    # originals are also deleted explicitly from their captured storage keys.
+    # The folder prefix removes canonical originals and derived artifacts;
+    # captured exact deletes remain intentionally idempotent.
     assert deleted_prefixes == [
         f"pods/{pod_id}/files/research/",
     ]

@@ -25,6 +25,7 @@ from app.modules.datastore.infrastructure.transactional_events import (
 )
 from app.composition.authorization import create_authorization_service
 from app.composition.identity_notifications import create_user_reader
+from app.modules.datastore.composition import get_datastore_composition
 
 _schema_manager_instance: Optional[SchemaManager] = None
 
@@ -88,6 +89,7 @@ def build_file_service(uow) -> DatastoreFileService:
         file_repository=DatastoreFileRepository(uow, message_bus=message_bus),
         storage=create_datastore_storage(),
         authorization_service=create_authorization_service(uow),
+        search_service_factory=get_datastore_composition().build_search_service,
     )
 
 

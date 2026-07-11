@@ -27,6 +27,12 @@ from app.modules.datastore.tests.e2e.fake_document_processors import (
     FakeDocumentProcessorServer,
 )
 from app.modules.datastore.config import datastore_settings
+from app.modules.datastore.composition import (
+    DatastoreComposition,
+    get_datastore_composition,
+    install_datastore_composition,
+)
+from app.modules.test_support.embeddings import DeterministicTestEmbedder
 from app.modules.test_support.e2e import fixtures as e2e_fixtures
 from app.modules.test_support.e2e.worker_process import production_worker_process
 
@@ -36,14 +42,16 @@ pytestmark = pytest.mark.e2e
 @pytest.fixture(scope="session", autouse=True)
 def hermetic_datastore_runtime():
     """Avoid model-network dependencies in routine datastore E2E tests."""
-    previous_embeddings = settings.e2e_deterministic_embeddings
     previous_layout = datastore_settings.document_processing_layout_enabled
-    settings.e2e_deterministic_embeddings = True
+    embedder = DeterministicTestEmbedder(settings.embedding_dimension)
+    previous_composition = install_datastore_composition(
+        DatastoreComposition(embedder_provider=lambda: embedder)
+    )
     datastore_settings.document_processing_layout_enabled = False
     try:
         yield
     finally:
-        settings.e2e_deterministic_embeddings = previous_embeddings
+        install_datastore_composition(previous_composition)
         datastore_settings.document_processing_layout_enabled = previous_layout
 
 
@@ -108,25 +116,19 @@ def document_worker(
             "DOCLING_SERVE_URL": fake_document_processor_server.base_url,
             "DOCLING_REQUEST_TIMEOUT_SECONDS": "2",
             "DOCUMENT_PROCESSING_DEBOUNCE_SECONDS": "0",
-            # The worker journey validates extraction/projection/indexing, not
-            # model acquisition. Keep it hermetic and deterministic so a cold or
-            # corrupt FastEmbed cache cannot make the contract test flaky.
-            "E2E_DETERMINISTIC_EMBEDDINGS": "true",
         }
         if processor == "markitdown":
             fake_dependencies = Path(__file__).parent / "fake_processor_deps"
             extra_env["PYTHONPATH"] = f"{fake_dependencies}:."
-        previous_test_embeddings = settings.e2e_deterministic_embeddings
-        settings.e2e_deterministic_embeddings = True
-        try:
-            async with production_worker_process(
-                e2e_settings,
-                log_prefix=f"lemma_datastore_{processor}_worker",
-                extra_env=extra_env,
-            ) as process:
-                yield process
-        finally:
-            settings.e2e_deterministic_embeddings = previous_test_embeddings
+        async with production_worker_process(
+            e2e_settings,
+            log_prefix=f"lemma_datastore_{processor}_worker",
+            extra_env=extra_env,
+            worker_entrypoint=(
+                "app.modules.datastore.tests.e2e.worker_entrypoint:streaq_worker"
+            ),
+        ) as process:
+            yield process
 
     return _start
 
@@ -200,9 +202,6 @@ async def index_datastore_file(db_manager, kreuzberg_wired):
 
     from app.modules.datastore.domain.file_entities import FileStatus
     from app.modules.datastore.infrastructure.models import DatastoreFile
-    from app.modules.datastore.services.file_processing_service import (
-        DatastoreFileProcessingService,
-    )
 
     _TERMINAL = {FileStatus.COMPLETED.value, FileStatus.NOT_REQUIRED.value}
 
@@ -217,7 +216,7 @@ async def index_datastore_file(db_manager, kreuzberg_wired):
     async def _index(pod_id, file_id):
         _, metadata = await _file_status(file_id)
 
-        service = DatastoreFileProcessingService(
+        service = get_datastore_composition().build_processing_service(
             pod_id,
             uow_factory=SessionUnitOfWorkFactory(db_manager.session_factory),
         )

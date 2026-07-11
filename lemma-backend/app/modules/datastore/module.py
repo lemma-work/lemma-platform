@@ -11,25 +11,20 @@ logger = get_logger(__name__)
 
 @asynccontextmanager
 async def _preload_local_embeddings(context):
-    """Fail worker readiness when its local embedding model is unusable."""
+    """Fail API/worker readiness when its local embedding model is unusable."""
     del context
     from app.core.config import settings
+    from app.modules.datastore.composition import get_datastore_composition
 
-    should_preload = (
-        settings.local_embedding_preload
-        and (
-            settings.e2e_deterministic_embeddings
-            or settings.effective_embedding_provider() == "local"
-        )
-        and (settings.environment != "testing" or settings.e2e_deterministic_embeddings)
-    )
+    composition = get_datastore_composition()
+    should_preload = settings.local_embedding_preload and composition.preload_embeddings
     if should_preload:
-        from app.core.embeddings.factory import create_embedder
-
         timeout = max(1.0, settings.local_embedding_preload_timeout_seconds)
         logger.info("Preloading local embedding model")
         async with asyncio.timeout(timeout):
-            vector = await create_embedder().embed("lemma embedding readiness")
+            vector = await composition.embedder_provider().embed(
+                "lemma embedding readiness"
+            )
         if len(vector) != settings.embedding_dimension:
             raise RuntimeError(
                 "Local embedding preload returned an unexpected vector dimension"
@@ -129,7 +124,7 @@ module = LemmaModule(
     name="datastore",
     routers=_routers,
     event_routers=_event_routers,
-    api_lifespans=(_backfill_query_role,),
+    api_lifespans=(_preload_local_embeddings, _backfill_query_role),
     worker_lifespans=(
         _preload_local_embeddings,
         _datastore_outbox_dispatcher,

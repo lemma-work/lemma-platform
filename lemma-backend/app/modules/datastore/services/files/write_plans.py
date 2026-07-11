@@ -15,7 +15,6 @@ class CreateFilePlan:
     requester_user_id: UUID
     emit_created_event: bool
     content_sha256: str
-    content_revision: int
     expected_size: int
 
 

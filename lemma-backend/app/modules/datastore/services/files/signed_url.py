@@ -20,6 +20,7 @@ from __future__ import annotations
 import asyncio
 import secrets
 import time
+from dataclasses import dataclass
 from datetime import datetime, timezone
 from uuid import UUID
 
@@ -43,7 +44,8 @@ end
 local hits = redis.call('HINCRBY', KEYS[1], 'hits', 1)
 local max_hits = tonumber(redis.call('HGET', KEYS[1], 'max_hits'))
 local object_key = redis.call('HGET', KEYS[1], 'object_key')
-return {hits, max_hits, object_key}
+local content_sha256 = redis.call('HGET', KEYS[1], 'content_sha256') or ''
+return {hits, max_hits, object_key, content_sha256}
 """
 
 
@@ -53,6 +55,12 @@ class SignedUrlNotFound(Exception):
 
 class SignedUrlExhausted(Exception):
     """The short link has been fetched its maximum number of times."""
+
+
+@dataclass(frozen=True, slots=True)
+class SignedUrlClaims:
+    object_key: str
+    content_sha256: str | None
 
 
 def _clamp(value: int | None, *, default: int, ceiling: int) -> int:
@@ -87,6 +95,7 @@ class SignedUrlStore:
         object_key: str,
         pod_id: UUID,
         path: str,
+        content_sha256: str | None = None,
         expires_seconds: int | None = None,
         max_hits: int | None = None,
     ) -> tuple[str, str, datetime, int]:
@@ -116,6 +125,7 @@ class SignedUrlStore:
                     "object_key": object_key,
                     "pod_id": str(pod_id),
                     "path": path,
+                    "content_sha256": content_sha256 or "",
                     "max_hits": max_hits,
                     "hits": 0,
                 },
@@ -129,8 +139,8 @@ class SignedUrlStore:
         signed_url = f"{settings.api_url.rstrip('/')}/s/{code}"
         return code, signed_url, expires_at, max_hits
 
-    async def consume(self, code: str) -> str:
-        """Record a hit and return the object key, or raise.
+    async def consume_claims(self, code: str) -> SignedUrlClaims:
+        """Record a hit and return the stored download claims, or raise.
 
         Raises ``SignedUrlNotFound`` when the code is unknown/expired and
         ``SignedUrlExhausted`` once the per-link hit cap has been exceeded.
@@ -145,6 +155,7 @@ class SignedUrlStore:
         hits = int(result[0])
         max_hits = int(result[1])
         object_key = result[2]
+        content_sha256 = result[3] or None
         if hits > max_hits:
             # Burn the link so further attempts short-circuit as not-found.
             try:
@@ -153,7 +164,14 @@ class SignedUrlStore:
                 logger.debug("signed-url cleanup failed: %s", exc)
             raise SignedUrlExhausted(code)
 
-        return object_key
+        return SignedUrlClaims(
+            object_key=object_key,
+            content_sha256=content_sha256,
+        )
+
+    async def consume(self, code: str) -> str:
+        """Compatibility wrapper returning only the object key."""
+        return (await self.consume_claims(code)).object_key
 
 
 _store: SignedUrlStore | None = None

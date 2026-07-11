@@ -72,6 +72,19 @@ def main() -> int:
             LIMIT 0
             """
         )
+        cursor.execute(
+            """
+            SELECT column_name
+            FROM information_schema.columns
+            WHERE table_name = 'datastore_files'
+              AND column_name IN (
+                  'content_sha256', 'storage_key', 'content_revision',
+                  'processing_phase', 'processing_started_at'
+              )
+            ORDER BY column_name
+            """
+        )
+        assert cursor.fetchall() == [("content_sha256",)]
     print("Reliability migration verification passed")
     return 0
 

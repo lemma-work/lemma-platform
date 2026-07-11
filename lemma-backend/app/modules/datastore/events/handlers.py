@@ -35,9 +35,7 @@ from app.modules.datastore.infrastructure.repositories import (
 from app.modules.datastore.infrastructure.reindex_queue import (
     get_datastore_reindex_queue,
 )
-from app.modules.datastore.services.file_processing_service import (
-    DatastoreFileProcessingService,
-)
+from app.modules.datastore.composition import get_datastore_composition
 from app.modules.datastore.services.file_recovery_service import (
     DatastoreFileRecoveryService,
 )
@@ -176,7 +174,9 @@ async def process_datastore_file_task(
                 if worker_ctx is not None
                 else SessionUnitOfWorkFactory(async_session_maker)
             )
-            service = DatastoreFileProcessingService(pod_uuid, uow_factory=uow_factory)
+            service = get_datastore_composition().build_processing_service(
+                pod_uuid, uow_factory=uow_factory
+            )
             await service.process_file_async(file_uuid, metadata or {})
         logger.info("FINISHED process_datastore_file_task for %s", file_uuid)
     except Exception as exc:

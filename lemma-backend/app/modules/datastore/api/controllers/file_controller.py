@@ -1,9 +1,6 @@
 from __future__ import annotations
 
-import unicodedata
-from io import BytesIO
 from typing import Optional
-from urllib.parse import quote
 from uuid import UUID
 
 from fastapi import (
@@ -49,28 +46,18 @@ from app.modules.datastore.api.schemas.datastore_schemas import (
 from app.modules.datastore.domain.errors import DatastoreValidationError
 from app.modules.datastore.domain.file_entities import DatastoreFileUpdateEntity
 from app.modules.datastore.services.files.file_url import build_file_app_url
-
-
-def build_content_disposition(disposition_type: str, filename: str) -> str:
-    """Build a Content-Disposition header value with an ASCII fallback and a
-    UTF-8 ``filename*`` for non-ASCII names."""
-    normalized_ascii = (
-        unicodedata.normalize("NFKD", filename)
-        .encode("ascii", "ignore")
-        .decode("ascii")
-    )
-    ascii_filename = (normalized_ascii or "download").replace("\\", "_").replace('"', "_")
-    encoded_filename = quote(filename, safe="")
-    return (
-        f'{disposition_type}; filename="{ascii_filename}"; '
-        f"filename*=UTF-8''{encoded_filename}"
-    )
+from app.modules.datastore.api.file_download_response import (
+    build_child_download_response,
+    build_content_disposition as build_content_disposition,
+    build_original_download_response,
+)
 
 router = APIRouter(
     prefix="/pods/{pod_id}/datastore/files",
     tags=["files"],
     redirect_slashes=False,
 )
+
 
 def _ensure_file_in_pod(file_entity: FileResponse, pod_id: UUID) -> None:
     if file_entity.pod_id != pod_id:
@@ -439,37 +426,19 @@ async def download_file(
     request: Request,
     use_cases: FileUseCasesDep,
     path: str = Query(...),
-) -> StreamingResponse:
+) -> Response:
     download = await use_cases.download_file(
-        pod_id=pod_id, path=path, request=request, user_id=user.id
+        pod_id=pod_id,
+        path=path,
+        request=request,
+        user_id=user.id,
+        if_none_match=request.headers.get("if-none-match"),
     )
     file_entity = download.entity
-    content = download.content
     response = _to_file_response(file_entity, user.id)
     _ensure_file_in_pod(response, pod_id)
 
-    content_type = file_entity.content_type
-    disposition_type = (
-        "inline"
-        if (
-            content_type.startswith("application/pdf")
-            or content_type.startswith("image/")
-            or content_type.startswith("text/")
-        )
-        else "attachment"
-    )
-    headers = {
-        "Content-Disposition": build_content_disposition(
-            disposition_type,
-            file_entity.name,
-        )
-    }
-
-    return StreamingResponse(
-        BytesIO(content),
-        media_type=content_type,
-        headers=headers,
-    )
+    return build_original_download_response(file_entity, download)
 
 
 @router.get(
@@ -542,7 +511,12 @@ async def create_file_signed_url(
     body: FileSignedUrlRequest | None = None,
 ) -> FileSignedUrlResponse:
     body = body or FileSignedUrlRequest()
-    file_entity, signed_url, expires_at, max_hits = await file_service.create_signed_url(
+    (
+        file_entity,
+        signed_url,
+        expires_at,
+        max_hits,
+    ) = await file_service.create_signed_url(
         pod_id,
         path,
         ctx=ctx,
@@ -578,7 +552,7 @@ async def download_file_child(
     ),
     page_start: Optional[int] = Query(default=None, ge=1),
     page_end: Optional[int] = Query(default=None, ge=1),
-) -> StreamingResponse:
+) -> Response:
     result = await use_cases.download_child(
         pod_id=pod_id,
         path=path,
@@ -594,22 +568,11 @@ async def download_file_child(
     response = _to_file_response(file_entity, user.id)
     _ensure_file_in_pod(response, pod_id)
 
-    disposition_type = (
-        "inline"
-        if content_type.startswith(("text/", "image/", "application/json"))
-        else "attachment"
-    )
-    download_name = artifact_name.rsplit("/", 1)[-1]
-    headers = {
-        "Content-Disposition": build_content_disposition(
-            disposition_type,
-            download_name,
-        )
-    }
-    return StreamingResponse(
-        BytesIO(content),
-        media_type=content_type,
-        headers=headers,
+    return build_child_download_response(
+        request_if_none_match=request.headers.get("if-none-match"),
+        artifact_name=artifact_name,
+        content=content,
+        content_type=content_type,
     )
 
 

@@ -55,11 +55,7 @@ class DatastoreFileEntity(AggregateRoot):
     indexed_at: datetime | None = None
     last_processing_error: str | None = None
     processing_attempts: int = 0
-    storage_key: str | None = None
     content_sha256: str | None = None
-    content_revision: int = 1
-    processing_phase: str | None = None
-    processing_started_at: datetime | None = None
     allowed_actions: list[str] = Field(default_factory=list)
 
     @property
@@ -107,21 +103,15 @@ class DatastoreFileEntity(AggregateRoot):
         if not enabled:
             self.status = FileStatus.NOT_REQUIRED
             self.indexed_at = None
-            self.processing_phase = None
-            self.processing_started_at = None
             return
         if self.is_file and is_indexable_mime_type(self.mime_type, self.name):
             self.status = FileStatus.PENDING
             self.indexed_at = None
             self.processing_attempts = 0
             self.last_processing_error = None
-            self.processing_phase = None
-            self.processing_started_at = None
         else:
             self.status = FileStatus.NOT_REQUIRED
             self.indexed_at = None
-            self.processing_phase = None
-            self.processing_started_at = None
 
     def mark_created(self, actor_id: UUID | None = None) -> None:
         from app.modules.datastore.domain.events import DatastoreFileCreatedEvent
@@ -157,13 +147,9 @@ class DatastoreFileEntity(AggregateRoot):
             # New content gets a fresh processing-retry budget.
             self.processing_attempts = 0
             self.last_processing_error = None
-            self.processing_phase = None
-            self.processing_started_at = None
         else:
             self.status = FileStatus.NOT_REQUIRED
             self.indexed_at = None
-            self.processing_phase = None
-            self.processing_started_at = None
         self.add_event(
             DatastoreFileUpdatedEvent(
                 file_id=self.id,

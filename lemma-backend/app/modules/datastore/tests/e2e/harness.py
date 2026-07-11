@@ -128,8 +128,9 @@ class DatastoreApi:
         return auth_headers(self.user["token"])
 
     async def request(self, method: str, path: str, **kwargs):
+        headers = {**(self._headers() or {}), **kwargs.pop("headers", {})}
         return await self.client.request(
-            method, path, headers=self._headers(), **kwargs
+            method, path, headers=headers or None, **kwargs
         )
 
     async def create_folder(

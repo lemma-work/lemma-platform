@@ -46,14 +46,7 @@ from app.modules.datastore.services.files.writer import FileWriter
 from app.modules.datastore.services.files.transaction_facade import (
     FileTransactionFacade,
 )
-from app.modules.datastore.services.search.postgres_search_service import (
-    PostgresSearchService,
-)
 from app.modules.datastore.services.system_skill_files import SystemSkillFileProvider
-
-
-def _default_search_factory(pod_id: UUID):
-    return PostgresSearchService(pod_id)
 
 
 _CHILD_PAGE_RE = re.compile(r"page_(\d+)\.jpg$")
@@ -74,13 +67,13 @@ class DatastoreFileService(FileTransactionFacade):
         file_repository: DatastoreFileRepositoryPort,
         storage: DatastoreStoragePort,
         authorization_service: object,
-        search_service_factory: DatastoreSearchFactoryPort | None = None,
+        search_service_factory: DatastoreSearchFactoryPort,
         system_skill_file_provider: SystemSkillFileProvider | None = None,
         document_processor: DocumentProcessorPort | None = None,
     ):
         self.file_repository = file_repository
         self.storage = storage
-        self.search_service_factory = search_service_factory or _default_search_factory
+        self.search_service_factory = search_service_factory
         self.authorization_service = authorization_service
         self.authz = DatastoreAuthorization(authorization_service)
         self.system_skill_files = (
@@ -588,6 +581,7 @@ class DatastoreFileService(FileTransactionFacade):
             object_key=object_key,
             pod_id=entity.pod_id,
             path=entity.path,
+            content_sha256=entity.content_sha256,
             expires_seconds=expires_seconds,
             max_hits=max_hits,
         )

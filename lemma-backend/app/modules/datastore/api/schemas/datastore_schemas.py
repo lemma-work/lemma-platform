@@ -367,9 +367,6 @@ class FileResponse(BaseModel):
     indexed_at: Optional[datetime] = None
     last_processing_error: Optional[str] = None
     processing_attempts: int = 0
-    processing_phase: Optional[str] = None
-    processing_started_at: Optional[datetime] = None
-    content_revision: int = 1
     content_sha256: Optional[str] = None
     created_at: datetime
     updated_at: datetime
@@ -403,7 +400,6 @@ class FileSummaryResponse(BaseModel):
     size_bytes: int = 0
     search_enabled: bool = True
     status: str
-    processing_phase: Optional[str] = None
     indexed_at: Optional[datetime] = None
     created_at: datetime
     updated_at: datetime

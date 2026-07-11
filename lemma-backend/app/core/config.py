@@ -745,13 +745,6 @@ class Settings(BaseSettings):
             "cold download. Env: ``LOCAL_EMBEDDING_CACHE_DIR``."
         ),
     )
-    e2e_deterministic_embeddings: bool = Field(
-        default=False,
-        description=(
-            "Use the dependency-free deterministic embedding adapter in hermetic "
-            "worker E2E tests. Never enable for real search workloads."
-        ),
-    )
     local_embedding_preload: bool = Field(
         default=True,
         description=(

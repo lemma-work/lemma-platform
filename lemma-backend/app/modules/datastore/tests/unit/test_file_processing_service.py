@@ -35,6 +35,9 @@ class _ExecuteResult:
     def __init__(self, rowcount: int = 1):
         self.rowcount = rowcount
 
+    def scalar_one_or_none(self):
+        return self.rowcount or None
+
 
 class _RecordingUowFactory:
     """Fake UnitOfWorkFactory: each call opens a short UoW with one execute result.
@@ -91,10 +94,12 @@ def _set_source_bytes(service, data: bytes) -> None:
 
 
 def _build_service(factory: _RecordingUowFactory) -> DatastoreFileProcessingService:
-    service = DatastoreFileProcessingService(uuid4(), uow_factory=factory)
+    search_service = AsyncMock()
+    service = DatastoreFileProcessingService(
+        uuid4(), uow_factory=factory, search_service=search_service
+    )
     service.storage = AsyncMock()
     service.storage.iter_download = _make_iter_download(b"")
-    service.search_service = AsyncMock()
     service.document_processor = AsyncMock()
     return service
 
@@ -628,11 +633,11 @@ async def test_process_file_async_scopes_short_uows_and_holds_no_session_during_
 
     await service.process_file_async(file_id, {"source": "test"})
 
-    # Five distinct short UoWs opened (get, claim, two phase transitions,
+    # Five distinct short UoWs opened (get, claim, two claim checks,
     # completion), all closed and each issuing exactly one statement.
     assert factory.opened == 5
     assert factory.active == 0
-    assert [s.execute.await_count for s in factory.sessions] == [1, 1, 1, 1, 1]
+    assert [s.execute.await_count for s in factory.sessions] == [1, 1, 0, 0, 1]
     service.search_service.index_file_chunks.assert_awaited_once()
     # PDF projection uploads document.md + manifest.json (no images here).
     assert service.storage.upload_file.await_count == 2
@@ -671,7 +676,7 @@ async def test_process_file_async_marks_failed_in_own_uow_on_error():
 
 
 @pytest.mark.asyncio
-async def test_process_file_async_terminally_fails_missing_immutable_original():
+async def test_process_file_async_terminally_fails_missing_original():
     file_id = uuid4()
     file_model = SimpleNamespace(
         id=file_id,
@@ -682,8 +687,7 @@ async def test_process_file_async_terminally_fails_missing_immutable_original():
         path="/manuals/missing.pdf",
         mime_type="application/pdf",
         file_metadata={},
-        content_revision=3,
-        storage_key=f"pods/test/files/.objects/{file_id}/revisions/3",
+        content_sha256="a" * 64,
     )
     factory = _RecordingUowFactory(
         results=[_ScalarResult(file_model), _ExecuteResult(), _ExecuteResult()]
@@ -699,12 +703,13 @@ async def test_process_file_async_terminally_fails_missing_immutable_original():
     terminal_stmt = factory.sessions[-1].execute.await_args.args[0]
     compiled = str(terminal_stmt.compile().params)
     assert "FAILED_PERMANENT" in compiled
-    assert "content_revision" in str(terminal_stmt)
+    assert "content_sha256" in str(terminal_stmt)
+    assert "processing_attempts" in str(terminal_stmt)
     service.document_processor.extract.assert_not_awaited()
 
 
 @pytest.mark.asyncio
-async def test_process_file_async_terminally_fails_corrupt_immutable_original():
+async def test_process_file_async_terminally_fails_corrupt_original():
     file_id = uuid4()
     file_model = SimpleNamespace(
         id=file_id,
@@ -715,9 +720,7 @@ async def test_process_file_async_terminally_fails_corrupt_immutable_original():
         path="/manuals/corrupt.pdf",
         mime_type="application/pdf",
         file_metadata={},
-        content_revision=2,
         content_sha256="0" * 64,
-        storage_key=f"pods/test/files/.objects/{file_id}/revisions/2",
     )
     factory = _RecordingUowFactory(
         results=[_ScalarResult(file_model), _ExecuteResult(), _ExecuteResult()]

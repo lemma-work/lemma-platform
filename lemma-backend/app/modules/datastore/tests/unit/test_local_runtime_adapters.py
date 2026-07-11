@@ -8,10 +8,8 @@ import pytest
 from app.core.config import settings
 from app.core.embeddings.embeddings import Embedder
 from app.core.embeddings.factory import create_embedder
-from app.core.embeddings.local_embedder import (
-    DeterministicTestEmbedder,
-    FastEmbedLocalEmbedder,
-)
+from app.core.embeddings.local_embedder import FastEmbedLocalEmbedder
+from app.modules.test_support.embeddings import DeterministicTestEmbedder
 from app.modules.datastore.infrastructure.storage import (
     GCSDatastoreStorage,
     LocalDatastoreStorage,
@@ -160,6 +158,55 @@ async def test_fastembed_repairs_missing_onnx_from_registered_alternate_source(
 
 
 @pytest.mark.asyncio
+async def test_fastembed_reuses_existing_alternate_before_network_repair(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+):
+    existing = tmp_path / "fast-bge-base-en-v1.5"
+    existing.mkdir()
+    (existing / "model_optimized.onnx").write_bytes(b"onnx")
+    constructor_calls: list[dict] = []
+
+    class FakeTextEmbedding:
+        def __init__(self, **kwargs):
+            constructor_calls.append(kwargs)
+            if "specific_model_path" not in kwargs:
+                raise RuntimeError("NO_SUCHFILE: model file doesn't exist")
+
+        @staticmethod
+        def list_supported_models():
+            return [
+                {
+                    "model": "BAAI/bge-base-en-v1.5",
+                    "sources": {
+                        "url": "https://models.example/model.tar.gz",
+                        "_deprecated_tar_struct": True,
+                    },
+                }
+            ]
+
+        @staticmethod
+        def retrieve_model_gcs(*args, **kwargs):
+            raise AssertionError("existing alternate model must prevent a download")
+
+        def embed(self, texts, **kwargs):
+            return [[1.0, 0.5, -0.25] for _ in texts]
+
+    import fastembed
+
+    monkeypatch.setattr(fastembed, "TextEmbedding", FakeTextEmbedding)
+    embedder = FastEmbedLocalEmbedder(
+        model_name="BAAI/bge-base-en-v1.5",
+        dimension=3,
+        cache_dir=tmp_path,
+    )
+
+    assert await embedder.embed("cached") == [1.0, 0.5, -0.25]
+    assert len(constructor_calls) == 2
+    assert constructor_calls[-1]["specific_model_path"] == str(existing)
+
+
+@pytest.mark.asyncio
 async def test_deterministic_test_embedder_is_stable_and_dimensioned():
     embedder = DeterministicTestEmbedder(16)
 
@@ -188,7 +235,9 @@ async def test_local_datastore_storage_round_trips_with_obstore(tmp_path: Path):
     assert await storage.upload_file("pod/file.txt", b"hello") is True
     assert await storage.stat_file("pod/file.txt") == 5
     assert await storage.download_file("pod/file.txt") == b"hello"
-    assert await storage.delete_prefix("pod") == 1
+    assert await storage.copy_file("pod/file.txt", "pod/copied.txt") is True
+    assert await storage.download_file("pod/copied.txt") == b"hello"
+    assert await storage.delete_prefix("pod") == 2
     assert not (tmp_path / "pod" / "file.txt").exists()
 
 

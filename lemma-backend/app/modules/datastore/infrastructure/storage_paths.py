@@ -30,17 +30,6 @@ def build_datastore_file_storage_key(
     return f"pods/{pod_id}/files/{normalized_path}"
 
 
-def build_datastore_versioned_file_storage_key(
-    pod_id: UUID,
-    file_id: UUID,
-    content_revision: int,
-) -> str:
-    """Immutable original-object key for a specific file content revision."""
-    if content_revision < 1:
-        raise ValueError("content_revision must be positive")
-    return f"pods/{pod_id}/files/.objects/{file_id}/revisions/{content_revision}"
-
-
 def build_datastore_folder_storage_prefix(
     pod_id: UUID,
     path: str,

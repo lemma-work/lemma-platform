@@ -37,9 +37,12 @@ async def test_process_datastore_file_task_limits_document_processing_concurrenc
             await asyncio.sleep(0.01)
             type(self).current -= 1
 
-    monkeypatch.setattr(
-        handlers, "DatastoreFileProcessingService", _FakeProcessingService
+    composition = SimpleNamespace(
+        build_processing_service=lambda pod_id, *, uow_factory: _FakeProcessingService(
+            pod_id, uow_factory=uow_factory
+        )
     )
+    monkeypatch.setattr(handlers, "get_datastore_composition", lambda: composition)
     monkeypatch.setattr(
         handlers.datastore_settings,
         "document_processing_max_concurrency",

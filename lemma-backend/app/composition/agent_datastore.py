@@ -14,13 +14,17 @@ from app.modules.datastore.services.files.file_url import (
 )
 from app.modules.datastore.services.record_service import RecordService
 from app.modules.datastore.services.table_service import TableService
+from app.modules.datastore.composition import get_datastore_composition
 
 
-def create_agent_skill_file_service(uow, *, authorization_service) -> DatastoreFileService:
+def create_agent_skill_file_service(
+    uow, *, authorization_service
+) -> DatastoreFileService:
     return DatastoreFileService(
         file_repository=DatastoreFileRepository(uow),
         storage=create_datastore_storage(),
         authorization_service=authorization_service,
+        search_service_factory=get_datastore_composition().build_search_service,
     )
 
 

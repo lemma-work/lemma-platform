@@ -23,10 +23,11 @@ make load-test-datastore-stats
 make load-test-datastore-down
 ```
 
-The run fails unless every file reaches `COMPLETED`, exposes a generated
-`document.md`, and the run directory returns a hybrid search result. Its JSON report defaults to
+The run fails unless every file reaches `COMPLETED`, returns the expected
+SHA-256 identity, exposes a generated `document.md`, and the run directory
+returns a hybrid search result. Its JSON report defaults to
 `/tmp/lemma-datastore-ingestion-report.json` and contains upload latency,
-end-to-end ready latency, attempts, terminal phase/error, throughput and p95.
+end-to-end ready latency, attempts, phase durations/error, throughput and p95.
 Each invocation uses a timestamped child directory, so warm-cache repeats do
 not collide with files from earlier runs. Pass `--run-id` directly to the
 Python entry point when a stable run label is useful.
@@ -57,6 +58,14 @@ requires 20/20 completion, no unhealthy/OOM container, preserved originals and
 search-ready chunks. Cold-cache runs include model acquisition; warm-cache runs
 measure steady state.
 
+`DATASTORE_BENCH_CONCURRENCY` controls only concurrent HTTP uploads.
+`DATASTORE_EXTRACTION_CONCURRENCY` controls the end-to-end processing slots in
+each worker process; queued Streaq tasks wait for a slot. The latter limit is
+process-local, so multiple worker replicas multiply the deployment-wide
+concurrency. A limit of five bounds work at five pipelines but does not make the
+memory used by five simultaneous Kreuzberg responses and embedding/indexing
+buffers fit a smaller host.
+
 The defaults allocate 4 CPU/8GB to Kreuzberg and 4 CPU/4GB to the backend
 worker. Report both budgets: extraction and local embedding consume different
 containers, and constraining either one changes end-to-end throughput.
@@ -71,13 +80,20 @@ On 2026-07-11, the full checked-in corpus passed on an 8GB Docker Desktop VM
 with five concurrent uploads, one end-to-end processing slot, Kreuzberg at
 2 CPU/4GB, and the worker at 4 CPU/3GB:
 
-- 20/20 `COMPLETED`; 20 immutable keys and SHA-256 digests
+- 20/20 `COMPLETED`; 20 canonical originals and SHA-256 identities
 - 20/20 generated `document.md`; hybrid search returned results
 - 2,186 indexed chunks across all 20 files
-- 22m36s wall time (0.88 documents/minute)
-- extraction p95 62.5s; indexing p95 143.7s
-- end-to-end p95 19m15s, including intentional queue wait
+- 26m59s wall time (0.74 documents/minute)
+- extraction p95 66.6s; indexing p95 170.8s
+- end-to-end p95 23m05s, including intentional queue wait
 - zero API/worker/Kreuzberg restarts or OOMs
+
+That cold run exposed an incomplete FastEmbed snapshot in the API process after
+the worker had already populated the shared alternate-model cache. The adapter
+now reuses that validated local ONNX artifact before attempting a network
+repair, and both API and worker preload embeddings before readiness. Against
+the preserved 20-file corpus, the rebuilt API returned 10 scoped hybrid results
+without a download or service restart.
 
 The 4 CPU/8GB Kreuzberg target profile could not be measured on that VM: the
 entire Docker VM, not the Kreuzberg container, was capped at 7.75GB. Docker

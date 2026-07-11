@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import hashlib
 from pathlib import Path
 from threading import Lock
 from typing import Any, List
@@ -105,6 +104,23 @@ class FastEmbedLocalEmbedder(Embedder):
         if not alternate_url:
             raise exc
 
+        deprecated_tar_struct = bool(sources.get("_deprecated_tar_struct"))
+        alternate_directory_name = (
+            f"{'fast-' if deprecated_tar_struct else ''}"
+            f"{self.model_name.split('/')[-1]}"
+        )
+        existing_alternate = self.cache_dir / alternate_directory_name
+        if existing_alternate.is_dir() and any(existing_alternate.glob("*.onnx")):
+            logger.info(
+                "Reusing existing alternate FastEmbed model for %s",
+                self.model_name,
+            )
+            return text_embedding_type(
+                model_name=self.model_name,
+                cache_dir=str(self.cache_dir),
+                specific_model_path=str(existing_alternate),
+            )
+
         repair_cache = self.cache_dir / "alternate-source"
         repair_cache.mkdir(parents=True, exist_ok=True)
         logger.warning(
@@ -116,7 +132,7 @@ class FastEmbedLocalEmbedder(Embedder):
             self.model_name,
             str(alternate_url),
             str(repair_cache),
-            deprecated_tar_struct=bool(sources.get("_deprecated_tar_struct")),
+            deprecated_tar_struct=deprecated_tar_struct,
             local_files_only=False,
         )
         return text_embedding_type(
@@ -150,30 +166,3 @@ class FastEmbedLocalEmbedder(Embedder):
         if hasattr(vector, "tolist"):
             return vector.tolist()
         return list(vector)
-
-
-class DeterministicTestEmbedder(Embedder):
-    """Dependency-free embeddings for hermetic worker tests only.
-
-    Each token hashes to a signed dimension, which preserves enough lexical
-    similarity for hybrid-search journeys without downloading an ONNX model.
-    """
-
-    def __init__(self, dimension: int):
-        self.dimension = dimension
-
-    async def embed(self, text: str) -> List[float]:
-        return self._encode(text)
-
-    async def embed_batch(self, texts: List[str]) -> List[List[float]]:
-        return [self._encode(text) for text in texts]
-
-    def _encode(self, text: str) -> list[float]:
-        vector = [0.0] * self.dimension
-        for token in text.lower().split():
-            digest = hashlib.sha256(token.encode("utf-8")).digest()
-            index = int.from_bytes(digest[:4], "big") % self.dimension
-            vector[index] += 1.0 if digest[4] & 1 else -1.0
-        if not any(vector):
-            vector[0] = 1.0
-        return vector

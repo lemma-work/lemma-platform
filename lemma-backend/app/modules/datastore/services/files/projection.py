@@ -16,9 +16,6 @@ logger = get_logger(__name__)
 
 def datastore_storage_key(file_entity: DatastoreFileEntity) -> str:
     """Storage object key for a file entity. Reusable outside the projection."""
-    stored_key = getattr(file_entity, "storage_key", None)
-    if stored_key:
-        return stored_key
     return build_datastore_file_storage_key(
         file_entity.pod_id,
         file_entity.path,

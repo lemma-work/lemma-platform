@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import hashlib
 import json
 import os
 import statistics
@@ -38,7 +39,6 @@ class FileResult:
     upload_seconds: float | None = None
     ready_seconds: float | None = None
     status: str = "UPLOAD_FAILED"
-    processing_phase: str | None = None
     processing_attempts: int = 0
     extraction_seconds: float | None = None
     projection_seconds: float | None = None
@@ -46,6 +46,7 @@ class FileResult:
     page_count: int | None = None
     chunk_count: int | None = None
     projection_verified: bool = False
+    content_sha256_verified: bool = False
     error: str | None = None
 
 
@@ -119,6 +120,9 @@ async def _upload_and_wait(
             response.raise_for_status()
             payload = response.json()
             result.file_id = str(payload["id"])
+            result.content_sha256_verified = payload.get(
+                "content_sha256"
+            ) == hashlib.sha256(content).hexdigest()
             result.upload_seconds = time.perf_counter() - upload_started
 
         deadline = time.monotonic() + timeout
@@ -130,7 +134,6 @@ async def _upload_and_wait(
             response.raise_for_status()
             payload = response.json()
             result.status = payload["status"]
-            result.processing_phase = payload.get("processing_phase")
             result.processing_attempts = int(payload.get("processing_attempts") or 0)
             result.error = payload.get("last_processing_error")
             if result.status in TERMINAL_STATUSES:
@@ -265,6 +268,9 @@ async def _run(args: argparse.Namespace) -> dict[str, Any]:
             "projection_verified": sum(
                 item.projection_verified for item in completed_results
             ),
+            "content_sha256_verified": sum(
+                item.content_sha256_verified for item in completed_results
+            ),
             "search_verified": search_result_count > 0,
             "search_result_count": search_result_count,
             "search_seconds": search_seconds,
@@ -314,6 +320,7 @@ def main() -> None:
     print(f"Full report: {args.report}")
     if (
         report["summary"]["completed"] != args.count
+        or report["summary"]["content_sha256_verified"] != args.count
         or not report["summary"]["search_verified"]
     ):
         raise SystemExit(1)

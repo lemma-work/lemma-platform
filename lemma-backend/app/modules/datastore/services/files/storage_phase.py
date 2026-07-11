@@ -54,6 +54,12 @@ class _PathDeletionCleanup:
 
 
 @dataclass(frozen=True, slots=True)
+class _StorageMove:
+    source_key: str
+    destination_key: str
+
+
+@dataclass(frozen=True, slots=True)
 class _UpdatePlan:
     """DB-resolved + in-memory-mutated state for a file update, carried across the
     storage write so the byte move/upload + search sync hold no connection."""
@@ -65,6 +71,7 @@ class _UpdatePlan:
     new_storage_key: str | None
     has_content: bool
     rename_moved: bool
+    storage_moves: tuple[_StorageMove, ...]
     should_sync: bool
     requester_user_id: UUID
 
@@ -110,17 +117,22 @@ class FileStoragePhase:
                 raise DatastoreInfrastructureError(
                     "Failed to upload updated file content"
                 ) from exc
-        elif plan.rename_moved:
-            if plan.previous_storage_key is None or plan.new_storage_key is None:
-                raise DatastoreInfrastructureError(
-                    "File rename is missing a source or destination storage key"
-                )
+        elif plan.storage_moves:
+            copied: list[_StorageMove] = []
             try:
-                existing_content = await self.storage.download_file(
-                    plan.previous_storage_key
-                )
-                await self.storage.upload_file(plan.new_storage_key, existing_content)
-            except Exception as exc:
+                for move in plan.storage_moves:
+                    await self.storage.copy_file(move.source_key, move.destination_key)
+                    copied.append(move)
+            except DatastoreDomainError as exc:
+                for move in reversed(copied):
+                    try:
+                        await self.storage.delete_file(move.destination_key)
+                    except DatastoreDomainError:
+                        logger.warning(
+                            "Failed rolling back staged move %s",
+                            move.destination_key,
+                            exc_info=True,
+                        )
                 raise DatastoreInfrastructureError(
                     "Failed to move file content after rename"
                 ) from exc
@@ -132,18 +144,20 @@ class FileStoragePhase:
         connection; best-effort throughout (orphans are swept, never torn rows)."""
         # Delete the old blob only now that the row points at the new key.
         if (
-            (plan.has_content or plan.rename_moved)
+            plan.has_content
             and plan.previous_storage_key
             and plan.previous_storage_key != plan.new_storage_key
         ):
             try:
                 await self.storage.delete_file(plan.previous_storage_key)
-            except Exception as exc:
+            except DatastoreDomainError as exc:
                 logger.warning(
                     "Failed to delete superseded original %s: %s",
                     plan.previous_storage_key,
                     exc,
                 )
+
+        await self._delete_move_sources(plan.storage_moves)
 
         # Synchronous chunk + converted-artifact cleanup when a file is (or has
         # become) unsearchable — search disabled OR a non-indexable type (e.g.
@@ -193,13 +207,28 @@ class FileStoragePhase:
                 plan.previous_path,
             )
 
+    async def _delete_move_sources(
+        self, storage_moves: tuple[_StorageMove, ...]
+    ) -> None:
+        for move in storage_moves:
+            if move.source_key == move.destination_key:
+                continue
+            try:
+                await self.storage.delete_file(move.source_key)
+            except DatastoreDomainError as exc:
+                logger.warning(
+                    "Failed to delete moved original %s: %s",
+                    move.source_key,
+                    exc,
+                )
+
     async def cleanup_uncommitted_update(self, plan: _UpdatePlan) -> None:
         """Delete a newly written object when the following DB phase fails.
 
         The previous key is never touched, so the committed row remains readable.
         """
         if (
-            (plan.has_content or plan.rename_moved)
+            plan.has_content
             and plan.new_storage_key
             and plan.new_storage_key != plan.previous_storage_key
         ):
@@ -211,6 +240,19 @@ class FileStoragePhase:
                 logger.warning(
                     "Failed to clean up uncommitted datastore object %s: %s",
                     plan.new_storage_key,
+                    exc,
+                )
+        for move in plan.storage_moves:
+            if move.destination_key == move.source_key:
+                continue
+            try:
+                await self.storage.delete_file(move.destination_key)
+            except DatastoreObjectNotFoundError:
+                continue
+            except DatastoreDomainError as exc:
+                logger.warning(
+                    "Failed to clean up staged moved object %s: %s",
+                    move.destination_key,
                     exc,
                 )
 
@@ -236,13 +278,10 @@ class FileStoragePhase:
                         folder_prefix,
                         exc,
                     )
-            # Child containers (converted markdown, figures, rendered pages) are
-            # colocated under the folder prefix, so the delete above removed them.
+            # The folder prefix removes canonical originals and colocated
+            # derived children. Exact deletes remain idempotent and cover any
+            # cleanup payload produced before a partial folder operation.
             for item in files:
-                # Immutable originals are keyed by file id rather than folder
-                # path, so purge each captured key explicitly. Legacy path-based
-                # keys were already removed by the prefix delete; this is
-                # intentionally idempotent.
                 try:
                     await self.storage.delete_file(item["storage_key"])
                 except Exception as exc:

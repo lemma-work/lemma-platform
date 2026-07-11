@@ -21,6 +21,8 @@ services:
       DOCUMENT_PROCESSOR: kreuzberg
       DOCUMENT_PROCESSING_OCR_ENABLED: "false"
       LOCAL_EMBEDDING_CACHE_DIR: /home/appuser/.cache/lemma/fastembed
+      HF_HOME: /home/appuser/.cache/lemma/fastembed/huggingface
+      XDG_CACHE_HOME: /home/appuser/.cache/lemma/fastembed/xdg
     volumes:
       - datastore_objects:/home/appuser/.local/object-storage
       - local_files:/home/appuser/.local/files
@@ -40,6 +42,8 @@ services:
       DOCUMENT_PROCESSING_MAX_INFLIGHT_BYTES: "${DATASTORE_MAX_INFLIGHT_BYTES:-536870912}"
       KREUZBERG_REQUEST_TIMEOUT_SECONDS: "${DATASTORE_KREUZBERG_TIMEOUT_SECONDS:-600}"
       LOCAL_EMBEDDING_CACHE_DIR: /home/appuser/.cache/lemma/fastembed
+      HF_HOME: /home/appuser/.cache/lemma/fastembed/huggingface
+      XDG_CACHE_HOME: /home/appuser/.cache/lemma/fastembed/xdg
       LOCAL_EMBEDDING_PRELOAD_TIMEOUT_SECONDS: "900"
       WORKER_CONCURRENCY: "${DATASTORE_WORKER_CONCURRENCY:-10}"
     volumes:
