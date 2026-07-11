@@ -107,12 +107,7 @@ def register_system_openai_catalog_customizer(
 def _build_system_openai_catalog(
     *, require_models: bool = True
 ) -> list[RuntimeModelCatalogEntry]:
-    """The env-configured system OpenAI catalog, after any registered customizer.
-
-    Shared by the live profile and the pricing-coverage names so both reflect the
-    same (optionally remapped) catalog. Requires no credentials, so it can run at
-    import/startup.
-    """
+    """Build the configured system OpenAI catalog, then customize it."""
     _load_runtime_env()
     raw_model_names = (
         os.getenv("LEMMA_OPENAI_MODEL_NAMES") or settings.lemma_openai_model_names
@@ -147,13 +142,7 @@ def _build_system_openai_catalog(
 
 
 def system_lemma_openai_catalog_model_names() -> list[tuple[str, str | None]]:
-    """``(public_name, provider_model_name)`` for the configured system:lemma
-    OpenAI-compatible catalog.
-
-    Mirrors the catalog built by ``_system_lemma_openai_profile`` (including any
-    registered customizer) without requiring credentials, so it can drive the
-    usage-pricing coverage invariant at import/startup.
-    """
+    """Return public/provider model pairs for pricing coverage checks."""
     return [
         (entry.name, entry.provider_model_name)
         for entry in _build_system_openai_catalog(require_models=False)
@@ -500,9 +489,7 @@ def _system_lemma_openai_profile() -> AgentRuntimeProfile | None:
     api_key = _env_or_setting("LEMMA_OPENAI_API_KEY", settings.lemma_openai_api_key)
     if not api_key:
         return None
-    # _build_system_openai_catalog() -> _csv_setting() already raises a clean
-    # "requires at least one model" error when the key is set but no models are
-    # configured (there is no built-in model default).
+    # Configured credentials require at least one explicit model.
     model_catalog = _build_system_openai_catalog()
     default_model_name = (
         os.getenv("LEMMA_OPENAI_DEFAULT_MODEL") or settings.lemma_openai_default_model
