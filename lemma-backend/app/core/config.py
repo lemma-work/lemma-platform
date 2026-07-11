@@ -1,7 +1,7 @@
 from pathlib import Path
 from typing import Literal, Optional
 
-from pydantic import Field, SecretStr, field_validator, model_validator
+from pydantic import AliasChoices, Field, SecretStr, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 from app.core.settings_env import dotenv_path
 
@@ -29,7 +29,10 @@ class Settings(BaseSettings):
     """Application settings loaded from environment variables."""
 
     model_config = SettingsConfigDict(
-        env_file=dotenv_path(), env_file_encoding="utf-8", case_sensitive=False, extra="ignore"
+        env_file=dotenv_path(),
+        env_file_encoding="utf-8",
+        case_sensitive=False,
+        extra="ignore",
     )
     environment: Literal["local", "development", "production", "testing"] = Field(
         default="local",
@@ -178,37 +181,6 @@ class Settings(BaseSettings):
             "``WORKER_HEARTBEAT_PATH``."
         ),
     )
-    agent_run_stop_poll_interval_seconds: float = Field(
-        default=1.0,
-        description=(
-            "Minimum interval between DB polls of an agent run's stop flag. The "
-            "harness checks should_stop at every streaming checkpoint (per token "
-            "/ part / tool call); without throttling that is one SELECT per token "
-            "per run, flooding the pool. The checker caches the result and "
-            "re-queries at most this often (0 disables throttling). A stop "
-            "request is still honored within this interval."
-        ),
-    )
-    agent_context_brief_cache_ttl_seconds: int = Field(
-        default=60,
-        description=(
-            "TTL for the in-process cache of an agent's rendered runtime-context "
-            "brief, keyed by (agent, conversation, pod, user). The brief is "
-            "injected into the system prompt and rebuilt on every message; it "
-            "only changes when pod inventory/grants change, so caching it keeps "
-            "the hot path off the DB. Tradeoff: a just-changed grant/table can "
-            "lag by up to this long. 0 disables caching."
-        ),
-    )
-    function_run_poll_interval_seconds: float = Field(
-        default=5.0,
-        description=(
-            "Interval an agent's JOB-function tool waits between DB polls of the "
-            "function run's status. JOB functions are long-running, so 1s polling "
-            "is needlessly aggressive; 5s cuts the poll query rate 5x. The overall "
-            "wait budget is unchanged."
-        ),
-    )
     worker_shutdown_grace_period_seconds: int = Field(
         default=10,
         description=(
@@ -239,70 +211,17 @@ class Settings(BaseSettings):
             "Set to the actual value in your Postgres config."
         ),
     )
-    conversation_title_model: str | None = Field(
-        default=None,
-        description=(
-            "Model name (within the system runtime profile's catalog) used to "
-            "LLM-generate conversation titles. When unset (the default), no LLM "
-            "call is made: the title is derived from the user's first message. "
-            "Set this only to a model your provider actually serves — pointing "
-            "it at a non-existent model makes the title call hang."
-        ),
-    )
     redis_url: str = Field(
         default="redis://localhost:6379",
         description="Redis connection URL",
     )
+    max_request_body_bytes: int = Field(
+        default=220 * 1024 * 1024,
+        description="Global ASGI request-body ceiling, enforced while receiving bytes.",
+    )
     redis_max_connections: int = Field(
         default=200,
         description="Maximum pooled Redis connections per process",
-    )
-    redis_stream_polling_interval_ms: int = Field(
-        default=500,
-        description=(
-            "Polling interval in milliseconds for FastStream Redis stream consumers. "
-            "Higher values reduce idle XREAD/XREADGROUP volume at the cost of slightly higher event pickup latency."
-        ),
-    )
-    consumer_group_reconcile_interval_seconds: float = Field(
-        default=30.0,
-        description=(
-            "How often the worker re-ensures Redis consumer groups exist. Bounds "
-            "the FastStream supervisor retry-storm if a group is lost (flush / "
-            "failover / eviction): the lost group is recreated within this window "
-            "and the subscriber resumes instead of spinning forever. Set to 0 to "
-            "disable the background reconcile loop."
-        ),
-    )
-    daemon_ws_ping_stale_after_seconds: float = Field(
-        default=90.0,
-        description=(
-            "If a connected user daemon sends no daemon.ping for this long, the "
-            "backend closes the websocket proactively instead of waiting for a "
-            "TCP-level disconnect (handles a half-open connection the daemon "
-            "itself doesn't notice). Should comfortably exceed the daemon's own "
-            "self-declared-dead threshold (ping interval * missed-pong limit, "
-            "default 15s * 3 = 45s)."
-        ),
-    )
-    daemon_reconnect_grace_seconds: float = Field(
-        default=120.0,
-        description=(
-            "How long DaemonHarness.run() waits for a disconnected user daemon "
-            "to reattach an in-flight run before failing it. Bounded and "
-            "orthogonal to DEFAULT_DAEMON_EVENT_TIMEOUT_SECONDS (7200s), which "
-            "governs a *live* connection's max silent gap between events, not "
-            "disconnect recovery."
-        ),
-    )
-    local_agent_runtime_config_path: str = Field(
-        default_factory=lambda: str(
-            _default_local_root() / "lemma" / "agent-runtime.json"
-        ),
-        description=(
-            "Local-only file used by the runtime settings API to persist the "
-            "system default agent runtime."
-        ),
     )
     lemma_default_model_type: Literal["openai_compat", "anthropic_compat"] = Field(
         default="openai_compat",
@@ -543,30 +462,6 @@ class Settings(BaseSettings):
             "can keep this distinct from the browser canonical auth URL."
         ),
     )
-    scheduler_api_url: str = Field(
-        default="http://localhost:8711", description="Scheduler API URL"
-    )
-    schedule_max_consecutive_failures: int = Field(
-        default=5,
-        description=(
-            "Circuit breaker: after this many consecutive failed fires, a schedule "
-            "is auto-deactivated (is_active=False) so it stops firing and filling "
-            "the DB with failing runs, and a ScheduleDeactivated event is emitted "
-            "(notifies the creator). A successful fire resets the count. Env: "
-            "``SCHEDULE_MAX_CONSECUTIVE_FAILURES``."
-        ),
-    )
-    scheduler_internal_token: Optional[SecretStr] = Field(
-        default=None,
-        description=(
-            "Shared secret for service-to-service auth on the scheduler sidecar's "
-            "/scheduler/jobs API. The backend sends it as a bearer token and the "
-            "sidecar requires it. When unset (e.g. local single-process dev where "
-            "nothing else can reach the router) the sidecar does not enforce auth. "
-            "Set it in every deployment where the sidecar runs as its own reachable "
-            "service. Env: ``SCHEDULER_INTERNAL_TOKEN``."
-        ),
-    )
     supertokens_core_url: str = Field(
         default="http://localhost:3567", description="Supertokens core URL"
     )
@@ -582,16 +477,26 @@ class Settings(BaseSettings):
     # app/modules/datastore/config.py
     # datastore signed-url config moved to app/modules/datastore/config.py
     # Object Storage Settings
-    storage_backend: Literal["auto", "local", "gcs"] = Field(
+    storage_backend: Literal["auto", "local", "gcs", "s3", "azure"] = Field(
         default="auto",
         description=(
-            "Object storage backend. 'auto' uses local storage in local/testing and "
-            "GCS when a bucket is configured elsewhere."
+            "Private object storage backend. 'auto' preserves the historical "
+            "local-or-GCS selection. Supported explicit cloud adapters: GCS, "
+            "Amazon S3 (and S3-compatible endpoints), and Azure Blob Storage."
         ),
     )
-    gcs_storage_bucket: Optional[str] = Field(
+    storage_bucket: Optional[str] = Field(
         default=None,
-        description="Google Cloud Storage bucket name for document storage",
+        validation_alias=AliasChoices(
+            "storage_bucket",
+            "STORAGE_BUCKET",
+            "GCS_STORAGE_BUCKET",
+        ),
+        description=(
+            "Private storage location: a filesystem directory for local, bucket "
+            "name for GCS/S3, or container name for Azure. GCS_STORAGE_BUCKET is "
+            "accepted as a backward-compatible environment alias."
+        ),
     )
     public_bucket_name: Optional[str] = Field(
         default=None,
@@ -842,6 +747,28 @@ class Settings(BaseSettings):
         default="BAAI/bge-base-en-v1.5",
         description="FastEmbed model used for local CPU embeddings.",
     )
+    local_embedding_cache_dir: str = Field(
+        default="~/.cache/lemma/fastembed",
+        description=(
+            "Persistent FastEmbed model cache. Model initialization is guarded by "
+            "a process-safe lock so concurrent document workers cannot corrupt a "
+            "cold download. Env: ``LOCAL_EMBEDDING_CACHE_DIR``."
+        ),
+    )
+    local_embedding_preload: bool = Field(
+        default=True,
+        description=(
+            "Initialize local embeddings during worker startup so model/cache "
+            "failures surface before document jobs are accepted."
+        ),
+    )
+    local_embedding_preload_timeout_seconds: float = Field(
+        default=900.0,
+        description=(
+            "Maximum worker-startup time allowed for local model preload, including "
+            "a first-run model download."
+        ),
+    )
     openai_compat_embedding_model: str = Field(
         default="nomic-ai/nomic-embed-text-v1.5",
         description=(
@@ -877,16 +804,25 @@ class Settings(BaseSettings):
     def is_local_mode(self) -> bool:
         return self.environment in {"local", "testing"}
 
-    def effective_storage_backend(self) -> Literal["local", "gcs"]:
+    def effective_storage_backend(self) -> Literal["local", "gcs", "s3", "azure"]:
         if self.storage_backend != "auto":
             return self.storage_backend
         if self.is_local_mode():
             return "local"
-        return "gcs" if self.gcs_storage_bucket else "local"
+        # Preserve the historical production behavior where a configured bucket
+        # implied GCS. New S3/Azure deployments must select their backend.
+        return "gcs" if self.storage_bucket else "local"
 
     def effective_public_storage_backend(self) -> Literal["local", "gcs"]:
-        if self.storage_backend != "auto":
-            return self.storage_backend
+        # Public icon storage remains an intentionally separate local/GCS
+        # concern. S3/Azure private-object selection must not accidentally turn
+        # the existing public-assets path into a differently configured backend.
+        if self.storage_backend == "gcs":
+            return "gcs"
+        if self.storage_backend == "local":
+            return "local"
+        if self.storage_backend in {"s3", "azure"}:
+            return "gcs" if self.public_bucket_name else "local"
         if self.is_local_mode():
             return "local"
         return "gcs" if self.public_bucket_name else "local"

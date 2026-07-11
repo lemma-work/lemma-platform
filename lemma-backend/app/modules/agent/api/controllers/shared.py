@@ -9,13 +9,15 @@ from uuid import UUID
 
 from fastapi import Depends
 
+from app.core.domain.realtime import RealtimeChannel
 from app.core.infrastructure.channels.channel_service import (
-    ChannelService,
     get_channel_service,
 )
-from app.modules.agent.services.realtime import conversation_channel as conversation_channel
+from app.modules.agent.services.realtime import (
+    conversation_channel as conversation_channel,
+)
 
-ChannelServiceDep = Annotated[ChannelService, Depends(get_channel_service)]
+ChannelServiceDep = Annotated[RealtimeChannel, Depends(get_channel_service)]
 _TERMINAL_STREAM_EVENTS = {"completed", "stopped", "error"}
 
 

@@ -30,7 +30,7 @@ from app.modules.connectors.domain.errors import (
     ConnectorNotFoundError,
     ConnectorValidationError,
     ConnectRequestStateRequiredError,
-    OAuthFlowError,
+    OAuthWorkflowError,
 )
 from app.modules.connectors.services.connector_service import ConnectorService
 
@@ -466,7 +466,7 @@ async def test_get_account_credentials_marks_reauth_required_on_refresh_failure(
         auth_provider_registry=registry,
     )
 
-    with pytest.raises(OAuthFlowError):
+    with pytest.raises(OAuthWorkflowError):
         await service.get_account_credentials(account.id, user_id)
 
     assert account.status == AccountStatus.REAUTH_REQUIRED
@@ -1144,13 +1144,14 @@ async def test_handle_oauth_callback_surfaces_upstream_error_details():
         auth_provider_registry=registry,
     )
 
-    with pytest.raises(OAuthFlowError) as exc_info:
+    with pytest.raises(OAuthWorkflowError) as exc_info:
         await service.handle_oauth_callback(
             redirect_uri="https://cb?state=state-3&code=abc",
             state="state-3",
         )
 
-    assert exc_info.value.details == {"upstream_message": "provider broke"}
+    assert exc_info.value.details == {"error_type": "RuntimeError"}
+    assert "provider broke" not in str(exc_info.value)
     connect_repo.update.assert_awaited_once()
 
 

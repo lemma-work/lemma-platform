@@ -23,8 +23,6 @@ import type { PlanSummaryState } from "lemma-sdk";
 import { isAskUserToolName } from "lemma-sdk";
 import { AssistantComposer, type AssistantSurfaceTone } from "./assistant-chrome";
 import { ComposerApprovalPanel, ComposerAskUserPanel } from "./assistant-message-group";
-import { ConversationFormPanel } from "./conversation-form-panel";
-import type { PendingDisplayResourceForm } from "./assistant-message-group";
 import { PlanSummaryStrip } from "./assistant-parts";
 import { assistantComposerInputClassName } from "./assistant-experience-helpers";
 import type { getActiveResourceMention } from "./assistant-experience-helpers";
@@ -34,8 +32,6 @@ type ActiveResourceMention = ReturnType<typeof getActiveResourceMention>;
 export interface AssistantExperienceComposerBodyProps {
   controller: AssistantControllerView;
   activePendingApprovalInvocation: Parameters<typeof ComposerApprovalPanel>[0]["invocation"] | null | undefined;
-  pendingDisplayResourceForm: PendingDisplayResourceForm | null;
-  onDismissDisplayResourceForm: (toolCallId: string) => void;
   activeResourceMention: ActiveResourceMention;
   insertResourceMention: (mention: AssistantResourceMention) => void;
   radius: LemmaAssistantRadius;
@@ -58,8 +54,6 @@ export interface AssistantExperienceComposerBodyProps {
 export function AssistantExperienceComposerBody({
   controller,
   activePendingApprovalInvocation,
-  pendingDisplayResourceForm,
-  onDismissDisplayResourceForm,
   activeResourceMention,
   insertResourceMention,
   radius,
@@ -91,20 +85,6 @@ export function AssistantExperienceComposerBody({
       <ComposerApprovalPanel
         invocation={activePendingApprovalInvocation}
         onResolveUserApproval={controller.resolveUserApproval}
-      />
-    );
-  }
-
-  if (pendingDisplayResourceForm) {
-    return (
-      <ConversationFormPanel
-        request={pendingDisplayResourceForm.request}
-        disabled={isConversationBusy}
-        onSubmit={async (message) => {
-          onDismissDisplayResourceForm(pendingDisplayResourceForm.toolCallId);
-          await controller.sendMessage(message);
-        }}
-        onDismiss={() => onDismissDisplayResourceForm(pendingDisplayResourceForm.toolCallId)}
       />
     );
   }

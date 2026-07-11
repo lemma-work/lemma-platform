@@ -4,10 +4,8 @@ from collections.abc import Callable, Sequence
 from contextlib import contextmanager
 from contextvars import ContextVar
 import logging
-import socket
 import time
 from typing import Any
-from urllib.parse import urlparse
 
 from fastapi import FastAPI
 from opentelemetry._logs import set_logger_provider
@@ -194,48 +192,6 @@ def _normalize_otlp_protocol(protocol: str | None) -> str:
     return "grpc"
 
 
-def _endpoint_host_port(endpoint: str, *, protocol: str) -> tuple[str, int] | None:
-    normalized = endpoint.strip()
-    if not normalized:
-        return None
-    parsed = urlparse(normalized if "://" in normalized else f"//{normalized}")
-    host = parsed.hostname
-    if not host:
-        return None
-    if parsed.port:
-        return host, parsed.port
-    if parsed.scheme == "https":
-        return host, 443
-    if parsed.scheme == "http":
-        return host, 80
-    if _normalize_otlp_protocol(protocol) == "http/protobuf":
-        return host, 4318
-    return host, 4317
-
-
-def _endpoint_reachable(endpoint: str, *, protocol: str, signal: str) -> bool:
-    host_port = _endpoint_host_port(endpoint, protocol=protocol)
-    if host_port is None:
-        logger.warning(
-            "Skipping OTEL export for invalid endpoint",
-            endpoint=endpoint,
-            signal=signal,
-        )
-        return False
-    host, port = host_port
-    try:
-        with socket.create_connection((host, port), timeout=0.5):
-            return True
-    except OSError as exc:
-        logger.warning(
-            "Skipping OTEL export because collector is unreachable",
-            endpoint=endpoint,
-            signal=signal,
-            error=str(exc),
-        )
-        return False
-
-
 def _build_span_exporter(
     endpoint: str,
     *,
@@ -353,15 +309,7 @@ def _setup_tracing(service_name: str) -> None:
     provider.add_span_processor(AgentRunSpanEnricher())
 
     traces_endpoint = _otlp_signal_endpoint("traces")
-    if (
-        traces_endpoint
-        and _signal_enabled("traces")
-        and _endpoint_reachable(
-            traces_endpoint,
-            protocol=settings.otel_exporter_otlp_protocol,
-            signal="traces",
-        )
-    ):
+    if traces_endpoint and _signal_enabled("traces"):
         provider.add_span_processor(
             BatchSpanProcessor(
                 _build_span_exporter(
@@ -380,11 +328,6 @@ def _setup_tracing(service_name: str) -> None:
     if (
         settings.llm_otel_enabled
         and settings.llm_otel_exporter_otlp_endpoint
-        and _endpoint_reachable(
-            settings.llm_otel_exporter_otlp_endpoint,
-            protocol=settings.llm_otel_exporter_otlp_protocol,
-            signal="llm_traces",
-        )
     ):
         provider.add_span_processor(
             OpenInferenceSpanProcessor(span_filter=_is_llm_span)
@@ -417,15 +360,7 @@ def _setup_metrics(service_name: str) -> None:
     readers: list[PeriodicExportingMetricReader] = []
 
     metrics_endpoint = _otlp_signal_endpoint("metrics")
-    if (
-        metrics_endpoint
-        and _signal_enabled("metrics")
-        and _endpoint_reachable(
-            metrics_endpoint,
-            protocol=settings.otel_exporter_otlp_protocol,
-            signal="metrics",
-        )
-    ):
+    if metrics_endpoint and _signal_enabled("metrics"):
         readers.append(
             PeriodicExportingMetricReader(
                 _build_metric_exporter(
@@ -461,13 +396,6 @@ def _setup_logs(service_name: str) -> None:
     logs_endpoint = _otlp_signal_endpoint("logs")
     if not logs_endpoint or not _signal_enabled("logs"):
         return
-    if not _endpoint_reachable(
-        logs_endpoint,
-        protocol=settings.otel_exporter_otlp_protocol,
-        signal="logs",
-    ):
-        return
-
     provider = LoggerProvider(resource=_build_resource(service_name))
     provider.add_log_record_processor(
         BatchLogRecordProcessor(
@@ -579,7 +507,7 @@ def init_telemetry(service_name: str = "lemma-api") -> None:
     except Exception as exc:
         logger.warning(
             "Observability setup failed; continuing without OTEL",
-            error=str(exc),
+            error_type=type(exc).__name__,
         )
     _telemetry_initialized = True
 

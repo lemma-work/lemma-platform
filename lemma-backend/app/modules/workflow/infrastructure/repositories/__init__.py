@@ -1,9 +1,9 @@
-from .flow_repository import SqlAlchemyFlowRepository
-from .run_repository import SqlAlchemyFlowRunRepository
+from .workflow_repository import SqlAlchemyWorkflowRepository
+from .run_repository import SqlAlchemyWorkflowRunRepository
 from .wait_repository import SqlAlchemyWorkflowRunWaitRepository
 
 __all__ = [
-    "SqlAlchemyFlowRepository",
-    "SqlAlchemyFlowRunRepository",
+    "SqlAlchemyWorkflowRepository",
+    "SqlAlchemyWorkflowRunRepository",
     "SqlAlchemyWorkflowRunWaitRepository",
 ]

@@ -49,9 +49,6 @@ async def test_list_operations_reads_from_catalog():
         connector_repository=connector_repository,
         operation_repository=operation_repository,
         operation_gateway=AsyncMock(),
-        schema_compiler=SimpleNamespace(
-            to_json_schema=lambda content: {"type": "object"}
-        ),
         account_resolution_service=AsyncMock(),
     )
 
@@ -102,9 +99,6 @@ async def test_discover_operations_returns_structured_summary():
         connector_repository=connector_repository,
         operation_repository=operation_repository,
         operation_gateway=AsyncMock(),
-        schema_compiler=SimpleNamespace(
-            to_json_schema=lambda content: {"type": "object"}
-        ),
         account_resolution_service=AsyncMock(),
     )
 
@@ -168,9 +162,6 @@ async def test_discover_operations_uses_repository_search_for_queries():
         connector_repository=connector_repository,
         operation_repository=operation_repository,
         operation_gateway=AsyncMock(),
-        schema_compiler=SimpleNamespace(
-            to_json_schema=lambda content: {"type": "object"}
-        ),
         account_resolution_service=AsyncMock(),
     )
 
@@ -232,9 +223,6 @@ async def test_get_operation_details_batch_returns_all_when_names_omitted():
         ),
         operation_repository=operation_repository,
         operation_gateway=AsyncMock(),
-        schema_compiler=SimpleNamespace(
-            to_json_schema=lambda content: {"type": "object"}
-        ),
         account_resolution_service=AsyncMock(),
     )
 
@@ -273,9 +261,6 @@ async def test_get_operation_details_batch_matches_names_case_insensitively():
         ),
         operation_repository=operation_repository,
         operation_gateway=AsyncMock(),
-        schema_compiler=SimpleNamespace(
-            to_json_schema=lambda content: {"type": "object"}
-        ),
         account_resolution_service=AsyncMock(),
     )
 
@@ -327,9 +312,6 @@ async def test_discover_operations_includes_relevance_score_for_queries():
         connector_repository=connector_repository,
         operation_repository=operation_repository,
         operation_gateway=AsyncMock(),
-        schema_compiler=SimpleNamespace(
-            to_json_schema=lambda content: {"type": "object"}
-        ),
         account_resolution_service=AsyncMock(),
     )
 
@@ -376,9 +358,6 @@ async def test_execute_operation_uses_provider_operation_name():
         ),
         operation_repository=operation_repository,
         operation_gateway=operation_gateway,
-        schema_compiler=SimpleNamespace(
-            to_json_schema=lambda content: {"type": "object"}
-        ),
         account_resolution_service=account_resolution_service,
     )
 
@@ -425,9 +404,6 @@ async def test_execute_operation_wraps_unexpected_errors_in_domain_error():
         operation_gateway=AsyncMock(
             execute_operation=AsyncMock(side_effect=RuntimeError("provider exploded"))
         ),
-        schema_compiler=SimpleNamespace(
-            to_json_schema=lambda content: {"type": "object"}
-        ),
         account_resolution_service=AsyncMock(
             resolve_account=AsyncMock(return_value=account)
         ),
@@ -442,7 +418,8 @@ async def test_execute_operation_wraps_unexpected_errors_in_domain_error():
         )
 
     assert exc_info.value.code == "OPERATION_EXECUTION_INFRA_ERROR"
-    assert exc_info.value.details == {"upstream_message": "provider exploded"}
+    assert exc_info.value.details == {"error_type": "RuntimeError"}
+    assert "provider exploded" not in str(exc_info.value)
 
 
 class _BinaryResult(BaseModel):
@@ -485,9 +462,6 @@ async def test_execute_operation_normalizes_pydantic_binary_results():
                     size_bytes=5,
                 )
             )
-        ),
-        schema_compiler=SimpleNamespace(
-            to_json_schema=lambda content: {"type": "object"}
         ),
         account_resolution_service=AsyncMock(
             resolve_account=AsyncMock(return_value=account)

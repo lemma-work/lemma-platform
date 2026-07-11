@@ -442,16 +442,16 @@ async def test_agent_grants_step_applies_grants(tmp_path, monkeypatch):
 # --- workflows + schedules ---------------------------------------------------
 
 
-class FakeFlowService:
+class FakeWorkflowService:
     def __init__(self):
         self.created = []
 
-    async def get_flow_by_name(self, pod_id, name, requester_user_id=None, ctx=None):
+    async def get_workflow_by_name(self, pod_id, name, requester_user_id=None, ctx=None):
         # A missing flow returns None (does NOT raise) — the applier must treat
         # that as "create", not "already exists".
         return None
 
-    async def create_flow(self, **kwargs):
+    async def create_workflow(self, **kwargs):
         self.created.append(kwargs["name"])
 
 
@@ -466,12 +466,12 @@ async def test_workflow_apply_creates_when_absent(tmp_path, monkeypatch):
             "edges": [],
         },
     )
-    fake = FakeFlowService()
+    fake = FakeWorkflowService()
     monkeypatch.setattr(
-        "app.modules.workflow.api.dependencies.get_flow_service", lambda uow: fake
+        "app.modules.workflow.api.dependencies.get_workflow_service", lambda uow: fake
     )
     await _grant_applier(root).apply_step(_step(StepKind.WORKFLOW, "score_flow"))
-    # Regression: get_flow_by_name returning None must not be read as "exists".
+    # Regression: get_workflow_by_name returning None must not be read as "exists".
     assert fake.created == ["score_flow"]
 
 

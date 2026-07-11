@@ -11,14 +11,20 @@ that point the ``plan_pod_import`` worker is the only writer of the state doc.
 
 from __future__ import annotations
 
-from datetime import datetime
+import asyncio
+from datetime import datetime, timezone
+from pathlib import Path
 from uuid import UUID, uuid4
 
+from obstore.exceptions import BaseError as ObjectStoreError
+
 from app.core.authorization.permissions import Permissions
+from app.core.api.uploads import upload_source_size
 from app.core.authorization.scope import context_scope, uow_scope
 from app.core.authorization.service import AuthorizationDataService
 from app.core.infrastructure.db.uow_factory import UnitOfWorkFactory
 from app.core.infrastructure.jobs.streaq_job_queue import get_streaq_job_queue
+from app.core.log.log import get_logger
 from app.modules.pod_bundle.config import pod_bundle_settings
 from app.modules.pod_bundle.domain.errors import (
     BundleConfirmationRequiredError,
@@ -50,12 +56,35 @@ URL_JOB_NAME = "import_pod_url"
 APPLY_JOB_NAME = "apply_pod_import"
 
 
+def _require_import_variables(
+    state: ImportState,
+    variables: dict[str, str] | None,
+) -> None:
+    if state.plan is None:
+        return
+    missing = [
+        item.name
+        for item in state.plan.variables
+        if item.required and not (variables or {}).get(item.name)
+    ]
+    if missing:
+        raise BundleConfirmationRequiredError(
+            "Required variables are missing.", details={"missing": missing}
+        )
+logger = get_logger(__name__)
+
+
 def import_apply_job_id(import_id: UUID) -> str:
     return f"pod-import:{import_id}"
 
 # Local file signatures we accept as bundle archives (zip magic bytes). The deep
 # structural validation is the plan job's responsibility; this is a cheap gate.
 _ZIP_MAGIC = (b"PK\x03\x04", b"PK\x05\x06", b"PK\x07\x08")
+
+
+def _read_prefix(path: Path, size: int) -> bytes:
+    with path.open("rb") as source:
+        return source.read(size)
 
 
 def import_plan_job_id(import_id: UUID) -> str:
@@ -104,16 +133,26 @@ class ImportUseCases:
         self._rate_limiter = rate_limiter or get_bundle_rate_limiter()
 
     async def stage_upload(
-        self, *, pod_id: UUID, user_id: UUID, filename: str | None, data: bytes
+        self,
+        *,
+        pod_id: UUID,
+        user_id: UUID,
+        filename: str | None,
+        data: bytes | Path,
     ) -> tuple[str, datetime]:
         """Stage a locally-uploaded ``.zip`` and return a signed lemma download
         URL to feed the URL-based import. The only multipart entry point; carries
         no orchestration. Raises 413 over the size cap / 422 for a non-zip."""
-        if len(data) > pod_bundle_settings.pod_bundle_max_archive_bytes:
+        if upload_source_size(data) > pod_bundle_settings.pod_bundle_max_archive_bytes:
             raise BundleTooLargeError(
                 "The uploaded bundle exceeds the maximum allowed size."
             )
-        if not data.startswith(_ZIP_MAGIC):
+        prefix = (
+            await asyncio.to_thread(_read_prefix, data, 4)
+            if isinstance(data, Path)
+            else data[:4]
+        )
+        if not prefix.startswith(_ZIP_MAGIC):
             raise BundleInvalidError("The uploaded file is not a valid .zip bundle.")
 
         await self._authorize(pod_id=pod_id, user_id=user_id, action=Permissions.POD_UPDATE)
@@ -259,16 +298,9 @@ class ImportUseCases:
                 "confirm_destructive=true to proceed.",
                 details={"warnings": state.plan.warnings},
             )
-        missing = [
-            v.name
-            for v in state.plan.variables
-            if v.required and not (variables or {}).get(v.name)
-        ]
-        if missing:
-            raise BundleConfirmationRequiredError(
-                "Required variables are missing.", details={"missing": missing}
-            )
+        _require_import_variables(state, variables)
 
+        retrying_failed_job = state.status is ImportStatus.FAILED
         # Reset any FAILED step back to PENDING so a re-apply retries it; DONE
         # steps stay DONE (idempotent resume).
         for step in state.plan.steps:
@@ -278,7 +310,15 @@ class ImportUseCases:
         state.variables_provided = dict(variables or {})
         state.confirm_destructive = confirm_destructive
         state.status = ImportStatus.APPLYING
-        await self._state_store.save_import(state)
+        state.error = None
+        state.error_type = None
+        state.error_code = None
+        state.completed_at = None
+        if retrying_failed_job:
+            state.attempt += 1
+            await self._state_store.reopen_import(state)
+        else:
+            await self._state_store.save_import(state)
 
         job = await self._job_queue.enqueue(
             APPLY_JOB_NAME,
@@ -302,9 +342,25 @@ class ImportUseCases:
         state = await self._state_store.get_import(import_id)
         if state is None or state.pod_id != pod_id:
             raise BundleJobExpiredError()
+        if state.status not in {
+            ImportStatus.AWAITING_CONFIRMATION,
+            ImportStatus.FAILED,
+        }:
+            raise BundleJobConflictError(
+                f"Import cannot be replanned from status {state.status.value}."
+            )
+        retrying_failed_job = state.status is ImportStatus.FAILED
         state.status = ImportStatus.QUEUED
         state.plan = None
-        await self._state_store.save_import(state)
+        state.error = None
+        state.error_type = None
+        state.error_code = None
+        state.completed_at = None
+        if retrying_failed_job:
+            state.attempt += 1
+            await self._state_store.reopen_import(state)
+        else:
+            await self._state_store.save_import(state)
         job = await self._job_queue.enqueue(
             PLAN_JOB_NAME,
             context={
@@ -320,26 +376,39 @@ class ImportUseCases:
 
     async def cancel_import(
         self, *, pod_id: UUID, import_id: UUID, user_id: UUID
-    ) -> None:
-        """Abort any running plan/apply job and delete the state + staged archive."""
+    ) -> ImportState:
+        """Persist a cancellation tombstone and request cooperative worker stop."""
         await self._authorize(pod_id=pod_id, user_id=user_id, action=Permissions.POD_UPDATE)
         state = await self._state_store.get_import(import_id)
         if state is None or state.pod_id != pod_id:
             raise BundleJobExpiredError()
-        for job_id in (import_plan_job_id(import_id), import_apply_job_id(import_id)):
+        if state.is_terminal:
+            return state
+        previous_status = state.status
+        state.status = ImportStatus.CANCELLING
+        state.cancel_requested_at = datetime.now(timezone.utc)
+        await self._state_store.save_import(state)
+
+        # Keep the accepted response stable even when an idle cancellation can
+        # reach its terminal state before this request returns.
+        accepted = state.model_copy(deep=True)
+        if previous_status == ImportStatus.AWAITING_CONFIRMATION:
+            state.status = ImportStatus.CANCELLED
+            state.current_step = None
+            state.completed_at = datetime.now(timezone.utc)
+            await self._state_store.save_import(state)
             try:
-                # Bounded: abort blocks until the task acknowledges, which never
-                # happens for an already-finished/never-enqueued job. Cancel's
-                # real guarantee is deleting the state + staged archive below, so
-                # a best-effort short-timeout abort is enough.
-                await self._job_queue.abort(job_id, timeout_seconds=2.0)
-            except Exception:  # noqa: BLE001 - the job may already be gone
-                pass
-        try:
-            await self._staging.delete_archive("pod-imports", import_id)
-        except Exception:  # noqa: BLE001
-            pass
-        await self._state_store.delete_import(import_id)
+                await self._staging.delete_archive("pod-imports", import_id)
+            except ObjectStoreError:
+                logger.warning(
+                    "Failed to clean staging for idle cancelled import",
+                    import_id=str(import_id),
+                )
+
+        # Active workers observe the durable tombstone before/after external I/O
+        # and before commit. Force-aborting them could bypass that finalization
+        # path and strand the job in CANCELLING.
+        return accepted
 
     async def _authorize(self, *, pod_id: UUID, user_id: UUID, action) -> None:
         async with uow_scope(self._uow_factory) as uow:

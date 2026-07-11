@@ -10,4 +10,3 @@ export type SurfaceAdminConsentInfo = {
     granted?: boolean;
     required?: boolean;
 };
-

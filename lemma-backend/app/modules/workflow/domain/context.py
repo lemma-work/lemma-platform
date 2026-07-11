@@ -22,7 +22,7 @@ from app.modules.workflow.domain.nodes import (
     InputBinding,
     RESERVED_NODE_IDS,
 )
-from app.modules.workflow.domain.start import FlowStartType
+from app.modules.workflow.domain.start import WorkflowStartType
 
 
 class TriggerContext(BaseModel):
@@ -32,7 +32,7 @@ class TriggerContext(BaseModel):
     runs have no `start` at all.
     """
 
-    trigger_type: FlowStartType = FlowStartType.SCHEDULED
+    trigger_type: WorkflowStartType = WorkflowStartType.SCHEDULED
     payload: dict[str, Any] = Field(default_factory=dict)
     metadata: dict[str, Any] = Field(default_factory=dict)
     llm_output: dict[str, Any] = Field(default_factory=dict)

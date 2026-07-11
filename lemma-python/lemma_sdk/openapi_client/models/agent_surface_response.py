@@ -14,6 +14,7 @@ from ..types import UNSET, Unset
 
 if TYPE_CHECKING:
     from ..models.surface_config_response import SurfaceConfigResponse
+    from ..models.surface_reach import SurfaceReach
 
 
 T = TypeVar("T", bound="AgentSurfaceResponse")
@@ -32,7 +33,9 @@ class AgentSurfaceResponse:
         agent_id (None | Unset | UUID):
         agent_name (None | str | Unset):
         credential_mode (SurfaceCredentialMode | Unset):
+        reach (None | SurfaceReach | Unset):
         status (AgentSurfaceStatus | Unset):
+        surface_identity_email (None | str | Unset):
         surface_identity_id (None | str | Unset):
         surface_identity_username (None | str | Unset):
         uses_default_agent (bool | Unset):  Default: False.
@@ -48,7 +51,9 @@ class AgentSurfaceResponse:
     agent_id: None | Unset | UUID = UNSET
     agent_name: None | str | Unset = UNSET
     credential_mode: SurfaceCredentialMode | Unset = UNSET
+    reach: None | SurfaceReach | Unset = UNSET
     status: AgentSurfaceStatus | Unset = UNSET
+    surface_identity_email: None | str | Unset = UNSET
     surface_identity_id: None | str | Unset = UNSET
     surface_identity_username: None | str | Unset = UNSET
     uses_default_agent: bool | Unset = False
@@ -56,6 +61,8 @@ class AgentSurfaceResponse:
     additional_properties: dict[str, Any] = _attrs_field(init=False, factory=dict)
 
     def to_dict(self) -> dict[str, Any]:
+        from ..models.surface_reach import SurfaceReach
+
         config = self.config.to_dict()
 
         id = str(self.id)
@@ -92,9 +99,23 @@ class AgentSurfaceResponse:
         if not isinstance(self.credential_mode, Unset):
             credential_mode = self.credential_mode.value
 
+        reach: dict[str, Any] | None | Unset
+        if isinstance(self.reach, Unset):
+            reach = UNSET
+        elif isinstance(self.reach, SurfaceReach):
+            reach = self.reach.to_dict()
+        else:
+            reach = self.reach
+
         status: str | Unset = UNSET
         if not isinstance(self.status, Unset):
             status = self.status.value
+
+        surface_identity_email: None | str | Unset
+        if isinstance(self.surface_identity_email, Unset):
+            surface_identity_email = UNSET
+        else:
+            surface_identity_email = self.surface_identity_email
 
         surface_identity_id: None | str | Unset
         if isinstance(self.surface_identity_id, Unset):
@@ -135,8 +156,12 @@ class AgentSurfaceResponse:
             field_dict["agent_name"] = agent_name
         if credential_mode is not UNSET:
             field_dict["credential_mode"] = credential_mode
+        if reach is not UNSET:
+            field_dict["reach"] = reach
         if status is not UNSET:
             field_dict["status"] = status
+        if surface_identity_email is not UNSET:
+            field_dict["surface_identity_email"] = surface_identity_email
         if surface_identity_id is not UNSET:
             field_dict["surface_identity_id"] = surface_identity_id
         if surface_identity_username is not UNSET:
@@ -151,6 +176,7 @@ class AgentSurfaceResponse:
     @classmethod
     def from_dict(cls: type[T], src_dict: Mapping[str, Any]) -> T:
         from ..models.surface_config_response import SurfaceConfigResponse
+        from ..models.surface_reach import SurfaceReach
 
         d = dict(src_dict)
         config = SurfaceConfigResponse.from_dict(d.pop("config"))
@@ -213,12 +239,40 @@ class AgentSurfaceResponse:
         else:
             credential_mode = SurfaceCredentialMode(_credential_mode)
 
+        def _parse_reach(data: object) -> None | SurfaceReach | Unset:
+            if data is None:
+                return data
+            if isinstance(data, Unset):
+                return data
+            try:
+                if not isinstance(data, dict):
+                    raise TypeError()
+                reach_type_0 = SurfaceReach.from_dict(data)
+
+                return reach_type_0
+            except (TypeError, ValueError, AttributeError, KeyError):
+                pass
+            return cast(None | SurfaceReach | Unset, data)
+
+        reach = _parse_reach(d.pop("reach", UNSET))
+
         _status = d.pop("status", UNSET)
         status: AgentSurfaceStatus | Unset
         if isinstance(_status, Unset):
             status = UNSET
         else:
             status = AgentSurfaceStatus(_status)
+
+        def _parse_surface_identity_email(data: object) -> None | str | Unset:
+            if data is None:
+                return data
+            if isinstance(data, Unset):
+                return data
+            return cast(None | str | Unset, data)
+
+        surface_identity_email = _parse_surface_identity_email(
+            d.pop("surface_identity_email", UNSET)
+        )
 
         def _parse_surface_identity_id(data: object) -> None | str | Unset:
             if data is None:
@@ -263,7 +317,9 @@ class AgentSurfaceResponse:
             agent_id=agent_id,
             agent_name=agent_name,
             credential_mode=credential_mode,
+            reach=reach,
             status=status,
+            surface_identity_email=surface_identity_email,
             surface_identity_id=surface_identity_id,
             surface_identity_username=surface_identity_username,
             uses_default_agent=uses_default_agent,

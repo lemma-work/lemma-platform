@@ -14,7 +14,7 @@ from app.modules.workflow.domain.nodes import (
     ExpressionInputBinding,
     LiteralInputBinding,
 )
-from app.modules.workflow.domain.start import FlowStartType
+from app.modules.workflow.domain.start import WorkflowStartType
 
 
 def test_reserved_namespaces_rejected_as_node_ids():
@@ -36,7 +36,7 @@ def test_trigger_populates_start_namespace_only():
     context = RunContext()
     context.set_start(
         TriggerContext(
-            trigger_type=FlowStartType.DATASTORE_EVENT,
+            trigger_type=WorkflowStartType.DATASTORE_EVENT,
             payload={"record": {"id": 1}},
             metadata={"table_name": "users"},
         )

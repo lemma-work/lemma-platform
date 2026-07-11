@@ -387,10 +387,39 @@ stop:
 	@for p in $(FRONTEND_PID_FILE) $(BACKEND_PID_FILE) $(AGENTBOX_PID_FILE); do \
 		if [ -f $$p ]; then \
 			pid=$$(cat $$p); \
-			kill $$pid 2>/dev/null && echo "  Stopped $$pid ($$p)" || true; \
+			children=$$(pgrep -P $$pid 2>/dev/null || true); \
+			targets="$$children $$pid"; \
+			kill $$targets 2>/dev/null || true; \
+			for i in $$(seq 1 40); do \
+				alive=""; \
+				for target in $$targets; do \
+					kill -0 $$target 2>/dev/null && alive="$$alive $$target" || true; \
+				done; \
+				[ -z "$$alive" ] && break; \
+				sleep 0.25; \
+			done; \
+			for target in $$targets; do \
+				if kill -0 $$target 2>/dev/null; then \
+					kill -KILL $$target 2>/dev/null || true; \
+					echo "  Force-stopped stale child $$target ($$p)"; \
+				fi; \
+			done; \
+			echo "  Stopped $$pid ($$p)"; \
 			rm -f $$p; \
 		fi; \
 	done
+	@# A previous graceful shutdown could have closed its listening socket but
+	@# remained stuck in the embedded worker, after its pidfile was removed. Such
+	@# an orphan still consumes Redis jobs and writes the worker heartbeat.
+	@stale=$$(pgrep -f '$(abspath $(BACKEND_DIR))/.venv/bin/python .*uvicorn standalone_app:app .*--port $(DEV_BACKEND_PORT)' 2>/dev/null || true); \
+	if [ -n "$$stale" ]; then \
+		kill $$stale 2>/dev/null || true; \
+		sleep 1; \
+		for pid in $$stale; do \
+			kill -0 $$pid 2>/dev/null && kill -KILL $$pid 2>/dev/null || true; \
+		done; \
+		echo "  Removed stale backend workers: $$stale"; \
+	fi
 	@# belt + braces: anything still listening on the dev ports
 	@for port in $(DEV_FRONTEND_PORT) $(DEV_BACKEND_PORT) $(DEV_AGENTBOX_PORT); do \
 		lsof -ti tcp:$$port 2>/dev/null | xargs -r kill 2>/dev/null && echo "  Killed leftovers on port $$port" || true; \

@@ -1,4 +1,5 @@
 from datetime import datetime
+from typing import Any
 from uuid import UUID
 from app.core.domain.events import DomainEvent
 from app.modules.schedule.domain.schedule import ScheduleType
@@ -9,15 +10,19 @@ class ScheduleEvent(DomainEvent):
     user_id: UUID
     schedule_type: ScheduleType
 
+    @classmethod
+    def stream_name(cls) -> str:
+        return "schedule_events"
+
 
 class ScheduleCreated(ScheduleEvent):
     event_type: str = "schedule.created"
-    config: dict
+    config: dict[str, Any]
 
 
 class ScheduleUpdated(ScheduleEvent):
     event_type: str = "schedule.updated"
-    config: dict
+    config: dict[str, Any]
 
 
 class ScheduleDeleted(ScheduleEvent):
@@ -45,13 +50,14 @@ class ScheduleFired(ScheduleEvent):
     """
 
     event_type: str = "schedule.fired"
-    payload: dict
-    metadata: dict | None = None
+    payload: dict[str, Any]
+    metadata: dict[str, Any] | None = None
     # Additional context for richer processing
     account_id: UUID | None = None  # For WEBHOOK schedules
     pod_id: UUID | None = None  # For pod-scoped table/file schedules
     scheduled_at: datetime | None = None  # For TIME schedules
-    llm_output: dict | None = None  # For filtered events
+    llm_output: dict[str, Any] | None = None  # For filtered events
+    source_event_id: str | None = None
 
 
 class ScheduleEvents:
@@ -61,6 +67,9 @@ class ScheduleEvents:
     # scheduler pod, the API pod — can ensure these groups exist before XADD,
     # even though it never imports the consuming subscribers. Keeps a fired event
     # from being dropped when a consumer's group was lost (flush/failover) and is
-    # otherwise only recreated later at "$". The workflow pod consumes via this
-    # group; the surface subscriber reads group-less (fan-out) and needs none.
-    CONSUMER_GROUPS = ("workflow-schedule-events", "schedule-notifications")
+    # otherwise only recreated later at "$".
+    CONSUMER_GROUPS = (
+        "workflow-schedule-events",
+        "schedule-notifications",
+        "surface-schedule-events",
+    )

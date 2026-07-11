@@ -5,7 +5,7 @@ from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
-from app.modules.connectors.domain.connector import AuthScheme
+from app.modules.connectors.contracts import AuthScheme
 from app.modules.agent_surfaces.domain.entities import (
     AgentSurfaceStatus,
     SurfaceChannelRoute,

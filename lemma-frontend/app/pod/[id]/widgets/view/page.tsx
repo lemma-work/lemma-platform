@@ -28,6 +28,10 @@ export default function DisplayResourceWidgetPage({
     const conversationId = searchParams.get('assistantConversationId') || searchParams.get('conversationId');
     const toolCallId = searchParams.get('toolCallId');
     const externalSrc = isHttpUrl(searchParams.get('src'));
+    const loadingMessages = searchParams.getAll('loadingMessage')
+        .map((message) => message.trim())
+        .filter(Boolean)
+        .slice(0, 4);
     const assistant = useAIAssistant();
     const initializedAssistantConversationRef = useRef<string | null>(null);
     const [saving, setSaving] = useState(false);
@@ -62,13 +66,12 @@ export default function DisplayResourceWidgetPage({
         );
     }
 
-    // Only inline-content widgets can be promoted: the endpoint resolves content
-    // by (conversation, tool call). The promoted app's HTML is identical to what
-    // the widget showed.
+    // Only inline-content widgets can be promoted: the endpoint resolves the source
+    // fragment by (conversation, tool call) and wraps it for standalone delivery.
     const canSaveAsApp = isContentWidget;
     const handleSaveAsApp = async () => {
         if (!conversationId || !toolCallId || saving) return;
-        const name = window.prompt('Save this widget as a app. Name it:', title);
+        const name = window.prompt('Save this widget as an app. Name it:', title);
         if (!name || !name.trim()) return;
         setSaving(true);
         setSaveError(null);
@@ -122,6 +125,7 @@ export default function DisplayResourceWidgetPage({
                     toolCallId={toolCallId}
                     externalSrc={externalSrc}
                     title={title}
+                    loadingMessages={loadingMessages}
                     variant="full"
                 />
             </div>

@@ -11,24 +11,21 @@ import httpx
 
 from agentbox_client import AgentBoxClient
 from app.core.log.log import get_logger
-from app.modules.agent.domain.workspace_entities import (
+from app.modules.workspace.contracts import (
     PythonExecutionResult,
     ShellCommandResult,
 )
-logger = get_logger(__name__)
-
-# Retry primitives are shared with the function-executor path; see agentbox_retry.
 from app.modules.workspace.agentbox_retry import (
     DEFAULT_INITIAL_RETRY_DELAY_SECONDS as _SESSION_CREATE_INITIAL_RETRY_DELAY_SECONDS,
     DEFAULT_MAX_ATTEMPTS as _SESSION_CREATE_MAX_ATTEMPTS,
     DEFAULT_MAX_RETRY_DELAY_SECONDS as _SESSION_CREATE_MAX_RETRY_DELAY_SECONDS,
-    RETRYABLE_HTTP_STATUS_CODES as _RETRYABLE_HTTP_STATUS_CODES,
     RETRYABLE_TRANSPORT_ERRORS as _RETRYABLE_TRANSPORT_ERRORS,
     format_http_status_error as _format_http_status_error,
     format_transport_error as _format_transport_error,
     is_retryable_http_error as _is_retryable_http_error,
-    truncate_message as _truncate_message,
 )
+
+logger = get_logger(__name__)
 
 
 def _agentbox_command_failure(

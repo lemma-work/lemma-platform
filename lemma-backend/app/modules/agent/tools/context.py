@@ -18,7 +18,7 @@ from app.modules.agent.domain.subscription_models import SubscriptionModels
 from app.modules.agent.services.subscription_models_provider import (
     resolve_subscription_models,
 )
-from app.modules.workspace.services.workspace_file_manager import WorkspaceFileManager
+from app.composition.agent_workspace import WorkspaceFileManager
 
 
 class BaseAgentContext(AgentContext):

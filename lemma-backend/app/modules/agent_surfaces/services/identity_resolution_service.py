@@ -12,7 +12,7 @@ from app.modules.agent_surfaces.domain.models import SurfaceSenderProfile
 from app.modules.agent_surfaces.infrastructure.repositories.external_user_repository import (
     ExternalSurfaceUserRepository,
 )
-from app.modules.identity.infrastructure.user_repositories import UserRepository
+from app.composition.surface_identity import UserRepository
 
 
 class SurfaceIdentityResolutionService:

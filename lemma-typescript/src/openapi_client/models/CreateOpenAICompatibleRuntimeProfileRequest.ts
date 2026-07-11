@@ -13,4 +13,3 @@ export type CreateOpenAICompatibleRuntimeProfileRequest = {
     name: string;
     source?: string;
 };
-

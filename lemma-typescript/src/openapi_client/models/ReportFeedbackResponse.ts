@@ -27,4 +27,3 @@ export type ReportFeedbackResponse = {
      */
     user_id?: (string | null);
 };
-

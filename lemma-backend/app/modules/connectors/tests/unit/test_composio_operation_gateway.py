@@ -78,3 +78,26 @@ async def test_successful_response_returns_data():
     response = {"successful": True, "data": {"name": "London"}}
     result = await _run(_gateway(response))
     assert result == {"name": "London"}
+
+
+async def test_sdk_telemetry_is_opt_in_and_context_is_restored():
+    from composio.core.models.base import allow_tracking
+
+    seen_tracking_values: list[bool] = []
+    composio = SimpleNamespace(
+        tools=SimpleNamespace(
+            execute=lambda *a, **k: (
+                seen_tracking_values.append(allow_tracking.get())
+                or {"successful": True, "data": {"ok": True}}
+            )
+        )
+    )
+    assert allow_tracking.get() is True
+
+    result = await _run(
+        ComposioOperationGateway(composio_client_factory=lambda: composio)
+    )
+
+    assert result == {"ok": True}
+    assert seen_tracking_values == [False]
+    assert allow_tracking.get() is True

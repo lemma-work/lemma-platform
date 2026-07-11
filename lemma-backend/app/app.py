@@ -12,6 +12,8 @@ from supertokens_python.framework.fastapi import get_middleware
 
 from app.version import API_VERSION
 from app.core.api.exception_handlers import register_exception_handlers
+from app.core.api.streaming_multipart import install_streaming_multipart_openapi
+from app.core.domain.errors import PayloadTooLargeError
 from app.core.config import settings
 from app.core.cors import get_allowed_cors_origin_regex, get_allowed_cors_origins
 from app.core.infrastructure.events.message_bus import (
@@ -41,6 +43,7 @@ from app.core.registry.installed import OSS_MODULES
 from app.auth_app import get_auth_app
 from app.mcp_server import get_agent_mcp_app, get_pod_mcp_app
 from app.core.infrastructure.db.session import get_engine
+from app.core.request_context import reset_request_id, set_request_id
 
 logger = get_logger(__name__)
 
@@ -79,7 +82,7 @@ _HTTP_METHODS = frozenset(
 def _apply_error_response_schema(schema: dict) -> dict:
     """Point every 4xx/5xx response at the unified ``ErrorResponse`` envelope.
 
-    All error responses share ``{"message","code","details"}`` (see
+    All error responses share ``{"message","code","request_id","details"}`` (see
     ``app.core.api.exception_handlers``). FastAPI documents the auto 422 as
     ``HTTPValidationError`` and per-route error responses ad hoc; rewrite them so
     the OpenAPI spec — and therefore the generated SDKs — matches what the server
@@ -127,8 +130,10 @@ async def lifespan(app: FastAPI):
         from app.core.observability.loop_watchdog import loop_lag_watchdog
 
         configure_thread_pool()
-        watchdog_task = asyncio.create_task(
-            loop_lag_watchdog(service_name="lemma-api")
+        watchdog_task = (
+            None
+            if getattr(app.state, "embedded_worker", False)
+            else asyncio.create_task(loop_lag_watchdog(service_name="lemma-api"))
         )
         initialize_supertokens()
         await channel_service.connect()
@@ -150,7 +155,7 @@ async def lifespan(app: FastAPI):
         finally:
             # Core closers — explicit and last so they tear down after modules.
             logger.info("Application shutting down")
-            if not watchdog_task.done():
+            if watchdog_task is not None and not watchdog_task.done():
                 watchdog_task.cancel()
                 try:
                     await watchdog_task
@@ -199,7 +204,63 @@ class RequestIdMiddleware:
                 message = {**message, "headers": raw_headers}
             await send(message)
 
-        await self.app(scope, receive, send_with_request_id)
+        token = set_request_id(request_id)
+        try:
+            await self.app(scope, receive, send_with_request_id)
+        finally:
+            reset_request_id(token)
+
+
+class RequestBodyLimitMiddleware:
+    """Enforce a byte ceiling without trusting the Content-Length header."""
+
+    def __init__(self, app, max_bytes: int):
+        self.app = app
+        self.max_bytes = max_bytes
+
+    async def __call__(self, scope, receive, send):
+        if scope["type"] != "http" or self.max_bytes <= 0:
+            await self.app(scope, receive, send)
+            return
+
+        headers = dict(scope.get("headers") or [])
+        request_id = headers.get(b"x-request-id", b"").decode("latin-1") or None
+        content_length = headers.get(b"content-length")
+        if content_length is not None:
+            try:
+                if int(content_length) > self.max_bytes:
+                    await self._send_too_large(scope, receive, send, request_id)
+                    return
+            except ValueError:
+                pass
+
+        received = 0
+
+        async def receive_limited():
+            nonlocal received
+            message = await receive()
+            if message["type"] == "http.request":
+                received += len(message.get("body", b""))
+                if received > self.max_bytes:
+                    raise PayloadTooLargeError(max_bytes=self.max_bytes)
+            return message
+
+        try:
+            await self.app(scope, receive_limited, send)
+        except PayloadTooLargeError:
+            await self._send_too_large(scope, receive, send, request_id)
+
+    async def _send_too_large(self, scope, receive, send, request_id):
+        response = JSONResponse(
+            status_code=413,
+            content={
+                "message": "request exceeds the maximum allowed size",
+                "code": "UPLOAD_TOO_LARGE",
+                "request_id": request_id,
+                "details": {"field": "request", "max_bytes": self.max_bytes},
+            },
+        )
+        await response(scope, receive, send)
 
 
 def create_app(modules=OSS_MODULES) -> FastAPI:
@@ -229,7 +290,7 @@ def create_app(modules=OSS_MODULES) -> FastAPI:
     app.state.lemma_modules = modules
 
     # Global error handling — every error response uses one envelope
-    # ({"message","code","details"}). Domain errors translate automatically via
+    # ({"message","code","request_id","details"}). Domain errors translate automatically via
     # their status_code/code, so controllers don't catch-and-remap them.
     register_exception_handlers(app)
 
@@ -303,6 +364,13 @@ def create_app(modules=OSS_MODULES) -> FastAPI:
     # routing/auth (the rewritten /public/* path is unauthenticated).
     app.add_middleware(AppHostRoutingMiddleware)
 
+    # Transport-level guard. Added before RequestIdMiddleware so the latter
+    # remains outermost and stamps 413 responses with the correlation id.
+    app.add_middleware(
+        RequestBodyLimitMiddleware,
+        max_bytes=settings.max_request_body_bytes,
+    )
+
     # Correlation id — added last so it is the outermost middleware and stamps
     # every response (including app-host-routed ones).
     app.add_middleware(RequestIdMiddleware)
@@ -356,6 +424,7 @@ def create_app(modules=OSS_MODULES) -> FastAPI:
             description=app.description,
         )
         schema = _replace_openapi_refs(schema, OPENAPI_SCHEMA_RENAMES)
+        schema = install_streaming_multipart_openapi(schema)
         components = schema.setdefault("components", {}).setdefault("schemas", {})
         for old_name, new_name in OPENAPI_SCHEMA_RENAMES.items():
             if old_name in components:

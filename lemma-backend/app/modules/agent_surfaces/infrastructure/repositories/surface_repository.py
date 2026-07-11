@@ -21,7 +21,8 @@ from app.modules.agent_surfaces.infrastructure.models import (
     AgentSurface,
     AgentSurfaceConversationLinkModel,
 )
-from app.modules.pod.infrastructure.models.pod_models import Pod
+from app.composition.surface_identity import Pod
+from app.composition.surface_agent import ConversationModel
 
 
 class SurfaceRepository(SurfaceInstallationRepositoryPort):
@@ -42,8 +43,6 @@ class SurfaceRepository(SurfaceInstallationRepositoryPort):
         self, conversation_id: UUID, updates: dict
     ) -> None:
         """Merge ``updates`` into a conversation's metadata blob (no-op if gone)."""
-        from app.modules.agent.infrastructure.models import ConversationModel
-
         model = await self.session.get(ConversationModel, conversation_id)
         if model is None:
             return

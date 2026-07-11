@@ -15,4 +15,3 @@ export type SurfaceConnectorSetupGuide = {
     supported?: boolean;
     title: string;
 };
-

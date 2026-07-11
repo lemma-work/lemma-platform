@@ -335,7 +335,7 @@ function PodShell({
             : "other";
     const isConversationRoute = pathname === `/pod/${pod.id}/conversations` || pathname.startsWith(`/pod/${pod.id}/conversations/`);
     const isPresentedInteractionRoute =
-        pathname === `/pod/${pod.id}/forms/view` || pathname === `/pod/${pod.id}/widgets/view`;
+        pathname === `/pod/${pod.id}/widgets/view`;
     const presentedConversationId = assistantConversationId || searchParams.get("conversationId");
     const presentedConversationHref = presentedConversationId
         ? `/pod/${pod.id}/conversations/${encodeURIComponent(presentedConversationId)}`

@@ -15,4 +15,3 @@ export type AgentHarnessInfo = {
     model_catalog?: Array<RuntimeModelCatalogEntry>;
     models?: Array<string>;
 };
-

@@ -12,4 +12,3 @@ export type PodUpdateRequest = {
     icon_url?: (string | null);
     name?: (string | null);
 };
-

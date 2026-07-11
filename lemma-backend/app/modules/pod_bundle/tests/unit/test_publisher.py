@@ -9,28 +9,63 @@ from app.modules.pod_bundle.infrastructure.github_publisher import (
     GithubPublisher,
     RepoCreateResult,
 )
-from app.modules.pod_bundle.infrastructure.readme import install_badge, render_readme
+from app.modules.pod_bundle.infrastructure.readme import (
+    install_badge,
+    install_badge_url,
+    install_target,
+    render_readme,
+)
 
 
 class FakeOps:
-    def __init__(self, *, create_error=False, put_error_on=None):
+    def __init__(
+        self,
+        *,
+        create_error=False,
+        put_error_on=None,
+        ambiguous_create=False,
+        ambiguous_put_on=None,
+    ):
         self.created = None
         self.create_calls = 0
         self.puts: list[tuple[str, int]] = []
         self._create_error = create_error
         self._put_error_on = put_error_on
+        self._ambiguous_create = ambiguous_create
+        self._ambiguous_put_on = ambiguous_put_on
+        self._repo = None
+        self._content: dict[str, bytes] = {}
+
+    async def resolve_repo(self, *, name):
+        if self._repo is None:
+            return None
+        return RepoCreateResult(
+            owner="acme", repo=name, html_url=f"https://github.com/acme/{name}"
+        )
 
     async def create_repo(self, *, name, private, description):
         if self._create_error:
             raise RuntimeError("boom")
         self.create_calls += 1
         self.created = (name, private)
-        return RepoCreateResult(owner="acme", repo=name, html_url=f"https://github.com/acme/{name}")
+        self._repo = name
+        result = RepoCreateResult(
+            owner="acme", repo=name, html_url=f"https://github.com/acme/{name}"
+        )
+        if self._ambiguous_create:
+            raise ConnectionError("response lost")
+        return result
 
     async def put_file(self, *, owner, repo, path, content, message):
         if self._put_error_on and path == self._put_error_on:
             raise RuntimeError("upload failed")
         self.puts.append((path, len(content)))
+        self._content[path] = content
+        if self._ambiguous_put_on and path == self._ambiguous_put_on:
+            raise ConnectionError("response lost")
+
+    async def file_matches(self, *, owner, repo, path, content):
+        return self._content.get(path) == content
 
 
 # --- readme ------------------------------------------------------------------
@@ -46,7 +81,7 @@ def test_render_readme_has_badge_and_counts():
     )
     assert "# CRM" in r
     assert "Leads pod" in r  # the description becomes the tagline
-    assert "img.shields.io" in r
+    assert install_badge("acme", "crm") in r.splitlines()
     # "What's inside" is a table of the present resources.
     assert "**Tables** | 2 |" in r and "**Agents** | 1 |" in r
     assert "Functions" not in r  # zero-count types omitted
@@ -76,7 +111,11 @@ def test_install_button_is_big_branded_badge():
     # Links to the one-click importer for the real owner/repo...
     assert "/import/github/acme/crm" in badge
     # ...as a big for-the-badge pill carrying the Lemma mark, sized up.
-    assert "img.shields.io" in badge
+    assert badge == (
+        f'<a href="{install_target("acme", "crm")}">'
+        f'<img src="{install_badge_url()}" height="44" '
+        'alt="Install to Lemma" /></a>'
+    )
     assert "for-the-badge" in badge
     assert "logo=data%3Aimage" in badge  # url-encoded data: logo (the Lemma mark)
     assert 'height="44"' in badge
@@ -146,6 +185,39 @@ async def test_publish_upload_failure_raises_domain_error():
             files={"pod.json": b"{}"},
             readme="img.shields.io",
         )
+
+
+async def test_publish_resolves_ambiguous_create_and_file_write():
+    ops = FakeOps(ambiguous_create=True, ambiguous_put_on="pod.json")
+
+    repo = await GithubPublisher(ops).publish(
+        repo_name="crm",
+        private=False,
+        description=None,
+        files={"pod.json": b"{}"},
+        readme="img.shields.io",
+    )
+
+    assert repo.repo == "crm"
+    assert ops._content["pod.json"] == b"{}"
+
+
+async def test_publish_skips_durable_completed_paths():
+    ops = FakeOps()
+    repo = RepoCreateResult(
+        owner="acme", repo="crm", html_url="https://github.com/acme/crm"
+    )
+    await GithubPublisher(ops).publish(
+        repo_name="crm",
+        private=False,
+        description=None,
+        files={"pod.json": b"{}"},
+        readme="img.shields.io",
+        already_created=repo,
+        completed_paths={"README.md"},
+    )
+
+    assert [path for path, _ in ops.puts] == ["pod.json"]
 
 
 async def test_composio_ops_create_repo_parses_full_name():

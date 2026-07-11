@@ -17,9 +17,9 @@ from __future__ import annotations
 
 from uuid import UUID
 
-from pydantic_ai import Agent as PydanticAIAgent
+from pydantic_ai import Agent as PydanticAIAgent, UsageLimits
 
-from app.core.config import settings
+from app.modules.agent.config import agent_settings
 from app.core.infrastructure.db.uow_factory import UnitOfWorkFactory
 from app.core.log.log import get_logger
 from app.modules.agent.domain.value_objects import (
@@ -39,15 +39,22 @@ from app.modules.agent.services.runtime_profile_service import (
     DEFAULT_SYSTEM_AGENT_RUNTIME_PROFILE_ID,
     AgentRuntimeProfileService,
 )
-from app.modules.usage.services.pydantic_ai_tracking import (
+from app.composition.agent_usage import (
     record_pydantic_ai_result_usage,
     reserve_usage_for_runtime,
 )
-from app.modules.usage.services.usage_context import UsageExecutionContext
+from app.composition.agent_usage import UsageExecutionContext
 
 logger = get_logger(__name__)
 
 _MAX_TITLE_LEN = 80
+_TITLE_USAGE_LIMITS = UsageLimits(
+    request_limit=1,
+    input_tokens_limit=12_000,
+    output_tokens_limit=256,
+    total_tokens_limit=12_256,
+    count_tokens_before_request=True,
+)
 
 _TITLE_SYSTEM_PROMPT = (
     "You generate a concise title for a chat conversation. "
@@ -88,7 +95,7 @@ class ConversationTitleService:
             # model the provider actually serves; on any failure we still fall
             # back to the first-message title rather than leaving it blank.
             title: str | None = None
-            if settings.conversation_title_model:
+            if agent_settings.conversation_title_model:
                 try:
                     title = await self._generate(
                         user_id=conversation.user_id,
@@ -150,8 +157,6 @@ class ConversationTitleService:
             runtime_credentials=resolved.credentials or {},
             fallback_model_name=resolved.model_name_for_harness,
         )
-        agent = PydanticAIAgent(model, system_prompt=_TITLE_SYSTEM_PROMPT)
-
         usage_context = UsageExecutionContext(
             user_id=user_id,
             organization_id=organization_id,
@@ -163,9 +168,13 @@ class ConversationTitleService:
             user_id=user_id,
             runtime_profile=runtime_profile,
         )
+        agent = PydanticAIAgent(model, system_prompt=_TITLE_SYSTEM_PROMPT)
         result = None
         try:
-            result = await agent.run(_build_user_prompt(user_text, reply_text))
+            result = await agent.run(
+                _build_user_prompt(user_text, reply_text),
+                usage_limits=_TITLE_USAGE_LIMITS,
+            )
             await record_pydantic_ai_result_usage(
                 ctx=usage_context,
                 runtime_profile=runtime_profile,
@@ -198,7 +207,7 @@ class ConversationTitleService:
             return await service.resolve(
                 runtime=AgentRuntimeConfig(
                     profile_id=DEFAULT_SYSTEM_AGENT_RUNTIME_PROFILE_ID,
-                    model_name=settings.conversation_title_model,
+                    model_name=agent_settings.conversation_title_model,
                 ),
                 organization_id=organization_id,
                 user_id=user_id,

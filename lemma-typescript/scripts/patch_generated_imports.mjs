@@ -101,7 +101,9 @@ function patchKnownGeneratorIssues(source, filePath) {
     );
   }
 
-  return patched;
+  // The generator has emitted either one or two final newlines across runtime
+  // versions. Canonicalize the ending so codegen drift checks are byte-stable.
+  return patched.replace(/\n+$/, "\n");
 }
 
 let updated = 0;

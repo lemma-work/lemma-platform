@@ -2,6 +2,12 @@
 
 from __future__ import annotations
 
+from collections.abc import AsyncIterator, Callable
+from contextlib import AbstractAsyncContextManager, asynccontextmanager
+from pathlib import Path
+import subprocess
+from typing import Literal
+
 import pytest
 import pytest_asyncio
 from fastapi import status
@@ -9,6 +15,7 @@ from httpx import AsyncClient
 from sqlalchemy import select
 
 from app.core.infrastructure.db.uow_factory import SessionUnitOfWorkFactory
+from app.core.config import settings
 from app.core.test_utils import shared_kreuzberg
 from app.modules.datastore.tests.e2e.harness import (
     DatastoreApi,
@@ -16,10 +23,37 @@ from app.modules.datastore.tests.e2e.harness import (
     pod_payload,
     signup_user,
 )
+from app.modules.datastore.tests.e2e.fake_document_processors import (
+    FakeDocumentProcessorServer,
+)
 from app.modules.datastore.config import datastore_settings
+from app.modules.datastore.composition import (
+    DatastoreComposition,
+    get_datastore_composition,
+    install_datastore_composition,
+)
+from app.modules.test_support.embeddings import DeterministicTestEmbedder
 from app.modules.test_support.e2e import fixtures as e2e_fixtures
+from app.modules.test_support.e2e.worker_process import production_worker_process
 
 pytestmark = pytest.mark.e2e
+
+
+@pytest.fixture(scope="session", autouse=True)
+def hermetic_datastore_runtime():
+    """Avoid model-network dependencies in routine datastore E2E tests."""
+    previous_layout = datastore_settings.document_processing_layout_enabled
+    embedder = DeterministicTestEmbedder(settings.embedding_dimension)
+    previous_composition = install_datastore_composition(
+        DatastoreComposition(embedder_provider=lambda: embedder)
+    )
+    datastore_settings.document_processing_layout_enabled = False
+    try:
+        yield
+    finally:
+        install_datastore_composition(previous_composition)
+        datastore_settings.document_processing_layout_enabled = previous_layout
+
 
 # Use the base session settings unchanged. Kreuzberg is NOT wired in here: it is
 # a RAM-heavy ML container, so only the fixtures that actually extract documents
@@ -43,6 +77,60 @@ fixed_test_user = e2e_fixtures.fixed_test_user
 authenticated_client = e2e_fixtures.authenticated_client
 fixed_test_org = e2e_fixtures.fixed_test_org
 scenario = e2e_fixtures.scenario
+
+DocumentProcessorName = Literal["kreuzberg", "docling", "markitdown"]
+
+
+@pytest_asyncio.fixture(scope="session")
+async def fake_document_processor_server() -> AsyncIterator[
+    FakeDocumentProcessorServer
+]:
+    server = FakeDocumentProcessorServer()
+    await server.start()
+    try:
+        yield server
+    finally:
+        await server.stop()
+
+
+@pytest.fixture
+def document_worker(
+    e2e_settings,
+    fake_document_processor_server: FakeDocumentProcessorServer,
+) -> Callable[
+    [DocumentProcessorName], AbstractAsyncContextManager[subprocess.Popen[str]]
+]:
+    """Start a production worker against one deterministic processor adapter."""
+
+    @asynccontextmanager
+    async def _start(processor: DocumentProcessorName):
+        extra_env = {
+            "E2E_DISABLE_WORKER_FILE_AUTOINDEX": "false",
+            "DOCUMENT_PROCESSOR": processor,
+            "KREUZBERG_URL": fake_document_processor_server.base_url,
+            "KREUZBERG_REQUEST_TIMEOUT_SECONDS": "1",
+            "KREUZBERG_CONNECT_TIMEOUT_SECONDS": "0.2",
+            "KREUZBERG_TRANSIENT_RETRY_ATTEMPTS": "2",
+            "KREUZBERG_TRANSIENT_RETRY_BASE_DELAY_SECONDS": "0.01",
+            "KREUZBERG_CIRCUIT_FAILURE_THRESHOLD": "20",
+            "DOCLING_SERVE_URL": fake_document_processor_server.base_url,
+            "DOCLING_REQUEST_TIMEOUT_SECONDS": "2",
+            "DOCUMENT_PROCESSING_DEBOUNCE_SECONDS": "0",
+        }
+        if processor == "markitdown":
+            fake_dependencies = Path(__file__).parent / "fake_processor_deps"
+            extra_env["PYTHONPATH"] = f"{fake_dependencies}:."
+        async with production_worker_process(
+            e2e_settings,
+            log_prefix=f"lemma_datastore_{processor}_worker",
+            extra_env=extra_env,
+            worker_entrypoint=(
+                "app.modules.datastore.tests.e2e.worker_entrypoint:streaq_worker"
+            ),
+        ) as process:
+            yield process
+
+    return _start
 
 
 @pytest.fixture(scope="session")
@@ -114,9 +202,6 @@ async def index_datastore_file(db_manager, kreuzberg_wired):
 
     from app.modules.datastore.domain.file_entities import FileStatus
     from app.modules.datastore.infrastructure.models import DatastoreFile
-    from app.modules.datastore.services.file_processing_service import (
-        DatastoreFileProcessingService,
-    )
 
     _TERMINAL = {FileStatus.COMPLETED.value, FileStatus.NOT_REQUIRED.value}
 
@@ -131,7 +216,7 @@ async def index_datastore_file(db_manager, kreuzberg_wired):
     async def _index(pod_id, file_id):
         _, metadata = await _file_status(file_id)
 
-        service = DatastoreFileProcessingService(
+        service = get_datastore_composition().build_processing_service(
             pod_id,
             uow_factory=SessionUnitOfWorkFactory(db_manager.session_factory),
         )
@@ -160,9 +245,11 @@ __all__ = [
     "authenticated_client",
     "db_manager",
     "db_session",
+    "document_worker",
     "e2e_settings",
     "fixed_test_org",
     "fixed_test_user",
+    "fake_document_processor_server",
     "index_datastore_file",
     "kreuzberg_url",
     "kreuzberg_wired",

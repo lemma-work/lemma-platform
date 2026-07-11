@@ -29,8 +29,6 @@ EXPECTED = [
     ("resend_inbound_domain", "RESEND_INBOUND_DOMAIN", "ops.lemma.work"),
     ("resend_from_name", "RESEND_FROM_NAME", "Lemma"),
     ("resend_inbound_signing_secret", "RESEND_INBOUND_SIGNING_SECRET", None),
-    ("surface_raw_webhook_log_dir", "SURFACE_RAW_WEBHOOK_LOG_DIR", None),
-    ("surface_raw_webhook_log_sources", "SURFACE_RAW_WEBHOOK_LOG_SOURCES", ""),
     ("surface_webhook_security_enabled", "SURFACE_WEBHOOK_SECURITY_ENABLED", True),
     ("surface_event_dedupe_ttl_seconds", "SURFACE_EVENT_DEDUPE_TTL_SECONDS", 900),
     ("surface_runtime_history_max_messages", "SURFACE_RUNTIME_HISTORY_MAX_MESSAGES", 40),

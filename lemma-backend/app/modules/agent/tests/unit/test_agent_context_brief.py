@@ -11,7 +11,6 @@ from uuid import uuid4
 
 import pytest
 
-from app.core.config import settings
 from app.modules.agent.services import agent_context_brief as brief_mod
 from app.modules.agent.services.agent_context_brief import (
     AgentContextBriefBuilder,
@@ -113,18 +112,24 @@ class _FakeFileService:
 def stubbed(monkeypatch):
     monkeypatch.setattr(brief_mod, "AgentContextBriefRepository", _FakeBriefRepo)
     monkeypatch.setattr(brief_mod, "AgentRepository", _FakeListRepo)
-    monkeypatch.setattr(brief_mod, "FunctionRepository", _FakeListRepo)
+    monkeypatch.setattr(
+        brief_mod,
+        "create_function_repository",
+        lambda uow: _FakeListRepo(uow),
+    )
     monkeypatch.setattr(
         brief_mod, "create_authorization_service", lambda uow: _FakeAuthzService()
     )
-    monkeypatch.setattr(brief_mod, "build_table_service", lambda uow: _FakeTableService())
+    monkeypatch.setattr(
+        brief_mod, "build_table_service", lambda uow: _FakeTableService()
+    )
     monkeypatch.setattr(brief_mod, "build_file_service", lambda uow: _FakeFileService())
     # Fake the Redis brief cache with an in-process dict (fresh per test). TTL<=0
     # disables caching exactly as in production, so the cache accessor returns None.
     fake = _FakeBriefCache()
 
     def _fake_get_cache():
-        if settings.agent_context_brief_cache_ttl_seconds <= 0:
+        if brief_mod.agent_settings.agent_context_brief_cache_ttl_seconds <= 0:
             return None
         return fake
 
@@ -169,7 +174,9 @@ async def test_default_assistant_brief_never_overlaps_uows(stubbed):
 
 
 async def test_brief_is_cached_second_call_opens_no_uow(stubbed, monkeypatch):
-    monkeypatch.setattr(settings, "agent_context_brief_cache_ttl_seconds", 60)
+    monkeypatch.setattr(
+        brief_mod.agent_settings, "agent_context_brief_cache_ttl_seconds", 60
+    )
     factory = RecordingUoWFactory()
     builder = AgentContextBriefBuilder(factory)
     agent = _named_agent()
@@ -178,14 +185,18 @@ async def test_brief_is_cached_second_call_opens_no_uow(stubbed, monkeypatch):
 
     first = await builder.build(agent=agent, conversation=conv, user_id=uid, pod_id=pid)
     opened_after_first = factory.opened
-    second = await builder.build(agent=agent, conversation=conv, user_id=uid, pod_id=pid)
+    second = await builder.build(
+        agent=agent, conversation=conv, user_id=uid, pod_id=pid
+    )
 
     assert first == second
     assert factory.opened == opened_after_first  # cache hit: no new UoWs
 
 
 async def test_brief_cache_disabled_with_zero_ttl(stubbed, monkeypatch):
-    monkeypatch.setattr(settings, "agent_context_brief_cache_ttl_seconds", 0)
+    monkeypatch.setattr(
+        brief_mod.agent_settings, "agent_context_brief_cache_ttl_seconds", 0
+    )
     factory = RecordingUoWFactory()
     builder = AgentContextBriefBuilder(factory)
     agent = _named_agent()

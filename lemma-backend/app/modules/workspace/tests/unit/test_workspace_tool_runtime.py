@@ -76,3 +76,34 @@ async def test_workspace_tool_runtime_reuses_cached_function_env():
     assert workspace_service.calls[0].get("env_vars") is None
     assert workspace_service.calls[1]["env_vars"] == {"LEMMA_TOKEN": "fresh-token"}
     assert cache.set_calls[0][2] == 300
+
+
+async def test_workspace_tool_runtime_does_not_share_tokens_across_sessions():
+    cache = FakeEnvCache()
+    workspace_service = FakeWorkspaceService()
+    runtime = WorkspaceToolRuntime(
+        workspace_service=workspace_service,
+        env_cache=cache,
+        default_env_ttl_seconds=300,
+    )
+    user_id = uuid4()
+    pod_id = uuid4()
+    function_id = uuid4()
+
+    await runtime.get_session(
+        user_id=user_id,
+        pod_id=pod_id,
+        session_id="session-a",
+        workload_type="function",
+        workload_id=function_id,
+    )
+    await runtime.get_session(
+        user_id=user_id,
+        pod_id=pod_id,
+        session_id="session-b",
+        workload_type="function",
+        workload_id=function_id,
+    )
+
+    assert len(cache.set_calls) == 2
+    assert cache.set_calls[0][0] != cache.set_calls[1][0]

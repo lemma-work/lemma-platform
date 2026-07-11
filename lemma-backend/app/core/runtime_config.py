@@ -3,11 +3,9 @@
 An app and a conversation widget are the same primitive — a pod-authenticated
 HTML page that reads ``window.__LEMMA_CONFIG__`` and talks to the pod through the
 browser SDK. The host injects that config at serve time so the artifact bakes in
-nothing and is portable between contexts (a widget's HTML can be promoted to an
-app verbatim). This module is the shared kernel both serving paths use; it
-operates on a ``pod_id``, not on any app/widget entity.
-
-See docs/app-widget-unification.md.
+nothing and is portable between contexts (a widget's source fragment can be promoted
+to an app without modification). This module is the shared kernel both serving paths
+use; it operates on a ``pod_id``, not on any app/widget entity.
 """
 
 from __future__ import annotations
@@ -64,9 +62,7 @@ def inject_runtime_config(content: bytes | str, pod_id: UUID | str) -> bytes:
 
     payload = json.dumps(build_runtime_config(pod_id)).replace("<", "\\u003c")
     script = (
-        f"<script {RUNTIME_CONFIG_SENTINEL}>"
-        f"window.__LEMMA_CONFIG__={payload};"
-        "</script>"
+        f"<script {RUNTIME_CONFIG_SENTINEL}>window.__LEMMA_CONFIG__={payload};</script>"
     )
 
     lowered = text.lower()

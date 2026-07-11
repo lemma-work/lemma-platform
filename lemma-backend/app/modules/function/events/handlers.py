@@ -14,8 +14,13 @@ from app.core.infrastructure.db.uow_factory import (
     SessionUnitOfWorkFactory,
     UnitOfWorkFactory,
 )
-from app.core.infrastructure.events.publisher import EventPublisher
-from app.core.infrastructure.events.stream_subscriber import redis_stream_sub
+from app.core.infrastructure.events.inbox import (
+    EventInboxPort,
+    provide_domain_event_inbox,
+)
+from app.core.infrastructure.events.stream_subscriber import (
+    reliable_redis_stream_subscriber,
+)
 from app.core.infrastructure.jobs.streaq_job_queue import (
     SharedStreaqJobQueue,
     get_streaq_job_queue,
@@ -53,20 +58,48 @@ def provide_uow_factory() -> UnitOfWorkFactory:
     return SessionUnitOfWorkFactory(async_session_maker)
 
 
-@router.subscriber(
-    stream=redis_stream_sub(
-        FUNCTION_RUN_EVENTS_STREAM,
-        group="function-run-events",
-        consumer="function-run-events-consumer",
-    )
+@reliable_redis_stream_subscriber(
+    router,
+    FUNCTION_RUN_EVENTS_STREAM,
+    group="function-run-events",
+    consumer="function-run-events-consumer",
 )
 async def handle_function_run_event(
     event: dict,
     fs_logger: Logger,
     uow_factory: UnitOfWorkFactory = Depends(provide_uow_factory),
     job_queue: SharedStreaqJobQueue = Depends(provide_job_queue),
+    inbox: EventInboxPort = Depends(provide_domain_event_inbox),
 ) -> None:
     """Project function run lifecycle events into persistence and jobs."""
+    event_type = event.get("event_type")
+    if event_type not in {
+        FunctionRunExecutionRequestedEvent.get_event_type(),
+        FunctionRunStartedEvent.get_event_type(),
+        FunctionRunLogsUpdatedEvent.get_event_type(),
+        FunctionRunCompletedEvent.get_event_type(),
+        FunctionRunFailedEvent.get_event_type(),
+    }:
+        return
+
+    async def process() -> None:
+        await _process_function_run_event(
+            event,
+            fs_logger=fs_logger,
+            uow_factory=uow_factory,
+            job_queue=job_queue,
+        )
+
+    await inbox.process("function.run-projection", event, process)
+
+
+async def _process_function_run_event(
+    event: dict,
+    *,
+    fs_logger: Logger,
+    uow_factory: UnitOfWorkFactory,
+    job_queue: SharedStreaqJobQueue,
+) -> None:
     event_type = event.get("event_type")
 
     if event_type == FunctionRunExecutionRequestedEvent.get_event_type():
@@ -208,16 +241,21 @@ async def process_function_run(
                 except Exception:
                     already_terminal = False
                 if not already_terminal:
-                    await EventPublisher.publish(
-                        FunctionRunFailedEvent.stream_name(),
-                        FunctionRunFailedEvent(
-                            run_id=parsed_run_id,
-                            function_id=function_id,
-                            error=str(exc),
-                            logs=None,
-                            completed_at=datetime.now(),
-                        ),
-                    )
+                    async with worker_ctx.uow() as uow:
+                        uow.collect_events(
+                            [
+                                FunctionRunFailedEvent(
+                                    run_id=parsed_run_id,
+                                    function_id=function_id,
+                                    error=(
+                                        "Function execution failed "
+                                        f"({type(exc).__name__})"
+                                    ),
+                                    logs=None,
+                                    completed_at=datetime.now(),
+                                )
+                            ]
+                        )
                 return
             await asyncio.sleep(0.2)
 

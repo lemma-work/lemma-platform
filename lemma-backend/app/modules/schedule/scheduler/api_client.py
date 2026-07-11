@@ -16,11 +16,12 @@ from app.modules.schedule.scheduler.api.schemas import (
     JobListResponse,
     JobStatusResponse,
 )
-from app.core.config import reveal_secret, settings
+from app.core.config import reveal_secret
 from app.core.log.log import get_logger
 
 from app.modules.schedule.domain.interfaces import SchedulerService
 from app.modules.schedule.domain.schedule import ScheduleEntity, ScheduleType
+from app.modules.schedule.config import schedule_settings
 
 logger = get_logger(__name__)
 
@@ -96,7 +97,7 @@ class SchedulerAPIClient(SchedulerService):
             base_url: Base URL of the scheduler API. Defaults to scheduler service URL.
         """
         # Default to scheduler service URL (typically http://localhost:8001)
-        self.base_url = (base_url or settings.scheduler_api_url).rstrip("/")
+        self.base_url = (base_url or schedule_settings.scheduler_api_url).rstrip("/")
         self._session: Optional[aiohttp.ClientSession] = None
         self._managed_session = (
             False  # Track if we're managing the session via context manager
@@ -172,7 +173,7 @@ class SchedulerAPIClient(SchedulerService):
             Response JSON data
         """
         headers: dict[str, str] = {}
-        token = reveal_secret(settings.scheduler_internal_token)
+        token = reveal_secret(schedule_settings.scheduler_internal_token)
         if token:
             headers["Authorization"] = f"Bearer {token}"
 

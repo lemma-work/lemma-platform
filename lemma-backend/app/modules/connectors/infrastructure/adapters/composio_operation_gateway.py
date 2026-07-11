@@ -83,16 +83,27 @@ class ComposioOperationGateway(AppOperationGatewayPort):
             )
 
         def _execute() -> Any:
-            composio = self._composio_client_factory()
-            response = composio.tools.execute(
-                operation_name,
-                payload or {},
-                connected_account_id=connection_id,
-                dangerously_skip_version_check=True
+            # The SDK enables its own external telemetry by default. Keep that
+            # opt-in at the application boundary so connector execution
+            # metadata and provider failures are not exported unexpectedly.
+            from composio.core.models.base import allow_tracking
+
+            tracking_token = allow_tracking.set(
+                connector_settings.composio_sdk_telemetry_enabled
             )
-            if hasattr(response, "model_dump"):
-                return response.model_dump()
-            return response
+            try:
+                composio = self._composio_client_factory()
+                response = composio.tools.execute(
+                    operation_name,
+                    payload or {},
+                    connected_account_id=connection_id,
+                    dangerously_skip_version_check=True,
+                )
+                if hasattr(response, "model_dump"):
+                    return response.model_dump()
+                return response
+            finally:
+                allow_tracking.reset(tracking_token)
 
         try:
             # Composio's SDK is synchronous HTTP; run it on the dedicated

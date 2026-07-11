@@ -1,4 +1,5 @@
 import json
+import asyncio
 from contextlib import asynccontextmanager
 from functools import partial
 from types import SimpleNamespace
@@ -62,7 +63,7 @@ class _ConversationService:
     def __init__(
         self,
         result: AgentRunStartResult | None = None,
-        exc: Exception | None = None,
+        exc: BaseException | None = None,
     ) -> None:
         self.result = result
         self.exc = exc
@@ -110,7 +111,9 @@ def _make_uow_factory():
 
 
 @pytest.mark.asyncio
-async def test_send_message_starts_run_before_stream_body_is_consumed(monkeypatch) -> None:
+async def test_send_message_starts_run_before_stream_body_is_consumed(
+    monkeypatch,
+) -> None:
     result = AgentRunStartResult(
         conversation_id=uuid4(),
         agent_run_id=uuid4(),
@@ -173,14 +176,16 @@ async def test_send_message_encodes_stream_failures_as_sse_errors(monkeypatch) -
 
     assert payload == {
         "type": "error",
-        "data": "redis pubsub disconnected",
+        "data": "Realtime stream interrupted. Reconnect to continue.",
         "agent_run_id": str(result.agent_run_id),
     }
     assert channel_service.exited is True
 
 
 @pytest.mark.asyncio
-async def test_send_message_raises_usage_limit_before_stream_starts(monkeypatch) -> None:
+async def test_send_message_raises_usage_limit_before_stream_starts(
+    monkeypatch,
+) -> None:
     channel_service = _ChannelService(_empty_iterator())
     service = _ConversationService(
         exc=UsageLimitExceededError("LLM usage limit exceeded for this account")
@@ -207,4 +212,31 @@ async def test_send_message_raises_usage_limit_before_stream_starts(monkeypatch)
 
     assert exc_info.value.status_code == 429
     assert service.called is True
+    assert channel_service.exited is True
+
+
+@pytest.mark.asyncio
+async def test_send_message_cancellation_releases_pubsub_subscription(monkeypatch) -> None:
+    channel_service = _ChannelService(_empty_iterator())
+    service = _ConversationService(exc=asyncio.CancelledError())
+    uow_factory, _ = _make_uow_factory()
+    monkeypatch.setattr(
+        conversation_controller, "_build_conversation_service", lambda uow: service
+    )
+    monkeypatch.setattr(
+        "app.core.authorization.scope.resolve_pod_context",
+        AsyncMock(return_value=allow_all_context()),
+    )
+
+    with pytest.raises(asyncio.CancelledError):
+        await send_message(
+            pod_id=uuid4(),
+            conversation_id=uuid4(),
+            data=SimpleNamespace(content="say ok", metadata=None),
+            user=SimpleNamespace(id=uuid4()),
+            channel_service=channel_service,
+            request=SimpleNamespace(),
+            uow_factory=uow_factory,
+        )
+
     assert channel_service.exited is True

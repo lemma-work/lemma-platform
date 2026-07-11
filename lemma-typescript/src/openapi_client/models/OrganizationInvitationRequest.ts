@@ -13,4 +13,3 @@ export type OrganizationInvitationRequest = {
     redirect_uri?: (string | null);
     role: OrganizationRole;
 };
-

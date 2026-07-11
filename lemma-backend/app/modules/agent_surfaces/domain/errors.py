@@ -18,7 +18,7 @@ class AgentSurfaceValidationError(AgentSurfaceError):
         super().__init__(
             message=message,
             code="AGENT_SURFACE_VALIDATION_ERROR",
-            status_code=400,
+            status_code=422,
         )
 
 

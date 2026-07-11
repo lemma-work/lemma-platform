@@ -12,4 +12,3 @@ export type FileSearchResultSchema = {
     path: string;
     score: number;
 };
-

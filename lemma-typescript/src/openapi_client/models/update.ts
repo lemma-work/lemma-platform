@@ -3,11 +3,10 @@
 /* tslint:disable */
 /* eslint-disable */
 export type update = {
-    data?: (string | null);
+    data?: (Blob | null);
     description?: (string | null);
     new_path?: (string | null);
     path: string;
     search_enabled?: (boolean | null);
     visibility?: (string | null);
 };
-

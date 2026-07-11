@@ -5,8 +5,7 @@ from pydantic import EmailStr, Field, model_validator
 
 from app.core.api.schemas import BaseSchema
 from app.core.authorization.grants import ensure_grant_uses_resource_name
-from app.modules.identity.domain.organization_entities import OrganizationRole
-from app.modules.identity.api.schemas.user_schemas import UserResponse
+from app.modules.identity.contracts import OrganizationRole, UserResponse
 from app.modules.pod.domain.pod_entities import (
     PodConfig,
     PodJoinRequestStatus,

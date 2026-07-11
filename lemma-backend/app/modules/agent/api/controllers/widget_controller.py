@@ -3,20 +3,20 @@
 A conversation widget and an app are the same primitive: a pod-authenticated
 HTML page that reads ``window.__LEMMA_CONFIG__`` and uses the browser SDK. This
 serves the widget's stored fragment as a full document with pod context injected
-— the same serve+inject path apps use — so the frontend embeds it by URL and it
-can be promoted to an app verbatim.
+— the same serve+inject path apps use — so the frontend embeds it by URL and its
+source fragment can be promoted to a standalone app unchanged.
 
 Unlike app assets, widget HTML can carry agent-baked data, so the serve route is
 **not public**: it requires a pod-member session, or a short-lived signed token
 for the iframe document load when the session cookie is not sent cross-site. The
-token is minted per-view by the authenticated mint endpoint.
+token is minted per-view by the authenticated mint endpoint. It authorizes only
+that document request; browser SDK calls still require the user's normal Lemma
+session.
 """
 
 from __future__ import annotations
 
-import json
 import time
-from typing import Any
 from urllib.parse import quote
 from uuid import UUID
 
@@ -28,7 +28,6 @@ from supertokens_python.recipe.session.asyncio import get_session
 from app.core.api.dependencies import UoWDep
 from app.core.api.html_response import build_injected_html_response
 from app.core.authorization.context import ResourceRef
-from app.core.authorization.current import reset_current_context, set_current_context
 from app.core.authorization.dependencies import PodContextDep
 from app.core.authorization.permissions import Permissions
 from app.core.authorization.service import AuthorizationDataService
@@ -56,29 +55,6 @@ router = APIRouter(
 
 class WidgetEmbedUrlResponse(BaseModel):
     url: str
-
-
-class WidgetSubmitRequest(BaseModel):
-    payload: Any = None
-    text: str | None = None
-
-
-class WidgetSubmitResponse(BaseModel):
-    ok: bool = True
-
-
-def _widget_submit_content(body: WidgetSubmitRequest) -> str:
-    """Render a widget submission as the body of a new user message."""
-    text = (body.text or "").strip()
-    if text:
-        return text
-    if body.payload is None:
-        return "Submitted the widget."
-    try:
-        rendered = json.dumps(body.payload, ensure_ascii=False, default=str)
-    except (TypeError, ValueError):
-        rendered = str(body.payload)
-    return f"Submitted from the widget:\n{rendered}"
 
 
 async def _resolve_widget_viewer(
@@ -169,64 +145,6 @@ async def serve_widget(
 
     document = wrap_html_fragment(artifact.content, title=artifact.title, embed=True)
     return build_injected_html_response(document, artifact.pod_id)
-
-
-@serve_router.post(
-    "/serve/{conversation_id}/{tool_call_id}/submit",
-    response_model=WidgetSubmitResponse,
-    operation_id="widget.submit",
-    summary="Submit Widget Input To Chat",
-    include_in_schema=False,
-)
-async def submit_widget(
-    conversation_id: UUID,
-    tool_call_id: str,
-    request: Request,
-    uow: UoWDep,
-    body: WidgetSubmitRequest,
-    token: str | None = Query(default=None),
-) -> WidgetSubmitResponse:
-    """Inject a widget's submitted value into its conversation as a user message.
-
-    Used by the standalone (non-embedded) widget submit bridge. Authenticated the
-    same way as the serve route — a pod-member session or the per-view signed
-    token — so a surface user opening the widget link can submit back. The web
-    iframe path posts to its parent instead and never hits this endpoint.
-    """
-    artifact = await WidgetAssetService(uow).get_widget(conversation_id, tool_call_id)
-    if artifact is None:
-        raise HTTPException(status_code=404, detail="Widget not found")
-
-    viewer_id = await _resolve_widget_viewer(
-        request, conversation_id, tool_call_id, token
-    )
-    if viewer_id is None:
-        raise HTTPException(status_code=401, detail="Authentication required")
-
-    ctx = await AuthorizationDataService(uow.session).build_user_context(
-        user_id=viewer_id, pod_id=artifact.pod_id
-    )
-    await ctx.require(Permissions.CONVERSATION_READ, ResourceRef.pod(artifact.pod_id))
-
-    content = _widget_submit_content(body)
-    conversation_service = get_conversation_service(uow)
-    ctx_token = set_current_context(ctx)
-    try:
-        await conversation_service.add_user_message_and_start_run(
-            conversation_id=conversation_id,
-            user_id=viewer_id,
-            content=content,
-            pod_id=artifact.pod_id,
-            message_metadata={
-                "source": "widget_submit",
-                "tool_call_id": tool_call_id,
-                "widget_payload": body.payload,
-            },
-        )
-        await uow.commit()
-    finally:
-        reset_current_context(ctx_token)
-    return WidgetSubmitResponse(ok=True)
 
 
 @router.post(

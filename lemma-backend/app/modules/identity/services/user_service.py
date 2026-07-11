@@ -4,6 +4,7 @@ from typing import Optional
 from uuid import UUID
 
 from app.core.helpers.identifiers import normalize_mobile_digits, normalize_telegram
+from app.modules.identity.domain.email import normalize_identity_email
 from app.modules.identity.domain.errors import UserConflictError, UserNotFoundError
 from app.modules.identity.domain.ports import (
     OrganizationRepositoryPort,
@@ -25,7 +26,8 @@ class UserService:
         self.user_cache = user_cache
 
     async def create_user(self, entity: UserEntity) -> UserEntity:
-        existing = await self.user_repository.get_by_email(str(entity.email))
+        entity.email = normalize_identity_email(entity.email)
+        existing = await self.user_repository.get_by_email(entity.email)
         if existing:
             raise UserConflictError("User with this email already exists")
 
@@ -48,7 +50,7 @@ class UserService:
         return user
 
     async def get_user_by_email(self, email: str) -> Optional[UserEntity]:
-        return await self.user_repository.get_by_email(email)
+        return await self.user_repository.get_by_email(normalize_identity_email(email))
 
     async def _ensure_identifiers_unique(self, entity: UserEntity) -> None:
         """Reject mobile/telegram values already held by another user.

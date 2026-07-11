@@ -20,4 +20,3 @@ export type AccountCreateSchema = {
     preferences?: (Record<string, any> | null);
     provider_account_id?: (string | null);
 };
-

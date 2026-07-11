@@ -37,7 +37,9 @@ class DatastoreTable(UUIDAuditBase):
     )
     table_name: Mapped[str] = mapped_column(String(255))
     primary_key_column: Mapped[str] = mapped_column(String(255), default="id")
-    columns: Mapped[list[dict]] = mapped_column(JSONB, nullable=False)  # Simplified type
+    columns: Mapped[list[dict]] = mapped_column(
+        JSONB, nullable=False
+    )  # Simplified type
     config: Mapped[dict | None] = mapped_column(JSONB, default=None, nullable=True)
     enable_rls: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
     visibility: Mapped[str] = mapped_column(String(30), default="POD", nullable=False)
@@ -79,7 +81,9 @@ class DatastoreFile(UUIDAuditBase):
         ForeignKey("users.id", ondelete="CASCADE"), index=True
     )
     kind: Mapped[str] = mapped_column(String(32), default="FILE", nullable=False)
-    visibility: Mapped[str] = mapped_column(String(30), default="PERSONAL", nullable=False)
+    visibility: Mapped[str] = mapped_column(
+        String(30), default="PERSONAL", nullable=False
+    )
     path: Mapped[str] = mapped_column(String(1024), nullable=False)
     name: Mapped[str] = mapped_column(String(255))
     description: Mapped[str | None] = mapped_column(Text, default=None, nullable=True)
@@ -87,7 +91,9 @@ class DatastoreFile(UUIDAuditBase):
     size_bytes: Mapped[int] = mapped_column(BigInteger, default=0, nullable=False)
     search_enabled: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
     status: Mapped[str] = mapped_column(String(50), default="PENDING", nullable=False)
-    file_metadata: Mapped[dict | None] = mapped_column(JSONB, default=None, nullable=True)
+    file_metadata: Mapped[dict | None] = mapped_column(
+        JSONB, default=None, nullable=True
+    )
     indexed_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True), default=None, nullable=True
     )
@@ -97,6 +103,7 @@ class DatastoreFile(UUIDAuditBase):
     processing_attempts: Mapped[int] = mapped_column(
         Integer, default=0, server_default="0", nullable=False
     )
+    content_sha256: Mapped[str | None] = mapped_column(String(64), nullable=True)
 
     __table_args__ = (
         Index("ix_datastore_file_status", "pod_id", "status"),
@@ -138,6 +145,7 @@ class DatastoreFile(UUIDAuditBase):
             indexed_at=self.indexed_at,
             last_processing_error=self.last_processing_error,
             processing_attempts=self.processing_attempts,
+            content_sha256=self.content_sha256,
             created_at=self.created_at,
             updated_at=self.updated_at,
         )

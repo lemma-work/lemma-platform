@@ -1,11 +1,36 @@
 """Datastore module registration."""
 
+import asyncio
 from contextlib import asynccontextmanager
 
 from app.core.log.log import get_logger
 from app.core.registry import LemmaModule
 
 logger = get_logger(__name__)
+
+
+@asynccontextmanager
+async def _preload_local_embeddings(context):
+    """Fail API/worker readiness when its local embedding model is unusable."""
+    del context
+    from app.core.config import settings
+    from app.modules.datastore.composition import get_datastore_composition
+
+    composition = get_datastore_composition()
+    should_preload = settings.local_embedding_preload and composition.preload_embeddings
+    if should_preload:
+        timeout = max(1.0, settings.local_embedding_preload_timeout_seconds)
+        logger.info("Preloading local embedding model")
+        async with asyncio.timeout(timeout):
+            vector = await composition.embedder_provider().embed(
+                "lemma embedding readiness"
+            )
+        if len(vector) != settings.embedding_dimension:
+            raise RuntimeError(
+                "Local embedding preload returned an unexpected vector dimension"
+            )
+        logger.info("Local embedding model is ready")
+    yield
 
 
 def _routers():
@@ -28,8 +53,11 @@ def _routers():
 
 def _event_routers():
     from app.modules.datastore.events.handlers import router
+    from app.modules.datastore.events.pod_schema_consumer import (
+        router as pod_schema_router,
+    )
 
-    return [router]
+    return [router, pod_schema_router]
 
 
 @asynccontextmanager
@@ -37,6 +65,14 @@ async def _backfill_query_role(app):
     """Ensure the RLS-subject role can read every existing pod schema, so ad-hoc
     datastore queries (run under that role) are scoped. Non-fatal: new tables
     also grant on creation, and queries fail closed."""
+    from app.modules.datastore.infrastructure.transactional_events import (
+        ensure_datastore_event_outbox,
+    )
+
+    # Fail startup when the durable event table cannot be established. Record
+    # mutation must never degrade to post-commit best-effort publication.
+    await ensure_datastore_event_outbox()
+
     try:
         from app.modules.datastore.api.dependencies import get_schema_manager
 
@@ -45,6 +81,31 @@ async def _backfill_query_role(app):
     except Exception:  # noqa: BLE001
         logger.warning("Failed to ensure datastore query role grants", exc_info=True)
     yield
+
+
+@asynccontextmanager
+async def _datastore_outbox_dispatcher(context):
+    """Dispatch the second outbox when pod schemas use a separate database."""
+    from app.core.config import settings
+    from app.core.infrastructure.events.message_bus import get_message_bus
+    from app.core.infrastructure.events.outbox import outbox_dispatcher_lifespan
+    from app.modules.datastore.infrastructure.session import (
+        get_datastore_session_maker,
+    )
+    from app.modules.datastore.infrastructure.transactional_events import (
+        ensure_datastore_event_outbox,
+    )
+
+    del context
+    datastore_url = settings.datastore_database_url or settings.database_url
+    if datastore_url == settings.database_url:
+        yield
+        return
+    await ensure_datastore_event_outbox()
+    async with outbox_dispatcher_lifespan(
+        get_datastore_session_maker(), get_message_bus()
+    ):
+        yield
 
 
 @asynccontextmanager
@@ -63,6 +124,14 @@ module = LemmaModule(
     name="datastore",
     routers=_routers,
     event_routers=_event_routers,
-    api_lifespans=(_backfill_query_role,),
-    worker_lifespans=(_close_reindex_queue,),
+    api_lifespans=(_preload_local_embeddings, _backfill_query_role),
+    worker_lifespans=(
+        _preload_local_embeddings,
+        _datastore_outbox_dispatcher,
+        _close_reindex_queue,
+    ),
+    stream_groups=(
+        ("datastore.events", "datastore-file-events"),
+        ("pod_events", "pod-provisioning-events"),
+    ),
 )

@@ -23,11 +23,13 @@ class ErrorResponse:
             code (str):
             message (str):
             details (Any | None | Unset):
+            request_id (None | str | Unset):
     """
 
     code: str
     message: str
     details: Any | None | Unset = UNSET
+    request_id: None | str | Unset = UNSET
     additional_properties: dict[str, Any] = _attrs_field(init=False, factory=dict)
 
     def to_dict(self) -> dict[str, Any]:
@@ -41,6 +43,12 @@ class ErrorResponse:
         else:
             details = self.details
 
+        request_id: None | str | Unset
+        if isinstance(self.request_id, Unset):
+            request_id = UNSET
+        else:
+            request_id = self.request_id
+
         field_dict: dict[str, Any] = {}
         field_dict.update(self.additional_properties)
         field_dict.update(
@@ -51,6 +59,8 @@ class ErrorResponse:
         )
         if details is not UNSET:
             field_dict["details"] = details
+        if request_id is not UNSET:
+            field_dict["request_id"] = request_id
 
         return field_dict
 
@@ -70,10 +80,20 @@ class ErrorResponse:
 
         details = _parse_details(d.pop("details", UNSET))
 
+        def _parse_request_id(data: object) -> None | str | Unset:
+            if data is None:
+                return data
+            if isinstance(data, Unset):
+                return data
+            return cast(None | str | Unset, data)
+
+        request_id = _parse_request_id(d.pop("request_id", UNSET))
+
         error_response = cls(
             code=code,
             message=message,
             details=details,
+            request_id=request_id,
         )
 
         error_response.additional_properties = d

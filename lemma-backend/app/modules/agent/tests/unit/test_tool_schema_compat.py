@@ -8,6 +8,9 @@ we guard the whole pod-default tool surface against it.
 
 from __future__ import annotations
 
+import asyncio
+import json
+from pathlib import Path
 from uuid import uuid4
 
 from pydantic_ai.tools import Tool
@@ -177,7 +180,9 @@ def test_record_filter_value_is_typed_not_bare_any():
 
 
 def test_final_answer_tool_schema_clean_without_output_schema():
-    agent = Agent(pod_id=uuid4(), user_id=uuid4(), name="x", instruction="", toolsets=[])
+    agent = Agent(
+        pod_id=uuid4(), user_id=uuid4(), name="x", instruction="", toolsets=[]
+    )
     assert agent.output_schema is None
     tool = Tool(get_final_answer_tool(agent), takes_ctx=True)
     schema = tool.function_schema.json_schema
@@ -240,11 +245,16 @@ def test_inline_tool_schema_refs_removes_defs_and_refs():
     # ship fully inlined. RecordFilter is flat (field/op/value), so it inlines.
     schema = {
         "type": "object",
-        "properties": {"filters": {"type": "array", "items": {"$ref": "#/$defs/RecordFilter"}}},
+        "properties": {
+            "filters": {"type": "array", "items": {"$ref": "#/$defs/RecordFilter"}}
+        },
         "$defs": {
             "RecordFilter": {
                 "type": "object",
-                "properties": {"field": {"type": "string"}, "op": {"$ref": "#/$defs/Op"}},
+                "properties": {
+                    "field": {"type": "string"},
+                    "op": {"$ref": "#/$defs/Op"},
+                },
             },
             "Op": {"enum": ["eq", "ne"]},
         },
@@ -252,3 +262,14 @@ def test_inline_tool_schema_refs_removes_defs_and_refs():
     inlined = inline_tool_schema_refs(schema)
     assert not _unresolved_refs(inlined), _unresolved_refs(inlined)
     assert "$defs" not in inlined
+
+
+def test_checked_in_agent_tool_schemas_match_live_tools():
+    """Make model-facing tool documentation freshness-enforced in the test suite."""
+    from scripts.export_agent_tool_schemas import collect_tools
+
+    backend_root = Path(__file__).resolve().parents[5]
+    checked_in = json.loads(
+        (backend_root / "agent_tool_schemas.json").read_text(encoding="utf-8")
+    )
+    assert checked_in == asyncio.run(collect_tools())

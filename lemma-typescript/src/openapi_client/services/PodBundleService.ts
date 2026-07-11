@@ -115,13 +115,13 @@ export class PodBundleService {
      * Abort a running import and delete its state + staged archive.
      * @param podId
      * @param importId
-     * @returns void
+     * @returns ImportStatusResponse Successful Response
      * @throws ApiError
      */
     public static podBundleImportCancel(
         podId: string,
         importId: string,
-    ): CancelablePromise<void> {
+    ): CancelablePromise<ImportStatusResponse> {
         return __request(OpenAPI, {
             method: 'DELETE',
             url: '/pods/{pod_id}/bundle/imports/{import_id}',

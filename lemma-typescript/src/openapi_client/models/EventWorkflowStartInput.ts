@@ -2,15 +2,14 @@
 /* istanbul ignore file */
 /* tslint:disable */
 /* eslint-disable */
-import type { EventFlowStartInput } from './EventFlowStartInput.js';
+import type { EventWorkflowStartConfigInput } from './EventWorkflowStartConfigInput.js';
 export type EventWorkflowStartInput = {
     /**
      * Connector trigger configuration for this workflow.
      */
-    config: EventFlowStartInput;
+    config: EventWorkflowStartConfigInput;
     /**
      * Event-triggered workflow start.
      */
     type?: string;
 };
-

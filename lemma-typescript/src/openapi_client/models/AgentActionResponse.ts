@@ -22,4 +22,3 @@ export type AgentActionResponse = {
     user_id: string;
     visibility?: string;
 };
-

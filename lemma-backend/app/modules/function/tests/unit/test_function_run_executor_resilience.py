@@ -11,6 +11,12 @@ from __future__ import annotations
 
 import httpx
 import pytest
+from agentbox_client.apps.function_executor import (
+    FunctionInvokeResponse,
+    RuntimeErrorInfo,
+)
+from types import SimpleNamespace
+from uuid import uuid4
 
 from app.core.log import log as _log_module  # noqa: F401  (ensure logging import OK)
 from app.modules.function.application import function_run_executor as fre
@@ -20,6 +26,7 @@ from app.modules.function.application.function_run_executor import (
     FunctionRunExecutor,
 )
 from app.modules.function.domain.errors import FunctionValidationError
+from app.modules.function.domain.entities import FunctionEntity, FunctionRunEntity
 
 pytestmark = pytest.mark.asyncio
 
@@ -80,6 +87,31 @@ async def test_function_validation_error_message_passes_through():
     assert msg == "Input does not match the declared schema."
 
 
+async def test_executor_response_redacts_persisted_error_and_logs():
+    run = FunctionRunEntity(function_id=uuid4(), user_id=uuid4())
+    response = FunctionInvokeResponse(
+        status="failed",
+        error=RuntimeErrorInfo(
+            name="ProviderError",
+            message="api_key=CANARY_FUNCTION_SECRET",
+        ),
+        logs=[
+            {
+                "timestamp": "2026-01-01T00:00:00Z",
+                "stream": "stderr",
+                "message": "Authorization: Bearer CANARY_FUNCTION_SECRET",
+            }
+        ],
+        code_hash="hash",
+        duration_ms=1,
+    )
+
+    _executor()._apply_executor_response_to_run(run, response)
+
+    assert "CANARY_FUNCTION_SECRET" not in str(run.model_dump())
+    assert "[REDACTED]" in str(run.model_dump())
+
+
 # --------------------------------------------------------------------------
 # Fix 1 (outer) — sandbox-recovery is idempotency-aware for sync executes
 # --------------------------------------------------------------------------
@@ -116,6 +148,54 @@ async def test_sync_recovery_does_not_rerun_on_post_dispatch_error():
             recoverable_transport_errors=_NON_IDEMPOTENT_RECOVERABLE_SANDBOX_TRANSPORT_ERRORS,
         )
     # No re-run — the function may already have executed its side effect.
+    assert calls["n"] == 1
+
+
+async def test_sync_execute_does_not_retry_ambiguous_http_503():
+    calls = {"n": 0}
+
+    class _Client:
+        async def wait_until_ready(self, **_kwargs):
+            return None
+
+        async def execute(self, **_kwargs):
+            calls["n"] += 1
+            raise _http_status_error(503)
+
+        async def close(self):
+            return None
+
+    executor = FunctionRunExecutor(
+        workspace_service=None,
+        storage_factory=None,
+        function_executor_client_factory=lambda _token: _Client(),
+    )
+    function_id = uuid4()
+    function = FunctionEntity(
+        id=function_id,
+        pod_id=uuid4(),
+        user_id=uuid4(),
+        name="side_effect",
+    )
+    run = FunctionRunEntity(
+        id=uuid4(),
+        function_id=function_id,
+        user_id=function.user_id,
+    )
+    session = SimpleNamespace(
+        env_vars={"LEMMA_TOKEN": "test-token"},
+        sandbox_id="sandbox",
+    )
+
+    with pytest.raises(httpx.HTTPStatusError):
+        await executor._execute_via_function_executor(
+            function=function,
+            run=run,
+            session=session,
+            timeout_seconds=30,
+            async_job=False,
+        )
+
     assert calls["n"] == 1
 
 

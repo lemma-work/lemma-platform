@@ -3,7 +3,6 @@
 /* tslint:disable */
 /* eslint-disable */
 export type AppBundleUploadRequest = {
-    dist_archive?: (string | null);
-    source_archive?: (string | null);
+    dist_archive?: (Blob | null);
+    source_archive?: (Blob | null);
 };
-

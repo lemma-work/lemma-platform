@@ -3,13 +3,12 @@
 Conversation widgets are authored as HTML *fragments* (no doctype/html/head/
 body — the display_resource tool enforces this). To serve a widget the same way a
 app is served — a full page the browser SDK can run in — the fragment is
-wrapped into a complete document here. The same wrapper is reused when a widget
-is promoted to an app, so the promoted artifact is identical to what was shown.
+wrapped into a complete document here. Promotion preserves the source fragment but
+uses the standalone wrapper, which intentionally omits conversation-only padding and
+height messaging.
 
 Pod context (window.__LEMMA_CONFIG__) is injected separately by
 app.core.runtime_config; this module only builds the document shell.
-
-See docs/app-widget-unification.md.
 """
 
 from __future__ import annotations
@@ -20,12 +19,23 @@ import re
 # injected). Mirrors the frontend's normalizeWidgetContent check.
 _FULL_DOC_RE = re.compile(r"<!doctype|<html[\s>]|<body[\s>]", re.IGNORECASE)
 
-# Posts the rendered height to the embedding parent so an in-conversation iframe
-# can size to content. Host-side shim — kept out of the artifact so a promoted
-# standalone app simply never includes it.
+# Keeps an in-conversation iframe integrated with its host: reports rendered height
+# and accepts a narrow, presentation-only ``--lemma-widget-*`` theme payload. The
+# bridge is kept out of promoted standalone apps, whose starter fallbacks remain
+# system-theme aware on their own.
 _HEIGHT_BRIDGE = """
     <script data-lemma-embed-bridge>
       (function () {
+        var themeTokens = [
+          "--lemma-widget-bg", "--lemma-widget-surface", "--lemma-widget-subtle",
+          "--lemma-widget-text", "--lemma-widget-muted", "--lemma-widget-border",
+          "--lemma-widget-accent", "--lemma-widget-danger",
+          "--lemma-widget-danger-soft", "--lemma-widget-radius",
+          "--lemma-widget-font", "--lemma-widget-color-scheme",
+          "--lemma-widget-chart-1", "--lemma-widget-chart-2",
+          "--lemma-widget-chart-3", "--lemma-widget-chart-4",
+          "--lemma-widget-chart-5"
+        ];
         var post = function () {
           var h = Math.max(
             document.documentElement.scrollHeight || 0,
@@ -34,40 +44,25 @@ _HEIGHT_BRIDGE = """
           );
           parent.postMessage({ type: "lemma-widget-height", height: h }, "*");
         };
+        window.addEventListener("message", function (event) {
+          if (event.source !== parent || !event.data || event.data.type !== "lemma-widget-theme") return;
+          var values = event.data.tokens || {};
+          themeTokens.forEach(function (name) {
+            var value = values[name];
+            if (typeof value === "string" && value.length > 0 && value.length <= 500) {
+              document.documentElement.style.setProperty(name, value);
+            }
+          });
+          var theme = event.data.theme;
+          if (theme === "light" || theme === "dark") {
+            document.documentElement.style.colorScheme = theme;
+            document.documentElement.style.setProperty("--lemma-widget-color-scheme", theme);
+          }
+          post();
+        });
         window.addEventListener("load", post);
         try { new ResizeObserver(post).observe(document.documentElement); } catch (e) {}
         post();
-      })();
-    </script>"""
-
-# Universal submit bridge: lets a widget send a value back to the chat via
-# window.lemma.submit(payload) or sendPrompt(text). Embedded in a conversation
-# iframe it posts to the parent (lemma-os turns it into a chat message); opened
-# standalone (e.g. from a surface) it POSTs to the widget submit endpoint, reusing
-# this page's own ?token= for auth. Inert unless the widget calls it, so it is
-# safe to include on every widget (charts simply never call submit).
-_SUBMIT_BRIDGE = """
-    <script data-lemma-submit-bridge>
-      (function () {
-        function send(payload, text) {
-          var msg = { type: "lemma-widget-submit", payload: payload, text: text || null };
-          if (window.parent && window.parent !== window) {
-            window.parent.postMessage(msg, "*");
-            return Promise.resolve({ ok: true, mode: "embed" });
-          }
-          var loc = window.location;
-          var url = loc.pathname.replace(/\\/$/, "") + "/submit" + loc.search;
-          return fetch(url, {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ payload: payload, text: text || null })
-          }).then(function (r) { return { ok: r.ok, status: r.status, mode: "standalone" }; });
-        }
-        window.lemma = window.lemma || {};
-        window.lemma.submit = function (payload) { return send(payload, null); };
-        if (typeof window.sendPrompt !== "function") {
-          window.sendPrompt = function (text) { return send(null, text); };
-        }
       })();
     </script>"""
 
@@ -100,7 +95,7 @@ def wrap_html_fragment(content: str, *, title: str = "", embed: bool = True) -> 
     """Wrap a fragment into a full HTML document.
 
     - ``embed=True`` (in-conversation widget): transparent page + a height bridge
-      so the embedding iframe can auto-size.
+      and theme bridge so the iframe can auto-size and follow the explicit host theme.
     - ``embed=False`` (standalone / promoted app): same shell, no height bridge.
 
     Content that already declares ``<!doctype>``/``<html>``/``<body>`` is returned
@@ -110,10 +105,7 @@ def wrap_html_fragment(content: str, *, title: str = "", embed: bool = True) -> 
     if _FULL_DOC_RE.search(fragment):
         return fragment
 
-    # Height bridge only for the in-conversation iframe; submit bridge always (it
-    # works both embedded — postMessage — and standalone — POST — and is inert
-    # until the widget calls window.lemma.submit / sendPrompt).
-    bridge = (_HEIGHT_BRIDGE if embed else "") + _SUBMIT_BRIDGE
+    bridge = _HEIGHT_BRIDGE if embed else ""
     styles = _RESET_STYLES + (_EMBED_STYLES if embed else "")
     return f"""<!doctype html>
 <html>

@@ -412,6 +412,8 @@ async def test_delete_app_cleans_up_storage_even_when_archives_share_release_pre
         },
     )
     assert upload_res.status_code == status.HTTP_200_OK, upload_res.text
+    source_archive_path = upload_res.json()["app"]["source_archive_path"]
+    assert source_archive_path
 
     app_storage_root = (
         Path(settings.local_file_storage_root)
@@ -420,7 +422,9 @@ async def test_delete_app_cleans_up_storage_even_when_archives_share_release_pre
         / app["id"]
     )
     assert app_storage_root.exists()
-    assert (app_storage_root / "source" / "archive.zip").exists()
+    # Source archives are content-addressed so a later upload cannot overwrite
+    # the version referenced by an in-flight reader.
+    assert (app_storage_root / source_archive_path).exists()
     assert any(path.name == "archive.zip" for path in app_storage_root.rglob("archive.zip"))
 
     delete_res = await authenticated_client.delete(f"/pods/{pod_id}/apps/{app_name}")

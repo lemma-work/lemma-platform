@@ -34,8 +34,8 @@ from app.modules.agent_surfaces.platforms.attachment_limits import (
     INBOUND_ATTACHMENT_BYTE_CAP,
     INBOUND_VOICE_TRANSCRIBE_BYTE_CAP,
 )
-from app.modules.datastore.api.dependencies import build_file_service
-from app.modules.datastore.services.files.paths import normalize_datastore_name
+from app.composition.surface_datastore import build_file_service
+from app.modules.datastore.contracts import normalize_datastore_name
 
 logger = get_logger(__name__)
 

@@ -8,4 +8,3 @@
 export type ExecuteFunctionRequest = {
     input_data?: Record<string, any>;
 };
-

@@ -17,18 +17,22 @@ class VariableSpecResponse:
     Attributes:
         kind (str):
         name (str):
+        connector (None | str | Unset): For a connector account variable, the connector the account must belong to (e.g.
+            'slack'), so the importer can connect the right connector. Null for non-connector variables.
         default (None | str | Unset):
         description (None | str | Unset):
-        platform (None | str | Unset): For a connector account variable, the platform the account must belong to (e.g.
-            'slack'), so the importer can connect the right connector. Null for non-connector variables.
+        provider (None | str | Unset): For a connector account variable, the auth provider backing the connector
+            ('LEMMA' or 'COMPOSIO'), so the importer connects/selects an account through the right provider. Null for non-
+            connector variables.
         required (bool | Unset):  Default: False.
     """
 
     kind: str
     name: str
+    connector: None | str | Unset = UNSET
     default: None | str | Unset = UNSET
     description: None | str | Unset = UNSET
-    platform: None | str | Unset = UNSET
+    provider: None | str | Unset = UNSET
     required: bool | Unset = False
     additional_properties: dict[str, Any] = _attrs_field(init=False, factory=dict)
 
@@ -36,6 +40,12 @@ class VariableSpecResponse:
         kind = self.kind
 
         name = self.name
+
+        connector: None | str | Unset
+        if isinstance(self.connector, Unset):
+            connector = UNSET
+        else:
+            connector = self.connector
 
         default: None | str | Unset
         if isinstance(self.default, Unset):
@@ -49,11 +59,11 @@ class VariableSpecResponse:
         else:
             description = self.description
 
-        platform: None | str | Unset
-        if isinstance(self.platform, Unset):
-            platform = UNSET
+        provider: None | str | Unset
+        if isinstance(self.provider, Unset):
+            provider = UNSET
         else:
-            platform = self.platform
+            provider = self.provider
 
         required = self.required
 
@@ -65,12 +75,14 @@ class VariableSpecResponse:
                 "name": name,
             }
         )
+        if connector is not UNSET:
+            field_dict["connector"] = connector
         if default is not UNSET:
             field_dict["default"] = default
         if description is not UNSET:
             field_dict["description"] = description
-        if platform is not UNSET:
-            field_dict["platform"] = platform
+        if provider is not UNSET:
+            field_dict["provider"] = provider
         if required is not UNSET:
             field_dict["required"] = required
 
@@ -82,6 +94,15 @@ class VariableSpecResponse:
         kind = d.pop("kind")
 
         name = d.pop("name")
+
+        def _parse_connector(data: object) -> None | str | Unset:
+            if data is None:
+                return data
+            if isinstance(data, Unset):
+                return data
+            return cast(None | str | Unset, data)
+
+        connector = _parse_connector(d.pop("connector", UNSET))
 
         def _parse_default(data: object) -> None | str | Unset:
             if data is None:
@@ -101,23 +122,24 @@ class VariableSpecResponse:
 
         description = _parse_description(d.pop("description", UNSET))
 
-        def _parse_platform(data: object) -> None | str | Unset:
+        def _parse_provider(data: object) -> None | str | Unset:
             if data is None:
                 return data
             if isinstance(data, Unset):
                 return data
             return cast(None | str | Unset, data)
 
-        platform = _parse_platform(d.pop("platform", UNSET))
+        provider = _parse_provider(d.pop("provider", UNSET))
 
         required = d.pop("required", UNSET)
 
         variable_spec_response = cls(
             kind=kind,
             name=name,
+            connector=connector,
             default=default,
             description=description,
-            platform=platform,
+            provider=provider,
             required=required,
         )
 

@@ -14,6 +14,8 @@ pooled DB connection is ever held across non-DB work.
 
 from __future__ import annotations
 
+import asyncio
+from pathlib import Path
 from typing import Any, Callable
 from uuid import UUID
 
@@ -23,6 +25,7 @@ from app.core.authorization.scope import pod_context_scope, uow_scope
 from app.core.infrastructure.db.uow_factory import UnitOfWorkFactory
 from app.modules.apps.domain.entities import AppAssetDocument, AppEntity
 from app.modules.apps.services.app_service import AppService
+from app.modules.apps.services.archive_validation import inspect_app_archive
 
 
 class AppUseCases:
@@ -58,11 +61,17 @@ class AppUseCases:
         app_name: str,
         request: Request,
         user_id: UUID,
-        source_archive_bytes: bytes | None,
-        dist_archive_bytes: bytes | None,
+        source_archive_bytes: bytes | Path | None,
+        dist_archive_bytes: bytes | Path | None,
     ) -> AppEntity:
         """Resolve+authorize+dedup (short UoW) -> write the bundle bytes (no
         connection) -> persist the release pointer (short UoW)."""
+        if source_archive_bytes is not None:
+            await asyncio.to_thread(
+                inspect_app_archive,
+                source_archive_bytes,
+                label="Source archive",
+            )
         async with pod_context_scope(
             self._uow_factory, request=request, user_id=user_id, pod_id=pod_id
         ) as scope:
@@ -78,11 +87,15 @@ class AppUseCases:
         written = await service.write_bundle_storage(
             plan, source_archive_bytes, dist_archive_bytes
         )
-        async with pod_context_scope(
-            self._uow_factory, request=request, user_id=user_id, pod_id=pod_id
-        ) as scope2:
-            service = self._build(scope2.uow)
-            return await service.finalize_upload_bundle(plan, written, user_id)
+        try:
+            async with pod_context_scope(
+                self._uow_factory, request=request, user_id=user_id, pod_id=pod_id
+            ) as scope2:
+                service = self._build(scope2.uow)
+                return await service.finalize_upload_bundle(plan, written, user_id)
+        except BaseException:
+            await service.cleanup_written_bundle(plan, written)
+            raise
 
     async def serve_asset(
         self,

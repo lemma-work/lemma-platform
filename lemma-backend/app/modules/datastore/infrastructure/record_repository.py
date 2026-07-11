@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+from collections.abc import Callable
 from typing import Any
 from uuid import UUID
 
@@ -21,58 +22,20 @@ from app.modules.datastore.domain.ports import (
     DatastoreSchemaPort,
 )
 from app.modules.datastore.domain.record_entities import RecordEntity
-from app.modules.datastore.infrastructure.db_error_parser import parse_db_error, raise_from_db_error
+from app.modules.datastore.infrastructure.record_errors import (
+    raise_record_read_error,
+    raise_record_write_error,
+)
 from app.modules.datastore.infrastructure.sql_identifiers import sanitize_identifier
 from app.modules.datastore.services.record_validator import convert_record
 from app.modules.datastore.services.table_context import TableContext
-
-
-def _raise_record_write_error(
-    exc: DBAPIError,
-    *,
-    operation: str,
-    ctx: TableContext | None = None,
-) -> None:
-    """Map a write-path DB error into a clean, agent-readable domain error.
-
-    Uses :mod:`db_error_parser` to detect check/FK/not-null/type/unique
-    violations and produce focused messages with structured ``details`` (e.g.
-    allowed ENUM values), instead of leaking the raw SQL + parameters.
-    """
-    raise_from_db_error(
-        exc,
-        table_name=ctx.table_name if ctx else None,
-        columns=ctx.columns if ctx else None,
-        operation=operation,
-    )
-
-
-def _raise_record_read_error(
-    exc: DBAPIError,
-    *,
-    operation: str,
-    table_name: str | None = None,
-    columns: list | None = None,
-) -> None:
-    """Map a read-path DB error into a ``DatastoreQueryError`` (400) or
-    ``DatastoreInfrastructureError`` (500), with a clean message + details.
-
-    Read-path client errors (bad filter values, type mismatches) are always
-    ``DATASTORE_QUERY_ERROR`` regardless of the underlying constraint type,
-    because the caller sent a query, not a record to validate.
-    """
-    message, details, error_cls = parse_db_error(
-        exc, table_name=table_name, columns=columns, operation=operation
-    )
-    if error_cls is DatastoreInfrastructureError:
-        if details is not None:
-            raise DatastoreInfrastructureError(message, details) from exc
-        raise DatastoreInfrastructureError(message) from exc
-    if details is not None:
-        raise DatastoreQueryError(message, details) from exc
-    raise DatastoreQueryError(message) from exc
 from app.modules.datastore.services.value_converter import ValueConverter
 from app.core.log.log import get_logger
+from app.core.domain.events import DomainEvent
+from app.modules.datastore.infrastructure.transactional_events import (
+    ensure_datastore_event_outbox,
+    stage_domain_events,
+)
 
 logger = get_logger(__name__)
 
@@ -146,9 +109,11 @@ class DatastoreRecordRepository(DatastoreRecordRepositoryPort):
         user_id: UUID,
         *,
         upsert: bool,
+        events: list[DomainEvent] | None = None,
     ) -> int:
         if not records:
             return 0
+        await ensure_datastore_event_outbox()
 
         prepared_records: list[dict[str, Any]] = []
         all_keys: set[str] = set()
@@ -192,19 +157,24 @@ class DatastoreRecordRepository(DatastoreRecordRepositoryPort):
                 if ctx.enable_rls:
                     await self.schema_manager.set_rls_context(session, user_id)
                 await session.execute(statement, params_list)
+                await stage_domain_events(session, events or [])
                 await session.commit()
                 return len(prepared_records)
         except DBAPIError as exc:
             logger.error("DB Error while bulk writing records: %s", exc)
-            _raise_record_write_error(exc, operation="bulk write records", ctx=ctx)
+            raise_record_write_error(exc, operation="bulk write records", ctx=ctx)
 
     async def create_record(
         self,
         ctx: TableContext,
         data: dict[str, Any],
         user_id: UUID,
+        *,
+        event_factory: Callable[[RecordEntity], DomainEvent] | None = None,
     ) -> RecordEntity:
         converted_data = convert_record(ctx.columns, data, skip_auto=False)
+        if event_factory is not None:
+            await ensure_datastore_event_outbox()
 
         columns: list[str] = []
         values = self._serialize_record_values(ctx, converted_data, user_id)
@@ -229,27 +199,38 @@ class DatastoreRecordRepository(DatastoreRecordRepositoryPort):
                 if not row:
                     raise DatastoreInfrastructureError("Failed to create record")
 
+                entity = self._row_to_entity(dict(row._mapping), ctx)
+                if event_factory is not None:
+                    await stage_domain_events(session, [event_factory(entity)])
                 await session.commit()
-                return self._row_to_entity(dict(row._mapping), ctx)
+                return entity
         except DBAPIError as exc:
             logger.error("DB Error while creating record: %s", exc)
-            _raise_record_write_error(exc, operation="create record", ctx=ctx)
+            raise_record_write_error(exc, operation="create record", ctx=ctx)
 
     async def bulk_create_records(
         self,
         ctx: TableContext,
         records: list[dict[str, Any]],
         user_id: UUID,
+        *,
+        events: list[DomainEvent] | None = None,
     ) -> int:
-        return await self._bulk_write_records(ctx, records, user_id, upsert=False)
+        return await self._bulk_write_records(
+            ctx, records, user_id, upsert=False, events=events
+        )
 
     async def bulk_upsert_records(
         self,
         ctx: TableContext,
         records: list[dict[str, Any]],
         user_id: UUID,
+        *,
+        events: list[DomainEvent] | None = None,
     ) -> int:
-        return await self._bulk_write_records(ctx, records, user_id, upsert=True)
+        return await self._bulk_write_records(
+            ctx, records, user_id, upsert=True, events=events
+        )
 
     async def get_record(
         self,
@@ -348,7 +329,7 @@ class DatastoreRecordRepository(DatastoreRecordRepositoryPort):
                 return rows, len(rows)
         except DBAPIError as exc:
             logger.error("Query Error: %s", exc)
-            _raise_record_read_error(exc, operation="query execution")
+            raise_record_read_error(exc, operation="query execution")
 
     async def _reject_if_too_expensive(self, session, query: str) -> None:
         """Reject a query whose planned cost or row estimate exceeds the ceiling.
@@ -362,7 +343,7 @@ class DatastoreRecordRepository(DatastoreRecordRepositoryPort):
             plan_json = explain.scalar_one()
         except DBAPIError as exc:
             logger.error("Query plan error: %s", exc)
-            _raise_record_read_error(exc, operation="query planning")
+            raise_record_read_error(exc, operation="query planning")
 
         if isinstance(plan_json, str):
             plan_json = json.loads(plan_json)
@@ -489,7 +470,7 @@ class DatastoreRecordRepository(DatastoreRecordRepositoryPort):
                 return [self._row_to_entity(dict(row._mapping), ctx) for row in rows], total
         except DBAPIError as exc:
             logger.error("List records error: %s", exc)
-            _raise_record_read_error(
+            raise_record_read_error(
                 exc,
                 operation="list records",
                 table_name=ctx.table_name,
@@ -504,7 +485,10 @@ class DatastoreRecordRepository(DatastoreRecordRepositoryPort):
         user_id: UUID,
         *,
         enforce_user_scope: bool = True,
+        event_factory: Callable[[RecordEntity], DomainEvent] | None = None,
     ) -> RecordEntity:
+        if event_factory is not None:
+            await ensure_datastore_event_outbox()
         parsed_id = ctx.parse_primary_key(record_id)
         converted_data = convert_record(ctx.columns, data)
         mutable_data = {
@@ -566,10 +550,13 @@ class DatastoreRecordRepository(DatastoreRecordRepositoryPort):
                 if not row:
                     raise DatastoreRecordNotFoundError("Record not found or update failed")
 
+                entity = self._row_to_entity(dict(row._mapping), ctx)
+                if event_factory is not None:
+                    await stage_domain_events(session, [event_factory(entity)])
                 await session.commit()
-                return self._row_to_entity(dict(row._mapping), ctx)
+                return entity
         except DBAPIError as exc:
-            _raise_record_write_error(exc, operation="update record", ctx=ctx)
+            raise_record_write_error(exc, operation="update record", ctx=ctx)
 
     async def delete_record(
         self,
@@ -578,7 +565,10 @@ class DatastoreRecordRepository(DatastoreRecordRepositoryPort):
         user_id: UUID,
         *,
         enforce_user_scope: bool = True,
+        event: DomainEvent | None = None,
     ) -> bool:
+        if event is not None:
+            await ensure_datastore_event_outbox()
         parsed_id = ctx.parse_primary_key(record_id)
         where_clauses = [f'"{ctx.primary_key_column}" = :id']
         params: dict[str, Any] = {"id": parsed_id}
@@ -605,6 +595,8 @@ class DatastoreRecordRepository(DatastoreRecordRepositoryPort):
                 result = await session.execute(text(sql), params)
                 if result.rowcount == 0:
                     raise DatastoreRecordNotFoundError()
+                if event is not None:
+                    await stage_domain_events(session, [event])
                 await session.commit()
             except IntegrityError as exc:
                 await session.rollback()

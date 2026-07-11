@@ -24,8 +24,8 @@ from app.modules.workflow.domain.errors import (
     WorkflowValidationError,
 )
 from app.modules.workflow.domain.schema_template import defaults_from_schema
-from app.modules.workflow.domain.flow import FlowEntity
-from app.modules.workflow.domain.run import FlowRunEntity, FlowRunStatus
+from app.modules.workflow.domain.workflow import WorkflowEntity
+from app.modules.workflow.domain.run import WorkflowRunEntity, WorkflowRunStatus
 from app.modules.workflow.domain.wait import (
     WaitRequest,
     WorkflowRunWaitEntity,
@@ -38,8 +38,8 @@ from app.modules.workflow.infrastructure.adapters import (
     ScheduleControlAdapter,
 )
 from app.modules.workflow.infrastructure.repositories import (
-    SqlAlchemyFlowRepository,
-    SqlAlchemyFlowRunRepository,
+    SqlAlchemyWorkflowRepository,
+    SqlAlchemyWorkflowRunRepository,
     SqlAlchemyWorkflowRunWaitRepository,
 )
 from app.core.log.log import get_logger
@@ -76,8 +76,8 @@ class WorkflowEngine:
         schedule_adapter=None,
     ):
         self.uow = uow
-        self.flow_repo = SqlAlchemyFlowRepository(uow)
-        self.run_repo = SqlAlchemyFlowRunRepository(uow)
+        self.flow_repo = SqlAlchemyWorkflowRepository(uow)
+        self.run_repo = SqlAlchemyWorkflowRunRepository(uow)
         self.wait_repo = SqlAlchemyWorkflowRunWaitRepository(uow)
 
         self.agent_adapter = agent_adapter or AgentControlAdapter(uow)
@@ -130,7 +130,7 @@ class WorkflowEngine:
         trigger: TriggerContext | None = None,
         schedule_event_id: str | None = None,
         ctx: Context | None = None,
-    ) -> FlowRunEntity:
+    ) -> WorkflowRunEntity:
         """Create and advance a new run.
 
         Manual runs take no inputs: if the entry node is a form the run is
@@ -141,7 +141,7 @@ class WorkflowEngine:
         """
         flow = await self.flow_repo.get(flow_id)
         if not flow:
-            raise ValueError(f"Flow {flow_id} not found")
+            raise ValueError(f"Workflow {flow_id} not found")
         ctx = await self._require_action(
             requester_user_id=user_id,
             action=Permissions.WORKFLOW_EXECUTE,
@@ -161,7 +161,7 @@ class WorkflowEngine:
             if existing is not None:
                 return existing
 
-        run = FlowRunEntity.create(
+        run = WorkflowRunEntity.create(
             flow_id=flow.id,
             pod_id=flow.pod_id,
             user_id=user_id,
@@ -205,14 +205,14 @@ class WorkflowEngine:
         *,
         requester_user_id: UUID | None = None,
         ctx: Context | None = None,
-    ) -> FlowRunEntity:
+    ) -> WorkflowRunEntity:
         """Submit a form to the run's active HUMAN wait and continue."""
         run = await self.run_repo.get_for_update(run_id)
         if not run:
-            raise ValueError("Flow run not found")
+            raise ValueError("Workflow run not found")
         flow = await self.flow_repo.get(run.flow_id)
         if not flow:
-            raise ValueError("Flow definition not found")
+            raise ValueError("Workflow definition not found")
         ctx = await self._require_action(
             requester_user_id=requester_user_id or run.user_id,
             action=Permissions.WORKFLOW_EXECUTE,
@@ -223,7 +223,7 @@ class WorkflowEngine:
 
         wait = await self.wait_repo.get_active_for_run(run.id)
         if (
-            run.status != FlowRunStatus.WAITING
+            run.status != WorkflowRunStatus.WAITING
             or wait is None
             or wait.wait_type != WorkflowRunWaitType.HUMAN
         ):
@@ -260,7 +260,7 @@ class WorkflowEngine:
         output: Dict[str, Any] | None = None,
         *,
         ctx: Context | None = None,
-    ) -> FlowRunEntity | None:
+    ) -> WorkflowRunEntity | None:
         """Resume the run waiting on (wait_type, external_ref).
 
         Returns None when no ACTIVE wait matches — stale or duplicate
@@ -277,8 +277,8 @@ class WorkflowEngine:
 
         run = await self.run_repo.get_for_update(wait.run_id)
         if run is None or run.status not in (
-            FlowRunStatus.WAITING,
-            FlowRunStatus.RUNNING,
+            WorkflowRunStatus.WAITING,
+            WorkflowRunStatus.RUNNING,
         ):
             logger.info(
                 "workflow.resume.stale_event",
@@ -290,7 +290,7 @@ class WorkflowEngine:
 
         flow = await self.flow_repo.get(run.flow_id)
         if not flow:
-            raise ValueError("Flow definition not found")
+            raise ValueError("Workflow definition not found")
 
         # External completions (agents without an output_schema, JOB functions)
         # may hand back a bare string or other non-dict. Normalize to a dict so
@@ -314,7 +314,7 @@ class WorkflowEngine:
         external_ref: str,
         error: str,
         output: Dict[str, Any] | None = None,
-    ) -> FlowRunEntity | None:
+    ) -> WorkflowRunEntity | None:
         """Fail the run waiting on (wait_type, external_ref)."""
         wait = await self.wait_repo.find_active_by_external_ref(wait_type, external_ref)
         if wait is None:
@@ -326,8 +326,8 @@ class WorkflowEngine:
             return None
         run = await self.run_repo.get_for_update(wait.run_id)
         if run is None or run.status not in (
-            FlowRunStatus.WAITING,
-            FlowRunStatus.RUNNING,
+            WorkflowRunStatus.WAITING,
+            WorkflowRunStatus.RUNNING,
         ):
             return None
 
@@ -347,11 +347,11 @@ class WorkflowEngine:
         *,
         requester_user_id: UUID | None = None,
         ctx: Context | None = None,
-    ) -> FlowRunEntity:
+    ) -> WorkflowRunEntity:
         """Cancel a non-terminal run and its active wait atomically."""
         run = await self.run_repo.get_for_update(run_id)
         if not run:
-            raise ValueError("Flow run not found")
+            raise ValueError("Workflow run not found")
         await self._require_action(
             requester_user_id=requester_user_id or run.user_id,
             action=Permissions.WORKFLOW_EXECUTE,
@@ -391,7 +391,7 @@ class WorkflowEngine:
         run_id: UUID,
         requester_user_id: UUID | None = None,
         ctx: Context | None = None,
-    ) -> Optional[FlowRunEntity]:
+    ) -> Optional[WorkflowRunEntity]:
         run = await self.run_repo.get(run_id)
         if run:
             await self._require_action(
@@ -413,7 +413,7 @@ class WorkflowEngine:
         cursor: UUID | None = None,
         requester_user_id: UUID | None = None,
         ctx: Context | None = None,
-    ) -> tuple[List[FlowRunEntity], UUID | None]:
+    ) -> tuple[List[WorkflowRunEntity], UUID | None]:
         flow = await self.flow_repo.get(flow_id)
         if flow:
             await self._require_action(
@@ -431,7 +431,7 @@ class WorkflowEngine:
 
     # -- internals ---------------------------------------------------------------
 
-    def _entry_node_id(self, flow: FlowEntity) -> str:
+    def _entry_node_id(self, flow: WorkflowEntity) -> str:
         if not flow.nodes:
             raise WorkflowValidationError(
                 "Workflow has no graph yet — upload nodes before starting runs"
@@ -444,17 +444,17 @@ class WorkflowEngine:
         assert flow.entry_node_id is not None
         return flow.entry_node_id
 
-    async def _persist_wait(self, run: FlowRunEntity, result: StepResult) -> None:
+    async def _persist_wait(self, run: WorkflowRunEntity, result: StepResult) -> None:
         if result.wait is None or run.status not in (
-            FlowRunStatus.WAITING,
-            FlowRunStatus.RUNNING,
+            WorkflowRunStatus.WAITING,
+            WorkflowRunStatus.RUNNING,
         ):
             return
         assert run.current_node_id is not None
         await self.wait_repo.create(self._wait_entity(run, result.wait))
 
     def _wait_entity(
-        self, run: FlowRunEntity, request: WaitRequest
+        self, run: WorkflowRunEntity, request: WaitRequest
     ) -> WorkflowRunWaitEntity:
         payload = dict(request.payload)
         if request.scheduled_at is not None:
@@ -500,7 +500,7 @@ class WorkflowEngine:
     ) -> None:
         if wait.assigned_pod_member_id is None or requester_user_id is None:
             return
-        from app.modules.pod.infrastructure.pod_repositories import (
+        from app.composition.workflow_pod import (
             PodMemberRepository,
         )
 

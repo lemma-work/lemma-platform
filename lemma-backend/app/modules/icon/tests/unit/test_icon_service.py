@@ -10,6 +10,7 @@ from app.modules.icon.services.icon_service import IconService
 
 
 TEST_USER_ID = UUID("22222222-2222-4222-8222-222222222222")
+TEST_ASSET_ID = "a" * 32
 
 
 @pytest.fixture
@@ -37,7 +38,10 @@ async def test_upload_icon_writes_to_local_storage_and_infers_extension(
     assert result.content_type == "image/jpeg"
     assert result.storage_path.startswith(f"icons/{TEST_USER_ID}/")
     assert result.storage_path.endswith(".jpg")
-    assert result.icon_url == f"https://api.example.test/public/icons/{result.storage_path}"
+    assert (
+        result.icon_url
+        == f"https://api.example.test/public/icons/{result.storage_path}"
+    )
     assert (
         local_icon_settings / "public-icons" / result.storage_path
     ).read_bytes() == b"jpeg-bytes"
@@ -66,7 +70,7 @@ async def test_upload_icon_prefers_filename_suffix_over_content_type(
 @pytest.mark.asyncio
 async def test_read_and_delete_by_managed_url(local_icon_settings: Path):
     service = IconService()
-    storage_path = f"icons/{TEST_USER_ID}/icon.png"
+    storage_path = f"icons/{TEST_USER_ID}/{TEST_ASSET_ID}.png"
     local_path = local_icon_settings / "public-icons" / storage_path
     local_path.parent.mkdir(parents=True)
     local_path.write_bytes(b"png-bytes")
@@ -83,7 +87,9 @@ def test_get_managed_storage_path_ignores_unmanaged_or_malformed_urls(
 ):
     service = IconService()
 
-    assert service.get_managed_storage_path("https://example.test/assets/icon.png") is None
+    assert (
+        service.get_managed_storage_path("https://example.test/assets/icon.png") is None
+    )
     assert (
         service.get_managed_storage_path(
             "https://example.test/public/icons/icons/../secret.png"
@@ -99,6 +105,9 @@ def test_get_managed_storage_path_ignores_unmanaged_or_malformed_urls(
         ".",
         "icons/../secret.png",
         "icons/./secret.png",
+        f"icons/{TEST_USER_ID}/icon.png",
+        f"icons/{TEST_USER_ID}/{TEST_ASSET_ID}.exe",
+        f"icons\\{TEST_USER_ID}\\{TEST_ASSET_ID}.png",
     ],
 )
 def test_public_url_rejects_malformed_storage_paths(
@@ -109,3 +118,18 @@ def test_public_url_rejects_malformed_storage_paths(
 
     with pytest.raises(ValueError, match="Invalid icon storage path"):
         service.build_public_url(storage_path)
+
+
+@pytest.mark.asyncio
+async def test_local_icon_path_rejects_symlink_escape(
+    local_icon_settings: Path,
+) -> None:
+    service = IconService()
+    outside = local_icon_settings / "outside"
+    outside.mkdir()
+    user_directory = local_icon_settings / "public-icons" / "icons" / str(TEST_USER_ID)
+    user_directory.parent.mkdir(parents=True)
+    user_directory.symlink_to(outside, target_is_directory=True)
+
+    with pytest.raises(ValueError, match="Invalid icon storage path"):
+        await service.read_icon(f"icons/{TEST_USER_ID}/{TEST_ASSET_ID}.png")

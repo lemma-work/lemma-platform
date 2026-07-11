@@ -13,12 +13,8 @@ from app.modules.schedule.domain.errors import (
     ScheduleInfrastructureError,
     ScheduleValidationError,
 )
+from app.modules.schedule.domain.interfaces import ScheduleTarget
 from app.modules.schedule.services.schedule_service import ScheduleService
-from app.modules.workflow.domain.start import (
-    EventFlowStart,
-    FlowStart,
-    FlowStartType,
-)
 
 
 @pytest.mark.asyncio
@@ -172,16 +168,12 @@ async def test_workflow_webhook_schedule_derives_trigger_from_workflow_start():
         external_schedule_writer=AsyncMock(),
     )
     workflow_id = uuid4()
-    workflow = SimpleNamespace(
+    workflow = ScheduleTarget(
         id=workflow_id,
-        start=FlowStart(
-            type=FlowStartType.EVENT,
-            config=EventFlowStart(
-                connector_id="gmail",
-                connector_trigger_id="gmail:gmail_new_gmail_message",
-                trigger_config={"labelIds": "INBOX"},
-            ),
-        ),
+        pod_id=uuid4(),
+        name="gmail_email_ingest",
+        event_trigger_id="gmail:gmail_new_gmail_message",
+        event_trigger_config={"labelIds": "INBOX"},
     )
     service._get_workflow_by_name = AsyncMock(  # type: ignore[method-assign]
         return_value=workflow
@@ -216,16 +208,12 @@ async def test_workflow_webhook_schedule_rejects_trigger_mismatch():
         scheduler_service=AsyncMock(),
         external_schedule_writer=AsyncMock(),
     )
-    workflow = SimpleNamespace(
+    workflow = ScheduleTarget(
         id=uuid4(),
-        start=FlowStart(
-            type=FlowStartType.EVENT,
-            config=EventFlowStart(
-                connector_id="gmail",
-                connector_trigger_id="gmail:gmail_new_gmail_message",
-                trigger_config={},
-            ),
-        ),
+        pod_id=uuid4(),
+        name="gmail_email_ingest",
+        event_trigger_id="gmail:gmail_new_gmail_message",
+        event_trigger_config={},
     )
     service._get_workflow_by_name = AsyncMock(  # type: ignore[method-assign]
         return_value=workflow

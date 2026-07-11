@@ -82,15 +82,16 @@ class _FakeStorage:
 
 
 @pytest.mark.asyncio
-async def test_build_object_url_uses_real_signed_url_on_gcs(monkeypatch):
-    """On the GCS backend the URL is the object store's own signed URL.
+@pytest.mark.parametrize("backend", ["gcs", "s3", "azure"])
+async def test_build_object_url_uses_native_cloud_signed_url(monkeypatch, backend):
+    """On cloud backends the URL is the object store's own signed URL.
 
     A live bucket isn't available in-sandbox, so we force the backend to ``gcs``
     and assert ``build_object_url`` delegates to ``storage.get_signed_url`` with
     the expiry converted to whole hours.
     """
     monkeypatch.setattr(file_url_mod, "_get_url_cache", lambda: None)
-    monkeypatch.setattr(settings, "storage_backend", "gcs")
+    monkeypatch.setattr(settings, "storage_backend", backend)
     storage = _FakeStorage()
 
     url, _expires_at = await build_object_url(storage, KEY, expires_seconds=7200)

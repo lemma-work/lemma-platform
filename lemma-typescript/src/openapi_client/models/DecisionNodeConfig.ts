@@ -9,4 +9,3 @@ import type { DecisionRule } from './DecisionRule.js';
 export type DecisionNodeConfig = {
     rules?: Array<DecisionRule>;
 };
-

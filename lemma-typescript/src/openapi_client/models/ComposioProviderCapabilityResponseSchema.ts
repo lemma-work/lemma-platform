@@ -11,4 +11,3 @@ export type ComposioProviderCapabilityResponseSchema = {
     system_default_available?: boolean;
     toolkit_slug: string;
 };
-

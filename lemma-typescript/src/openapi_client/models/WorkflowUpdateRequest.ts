@@ -27,4 +27,3 @@ export type WorkflowUpdateRequest = {
     start?: ((ManualWorkflowStartInput | ScheduledWorkflowStartInput | EventWorkflowStartInput | DataStoreWorkflowStartInput) | null);
     visibility?: (ResourceVisibility | null);
 };
-

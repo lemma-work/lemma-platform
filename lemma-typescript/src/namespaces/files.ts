@@ -14,14 +14,30 @@ import type { attach } from "../openapi_client/models/attach.js";
 import type { FileDetailResponse } from "../openapi_client/models/FileDetailResponse.js";
 import { FilesService } from "../openapi_client/services/FilesService.js";
 
+function trimLeadingSlashes(value: string): string {
+  let start = 0;
+  while (start < value.length && value[start] === "/") {
+    start += 1;
+  }
+  return value.slice(start);
+}
+
+function trimTrailingSlashes(value: string): string {
+  let end = value.length;
+  while (end > 0 && value[end - 1] === "/") {
+    end -= 1;
+  }
+  return value.slice(0, end);
+}
+
 function joinDatastorePath(basePath: string | undefined, leaf: string): string {
-  const normalizedLeaf = leaf.replace(/^\/+/, "");
+  const normalizedLeaf = trimLeadingSlashes(leaf);
   const trimmedBase = (basePath ?? "/").trim();
   const normalizedBase = trimmedBase.length > 0 ? trimmedBase : "/";
   if (normalizedBase === "/") {
     return `/${normalizedLeaf}`;
   }
-  return `${normalizedBase.replace(/\/+$/, "")}/${normalizedLeaf}`;
+  return `${trimTrailingSlashes(normalizedBase)}/${normalizedLeaf}`;
 }
 
 function getDirectoryPath(path: string): string {
@@ -29,7 +45,7 @@ function getDirectoryPath(path: string): string {
   if (!normalized || normalized === "/") {
     return "/";
   }
-  const withoutTrailing = normalized.replace(/\/+$/, "");
+  const withoutTrailing = trimTrailingSlashes(normalized);
   const index = withoutTrailing.lastIndexOf("/");
   if (index <= 0) {
     return "/";
@@ -38,7 +54,7 @@ function getDirectoryPath(path: string): string {
 }
 
 function getBaseName(path: string): string {
-  const normalized = path.trim().replace(/\/+$/, "");
+  const normalized = trimTrailingSlashes(path.trim());
   const index = normalized.lastIndexOf("/");
   if (index === -1) {
     return normalized;
@@ -152,7 +168,7 @@ export class FilesNamespace {
     } = {},
   ) {
     const payload: DatastoreFileUploadRequest = {
-      data: file as unknown as string,
+      data: file,
       name: options.name ?? (file instanceof File ? file.name : undefined),
       description: options.description,
       directory_path: options.directoryPath ?? options.parentId ?? "/",
@@ -185,7 +201,7 @@ export class FilesNamespace {
 
     const payload: update = {
       path,
-      data: options.file as unknown as string | undefined,
+      data: options.file,
       description: options.description,
       new_path: resolvedNewPath,
       search_enabled: options.searchEnabled,
@@ -249,8 +265,8 @@ export class FilesNamespace {
     ): Promise<FileDetailResponse> => {
       const formData: attach = {
         path,
-        data: markdown as unknown as string,
-        images: options.images as unknown as string[] | undefined,
+        data: markdown,
+        images: options.images,
       };
       return this.client.request(() =>
         FilesService.fileMarkdownAttach(this.podId(), formData),

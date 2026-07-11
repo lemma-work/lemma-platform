@@ -25,11 +25,11 @@ import type {
   ConversationModel as SdkConversationModel,
   CreateAgentInput as SdkCreateAgentInput,
   CreateFunctionRequest as SdkCreateFunctionRequest,
-  DataStoreFlowStartInput as SdkDatastoreEventFlowStart,
-  EventFlowStartInput as SdkEventFlowStart,
+  DataStoreWorkflowStartInput as SdkDatastoreEventFlowStart,
+  EventWorkflowStartInput as SdkEventFlowStart,
   DatastoreFile as SdkFileResponse,
-  FlowResponse as SdkFlow,
-  FlowRun as SdkFlowRun,
+  WorkflowDetailResponse as SdkFlow,
+  WorkflowRunResponse as SdkFlowRun,
   WorkflowStart as SdkFlowStart,
   WorkflowStartType as SdkFlowStartType,
   FunctionResponse as SdkFunction,
@@ -48,7 +48,7 @@ import type {
   DatastoreFileSummary as SdkFileInfo,
   Schedule as SdkSchedule,
   CreateScheduleRequest as SdkCreateScheduleRequest,
-  ScheduledFlowStartInput as SdkScheduledFlowStart,
+  ScheduledWorkflowStartInput as SdkScheduledFlowStart,
   TableResponse as SdkTable,
   RecentUsageResponse as SdkRecentUsageResponse,
   UpdateAgentInput as SdkUpdateAgentInput,
@@ -315,16 +315,16 @@ export type FunctionRun = SdkFunctionRun;
 export type WorkflowStartType = `${SdkFlowStartType}`;
 export type FlowStartType = WorkflowStartType;
 
-export type ScheduledFlowStart = Partial<SdkScheduledFlowStart> & {
+export type ScheduledFlowStart = Partial<SdkScheduledFlowStart['config']> & {
   cron_expression?: string;
   timezone?: string;
 };
 
-export type EventFlowStart = Partial<SdkEventFlowStart> & {
+export type EventFlowStart = Partial<SdkEventFlowStart['config']> & {
   event_type?: string;
 };
 
-export type DatastoreEventFlowStart = Omit<Partial<SdkDatastoreEventFlowStart>, 'operations'> & {
+export type DatastoreEventFlowStart = Omit<Partial<SdkDatastoreEventFlowStart['config']>, 'operations'> & {
   name?: string;
   table_name?: string;
   operations: Array<'INSERT' | 'UPDATE' | 'DELETE' | string>;

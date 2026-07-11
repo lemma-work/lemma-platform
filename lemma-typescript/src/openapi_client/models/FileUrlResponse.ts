@@ -8,4 +8,3 @@ export type FileUrlResponse = {
     path: string;
     url: string;
 };
-

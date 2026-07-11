@@ -57,7 +57,7 @@ services:
         condition: service_healthy
 
   supertokens:
-    image: docker.io/supertokens/supertokens-postgresql:11.1.0
+    image: docker.io/supertokens/supertokens-postgresql:11.4.5
     environment:
       POSTGRESQL_CONNECTION_URI: postgresql://postgres:postgres@db:5432/supertokens
     depends_on:

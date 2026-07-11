@@ -24,4 +24,3 @@ export type AgentSummaryResponse = {
     user_id: string;
     visibility?: string;
 };
-

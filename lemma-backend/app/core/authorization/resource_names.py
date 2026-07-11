@@ -26,7 +26,7 @@ from app.modules.function.infrastructure.models import FunctionModel
 from app.modules.connectors.infrastructure.models.account import Account
 from app.modules.connectors.infrastructure.models.connector import Connector
 from app.modules.schedule.infrastructure.models.schedule import Schedule
-from app.modules.workflow.infrastructure.models import FlowModel
+from app.modules.workflow.infrastructure.models import WorkflowModel
 
 logger = structlog.get_logger(__name__)
 
@@ -39,7 +39,7 @@ _NAME_REGISTRY = {
         FunctionModel.name,
         (),
     ),
-    ResourceType.WORKFLOW: (FlowModel.id, FlowModel.pod_id, FlowModel.name, ()),
+    ResourceType.WORKFLOW: (WorkflowModel.id, WorkflowModel.pod_id, WorkflowModel.name, ()),
     ResourceType.APP: (AppModel.id, AppModel.pod_id, AppModel.name, ()),
     ResourceType.DATASTORE_TABLE: (
         DatastoreTable.id,

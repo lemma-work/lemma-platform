@@ -1,7 +1,10 @@
 from datetime import datetime
 from uuid import UUID
 
+from pydantic import EmailStr, field_validator
+
 from app.core.api.schemas import BaseSchema
+from app.modules.identity.domain.email import normalize_identity_email
 
 from app.modules.identity.domain.organization_entities import (
     OrganizationInvitationStatus,
@@ -15,6 +18,7 @@ class OrganizationCreateRequest(BaseSchema):
     """Organization creation request schema."""
 
     name: str
+    slug: str | None = None
     email_domain: str | None = None
     join_policy: OrganizationJoinPolicy = OrganizationJoinPolicy.INVITE_ONLY
 
@@ -54,18 +58,23 @@ class OrganizationMemberResponse(BaseSchema):
 class OrganizationInvitationRequest(BaseSchema):
     """Organization invitation request schema."""
 
-    email: str
+    email: EmailStr
     role: OrganizationRole
     pod_id: UUID | None = None
     pod_role: str | None = None
     redirect_uri: str | None = None
+
+    @field_validator("email", mode="before")
+    @classmethod
+    def normalize_email(cls, value: object) -> str:
+        return normalize_identity_email(str(value))
 
 
 class OrganizationInvitationResponse(BaseSchema):
     """Organization invitation response schema."""
 
     id: UUID
-    email: str
+    email: EmailStr
     organization_id: UUID
     organization_name: str | None = None
     role: OrganizationRole

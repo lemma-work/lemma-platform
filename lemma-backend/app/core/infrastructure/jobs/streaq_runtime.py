@@ -6,8 +6,6 @@ import asyncio
 from collections.abc import AsyncGenerator, Awaitable, Callable
 from contextlib import AsyncExitStack, asynccontextmanager
 from dataclasses import dataclass
-from functools import partial
-from pathlib import Path
 
 from faststream.redis import RedisBroker
 from streaq import Worker
@@ -18,6 +16,7 @@ from app.core.infrastructure.db.session import async_session_maker, get_engine, 
 from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
 from app.core.infrastructure.db.uow_factory import SessionUnitOfWorkFactory
 from app.core.infrastructure.events.message_bus import close_message_bus, get_message_bus
+from app.core.infrastructure.events.outbox import outbox_dispatcher_lifespan
 from app.core.infrastructure.jobs.streaq_job_queue import (
     SharedStreaqJobQueue,
     close_streaq_job_queue,
@@ -52,16 +51,11 @@ class AppWorkerContext:
         return self.uow_factory()
 
     def build_function_storage_factory(self):
-        from app.modules.function.services.function_file_manager import FunctionFileManager
-
-        if settings.effective_storage_backend() == "gcs":
-            if not settings.gcs_storage_bucket:
-                raise ValueError("GCS storage requires GCS_STORAGE_BUCKET")
-            return partial(FunctionFileManager, bucket_name=settings.gcs_storage_bucket)
-        return partial(
-            FunctionFileManager,
-            root_path=Path(settings.local_file_storage_root) / "common",
+        from app.modules.function.api.dependencies import (
+            get_function_storage_factory,
         )
+
+        return get_function_storage_factory()
 
     def build_function_service(self, uow: SqlAlchemyUnitOfWork):
         from app.core.infrastructure.events.message_bus import get_message_bus
@@ -190,9 +184,10 @@ async def _consumer_group_reconcile_loop() -> None:
     """
     import redis.asyncio as redis
 
+    from app.core.infrastructure.events.config import event_transport_settings
     from app.core.infrastructure.events.stream_subscriber import ensure_consumer_groups
 
-    interval = settings.consumer_group_reconcile_interval_seconds
+    interval = event_transport_settings.consumer_group_reconcile_interval_seconds
     client = redis.from_url(settings.redis_url, decode_responses=False)
     try:
         while True:
@@ -261,7 +256,9 @@ async def worker_lifespan() -> AsyncGenerator[AppWorkerContext]:
     from app.core.registry.installed import OSS_MODULES
 
     reconcile_task: asyncio.Task[None] | None = None
-    if settings.consumer_group_reconcile_interval_seconds > 0:
+    from app.core.infrastructure.events.config import event_transport_settings
+
+    if event_transport_settings.consumer_group_reconcile_interval_seconds > 0:
         reconcile_task = asyncio.create_task(_consumer_group_reconcile_loop())
 
     # Loop-lag watchdog: measures event-loop lag and refreshes the liveness
@@ -270,7 +267,10 @@ async def worker_lifespan() -> AsyncGenerator[AppWorkerContext]:
     from app.core.observability.loop_watchdog import loop_lag_watchdog
 
     watchdog_task = asyncio.create_task(
-        loop_lag_watchdog(service_name="lemma-worker")
+        loop_lag_watchdog(
+            service_name="lemma-worker",
+            heartbeat_path=settings.worker_heartbeat_path or None,
+        )
     )
 
     try:
@@ -278,6 +278,9 @@ async def worker_lifespan() -> AsyncGenerator[AppWorkerContext]:
         # receiver + dedupe-store close; datastore reindex-queue close). Entered
         # after core startup and unwound before the core closers below.
         async with AsyncExitStack() as module_stack:
+            await module_stack.enter_async_context(
+                outbox_dispatcher_lifespan(async_session_maker, get_message_bus())
+            )
             await enter_worker_lifespans(module_stack, OSS_MODULES, context)
             yield context
     finally:

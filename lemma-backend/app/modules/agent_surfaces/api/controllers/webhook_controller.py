@@ -1,25 +1,46 @@
 from __future__ import annotations
 
 import json
+import hashlib
 from uuid import UUID
 from fastapi import APIRouter, Depends, HTTPException, Request, Response
 from fastapi.responses import HTMLResponse
 
 from app.modules.agent_surfaces.config import surface_settings
-from app.core.infrastructure.events.message_bus import get_message_bus
+from app.core.infrastructure.events.inbox import stable_event_id
+from app.core.infrastructure.events.publisher import EventPublisher
+from app.core.redaction import redact_value
 from app.modules.agent_surfaces.api.dependencies import (
     SurfaceWebhookSecurityServiceDep,
     get_surface_service,
 )
 from app.modules.agent_surfaces.domain.events import SurfaceWebhookReceivedEvent
-from app.modules.agent_surfaces.infrastructure.debug.raw_webhook_file_logger import (
-    log_raw_webhook_event,
-)
 from app.modules.agent_surfaces.services.surface_service import (
     AgentSurfaceService,
 )
 
 router = APIRouter(prefix="/surfaces", tags=["Agent Surfaces (Ingress)"])
+
+
+def _surface_source_event_id(platform: str, payload: dict, raw_body: bytes) -> str:
+    candidates: list[object] = [
+        payload.get("event_id"),
+        payload.get("update_id"),
+        payload.get("id"),
+        payload.get("message_id"),
+        payload.get("data", {}).get("message_id")
+        if isinstance(payload.get("data"), dict)
+        else None,
+    ]
+    for candidate in candidates:
+        if candidate is not None and str(candidate):
+            return f"{platform}:{candidate}"
+    return f"{platform}:content-sha256:{hashlib.sha256(raw_body).hexdigest()}"
+
+
+def _redacted_headers(headers: dict[str, str]) -> dict[str, str]:
+    value = redact_value(headers)
+    return {str(key): str(item) for key, item in value.items()}
 
 
 def _decode_webhook_payload(raw_body: bytes, headers: dict[str, str]) -> dict:
@@ -108,7 +129,6 @@ async def handle_platform_webhook(
     request: Request,
     security_service: SurfaceWebhookSecurityServiceDep,
     service: AgentSurfaceService = Depends(get_surface_service),
-    message_bus=Depends(get_message_bus),
 ):
     """Handle platform-level webhook callbacks."""
     headers = dict(request.headers)
@@ -130,14 +150,16 @@ async def handle_platform_webhook(
         )
         if surface is None:
             return {"message": "Ignored: no surface for address"}
-        await log_raw_webhook_event(source="resend", payload=normalized, headers=headers)
+        source_event_id = _surface_source_event_id("resend", normalized, raw_body)
         event = SurfaceWebhookReceivedEvent(
+            event_id=stable_event_id({"event_id": source_event_id}),
             source="resend",
             payload=normalized,
-            headers=headers,
+            headers=_redacted_headers(headers),
             surface_id=surface.id,
+            source_event_id=source_event_id,
         )
-        await message_bus.publish(stream=event.stream_name(), event=event)
+        await EventPublisher.publish(event.stream_name(), event)
         return {"message": "Webhook received"}
 
     # Slack sends url_verification before any signing secret is configured — respond immediately.
@@ -153,14 +175,15 @@ async def handle_platform_webhook(
         raw_body=raw_body,
     )
 
-    await log_raw_webhook_event(source=platform, payload=payload, headers=headers)
-
+    source_event_id = _surface_source_event_id(platform, payload, raw_body)
     event = SurfaceWebhookReceivedEvent(
+        event_id=stable_event_id({"event_id": source_event_id}),
         source=platform,
         payload=payload,
-        headers=headers,
+        headers=_redacted_headers(headers),
+        source_event_id=source_event_id,
     )
-    await message_bus.publish(stream=event.stream_name(), event=event)
+    await EventPublisher.publish(event.stream_name(), event)
 
     return {"message": "Webhook received"}
 
@@ -175,7 +198,6 @@ async def handle_surface_webhook(
     request: Request,
     security_service: SurfaceWebhookSecurityServiceDep,
     service: AgentSurfaceService = Depends(get_surface_service),
-    message_bus=Depends(get_message_bus),
 ):
     """Handle webhooks addressed to one concrete surface."""
     headers = dict(request.headers)
@@ -193,15 +215,16 @@ async def handle_surface_webhook(
     )
 
     source = surface.surface_type.value.lower()
-    await log_raw_webhook_event(source=source, payload=payload, headers=headers)
-
+    source_event_id = _surface_source_event_id(source, payload, raw_body)
     event = SurfaceWebhookReceivedEvent(
+        event_id=stable_event_id({"event_id": source_event_id}),
         source=source,
         payload=payload,
-        headers=headers,
+        headers=_redacted_headers(headers),
         surface_id=surface.id,
+        source_event_id=source_event_id,
     )
-    await message_bus.publish(stream=event.stream_name(), event=event)
+    await EventPublisher.publish(event.stream_name(), event)
 
     return {"message": "Webhook received"}
 

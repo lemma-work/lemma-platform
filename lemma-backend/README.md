@@ -6,7 +6,10 @@ The backend lives in `lemma-backend/` inside the `lemma-platform` monorepo. It i
 
 > Engineering conventions (DB sessions/connections, caching, the authorization
 > model, secrets) live in [docs/development.md](docs/development.md); test
-> notes in `docs/tests/`. This README covers setup and running the stack.
+> notes in `docs/tests/`. The runtime module catalog is in
+> [docs/modules/README.md](docs/modules/README.md), with prioritized review
+> findings in [docs/modules/issues.md](docs/modules/issues.md). This README covers
+> setup and running the stack.
 
 ## Stack
 

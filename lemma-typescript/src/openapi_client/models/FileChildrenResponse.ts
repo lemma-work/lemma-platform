@@ -7,4 +7,3 @@ export type FileChildrenResponse = {
     items?: Array<FileChildSchema>;
     path: string;
 };
-

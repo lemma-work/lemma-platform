@@ -6,4 +6,3 @@ export type SurfaceIdentityConfigInput = {
     allowed_domains?: Array<string>;
     allowed_email_addresses?: Array<string>;
 };
-

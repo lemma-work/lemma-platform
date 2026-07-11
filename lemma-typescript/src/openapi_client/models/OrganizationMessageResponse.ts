@@ -10,4 +10,3 @@ export type OrganizationMessageResponse = {
     redirect_uri?: (string | null);
     success?: boolean;
 };
-

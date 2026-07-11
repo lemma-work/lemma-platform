@@ -16,8 +16,8 @@ import type {
   FileSummaryResponse,
   FileSearchResponse,
   FileSearchResultSchema,
-  FlowDetailResponse,
-  FlowSummaryResponse,
+  WorkflowDetailResponse,
+  WorkflowSummaryResponse,
   TableSummaryResponse,
   WorkflowRunResponse,
   FunctionDetailResponse,
@@ -156,11 +156,9 @@ export type FunctionRun = FunctionRunResponse;
 export type FunctionRunSummary = FunctionRunSummaryResponse;
 export type FlowRun = WorkflowRunResponse;
 export type WorkflowRunSummary = WorkflowRunSummaryResponse;
-/** @deprecated Use Workflow or FlowDetailResponse. */
-export type FlowResponse = FlowDetailResponse;
-export type Workflow = FlowDetailResponse;
+export type Workflow = WorkflowDetailResponse;
 /** Lean workflow shape returned by list endpoints (no graph; node_count/node_types only). */
-export type WorkflowSummary = FlowSummaryResponse;
+export type WorkflowSummary = WorkflowSummaryResponse;
 export type WorkflowStart = Workflow["start"];
 export type WorkflowStartType = NonNullable<WorkflowStart>["type"];
 export type Schedule = ScheduleDetailResponse;

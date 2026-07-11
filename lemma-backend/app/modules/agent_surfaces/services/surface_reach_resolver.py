@@ -35,7 +35,7 @@ if TYPE_CHECKING:
     from app.modules.agent_surfaces.services.credential_resolver import (
         SurfaceCredentialResolver,
     )
-    from app.modules.connectors.services.connector_service import ConnectorService
+    from app.composition.surface_connectors import ConnectorService
 
 logger = get_logger(__name__)
 

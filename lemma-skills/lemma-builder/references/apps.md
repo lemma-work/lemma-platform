@@ -48,8 +48,9 @@ a server-side `DATASTORE` schedule, which reacts by *doing work* (`schedules-and
 
 **Default to HTML for a single page** (the host injects pod context and the SDK
 loads from it — nothing to build); reach for **Vite** when the app genuinely needs
-routing/components/state. A conversation **widget** is the same artifact as an HTML
-app and can be saved as one verbatim — see the `lemma-widget` skill.
+routing/components/state. A conversation **widget** uses the same source primitive as
+an HTML app. Promotion preserves its authored fragment and wraps it as a standalone
+document without embed-only padding or height messaging — see the `lemma-widget` skill.
 
 ### HTML app — the whole loop
 

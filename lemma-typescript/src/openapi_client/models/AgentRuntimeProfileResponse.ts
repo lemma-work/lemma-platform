@@ -30,4 +30,3 @@ export type AgentRuntimeProfileResponse = {
     status: RuntimeProfileStatus;
     user_id?: (string | null);
 };
-

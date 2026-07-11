@@ -6,4 +6,3 @@ import type { UserSurfacePlatformGroup } from './UserSurfacePlatformGroup.js';
 export type UserSurfacesResponse = {
     groups: Array<UserSurfacePlatformGroup>;
 };
-

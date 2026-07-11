@@ -9,9 +9,9 @@ from dataclasses import dataclass
 from app.core.authorization.context import Context
 from app.modules.workflow.domain.context import LoopScope, RunContextReader
 from app.modules.workflow.domain.errors import WorkflowDomainError
-from app.modules.workflow.domain.flow import FlowEntity
+from app.modules.workflow.domain.workflow import WorkflowEntity
 from app.modules.workflow.domain.ports import AgentPort, FunctionPort, SchedulePort
-from app.modules.workflow.domain.run import FlowRunEntity, FlowRunStatus, LoopFrame
+from app.modules.workflow.domain.run import WorkflowRunEntity, WorkflowRunStatus, LoopFrame
 from app.modules.workflow.domain.wait import WaitRequest
 from app.modules.workflow.domain.wait import WorkflowRunWaitType
 from app.modules.workflow.execution.executors import EXECUTOR_REGISTRY, NodeExecutor
@@ -56,10 +56,10 @@ class RunStepper:
         self._authz_ctx = authz_ctx
         self._registry = registry or EXECUTOR_REGISTRY
 
-    async def advance(self, run: FlowRunEntity, flow: FlowEntity) -> StepResult:
+    async def advance(self, run: WorkflowRunEntity, flow: WorkflowEntity) -> StepResult:
         """Execute from run.current_node_id until WAITING/COMPLETED/FAILED."""
         steps = 0
-        while run.status == FlowRunStatus.RUNNING:
+        while run.status == WorkflowRunStatus.RUNNING:
             if run.current_node_id is None:
                 run.complete()
                 break
@@ -152,11 +152,11 @@ class RunStepper:
         return StepResult()
 
     async def continue_after(
-        self, run: FlowRunEntity, flow: FlowEntity, node_id: str
+        self, run: WorkflowRunEntity, flow: WorkflowEntity, node_id: str
     ) -> StepResult:
         """Continue execution after node_id completed externally (resume)."""
         self.move_past(run, flow, node_id)
-        if run.status != FlowRunStatus.RUNNING:
+        if run.status != WorkflowRunStatus.RUNNING:
             self._log_outcome(run)
             return StepResult()
         return await self.advance(run, flow)
@@ -165,8 +165,8 @@ class RunStepper:
 
     def move_past(
         self,
-        run: FlowRunEntity,
-        flow: FlowEntity,
+        run: WorkflowRunEntity,
+        flow: WorkflowEntity,
         from_node_id: str,
         *,
         forced: str | None = None,
@@ -214,7 +214,7 @@ class RunStepper:
                 run.execution_context.set_loop_scope(None)
             target = flow.next_after(frame.loop_node_id)
 
-    def _seed_loop_scope(self, run: FlowRunEntity, frame: LoopFrame) -> None:
+    def _seed_loop_scope(self, run: WorkflowRunEntity, frame: LoopFrame) -> None:
         run.execution_context.set_loop_scope(
             LoopScope(
                 item=frame.items[frame.index],
@@ -224,7 +224,7 @@ class RunStepper:
             )
         )
 
-    def _step_context(self, run: FlowRunEntity, flow: FlowEntity) -> StepContext:
+    def _step_context(self, run: WorkflowRunEntity, flow: WorkflowEntity) -> StepContext:
         return StepContext(
             run_id=run.id,
             flow_id=flow.id,
@@ -237,10 +237,10 @@ class RunStepper:
             authz_ctx=self._authz_ctx,
         )
 
-    def _log_outcome(self, run: FlowRunEntity) -> None:
-        if run.status == FlowRunStatus.COMPLETED:
+    def _log_outcome(self, run: WorkflowRunEntity) -> None:
+        if run.status == WorkflowRunStatus.COMPLETED:
             logger.info("workflow.run.completed", run_id=str(run.id))
-        elif run.status == FlowRunStatus.FAILED:
+        elif run.status == WorkflowRunStatus.FAILED:
             logger.warning(
                 "workflow.run.failed",
                 run_id=str(run.id),

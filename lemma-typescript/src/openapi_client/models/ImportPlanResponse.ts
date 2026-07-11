@@ -12,4 +12,3 @@ export type ImportPlanResponse = {
     variables?: Array<VariableSpecResponse>;
     warnings?: Array<string>;
 };
-

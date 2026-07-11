@@ -40,8 +40,8 @@ RETRYABLE_TRANSPORT_ERRORS: tuple[type[BaseException], ...] = (
 # effect). The errors omitted here -- ReadError/ReadTimeout/RemoteProtocolError/
 # WriteError/WriteTimeout/OSError -- can all fire *after* the request reached and
 # ran in the app (the failure is only on the response leg), so re-sending would
-# run the side effect a second time. This mirrors why sync executes also drop
-# 504 from ``RETRYABLE_HTTP_STATUS_CODES``.
+# run the side effect a second time. Non-idempotent callers must likewise narrow
+# HTTP retries to statuses that prove the upstream app never received the call.
 CONNECT_PHASE_TRANSPORT_ERRORS: tuple[type[BaseException], ...] = (
     httpx.ConnectError,
     httpx.ConnectTimeout,
@@ -102,10 +102,10 @@ async def retry_on_transient_agentbox_error(
     exception propagate immediately. The last transient error is re-raised once
     ``max_attempts`` is exhausted. ``on_retry(attempt, message)`` is a logging
     hook invoked before each backoff sleep. ``retryable_status_codes`` narrows
-    which 5xx codes are retried -- e.g. a non-idempotent synchronous call drops
-    504 (gateway timeout) so a request that already reached the app is not
-    re-sent. ``retryable_transport_errors`` narrows which transport exceptions
-    are retried for the same reason -- a non-idempotent call passes
+    which statuses are retried -- e.g. a non-idempotent synchronous call allows
+    only manager responses that prove the upstream app was not reached.
+    ``retryable_transport_errors`` narrows which transport exceptions are
+    retried for the same reason -- a non-idempotent call passes
     ``CONNECT_PHASE_TRANSPORT_ERRORS`` so a request that may have already run in
     the app (a response-leg failure) is not re-sent and its side effect not
     duplicated.

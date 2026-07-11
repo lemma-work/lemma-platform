@@ -8,7 +8,7 @@ stop is observed it sticks without further queries.
 
 from uuid import uuid4
 
-from app.core.config import settings
+from app.modules.agent.config import agent_settings
 from app.modules.agent.services import agent_runner_service as ars_module
 from app.modules.agent.services.agent_runner_service import AgentRunnerService
 
@@ -29,7 +29,7 @@ async def test_stop_checker_throttles_db_polls(monkeypatch):
     clock = {"t": 1000.0}
     monkeypatch.setattr(ars_module.time, "monotonic", lambda: clock["t"])
 
-    interval = settings.agent_run_stop_poll_interval_seconds
+    interval = agent_settings.agent_run_stop_poll_interval_seconds
     check = service._make_stop_checker(uuid4())
 
     # First checkpoint queries the DB.
@@ -60,7 +60,7 @@ async def test_stop_checker_is_sticky_once_stopped(monkeypatch):
     clock = {"t": 0.0}
     monkeypatch.setattr(ars_module.time, "monotonic", lambda: clock["t"])
 
-    interval = settings.agent_run_stop_poll_interval_seconds
+    interval = agent_settings.agent_run_stop_poll_interval_seconds
     check = service._make_stop_checker(uuid4())
 
     assert await check() is False  # query 1 -> not stopped

@@ -96,9 +96,7 @@ def _resolve_output(
 def _voice_note_format_for(platform: str | None) -> str:
     if not platform:
         return "mp3"
-    from app.modules.agent_surfaces.platforms.platform_capabilities import (
-        voice_note_format,
-    )
+    from app.composition.agent_surface_runtime import voice_note_format
 
     return voice_note_format(platform)
 
@@ -109,21 +107,16 @@ async def _deliver_voice_note(deps: BaseAgentContext, path: str) -> bool:
     conversation_id = getattr(deps, "conversation_id", None)
     if not platform or not conversation_id:
         return False
-    from app.modules.agent_surfaces.platforms.platform_capabilities import (
-        get_platform_capabilities,
-    )
+    from app.composition.agent_surface_runtime import platform_supports_chat_delivery
 
-    caps = get_platform_capabilities(platform)
-    if caps is None or caps.is_email:
+    if not platform_supports_chat_delivery(platform):
         # Email composes one reply via the reply tool; the agent attaches the
         # audio there. Web/non-surface just gets the file path (audio player).
         return False
     try:
-        from app.modules.agent_surfaces.services.surface_display_delivery import (
-            deliver_voice_note_to_surface,
-        )
+        from app.composition.agent_surface_runtime import deliver_voice_note
 
-        return await deliver_voice_note_to_surface(
+        return await deliver_voice_note(
             conversation_id=conversation_id, file_path=path
         )
     except Exception as exc:

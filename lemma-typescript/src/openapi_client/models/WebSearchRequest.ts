@@ -15,4 +15,3 @@ export type WebSearchRequest = {
      */
     query: string;
 };
-

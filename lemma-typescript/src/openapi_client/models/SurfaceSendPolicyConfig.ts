@@ -8,4 +8,3 @@
 export type SurfaceSendPolicyConfig = {
     allow_send?: boolean;
 };
-

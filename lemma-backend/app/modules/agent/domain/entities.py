@@ -137,6 +137,8 @@ class Conversation(Entity):
     title: str | None = None
     instructions: str | None = None
     agent_runtime: AgentRuntimeConfig | None = None
+    origin_type: str | None = None
+    origin_id: UUID | None = None
     parent_id: UUID | None = None
     type: ConversationType = ConversationType.CHAT
     status: ConversationStatus | None = None

@@ -28,4 +28,3 @@ export type OperationDiscoverResponse = {
      */
     total_operations: number;
 };
-

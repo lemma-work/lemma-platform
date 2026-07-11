@@ -1,4 +1,3 @@
-import datetime
 from uuid import UUID
 from fastapi import Request
 from starlette.middleware.base import BaseHTTPMiddleware
@@ -15,7 +14,7 @@ class CustomAuthenticationMiddleware(BaseHTTPMiddleware):
     async def dispatch(self, request: Request, call_next):
         # Skip auth for specific paths
         if request.url.path.startswith(
-            ("/st", "/docs", "/openapi.json", "/health", "/schema")
+            ("/st", "/docs", "/openapi.json", "/health", "/livez", "/schema")
         ):
             return await call_next(request)
 

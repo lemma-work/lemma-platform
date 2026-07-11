@@ -354,7 +354,7 @@ async def test_create_account_surface_rejects_org_level_account_conflict(monkeyp
     repo.create.assert_not_awaited()
 
 
-async def test_create_teams_surface_with_account_is_active(monkeypatch):
+async def test_create_teams_surface_with_account_awaits_admin_consent(monkeypatch):
     repo = AsyncMock()
     enricher = AsyncMock()
     service = AgentSurfaceService(
@@ -382,7 +382,7 @@ async def test_create_teams_surface_with_account_is_active(monkeypatch):
         account_id=account_id,
     )
 
-    assert result.status is AgentSurfaceStatus.ACTIVE
+    assert result.status is AgentSurfaceStatus.PENDING_ADMIN_CONSENT
     assert result.external_tenant_id == "tenant-123"
     assert result.account_id == account_id
 

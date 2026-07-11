@@ -8,4 +8,3 @@ export type AgentPermissionsResponse = {
     agent_name: string;
     grants?: Array<AgentResourcePermissionResponse>;
 };
-

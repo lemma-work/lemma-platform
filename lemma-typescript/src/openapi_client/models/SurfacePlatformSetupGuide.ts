@@ -11,4 +11,3 @@ export type SurfacePlatformSetupGuide = {
     summary: string;
     title: string;
 };
-

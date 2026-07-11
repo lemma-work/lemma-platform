@@ -38,7 +38,7 @@ from app.modules.connectors.domain.errors import (
     ConnectRequestStateRequiredError,
     ConnectorValidationError,
     CredentialsNotFoundError,
-    OAuthFlowError,
+    OAuthWorkflowError,
     UnsupportedAuthProviderError,
 )
 from app.modules.connectors.domain.ports import (
@@ -95,12 +95,14 @@ class ConnectorService:
         self.operation_repository = operation_repository
 
     def _exception_details(self, exc: Exception) -> dict | None:
-        details = getattr(exc, "details", None)
-        if isinstance(details, dict):
-            return details
-        if details is not None:
-            return {"upstream": details}
-        return {"upstream_message": str(exc)}
+        details: dict[str, object] = {"error_type": type(exc).__name__}
+        status_code = getattr(exc, "status_code", None)
+        if isinstance(status_code, int):
+            details["upstream_status"] = status_code
+        code = getattr(exc, "code", None)
+        if isinstance(code, str) and len(code) <= 100:
+            details["upstream_code"] = code
+        return details
 
     async def _load_native_account_profile(
         self,
@@ -786,9 +788,12 @@ class ConnectorService:
         except DomainError:
             raise
         except Exception as exc:
-            logger.error(f"Failed to get authorization URL: {exc}")
-            raise OAuthFlowError(
-                f"Failed to initiate OAuth flow: {exc}",
+            logger.exception(
+                "Failed to get connector authorization URL",
+                error_type=type(exc).__name__,
+            )
+            raise OAuthWorkflowError(
+                "Unable to initiate the OAuth flow.",
                 details=self._exception_details(exc),
             ) from exc
 
@@ -971,12 +976,15 @@ class ConnectorService:
         except DomainError:
             raise
         except Exception as exc:
-            logger.error(f"Failed to exchange code for credentials: {exc}")
+            logger.exception(
+                "Failed to exchange connector authorization code",
+                error_type=type(exc).__name__,
+            )
             pending_request.status = ConnectRequestStatus.ERROR
             await self.connect_request_repository.update(pending_request)
             await self.uow.commit()
-            raise OAuthFlowError(
-                f"Failed to complete OAuth flow: {exc}",
+            raise OAuthWorkflowError(
+                "Unable to complete the OAuth flow.",
                 details=self._exception_details(exc),
             ) from exc
         provider_account_id = self._extract_provider_account_id(
@@ -1182,16 +1190,16 @@ class ConnectorService:
                         )
                         if isinstance(exc, DomainError):
                             raise
-                        raise OAuthFlowError(
-                            f"Failed to refresh credentials: {exc}",
+                        raise OAuthWorkflowError(
+                            "Unable to refresh connector credentials.",
                             details=self._exception_details(exc),
                         ) from exc
                     if isinstance(exc, DomainError):
                         raise
                     logger.warning(
-                        "Credential refresh failed for account %s; using stored token. %s",
-                        account_id,
-                        exc,
+                        "Credential refresh failed; using the unexpired stored token",
+                        account_id=str(account_id),
+                        error_type=type(exc).__name__,
                     )
                 else:
                     account.credentials = new_credentials
@@ -1204,7 +1212,7 @@ class ConnectorService:
                 await self._persist_account_status(
                     account, AccountStatus.REAUTH_REQUIRED
                 )
-                raise OAuthFlowError(
+                raise OAuthWorkflowError(
                     "Credentials are expired and cannot be refreshed for this account."
                 )
 

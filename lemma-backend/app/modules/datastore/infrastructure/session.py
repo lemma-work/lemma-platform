@@ -74,3 +74,8 @@ async def close_datastore_engine() -> None:
     _session_maker = None
     if engine is not None:
         await engine.dispose()
+    from app.modules.datastore.infrastructure.transactional_events import (
+        reset_datastore_event_outbox_state,
+    )
+
+    reset_datastore_event_outbox_state()

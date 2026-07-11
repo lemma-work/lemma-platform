@@ -11,4 +11,3 @@ export type DatastoreQueryRequest = {
      */
     query: string;
 };
-

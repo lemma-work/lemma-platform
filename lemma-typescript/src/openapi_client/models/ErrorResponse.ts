@@ -13,5 +13,5 @@ export type ErrorResponse = {
     code: string;
     details?: null;
     message: string;
+    request_id?: (string | null);
 };
-

@@ -4,7 +4,7 @@ A widget's HTML fragment is stored durably in the display_resource tool call's
 ``tool_args.content`` and addressed by ``(conversation_id, tool_call_id)``. This
 service fetches that content plus the conversation's ``pod_id`` so the public
 widget route can wrap, inject pod context, and serve it — the same primitive as
-an app. See docs/app-widget-unification.md.
+an app.
 """
 
 from __future__ import annotations

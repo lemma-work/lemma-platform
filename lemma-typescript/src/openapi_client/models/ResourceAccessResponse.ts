@@ -9,4 +9,3 @@ export type ResourceAccessResponse = {
     resource_name: string;
     resource_type: ResourceType;
 };
-

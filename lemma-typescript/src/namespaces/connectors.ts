@@ -5,7 +5,6 @@ import type { ConnectRequestResponseSchema } from "../openapi_client/models/Conn
 import type { OperationDetailsBatchRequest } from "../openapi_client/models/OperationDetailsBatchRequest.js";
 import type { OperationExecutionRequest } from "../openapi_client/models/OperationExecutionRequest.js";
 import type { AccountCreateSchema } from "../openapi_client/models/AccountCreateSchema.js";
-import type { AccountCredentialsResponseSchema } from "../openapi_client/models/AccountCredentialsResponseSchema.js";
 import type { AccountListResponseSchema } from "../openapi_client/models/AccountListResponseSchema.js";
 import type { AccountResponseSchema } from "../openapi_client/models/AccountResponseSchema.js";
 import type { AuthConfigCreateSchema } from "../openapi_client/models/AuthConfigCreateSchema.js";
@@ -120,11 +119,6 @@ export class ConnectorsNamespace {
       )),
     get: (organizationId: string, accountId: string) =>
       this.client.request(() => ConnectorsService.connectorAccountGet(
-        organizationId,
-        accountId,
-      )),
-    credentials: (organizationId: string, accountId: string) =>
-      this.client.request(() => ConnectorsService.connectorAccountCredentialsGet(
         organizationId,
         accountId,
       )),

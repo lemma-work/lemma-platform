@@ -16,8 +16,9 @@ from app.modules.schedule.scheduler.api.schemas import (
     JobListResponse,
     JobStatusResponse,
 )
-from app.core.config import reveal_secret, settings
+from app.core.config import reveal_secret
 from app.core.log.log import get_logger
+from app.modules.schedule.config import schedule_settings
 
 logger = get_logger(__name__)
 
@@ -32,7 +33,7 @@ async def require_scheduler_token(
     caller must present it as a bearer token; when it is unset (e.g. local
     single-process dev) the check is skipped so nothing breaks out of the box.
     """
-    expected = reveal_secret(settings.scheduler_internal_token)
+    expected = reveal_secret(schedule_settings.scheduler_internal_token)
     if not expected:
         return
 

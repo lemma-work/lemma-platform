@@ -17,4 +17,3 @@ export type PublishStatusResponse = {
     repo_url?: (string | null);
     status: PublishStatus;
 };
-

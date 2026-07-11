@@ -12,4 +12,3 @@ export type PlanStepResponse = {
     name: string;
     status?: string;
 };
-

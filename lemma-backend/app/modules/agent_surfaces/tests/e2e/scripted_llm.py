@@ -26,7 +26,6 @@ between runs unless a test wants to deliberately diverge.
 
 from __future__ import annotations
 
-from typing import Any
 from uuid import UUID
 
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -62,9 +61,19 @@ from app.modules.agent_surfaces.tests.e2e.helpers import (
     _latest_agent_run,
     E2E_RUNTIME_MODEL_NAME,
 )
+from app.modules.test_support.e2e.scripted_model import (
+    ScriptTurn as ScriptTurn,
+    script_ask_user as script_ask_user,
+    script_display_resource as script_display_resource,
+    script_email_reply as script_email_reply,
+    script_progress as script_progress,
+    script_request_approval as script_request_approval,
+    script_say as script_say,
+    script_text as script_text,
+    script_tool_call as script_tool_call,
+)
 
 SurfaceContext = SurfaceChatContext | SurfaceReplyContext
-ScriptTurn = dict[str, Any]  # {"text": str | None, "tool_calls": list[dict]}
 
 
 # ---------------------------------------------------------------------------
@@ -225,165 +234,3 @@ async def resume_latest_scripted_run(
         agent_name=agent_name,
         script=None,
     )
-
-
-# ---------------------------------------------------------------------------
-# Script-entry DSL builders
-# ---------------------------------------------------------------------------
-
-
-def script_text(text: str) -> ScriptTurn:
-    """A turn with only assistant text (a final reply, or narration)."""
-    return {"text": text, "tool_calls": []}
-
-
-def script_tool_call(
-    tool_name: str,
-    args: dict[str, Any],
-    *,
-    tool_call_id: str | None = None,
-    text: str | None = None,
-) -> ScriptTurn:
-    """Generic one-tool-call turn — the primitive the builders below wrap.
-
-    Always pass an explicit ``tool_call_id`` for ask_user/request_approval so
-    the test can reference it later (native-submission callback ids embed it).
-    """
-    call: dict[str, Any] = {"tool_name": tool_name, "args": args}
-    if tool_call_id is not None:
-        call["tool_call_id"] = tool_call_id
-    return {"text": text, "tool_calls": [call]}
-
-
-def script_ask_user(
-    questions: list[dict[str, Any]],
-    *,
-    tool_call_id: str = "tool-ask-1",
-    text: str | None = None,
-) -> ScriptTurn:
-    """``questions``: list of ``{"question", "header", "options": [{"label", ...}], "multi_select"?}``.
-
-    Wraps in ``{"request": {"questions": questions}}`` — the real ``ask_user``
-    tool function's single param is named ``request`` (``AskUserRequest``).
-    """
-    return script_tool_call(
-        "ask_user",
-        {"request": {"questions": questions}},
-        tool_call_id=tool_call_id,
-        text=text,
-    )
-
-
-def script_request_approval(
-    *,
-    tool_name: str,
-    args: dict[str, Any],
-    title: str,
-    reason: str | None = None,
-    tool_call_id: str = "tool-approval-1",
-    text: str | None = None,
-) -> ScriptTurn:
-    """FLAT args, matching the real ``request_approval(tool_name, args, title,
-    reason=None, payload=None)`` signature — NOT wrapped in a "request" key.
-
-    ``tool_name``/``args`` here are the INNER tool being requested approval
-    for (e.g. ``tool_name="say"``); do not confuse with the OUTER scripted
-    tool name, which is always ``"request_approval"`` itself.
-    """
-    call_args: dict[str, Any] = {"tool_name": tool_name, "args": args, "title": title}
-    if reason is not None:
-        call_args["reason"] = reason
-    return script_tool_call(
-        "request_approval", call_args, tool_call_id=tool_call_id, text=text
-    )
-
-
-def script_display_resource(
-    *,
-    type: str,  # noqa: A002 - matches the real field name
-    path: str | None = None,
-    name: str | None = None,
-    tool_call_id: str = "tool-display-1",
-    text: str | None = None,
-    **extra: Any,
-) -> ScriptTurn:
-    request: dict[str, Any] = {"type": type}
-    if path is not None:
-        request["path"] = path
-    if name is not None:
-        request["name"] = name
-    request.update(extra)
-    return script_tool_call(
-        "display_resource", {"request": request}, tool_call_id=tool_call_id, text=text
-    )
-
-
-def script_say(
-    text_to_speak: str,
-    *,
-    tool_call_id: str = "tool-say-1",
-    voice: str | None = None,
-    output_file_path: str | None = None,
-    text: str | None = None,
-) -> ScriptTurn:
-    request: dict[str, Any] = {"text": text_to_speak}
-    if voice is not None:
-        request["voice"] = voice
-    if output_file_path is not None:
-        request["output_file_path"] = output_file_path
-    return script_tool_call(
-        "say", {"request": request}, tool_call_id=tool_call_id, text=text
-    )
-
-
-def script_email_reply(
-    tool_name: str,  # "gmail_reply_email" | "outlook_reply_email" | "resend_reply_email"
-    content: str,
-    *,
-    content_type: str = "markdown",
-    attachment_paths: list[str] | None = None,
-    subject: str | None = None,
-    tool_call_id: str = "tool-email-reply-1",
-    text: str | None = None,
-) -> ScriptTurn:
-    request: dict[str, Any] = {"content": content, "content_type": content_type}
-    if attachment_paths:
-        request["attachment_paths"] = attachment_paths
-    if subject is not None:
-        request["subject"] = subject
-    return script_tool_call(
-        tool_name, {"request": request}, tool_call_id=tool_call_id, text=text
-    )
-
-
-def script_progress(
-    comments: list[str],
-    *,
-    final_text: str = "All done.",
-    tool_name: str,
-) -> list[ScriptTurn]:
-    """One turn per comment (each its own real tool call, so the observer sees
-    N separate TOOL_CALL messages to stream), then a final text turn.
-
-    ``tool_name`` MUST be a real tool actually present in the test agent's
-    resolved toolset (e.g. a platform's own read-only tool, such as
-    ``slack_get_recent_channel_messages``) — the mock model emits a genuine
-    ``ToolCallPart`` that real pydantic-ai toolset resolution must be able to
-    dispatch AND validate. Every platform tool takes a single ``request: Model``
-    parameter, so ``comment`` is nested under ``request`` — matching both what
-    real validation expects (an unrecognized ``comment`` field inside `request`
-    is silently ignored; no platform tool model uses ``extra="forbid"``) and
-    what the progress observer's ``_find_comment`` reads (it checks top-level
-    ``comment`` first, then recurses into ``request``). Pick a tool whose other
-    ``request`` fields are all optional (e.g. ``limit``/``include_current_thread``
-    on ``SlackRecentChannelMessagesParams``) so the empty-otherwise ``request``
-    still validates.
-    """
-    turns = [
-        script_tool_call(
-            tool_name, {"request": {"comment": c}}, tool_call_id=f"tool-progress-{i}"
-        )
-        for i, c in enumerate(comments)
-    ]
-    turns.append(script_text(final_text))
-    return turns

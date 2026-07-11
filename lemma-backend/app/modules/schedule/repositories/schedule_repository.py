@@ -429,3 +429,29 @@ class ScheduleRepository(ScheduleRepositoryInterface):
         )
         await self.session.execute(stmt)
         await self.session.flush()
+
+    async def increment_consecutive_failures(self, schedule_id: UUID) -> int:
+        """Atomically increment the durable circuit-breaker counter."""
+        count = await self.session.scalar(
+            update(Schedule)
+            .where(Schedule.id == schedule_id)
+            .values(consecutive_failures=Schedule.consecutive_failures + 1)
+            .returning(Schedule.consecutive_failures)
+        )
+        return int(count or 0)
+
+    async def reset_consecutive_failures(self, schedule_id: UUID) -> None:
+        """Reset the durable circuit-breaker counter after success/reactivation."""
+        await self.session.execute(
+            update(Schedule)
+            .where(Schedule.id == schedule_id)
+            .values(consecutive_failures=0)
+        )
+
+    async def set_consecutive_failures(self, schedule_id: UUID, count: int) -> None:
+        """Set the streak derived from distinct terminal schedule runs."""
+        await self.session.execute(
+            update(Schedule)
+            .where(Schedule.id == schedule_id)
+            .values(consecutive_failures=max(0, count))
+        )

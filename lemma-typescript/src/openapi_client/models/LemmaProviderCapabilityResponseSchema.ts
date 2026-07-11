@@ -14,4 +14,3 @@ export type LemmaProviderCapabilityResponseSchema = {
     supports_org_custom_oauth?: boolean;
     system_default_available?: boolean;
 };
-

@@ -34,6 +34,22 @@ async def test_create_user_emits_signup_event_without_personal_org(
 
 
 @pytest.mark.asyncio
+async def test_create_user_normalizes_email_before_lookup_and_persist(
+    user_service: UserService,
+    user_repository_mock: AsyncMock,
+):
+    user = UserEntity(email="Test+User@Example.COM")
+    user_repository_mock.get_by_email.return_value = None
+    user_repository_mock.create.return_value = user
+
+    await user_service.create_user(user)
+
+    user_repository_mock.get_by_email.assert_awaited_once_with("test+user@example.com")
+    create_user_arg = user_repository_mock.create.await_args.args[0]
+    assert create_user_arg.email == "test+user@example.com"
+
+
+@pytest.mark.asyncio
 async def test_create_user_raises_conflict_when_email_exists(
     user_service: UserService,
     user_repository_mock: AsyncMock,
@@ -95,6 +111,19 @@ async def test_get_user_by_email_returns_optional(
     user_repository_mock.get_by_email.return_value = user
 
     assert await user_service.get_user_by_email("test+user@example.com") == user
+    user_repository_mock.get_by_email.assert_awaited_once_with("test+user@example.com")
+
+
+@pytest.mark.asyncio
+async def test_get_user_by_email_normalizes_before_lookup(
+    user_service: UserService,
+    user_repository_mock: AsyncMock,
+):
+    user = UserEntity(email="test+user@example.com")
+    user_repository_mock.get_by_email.return_value = user
+
+    assert await user_service.get_user_by_email("Test+User@Example.COM") == user
+    user_repository_mock.get_by_email.assert_awaited_once_with("test+user@example.com")
 
 
 @pytest.mark.asyncio

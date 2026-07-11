@@ -16,4 +16,3 @@ export type ExpressionInputBinding = {
      */
     value: string;
 };
-

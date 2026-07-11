@@ -23,7 +23,6 @@ from pathlib import Path
 from uuid import UUID
 
 from app.core.authorization.scope import context_scope, uow_scope
-from app.core.concurrency.offload import run_blocking
 from app.core.authorization.service import AuthorizationDataService
 from app.core.domain.errors import DomainError
 from app.core.infrastructure.jobs.streaq_runtime import (
@@ -34,13 +33,16 @@ from app.core.infrastructure.jobs.streaq_runtime import (
 )
 from app.core.log.log import get_logger
 from app.modules.pod_bundle.config import pod_bundle_settings
-from app.modules.pod_bundle.domain.errors import BundleInvalidError, BundleStagingMissingError
+from app.modules.pod_bundle.domain.errors import (
+    BundleInvalidError,
+    BundleStagingMissingError,
+    BundleStateConflictError,
+)
 from app.modules.pod_bundle.domain.state import (
     ExportState,
     ExportStatus,
     ImportState,
     ImportStatus,
-    PublishState,
     PublishStatus,
 )
 from app.modules.pod_bundle.infrastructure.exporter import BundleExporter
@@ -60,6 +62,100 @@ from app.modules.pod_bundle.infrastructure.state_store import (
 logger = get_logger(__name__)
 
 
+class _ImportCancellation(Exception):
+    pass
+
+
+async def _cancellation_requested(store, import_id: UUID) -> ImportState | None:
+    current = await store.get_import(import_id)
+    if current is not None and current.status in {
+        ImportStatus.CANCELLING,
+        ImportStatus.CANCELLED,
+        ImportStatus.PARTIALLY_CANCELLED,
+    }:
+        return current
+    return None
+
+
+async def _raise_if_cancelled(store, import_id: UUID) -> None:
+    if await _cancellation_requested(store, import_id) is not None:
+        raise _ImportCancellation
+
+
+async def _resolve_import_replacements(
+    worker_ctx: AppWorkerContext,
+    state: ImportState,
+    *,
+    pod_id: UUID,
+    user_id: UUID,
+) -> dict[str, str]:
+    if state.plan is None:
+        return {}
+    replacements = {
+        variable.name: variable.default
+        for variable in state.plan.variables
+        if variable.default is not None
+    }
+    replacements.update(state.variables_provided or {})
+    unresolved_members = [
+        variable.name
+        for variable in state.plan.variables
+        if variable.kind == "pod_member" and not replacements.get(variable.name)
+    ]
+    if unresolved_members:
+        member_id = await _resolve_importer_pod_member_id(
+            worker_ctx, pod_id=pod_id, user_id=user_id
+        )
+        if member_id is not None:
+            replacements.update(dict.fromkeys(unresolved_members, member_id))
+    return replacements
+
+
+async def _finalize_import_cancellation(store, staging, state: ImportState) -> None:
+    current = await store.get_import(state.import_id) or state
+    current.current_step = None
+    current.status = (
+        ImportStatus.PARTIALLY_CANCELLED
+        if current.committed_steps
+        else ImportStatus.CANCELLED
+    )
+    current.completed_at = _now()
+    try:
+        await store.save_import(current)
+    except BundleStateConflictError:
+        latest = await store.get_import(current.import_id)
+        if latest is not None and latest.status in {
+            ImportStatus.CANCELLED,
+            ImportStatus.PARTIALLY_CANCELLED,
+        }:
+            return
+        raise
+    await publish_bundle_event(
+        current.import_id,
+        completed_payload(current.status.value, current.seq),
+    )
+    try:
+        await staging.delete_archive("pod-imports", current.import_id)
+    except Exception:  # cleanup is backstopped by the sweep job
+        logger.warning(
+            "Failed to clean staging for cancelled import",
+            import_id=str(current.import_id),
+        )
+
+
+async def _settle_import_state_conflict(store, staging, import_id: UUID) -> bool:
+    """Resolve a CAS conflict when cancellation/finalization already won."""
+    latest = await store.get_import(import_id)
+    if latest is not None and latest.status is ImportStatus.CANCELLING:
+        await _finalize_import_cancellation(store, staging, latest)
+        return True
+    return latest is not None and latest.status in {
+        ImportStatus.COMPLETED,
+        ImportStatus.CANCELLED,
+        ImportStatus.PARTIALLY_CANCELLED,
+    }
+
+
 @streaq_task(name="export_pod_bundle")
 async def export_pod_bundle(context: dict[str, str | None]) -> None:
     worker_ctx: AppWorkerContext = streaq_worker.context
@@ -76,14 +172,23 @@ async def export_pod_bundle(context: dict[str, str | None]) -> None:
         # do — re-running requires a fresh request.
         logger.info("Export state missing; skipping export job %s", export_id)
         return
-    if state.is_terminal:
+    if state.status == ExportStatus.READY:
         logger.info("Export %s already terminal (%s); skipping", export_id, state.status)
         return
 
     try:
         # (a) EXPORTING
+        retrying = state.status is ExportStatus.FAILED
         state.status = ExportStatus.EXPORTING
-        await store.save_export(state)
+        state.error = None
+        state.error_type = None
+        state.error_code = None
+        state.completed_at = None
+        if retrying:
+            state.attempt += 1
+            await store.reopen_export(state)
+        else:
+            await store.save_export(state)
         await publish_bundle_event(
             export_id, status_payload(state.status.value, state.seq)
         )
@@ -197,6 +302,12 @@ async def plan_pod_import(context: dict[str, str | None]) -> None:
 
     try:
         await _plan_from_staging(worker_ctx, store, staging, state)
+    except _ImportCancellation:
+        await _finalize_import_cancellation(store, staging, state)
+    except BundleStateConflictError:
+        if await _settle_import_state_conflict(store, staging, import_id):
+            return
+        raise
     except DomainError as exc:
         await _fail_import(store, state, str(exc))
         logger.warning("Pod bundle plan %s failed (terminal): %s", import_id, exc)
@@ -211,6 +322,7 @@ async def _plan_from_staging(worker_ctx, store, staging, state: ImportState) -> 
     imports). Sets ``PLANNING`` → ``AWAITING_CONFIRMATION``; raises a domain error
     the caller maps to a terminal FAILED state."""
     import_id = state.import_id
+    await _raise_if_cancelled(store, import_id)
     state.status = ImportStatus.PLANNING
     await store.save_import(state)
     await publish_bundle_event(import_id, status_payload(state.status.value, state.seq))
@@ -218,6 +330,7 @@ async def _plan_from_staging(worker_ctx, store, staging, state: ImportState) -> 
     archive = await staging.get_archive("pod-imports", import_id)
     if archive is None:
         raise BundleStagingMissingError()
+    await _raise_if_cancelled(store, import_id)
 
     with tempfile.TemporaryDirectory(prefix="lemma-pod-import-") as tmp:
         from lemma_pod_bundle import extract_bundle
@@ -246,6 +359,7 @@ async def _plan_from_staging(worker_ctx, store, staging, state: ImportState) -> 
                 )
                 plan = await PlanBuilder(existing).build_plan(bundle_root=bundle_root)
 
+    await _raise_if_cancelled(store, import_id)
     state.plan = plan
     state.progress.total = len(plan.steps)
     state.progress.done = 0
@@ -276,6 +390,7 @@ async def import_pod_github(context: dict[str, str | None]) -> None:
         return
 
     try:
+        await _raise_if_cancelled(store, import_id)
         state.status = ImportStatus.FETCHING
         await store.save_import(state)
         await publish_bundle_event(import_id, status_payload(state.status.value, state.seq))
@@ -293,10 +408,17 @@ async def import_pod_github(context: dict[str, str | None]) -> None:
         zip_bytes = await GithubBundleFetcher().fetch_zipball(
             owner=owner, repo=repo, ref=state.source.ref
         )
+        await _raise_if_cancelled(store, import_id)
         state.staging_key = await staging.put_archive("pod-imports", import_id, zip_bytes)
         await store.save_import(state)
 
         await _plan_from_staging(worker_ctx, store, staging, state)
+    except _ImportCancellation:
+        await _finalize_import_cancellation(store, staging, state)
+    except BundleStateConflictError:
+        if await _settle_import_state_conflict(store, staging, import_id):
+            return
+        raise
     except DomainError as exc:
         await _fail_import(store, state, str(exc))
         logger.warning("GitHub import %s failed (terminal): %s", import_id, exc)
@@ -329,6 +451,7 @@ async def import_pod_url(context: dict[str, str | None]) -> None:
         return
 
     try:
+        await _raise_if_cancelled(store, import_id)
         state.status = ImportStatus.FETCHING
         await store.save_import(state)
         await publish_bundle_event(import_id, status_payload(state.status.value, state.seq))
@@ -338,10 +461,17 @@ async def import_pod_url(context: dict[str, str | None]) -> None:
             raise BundleStagingMissingError(
                 "The source bundle is no longer available; export or upload it again."
             )
+        await _raise_if_cancelled(store, import_id)
         state.staging_key = await staging.put_archive("pod-imports", import_id, data)
         await store.save_import(state)
 
         await _plan_from_staging(worker_ctx, store, staging, state)
+    except _ImportCancellation:
+        await _finalize_import_cancellation(store, staging, state)
+    except BundleStateConflictError:
+        if await _settle_import_state_conflict(store, staging, import_id):
+            return
+        raise
     except DomainError as exc:
         await _fail_import(store, state, str(exc))
         logger.warning("URL import %s failed (terminal): %s", import_id, exc)
@@ -371,6 +501,9 @@ async def apply_pod_import(context: dict[str, str | None]) -> None:
         return
     if state.status == ImportStatus.COMPLETED:
         return
+    if state.status == ImportStatus.CANCELLING:
+        await _finalize_import_cancellation(store, staging, state)
+        return
 
     from app.modules.pod_bundle.infrastructure.app_builder import AppStepRunner
     from app.modules.pod_bundle.infrastructure.applier import (
@@ -380,6 +513,7 @@ async def apply_pod_import(context: dict[str, str | None]) -> None:
     from app.modules.pod_bundle.domain.state import StepKind, StepStatus
 
     try:
+        await _raise_if_cancelled(store, import_id)
         state.status = ImportStatus.APPLYING
         await store.save_import(state)
         await publish_bundle_event(import_id, status_payload(state.status.value, state.seq))
@@ -388,31 +522,9 @@ async def apply_pod_import(context: dict[str, str | None]) -> None:
         if archive is None:
             raise BundleStagingMissingError()
 
-        # Resolve ${var} placeholders from the plan's defaults first, then the
-        # importer-provided values (which win). Required variables are validated at
-        # apply-request time, so anything still unresolved here is an optional var
-        # with no default and is dropped by the service layer.
-        replacements = {
-            v.name: v.default for v in state.plan.variables if v.default is not None
-        }
-        replacements.update(state.variables_provided or {})
-
-        # A pod_member (``${..._assignee}``) variable auto-resolves to the
-        # importing user's own membership unless they supplied one — otherwise the
-        # placeholder is left unresolved and the workflow silently loses its
-        # assignee. Resolve once and reuse for every such variable.
-        unresolved_member_vars = [
-            v.name
-            for v in state.plan.variables
-            if v.kind == "pod_member" and not replacements.get(v.name)
-        ]
-        if unresolved_member_vars:
-            member_id = await _resolve_importer_pod_member_id(
-                worker_ctx, pod_id=pod_id, user_id=user_id
-            )
-            if member_id is not None:
-                for name in unresolved_member_vars:
-                    replacements[name] = member_id
+        replacements = await _resolve_import_replacements(
+            worker_ctx, state, pod_id=pod_id, user_id=user_id
+        )
 
         # APP steps build in the agentbox and must not hold a pooled DB connection,
         # so they run through a self-scoped runner instead of the per-step uow_scope.
@@ -431,7 +543,10 @@ async def apply_pod_import(context: dict[str, str | None]) -> None:
                 raise BundleInvalidError(str(exc)) from exc
 
             while (step := state.plan.next_pending_step()) is not None:
+                await _raise_if_cancelled(store, import_id)
                 step.status = StepStatus.RUNNING
+                state.current_step = step.index
+                await store.save_import(state)
                 try:
                     if step.kind is StepKind.APP:
                         # Self-scoped: creates the app, builds it in the agentbox
@@ -445,6 +560,25 @@ async def apply_pod_import(context: dict[str, str | None]) -> None:
                             bundle_root=bundle_root,
                             replacements=replacements,
                         )
+                        cancelled = await _cancellation_requested(store, import_id)
+                        if cancelled is not None:
+                            if step.index not in cancelled.committed_steps:
+                                cancelled.committed_steps.append(step.index)
+                            if cancelled.plan is not None:
+                                cancelled_step = next(
+                                    (
+                                        item
+                                        for item in cancelled.plan.steps
+                                        if item.index == step.index
+                                    ),
+                                    None,
+                                )
+                                if cancelled_step is not None:
+                                    cancelled_step.status = StepStatus.DONE
+                            await _finalize_import_cancellation(
+                                store, staging, cancelled
+                            )
+                            return
                     else:
                         async with uow_scope(worker_ctx.uow_factory) as uow:
                             ctx = await AuthorizationDataService(
@@ -460,6 +594,7 @@ async def apply_pod_import(context: dict[str, str | None]) -> None:
                                     replacements=replacements,
                                 )
                                 await applier.apply_step(step)
+                                await _raise_if_cancelled(store, import_id)
                                 # Commit the step before checkpointing it DONE: the
                                 # bare UoW rolls back on error but does NOT auto-commit
                                 # on success, so uncommitted writes (e.g. a workflow a
@@ -469,6 +604,8 @@ async def apply_pod_import(context: dict[str, str | None]) -> None:
                                 # committed internally.
                                 await uow.commit()
                     step.status = StepStatus.DONE
+                    if step.index not in state.committed_steps:
+                        state.committed_steps.append(step.index)
                 except StepNotApplicableError as exc:
                     # Deferred kind (app/surface/grants) — skip, don't fail.
                     step.status = StepStatus.SKIPPED
@@ -484,7 +621,9 @@ async def apply_pod_import(context: dict[str, str | None]) -> None:
                     return
                 await _checkpoint(store, state, step)
 
+        await _raise_if_cancelled(store, import_id)
         await _record_recipe(worker_ctx, state)
+        await _raise_if_cancelled(store, import_id)
         state.status = ImportStatus.COMPLETED
         state.completed_at = _now()
         await store.save_import(state)
@@ -496,6 +635,12 @@ async def apply_pod_import(context: dict[str, str | None]) -> None:
             await staging.delete_archive("pod-imports", import_id)
         except Exception as exc:  # noqa: BLE001
             logger.warning("Failed to delete staged import %s: %s", import_id, exc)
+    except _ImportCancellation:
+        await _finalize_import_cancellation(store, staging, state)
+    except BundleStateConflictError:
+        if await _settle_import_state_conflict(store, staging, import_id):
+            return
+        raise
     except DomainError as exc:
         await _fail_import(store, state, str(exc))
         logger.warning("Pod bundle apply %s failed (terminal): %s", import_id, exc)
@@ -509,6 +654,7 @@ async def _checkpoint(store, state: ImportState, step) -> None:
     done = sum(1 for s in state.plan.steps if s.status.value in ("DONE", "SKIPPED"))
     state.progress.done = done
     state.progress.total = len(state.plan.steps)
+    state.current_step = None
     await store.save_import(state)
     await publish_bundle_event(
         state.import_id,
@@ -526,227 +672,6 @@ async def _checkpoint(store, state: ImportState, step) -> None:
     )
 
 
-@streaq_task(name="publish_pod_github")
-async def publish_pod_github(context: dict[str, str | None]) -> None:
-    """Export the pod, render a README, and push everything to a new GitHub repo
-    via the Composio connector — per-file checkpoints make it resumable and a
-    missing GitHub connection ends terminally with a clear message."""
-    worker_ctx: AppWorkerContext = streaq_worker.context
-    publish_id = UUID(str(context["publish_id"]))
-    pod_id = UUID(str(context["pod_id"]))
-    user_id = UUID(str(context["user_id"]))
-
-    store = get_pod_bundle_state_store()
-    state = await store.get_publish(publish_id)
-    if state is None or state.status == PublishStatus.COMPLETED:
-        return
-
-    from app.modules.pod_bundle.infrastructure.ai_readme import (
-        build_system_polish_fn,
-        polish_readme,
-    )
-    from app.modules.pod_bundle.infrastructure.exporter import BundleExporter
-    from app.modules.pod_bundle.infrastructure.github_publisher import (
-        ComposioGithubOps,
-        GithubPublisher,
-    )
-    from app.modules.pod_bundle.infrastructure.readme import render_readme
-
-    try:
-        # (1) EXPORTING — assemble the bundle bytes in one short UoW scope.
-        state.status = PublishStatus.EXPORTING
-        await store.save_publish(state)
-        await publish_bundle_event(publish_id, status_payload(state.status.value, state.seq))
-
-        async def _noop_progress(done: int, total: int) -> None:
-            return None
-
-        organization_id = None
-        async with uow_scope(worker_ctx.uow_factory) as uow:
-            ctx = await AuthorizationDataService(uow.session).build_user_context(
-                user_id=user_id, pod_id=pod_id
-            )
-            organization_id = ctx.organization_id
-            async with context_scope(ctx):
-                # Resources only: a pod published to (possibly public) GitHub ships
-                # a template that recreates the pod in an empty-table state, never a
-                # dump of its row data.
-                pod_name, zip_bytes, _warnings = await BundleExporter().export(
-                    pod_id=pod_id,
-                    user_id=user_id,
-                    with_data=False,
-                    include=None,
-                    ctx=ctx,
-                    uow=uow,
-                    on_progress=_noop_progress,
-                )
-
-        files = await run_blocking(_zip_to_files, zip_bytes, limiter="cpu_bound")
-        counts = _resource_counts(files)
-        pod_meta = _pod_meta_from_files(files)
-        repo_description = pod_meta.get("description")
-
-        # (2) PUBLISHING — create the repo + push files via Composio (no DB held
-        # across the HTTP calls beyond each short per-operation scope).
-        state.status = PublishStatus.PUBLISHING
-        await store.save_publish(state)
-        await publish_bundle_event(publish_id, status_payload(state.status.value, state.seq))
-
-        async def _run_op(op_name: str, payload: dict) -> dict:
-            async with uow_scope(worker_ctx.uow_factory) as op_uow:
-                op_ctx = await AuthorizationDataService(
-                    op_uow.session
-                ).build_user_context(user_id=user_id, pod_id=pod_id)
-                from app.modules.connectors.api.dependencies import (
-                    build_connector_operation_service,
-                )
-
-                svc = build_connector_operation_service(op_uow)
-                resp = await svc.execute_operation(
-                    connector_id="github",
-                    operation_name=op_name,
-                    payload=payload,
-                    user_id=user_id,
-                    actor=op_ctx,
-                    account_id=state.account_id,
-                )
-            return resp.model_dump() if hasattr(resp, "model_dump") else (
-                resp if isinstance(resp, dict) else {}
-            )
-
-        publisher = GithubPublisher(ComposioGithubOps(_run_op))
-
-        # Create the repo first so the README's install button carries the real
-        # GitHub owner (not the repo name), then render + optionally AI-polish the
-        # README and push everything.
-        repo = await publisher.create_repo(
-            repo_name=state.repo_name,
-            private=state.private,
-            description=repo_description,
-        )
-        state.repo_url = repo.html_url
-        state.repo_created = True
-        await store.save_publish(state)
-
-        readme = render_readme(
-            pod_name=pod_meta.get("name") or pod_name.removesuffix(".zip"),
-            description=repo_description,
-            resource_counts=counts,
-            owner=repo.owner,
-            repo=repo.repo,
-            icon_url=pod_meta.get("icon_url"),
-        )
-        if state.ai_readme:
-            polish_fn = build_system_polish_fn(
-                user_id=user_id,
-                organization_id=organization_id,
-                pod_id=pod_id,
-            )
-            readme = await polish_readme(readme, polish_fn=polish_fn)
-        state.readme = readme
-        await store.save_publish(state)
-
-        async def _on_file(path: str, done: int, total: int) -> None:
-            state.progress.done = done
-            state.progress.total = total
-            await store.save_publish(state)
-            await publish_bundle_event(
-                publish_id, progress_payload(done, total, state.seq, path=path)
-            )
-
-        repo = await publisher.publish(
-            repo_name=state.repo_name,
-            private=state.private,
-            description=repo_description,
-            files=files,
-            readme=readme,
-            on_progress=_on_file,
-            already_created=repo,
-        )
-
-        state.status = PublishStatus.COMPLETED
-        state.repo_url = repo.html_url
-        state.repo_created = True
-        state.completed_at = _now()
-        await store.save_publish(state)
-        await publish_bundle_event(
-            publish_id,
-            completed_payload(state.status.value, state.seq, repo_url=repo.html_url),
-        )
-    except DomainError as exc:
-        await _fail_publish(store, state, str(exc))
-        logger.warning("Pod publish %s failed (terminal): %s", publish_id, exc)
-    except Exception as exc:
-        await _fail_publish(store, state, "Publish failed due to a transient error.")
-        logger.error("Pod publish %s failed (retryable): %s", publish_id, exc)
-        raise
-
-
-async def _fail_publish(store, state: PublishState, message: str) -> None:
-    state.status = PublishStatus.FAILED
-    state.error = message
-    state.completed_at = _now()
-    try:
-        await store.save_publish(state)
-        await publish_bundle_event(state.publish_id, error_payload(message, state.seq))
-    except Exception as exc:  # noqa: BLE001
-        logger.warning("Failed to persist FAILED publish %s: %s", state.publish_id, exc)
-
-
-def _zip_to_files(zip_bytes: bytes) -> dict[str, bytes]:
-    """Unpack an exported bundle zip to a ``{path: bytes}`` map for upload,
-    dropping directory entries and any pre-existing README (we render our own)."""
-    import io
-    import zipfile
-
-    files: dict[str, bytes] = {}
-    with zipfile.ZipFile(io.BytesIO(zip_bytes)) as zf:
-        for info in zf.infolist():
-            if info.is_dir():
-                continue
-            name = info.filename
-            if name.lower().endswith("readme.md"):
-                continue
-            files[name] = zf.read(info)
-    return files
-
-
-def _pod_meta_from_files(files: dict[str, bytes]) -> dict[str, str | None]:
-    """Read the pod's name/description/icon_url from the bundle's ``pod.json`` so
-    the README uses the real pod identity (not the export filename)."""
-    import json
-
-    raw = files.get("pod.json")
-    if not raw:
-        return {}
-    try:
-        data = json.loads(raw.decode("utf-8"))
-    except Exception:  # noqa: BLE001 - a malformed manifest just yields no meta
-        return {}
-    if not isinstance(data, dict):
-        return {}
-    return {
-        "name": data.get("name"),
-        "description": data.get("description"),
-        "icon_url": data.get("icon_url"),
-    }
-
-
-def _resource_counts(files: dict[str, bytes]) -> dict[str, int]:
-    counts: dict[str, int] = {}
-    for path in files:
-        parts = path.split("/")
-        if len(parts) >= 2:
-            counts[parts[0]] = counts.get(parts[0], 0)
-    # Count distinct resource directories per type.
-    seen: dict[str, set[str]] = {}
-    for path in files:
-        parts = path.split("/")
-        if len(parts) >= 2:
-            seen.setdefault(parts[0], set()).add(parts[1])
-    return {k: len(v) for k, v in seen.items()}
-
-
 async def _resolve_importer_pod_member_id(
     worker_ctx: AppWorkerContext, *, pod_id: UUID, user_id: UUID
 ) -> str | None:
@@ -757,7 +682,7 @@ async def _resolve_importer_pod_member_id(
     Best-effort: returns ``None`` (leaving the placeholder unresolved, so the
     service drops the assignee) if the user has no membership or the lookup
     fails, rather than failing the whole apply over one workflow assignee."""
-    from app.modules.pod.api.dependencies import get_pod_member_service
+    from app.composition.pod_bundle_pod import get_pod_member_service
 
     try:
         async with uow_scope(worker_ctx.uow_factory) as uow:
@@ -789,8 +714,8 @@ async def _record_recipe(worker_ctx: AppWorkerContext, state: ImportState) -> No
     fields (join_policy, default_runtime) to their defaults."""
     from datetime import datetime, timezone
 
-    from app.modules.pod.api.dependencies import get_pod_service
-    from app.modules.pod.domain.pod_entities import (
+    from app.composition.pod_bundle_pod import get_pod_service
+    from app.modules.pod.contracts import (
         PodRecipe,
         PodUpdateEntity,
     )
@@ -851,9 +776,8 @@ _STUCK_AFTER_SECONDS = 40 * 60
 @streaq_cron("*/30 * * * *", name="sweep_pod_bundle_staging")
 async def sweep_pod_bundle_staging() -> None:
     """Reclaim staged archives whose ephemeral state has expired, and mark
-    crashed (long-idle, non-terminal) imports/exports FAILED so the UI stops
-    showing them as in-progress. Keyed off the object-store inventory, so it is
-    bounded by how many archives are actually staged."""
+    crashed jobs FAILED so the UI stops showing them as in-progress. Durable
+    recovery scans PostgreSQL first, independently of object-store inventory."""
     reclaimed, recovered = await _sweep(
         get_pod_bundle_state_store(), BundleStagingStorage()
     )
@@ -875,10 +799,28 @@ async def _sweep(store, staging) -> tuple[int, int]:
     cutoff = _now() - timedelta(seconds=_STUCK_AFTER_SECONDS)
 
     reclaimed = 0
-    recovered = 0
-    for kind, get_state, save_state, is_import in (
-        ("pod-imports", store.get_import, store.save_import, True),
-        ("pod-exports", store.get_export, store.save_export, False),
+    recovered_states = await store.recover_stale_jobs(cutoff=cutoff)
+    recovered = len(recovered_states)
+    for state in recovered_states:
+        job_id = getattr(
+            state,
+            "import_id",
+            getattr(state, "export_id", getattr(state, "publish_id", None)),
+        )
+        if job_id is not None:
+            await publish_bundle_event(
+                job_id,
+                error_payload(state.error or "Job interrupted.", state.seq),
+            )
+    for kind, get_state, save_state, failed_status in (
+        ("pod-imports", store.get_import, store.save_import, ImportStatus.FAILED),
+        ("pod-exports", store.get_export, store.save_export, ExportStatus.FAILED),
+        (
+            "pod-publishes",
+            store.get_publish,
+            store.save_publish,
+            PublishStatus.FAILED,
+        ),
     ):
         try:
             archives = await staging.list_archives(kind)  # type: ignore[arg-type]
@@ -896,10 +838,7 @@ async def _sweep(store, staging) -> tuple[int, int]:
                     logger.warning("Sweep: delete %s/%s failed: %s", kind, job_id, exc)
                 continue
             if not state.is_terminal and state.updated_at < cutoff:
-                if is_import:
-                    state.status = ImportStatus.FAILED
-                else:
-                    state.status = ExportStatus.FAILED
+                state.status = failed_status
                 state.error = "Interrupted (worker restart or crash); start over."
                 state.completed_at = _now()
                 await save_state(state)  # type: ignore[arg-type]

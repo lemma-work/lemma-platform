@@ -11,8 +11,13 @@ from app.core.log.log import get_logger
 logger = get_logger(__name__)
 
 
-class PubSubSubscriber:
-    """Subscriber for pubsub using FastStream RedisBroker."""
+class RedisStreamReader:
+    """Programmatic Redis Stream tailer for resumable client-facing feeds.
+
+    This is not a domain-event consumer and does not replace the centralized
+    message bus/inbox subscriber policy. Datastore WebSocket clients use it only
+    to replay and tail the already-published durable stream.
+    """
 
     def __init__(self, channel_or_stream: str):
         """

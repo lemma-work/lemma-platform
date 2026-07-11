@@ -25,7 +25,7 @@ from app.core.infrastructure.db.session import async_session_maker
 from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
 from app.core.infrastructure.db.uow_factory import create_uow_from_session_maker
 from app.core.log.log import get_logger
-from app.modules.agent.tools.user_interaction.models import DisplayResourceRequest
+from app.modules.agent.contracts import DisplayResourceRequest
 from app.modules.agent_surfaces.services.ingress_service import (
     AgentSurfaceIngressService,
 )
@@ -42,7 +42,7 @@ def build_agent_surface_ingress_service(
     ``build_surface_event_handler`` dependency; kept here so the tool delivery
     path does not depend on the worker/request context.
     """
-    from app.modules.agent.api.dependencies import get_conversation_service
+    from app.composition.surface_agent import get_conversation_service
     from app.modules.agent_surfaces.api.dependencies import surface_repository_factory
     from app.modules.agent_surfaces.infrastructure.adapters.routing_resolution_adapter import (
         SqlAlchemySurfaceRoutingResolutionAdapter,
@@ -50,7 +50,7 @@ def build_agent_surface_ingress_service(
     from app.modules.agent_surfaces.infrastructure.repositories.surface_repository import (
         SurfaceConversationLinkRepository,
     )
-    from app.modules.connectors.api.dependencies import get_connector_service
+    from app.composition.surface_connectors import get_connector_service
 
     return AgentSurfaceIngressService(
         uow=uow,

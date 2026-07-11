@@ -7,8 +7,8 @@ import httpx
 
 from ... import errors
 from ...client import AuthenticatedClient, Client
+from ...models.app_bundle_upload_request import AppBundleUploadRequest
 from ...models.app_bundle_upload_response import AppBundleUploadResponse
-from ...models.body_app_bundle_upload import BodyAppBundleUpload
 from ...models.error_response import ErrorResponse
 from ...types import UNSET, Response, Unset
 
@@ -17,7 +17,7 @@ def _get_kwargs(
     pod_id: UUID,
     app_name: str,
     *,
-    body: BodyAppBundleUpload | Unset = UNSET,
+    body: AppBundleUploadRequest | Unset = UNSET,
 ) -> dict[str, Any]:
     headers: dict[str, Any] = {}
 
@@ -71,14 +71,14 @@ def sync_detailed(
     app_name: str,
     *,
     client: AuthenticatedClient | Client,
-    body: BodyAppBundleUpload | Unset = UNSET,
+    body: AppBundleUploadRequest | Unset = UNSET,
 ) -> Response[AppBundleUploadResponse | ErrorResponse]:
     """Upload App Bundle
 
     Args:
         pod_id (UUID):
         app_name (str):
-        body (BodyAppBundleUpload | Unset):
+        body (AppBundleUploadRequest | Unset):
 
     Raises:
         errors.UnexpectedStatus: If the server returns an undocumented status code and Client.raise_on_unexpected_status is True.
@@ -106,14 +106,14 @@ def sync(
     app_name: str,
     *,
     client: AuthenticatedClient | Client,
-    body: BodyAppBundleUpload | Unset = UNSET,
+    body: AppBundleUploadRequest | Unset = UNSET,
 ) -> AppBundleUploadResponse | ErrorResponse | None:
     """Upload App Bundle
 
     Args:
         pod_id (UUID):
         app_name (str):
-        body (BodyAppBundleUpload | Unset):
+        body (AppBundleUploadRequest | Unset):
 
     Raises:
         errors.UnexpectedStatus: If the server returns an undocumented status code and Client.raise_on_unexpected_status is True.
@@ -136,14 +136,14 @@ async def asyncio_detailed(
     app_name: str,
     *,
     client: AuthenticatedClient | Client,
-    body: BodyAppBundleUpload | Unset = UNSET,
+    body: AppBundleUploadRequest | Unset = UNSET,
 ) -> Response[AppBundleUploadResponse | ErrorResponse]:
     """Upload App Bundle
 
     Args:
         pod_id (UUID):
         app_name (str):
-        body (BodyAppBundleUpload | Unset):
+        body (AppBundleUploadRequest | Unset):
 
     Raises:
         errors.UnexpectedStatus: If the server returns an undocumented status code and Client.raise_on_unexpected_status is True.
@@ -169,14 +169,14 @@ async def asyncio(
     app_name: str,
     *,
     client: AuthenticatedClient | Client,
-    body: BodyAppBundleUpload | Unset = UNSET,
+    body: AppBundleUploadRequest | Unset = UNSET,
 ) -> AppBundleUploadResponse | ErrorResponse | None:
     """Upload App Bundle
 
     Args:
         pod_id (UUID):
         app_name (str):
-        body (BodyAppBundleUpload | Unset):
+        body (AppBundleUploadRequest | Unset):
 
     Raises:
         errors.UnexpectedStatus: If the server returns an undocumented status code and Client.raise_on_unexpected_status is True.

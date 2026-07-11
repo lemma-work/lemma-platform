@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+import json
 import socket
 from pathlib import Path
 import shutil
@@ -157,6 +158,7 @@ def _close_shared_contexts() -> None:
 
 
 def _reset_supertokens_testing_state() -> None:
+    from supertokens_python.recipe.accountlinking.recipe import AccountLinkingRecipe
     from supertokens_python.recipe.dashboard.recipe import DashboardRecipe
     from supertokens_python.recipe.emailpassword.recipe import EmailPasswordRecipe
     from supertokens_python.recipe.jwt.recipe import JWTRecipe
@@ -171,6 +173,7 @@ def _reset_supertokens_testing_state() -> None:
     Supertokens.reset()
     for recipe in (
         SessionRecipe,
+        AccountLinkingRecipe,
         EmailPasswordRecipe,
         DashboardRecipe,
         ThirdPartyRecipe,
@@ -243,7 +246,7 @@ def e2e_settings(test_database_url, test_redis_url, supertokens_container):
     shutil.rmtree(settings.email_output_dir, ignore_errors=True)
     Path(settings.email_output_dir).mkdir(parents=True, exist_ok=True)
     settings.local_file_storage_root = f"/tmp/lemma-files-tests{worker_suffix}"
-    settings.gcs_storage_bucket = None
+    settings.storage_bucket = None
     settings.public_bucket_name = None
     settings.storage_backend = "local"
     settings.embedding_provider = "local"
@@ -278,6 +281,27 @@ def e2e_settings(test_database_url, test_redis_url, supertokens_container):
     settings.e2e_sandbox_mode = sandbox_mode
     os.environ["E2E_LLM_MODE"] = llm_mode
     os.environ["E2E_SANDBOX_MODE"] = sandbox_mode
+    if llm_mode == "mock":
+        # system:lemma normally requires an operator credential and model
+        # catalog. The deterministic FunctionModel never contacts that
+        # provider, but profile resolution still exercises the production path.
+        os.environ.setdefault("LEMMA_OPENAI_API_KEY", "e2e-mock-key-not-used")
+        os.environ.setdefault("LEMMA_OPENAI_DEFAULT_MODEL", "e2e-mock-model")
+        os.environ.setdefault("LEMMA_OPENAI_MODEL_NAMES", "e2e-mock-model")
+        os.environ.setdefault(
+            "LEMMA_SYSTEM_MODEL_METADATA_JSON",
+            json.dumps(
+                {
+                    "e2e-mock-model": {
+                        "input_per_million_usd": 1.0,
+                        "output_per_million_usd": 1.0,
+                        "max_input_tokens": 100_000,
+                        "max_output_tokens": 20_000,
+                        "max_requests": 200,
+                    }
+                }
+            ),
+        )
 
     # A single Kreuzberg is shared across all xdist workers (see datastore
     # conftest); under concurrent indexing load it can briefly stall or be
@@ -337,10 +361,19 @@ def _start_fake_agentbox(port: int) -> None:
 
 @pytest.fixture(scope="session", autouse=True)
 def cleanup_workspace_containers_session():
-    # Clean stale containers from prior interrupted runs.
-    _cleanup_e2e_workspace_containers()
+    # A broad stale-container sweep is safe only in a serial session. Under
+    # xdist, a sibling worker may already own an e2e-labeled Postgres/Redis
+    # container; sweeping by the shared label would kill its live stack.
+    parallel_worker = bool(os.environ.get("PYTEST_XDIST_WORKER"))
+    if not parallel_worker:
+        _cleanup_e2e_workspace_containers()
     yield
-    _cleanup_e2e_workspace_containers()
+    # Close exactly the contexts created by this pytest process. Their context
+    # managers remove their own containers and network without touching a
+    # sibling worker's resources.
+    _close_shared_contexts()
+    if not parallel_worker:
+        _cleanup_e2e_workspace_containers()
 
 
 @pytest_asyncio.fixture(scope="function", autouse=True)
@@ -433,6 +466,7 @@ async def worker(e2e_settings):
                 "EMAIL_TRANSPORT": "filesystem",
                 "EMAIL_OUTPUT_DIR": e2e_settings.email_output_dir,
                 "GCS_STORAGE_BUCKET": "",
+                "STORAGE_BUCKET": "",
                 "PUBLIC_BUCKET_NAME": "",
                 "STORAGE_BACKEND": "local",
                 "EMBEDDING_PROVIDER": "local",
@@ -516,7 +550,10 @@ async def db_manager(e2e_settings) -> AsyncGenerator[DatabaseManager, None]:
     from app.modules.usage.infrastructure import models as usage_models
     from app.modules.agent_surfaces.infrastructure import models as agent_surface_models
     from app.modules.pod.infrastructure import models as pod_role_models
+    from app.core.infrastructure.events import models as event_models
+    from app.modules.pod_bundle.infrastructure import models as pod_bundle_models
     _ = (
+        event_models,
         user_models,
         organization_models,
         pod_models,
@@ -530,6 +567,7 @@ async def db_manager(e2e_settings) -> AsyncGenerator[DatabaseManager, None]:
         usage_models,
         agent_surface_models,
         pod_role_models,
+        pod_bundle_models,
     )
 
     import asyncio as _asyncio

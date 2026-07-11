@@ -3,8 +3,7 @@
 /* tslint:disable */
 /* eslint-disable */
 export type attach = {
-    data: string;
-    images?: Array<string>;
+    data: Blob;
+    images?: Array<Blob>;
     path: string;
 };
-

@@ -366,6 +366,8 @@ class FileResponse(BaseModel):
     metadata: Optional[dict] = None
     indexed_at: Optional[datetime] = None
     last_processing_error: Optional[str] = None
+    processing_attempts: int = 0
+    content_sha256: Optional[str] = None
     created_at: datetime
     updated_at: datetime
 

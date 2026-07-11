@@ -19,4 +19,3 @@ export type LoopNodeConfig = {
      */
     items_path: string;
 };
-

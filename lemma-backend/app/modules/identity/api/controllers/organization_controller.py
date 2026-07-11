@@ -60,7 +60,7 @@ async def create_organization(
     user: UserEntity = request.state.user
     entity = OrganizationEntity(
         name=data.name,
-        slug=slugify(data.name),
+        slug=data.slug or "",
         email_domain=data.email_domain,
         join_policy=data.join_policy,
     )

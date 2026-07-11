@@ -11,4 +11,3 @@ export type SurfaceBehaviorConfigInput = {
     identity?: SurfaceIdentityConfigInput;
     send_policy?: SurfaceSendPolicyConfig;
 };
-

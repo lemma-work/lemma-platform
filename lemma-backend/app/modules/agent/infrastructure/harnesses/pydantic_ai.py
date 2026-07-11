@@ -144,7 +144,7 @@ class PydanticAIHarness:
                 if event.type in {AgentEventType.ERROR, AgentEventType.STOPPED}:
                     terminal_event_seen = True
         except ModelHTTPError as exc:
-            logger.error("Model provider rejected agent request: %s", exc)
+            logger.error(f"Model request failed status={exc.status_code} model={exc.model_name}")
             yield AgentEvent(
                 type=AgentEventType.ERROR,
                 data=_user_facing_error_message(exc),
@@ -155,7 +155,7 @@ class PydanticAIHarness:
             # Reached only when a tool genuinely failed every retry (default 5) —
             # GracefulToolset turns ordinary execution errors into tool responses,
             # so this is the rare "model kept sending invalid arguments" case.
-            logger.warning("Agent run ended after repeated tool failures: %s", exc)
+            logger.warning("Agent run ended after repeated tool failures")
             yield AgentEvent(
                 type=AgentEventType.ERROR,
                 data=_user_facing_error_message(exc),
@@ -163,7 +163,7 @@ class PydanticAIHarness:
             )
             return
         except UsageLimitExceeded as exc:
-            logger.warning("Agent run hit a usage limit: %s", exc)
+            logger.warning("Agent run hit a usage limit")
             yield AgentEvent(
                 type=AgentEventType.ERROR,
                 data=_user_facing_error_message(exc),
@@ -175,7 +175,7 @@ class PydanticAIHarness:
             # rather than failing. The tool call is already persisted; the runner
             # finishes this run and flips the conversation to WAITING. The user's
             # submission later starts a fresh run that resumes from history.
-            logger.info("Agent run paused for user input: %s", exc)
+            logger.info(f"Agent input required kind={exc.kind} call={exc.tool_call_id}")
             yield AgentEvent(
                 type=AgentEventType.WAITING,
                 data={
@@ -187,7 +187,7 @@ class PydanticAIHarness:
             )
             return
         except Exception as exc:
-            logger.error("PydanticAI harness execution failed: %s", exc, exc_info=True)
+            logger.error(f"PydanticAI harness failed type={type(exc).__name__}")
             yield AgentEvent(
                 type=AgentEventType.ERROR,
                 data=_user_facing_error_message(exc),
@@ -1139,20 +1139,16 @@ class PydanticAIHarness:
             attachments = metadata.get("attachments")
             if isinstance(attachments, list) and attachments:
                 try:
-                    from app.modules.agent_surfaces.platforms.common import (
-                        attachment_tool_hint,
-                        render_attachment_prompt_block,
+                    from app.composition.agent_surface_runtime import (
+                        render_attachment_context,
                     )
 
                     platform_name = str(platform or "external").upper()
-                    attachment_block = render_attachment_prompt_block(
-                        attachments,
-                        platform=platform_name,
-                        include_hint=False,
+                    attachment_block, hint = render_attachment_context(
+                        attachments, platform=platform_name
                     )
                     if attachment_block:
                         pieces.append(attachment_block)
-                    hint = attachment_tool_hint(platform_name)
                     if hint:
                         pieces.append(hint)
                 except Exception:
@@ -1160,9 +1156,7 @@ class PydanticAIHarness:
 
         if platform:
             try:
-                from app.modules.agent_surfaces.platforms.common import (
-                    email_reply_instruction,
-                )
+                from app.composition.agent_surface_runtime import email_reply_instruction
 
                 email_hint = email_reply_instruction(str(platform))
                 if email_hint:

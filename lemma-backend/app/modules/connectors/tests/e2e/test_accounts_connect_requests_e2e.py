@@ -74,22 +74,22 @@ async def test_connect_request_and_accounts_lifecycle(
     connector_id = f"oauth-app-{uuid4().hex[:8]}"
     app = Connector(
         id=connector_id,
-            title="OAuth App",
-            description="OAuth test app",
-            provider_capabilities=[
-                {
-                    "provider": "LEMMA",
-                    "auth_scheme": "OAUTH2",
-                    "supports_org_custom_oauth": True,
-                    "oauth2_defaults": {
-                        "default_scopes": ["openid"],
-                        "authorization_url": "https://mock.example.com/auth",
-                        "token_url": "https://mock.example.com/token",
-                    },
-                }
-            ],
-            is_active=True,
-        )
+        title="OAuth App",
+        description="OAuth test app",
+        provider_capabilities=[
+            {
+                "provider": "LEMMA",
+                "auth_scheme": "OAUTH2",
+                "supports_org_custom_oauth": True,
+                "oauth2_defaults": {
+                    "default_scopes": ["openid"],
+                    "authorization_url": "https://mock.example.com/auth",
+                    "token_url": "https://mock.example.com/token",
+                },
+            }
+        ],
+        is_active=True,
+    )
     db_session.add(app)
     await db_session.commit()
 
@@ -115,7 +115,9 @@ async def test_connect_request_and_accounts_lifecycle(
         == "********"
     )
 
-    async def _fake_get_authorization_url(self, connector, user_id, state, redirect_uri):
+    async def _fake_get_authorization_url(
+        self, connector, user_id, state, redirect_uri
+    ):
         assert connector.oauth2_config.client_secret == "client-secret"
         return ("https://mock.example.com/authorize", "provider_state")
 
@@ -172,9 +174,10 @@ async def test_connect_request_and_accounts_lifecycle(
     response = await authenticated_client.get(
         f"/organizations/{org_id}/connectors/accounts/{account_id}/credentials"
     )
-    assert response.status_code == 200
-    assert response.json()["data"]["access_token"] == "access-token"
-    assert response.json()["data"]["expires_at"] is not None
+    # Raw credentials are deliberately an internal-only connector contract.
+    # Keep this assertion so a future route registration cannot accidentally
+    # re-expose access tokens through the public API.
+    assert response.status_code == 404
 
     result = await db_session.execute(
         Account.__table__.select().where(Account.id == UUID(account_id))
@@ -231,32 +234,30 @@ async def test_lemma_system_default_requires_configured_env_credentials(
 
     app = Connector(
         id=connector_id,
-            title="System Default OAuth App",
-            description="System default OAuth test app",
-            provider_capabilities=[
-                {
-                    "provider": "LEMMA",
-                    "auth_scheme": "OAUTH2",
-                    "supports_org_custom_oauth": True,
-                    "oauth2_defaults": {
-                        "default_scopes": ["openid"],
-                        "authorization_url": "https://mock.example.com/auth",
+        title="System Default OAuth App",
+        description="System default OAuth test app",
+        provider_capabilities=[
+            {
+                "provider": "LEMMA",
+                "auth_scheme": "OAUTH2",
+                "supports_org_custom_oauth": True,
+                "oauth2_defaults": {
+                    "default_scopes": ["openid"],
+                    "authorization_url": "https://mock.example.com/auth",
                     "token_url": "https://mock.example.com/token",
                 },
                 "system_oauth": {
-                        "client_id_env": client_id_env,
-                        "client_secret_env": client_secret_env,
-                    },
-                }
-            ],
-            is_active=True,
-        )
+                    "client_id_env": client_id_env,
+                    "client_secret_env": client_secret_env,
+                },
+            }
+        ],
+        is_active=True,
+    )
     db_session.add(app)
     await db_session.commit()
 
-    app_response = await authenticated_client.get(
-        f"/connectors/{connector_id}"
-    )
+    app_response = await authenticated_client.get(f"/connectors/{connector_id}")
     assert app_response.status_code == 200, app_response.text
     lemma_capability = app_response.json()["provider_capabilities"][0]
     assert lemma_capability["system_default_available"] is False
@@ -293,9 +294,7 @@ async def test_lemma_system_default_requires_configured_env_credentials(
     monkeypatch.setenv(client_id_env, "system-client-id")
     monkeypatch.setenv(client_secret_env, "system-client-secret")
 
-    app_response = await authenticated_client.get(
-        f"/connectors/{connector_id}"
-    )
+    app_response = await authenticated_client.get(f"/connectors/{connector_id}")
     assert app_response.status_code == 200, app_response.text
     lemma_capability = app_response.json()["provider_capabilities"][0]
     assert lemma_capability["system_default_available"] is True
@@ -430,14 +429,12 @@ async def test_list_accounts_uses_id_cursor_pagination(
 
     for connector_id in connector_ids:
         app = Connector(
-                id=connector_id,
-                title=f"App {connector_id}",
-                description="Pagination test app",
-                provider_capabilities=[
-                    {"provider": "LEMMA", "auth_scheme": "OAUTH2"}
-                ],
-                is_active=True,
-            )
+            id=connector_id,
+            title=f"App {connector_id}",
+            description="Pagination test app",
+            provider_capabilities=[{"provider": "LEMMA", "auth_scheme": "OAUTH2"}],
+            is_active=True,
+        )
         db_session.add(app)
         await db_session.flush()
         auth_config = AuthConfig(
@@ -661,7 +658,9 @@ async def test_delete_account_removes_account_and_404s_on_repeat(
                 "credential_schema": {
                     "type": "object",
                     "required": ["bot_token"],
-                    "properties": {"bot_token": {"type": "string", "format": "password"}},
+                    "properties": {
+                        "bot_token": {"type": "string", "format": "password"}
+                    },
                 },
             }
         ],
@@ -732,7 +731,9 @@ async def test_credential_managed_account_rejects_duplicate_identity_and_exposes
                 "credential_schema": {
                     "type": "object",
                     "required": ["bot_token"],
-                    "properties": {"bot_token": {"type": "string", "format": "password"}},
+                    "properties": {
+                        "bot_token": {"type": "string", "format": "password"}
+                    },
                 },
             }
         ],
@@ -846,7 +847,9 @@ async def test_oauth_new_account_addition_and_reauth_flows(
     )
     assert auth_config_response.status_code == 200, auth_config_response.text
 
-    async def _fake_get_authorization_url(self, connector, user_id, state, redirect_uri):
+    async def _fake_get_authorization_url(
+        self, connector, user_id, state, redirect_uri
+    ):
         return ("https://mock.example.com/authorize", "provider_state")
 
     # The callback URL's "code" query param stands in for the provider's actual
@@ -946,11 +949,7 @@ async def test_oauth_new_account_addition_and_reauth_flows(
     credentials_response = await authenticated_client.get(
         f"/organizations/{org_id}/connectors/accounts/{first_account['id']}/credentials"
     )
-    assert credentials_response.status_code == 200, credentials_response.text
-    assert (
-        credentials_response.json()["data"]["access_token"]
-        == "access-token-user-alpha"
-    )
+    assert credentials_response.status_code == 404, credentials_response.text
 
 
 @pytest.mark.asyncio
@@ -973,7 +972,9 @@ async def test_list_and_get_auth_config(
                 "credential_schema": {
                     "type": "object",
                     "required": ["bot_token"],
-                    "properties": {"bot_token": {"type": "string", "format": "password"}},
+                    "properties": {
+                        "bot_token": {"type": "string", "format": "password"}
+                    },
                 },
             }
         ],
@@ -999,9 +1000,7 @@ async def test_list_and_get_auth_config(
         f"/organizations/{org_id}/connectors/auth-configs"
     )
     assert list_response.status_code == 200, list_response.text
-    assert any(
-        item["id"] == auth_config_id for item in list_response.json()["items"]
-    )
+    assert any(item["id"] == auth_config_id for item in list_response.json()["items"])
 
     get_response = await authenticated_client.get(
         f"/organizations/{org_id}/connectors/auth-configs/{connector_id}"
@@ -1040,7 +1039,9 @@ async def test_default_pod_agent_cannot_delete_account(
                 "credential_schema": {
                     "type": "object",
                     "required": ["bot_token"],
-                    "properties": {"bot_token": {"type": "string", "format": "password"}},
+                    "properties": {
+                        "bot_token": {"type": "string", "format": "password"}
+                    },
                 },
             }
         ],
@@ -1113,7 +1114,9 @@ async def test_default_pod_agent_cannot_delete_auth_config(
                 "credential_schema": {
                     "type": "object",
                     "required": ["bot_token"],
-                    "properties": {"bot_token": {"type": "string", "format": "password"}},
+                    "properties": {
+                        "bot_token": {"type": "string", "format": "password"}
+                    },
                 },
             }
         ],

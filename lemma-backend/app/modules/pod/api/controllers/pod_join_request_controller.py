@@ -8,7 +8,7 @@ from app.core.api.dependencies import CurrentUser, UoWDep
 from app.core.api.pagination import parse_uuid_page_token
 from app.core.authorization.dependencies import reject_delegated_workload_pod
 from app.core.authorization.service import AuthorizationDataService
-from app.modules.identity.domain.organization_entities import OrganizationRole
+from app.modules.identity.contracts import OrganizationRole
 from app.modules.pod.api.dependencies import PodJoinRequestServiceDep
 from app.modules.pod.api.schemas.pod_schemas import (
     PodJoinRequestApproveRequest,

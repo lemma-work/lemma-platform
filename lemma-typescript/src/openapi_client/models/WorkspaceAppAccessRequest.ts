@@ -5,4 +5,3 @@
 export type WorkspaceAppAccessRequest = {
     ttl_seconds?: number;
 };
-

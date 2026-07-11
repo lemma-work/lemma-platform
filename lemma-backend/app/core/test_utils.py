@@ -13,7 +13,7 @@ import psycopg
 # required for the halfvec vector indexes the search service now builds.
 POSTGRES_IMAGE = "docker.io/pgvector/pgvector:0.8.3-pg15"
 REDIS_IMAGE = "redis/redis-stack:7.2.0-v19"
-SUPERTOKENS_IMAGE = "docker.io/supertokens/supertokens-postgresql:11.1.0"
+SUPERTOKENS_IMAGE = "docker.io/supertokens/supertokens-postgresql:11.4.5"
 # The project moved orgs (kreuzberg-dev -> xberg-io); the old
 # ghcr.io/kreuzberg-dev/kreuzberg:4.9.9 tag now 404s ("manifest unknown"). This
 # is the same 4.9.9 on the current public namespace (matches docker-compose.yml).

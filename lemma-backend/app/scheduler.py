@@ -17,6 +17,12 @@ from app.modules.schedule.scheduler.api.scheduler_controller import (
 from app.modules.schedule.scheduler.scheduler_service import get_scheduler_service
 from app.core.config import settings
 from app.core.log.log import setup_logging, get_logger
+from app.core.infrastructure.db.session import get_engine
+from app.core.observability.telemetry import (
+    init_telemetry,
+    instrument_database_engine,
+    instrument_fastapi_app,
+)
 from app.version import API_VERSION
 
 logger = get_logger(__name__)
@@ -54,6 +60,9 @@ app = FastAPI(
     # service and debug=True would leak tracebacks on error responses.
     debug=False,
 )
+init_telemetry(service_name="lemma-scheduler")
+instrument_database_engine(get_engine())
+instrument_fastapi_app(app)
 
 # Configure CORS
 # This is an internal service-to-service API (only the backend's SchedulerAPIClient

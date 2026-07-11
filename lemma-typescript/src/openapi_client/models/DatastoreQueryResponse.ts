@@ -9,4 +9,3 @@ export type DatastoreQueryResponse = {
     items: Array<Record<string, any>>;
     total: number;
 };
-

@@ -19,6 +19,8 @@ from app.modules.schedule.api.schemas.schedule_schemas import (
     ScheduleListResponse,
     UpdateScheduleRequest,
     ScheduleResponse,
+    ScheduleRunListResponse,
+    ScheduleRunResponse,
 )
 from app.modules.schedule.domain.schedule import (
     ScheduleCreateEntity,
@@ -107,6 +109,59 @@ async def list_schedules(
         limit=limit,
         next_page_token=str(next_cursor) if next_cursor else None,
     )
+
+
+@router.get(
+    "/{schedule_id}/runs",
+    response_model=ScheduleRunListResponse,
+    operation_id="schedule.run.list",
+)
+async def list_schedule_runs(
+    pod_id: UUID,
+    schedule_id: UUID,
+    service: ScheduleServiceDep,
+    ctx: PodContextDep,
+    limit: int = 100,
+) -> ScheduleRunListResponse:
+    runs = await service.list_schedule_runs(
+        pod_id=pod_id,
+        schedule_id=schedule_id,
+        ctx=ctx,
+        limit=max(1, min(limit, 1000)),
+    )
+    if runs is None:
+        raise HTTPException(status_code=404, detail="Schedule not found")
+    return ScheduleRunListResponse(
+        items=[ScheduleRunResponse.model_validate(item) for item in runs],
+        limit=max(1, min(limit, 1000)),
+    )
+
+
+@router.post(
+    "/{schedule_id}/runs/{run_id}/retry",
+    response_model=ScheduleRunResponse,
+    status_code=status.HTTP_202_ACCEPTED,
+    operation_id="schedule.run.retry",
+)
+async def retry_schedule_run(
+    pod_id: UUID,
+    schedule_id: UUID,
+    run_id: UUID,
+    service: ScheduleServiceDep,
+    ctx: PodContextDep,
+) -> ScheduleRunResponse:
+    schedule_run = await service.retry_schedule_run(
+        pod_id=pod_id,
+        schedule_id=schedule_id,
+        run_id=run_id,
+        ctx=ctx,
+    )
+    if schedule_run is None:
+        raise HTTPException(
+            status_code=409,
+            detail="Schedule run is not failed, dead-lettered, or does not exist",
+        )
+    return ScheduleRunResponse.model_validate(schedule_run)
 
 
 @router.get(

@@ -43,6 +43,14 @@ class BundleJobConflictError(PodBundleDomainError):
         super().__init__(message, code="POD_BUNDLE_CONFLICT", status_code=409)
 
 
+class BundleStateConflictError(BundleJobConflictError):
+    """A stale worker attempted to overwrite a newer durable job state."""
+
+    def __init__(self, message: str = "The pod bundle job changed concurrently."):
+        super().__init__(message)
+        self.code = "POD_BUNDLE_STATE_CONFLICT"
+
+
 class BundleRateLimitExceededError(PodBundleDomainError):
     """The user hit their per-UTC-day cap on export or import jobs. Retriable
     tomorrow (or once an operator raises the limit) — not a bug, so 429 with a

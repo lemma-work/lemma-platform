@@ -5,6 +5,8 @@ from typing import Any, Protocol
 
 from opentelemetry import trace
 
+from app.core.redaction import redact_event_dict
+
 _logging_context: dict[str, Any] = {}
 
 
@@ -84,6 +86,7 @@ def setup_logging(
         _normalize_event,
         structlog.processors.StackInfoRenderer(),
         structlog.processors.format_exc_info,
+        redact_event_dict,
     ]
 
     if json_logs:

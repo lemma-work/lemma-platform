@@ -9,4 +9,3 @@ export type UsageListResponse = {
     start_date: string;
     total: number;
 };
-

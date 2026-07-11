@@ -14,7 +14,7 @@ from ..openapi_client.api.workflows import (
     workflow_run_waiting_assigned_to_me,
     workflow_update,
 )
-from ..openapi_client.models.flow_detail_response import FlowDetailResponse
+from ..openapi_client.models.workflow_detail_response import WorkflowDetailResponse
 from ..openapi_client.models.workflow_create_request import WorkflowCreateRequest
 from ..openapi_client.models.workflow_graph_update_request import (
     WorkflowGraphUpdateRequest,
@@ -37,18 +37,18 @@ class PodWorkflows(BoundResource):
     def list(self, *, limit: int = 100) -> WorkflowListResponse:
         return self._call(workflow_list, self._pod_uuid(), limit=limit)
 
-    def create(self, request: WorkflowCreateRequest) -> FlowDetailResponse:
+    def create(self, request: WorkflowCreateRequest) -> WorkflowDetailResponse:
         return self._call(workflow_create, self._pod_uuid(), body=request)
 
-    def get(self, name: str) -> FlowDetailResponse:
+    def get(self, name: str) -> WorkflowDetailResponse:
         return self._call(workflow_get, self._pod_uuid(), name)
 
-    def update(self, name: str, request: WorkflowUpdateRequest) -> FlowDetailResponse:
+    def update(self, name: str, request: WorkflowUpdateRequest) -> WorkflowDetailResponse:
         return self._call(workflow_update, self._pod_uuid(), name, body=request)
 
     def update_graph(
         self, name: str, request: WorkflowGraphUpdateRequest | dict
-    ) -> FlowDetailResponse:
+    ) -> WorkflowDetailResponse:
         return self._call(
             workflow_graph_update,
             self._pod_uuid(),

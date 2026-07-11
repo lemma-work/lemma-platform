@@ -16,4 +16,3 @@ export type OrganizationMemberResponse = {
     user?: (UserResponse | null);
     user_id: string;
 };
-

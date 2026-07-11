@@ -3,7 +3,7 @@ from __future__ import annotations
 from uuid import UUID
 
 from app.core.infrastructure.db.uow_factory import UnitOfWorkFactory
-from app.modules.agent.domain.entities import Conversation
+from app.modules.agent.contracts import Conversation
 from app.modules.agent_surfaces.infrastructure.repositories.surface_repository import (
     SurfaceRepository,
 )
@@ -39,7 +39,7 @@ from app.modules.agent_surfaces.services.credential_resolver import (
     has_native_credentials,
     native_credentials,
 )
-from app.modules.connectors.api.dependencies import get_connector_service
+from app.composition.surface_connectors import get_connector_service
 
 _TOOLSET_BUILDERS = {
     "SLACK": build_slack_surface_toolset,

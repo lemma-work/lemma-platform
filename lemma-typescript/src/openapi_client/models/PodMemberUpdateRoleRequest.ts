@@ -8,4 +8,3 @@
 export type PodMemberUpdateRoleRequest = {
     roles: Array<string>;
 };
-

@@ -12,16 +12,16 @@ from app.core.authorization.dependencies import (
     require_resource_action,
 )
 from app.core.authorization.permissions import Permissions
-from app.modules.icon.services.icon_service import IconService
-from app.modules.workflow.services.flow_service import FlowService
+from app.composition.icons import create_icon_service
+from app.modules.workflow.services.workflow_service import WorkflowService
 
 
-def get_flow_service(uow: UoWDep) -> FlowService:
-    """Provide flow service."""
-    return FlowService(uow, icon_service=IconService())
+def get_workflow_service(uow: UoWDep) -> WorkflowService:
+    """Provide workflow service."""
+    return WorkflowService(uow, icon_service=create_icon_service())
 
 
-FlowServiceDep = Annotated[FlowService, Depends(get_flow_service)]
+WorkflowServiceDep = Annotated[WorkflowService, Depends(get_workflow_service)]
 
 # Auth dependencies for controller routes
 WorkflowViewerDep = require_action(Permissions.WORKFLOW_READ, pod_from_path)

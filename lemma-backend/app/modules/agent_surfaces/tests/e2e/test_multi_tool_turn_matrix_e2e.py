@@ -107,7 +107,9 @@ async def test_multi_tool_turn_slack_widget_then_say_then_one_final_answer(
         toolsets=["USER_INTERACTION", "SPEECH"],
     )
 
-    dm_payload = _load_slack_dm_fixture(text="show me and tell me", ts="1700005100.600600")
+    dm_payload = _load_slack_dm_fixture(
+        text="show me and tell me", ts="1700005100.600600"
+    )
     await process_ingress_and_run_scripted(
         db_session,
         SurfacePlatformWebhookIngress(source="slack", payload=dm_payload, headers={}),
@@ -124,7 +126,9 @@ async def test_multi_tool_turn_slack_widget_then_say_then_one_final_answer(
     widget_index = next(
         i for i, m in enumerate(slack_messages) if "blocks" in m or "attachments" in m
     )
-    uploads = await wait_for_messages(message_store, "SLACK_FILE_UPLOAD_URL", min_count=1)
+    uploads = await wait_for_messages(
+        message_store, "SLACK_FILE_UPLOAD_URL", min_count=1
+    )
     assert uploads
     final_texts = [m for m in slack_messages if m.get("text") == "All done."]
     assert len(final_texts) == 1, "final answer must be delivered exactly once"
@@ -193,7 +197,9 @@ async def test_multi_tool_turn_teams_two_widgets_then_one_final_answer(
     )
 
     teams_messages = await wait_for_messages(message_store, "TEAMS", min_count=1)
-    bodies = [m["body"] for m in teams_messages if m.get("body", {}).get("type") == "message"]
+    bodies = [
+        m["body"] for m in teams_messages if m.get("body", {}).get("type") == "message"
+    ]
     widget_bodies = [b for b in bodies if b.get("attachments")]
     assert len(widget_bodies) == 2, "both widget calls must render their own message"
     final_bodies = [b for b in bodies if b.get("text") == "All done."]
@@ -305,7 +311,7 @@ async def test_multi_tool_turn_whatsapp_two_widgets_then_one_final_answer(
 
     # WIDGET resources have no path to upload as native media (that's FILE-type
     # only — see send_display_resource_for_conversation) — both calls render as
-    # an interactive "open widget" link card, distinct from the final text.
+    # an "open widget" link card, distinct from the final text.
     whatsapp_messages = await wait_for_messages(message_store, "WHATSAPP", min_count=3)
     widget_messages = [m for m in whatsapp_messages if m.get("type") == "interactive"]
     assert len(widget_messages) == 2, "both widget calls must render their own message"
@@ -378,13 +384,17 @@ async def test_multi_tool_turn_gmail_two_widgets_then_one_reply(
             script_display_resource(**_WIDGET_ARGS, tool_call_id="tool-display-1"),
             script_display_resource(**_WIDGET_ARGS, tool_call_id="tool-display-2"),
             script_email_reply(
-                "gmail_reply_email", "Here is my answer.", tool_call_id="tool-email-reply-1"
+                "gmail_reply_email",
+                "Here is my answer.",
+                tool_call_id="tool-email-reply-1",
             ),
         ],
     )
 
     messages = await _messages_for_conversation(
-        authenticated_client, pod_id=pod_id, conversation_id=str(context.conversation_id)
+        authenticated_client,
+        pod_id=pod_id,
+        conversation_id=str(context.conversation_id),
     )
     display_returns = [
         m
@@ -463,13 +473,17 @@ async def test_multi_tool_turn_outlook_two_widgets_then_one_reply(
             script_display_resource(**_WIDGET_ARGS, tool_call_id="tool-display-1"),
             script_display_resource(**_WIDGET_ARGS, tool_call_id="tool-display-2"),
             script_email_reply(
-                "outlook_reply_email", "Here is my answer.", tool_call_id="tool-email-reply-1"
+                "outlook_reply_email",
+                "Here is my answer.",
+                tool_call_id="tool-email-reply-1",
             ),
         ],
     )
 
     messages = await _messages_for_conversation(
-        authenticated_client, pod_id=pod_id, conversation_id=str(context.conversation_id)
+        authenticated_client,
+        pod_id=pod_id,
+        conversation_id=str(context.conversation_id),
     )
     display_returns = [
         m
@@ -542,13 +556,17 @@ async def test_multi_tool_turn_resend_two_widgets_then_one_reply(
             script_display_resource(**_WIDGET_ARGS, tool_call_id="tool-display-1"),
             script_display_resource(**_WIDGET_ARGS, tool_call_id="tool-display-2"),
             script_email_reply(
-                "resend_reply_email", "Here is my answer.", tool_call_id="tool-email-reply-1"
+                "resend_reply_email",
+                "Here is my answer.",
+                tool_call_id="tool-email-reply-1",
             ),
         ],
     )
 
     messages = await _messages_for_conversation(
-        authenticated_client, pod_id=pod_id, conversation_id=str(context.conversation_id)
+        authenticated_client,
+        pod_id=pod_id,
+        conversation_id=str(context.conversation_id),
     )
     display_returns = [
         m

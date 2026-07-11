@@ -16,4 +16,3 @@ export type UpdateAgentRequest = {
     toolsets?: (Array<AgentToolset> | null);
     visibility?: (ResourceVisibility | null);
 };
-

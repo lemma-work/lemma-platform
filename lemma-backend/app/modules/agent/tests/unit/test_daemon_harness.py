@@ -30,6 +30,18 @@ from app.modules.agent.infrastructure.harnesses.daemon import (
 )
 
 
+@pytest.fixture(autouse=True)
+def _stub_daemon_capacity_cache(monkeypatch: pytest.MonkeyPatch):
+    """Unit tests must not depend on an ambient Redis at localhost:6379."""
+    import app.modules.agent.infrastructure.daemon_hub as daemon_hub_module
+
+    async def _no_capacity(*, daemon_id):
+        del daemon_id
+        return None
+
+    monkeypatch.setattr(daemon_hub_module, "get_daemon_capacity", _no_capacity)
+
+
 class _FakeWorkspaceSandboxService:
     async def get_env_vars(self, **kwargs):
         del kwargs
@@ -617,6 +629,41 @@ async def test_hub_register_supersedes_connection_orphans_old_runs():
     assert hub._orphaned_run_queues.get(agent_run_id) is queue
 
     await hub.unregister(daemon_id=daemon_id, user_id=daemon_user_id)
+
+
+@pytest.mark.asyncio
+async def test_stale_websocket_cannot_unregister_superseding_connection(monkeypatch):
+    hub = AgentRuntimeDaemonHub()
+    daemon_id = uuid4()
+    daemon_user_id = uuid4()
+    old_websocket = _FakeWebSocket()
+    new_websocket = _FakeWebSocket()
+
+    async def listen(connection):
+        connection.command_ready.set()
+        await asyncio.Event().wait()
+
+    monkeypatch.setattr(hub, "_listen_for_daemon_commands", listen)
+    await hub.register(
+        daemon_id=daemon_id,
+        user_id=daemon_user_id,
+        websocket=old_websocket,  # type: ignore[arg-type]
+    )
+    await hub.register(
+        daemon_id=daemon_id,
+        user_id=daemon_user_id,
+        websocket=new_websocket,  # type: ignore[arg-type]
+    )
+
+    await hub.unregister(
+        daemon_id=daemon_id,
+        user_id=daemon_user_id,
+        websocket=old_websocket,  # type: ignore[arg-type]
+    )
+
+    assert hub._connections[daemon_id].websocket is new_websocket
+    await hub.close()
+    assert hub._connections == {}
 
 
 @pytest.mark.asyncio

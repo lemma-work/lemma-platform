@@ -32,4 +32,13 @@ def _event_routers():
     ]
 
 
-module = LemmaModule(name="schedule", routers=_routers, event_routers=_event_routers)
+module = LemmaModule(
+    name="schedule",
+    routers=_routers,
+    event_routers=_event_routers,
+    stream_groups=(
+        ("schedule_events", "schedule-notifications"),
+        ("datastore.events", "schedule-datastore-events"),
+        ("pod_events", "schedule-pod-events"),
+    ),
+)

@@ -4,46 +4,36 @@ from __future__ import annotations
 
 from collections.abc import Iterable, Mapping
 from datetime import datetime, timedelta, timezone
-from typing import NamedTuple
 from uuid import UUID
 
-from app.core.log.log import get_logger
-from app.modules.agent.domain.runtime_profiles import RuntimeProfileScope
-from app.modules.agent.domain.value_objects import AgentRunUsage
-from app.modules.usage.domain.entities import UsageRecord, UsageReservation
+from app.modules.usage.contracts import AgentRunUsage, ModelPricing
+from app.modules.usage.domain.entities import (
+    UsageLimitCounterScope,
+    UsageRecord,
+    UsageReservation,
+)
 from app.modules.usage.domain.ports import UsageLimitPort, UsageLimitValues
 from app.modules.usage.domain.errors import UsageLimitExceededError
-from app.modules.usage.domain.events import ModelUsageEvent, UsageLimitDeniedEvent
+from app.modules.usage.domain.events import (
+    ModelUsageEvent,
+    UsageLimitDeniedEvent,
+)
 from app.modules.usage.infrastructure.repositories import UsageRepository
 from app.modules.usage.services.usage_context import UsageExecutionContext
+from app.modules.usage.services.pricing import UsagePricing
 
-logger = get_logger(__name__)
-
-
-class ModelPricing(NamedTuple):
-    input_per_million_usd: float
-    output_per_million_usd: float
-    unit_usd: float = 0.0
-    # Cache-read rate (Fireworks "cached" input price). ``None`` means "no cache
-    # discount" — cached tokens are billed at the full input rate, which
-    # over-counts rather than under-counts.
-    cached_input_per_million_usd: float | None = None
-
-
-class UsageService:
+class UsageService(UsagePricing):
     """Service for profile-aware usage recording and system-profile limits."""
 
-    DEFAULT_ORG_MONTHLY_COST_LIMIT_USD: float | None = 50.0
-    DEFAULT_USER_WEEKLY_COST_LIMIT_USD: float | None = 10.0
-    DEFAULT_USER_MONTHLY_COST_LIMIT_USD: float | None = None
     DEFAULT_RESERVATION_USD = 0.01
 
     # Per-model rates (USD per 1M tokens). Keyed by both the public model name
     # and the provider model id so resolution succeeds on either. Starts empty;
     # provider-specific cloud modules register their pricing at startup via
-    # ``register_model_pricing()``. The fallback below prevents unpriced models
-    # from escaping metering entirely.
+    # ``register_model_pricing()``. Unpriced models are still metered, with a
+    # null cost, and never fail solely because price metadata is absent.
     _SYSTEM_MODEL_PRICING: dict[str, ModelPricing] = {}
+    _ENV_METADATA_SOURCE: str | None = None
 
     @classmethod
     def register_model_pricing(cls, pricing: dict[str, ModelPricing]) -> None:
@@ -54,14 +44,6 @@ class UsageService:
         model id ensures ``_resolve_pricing`` resolves on either form.
         """
         cls._SYSTEM_MODEL_PRICING.update(pricing)
-
-    # Used when a system model has no explicit pricing entry, so that usage is
-    # still recorded (and counts toward limits) instead of being silently
-    # dropped. Deliberately the most expensive rates in the table with no cache
-    # discount, so an unpriced model over-counts rather than runs free. The
-    # startup + unit invariant keeps the shipped catalog fully priced, so this
-    # should never be hit in practice.
-    _FALLBACK_PRICING = ModelPricing(1.74, 4.40, cached_input_per_million_usd=1.74)
 
     def __init__(
         self,
@@ -80,19 +62,70 @@ class UsageService:
         profile_id: str,
         profile_scope: str,
         model_name: str,
-        amount_usd: float | None = None,
         now: datetime | None = None,
     ) -> UsageReservation | None:
         if not self._is_system_scope(profile_scope):
             return None
+        limit_values = await self._resolve_usage_limit_values(
+            organization_id=organization_id,
+            user_id=user_id,
+        )
+        if not self._has_applicable_limit(limit_values, organization_id):
+            return None
         now = now or datetime.now(timezone.utc)
-        amount = amount_usd or self.DEFAULT_RESERVATION_USD
+        amount = self.DEFAULT_RESERVATION_USD
         limits = await self.get_usage_limits(
             organization_id=organization_id,
             user_id=user_id,
             now=now,
+            _limit_values=limit_values,
         )
-        if not limits["allowed"]:
+        scopes: list[UsageLimitCounterScope] = []
+        org_monthly = limits["org_monthly"]
+        if organization_id is not None and org_monthly["limit_usd"] is not None:
+            scopes.append(
+                UsageLimitCounterScope(
+                    organization_id=organization_id,
+                    user_id=None,
+                    window_kind="org_month",
+                    window_start=org_monthly["window_start"],
+                    window_end=org_monthly["reset_at"],
+                    limit_usd=org_monthly["limit_usd"],
+                    initial_used_usd=org_monthly["used_usd"],
+                )
+            )
+        user_weekly = limits["user_weekly"]
+        if user_weekly["limit_usd"] is not None:
+            scopes.append(
+                UsageLimitCounterScope(
+                    organization_id=user_weekly["counter_organization_id"],
+                    user_id=user_id,
+                    window_kind="user_week",
+                    window_start=user_weekly["window_start"],
+                    window_end=user_weekly["reset_at"],
+                    limit_usd=user_weekly["limit_usd"],
+                    initial_used_usd=user_weekly["used_usd"],
+                )
+            )
+        user_monthly = limits["user_monthly"]
+        if user_monthly["limit_usd"] is not None:
+            scopes.append(
+                UsageLimitCounterScope(
+                    organization_id=user_monthly["counter_organization_id"],
+                    user_id=user_id,
+                    window_kind="user_month",
+                    window_start=user_monthly["window_start"],
+                    window_end=user_monthly["reset_at"],
+                    limit_usd=user_monthly["limit_usd"],
+                    initial_used_usd=user_monthly["used_usd"],
+                )
+            )
+
+        counter_ids = await self.usage_repository.reserve_limit_scopes(
+            scopes=scopes,
+            amount_usd=amount,
+        )
+        if counter_ids is None:
             self._collect_denied_event(
                 organization_id=organization_id,
                 user_id=user_id,
@@ -101,44 +134,6 @@ class UsageService:
                 reason="limit_exceeded",
             )
             raise UsageLimitExceededError()
-
-        counter_ids: list[UUID] = []
-        org_monthly = limits["org_monthly"]
-        if organization_id is not None and org_monthly["limit_usd"] is not None:
-            counter_ids.append(
-                await self.usage_repository.reserve_counter(
-                    organization_id=organization_id,
-                    user_id=None,
-                    window_kind="org_month",
-                    window_start=org_monthly["window_start"],
-                    window_end=org_monthly["reset_at"],
-                    amount_usd=amount,
-                )
-        )
-        user_weekly = limits["user_weekly"]
-        if user_weekly["limit_usd"] is not None:
-            counter_ids.append(
-                await self.usage_repository.reserve_counter(
-                    organization_id=user_weekly["counter_organization_id"],
-                    user_id=user_id,
-                    window_kind="user_week",
-                    window_start=user_weekly["window_start"],
-                    window_end=user_weekly["reset_at"],
-                    amount_usd=amount,
-                )
-            )
-        user_monthly = limits["user_monthly"]
-        if user_monthly["limit_usd"] is not None:
-            counter_ids.append(
-                await self.usage_repository.reserve_counter(
-                    organization_id=user_monthly["counter_organization_id"],
-                    user_id=user_id,
-                    window_kind="user_month",
-                    window_start=user_monthly["window_start"],
-                    window_end=user_monthly["reset_at"],
-                    amount_usd=amount,
-                )
-            )
         return UsageReservation(
             organization_id=organization_id,
             user_id=user_id,
@@ -178,7 +173,8 @@ class UsageService:
         cache_read_tokens = self._coerce_token_count(
             (usage_data.metadata or {}).get("cache_read_tokens")
         )
-        cost_usd, pricing_fallback = self._calculate_system_cost(
+        self._load_environment_metadata()
+        cost_usd, pricing_missing = self._calculate_system_cost(
             profile_scope=profile_scope,
             model_name=model_name,
             provider_model_name=provider_model_name,
@@ -190,8 +186,8 @@ class UsageService:
         metadata = dict(usage_data.metadata or {})
         if provider_model_name:
             metadata["provider_model_name"] = provider_model_name
-        if pricing_fallback:
-            metadata["pricing_fallback"] = True
+        if pricing_missing:
+            metadata["pricing_missing"] = True
         record = UsageRecord(
             organization_id=ctx.organization_id,
             pod_id=ctx.pod_id,
@@ -215,7 +211,12 @@ class UsageService:
         )
         saved = await self.usage_repository.create(record)
         if reservation is not None:
-            await self.release_reservation(reservation)
+            actual_cost = cost_usd or 0.0
+            await self.usage_repository.consume_reservation(
+                counter_ids=reservation.counter_ids,
+                reserved_usd=reservation.amount_usd,
+                actual_usd=actual_cost,
+            )
         self._collect_recorded_event(saved)
         return saved
 
@@ -375,6 +376,7 @@ class UsageService:
         organization_id: UUID | None,
         user_id: UUID,
         now: datetime | None = None,
+        _limit_values: UsageLimitValues | None = None,
     ) -> dict[str, object]:
         now = now or datetime.now(timezone.utc)
         month_start = now.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
@@ -384,9 +386,8 @@ class UsageService:
             second=0,
             microsecond=0,
         )
-        limit_values = await self._resolve_usage_limit_values(
-            organization_id=organization_id,
-            user_id=user_id,
+        limit_values = _limit_values or await self._resolve_usage_limit_values(
+            organization_id=organization_id, user_id=user_id
         )
         user_limit_organization_id = (
             organization_id
@@ -479,98 +480,16 @@ class UsageService:
             ),
         }
 
-    def _calculate_system_cost(
-        self,
-        *,
-        profile_scope: str,
-        model_name: str,
-        provider_model_name: str | None,
-        input_tokens: int,
-        output_tokens: int,
-        units: float,
-        cache_read_tokens: int = 0,
-    ) -> tuple[float | None, bool]:
-        """Return ``(cost_usd, pricing_fallback)`` for a system-scope run.
-
-        ``input_tokens`` already includes ``cache_read_tokens`` (cache reads are a
-        subset of the prompt), so the input is split: non-cached tokens at the
-        full input rate, cache-read tokens at the (cheaper) cached rate. Returns
-        ``(None, False)`` for non-system scopes (no system cost). The boolean is
-        ``True`` when fallback pricing was used because the model was unpriced.
-        """
-        if not self._is_system_scope(profile_scope):
-            return None, False
-        pricing, pricing_fallback = self._resolve_pricing(
-            model_name, provider_model_name
-        )
-        total_input = max(0, input_tokens)
-        cache_read = min(max(0, cache_read_tokens), total_input)
-        non_cached = total_input - cache_read
-        cached_rate = (
-            pricing.cached_input_per_million_usd
-            if pricing.cached_input_per_million_usd is not None
-            else pricing.input_per_million_usd
-        )
-        input_cost = (
-            non_cached / 1_000_000 * pricing.input_per_million_usd
-            + cache_read / 1_000_000 * cached_rate
-        )
-        output_cost = (max(0, output_tokens) / 1_000_000) * pricing.output_per_million_usd
-        unit_cost = max(0.0, units) * pricing.unit_usd
-        return round(input_cost + output_cost + unit_cost, 8), pricing_fallback
-
-    def _resolve_pricing(
-        self,
-        model_name: str,
-        provider_model_name: str | None,
-    ) -> tuple[ModelPricing, bool]:
-        """Resolve pricing for a system model, returning ``(pricing, fallback)``.
-
-        Never raises: an unpriced model resolves to ``_FALLBACK_PRICING`` (and
-        ``fallback=True``) and logs an error, so usage is still recorded and
-        counts toward limits instead of being silently dropped — the bug that let
-        unpriced models (e.g. glm-5.2) escape metering entirely.
-        """
-        for candidate in (model_name, provider_model_name):
-            if not candidate:
-                continue
-            normalized = candidate.strip()
-            if normalized in self._SYSTEM_MODEL_PRICING:
-                return self._SYSTEM_MODEL_PRICING[normalized], False
-        logger.error(
-            "Missing usage pricing for system model %r (provider=%r); using "
-            "fallback pricing so usage is still recorded",
-            model_name,
-            provider_model_name,
-        )
-        return self._FALLBACK_PRICING, True
-
-    @staticmethod
-    def _coerce_token_count(value: object) -> int:
-        try:
-            return max(0, int(value))  # type: ignore[arg-type]
-        except (TypeError, ValueError):
-            return 0
-
     async def _resolve_usage_limit_values(
         self,
         *,
         organization_id: UUID | None,
         user_id: UUID,
     ) -> UsageLimitValues:
-        # No external plan provider (e.g. no billing installed) -> built-in
-        # defaults. A configured provider (billing) resolves plan-based limits.
+        # OSS metering is unlimited. A separately composed billing/plan module
+        # opts into admission by implementing the usage-owned limit port.
         if self.usage_limit_port is None:
-            return UsageLimitValues(
-                org_monthly_limit_usd=(
-                    self.DEFAULT_ORG_MONTHLY_COST_LIMIT_USD
-                    if organization_id
-                    else None
-                ),
-                user_weekly_limit_usd=self.DEFAULT_USER_WEEKLY_COST_LIMIT_USD,
-                user_monthly_limit_usd=self.DEFAULT_USER_MONTHLY_COST_LIMIT_USD,
-                user_limit_scope="organization",
-            )
+            return UsageLimitValues()
         resolved = await self.usage_limit_port.resolve_limits(
             organization_id=organization_id,
             user_id=user_id,
@@ -585,6 +504,17 @@ class UsageService:
             user_weekly_limit_usd=user_weekly,
             user_monthly_limit_usd=None,
             user_limit_scope="organization",
+        )
+
+    @staticmethod
+    def _has_applicable_limit(
+        values: UsageLimitValues,
+        organization_id: UUID | None,
+    ) -> bool:
+        return bool(
+            (organization_id is not None and values.org_monthly_limit_usd is not None)
+            or values.user_weekly_limit_usd is not None
+            or values.user_monthly_limit_usd is not None
         )
 
     def _limit_scope(
@@ -692,38 +622,6 @@ class UsageService:
             ]
         )
 
-    def _profile_value(
-        self,
-        runtime_profile: dict[str, object] | None,
-        key: str,
-    ) -> str | None:
-        if not isinstance(runtime_profile, dict):
-            return None
-        value = runtime_profile.get(key)
-        return value if isinstance(value, str) and value else None
-
-    def _is_system_scope(self, profile_scope: str) -> bool:
-        return profile_scope == RuntimeProfileScope.SYSTEM.value or profile_scope == "SYSTEM"
-
-    def _usage_value(self, usage: object, *names: str) -> int:
-        for name in names:
-            attr = getattr(usage, name, None)
-            if callable(attr):
-                try:
-                    value = attr()
-                except TypeError:
-                    continue
-            else:
-                value = attr
-            if value is None:
-                continue
-            try:
-                return max(0, int(value))
-            except (TypeError, ValueError):
-                continue
-        return 0
-
-
 def assert_system_pricing_covers_catalog(
     model_names: Iterable[tuple[str, str | None]],
     *,
@@ -733,9 +631,8 @@ def assert_system_pricing_covers_catalog(
 
     A model is "covered" when either its public name or its provider id is present
     in the pricing table, mirroring ``UsageService._resolve_pricing``'s
-    OR-resolution. Used by the startup check and the unit invariant to guarantee
-    no system model can slip through metering unpriced — the class of bug that let
-    glm-5.2 escape usage tracking and run free past plan limits.
+    OR-resolution. Missing prices never prevent metering; callers may use this
+    helper to report catalog pricing completeness.
     """
     table = pricing if pricing is not None else UsageService._SYSTEM_MODEL_PRICING
     uncovered: list[str] = []

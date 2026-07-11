@@ -10,7 +10,7 @@ class AppDomainError(DomainError):
 
 class AppValidationError(AppDomainError):
     def __init__(self, message: str):
-        super().__init__(message=message, code="APP_VALIDATION_ERROR", status_code=400)
+        super().__init__(message=message, code="APP_VALIDATION_ERROR", status_code=422)
 
 
 class AppAccessDeniedError(AppDomainError):

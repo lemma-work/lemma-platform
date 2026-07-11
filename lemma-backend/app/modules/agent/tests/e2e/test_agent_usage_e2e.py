@@ -22,7 +22,7 @@ from app.modules.agent.tests.e2e.system_lemma_helpers import (
 )
 from app.modules.usage.infrastructure.models import UsageRecord
 
-pytestmark = pytest.mark.e2e
+pytestmark = [pytest.mark.e2e, pytest.mark.provider]
 
 # Resolved at import time from backend/.env or environment — never hardcoded.
 SYSTEM_LEMMA_DEFAULT_MODEL = system_lemma_default_model()

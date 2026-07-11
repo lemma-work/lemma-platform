@@ -13,6 +13,7 @@ Skip Docker-based tests:
 
 from __future__ import annotations
 
+import functools
 import re
 import shutil
 import subprocess
@@ -57,12 +58,20 @@ TS_VERSION = _read_ts_version()
 
 # --- Docker helpers ----------------------------------------------------------
 
+@functools.cache
 def docker_available() -> bool:
     if shutil.which("docker") is None:
         return False
-    result = subprocess.run(
-        ["docker", "info"], capture_output=True, text=True, check=False
-    )
+    try:
+        result = subprocess.run(
+            ["docker", "info"],
+            capture_output=True,
+            text=True,
+            check=False,
+            timeout=5,
+        )
+    except subprocess.TimeoutExpired:
+        return False
     return result.returncode == 0
 
 

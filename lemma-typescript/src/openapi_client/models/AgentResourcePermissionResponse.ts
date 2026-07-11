@@ -8,4 +8,3 @@ export type AgentResourcePermissionResponse = {
     resource_name: string;
     resource_type: ResourceType;
 };
-

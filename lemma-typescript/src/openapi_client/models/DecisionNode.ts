@@ -14,4 +14,3 @@ export type DecisionNode = {
     position?: (Record<string, number> | null);
     type?: string;
 };
-

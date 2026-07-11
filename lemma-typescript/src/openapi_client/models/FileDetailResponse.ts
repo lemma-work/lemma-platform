@@ -22,4 +22,3 @@ export type FileDetailResponse = {
     updated_at: string;
     visibility?: string;
 };
-

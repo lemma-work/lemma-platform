@@ -1,9 +1,10 @@
 from datetime import date
 
-from pydantic import EmailStr
+from pydantic import EmailStr, field_validator
 
 from app.core.domain.aggregate import AggregateRoot
 from app.core.domain.entity import Entity
+from app.modules.identity.domain.email import normalize_identity_email
 from app.modules.identity.domain.user_preferences import UserPreferences
 
 
@@ -30,6 +31,11 @@ class UserEntity(AggregateRoot):
     timezone: str | None = None
     date_of_birth: date | None = None
     preferences: UserPreferences | None = None
+
+    @field_validator("email", mode="before")
+    @classmethod
+    def normalize_email(cls, value: object) -> str:
+        return normalize_identity_email(str(value))
 
     def mark_signed_up(self) -> None:
         """Emit signed-up event for welcome email processing."""

@@ -10,7 +10,7 @@ from app.core.authorization.dependencies import PodContextDep
 from app.core.authorization.permissions import Permissions
 from app.core.api.dependencies import CurrentUser
 from app.core.api.pagination import parse_uuid_page_token
-from app.modules.agent.api.dependencies import AgentServiceDep
+from app.composition.surface_agent import AgentServiceDep
 from app.modules.agent_surfaces.api.dependencies import (
     SurfaceEventHandlerDep,
     get_surface_service,
@@ -50,7 +50,7 @@ from app.modules.agent_surfaces.services.surface_reach_resolver import (
 from app.modules.agent_surfaces.services.surface_service import (
     AgentSurfaceService,
 )
-from app.modules.connectors.api.dependencies import ConnectorServiceDep
+from app.composition.surface_connectors import ConnectorServiceDep
 
 router = APIRouter(prefix="/pods/{pod_id}/surfaces", tags=["Agent Surfaces"])
 

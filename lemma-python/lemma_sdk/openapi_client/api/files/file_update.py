@@ -7,16 +7,16 @@ import httpx
 
 from ... import errors
 from ...client import AuthenticatedClient, Client
-from ...models.body_file_update import BodyFileUpdate
 from ...models.error_response import ErrorResponse
 from ...models.file_detail_response import FileDetailResponse
+from ...models.update import Update
 from ...types import Response
 
 
 def _get_kwargs(
     pod_id: UUID,
     *,
-    body: BodyFileUpdate,
+    body: Update,
 ) -> dict[str, Any]:
     headers: dict[str, Any] = {}
 
@@ -67,13 +67,13 @@ def sync_detailed(
     pod_id: UUID,
     *,
     client: AuthenticatedClient | Client,
-    body: BodyFileUpdate,
+    body: Update,
 ) -> Response[ErrorResponse | FileDetailResponse]:
     """Update File
 
     Args:
         pod_id (UUID):
-        body (BodyFileUpdate):
+        body (Update):
 
     Raises:
         errors.UnexpectedStatus: If the server returns an undocumented status code and Client.raise_on_unexpected_status is True.
@@ -99,13 +99,13 @@ def sync(
     pod_id: UUID,
     *,
     client: AuthenticatedClient | Client,
-    body: BodyFileUpdate,
+    body: Update,
 ) -> ErrorResponse | FileDetailResponse | None:
     """Update File
 
     Args:
         pod_id (UUID):
-        body (BodyFileUpdate):
+        body (Update):
 
     Raises:
         errors.UnexpectedStatus: If the server returns an undocumented status code and Client.raise_on_unexpected_status is True.
@@ -126,13 +126,13 @@ async def asyncio_detailed(
     pod_id: UUID,
     *,
     client: AuthenticatedClient | Client,
-    body: BodyFileUpdate,
+    body: Update,
 ) -> Response[ErrorResponse | FileDetailResponse]:
     """Update File
 
     Args:
         pod_id (UUID):
-        body (BodyFileUpdate):
+        body (Update):
 
     Raises:
         errors.UnexpectedStatus: If the server returns an undocumented status code and Client.raise_on_unexpected_status is True.
@@ -156,13 +156,13 @@ async def asyncio(
     pod_id: UUID,
     *,
     client: AuthenticatedClient | Client,
-    body: BodyFileUpdate,
+    body: Update,
 ) -> ErrorResponse | FileDetailResponse | None:
     """Update File
 
     Args:
         pod_id (UUID):
-        body (BodyFileUpdate):
+        body (Update):
 
     Raises:
         errors.UnexpectedStatus: If the server returns an undocumented status code and Client.raise_on_unexpected_status is True.

@@ -13,4 +13,3 @@ export type CreateUserDaemonRuntimeProfileRequest = {
     scope?: RuntimeProfileScope;
     source?: string;
 };
-

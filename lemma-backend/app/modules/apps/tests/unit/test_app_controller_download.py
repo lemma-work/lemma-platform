@@ -99,3 +99,38 @@ async def test_dist_archive_resolves_in_uow_then_reads_after_release():
     assert service.read_while_open is False
     assert factory.state["open"] is False
     assert archive == b"DIST-ZIP"
+
+
+@pytest.mark.asyncio
+async def test_bundle_finalize_failure_cleans_storage_before_reraising():
+    factory = _TrackingUowFactory()
+    plan = object()
+    written = object()
+
+    class _FailingFinalizeService:
+        async def resolve_upload_bundle(self, *args, **kwargs):
+            return plan
+
+        async def write_bundle_storage(self, *args, **kwargs):
+            return written
+
+        async def finalize_upload_bundle(self, *args, **kwargs):
+            raise RuntimeError("database commit failed")
+
+        cleanup_written_bundle = AsyncMock()
+
+    service = _FailingFinalizeService()
+
+    with pytest.raises(RuntimeError, match="database commit failed"):
+        await _use_cases(factory, service).upload_bundle(
+            pod_id=uuid4(),
+            app_name="dashboard",
+            request=SimpleNamespace(),
+            user_id=uuid4(),
+            source_archive_bytes=None,
+            dist_archive_bytes=b"dist archive placeholder",
+        )
+
+    service.cleanup_written_bundle.assert_awaited_once_with(plan, written)
+    assert factory.state["open"] is False
+    assert factory.state["opens"] == 2

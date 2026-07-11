@@ -1,8 +1,7 @@
 """App module dependencies."""
 
-from functools import partial
-from pathlib import Path
 from typing import Annotated
+from uuid import UUID
 
 from fastapi import Depends
 
@@ -16,26 +15,33 @@ from app.core.authorization.dependencies import (
 )
 from app.core.authorization.permissions import Permissions
 from app.core.config import settings
+from app.core.object_storage import build_object_store, local_file_storage_path
 from app.core.infrastructure.db.uow_factory import UnitOfWorkFactory
 from app.core.infrastructure.events.message_bus import get_message_bus
 from app.core.ports.widget_content import WidgetContentReader
-from app.modules.agent.services.widget_asset_service import WidgetAssetService
+from app.composition.widget_content import create_widget_content_reader
 from app.modules.apps.application.app_use_cases import AppUseCases
 from app.modules.apps.infrastructure.repositories import AppRepository
 from app.modules.apps.services.app_file_manager import AppFileManager
 from app.modules.apps.services.app_service import AppService
-from app.modules.pod.services.authorization_factory import create_authorization_service
+from app.composition.authorization import create_authorization_service
 
 
 def _get_app_storage_factory():
-    if settings.effective_storage_backend() == "gcs":
-        if not settings.gcs_storage_bucket:
-            raise ValueError("GCS storage requires GCS_STORAGE_BUCKET")
-        return partial(AppFileManager, bucket_name=settings.gcs_storage_bucket)
-    return partial(
-        AppFileManager,
-        root_path=Path(settings.local_file_storage_root) / "common",
-    )
+    root = local_file_storage_path("common")
+
+    def build(app_id: UUID) -> AppFileManager:
+        if settings.effective_storage_backend() == "local":
+            return AppFileManager(app_id, root_path=root)
+        return AppFileManager(
+            app_id,
+            store=build_object_store(
+                local_prefix=root,
+                remote_prefix=f"apps/{app_id}",
+            ),
+        )
+
+    return build
 
 
 def build_app_service(uow) -> AppService:
@@ -74,7 +80,7 @@ def get_widget_content_reader(uow: UoWDep) -> WidgetContentReader:
     # DI wiring edge: the agent module owns widget content, but the app module's
     # business logic depends only on the core WidgetContentReader port — this
     # provider is the single place the two modules are wired together.
-    return WidgetAssetService(uow)
+    return create_widget_content_reader(uow)
 
 
 WidgetContentReaderDep = Annotated[

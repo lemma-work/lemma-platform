@@ -16,7 +16,6 @@ from app.core.authorization.delegation import (
     DEFAULT_POD_AGENT_NAME,
 )
 from app.core.authorization.permissions import Permissions
-from app.core.infrastructure.events.publisher import EventPublisher
 from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
 from app.modules.agent.domain.entities import (
     Agent,
@@ -30,7 +29,6 @@ from app.modules.agent.domain.errors import (
     UnknownApprovalError,
 )
 from app.modules.agent.domain.events import (
-    AGENT_EVENTS_STREAM,
     AgentRunStartedEvent,
     AgentRunStopRequestedEvent,
 )
@@ -59,9 +57,9 @@ from app.modules.agent.services.realtime import (
 )
 from app.modules.agent.services.serialization import message_to_payload
 from app.modules.agent.services.workspace_location import resolve_workspace_location
-from app.modules.pod.domain.pod_entities import PodConfig
-from app.modules.pod.infrastructure.pod_repositories import PodRepository
-from app.modules.usage.services.usage_service import UsageService
+from app.modules.pod.contracts import PodConfig
+from app.composition.agent_pod import create_agent_pod_repository
+from app.composition.agent_usage import UsageLimitExceededError, UsageService
 
 _POD_ASSISTANT_AGENT_ID = DEFAULT_POD_AGENT_ID
 
@@ -690,17 +688,18 @@ class ConversationService:
             agent_runtime=selected_agent_runtime,
             metadata={"source": "approval_resume", "resumed_tool_call_id": approval_id},
         )
-        await self.uow.commit()
-        await EventPublisher.publish(
-            AGENT_EVENTS_STREAM,
-            AgentRunStartedEvent(
-                conversation_id=conversation.id,
-                agent_run_id=resume_run.id,
-                user_id=user_id,
-                pod_id=pod_id,
-                agent_name=agent_name,
-            ),
+        self.uow.collect_events(
+            [
+                AgentRunStartedEvent(
+                    conversation_id=conversation.id,
+                    agent_run_id=resume_run.id,
+                    user_id=user_id,
+                    pod_id=pod_id,
+                    agent_name=agent_name,
+                )
+            ]
         )
+        await self.uow.commit()
 
     async def _unresolved_pausing_call_ids(
         self,
@@ -1285,8 +1284,22 @@ class ConversationService:
             ),
         )
 
-        # Streaming endpoints need the message/run committed before the worker
-        # can safely load them; normal CRUD methods still rely on request UoW.
+        if started_new_run and not _SUPPRESS_RUN_ENQUEUE.get():
+            self.uow.collect_events(
+                [
+                    AgentRunStartedEvent(
+                        conversation_id=conversation.id,
+                        agent_run_id=active_run.id,
+                        user_id=user_id,
+                        pod_id=pod_id,
+                        agent_name=agent_name,
+                    )
+                ]
+            )
+
+        # Streaming endpoints need the message/run and its outbox event committed
+        # atomically before the worker can safely load them; normal CRUD methods
+        # still rely on the request UoW.
         await self.uow.commit()
         # Publish superseded-interaction returns only now that they're durably
         # committed alongside the new run/message (same transaction as above).
@@ -1302,17 +1315,6 @@ class ConversationService:
             conversation.id,
             input_added_payload(active_run.id, message_to_payload(saved_user_message)),
         )
-        if started_new_run and not _SUPPRESS_RUN_ENQUEUE.get():
-            await EventPublisher.publish(
-                AGENT_EVENTS_STREAM,
-                AgentRunStartedEvent(
-                    conversation_id=conversation.id,
-                    agent_run_id=active_run.id,
-                    user_id=user_id,
-                    pod_id=pod_id,
-                    agent_name=agent_name,
-                ),
-            )
         return AgentRunStartResult(
             conversation_id=conversation.id,
             agent_run_id=active_run.id,
@@ -1445,14 +1447,14 @@ class ConversationService:
         return agent.id
 
     async def _get_pod_organization_id(self, pod_id: UUID) -> UUID | None:
-        return await PodRepository(self.uow).get_organization_id(pod_id)
+        return await create_agent_pod_repository(self.uow).get_organization_id(pod_id)
 
     async def _default_agent_runtime_for_pod(
         self,
         *,
         pod_id: UUID,
     ) -> AgentRuntimeConfig:
-        config = await PodRepository(self.uow).get_config(pod_id)
+        config = await create_agent_pod_repository(self.uow).get_config(pod_id)
         runtime = PodConfig.from_raw(config).resolved_default_runtime()
         return runtime or AgentRuntimeConfig(
             profile_id=DEFAULT_SYSTEM_AGENT_RUNTIME_PROFILE_ID
@@ -1475,8 +1477,6 @@ class ConversationService:
         )
         if limits["allowed"]:
             return
-        from app.modules.usage.domain.errors import UsageLimitExceededError
-
         raise UsageLimitExceededError()
 
     async def _authorized_conversation(

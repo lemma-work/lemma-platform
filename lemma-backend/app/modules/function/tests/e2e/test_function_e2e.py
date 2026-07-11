@@ -20,7 +20,11 @@ from app.modules.test_support.e2e_authz import (
     item_names,
 )
 
-pytestmark = [pytest.mark.e2e, pytest.mark.workspace]
+pytestmark = [
+    pytest.mark.e2e,
+    pytest.mark.workspace,
+    pytest.mark.usefixtures("configure_workspace_api_url"),
+]
 
 
 async def _wait_for_run_completion(

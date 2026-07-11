@@ -34,7 +34,7 @@ export type WorkflowRunWaitAssignment = {
     wait: {
         id?: string;
         run_id: string;
-        flow_id: string;
+        workflow_id: string;
         node_id: string;
         wait_type: string;
         status?: string;
@@ -163,7 +163,7 @@ function normalizeFlow(raw: Record<string, unknown>): Workflow {
 function normalizeFlowRun(raw: Record<string, unknown>): WorkflowRun {
     return {
         id: String(raw.id || ''),
-        flow_id: String(raw.flow_id || ''),
+        workflow_id: String(raw.workflow_id || ''),
         pod_id: String(raw.pod_id || ''),
         user_id: String(raw.user_id || ''),
         trigger_type: (raw.trigger_type as string | undefined) ?? undefined,
@@ -190,7 +190,7 @@ function normalizeWait(raw: Record<string, unknown>): WorkflowRunWaitAssignment 
         wait: {
             id: typeof wait.id === 'string' ? wait.id : undefined,
             run_id: String(wait.run_id || run.id || ''),
-            flow_id: String(wait.flow_id || run.flow_id || ''),
+            workflow_id: String(wait.workflow_id || run.workflow_id || ''),
             node_id: String(wait.node_id || run.current_node_id || ''),
             wait_type: String(wait.wait_type || ''),
             status: typeof wait.status === 'string' ? wait.status : undefined,

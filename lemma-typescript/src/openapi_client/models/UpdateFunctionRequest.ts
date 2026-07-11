@@ -18,4 +18,3 @@ export type UpdateFunctionRequest = {
     type?: (FunctionType | null);
     visibility?: (ResourceVisibility | null);
 };
-

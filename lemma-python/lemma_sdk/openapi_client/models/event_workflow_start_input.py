@@ -15,7 +15,7 @@ from attrs import field as _attrs_field
 from ..types import UNSET, Unset
 
 if TYPE_CHECKING:
-    from ..models.event_flow_start_input import EventFlowStartInput
+    from ..models.event_workflow_start_config_input import EventWorkflowStartConfigInput
 
 
 T = TypeVar("T", bound="EventWorkflowStartInput")
@@ -25,11 +25,11 @@ T = TypeVar("T", bound="EventWorkflowStartInput")
 class EventWorkflowStartInput:
     """
     Attributes:
-        config (EventFlowStartInput):
+        config (EventWorkflowStartConfigInput):
         type_ (Literal['EVENT'] | Unset): Event-triggered workflow start. Default: 'EVENT'.
     """
 
-    config: EventFlowStartInput
+    config: EventWorkflowStartConfigInput
     type_: Literal["EVENT"] | Unset = "EVENT"
     additional_properties: dict[str, Any] = _attrs_field(init=False, factory=dict)
 
@@ -52,10 +52,12 @@ class EventWorkflowStartInput:
 
     @classmethod
     def from_dict(cls: type[T], src_dict: Mapping[str, Any]) -> T:
-        from ..models.event_flow_start_input import EventFlowStartInput
+        from ..models.event_workflow_start_config_input import (
+            EventWorkflowStartConfigInput,
+        )
 
         d = dict(src_dict)
-        config = EventFlowStartInput.from_dict(d.pop("config"))
+        config = EventWorkflowStartConfigInput.from_dict(d.pop("config"))
 
         type_ = cast(Literal["EVENT"] | Unset, d.pop("type", UNSET))
         if type_ != "EVENT" and not isinstance(type_, Unset):

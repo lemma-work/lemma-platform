@@ -19,6 +19,7 @@ E2E_PARALLEL := -n $(E2E_WORKERS) --dist loadscope
 # Load test settings (override on the command line)
 LOAD_TEST_COMPOSE := load_tests/docker-compose.load-test.yml
 LOAD_TEST_ENV     := load_tests/.env.load_test
+DATASTORE_LOAD_TEST_COMPOSE := -f $(LOAD_TEST_COMPOSE) -f load_tests/docker-compose.datastore.yml
 MAX_SUBSCRIBERS   ?= 100
 WRITER_VUS        ?= 2
 # Full-journey load test (load-test-journey): each VU self-provisions then loops
@@ -32,14 +33,14 @@ BACKEND_COVERAGE_FILE ?= $(CURDIR)/.coverage.backend
 BACKEND_COVERAGE_RUN_ENV = COVERAGE_PROCESS_START=$(CURDIR)/.coveragerc COVERAGE_FILE=$(BACKEND_COVERAGE_FILE)
 BACKEND_COVERAGE_DATA_ENV = COVERAGE_FILE=$(BACKEND_COVERAGE_FILE)
 
-.PHONY: help test test-unit test-e2e test-e2e-real test-e2e-fast test-e2e-runtime test-module coverage coverage-unit coverage-e2e coverage-backend-unit coverage-backend-e2e-shard coverage-backend-report test-collect lint migrate docker-build docker-build-cloud docker-build-arm64 docker-build-amd64 agentbox-build teams-manifest-zip load-test-build load-test-up load-test-migrate load-test-setup load-test-run load-test-sse load-test-journey load-test-monitor load-test-down load-test
+.PHONY: help test test-unit test-e2e test-e2e-real test-e2e-fast test-e2e-runtime test-module coverage coverage-unit coverage-e2e coverage-backend-unit coverage-backend-e2e-shard coverage-backend-report coverage-backend-gate test-collect lint lint-async typecheck-critical architecture migrate docker-build docker-build-cloud docker-build-arm64 docker-build-amd64 agentbox-build teams-manifest-zip load-test-build load-test-up load-test-migrate load-test-setup load-test-run load-test-sse load-test-journey load-test-datastore-up load-test-datastore-setup load-test-datastore-files load-test-datastore-stats load-test-datastore-down load-test-monitor load-test-down load-test
 
 help:
 	@echo "Lemma backend:"
 	@echo "  make test              # run backend tests"
 	@echo "  make test-unit         # run non-e2e tests"
 	@echo "  make test-e2e          # run all e2e tests"
-	@echo "  make test-e2e-fast     # fast API e2e (no slow/worker/workspace/provider/local_cli),"
+	@echo "  make test-e2e-fast     # hermetic API/worker e2e (no slow/workspace/provider/local_cli),"
 	@echo "                         #   parallel via pytest-xdist (E2E_WORKERS=$(E2E_WORKERS); auto|0 to override)"
 	@echo "  make test-e2e-runtime  # run slow worker/workspace/local/provider e2e tests (serial)"
 	@echo "  make test-module MODULE=pod"
@@ -48,6 +49,8 @@ help:
 	@echo "  make coverage-backend-unit     # backend unit coverage + markdown"
 	@echo "  make coverage-backend-e2e-shard # backend e2e shard coverage + markdown"
 	@echo "  make lint              # run ruff checks"
+	@echo "  make typecheck-critical # strict reliability/domain type gate"
+	@echo "  make architecture      # dependency/complexity/exception ratchet"
 	@echo "  make migrate           # apply database migrations"
 	@echo "  make docker-build-cloud  # build the lemma-cloud image"
 	@echo "  (full dev workflow: use 'make dev STACK=cloud|oss' from the repo root)"
@@ -65,6 +68,8 @@ help:
 	@echo "  make load-test-run     # run k6 WebSocket load test (reads .env.load_test)"
 	@echo "  make load-test-sse     # run k6 SSE streaming load test"
 	@echo "  make load-test-journey # run k6 full chat-journey test (self-provisioning, mock LLM)"
+	@echo "  make load-test-datastore-files # upload and fully process 20 fixture PDFs"
+	@echo "                         #   see docs/operators/datastore-ingestion-benchmark.md"
 	@echo "                         #   knobs: MAX_USERS=100 THINK_MS=500"
 	@echo "  make load-test-monitor # monitor DB connections (pg_stat_activity poller)"
 	@echo "  make load-test-down    # tear down containers and clean up"
@@ -94,7 +99,7 @@ test-e2e-real:
 	E2E_REAL=1 uv run pytest -m e2e
 
 test-e2e-fast:
-	uv run pytest $(E2E_PARALLEL) -m "e2e and not slow and not worker and not workspace and not provider and not local_cli and not indexing"
+	uv run pytest $(E2E_PARALLEL) -m "e2e and not slow and not workspace and not provider and not local_cli and not indexing and not protected"
 
 # One CI shard of the fast suite: same marker filter, scoped to the paths (or
 # --ignore excludes) passed in E2E_ARGS. CI runs several shards in parallel on
@@ -103,7 +108,7 @@ test-e2e-fast:
 # contention that makes -n2 flaky. The union of all shards' E2E_ARGS must equal
 # the whole fast suite (the last shard is a catch-all via --ignore).
 test-e2e-shard:
-	uv run pytest $(E2E_PARALLEL) $(E2E_ARGS) -m "e2e and not slow and not worker and not workspace and not provider and not local_cli and not indexing" -o timeout=120
+	uv run pytest $(E2E_PARALLEL) $(E2E_ARGS) -m "e2e and not slow and not workspace and not provider and not local_cli and not indexing and not protected" -o timeout=120
 
 # Kreuzberg-backed indexing/search e2e (real document extraction). Split out of
 # test-e2e-fast so that job stays fast and never boots the RAM-heavy Kreuzberg
@@ -114,7 +119,7 @@ test-e2e-indexing:
 
 # Real runtime suite only (real model + Docker), serial. Subset of test-e2e-real.
 test-e2e-runtime:
-	E2E_REAL=1 uv run pytest -m "e2e and (slow or worker or workspace or provider or local_cli)"
+	E2E_REAL=1 uv run pytest -m "e2e and (slow or workspace or provider or local_cli or indexing or surface_live or protected)"
 
 test-module:
 	@test -n "$(MODULE)" || (echo "MODULE is required, e.g. make test-module MODULE=pod" && exit 1)
@@ -145,7 +150,7 @@ coverage-backend-e2e-shard:
 	$(BACKEND_COVERAGE_DATA_ENV) uv run coverage erase
 	$(BACKEND_COVERAGE_RUN_ENV) uv run coverage run --parallel-mode -m pytest \
 		$(E2E_PARALLEL) $(E2E_ARGS) \
-		-m "e2e and not slow and not worker and not workspace and not provider and not local_cli and not indexing" \
+		-m "e2e and not slow and not workspace and not provider and not local_cli and not indexing and not protected" \
 		-o timeout=120 \
 		--junitxml=$(BACKEND_COVERAGE_DIR)/junit-$(COVERAGE_PHASE).xml
 	$(MAKE) coverage-backend-report COVERAGE_PHASE=$(COVERAGE_PHASE)
@@ -165,6 +170,16 @@ coverage-backend-report:
 		--markdown-out $(BACKEND_COVERAGE_DIR)/comment.md \
 		--summary-json-out $(BACKEND_COVERAGE_DIR)/summary.json
 
+coverage-backend-gate:
+	$(BACKEND_COVERAGE_DATA_ENV) uv run coverage combine
+	$(BACKEND_COVERAGE_DATA_ENV) uv run coverage json -o $(BACKEND_COVERAGE_DIR)/coverage.json
+	$(BACKEND_COVERAGE_DATA_ENV) uv run coverage xml -o $(BACKEND_COVERAGE_DIR)/coverage.xml
+	uv run python scripts/check_coverage_thresholds.py \
+		$(BACKEND_COVERAGE_DIR)/coverage.json \
+		--min-total 70 --min-module schedule=65
+	uv run diff-cover $(BACKEND_COVERAGE_DIR)/coverage.xml \
+		--compare-branch origin/main --fail-under=85
+
 coverage-module:
 	@test -n "$(MODULE)" || (echo "MODULE is required, e.g. make coverage-module MODULE=agent" && exit 1)
 	uv run pytest app/modules/$(MODULE) \
@@ -176,7 +191,23 @@ test-collect:
 	uv run pytest --collect-only -q
 
 lint:
-	uv run ruff check .
+	uv run ruff check app migrations scripts
+
+typecheck-critical:
+	uv run basedpyright --level error \
+		app/core/domain/events.py \
+		app/core/domain/errors.py \
+		app/core/api/schemas.py \
+		app/core/api/uploads.py \
+		app/core/infrastructure/events \
+		app/modules/pod/domain \
+		app/modules/pod_bundle/domain \
+		app/modules/schedule/domain \
+		app/modules/usage/domain
+
+architecture:
+	uv run python scripts/check_architecture.py
+	uv run python scripts/generate_route_inventory.py --check
 
 # Async-safety gate (enforced in CI). Catches blocking calls newly introduced
 # into async production code. Scoped to app/ with the noisy/stylistic ASYNC
@@ -222,6 +253,38 @@ teams-manifest-zip:
 load-test-build:
 	@echo "Building lemma-backend:load-test image from monorepo root…"
 	cd .. && docker build -f lemma-backend/Dockerfile -t lemma-backend:load-test .
+
+load-test-datastore-files:
+	uv run python load_tests/datastore_ingestion.py \
+		--count "$${DATASTORE_BENCH_COUNT:-20}" \
+		--upload-concurrency "$${DATASTORE_BENCH_CONCURRENCY:-5}" \
+		--processing-timeout "$${DATASTORE_BENCH_TIMEOUT:-3600}" \
+		--report "$${DATASTORE_BENCH_REPORT:-/tmp/lemma-datastore-ingestion-report.json}"
+
+load-test-datastore-up:
+	docker compose $(DATASTORE_LOAD_TEST_COMPOSE) up -d
+	@until docker compose $(DATASTORE_LOAD_TEST_COMPOSE) exec -T api python -c "import urllib.request; urllib.request.urlopen('http://localhost:8000/health')" > /dev/null 2>&1; do \
+		printf '.'; sleep 3; \
+	done
+	@until docker compose $(DATASTORE_LOAD_TEST_COMPOSE) logs worker 2>&1 | grep -q "Local embedding model is ready"; do \
+		test -n "$$(docker compose $(DATASTORE_LOAD_TEST_COMPOSE) ps -q worker)" || { \
+			echo " Datastore worker stopped during startup."; \
+			docker compose $(DATASTORE_LOAD_TEST_COMPOSE) logs --tail=100 worker; \
+			exit 1; \
+		}; \
+		printf '.'; sleep 3; \
+	done
+	@echo " Datastore benchmark stack is ready."
+
+load-test-datastore-setup:
+	docker compose $(DATASTORE_LOAD_TEST_COMPOSE) exec -T api alembic upgrade head
+	uv run python load_tests/setup.py --api-url $(LEMMA_API_URL)
+
+load-test-datastore-stats:
+	docker stats lemma-load-api lemma-load-worker lemma-load-kreuzberg --no-stream
+
+load-test-datastore-down:
+	docker compose $(DATASTORE_LOAD_TEST_COMPOSE) down -v
 
 load-test-up:
 	docker compose -f $(LOAD_TEST_COMPOSE) up -d

@@ -3,9 +3,9 @@ from __future__ import annotations
 import asyncio
 from typing import Any
 
-from app.modules.connectors.config import connector_settings
 from app.core.log.log import get_logger
-from app.modules.connectors.domain.connector import ConnectorEntity, AuthProvider
+from app.modules.connectors.config import connector_settings
+from app.modules.connectors.domain.connector import AuthProvider, ConnectorEntity
 from app.modules.connectors.domain.errors import (
     ConnectorNotFoundError,
     OperationExecutionTimeoutError,
@@ -15,14 +15,14 @@ from app.modules.connectors.domain.ports import (
     ConnectorRepositoryPort,
     OperationDetailsPort,
 )
-
-logger = get_logger(__name__)
 from app.modules.connectors.infrastructure.adapters.composio_operation_gateway import (
     ComposioOperationGateway,
 )
 from app.modules.connectors.infrastructure.adapters.lemma_operation_gateway import (
     LemmaOperationGateway,
 )
+
+logger = get_logger(__name__)
 
 
 class RoutingOperationGateway(AppOperationGatewayPort):

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from pathlib import Path
 from typing import Optional, Protocol, Tuple
 from uuid import UUID
 
@@ -48,7 +49,7 @@ class AppRepositoryPort(Protocol):
 
 
 class AppStoragePort(Protocol):
-    async def write_file(self, path: str, content: bytes | str): ...
+    async def write_file(self, path: str, content: bytes | str | Path): ...
 
     async def read_file(self, path: str): ...
 

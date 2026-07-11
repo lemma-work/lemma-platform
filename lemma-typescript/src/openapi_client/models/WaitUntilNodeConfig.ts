@@ -5,4 +5,3 @@
 export type WaitUntilNodeConfig = {
     timeout_seconds: number;
 };
-

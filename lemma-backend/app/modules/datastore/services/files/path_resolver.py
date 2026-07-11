@@ -3,6 +3,7 @@ from __future__ import annotations
 from uuid import NAMESPACE_URL, UUID, uuid5
 
 from app.core.authorization.context import ResourceVisibility
+from app.core.file_types import get_content_type
 from app.modules.datastore.domain.errors import (
     DatastoreAccessDeniedError,
     DatastoreValidationError,
@@ -75,8 +76,6 @@ class PathResolver:
         return file_entity.search_enabled
 
     def _get_content_type(self, file_name: str) -> str:
-        from app.modules.agent.domain.file_entities import get_content_type
-
         return get_content_type(file_name)
 
     def _default_visibility_for_path(

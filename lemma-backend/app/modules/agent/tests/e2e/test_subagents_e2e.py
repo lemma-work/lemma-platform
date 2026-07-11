@@ -33,6 +33,7 @@ from app.modules.agent.tests.e2e.test_agent_e2e import (
 
 pytestmark = [
     pytest.mark.e2e,
+    pytest.mark.provider,
     pytest.mark.skipif(
         os.getenv("LEMMA_RUN_PROVIDER_E2E") != "1",
         reason="Set LEMMA_RUN_PROVIDER_E2E=1 to run real provider-backed e2e tests.",

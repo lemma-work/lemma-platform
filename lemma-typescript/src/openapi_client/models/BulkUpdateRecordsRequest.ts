@@ -11,4 +11,3 @@ export type BulkUpdateRecordsRequest = {
      */
     records: Array<Record<string, any>>;
 };
-

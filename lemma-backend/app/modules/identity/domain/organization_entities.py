@@ -3,8 +3,10 @@ from enum import Enum
 from uuid import UUID
 
 from pydantic import Field
+from pydantic import field_validator
 
 from app.core.domain.aggregate import AggregateRoot
+from app.modules.identity.domain.email import normalize_identity_email
 from app.modules.identity.domain.user_entities import UserEntity
 
 
@@ -100,6 +102,11 @@ class OrganizationInvitationEntity(AggregateRoot):
     )
     accepted_at: datetime | None = None
     revoked_at: datetime | None = None
+
+    @field_validator("email", mode="before")
+    @classmethod
+    def normalize_email(cls, value: object) -> str:
+        return normalize_identity_email(str(value))
 
     def is_expired(self, now: datetime | None = None) -> bool:
         if self.status != OrganizationInvitationStatus.PENDING:

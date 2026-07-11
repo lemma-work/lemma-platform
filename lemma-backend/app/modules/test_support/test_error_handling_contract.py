@@ -81,20 +81,35 @@ def _envelope_app() -> FastAPI:
 
 
 def test_handlers_emit_unified_envelope() -> None:
-    client = TestClient(_envelope_app(), raise_server_exceptions=False)
+    client = TestClient(
+        _envelope_app(),
+        raise_server_exceptions=False,
+        headers={"x-request-id": "test-request-id"},
+    )
 
     r = client.get("/domain")
     assert r.status_code == 404
-    assert r.json() == {"message": "nope", "code": "WIDGET_GONE", "details": {"x": 1}}
+    assert r.json() == {
+        "message": "nope",
+        "code": "WIDGET_GONE",
+        "request_id": "test-request-id",
+        "details": {"x": 1},
+    }
 
     r = client.get("/http")
     assert r.status_code == 403
-    assert r.json() == {"message": "forbidden", "code": "HTTP_403", "details": None}
+    assert r.json() == {
+        "message": "forbidden",
+        "code": "HTTP_403",
+        "request_id": "test-request-id",
+        "details": None,
+    }
 
     r = client.post("/validate", json={"n": "not-an-int"})
     body = r.json()
     assert r.status_code == 422
     assert body["code"] == "VALIDATION_ERROR"
+    assert body["request_id"] == "test-request-id"
     assert body["message"] == "Request validation failed"
     assert isinstance(body["details"], list)
 
@@ -103,6 +118,7 @@ def test_handlers_emit_unified_envelope() -> None:
     assert r.json() == {
         "message": "Internal server error",
         "code": "INTERNAL_ERROR",
+        "request_id": "test-request-id",
         "details": None,
     }
 

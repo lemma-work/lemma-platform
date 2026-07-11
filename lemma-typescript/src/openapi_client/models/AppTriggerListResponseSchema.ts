@@ -11,4 +11,3 @@ export type AppTriggerListResponseSchema = {
     limit: number;
     next_page_token?: (string | null);
 };
-

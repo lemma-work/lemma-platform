@@ -23,4 +23,3 @@ export type FunctionRunResponse = {
     workspace_process_id?: (string | null);
     workspace_session_id?: (string | null);
 };
-

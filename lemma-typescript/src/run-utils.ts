@@ -1,6 +1,6 @@
-import type { FlowRunStatus, FunctionRunStatus } from "./openapi_client/index.js";
+import type { FunctionRunStatus, WorkflowRunStatus } from "./openapi_client/index.js";
 
-export type AnyRunStatus = FunctionRunStatus | FlowRunStatus | (string & {});
+export type AnyRunStatus = FunctionRunStatus | WorkflowRunStatus | (string & {});
 
 interface BackoffOptions {
   baseMs?: number;
@@ -9,7 +9,7 @@ interface BackoffOptions {
 }
 
 const FUNCTION_TERMINAL = new Set<string>(["COMPLETED", "FAILED", "CANCELLED"]);
-const FLOW_TERMINAL = new Set<string>(["COMPLETED", "FAILED", "CANCELLED"]);
+const WORKFLOW_TERMINAL = new Set<string>(["COMPLETED", "FAILED", "CANCELLED"]);
 
 export function normalizeRunStatus(status: unknown): string | undefined {
   if (typeof status !== "string") {
@@ -25,7 +25,7 @@ export function isTerminalFunctionStatus(status: unknown): boolean {
   return !!normalized && FUNCTION_TERMINAL.has(normalized);
 }
 
-export function isTerminalFlowStatus(status: unknown, options: { treatWaitingAsTerminal?: boolean } = {}): boolean {
+export function isTerminalWorkflowStatus(status: unknown, options: { treatWaitingAsTerminal?: boolean } = {}): boolean {
   const normalized = normalizeRunStatus(status);
   if (!normalized) return false;
 
@@ -33,7 +33,7 @@ export function isTerminalFlowStatus(status: unknown, options: { treatWaitingAsT
     return options.treatWaitingAsTerminal === true;
   }
 
-  return FLOW_TERMINAL.has(normalized);
+  return WORKFLOW_TERMINAL.has(normalized);
 }
 
 export async function sleep(ms: number, signal?: AbortSignal): Promise<void> {

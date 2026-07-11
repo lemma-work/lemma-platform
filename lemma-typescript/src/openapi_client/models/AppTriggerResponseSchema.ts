@@ -17,4 +17,3 @@ export type AppTriggerResponseSchema = {
     provider: AuthProvider;
     updated_at: string;
 };
-

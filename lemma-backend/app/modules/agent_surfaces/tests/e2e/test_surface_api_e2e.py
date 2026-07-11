@@ -10,6 +10,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.modules.agent_surfaces.tests.e2e.helpers import (
     _create_agent,
     _create_surface,
+    _ensure_connector,
     _ensure_connector_account,
     _load_slack_dm_fixture,
 )
@@ -539,7 +540,7 @@ async def test_surface_credentials_are_unique_within_org_until_deleted(
         f"/pods/{sibling_pod_id}/surfaces",
         json={"platform": "WHATSAPP"},
     )
-    assert duplicate_system.status_code == 400, duplicate_system.text
+    assert duplicate_system.status_code == 422, duplicate_system.text
     assert "System WHATSAPP credentials are already used" in duplicate_system.text
 
     deleted_system = await authenticated_client.delete(
@@ -578,7 +579,7 @@ async def test_surface_credentials_are_unique_within_org_until_deleted(
         f"/pods/{sibling_pod_id}/surfaces",
         json={"platform": "SLACK", "account_id": str(account.id)},
     )
-    assert duplicate_account.status_code == 400, duplicate_account.text
+    assert duplicate_account.status_code == 422, duplicate_account.text
     assert "connected account is already used" in duplicate_account.text
 
     deleted_account = await authenticated_client.delete(
@@ -737,3 +738,149 @@ async def test_create_resend_email_surface_provisions_address(
     assert row.surface_identity_email and row.surface_identity_email.endswith(
         "@ops.lemma.work"
     )
+
+
+async def test_available_catalog_channel_discovery_and_teams_consent_journey(
+    authenticated_client: AsyncClient,
+    db_session: AsyncSession,
+    test_pod,
+    fixed_test_user,
+    fake_slack,
+    monkeypatch,
+):
+    from app.core.config import settings as app_settings
+    from app.modules.agent_surfaces.domain.surface_connectors import (
+        SURFACE_CONNECTOR_BINDINGS,
+    )
+    from app.modules.agent_surfaces.services.surface_service import AgentSurfaceService
+
+    monkeypatch.setattr(app_settings, "api_url", "https://api.example.test")
+    monkeypatch.setattr(surface_settings, "telegram_bot_token", "system-telegram")
+    monkeypatch.setattr(surface_settings, "whatsapp_access_token", "system-whatsapp")
+    monkeypatch.setattr(surface_settings, "whatsapp_phone_number_id", "system-phone")
+    monkeypatch.setattr(surface_settings, "microsoft_bot_app_id", "teams-app-id")
+    monkeypatch.setattr(surface_settings, "microsoft_bot_app_password", "teams-secret")
+
+    async def _consent_not_yet_granted(self, tenant_id: str) -> bool:
+        del self, tenant_id
+        return False
+
+    monkeypatch.setattr(
+        AgentSurfaceService,
+        "_check_admin_consent_granted",
+        _consent_not_yet_granted,
+    )
+
+    for binding in SURFACE_CONNECTOR_BINDINGS.values():
+        await _ensure_connector(db_session, binding.connector_id)
+    await db_session.commit()
+
+    pod_id = test_pod["id"]
+    catalog = await authenticated_client.get(f"/pods/{pod_id}/available-surfaces")
+    assert catalog.status_code == 200, catalog.text
+    by_platform = {item["platform"]: item for item in catalog.json()["surfaces"]}
+    assert set(by_platform) == {
+        "SLACK",
+        "TEAMS",
+        "WHATSAPP",
+        "TELEGRAM",
+        "GMAIL",
+        "OUTLOOK",
+        "RESEND",
+    }
+    assert by_platform["TELEGRAM"]["supported_credential_modes"] == [
+        "CUSTOM",
+        "SYSTEM",
+    ]
+    assert by_platform["WHATSAPP"]["supported_credential_modes"] == [
+        "CUSTOM",
+        "SYSTEM",
+    ]
+    assert all(item["connector_available"] for item in by_platform.values())
+    assert all(item["connect"] for item in by_platform.values())
+
+    slack_account = await _ensure_connector_account(
+        db_session,
+        user_id=fixed_test_user["id"],
+        connector_id="slack",
+        credentials={
+            "access_token": "xoxb-channel-discovery",
+            "api_base_url": fake_slack.base_url,
+            "raw_response": {
+                "team_id": "T0123456",
+                "bot_user_id": "U0AGSSTQZLH",
+                "api_base_url": fake_slack.base_url,
+            },
+        },
+    )
+    slack = await authenticated_client.post(
+        f"/pods/{pod_id}/surfaces",
+        json={"platform": "SLACK", "account_id": str(slack_account.id)},
+    )
+    assert slack.status_code == 200, slack.text
+    channels = await authenticated_client.get(
+        f"/pods/{pod_id}/surfaces/slack/channels"
+    )
+    assert channels.status_code == 200, channels.text
+    assert channels.json()["channels"] == [
+        {"id": "C-SUPPORT", "name": "support", "is_member": True},
+        {"id": "C-INCIDENTS", "name": "incidents", "is_member": False},
+    ]
+
+    unsupported = await authenticated_client.get(
+        f"/pods/{pod_id}/surface-setup/not-a-platform"
+    )
+    assert unsupported.status_code == 422, unsupported.text
+
+    tenant_id = "1b5c589f-1718-42c8-8244-166fbe5dd8fc"
+    teams_account = await _ensure_connector_account(
+        db_session,
+        user_id=fixed_test_user["id"],
+        connector_id="microsoft_teams",
+        credentials={"user_data": {"tenant_id": tenant_id}},
+    )
+    teams = await authenticated_client.post(
+        f"/pods/{pod_id}/surfaces",
+        json={"platform": "TEAMS", "account_id": str(teams_account.id)},
+    )
+    assert teams.status_code == 200, teams.text
+    teams_id = teams.json()["id"]
+
+    pending = await authenticated_client.get(f"/pods/{pod_id}/surfaces/teams/setup")
+    assert pending.status_code == 200, pending.text
+    consent = pending.json()["admin_consent"]
+    assert consent["required"] is True
+    assert consent["granted"] is False
+    assert "adminconsent" in consent["consent_url"]
+    assert f"state={teams_id}" in consent["consent_url"]
+
+    provider_error = await authenticated_client.get(
+        "/surfaces/teams/admin-consent/callback",
+        params={"error": "access_denied", "error_description": "Denied"},
+    )
+    assert provider_error.status_code == 400
+    missing = await authenticated_client.get(
+        "/surfaces/teams/admin-consent/callback",
+        params={"tenant": tenant_id, "admin_consent": "False"},
+    )
+    assert missing.status_code == 400
+    bad_state = await authenticated_client.get(
+        "/surfaces/teams/admin-consent/callback",
+        params={"tenant": tenant_id, "admin_consent": "True", "state": "invalid"},
+    )
+    assert bad_state.status_code == 400
+
+    activated = await authenticated_client.get(
+        "/surfaces/teams/admin-consent/callback",
+        params={
+            "tenant": tenant_id,
+            "admin_consent": "True",
+            "state": teams_id,
+        },
+    )
+    assert activated.status_code == 200, activated.text
+    assert "Admin consent granted" in activated.text
+
+    ready = await authenticated_client.get(f"/pods/{pod_id}/surfaces/teams/setup")
+    assert ready.status_code == 200, ready.text
+    assert ready.json()["admin_consent"]["granted"] is True

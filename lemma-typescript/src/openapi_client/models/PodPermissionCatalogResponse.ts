@@ -6,4 +6,3 @@ import type { PodPermissionResponse } from './PodPermissionResponse.js';
 export type PodPermissionCatalogResponse = {
     items: Array<PodPermissionResponse>;
 };
-

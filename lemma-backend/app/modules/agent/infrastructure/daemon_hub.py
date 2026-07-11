@@ -10,11 +10,21 @@ from uuid import UUID
 
 from fastapi import WebSocket
 from pydantic import BaseModel
-from redis.asyncio import Redis, ConnectionPool
 from redis.exceptions import RedisError
 
 from app.core.config import settings
+from app.core.infrastructure.channels.channel_service import get_channel_service
 from app.core.log.log import get_logger
+from app.modules.agent.infrastructure.agent_runtime_redis import (
+    close_agent_runtime_redis,
+    daemon_command_channel as _daemon_command_channel,
+    daemon_online_key as _daemon_online_key,
+    get_agent_runtime_redis as _get_redis,
+    get_daemon_capacity,
+    is_daemon_online as _is_daemon_online,
+    publish_json as _publish_json,
+    run_event_channel as _run_event_channel,
+)
 from app.modules.agent.domain.value_objects import (
     AgentEvent,
     AgentEventType,
@@ -75,9 +85,6 @@ class AgentRuntimeDaemonHub:
             user_id=user_id,
             websocket=websocket,
         )
-        connection.command_task = asyncio.create_task(
-            self._listen_for_daemon_commands(connection)
-        )
         async with self._lock:
             old_connection = self._connections.get(daemon_id)
             if old_connection is not None and old_connection.command_task is not None:
@@ -86,23 +93,71 @@ class AgentRuntimeDaemonHub:
             if old_connection is not None:
                 self._orphan_connection_runs_locked(old_connection)
         if old_connection is not None:
-            self._notify_connection_runs_reconnecting(old_connection, reason="daemon_superseded")
+            self._notify_connection_runs_reconnecting(
+                old_connection, reason="daemon_superseded"
+            )
+            if old_connection.command_task is not None:
+                with contextlib.suppress(asyncio.CancelledError):
+                    await old_connection.command_task
+
+        async with self._lock:
+            if self._connections.get(daemon_id) is not connection:
+                return
+            connection.command_task = asyncio.create_task(
+                self._listen_for_daemon_commands(connection)
+            )
         with contextlib.suppress(TimeoutError):
             await asyncio.wait_for(connection.command_ready.wait(), timeout=2)
 
-    async def unregister(self, *, daemon_id: UUID, user_id: UUID) -> None:
+    async def unregister(
+        self,
+        *,
+        daemon_id: UUID,
+        user_id: UUID,
+        websocket: WebSocket | None = None,
+    ) -> None:
+        removed_connection: _DaemonConnection | None = None
         async with self._lock:
             connection = self._connections.get(daemon_id)
-            if connection is not None and connection.user_id == user_id:
+            if (
+                connection is not None
+                and connection.user_id == user_id
+                and (websocket is None or connection.websocket is websocket)
+            ):
                 del self._connections[daemon_id]
                 if connection.command_task is not None:
                     connection.command_task.cancel()
                 self._orphan_connection_runs_locked(connection)
-        if connection is not None and connection.user_id == user_id:
-            self._notify_connection_runs_reconnecting(connection, reason="daemon_disconnected")
-        if connection is not None and connection.command_task is not None:
+                removed_connection = connection
+        if removed_connection is not None:
+            self._notify_connection_runs_reconnecting(
+                removed_connection, reason="daemon_disconnected"
+            )
+        if (
+            removed_connection is not None
+            and removed_connection.command_task is not None
+        ):
             with contextlib.suppress(asyncio.CancelledError):
-                await connection.command_task
+                await removed_connection.command_task
+
+    async def close(self) -> None:
+        """Cancel every Redis listener before the shared clients shut down."""
+        async with self._lock:
+            tasks = [
+                connection.command_task
+                for connection in self._connections.values()
+                if connection.command_task is not None
+            ]
+            tasks.extend(
+                subscription.task for subscription in self._remote_runs.values()
+            )
+            self._connections.clear()
+            self._remote_runs.clear()
+            self._orphaned_run_queues.clear()
+        for task in tasks:
+            task.cancel()
+        if tasks:
+            await asyncio.gather(*tasks, return_exceptions=True)
 
     def _orphan_connection_runs_locked(self, connection: _DaemonConnection) -> None:
         """Move a dying connection's run queues into ``_orphaned_run_queues``.
@@ -166,7 +221,9 @@ class AgentRuntimeDaemonHub:
                     connection.run_queues[agent_run_id] = queue
 
     async def connected(self, *, daemon_id: UUID, user_id: UUID) -> bool:
-        return await self._connection_for(daemon_id=daemon_id, user_id=user_id) is not None
+        return (
+            await self._connection_for(daemon_id=daemon_id, user_id=user_id) is not None
+        )
 
     async def start_run(
         self,
@@ -306,7 +363,7 @@ class AgentRuntimeDaemonHub:
         connection = await self._connection_for(daemon_id=daemon_id, user_id=user_id)
         try:
             agent_run_id = UUID(str(message["agent_run_id"]))
-        except (KeyError, ValueError):
+        except KeyError, ValueError:
             return
 
         event_payload = message.get("event", message.get("payload"))
@@ -344,22 +401,19 @@ class AgentRuntimeDaemonHub:
         self,
         connection: _DaemonConnection,
     ) -> None:
-        redis: Redis | None = None
-        pubsub = None
         channel = _daemon_command_channel(connection.daemon_id)
         try:
-            redis = Redis.from_url(settings.redis_url, decode_responses=True)
-            pubsub = redis.pubsub(ignore_subscribe_messages=True)
-            await pubsub.subscribe(channel)
-            await redis.set(_daemon_online_key(connection.daemon_id), str(connection.user_id))
-            connection.command_ready.set()
-            async for raw_message in pubsub.listen():
-                if raw_message.get("type") != "message":
-                    continue
-                command = _json_dict(raw_message.get("data"))
-                if not _matches_daemon_command(command, connection=connection):
-                    continue
-                await self._send(connection, command)
+            channel_service = await get_channel_service()
+            async with channel_service.subscribe([channel]) as messages:
+                await _get_redis().set(
+                    _daemon_online_key(connection.daemon_id), str(connection.user_id)
+                )
+                connection.command_ready.set()
+                async for raw_message in messages:
+                    command = _json_dict(raw_message)
+                    if not _matches_daemon_command(command, connection=connection):
+                        continue
+                    await self._send(connection, command)
         except asyncio.CancelledError:
             raise
         except (OSError, RedisError) as exc:
@@ -371,16 +425,8 @@ class AgentRuntimeDaemonHub:
             )
         finally:
             connection.command_ready.set()
-            if pubsub is not None:
-                with contextlib.suppress(Exception):
-                    await pubsub.unsubscribe(channel)
-                with contextlib.suppress(Exception):
-                    await pubsub.aclose()
-            if redis is not None:
-                with contextlib.suppress(Exception):
-                    await redis.delete(_daemon_online_key(connection.daemon_id))
-                with contextlib.suppress(Exception):
-                    await redis.aclose()
+            with contextlib.suppress(Exception):
+                await _get_redis().delete(_daemon_online_key(connection.daemon_id))
 
     async def _listen_for_run_events(
         self,
@@ -389,23 +435,18 @@ class AgentRuntimeDaemonHub:
         queue: asyncio.Queue[AgentEvent],
         ready: asyncio.Event | None = None,
     ) -> None:
-        redis: Redis | None = None
-        pubsub = None
         channel = _run_event_channel(agent_run_id)
         try:
-            redis = Redis.from_url(settings.redis_url, decode_responses=True)
-            pubsub = redis.pubsub(ignore_subscribe_messages=True)
-            await pubsub.subscribe(channel)
-            if ready is not None:
-                ready.set()
-            async for raw_message in pubsub.listen():
-                if raw_message.get("type") != "message":
-                    continue
-                message = _json_dict(raw_message.get("data"))
-                event_payload = message.get("event", message.get("payload"))
-                await queue.put(
-                    _event_from_payload(event_payload, agent_run_id=agent_run_id)
-                )
+            channel_service = await get_channel_service()
+            async with channel_service.subscribe([channel]) as messages:
+                if ready is not None:
+                    ready.set()
+                async for raw_message in messages:
+                    message = _json_dict(raw_message)
+                    event_payload = message.get("event", message.get("payload"))
+                    await queue.put(
+                        _event_from_payload(event_payload, agent_run_id=agent_run_id)
+                    )
         except asyncio.CancelledError:
             raise
         except (OSError, RedisError) as exc:
@@ -421,14 +462,6 @@ class AgentRuntimeDaemonHub:
         finally:
             if ready is not None:
                 ready.set()
-            if pubsub is not None:
-                with contextlib.suppress(Exception):
-                    await pubsub.unsubscribe(channel)
-                with contextlib.suppress(Exception):
-                    await pubsub.aclose()
-            if redis is not None:
-                with contextlib.suppress(Exception):
-                    await redis.aclose()
 
     async def _publish_daemon_command(
         self,
@@ -458,74 +491,10 @@ def daemon_mcp_url(conversation_id: UUID) -> str:
     return f"{base_url}/agent-runtime/conversations/{conversation_id}/mcp"
 
 
-def _daemon_command_channel(daemon_id: UUID) -> str:
-    return f"agent-runtime:daemon:{daemon_id}:commands"
-
-
-def _run_event_channel(agent_run_id: UUID) -> str:
-    return f"agent-runtime:run:{agent_run_id}:events"
-
-
-def _daemon_online_key(daemon_id: UUID) -> str:
-    return f"agent-runtime:daemon:{daemon_id}:online"
-
-
-def _daemon_capacity_key(daemon_id: UUID) -> str:
-    return f"agent-runtime:daemon:{daemon_id}:capacity"
-
-
-# Ephemeral, presence-scoped data (same category as _daemon_online_key above)
-# -- lives in Redis, not a DB column, because it's a live fact that changes on
-# every heartbeat and is meaningless the instant the daemon disconnects. The
-# TTL is a safety net only; the heartbeat refreshes it far more often, and
-# _clear_daemon_capacity() below removes it immediately on a clean disconnect.
-_DAEMON_CAPACITY_TTL_SECONDS = 120
-
-
-async def set_daemon_capacity(
-    *, daemon_id: UUID, active_run_count: int, max_concurrent_runs: int
-) -> None:
-    await _get_redis().set(
-        _daemon_capacity_key(daemon_id),
-        json.dumps(
-            {"active_run_count": active_run_count, "max_concurrent_runs": max_concurrent_runs}
-        ),
-        ex=_DAEMON_CAPACITY_TTL_SECONDS,
-    )
-
-
-async def get_daemon_capacity(*, daemon_id: UUID) -> JsonObject | None:
-    raw = await _get_redis().get(_daemon_capacity_key(daemon_id))
-    if raw is None:
-        return None
-    try:
-        parsed = json.loads(raw)
-    except json.JSONDecodeError:
-        return None
-    return parsed if isinstance(parsed, dict) else None
-
-
-async def clear_daemon_capacity(*, daemon_id: UUID) -> None:
-    await _get_redis().delete(_daemon_capacity_key(daemon_id))
-
-
-_redis_pool: ConnectionPool | None = None
-
-
-def _get_redis() -> Redis:
-    global _redis_pool  # noqa: PLW0603
-    if _redis_pool is None:
-        _redis_pool = ConnectionPool.from_url(settings.redis_url, decode_responses=True)
-    return Redis(connection_pool=_redis_pool)
-
-
-async def _publish_json(channel: str, payload: JsonObject) -> None:
-    await _get_redis().publish(channel, json.dumps(payload))
-
-
-async def _is_daemon_online(*, daemon_id: UUID, user_id: UUID) -> bool:
-    value = await _get_redis().get(_daemon_online_key(daemon_id))
-    return value == str(user_id)
+async def close_agent_runtime_resources() -> None:
+    """Stop daemon listeners, then close their Redis key/value client."""
+    await agent_runtime_daemon_hub.close()
+    await close_agent_runtime_redis()
 
 
 def _json_dict(value: object) -> JsonObject:

@@ -25,8 +25,8 @@ jobs:
       frontend: ${{ steps.filter.outputs.frontend }}
       codegen: ${{ steps.filter.outputs.codegen }}
     steps:
-      - uses: actions/checkout@v5
-      - uses: dorny/paths-filter@v3
+      - uses: actions/checkout@v7
+      - uses: dorny/paths-filter@v4
         id: filter
         with:
           filters: |
@@ -48,10 +48,15 @@ jobs:
             frontend:
               - 'lemma-frontend/**'
             codegen:
-              - 'lemma-python/**'
-              - 'lemma-typescript/**'
-              - 'lemma-backend/app/**'
-              - 'scripts/**'
+              - 'lemma-python/lemma_sdk/openapi_spec.json'
+              - 'lemma-python/lemma_sdk/openapi_client/**'
+              - 'lemma-python/lemma_sdk/_spec_info.py'
+              - 'lemma-python/scripts/generate_openapi_client.sh'
+              - 'lemma-typescript/src/openapi_client/**'
+              - 'lemma-typescript/src/react/generated/**'
+              - 'lemma-typescript/scripts/generate_openapi_client.sh'
+              - 'lemma-typescript/scripts/generate_l2.mjs'
+              - 'lemma-typescript/scripts/patch_generated_imports.mjs'
               - '.github/workflows/ci.yml'
 
   backend-unit:
@@ -77,7 +82,7 @@ jobs:
           --health-timeout 5s
           --health-retries 5
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
       - uses: astral-sh/setup-uv@v5
         with:
           enable-cache: true
@@ -98,57 +103,17 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: backend-unit-coverage
+          include-hidden-files: true
           path: |
+            lemma-backend/.coverage.backend
             lemma-backend/coverage-backend/comment.md
             lemma-backend/coverage-backend/summary.json
             lemma-backend/coverage-backend/coverage.json
             lemma-backend/coverage-backend/coverage.xml
             lemma-backend/coverage-backend/html
           if-no-files-found: ignore
-      - name: Update PR backend coverage comment
-        if: >-
-          github.event_name == 'pull_request' &&
-          github.event.pull_request.head.repo.full_name == github.repository &&
-          hashFiles('lemma-backend/coverage-backend/comment.md') != ''
-        uses: actions/github-script@v8
-        with:
-          script: |
-            const fs = require('fs');
-            const marker = '<!-- lemma-backend-coverage:unit -->';
-            const body = fs.readFileSync('lemma-backend/coverage-backend/comment.md', 'utf8');
-            const issue_number = context.payload.pull_request.number;
-            const {owner, repo} = context.repo;
-            try {
-              const comments = await github.paginate(github.rest.issues.listComments, {
-                owner,
-                repo,
-                issue_number,
-                per_page: 100,
-              });
-              const existing = comments.find((comment) =>
-                comment.user?.type === 'Bot' && comment.body?.includes(marker)
-              );
-              if (existing) {
-                await github.rest.issues.updateComment({
-                  owner,
-                  repo,
-                  comment_id: existing.id,
-                  body,
-                });
-              } else {
-                await github.rest.issues.createComment({
-                  owner,
-                  repo,
-                  issue_number,
-                  body,
-                });
-              }
-            } catch (error) {
-              core.warning(`Could not update backend coverage PR comment: ${error.message}`);
-            }
-
   backend-lint:
-    name: lemma-backend async-safety lint
+    name: lemma-backend quality gates
     needs: changes
     if: needs.changes.outputs.backend == 'true'
     runs-on: ubuntu-latest
@@ -156,14 +121,53 @@ jobs:
       run:
         working-directory: lemma-backend
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
       - uses: astral-sh/setup-uv@v5
         with:
           enable-cache: true
       - name: Sync deps
         run: uv sync
-      - name: Async-safety lint (flake8-async on app/)
+      - name: Ruff handwritten backend
+        run: make lint
+      - name: Async-safety lint
         run: make lint-async
+      - name: Critical domain type safety
+        run: make typecheck-critical
+      - name: Architecture, complexity, and broad-catch ratchet
+        run: make architecture
+
+  backend-migration:
+    name: lemma-backend migration upgrade/downgrade
+    needs: changes
+    if: needs.changes.outputs.backend == 'true'
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: lemma-backend
+    services:
+      postgres:
+        image: pgvector/pgvector:0.8.3-pg15
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: migration_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres -d migration_test"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    steps:
+      - uses: actions/checkout@v7
+      - uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+      - run: uv sync
+      - name: Verify consolidated reliability migration
+        run: uv run python scripts/verify_reliability_migration.py
+        env:
+          MIGRATION_TEST_DATABASE_URL: postgresql+asyncpg://postgres:postgres@localhost:5432/migration_test
 
   python-sdk:
     name: Python SDK + CLI tests
@@ -171,8 +175,8 @@ jobs:
     if: needs.changes.outputs.python_sdk == 'true'
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v5
-      - uses: actions/setup-python@v5
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v6
         with:
           python-version: "3.12"
       - name: Install SDK + CLI
@@ -204,7 +208,7 @@ jobs:
       run:
         working-directory: lemma-typescript
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
       - uses: actions/setup-node@v5
         with:
           node-version: 24
@@ -233,8 +237,8 @@ jobs:
     if: needs.changes.outputs.codegen == 'true'
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v5
-      - uses: actions/setup-python@v5
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v6
         with:
           python-version: "3.12"
       - uses: actions/setup-node@v5
@@ -270,7 +274,7 @@ jobs:
     if: needs.changes.outputs.frontend == 'true'
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
       - uses: actions/setup-node@v5
         with:
           node-version: 24
@@ -297,7 +301,7 @@ jobs:
     if: needs.changes.outputs.frontend == 'true' || needs.changes.outputs.typescript == 'true'
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
       - uses: actions/setup-node@v5
         with:
           node-version: 24
@@ -323,7 +327,7 @@ jobs:
     if: needs.changes.outputs.python_sdk == 'true'
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
       - uses: astral-sh/setup-uv@v5
         with:
           enable-cache: true
@@ -337,8 +341,8 @@ jobs:
     if: needs.changes.outputs.python_sdk == 'true'
     runs-on: windows-latest
     steps:
-      - uses: actions/checkout@v5
-      - uses: actions/setup-python@v5
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v6
         with:
           python-version: "3.12"
       - name: Install uv
@@ -386,6 +390,7 @@ jobs:
       - changes
       - backend-unit
       - backend-lint
+      - backend-migration
       - python-sdk
       - typescript-sdk
       - codegen-drift

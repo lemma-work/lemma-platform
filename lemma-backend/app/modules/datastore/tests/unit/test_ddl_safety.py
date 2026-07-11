@@ -7,7 +7,11 @@ The full DDL-execution path is exercised end-to-end in the e2e suite.
 
 from __future__ import annotations
 
+from contextlib import asynccontextmanager
 from decimal import Decimal
+from types import SimpleNamespace
+from unittest.mock import AsyncMock
+from uuid import uuid4
 
 import pytest
 
@@ -62,7 +66,9 @@ def test_malicious_or_invalid_expressions_rejected(expr: str) -> None:
         validate_computed_expression(expr, KNOWN)
 
 
-def test_bare_identifiers_allowed_when_columns_unknown_but_calls_still_restricted() -> None:
+def test_bare_identifiers_allowed_when_columns_unknown_but_calls_still_restricted() -> (
+    None
+):
     # construction-time pass (no known column set): column refs allowed...
     validate_computed_expression("price * qty")
     # ...but arbitrary function calls are still rejected even without columns.
@@ -79,7 +85,9 @@ def test_quote_sql_literal_escapes_and_types() -> None:
     assert quote_sql_literal(Decimal("1.50")) == "1.50"
 
 
-@pytest.mark.parametrize("bad", [object(), ["a"], {"k": "v"}, float("nan"), float("inf")])
+@pytest.mark.parametrize(
+    "bad", [object(), ["a"], {"k": "v"}, float("nan"), float("inf")]
+)
 def test_quote_sql_literal_rejects_unsupported(bad: object) -> None:
     with pytest.raises(DatastoreValidationError):
         quote_sql_literal(bad)
@@ -131,3 +139,26 @@ def test_enum_check_clause_quotes_options_safely() -> None:
 
     non_enum = ColumnSchema(name="t", type=DatastoreDataType.TEXT)
     assert manager._enum_check_clause(non_enum) == ""
+
+
+@pytest.mark.asyncio
+async def test_schema_provisioning_takes_shared_bootstrap_lock_before_create() -> None:
+    connection = SimpleNamespace(execute=AsyncMock())
+
+    @asynccontextmanager
+    async def begin():
+        yield connection
+
+    manager = SchemaManager(
+        engine=SimpleNamespace(begin=begin),
+        session_factory=object(),
+    )
+    pod_id = uuid4()
+
+    await manager.create_datastore_schema(pod_id)
+
+    assert connection.execute.await_count == 2
+    lock_call, create_call = connection.execute.await_args_list
+    assert "pg_advisory_xact_lock" in str(lock_call.args[0])
+    assert lock_call.args[1] == {"schema_name": manager.get_schema_name(pod_id)}
+    assert "CREATE SCHEMA IF NOT EXISTS" in str(create_call.args[0])

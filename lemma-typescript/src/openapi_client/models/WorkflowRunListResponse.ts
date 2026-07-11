@@ -8,4 +8,3 @@ export type WorkflowRunListResponse = {
     limit: number;
     next_page_token?: (string | null);
 };
-

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from collections.abc import Iterable
+import time
 from uuid import UUID
 
 from sqlalchemy.sql import text
@@ -10,6 +11,7 @@ from app.modules.datastore.domain.file_entities import (
     DatastoreFileSearchResult,
     SearchMethod,
 )
+from app.modules.datastore.domain.document_processing import IndexingMetrics
 from app.modules.datastore.infrastructure.file_chunk_repository import (
     DatastoreFileChunkRepository,
 )
@@ -18,7 +20,6 @@ from app.modules.datastore.infrastructure.session import (
     get_datastore_session_maker,
 )
 from app.core.embeddings.embeddings import Embedder
-from app.core.embeddings.factory import create_embedder
 from app.modules.datastore.domain.ports import RerankerPort
 from app.modules.datastore.infrastructure.reranker import create_reranker
 import logging
@@ -33,18 +34,18 @@ class PostgresSearchService:
         *,
         engine=None,
         session_factory=None,
-        embedder: Embedder | None = None,
+        embedder: Embedder,
         reranker: RerankerPort | None = None,
     ):
         self.pod_id = pod_id
         self.engine = engine or get_datastore_engine()
         self.session_factory = session_factory or get_datastore_session_maker()
-        self.schema_name = f'pod_{str(pod_id).replace("-", "_")}'
+        self.schema_name = f"pod_{str(pod_id).replace('-', '_')}"
         self.chunk_repo = DatastoreFileChunkRepository(
             self.session_factory,
             self.schema_name,
         )
-        self.embedder = embedder or create_embedder()
+        self.embedder = embedder
         self.reranker = reranker or create_reranker()
         self._initialized = False
 
@@ -64,7 +65,9 @@ class PostgresSearchService:
                 {"key": self._ENSURE_SCHEMA_LOCK_KEY},
             )
             await conn.execute(text("CREATE EXTENSION IF NOT EXISTS vector"))
-            await conn.execute(text(f'CREATE SCHEMA IF NOT EXISTS "{self.schema_name}"'))
+            await conn.execute(
+                text(f'CREATE SCHEMA IF NOT EXISTS "{self.schema_name}"')
+            )
             await conn.execute(
                 text(
                     f'''
@@ -134,14 +137,22 @@ class PostgresSearchService:
         dim = settings.embedding_dimension
         # Retire the older full-precision hnsw / ivfflat indexes (lazy per-schema
         # migration — this runs on next access for each existing pod schema).
-        for legacy in ("ix_reserved_chunks_embedding_hnsw", "ix_reserved_chunks_embedding_ivfflat"):
+        for legacy in (
+            "ix_reserved_chunks_embedding_hnsw",
+            "ix_reserved_chunks_embedding_ivfflat",
+        ):
             try:
                 async with self.engine.begin() as conn:
                     await conn.execute(
                         text(f'DROP INDEX IF EXISTS "{self.schema_name}".{legacy}')
                     )
             except Exception as exc:
-                logger.info("Could not drop legacy index %s for %s: %s", legacy, self.schema_name, exc)
+                logger.info(
+                    "Could not drop legacy index %s for %s: %s",
+                    legacy,
+                    self.schema_name,
+                    exc,
+                )
         try:
             async with self.engine.begin() as conn:
                 await conn.execute(
@@ -156,7 +167,9 @@ class PostgresSearchService:
                 )
         except Exception as exc:
             lower_msg = str(exc).lower()
-            if "extension" in lower_msg and ("does not exist" in lower_msg or "not installed" in lower_msg):
+            if "extension" in lower_msg and (
+                "does not exist" in lower_msg or "not installed" in lower_msg
+            ):
                 logger.info(
                     "Skipping halfvec vector index for %s: extension not available",
                     self.schema_name,
@@ -174,19 +187,52 @@ class PostgresSearchService:
         file_id: UUID,
         chunks: list[dict],
         metadata: dict | None = None,
-    ) -> bool:
+    ) -> IndexingMetrics:
+        schema_started = time.perf_counter()
         await self.ensure_schema()
-        await self.remove_file(file_id)
+        schema_seconds = time.perf_counter() - schema_started
 
         if not chunks:
             logger.warning("No chunks for %s", file_id)
-            return False
+            return IndexingMetrics(
+                chunk_count=0,
+                schema_seconds=schema_seconds,
+                embedding_seconds=0.0,
+                persistence_seconds=0.0,
+            )
 
         try:
             texts = [c["text"] for c in chunks]
+            embedding_started = time.perf_counter()
             embeddings = await self.embedder.embed_batch(texts)
+            embedding_seconds = time.perf_counter() - embedding_started
+            if len(embeddings) != len(chunks):
+                raise ValueError(
+                    f"Embedding provider returned {len(embeddings)} vectors for "
+                    f"{len(chunks)} chunks"
+                )
+            # add_chunks replaces the prior revision in one transaction. The old
+            # searchable revision remains intact if embedding generation fails.
+            persistence_started = time.perf_counter()
             await self.chunk_repo.add_chunks(file_id, chunks, embeddings, metadata)
-            return True
+            persistence_seconds = time.perf_counter() - persistence_started
+            metrics = IndexingMetrics(
+                chunk_count=len(chunks),
+                schema_seconds=schema_seconds,
+                embedding_seconds=embedding_seconds,
+                persistence_seconds=persistence_seconds,
+            )
+            logger.info(
+                "Datastore indexing stages file=%s chunks=%d schema=%.3fs "
+                "embed=%.3fs persist=%.3fs throughput=%.2f_chunks_per_second",
+                file_id,
+                len(chunks),
+                schema_seconds,
+                embedding_seconds,
+                persistence_seconds,
+                len(chunks) / max(embedding_seconds, 0.001),
+            )
+            return metrics
         except Exception as exc:
             logger.error("Failed to add file to search: %s", exc)
             raise
