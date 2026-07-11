@@ -7,14 +7,14 @@ dependencies = [
     "fastapi[standard]>=0.128.0",
     "kubernetes>=34.1.0",
     "pydantic>=2.11.0",
-    "pydantic-settings>=2.11.0",
+    "pydantic-settings>=2.14.2",
     "uvicorn[standard]>=0.42.0",
 ]
 
 [dependency-groups]
 dev = [
     "agentbox-client",
-    "pytest>=8.4.0",
+    "pytest>=9.1.1",
     "pytest-asyncio>=1.2.0",
 ]
 

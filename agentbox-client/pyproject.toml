@@ -12,8 +12,8 @@ dependencies = [
 dev = [
     "fastapi[standard]>=0.128.0",
     "kubernetes>=34.1.0",
-    "pydantic-settings>=2.11.0",
-    "pytest>=8.4.0",
+    "pydantic-settings>=2.14.2",
+    "pytest>=9.1.1",
     "uvicorn[standard]>=0.42.0",
 ]
 

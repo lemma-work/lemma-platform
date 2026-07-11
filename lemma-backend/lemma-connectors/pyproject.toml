@@ -8,14 +8,14 @@ dependencies = [
     "attrs>=25.3.0",
     "httpx>=0.28.1",
     "json-schema-to-pydantic>=0.4.11",
-    "pydantic>=2.11.9",
+    "pydantic>=2.13.4",
     "python-dateutil>=2.9.0",
 ]
 
 [dependency-groups]
 dev = [
-    "datamodel-code-generator>=0.56.1",
-    "openapi-python-client>=0.28.3",
+    "datamodel-code-generator>=0.68.1",
+    "openapi-python-client>=0.29.0",
 ]
 
 [build-system]
