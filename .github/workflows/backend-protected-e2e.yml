@@ -10,7 +10,7 @@ permissions:
 
 jobs:
   protected-runtime:
-    name: Real runtime, provider, surface, and document processors
+    name: Real runtime, surface, and document processors
     runs-on: ubuntu-latest
     timeout-minutes: 60
     environment: backend-protected-e2e
@@ -32,8 +32,11 @@ jobs:
           -o timeout=300
         env:
           E2E_REAL: "1"
+          # Keep the protected Docker/runtime axis real without requiring a
+          # paid model credential. Provider-only tests remain covered by the
+          # deterministic model unless a dedicated real-provider run opts in.
+          E2E_LLM_MODE: "mock"
           LEMMA_RUN_SURFACE_LIVE_E2E: "1"
-          LEMMA_OPENAI_API_KEY: ${{ secrets.LEMMA_OPENAI_API_KEY }}
           LEMMA_E2E_OAUTH_CREDENTIALS: ${{ secrets.LEMMA_E2E_OAUTH_CREDENTIALS }}
           LEMMA_E2E_MODEL_MAX_COST_USD: "1.00"
           LEMMA_E2E_MODEL_TIMEOUT_SECONDS: "120"

@@ -20,6 +20,7 @@ from app.modules.function.domain.events import (
 )
 from app.modules.function.infrastructure.repositories import FunctionRunRepository
 from app.modules.pod.infrastructure.models.pod_models import PodMember
+from app.modules.test_support.fakes import PassthroughEventInbox
 from app.modules.test_support.e2e_authz import (
     create_role_visibility_context,
     item_names,
@@ -384,6 +385,7 @@ async def _drive_agent_event(conversation_id: str, *, status: AgentRunStatus) ->
         _FakeLogger(),
         job_queue=_InlineResumeJobQueue(),
         uow_factory=wf_handlers.provide_uow_factory(),
+        inbox=PassthroughEventInbox(),
     )
 
 
