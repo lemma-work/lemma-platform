@@ -74,7 +74,7 @@ async def test_agentbox_runtime_supports_lemma_cli_browser_and_yielded_exec(
         assert "agent-browser" in (binaries["stdout"] or "")
         assert "save-webpage" in (binaries["stdout"] or "")
 
-        profile = await _exec(session, "lemma --output json profile", timeout=30)
+        profile = await _exec(session, "lemma --output json profile get", timeout=30)
         profile_json = json.loads(profile["stdout"])
         assert profile_json["current_user"]["email"] == fixed_test_user["email"]
         assert profile_json["current_user"]["id"] == fixed_test_user["id"]

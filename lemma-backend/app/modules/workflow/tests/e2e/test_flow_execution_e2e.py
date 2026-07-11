@@ -346,7 +346,10 @@ async def _drive_function_completed(function_run_id: str, output_data: dict) -> 
         completed_at=datetime.now(),
     ).model_dump(mode="json")
     await wf_handlers.handle_function_run_event(
-        event, _FakeLogger(), job_queue=_InlineResumeJobQueue()
+        event,
+        _FakeLogger(),
+        job_queue=_InlineResumeJobQueue(),
+        inbox=PassthroughEventInbox(),
     )
 
 
@@ -362,7 +365,10 @@ async def _drive_function_failed(function_run_id: str, error: str) -> None:
         completed_at=datetime.now(),
     ).model_dump(mode="json")
     await wf_handlers.handle_function_run_event(
-        event, _FakeLogger(), job_queue=_InlineResumeJobQueue()
+        event,
+        _FakeLogger(),
+        job_queue=_InlineResumeJobQueue(),
+        inbox=PassthroughEventInbox(),
     )
 
 
@@ -785,6 +791,17 @@ async def test_user_assigned_manual_workflow_runs_through_all_node_types(
         inputs={"approved": True},
         headers={"Authorization": f"Bearer {reviewer_b['token']}"},
     )
+    run = await _wait_for_run(
+        authenticated_client,
+        pod_id,
+        run["id"],
+        lambda current: (
+            current["status"] == "RUNNING"
+            and current["current_node_id"] == "cooldown"
+            and (current.get("active_wait") or {}).get("wait_type") == "TIME"
+        ),
+        "timer wait after real function execution",
+    )
     assert run["status"] == "RUNNING"
     assert run["current_node_id"] == "cooldown"
     assert run["active_wait"]["wait_type"] == "TIME"
@@ -924,7 +941,13 @@ async def test_scheduled_single_api_function_workflow_completes_inline(
             schedule_event_id=f"test:{uuid4()}",
         )
 
-    fetched = await _get_run(authenticated_client, pod_id, str(run.id))
+    fetched = await _wait_for_run(
+        authenticated_client,
+        pod_id,
+        str(run.id),
+        lambda current: current["status"] == "COMPLETED",
+        "scheduled API function completion",
+    )
     assert fetched["status"] == "COMPLETED"
     assert fetched["active_wait"] is None
     assert fetched["execution_context"]["record"] == {
