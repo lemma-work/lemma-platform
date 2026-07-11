@@ -104,7 +104,9 @@ def register_system_openai_catalog_customizer(
     _system_openai_catalog_customizer = customizer
 
 
-def _build_system_openai_catalog() -> list[RuntimeModelCatalogEntry]:
+def _build_system_openai_catalog(
+    *, require_models: bool = True
+) -> list[RuntimeModelCatalogEntry]:
     """The env-configured system OpenAI catalog, after any registered customizer.
 
     Shared by the live profile and the pricing-coverage names so both reflect the
@@ -112,8 +114,13 @@ def _build_system_openai_catalog() -> list[RuntimeModelCatalogEntry]:
     import/startup.
     """
     _load_runtime_env()
-    model_names = _csv_setting(
+    raw_model_names = (
         os.getenv("LEMMA_OPENAI_MODEL_NAMES") or settings.lemma_openai_model_names
+    )
+    model_names = (
+        _csv_setting(raw_model_names)
+        if require_models
+        else _csv_setting_or_empty(raw_model_names)
     )
     default_model_name = (
         os.getenv("LEMMA_OPENAI_DEFAULT_MODEL") or settings.lemma_openai_default_model
@@ -149,7 +156,7 @@ def system_lemma_openai_catalog_model_names() -> list[tuple[str, str | None]]:
     """
     return [
         (entry.name, entry.provider_model_name)
-        for entry in _build_system_openai_catalog()
+        for entry in _build_system_openai_catalog(require_models=False)
     ]
 
 
@@ -161,6 +168,7 @@ def _openai_compat_model_capabilities(
     if model_name in vision_model_names:
         capabilities.append(RuntimeModelCapability.VISION)
     return capabilities
+
 
 USER_DAEMON_PROFILE_PROTOCOLS = {
     HarnessKind.CODEX: RuntimeProfileProtocol.CODEX_APP_SERVER,
@@ -578,13 +586,18 @@ def _env_or_setting(env_name: str, setting_value: object | None) -> str | None:
 
 
 def _csv_setting(value: str) -> list[str]:
+    model_names = _csv_setting_or_empty(value)
+    if not model_names:
+        raise RuntimeError("Lemma system model profile requires at least one model")
+    return model_names
+
+
+def _csv_setting_or_empty(value: str) -> list[str]:
     model_names: list[str] = []
     for raw_model_name in value.split(","):
         model_name = raw_model_name.strip()
         if model_name and model_name not in model_names:
             model_names.append(model_name)
-    if not model_names:
-        raise RuntimeError("Lemma system model profile requires at least one model")
     return model_names
 
 

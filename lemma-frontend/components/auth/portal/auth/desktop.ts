@@ -1,3 +1,5 @@
+import { sha256 } from "@noble/hashes/sha2.js";
+
 const DESKTOP_REQUEST_STORAGE_KEY = "lemma.desktop-auth.request-id";
 const DESKTOP_PENDING_STORAGE_KEY = "lemma.desktop-auth.pending";
 
@@ -84,11 +86,12 @@ export function createDesktopVerifier(): string {
 export async function challengeForDesktopVerifier(
   verifier: string,
 ): Promise<string> {
-  const digest = await window.crypto.subtle.digest(
-    "SHA-256",
-    new TextEncoder().encode(verifier),
-  );
-  return base64Url(new Uint8Array(digest));
+  const encoded = new TextEncoder().encode(verifier);
+  const subtle = window.crypto.subtle;
+  const digest = subtle
+    ? new Uint8Array(await subtle.digest("SHA-256", encoded))
+    : sha256(encoded);
+  return base64Url(digest);
 }
 
 function base64Url(bytes: Uint8Array): string {

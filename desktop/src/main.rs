@@ -337,8 +337,16 @@ fn handle_supervisor_event(app: &AppHandle, event: &Value) {
                 ui.ready = true;
                 ui.running = true;
                 ui.error = false;
-                if let Some(url) = event["url"].as_str() {
-                    ui.url = url.to_string();
+                // The stack advertises its wildcard sslip.io origin so pod apps
+                // can share cookies. Keep the desktop shell on localhost,
+                // however: WebKit treats plain-http localhost as trustworthy
+                // and exposes Web Crypto for the PKCE browser handoff.
+                if ui.mode != "local" {
+                    if let Some(url) = event["url"].as_str() {
+                        ui.url = url.to_string();
+                    }
+                } else {
+                    ui.url = local_url();
                 }
                 // Stay on the splash: the user proceeds via its CTA.
             }

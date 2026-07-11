@@ -55,6 +55,18 @@ describe("desktop auth helpers", () => {
     expect(verifier).toHaveLength(43);
     expect(challenge).toMatch(/^[A-Za-z0-9_-]{43}$/);
   });
+
+  it("creates the PKCE challenge when WebKit has no SubtleCrypto", async () => {
+    vi.stubGlobal("window", {
+      sessionStorage: new MemoryStorage(),
+      crypto: { getRandomValues: globalThis.crypto.getRandomValues.bind(globalThis.crypto) },
+      btoa: globalThis.btoa.bind(globalThis),
+    });
+
+    await expect(challengeForDesktopVerifier("test-verifier")).resolves.toBe(
+      "JBbiqONGWPaAmwXk_8bT6UnlPfrn65D32eZlJS-zGG0",
+    );
+  });
 });
 
 class MemoryStorage implements Storage {
