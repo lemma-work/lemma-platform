@@ -464,11 +464,14 @@ jobs:
           set -euo pipefail
           app="desktop/target/release/bundle/macos/Lemma.app"
           sidecar="${app}/Contents/MacOS/lemma-supervisor"
+          uv="${app}/Contents/MacOS/uv"
 
           test -d "${app}"
           test -x "${sidecar}"
+          test -x "${uv}"
           codesign --verify --deep --strict --verbose=2 "${app}"
           codesign --verify --strict --verbose=2 "${sidecar}"
+          codesign --verify --strict --verbose=2 "${uv}"
 
           signature_info="$(codesign -dvvv "${app}" 2>&1)"
           printf '%s\n' "${signature_info}"

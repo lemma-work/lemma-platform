@@ -9,6 +9,7 @@ from tomlkit import TOMLDocument
 
 from lemma_stack.config import render, store
 from lemma_stack.context import AdminContext
+from lemma_stack.output import AdminError, warn
 from lemma_stack.paths import LocalPaths
 from lemma_stack.register import register_local_server
 from lemma_stack.release import manifest as release_manifest
@@ -36,9 +37,23 @@ def resolve_manifest(
 ) -> ReleaseManifest:
     if manifest_path is not None:
         return release_manifest.load_file(manifest_path)
-    if prefer_pinned and paths.release_file.exists():
+    selected_channel = channel or store.channel(config)
+    has_pin = paths.release_file.exists()
+
+    # Desktop starts follow the stable channel so replacing the app upgrades
+    # its local images. Explicit version channels remain pinned. If Stable is
+    # temporarily unreachable, use the last known-good manifest so local mode
+    # still works offline.
+    if prefer_pinned and has_pin and selected_channel != "stable":
         return release_manifest.load_pinned(paths)
-    return release_manifest.fetch(channel or store.channel(config))
+    try:
+        return release_manifest.fetch(selected_channel)
+    except AdminError:
+        if not (prefer_pinned and has_pin and selected_channel == "stable"):
+            raise
+        pinned = release_manifest.load_pinned(paths)
+        warn(f"could not refresh the stable release; continuing with pinned Lemma {pinned.version}")
+        return pinned
 
 
 def bring_up(

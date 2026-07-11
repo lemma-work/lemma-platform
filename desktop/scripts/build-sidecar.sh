@@ -4,8 +4,9 @@
 # `lemma-stack supervise`, which pulls the released images and brings the
 # stack up — no runtime checkout or download needed.
 #
-# Output: desktop/binaries/lemma-supervisor-<target-triple>, which
-# tauri.dist.conf.json picks up via externalBin.
+# Output: desktop/binaries/lemma-supervisor-<target-triple> plus the uv binary
+# used to install/update lemma-terminal for Finder-launched desktop sessions.
+# tauri.dist.conf.json picks up both via externalBin.
 set -euo pipefail
 
 cd "$(dirname "$0")/../.."
@@ -28,5 +29,10 @@ mkdir -p "$OUT_DIR"
     lemma_stack/sidecar_main.py )
 
 mv "$OUT_DIR/lemma-supervisor" "$OUT_DIR/lemma-supervisor-$TRIPLE"
+UV_BIN="$(command -v uv)"
+cp "$UV_BIN" "$OUT_DIR/uv-$TRIPLE"
+chmod 0755 "$OUT_DIR/uv-$TRIPLE"
 echo "sidecar: $OUT_DIR/lemma-supervisor-$TRIPLE"
+echo "uv: $OUT_DIR/uv-$TRIPLE"
 "$OUT_DIR/lemma-supervisor-$TRIPLE" --help >/dev/null && echo "sidecar: smoke ok"
+"$OUT_DIR/uv-$TRIPLE" --version >/dev/null && echo "uv: smoke ok"

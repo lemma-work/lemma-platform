@@ -24,7 +24,7 @@ from lemma_stack.output import (
     warn,
 )
 from lemma_stack.paths import LocalPaths, enrich_path
-from lemma_stack.register import install_lemma_cli, register_local_server
+from lemma_stack.register import install_lemma_cli_and_skills, register_local_server
 from lemma_stack.release import manifest as release_manifest
 from lemma_stack.runtime import detect
 from lemma_stack.stack import images, lifecycle
@@ -175,7 +175,7 @@ def install(
 
     # 7. install the lemma CLI and point it at this stack (server "local")
     if use_cli:
-        install_lemma_cli()
+        install_lemma_cli_and_skills(version=manifest.version)
         if not start_stack:
             register_local_server(
                 base_url=render.backend_origin(config),

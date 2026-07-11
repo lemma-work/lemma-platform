@@ -34,7 +34,9 @@ Connection modes (persisted in `~/Library/Application Support/Lemma/desktop-conf
 - **undecided** (first launch): asks whether to connect to Lemma Cloud or run
   Lemma locally; local setup requires a second confirmation before installation
 - **local**: spawns the supervisor, shows the splash with live
-  startup phases, navigates to `http://localhost:3711` when ready
+  startup phases, refreshes Stable-channel images, installs the matching
+  `lemma-terminal` release and its curated agent skills, then navigates to
+  `http://localhost:3711` when ready. Explicit version channels stay pinned.
 - **hosted**: loads the hosted app directly, no local services
 
 ## Development
@@ -58,11 +60,13 @@ lemma-stack supervise --dry-run   # then type: {"cmd":"start"}
 
 ## Distribution pieces
 
-- `scripts/build-sidecar.sh` — compiles `lemma-stack` into a single
-  self-contained binary (`lemma-supervisor`) via PyInstaller from
+- `scripts/build-sidecar.sh` — compiles `lemma-stack` into a self-contained
+  binary (`lemma-supervisor`) via PyInstaller from
   `lemma-stack/lemma_stack/sidecar_main.py`. The sidecar runs `lemma-stack
   supervise`, which pulls the released container images itself — no runtime
-  checkout or tarball download is involved.
+  checkout or tarball download is involved. Distribution builds also bundle
+  the signed `uv` executable used to install or upgrade `lemma-terminal` when
+  the app was launched from Finder without a shell `PATH`.
 - `scripts/extract-concepts.mjs` — bakes the in-app education concept registry
   (`lemma-frontend/lib/education/concepts.ts`) into `ui/concepts.gen.json` for
   the splash tour.
@@ -70,7 +74,7 @@ lemma-stack supervise --dry-run   # then type: {"cmd":"start"}
   Podman runtime (krunkit entitlements in `krunkit-entitlements.plist`).
 
 A distribution build runs the sidecar build then bundles with
-`tauri.dist.conf.json` (adds the sidecar as externalBin):
+`tauri.dist.conf.json` (adds the supervisor and uv as external binaries):
 
 ```sh
 node desktop/scripts/extract-concepts.mjs

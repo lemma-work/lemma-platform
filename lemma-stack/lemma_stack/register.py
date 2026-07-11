@@ -11,11 +11,14 @@ import json
 import os
 import shutil
 import subprocess
+import sys
 from pathlib import Path
+from typing import Sequence
 
 from lemma_stack.output import info, ok, warn
 
 SERVER_NAME = "local"
+CLI_DISTRIBUTION = "lemma-terminal"
 
 
 def cli_config_path() -> Path:
@@ -73,33 +76,87 @@ def _detect_cli_source() -> str | None:
     return None
 
 
-def install_lemma_cli() -> bool:
-    """Best-effort install of the `lemma` CLI as a uv tool. Never fatal — the
-    server is registered regardless, so the CLI works once present."""
-    if shutil.which("uv") is None:
-        warn("uv not found; install the lemma CLI yourself: uv tool install lemma-cli")
-        return False
-    source = _detect_cli_source()
-    if source is None:
-        # End-user install: always force the latest PyPI release, replacing any
-        # previous installation (including one from a git source).
-        source = "lemma-cli"
-    elif shutil.which("lemma") is not None:
-        # Dev environment with a local checkout already on PATH — leave it alone.
-        return True
-    info(f"installing the lemma CLI from {source}")
-    proc = subprocess.run(
-        ["uv", "tool", "install", "--force", source],
+def _find_user_binary(name: str) -> str | None:
+    # Finder-launched macOS apps do not inherit the user's shell PATH. The
+    # signed desktop bundle includes uv next to the supervisor sidecar. Prefer
+    # uv's user tool directory over a stale system-wide CLI on PATH.
+    for directory in (
+        Path(sys.executable).resolve().parent,
+        Path.home() / ".local" / "bin",
+        Path.home() / ".cargo" / "bin",
+    ):
+        candidate = directory / name
+        if candidate.is_file():
+            return str(candidate)
+    return shutil.which(name)
+
+
+def _run(command: Sequence[str]) -> subprocess.CompletedProcess[str]:
+    return subprocess.run(
+        list(command),
         capture_output=True,
         text=True,
         check=False,
     )
+
+
+def _installed_cli_version(lemma: str) -> str | None:
+    proc = _run([lemma, "--version"])
+    if proc.returncode != 0:
+        return None
+    first_line = (proc.stdout or proc.stderr or "").splitlines()[0:1]
+    if not first_line:
+        return None
+    parts = first_line[0].strip().split()
+    return parts[1] if len(parts) >= 2 and parts[0] == "lemma" else None
+
+
+def install_lemma_cli(*, version: str | None = None) -> bool:
+    """Best-effort install of the `lemma` CLI as a uv tool. Never fatal — the
+    server is registered regardless, so the CLI works once present."""
+    uv = _find_user_binary("uv")
+    if uv is None:
+        warn("uv not found; install the Lemma terminal yourself: uv tool install lemma-terminal")
+        return False
+    source = _detect_cli_source()
+    if source is None:
+        source = f"{CLI_DISTRIBUTION}=={version}" if version else CLI_DISTRIBUTION
+        lemma = _find_user_binary("lemma")
+        if version and lemma and _installed_cli_version(lemma) == version:
+            return True
+    elif _find_user_binary("lemma") is not None:
+        # Dev environment with a local checkout already on PATH — leave it alone.
+        return True
+    info(f"installing the lemma CLI from {source}")
+    proc = _run([uv, "tool", "install", "--force", source])
     if proc.returncode != 0:
         detail = (proc.stderr or proc.stdout or "").strip()[-300:]
         warn(
             "could not auto-install the lemma CLI; install it with "
-            f"`uv tool install lemma-cli`.\n  {detail}"
+            f"`uv tool install {source}`.\n  {detail}"
         )
         return False
     ok("lemma CLI installed")
     return True
+
+
+def install_lemma_skills() -> bool:
+    """Upsert curated skills from lemma-terminal into user-level agent dirs."""
+    lemma = _find_user_binary("lemma")
+    if lemma is None:
+        warn("lemma CLI not found; skipping bundled skill installation")
+        return False
+    info("installing bundled Lemma skills")
+    proc = _run([lemma, "skills", "install", "--target", "all", "--yes"])
+    if proc.returncode != 0:
+        detail = (proc.stderr or proc.stdout or "").strip()[-300:]
+        warn(f"could not install bundled Lemma skills.\n  {detail}")
+        return False
+    ok("Lemma skills installed")
+    return True
+
+
+def install_lemma_cli_and_skills(*, version: str | None = None) -> bool:
+    if not install_lemma_cli(version=version):
+        return False
+    return install_lemma_skills()

@@ -183,6 +183,10 @@ class Supervisor:
             do_register=True,
             progress=progress,
         )
+        self._set_phase("workspace", "installing terminal and skills")
+        from lemma_stack.register import install_lemma_cli_and_skills
+
+        install_lemma_cli_and_skills(version=manifest.version)
         self._finish_ready(config)
 
     def _resolve_provider(self, config) -> str:
