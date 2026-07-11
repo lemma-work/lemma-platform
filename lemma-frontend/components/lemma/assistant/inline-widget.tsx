@@ -9,11 +9,16 @@
 //   - "inline": embedded in the chat thread, height-capped with a fade + Expand.
 //   - "full":   the standalone widgets/view page, full reported height, no cap.
 
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { Loader2, Maximize2 } from "lucide-react";
+import { useTheme } from "next-themes";
 
 import { getLemmaClient } from "@/lib/sdk/lemma-client";
+import {
+    buildWidgetThemeMessage,
+    resolveWidgetTheme,
+} from "@/lib/assistant/widget-theme";
 import { cn } from "@/lib/utils";
 
 function isHttpUrl(value: string | null | undefined): string | null {
@@ -32,6 +37,7 @@ export interface InlineWidgetProps {
     toolCallId: string;
     externalSrc?: string | null;
     title?: string;
+    loadingMessages?: string[];
     variant?: "inline" | "full";
     /** Max rendered height for the inline variant before the fade + Expand kicks in. */
     maxHeight?: number;
@@ -46,13 +52,16 @@ export function InlineWidget({
     toolCallId,
     externalSrc,
     title = "Widget",
+    loadingMessages = [],
     variant = "inline",
     maxHeight = INLINE_MAX_HEIGHT,
     onExpand,
 }: InlineWidgetProps) {
+    const { resolvedTheme } = useTheme();
     const iframeRef = useRef<HTMLIFrameElement | null>(null);
     const [reportedHeight, setReportedHeight] = useState(variant === "full" ? 520 : 320);
     const [heightReported, setHeightReported] = useState(false);
+    const [loadingMessageIndex, setLoadingMessageIndex] = useState(0);
 
     const resolvedExternalSrc = isHttpUrl(externalSrc);
     // An inline-content widget is served (and config-injected) by the backend; we
@@ -73,6 +82,39 @@ export function InlineWidget({
     });
 
     const iframeSrc = resolvedExternalSrc || embedQuery.data || null;
+    const loading = isContentWidget && embedQuery.isLoading;
+    const normalizedLoadingMessages = useMemo(
+        () => loadingMessages.map((message) => message.trim()).filter(Boolean).slice(0, 4),
+        [loadingMessages],
+    );
+
+    const sendTheme = useCallback(() => {
+        if (!isContentWidget || !iframeSrc || !iframeRef.current?.contentWindow) return;
+        const rootStyles = window.getComputedStyle(document.documentElement);
+        const bodyStyles = window.getComputedStyle(document.body);
+        const theme = resolveWidgetTheme(
+            resolvedTheme,
+            window.matchMedia("(prefers-color-scheme: dark)").matches,
+        );
+        const message = buildWidgetThemeMessage({
+            theme,
+            readToken: (name) => rootStyles.getPropertyValue(name),
+            fontFamily: bodyStyles.fontFamily,
+        });
+        iframeRef.current.contentWindow.postMessage(message, new URL(iframeSrc).origin);
+    }, [iframeSrc, isContentWidget, resolvedTheme]);
+
+    useEffect(() => {
+        sendTheme();
+    }, [sendTheme]);
+
+    useEffect(() => {
+        if (!loading || normalizedLoadingMessages.length <= 1) return;
+        const intervalId = window.setInterval(() => {
+            setLoadingMessageIndex((index) => index + 1);
+        }, 1800);
+        return () => window.clearInterval(intervalId);
+    }, [loading, normalizedLoadingMessages.length]);
 
     useEffect(() => {
         const handleMessage = (event: MessageEvent) => {
@@ -88,7 +130,6 @@ export function InlineWidget({
         return () => window.removeEventListener("message", handleMessage);
     }, []);
 
-    const loading = isContentWidget && embedQuery.isLoading;
     const isInline = variant === "inline";
     const fullHeight = !heightReported ? 360 : reportedHeight;
     const overflows = isInline && heightReported && reportedHeight > maxHeight;
@@ -101,7 +142,7 @@ export function InlineWidget({
                 !isInline && "min-h-full",
             )}>
                 <Loader2 className="h-4 w-4 animate-spin" />
-                Loading widget
+                {normalizedLoadingMessages[loadingMessageIndex % normalizedLoadingMessages.length] || "Loading widget"}
             </div>
         );
     }
@@ -129,6 +170,7 @@ export function InlineWidget({
                 allow="clipboard-read; clipboard-write; fullscreen"
                 referrerPolicy="strict-origin-when-cross-origin"
                 sandbox="allow-same-origin allow-scripts allow-forms allow-popups allow-downloads allow-modals allow-top-navigation-by-user-activation"
+                onLoad={sendTheme}
                 className="block h-full w-full border-0 bg-transparent"
             />
         );
@@ -145,6 +187,7 @@ export function InlineWidget({
                 allow="clipboard-read; clipboard-write; fullscreen"
                 referrerPolicy="strict-origin-when-cross-origin"
                 sandbox="allow-same-origin allow-scripts allow-forms allow-popups allow-downloads allow-modals allow-top-navigation-by-user-activation"
+                onLoad={sendTheme}
                 className="block w-full border-0 bg-transparent"
             />
             {overflows ? (

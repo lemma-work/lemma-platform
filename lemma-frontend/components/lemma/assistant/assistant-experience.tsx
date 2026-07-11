@@ -53,7 +53,6 @@ import {
 import {
   collectDisplayResourceCardsByRow,
   currentPodIdFromBrowserPath,
-  findPendingDisplayResourceForm,
   pluralize,
 } from "./assistant-message-group";
 // Standalone presentational parts (plan strip, thinking, empty state, icons) extracted.
@@ -189,7 +188,6 @@ export function AssistantExperienceView({
   const [showScrollToBottom, setShowScrollToBottom] = useState(false);
   const [runStatusNow, setRunStatusNow] = useState(() => Date.now());
   const [draftSelectionStart, setDraftSelectionStart] = useState(0);
-  const [dismissedFormToolCallIds, setDismissedFormToolCallIds] = useState<readonly string[]>([]);
   const messagesContainerRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -560,19 +558,6 @@ export function AssistantExperienceView({
   );
   const currentRunLatestUserIndex = latestUserIndex(controllerMessages);
   const activePendingApprovalInvocation = findPendingUserApprovalInvocation(displayMessageRows, currentRunLatestUserIndex);
-  // A pending FORM display-resource is rendered as a progressive panel over the
-  // composer (not a card). Suppress it while the assistant is running, while an
-  // approval gate is open, or once the user dismisses it to type freely.
-  const pendingFormCandidate = isConversationBusy || activePendingApprovalInvocation
-    ? null
-    : findPendingDisplayResourceForm(displayMessageRows, currentRunLatestUserIndex);
-  const pendingDisplayResourceForm = pendingFormCandidate
-    && !dismissedFormToolCallIds.includes(pendingFormCandidate.toolCallId)
-    ? pendingFormCandidate
-    : null;
-  const dismissDisplayResourceForm = useCallback((toolCallId: string) => {
-    setDismissedFormToolCallIds((prev) => (prev.includes(toolCallId) ? prev : [...prev, toolCallId]));
-  }, []);
   const displayResourcePodId = currentPodIdFromBrowserPath();
   const displayResourceCardsByRow = useMemo(
     () => collectDisplayResourceCardsByRow({
@@ -717,8 +702,6 @@ export function AssistantExperienceView({
           renderPendingFile={renderPendingFile}
           controller={controller}
           activePendingApprovalInvocation={activePendingApprovalInvocation}
-          pendingDisplayResourceForm={pendingDisplayResourceForm}
-          onDismissDisplayResourceForm={dismissDisplayResourceForm}
           activeResourceMention={activeResourceMention}
           insertResourceMention={insertResourceMention}
           radius={radius}
