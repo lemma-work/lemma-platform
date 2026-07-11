@@ -1,6 +1,6 @@
 # syntax=docker/dockerfile:1
 
-FROM node:24-alpine AS builder
+FROM node:26-alpine AS builder
 
 WORKDIR /lemma-typescript
 COPY lemma-typescript/package.json lemma-typescript/package-lock.json ./
@@ -14,7 +14,7 @@ RUN npm ci
 COPY lemma-frontend/ ./
 RUN npm run build
 
-FROM node:24-alpine AS runner
+FROM node:26-alpine AS runner
 WORKDIR /app
 
 ENV NODE_ENV=production
