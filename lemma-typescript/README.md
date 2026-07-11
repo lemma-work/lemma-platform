@@ -2,7 +2,7 @@
 
 `lemma-sdk` is the headless TypeScript SDK for Lemma. Use `lemma-sdk` for the core client and shared helpers, and use `lemma-sdk/react` as the main app-building surface for hooks and auth primitives.
 
-`AuthGuard` intentionally stays in `lemma-sdk/react`. The product direction remains hooks-first and shell-agnostic, and the registry ships stock Lemma UI blocks when you want installable agent conversation, records, file, workflow, collaboration, or shell surfaces.
+`AuthGuard` and its app-entry surfaces stay in `lemma-sdk/react`. The product direction remains hooks-first, while the registry ships stock Lemma UI blocks when you want installable agent conversation, records, file, workflow, collaboration, or shell surfaces.
 
 ## Install
 
@@ -116,10 +116,11 @@ Install React if your app needs hooks:
 npm install react react-dom
 ```
 
-`lemma-sdk/react` is headless-first. It exports hooks plus `AuthGuard`; it does not export stock UI components or CSS.
+`lemma-sdk/react` is headless-first. It also exports a polished app-entry family—`AuthGuard`, `AppLoader`, `AppSignIn`, and `AppAccess`—with self-contained styles. Larger stock application surfaces remain installable registry blocks.
 
 ```tsx
 import {
+  AppLoader,
   AuthGuard,
   useConversationMessages,
   useConversations,
@@ -133,7 +134,7 @@ import {
 
 | Area | Hooks | Stability | Use when |
 | --- | --- | --- | --- |
-| Auth | `AuthGuard`, `useAuth`, `useCurrentUser`, `usePodAccess` | Stable | Gate an app, read signed-in user state, or request pod access. |
+| Auth | `AuthGuard`, `AppLoader`, `AppSignIn`, `AppAccess`, `useAuth`, `useCurrentUser`, `usePodAccess` | Stable | Gate an app, show a consistent app entry experience, read signed-in user state, or request pod access. |
 | Tables | `useTables`, `useRecords`, `useRecord`, `useJoinedRecords`, `useRelatedRecords`, `useReverseRelatedRecords`, `useReferencingRecords`, `useDatastoreQuery`, `useRecordAggregates` | Stable | Build custom table browsers, details views, related-record views, raw SQL-backed reads, and chart/KPI queries. |
 | Record mutations | `useCreateRecord`, `useUpdateRecord`, `useDeleteRecord`, `useBulkRecords` | Stable | Create, update, delete, or bulk-delete rows from headless UI. Function-backed mutations via `createVia`/`updateVia` options. |
 | Record forms | `useRecordSchema`, `useRecordForm`, `useForeignKeyOptions`, `useSchemaForm` | Stable | Render schema-driven record forms, enum fields, and foreign-key selectors. `useRecordForm` is the canonical table-bound form hook; `useSchemaForm` remains available for raw JSON-schema flows. |

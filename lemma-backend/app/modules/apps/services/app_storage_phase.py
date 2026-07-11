@@ -48,6 +48,7 @@ class _AssetReadInputs:
     dist_root_path: str
     normalized_asset_path: str
     quoted_etag: str
+    app: dict[str, str] | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -120,7 +121,11 @@ class AppStoragePhase:
                 raise AppNotFoundError("App index.html not found") from exc
             is_entrypoint = True
         if is_entrypoint:
-            content = inject_runtime_config(content, inputs.pod_id)
+            content = inject_runtime_config(
+                content,
+                inputs.pod_id,
+                app=inputs.app,
+            )
         return AppAssetDocument(
             content=content,
             media_type=self._guess_media_type(

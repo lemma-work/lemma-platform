@@ -1,5 +1,5 @@
 export { LemmaClient } from "./client.js";
-export type { LemmaConfig } from "./client.js";
+export type { LemmaAppConfig, LemmaConfig } from "./client.js";
 export {
   AuthManager,
   buildAuthUrl,

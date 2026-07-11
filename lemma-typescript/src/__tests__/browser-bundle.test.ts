@@ -42,12 +42,14 @@ describe("browser bundle globals", () => {
       apiUrl: "https://api.example.test/",
       podId: "pod-xyz",
       authUrl: "https://auth.example.test/",
+      app: { name: "Support Triage" },
     };
     loadBundle();
     const g = globalThis as Record<string, any>;
     const client = new g.LemmaClient.LemmaClient(); // takes no args; reads the global
     expect(client.podId).toBe("pod-xyz");
     expect(client.apiUrl).toBe("https://api.example.test"); // trailing slash stripped
+    expect(client.app).toEqual({ name: "Support Triage" });
   });
 
   describe("runtime client calls", () => {

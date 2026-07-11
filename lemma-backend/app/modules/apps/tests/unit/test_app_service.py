@@ -308,6 +308,7 @@ async def test_get_app_asset_reads_release_contents():
     assert "public-ok" in body
     assert "data-lemma-runtime-config" in body
     assert str(pod_id) in body
+    assert '"app": {"name": "dashboard"}' in body
     assert asset.media_type == "text/html"
     # ETag folds in the config hash so a pod/api/auth change busts the cache.
     expected_token = runtime_config_token(app.pod_id)

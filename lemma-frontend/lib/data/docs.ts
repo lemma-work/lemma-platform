@@ -532,7 +532,11 @@ const currentUser = await podClient.users.current();`,
 
 export function App({ client }: { client: LemmaClient }) {
   return (
-    <AuthGuard client={client} appName="Support Triage">
+    <AuthGuard
+      client={client}
+      appName="Support Triage"
+      appDescription="Route and resolve incoming customer requests."
+    >
       <SupportTriageApp client={client} />
     </AuthGuard>
   );
@@ -544,9 +548,11 @@ export function App({ client }: { client: LemmaClient }) {
         items: [
           'Checks signed-in state through Lemma auth.',
           'Uses pod membership when the client has a pod id.',
-          'Shows a branded sign-in fallback when unauthenticated.',
-          'Shows request-access UI when signed in but not a pod member.',
-          'Lets you pass custom loading, unauthenticated, or access-request fallbacks.',
+          'Shows a polished app loader while auth and membership resolve.',
+          'Uses the host-injected app or widget name by default.',
+          'Shows app-aware sign-in, access request, pending, and retry states.',
+          'Rechecks pending access automatically and supports account switching.',
+          'Lets you theme or replace loading, unauthenticated, and access-request surfaces.',
         ],
       },
       {

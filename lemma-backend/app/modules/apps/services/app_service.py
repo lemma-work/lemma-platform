@@ -160,6 +160,7 @@ class AppService:
             dist_root_path=release.dist_root_path,
             normalized_asset_path=normalized_asset_path,
             quoted_etag=quoted_etag,
+            app={"name": app.name},
         )
 
     async def read_app_asset(self, inputs: _AssetReadInputs) -> AppAssetDocument:
@@ -255,9 +256,9 @@ class AppService:
         visibility: str | None = None,
         ctx: Context | None = None,
     ) -> AppEntity:
-        """Promote a resolved widget artifact into a persisted app.
+        """Promote a resolved widget into a persisted app.
 
-        The widget and the app are the same artifact at two lifecycle stages:
+        The widget and the app share the same HTML runtime at two lifecycle stages:
         the stored HTML is wrapped as a standalone document (no embed bridge)
         and deployed as the app's bundle — identical to what the widget showed.
         """

@@ -43,3 +43,17 @@ def test_config_values_are_escaped():
     out = inject_runtime_config(b"<head></head>", uuid4()).decode()
     assert "</script>" in out  # only our own closing tag
     assert out.count("<script data-lemma-runtime-config>") == 1
+
+
+def test_injects_sanitized_app_identity():
+    out = inject_runtime_config(
+        b"<head></head>",
+        uuid4(),
+        app={
+            "name": "Support Triage",
+            "description": "Route urgent work",
+            "private": "not-exposed",
+        },
+    ).decode()
+    assert '"app": {"name": "Support Triage", "description": "Route urgent work"}' in out
+    assert "not-exposed" not in out

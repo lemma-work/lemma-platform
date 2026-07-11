@@ -1,5 +1,20 @@
 export { AuthGuard } from "./AuthGuard.js";
-export type { AuthGuardProps } from "./AuthGuard.js";
+export type {
+  AuthGuardAccessContext,
+  AuthGuardLoadingContext,
+  AuthGuardProps,
+  AuthGuardUnauthenticatedContext,
+} from "./AuthGuard.js";
+export { AppAccess, AppLoader, AppSignIn } from "./AppGate.js";
+export type {
+  AppAccessProps,
+  AppAccessStatus,
+  AppAppearance,
+  AppIdentity,
+  AppLoaderProps,
+  AppSignInProps,
+  AppUserIdentity,
+} from "./AppGate.js";
 export { useAuth } from "./useAuth.js";
 export type { UseAuthResult } from "./useAuth.js";
 export { useConversations } from "./useConversations.js";

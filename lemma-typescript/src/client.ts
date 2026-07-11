@@ -1,4 +1,8 @@
-import { resolveConfig, type LemmaConfig } from "./config.js";
+import {
+  resolveConfig,
+  type LemmaAppConfig,
+  type LemmaConfig,
+} from "./config.js";
 import { AuthManager, type AuthState, type AuthListener } from "./auth.js";
 import { GeneratedClientAdapter } from "./generated.js";
 import { HttpClient } from "./http.js";
@@ -28,6 +32,7 @@ import { WidgetsNamespace } from "./namespaces/widgets.js";
 import { DatastoreNamespace } from "./namespaces/datastore.js";
 
 export type { LemmaConfig };
+export type { LemmaAppConfig };
 export { AuthManager };
 export type { AuthState, AuthListener };
 
@@ -156,6 +161,10 @@ export class LemmaClient {
 
   get authUrl(): string {
     return this._config.authUrl;
+  }
+
+  get app(): LemmaAppConfig | undefined {
+    return this._config.app;
   }
 
   /**

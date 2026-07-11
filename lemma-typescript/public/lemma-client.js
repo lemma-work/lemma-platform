@@ -9129,7 +9129,7 @@ var LemmaClient = (() => {
     return {};
   }
   function resolveConfig(overrides = {}) {
-    var _a, _b, _c, _d, _e, _f, _g, _h, _i, _j;
+    var _a, _b, _c, _d, _e, _f, _g, _h, _i, _j, _k;
     const win = windowConfig();
     const apiUrl = (_c = (_b = (_a = overrides.apiUrl) != null ? _a : win.apiUrl) != null ? _b : fromEnv("API_URL")) != null ? _c : "https://api.lemma.work";
     const authUrl = (_f = (_e = (_d = overrides.authUrl) != null ? _d : win.authUrl) != null ? _e : fromEnv("AUTH_URL")) != null ? _f : "https://lemma.work/auth";
@@ -9138,8 +9138,9 @@ var LemmaClient = (() => {
       apiUrl: apiUrl.replace(/\/$/, ""),
       authUrl: authUrl.replace(/\/$/, ""),
       podId,
-      timeoutMs: (_i = overrides.timeoutMs) != null ? _i : win.timeoutMs,
-      maxRetries: (_j = overrides.maxRetries) != null ? _j : win.maxRetries
+      app: (_i = overrides.app) != null ? _i : win.app,
+      timeoutMs: (_j = overrides.timeoutMs) != null ? _j : win.timeoutMs,
+      maxRetries: (_k = overrides.maxRetries) != null ? _k : win.maxRetries
     };
   }
 
@@ -15997,6 +15998,9 @@ var LemmaClient = (() => {
     }
     get authUrl() {
       return this._config.authUrl;
+    }
+    get app() {
+      return this._config.app;
     }
     /**
      * Initialize the client by checking auth state.
