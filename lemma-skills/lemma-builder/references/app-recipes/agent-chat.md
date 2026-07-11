@@ -40,6 +40,9 @@ Load the opt-in UI bundle *after* the client; pod context comes from the injecte
   method `el.send(text)`.
 - Both are Shadow-DOM and themeable from the host via CSS custom properties
   (`--lemma-bg`, `--lemma-accent`, `--lemma-radius`, …) and `::part(...)`.
+- The current thread component renders tool activity as generic event lines. It
+  does not yet render `ask_user`/`request_approval` controls or embedded widgets;
+  use a custom renderer for those interactions.
 
 ## React — preset components
 

@@ -10,7 +10,11 @@ from app.modules.identity.domain.organization_entities import (
     OrganizationRole,
 )
 from app.modules.identity.domain.user_entities import UserEntity
-from app.modules.pod.domain.errors import PodAccessDeniedError, PodNotFoundError
+from app.modules.pod.domain.errors import (
+    PodAccessDeniedError,
+    PodNotFoundError,
+    PodValidationError,
+)
 from app.modules.pod.domain.pod_entities import (
     PodConfig,
     PodEntity,
@@ -102,6 +106,71 @@ async def test_create_pod_requires_org_membership(
 
     with pytest.raises(PodAccessDeniedError):
         await pod_service.create_pod(pod, creator_id)
+
+
+@pytest.mark.asyncio
+async def test_create_pod_trims_valid_name(
+    pod_service: PodService,
+    pod_repository_mock: AsyncMock,
+    pod_member_repository_mock: AsyncMock,
+    organization_repository_mock: AsyncMock,
+):
+    creator_id = uuid4()
+    organization_id = uuid4()
+    org_member = _make_org_member(
+        user_id=creator_id,
+        organization_id=organization_id,
+        role=OrganizationRole.ORG_OWNER,
+    )
+    pod = _make_pod(organization_id=organization_id, user_id=creator_id)
+    pod.name = "  Valid Pod_1  "
+
+    organization_repository_mock.get_member.return_value = org_member
+    pod_repository_mock.create.side_effect = lambda entity: entity
+    pod_member_repository_mock.create.return_value = PodMemberEntity(
+        pod_id=pod.id,
+        organization_member_id=org_member.id,
+        role=PodRole.ADMIN,
+    )
+
+    created = await pod_service.create_pod(pod, creator_id)
+
+    assert created.name == "Valid Pod_1"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "invalid_name",
+    [
+        "Founder'd Pod",
+        "Billing/Finance",
+        "Ops!",
+        "   ",
+        "-Starts With Hyphen",
+        "Ends With Hyphen-",
+    ],
+)
+async def test_create_pod_rejects_invalid_name(
+    pod_service: PodService,
+    pod_repository_mock: AsyncMock,
+    organization_repository_mock: AsyncMock,
+    invalid_name: str,
+):
+    creator_id = uuid4()
+    organization_id = uuid4()
+    pod = _make_pod(organization_id=organization_id, user_id=creator_id)
+    pod.name = invalid_name
+
+    organization_repository_mock.get_member.return_value = _make_org_member(
+        user_id=creator_id,
+        organization_id=organization_id,
+        role=OrganizationRole.ORG_OWNER,
+    )
+
+    with pytest.raises(PodValidationError):
+        await pod_service.create_pod(pod, creator_id)
+
+    pod_repository_mock.create.assert_not_called()
 
 
 @pytest.mark.asyncio
@@ -274,6 +343,26 @@ async def test_update_pod_mirrors_default_runtime_profile_id(
     assert runtime is not None
     assert runtime.profile_id == "new-profile"
     assert runtime.model_name == "claude-sonnet"
+
+
+@pytest.mark.asyncio
+async def test_update_pod_rejects_invalid_name(
+    pod_service: PodService,
+    pod_repository_mock: AsyncMock,
+):
+    pod = _make_pod(organization_id=uuid4(), user_id=uuid4())
+    pod_repository_mock.get.return_value = pod
+    ctx = AsyncMock()
+
+    with pytest.raises(PodValidationError):
+        await pod_service.update_pod(
+            pod.id,
+            PodUpdateEntity(name="Team's Pod"),
+            uuid4(),
+            ctx=ctx,
+        )
+
+    pod_repository_mock.update.assert_not_called()
 
 
 @pytest.mark.asyncio

@@ -248,14 +248,14 @@ def platform_agent_guidance(platform: str | None) -> str:
             delivery.append(
                 "- Questions: call `ask_user` for multiple-choice questions — they "
                 f"render as native tappable options inside {caps.display_name} and the "
-                "user's pick comes back as the answer. For richer/free-form input, "
-                "render a WIDGET that submits its answers back to the chat."
+                "user's pick comes back as the answer. For free-form input, ask "
+                "clearly in your reply and continue from the user's next message."
             )
         else:
             delivery.append(
                 "- Questions: call `ask_user` — the questions and options are sent as a "
-                "formatted message and the user replies with their choice. For richer "
-                "input, render a WIDGET that submits its answers back to the chat."
+                "formatted message and the user replies with their choice. For free-form "
+                "input, ask clearly in your reply."
             )
         delivery.append(
             "- Voice: reply with text by default. Only when the user wants a spoken "

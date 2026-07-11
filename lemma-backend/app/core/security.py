@@ -78,6 +78,19 @@ def _is_datastore_changes_ws_path(path: str) -> bool:
     return True
 
 
+def _is_public_desktop_auth_path(path: str, method: str) -> bool:
+    """Only request creation and verifier exchange are unauthenticated.
+
+    The similarly-named ``.../{request_id}/complete`` route deliberately does
+    not match: it must receive the authenticated browser session.
+    """
+    normalized_method = method.upper()
+    return normalized_method == "POST" and path in {
+        "/auth/desktop/requests",
+        "/auth/desktop/session",
+    }
+
+
 async def verify_auth(connection: HTTPConnection):
     """
     Global dependency to enforce authentication on all routes except excluded ones.
@@ -85,8 +98,13 @@ async def verify_auth(connection: HTTPConnection):
     """
     set_current_context(None)
 
-    if connection.url.path.startswith(EXCLUDED_PATHS) or _is_surface_webhook_path(
-        connection.url.path
+    if (
+        connection.url.path.startswith(EXCLUDED_PATHS)
+        or _is_surface_webhook_path(connection.url.path)
+        or _is_public_desktop_auth_path(
+            connection.url.path,
+            str(connection.scope.get("method", "GET")),
+        )
     ):
         return
 

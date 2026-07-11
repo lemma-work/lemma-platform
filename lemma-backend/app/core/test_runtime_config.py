@@ -22,6 +22,13 @@ def test_token_changes_with_pod():
     assert runtime_config_token(uuid4()) != runtime_config_token(uuid4())
 
 
+def test_token_changes_with_app_identity():
+    pod_id = uuid4()
+    assert runtime_config_token(pod_id, app={"name": "One"}) != runtime_config_token(
+        pod_id, app={"name": "Two"}
+    )
+
+
 def test_injects_after_head_and_is_idempotent():
     pod_id = uuid4()
     html = b"<html><head><meta></head><body>x</body></html>"

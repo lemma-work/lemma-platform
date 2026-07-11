@@ -48,10 +48,15 @@ jobs:
             frontend:
               - 'lemma-frontend/**'
             codegen:
-              - 'lemma-python/**'
-              - 'lemma-typescript/**'
-              - 'lemma-backend/app/**'
-              - 'scripts/**'
+              - 'lemma-python/lemma_sdk/openapi_spec.json'
+              - 'lemma-python/lemma_sdk/openapi_client/**'
+              - 'lemma-python/lemma_sdk/_spec_info.py'
+              - 'lemma-python/scripts/generate_openapi_client.sh'
+              - 'lemma-typescript/src/openapi_client/**'
+              - 'lemma-typescript/src/react/generated/**'
+              - 'lemma-typescript/scripts/generate_openapi_client.sh'
+              - 'lemma-typescript/scripts/generate_l2.mjs'
+              - 'lemma-typescript/scripts/patch_generated_imports.mjs'
               - '.github/workflows/ci.yml'
 
   backend-unit:

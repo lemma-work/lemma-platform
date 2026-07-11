@@ -1,35 +1,80 @@
 version: 2
+
+# Version updates are intentionally low-frequency and grouped. Security updates
+# remain immediate, but are grouped per ecosystem instead of opening one PR per
+# vulnerable transitive dependency.
 updates:
-  - package-ecosystem: pip
-    directory: /lemma-backend
+  - package-ecosystem: uv
+    directories:
+      - /agentbox
+      - /agentbox-client
+      - /lemma-backend
+      - /lemma-backend/lemma-connectors
+      - /lemma-cli
+      - /lemma-pod-bundle
+      - /lemma-python
+      - /lemma-stack
     schedule:
-      interval: weekly
+      interval: monthly
+      time: "04:00"
+      timezone: Asia/Kolkata
+    open-pull-requests-limit: 2
     groups:
-      backend-python:
+      python-routine-updates:
+        applies-to: version-updates
         patterns: ["*"]
-  - package-ecosystem: pip
-    directory: /lemma-python
-    schedule:
-      interval: weekly
+        update-types: [minor, patch]
+      python-security-updates:
+        applies-to: security-updates
+        patterns: ["*"]
+
   - package-ecosystem: npm
-    directory: /lemma-typescript
+    directories:
+      - /lemma-typescript
+      - /lemma-frontend
     schedule:
-      interval: weekly
+      interval: monthly
+      time: "04:15"
+      timezone: Asia/Kolkata
+    open-pull-requests-limit: 2
     groups:
-      typescript-sdk:
+      javascript-routine-updates:
+        applies-to: version-updates
         patterns: ["*"]
-  - package-ecosystem: npm
-    directory: /lemma-frontend
-    schedule:
-      interval: weekly
-    groups:
-      frontend:
+        update-types: [minor, patch]
+      javascript-security-updates:
+        applies-to: security-updates
         patterns: ["*"]
+
   - package-ecosystem: github-actions
     directory: /
     schedule:
-      interval: weekly
+      interval: monthly
+      time: "04:30"
+      timezone: Asia/Kolkata
+    open-pull-requests-limit: 1
+    groups:
+      github-actions-updates:
+        applies-to: version-updates
+        patterns: ["*"]
+      github-actions-security-updates:
+        applies-to: security-updates
+        patterns: ["*"]
+
   - package-ecosystem: docker
-    directory: /lemma-backend
+    directories:
+      - /agentbox
+      - /lemma-backend
+      - /lemma-frontend
     schedule:
-      interval: weekly
+      interval: monthly
+      time: "04:45"
+      timezone: Asia/Kolkata
+    open-pull-requests-limit: 1
+    groups:
+      docker-updates:
+        applies-to: version-updates
+        patterns: ["*"]
+      docker-security-updates:
+        applies-to: security-updates
+        patterns: ["*"]

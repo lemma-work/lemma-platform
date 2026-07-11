@@ -162,48 +162,277 @@
   .whisper.on { opacity: 1; }
   .whisper .term { color: var(--gold-deep); font-weight: 600; }
 
+  .setup-intro { display: contents; }
+  .setup-brand, .setup-support { display: none; }
+  .scene.choosing {
+    display: grid;
+    grid-template-columns: minmax(280px, 0.9fr) minmax(450px, 1.2fr);
+    align-items: center;
+    gap: clamp(56px, 7vw, 104px);
+    padding: clamp(48px, 8vh, 88px) clamp(64px, 8vw, 120px);
+    text-align: left;
+    background: #f5f4f0;
+  }
+  .scene.choosing .setup-intro {
+    position: relative;
+    display: flex;
+    width: 100%;
+    height: 100%;
+    min-height: 0;
+    flex-direction: column;
+    justify-content: center;
+    align-items: flex-start;
+  }
+  .scene.choosing .setup-brand {
+    position: absolute;
+    inset: 0 0 auto;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    color: var(--ink);
+  }
+  .lemma-mark {
+    display: inline-flex;
+    align-items: flex-end;
+    gap: 3px;
+  }
+  .lemma-mark-bar {
+    display: block;
+    width: 4px;
+    border-radius: 2px;
+    background: var(--gold);
+  }
+  .lemma-mark-bar-0 { height: 9px; }
+  .lemma-mark-bar-1 { height: 15px; }
+  .lemma-mark-bar-2 { height: 22px; }
+  .lemma-wordmark {
+    font-family: var(--sans);
+    font-size: 1.15rem;
+    font-weight: 400;
+    line-height: 1;
+  }
+  .scene.choosing .orb-wrap { display: none; }
+  .scene.choosing .statement {
+    min-height: 250px;
+    max-width: 460px;
+  }
+  .scene.choosing .statement p {
+    font-family: var(--sans);
+    font-size: clamp(3.4rem, 5.6vw, 5rem);
+    font-weight: 440;
+    line-height: 0.98;
+    letter-spacing: -0.055em;
+    text-align: left;
+  }
+  .scene.choosing .setup-support {
+    display: block;
+    max-width: 280px;
+    margin: 26px 0 0;
+    color: var(--ink-soft);
+    font-size: 0.84rem;
+  }
+  .scene.choosing .truth,
+  .scene.choosing .whisper,
+  .scene.choosing .corner,
+  .scene.choosing .progress { display: none; }
+  #choose, #local-confirm {
+    width: 100%;
+    padding: 0 0 0 clamp(40px, 5vw, 72px);
+    border-left: 1px solid rgba(28, 24, 18, 0.14);
+  }
+  .setup-kicker {
+    margin: 0 0 18px;
+    color: var(--gold-deep);
+    font-family: var(--mono);
+    font-size: 0.63rem;
+    font-weight: 500;
+    letter-spacing: 0.15em;
+    text-transform: uppercase;
+  }
+  .choice-intro {
+    max-width: 420px;
+    margin: 0;
+    color: var(--ink-soft);
+    font-size: 0.9rem;
+    line-height: 1.55;
+  }
   .choices {
     display: flex;
-    gap: 16px;
-    margin-top: 44px;
-    justify-content: center;
+    flex-direction: column;
+    gap: 0;
+    margin-top: 6px;
   }
   .choice {
     all: unset;
+    box-sizing: border-box;
+    position: relative;
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto;
+    grid-template-areas:
+      "meta action"
+      "title action"
+      "body action";
+    column-gap: 28px;
     cursor: pointer;
-    width: 250px;
-    padding: 20px 22px;
-    border: 1px solid rgba(28, 24, 18, 0.16);
-    border-radius: 16px;
-    background: rgba(255, 255, 255, 0.6);
+    width: 100%;
+    padding: 27px 0 28px;
+    border-top: 1px solid rgba(28, 24, 18, 0.15);
     text-align: left;
-    transition: border-color 0.2s ease, background 0.2s ease, transform 0.2s ease;
+    transition: color 0.2s ease, padding-left 0.2s ease;
   }
+  .choice:last-child { border-bottom: 1px solid rgba(28, 24, 18, 0.15); }
   .choice:hover {
-    border-color: var(--gold);
-    background: #ffffff;
-    transform: translateY(-2px);
+    padding-left: 10px;
+  }
+  .choice:focus-visible {
+    outline: 3px solid rgba(192, 128, 31, 0.28);
+    outline-offset: 3px;
+  }
+  .choice.recommended::before {
+    content: "";
+    position: absolute;
+    top: 25px;
+    bottom: 25px;
+    left: -22px;
+    width: 2px;
+    background: var(--gold);
   }
   .choice strong {
+    grid-area: title;
     display: block;
-    font-family: var(--serif);
-    font-size: 1.15rem;
-    font-weight: 500;
-    margin-bottom: 6px;
+    margin: 9px 0 5px;
+    font-family: var(--sans);
+    font-size: 1.28rem;
+    font-weight: 560;
+    line-height: 1.25;
+    color: var(--ink);
   }
-  .choice span {
+  .choice-top {
+    grid-area: meta;
+    display: flex;
+    align-items: center;
+    gap: 12px;
+  }
+  .choice .choice-body {
+    grid-area: body;
+    display: block;
+    max-width: 390px;
     font-size: 0.84rem;
     color: var(--ink-soft);
-    line-height: 1.55;
+    line-height: 1.45;
   }
   .choice .flag {
     display: block;
     font-family: var(--mono);
-    font-size: 0.64rem;
+    font-size: 0.6rem;
+    font-weight: 500;
     letter-spacing: 0.14em;
     text-transform: uppercase;
     color: var(--gold-deep);
-    margin-bottom: 10px;
+  }
+  .choice-badge {
+    color: var(--gold-deep);
+    font-family: var(--mono);
+    font-size: 0.55rem;
+    letter-spacing: 0.1em;
+    text-transform: uppercase;
+  }
+  .choice .choice-action {
+    grid-area: action;
+    align-self: center;
+    display: block;
+    padding-bottom: 2px;
+    border-bottom: 1px solid rgba(28, 24, 18, 0.35);
+    color: var(--ink);
+    font-size: 0.82rem;
+    font-weight: 600;
+  }
+  .mode-note {
+    margin: 20px 0 0;
+    color: var(--ink-soft);
+    font-size: 0.74rem;
+    line-height: 1.45;
+  }
+  .local-review {
+    width: 100%;
+    margin: 20px 0 0;
+    padding: 0;
+    text-align: left;
+  }
+  .local-review ul {
+    margin: 0;
+    padding: 0;
+    list-style: none;
+    color: var(--ink-soft);
+    font-size: 0.84rem;
+    line-height: 1.5;
+  }
+  .local-review li {
+    position: relative;
+    padding: 13px 0 13px 28px;
+    border-top: 1px solid rgba(28, 24, 18, 0.09);
+  }
+  .local-review li::before {
+    content: "";
+    position: absolute;
+    top: 20px;
+    left: 5px;
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
+    background: var(--gold);
+    box-shadow: 0 0 0 4px rgba(192, 128, 31, 0.11);
+  }
+  .confirm-actions {
+    display: flex;
+    justify-content: flex-end;
+    gap: 10px;
+    margin-top: 22px;
+  }
+  .confirm-actions button {
+    font: inherit;
+    font-size: 0.86rem;
+    font-weight: 600;
+    padding: 10px 16px;
+    border-radius: 11px;
+    border: 1px solid rgba(28, 24, 18, 0.24);
+    background: transparent;
+    color: var(--ink);
+    cursor: pointer;
+  }
+  .confirm-actions button.primary {
+    border-color: #131313;
+    background: #131313;
+    color: #faf6ee;
+  }
+  .confirm-actions button:hover { border-color: var(--gold); }
+  .confirm-actions button.primary:hover { background: #2a2a28; }
+  .confirm-actions button:disabled { cursor: wait; opacity: 0.55; }
+  .setup-error {
+    margin: 14px 0 0;
+    color: var(--bad);
+    font-family: var(--mono);
+    font-size: 0.72rem;
+    user-select: text;
+  }
+
+  @media (max-width: 1050px) {
+    .scene.choosing {
+      grid-template-columns: 280px minmax(450px, 1fr);
+      gap: 40px;
+      padding-left: 48px;
+      padding-right: 48px;
+    }
+    .scene.choosing .statement { min-height: 220px; }
+    .scene.choosing .statement p { font-size: 3.45rem; }
+    #choose, #local-confirm { padding-left: 40px; }
+  }
+
+  @media (max-height: 720px) {
+    .scene.choosing { padding-top: 36px; padding-bottom: 36px; }
+    .scene.choosing .statement { min-height: 200px; }
+    .scene.choosing .statement p { font-size: 3.15rem; }
+    .choice { padding-top: 22px; padding-bottom: 23px; }
   }
 
   /* ---------- quiet chrome ---------- */
@@ -318,28 +547,61 @@
 </head>
 <body>
 <div class="scene" id="scene">
-  <div class="orb-wrap" id="orb" aria-hidden="true"></div>
-
-  <div class="statement" aria-live="polite">
-    <p id="line"></p>
+  <div class="setup-intro">
+    <div class="setup-brand" aria-label="Lemma">
+      <span class="lemma-mark" aria-hidden="true">
+        <span class="lemma-mark-bar lemma-mark-bar-0"></span>
+        <span class="lemma-mark-bar lemma-mark-bar-1"></span>
+        <span class="lemma-mark-bar lemma-mark-bar-2"></span>
+      </span>
+      <span class="lemma-wordmark">Lemma</span>
+    </div>
+    <div class="orb-wrap" id="orb" aria-hidden="true"></div>
+    <div class="statement" aria-live="polite">
+      <p id="line"></p>
+    </div>
+    <p class="setup-support">You can change this later in Settings.</p>
   </div>
   <p class="truth" id="truth"></p>
 
   <section id="choose" hidden>
+    <p class="setup-kicker">Workspace location</p>
     <div class="choices">
+      <button class="choice recommended" id="choose-cloud" type="button">
+        <span class="choice-top">
+          <span class="flag">Cloud</span>
+          <span class="choice-badge">Recommended</span>
+        </span>
+        <strong>Connect to lemma.work</strong>
+        <span class="choice-body">Sign in or create a workspace. Ready immediately.</span>
+        <span class="choice-action">Continue →</span>
+      </button>
       <button class="choice" id="choose-local" type="button">
-        <span class="flag">private · local-first</span>
-        <strong>On this Mac</strong>
-        <span>The whole platform runs here — agents, data, everything.
-        Nothing leaves your machine. First setup takes a few minutes,
-        once.</span>
+        <span class="choice-top">
+          <span class="flag">Local</span>
+        </span>
+        <strong>Run Lemma on this Mac</strong>
+        <span class="choice-body">Set up local services and keep workspace data here.</span>
+        <span class="choice-action">Review →</span>
       </button>
-      <button class="choice" id="choose-cloud" type="button">
-        <span class="flag">nothing to install</span>
-        <strong>Lemma Cloud</strong>
-        <span>Your workspace runs on lemma.work. Fastest way in — switch
-        to local any time from the menu.</span>
-      </button>
+    </div>
+    <p class="mode-note">Cloud and local workspaces do not share data.</p>
+  </section>
+
+  <section id="local-confirm" hidden>
+    <p class="setup-kicker">Local setup</p>
+    <p class="choice-intro">Lemma will install and run services on this Mac.</p>
+    <div class="local-review">
+      <ul>
+        <li>Workspace data is stored on this Mac.</li>
+        <li>First setup takes a few minutes and uses additional disk space.</li>
+        <li>AI models and connected integrations may send data to their providers.</li>
+      </ul>
+      <p class="setup-error" id="local-setup-error" hidden></p>
+      <div class="confirm-actions">
+        <button id="back-to-choices" type="button">Back</button>
+        <button class="primary" id="confirm-local" type="button">Install local services</button>
+      </div>
     </div>
   </section>
 
@@ -357,7 +619,7 @@
   <div class="progress"><div id="bar"></div></div>
   <div class="corner left">
     <button id="toggle-log" type="button">log</button>
-    <button id="switch-mode" type="button">use lemma cloud</button>
+    <button id="switch-mode" type="button" hidden>use lemma cloud</button>
   </div>
   <div class="corner right" id="runinfo"></div>
 
@@ -375,7 +637,7 @@
         stop: (includeInfra = false) => invoke("stop", { includeInfra }),
         restart: () => invoke("restart"),
         openApp: () => invoke("open_app"),
-        openAuth: () => invoke("login"),
+        openAuth: (mode = "signin") => invoke("login", { mode }),
         openLogs: () => invoke("open_logs"),
         chooseConnectionMode: () => invoke("choose_connection_mode"),
         setConnectionMode: (mode) => invoke("set_connection_mode", { mode }),
@@ -406,7 +668,7 @@
       stop: () => clearTimeout(timer),
       restart: () => { clearTimeout(timer); i = 0; step(); },
       openApp: () => console.log("[demo] open app"),
-      openAuth: () => console.log("[demo] open auth"),
+      openAuth: (mode = "signin") => console.log("[demo] open auth", mode),
       openLogs: () => console.log("[demo] open logs"),
       chooseConnectionMode: () => console.log("[demo] switch mode"),
       setConnectionMode: (mode) => { console.log("[demo] mode:", mode); if (mode === "local") window.lemmaDesktop.start(); },
@@ -474,7 +736,8 @@
   function renderState(s) {
     if (!s || !s.phaseKey) return;
     if (s.mode === "undecided") return;
-    if (s.running || s.ready) hideChooser();
+    switchModeBtn.hidden = s.mode !== "local";
+    if (s.running || s.ready) hideConnectionChoice();
     if (s.setup) sawSetup = true;
     lastPhase = s.phaseKey;
 
@@ -500,9 +763,20 @@
       scene.classList.add("awake");
       say(READY_LINE);
       truth.textContent = VOICE.ready[1];
+      primaryAction = "auth";
+      openBtn.textContent = "Create your account";
       openBtn.hidden = false;
       whisper.classList.remove("on");
       stopWhispers();
+    } else if (s.phaseKey === "stopped" || (!s.running && s.phaseKey !== "boot")) {
+      window.__orb?.resume();
+      scene.classList.add("awake");
+      say(VOICE.stopped[0]);
+      truth.textContent = VOICE.stopped[1];
+      primaryAction = "start";
+      openBtn.textContent = "Start Lemma";
+      openBtn.hidden = false;
+      whisper.classList.remove("on");
     } else {
       if (scene.classList.contains("awake")) {
         scene.classList.remove("awake");
@@ -531,6 +805,7 @@
   let whisperIndex = 0;
   let whisperTimer = null;
   function nextWhisper() {
+    if (scene.classList.contains("choosing")) return;
     if (!whispers.length) return;
     whisper.classList.remove("on");
     setTimeout(() => {
@@ -578,7 +853,25 @@
   document.getElementById("error-logs").addEventListener("click", toggleLog);
 
   // ---- actions ------------------------------------------------------------
-  openBtn.addEventListener("click", () => window.lemmaDesktop.openAuth());
+  let primaryAction = "auth";
+  openBtn.addEventListener("click", async () => {
+    if (primaryAction === "start") {
+      window.lemmaDesktop.start();
+      return;
+    }
+    openBtn.disabled = true;
+    openBtn.textContent = "Opening account setup…";
+    try {
+      await window.lemmaDesktop.openAuth("signup");
+    } catch (error) {
+      openBtn.disabled = false;
+      openBtn.textContent = "Try account setup again";
+      say("Account setup did not open.");
+      truth.textContent = "";
+      errdetail.textContent = String(error || "Could not open account setup.");
+      errwrap.hidden = false;
+    }
+  });
   document.getElementById("retry").addEventListener("click", () => {
     errwrap.hidden = true;
     scene.classList.remove("stalled");
@@ -586,29 +879,70 @@
     startWhispers();
     window.lemmaDesktop.start();
   });
-  document.getElementById("switch-mode").addEventListener("click", () => window.lemmaDesktop.chooseConnectionMode());
+  const switchModeBtn = document.getElementById("switch-mode");
+  switchModeBtn.addEventListener("click", () => window.lemmaDesktop.chooseConnectionMode());
 
   // ---- first-launch chooser ------------------------------------------------
   const chooseEl = document.getElementById("choose");
+  const localConfirmEl = document.getElementById("local-confirm");
+  const localSetupError = document.getElementById("local-setup-error");
+  const confirmLocalBtn = document.getElementById("confirm-local");
   function showChooser() {
+    scene.classList.add("choosing");
     chooseEl.hidden = false;
-    say("Welcome. Where should Lemma live?");
-    truth.textContent = "nothing installs until you choose";
+    localConfirmEl.hidden = true;
+    switchModeBtn.hidden = true;
+    localSetupError.hidden = true;
+    confirmLocalBtn.disabled = false;
+    confirmLocalBtn.textContent = "Install local services";
+    stopWhispers();
+    whisper.classList.remove("on");
+    say("Where do you want to run Lemma?");
+    truth.textContent = "no local services are installed until you confirm";
   }
-  function hideChooser() {
+  function showLocalConfirmation() {
+    scene.classList.add("choosing");
     chooseEl.hidden = true;
+    localConfirmEl.hidden = false;
+    switchModeBtn.hidden = true;
+    localSetupError.hidden = true;
+    say("Set up Lemma on this Mac?");
+    truth.textContent = "review before installation";
   }
-  document.getElementById("choose-local").addEventListener("click", () => {
-    hideChooser();
+  function hideConnectionChoice() {
+    scene.classList.remove("choosing");
+    chooseEl.hidden = true;
+    localConfirmEl.hidden = true;
+  }
+  document.getElementById("choose-local").addEventListener("click", showLocalConfirmation);
+  document.getElementById("back-to-choices").addEventListener("click", showChooser);
+  confirmLocalBtn.addEventListener("click", async () => {
+    confirmLocalBtn.disabled = true;
+    confirmLocalBtn.textContent = "Starting…";
+    hideConnectionChoice();
     say(VOICE.boot[0]);
     truth.textContent = "";
-    window.lemmaDesktop.setConnectionMode("local");
+    try {
+      await window.lemmaDesktop.setConnectionMode("local");
+      switchModeBtn.hidden = false;
+    } catch (error) {
+      showLocalConfirmation();
+      localSetupError.textContent = String(error || "Local setup could not start.");
+      localSetupError.hidden = false;
+      confirmLocalBtn.disabled = false;
+      confirmLocalBtn.textContent = "Try local setup again";
+    }
   });
-  document.getElementById("choose-cloud").addEventListener("click", () => {
-    hideChooser();
+  document.getElementById("choose-cloud").addEventListener("click", async () => {
+    hideConnectionChoice();
     say("Taking you to Lemma Cloud.");
     truth.textContent = "lemma.work";
-    window.lemmaDesktop.setConnectionMode("hosted");
+    try {
+      await window.lemmaDesktop.setConnectionMode("hosted");
+    } catch (error) {
+      showChooser();
+      truth.textContent = "could not open lemma.work · try again";
+    }
   });
 
   // ---- boot ----------------------------------------------------------------
@@ -616,12 +950,22 @@
   truth.textContent = "";
   window.lemmaDesktop.onLog(appendLog);
   window.lemmaDesktop.onState(renderState);
+  function shouldAutoStart(s) {
+    return Boolean(
+      s &&
+      s.mode === "local" &&
+      s.phaseKey === "boot" &&
+      !s.error &&
+      !s.running &&
+      !s.ready
+    );
+  }
   window.lemmaDesktop.getState().then((s) => {
     if (s && s.mode === "undecided") {
       showChooser();
     } else {
       renderState(s);
-      if (s && s.mode === "local") window.lemmaDesktop.start();
+      if (shouldAutoStart(s)) window.lemmaDesktop.start();
     }
   });
 </script>
@@ -701,7 +1045,7 @@ void main() {
     float diffuse = max(dot(normal, lightDir), 0.0);
     float fresnel = pow(1.0 - max(dot(normal, vec3(0.0, 0.0, 1.0)), 0.0), 2.0);
     vec3 finalColor = color * (0.28 + diffuse * 0.58 + fresnel * 0.68);
-    gl_FragColor = vec4(finalColor, 0.72);
+    gl_FragColor = vec4(finalColor, 0.46);
 }
 `;
 
@@ -716,7 +1060,7 @@ void main() {
   renderer.setClearColor(0xffffff, 0);
   container.appendChild(renderer.domElement);
 
-  const geometry = new THREE.IcosahedronGeometry(1.15, 48);
+  const geometry = new THREE.IcosahedronGeometry(1.15, 8);
   const material = new THREE.ShaderMaterial({
     uniforms: {
       time: { value: 0 },

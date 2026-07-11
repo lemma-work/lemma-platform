@@ -30,11 +30,21 @@ class RunToolAssembler:
         conversation: Conversation | None,
     ) -> list[object]:
         # The pod default assistant (no specific agent) gets the fixed default
-        # toolset; a user-created agent gets exactly the toolsets it was created
-        # with — nothing implicit is added.
+        # toolset. User-created agents get their configured toolsets plus narrow
+        # runtime dependencies required to use them correctly.
         toolset_names = list(
             agent.toolsets if agent is not None else POD_DEFAULT_AGENT_TOOLSETS
         )
+        # display_resource can author WIDGET content only after reading the
+        # built-in lemma-widget skill. Make that dependency automatic so a
+        # custom agent cannot receive USER_INTERACTION without the starter and
+        # authoring contract it needs. This grants skill *reading* only; it does
+        # not add POD, shell, network, or resource permissions.
+        if (
+            AgentToolset.USER_INTERACTION in toolset_names
+            and AgentToolset.SKILLS not in toolset_names
+        ):
+            toolset_names.append(AgentToolset.SKILLS)
         # Depth=1: a run that IS itself a spawned sub-agent gets neither the
         # sub-agent control toolset nor the agent_<name> spawn tools. The source of
         # truth is the `is_sub_agent` metadata flag stamped by SubAgentService.spawn

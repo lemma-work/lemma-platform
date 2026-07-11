@@ -37,9 +37,18 @@ class _FakeSession:
 def _connection() -> SimpleNamespace:
     return SimpleNamespace(
         url=SimpleNamespace(path="/pods/does-not-matter"),
-        scope={"type": "http"},
+        scope={"type": "http", "method": "GET"},
         state=SimpleNamespace(),
     )
+
+
+def test_only_desktop_request_creation_and_exchange_are_public():
+    assert security._is_public_desktop_auth_path("/auth/desktop/requests", "POST")
+    assert security._is_public_desktop_auth_path("/auth/desktop/session", "POST")
+    assert not security._is_public_desktop_auth_path(
+        "/auth/desktop/requests/request-id/complete", "POST"
+    )
+    assert not security._is_public_desktop_auth_path("/auth/desktop/requests", "GET")
 
 
 def _patch(monkeypatch, *, flag: bool, payload: dict):
@@ -152,7 +161,9 @@ async def test_live_delegation_token_accepted(monkeypatch):
             )
         ),
     )
-    monkeypatch.setattr(security, "is_delegation_revoked", AsyncMock(return_value=False))
+    monkeypatch.setattr(
+        security, "is_delegation_revoked", AsyncMock(return_value=False)
+    )
 
     await security.verify_auth(conn)
 

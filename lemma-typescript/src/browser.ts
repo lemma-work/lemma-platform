@@ -43,8 +43,7 @@ export {
 // HTML lint, and the no-build starter all construct `new
 // window.LemmaClient.LemmaClient()`), and keep `window.Lemma` as a back-compat
 // alias for conversation widgets that historically loaded this bundle as
-// `new Lemma.LemmaClient(...)`. Both point at the same surface object. See
-// docs/app-widget-unification.md.
+// `new Lemma.LemmaClient(...)`. Both point at the same surface object.
 if (typeof globalThis !== "undefined") {
   const scope = globalThis as Record<string, unknown>;
   const surface = {

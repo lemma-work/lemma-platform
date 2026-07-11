@@ -13,9 +13,10 @@ use std::path::PathBuf;
 use std::process::{Child, Command, Stdio};
 use std::sync::Mutex;
 use tauri::menu::{CheckMenuItem, Menu, MenuItem, PredefinedMenuItem};
-use tauri_plugin_autostart::ManagerExt as _;
 use tauri::tray::TrayIconBuilder;
+use tauri::webview::NewWindowResponse;
 use tauri::{AppHandle, Emitter, Manager, State, WebviewUrl, WebviewWindowBuilder};
+use tauri_plugin_autostart::ManagerExt as _;
 
 const DEFAULT_HOSTED_URL: &str = "https://lemma.work";
 const DEFAULT_LOCAL_URL: &str = "http://localhost:3711";
@@ -197,7 +198,13 @@ fn ensure_supervisor(app: &AppHandle) -> Result<(), String> {
             }
             // Dev fallback: run lemma-stack from the checkout.
             let mut fallback = Command::new("uv");
-            fallback.args(["run", "--project", "lemma-stack", "lemma-stack", "supervise"]);
+            fallback.args([
+                "run",
+                "--project",
+                "lemma-stack",
+                "lemma-stack",
+                "supervise",
+            ]);
             fallback
         }
     };
@@ -271,6 +278,9 @@ fn supervisor_gone(app: &AppHandle) {
         ui.clone()
     };
     let _ = app.emit("lemma:state", snapshot);
+    if current_mode(app) == "local" {
+        show_splash(app);
+    }
 }
 
 fn emit_log(app: &AppHandle, line: &str) {
@@ -332,23 +342,97 @@ fn handle_supervisor_event(app: &AppHandle, event: &Value) {
     };
 
     let _ = app.emit("lemma:state", snapshot);
+    if kind == "error" {
+        show_splash(app);
+    }
 }
 
-fn open_app_window(app: &AppHandle, url: &str) {
-    if let Some(window) = app.get_webview_window("main") {
-        let escaped = url.replace('\'', "%27");
-        let _ = window.eval(&format!("window.location.replace('{escaped}')"));
-        let _ = window.show();
-        let _ = window.set_focus();
+fn open_app_window(app: &AppHandle, url: &str) -> Result<(), String> {
+    let target = tauri::Url::parse(url).map_err(|error| format!("invalid app URL: {error}"))?;
+    let window = app
+        .get_webview_window("main")
+        .ok_or("main window is not available")?;
+    window
+        .navigate(target)
+        .map_err(|error| format!("could not open {url}: {error}"))?;
+    let _ = window.show();
+    let _ = window.set_focus();
+    Ok(())
+}
+
+fn open_local_auth_window(app: &AppHandle, url: &str) -> Result<(), String> {
+    let target = tauri::Url::parse(url).map_err(|error| format!("invalid auth URL: {error}"))?;
+    let window = if let Some(window) = app.get_webview_window("auth") {
+        window
+            .navigate(target)
+            .map_err(|error| format!("could not open account setup: {error}"))?;
+        window
+    } else {
+        build_local_auth_window(app, target)?
+    };
+    window
+        .show()
+        .map_err(|error| format!("could not show account setup: {error}"))?;
+    window
+        .set_focus()
+        .map_err(|error| format!("could not focus account setup: {error}"))?;
+    if let Some(main) = app.get_webview_window("main") {
+        let _ = main.hide();
     }
+    Ok(())
+}
+
+fn build_local_auth_window(
+    app: &AppHandle,
+    target: tauri::Url,
+) -> Result<tauri::WebviewWindow, String> {
+    let navigation_handle = app.clone();
+    let new_window_handle = app.clone();
+    let window = WebviewWindowBuilder::new(app, "auth", WebviewUrl::External(target))
+        .title("Lemma account setup")
+        .inner_size(1080.0, 780.0)
+        .min_inner_size(860.0, 620.0)
+        .on_navigation(move |url| {
+            if navigation_allowed_for_app(&navigation_handle, url) {
+                true
+            } else {
+                open_external(url.as_str());
+                false
+            }
+        })
+        .on_new_window(move |url, _features| {
+            if url.as_str() != "about:blank" {
+                if navigation_allowed_for_app(&new_window_handle, &url) {
+                    if let Some(auth) = new_window_handle.get_webview_window("auth") {
+                        let _ = auth.navigate(url);
+                    }
+                } else {
+                    open_external(url.as_str());
+                }
+            }
+            NewWindowResponse::Deny
+        })
+        .build()
+        .map_err(|error| format!("could not create account window: {error}"))?;
+
+    let close_handle = app.clone();
+    let close_window = window.clone();
+    window.on_window_event(move |event| {
+        if let tauri::WindowEvent::CloseRequested { api, .. } = event {
+            api.prevent_close();
+            let _ = close_window.hide();
+            show_splash(&close_handle);
+        }
+    });
+    Ok(window)
+}
+
+fn navigate_app_window(app: &AppHandle, url: &str) -> Result<(), String> {
+    open_app_window(app, url)
 }
 
 fn show_splash(app: &AppHandle) {
-    if let Some(window) = app.get_webview_window("main") {
-        let _ = window.eval("window.location.replace('tauri://localhost/index.html')");
-        let _ = window.show();
-        let _ = window.set_focus();
-    }
+    let _ = open_app_window(app, "tauri://localhost/index.html");
 }
 
 // ---------------------------------------------------------------------------
@@ -362,16 +446,22 @@ fn start(app: AppHandle) -> Result<(), String> {
         return Err("choose a connection mode first".into());
     }
     if mode == "hosted" {
-        open_app_window(&app, &hosted_url());
-        return Ok(());
+        return open_app_window(&app, &hosted_url());
     }
     ensure_supervisor(&app)?;
     let setup = std::env::var("LEMMA_DESKTOP_START_SETUP").as_deref() == Ok("1");
-    send_to_supervisor(&app, json!({"cmd": "start", "setup": setup, "id": "shell-start"}))
+    send_to_supervisor(
+        &app,
+        json!({"cmd": "start", "setup": setup, "id": "shell-start"}),
+    )
 }
 
 #[tauri::command]
 fn stop(app: AppHandle, include_infra: Option<bool>) -> Result<(), String> {
+    if current_mode(&app) != "local" {
+        return Err("local services are not active in Lemma Cloud mode".into());
+    }
+    show_splash(&app);
     send_to_supervisor(
         &app,
         json!({"cmd": "stop", "infra": include_infra.unwrap_or(false), "id": "shell-stop"}),
@@ -380,6 +470,10 @@ fn stop(app: AppHandle, include_infra: Option<bool>) -> Result<(), String> {
 
 #[tauri::command]
 fn restart(app: AppHandle) -> Result<(), String> {
+    if current_mode(&app) != "local" {
+        return Err("local services are not active in Lemma Cloud mode".into());
+    }
+    show_splash(&app);
     ensure_supervisor(&app)?;
     send_to_supervisor(&app, json!({"cmd": "restart", "id": "shell-restart"}))
 }
@@ -387,8 +481,7 @@ fn restart(app: AppHandle) -> Result<(), String> {
 #[tauri::command]
 fn open_app(app: AppHandle) -> Result<(), String> {
     let target = app_base_url(&app);
-    open_app_window(&app, &target);
-    Ok(())
+    open_app_window(&app, &target)
 }
 
 #[tauri::command]
@@ -408,24 +501,31 @@ fn set_connection_mode(app: AppHandle, mode: String) -> Result<(), String> {
     }
     set_mode(&app, &mode);
     if mode == "hosted" {
-        open_app_window(&app, &hosted_url());
-        return Ok(());
+        return open_app_window(&app, &hosted_url());
     }
     ensure_supervisor(&app)?;
     let setup = std::env::var("LEMMA_DESKTOP_START_SETUP").as_deref() == Ok("1");
-    send_to_supervisor(&app, json!({"cmd": "start", "setup": setup, "id": "shell-start"}))
+    send_to_supervisor(
+        &app,
+        json!({"cmd": "start", "setup": setup, "id": "shell-start"}),
+    )
 }
 
 #[tauri::command]
 fn choose_connection_mode(app: AppHandle) -> Result<String, String> {
-    let new_mode = if current_mode(&app) == "local" {
+    let current = current_mode(&app);
+    if current == "undecided" {
+        show_splash(&app);
+        return Ok(current);
+    }
+    let new_mode = if current == "local" {
         "hosted"
     } else {
         "local"
     };
     set_mode(&app, new_mode);
     if new_mode == "hosted" {
-        open_app_window(&app, &hosted_url());
+        open_app_window(&app, &hosted_url())?;
     } else {
         show_splash(&app);
         start(app)?;
@@ -458,30 +558,58 @@ fn set_mode(app: &AppHandle, mode: &str) {
 }
 
 // ---------------------------------------------------------------------------
-// Navigation policy: allow Lemma origins in-window, everything else opens in
-// the default browser.
+// Navigation policy: keep only the configured frontend origins in the primary
+// webview. OAuth and untrusted/external content belong in the system browser.
 // ---------------------------------------------------------------------------
 
+fn same_origin(url: &tauri::Url, target: &str) -> bool {
+    let Ok(target) = tauri::Url::parse(target) else {
+        return false;
+    };
+    url.scheme() == target.scheme()
+        && url.host_str() == target.host_str()
+        && url.port_or_known_default() == target.port_or_known_default()
+}
+
+fn is_desktop_browser_auth_url(url: &tauri::Url) -> bool {
+    matches!(url.scheme(), "http" | "https")
+        && url.path().starts_with("/auth")
+        && url
+            .query_pairs()
+            .any(|(key, value)| key == "desktop_browser" && value == "1")
+}
+
 fn navigation_allowed(url: &tauri::Url) -> bool {
-    match url.scheme() {
-        "tauri" => return true,
-        "http" | "https" => {}
-        _ => return false,
-    }
-    let host = url.host_str().unwrap_or_default();
-    if host == "localhost" || host == "127.0.0.1" {
-        return true;
-    }
-    let hosted_host = tauri::Url::parse(&hosted_url())
-        .ok()
-        .and_then(|u| u.host_str().map(String::from))
-        .unwrap_or_default();
-    let base = hosted_host.trim_start_matches("www.");
-    !base.is_empty() && (host == base || host.ends_with(&format!(".{base}")))
+    url.scheme() == "tauri" || same_origin(url, &hosted_url()) || same_origin(url, &local_url())
+}
+
+fn navigation_allowed_for_app(app: &AppHandle, url: &tauri::Url) -> bool {
+    navigation_allowed(url) || same_origin(url, &app_base_url(app))
 }
 
 fn open_external(url: &str) {
     let _ = Command::new("/usr/bin/open").arg(url).spawn();
+}
+
+fn handle_deep_link(app: &AppHandle, url: &tauri::Url) {
+    if url.scheme() != "lemma" || url.host_str() != Some("auth") || url.path() != "/complete" {
+        return;
+    }
+    if let Some(window) = app.get_webview_window("main") {
+        let _ = window.show();
+        let _ = window.set_focus();
+    }
+}
+
+fn desktop_context_script(mode: &str) -> String {
+    let context = json!({
+        "version": env!("CARGO_PKG_VERSION"),
+        "mode": mode,
+    });
+    format!(
+        "window.__LEMMA_DESKTOP__ = Object.freeze({});",
+        serde_json::to_string(&context).unwrap_or_else(|_| "{}".into())
+    )
 }
 
 // ---------------------------------------------------------------------------
@@ -499,16 +627,48 @@ fn app_base_url(app: &AppHandle) -> String {
     }
 }
 
+fn local_auth_path(mode: &str) -> &'static str {
+    if mode == "signup" {
+        "auth/signup"
+    } else {
+        "auth"
+    }
+}
+
 #[tauri::command]
-fn login(app: AppHandle) -> Result<(), String> {
+async fn login(app: AppHandle, mode: Option<String>) -> Result<(), String> {
     let base = app_base_url(&app);
-    open_app_window(&app, &format!("{}/auth", base.trim_end_matches('/')));
-    Ok(())
+    let auth_mode = if mode.as_deref() == Some("signup") {
+        "signup"
+    } else {
+        "signin"
+    };
+    if current_mode(&app) == "local" {
+        open_local_auth_window(
+            &app,
+            &format!(
+                "{}/{}",
+                base.trim_end_matches('/'),
+                local_auth_path(auth_mode),
+            ),
+        )
+    } else {
+        open_app_window(
+            &app,
+            &format!(
+                "{}/auth/desktop?mode={auth_mode}",
+                base.trim_end_matches('/'),
+            ),
+        )
+    }
 }
 
 fn build_tray(app: &AppHandle) -> tauri::Result<()> {
     let open_item = MenuItem::with_id(app, "open", "Open Lemma", true, None::<&str>)?;
     let login_item = MenuItem::with_id(app, "login", "Log In…", true, None::<&str>)?;
+    let home_item = MenuItem::with_id(app, "home", "Lemma Home", true, None::<&str>)?;
+    let back_item = MenuItem::with_id(app, "back", "Back", true, None::<&str>)?;
+    let reload_item = MenuItem::with_id(app, "reload", "Reload", true, None::<&str>)?;
     let start_item = MenuItem::with_id(app, "start", "Start Services", true, None::<&str>)?;
     let stop_item = MenuItem::with_id(app, "stop", "Stop Services", true, None::<&str>)?;
     let stop_all_item = MenuItem::with_id(
@@ -519,13 +679,7 @@ fn build_tray(app: &AppHandle) -> tauri::Result<()> {
         None::<&str>,
     )?;
     let restart_item = MenuItem::with_id(app, "restart", "Restart Services", true, None::<&str>)?;
-    let mode_item = MenuItem::with_id(
-        app,
-        "mode",
-        "Switch Connection Mode",
-        true,
-        None::<&str>,
-    )?;
+    let mode_item = MenuItem::with_id(app, "mode", "Switch Connection Mode", true, None::<&str>)?;
     let autostart_enabled = app.autolaunch().is_enabled().unwrap_or(false);
     let autostart_item = CheckMenuItem::with_id(
         app,
@@ -542,6 +696,9 @@ fn build_tray(app: &AppHandle) -> tauri::Result<()> {
         &[
             &open_item,
             &login_item,
+            &home_item,
+            &back_item,
+            &reload_item,
             &PredefinedMenuItem::separator(app)?,
             &start_item,
             &stop_item,
@@ -568,7 +725,22 @@ fn build_tray(app: &AppHandle) -> tauri::Result<()> {
                     let _ = open_app(app);
                 }
                 "login" => {
-                    let _ = login(app);
+                    tauri::async_runtime::spawn(async move {
+                        let _ = login(app, Some("signin".into())).await;
+                    });
+                }
+                "home" => {
+                    let _ = open_app(app);
+                }
+                "back" => {
+                    if let Some(window) = app.get_webview_window("main") {
+                        let _ = window.eval("window.history.back()");
+                    }
+                }
+                "reload" => {
+                    if let Some(window) = app.get_webview_window("main") {
+                        let _ = window.eval("window.location.reload()");
+                    }
                 }
                 "start" => {
                     let _ = start(app);
@@ -628,7 +800,12 @@ fn main() {
     let mode = connection_mode();
 
     tauri::Builder::default()
-        .plugin(tauri_plugin_single_instance::init(|app, _argv, _cwd| {
+        .plugin(tauri_plugin_single_instance::init(|app, argv, _cwd| {
+            for argument in argv {
+                if let Ok(url) = tauri::Url::parse(&argument) {
+                    handle_deep_link(app, &url);
+                }
+            }
             if let Some(window) = app.get_webview_window("main") {
                 let _ = window.show();
                 let _ = window.set_focus();
@@ -638,6 +815,7 @@ fn main() {
             tauri_plugin_autostart::MacosLauncher::LaunchAgent,
             None,
         ))
+        .plugin(tauri_plugin_deep_link::init())
         .manage(Shell::new(mode.clone()))
         .invoke_handler(tauri::generate_handler![
             start,
@@ -663,15 +841,43 @@ fn main() {
                 .title("Lemma")
                 .inner_size(1280.0, 860.0)
                 .min_inner_size(980.0, 680.0)
-                .on_navigation(|url| {
-                    if navigation_allowed(url) {
-                        true
-                    } else {
-                        open_external(url.as_str());
-                        false
+                .initialization_script(desktop_context_script(&mode))
+                .on_navigation({
+                    let handle = handle.clone();
+                    move |url| {
+                        if is_desktop_browser_auth_url(url) {
+                            open_external(url.as_str());
+                            false
+                        } else if navigation_allowed_for_app(&handle, url) {
+                            true
+                        } else {
+                            open_external(url.as_str());
+                            false
+                        }
+                    }
+                })
+                .on_new_window({
+                    let handle = handle.clone();
+                    move |url, _features| {
+                        if url.as_str() == "about:blank" {
+                            return NewWindowResponse::Deny;
+                        }
+                        if is_desktop_browser_auth_url(&url) {
+                            open_external(url.as_str());
+                        } else if navigation_allowed_for_app(&handle, &url) {
+                            let _ = navigate_app_window(&handle, url.as_str());
+                        } else {
+                            open_external(url.as_str());
+                        }
+                        NewWindowResponse::Deny
                     }
                 })
                 .build()?;
+
+            if let Some(main) = handle.get_webview_window("main") {
+                main.show()?;
+                main.set_focus()?;
+            }
 
             build_tray(&handle)?;
 
@@ -701,6 +907,12 @@ fn main() {
         .build(tauri::generate_context!())
         .expect("error while building Lemma desktop")
         .run(|app, event| match event {
+            #[cfg(target_os = "macos")]
+            tauri::RunEvent::Opened { urls } => {
+                for url in urls {
+                    handle_deep_link(app, &url);
+                }
+            }
             tauri::RunEvent::Reopen { .. } => {
                 if let Some(window) = app.get_webview_window("main") {
                     let _ = window.show();
@@ -712,4 +924,64 @@ fn main() {
             }
             _ => {}
         });
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn configured_origins_are_exact() {
+        let same = tauri::Url::parse("https://lemma.work/docs").unwrap();
+        let subdomain = tauri::Url::parse("https://untrusted.lemma.work/").unwrap();
+        let wrong_port = tauri::Url::parse("http://localhost:9999/").unwrap();
+
+        assert!(same_origin(&same, "https://lemma.work"));
+        assert!(!same_origin(&subdomain, "https://lemma.work"));
+        assert!(!same_origin(&wrong_port, "http://localhost:3711"));
+    }
+
+    #[test]
+    fn desktop_browser_login_is_explicitly_marked() {
+        let desktop = tauri::Url::parse(
+            "https://lemma.work/auth?desktop_browser=1&desktop_request=request-1234567890",
+        )
+        .unwrap();
+        let ordinary = tauri::Url::parse("https://lemma.work/auth").unwrap();
+        let unrelated = tauri::Url::parse("https://lemma.work/docs?desktop_browser=1").unwrap();
+
+        assert!(is_desktop_browser_auth_url(&desktop));
+        assert!(!is_desktop_browser_auth_url(&ordinary));
+        assert!(!is_desktop_browser_auth_url(&unrelated));
+    }
+
+    #[test]
+    fn first_launch_chooser_explains_both_connection_modes() {
+        let html = include_str!("../ui/index.html");
+
+        assert!(html.contains("Connect to lemma.work"));
+        assert!(html.contains("Run Lemma on this Mac"));
+        assert!(html.contains("Cloud and local workspaces do not share data"));
+        assert!(html.contains("Install local services"));
+        assert!(html.contains("lemma-mark-bar-2"));
+        assert!(html.contains("s.phaseKey === \"boot\""));
+        assert!(html.contains("!s.error"));
+        assert!(html.contains("await window.lemmaDesktop.openAuth(\"signup\")"));
+        assert!(!html.contains("Nothing leaves your machine"));
+    }
+
+    #[test]
+    fn macos_allows_only_the_local_http_frontend() {
+        let plist = include_str!("../Info.plist");
+
+        assert!(plist.contains("NSAllowsLocalNetworking"));
+        assert!(plist.contains("127-0-0-1.sslip.io"));
+        assert!(!plist.contains("NSAllowsArbitraryLoads"));
+    }
+
+    #[test]
+    fn local_account_creation_opens_the_supertokens_signup_route() {
+        assert_eq!(local_auth_path("signup"), "auth/signup");
+        assert_eq!(local_auth_path("signin"), "auth");
+    }
 }

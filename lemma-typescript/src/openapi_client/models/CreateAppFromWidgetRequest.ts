@@ -5,9 +5,9 @@
 /**
  * Promote a conversation widget into a persisted app.
  *
- * The widget's stored HTML (addressed by conversation + tool call) is wrapped
- * into a standalone document and deployed as the app's bundle — the artifact
- * is identical to what the widget showed. See docs/app-widget-unification.md.
+ * The widget's stored source fragment (addressed by conversation + tool call) is
+ * preserved, wrapped into a standalone document without embed-only chrome, and
+ * deployed as the app's bundle.
  */
 export type CreateAppFromWidgetRequest = {
     conversation_id: string;

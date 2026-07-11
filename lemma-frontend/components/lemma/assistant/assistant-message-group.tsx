@@ -37,8 +37,6 @@ export {
   collectDisplayResourceCardsByRow,
   currentPodIdFromBrowserPath,
   DisplayResourceCards,
-  findPendingDisplayResourceForm,
-  type PendingDisplayResourceForm,
 } from "./assistant-resource-cards";
 export { ComposerApprovalPanel, ComposerAskUserPanel } from "./assistant-approval-cards";
 export { pluralize, RunTraceHeader } from "./assistant-tool-details";

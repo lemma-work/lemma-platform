@@ -23,13 +23,17 @@ def _event_routers():
 
 @asynccontextmanager
 async def _close_user_cache(app):
-    """API process: close the cached-identity user store on shutdown."""
+    """API process: close identity module Redis clients on shutdown."""
     try:
         yield
     finally:
         from app.modules.identity.infrastructure.user_cache import close_user_cache
+        from app.modules.identity.services.desktop_auth_handoff import (
+            get_desktop_auth_handoff_store,
+        )
 
         await close_user_cache()
+        await get_desktop_auth_handoff_store().close()
 
 
 module = LemmaModule(

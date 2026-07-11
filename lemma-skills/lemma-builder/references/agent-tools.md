@@ -63,8 +63,8 @@ prose-question fallback still works.
 ## `ask_user`
 
 Ask one or more multiple-choice questions and wait for the answers. Use it for a choice
-among known options; for free-form or multi-field input render an interactive WIDGET
-instead (see `display_resource`).
+among known options. For free-form or multi-field input, ask clearly in prose and end
+the turn so the user's next message can answer.
 
 **Request**
 
@@ -112,13 +112,12 @@ Show a user-facing resource or a rich interaction instead of prose. One tool, ma
 | `public_url` | string? | WIDGET | URL to embed/open — exactly one of `public_url`/`content` |
 | `content` | string? | WIDGET | inline SVG/HTML fragment (no `<!doctype>`/`<html>`/`<head>`/`<body>`) |
 | `loading_messages` | string[]? | WIDGET | ≤4, shown while the widget renders |
-| `interactive` | bool | WIDGET | `true` when the widget submits input back to chat (see below) |
 | `filters` | RecordFilter[]? | TABLE | `[{ field, op, value }]` — record-API shape |
 | `query` | string? | TABLE | read-only SQL, RLS-disabled tables only; mutually exclusive with `filters` |
 
 Validity (enforced in the tool body, returned as `success:false`/`error`, not a hard
 failure): BROWSER takes only `type`; `path` is FILE-only; `public_url`/`content`/
-`loading_messages`/`interactive` are WIDGET-only; a WIDGET needs **exactly one** of
+`loading_messages` are WIDGET-only; a WIDGET needs **exactly one** of
 `content`/`public_url`; `filters`/`query` are TABLE-only and not both; `filters` needs
 `name`.
 
@@ -132,18 +131,14 @@ failure): BROWSER takes only `type`; `path` is FILE-only; `public_url`/`content`
   tables).
 - `AGENT`/`FUNCTION`/`WORKFLOW`/`APP`/`SCHEDULE` — show that pod resource (or all of the
   type). Use this after creating/updating a resource instead of only saying you did.
-- `WIDGET` — render a custom visual. Before your first widget in a conversation, load the
-  `lemma-widget` skill. Set `interactive=true` when it collects input.
+- `WIDGET` — the default for an answer with structure or visual hierarchy beyond
+  short prose: several values/records, statuses, steps, comparisons, a timeline,
+  compact table, preview, or chart. Before the first widget, load `lemma-widget`.
+  Inline widgets are lightweight plain HTML/CSS/JS or SVG and are display-only; use
+  a Vite app when the UI needs React, routing, or substantial application state.
 
 **Response** — `{ success, message?, error?, app?, url?, expires_at? }` (`url`/
 `expires_at` populate for displayed workspace apps).
-
-**Interactive widgets (the round-trip).** A widget with `interactive=true` collects input
-and submits it back via the in-widget `lemma.submit(payload)` / `sendPrompt(text)` bridge.
-A submit becomes a **new user message + a new agent run** (see the custom-renderer section
-below for the endpoints, and `lemma-widget/SKILL.md` → "Submitting back to the chat" for
-authoring). Use an interactive widget when `ask_user`'s fixed choices aren't enough
-(forms, multi-field input).
 
 ---
 
@@ -208,10 +203,11 @@ descriptions, so any agent with the toolset gets them.)
 
 ## Building a custom renderer
 
-Most apps never hand-render these tools: the `<lemma-agent-thread>` web component and the
-React hooks (`useConversationMessages`) already render `ask_user`/`request_approval` cards,
-embed widgets, and surface the final reply — see `app-recipes/agent-chat.md`. Build a
-custom renderer only when you're not using those. The contract:
+The current `<lemma-agent-thread>` web component covers the message list, composer,
+streaming state, and final reply, but renders tool activity generically. React hooks
+(`useConversationMessages`) expose the raw message stream; they do not supply rich
+`ask_user`/`request_approval` cards or widget embeds. Build those interaction views in
+the product frontend or a custom renderer using this contract:
 
 **1. Read the message stream.** A single assistant turn emits several `role:"assistant"`
 messages split by `kind`: `thinking`, `tool_call`, `tool_return`, `notification`, `text`
@@ -243,21 +239,12 @@ POST /pods/{pod_id}/conversations/{conversation_id}/approvals/{approval_id}/deci
 For `ask_user`, put the chosen answers in `response.answers` (keyed by question header).
 For an approved `request_approval`, the wrapped tool runs as the user during resume.
 
-**3. Embed and submit widgets.** Mint a short-lived embed URL, load it in an iframe, and
-let the in-widget bridge submit back:
+**3. Embed widgets.** Mint a short-lived embed URL and load it in an iframe:
 
 ```http
 POST /pods/{pod_id}/widgets/{conversation_id}/{tool_call_id}/embed-token
         # operation widget.embed_token → { "url": "https://api…/widgets/serve/…?token=…" }
-
-POST /widgets/serve/{conversation_id}/{tool_call_id}/submit
-        # operation widget.submit → body { "payload": <any>, "text": <string|null> } → { "ok": true }
 ```
-
-An embedded widget's `lemma.submit()` posts a message to the parent frame (handle it and
-forward); a standalone widget POSTs the submit endpoint directly with its signed token.
-Either way the backend appends a new user message and starts a new run. Authoring details:
-`lemma-widget/SKILL.md`.
 
 ---
 
@@ -265,5 +252,5 @@ Either way the backend appends a new user message and starts a new run. Authorin
 
 - Which toolsets to enable + grants → `agents.md`
 - How chat/email delivery works per platform → `surfaces.md`
-- Authoring widgets + the submit bridge → `lemma-widget/SKILL.md`
+- Authoring widgets → `lemma-widget/SKILL.md`
 - Agent chat UI + raw message shape → `app-recipes/agent-chat.md`

@@ -174,6 +174,23 @@ async def test_pod_skill_loader_reads_skill_content_and_resources():
 
 
 @pytest.mark.asyncio
+async def test_system_widget_skill_exposes_versioned_starter_assets():
+    resources = await list_workspace_skill_resources("lemma-widget")
+
+    assert {item["path"] for item in resources} >= {
+        "assets/widget-starter-v1.html",
+        "assets/widget-list-v1.html",
+        "assets/widget-chart-v1.html",
+        "assets/widget-detail-v1.html",
+    }
+    starter = await read_workspace_skill_resource(
+        "lemma-widget", "assets/widget-starter-v1.html"
+    )
+    assert 'data-lemma-widget-version="1"' in starter
+    assert "window.__LEMMA_CONFIG__" in starter
+
+
+@pytest.mark.asyncio
 async def test_pod_skill_loader_passes_authz_context_for_datastore_service(
     monkeypatch: pytest.MonkeyPatch,
 ):

@@ -280,6 +280,7 @@ async def test_get_app_asset_reads_release_contents():
         pod_id=pod_id,
         user_id=user_id,
         name="dashboard",
+        description="Team overview",
         public_slug="dashboard",
         current_release_id=uuid4(),
     )
@@ -308,10 +309,12 @@ async def test_get_app_asset_reads_release_contents():
     assert "public-ok" in body
     assert "data-lemma-runtime-config" in body
     assert str(pod_id) in body
-    assert '"app": {"name": "dashboard"}' in body
+    assert '"app": {"name": "dashboard", "description": "Team overview"}' in body
     assert asset.media_type == "text/html"
     # ETag folds in the config hash so a pod/api/auth change busts the cache.
-    expected_token = runtime_config_token(app.pod_id)
+    expected_token = runtime_config_token(
+        app.pod_id, app={"name": app.name, "description": app.description}
+    )
     assert asset.etag == f'"version.{expected_token}"'
     assert asset.is_entrypoint is True
 
@@ -451,12 +454,12 @@ async def test_get_app_asset_returns_not_modified_when_etag_matches():
     repo.get_release.return_value = release
 
     # The entrypoint ETag includes the config hash; a matching request 304s.
-    config_token = runtime_config_token(app.pod_id)
+    config_token = runtime_config_token(app.pod_id, app={"name": app.name})
     asset = await _get_app_asset(service, 
         pod_id,
         "dashboard",
         user_id,
-        asset_path=None,
+        asset_path="settings",
         request_etag=f'"version.{config_token}"',
         ctx=allow_all_context(user_id=user_id, pod_id=pod_id),
     )

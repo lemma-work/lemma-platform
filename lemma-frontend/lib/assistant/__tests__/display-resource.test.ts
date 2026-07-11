@@ -39,13 +39,15 @@ describe('buildDisplayResourceHref — WIDGET variants', () => {
     it('content widget carries only the tool context (no src/path)', () => {
         const href = buildDisplayResourceHref({
             ...base,
-            request: { type: 'WIDGET', loadingMessages: [] },
+            request: { type: 'WIDGET', loadingMessages: ['Reading records', 'Drawing view'] },
         });
         expect(href).toContain('/pod/p1/widgets/view');
         expect(href).toContain('toolCallId=t1');
         expect(href).toContain('assistantConversationId=c1');
         expect(href).not.toContain('src=');
         expect(href).not.toContain('path=');
+        const params = new URL(href!, 'https://lemma.work').searchParams;
+        expect(params.getAll('loadingMessage')).toEqual(['Reading records', 'Drawing view']);
     });
 
     it('public_url widget carries an external src', () => {
@@ -63,18 +65,5 @@ describe('buildDisplayResourceHref — WIDGET variants', () => {
             request: { type: 'WIDGET', path: '/KB/w.html', loadingMessages: [] },
         });
         expect(href).toBeNull();
-    });
-});
-
-describe('buildDisplayResourceHref — other types', () => {
-    it('FORM routes to the forms view', () => {
-        const href = buildDisplayResourceHref({
-            podId: 'p1',
-            conversationId: 'c1',
-            toolCallId: 't1',
-            request: { type: 'FORM', loadingMessages: [] },
-        });
-        expect(href).toContain('/pod/p1/forms/view');
-        expect(href).toContain('toolCallId=t1');
     });
 });

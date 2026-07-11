@@ -14,6 +14,7 @@ from supertokens_python.recipe.emailpassword.interfaces import (
 from supertokens_python.recipe.emailpassword.types import FormField
 from supertokens_python.recipe.session.interfaces import SessionContainer
 
+from app.modules.identity.domain.email import normalize_identity_email
 from app.modules.identity.infrastructure.supertokens_auth.auth_method_conflicts import (
     get_conflicting_thirdparty_id,
     get_thirdparty_conflict_reason,
@@ -39,7 +40,7 @@ def override_emailpassword_apis(original_implementation: APIInterface) -> APIInt
         SignInPostNotAllowedResponse,
         GeneralErrorResponse,
     ]:
-        email = _get_email(form_fields)
+        email = _normalize_form_email(form_fields)
         users = await list_users_by_email(
             tenant_id=tenant_id,
             email=email,
@@ -75,7 +76,7 @@ def override_emailpassword_apis(original_implementation: APIInterface) -> APIInt
         SignUpPostNotAllowedResponse,
         GeneralErrorResponse,
     ]:
-        email = _get_email(form_fields)
+        email = _normalize_form_email(form_fields)
         users = await list_users_by_email(
             tenant_id=tenant_id,
             email=email,
@@ -106,3 +107,12 @@ def override_emailpassword_apis(original_implementation: APIInterface) -> APIInt
 
 def _get_email(form_fields: List[FormField]) -> str:
     return next(field.value for field in form_fields if field.id == "email")
+
+
+def _normalize_form_email(form_fields: List[FormField]) -> str:
+    email = normalize_identity_email(_get_email(form_fields))
+    for field in form_fields:
+        if field.id == "email":
+            field.value = email
+            break
+    return email

@@ -3298,7 +3298,7 @@
         "type": "object"
       },
       "CreateAppFromWidgetRequest": {
-        "description": "Promote a conversation widget into a persisted app.\n\nThe widget's stored HTML (addressed by conversation + tool call) is wrapped\ninto a standalone document and deployed as the app's bundle \u2014 the artifact\nis identical to what the widget showed. See docs/app-widget-unification.md.",
+        "description": "Promote a conversation widget into a persisted app.\n\nThe widget's stored source fragment (addressed by conversation + tool call) is\npreserved, wrapped into a standalone document without embed-only chrome, and\ndeployed as the app's bundle.",
         "properties": {
           "conversation_id": {
             "format": "uuid",
@@ -18196,7 +18196,7 @@
     },
     "/pods/{pod_id}/apps/from-widget": {
       "post": {
-        "description": "Promote a conversation widget into a persisted app.\n\nThe widget and the app are the same artifact at two lifecycle stages: this\nfetches the widget's stored HTML and deploys it as the app's bundle \u2014\nidentical to what was shown.",
+        "description": "Promote a conversation widget into a persisted app.\n\nThe widget and the app share one source artifact at two lifecycle stages. This\nfetches the stored fragment, preserves it, and deploys it in the standalone\ndocument wrapper (without conversation-only padding or height messaging).",
         "operationId": "app.create_from_widget",
         "parameters": [
           {

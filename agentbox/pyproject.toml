@@ -7,7 +7,7 @@ dependencies = [
     "fastapi[standard]>=0.128.0",
     "kubernetes>=34.1.0",
     "pydantic>=2.11.0",
-    "pydantic-settings>=2.11.0",
+    "pydantic-settings>=2.14.2",
     "uvicorn[standard]>=0.42.0",
 ]
 

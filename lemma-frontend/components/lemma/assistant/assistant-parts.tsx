@@ -4,7 +4,6 @@ import { useEffect, useState, type ReactNode } from "react";
 import {
   ArrowUp,
   BarChart3,
-  CheckCircle2,
   CheckSquare,
   ChevronDown,
   Database,
@@ -330,8 +329,6 @@ export function displayResourceIcon(request: DisplayResourceRequest): ReactNode 
       return <CheckSquare className={className} />;
     case "WIDGET":
       return <BarChart3 className={className} />;
-    case "FORM":
-      return <CheckCircle2 className={className} />;
     case "APP":
     case "SCHEDULE":
     default:

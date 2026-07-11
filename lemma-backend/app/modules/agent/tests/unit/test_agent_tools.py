@@ -26,6 +26,7 @@ from app.modules.agent.services.agent_runner_service import (
 from app.modules.agent.tools.callable_tool_factory import AgentCallableToolFactory
 from app.modules.agent.tools.final_answer.final_answer_tool import FinalAgentResult
 from app.modules.agent.tools.pod import pod_toolset
+from app.modules.agent.tools.skills import skills_toolset
 from app.modules.agent.tools.registry import (
     POD_DEFAULT_AGENT_TOOLSETS,
     resolve_agent_toolsets,
@@ -38,6 +39,7 @@ from app.modules.agent.tools.user_interaction.models import (
     validate_display_payload,
 )
 from app.modules.agent.tools.subagents.pydantic_adapter import subagents_toolset
+from app.modules.agent.tools.tool_assembler import RunToolAssembler
 from app.modules.agent.tools.tool_errors import AgentInputRequired
 from app.modules.agent.tools.user_interaction.pydantic_adapter import (
     ask_user,
@@ -287,7 +289,9 @@ async def test_display_resource_email_surface_not_delivered_by_tool(monkeypatch)
 async def test_display_resource_no_surface_does_not_deliver(monkeypatch):
     # Web/app/subagent runs carry no surface_platform → pure return, no send.
     calls = _patch_surface_delivery(monkeypatch)
-    ctx = SimpleNamespace(tool_call_id="tc-1", deps=SimpleNamespace(conversation_id=uuid4()))
+    ctx = SimpleNamespace(
+        tool_call_id="tc-1", deps=SimpleNamespace(conversation_id=uuid4())
+    )
 
     response = await display_resource(
         ctx,  # type: ignore[arg-type]
@@ -299,7 +303,9 @@ async def test_display_resource_no_surface_does_not_deliver(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_display_resource_returns_browser_access_url(monkeypatch: pytest.MonkeyPatch):
+async def test_display_resource_returns_browser_access_url(
+    monkeypatch: pytest.MonkeyPatch,
+):
     user_id = uuid4()
     calls: list[tuple[str, object]] = []
 
@@ -343,9 +349,15 @@ async def test_display_resource_returns_browser_access_url(monkeypatch: pytest.M
         "resolve_workspace_host_url_for_runtime",
         lambda runtime, api_url: f"{runtime}:{api_url}",
     )
-    monkeypatch.setattr(user_interaction_adapter.settings, "agentbox_api_url", "https://agentbox.test")
-    monkeypatch.setattr(user_interaction_adapter.settings, "agentbox_api_key", "agentbox-key")
-    monkeypatch.setattr(user_interaction_adapter.settings, "api_url", "https://api.test")
+    monkeypatch.setattr(
+        user_interaction_adapter.settings, "agentbox_api_url", "https://agentbox.test"
+    )
+    monkeypatch.setattr(
+        user_interaction_adapter.settings, "agentbox_api_key", "agentbox-key"
+    )
+    monkeypatch.setattr(
+        user_interaction_adapter.settings, "api_url", "https://api.test"
+    )
 
     ctx = SimpleNamespace(deps=SimpleNamespace(user_id=user_id))
 
@@ -405,6 +417,10 @@ def test_display_resource_validates_widget_form_and_table_payloads():
         )
         is None
     )
+    assert "absolute http or https URL" in _payload_error(
+        type=DisplayResourceType.WIDGET,
+        public_url="javascript:alert(1)",
+    )
     assert (
         validate_display_payload(
             DisplayResourceRequest(
@@ -426,10 +442,11 @@ def test_display_resource_validates_widget_form_and_table_payloads():
         content="<div>chart</div>",
     )
 
-    # FORM has been removed: the enum no longer carries it, and structured input
-    # is collected via ask_user (choices) or an interactive WIDGET.
+    # FORM has been removed: the enum no longer carries it, and user input is
+    # collected via ask_user (choices) or a normal conversational turn.
     assert not hasattr(DisplayResourceType, "FORM")
     assert "json_schema" not in DisplayResourceRequest.model_fields
+    assert "interactive" not in DisplayResourceRequest.model_fields
 
     table = DisplayResourceRequest(
         type=DisplayResourceType.TABLE,
@@ -472,6 +489,24 @@ async def test_display_resource_invalid_payload_returns_success_false():
     )
     assert response.success is False
     assert "exactly one" in (response.error or "")
+
+
+@pytest.mark.asyncio
+async def test_display_resource_rejects_nonportable_widget_html():
+    ctx = SimpleNamespace(
+        deps=SimpleNamespace(surface_platform=None, conversation_id=uuid4()),
+        tool_call_id="tc",
+    )
+    response = await display_resource(
+        ctx,
+        DisplayResourceRequest(
+            type=DisplayResourceType.WIDGET,
+            content='<script src="/public/sdk/lemma-client.js"></script>',
+        ),
+    )
+    assert response.success is False
+    assert "Invalid WIDGET content" in (response.error or "")
+    assert "relative" in (response.error or "")
 
 
 def _approval_ctx(approval_id: str, *, supports_pause_signal: bool = True):
@@ -659,6 +694,27 @@ def test_user_interaction_toolset_includes_ask_user():
     assert "ask_user" in user_interaction_toolset.tools
     assert "display_resource" in user_interaction_toolset.tools
     assert "request_approval" in user_interaction_toolset.tools
+
+
+@pytest.mark.asyncio
+async def test_user_interaction_implicitly_adds_skills_at_run_time():
+    agent = Agent(
+        pod_id=uuid4(),
+        user_id=uuid4(),
+        name="widget-author",
+        instruction="Show useful widgets.",
+        toolsets=[AgentToolset.USER_INTERACTION],
+    )
+    toolsets = await RunToolAssembler(object()).assemble(
+        agent=agent,
+        conversation=Conversation(
+            pod_id=agent.pod_id,
+            user_id=agent.user_id,
+            agent_id=agent.id,
+        ),
+    )
+    assert user_interaction_toolset in toolsets
+    assert skills_toolset in toolsets
 
 
 def _ask_ctx(*, supports_pause_signal: bool = True):
@@ -909,7 +965,9 @@ async def test_callable_function_tool_passes_flat_model_args_as_input(
     captured: dict[str, object] = {}
 
     class _FakeService:
-        async def execute_function(self, *, pod_id, name, input_data, user_id, ctx=None, run_as_workload=None):
+        async def execute_function(
+            self, *, pod_id, name, input_data, user_id, ctx=None, run_as_workload=None
+        ):
             captured["input_data"] = input_data
             captured["user_id"] = user_id
             return SimpleNamespace(
@@ -1136,7 +1194,9 @@ async def test_agent_tool_returns_dict_when_output_schema_set(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_agent_tool_timeout_returns_handle_dict_even_no_output_schema(monkeypatch):
+async def test_agent_tool_timeout_returns_handle_dict_even_no_output_schema(
+    monkeypatch,
+):
     _patch_subagent(
         monkeypatch,
         await_result={"timed_out": True, "status": "RUNNING"},
@@ -1592,7 +1652,12 @@ def test_user_agent_without_toolsets_has_no_tool_fragments():
     )
 
     assert prompt.startswith("You are a Lemma agent")
-    for fragment_marker in ("## Lemma CLI", "## Web Search", "## Skills", "# Task list"):
+    for fragment_marker in (
+        "## Lemma CLI",
+        "## Web Search",
+        "## Skills",
+        "# Task list",
+    ):
         assert fragment_marker not in prompt
 
 

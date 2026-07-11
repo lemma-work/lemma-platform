@@ -1,0 +1,53 @@
+<!-- Lemma list widget v1. Replace every uppercase placeholder before display. -->
+<style>
+  .lwl-v1 { --ink:var(--lemma-widget-text,#141414); --muted:var(--lemma-widget-muted,#6b6b6b); --line:var(--lemma-widget-border,#e5e5e5); --surface:var(--lemma-widget-surface,#fff); --subtle:var(--lemma-widget-subtle,#f0efec); --accent:var(--lemma-widget-accent,#6366f1); --radius:var(--lemma-widget-radius,10px); color-scheme:var(--lemma-widget-color-scheme,light); color:var(--ink); font:14px/1.45 var(--lemma-widget-font,ui-sans-serif,system-ui,-apple-system,"Segoe UI",sans-serif); }
+  .lwl-v1 * { box-sizing:border-box; }
+  .lwl-v1 [hidden] { display:none !important; }
+  .lwl-v1 h2 { margin:0 0 12px; font-size:19px; letter-spacing:-.02em; }
+  .lwl-v1__rows { display:grid; gap:7px; }
+  .lwl-v1__row { display:grid; grid-template-columns:minmax(0,1fr) auto; align-items:center; gap:14px; padding:11px 13px; border:1px solid var(--line); border-radius:var(--radius); background:var(--surface); }
+  .lwl-v1__title { overflow:hidden; font-weight:620; text-overflow:ellipsis; white-space:nowrap; }
+  .lwl-v1__sub { margin-top:2px; overflow:hidden; color:var(--muted); font-size:12px; text-overflow:ellipsis; white-space:nowrap; }
+  .lwl-v1__badge { padding:3px 8px; border-radius:999px; background:var(--subtle); color:var(--accent); font-size:11px; font-weight:700; text-transform:uppercase; }
+  .lwl-v1__state { padding:18px; border:1px dashed var(--line); border-radius:var(--radius); background:var(--subtle); color:var(--muted); text-align:center; }
+  @media (prefers-color-scheme:dark) { .lwl-v1 { --ink:var(--lemma-widget-text,#ececec); --muted:var(--lemma-widget-muted,#9e9e9e); --line:var(--lemma-widget-border,#2a2a2a); --surface:var(--lemma-widget-surface,#1a1a1a); --subtle:var(--lemma-widget-subtle,#222); --accent:var(--lemma-widget-accent,#818cf8); color-scheme:var(--lemma-widget-color-scheme,dark); } }
+</style>
+<section class="lwl-v1" data-lemma-widget-version="1">
+  <h2>__WIDGET_TITLE__</h2>
+  <div id="lwl-v1-state" class="lwl-v1__state">Loading…</div>
+  <div id="lwl-v1-rows" class="lwl-v1__rows" hidden></div>
+</section>
+<script>
+  (function () {
+    var stateEl = document.getElementById("lwl-v1-state");
+    var rowsEl = document.getElementById("lwl-v1-rows");
+    function field(row, key) { return row && row.data && row.data[key] != null ? row.data[key] : row && row[key]; }
+    function esc(value) { return String(value == null ? "" : value).replace(/[&<>"']/g, function (c) { return {"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]; }); }
+    function fail(message) { stateEl.hidden=false; stateEl.textContent=message || "Unable to load."; rowsEl.hidden=true; }
+    function render(rows) {
+      if (!rows.length) { fail("No __EMPTY_LABEL__ yet."); return; }
+      rowsEl.innerHTML = rows.slice(0, 12).map(function (row) {
+        return '<article class="lwl-v1__row"><div><div class="lwl-v1__title">' + esc(field(row,"__TITLE_FIELD__")) +
+          '</div><div class="lwl-v1__sub">' + esc(field(row,"__SUBTITLE_FIELD__")) +
+          '</div></div><span class="lwl-v1__badge">' + esc(field(row,"__STATUS_FIELD__") || "—") + "</span></article>";
+      }).join("");
+      rowsEl.hidden=false; stateEl.hidden=true;
+    }
+    async function boot() {
+      try {
+        var client = new window.LemmaClient.LemmaClient();
+        var auth = await client.initialize();
+        if (!auth || auth.status !== "authenticated") { fail("Sign in to Lemma to view this data."); return; }
+        var response = await client.records.list("__TABLE_NAME__", { limit: 12 });
+        render((response && response.items) || []);
+      } catch (error) { fail(error && error.message); }
+    }
+    var cfg = window.__LEMMA_CONFIG__ || {};
+    if (!cfg.apiUrl) { fail("Lemma runtime configuration is unavailable."); return; }
+    var sdk = document.createElement("script");
+    sdk.src = cfg.apiUrl.replace(/\/$/, "") + "/public/sdk/lemma-client.js";
+    sdk.onload = boot;
+    sdk.onerror = function () { fail("Could not load the Lemma browser SDK."); };
+    document.head.appendChild(sdk);
+  })();
+</script>

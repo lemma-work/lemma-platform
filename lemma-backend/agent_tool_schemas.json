@@ -2,7 +2,7 @@
   {
     "tool_name": "ask_user",
     "toolset": "USER_INTERACTION",
-    "description": "Ask the user one or more multiple-choice questions and wait for their answers.\n\nUse this to get a decision or clarification you genuinely cannot infer \u2014 for\nexample which of several approaches to take, or a missing preference. Present a\nshort series of questions, each with 2-4 concrete options, and mark the option\nyou recommend (`recommended: true`). The run pauses while the client renders\nthe questions; the user picks an option per question (or types their own answer\nvia an always-available \"Other\"), and the chosen answers come back in\n`answers`, keyed by each question's `header`.\n\nPrefer this over a prose question whenever the answer is a choice among known\noptions. For free-form structured input (several typed fields at once), render\na WIDGET with `display_resource` that submits its answers back to the chat.\nOnly ask when it changes what you do next \u2014 don't ask about things with an\nobvious default; just proceed.",
+    "description": "Ask the user one or more multiple-choice questions and wait for their answers.\n\nUse this to get a decision or clarification you genuinely cannot infer \u2014 for\nexample which of several approaches to take, or a missing preference. Present a\nshort series of questions, each with 2-4 concrete options, and mark the option\nyou recommend (`recommended: true`). The run pauses while the client renders\nthe questions; the user picks an option per question (or types their own answer\nvia an always-available \"Other\"), and the chosen answers come back in\n`answers`, keyed by each question's `header`.\n\nPrefer this over a prose question whenever the answer is a choice among known\noptions. For free-form input, ask clearly in prose and end your turn so the\nuser's next message can answer. Only ask when it changes what you do next \u2014\ndon't ask about things with an obvious default; just proceed.",
     "input_schema": {
       "$defs": {
         "AskUserOption": {
@@ -120,7 +120,7 @@
   {
     "tool_name": "display_resource",
     "toolset": "USER_INTERACTION",
-    "description": "Display a user-facing resource or richer interaction.\n\nPrefer this tool whenever the user would benefit from seeing, inspecting, or\nacting on something instead of receiving prose only. Text is good for brief\nnarration, but users often want a concrete surface:\n- asking a multiple-choice question: use the `ask_user` tool. For richer or\n  free-form structured input (several typed fields at once), render a WIDGET.\n- showing complex data, charts, previews, or custom visuals: render a WIDGET\n  instead of dumping dense text.\n- creating or updating pod resources: display the created or changed AGENT,\n  FUNCTION, WORKFLOW, APP, SCHEDULE, TABLE, or FILE instead of only saying\n  that it was created.\n- showing datastore records or resource lists: display the TABLE or resource\n  directly so the user can inspect it.\n\nUse this for every \"show this to the user\" action: pod files, datastore\ntables, agents, functions, workflows, apps, schedules, and widgets.",
+    "description": "Display a user-facing resource or richer interaction.\n\nPrefer this tool whenever the useful answer is more than short prose. Text is\nfor a single fact, a short explanation, or narration around a concrete surface:\n- asking a multiple-choice question: use the `ask_user` tool. For free-form\n  input, ask clearly in prose and continue from the user's next message.\n- showing several values, records, statuses, steps, comparisons, a timeline,\n  compact table, preview, or chart: render a WIDGET instead of describing the\n  structure in prose.\n- creating or updating pod resources: display the created or changed AGENT,\n  FUNCTION, WORKFLOW, APP, SCHEDULE, TABLE, or FILE instead of only saying\n  that it was created.\n- showing datastore records or resource lists: display the TABLE or resource\n  directly so the user can inspect it.\n\nUse this for every \"show this to the user\" action: pod files, datastore\ntables, agents, functions, workflows, apps, schedules, and widgets.",
     "input_schema": {
       "$defs": {
         "DisplayResourceType": {
@@ -237,11 +237,6 @@
           },
           "maxItems": 4,
           "type": "array"
-        },
-        "interactive": {
-          "default": false,
-          "description": "For WIDGET resources, set true when the widget collects input and submits it back to the chat (via the in-widget lemma.submit(payload) / sendPrompt(text) bridge). Use an interactive widget instead of ask_user when you need richer or free-form structured input.",
-          "type": "boolean"
         },
         "filters": {
           "anyOf": [

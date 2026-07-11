@@ -6,8 +6,7 @@ export type DisplayResourceType =
     | 'WORKFLOW'
     | 'APP'
     | 'SCHEDULE'
-    | 'WIDGET'
-    | 'FORM';
+    | 'WIDGET';
 
 export interface DisplayResourceRequest {
     type: DisplayResourceType;
@@ -16,7 +15,6 @@ export interface DisplayResourceRequest {
     publicUrl?: string;
     content?: string;
     loadingMessages: string[];
-    jsonSchema?: Record<string, unknown>;
     filters?: DisplayResourceTableFilter[];
     query?: string;
 }
@@ -78,7 +76,6 @@ function normalizeResourceType(value: unknown): DisplayResourceType | null {
         'APP',
         'SCHEDULE',
         'WIDGET',
-        'FORM',
     ];
     return allowed.includes(normalized as DisplayResourceType)
         ? normalized as DisplayResourceType
@@ -99,7 +96,6 @@ export function extractDisplayResourceRequest(value: unknown): DisplayResourceRe
     const type = normalizeResourceType(request.type);
     if (!type) return null;
 
-    const jsonSchema = asRecord(request.json_schema ?? request.jsonSchema);
     const filters = Array.isArray(request.filters)
         ? request.filters.filter(isDisplayResourceTableFilter)
         : undefined;
@@ -111,7 +107,6 @@ export function extractDisplayResourceRequest(value: unknown): DisplayResourceRe
         publicUrl: asString(request.public_url ?? request.publicUrl),
         content: asString(request.content),
         loadingMessages: asStringArray(request.loading_messages ?? request.loadingMessages).slice(0, 4),
-        jsonSchema: Object.keys(jsonSchema).length > 0 ? jsonSchema : undefined,
         filters,
         query: asString(request.query),
     };
@@ -174,7 +169,7 @@ export function findDisplayResourceInMessages(
     // The backend serves an inline-content widget at a URL returned in the tool
     // *result* (tool_args holds the content; tool_result holds the url). Prefer
     // that URL so the widget embeds the backend-served, config-injected page —
-    // the same artifact a app serves. See docs/app-widget-unification.md.
+    // the same portable source fragment used when it is promoted to an app.
     let resultUrl: string | undefined;
     for (const message of messages) {
         const messageToolCallId = asString(
@@ -333,16 +328,17 @@ export function buildDisplayResourceHref({
     const name = request.name;
 
     switch (request.type) {
-        case 'FORM':
-            return appendToolContext(`${podBase}/forms/view`, conversationId, toolCallId);
         case 'WIDGET': {
             // Inline-content widgets need only the tool context; the view page
             // mints a backend embed URL. External widgets carry public_url.
             // Legacy pod-file widget paths are no longer renderable.
             if (request.path) return null;
-            const widgetBase = appendToolContext(`${podBase}/widgets/view`, conversationId, toolCallId);
-            if (request.publicUrl) return appendQueryParams(widgetBase, { src: request.publicUrl });
-            return widgetBase;
+            let widgetBase = appendToolContext(`${podBase}/widgets/view`, conversationId, toolCallId);
+            if (request.publicUrl) widgetBase = appendQueryParams(widgetBase, { src: request.publicUrl });
+            return appendRepeatedQueryParams(
+                widgetBase,
+                request.loadingMessages.map((message) => ['loadingMessage', message]),
+            );
         }
         case 'FILE':
             return buildFileResourceHref(podBase, request.path, conversationId);

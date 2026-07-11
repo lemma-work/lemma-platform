@@ -11,6 +11,7 @@ from supertokens_python.recipe.thirdparty.types import RawUserInfoFromProvider
 from app.core.infrastructure.db.session import async_session_maker
 from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
 from app.core.infrastructure.events.message_bus import get_message_bus
+from app.modules.identity.domain.email import normalize_identity_email
 from app.modules.identity.domain.user_entities import UserEntity
 from app.modules.identity.infrastructure.organization_repositories import (
     OrganizationRepository,
@@ -45,6 +46,7 @@ def override_thirdparty_functions(
         tenant_id: str,
         user_context: Dict[str, Any],
     ):
+        email = normalize_identity_email(email)
         users = await list_users_by_email(
             tenant_id=tenant_id,
             email=email,
@@ -90,7 +92,7 @@ def override_thirdparty_functions(
                     created_user = await user_service.create_user(
                         UserEntity(
                             id=result.user.id,
-                            email=result.user.emails[0],
+                            email=normalize_identity_email(result.user.emails[0]),
                             is_verified=True,
                             is_active=True,
                             is_superuser=False,

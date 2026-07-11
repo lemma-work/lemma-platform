@@ -11,6 +11,7 @@ from app.modules.identity.domain.organization_entities import (
     can_grant_org_role,
 )
 from app.modules.identity.domain.ports import IdentityEmailPort
+from app.modules.identity.domain.email import normalize_identity_email
 from app.modules.identity.domain.user_entities import UserEntity
 from app.modules.identity.domain.ports import UserRepositoryPort
 from app.modules.identity.domain.user_preferences import UserPreferences
@@ -37,4 +38,5 @@ __all__ = [
     "UserResponse",
     "UserPreferences",
     "can_grant_org_role",
+    "normalize_identity_email",
 ]

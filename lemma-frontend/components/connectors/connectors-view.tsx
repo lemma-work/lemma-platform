@@ -13,7 +13,7 @@ import { EmptyState } from '@/components/shared/empty-state';
 import { DestructiveConfirmationDialog } from '@/components/shared/destructive-confirmation-dialog';
 import { Input } from '@/components/ui/input';
 import { CheckCircle2, Loader2, Plug, Search } from 'lucide-react';
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { toast } from 'sonner';
 import type { Account, Connector } from '@/lib/types';
 import { useOrganization } from '@/components/dashboard/org-context';
@@ -51,7 +51,7 @@ export function ConnectorsView({ organizationId, organizationName, embedded = fa
         organizations.find((org) => org.id === effectiveOrganizationId)?.name ||
         currentOrg?.name;
 
-    const { data: accounts, isLoading: isLoadingAccounts } = useAccounts({ organizationId: effectiveOrganizationId, limit: 200 });
+    const { data: accounts, isLoading: isLoadingAccounts, refetch: refetchAccounts } = useAccounts({ organizationId: effectiveOrganizationId, limit: 200 });
     const { data: authConfigs, isLoading: isLoadingAuthConfigs } = useAuthConfigs({ organizationId: effectiveOrganizationId, limit: 200 });
     const { data: connectors, isLoading: isLoadingApps } = useConnectors({ limit: 200 });
     const deleteAccount = useDeleteAccount(effectiveOrganizationId);
@@ -67,11 +67,47 @@ export function ConnectorsView({ organizationId, organizationName, embedded = fa
     const [isEnabling, setIsEnabling] = useState(false);
     const [credentialTarget, setCredentialTarget] = useState<CredentialTarget | null>(null);
     const [isSubmittingCredentials, setIsSubmittingCredentials] = useState(false);
+    const [pendingOAuth, setPendingOAuth] = useState<{
+        connectorId: string;
+        baselineStatuses: Record<string, string>;
+        startedAt: number;
+    } | null>(null);
     const [accountPendingDisconnect, setAccountPendingDisconnect] = useState<{
         id: string;
         appName: string;
         accountLabel: string;
     } | null>(null);
+
+    useEffect(() => {
+        if (!pendingOAuth) return;
+        let cancelled = false;
+        const poll = window.setInterval(() => {
+            void refetchAccounts().then((result) => {
+                if (cancelled) return;
+                const current = (result.data ?? []) as Account[];
+                const completed = current.find((account) => {
+                    if (account.connector_id !== pendingOAuth.connectorId) return false;
+                    const previousStatus = pendingOAuth.baselineStatuses[account.id];
+                    return previousStatus === undefined || (previousStatus !== account.status && account.status === 'CONNECTED');
+                });
+                if (completed) {
+                    window.clearInterval(poll);
+                    setPendingOAuth(null);
+                    toast.success(`${getAppLabel(completed.connector as Connector)} connected`);
+                    return;
+                }
+                if (Date.now() - pendingOAuth.startedAt > 120_000) {
+                    window.clearInterval(poll);
+                    setPendingOAuth(null);
+                    toast.info('Connection is still pending. You can retry from this page.');
+                }
+            });
+        }, 2500);
+        return () => {
+            cancelled = true;
+            window.clearInterval(poll);
+        };
+    }, [pendingOAuth, refetchAccounts]);
 
     const connectorsById = useMemo(
         () => new Map((connectors || []).map((connector) => [connector.id, connector])),
@@ -129,7 +165,14 @@ export function ConnectorsView({ organizationId, organizationName, embedded = fa
     // OAuth needs a round-trip to fetch the authorization URL before we can act.
     const startOAuth = async (connectorId: string, authConfigId: string) => {
         const response = await createConnectRequest.mutateAsync({ connectorId, authConfigId });
-        openAuthorization(response.authorization_url);
+        if (response.authorization_url) {
+            setPendingOAuth({
+                connectorId,
+                baselineStatuses: Object.fromEntries((accounts || []).map((account) => [account.id, account.status])),
+                startedAt: Date.now(),
+            });
+            openAuthorization(response.authorization_url);
+        }
     };
 
     const handleConnect = async (app: Connector) => {
@@ -360,7 +403,11 @@ export function ConnectorsView({ organizationId, organizationName, embedded = fa
                             <ConnectedAccountCard
                                 key={account.id}
                                 account={account}
-                                isBusy={reconnectAccountId === account.id || deletingAccountId === account.id}
+                                isBusy={
+                                    reconnectAccountId === account.id
+                                    || deletingAccountId === account.id
+                                    || pendingOAuth?.connectorId === account.connector_id
+                                }
                                 onReconnect={handleReconnect}
                                 onDisconnect={(acc) =>
                                     setAccountPendingDisconnect({
@@ -384,7 +431,7 @@ export function ConnectorsView({ organizationId, organizationName, embedded = fa
                 <ConnectorGrid
                     connectors={filteredApps}
                     connectedAppIds={connectedAppIds}
-                    busyAppId={busyAppId}
+                    busyAppId={busyAppId || pendingOAuth?.connectorId || null}
                     searchTerm={searchTerm}
                     onConnect={handleConnect}
                     onAdvanced={setAdvancedApp}

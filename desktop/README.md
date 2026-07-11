@@ -20,8 +20,20 @@ installer can never skew.
 - `capabilities/main.json` — IPC permissions for the splash window only;
   remote pages (the app itself) get no IPC access
 
+The shell injects a read-only `window.__LEMMA_DESKTOP__` marker into the main
+webview so the shared frontend can choose desktop-safe behavior without gaining
+native IPC privileges. Same-origin new-window requests stay in Lemma; external
+URLs open in the system browser.
+
+Desktop login uses a short-lived PKCE-style handoff. The webview keeps a private
+verifier, the system browser completes the normal Lemma login, and the webview
+exchanges the verifier for a fresh cookie session. The `lemma://auth/complete`
+deep link only focuses the app; no access or refresh token is placed in a URL.
+
 Connection modes (persisted in `~/Library/Application Support/Lemma/desktop-config.json`):
-- **local** (default): spawns the supervisor, shows the splash with live
+- **undecided** (first launch): asks whether to connect to Lemma Cloud or run
+  Lemma locally; local setup requires a second confirmation before installation
+- **local**: spawns the supervisor, shows the splash with live
   startup phases, navigates to `http://localhost:3711` when ready
 - **hosted**: loads the hosted app directly, no local services
 
@@ -80,7 +92,9 @@ lemma-stack supervise` from a checkout (dev fallback).
       verify, stage under Application Support, run from staged runtime)
 - [x] Supervisor as compiled sidecar binary (PyInstaller bootstrap)
 - [x] Single-instance enforcement, start-at-login tray toggle
-- [x] Log In tray item (opens `<base>/auth`)
+- [x] Log In tray item (opens `<base>/auth/desktop`)
+- [x] System-browser auth with one-time desktop session handoff and deep-link return
+- [x] Desktop-aware same-origin/new-window navigation policy
 - [x] Podman bundle as downloadable artifact (sidecar downloads it when no
       Docker is found)
 - [x] Dependency bootstrap: supervisor installs uv/Node (nvm) user-locally

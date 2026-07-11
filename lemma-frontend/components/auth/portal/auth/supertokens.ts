@@ -8,6 +8,9 @@ import {
   consumeStoredRedirectUri,
   getDefaultPostAuthRedirect,
 } from "@/components/auth/portal/auth/redirects";
+import {
+  getStoredDesktopRequestId,
+} from "@/components/auth/portal/auth/desktop";
 
 let hasInitialised = false;
 
@@ -220,6 +223,13 @@ export function ensureSuperTokensInit(): void {
       if (context.action === "SUCCESS") {
         if (window.location.pathname === `${websiteBasePath}/cli/login`) {
           return window.location.href;
+        }
+        const desktopRequestId = getStoredDesktopRequestId();
+        if (desktopRequestId) {
+          const desktopReturn = new URL(websiteBasePath, authConfig.websiteUrl);
+          desktopReturn.searchParams.set("desktop_browser", "1");
+          desktopReturn.searchParams.set("desktop_request", desktopRequestId);
+          return desktopReturn.toString();
         }
         return consumeStoredRedirectUri() || getDefaultPostAuthRedirect();
       }

@@ -1,6 +1,7 @@
 from uuid import UUID
 from supertokens_python.asyncio import get_user
 from supertokens_python.recipe.session.asyncio import (
+    create_new_session,
     create_new_session_without_request_response,
     refresh_session_without_request_response,
 )
@@ -67,6 +68,23 @@ async def create_cli_session_tokens(
         "session_handle": session.get_handle(),
         "user_id": str(user_id),
     }
+
+
+async def create_desktop_browser_session(request, user_id: UUID) -> str:
+    """Create a cookie session on the current webview exchange response."""
+    user = await get_user(str(user_id))
+
+    if user is None or not user.login_methods:
+        raise ValueError(f"User {user_id} not found")
+
+    session = await create_new_session(
+        request,
+        "public",
+        user.login_methods[0].recipe_user_id,
+        access_token_payload={"client": "lemma-desktop"},
+        session_data_in_database={"client": "lemma-desktop"},
+    )
+    return session.get_handle()
 
 
 async def refresh_cli_session_tokens(refresh_token: str) -> dict:

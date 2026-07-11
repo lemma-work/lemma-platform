@@ -111,9 +111,9 @@ async def create_app_from_widget(
 ) -> AppDetailResponse:
     """Promote a conversation widget into a persisted app.
 
-    The widget and the app are the same artifact at two lifecycle stages: this
-    fetches the widget's stored HTML and deploys it as the app's bundle —
-    identical to what was shown.
+    The widget and the app share one source artifact at two lifecycle stages. This
+    fetches the stored fragment, preserves it, and deploys it in the standalone
+    document wrapper (without conversation-only padding or height messaging).
     """
     artifact = await reader.get_widget(data.conversation_id, data.tool_call_id)
     if artifact is None or artifact.pod_id != pod_id:

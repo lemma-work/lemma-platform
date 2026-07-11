@@ -22,9 +22,9 @@ name: Backend E2E (mocked)
 on:
   workflow_dispatch:
   pull_request:
-    # `run-e2e` lets a PR validate changes to this workflow before those changes
-    # reach the default branch. Synchronize/reopen keeps that opt-in run current.
-    types: [labeled, synchronize, reopened]
+    # Labels provide an explicit run before CI completes. Normal PR updates run
+    # once through workflow_run after CI succeeds.
+    types: [labeled]
   workflow_run:
     workflows: ["CI"]
     types: [completed]
@@ -33,7 +33,7 @@ permissions:
   contents: read
 
 concurrency:
-  group: e2e-${{ github.event.workflow_run.head_branch || github.ref }}
+  group: e2e-${{ github.event.workflow_run.head_branch || github.event.pull_request.head.ref || github.ref_name }}
   cancel-in-progress: true
 
 jobs:
@@ -43,7 +43,8 @@ jobs:
     if: >-
       github.event_name == 'workflow_dispatch' ||
       (github.event_name == 'pull_request' &&
-       contains(github.event.pull_request.labels.*.name, 'run-e2e')) ||
+       github.event.action == 'labeled' &&
+       github.event.label.name == 'run-e2e') ||
       (github.event.workflow_run.event == 'pull_request' &&
        github.event.workflow_run.conclusion == 'success')
     runs-on: ubuntu-latest
@@ -352,7 +353,8 @@ jobs:
     if: >-
       github.event_name == 'workflow_dispatch' ||
       (github.event_name == 'pull_request' &&
-       contains(github.event.pull_request.labels.*.name, 'surface-live'))
+       github.event.action == 'labeled' &&
+       github.event.label.name == 'surface-live')
     runs-on: ubuntu-latest
     defaults:
       run:

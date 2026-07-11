@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import Image from "next/image";
 import { useRouter } from "next/navigation";
 import {
@@ -30,6 +30,8 @@ import {
   type Organization,
   type OrganizationInvitation,
 } from "@/lib/types";
+import { useAcceptOrganizationInvitation } from "@/lib/hooks/use-organizations";
+import { markOnboardingSkippedFirstPod } from "@/lib/pods/onboarding-skip";
 import {
   getGitHubRepoLabel,
   getKitById,
@@ -38,6 +40,7 @@ import {
 } from "@/lib/kits/catalog";
 import { RECIPE_BUILDS_LABEL, type Recipe } from "@/lib/recipes/recipes";
 import { cn } from "@/lib/utils";
+import { toast } from "sonner";
 import { useAvailableAgentRuntimeHarnesses } from "@/lib/hooks/use-agent-runtime";
 import {
   availableHarnessKey,
@@ -69,12 +72,16 @@ import {
   INTENT_EXAMPLE_LABELS,
   INTENT_EXAMPLES,
   SETUP_GREETINGS,
+  TEAM_OPTIONS,
   derivePodNameFromIntent,
+  podNameForAudience,
   splitGraphemes,
+  teamLabelForKind,
   type Audience,
   type BuildPath,
   type ConnectChoice,
   type SetupStep,
+  type TeamKind,
 } from "./account-onboarding-helpers";
 
 type ProviderPreset = {
@@ -131,18 +138,38 @@ export function InvitationsStep({
 }) {
   const router = useRouter();
   const firstInvitation = invitations[0];
+  const hasSubmittedRef = useRef(false);
+  const { mutate: acceptInvitation } = useAcceptOrganizationInvitation();
 
   useEffect(() => {
-    if (firstInvitation) {
-      router.replace(`/invitations/${firstInvitation.id}/accept`);
-    }
-  }, [firstInvitation, router]);
+    if (!firstInvitation || hasSubmittedRef.current) return;
+
+    hasSubmittedRef.current = true;
+    acceptInvitation(firstInvitation.id, {
+      onSuccess: (response) => {
+        markOnboardingSkippedFirstPod();
+        const destination =
+          response.redirect_uri || firstInvitation.redirect_uri || "/";
+
+        if (/^https?:\/\//i.test(destination)) {
+          window.location.assign(destination);
+          return;
+        }
+
+        router.replace(destination.startsWith("/") ? destination : `/${destination}`);
+      },
+      onError: (error) => {
+        toast.error(`Could not join invitation: ${error.message}`);
+        router.replace(`/invitations/${firstInvitation.id}/accept`);
+      },
+    });
+  }, [acceptInvitation, firstInvitation, router]);
 
   return (
     <SetupShell>
       <LoadingState
-        title="Opening invitation"
-        description="Taking you to the workspace handoff."
+        title="Joining your workspace"
+        description="Accepting your invitation so setup can wait until later."
         shape="lines"
         className="w-full max-w-xl"
       />
@@ -300,11 +327,15 @@ export function IdentityStep({
 
 export function AudienceStep({
   audience,
+  isSaving = false,
+  savingAudience = null,
   onSelect,
   onBack,
   steps,
 }: {
   audience: Audience | null;
+  isSaving?: boolean;
+  savingAudience?: Audience | null;
   onSelect: (audience: Audience) => void;
   onBack?: () => void;
   steps?: SetupStep[];
@@ -335,6 +366,7 @@ export function AudienceStep({
               key={option.id}
               type="button"
               onClick={() => onSelect(option.id)}
+              disabled={isSaving}
               onMouseEnter={() => setHoveredAudience(option.id)}
               onMouseLeave={() => setHoveredAudience(null)}
               onFocus={() => setHoveredAudience(option.id)}
@@ -357,6 +389,9 @@ export function AudienceStep({
                 <span className="flex items-center gap-2 text-sm font-semibold text-[var(--text-primary)]">
                   {option.title}
                   {selected ? <Check className="h-4 w-4" /> : null}
+                  {isSaving && savingAudience === option.id ? (
+                    <Loader2 className="h-4 w-4 animate-spin" />
+                  ) : null}
                 </span>
                 <span className="mt-1 block text-xs leading-5 text-[var(--text-secondary)]">
                   {option.description}
@@ -365,6 +400,109 @@ export function AudienceStep({
             </button>
           );
         })}
+      </div>
+    </SetupSplitPanel>
+  );
+}
+
+export function TeamStep({
+  teamKind,
+  customTeamName,
+  isCreating,
+  onTeamKindChange,
+  onCustomTeamNameChange,
+  onContinue,
+  onBack,
+  steps,
+}: {
+  teamKind: TeamKind | null;
+  customTeamName: string;
+  isCreating: boolean;
+  onTeamKindChange: (teamKind: TeamKind) => void;
+  onCustomTeamNameChange: (value: string) => void;
+  onContinue: () => void;
+  onBack?: () => void;
+  steps?: SetupStep[];
+}) {
+  const teamLabel = teamLabelForKind(teamKind, customTeamName);
+  const podTitle = podNameForAudience("team", teamLabel);
+  const canContinue = teamKind !== "other" || Boolean(customTeamName.trim());
+
+  return (
+    <SetupSplitPanel
+      title="What team do you work in?"
+      subtitle="We will create one clean starting pod for that team. Teammates, permissions, and workspace details can wait."
+      preview={
+        <StartPreviewBody
+          podTitle={podTitle}
+          podBlurb="A shared pod for this team's agents, apps, workflows, and operating data."
+          justSelected={null}
+        />
+      }
+      onBack={onBack}
+      currentStep="team"
+      steps={steps}
+    >
+      <div className="w-full max-w-3xl space-y-4 text-left">
+        <div className="grid gap-2.5 sm:grid-cols-2">
+          {TEAM_OPTIONS.map((option) => {
+            const Icon = option.icon;
+            const selected = teamKind === option.id;
+            return (
+              <button
+                key={option.id}
+                type="button"
+                onClick={() => onTeamKindChange(option.id)}
+                data-active={selected}
+                className={[
+                  "setup-path-choice flex w-full items-start gap-3 px-4 py-4 text-left",
+                  selected ? "is-active" : "",
+                ].join(" ")}
+              >
+                <span
+                  className={[
+                    "setup-path-choice-icon flex h-9 w-9 shrink-0 items-center justify-center",
+                    selected ? "is-active" : "",
+                  ].join(" ")}
+                >
+                  <Icon className="h-4 w-4" />
+                </span>
+                <span className="min-w-0 flex-1">
+                  <span className="flex items-center gap-2 text-sm font-semibold text-[var(--text-primary)]">
+                    {option.title}
+                    {selected ? <Check className="h-4 w-4" /> : null}
+                  </span>
+                  <span className="mt-1 block text-xs leading-5 text-[var(--text-secondary)]">
+                    {option.description}
+                  </span>
+                </span>
+              </button>
+            );
+          })}
+        </div>
+
+        {teamKind === "other" ? (
+          <div className="space-y-2">
+            <Label htmlFor="team-name">Team name</Label>
+            <Input
+              id="team-name"
+              value={customTeamName}
+              onChange={(event) => onCustomTeamNameChange(event.target.value)}
+              placeholder="Community"
+              autoFocus
+            />
+          </div>
+        ) : null}
+
+        <SetupPrimaryButton
+          onClick={onContinue}
+          loading={isCreating}
+          loadingLabel={`Creating ${podTitle}`}
+          disabled={isCreating || !canContinue}
+          className="!mx-0"
+        >
+          Create {podTitle}
+        </SetupPrimaryButton>
       </div>
     </SetupSplitPanel>
   );
@@ -834,24 +972,28 @@ function ConnectOptionCard({
 
 export function StartStep({
   audience,
+  podName,
   recipes,
   selectedRecipeId,
   customIntent,
   isCreating,
   onSelectRecipe,
   onCustomIntentChange,
+  onBuildWithLemma,
   onContinue,
   onSkip,
   onBack,
   steps,
 }: {
   audience: Audience;
+  podName: string;
   recipes: Recipe[];
   selectedRecipeId: string;
   customIntent: string;
   isCreating: boolean;
   onSelectRecipe: (id: string) => void;
   onCustomIntentChange: (value: string) => void;
+  onBuildWithLemma: () => void;
   onContinue: () => void;
   onSkip: () => void;
   onBack?: () => void;
@@ -867,22 +1009,23 @@ export function StartStep({
   const hoveredRecipe = recipes.find((recipe) => recipe.id === hoveredRecipeId);
   const previewTitle = hasIntent
     ? derivePodNameFromIntent(customIntent)
-    : (hoveredRecipe?.name ?? selectedRecipe?.name ?? "First Pod");
+    : (hoveredRecipe?.name ?? selectedRecipe?.name ?? podName);
   const previewBlurb = hasIntent
     ? undefined
     : (hoveredRecipe?.blurb ?? selectedRecipe?.blurb);
+  const primaryLabel = hasIntent
+    ? "Build this"
+    : selectedRecipe?.source.kind === "repo"
+      ? "Install recipe"
+      : "Build recipe";
 
   return (
     <SetupSplitPanel
-      title={
-        personal
-          ? "What do you want to get done?"
-          : "What should your team's first pod handle?"
-      }
+      title="What should we add first?"
       subtitle={
         personal
-          ? "Describe it, or start from one of these — Lemma wires up the bots and apps and hands you something that already works."
-          : "Describe it, or start from one of these — Lemma wires up the bots, apps, and approvals into a working pod."
+          ? `${podName} is ready. Add a recipe, let Lemma build with you, or describe something specific.`
+          : `${podName} is ready. Add a team recipe, let Lemma build with you, or describe the workflow you want.`
       }
       preview={
         <StartPreviewBody
@@ -896,6 +1039,31 @@ export function StartStep({
       steps={steps}
     >
       <div className="w-full max-w-4xl text-left">
+        <button
+          type="button"
+          onClick={onBuildWithLemma}
+          className="setup-path-choice flex w-full items-start gap-3 px-4 py-4 text-left"
+        >
+          <span className="setup-path-choice-icon flex h-9 w-9 shrink-0 items-center justify-center">
+            <Sparkles className="h-4 w-4" />
+          </span>
+          <span className="min-w-0 flex-1">
+            <span className="block text-sm font-semibold text-[var(--text-primary)]">
+              Build with Lemma
+            </span>
+            <span className="mt-1 block text-xs leading-5 text-[var(--text-secondary)]">
+              Open the builder in this pod and let it propose the smallest useful first version.
+            </span>
+          </span>
+          <ArrowRight className="mt-1 h-4 w-4 shrink-0 text-[var(--text-tertiary)]" />
+        </button>
+
+        <div className="mt-5 flex items-center gap-3 text-xs text-[var(--text-tertiary)]">
+          <span className="h-px flex-1 bg-[var(--border-subtle)]" />
+          describe something specific
+          <span className="h-px flex-1 bg-[var(--border-subtle)]" />
+        </div>
+
         <div className="form-field-control flex min-h-14 items-center gap-3 px-4 py-2">
           <Sparkles className="h-5 w-5 shrink-0 text-[var(--text-tertiary)]" />
           <input
@@ -915,7 +1083,7 @@ export function StartStep({
 
         <div className="mt-5 flex items-center gap-3 text-xs text-[var(--text-tertiary)]">
           <span className="h-px flex-1 bg-[var(--border-subtle)]" />
-          or start from one of these
+          or install a recipe
           <span className="h-px flex-1 bg-[var(--border-subtle)]" />
         </div>
 
@@ -949,7 +1117,9 @@ export function StartStep({
                   {recipe.blurb}
                 </span>
                 <span className="chip chip-sm mt-3 self-start font-mono text-[var(--text-tertiary)]">
-                  {RECIPE_BUILDS_LABEL[recipe.builds]}
+                  {recipe.source.kind === "repo"
+                    ? "GitHub kit"
+                    : RECIPE_BUILDS_LABEL[recipe.builds]}
                 </span>
               </button>
             );
@@ -964,7 +1134,7 @@ export function StartStep({
           disabled={continueDisabled}
           className="setup-primary-action !flex mt-6 h-11 min-w-44 gap-2 px-6 text-sm font-medium"
         >
-          {personal ? "Create my space" : "Create pod"}
+          {primaryLabel}
           <ArrowRight className="h-4 w-4" />
         </Button>
 

@@ -14,7 +14,8 @@ from app.core.api.uploads import upload_source_sha256
 from app.core.authorization.context import Context, ResourceRef, ResourceType, ResourceVisibility
 from app.core.html_document import wrap_html_fragment
 from app.core.ports.widget_content import WidgetArtifact
-from app.core.runtime_config import runtime_config_token
+from app.core import runtime_config
+from app.core.widget_html_validation import lint_app_html
 from app.core.authorization.permissions import Permissions
 from app.core.helpers.slug import normalize_public_slug, normalize_resource_name
 from app.modules.apps.domain.entities import (
@@ -34,7 +35,6 @@ from app.modules.apps.domain.ports import (
     AppStorageFactoryPort,
 )
 from app.modules.apps.services.app_dist_bundle import load_app_dist_bundle
-from app.modules.apps.services.app_html_validation import lint_app_html
 from app.modules.apps.services.app_storage_phase import (
     AppStoragePhase,
     _AppDeletionCleanup,
@@ -137,16 +137,16 @@ class AppService:
         304 (no storage needed) or the inputs for the storage read otherwise."""
         release = await self._get_current_release(app, raise_not_found_name=raise_not_found_name)
         normalized_asset_path = self._normalize_requested_asset_path(asset_path)
-        entrypoint_request = normalized_asset_path in {"", "index.html"}
+        app_identity = runtime_config.build_runtime_app_identity(app.name, app.description)
+        entrypoint_request = runtime_config.is_runtime_config_entrypoint(normalized_asset_path)
         # Entrypoints carry the injected pod context, so a pod/api/auth change
         # must bust the cached HTML — fold the config hash into the ETag.
         etag = (
-            f"{release.version}.{runtime_config_token(app.pod_id)}"
+            f"{release.version}.{runtime_config.runtime_config_token(app.pod_id, app=app_identity)}"
             if entrypoint_request
             else release.version
         )
         quoted_etag = self._quote_etag(etag)
-
         if self._etag_matches(etag, request_etag):
             return AppAssetDocument(
                 etag=quoted_etag,
@@ -160,7 +160,7 @@ class AppService:
             dist_root_path=release.dist_root_path,
             normalized_asset_path=normalized_asset_path,
             quoted_etag=quoted_etag,
-            app={"name": app.name},
+            app=app_identity,
         )
 
     async def read_app_asset(self, inputs: _AssetReadInputs) -> AppAssetDocument:
@@ -256,10 +256,10 @@ class AppService:
         visibility: str | None = None,
         ctx: Context | None = None,
     ) -> AppEntity:
-        """Promote a resolved widget into a persisted app.
-        The widget and the app share the same HTML runtime at two lifecycle stages:
-        the stored HTML is wrapped as a standalone document (no embed bridge)
-        and deployed as the app's bundle — identical to what the widget showed.
+        """Promote a resolved widget artifact into a persisted app.
+        The widget and the app share one source artifact at two lifecycle stages:
+        the stored fragment is preserved, wrapped as a standalone document (no
+        embed bridge or conversation padding), and deployed as the app's bundle.
         """
         for issue in lint_app_html(artifact.content):
             logger.warning(

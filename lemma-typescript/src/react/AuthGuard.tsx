@@ -27,6 +27,7 @@ export interface AuthGuardAccessContext {
   status: Exclude<PodAccessStatus, "idle" | "checking" | "member">;
   user: AppUserIdentity | null;
   isRequestingAccess: boolean;
+  isCheckingAccess: boolean;
   error: Error | null;
   requestAccess: () => Promise<void>;
   refresh: () => Promise<PodAccessStatus>;
@@ -125,9 +126,12 @@ export function AuthGuard({
     }
   };
 
+  const isPendingRefresh = podAccess.status === "checking"
+    && podAccess.joinRequest?.status === "PENDING";
   const isCheckingAccess = isAuthenticated
     && Boolean(client.podId)
-    && (podAccess.status === "idle" || podAccess.status === "checking");
+    && (podAccess.status === "idle" || podAccess.status === "checking")
+    && !isPendingRefresh;
 
   if (isLoading || isCheckingAccess) {
     const context: AuthGuardLoadingContext = { app };
@@ -147,7 +151,7 @@ export function AuthGuard({
     return <>{children}</>;
   }
 
-  const accessStatus = podAccess.status === "pending"
+  const accessStatus = podAccess.status === "pending" || isPendingRefresh
     ? "pending"
     : podAccess.status === "error"
       ? "error"
@@ -158,6 +162,7 @@ export function AuthGuard({
     status: accessStatus,
     user,
     isRequestingAccess: podAccess.isRequestingAccess,
+    isCheckingAccess: podAccess.isLoading,
     error: podAccess.error,
     requestAccess,
     refresh: podAccess.refresh,
@@ -174,7 +179,7 @@ export function AuthGuard({
       appearance={appearance}
       status={accessStatus}
       user={user}
-      isSubmitting={podAccess.isRequestingAccess}
+      isSubmitting={podAccess.isRequestingAccess || podAccess.isLoading}
       error={podAccess.error}
       onRequestAccess={requestAccess}
       onRefresh={() => void podAccess.refresh()}

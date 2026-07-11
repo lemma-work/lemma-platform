@@ -19,6 +19,7 @@ from app.modules.agent.tools.user_interaction.models import (
     RequestApprovalResponse,
     validate_display_payload,
 )
+from app.core.widget_html_validation import validate_widget_html
 from app.composition.agent_workspace import (
     WorkspaceSandboxService,
     agentbox_sandbox_id,
@@ -32,13 +33,13 @@ async def display_resource(
     """
     Display a user-facing resource or richer interaction.
 
-    Prefer this tool whenever the user would benefit from seeing, inspecting, or
-    acting on something instead of receiving prose only. Text is good for brief
-    narration, but users often want a concrete surface:
-    - asking a multiple-choice question: use the `ask_user` tool. For richer or
-      free-form structured input (several typed fields at once), render a WIDGET.
-    - showing complex data, charts, previews, or custom visuals: render a WIDGET
-      instead of dumping dense text.
+    Prefer this tool whenever the useful answer is more than short prose. Text is
+    for a single fact, a short explanation, or narration around a concrete surface:
+    - asking a multiple-choice question: use the `ask_user` tool. For free-form
+      input, ask clearly in prose and continue from the user's next message.
+    - showing several values, records, statuses, steps, comparisons, a timeline,
+      compact table, preview, or chart: render a WIDGET instead of describing the
+      structure in prose.
     - creating or updating pod resources: display the created or changed AGENT,
       FUNCTION, WORKFLOW, APP, SCHEDULE, TABLE, or FILE instead of only saying
       that it was created.
@@ -63,8 +64,10 @@ async def display_resource(
       resources of that type.
     - WIDGET: set type="WIDGET" and provide exactly one of public_url or content.
       Before your first widget in a conversation, silently load the `lemma-widget`
-      skill and follow its guidance. A widget can collect structured input and
-      submit it back to the chat — use one when `ask_user` choices aren't enough.
+      skill and follow its guidance. Inline widgets use plain HTML/CSS/JS or SVG;
+      if the UI needs React, routing, or substantial application state, build a Vite
+      app instead. Widgets are display surfaces; use `ask_user` or a normal
+      conversational turn when you need input from the user.
 
     This tool only displays or requests user-facing resources. User approval for
     potentially sensitive local harness actions remains the separate approval flow.
@@ -75,6 +78,14 @@ async def display_resource(
     payload_error = validate_display_payload(request)
     if payload_error is not None:
         return DisplayResourceResponse(success=False, error=payload_error)
+
+    if request.type == DisplayResourceType.WIDGET and request.content:
+        widget_errors = validate_widget_html(request.content)
+        if widget_errors:
+            return DisplayResourceResponse(
+                success=False,
+                error="Invalid WIDGET content: " + " ".join(widget_errors),
+            )
 
     if request.type == DisplayResourceType.BROWSER:
         runtime = WorkspaceSandboxService._resolve_runtime()
@@ -128,9 +139,8 @@ async def display_resource(
     ):
         # An inline-content widget is the same primitive as an app: serve its
         # HTML from the backend (with pod context injected) so the frontend embeds
-        # it by URL and it can be promoted to an app verbatim. The content lives
+        # it by URL and it can be promoted to an app. The content lives
         # durably in this tool call's args, addressed by (conversation, tool_call).
-        # See docs/app-widget-unification.md.
         conversation_id = getattr(ctx.deps, "conversation_id", None)
         tool_call_id = ctx.tool_call_id
         if conversation_id and tool_call_id:
@@ -357,10 +367,9 @@ async def ask_user(
     `answers`, keyed by each question's `header`.
 
     Prefer this over a prose question whenever the answer is a choice among known
-    options. For free-form structured input (several typed fields at once), render
-    a WIDGET with `display_resource` that submits its answers back to the chat.
-    Only ask when it changes what you do next — don't ask about things with an
-    obvious default; just proceed.
+    options. For free-form input, ask clearly in prose and end your turn so the
+    user's next message can answer. Only ask when it changes what you do next —
+    don't ask about things with an obvious default; just proceed.
     """
     if not request.questions:
         return AskUserResponse(

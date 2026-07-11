@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from datetime import datetime, timedelta, timezone
 from uuid import uuid4
 from unittest.mock import AsyncMock
 
@@ -92,6 +93,55 @@ async def test_create_organization_success_adds_owner_member(
     assert member_arg.organization_id == org.id
     assert member_arg.user_id == owner_id
     assert member_arg.role == OrganizationRole.ORG_OWNER
+
+
+@pytest.mark.asyncio
+async def test_create_organization_generates_clean_slug_from_name(
+    organization_service: OrganizationService,
+    organization_repository_mock: AsyncMock,
+):
+    owner_id = uuid4()
+    org = OrganizationEntity(name="Rahul's Research & Ops!", slug="")
+
+    organization_repository_mock.get_by_name.return_value = None
+    organization_repository_mock.get_by_slug.return_value = None
+    organization_repository_mock.create.return_value = org
+
+    await organization_service.create_organization(org, owner_id)
+
+    create_arg = organization_repository_mock.create.await_args.args[0]
+    assert create_arg.slug == "rahul-s-research-ops"
+
+
+@pytest.mark.asyncio
+async def test_create_organization_rejects_invalid_provided_slug(
+    organization_service: OrganizationService,
+    organization_repository_mock: AsyncMock,
+):
+    owner_id = uuid4()
+    org = OrganizationEntity(name="Rahul Org", slug="rahul's-org")
+
+    organization_repository_mock.get_by_name.return_value = None
+
+    with pytest.raises(IdentityValidationError):
+        await organization_service.create_organization(org, owner_id)
+
+    organization_repository_mock.create.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_create_organization_rejects_generated_slug_over_255_characters(
+    organization_service: OrganizationService,
+    organization_repository_mock: AsyncMock,
+):
+    org = OrganizationEntity(name="a" * 256, slug="")
+
+    organization_repository_mock.get_by_name.return_value = None
+
+    with pytest.raises(IdentityValidationError, match="255 characters or fewer"):
+        await organization_service.create_organization(org, uuid4())
+
+    organization_repository_mock.create.assert_not_awaited()
 
 
 @pytest.mark.asyncio
@@ -214,6 +264,118 @@ async def test_create_invitation_raises_existing_invitation_conflict(
 
     with pytest.raises(OrganizationConflictError):
         await organization_service.create_invitation(invitation, inviter_user_id=inviter_id)
+
+
+@pytest.mark.asyncio
+async def test_create_invitation_normalizes_email_before_persisting(
+    organization_service: OrganizationService,
+    organization_repository_mock: AsyncMock,
+):
+    inviter_id = uuid4()
+    org = OrganizationEntity(name="Acme", slug="acme")
+    invitation = OrganizationInvitationEntity(
+        email="Test+New@Example.COM",
+        organization_id=org.id,
+        role=OrganizationRole.ORG_MEMBER,
+    )
+
+    organization_repository_mock.get.return_value = org
+    organization_repository_mock.get_member.return_value = _member(
+        user_id=inviter_id,
+        organization_id=org.id,
+        role=OrganizationRole.ORG_OWNER,
+    )
+    organization_repository_mock.get_member_by_email.return_value = None
+    organization_repository_mock.get_invitation_by_email.return_value = None
+    organization_repository_mock.add_invitation.return_value = invitation
+
+    await organization_service.create_invitation(invitation, inviter_user_id=inviter_id)
+
+    create_arg = organization_repository_mock.add_invitation.await_args.args[0]
+    assert create_arg.email == "test+new@example.com"
+    organization_repository_mock.get_member_by_email.assert_awaited_once_with(
+        org.id,
+        "test+new@example.com",
+    )
+    organization_repository_mock.get_invitation_by_email.assert_awaited_once_with(
+        org.id,
+        "test+new@example.com",
+    )
+
+
+@pytest.mark.asyncio
+async def test_create_invitation_allows_new_invitation_after_revoked_existing(
+    organization_service: OrganizationService,
+    organization_repository_mock: AsyncMock,
+):
+    inviter_id = uuid4()
+    org = OrganizationEntity(name="Acme", slug="acme")
+    old_invitation = OrganizationInvitationEntity(
+        email="test+new@example.com",
+        organization_id=org.id,
+        role=OrganizationRole.ORG_MEMBER,
+        status=OrganizationInvitationStatus.REVOKED,
+    )
+    invitation = OrganizationInvitationEntity(
+        email="test+new@example.com",
+        organization_id=org.id,
+        role=OrganizationRole.ORG_MEMBER,
+    )
+
+    organization_repository_mock.get.return_value = org
+    organization_repository_mock.get_member.return_value = _member(
+        user_id=inviter_id,
+        organization_id=org.id,
+        role=OrganizationRole.ORG_OWNER,
+    )
+    organization_repository_mock.get_member_by_email.return_value = None
+    organization_repository_mock.get_invitation_by_email.return_value = old_invitation
+    organization_repository_mock.add_invitation.return_value = invitation
+
+    result = await organization_service.create_invitation(
+        invitation,
+        inviter_user_id=inviter_id,
+    )
+
+    assert result == invitation
+    organization_repository_mock.add_invitation.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_create_invitation_marks_expired_existing_and_creates_new(
+    organization_service: OrganizationService,
+    organization_repository_mock: AsyncMock,
+):
+    inviter_id = uuid4()
+    org = OrganizationEntity(name="Acme", slug="acme")
+    expired_invitation = OrganizationInvitationEntity(
+        email="test+new@example.com",
+        organization_id=org.id,
+        role=OrganizationRole.ORG_MEMBER,
+        expires_at=datetime.now(timezone.utc) - timedelta(minutes=1),
+    )
+    invitation = OrganizationInvitationEntity(
+        email="test+new@example.com",
+        organization_id=org.id,
+        role=OrganizationRole.ORG_MEMBER,
+    )
+
+    organization_repository_mock.get.return_value = org
+    organization_repository_mock.get_member.return_value = _member(
+        user_id=inviter_id,
+        organization_id=org.id,
+        role=OrganizationRole.ORG_OWNER,
+    )
+    organization_repository_mock.get_member_by_email.return_value = None
+    organization_repository_mock.get_invitation_by_email.return_value = expired_invitation
+    organization_repository_mock.update_invitation.return_value = expired_invitation
+    organization_repository_mock.add_invitation.return_value = invitation
+
+    await organization_service.create_invitation(invitation, inviter_user_id=inviter_id)
+
+    update_arg = organization_repository_mock.update_invitation.await_args.args[0]
+    assert update_arg.status == OrganizationInvitationStatus.EXPIRED
+    organization_repository_mock.add_invitation.assert_awaited_once()
 
 
 @pytest.mark.asyncio

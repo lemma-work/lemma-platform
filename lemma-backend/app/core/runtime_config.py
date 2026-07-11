@@ -2,18 +2,17 @@
 
 An app and a conversation widget are the same primitive — a pod-authenticated
 HTML page that reads ``window.__LEMMA_CONFIG__`` and talks to the pod through the
-browser SDK. The host injects that config at serve time so the page bakes in
-nothing and is portable between contexts (a widget's HTML can be promoted to an
-app verbatim). This module is the shared kernel both serving paths use; it
-operates on a ``pod_id``, not on any app/widget entity.
-
-See docs/app-widget-unification.md.
+browser SDK. The host injects that config at serve time so the artifact bakes in
+nothing and is portable between contexts (a widget's source fragment can be promoted
+to an app without modification). This module is the shared kernel both serving paths
+use; it operates on a ``pod_id``, not on any app/widget entity.
 """
 
 from __future__ import annotations
 
 import hashlib
 import json
+from pathlib import PurePosixPath
 from uuid import UUID
 
 from app.core.config import settings
@@ -22,6 +21,23 @@ from app.core.config import settings
 # NOT the bare global name — a page that merely *reads* window.__LEMMA_CONFIG__
 # must still receive injection.
 RUNTIME_CONFIG_SENTINEL = "data-lemma-runtime-config"
+
+
+def build_runtime_app_identity(
+    name: str,
+    description: str | None = None,
+) -> dict[str, str]:
+    return {
+        key: value
+        for key, value in {"name": name, "description": description}.items()
+        if value
+    }
+
+
+def is_runtime_config_entrypoint(asset_path: str) -> bool:
+    return asset_path in {"", "index.html"} or bool(
+        asset_path and "." not in PurePosixPath(asset_path).name
+    )
 
 
 def build_runtime_config(
@@ -49,9 +65,13 @@ def build_runtime_config(
     return config
 
 
-def runtime_config_token(pod_id: UUID | str) -> str:
+def runtime_config_token(
+    pod_id: UUID | str,
+    *,
+    app: dict[str, str] | None = None,
+) -> str:
     """Short, stable hash of the runtime config, for cache busting (ETags)."""
-    payload = json.dumps(build_runtime_config(pod_id), sort_keys=True)
+    payload = json.dumps(build_runtime_config(pod_id, app=app), sort_keys=True)
     return hashlib.sha256(payload.encode("utf-8")).hexdigest()[:12]
 
 
@@ -82,9 +102,7 @@ def inject_runtime_config(
         build_runtime_config(pod_id, app=app)
     ).replace("<", "\\u003c")
     script = (
-        f"<script {RUNTIME_CONFIG_SENTINEL}>"
-        f"window.__LEMMA_CONFIG__={payload};"
-        "</script>"
+        f"<script {RUNTIME_CONFIG_SENTINEL}>window.__LEMMA_CONFIG__={payload};</script>"
     )
 
     lowered = text.lower()

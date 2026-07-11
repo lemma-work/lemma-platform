@@ -1,8 +1,14 @@
 import {
+  BadgeDollarSign,
+  Headphones,
+  Handshake,
   Code2,
+  Lightbulb,
   Layers3,
+  Settings,
   Sparkles,
   UserRound,
+  UserPlus,
   UsersRound,
 } from "lucide-react";
 
@@ -12,13 +18,14 @@ import {
   buildKitAssistantOpeningMessage,
   type KitDefinition,
 } from "@/lib/kits/catalog";
-import { getRecipeById, type Recipe } from "@/lib/recipes/recipes";
+import { getRecipeById, recipeCatalog, type Recipe } from "@/lib/recipes/recipes";
 import type { CustomProviderKind } from "@/components/agents/agent-runtime-helpers";
 
 export type SetupStep =
   | "boot"
   | "identity"
   | "audience"
+  | "team"
   | "workspace"
   | "connect"
   | "start";
@@ -33,6 +40,7 @@ export const SETUP_STEPS: SetupStep[] = [
   "boot",
   "identity",
   "audience",
+  "team",
   "workspace",
   "connect",
   "start",
@@ -45,7 +53,90 @@ export function setupStepsForAudience(audience: Audience | null): SetupStep[] {
   if (audience === "personal") {
     return ["boot", "identity", "audience", "connect", "start"];
   }
+  if (audience === "team") {
+    return [
+      "boot",
+      "identity",
+      "audience",
+      "team",
+      "workspace",
+      "connect",
+      "start",
+    ];
+  }
   return SETUP_STEPS;
+}
+
+export type TeamKind =
+  | "sales"
+  | "support"
+  | "operations"
+  | "recruiting"
+  | "customer-success"
+  | "product"
+  | "finance"
+  | "other";
+
+export const TEAM_OPTIONS: Array<{
+  id: TeamKind;
+  title: string;
+  description: string;
+  icon: React.ComponentType<{ className?: string }>;
+}> = [
+  {
+    id: "sales",
+    title: "Sales",
+    description: "Accounts, pipeline, follow-ups, and handoffs.",
+    icon: Handshake,
+  },
+  {
+    id: "support",
+    title: "Support",
+    description: "Tickets, inboxes, triage, and customer replies.",
+    icon: Headphones,
+  },
+  {
+    id: "operations",
+    title: "Operations",
+    description: "Approvals, queues, recurring work, and internal requests.",
+    icon: Settings,
+  },
+  {
+    id: "recruiting",
+    title: "Recruiting",
+    description: "Candidates, outreach, interviews, and hiring loops.",
+    icon: UserPlus,
+  },
+  {
+    id: "customer-success",
+    title: "Customer Success",
+    description: "Renewals, health signals, account notes, and escalations.",
+    icon: UsersRound,
+  },
+  {
+    id: "product",
+    title: "Product",
+    description: "Feedback, research, specs, and launch coordination.",
+    icon: Lightbulb,
+  },
+  {
+    id: "finance",
+    title: "Finance",
+    description: "Invoices, approvals, spend, and reporting.",
+    icon: BadgeDollarSign,
+  },
+  {
+    id: "other",
+    title: "Something else",
+    description: "Name the team yourself.",
+    icon: Code2,
+  },
+];
+
+export function teamLabelForKind(kind: TeamKind | null, customName = "") {
+  if (kind === "other") return toTitleCase(customName.trim() || "Team");
+  const option = TEAM_OPTIONS.find((item) => item.id === kind);
+  return option?.title || "Team";
 }
 
 // The AI connection a user picks during onboarding. "lemma" keeps the built-in
@@ -125,7 +216,13 @@ const TEAM_START_RECIPE_IDS = [
 export function startRecipesForAudience(audience: Audience): Recipe[] {
   const ids =
     audience === "personal" ? PERSONAL_START_RECIPE_IDS : TEAM_START_RECIPE_IDS;
-  return ids
+  const recipeIds = [
+    ...ids,
+    ...recipeCatalog
+      .filter((recipe) => recipe.source.kind === "repo")
+      .map((recipe) => recipe.id),
+  ];
+  return recipeIds
     .map((id) => getRecipeById(id))
     .filter((recipe): recipe is Recipe => Boolean(recipe));
 }
@@ -279,6 +376,18 @@ export function defaultWorkspaceName(name: string) {
 export function personalWorkspaceName(name: string) {
   const firstName = splitName(name).firstName || "My";
   return `${firstName}'s Space`;
+}
+
+export function teamWorkspaceName(teamName: string) {
+  const label = toTitleCase(teamName.trim() || "Team");
+  return `${label} Workspace`;
+}
+
+export function podNameForAudience(audience: Audience, teamName = "") {
+  if (audience === "personal") return "Personal Pod";
+
+  const label = toTitleCase(teamName.trim() || "Team");
+  return /\bpod$/i.test(label) ? label : `${label} Pod`;
 }
 
 export function derivePodNameFromIntent(value: string) {
