@@ -1,6 +1,12 @@
 "use client";
 
-import { useEffect, useMemo, useState, useSyncExternalStore } from "react";
+import {
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  useSyncExternalStore,
+} from "react";
 import { useRouter } from "next/navigation";
 import { useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
@@ -19,8 +25,20 @@ import {
   markOnboardingSkippedFirstPod,
 } from "@/lib/pods/onboarding-skip";
 import {
+  clearOnboardingDraft,
+  findDraftBasePod,
+  readOnboardingDraft,
+  shouldResumeOnboarding,
+  subscribeToOnboardingDraft,
+  updateOnboardingDraft,
+  type OnboardingDraft,
+} from "@/lib/pods/onboarding-progress";
+import {
   useCreateOrganization,
+  useJoinSuggestedOrganization,
   useMyOrganizationInvitations,
+  useOrganizationSlugAvailability,
+  useSuggestedOrganizations,
 } from "@/lib/hooks/use-organizations";
 import { useAccessiblePods } from "@/lib/hooks/use-pods";
 import { useProfile, useUpdateProfile } from "@/lib/hooks/use-user";
@@ -36,6 +54,11 @@ import {
   type Pod,
 } from "@/lib/types";
 import {
+  normalizeEmailDomain,
+  slugifyOrganizationName,
+  workDomainFromEmail,
+} from "@/lib/utils/organization-slugs";
+import {
   FIRST_RUN_DELIGHT,
   buildRecipeConversationHref,
   getRecipeById,
@@ -44,6 +67,7 @@ import {
 import { SetupChrome, SetupShell } from "./account-onboarding-chrome";
 import {
   buildPromptFromIntent,
+  defaultWorkspaceName,
   inferFullName,
   podNameForAudience,
   personalWorkspaceName,
@@ -65,6 +89,7 @@ import {
   InvitationsStep,
   StartStep,
   TeamStep,
+  WorkspaceStep,
 } from "./account-onboarding-steps";
 
 export function AccountOnboarding({
@@ -96,8 +121,20 @@ export function AccountOnboarding({
     () => null,
   );
   const hasSkippedFirstPod = requireFirstPod && Boolean(skippedFirstPod);
+  const storedOnboardingDraft = useSyncExternalStore(
+    subscribeToOnboardingDraft,
+    readOnboardingDraft,
+    () => null,
+  );
+  const onboardingDraft =
+    storedOnboardingDraft?.ownerEmail === profile?.email?.trim().toLowerCase()
+      ? storedOnboardingDraft
+      : null;
+  const hasOnboardingDraft = requireFirstPod && Boolean(onboardingDraft);
   const { data: podsData, isLoading: isLoadingPods } = useAccessiblePods({
-    enabled: requireFirstPod && !hasLastOpenedPod && !hasSkippedFirstPod,
+    enabled:
+      requireFirstPod &&
+      (hasOnboardingDraft || (!hasLastOpenedPod && !hasSkippedFirstPod)),
   });
   const pods = podsData?.items || [];
   const { data: invitationsData, isLoading: isLoadingInvitations } =
@@ -111,26 +148,30 @@ export function AccountOnboarding({
     isProfileComplete && !isLoadingOrganizations && organizations.length === 0;
   const needsFirstPod =
     requireFirstPod &&
-    !hasLastOpenedPod &&
-    !hasSkippedFirstPod &&
+    (hasOnboardingDraft || (!hasLastOpenedPod && !hasSkippedFirstPod)) &&
     isProfileComplete &&
     !isLoadingPods &&
     pendingInvitations.length === 0 &&
-    pods.length === 0;
+    shouldResumeOnboarding(onboardingDraft, pods.length);
   const [setupActive, setSetupActive] = useState(false);
-  const nextSetupStep: SetupStep = needsProfile
-    ? "identity"
-    : needsOrganization || needsFirstPod
-      ? "audience"
-      : "audience";
+  const nextSetupStep: SetupStep =
+    onboardingDraft?.step ||
+    (needsProfile
+      ? "identity"
+      : needsOrganization || needsFirstPod
+        ? "audience"
+        : "audience");
   const setupInitialStep: SetupStep =
-    setupActive || needsFirstPod ? nextSetupStep : "boot";
+    setupActive || needsFirstPod || hasOnboardingDraft ? nextSetupStep : "boot";
 
   if (
     !setupActive &&
     (isLoadingProfile ||
       isLoadingOrganizations ||
-      (isProfileComplete && requireFirstPod && !hasLastOpenedPod && isLoadingPods) ||
+      (isProfileComplete &&
+        requireFirstPod &&
+        (hasOnboardingDraft || !hasLastOpenedPod) &&
+        isLoadingPods) ||
       (isProfileComplete && isLoadingInvitations))
   ) {
     if (preflightFallback) {
@@ -157,8 +198,20 @@ export function AccountOnboarding({
     return (
       <SetupAssistant
         profile={profile}
-        initialOrganization={currentOrg || organizations[0] || null}
-        initialAudience={organizations.length > 0 ? "team" : null}
+        organizations={organizations}
+        accessiblePods={pods}
+        initialDraft={onboardingDraft}
+        initialOrganization={
+          organizations.find(
+            (organization) => organization.id === onboardingDraft?.organizationId,
+          ) ||
+          currentOrg ||
+          organizations[0] ||
+          null
+        }
+        initialAudience={
+          onboardingDraft?.audience || (organizations.length > 0 ? "team" : null)
+        }
         startStep={nextSetupStep}
         initialStep={setupInitialStep}
         onSetupStart={() => setSetupActive(true)}
@@ -172,6 +225,9 @@ export function AccountOnboarding({
 
 function SetupAssistant({
   profile,
+  organizations,
+  accessiblePods,
+  initialDraft,
   initialOrganization,
   initialAudience,
   startStep,
@@ -185,6 +241,9 @@ function SetupAssistant({
     last_name?: string | null;
     full_name?: string | null;
   } | null;
+  organizations: Organization[];
+  accessiblePods: Pod[];
+  initialDraft: OnboardingDraft | null;
   initialOrganization: Organization | null;
   initialAudience: Audience | null;
   startStep: SetupStep;
@@ -196,23 +255,62 @@ function SetupAssistant({
   const queryClient = useQueryClient();
   const updateProfile = useUpdateProfile();
   const createOrganization = useCreateOrganization();
+  const joinSuggestedOrganization = useJoinSuggestedOrganization();
   const createAgentRuntime = useCreateAgentRuntime();
   const updatePodDefaultRuntime = useUpdatePodDefaultAgentRuntime();
   const email = profile?.email || "";
+  const saveOnboardingDraft = (
+    patch: Parameters<typeof updateOnboardingDraft>[0],
+  ) =>
+    updateOnboardingDraft({
+      ownerEmail: email.trim().toLowerCase() || null,
+      ...patch,
+    });
+  const workDomain = workDomainFromEmail(email);
+  const normalizedWorkDomain = normalizeEmailDomain(workDomain);
   const inferredName = inferFullName(profile);
   const [step, setStep] = useState<SetupStep>(initialStep);
   const [createdOrganization, setCreatedOrganization] =
     useState<Organization | null>(null);
-  const [basePod, setBasePod] = useState<Pod | null>(null);
+  const [basePod, setBasePod] = useState<Pod | null>(() =>
+    findDraftBasePod(null, accessiblePods, initialDraft),
+  );
+  const createPodPromiseRef = useRef<Promise<Pod | null> | null>(null);
   const [isCreatingPod, setIsCreatingPod] = useState(false);
   const [isConnectingAi, setIsConnectingAi] = useState(false);
   const [connectedProfileId, setConnectedProfileId] = useState<string | null>(
     null,
   );
   const [identityName, setIdentityName] = useState(inferredName);
-  const [audience, setAudience] = useState<Audience | null>(initialAudience);
-  const [teamKind, setTeamKind] = useState<TeamKind | null>("support");
-  const [customTeamName, setCustomTeamName] = useState("");
+  const [workspaceName, setWorkspaceName] = useState(
+    initialDraft?.workspaceName || defaultWorkspaceName(inferredName),
+  );
+  const [audience, setAudience] = useState<Audience | null>(
+    initialDraft?.audience || initialAudience,
+  );
+  const [teamKind, setTeamKind] = useState<TeamKind | null>(
+    initialDraft?.teamKind || "support",
+  );
+  const [customTeamName, setCustomTeamName] = useState(
+    initialDraft?.customTeamName || "",
+  );
+  const [allowDomainJoin, setAllowDomainJoin] = useState(
+    initialDraft?.allowDomainJoin ?? Boolean(normalizedWorkDomain),
+  );
+  const suggestedOrganizations = useSuggestedOrganizations({
+    enabled:
+      Boolean(profile?.email) &&
+      organizations.length === 0 &&
+      audience === "team",
+  });
+  const suggestedOrganization = suggestedOrganizations.data?.items?.[0] || null;
+  const slug = useMemo(
+    () => slugifyOrganizationName(workspaceName),
+    [workspaceName],
+  );
+  const slugAvailability = useOrganizationSlugAvailability(slug, {
+    enabled: step === "workspace" && !suggestedOrganization && slug.length > 2,
+  });
   const startRecipes = useMemo(
     () => startRecipesForAudience(audience ?? "personal"),
     [audience],
@@ -229,8 +327,22 @@ function SetupAssistant({
     }
   }, [initialStep, step]);
 
+  useEffect(() => {
+    if (!basePod && initialDraft?.basePodId) {
+      const restored = accessiblePods.find(
+        (pod) => pod.id === initialDraft.basePodId,
+      );
+      if (restored) setBasePod(restored);
+    }
+  }, [accessiblePods, basePod, initialDraft?.basePodId]);
+
+  useEffect(() => {
+    if (!initialDraft) setAllowDomainJoin(Boolean(normalizedWorkDomain));
+  }, [initialDraft, normalizedWorkDomain]);
+
   const goTo = (nextStep: SetupStep) => {
     onSetupStart();
+    saveOnboardingDraft({ step: nextStep });
     setStep(nextStep);
   };
 
@@ -251,6 +363,9 @@ function SetupAssistant({
       {
         onSuccess: () => {
           toast.success("Operator profile saved");
+          const nextWorkspaceName = defaultWorkspaceName(identityName);
+          setWorkspaceName(nextWorkspaceName);
+          saveOnboardingDraft({ workspaceName: nextWorkspaceName });
           goTo("audience");
         },
         onError: (error) =>
@@ -265,7 +380,9 @@ function SetupAssistant({
   const ensureOrganization = async (
     audienceForPod: Audience,
     teamName = "",
+    organizationOverride?: Organization | null,
   ): Promise<Organization | null> => {
+    if (organizationOverride) return organizationOverride;
     if (activeOrganization) return activeOrganization;
 
     const organization = await createOrganization.mutateAsync({
@@ -278,48 +395,86 @@ function SetupAssistant({
     });
     setCreatedOrganization(organization);
     onOrganizationReady(organization);
+    saveOnboardingDraft({ organizationId: organization.id });
     return organization;
   };
 
   const createBasePod = async (
     audienceForPod: Audience,
     teamName = "",
+    organizationOverride?: Organization | null,
   ): Promise<Pod | null> => {
-    setIsCreatingPod(true);
-    try {
-      const organization = await ensureOrganization(audienceForPod, teamName);
-      if (!organization) {
-        toast.error("Could not prepare your workspace");
-        return null;
-      }
-
-      const podName = podNameForAudience(audienceForPod, teamName);
-      const pod = await getLemmaClient().pods.create({
-        name: podName,
-        description:
-          audienceForPod === "personal"
-            ? "Personal pod created during onboarding. Add recipes, agents, apps, and automations here."
-            : `${teamName || "Team"} pod created during onboarding. Add recipes, agents, apps, and automations here.`,
-        organization_id: organization.id,
-      });
-      setBasePod(pod);
-      queryClient.invalidateQueries({ queryKey: ["pods"] });
-      toast.success(`${pod.name} created`);
-      return pod;
-    } catch (error) {
-      const message =
-        error instanceof Error && error.message
-          ? error.message
-          : "Failed to create pod";
-      toast.error(message);
-      return null;
-    } finally {
-      setIsCreatingPod(false);
+    const restoredCandidate = findDraftBasePod(
+      basePod,
+      accessiblePods,
+      initialDraft,
+    );
+    const intendedOrganizationId =
+      organizationOverride?.id ||
+      activeOrganization?.id ||
+      initialDraft?.organizationId ||
+      null;
+    const restoredPod =
+      restoredCandidate &&
+      (!intendedOrganizationId ||
+        restoredCandidate.organization_id === intendedOrganizationId)
+        ? restoredCandidate
+        : null;
+    if (restoredPod) {
+      setBasePod(restoredPod);
+      return restoredPod;
     }
+    if (createPodPromiseRef.current) return createPodPromiseRef.current;
+
+    setIsCreatingPod(true);
+    const creation = (async () => {
+      try {
+        const organization = await ensureOrganization(
+          audienceForPod,
+          teamName,
+          organizationOverride,
+        );
+        if (!organization) {
+          toast.error("Could not prepare your workspace");
+          return null;
+        }
+
+        const podName = podNameForAudience(audienceForPod, teamName);
+        const pod = await getLemmaClient().pods.create({
+          name: podName,
+          description:
+            audienceForPod === "personal"
+              ? "Personal pod created during onboarding. Add recipes, agents, apps, and automations here."
+              : `${teamName || "Team"} pod created during onboarding. Add recipes, agents, apps, and automations here.`,
+          organization_id: organization.id,
+        });
+        setBasePod(pod);
+        saveOnboardingDraft({
+          organizationId: organization.id,
+          basePodId: pod.id,
+        });
+        queryClient.invalidateQueries({ queryKey: ["pods"] });
+        toast.success(`${pod.name} created`);
+        return pod;
+      } catch (error) {
+        const message =
+          error instanceof Error && error.message
+            ? error.message
+            : "Failed to create pod";
+        toast.error(message);
+        return null;
+      } finally {
+        setIsCreatingPod(false);
+        createPodPromiseRef.current = null;
+      }
+    })();
+    createPodPromiseRef.current = creation;
+    return creation;
   };
 
   const handleAudienceSelect = async (value: Audience) => {
     setAudience(value);
+    saveOnboardingDraft({ audience: value });
     setCustomIntent("");
     setSelectedRecipeId(startRecipesForAudience(value)[0]?.id ?? "");
 
@@ -339,8 +494,81 @@ function SetupAssistant({
       return;
     }
 
-    const pod = await createBasePod("team", teamName);
+    const nextWorkspaceName = teamWorkspaceName(teamName);
+    setWorkspaceName(nextWorkspaceName);
+    saveOnboardingDraft({
+      audience: "team",
+      teamKind,
+      customTeamName,
+      workspaceName: nextWorkspaceName,
+    });
+
+    if (!activeOrganization) {
+      goTo("workspace");
+      return;
+    }
+
+    const pod = await createBasePod("team", teamName, activeOrganization);
     if (pod) goTo("connect");
+  };
+
+  const handleJoinSuggested = async () => {
+    if (!suggestedOrganization) return;
+
+    try {
+      const organization = await joinSuggestedOrganization.mutateAsync(
+        suggestedOrganization.id,
+      );
+      toast.success(`Joined ${organization.name}`);
+      setCreatedOrganization(organization);
+      onOrganizationReady(organization);
+      saveOnboardingDraft({ organizationId: organization.id });
+
+      const existingPods = await getLemmaClient().pods.listByOrganization(
+        organization.id,
+      );
+      if (existingPods.items.length > 0) {
+        clearOnboardingDraft();
+        router.replace("/home");
+        return;
+      }
+
+      const pod = await createBasePod(
+        "team",
+        resolveTeamName(),
+        organization,
+      );
+      if (pod) goTo("connect");
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "Unknown error";
+      toast.error(`Could not join workspace: ${message}`);
+    }
+  };
+
+  const handleCreateWorkspace = async () => {
+    const useDomainJoin = allowDomainJoin && Boolean(normalizedWorkDomain);
+    try {
+      const organization = await createOrganization.mutateAsync({
+        name: workspaceName.trim(),
+        join_policy: useDomainJoin
+          ? OrganizationJoinPolicy.EMAIL_DOMAIN
+          : OrganizationJoinPolicy.INVITE_ONLY,
+        email_domain: useDomainJoin ? normalizedWorkDomain : null,
+      });
+      toast.success(`${organization.name} created`);
+      setCreatedOrganization(organization);
+      onOrganizationReady(organization);
+      saveOnboardingDraft({ organizationId: organization.id });
+      const pod = await createBasePod(
+        "team",
+        resolveTeamName(),
+        organization,
+      );
+      if (pod) goTo("connect");
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "Unknown error";
+      toast.error(`Failed to create workspace: ${message}`);
+    }
   };
 
   const handleConnectContinue = async (choice: ConnectChoice) => {
@@ -352,7 +580,10 @@ function SetupAssistant({
     setIsConnectingAi(true);
     try {
       const teamName = resolveTeamName();
-      const organization = await ensureOrganization(audience ?? "personal", teamName);
+      const organization = await ensureOrganization(
+        audience ?? "personal",
+        teamName,
+      );
       if (!organization) {
         toast.error("Could not prepare your workspace");
         return;
@@ -421,10 +652,12 @@ function SetupAssistant({
 
   const handleSkipFirstPod = () => {
     if (basePod) {
+      clearOnboardingDraft();
       router.push(`/pod/${basePod.id}`);
       return;
     }
 
+    clearOnboardingDraft();
     markOnboardingSkippedFirstPod();
     router.replace("/home");
   };
@@ -450,6 +683,7 @@ function SetupAssistant({
         pod_id: pod.id,
       }),
     });
+    clearOnboardingDraft();
     router.push(`/pod/${pod.id}/conversations/new?${params.toString()}`);
   };
 
@@ -477,6 +711,7 @@ function SetupAssistant({
     }
 
     if (recipe) {
+      clearOnboardingDraft();
       router.push(
         buildRecipeConversationHref(pod.id, recipe, {
           podName: pod.name,
@@ -508,6 +743,7 @@ function SetupAssistant({
           pod_id: pod.id,
         }),
       });
+      clearOnboardingDraft();
       router.push(`/pod/${pod.id}/conversations/new?${params.toString()}`);
     }
   };
@@ -532,7 +768,9 @@ function SetupAssistant({
     );
   }
 
-  const orderedSteps = setupStepsForAudience(audience);
+  const orderedSteps = setupStepsForAudience(audience).filter(
+    (candidate) => candidate !== "workspace" || !activeOrganization,
+  );
   const handleBack = () => {
     const currentIndex = orderedSteps.indexOf(step);
     if (currentIndex <= 0) return;
@@ -565,9 +803,37 @@ function SetupAssistant({
           teamKind={teamKind}
           customTeamName={customTeamName}
           isCreating={isCreatingPod}
-          onTeamKindChange={setTeamKind}
-          onCustomTeamNameChange={setCustomTeamName}
+          onTeamKindChange={(value) => {
+            setTeamKind(value);
+            saveOnboardingDraft({ teamKind: value });
+          }}
+          onCustomTeamNameChange={(value) => {
+            setCustomTeamName(value);
+            saveOnboardingDraft({ customTeamName: value });
+          }}
           onContinue={handleTeamContinue}
+          onBack={handleBack}
+          steps={orderedSteps}
+        />
+      ) : step === "workspace" ? (
+        <WorkspaceStep
+          domain={workDomain || null}
+          suggestedOrganization={suggestedOrganization}
+          workspaceName={workspaceName}
+          slugAvailable={slugAvailability.data?.available}
+          allowDomainJoin={allowDomainJoin}
+          isJoining={joinSuggestedOrganization.isPending}
+          isCreating={createOrganization.isPending || isCreatingPod}
+          onWorkspaceNameChange={(value) => {
+            setWorkspaceName(value);
+            saveOnboardingDraft({ workspaceName: value });
+          }}
+          onAllowDomainJoinChange={(value) => {
+            setAllowDomainJoin(value);
+            saveOnboardingDraft({ allowDomainJoin: value });
+          }}
+          onJoinSuggested={() => void handleJoinSuggested()}
+          onCreateWorkspace={() => void handleCreateWorkspace()}
           onBack={handleBack}
           steps={orderedSteps}
         />

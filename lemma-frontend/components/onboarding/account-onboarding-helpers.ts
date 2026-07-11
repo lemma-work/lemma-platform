@@ -41,6 +41,7 @@ export const SETUP_STEPS: SetupStep[] = [
   "identity",
   "audience",
   "team",
+  "workspace",
   "connect",
   "start",
 ];
@@ -53,7 +54,15 @@ export function setupStepsForAudience(audience: Audience | null): SetupStep[] {
     return ["boot", "identity", "audience", "connect", "start"];
   }
   if (audience === "team") {
-    return ["boot", "identity", "audience", "team", "connect", "start"];
+    return [
+      "boot",
+      "identity",
+      "audience",
+      "team",
+      "workspace",
+      "connect",
+      "start",
+    ];
   }
   return SETUP_STEPS;
 }

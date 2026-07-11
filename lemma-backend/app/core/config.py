@@ -223,6 +223,19 @@ class Settings(BaseSettings):
         default=200,
         description="Maximum pooled Redis connections per process",
     )
+    desktop_auth_create_limit: int = Field(
+        default=100,
+        ge=0,
+        description=(
+            "Maximum desktop auth handoff requests a client IP may create per "
+            "rate-limit window. Set to 0 to disable the application-level cap."
+        ),
+    )
+    desktop_auth_create_window_seconds: int = Field(
+        default=60,
+        ge=1,
+        description="Desktop auth handoff creation rate-limit window in seconds.",
+    )
     lemma_default_model_type: Literal["openai_compat", "anthropic_compat"] = Field(
         default="openai_compat",
         description="Server-provided Lemma system model profile provider type.",

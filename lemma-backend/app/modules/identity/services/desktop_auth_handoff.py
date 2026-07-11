@@ -21,14 +21,35 @@ from app.core.config import settings
 
 
 _KEY_PREFIX = "identity:desktop-auth"
+_RATE_KEY_PREFIX = "identity:desktop-auth-rate"
 _DEFAULT_TTL_SECONDS = 5 * 60
 
 _COMPLETE_LUA = """
 if redis.call('EXISTS', KEYS[1]) == 0 then
-  return 0
+  return {'missing'}
+end
+local status = redis.call('HGET', KEYS[1], 'status')
+if status == 'complete' then
+  local completed_user_id = redis.call('HGET', KEYS[1], 'user_id')
+  if completed_user_id == ARGV[1] then
+    return {'complete'}
+  end
+  return {'conflict'}
+end
+if status ~= 'pending' then
+  return {'conflict'}
 end
 redis.call('HSET', KEYS[1], 'status', 'complete', 'user_id', ARGV[1])
-return 1
+return {'complete'}
+"""
+
+_RATE_LIMIT_LUA = """
+local count = redis.call('INCR', KEYS[1])
+if count == 1 then
+  redis.call('EXPIRE', KEYS[1], ARGV[1])
+end
+local ttl = redis.call('TTL', KEYS[1])
+return {count, ttl}
 """
 
 _CONSUME_LUA = """
@@ -61,6 +82,18 @@ class DesktopAuthRequestPending(Exception):
     """The browser has not completed authentication yet."""
 
 
+class DesktopAuthCompletionConflict(Exception):
+    """A different user already completed the handoff request."""
+
+
+class DesktopAuthRateLimitExceeded(Exception):
+    """The client created too many handoff requests."""
+
+    def __init__(self, retry_after_seconds: int):
+        super().__init__("Desktop auth request rate limit exceeded")
+        self.retry_after_seconds = retry_after_seconds
+
+
 @dataclass(frozen=True)
 class DesktopAuthRequest:
     request_id: str
@@ -78,9 +111,21 @@ class DesktopAuthHandoffStore:
         redis_url: str | None = None,
         *,
         ttl_seconds: int = _DEFAULT_TTL_SECONDS,
+        create_limit: int | None = None,
+        create_window_seconds: int | None = None,
     ):
         self._redis_url = redis_url or settings.redis_url
         self._ttl_seconds = ttl_seconds
+        self._create_limit = (
+            settings.desktop_auth_create_limit
+            if create_limit is None
+            else max(0, create_limit)
+        )
+        self._create_window_seconds = (
+            settings.desktop_auth_create_window_seconds
+            if create_window_seconds is None
+            else max(1, create_window_seconds)
+        )
         self._redis: Redis | None = None
         self._lock = asyncio.Lock()
 
@@ -99,9 +144,29 @@ class DesktopAuthHandoffStore:
     def _key(request_id: str) -> str:
         return f"{_KEY_PREFIX}:{request_id}"
 
-    async def create(self, challenge: str) -> DesktopAuthRequest:
-        request_id = secrets.token_urlsafe(24)
+    @staticmethod
+    def _rate_key(client_key: str) -> str:
+        digest = hashlib.sha256(client_key.encode("utf-8")).hexdigest()
+        return f"{_RATE_KEY_PREFIX}:{digest}"
+
+    async def _check_create_rate_limit(self, redis: Redis, client_key: str) -> None:
+        if self._create_limit == 0:
+            return
+        result = await redis.eval(
+            _RATE_LIMIT_LUA,
+            1,
+            self._rate_key(client_key),
+            self._create_window_seconds,
+        )
+        count = int(result[0]) if result else 1
+        retry_after = max(1, int(result[1]) if result and len(result) > 1 else 1)
+        if count > self._create_limit:
+            raise DesktopAuthRateLimitExceeded(retry_after)
+
+    async def create(self, challenge: str, *, client_key: str) -> DesktopAuthRequest:
         redis = await self._get_redis()
+        await self._check_create_rate_limit(redis, client_key)
+        request_id = secrets.token_urlsafe(24)
         key = self._key(request_id)
         async with redis.pipeline(transaction=True) as pipe:
             pipe.hset(
@@ -120,14 +185,17 @@ class DesktopAuthHandoffStore:
 
     async def complete(self, request_id: str, user_id: UUID) -> None:
         redis = await self._get_redis()
-        completed = await redis.eval(
+        result = await redis.eval(
             _COMPLETE_LUA,
             1,
             self._key(request_id),
             str(user_id),
         )
-        if int(completed or 0) != 1:
+        status = result[0] if result else "missing"
+        if status == "missing":
             raise DesktopAuthRequestNotFound(request_id)
+        if status == "conflict":
+            raise DesktopAuthCompletionConflict(request_id)
 
     async def consume(self, request_id: str, verifier: str) -> UUID:
         redis = await self._get_redis()

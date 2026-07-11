@@ -13,8 +13,10 @@ from app.modules.identity.infrastructure.supertokens_auth.helpers import (
     refresh_cli_session_tokens,
 )
 from app.modules.identity.services.desktop_auth_handoff import (
+    DesktopAuthCompletionConflict,
     DesktopAuthRequestNotFound,
     DesktopAuthRequestPending,
+    DesktopAuthRateLimitExceeded,
     DesktopAuthVerifierRejected,
     get_desktop_auth_handoff_store,
 )
@@ -163,11 +165,23 @@ async def cli_auth_info() -> CliAuthInfoResponse:
 )
 async def create_desktop_auth_request(
     body: DesktopAuthRequestCreate,
+    request: Request,
 ) -> DesktopAuthRequestResponse:
-    request = await get_desktop_auth_handoff_store().create(body.code_challenge)
+    client_key = request.client.host if request.client else "unknown"
+    try:
+        handoff = await get_desktop_auth_handoff_store().create(
+            body.code_challenge,
+            client_key=client_key,
+        )
+    except DesktopAuthRateLimitExceeded as exc:
+        raise HTTPException(
+            status_code=429,
+            detail="Too many desktop login requests",
+            headers={"Retry-After": str(exc.retry_after_seconds)},
+        ) from exc
     return DesktopAuthRequestResponse(
-        request_id=request.request_id,
-        expires_in_seconds=request.expires_in_seconds,
+        request_id=handoff.request_id,
+        expires_in_seconds=handoff.expires_in_seconds,
     )
 
 
@@ -187,6 +201,11 @@ async def complete_desktop_auth_request(
     except DesktopAuthRequestNotFound as exc:
         raise HTTPException(
             status_code=404, detail="Desktop login request expired"
+        ) from exc
+    except DesktopAuthCompletionConflict as exc:
+        raise HTTPException(
+            status_code=409,
+            detail="Desktop login request was already completed by another user",
         ) from exc
     return DesktopAuthCompleteResponse()
 

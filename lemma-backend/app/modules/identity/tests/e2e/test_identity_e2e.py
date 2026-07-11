@@ -163,6 +163,21 @@ async def test_desktop_browser_handoff_creates_cookie_session(
     )
     assert complete_response.status_code == 200, complete_response.text
 
+    retry_complete_response = await async_client.post(
+        f"/auth/desktop/requests/{request_id}/complete",
+        headers=_auth_headers(user["token"]),
+    )
+    assert retry_complete_response.status_code == 200, retry_complete_response.text
+
+    replacement_user = await signup_user(
+        email=f"desktop-handoff-replacement-{uuid4().hex[:8]}@example.com"
+    )
+    replacement_response = await async_client.post(
+        f"/auth/desktop/requests/{request_id}/complete",
+        headers=_auth_headers(replacement_user["token"]),
+    )
+    assert replacement_response.status_code == 409, replacement_response.text
+
     async with AsyncClient(
         transport=ASGITransport(app=test_app),
         base_url="http://test",
