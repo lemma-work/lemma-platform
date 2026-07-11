@@ -19,7 +19,7 @@ from app.modules.agent.tools.user_interaction.models import (
     RequestApprovalResponse,
     validate_display_payload,
 )
-from app.modules.apps.services.app_html_validation import validate_widget_html
+from app.core.widget_html_validation import validate_widget_html
 from app.composition.agent_workspace import (
     WorkspaceSandboxService,
     agentbox_sandbox_id,

@@ -9,7 +9,7 @@
 //   - "inline": embedded in the chat thread, height-capped with a fade + Expand.
 //   - "full":   the standalone widgets/view page, full reported height, no cap.
 
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { Loader2, Maximize2 } from "lucide-react";
 import { useTheme } from "next-themes";
@@ -19,6 +19,11 @@ import {
     buildWidgetThemeMessage,
     resolveWidgetTheme,
 } from "@/lib/assistant/widget-theme";
+import {
+    isWidgetLoading,
+    normalizeWidgetLoadingMessages,
+    selectWidgetLoadingMessage,
+} from "@/lib/assistant/widget-loading";
 import { cn } from "@/lib/utils";
 
 function isHttpUrl(value: string | null | undefined): string | null {
@@ -29,6 +34,32 @@ function isHttpUrl(value: string | null | undefined): string | null {
     } catch {
         return null;
     }
+}
+
+function postWidgetTheme({
+    iframe,
+    iframeSrc,
+    isContentWidget,
+    resolvedTheme,
+}: {
+    iframe: HTMLIFrameElement | null;
+    iframeSrc: string | null;
+    isContentWidget: boolean;
+    resolvedTheme: string | undefined;
+}) {
+    if (!isContentWidget || !iframeSrc || !iframe?.contentWindow) return;
+    const rootStyles = window.getComputedStyle(document.documentElement);
+    const bodyStyles = window.getComputedStyle(document.body);
+    const theme = resolveWidgetTheme(
+        resolvedTheme,
+        window.matchMedia("(prefers-color-scheme: dark)").matches,
+    );
+    const message = buildWidgetThemeMessage({
+        theme,
+        readToken: (name) => rootStyles.getPropertyValue(name),
+        fontFamily: bodyStyles.fontFamily,
+    });
+    iframe.contentWindow.postMessage(message, new URL(iframeSrc).origin);
 }
 
 export interface InlineWidgetProps {
@@ -61,7 +92,8 @@ export function InlineWidget({
     const iframeRef = useRef<HTMLIFrameElement | null>(null);
     const [reportedHeight, setReportedHeight] = useState(variant === "full" ? 520 : 320);
     const [heightReported, setHeightReported] = useState(false);
-    const [loadingMessageIndex, setLoadingMessageIndex] = useState(0);
+    const [loadedIframeSrc, setLoadedIframeSrc] = useState<string | null>(null);
+    const [loadingProgress, setLoadingProgress] = useState({ key: "", index: 0 });
 
     const resolvedExternalSrc = isHttpUrl(externalSrc);
     // An inline-content widget is served (and config-injected) by the backend; we
@@ -82,39 +114,38 @@ export function InlineWidget({
     });
 
     const iframeSrc = resolvedExternalSrc || embedQuery.data || null;
-    const loading = isContentWidget && embedQuery.isLoading;
+    const embedTokenLoading = isContentWidget && embedQuery.isLoading;
+    const loading = isWidgetLoading({ embedTokenLoading, iframeSrc, loadedIframeSrc });
+    const loadingKey = iframeSrc || "embed-token";
+    const loadingMessageIndex = loadingProgress.key === loadingKey ? loadingProgress.index : 0;
     const normalizedLoadingMessages = useMemo(
-        () => loadingMessages.map((message) => message.trim()).filter(Boolean).slice(0, 4),
+        () => normalizeWidgetLoadingMessages(loadingMessages),
         [loadingMessages],
     );
-
-    const sendTheme = useCallback(() => {
-        if (!isContentWidget || !iframeSrc || !iframeRef.current?.contentWindow) return;
-        const rootStyles = window.getComputedStyle(document.documentElement);
-        const bodyStyles = window.getComputedStyle(document.body);
-        const theme = resolveWidgetTheme(
-            resolvedTheme,
-            window.matchMedia("(prefers-color-scheme: dark)").matches,
-        );
-        const message = buildWidgetThemeMessage({
-            theme,
-            readToken: (name) => rootStyles.getPropertyValue(name),
-            fontFamily: bodyStyles.fontFamily,
-        });
-        iframeRef.current.contentWindow.postMessage(message, new URL(iframeSrc).origin);
-    }, [iframeSrc, isContentWidget, resolvedTheme]);
+    const loadingMessage = selectWidgetLoadingMessage(
+        normalizedLoadingMessages,
+        loadingMessageIndex,
+    );
 
     useEffect(() => {
-        sendTheme();
-    }, [sendTheme]);
+        postWidgetTheme({
+            iframe: iframeRef.current,
+            iframeSrc,
+            isContentWidget,
+            resolvedTheme,
+        });
+    }, [iframeSrc, isContentWidget, resolvedTheme]);
 
     useEffect(() => {
         if (!loading || normalizedLoadingMessages.length <= 1) return;
         const intervalId = window.setInterval(() => {
-            setLoadingMessageIndex((index) => index + 1);
+            setLoadingProgress((current) => ({
+                key: loadingKey,
+                index: current.key === loadingKey ? current.index + 1 : 1,
+            }));
         }, 1800);
         return () => window.clearInterval(intervalId);
-    }, [loading, normalizedLoadingMessages.length]);
+    }, [loading, loadingKey, normalizedLoadingMessages.length]);
 
     useEffect(() => {
         const handleMessage = (event: MessageEvent) => {
@@ -135,14 +166,25 @@ export function InlineWidget({
     const overflows = isInline && heightReported && reportedHeight > maxHeight;
     const renderedHeight = isInline ? Math.min(fullHeight, maxHeight) : fullHeight;
 
-    if (loading) {
+    const handleIframeLoad = () => {
+        if (!iframeSrc) return;
+        setLoadedIframeSrc(iframeSrc);
+        postWidgetTheme({
+            iframe: iframeRef.current,
+            iframeSrc,
+            isContentWidget,
+            resolvedTheme,
+        });
+    };
+
+    if (embedTokenLoading && !iframeSrc) {
         return (
             <div className={cn(
                 "flex items-center justify-center gap-2 py-8 text-sm text-[var(--text-secondary)]",
                 !isInline && "min-h-full",
             )}>
                 <Loader2 className="h-4 w-4 animate-spin" />
-                {normalizedLoadingMessages[loadingMessageIndex % normalizedLoadingMessages.length] || "Loading widget"}
+                {loadingMessage}
             </div>
         );
     }
@@ -162,17 +204,28 @@ export function InlineWidget({
     // no chrome. Inline: height-capped with a fade + Expand when it overflows.
     if (!isInline) {
         return (
-            <iframe
-                key={iframeSrc}
-                ref={iframeRef}
-                src={iframeSrc}
-                title={title}
-                allow="clipboard-read; clipboard-write; fullscreen"
-                referrerPolicy="strict-origin-when-cross-origin"
-                sandbox="allow-same-origin allow-scripts allow-forms allow-popups allow-downloads allow-modals allow-top-navigation-by-user-activation"
-                onLoad={sendTheme}
-                className="block h-full w-full border-0 bg-transparent"
-            />
+            <div className="relative h-full min-h-[360px]">
+                <iframe
+                    key={iframeSrc}
+                    ref={iframeRef}
+                    src={iframeSrc}
+                    title={title}
+                    allow="clipboard-read; clipboard-write; fullscreen"
+                    referrerPolicy="strict-origin-when-cross-origin"
+                    sandbox="allow-same-origin allow-scripts allow-forms allow-popups allow-downloads allow-modals allow-top-navigation-by-user-activation"
+                    onLoad={handleIframeLoad}
+                    className={cn(
+                        "block h-full w-full border-0 bg-transparent transition-opacity",
+                        loading && "opacity-0",
+                    )}
+                />
+                {loading ? (
+                    <div className="absolute inset-0 flex items-center justify-center gap-2 bg-[var(--pod-main-bg)] text-sm text-[var(--text-secondary)]">
+                        <Loader2 className="h-4 w-4 animate-spin" />
+                        {loadingMessage}
+                    </div>
+                ) : null}
+            </div>
         );
     }
 
@@ -187,9 +240,18 @@ export function InlineWidget({
                 allow="clipboard-read; clipboard-write; fullscreen"
                 referrerPolicy="strict-origin-when-cross-origin"
                 sandbox="allow-same-origin allow-scripts allow-forms allow-popups allow-downloads allow-modals allow-top-navigation-by-user-activation"
-                onLoad={sendTheme}
-                className="block w-full border-0 bg-transparent"
+                onLoad={handleIframeLoad}
+                className={cn(
+                    "block w-full border-0 bg-transparent transition-opacity",
+                    loading && "opacity-0",
+                )}
             />
+            {loading ? (
+                <div className="absolute inset-0 flex items-center justify-center gap-2 bg-[var(--pod-main-bg)] text-sm text-[var(--text-secondary)]">
+                    <Loader2 className="h-4 w-4 animate-spin" />
+                    {loadingMessage}
+                </div>
+            ) : null}
             {overflows ? (
                 <div className="pointer-events-none absolute inset-x-0 bottom-0 flex h-20 items-end justify-center bg-gradient-to-t from-[var(--pod-main-bg)] via-[color:color-mix(in_srgb,var(--pod-main-bg)_70%,transparent)] to-transparent pb-2">
                     {onExpand ? (

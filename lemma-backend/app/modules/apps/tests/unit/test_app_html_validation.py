@@ -1,6 +1,6 @@
 """Unit tests for the advisory app-HTML linter (unified browser-SDK contract)."""
 
-from app.modules.apps.services.app_html_validation import (
+from app.core.widget_html_validation import (
     lint_app_html,
     validate_widget_html,
 )
@@ -110,6 +110,32 @@ def test_widget_contract_accepts_portable_sdk_fragment():
     assert validate_widget_html(UNIFIED_OK) == []
 
 
+def test_widget_contract_accepts_direct_runtime_config_api_url():
+    html = UNIFIED_OK.replace(
+        "cfg.apiUrl", "window.__LEMMA_CONFIG__.apiUrl"
+    )
+    assert validate_widget_html(html) == []
+
+
+def test_widget_contract_accepts_bracket_runtime_config_api_url():
+    html = UNIFIED_OK.replace("cfg.apiUrl", 'cfg["apiUrl"]')
+    assert validate_widget_html(html) == []
+
+
+def test_widget_contract_accepts_destructured_runtime_config_api_url():
+    html = UNIFIED_OK.replace(
+        "var cfg = window.__LEMMA_CONFIG__ || {};",
+        "const { apiUrl } = window.__LEMMA_CONFIG__ || {};",
+    ).replace("cfg.apiUrl", "apiUrl")
+    assert validate_widget_html(html) == []
+
+
+def test_widget_contract_accepts_aliased_runtime_config_api_url():
+    assert "var cfg = window.__LEMMA_CONFIG__" in UNIFIED_OK
+    assert "cfg.apiUrl" in UNIFIED_OK
+    assert validate_widget_html(UNIFIED_OK) == []
+
+
 def test_widget_contract_rejects_full_document():
     issues = validate_widget_html("<!doctype html><html><body>x</body></html>")
     assert any("fragment" in issue for issue in issues)
@@ -142,3 +168,17 @@ def test_widget_contract_requires_sdk_onload_boot():
         """
     )
     assert any("load handler" in issue for issue in issues)
+
+
+def test_widget_contract_requires_api_url_identifier():
+    issues = validate_widget_html(
+        """
+        <script>
+          const cfg = window.__LEMMA_CONFIG__;
+          const s = document.createElement('script');
+          s.src = '/public/sdk/lemma-client.js';
+          s.onload = boot;
+        </script>
+        """
+    )
+    assert any("apiUrl" in issue for issue in issues)

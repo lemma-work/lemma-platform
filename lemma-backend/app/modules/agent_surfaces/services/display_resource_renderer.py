@@ -200,10 +200,9 @@ def build_display_resource_url(
     pod_base = f"{base}/pod/{quote(str(pod_id), safe='')}"
 
     if request.type is DisplayResourceType.WIDGET:
-        if request.public_url:
-            return request.public_url
-        return _append_tool_context(
-            f"{pod_base}/widgets/view",
+        return _widget_resource_url(
+            pod_base,
+            request,
             conversation_id=conversation_id,
             tool_call_id=tool_call_id,
         )
@@ -249,6 +248,20 @@ def build_display_resource_url(
             conversation_id,
         )
     return _conversation_url(pod_base, conversation_id, tool_call_id)
+
+
+def _widget_resource_url(
+    pod_base: str,
+    request: DisplayResourceRequest,
+    *,
+    conversation_id: UUID | None,
+    tool_call_id: str | None,
+) -> str:
+    return request.public_url or _append_tool_context(
+        f"{pod_base}/widgets/view",
+        conversation_id=conversation_id,
+        tool_call_id=tool_call_id,
+    )
 
 
 def _display_resource_title(request: DisplayResourceRequest) -> str:

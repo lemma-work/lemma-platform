@@ -3,7 +3,7 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-from app.modules.apps.services.app_html_validation import validate_widget_html
+from app.core.widget_html_validation import validate_widget_html
 
 REPO_ROOT = Path(__file__).resolve().parents[6]
 ASSET_ROOT = REPO_ROOT / "lemma-skills" / "lemma-widget" / "assets"
@@ -63,6 +63,12 @@ def test_versioned_widget_starters_require_token_replacement():
         assert any("unresolved widget starter tokens" in error for error in errors), (
             name
         )
+
+
+def test_list_widget_uses_schema_agnostic_default_ordering():
+    source = (ASSET_ROOT / "widget-list-v1.html").read_text(encoding="utf-8")
+    assert "created_at" not in source
+    assert "sort:" not in source
 
 
 def test_materialized_widget_starters_satisfy_runtime_contract():

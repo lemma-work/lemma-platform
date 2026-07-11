@@ -38,7 +38,7 @@
         var client = new window.LemmaClient.LemmaClient();
         var auth = await client.initialize();
         if (!auth || auth.status !== "authenticated") { fail("Sign in to Lemma to view this data."); return; }
-        var response = await client.records.list("__TABLE_NAME__", { limit: 12, sort: [{ field:"created_at", direction:"desc" }] });
+        var response = await client.records.list("__TABLE_NAME__", { limit: 12 });
         render((response && response.items) || []);
       } catch (error) { fail(error && error.message); }
     }

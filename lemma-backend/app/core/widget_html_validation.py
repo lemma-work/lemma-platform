@@ -1,35 +1,20 @@
-"""HTML checks for the unified app/widget browser-SDK contract.
+"""HTML checks for the shared app/widget browser-SDK contract.
 
 ``lint_app_html`` remains advisory for app uploads: callers log common authoring
 mistakes without rejecting a bundle. ``validate_widget_html`` promotes those same
 mistakes plus fragment/starter/loader checks to blocking errors before an inline
 widget is persisted and rendered.
 
-Unified contract — see `lemma-typescript/src/browser.ts` and the `lemma-widget` /
-`lemma-builder` skills. The SDK is served only from the API origin, so the URL is
-built from the injected ``window.__LEMMA_CONFIG__.apiUrl`` (a relative
-``/public/sdk/...`` src 404s on app subdomains) and the body boots in ``onload``:
-
-    <script>
-      (function () {
-        var cfg = window.__LEMMA_CONFIG__ || {};
-        var base = (cfg.apiUrl || window.location.origin).replace(/\\/$/, "");
-        var s = document.createElement("script");
-        s.src = base + "/public/sdk/lemma-client.js";
-        s.onload = boot;
-        document.head.appendChild(s);
-      })();
-      function boot() {
-        const client = new window.LemmaClient.LemmaClient();  // reads window.__LEMMA_CONFIG__
-      }
-    </script>
+The browser SDK is served only from the API origin, so widgets and apps must build
+its URL from the injected ``window.__LEMMA_CONFIG__.apiUrl`` and boot their code
+from the dynamically created script's load handler.
 """
 
 from __future__ import annotations
 
 import re
 
-# (pattern, advisory message). Order is fixed for deterministic output.
+
 _LINT_PATTERNS: tuple[tuple[re.Pattern[str], str], ...] = (
     (
         re.compile(r"@babel/standalone|type\s*=\s*['\"]text/babel['\"]", re.IGNORECASE),
@@ -50,9 +35,6 @@ _LINT_PATTERNS: tuple[tuple[re.Pattern[str], str], ...] = (
         'Loads the retired `pod-client.js`. Use `<script src="/public/sdk/lemma-client.js"></script>`.',
     ),
     (
-        # Hardcoded absolute host on the SDK script (e.g. the app's own
-        # subdomain, which does not serve /public/sdk — nor does pointing a local
-        # app at a prod host). Build the URL from window.__LEMMA_CONFIG__.apiUrl.
         re.compile(
             r"\bsrc\s*=\s*['\"]https?://[^'\"]*/public/sdk/lemma-client\.js['\"]",
             re.IGNORECASE,
@@ -62,9 +44,6 @@ _LINT_PATTERNS: tuple[tuple[re.Pattern[str], str], ...] = (
         "created `<script>` that boots in `onload` — never the app's own subdomain.",
     ),
     (
-        # Relative SDK src. The bundles are served ONLY from the API origin; an app
-        # subdomain does not serve /public/sdk, so a relative src 404s the moment
-        # a widget/app is deployed to its own host. Build from cfg.apiUrl instead.
         re.compile(
             r"\bsrc\s*=\s*['\"]/(?:public/sdk|sdk)/lemma-(?:client|ui)\.js['\"]",
             re.IGNORECASE,
@@ -75,25 +54,22 @@ _LINT_PATTERNS: tuple[tuple[re.Pattern[str], str], ...] = (
         "script's `onload` — see the `lemma-widget` skill's \"Loading the SDK\".",
     ),
     (
-        # `new window.LemmaClient(` (constructor missing the inner class). The
-        # correct double form `new window.LemmaClient.LemmaClient(` does not match,
-        # because `window.LemmaClient` there is followed by `.`, not `(`.
         re.compile(r"new\s+window\.LemmaClient\s*\("),
         "`new window.LemmaClient(...)` references the namespace object, not the constructor — "
         "use `new window.LemmaClient.LemmaClient()`.",
     ),
 )
 
-# A hardcoded pod id handed to the client; the host injects window.__LEMMA_CONFIG__.
 _HARDCODED_POD_ID = re.compile(
     r"podId\s*:\s*['\"][0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-"
     r"[0-9a-fA-F]{4}-[0-9a-fA-F]{12}['\"]"
 )
-
 _FULL_DOCUMENT = re.compile(
     r"<!doctype|<html[\s>]|<head[\s>]|<body[\s>]", re.IGNORECASE
 )
 _UNRESOLVED_TEMPLATE_TOKEN = re.compile(r"__[A-Z][A-Z0-9_]*__")
+_RUNTIME_CONFIG_REFERENCE = re.compile(r"\b(?:window\.)?__LEMMA_CONFIG__\b")
+_API_URL_IDENTIFIER = re.compile(r"\bapiUrl\b")
 
 
 def lint_app_html(html: str) -> list[str]:
@@ -112,12 +88,7 @@ def lint_app_html(html: str) -> list[str]:
 
 
 def validate_widget_html(html: str) -> list[str]:
-    """Return blocking authoring errors for an inline widget fragment.
-
-    Static HTML/SVG widgets do not need the SDK. When a widget does reference the
-    browser client, enforce the portable loader contract before the tool result is
-    rendered so a bad SDK URL never reaches the iframe.
-    """
+    """Return blocking authoring errors for an inline widget fragment."""
     content = (html or "").strip()
     if not content:
         return ["Widget content must not be empty."]
@@ -140,15 +111,11 @@ def validate_widget_html(html: str) -> list[str]:
 
     uses_sdk = "lemma-client.js" in content or "LemmaClient" in content
     if uses_sdk:
-        if "window.__LEMMA_CONFIG__" not in content:
+        if not _RUNTIME_CONFIG_REFERENCE.search(content):
             errors.append(
                 "SDK-backed widgets must read window.__LEMMA_CONFIG__ at runtime."
             )
-        if (
-            ".apiUrl" not in content
-            and '["apiUrl"]' not in content
-            and "['apiUrl']" not in content
-        ):
+        if not _API_URL_IDENTIFIER.search(content):
             errors.append(
                 "Build the browser SDK URL from window.__LEMMA_CONFIG__.apiUrl."
             )
