@@ -85,7 +85,7 @@ Grant only the toolsets the job needs:
 | --- | --- |
 | `POD` | read/query pod tables and records, read/search pod files, and mint file URLs (in-app member link or a public hit-capped share link) — grant-checked against the agent's own grants |
 | `WORKSPACE_CLI` | a sandbox shell with the `lemma` CLI — the most powerful and broadest toolset. Includes `view_image` (vision-gated: silently withheld if the active model has no vision capability) |
-| `SKILLS` | loading skills available in the workspace |
+| `SKILLS` | loading skills available in the workspace; also added automatically at runtime when `USER_INTERACTION` is configured so widget-capable agents can load `lemma-widget` |
 | `WEB_SEARCH` | web search |
 | `USER_INTERACTION` | ask multiple-choice questions (`ask_user`), show resources/files/tables/widgets (`display_resource`), and gate sensitive actions behind approval (`request_approval`) — behaviors & schemas in `agent-tools.md` |
 | `SPEECH` | speak replies and transcribe voice notes (`say` / `listen`) — see `agent-tools.md` |

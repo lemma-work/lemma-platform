@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from datetime import datetime
 from enum import Enum
+from urllib.parse import urlparse
 
 from pydantic import BaseModel, Field
 
@@ -71,15 +72,6 @@ class DisplayResourceRequest(BaseModel):
         max_length=4,
         description="For WIDGET resources, optional loading messages shown while the visual renders.",
     )
-    interactive: bool = Field(
-        default=False,
-        description=(
-            "For WIDGET resources, set true when the widget collects input and "
-            "submits it back to the chat (via the in-widget lemma.submit(payload) / "
-            "sendPrompt(text) bridge). Use an interactive widget instead of ask_user "
-            "when you need richer or free-form structured input."
-        ),
-    )
     filters: list[RecordFilter] | None = Field(
         default=None,
         description=(
@@ -133,9 +125,6 @@ def validate_display_payload(request: "DisplayResourceRequest") -> str | None:
             return "public_url and content are only valid for WIDGET resources."
         if request.loading_messages:
             return "loading_messages is only valid for WIDGET resources."
-        if request.interactive:
-            return "interactive is only valid for WIDGET resources."
-
     if request.type == DisplayResourceType.FILE:
         if request.path is not None and request.path.startswith(
             ("/tmp/", "/private/", "/Users/")
@@ -152,6 +141,10 @@ def validate_display_payload(request: "DisplayResourceRequest") -> str | None:
         )
         if payload_count != 1:
             return "WIDGET resources must provide exactly one of public_url or content."
+        if request.public_url:
+            parsed = urlparse(request.public_url)
+            if parsed.scheme not in {"http", "https"} or not parsed.netloc:
+                return "WIDGET public_url must be an absolute http or https URL."
 
     if request.type != DisplayResourceType.TABLE and (
         request.filters is not None or request.query is not None

@@ -1,4 +1,4 @@
 interface:
   display_name: "Lemma Widgets"
   short_description: "Build live pod widgets (savable as apps)"
-  default_prompt: "Use $lemma-widget to render a polished, self-contained inline widget powered by live Lemma pod data via the browser SDK — the same artifact you can later save as an app."
+  default_prompt: "Use $lemma-widget to show any answer with structure or visual hierarchy beyond short prose as a lightweight inline HTML widget. Use a Vite app instead if the UI needs React, routing, or substantial application state."

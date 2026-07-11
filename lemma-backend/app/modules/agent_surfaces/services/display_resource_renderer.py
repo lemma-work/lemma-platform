@@ -200,6 +200,8 @@ def build_display_resource_url(
     pod_base = f"{base}/pod/{quote(str(pod_id), safe='')}"
 
     if request.type is DisplayResourceType.WIDGET:
+        if request.public_url:
+            return request.public_url
         return _append_tool_context(
             f"{pod_base}/widgets/view",
             conversation_id=conversation_id,
@@ -265,7 +267,7 @@ def _display_resource_summary(request: DisplayResourceRequest) -> str | None:
     if request.type is DisplayResourceType.TABLE:
         return "A datastore view is ready."
     if request.type is DisplayResourceType.WIDGET:
-        return "An interactive widget is ready."
+        return "A widget is ready."
     if request.type is DisplayResourceType.FILE:
         return "A file is ready to inspect."
     if request.type is DisplayResourceType.BROWSER:
@@ -293,9 +295,9 @@ def _display_resource_detail_lines(
                 )
             ]
     if request.type is DisplayResourceType.WIDGET:
-        # Do not leak a raw serve/source URL to a surface — the action button
-        # already carries the user-facing /widgets/view deep link.
-        return ["Interactive widget"]
+        if request.public_url:
+            return ["External widget"]
+        return ["Widget"]
     if request.type is DisplayResourceType.BROWSER:
         output = _as_record(tool_output)
         expires_at = _as_nonempty_string(output.get("expires_at"))

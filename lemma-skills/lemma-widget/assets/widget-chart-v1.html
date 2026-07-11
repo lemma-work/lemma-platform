@@ -1,0 +1,65 @@
+<!-- Lemma chart widget v1. Replace every uppercase placeholder before display. -->
+<style>
+  .lwc-v1 { --ink:var(--lemma-widget-text,#141414); --muted:var(--lemma-widget-muted,#6b6b6b); --line:var(--lemma-widget-border,#e5e5e5); --surface:var(--lemma-widget-surface,#fff); --subtle:var(--lemma-widget-subtle,#f0efec); --accent:var(--lemma-widget-accent,#6366f1); --chart-1:var(--lemma-widget-chart-1,#6366f1); --chart-2:var(--lemma-widget-chart-2,#6fa9bb); --chart-3:var(--lemma-widget-chart-3,#d99a32); --chart-4:var(--lemma-widget-chart-4,#df6a45); --chart-5:var(--lemma-widget-chart-5,#8d82bd); --radius:var(--lemma-widget-radius,10px); color-scheme:var(--lemma-widget-color-scheme,light); color:var(--ink); font:14px/1.45 var(--lemma-widget-font,ui-sans-serif,system-ui,-apple-system,"Segoe UI",sans-serif); }
+  .lwc-v1 * { box-sizing:border-box; }
+  .lwc-v1 [hidden] { display:none !important; }
+  .lwc-v1__head { display:flex; align-items:end; justify-content:space-between; gap:12px; margin-bottom:12px; }
+  .lwc-v1 h2 { margin:0; font-size:19px; letter-spacing:-.02em; }
+  .lwc-v1__total { color:var(--muted); font-variant-numeric:tabular-nums; }
+  .lwc-v1__frame { position:relative; width:100%; height:300px; padding:12px; border:1px solid var(--line); border-radius:var(--radius); background:var(--surface); }
+  .lwc-v1__state { display:grid; min-height:180px; place-items:center; color:var(--muted); }
+  @media (prefers-color-scheme:dark) { .lwc-v1 { --ink:var(--lemma-widget-text,#ececec); --muted:var(--lemma-widget-muted,#9e9e9e); --line:var(--lemma-widget-border,#2a2a2a); --surface:var(--lemma-widget-surface,#1a1a1a); --subtle:var(--lemma-widget-subtle,#222); --accent:var(--lemma-widget-accent,#818cf8); --chart-1:var(--lemma-widget-chart-1,#818cf8); --chart-2:var(--lemma-widget-chart-2,#83b8c8); --chart-3:var(--lemma-widget-chart-3,#e0aa55); --chart-4:var(--lemma-widget-chart-4,#f87171); --chart-5:var(--lemma-widget-chart-5,#aaa0d7); color-scheme:var(--lemma-widget-color-scheme,dark); } }
+</style>
+<section class="lwc-v1" data-lemma-widget-version="1">
+  <header class="lwc-v1__head"><h2>__WIDGET_TITLE__</h2><div id="lwc-v1-total" class="lwc-v1__total"></div></header>
+  <div id="lwc-v1-state" class="lwc-v1__state">Loading chart…</div>
+  <div id="lwc-v1-frame" class="lwc-v1__frame" hidden><canvas id="lwc-v1-chart"></canvas></div>
+</section>
+<script>
+  (function () {
+    var stateEl = document.getElementById("lwc-v1-state");
+    var frameEl = document.getElementById("lwc-v1-frame");
+    var totalEl = document.getElementById("lwc-v1-total");
+    function field(row, key) { return row && row.data && row.data[key] != null ? row.data[key] : row && row[key]; }
+    function fail(message) { stateEl.hidden=false; stateEl.textContent=message || "Unable to load chart."; frameEl.hidden=true; }
+    function loadChartJs() {
+      return new Promise(function (resolve, reject) {
+        if (window.Chart) { resolve(); return; }
+        var chart = document.createElement("script");
+        chart.src = "https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.js";
+        chart.onload = resolve;
+        chart.onerror = reject;
+        document.head.appendChild(chart);
+      });
+    }
+    async function boot() {
+      try {
+        var client = new window.LemmaClient.LemmaClient();
+        var auth = await client.initialize();
+        if (!auth || auth.status !== "authenticated") { fail("Sign in to Lemma to view this chart."); return; }
+        var response = await client.records.list("__TABLE_NAME__", { limit: 200 });
+        var rows = (response && response.items) || [];
+        if (!rows.length) { fail("No __EMPTY_LABEL__ yet."); return; }
+        var counts = {};
+        rows.forEach(function (row) { var key=field(row,"__GROUP_FIELD__") || "Unspecified"; counts[key]=(counts[key]||0)+1; });
+        await loadChartJs();
+        var theme=getComputedStyle(document.querySelector(".lwc-v1"));
+        var palette=[1,2,3,4,5].map(function(index){return theme.getPropertyValue("--chart-"+index).trim();});
+        totalEl.textContent = new Intl.NumberFormat().format(rows.length) + " total";
+        frameEl.hidden=false; stateEl.hidden=true;
+        new window.Chart(document.getElementById("lwc-v1-chart"), {
+          type:"bar",
+          data:{ labels:Object.keys(counts), datasets:[{ data:Object.values(counts), backgroundColor:palette }] },
+          options:{ responsive:true, maintainAspectRatio:false, animation:false, color:theme.getPropertyValue("--muted").trim(), plugins:{legend:{display:false}}, scales:{y:{beginAtZero:true,ticks:{precision:0},grid:{color:theme.getPropertyValue("--line").trim()}},x:{grid:{display:false}}} }
+        });
+      } catch (error) { fail(error && error.message); }
+    }
+    var cfg = window.__LEMMA_CONFIG__ || {};
+    if (!cfg.apiUrl) { fail("Lemma runtime configuration is unavailable."); return; }
+    var sdk = document.createElement("script");
+    sdk.src = cfg.apiUrl.replace(/\/$/, "") + "/public/sdk/lemma-client.js";
+    sdk.onload = boot;
+    sdk.onerror = function () { fail("Could not load the Lemma browser SDK."); };
+    document.head.appendChild(sdk);
+  })();
+</script>

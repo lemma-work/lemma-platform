@@ -257,9 +257,9 @@ class AppService:
     ) -> AppEntity:
         """Promote a resolved widget artifact into a persisted app.
 
-        The widget and the app are the same artifact at two lifecycle stages:
-        the stored HTML is wrapped as a standalone document (no embed bridge)
-        and deployed as the app's bundle — identical to what the widget showed.
+        The widget and the app share one source artifact at two lifecycle stages:
+        the stored fragment is preserved, wrapped as a standalone document (no
+        embed bridge or conversation padding), and deployed as the app's bundle.
         """
         for issue in lint_app_html(artifact.content):
             logger.warning(

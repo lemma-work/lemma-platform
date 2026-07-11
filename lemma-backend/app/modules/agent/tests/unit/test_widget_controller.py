@@ -66,6 +66,11 @@ def _fake_conv_service(owner_id, pod_id):
 # --- serve route -----------------------------------------------------------
 
 
+def test_widget_router_has_no_submit_route():
+    paths = {route.path for route in ctrl.serve_router.routes}
+    assert not any(path.endswith("/submit") for path in paths)
+
+
 @pytest.mark.asyncio
 async def test_serve_widget_with_token(monkeypatch):
     pod_id = uuid4()
@@ -78,7 +83,9 @@ async def test_serve_widget_with_token(monkeypatch):
     monkeypatch.setattr(ctrl, "verify_widget_token", lambda _token, **_kw: user_id)
     ctx = SimpleNamespace(require=AsyncMock(return_value=None), user_id=user_id)
     monkeypatch.setattr(ctrl, "AuthorizationDataService", _fake_authz(ctx))
-    monkeypatch.setattr(ctrl, "get_conversation_service", _fake_conv_service(user_id, pod_id))
+    monkeypatch.setattr(
+        ctrl, "get_conversation_service", _fake_conv_service(user_id, pod_id)
+    )
 
     resp = await ctrl.serve_widget(
         uuid4(), "tc_1", SimpleNamespace(), SimpleNamespace(session=None), token="tok"
@@ -130,7 +137,9 @@ async def test_serve_non_owner_returns_404(monkeypatch):
     monkeypatch.setattr(ctrl, "verify_widget_token", lambda _token, **_kw: viewer_id)
     ctx = SimpleNamespace(require=AsyncMock(return_value=None), user_id=viewer_id)
     monkeypatch.setattr(ctrl, "AuthorizationDataService", _fake_authz(ctx))
-    monkeypatch.setattr(ctrl, "get_conversation_service", _fake_conv_service(owner_id, pod_id))
+    monkeypatch.setattr(
+        ctrl, "get_conversation_service", _fake_conv_service(owner_id, pod_id)
+    )
 
     with pytest.raises(HTTPException) as exc:
         await ctrl.serve_widget(
@@ -149,7 +158,9 @@ async def test_mint_non_owner_returns_404(monkeypatch):
     owner_id = uuid4()
     artifact = WidgetArtifact(content="<div>secret</div>", pod_id=pod_id)
     monkeypatch.setattr(ctrl, "WidgetAssetService", _fake_service(artifact))
-    monkeypatch.setattr(ctrl, "get_conversation_service", _fake_conv_service(owner_id, pod_id))
+    monkeypatch.setattr(
+        ctrl, "get_conversation_service", _fake_conv_service(owner_id, pod_id)
+    )
     ctx = SimpleNamespace(require=AsyncMock(return_value=None), user_id=viewer_id)
 
     with pytest.raises(HTTPException) as exc:
@@ -168,9 +179,7 @@ async def test_serve_non_member_returns_403(monkeypatch):
     monkeypatch.setattr(ctrl, "get_session", AsyncMock(return_value=None))
     monkeypatch.setattr(ctrl, "verify_widget_token", lambda _token, **_kw: user_id)
     ctx = SimpleNamespace(
-        require=AsyncMock(
-            side_effect=DomainError("denied", code="X", status_code=403)
-        ),
+        require=AsyncMock(side_effect=DomainError("denied", code="X", status_code=403)),
         user_id=user_id,
     )
     monkeypatch.setattr(ctrl, "AuthorizationDataService", _fake_authz(ctx))
@@ -192,7 +201,9 @@ async def test_mint_embed_url(monkeypatch):
     conversation_id = uuid4()
     artifact = WidgetArtifact(content="<div>x</div>", pod_id=pod_id)
     monkeypatch.setattr(ctrl, "WidgetAssetService", _fake_service(artifact))
-    monkeypatch.setattr(ctrl, "get_conversation_service", _fake_conv_service(user_id, pod_id))
+    monkeypatch.setattr(
+        ctrl, "get_conversation_service", _fake_conv_service(user_id, pod_id)
+    )
     ctx = SimpleNamespace(require=AsyncMock(return_value=None), user_id=user_id)
 
     resp = await ctrl.mint_widget_embed_url(

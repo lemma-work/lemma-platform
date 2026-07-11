@@ -79,3 +79,21 @@ def test_display_resource_renderer_reads_browser_url_from_model_output():
 
     assert plan.primary_action is not None
     assert plan.primary_action.url == "https://browser.example.test/live"
+
+
+def test_display_resource_renderer_links_external_widget_directly():
+    plan = build_display_resource_render_plan(
+        pod_id=uuid4(),
+        conversation_id=uuid4(),
+        tool_call_id="tool-widget-1",
+        request=DisplayResourceRequest.model_validate(
+            {
+                "type": "WIDGET",
+                "public_url": "https://widgets.example.test/board",
+            }
+        ),
+    )
+
+    assert plan.primary_action is not None
+    assert plan.primary_action.url == "https://widgets.example.test/board"
+    assert "External widget" in plan.to_plain_text()

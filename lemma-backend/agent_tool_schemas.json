@@ -2,7 +2,7 @@
   {
     "tool_name": "ask_user",
     "toolset": "USER_INTERACTION",
-    "description": "Ask the user one or more multiple-choice questions and wait for their answers.\n\nUse this to get a decision or clarification you genuinely cannot infer \u2014 for\nexample which of several approaches to take, or a missing preference. Present a\nshort series of questions, each with 2-4 concrete options, and mark the option\nyou recommend (`recommended: true`). The run pauses while the client renders\nthe questions; the user picks an option per question (or types their own answer\nvia an always-available \"Other\"), and the chosen answers come back in\n`answers`, keyed by each question's `header`.\n\nPrefer this over a prose question whenever the answer is a choice among known\noptions. For free-form structured input (several typed fields at once), render\na FORM with `display_resource` instead. Only ask when it changes what you do\nnext \u2014 don't ask about things with an obvious default; just proceed.",
+    "description": "Ask the user one or more multiple-choice questions and wait for their answers.\n\nUse this to get a decision or clarification you genuinely cannot infer \u2014 for\nexample which of several approaches to take, or a missing preference. Present a\nshort series of questions, each with 2-4 concrete options, and mark the option\nyou recommend (`recommended: true`). The run pauses while the client renders\nthe questions; the user picks an option per question (or types their own answer\nvia an always-available \"Other\"), and the chosen answers come back in\n`answers`, keyed by each question's `header`.\n\nPrefer this over a prose question whenever the answer is a choice among known\noptions. For free-form input, ask clearly in prose and end your turn so the\nuser's next message can answer. Only ask when it changes what you do next \u2014\ndon't ask about things with an obvious default; just proceed.",
     "input_schema": {
       "$defs": {
         "AskUserOption": {
@@ -120,7 +120,7 @@
   {
     "tool_name": "display_resource",
     "toolset": "USER_INTERACTION",
-    "description": "Display a user-facing resource or richer interaction.\n\nPrefer this tool whenever the user would benefit from seeing, inspecting, or\nacting on something instead of receiving prose only. Text is good for brief\nnarration, but users often want a concrete surface:\n- asking multiple structured questions: render a FORM instead of asking\n  several prose questions at once.\n- showing complex data, charts, previews, or custom visuals: render a WIDGET\n  instead of dumping dense text.\n- creating or updating pod resources: display the created or changed AGENT,\n  FUNCTION, WORKFLOW, DESK, SCHEDULE, TABLE, or FILE instead of only saying\n  that it was created.\n- showing datastore records or resource lists: display the TABLE or resource\n  directly so the user can inspect it.\n\nUse this for every \"show this to the user\" action: pod files, datastore\ntables, agents, functions, workflows, desks, schedules, widgets, and forms.",
+    "description": "Display a user-facing resource or richer interaction.\n\nPrefer this tool whenever the useful answer is more than short prose. Text is\nfor a single fact, a short explanation, or narration around a concrete surface:\n- asking a multiple-choice question: use the `ask_user` tool. For free-form\n  input, ask clearly in prose and continue from the user's next message.\n- showing several values, records, statuses, steps, comparisons, a timeline,\n  compact table, preview, or chart: render a WIDGET instead of describing the\n  structure in prose.\n- creating or updating pod resources: display the created or changed AGENT,\n  FUNCTION, WORKFLOW, APP, SCHEDULE, TABLE, or FILE instead of only saying\n  that it was created.\n- showing datastore records or resource lists: display the TABLE or resource\n  directly so the user can inspect it.\n\nUse this for every \"show this to the user\" action: pod files, datastore\ntables, agents, functions, workflows, apps, schedules, and widgets.",
     "input_schema": {
       "$defs": {
         "DisplayResourceType": {
@@ -131,10 +131,9 @@
             "AGENT",
             "FUNCTION",
             "WORKFLOW",
-            "DESK",
+            "APP",
             "SCHEDULE",
-            "WIDGET",
-            "FORM"
+            "WIDGET"
           ],
           "title": "DisplayResourceType",
           "type": "string"
@@ -238,19 +237,6 @@
           },
           "maxItems": 4,
           "type": "array"
-        },
-        "json_schema": {
-          "anyOf": [
-            {
-              "additionalProperties": true,
-              "type": "object"
-            },
-            {
-              "type": "null"
-            }
-          ],
-          "default": null,
-          "description": "For FORM resources, a JSON Schema object describing the form fields. It MUST contain a non-empty 'properties' map (one entry per field, each a JSON Schema with a 'type' and optional 'title'/'enum') plus an optional 'required' list \u2014 an empty object is rejected. Example: {\"title\": \"Quick form\", \"properties\": {\"name\": {\"type\": \"string\", \"title\": \"Name\"}, \"priority\": {\"type\": \"string\", \"enum\": [\"low\", \"high\"]}}, \"required\": [\"name\"]}. May also be passed as a JSON-encoded string."
         },
         "filters": {
           "anyOf": [
@@ -639,11 +625,11 @@
   },
   {
     "tool_name": "get_operation_details_tool",
-    "toolset": "INTEGRATIONS",
+    "toolset": "CONNECTORS",
     "description": "Fetch detailed input and output schemas for one or more operations.",
     "input_schema": {
       "properties": {
-        "application_id": {
+        "connector_id": {
           "type": "string"
         },
         "operation_names": {
@@ -662,7 +648,7 @@
         }
       },
       "required": [
-        "application_id"
+        "connector_id"
       ],
       "title": "_OperationDetailsToolRequest",
       "type": "object"
@@ -713,8 +699,8 @@
       },
       "description": "Batch response containing full metadata for multiple operations.",
       "properties": {
-        "application_id": {
-          "description": "Application identifier.",
+        "connector_id": {
+          "description": "Connector identifier.",
           "type": "string"
         },
         "items": {
@@ -730,7 +716,7 @@
         }
       },
       "required": [
-        "application_id",
+        "connector_id",
         "items",
         "returned_count"
       ],
@@ -893,7 +879,7 @@
   {
     "tool_name": "listen",
     "toolset": "SPEECH",
-    "description": "Transcribe a user's voice message or audio file to text (speech-to-text).\n\nUSE WHEN the user sends a voice note / audio file and you need its words.\nThe file_path may point at the pod datastore (e.g. an auto-ingested voice\nnote at /me/telegram/voice.ogg) or the workspace sandbox. Common formats\n(OGG/Opus, MP3, M4A/AAC, WAV, FLAC, WebM) are supported directly.\n\nReturns the transcript plus optional detected_language/duration.",
+    "description": "Transcribe a user's voice message or audio file to text (speech-to-text).\n\nUSE WHEN the user sends a voice note / audio file and you need its words.\nThe file_path may point at the pod datastore (e.g. an auto-ingested voice\nnote at /me/telegram/voice.ogg) or the workspace sandbox. Common formats\n(OGG/Opus, MP3, M4A/AAC, WAV, FLAC, WebM) are supported directly.\n\nReturns the transcript plus optional detected_language/duration. The\ntranscript is for YOUR understanding \u2014 treat it as if the user had typed\nthose words and act on the request directly. Do NOT paste, echo, or rewrite\nthe transcript back to the user as a message (\"You said: ...\").",
     "input_schema": {
       "description": "Transcribe a pod/workspace audio file to text.",
       "properties": {
@@ -1399,12 +1385,12 @@
   {
     "tool_name": "pod_list_files",
     "toolset": "POD",
-    "description": "List pod files under a path.\n\n``recursive=false`` (default) lists the immediate files and folders in\n``path``. ``recursive=true`` returns a file tree rooted at ``path`` (folders\nplus a sample of files per directory).",
+    "description": "List pod files under a path.\n\n``recursive=false`` (default) lists the immediate files and folders in\n``path``. ``recursive=true`` returns a file tree rooted at ``path`` (folders\nplus a sample of files per directory). Without an absolute path, resolves\nagainst your default pod working directory (`/me/c/{date}/{slug}`).",
     "input_schema": {
       "properties": {
         "path": {
           "default": "/",
-          "description": "Folder path, e.g. /pod or /me.",
+          "description": "Folder path, e.g. /pod or /me. An absolute path is used as-is; a relative path (e.g. '' or 'notes') is resolved against your default pod working directory (`/me/c/{date}/{slug}`).",
           "type": "string"
         },
         "recursive": {
@@ -1460,11 +1446,11 @@
   {
     "tool_name": "pod_read_file",
     "toolset": "POD",
-    "description": "Read a pod file's content as text or as converted document markdown.\n\n- ``format=\"text\"`` (default) \u2014 the file's raw UTF-8 text, truncated to\n  ``max_chars``.\n- ``format=\"markdown\"`` \u2014 converted markdown for a document (PDF, DOCX, ...),\n  optionally a 1-based page range (``page_start``/``page_end``).\n\nTo SEE pages visually (layout, tables, figures), use ``pod_view_document_pages``.",
+    "description": "Read a pod file's content as text or as converted document markdown.\n\n- ``format=\"text\"`` (default) \u2014 the file's raw UTF-8 text, truncated to\n  ``max_chars``.\n- ``format=\"markdown\"`` \u2014 converted markdown for a document (PDF, DOCX, ...),\n  optionally a 1-based page range (``page_start``/``page_end``).\n\nDocuments are auto-converted to markdown at upload and cached, so reading is\ninstant \u2014 read them here directly; do not download and re-parse/OCR them.\n``pod_list_files`` reports ``has_markdown``/``page_count`` so you know what's\nready. To SEE pages visually (layout, tables, figures), use\n``pod_view_document_pages``.",
     "input_schema": {
       "properties": {
         "path": {
-          "description": "Absolute pod file path, e.g. /pod/notes.txt.",
+          "description": "Pod file path to read. An absolute path (e.g. /pod/notes.txt) is used as-is; a relative path is resolved against your default pod working directory (`/me/c/{date}/{slug}`).",
           "type": "string"
         },
         "format": {
@@ -2176,6 +2162,50 @@
     }
   },
   {
+    "tool_name": "pod_write_file",
+    "toolset": "POD",
+    "description": "Write text content to a pod file, creating or overwriting it.\n\nWithout an absolute path, the file lands in your default pod working\ndirectory (`/me/c/{date}/{slug}`) \u2014 a stable, private location scoped to\nthis conversation. Writes under your own `/me/...` (including that default\nlocation) never need approval; writes to a shared pod path may.",
+    "input_schema": {
+      "properties": {
+        "path": {
+          "description": "Pod file path to write. An absolute path (e.g. /me/report.md) is used as-is; a relative path (e.g. report.md) is resolved against your default pod working directory (`/me/c/{date}/{slug}`) \u2014 write there when you don't need a specific shared location.",
+          "type": "string"
+        },
+        "content": {
+          "description": "UTF-8 text content to write.",
+          "type": "string"
+        },
+        "overwrite": {
+          "default": true,
+          "description": "If false and the file already exists, the write is rejected instead of replacing it.",
+          "type": "boolean"
+        },
+        "description": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Optional file description."
+        }
+      },
+      "required": [
+        "path",
+        "content"
+      ],
+      "title": "PodWriteFileRequest",
+      "type": "object"
+    },
+    "output_schema": {
+      "additionalProperties": true,
+      "type": "object"
+    }
+  },
+  {
     "tool_name": "pod_write_record",
     "toolset": "POD",
     "description": "Create, update, or delete a record in a pod table (requires record.write grant).\n\n- ``action=\"create\"`` \u2014 needs ``data`` (column -> value).\n- ``action=\"update\"`` \u2014 needs ``record_id`` and ``data``.\n- ``action=\"delete\"`` \u2014 needs ``record_id``.",
@@ -2212,11 +2242,14 @@
               "type": "object"
             },
             {
+              "type": "string"
+            },
+            {
               "type": "null"
             }
           ],
           "default": null,
-          "description": "An object mapping column name -> value, e.g. {\"title\": \"Q3 report\", \"amount\": 42, \"tags\": [\"a\", \"b\"]}. Values may be scalars, nested objects, or arrays. REQUIRED and must be non-empty for 'create' and 'update' \u2014 an empty object writes nothing and is rejected."
+          "description": "The row's column name -> value mapping. Pass EITHER a JSON object, e.g. {\"title\": \"Q3 report\", \"amount\": 42, \"tags\": [\"a\", \"b\"]}, OR a JSON-encoded string of that same object if you cannot emit a populated object directly, e.g. \"{\\\"title\\\": \\\"Q3 report\\\", \\\"amount\\\": 42}\". Values may be scalars, nested objects, or arrays. REQUIRED and must be non-empty for 'create' and 'update' \u2014 an empty object writes nothing and is rejected."
         }
       },
       "required": [
@@ -2339,6 +2372,20 @@
             }
           ],
           "default": null
+        },
+        "permission_ids": {
+          "anyOf": [
+            {
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
         }
       },
       "required": [
@@ -2426,7 +2473,7 @@
   {
     "tool_name": "say",
     "toolset": "SPEECH",
-    "description": "Generate spoken audio (MP3) from text and save it to the pod datastore.\n\nUSE WHEN you want to reply to the user with voice. Returns the pod file path\nof the generated audio. To actually send it, call display_resource\n(type=FILE, path=<audio_file_path>) \u2014 do NOT assume it is auto-sent.",
+    "description": "Speak a reply: synthesize audio from text and deliver it as a voice note.\n\nUSE WHEN the user wants a spoken reply \u2014 the default reply modality is text,\nso only call this when voice is genuinely wanted (e.g. they sent a voice note\nand want one back). On a chat surface this delivers a NATIVE voice note\nautomatically (Telegram voice bubble, WhatsApp audio, Slack audio player) and\nalso saves the audio to the pod datastore; on the web app it appears as an\naudio player. The user receives and can play this audio \u2014 it IS your reply.\n\nDo NOT call display_resource afterward \u2014 say already delivers. Do NOT also\nwrite the same words as a text message: the spoken audio is the reply, and\nrestating it as text duplicates it. Add a separate text line only if it says\nsomething different (a caption, a link). Returns the pod file path of the\ngenerated audio.",
     "input_schema": {
       "description": "Generate spoken audio (MP3) from text.",
       "properties": {
@@ -2512,11 +2559,11 @@
   },
   {
     "tool_name": "search_operations_tool",
-    "toolset": "INTEGRATIONS",
-    "description": "Search operations for one application using only name and description.",
+    "toolset": "CONNECTORS",
+    "description": "Search operations for one connector using only name and description.",
     "input_schema": {
       "properties": {
-        "application_id": {
+        "connector_id": {
           "type": "string"
         },
         "query": {
@@ -2543,7 +2590,7 @@
         }
       },
       "required": [
-        "application_id"
+        "connector_id"
       ],
       "title": "_OperationSearchToolRequest",
       "type": "object"
@@ -2589,10 +2636,10 @@
           "type": "object"
         }
       },
-      "description": "Structured result for operation discovery within one application.",
+      "description": "Structured result for operation discovery within one connector.",
       "properties": {
-        "application_id": {
-          "description": "Application identifier.",
+        "connector_id": {
+          "description": "Connector identifier.",
           "type": "string"
         },
         "query": {
@@ -2615,7 +2662,7 @@
           "type": "array"
         },
         "total_operations": {
-          "description": "Total operations available for the application.",
+          "description": "Total operations available for the connector.",
           "type": "integer"
         },
         "returned_count": {
@@ -2624,7 +2671,7 @@
         }
       },
       "required": [
-        "application_id",
+        "connector_id",
         "items",
         "total_operations",
         "returned_count"
@@ -2674,7 +2721,7 @@
   },
   {
     "tool_name": "view_image",
-    "toolset": "WORKSPACE_CLI",
+    "toolset": "VIEW_IMAGE",
     "description": "Load an image file from the private workspace and return it as binary tool content.\n\nUse this for screenshots, generated images, charts, or any other visual artifact\nthat the agent should inspect.\n\nPATH HANDLING:\n- This tool reads only from the private current conversation workspace directory.\n- Always pass a relative path such as `images/output.png`.\n- Do not pass absolute paths or paths outside the current workspace directory.",
     "input_schema": {
       "properties": {

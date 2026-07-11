@@ -1,0 +1,135 @@
+<!-- Lemma widget starter v1. Replace every uppercase placeholder before display. -->
+<style>
+  .lw-v1 {
+    --lw-bg: var(--lemma-widget-bg, #f5f4f0);
+    --lw-surface: var(--lemma-widget-surface, #ffffff);
+    --lw-subtle: var(--lemma-widget-subtle, #f0efec);
+    --lw-ink: var(--lemma-widget-text, #141414);
+    --lw-muted: var(--lemma-widget-muted, #6b6b6b);
+    --lw-line: var(--lemma-widget-border, #e5e5e5);
+    --lw-accent: var(--lemma-widget-accent, #6366f1);
+    --lw-danger: var(--lemma-widget-danger, #dc2626);
+    --lw-danger-soft: var(--lemma-widget-danger-soft, #fef2f2);
+    --lw-radius: var(--lemma-widget-radius, 10px);
+    color-scheme: var(--lemma-widget-color-scheme, light);
+    color: var(--lw-ink);
+    display: block;
+    width: 100%;
+    font: 14px/1.45 var(--lemma-widget-font, ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif);
+  }
+  .lw-v1 * { box-sizing: border-box; }
+  .lw-v1 [hidden] { display:none !important; }
+  .lw-v1__head { display:flex; align-items:flex-start; justify-content:space-between; gap:16px; margin-bottom:14px; }
+  .lw-v1__eyebrow { color:var(--lw-accent); font-size:11px; font-weight:700; letter-spacing:.08em; text-transform:uppercase; }
+  .lw-v1__title { margin:3px 0 0; font-size:20px; line-height:1.2; font-weight:650; letter-spacing:-.02em; }
+  .lw-v1__meta { color:var(--lw-muted); font-size:12px; white-space:nowrap; }
+  .lw-v1__grid { display:grid; grid-template-columns:repeat(auto-fit,minmax(150px,1fr)); gap:10px; }
+  .lw-v1__card { min-width:0; padding:14px; border:1px solid var(--lw-line); border-radius:var(--lw-radius); background:var(--lw-surface); }
+  .lw-v1__label { color:var(--lw-muted); font-size:11px; font-weight:650; letter-spacing:.06em; text-transform:uppercase; }
+  .lw-v1__value { margin-top:5px; font-size:25px; line-height:1.1; font-weight:650; font-variant-numeric:tabular-nums; }
+  .lw-v1__state { padding:20px; border:1px dashed var(--lw-line); border-radius:var(--lw-radius); background:var(--lw-subtle); color:var(--lw-muted); text-align:center; }
+  .lw-v1__state[data-kind="error"] { color:var(--lw-danger); border-color:var(--lw-danger); background:var(--lw-danger-soft); }
+  @media (prefers-color-scheme: dark) {
+    .lw-v1 {
+      --lw-bg: var(--lemma-widget-bg, #11120f);
+      --lw-surface: var(--lemma-widget-surface, #1a1a1a);
+      --lw-subtle: var(--lemma-widget-subtle, #222222);
+      --lw-ink: var(--lemma-widget-text, #ececec);
+      --lw-muted: var(--lemma-widget-muted, #9e9e9e);
+      --lw-line: var(--lemma-widget-border, #2a2a2a);
+      --lw-accent: var(--lemma-widget-accent, #818cf8);
+      --lw-danger: var(--lemma-widget-danger, #f87171);
+      --lw-danger-soft: var(--lemma-widget-danger-soft, #331919);
+      color-scheme: var(--lemma-widget-color-scheme, dark);
+    }
+  }
+  @media (max-width:420px) { .lw-v1__head { display:block; } .lw-v1__meta { margin-top:5px; } }
+</style>
+
+<section class="lw-v1" data-lemma-widget-version="1">
+  <header class="lw-v1__head">
+    <div>
+      <div class="lw-v1__eyebrow">__WIDGET_EYEBROW__</div>
+      <h2 class="lw-v1__title">__WIDGET_TITLE__</h2>
+    </div>
+    <div id="lw-v1-meta" class="lw-v1__meta">Connecting…</div>
+  </header>
+  <div id="lw-v1-state" class="lw-v1__state">Loading live pod data…</div>
+  <div id="lw-v1-content" class="lw-v1__grid" hidden></div>
+</section>
+
+<script>
+  (function () {
+    var stateEl = document.getElementById("lw-v1-state");
+    var contentEl = document.getElementById("lw-v1-content");
+    var metaEl = document.getElementById("lw-v1-meta");
+
+    function fail(message) {
+      stateEl.hidden = false;
+      stateEl.dataset.kind = "error";
+      stateEl.textContent = message || "Unable to load this widget.";
+      contentEl.hidden = true;
+      metaEl.textContent = "Unavailable";
+    }
+
+    function field(row, key) {
+      return row && row.data && row.data[key] != null ? row.data[key] : row && row[key];
+    }
+
+    function escapeHtml(value) {
+      return String(value == null ? "" : value).replace(/[&<>"']/g, function (char) {
+        return { "&":"&amp;", "<":"&lt;", ">":"&gt;", '"':"&quot;", "'":"&#39;" }[char];
+      });
+    }
+
+    function render(rows) {
+      if (!rows.length) {
+        stateEl.textContent = "No __EMPTY_LABEL__ yet.";
+        metaEl.textContent = "0 records";
+        return;
+      }
+      var counts = {};
+      rows.forEach(function (row) {
+        var key = field(row, "__GROUP_FIELD__") || "Unspecified";
+        counts[key] = (counts[key] || 0) + 1;
+      });
+      var cards = [
+        '<article class="lw-v1__card"><div class="lw-v1__label">Total</div><div class="lw-v1__value">' +
+          new Intl.NumberFormat().format(rows.length) + "</div></article>"
+      ].concat(Object.keys(counts).slice(0, 5).map(function (key) {
+        return '<article class="lw-v1__card"><div class="lw-v1__label">' + escapeHtml(key) +
+          '</div><div class="lw-v1__value">' + new Intl.NumberFormat().format(counts[key]) + "</div></article>";
+      }));
+      contentEl.innerHTML = cards.join("");
+      contentEl.hidden = false;
+      stateEl.hidden = true;
+      metaEl.textContent = new Intl.NumberFormat().format(rows.length) + " records";
+    }
+
+    async function boot() {
+      try {
+        var client = new window.LemmaClient.LemmaClient();
+        var auth = await client.initialize();
+        if (!auth || auth.status !== "authenticated") {
+          fail("Sign in to Lemma to view this data.");
+          return;
+        }
+        var response = await client.records.list("__TABLE_NAME__", { limit: 100 });
+        render((response && response.items) || []);
+      } catch (error) {
+        fail(error && error.message ? error.message : "Unable to load live pod data.");
+      }
+    }
+
+    var cfg = window.__LEMMA_CONFIG__ || {};
+    if (!cfg.apiUrl) {
+      fail("Lemma runtime configuration is unavailable.");
+      return;
+    }
+    var sdk = document.createElement("script");
+    sdk.src = cfg.apiUrl.replace(/\/$/, "") + "/public/sdk/lemma-client.js";
+    sdk.onload = boot;
+    sdk.onerror = function () { fail("Could not load the Lemma browser SDK."); };
+    document.head.appendChild(sdk);
+  })();
+</script>
