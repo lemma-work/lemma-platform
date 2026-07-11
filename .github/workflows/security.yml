@@ -10,15 +10,95 @@ on:
 
 permissions:
   contents: read
+  pull-requests: read
 
 concurrency:
   group: security-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:
+  changes:
+    name: Detect security-relevant changes
+    runs-on: ubuntu-latest
+    outputs:
+      python: ${{ steps.scope.outputs.python }}
+      javascript: ${{ steps.scope.outputs.javascript }}
+      dependencies: ${{ steps.scope.outputs.dependencies }}
+      python_dependencies: ${{ steps.scope.outputs.python_dependencies }}
+      backend_image: ${{ steps.scope.outputs.backend_image }}
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dorny/paths-filter@v4
+        id: filter
+        with:
+          filters: |
+            python:
+              - '**/*.py'
+              - '**/pyproject.toml'
+              - '**/uv.lock'
+              - '.github/workflows/security.yml'
+            javascript:
+              - '**/*.js'
+              - '**/*.jsx'
+              - '**/*.mjs'
+              - '**/*.cjs'
+              - '**/*.ts'
+              - '**/*.tsx'
+              - '**/package.json'
+              - '**/package-lock.json'
+              - '.github/workflows/security.yml'
+            dependencies:
+              - '**/pyproject.toml'
+              - '**/uv.lock'
+              - '**/package.json'
+              - '**/package-lock.json'
+              - '**/Dockerfile'
+              - '.github/dependabot.yml'
+              - '.github/workflows/**'
+            python_dependencies:
+              - '**/pyproject.toml'
+              - '**/uv.lock'
+              - '.github/workflows/security.yml'
+            backend_image:
+              - 'lemma-backend/Dockerfile'
+              - 'lemma-backend/pyproject.toml'
+              - 'lemma-backend/uv.lock'
+              - 'lemma-backend/lemma-connectors/pyproject.toml'
+              - 'lemma-backend/lemma-connectors/uv.lock'
+              - 'agentbox-client/pyproject.toml'
+              - 'agentbox-client/uv.lock'
+              - 'lemma-pod-bundle/pyproject.toml'
+              - 'lemma-pod-bundle/uv.lock'
+              - '.github/workflows/security.yml'
+      - name: Resolve scheduled/manual scope
+        id: scope
+        shell: bash
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          PYTHON_CHANGED: ${{ steps.filter.outputs.python }}
+          JAVASCRIPT_CHANGED: ${{ steps.filter.outputs.javascript }}
+          DEPENDENCIES_CHANGED: ${{ steps.filter.outputs.dependencies }}
+          PYTHON_DEPENDENCIES_CHANGED: ${{ steps.filter.outputs.python_dependencies }}
+          BACKEND_IMAGE_CHANGED: ${{ steps.filter.outputs.backend_image }}
+        run: |
+          if [[ "$EVENT_NAME" == "schedule" || "$EVENT_NAME" == "workflow_dispatch" ]]; then
+            echo "python=true" >> "$GITHUB_OUTPUT"
+            echo "javascript=true" >> "$GITHUB_OUTPUT"
+            echo "dependencies=true" >> "$GITHUB_OUTPUT"
+            echo "python_dependencies=true" >> "$GITHUB_OUTPUT"
+            echo "backend_image=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "python=$PYTHON_CHANGED" >> "$GITHUB_OUTPUT"
+            echo "javascript=$JAVASCRIPT_CHANGED" >> "$GITHUB_OUTPUT"
+            echo "dependencies=$DEPENDENCIES_CHANGED" >> "$GITHUB_OUTPUT"
+            echo "python_dependencies=$PYTHON_DEPENDENCIES_CHANGED" >> "$GITHUB_OUTPUT"
+            echo "backend_image=$BACKEND_IMAGE_CHANGED" >> "$GITHUB_OUTPUT"
+          fi
+
   dependency-review:
     name: Dependency review
-    if: github.event_name == 'pull_request'
+    needs: changes
+    if: github.event_name == 'pull_request' && needs.changes.outputs.dependencies == 'true'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
@@ -26,21 +106,35 @@ jobs:
         with:
           fail-on-severity: high
 
-  codeql:
-    name: CodeQL (${{ matrix.language }})
+  codeql-python:
+    name: CodeQL (python)
+    needs: changes
+    if: needs.changes.outputs.python == 'true'
     runs-on: ubuntu-latest
     permissions:
       contents: read
       security-events: write
-    strategy:
-      fail-fast: false
-      matrix:
-        language: [python, javascript-typescript]
     steps:
       - uses: actions/checkout@v7
       - uses: github/codeql-action/init@v4
         with:
-          languages: ${{ matrix.language }}
+          languages: python
+          build-mode: none
+      - uses: github/codeql-action/analyze@v4
+
+  codeql-javascript:
+    name: CodeQL (javascript-typescript)
+    needs: changes
+    if: needs.changes.outputs.javascript == 'true'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      security-events: write
+    steps:
+      - uses: actions/checkout@v7
+      - uses: github/codeql-action/init@v4
+        with:
+          languages: javascript-typescript
           build-mode: none
       - uses: github/codeql-action/analyze@v4
 
@@ -71,6 +165,8 @@ jobs:
 
   python-audit:
     name: Python dependency audit
+    needs: changes
+    if: needs.changes.outputs.python_dependencies == 'true'
     runs-on: ubuntu-latest
     defaults:
       run:
@@ -95,6 +191,8 @@ jobs:
 
   container:
     name: Backend image vulnerability scan
+    needs: changes
+    if: needs.changes.outputs.backend_image == 'true'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
