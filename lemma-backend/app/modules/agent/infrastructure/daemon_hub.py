@@ -25,6 +25,7 @@ from app.modules.agent.infrastructure.agent_runtime_redis import (
     publish_json as _publish_json,
     run_event_channel as _run_event_channel,
 )
+from app.modules.agent.infrastructure.mcp import normalize_local_mcp_tool_name
 from app.modules.agent.domain.value_objects import (
     AgentEvent,
     AgentEventType,
@@ -538,6 +539,8 @@ def _event_from_payload(payload: object, *, agent_run_id: UUID) -> AgentEvent:
 def _normalize_event_data(event_type: AgentEventType, data: object) -> object:
     if event_type == AgentEventType.MESSAGE and isinstance(data, dict):
         return _message_draft_from_payload(data)
+    if event_type == AgentEventType.TOKEN and isinstance(data, dict):
+        return _normalize_tool_token(data)
     if event_type == AgentEventType.USAGE and isinstance(data, dict):
         return AgentRunUsage.model_validate(data)
     if isinstance(data, BaseModel):
@@ -549,7 +552,7 @@ def _message_draft_from_payload(data: dict) -> MessageDraft:
     """Build a flat MessageDraft from a daemon MESSAGE payload."""
 
     role = MessageRole(data.get("role", MessageRole.ASSISTANT.value))
-    metadata = data.get("metadata") if isinstance(data.get("metadata"), dict) else None
+    metadata = dict(data["metadata"]) if isinstance(data.get("metadata"), dict) else {}
     raw_kind = data.get("kind")
 
     if raw_kind is None:
@@ -560,32 +563,60 @@ def _message_draft_from_payload(data: dict) -> MessageDraft:
         return MessageDraft.of_text(
             body if isinstance(body, str) else ("" if body is None else str(body)),
             role=role,
-            metadata=metadata,
+            metadata=metadata or None,
         )
 
     kind = MessageKind(raw_kind)
     if kind == MessageKind.TOOL_CALL:
+        raw_tool_name = str(data.get("tool_name") or "unknown_tool")
+        tool_name = normalize_local_mcp_tool_name(raw_tool_name)
+        if tool_name != raw_tool_name:
+            metadata.setdefault("provider_tool_name", raw_tool_name)
         return MessageDraft.of_tool_call(
-            tool_name=str(data.get("tool_name") or "unknown_tool"),
+            tool_name=tool_name,
             tool_call_id=str(data.get("tool_call_id") or ""),
             tool_args=data.get("tool_args"),
             role=role,
-            metadata=metadata,
+            metadata=metadata or None,
         )
     if kind == MessageKind.TOOL_RETURN:
+        raw_tool_name = data.get("tool_name")
+        tool_name = (
+            normalize_local_mcp_tool_name(raw_tool_name)
+            if isinstance(raw_tool_name, str)
+            else None
+        )
+        if tool_name is not None and tool_name != raw_tool_name:
+            metadata.setdefault("provider_tool_name", raw_tool_name)
         return MessageDraft.of_tool_return(
-            tool_name=data.get("tool_name"),
+            tool_name=tool_name,
             tool_call_id=str(data.get("tool_call_id") or ""),
             tool_result=data.get("tool_result"),
             role=role,
-            metadata=metadata,
+            metadata=metadata or None,
         )
     return MessageDraft(
         role=role,
         kind=kind,
         text=data.get("text"),
-        metadata=metadata,
+        metadata=metadata or None,
     )
+
+
+def _normalize_tool_token(data: dict) -> dict:
+    if data.get("kind") != "tool" or not isinstance(data.get("data"), str):
+        return data
+    try:
+        payload = json.loads(data["data"])
+    except json.JSONDecodeError:
+        return data
+    if not isinstance(payload, dict) or not isinstance(payload.get("tool_name"), str):
+        return data
+    normalized = normalize_local_mcp_tool_name(payload["tool_name"])
+    if normalized == payload["tool_name"]:
+        return data
+    payload["tool_name"] = normalized
+    return {**data, "data": json.dumps(payload, separators=(",", ":"))}
 
 
 agent_runtime_daemon_hub = AgentRuntimeDaemonHub()

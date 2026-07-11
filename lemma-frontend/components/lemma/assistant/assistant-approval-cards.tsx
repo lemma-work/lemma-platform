@@ -286,13 +286,13 @@ export function InlineUserApprovalCall({
     <button
       type="button"
       onClick={onClick}
-      className="lemma-assistant-inline-approval-button inline-flex max-w-full items-center gap-2 border-0 bg-transparent p-0 text-left text-sm leading-5 transition-colors hover:text-[var(--text-primary)]"
+      className="lemma-assistant-inline-approval-button inline-flex max-w-full items-center gap-2 border-0 bg-transparent p-0 text-left text-[13px] font-normal leading-5 tracking-normal text-[var(--text-secondary)] [font-family:var(--font-body-family)] transition-colors hover:text-[var(--text-primary)] data-[selected=true]:text-[var(--text-primary)]"
       data-selected={isSelected}
     >
-      <span className="flex size-3.5 flex-shrink-0 items-center justify-center text-[var(--text-tertiary)]" aria-hidden="true">
+      <span className="flex size-3.5 flex-shrink-0 items-center justify-center text-current opacity-80" aria-hidden="true">
         {isResolved ? (isDenied ? <XCircle className="size-3.5" /> : <CheckCircle2 className="size-3.5" />) : pendingIcon}
       </span>
-      <span className="min-w-0 truncate text-[var(--text-secondary)]">{title}</span>
+      <span className="min-w-0 truncate">{title}</span>
     </button>
   );
 }

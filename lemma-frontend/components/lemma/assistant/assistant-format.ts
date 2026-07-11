@@ -13,6 +13,7 @@ import {
   messageHasToolActivity,
   messageTextContent,
   messageTimeMs,
+  normalizeAgentToolName,
   preferToolInvocation,
   prepareMessagesForDisplay,
   rowIsAfterIndex,
@@ -594,13 +595,12 @@ export function pickPreferredEntries(
 }
 
 export function normalizeToolNameForDisplay(toolName: string): string {
-  const normalized = toolName
+  return normalizeAgentToolName(toolName)
     .trim()
     .replace(/([a-z0-9])([A-Z])/g, "$1_$2")
     .replace(/([A-Z]+)([A-Z][a-z])/g, "$1_$2")
     .toLowerCase()
     .replace(/[.\-:\s]+/g, "_");
-  return normalized.startsWith("lemma_") ? normalized.slice("lemma_".length) : normalized;
 }
 
 function normalizedPayloadKey(key: string): string {

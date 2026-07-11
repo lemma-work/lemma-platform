@@ -11,6 +11,8 @@ describe('isDisplayResourceToolName', () => {
         expect(isDisplayResourceToolName('display_resource')).toBe(true);
         expect(isDisplayResourceToolName('lemma_display_resource')).toBe(true);
         expect(isDisplayResourceToolName('mcp.display_resource')).toBe(true);
+        expect(isDisplayResourceToolName('mcp__lemma_tools__lemma_display_resource')).toBe(true);
+        expect(isDisplayResourceToolName('lemma_tools_lemma_display_resource')).toBe(true);
         expect(isDisplayResourceToolName('something_else')).toBe(false);
         expect(isDisplayResourceToolName(123)).toBe(false);
     });

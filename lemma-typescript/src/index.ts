@@ -52,6 +52,7 @@ export {
 export type { AnyRunStatus } from "./run-utils.js";
 export { parseAssistantStreamEvent, upsertConversationMessage } from "./assistant-events.js";
 export type { ParsedAssistantStreamEvent } from "./assistant-events.js";
+export { normalizeAgentToolName } from "./core/agent/tool-names.js";
 // Framework-agnostic agent core (drives the React hooks and, next, web components).
 export {
   AgentController,
@@ -78,6 +79,7 @@ export {
   isUserApprovalToolName,
   isAskUserToolName,
   isUserInteractionToolName,
+  isRenderableUserInteractionInvocation,
   userApprovalResolvedDecision,
   latestPlanSummary,
   latestUserIndex,

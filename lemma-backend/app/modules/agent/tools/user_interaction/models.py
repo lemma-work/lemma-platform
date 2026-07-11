@@ -209,6 +209,13 @@ class RequestApprovalResponse(BaseToolResponse):
         default_factory=dict,
         description="Optional structured response submitted with the decision.",
     )
+    interaction_fallback: bool = Field(
+        default=False,
+        description=(
+            "True when a daemon runtime could not pause and the model must ask "
+            "for confirmation conversationally instead."
+        ),
+    )
 
 
 class AskUserOption(BaseModel):
@@ -261,5 +268,12 @@ class AskUserResponse(BaseToolResponse):
         description=(
             "The user's answers keyed by each question's header. Each value is the "
             "chosen option label(s) or the custom text they typed for 'Other'."
+        ),
+    )
+    interaction_fallback: bool = Field(
+        default=False,
+        description=(
+            "True when a daemon runtime could not pause and the model must ask "
+            "the question conversationally instead."
         ),
     )

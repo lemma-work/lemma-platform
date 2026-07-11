@@ -647,6 +647,7 @@ async def test_interaction_tools_guide_instead_of_pausing_on_daemon_harness():
         _one_question(),
     )
     assert ask.success is False
+    assert ask.interaction_fallback is True
     assert "continue this conversation" in (ask.message or "")
 
     approval = await request_approval(
@@ -656,6 +657,7 @@ async def test_interaction_tools_guide_instead_of_pausing_on_daemon_harness():
         title="List files?",
     )
     assert approval.success is False
+    assert approval.interaction_fallback is True
     assert "can't run a tool with the user's approval" in (approval.message or "")
 
 

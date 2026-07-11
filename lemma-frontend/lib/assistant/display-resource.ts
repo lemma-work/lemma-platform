@@ -1,3 +1,5 @@
+import { normalizeAgentToolName } from 'lemma-sdk';
+
 export type DisplayResourceType =
     | 'FILE'
     | 'TABLE'
@@ -84,10 +86,8 @@ function normalizeResourceType(value: unknown): DisplayResourceType | null {
 
 export function isDisplayResourceToolName(toolName: unknown): boolean {
     if (typeof toolName !== 'string') return false;
-    const normalized = toolName.trim().toLowerCase().replace(/[.:]/g, '_');
-    return normalized === 'display_resource'
-        || normalized === 'lemma_display_resource'
-        || normalized.endsWith('_display_resource');
+    const normalized = normalizeAgentToolName(toolName).toLowerCase().replace(/[.:]/g, '_');
+    return normalized === 'display_resource' || normalized === 'mcp_display_resource';
 }
 
 export function extractDisplayResourceRequest(value: unknown): DisplayResourceRequest | null {

@@ -22,6 +22,7 @@ class StreamTextState:
         self.streamed_messages = False
         self.emitted_tool_call_ids: set[str] = set()
         self.emitted_tool_return_ids: set[str] = set()
+        self.tool_names_by_call_id: dict[str, str] = {}
 
     @property
     def full_text(self) -> str:
@@ -82,6 +83,7 @@ class StreamTextState:
             status = str(state.get("status") or "")
             if call_id not in self.emitted_tool_call_ids:
                 self.emitted_tool_call_ids.add(call_id)
+                self.tool_names_by_call_id[call_id] = tool_name
                 # Flush buffered text first so ordering reads text -> tool -> text.
                 await self.flush(is_final=False)
                 self.streamed_tokens = True

@@ -9,6 +9,7 @@
 // the hooks, web components, and the app. Formatting/labels and JSX stay in the
 // caller.
 import { isFinalResultToolName } from "./output.js";
+import { normalizeAgentToolName } from "./tool-names.js";
 import type {
   AssistantMessagePart,
   AssistantRenderableMessage,
@@ -768,19 +769,32 @@ function rowIsAfterIndex(row: DisplayMessageRow, index: number): boolean {
 /** Whether a tool is the higher-order approval gate (`request_approval`, or the
  * legacy `user_approval`). */
 export function isUserApprovalToolName(toolName: string): boolean {
-  const normalized = toolName.trim().toLowerCase();
+  const normalized = normalizeAgentToolName(toolName).toLowerCase();
   return normalized === "request_approval" || normalized === "user_approval";
 }
 
 /** Whether a tool is the multiple-choice question gate (`ask_user`). */
 export function isAskUserToolName(toolName: string): boolean {
-  return toolName.trim().toLowerCase() === "ask_user";
+  return normalizeAgentToolName(toolName).toLowerCase() === "ask_user";
 }
 
 /** Whether a tool pauses the run for the user (an approval OR a question). Both
  * end the run (conversation -> WAITING) and resume via the approvals endpoint. */
 export function isUserInteractionToolName(toolName: string): boolean {
   return isUserApprovalToolName(toolName) || isAskUserToolName(toolName);
+}
+
+/** Whether an interaction invocation should use the specialized question /
+ * approval UI. Failed daemon fallbacks have a terminal result but no user
+ * decision or answers, so they deliberately render as ordinary tool activity. */
+export function isRenderableUserInteractionInvocation(
+  invocation: AssistantToolInvocation,
+): boolean {
+  if (!isUserInteractionToolName(invocation.toolName)) return false;
+  if (invocation.state !== "result") return true;
+  const result = (invocation.result || {}) as Record<string, unknown>;
+  const output = asRecord(result.output);
+  return result.interaction_fallback !== true && output.interaction_fallback !== true;
 }
 
 export function userApprovalResolvedDecision(resultData: Record<string, unknown>): string | undefined {

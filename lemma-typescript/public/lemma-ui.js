@@ -885,6 +885,28 @@ var LemmaUI = (() => {
     }
   };
 
+  // src/core/agent/tool-names.ts
+  var LEMMA_MCP_TOOL_PREFIXES = [
+    "mcp.lemma_tools.",
+    "mcp__lemma_tools__",
+    "lemma_tools_",
+    "lemma_tools.",
+    "mcp.lemma-tools.",
+    "mcp__lemma-tools__",
+    "lemma-tools_",
+    "lemma-tools."
+  ];
+  function normalizeAgentToolName(toolName) {
+    let normalized = toolName.trim();
+    const lower = normalized.toLowerCase();
+    const providerPrefix = LEMMA_MCP_TOOL_PREFIXES.find((prefix) => lower.startsWith(prefix));
+    if (providerPrefix) normalized = normalized.slice(providerPrefix.length);
+    if (normalized.toLowerCase().startsWith("lemma_")) {
+      normalized = normalized.slice("lemma_".length);
+    }
+    return normalized;
+  }
+
   // src/core/agent/output.ts
   function isRecord4(value) {
     return !!value && typeof value === "object" && !Array.isArray(value);
@@ -945,7 +967,7 @@ var LemmaUI = (() => {
     return candidates.filter((candidate) => candidate.trim().length > 0);
   }
   function isFinalResultToolName(toolName) {
-    const normalized = toolName.trim().toLowerCase().replace(/[.\-:]/g, "_");
+    const normalized = normalizeAgentToolName(toolName).toLowerCase().replace(/[.\-:]/g, "_");
     return normalized === "final_result" || normalized === "final_answer";
   }
   function unwrapFinalResultPayload(value) {

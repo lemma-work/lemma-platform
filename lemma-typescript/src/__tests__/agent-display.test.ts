@@ -4,12 +4,14 @@ import {
   collectCompletedRunTraceGroups,
   dedupToolInvocations,
   isAskUserToolName,
+  isRenderableUserInteractionInvocation,
   isUserApprovalToolName,
   isUserInteractionToolName,
   latestPlanSummary,
   messageTextContent,
   normalizeAssistantMarkdown,
 } from "../core/agent/display.js";
+import { normalizeAgentToolName } from "../core/agent/tool-names.js";
 import { parseAssistantStreamEvent } from "../assistant-events.js";
 import type { AssistantRenderableMessage } from "../core/agent/renderable.js";
 
@@ -22,7 +24,53 @@ describe("user-interaction tool predicates", () => {
     // The combined predicate matches either pausing tool.
     expect(isUserInteractionToolName("ask_user")).toBe(true);
     expect(isUserInteractionToolName("request_approval")).toBe(true);
+    expect(isAskUserToolName("mcp__lemma_tools__lemma_ask_user")).toBe(true);
+    expect(isUserApprovalToolName("lemma_tools_lemma_request_approval")).toBe(true);
     expect(isUserInteractionToolName("exec_command")).toBe(false);
+  });
+
+  it("does not render a completed daemon prose fallback as an interaction card", () => {
+    expect(isRenderableUserInteractionInvocation({
+      toolCallId: "ask-1",
+      toolName: "mcp__lemma_tools__lemma_ask_user",
+      args: {},
+      state: "result",
+      result: {
+        success: false,
+        interaction_fallback: true,
+        message: "Ask the user directly in your reply.",
+      },
+    })).toBe(false);
+    expect(isRenderableUserInteractionInvocation({
+      toolCallId: "ask-2",
+      toolName: "ask_user",
+      args: {},
+      state: "call",
+    })).toBe(true);
+    expect(isRenderableUserInteractionInvocation({
+      toolCallId: "ask-3",
+      toolName: "ask_user",
+      args: {},
+      state: "result",
+      result: { success: true, answers: { Runtime: "Claude" } },
+    })).toBe(true);
+    expect(isRenderableUserInteractionInvocation({
+      toolCallId: "ask-4",
+      toolName: "ask_user",
+      args: {},
+      state: "result",
+      result: { success: false, answers: {}, message: "User dismissed the questions." },
+    })).toBe(true);
+  });
+});
+
+describe("normalizeAgentToolName", () => {
+  it("strips only Lemma MCP wrappers", () => {
+    expect(normalizeAgentToolName("mcp__lemma_tools__lemma_display_resource")).toBe("display_resource");
+    expect(normalizeAgentToolName("mcp.lemma_tools.lemma_exec_command")).toBe("exec_command");
+    expect(normalizeAgentToolName("lemma_tools_lemma_ask_user")).toBe("ask_user");
+    expect(normalizeAgentToolName("mcp__github__create_issue")).toBe("mcp__github__create_issue");
+    expect(normalizeAgentToolName("commandExecution")).toBe("commandExecution");
   });
 });
 

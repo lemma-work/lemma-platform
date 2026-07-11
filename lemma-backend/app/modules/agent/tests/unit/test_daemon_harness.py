@@ -26,6 +26,7 @@ from app.modules.agent.infrastructure.harnesses.daemon import (
     DEFAULT_RECONNECT_GRACE_SECONDS,
     DaemonHarness,
     _mcp_payload,
+    _missing_tool_return_events,
     _run_start_payload,
 )
 
@@ -56,6 +57,39 @@ def test_daemon_harness_default_event_timeout_is_two_hours():
 
     assert harness.event_timeout_seconds == DEFAULT_DAEMON_EVENT_TIMEOUT_SECONDS
     assert harness.event_timeout_seconds == 7200.0
+
+
+@pytest.mark.parametrize(
+    ("terminal_type", "expected_error"),
+    [
+        (AgentEventType.COMPLETED, "Daemon run completed without a tool return."),
+        (AgentEventType.ERROR, "Daemon run failed before the tool returned a result."),
+        (AgentEventType.STOPPED, "Daemon run stopped before the tool returned a result."),
+    ],
+)
+def test_missing_tool_returns_are_closed_for_every_terminal_status(
+    terminal_type: AgentEventType, expected_error: str
+) -> None:
+    run_id = uuid4()
+    outstanding = {"call-1": "display_resource"}
+
+    events = _missing_tool_return_events(
+        outstanding_tool_calls=outstanding,
+        terminal_event=AgentEvent(
+            type=terminal_type,
+            data={},
+            agent_run_id=run_id,
+        ),
+    )
+
+    assert outstanding == {}
+    assert len(events) == 1
+    assert events[0].agent_run_id == run_id
+    assert events[0].data.tool_call_id == "call-1"
+    assert events[0].data.tool_result == {
+        "success": False,
+        "error": expected_error,
+    }
 
 
 class _FakeWebSocket:
@@ -225,6 +259,24 @@ async def test_daemon_harness_forwards_run_start_and_yields_events(
         message={
             "type": "run.event",
             "agent_run_id": str(agent_run_id),
+            "event": {
+                "type": "message",
+                "data": {
+                    "role": "assistant",
+                    "kind": "tool_call",
+                    "tool_name": "mcp__lemma_tools__lemma_exec_command",
+                    "tool_call_id": "unfinished-1",
+                    "tool_args": {"cmd": "pwd"},
+                },
+            },
+        },
+    )
+    await agent_runtime_daemon_hub.handle_run_event(
+        daemon_id=daemon_id,
+        user_id=daemon_user_id,
+        message={
+            "type": "run.event",
+            "agent_run_id": str(agent_run_id),
             "event": {"type": "completed", "data": {}},
         },
     )
@@ -232,10 +284,24 @@ async def test_daemon_harness_forwards_run_start_and_yields_events(
 
     assert [event.type for event in events] == [
         AgentEventType.MESSAGE,
+        AgentEventType.MESSAGE,
+        AgentEventType.MESSAGE,
         AgentEventType.COMPLETED,
     ]
     assert events[0].data.kind == MessageKind.TEXT
     assert events[0].data.text == "hi from daemon"
+    assert events[1].data.kind == MessageKind.TOOL_CALL
+    assert events[1].data.tool_name == "exec_command"
+    assert events[2].data.kind == MessageKind.TOOL_RETURN
+    assert events[2].data.tool_call_id == "unfinished-1"
+    assert events[2].data.tool_result == {
+        "success": False,
+        "error": "Daemon run completed without a tool return.",
+    }
+    assert events[2].data.metadata == {
+        "synthetic_tool_return": True,
+        "terminal_event": "COMPLETED",
+    }
     await agent_runtime_daemon_hub.unregister(
         daemon_id=daemon_id,
         user_id=daemon_user_id,

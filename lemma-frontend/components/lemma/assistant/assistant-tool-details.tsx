@@ -14,6 +14,7 @@ import {
   isToolInvocationActive,
   isUserApprovalToolName,
   isUserInteractionToolName,
+  isRenderableUserInteractionInvocation,
   userApprovalResolvedDecision,
 } from "lemma-sdk";
 import { Check, ChevronDown, Copy } from "lucide-react";
@@ -54,6 +55,7 @@ import type {
   ToolCardResult,
   UserApprovalDecision,
 } from "./assistant-experience";
+import { ToolCallIcon } from "./assistant-tool-icon";
 
 export function ToolDetailsPanel({
   toolCallId,
@@ -155,14 +157,14 @@ export function ToolDetailsPanel({
   const hiddenInputCount = Math.max(0, countSummarizablePayloadEntries(args, summaryOptions.input) - inputEntries.length);
   const hiddenOutputCount = Math.max(0, countSummarizablePayloadEntries(resultData, summaryOptions.output) - outputEntries.length);
 
-  if (isUserInteractionToolName(toolName)) {
-    const interactionInvocation = {
+  const interactionInvocation = {
       toolCallId,
       toolName,
       args,
       state: (state === "result" ? "result" : "call") as "result" | "call",
       ...(result ? { result } : {}),
     };
+  if (isRenderableUserInteractionInvocation(interactionInvocation)) {
     return (
       <div className="mt-1.5">
         {isAskUserToolName(toolName) ? (
@@ -292,13 +294,17 @@ function InlineToolCall({
     <button
       type="button"
       onClick={onClick}
-      className="lemma-assistant-inline-tool-button inline-flex max-w-full items-center gap-1.5 border-0 bg-transparent p-0 text-left text-sm leading-5 transition-colors hover:text-[var(--text-primary)]"
+      className="lemma-assistant-inline-tool-button inline-flex max-w-full items-center gap-2 border-0 bg-transparent p-0 text-left text-[13px] font-normal leading-5 tracking-normal text-[var(--text-secondary)] [font-family:var(--font-body-family)] transition-colors hover:text-[var(--text-primary)] data-[selected=true]:text-[var(--text-primary)]"
       data-state={isExecuting ? "executing" : isFailed ? "failed" : "complete"}
       data-selected={isSelected}
     >
+      <ToolCallIcon
+        toolName={invocation.toolName}
+        className="size-3.5 shrink-0 text-current opacity-80"
+      />
       <span
         className={cn(
-          "min-w-0 truncate text-[var(--text-secondary)]",
+          "min-w-0 truncate",
           isExecuting && "lemma-assistant-thinking-shimmer bg-clip-text text-transparent animate-[lemma-skeleton-breathe_1.5s_ease-in-out_infinite]",
         )}
       >
@@ -423,14 +429,14 @@ export function RunTraceHeader({
       {isInteractive ? (
         <button
           type="button"
-          className="flex w-fit max-w-full items-center gap-1.5 border-0 bg-transparent p-0 text-left text-sm font-normal leading-6 text-[var(--text-secondary)] transition-colors hover:text-[var(--text-primary)]"
+          className="flex w-fit max-w-full items-center gap-1.5 border-0 bg-transparent p-0 text-left text-sm font-normal leading-6 tracking-normal text-[var(--text-secondary)] [font-family:var(--font-body-family)] transition-colors hover:text-[var(--text-primary)]"
           onClick={onToggle}
           aria-expanded={isExpanded}
         >
           {content}
         </button>
       ) : (
-        <div className="flex w-fit max-w-full items-center gap-1.5 text-sm font-normal leading-6 text-[var(--text-secondary)]">
+        <div className="flex w-fit max-w-full items-center gap-1.5 text-sm font-normal leading-6 tracking-normal text-[var(--text-secondary)] [font-family:var(--font-body-family)]">
           {content}
         </div>
       )}
@@ -512,7 +518,7 @@ export function ToolActivityRollup({
   const renderToolActivityPart = (part: ToolActivityPart): ReactNode => {
     const invocation = part.toolInvocation;
     const isSelected = activeDetailId === invocation.toolCallId;
-    if (isUserInteractionToolName(invocation.toolName)) {
+    if (isRenderableUserInteractionInvocation(invocation)) {
       const resultData = (invocation.result || {}) as ToolCardResult;
       const isResolved = invocation.state === "result" || !!userApprovalResolvedDecision(resultData);
       if (isResolved) {

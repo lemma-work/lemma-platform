@@ -111,6 +111,11 @@
           "additionalProperties": true,
           "description": "The user's answers keyed by each question's header. Each value is the chosen option label(s) or the custom text they typed for 'Other'.",
           "type": "object"
+        },
+        "interaction_fallback": {
+          "default": false,
+          "description": "True when a daemon runtime could not pause and the model must ask the question conversationally instead.",
+          "type": "boolean"
         }
       },
       "title": "AskUserResponse",
@@ -2363,6 +2368,11 @@
           "additionalProperties": true,
           "description": "Optional structured response submitted with the decision.",
           "type": "object"
+        },
+        "interaction_fallback": {
+          "default": false,
+          "description": "True when a daemon runtime could not pause and the model must ask for confirmation conversationally instead.",
+          "type": "boolean"
         }
       },
       "title": "RequestApprovalResponse",

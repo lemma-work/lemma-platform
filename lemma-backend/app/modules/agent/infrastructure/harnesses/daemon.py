@@ -18,6 +18,7 @@ from app.modules.agent.domain.value_objects import (
     HarnessKind,
     HarnessOptions,
     JsonObject,
+    MessageDraft,
     MessageKind,
     MessageRole,
     to_json_value,
@@ -105,6 +106,7 @@ class DaemonHarness:
             return
 
         stop_sent = False
+        outstanding_tool_calls: dict[str, str] = {}
         # Set the moment a RECONNECTING sentinel is first seen; cleared once a
         # real event arrives again. Bounds how long this run waits out a dead
         # connection, independent of (and much shorter than) event_timeout_seconds.
@@ -131,11 +133,17 @@ class DaemonHarness:
                                 reconnecting_since + self.reconnect_grace_seconds
                             ) - time.monotonic()
                             if grace_remaining <= 0:
-                                yield AgentEvent(
+                                terminal_event = AgentEvent(
                                     type=AgentEventType.ERROR,
                                     data="User daemon did not reconnect within the grace period",
                                     agent_run_id=agent_run_id,
                                 )
+                                for missing_return in _missing_tool_return_events(
+                                    outstanding_tool_calls=outstanding_tool_calls,
+                                    terminal_event=terminal_event,
+                                ):
+                                    yield missing_return
+                                yield terminal_event
                                 return
                             remaining = min(remaining, grace_remaining)
                         if remaining <= 0:
@@ -160,11 +168,17 @@ class DaemonHarness:
                             )
                             stop_sent = True
                 except TimeoutError:
-                    yield AgentEvent(
+                    terminal_event = AgentEvent(
                         type=AgentEventType.ERROR,
                         data="User daemon did not emit a run event before timeout",
                         agent_run_id=agent_run_id,
                     )
+                    for missing_return in _missing_tool_return_events(
+                        outstanding_tool_calls=outstanding_tool_calls,
+                        terminal_event=terminal_event,
+                    ):
+                        yield missing_return
+                    yield terminal_event
                     return
 
                 if event.type == AgentEventType.RECONNECTING:
@@ -188,6 +202,31 @@ class DaemonHarness:
                         agent_run_id=agent_run_id,
                     )
 
+                if event.type == AgentEventType.MESSAGE and isinstance(
+                    event.data, MessageDraft
+                ):
+                    message = event.data
+                    if (
+                        message.kind == MessageKind.TOOL_CALL
+                        and message.tool_call_id
+                        and message.tool_name
+                    ):
+                        outstanding_tool_calls[message.tool_call_id] = message.tool_name
+                    elif message.kind == MessageKind.TOOL_RETURN and message.tool_call_id:
+                        outstanding_tool_calls.pop(message.tool_call_id, None)
+
+                if event.type in {
+                    AgentEventType.COMPLETED,
+                    AgentEventType.STOPPED,
+                    AgentEventType.ERROR,
+                    AgentEventType.REJECTED,
+                }:
+                    for missing_return in _missing_tool_return_events(
+                        outstanding_tool_calls=outstanding_tool_calls,
+                        terminal_event=event,
+                    ):
+                        yield missing_return
+
                 yield event
                 if event.type in {
                     AgentEventType.COMPLETED,
@@ -202,6 +241,49 @@ class DaemonHarness:
                 user_id=daemon_user_id,
                 agent_run_id=agent_run_id,
             )
+
+
+def _missing_tool_return_error(event_type: AgentEventType) -> str:
+    if event_type == AgentEventType.STOPPED:
+        return "Daemon run stopped before the tool returned a result."
+    if event_type == AgentEventType.ERROR:
+        return "Daemon run failed before the tool returned a result."
+    if event_type == AgentEventType.REJECTED:
+        return "Daemon run was rejected before the tool returned a result."
+    return "Daemon run completed without a tool return."
+
+
+def _missing_tool_return_events(
+    *,
+    outstanding_tool_calls: dict[str, str],
+    terminal_event: AgentEvent,
+) -> list[AgentEvent]:
+    events = [
+        AgentEvent(
+            type=AgentEventType.MESSAGE,
+            data=MessageDraft.of_tool_return(
+                tool_name=tool_name,
+                tool_call_id=tool_call_id,
+                tool_result={
+                    "success": False,
+                    "error": _missing_tool_return_error(terminal_event.type),
+                    **(
+                        {"interaction_fallback": True}
+                        if tool_name in {"ask_user", "request_approval"}
+                        else {}
+                    ),
+                },
+                metadata={
+                    "synthetic_tool_return": True,
+                    "terminal_event": terminal_event.type.value,
+                },
+            ),
+            agent_run_id=terminal_event.agent_run_id,
+        )
+        for tool_call_id, tool_name in outstanding_tool_calls.items()
+    ]
+    outstanding_tool_calls.clear()
+    return events
 
 
 def _daemon_id_from_options(options: HarnessOptions) -> UUID:

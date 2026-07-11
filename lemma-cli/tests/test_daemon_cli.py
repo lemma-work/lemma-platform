@@ -931,6 +931,13 @@ async def test_claude_stream_persists_assistant_text_before_tool_call(monkeypatc
                     "input": {"cmd": "pwd"},
                 },
             ]}}))
+            print(json.dumps({"type": "user", "message": {"content": [
+                {
+                    "type": "tool_result",
+                    "tool_use_id": "toolu_1",
+                    "content": "{\\"success\\": true, \\"stdout\\": \\"/workspace\\"}",
+                }
+            ]}}))
             print(json.dumps({"type": "assistant", "message": {"content": [
                 {"type": "text", "text": "Done."}
             ]}}))
@@ -973,6 +980,9 @@ async def test_claude_stream_persists_assistant_text_before_tool_call(monkeypatc
     assert messages[0]["text"] == "Checking now."
     assert messages[0]["metadata"]["is_final_answer"] is False
     assert messages[1]["kind"] == "tool_call"
+    assert messages[2]["kind"] == "tool_return"
+    assert messages[2]["tool_call_id"] == "toolu_1"
+    assert messages[2]["tool_result"] == {"success": True, "stdout": "/workspace"}
     assert messages[-1]["kind"] == "text"
     assert messages[-1]["text"] == "Done."
     assert [event["type"] for event in events][-1] == "completed"

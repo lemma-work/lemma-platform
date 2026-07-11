@@ -265,6 +265,7 @@ async def request_approval(
         # the conversational fallback instead of hanging or aborting the run.
         return RequestApprovalResponse(
             success=False,
+            interaction_fallback=True,
             message=(
                 "This runtime can't run a tool with the user's approval mid-turn. "
                 f"Explain what you need to do ({tool_name}) and why it needs their "
@@ -396,6 +397,7 @@ async def ask_user(
         # Guide the model to ask conversationally instead of hanging/aborting.
         return AskUserResponse(
             success=False,
+            interaction_fallback=True,
             message=(
                 "This runtime can't pause to collect a multiple-choice answer. Ask "
                 "the user your question(s) directly in your reply and end your turn; "

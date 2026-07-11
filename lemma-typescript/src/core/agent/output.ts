@@ -8,6 +8,8 @@
 // consumes it from the SDK — one implementation for hooks, web components, and
 // the app. No React, no DOM.
 
+import { normalizeAgentToolName } from "./tool-names.js";
+
 export type MessagePartLike = {
   type?: string;
   text?: string;
@@ -144,7 +146,7 @@ export function latestAssistantText(messages: MessageLike[]): string {
 }
 
 export function isFinalResultToolName(toolName: string): boolean {
-  const normalized = toolName.trim().toLowerCase().replace(/[.\-:]/g, "_");
+  const normalized = normalizeAgentToolName(toolName).toLowerCase().replace(/[.\-:]/g, "_");
   return normalized === "final_result" || normalized === "final_answer";
 }
 

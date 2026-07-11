@@ -7,7 +7,7 @@ from uuid import uuid4
 
 import pytest
 
-from app.modules.agent.domain.value_objects import AgentEventType
+from app.modules.agent.domain.value_objects import AgentEventType, MessageKind
 from app.modules.agent.infrastructure import daemon_hub
 
 
@@ -48,6 +48,83 @@ class _WebSocket:
 
     async def send_json(self, payload: dict[str, object]) -> None:
         self.sent.append(payload)
+
+
+@pytest.mark.parametrize(
+    ("provider_name", "canonical_name"),
+    [
+        ("mcp__lemma_tools__lemma_display_resource", "display_resource"),
+        ("mcp.lemma_tools.lemma_ask_user", "ask_user"),
+        ("lemma_tools_lemma_exec_command", "exec_command"),
+        ("lemma_display_resource", "display_resource"),
+        ("commandExecution", "commandExecution"),
+    ],
+)
+def test_daemon_message_tool_names_are_canonicalized(
+    provider_name: str, canonical_name: str
+) -> None:
+    event = daemon_hub._event_from_payload(
+        {
+            "type": "message",
+            "data": {
+                "role": "assistant",
+                "kind": "tool_call",
+                "tool_name": provider_name,
+                "tool_call_id": "call-1",
+                "tool_args": {"value": 1},
+            },
+        },
+        agent_run_id=uuid4(),
+    )
+
+    assert event.data.kind == MessageKind.TOOL_CALL
+    assert event.data.tool_name == canonical_name
+    if provider_name == canonical_name:
+        assert not (event.data.metadata or {}).get("provider_tool_name")
+    else:
+        assert event.data.metadata == {"provider_tool_name": provider_name}
+
+
+def test_daemon_tool_token_name_is_canonicalized() -> None:
+    event = daemon_hub._event_from_payload(
+        {
+            "type": "token",
+            "data": {
+                "kind": "tool",
+                "data": '{"tool_name":"mcp__lemma_tools__lemma_exec_command","args":{"cmd":"pwd"}}',
+            },
+        },
+        agent_run_id=uuid4(),
+    )
+
+    assert event.data == {
+        "kind": "tool",
+        "data": '{"tool_name":"exec_command","args":{"cmd":"pwd"}}',
+    }
+
+
+def test_daemon_tool_return_keeps_call_id_and_result_while_normalizing_name() -> None:
+    event = daemon_hub._event_from_payload(
+        {
+            "type": "message",
+            "data": {
+                "role": "tool",
+                "kind": "tool_return",
+                "tool_name": "mcp__lemma_tools__lemma_display_resource",
+                "tool_call_id": "display-1",
+                "tool_result": {"success": True, "url": "/widgets/1"},
+            },
+        },
+        agent_run_id=uuid4(),
+    )
+
+    assert event.data.kind == MessageKind.TOOL_RETURN
+    assert event.data.tool_name == "display_resource"
+    assert event.data.tool_call_id == "display-1"
+    assert event.data.tool_result == {"success": True, "url": "/widgets/1"}
+    assert event.data.metadata == {
+        "provider_tool_name": "mcp__lemma_tools__lemma_display_resource"
+    }
 
 
 @pytest.mark.asyncio

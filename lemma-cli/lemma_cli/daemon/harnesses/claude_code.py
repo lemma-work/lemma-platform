@@ -6,7 +6,7 @@ import json
 from collections.abc import Awaitable, Callable
 from typing import Any
 
-from .base import StreamTextState
+from .base import StreamTextState, emit_tool_return
 from .codex import (
     _daemon_session_invalid_payload,
     _daemon_session_started_payload,
@@ -21,6 +21,7 @@ from ..mcp import (
     write_provider_mcp_files,
 )
 from ..process import create_subprocess, drain_stream, terminate_gracefully
+from .._utils import parse_jsonish
 
 
 class ClaudeCodeHarness:
@@ -200,6 +201,17 @@ async def _handle_claude_stream_event(
                 await state.flush(is_final=False)
                 await _emit_claude_tool_call(part, state)
         return text
+    if event_type == "user":
+        message = event.get("message")
+        if not isinstance(message, dict):
+            return ""
+        content = message.get("content")
+        if not isinstance(content, list):
+            return ""
+        for part in content:
+            if isinstance(part, dict) and part.get("type") == "tool_result":
+                await _emit_claude_tool_return(part, state)
+        return ""
     if event_type == "tool_call":
         # Cursor reports tool activity as top-level tool_call events
         # (subtype started/completed) rather than Claude's tool_use content
@@ -228,6 +240,7 @@ async def _emit_cursor_tool_call(event: dict[str, Any], state: StreamTextState) 
         if call_id in state.emitted_tool_call_ids:
             return
         state.emitted_tool_call_ids.add(call_id)
+        state.tool_names_by_call_id[call_id] = tool_name
         message = {
             "role": "assistant",
             "kind": "tool_call",
@@ -237,12 +250,14 @@ async def _emit_cursor_tool_call(event: dict[str, Any], state: StreamTextState) 
             "metadata": {"tool_name": tool_name, "provider": state.harness_kind},
         }
         state.streamed_tokens = True
+        state.streamed_messages = True
         await state.event_sink("token", codex_tool_token(message))
         await state.event_sink("message", message)
     elif subtype == "completed":
         if call_id in state.emitted_tool_return_ids:
             return
         state.emitted_tool_return_ids.add(call_id)
+        state.tool_names_by_call_id.setdefault(call_id, tool_name)
         state.streamed_messages = True
         await state.event_sink(
             "message",
@@ -293,7 +308,7 @@ async def _emit_claude_tool_call(part: dict[str, Any], state: StreamTextState) -
     if tool_call_id in state.emitted_tool_call_ids:
         return
     state.emitted_tool_call_ids.add(tool_call_id)
-    from .._utils import parse_jsonish
+    state.tool_names_by_call_id[tool_call_id] = tool_name
     tool_call = {
         "role": "assistant",
         "kind": "tool_call",
@@ -307,8 +322,60 @@ async def _emit_claude_tool_call(part: dict[str, Any], state: StreamTextState) -
     }
     if state.event_sink is not None:
         state.streamed_tokens = True
+        state.streamed_messages = True
         await state.event_sink("token", codex_tool_token(tool_call))
         await state.event_sink("message", tool_call)
+
+
+async def _emit_claude_tool_return(
+    part: dict[str, Any], state: StreamTextState
+) -> None:
+    tool_call_id = part.get("tool_use_id") or part.get("toolUseId")
+    if not isinstance(tool_call_id, str) or not tool_call_id:
+        return
+    if tool_call_id in state.emitted_tool_return_ids:
+        return
+    state.emitted_tool_return_ids.add(tool_call_id)
+    if state.event_sink is None:
+        return
+
+    tool_name = state.tool_names_by_call_id.get(tool_call_id, "unknown_tool")
+    state.streamed_messages = True
+    await emit_tool_return(
+        state.event_sink,
+        tool_name=tool_name,
+        tool_call_id=tool_call_id,
+        tool_result=_claude_tool_result(part),
+        harness_kind=state.harness_kind,
+    )
+
+
+def _claude_tool_result(part: dict[str, Any]) -> Any:
+    content = part.get("content")
+    if isinstance(content, list):
+        text_parts = [
+            str(item.get("text"))
+            for item in content
+            if isinstance(item, dict) and isinstance(item.get("text"), str)
+        ]
+        value: Any = (
+            parse_jsonish("\n".join(text_parts))
+            if text_parts and len(text_parts) == len(content)
+            else content
+        )
+    elif isinstance(content, str):
+        value = parse_jsonish(content)
+    else:
+        value = content
+
+    if not bool(part.get("is_error") or part.get("isError")):
+        return value
+    if isinstance(value, dict):
+        return {**value, "success": False}
+    return {
+        "success": False,
+        "error": value if value is not None else "Claude tool returned an error.",
+    }
 
 
 def _claude_stream_session_id(event: dict[str, Any]) -> str | None:
