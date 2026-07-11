@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import json
+import re
+from pathlib import Path
 
 import pytest
 
@@ -33,6 +35,17 @@ def test_parse_and_pull_refs():
     # infra falls back to built-in defaults when missing from the manifest
     assert manifest.infra_image("postgres") == "docker.io/pgvector/pgvector:0.8.0-pg16"
     assert manifest.infra_image("redis") == m.DEFAULT_INFRA_IMAGES["redis"]
+
+
+def test_release_workflow_uses_the_stack_supertokens_version():
+    workflow = (
+        Path(__file__).resolve().parents[2]
+        / ".github/workflows/release-local-images.yml"
+    ).read_text(encoding="utf-8")
+    match = re.search(r'"supertokens": "([^"]+)"', workflow)
+
+    assert match is not None
+    assert match.group(1) == m.DEFAULT_INFRA_IMAGES["supertokens"]
 
 
 def test_kreuzberg_pull_only_when_enabled():
