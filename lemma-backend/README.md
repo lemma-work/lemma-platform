@@ -142,7 +142,7 @@ Markers: `e2e`, `slow`, `worker` (needs the real streaq worker), `workspace` (ne
 
 ### Pre-merge e2e gate (CI)
 
-e2e is **not** run on every commit (it's expensive). It runs as a separate, opt-in gate (`.github/workflows/e2e.yml`): add the **`run-e2e`** label to a PR, or trigger *Actions → "Backend E2E (mocked)" → Run workflow*. Per-commit CI (`ci.yml`) runs unit + build/lint/SDK checks only.
+e2e is **not** run on every commit (it's expensive). It runs as a separate, opt-in gate (`.github/workflows/e2e.yml`): add the **`run-e2e`** label to a PR, or trigger *Actions → "Backend E2E" → Run workflow*. It is a real end-to-end run (Postgres/Redis/SuperTokens/workers/fake providers); only the LLM and the AgentBox sandbox are stubbed. Per-commit CI (`ci.yml`) runs unit + build/lint/SDK checks only.
 
 ## Coverage
 

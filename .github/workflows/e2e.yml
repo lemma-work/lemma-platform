@@ -1,10 +1,12 @@
-name: Backend E2E (mocked)
+name: Backend E2E
 
-# The fast mocked backend e2e suite — mock LLM (deterministic FunctionModel) +
-# in-process fake AgentBox, so it needs NO model API keys and NO Docker workspace
-# image (Postgres / Redis / SuperTokens come from testcontainers on the runner).
-# Real streaq workers are part of hermetic PR E2E. Only slow, Docker workspace,
-# live-provider, local-CLI, and real-indexing tests stay in protected CI.
+# The fast backend end-to-end suite. This is a REAL e2e run — Postgres, Redis,
+# SuperTokens, the streaq workers, and the fake provider servers all run for real
+# (from testcontainers on the runner). Only the two nondeterministic/expensive
+# externals are stubbed: the LLM (a deterministic FunctionModel) and the AgentBox
+# workspace (an in-process fake) — so it needs NO model API keys and NO Docker
+# workspace image. Slow, Docker-workspace, live-provider, local-CLI, and
+# real-indexing tests live in "Backend protected E2E" instead.
 #
 # The suite is sharded across runners. Most shards stay serial; the 100+ journey
 # surfaces shard uses two fully isolated xdist workers to remain under ten
@@ -13,7 +15,7 @@ name: Backend E2E (mocked)
 # Trigger model: runs automatically once the "CI" workflow (unit tests etc.)
 # SUCCEEDS for a PR — so the container-heavy e2e only spins up after the cheap
 # checks are green, roughly once per PR update. Also runnable on demand:
-# Actions -> "Backend E2E (mocked)" -> Run workflow.
+# Actions -> "Backend E2E" -> Run workflow.
 #
 # Not a required check yet. To make a green e2e a hard merge requirement later,
 # add the "lemma-backend e2e (*)" shard checks (or an aggregation job) to the
@@ -113,7 +115,7 @@ jobs:
         run: uv sync
       # Shards run in parallel, so wall-clock is the slowest shard, not their sum.
       # E2E_ARGS scopes each shard; matrix workers keeps surfaces below ten minutes.
-      - name: E2E tests with coverage (mocked LLM + fake AgentBox)
+      - name: E2E tests (deterministic LLM + in-process sandbox, real services)
         run: >-
           make coverage-backend-e2e-shard
           E2E_ARGS="${{ matrix.suite.args }}"

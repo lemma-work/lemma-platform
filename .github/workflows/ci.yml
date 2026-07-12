@@ -48,6 +48,7 @@ jobs:
               - '.github/workflows/ci.yml'
             frontend:
               - 'lemma-frontend/**'
+              - '.github/workflows/ci.yml'
             codegen:
               - 'lemma-python/lemma_sdk/openapi_spec.json'
               - 'lemma-python/lemma_sdk/openapi_client/**'
