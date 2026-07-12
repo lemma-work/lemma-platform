@@ -6,27 +6,12 @@ from typing import Any, Dict
 from uuid import UUID
 from datetime import datetime, timezone
 
-from sqlalchemy import select
-
-from app.core.infrastructure.db.session import async_session_maker
 from app.modules.schedule.domain.schedule import ScheduleType
 from app.modules.schedule.domain.events.schedule import ScheduleFired
-from app.modules.schedule.infrastructure.models.schedule import Schedule
 from app.core.infrastructure.events.publisher import EventPublisher
 from app.core.log.log import get_logger
 
 logger = get_logger(__name__)
-
-
-async def resolve_schedule_user_id(schedule_id: UUID) -> UUID:
-    """Resolve the canonical owner for a persisted time schedule."""
-    async with async_session_maker() as session:
-        user_id = await session.scalar(
-            select(Schedule.user_id).where(Schedule.id == schedule_id)
-        )
-    if user_id is None:
-        raise LookupError(f"Time schedule {schedule_id} no longer exists")
-    return user_id
 
 
 class SchedulerEventEmitter:
@@ -50,6 +35,7 @@ class SchedulerEventEmitter:
     async def emit_scheduled_job_event(
         self,
         schedule_id: UUID,
+        user_id: UUID,
         payload: Dict[str, Any] | None = None,
         *,
         scheduled_at: datetime,
@@ -67,7 +53,7 @@ class SchedulerEventEmitter:
         source_event_id = f"cron:{schedule_id}:{scheduled_at.isoformat()}"
         event = ScheduleFired(
             schedule_id=schedule_id,
-            user_id=await resolve_schedule_user_id(schedule_id),
+            user_id=user_id,
             schedule_type=ScheduleType.TIME,
             payload=payload or {},
             scheduled_at=scheduled_at,

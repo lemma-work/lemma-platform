@@ -32,11 +32,9 @@ from app.modules.workflow.domain.wait import (
     WorkflowRunWaitType,
 )
 from app.modules.workflow.execution.stepper import RunStepper, StepResult
-from app.modules.workflow.infrastructure.adapters import (
-    AgentControlAdapter,
-    FunctionControlAdapter,
-    ScheduleControlAdapter,
-)
+from app.composition.workflow_agent import AgentControlAdapter
+from app.composition.workflow_function import FunctionControlAdapter
+from app.composition.workflow_scheduler import ScheduleControlAdapter
 from app.modules.workflow.infrastructure.repositories import (
     SqlAlchemyWorkflowRepository,
     SqlAlchemyWorkflowRunRepository,

@@ -74,11 +74,9 @@ def build_record_service(uow) -> RecordService:
         record_repository=DatastoreRecordRepository(
             schema_manager=get_schema_manager()
         ),
-        message_bus=message_bus,
+        event_dispatcher=dispatch_datastore_outbox_once,
         authorization_service=create_authorization_service(uow),
         user_repository=create_user_reader(uow, message_bus=message_bus),
-        transactional_events=True,
-        event_dispatcher=dispatch_datastore_outbox_once,
     )
 
 

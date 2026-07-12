@@ -1,7 +1,5 @@
 """Background job handlers and FastStream event consumers for Workflow module."""
 
-import hashlib
-import json
 from datetime import datetime
 
 from faststream import Depends, Logger
@@ -39,6 +37,7 @@ from app.modules.function.domain.events import (
     FunctionRunCompletedEvent,
     FunctionRunFailedEvent,
 )
+from app.modules.schedule.domain.events.schedule import ScheduleFired
 from app.modules.workflow.domain.wait import WorkflowRunWaitType
 from app.modules.workflow.execution.engine import WorkflowEngine
 from app.modules.workflow.infrastructure.repositories import (
@@ -222,37 +221,23 @@ async def handle_schedule_events(
     if event_type != "schedule.fired":
         return
 
+    fired = ScheduleFired.model_validate(event)
+
     async def process() -> None:
-        await on_schedule_fired(event, fs_logger, job_queue)
+        await on_schedule_fired(fired, fs_logger, job_queue)
 
     await inbox.process("workflow.schedule-start", event, process)
 
 
 async def on_schedule_fired(
-    event: dict,
+    event: ScheduleFired,
     fs_logger: Logger,
     job_queue: SharedStreaqJobQueue,
 ):
     """Handle ScheduleFired: wake workflow waits or launch scheduled targets."""
-    schedule_id = event.get("schedule_id")
-    user_id = event.get("user_id")
-    payload = event.get("payload")
-    metadata = event.get("metadata")
-    llm_output = event.get("llm_output")
-    source_occurred_at = event.get("scheduled_at") or event.get("occurred_at")
-    schedule_event_id = (
-        event.get("source_event_id")
-        or event.get("event_id")
-        or event.get("id")
-        or event.get("message_id")
-        or event.get("occurred_at")
-    )
-    if not schedule_event_id:
-        canonical = json.dumps(event, sort_keys=True, separators=(",", ":"), default=str)
-        schedule_event_id = f"legacy:{hashlib.sha256(canonical.encode()).hexdigest()}"
-
-    if not schedule_id:
-        return
+    schedule_id = event.schedule_id
+    source_occurred_at = event.scheduled_at or event.occurred_at
+    schedule_event_id = event.source_event_id
 
     fs_logger.info(f"Workflow: Received ScheduleFired for {schedule_id}")
 
@@ -269,10 +254,10 @@ async def on_schedule_fired(
     await job_queue.enqueue(
         "check_and_start_flows_for_schedule",
         schedule_id=str(schedule_id),
-        user_id=str(user_id) if user_id else None,
-        payload=payload or {},
-        metadata=metadata or {},
-        llm_output=llm_output,
+        user_id=str(event.user_id),
+        payload=event.payload,
+        metadata=event.metadata or {},
+        llm_output=event.llm_output,
         schedule_event_id=str(schedule_event_id),
         source_occurred_at=(
             source_occurred_at.isoformat()
@@ -288,11 +273,11 @@ async def on_schedule_fired(
 @streaq_task(name="check_and_start_flows_for_schedule")
 async def check_and_start_flows_for_schedule(
     schedule_id: str,
+    user_id: str,
     payload: dict,
-    user_id: str | None = None,
+    schedule_event_id: str,
     metadata: dict | None = None,
     llm_output: dict | None = None,
-    schedule_event_id: str | None = None,
     source_occurred_at: str | None = None,
 ):
     """Check schedules and start or wake workflow runs."""

@@ -46,6 +46,8 @@ async def _create_workflow(
     *,
     start: dict,
     name_prefix: str,
+    nodes: list[dict] | None = None,
+    edges: list[dict] | None = None,
 ) -> dict:
     create = await client.post(
         f"/pods/{pod_id}/workflows",
@@ -62,8 +64,8 @@ async def _create_workflow(
         f"/pods/{pod_id}/workflows/{workflow_name}/graph",
         json={
             "start": start,
-            "nodes": [{"id": "end", "type": "END", "label": "Done"}],
-            "edges": [],
+            "nodes": nodes or [{"id": "end", "type": "END", "label": "Done"}],
+            "edges": edges or [],
         },
     )
     assert graph.status_code == 200, graph.text
@@ -198,6 +200,23 @@ async def _workflow_run(
     response = await client.get(f"/pods/{pod_id}/workflow-runs/{run_id}")
     assert response.status_code == 200, response.text
     return response.json()
+
+
+async def _wait_for_run_status(
+    client: AsyncClient,
+    pod_id: str,
+    run_id: str,
+    status: str,
+) -> dict:
+    deadline = asyncio.get_running_loop().time() + SCHEDULE_E2E_TIMEOUT_SECONDS
+    while asyncio.get_running_loop().time() < deadline:
+        run = await _workflow_run(client, pod_id, run_id)
+        if run["status"] == "FAILED":
+            pytest.fail(f"Workflow run failed while waiting for {status}: {run}")
+        if run["status"] == status:
+            return run
+        await asyncio.sleep(SCHEDULE_E2E_POLL_SECONDS)
+    pytest.fail(f"Timed out waiting for workflow run status {status}")
 
 
 async def _wait_for_workflow_run(
@@ -743,6 +762,52 @@ async def test_cron_schedule_fires_workflow(
 
 
 @pytest.mark.asyncio
+async def test_wait_until_resumes_through_scheduler_with_exact_wait_ref(
+    authenticated_client: AsyncClient,
+    fixed_test_org,
+    worker,
+):
+    _ = worker
+    pod_id = await _create_pod(authenticated_client, fixed_test_org["id"])
+    workflow = await _create_workflow(
+        authenticated_client,
+        pod_id,
+        start={"type": "MANUAL"},
+        name_prefix="wait-until-workflow",
+        nodes=[
+            {
+                "id": "timer",
+                "type": "WAIT_UNTIL",
+                "config": {"timeout_seconds": 2},
+            },
+            {"id": "end", "type": "END"},
+        ],
+        edges=[{"id": "timer-end", "source": "timer", "target": "end"}],
+    )
+
+    response = await authenticated_client.post(
+        f"/pods/{pod_id}/workflows/{workflow['name']}/runs"
+    )
+    assert response.status_code == 201, response.text
+    waiting = response.json()
+    assert waiting["active_wait"]["wait_type"] == "TIME"
+    wait_ref = waiting["active_wait"]["external_ref"]
+    assert UUID(wait_ref) != UUID(waiting["id"])
+
+    completed = await _wait_for_run_status(
+        authenticated_client,
+        pod_id,
+        waiting["id"],
+        "COMPLETED",
+    )
+    assert completed["active_wait"] is None
+    assert [step["node_id"] for step in completed["step_history"]] == [
+        "timer",
+        "end",
+    ]
+
+
+@pytest.mark.asyncio
 async def test_composio_webhook_schedule_starts_event_workflow_from_logged_payload(
     authenticated_client: AsyncClient,
     fixed_test_org,
@@ -777,7 +842,7 @@ async def test_composio_webhook_schedule_starts_event_workflow_from_logged_paylo
     )
 
     monkeypatch.setattr(
-        "app.modules.schedule.infrastructure.adapters.composio_webhook_verifier.ComposioWebhookVerifier.verify",
+        "app.composition.schedule_connectors.ComposioWebhookVerifier.verify",
         lambda self, payload_text, headers: {
             "version": "V3",
             "payload": {

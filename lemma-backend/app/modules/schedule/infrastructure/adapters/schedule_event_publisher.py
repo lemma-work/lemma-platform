@@ -21,10 +21,10 @@ class DurableScheduleEventPublisher(ScheduleEventPublisher):
         self,
         schedule: ScheduleEntity,
         payload: Dict[str, Any],
+        source_event_id: str,
         user_id: UUID | None = None,
         metadata: Optional[Dict[str, Any]] = None,
         llm_output: Optional[Dict[str, Any]] = None,
-        source_event_id: str | None = None,
     ) -> None:
         event = ScheduleFired(
             schedule_id=schedule.id,

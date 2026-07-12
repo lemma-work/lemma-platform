@@ -53,13 +53,13 @@ class ScheduleFired(ScheduleEvent):
 
     event_type: str = "schedule.fired"
     payload: dict[str, Any]
+    source_event_id: str
     metadata: dict[str, Any] | None = None
     # Additional context for richer processing
     account_id: UUID | None = None  # For WEBHOOK schedules
     pod_id: UUID | None = None  # For pod-scoped table/file schedules
     scheduled_at: datetime | None = None  # For TIME schedules
     llm_output: dict[str, Any] | None = None  # For filtered events
-    source_event_id: str | None = None
 
 
 class ScheduleEvents:

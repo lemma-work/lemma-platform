@@ -5,8 +5,9 @@ This service manages scheduled jobs and emits events via FastStream when jobs fi
 
 from __future__ import annotations
 
+from dataclasses import dataclass
 from typing import Optional
-from datetime import datetime
+from datetime import datetime, timezone
 from uuid import UUID
 
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
@@ -14,9 +15,13 @@ from apscheduler.jobstores.sqlalchemy import SQLAlchemyJobStore
 from apscheduler.triggers.cron import CronTrigger
 from apscheduler.triggers.date import DateTrigger
 from pytz import utc
+from sqlalchemy import select
 
 from app.core.config import settings
+from app.core.infrastructure.db.session import async_session_maker
 from app.core.log.log import get_logger
+from app.modules.schedule.domain.schedule import ScheduleType
+from app.modules.schedule.infrastructure.models.schedule import Schedule
 from app.modules.schedule.scheduler.events import get_event_emitter
 from app.modules.schedule.scheduler.executor import (
     ScheduledTimeAsyncIOExecutor,
@@ -26,7 +31,39 @@ from app.modules.schedule.scheduler.executor import (
 logger = get_logger(__name__)
 
 
-async def execute_scheduled_job(schedule_id: str, payload: dict | None = None):
+@dataclass(frozen=True)
+class TimeScheduleJob:
+    id: UUID
+    user_id: UUID
+    config: dict
+
+
+async def load_active_time_schedules() -> list[TimeScheduleJob]:
+    table = Schedule.__table__
+    async with async_session_maker() as session:
+        rows = (
+            await session.execute(
+                select(table.c.id, table.c.user_id, table.c.config).where(
+                    table.c.schedule_type == ScheduleType.TIME,
+                    table.c.is_active.is_(True),
+                )
+            )
+        ).mappings()
+        return [
+            TimeScheduleJob(
+                id=row["id"],
+                user_id=row["user_id"],
+                config=dict(row["config"] or {}),
+            )
+            for row in rows
+        ]
+
+
+async def execute_scheduled_job(
+    schedule_id: str,
+    user_id: str,
+    payload: dict | None = None,
+):
     """Static function to execute scheduled jobs.
 
     This function is called by APScheduler when a job fires.
@@ -43,6 +80,7 @@ async def execute_scheduled_job(schedule_id: str, payload: dict | None = None):
     schedule_uuid = UUID(schedule_id)
     await emitter.emit_scheduled_job_event(
         schedule_id=schedule_uuid,
+        user_id=UUID(user_id),
         payload=payload or {},
         scheduled_at=current_scheduled_run_time(),
     )
@@ -95,14 +133,76 @@ class SchedulerService:
     async def start(self):
         """Start the scheduler and event emitter."""
         if not self._started:
-            # Start event emitter first
             emitter = get_event_emitter()
             await emitter.start()
-
-            # Start scheduler
-            self.scheduler.start()
+            try:
+                self.scheduler.start(paused=True)
+                await self.reconcile_time_schedule_jobs()
+                self.scheduler.resume()
+            except Exception:
+                if self.scheduler.running:
+                    self.scheduler.shutdown(wait=False)
+                await emitter.stop()
+                raise
             self._started = True
-            logger.info("APScheduler started with event emitter")
+            logger.info("APScheduler started with reconciled time jobs")
+
+    async def reconcile_time_schedule_jobs(self) -> None:
+        """Replace logical TIME jobs from authoritative schedule rows.
+
+        Workflow wait timers are not logical schedule rows and carry a
+        ``workflow_run_id`` payload instead of ``payload.schedule_id``; they are
+        deliberately left untouched.
+        """
+        schedules = await load_active_time_schedules()
+
+        now = datetime.now(timezone.utc)
+        desired: list[
+            tuple[TimeScheduleJob, dict, datetime | None, str | None]
+        ] = []
+        desired_ids: set[str] = set()
+        for schedule in schedules:
+            config = dict(schedule.config or {})
+            payload = dict(config.get("payload") or {})
+            payload.setdefault("schedule_id", str(schedule.id))
+            scheduled_at = config.get("scheduled_at")
+            cron = config.get("cron")
+            if scheduled_at:
+                run_date = datetime.fromisoformat(str(scheduled_at))
+                if run_date.tzinfo is None:
+                    run_date = run_date.replace(tzinfo=timezone.utc)
+                else:
+                    run_date = run_date.astimezone(timezone.utc)
+                if run_date <= now:
+                    continue
+                desired.append((schedule, payload, run_date, None))
+            elif cron:
+                desired.append((schedule, payload, None, str(cron)))
+            else:
+                raise ValueError(f"TIME schedule {schedule.id} has no trigger")
+            desired_ids.add(str(schedule.id))
+
+        for job in self.scheduler.get_jobs():
+            payload = dict((job.kwargs or {}).get("payload") or {})
+            if payload.get("schedule_id") == job.id and job.id not in desired_ids:
+                self.scheduler.remove_job(job.id)
+
+        for schedule, payload, run_date, cron in desired:
+            if run_date is not None:
+                self.add_once_job(
+                    schedule_id=schedule.id,
+                    user_id=schedule.user_id,
+                    run_date=run_date,
+                    payload=payload,
+                )
+            else:
+                assert cron is not None
+                self.add_cron_job(
+                    schedule_id=schedule.id,
+                    user_id=schedule.user_id,
+                    cron_expression=cron,
+                    payload=payload,
+                )
 
     async def shutdown(self, wait: bool = True):
         """Shutdown the scheduler and event emitter."""
@@ -119,6 +219,7 @@ class SchedulerService:
     def add_cron_job(
         self,
         schedule_id: UUID,
+        user_id: UUID,
         cron_expression: str,
         payload: Optional[dict] = None,
         replace_existing: bool = True,
@@ -155,7 +256,11 @@ class SchedulerService:
             func="app.modules.schedule.scheduler.scheduler_service:execute_scheduled_job",
             trigger=apscheduler_trigger,
             id=job_id,
-            kwargs={"schedule_id": job_id, "payload": payload},
+            kwargs={
+                "schedule_id": job_id,
+                "user_id": str(user_id),
+                "payload": payload,
+            },
             replace_existing=replace_existing,
         )
 
@@ -166,6 +271,7 @@ class SchedulerService:
     def add_once_job(
         self,
         schedule_id: UUID,
+        user_id: UUID,
         run_date: datetime,
         payload: Optional[dict] = None,
         replace_existing: bool = True,
@@ -194,7 +300,11 @@ class SchedulerService:
             func="app.modules.schedule.scheduler.scheduler_service:execute_scheduled_job",
             trigger=apscheduler_trigger,
             id=job_id,
-            kwargs={"schedule_id": job_id, "payload": payload},
+            kwargs={
+                "schedule_id": job_id,
+                "user_id": str(user_id),
+                "payload": payload,
+            },
             replace_existing=replace_existing,
         )
 

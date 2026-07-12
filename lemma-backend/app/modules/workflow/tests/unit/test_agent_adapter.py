@@ -6,9 +6,7 @@ from uuid import uuid4
 
 import pytest
 
-from app.modules.workflow.infrastructure.adapters.agent_adapter import (
-    AgentControlAdapter,
-)
+from app.composition.workflow_agent import AgentControlAdapter
 
 
 def test_normalize_agent_output_wraps_non_dict_as_answer():

@@ -113,12 +113,54 @@ async def test_duplicate_agent_schedule_fire_is_skipped(monkeypatch):
 
     await svc.handle_schedule_fired(
         schedule_id=str(schedule.id),
+        user_id=schedule.user_id,
         payload={},
         schedule_event_id="evt-1",
     )
 
     run_repo.claim.assert_awaited_once()
     engine.agent_adapter.run_agent_by_id.assert_not_awaited()
+
+
+@pytest.mark.anyio
+async def test_workflow_timer_requires_exact_wait_ref() -> None:
+    service = ScheduleStartService(_engine_with_mocks())
+
+    with pytest.raises(ValueError, match="wait_ref is required"):
+        await service.handle_schedule_fired(
+            schedule_id=str(uuid4()),
+            user_id=uuid4(),
+            payload={"workflow_run_id": str(uuid4())},
+            schedule_event_id="timer:event-1",
+        )
+
+
+@pytest.mark.anyio
+async def test_workflow_timer_rejects_non_owner_user() -> None:
+    engine = _engine_with_mocks()
+    run_id = uuid4()
+    engine.run_repo.get = AsyncMock(
+        return_value=SimpleNamespace(
+            id=run_id,
+            user_id=uuid4(),
+            pod_id=uuid4(),
+        )
+    )
+    engine.resume_internal = AsyncMock()
+    service = ScheduleStartService(engine)
+
+    with pytest.raises(ValueError, match="does not match the run owner"):
+        await service.handle_schedule_fired(
+            schedule_id=str(uuid4()),
+            user_id=uuid4(),
+            payload={
+                "workflow_run_id": str(run_id),
+                "wait_ref": str(uuid4()),
+            },
+            schedule_event_id="timer:event-2",
+        )
+
+    engine.resume_internal.assert_not_awaited()
 
 
 @pytest.mark.anyio

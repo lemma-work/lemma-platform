@@ -12,6 +12,7 @@ class ScheduleCronJobRequest(BaseModel):
     """Request schema for scheduling a cron job."""
 
     schedule_id: UUID = Field(..., description="Schedule ID (also used as job_id)")
+    user_id: UUID = Field(..., description="User who owns the resulting run")
     cron_expression: str = Field(
         ..., description="Cron expression (e.g., '*/5 * * * *')"
     )
@@ -25,6 +26,7 @@ class ScheduleOnceJobRequest(BaseModel):
     """Request schema for scheduling a one-time job."""
 
     schedule_id: UUID = Field(..., description="Schedule ID (also used as job_id)")
+    user_id: UUID = Field(..., description="User who owns the resulting run")
     run_date: datetime = Field(
         ..., description="When to run the job (ISO datetime string)"
     )

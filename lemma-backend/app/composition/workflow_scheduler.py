@@ -20,10 +20,11 @@ class ScheduleControlAdapter(SchedulePort):
         pod_id: UUID,
         user_id: UUID,
     ) -> UUID:
-        del pod_id, user_id
+        del pod_id
         timer_id = uuid4()
         await self.scheduler.schedule_once_job(
             schedule_id=timer_id,
+            user_id=user_id,
             run_date=datetime.fromisoformat(scheduled_at),
             payload={
                 "workflow_run_id": str(run_id),

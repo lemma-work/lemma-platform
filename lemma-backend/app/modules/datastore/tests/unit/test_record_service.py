@@ -15,13 +15,26 @@ from app.modules.datastore.domain.datastore_entities import (
 )
 from app.modules.datastore.domain.errors import DatastoreValidationError
 from app.modules.datastore.domain.events import (
-    DATASTORE_EVENTS_STREAM,
     DatastoreRecordEvent,
     DatastoreRecordOperation,
 )
-from app.modules.datastore.services.record_service import RecordService
+from app.modules.datastore.services.record_service import RecordService as _RecordService
 from app.modules.datastore.services.record_validator import convert_record
 from app.modules.datastore.services.table_context import TableContext
+
+
+def RecordService(
+    *,
+    record_repository,
+    event_dispatcher=None,
+    **kwargs,
+):
+    """Build the production transactional-only service for focused unit tests."""
+    return _RecordService(
+        record_repository=record_repository,
+        event_dispatcher=event_dispatcher or AsyncMock(),
+        **kwargs,
+    )
 
 
 def _table_context() -> TableContext:
@@ -110,29 +123,39 @@ def _events_enabled_rls_context() -> TableContext:
     return TableContext.from_table_entity(table, "pod_test", events_enabled=True)
 
 
-async def test_create_record_emits_record_event_on_unified_stream():
+async def test_create_record_stages_record_event_for_outbox():
     ctx = _events_enabled_context()
     user_id = uuid4()
     record_id = str(uuid4())
     record_repository = AsyncMock()
-    record_repository.create_record.return_value = type(
+    stored = type(
         "StoredRecord",
         (),
         {"user_id": uuid4(), "id": record_id, "data": {"merchant": "Hotel"}},
     )()
-    message_bus = AsyncMock()
-    service = RecordService(record_repository=record_repository, message_bus=message_bus)
+    staged_events = []
+
+    async def create_record(_ctx, _data, _user_id, *, event_factory):
+        staged_events.append(event_factory(stored))
+        return stored
+
+    record_repository.create_record.side_effect = create_record
+    dispatcher = AsyncMock()
+    service = RecordService(
+        record_repository=record_repository,
+        event_dispatcher=dispatcher,
+    )
 
     await service.create_record(ctx, {"merchant": "Hotel"}, user_id)
 
-    stream, event = message_bus.publish.await_args.args
-    assert stream == DATASTORE_EVENTS_STREAM
+    event = staged_events[0]
     assert isinstance(event, DatastoreRecordEvent)
     assert event.event_type == "datastore.record.insert"
     assert event.operation == DatastoreRecordOperation.INSERT
     assert event.actor_id == user_id
     assert event.table_name == "expenses"
     assert event.record_id == record_id
+    dispatcher.assert_awaited_once()
 
 
 async def test_production_record_event_is_staged_by_repository_not_published_after_commit():
@@ -152,16 +175,15 @@ async def test_production_record_event_is_staged_by_repository_not_published_aft
         return stored
 
     record_repository.create_record.side_effect = create_record
-    message_bus = AsyncMock()
+    dispatcher = AsyncMock()
     service = RecordService(
         record_repository=record_repository,
-        message_bus=message_bus,
-        transactional_events=True,
+        event_dispatcher=dispatcher,
     )
 
     await service.create_record(ctx, {"merchant": "Hotel"}, user_id)
 
-    message_bus.publish.assert_not_called()
+    dispatcher.assert_awaited_once()
     assert len(staged_events) == 1
     assert staged_events[0].record_id == record_id
     assert staged_events[0].operation == DatastoreRecordOperation.INSERT
@@ -175,12 +197,16 @@ async def test_create_record_skips_event_when_events_disabled():
         (),
         {"user_id": uuid4(), "id": str(uuid4()), "data": {"merchant": "Hotel"}},
     )()
-    message_bus = AsyncMock()
-    service = RecordService(record_repository=record_repository, message_bus=message_bus)
+    dispatcher = AsyncMock()
+    service = RecordService(
+        record_repository=record_repository,
+        event_dispatcher=dispatcher,
+    )
 
     await service.create_record(ctx, {"merchant": "Hotel"}, uuid4())
 
-    message_bus.publish.assert_not_called()
+    assert record_repository.create_record.await_args.kwargs["event_factory"] is None
+    dispatcher.assert_not_awaited()
 
 
 async def test_update_and_delete_emit_record_events():
@@ -188,27 +214,38 @@ async def test_update_and_delete_emit_record_events():
     user_id = uuid4()
     record_id = str(uuid4())
     record_repository = AsyncMock()
-    record_repository.update_record.return_value = type(
+    updated = type(
         "StoredRecord",
         (),
         {"user_id": uuid4(), "id": record_id, "data": {"merchant": "Retreat"}},
     )()
-    record_repository.delete_record.return_value = type(
+    deleted = type(
         "DeletedRecord",
         (),
         {"user_id": user_id, "id": record_id, "data": {"merchant": "Retreat"}},
     )()
-    message_bus = AsyncMock()
-    service = RecordService(record_repository=record_repository, message_bus=message_bus)
+    staged_events = []
+
+    async def update_record(*args, event_factory, **kwargs):
+        staged_events.append(event_factory(updated))
+        return updated
+
+    async def delete_record(*args, event_factory, **kwargs):
+        staged_events.append(event_factory(deleted))
+        return deleted
+
+    record_repository.update_record.side_effect = update_record
+    record_repository.delete_record.side_effect = delete_record
+    service = RecordService(record_repository=record_repository)
 
     await service.update_record(ctx, record_id, {"merchant": "Retreat"}, user_id)
-    _, update_event = message_bus.publish.await_args.args
+    update_event = staged_events[-1]
     assert update_event.operation == DatastoreRecordOperation.UPDATE
     assert update_event.event_type == "datastore.record.update"
     assert update_event.actor_id == user_id
 
     await service.delete_record(ctx, record_id, user_id)
-    _, delete_event = message_bus.publish.await_args.args
+    delete_event = staged_events[-1]
     assert delete_event.operation == DatastoreRecordOperation.DELETE
     assert delete_event.event_type == "datastore.record.delete"
 
@@ -218,8 +255,7 @@ async def test_bulk_create_emits_one_insert_event_per_row():
     user_id = uuid4()
     record_repository = AsyncMock()
     record_repository.bulk_create_records.return_value = 2
-    message_bus = AsyncMock()
-    service = RecordService(record_repository=record_repository, message_bus=message_bus)
+    service = RecordService(record_repository=record_repository)
 
     await service.bulk_create_records(
         ctx,
@@ -227,10 +263,9 @@ async def test_bulk_create_emits_one_insert_event_per_row():
         user_id,
     )
 
-    assert message_bus.publish.await_count == 2
-    for call in message_bus.publish.await_args_list:
-        stream, event = call.args
-        assert stream == DATASTORE_EVENTS_STREAM
+    events = record_repository.bulk_create_records.await_args.kwargs["events"]
+    assert len(events) == 2
+    for event in events:
         assert event.operation == DatastoreRecordOperation.INSERT
         assert event.actor_id == user_id
 
@@ -243,17 +278,23 @@ async def test_record_event_carries_row_owner_for_rls_table():
     owner = uuid4()
     record_id = str(uuid4())
     record_repository = AsyncMock()
-    record_repository.create_record.return_value = type(
+    stored = type(
         "StoredRecord",
         (),
         {"user_id": owner, "id": record_id, "data": {"merchant": "Hotel"}},
     )()
-    message_bus = AsyncMock()
-    service = RecordService(record_repository=record_repository, message_bus=message_bus)
+    staged_events = []
+
+    async def create_record(*args, event_factory, **kwargs):
+        staged_events.append(event_factory(stored))
+        return stored
+
+    record_repository.create_record.side_effect = create_record
+    service = RecordService(record_repository=record_repository)
 
     await service.create_record(ctx, {"merchant": "Hotel"}, caller)
 
-    _, event = message_bus.publish.await_args.args
+    event = staged_events[0]
     assert event.owner_user_id == owner
     assert event.actor_id == caller
 
@@ -263,17 +304,23 @@ async def test_record_event_omits_owner_for_non_rls_table():
     member who can read the table."""
     ctx = _events_enabled_context()  # enable_rls=False
     record_repository = AsyncMock()
-    record_repository.create_record.return_value = type(
+    stored = type(
         "StoredRecord",
         (),
         {"user_id": uuid4(), "id": str(uuid4()), "data": {"merchant": "Hotel"}},
     )()
-    message_bus = AsyncMock()
-    service = RecordService(record_repository=record_repository, message_bus=message_bus)
+    staged_events = []
+
+    async def create_record(*args, event_factory, **kwargs):
+        staged_events.append(event_factory(stored))
+        return stored
+
+    record_repository.create_record.side_effect = create_record
+    service = RecordService(record_repository=record_repository)
 
     await service.create_record(ctx, {"merchant": "Hotel"}, uuid4())
 
-    _, event = message_bus.publish.await_args.args
+    event = staged_events[0]
     assert event.owner_user_id is None
 
 
@@ -284,17 +331,23 @@ async def test_delete_record_event_owner_defaults_to_caller_on_rls_table():
     caller = uuid4()
     record_id = str(uuid4())
     record_repository = AsyncMock()
-    record_repository.delete_record.return_value = type(
+    deleted = type(
         "DeletedRecord",
         (),
         {"user_id": caller, "id": record_id, "data": {}},
     )()
-    message_bus = AsyncMock()
-    service = RecordService(record_repository=record_repository, message_bus=message_bus)
+    staged_events = []
+
+    async def delete_record(*args, event_factory, **kwargs):
+        staged_events.append(event_factory(deleted))
+        return deleted
+
+    record_repository.delete_record.side_effect = delete_record
+    service = RecordService(record_repository=record_repository)
 
     await service.delete_record(ctx, record_id, caller)
 
-    _, event = message_bus.publish.await_args.args
+    event = staged_events[0]
     assert event.operation == DatastoreRecordOperation.DELETE
     assert event.owner_user_id == caller
 
@@ -325,14 +378,13 @@ async def test_transactional_admin_delete_stages_original_rls_row_owner():
         return deleted
 
     record_repository.delete_record.side_effect = delete_record
-    message_bus = AsyncMock()
+    dispatcher = AsyncMock()
     auth_context = AsyncMock()
     auth_context.can.return_value = True
     service = RecordService(
         record_repository=record_repository,
-        message_bus=message_bus,
+        event_dispatcher=dispatcher,
         authorization_service=object(),
-        transactional_events=True,
     )
 
     token = set_current_context(auth_context)
@@ -341,7 +393,7 @@ async def test_transactional_admin_delete_stages_original_rls_row_owner():
     finally:
         reset_current_context(token)
 
-    message_bus.publish.assert_not_called()
+    dispatcher.assert_awaited_once()
     assert len(staged_events) == 1
     assert staged_events[0].actor_id == actor
     assert staged_events[0].owner_user_id == row_owner
@@ -362,7 +414,7 @@ async def test_create_record_ignores_user_supplied_timestamps():
         (),
         {"user_id": uuid4(), "id": stored["id"], "data": stored},
     )()
-    service = RecordService(record_repository=record_repository, message_bus=AsyncMock())
+    service = RecordService(record_repository=record_repository)
 
     await service.create_record(
         ctx,
@@ -393,7 +445,7 @@ async def test_update_record_ignores_user_supplied_timestamps():
         (),
         {"user_id": uuid4(), "id": stored["id"], "data": stored},
     )()
-    service = RecordService(record_repository=record_repository, message_bus=AsyncMock())
+    service = RecordService(record_repository=record_repository)
 
     await service.update_record(
         ctx,
@@ -424,7 +476,6 @@ async def test_rls_record_mutations_use_record_write_action():
     authorization_service.resolve_resource_id_by_name.return_value = uuid4()
     service = RecordService(
         record_repository=record_repository,
-        message_bus=AsyncMock(),
         authorization_service=authorization_service,
     )
 
@@ -454,7 +505,6 @@ async def test_non_rls_record_mutations_require_record_write_action():
     authorization_service.resolve_resource_id_by_name.return_value = uuid4()
     service = RecordService(
         record_repository=record_repository,
-        message_bus=AsyncMock(),
         authorization_service=authorization_service,
     )
 
@@ -527,7 +577,6 @@ async def test_create_record_rejects_unknown_user_reference():
     user_repository.get.return_value = None
     service = RecordService(
         record_repository=record_repository,
-        message_bus=AsyncMock(),
         user_repository=user_repository,
     )
 
@@ -570,7 +619,6 @@ async def test_update_record_rejects_unknown_user_reference():
     user_repository.get.return_value = None
     service = RecordService(
         record_repository=record_repository,
-        message_bus=AsyncMock(),
         user_repository=user_repository,
     )
 
@@ -614,7 +662,6 @@ async def test_bulk_create_rejects_unknown_user_reference():
     user_repository.get.return_value = None
     service = RecordService(
         record_repository=record_repository,
-        message_bus=AsyncMock(),
         user_repository=user_repository,
     )
 
@@ -642,7 +689,6 @@ async def test_rls_list_records_enforces_current_user_scope_for_non_admin():
     authorization_service = AsyncMock()
     service = RecordService(
         record_repository=record_repository,
-        message_bus=AsyncMock(),
         authorization_service=authorization_service,
     )
 
@@ -666,7 +712,6 @@ async def test_rls_list_records_scopes_pod_admin_by_default():
     record_repository.list_records.return_value = ([], 0)
     service = RecordService(
         record_repository=record_repository,
-        message_bus=AsyncMock(),
         authorization_service=AsyncMock(),
     )
 
@@ -688,7 +733,6 @@ async def test_rls_list_records_admin_mode_bypasses_scope_for_admin():
     record_repository.list_records.return_value = ([], 0)
     service = RecordService(
         record_repository=record_repository,
-        message_bus=AsyncMock(),
         authorization_service=AsyncMock(),
     )
 
@@ -710,7 +754,6 @@ async def test_rls_list_records_admin_mode_rejected_for_non_admin():
     record_repository = AsyncMock()
     service = RecordService(
         record_repository=record_repository,
-        message_bus=AsyncMock(),
         authorization_service=AsyncMock(),
     )
 
@@ -761,7 +804,6 @@ async def test_execute_readonly_query_scopes_to_user_by_default_even_for_admin()
     record_repository.execute_readonly_query.return_value = ([], 0)
     service = RecordService(
         record_repository=record_repository,
-        message_bus=AsyncMock(),
         authorization_service=AsyncMock(),
     )
 
@@ -787,7 +829,6 @@ async def test_execute_readonly_query_admin_mode_grants_admin_rows_when_admin_on
     record_repository.execute_readonly_query.return_value = ([{"merchant": "x"}], 1)
     service = RecordService(
         record_repository=record_repository,
-        message_bus=AsyncMock(),
         authorization_service=AsyncMock(),
     )
 
@@ -815,7 +856,6 @@ async def test_execute_readonly_query_admin_mode_rejected_when_not_table_admin()
     record_repository = AsyncMock()
     service = RecordService(
         record_repository=record_repository,
-        message_bus=AsyncMock(),
         authorization_service=AsyncMock(),
     )
 
@@ -839,7 +879,6 @@ async def test_execute_readonly_query_requires_pod_read_when_no_table_referenced
     record_repository.execute_readonly_query.return_value = ([{"n": 1}], 1)
     service = RecordService(
         record_repository=record_repository,
-        message_bus=AsyncMock(),
         authorization_service=AsyncMock(),
     )
 

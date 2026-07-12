@@ -5,7 +5,6 @@ from typing import Any, List, Optional
 from uuid import UUID
 
 from sqlalchemy import delete, func, or_, select, update
-from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
 from app.core.domain.message_bus import MessageBus
@@ -40,18 +39,9 @@ class ScheduleRepository(ScheduleRepositoryInterface):
 
     def __init__(
         self,
-        uow: SqlAlchemyUnitOfWork | None = None,
-        session: AsyncSession | None = None,
+        uow: SqlAlchemyUnitOfWork,
         message_bus: MessageBus | None = None,
     ):
-        # Backward compatibility: first positional arg may be AsyncSession.
-        if isinstance(uow, AsyncSession):
-            session = uow
-            uow = None
-        if uow is None:
-            if session is None:
-                raise ValueError("Either uow or session must be provided")
-            uow = SqlAlchemyUnitOfWork(session)
         self.uow = uow
         self.session = uow.session
         if message_bus is not None:

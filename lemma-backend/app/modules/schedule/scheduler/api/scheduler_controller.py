@@ -72,6 +72,7 @@ async def schedule_cron_job(
     try:
         scheduler.add_cron_job(
             schedule_id=data.schedule_id,
+            user_id=data.user_id,
             cron_expression=data.cron_expression,
             payload=data.payload,
             replace_existing=data.replace_existing,
@@ -119,6 +120,7 @@ async def schedule_once_job(
     try:
         scheduler.add_once_job(
             schedule_id=data.schedule_id,
+            user_id=data.user_id,
             run_date=data.run_date,
             payload=data.payload,
             replace_existing=data.replace_existing,
@@ -159,17 +161,10 @@ async def list_jobs() -> JobListResponse:
 
     job_responses = []
     for job in jobs:
-        # job_id is the same as schedule_id (as string)
-        try:
-            schedule_id = UUID(job.id)
-        except ValueError:
-            # Fallback if job_id is not a valid UUID
-            schedule_id = UUID("00000000-0000-0000-0000-000000000000")
-
         job_responses.append(
             JobResponse(
                 job_id=job.id,
-                schedule_id=schedule_id,
+                schedule_id=UUID(job.id),
                 next_run_time=job.next_run_time,
                 job_state=job.state.name if hasattr(job, "state") else None,
             )

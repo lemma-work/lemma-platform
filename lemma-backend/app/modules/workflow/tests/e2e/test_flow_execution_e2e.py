@@ -30,7 +30,6 @@ from app.modules.workflow.domain.start import WorkflowStartType
 from app.modules.workflow.events import handlers as wf_handlers
 from app.modules.workflow.execution.engine import WorkflowEngine
 from app.modules.workflow.services.run_resume_service import RunResumeService
-from app.modules.workflow.services.schedule_start_service import ScheduleStartService
 
 pytestmark = [pytest.mark.e2e, pytest.mark.workspace]
 
@@ -435,20 +434,6 @@ async def _fail_agent_conversation(conversation_id: str, error: str) -> None:
     await _drive_agent_event(conversation_id, status=AgentRunStatus.FAILED)
 
 
-async def _fire_wake(run_id: str) -> None:
-    """Mimic the scheduler firing a wait_until wake for a run."""
-    async with create_uow_from_session_maker(async_session_maker) as uow:
-        await ScheduleStartService(WorkflowEngine(uow)).handle_schedule_fired(
-            schedule_id=run_id,
-            payload={
-                "workflow_run_id": run_id,
-                "source": "workflow_wait_until",
-            },
-            metadata={"source": "test"},
-            schedule_event_id=f"test:{uuid4()}",
-        )
-
-
 async def _create_simple_workflow(
     client: AsyncClient,
     pod_id: str,
@@ -605,7 +590,7 @@ def _assigned_workflow_graph(
             "id": "cooldown",
             "type": "WAIT_UNTIL",
             "label": "Cooldown",
-            "config": {"timeout_seconds": 60},
+            "config": {"timeout_seconds": 2},
         },
         {"id": "end", "type": "END", "label": "Done"},
     ]
@@ -807,9 +792,8 @@ async def test_user_assigned_manual_workflow_runs_through_all_node_types(
     assert run["current_node_id"] == "cooldown"
     assert run["active_wait"]["wait_type"] == "TIME"
     timer_id = run["active_wait"]["external_ref"]
-    assert timer_id == run["id"]
+    assert UUID(timer_id) != UUID(run["id"])
 
-    await _fire_wake(run["id"])
     completed = await _wait_for_run(
         authenticated_client,
         pod_id,

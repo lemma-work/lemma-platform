@@ -57,6 +57,7 @@ class SchedulerAPIClient(SchedulerService):
             if config.scheduled_at:
                 await self.schedule_once_job(
                     schedule_id=schedule.id,
+                    user_id=schedule.user_id,
                     run_date=datetime.fromisoformat(config.scheduled_at),
                     payload=payload,
                     replace_existing=True,
@@ -64,6 +65,7 @@ class SchedulerAPIClient(SchedulerService):
             elif config.cron:
                 await self.schedule_cron_job(
                     schedule_id=schedule.id,
+                    user_id=schedule.user_id,
                     cron_expression=config.cron,
                     payload=payload,
                     replace_existing=True,
@@ -201,6 +203,7 @@ class SchedulerAPIClient(SchedulerService):
     async def schedule_cron_job(
         self,
         schedule_id: UUID,
+        user_id: UUID,
         cron_expression: str,
         payload: Optional[dict] = None,
         replace_existing: bool = True,
@@ -218,6 +221,7 @@ class SchedulerAPIClient(SchedulerService):
         """
         request = ScheduleCronJobRequest(
             schedule_id=schedule_id,
+            user_id=user_id,
             cron_expression=cron_expression,
             payload=payload,
             replace_existing=replace_existing,
@@ -234,6 +238,7 @@ class SchedulerAPIClient(SchedulerService):
     async def schedule_once_job(
         self,
         schedule_id: UUID,
+        user_id: UUID,
         run_date: datetime,
         payload: Optional[dict] = None,
         replace_existing: bool = True,
@@ -251,6 +256,7 @@ class SchedulerAPIClient(SchedulerService):
         """
         request = ScheduleOnceJobRequest(
             schedule_id=schedule_id,
+            user_id=user_id,
             run_date=run_date,
             payload=payload,
             replace_existing=replace_existing,

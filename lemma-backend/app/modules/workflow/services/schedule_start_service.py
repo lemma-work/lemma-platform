@@ -24,8 +24,6 @@ from app.modules.schedule.contracts import ScheduleFireStatus, ScheduleRunStatus
 
 logger = get_logger(__name__)
 
-_LEGACY_MISSING_USER_ID = UUID("00000000-0000-0000-0000-000000000000")
-
 
 def _schedule_pod_id(schedule) -> UUID:
     pod_id = schedule.pod_id
@@ -51,21 +49,24 @@ class ScheduleStartService:
         self,
         *,
         schedule_id: str,
-        user_id: UUID | str | None = None,
+        user_id: UUID | str,
         payload: dict,
+        schedule_event_id: str,
         metadata: dict | None = None,
         llm_output: dict | None = None,
-        schedule_event_id: str | None = None,
         source_occurred_at: datetime | None = None,
     ) -> None:
-        # 1. A wake for a specific run (wait_until timers carry the run id, and —
-        # for timers scheduled after the per-wait-token change — a wait_ref that
-        # resolves to the exact wait so sequential timers can't cross-resume).
-        workflow_run_id = payload.get("workflow_run_id") or payload.get("flow_run_id")
+        # 1. A wake for a specific run. The per-wait token is required so
+        # sequential timers cannot cross-resume.
+        workflow_run_id = payload.get("workflow_run_id")
         if workflow_run_id:
+            wait_ref = payload.get("wait_ref")
+            if not wait_ref:
+                raise ValueError("wait_ref is required for workflow timer fires")
             await self._wake_run(
                 run_id=str(workflow_run_id),
-                external_ref=payload.get("wait_ref"),
+                external_ref=str(wait_ref),
+                user_id=UUID(str(user_id)),
                 payload=payload,
                 metadata=metadata,
                 llm_output=llm_output,
@@ -83,12 +84,7 @@ class ScheduleStartService:
         if not schedule.is_active:
             logger.info("Inactive schedule skipped", schedule_id=str(schedule.id))
             return
-        if not schedule_event_id:
-            raise ValueError("schedule_event_id is required for durable delivery")
-
-        run_user_id = UUID(str(user_id)) if user_id is not None else schedule.user_id
-        if run_user_id == _LEGACY_MISSING_USER_ID:
-            run_user_id = schedule.user_id
+        run_user_id = UUID(str(user_id))
 
         run_repo = ScheduleRunRepository(self._uow)
         schedule_run = await run_repo.claim(
@@ -229,26 +225,25 @@ class ScheduleStartService:
         self,
         *,
         run_id: str,
-        external_ref: str | None = None,
+        external_ref: str,
+        user_id: UUID,
         payload: dict,
         metadata: dict | None,
         llm_output: dict | None,
     ) -> None:
-        # Resume the specific wait keyed by its own token when present; fall back
-        # to the run id for timers scheduled before the per-wait-token change (so
-        # in-flight waits created by the old code path still wake correctly).
-        resume_ref = external_ref or run_id
-        logger.info("Waking workflow run from scheduler", run_id=run_id, wait_ref=resume_ref)
+        logger.info("Waking workflow run from scheduler", run_id=run_id, wait_ref=external_ref)
         run = await self._engine.run_repo.get(UUID(run_id))
         if run is None:
             logger.info("No workflow run found for scheduler wake", run_id=run_id)
             return
+        if run.user_id != user_id:
+            raise ValueError("workflow timer user_id does not match the run owner")
         ctx = await self._build_user_context(user_id=run.user_id, pod_id=run.pod_id)
         ctx_token = set_current_context(ctx)
         try:
             await self._engine.resume_internal(
                 WorkflowRunWaitType.TIME,
-                external_ref=resume_ref,
+                external_ref=external_ref,
                 output={
                     "payload": payload,
                     "metadata": metadata or {},
@@ -265,11 +260,9 @@ class ScheduleStartService:
         schedule,
         user_id: UUID,
         trigger: TriggerContext,
-        schedule_event_id: str | None,
+        schedule_event_id: str,
     ) -> str | None:
-        workflow_schedule_event_id = (
-            f"{schedule.id}:{schedule_event_id}" if schedule_event_id else None
-        )
+        workflow_schedule_event_id = f"{schedule.id}:{schedule_event_id}"
         try:
             ctx = await self._build_user_context(
                 user_id=user_id,

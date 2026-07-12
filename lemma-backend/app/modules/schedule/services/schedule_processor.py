@@ -61,6 +61,9 @@ class ScheduleProcessor:
                 logger.info("Schedule %s filtered out by LLM.", schedule.id)
                 return False
 
+        if not source_event_id:
+            raise ValueError("source_event_id is required to publish a schedule fire")
+
         await self.event_publisher.publish_schedule_fired(
             schedule=schedule,
             payload=payload,
