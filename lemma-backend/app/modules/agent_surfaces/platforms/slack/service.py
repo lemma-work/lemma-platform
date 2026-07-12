@@ -11,6 +11,7 @@ from app.modules.agent.contracts import ConversationContext
 from app.modules.agent_surfaces.domain.entities import ParsedInboundSurfaceEvent
 from app.modules.agent_surfaces.domain.models import (
     OTHER_ANSWER_SUFFIX as _OTHER_SUFFIX,
+    SurfaceApprovalRenderPlan,
     SurfaceChannelInfo,
     SurfaceContextMessage,
     SurfaceDisplayRenderPlan,
@@ -32,6 +33,7 @@ from app.modules.agent_surfaces.platforms.slack.client import (
     slack_scopes,
 )
 from app.modules.agent_surfaces.platforms.slack.models import (
+    SLACK_APPROVAL_ACTION_ID_BY_DECISION,
     SLACK_FORM_SUBMIT_ACTION_ID,
     SlackChannelMessageSnapshot,
     SlackFileAttachment,
@@ -209,6 +211,35 @@ class SlackPlatformService:
             "channel": channel,
             "text": question_plan.title,
             "blocks": _question_blocks(question_plan),
+        }
+        thread_ts = event.reply_target.get("thread_ts")
+        if thread_ts:
+            payload["thread_ts"] = thread_ts
+        payload.update(
+            slack_customized_message_kwargs(
+                self.credentials, (metadata or {}).get("agent_display_name")
+            )
+        )
+        await client.chat_postMessage(**payload)
+        return True
+
+    async def send_approval(
+        self,
+        *,
+        event: ParsedInboundSurfaceEvent,
+        approval_plan: SurfaceApprovalRenderPlan,
+        metadata: dict[str, Any] | None = None,
+    ) -> bool:
+        """Render a request_approval prompt as Block Kit Approve/Deny buttons."""
+        token = slack_access_token(self.credentials)
+        channel = event.reply_target.get("channel")
+        if not token or not channel:
+            return False
+        client = build_slack_client(self.credentials)
+        payload: dict[str, Any] = {
+            "channel": channel,
+            "text": f"Approval needed: {approval_plan.title}",
+            "blocks": _approval_blocks(approval_plan),
         }
         thread_ts = event.reply_target.get("thread_ts")
         if thread_ts:
@@ -821,6 +852,47 @@ def _question_blocks(plan: SurfaceQuestionRenderPlan) -> list[dict[str, Any]]:
             ],
         }
     )
+    return blocks
+
+
+def _approval_blocks(plan: SurfaceApprovalRenderPlan) -> list[dict[str, Any]]:
+    """Build a section (title/reason/action) + Approve/Deny action buttons.
+
+    Each button's ``action_id`` encodes the decision; its ``value`` carries the
+    callback id so the block_actions parser can route the tap back to the run.
+    """
+    text_parts = [f"*Approval needed:* {_slack_escape(plan.title)}"]
+    if plan.reason:
+        text_parts.append(_slack_escape(plan.reason))
+    if plan.action_summary:
+        text_parts.append(f"> Action: `{_slack_escape(plan.action_summary)}`")
+    blocks: list[dict[str, Any]] = [
+        {
+            "type": "section",
+            "text": {
+                "type": "mrkdwn",
+                "text": _truncate_slack_text("\n".join(text_parts), 2900),
+            },
+        }
+    ]
+    elements: list[dict[str, Any]] = []
+    for button in plan.buttons:
+        action_id = SLACK_APPROVAL_ACTION_ID_BY_DECISION.get(button.decision)
+        if action_id is None:
+            continue
+        element: dict[str, Any] = {
+            "type": "button",
+            "action_id": action_id,
+            "text": {
+                "type": "plain_text",
+                "text": _truncate_slack_text(button.label, 74) or "Approve",
+            },
+            "value": plan.callback_id,
+        }
+        if button.style in ("primary", "danger"):
+            element["style"] = button.style
+        elements.append(element)
+    blocks.append({"type": "actions", "elements": elements})
     return blocks
 
 

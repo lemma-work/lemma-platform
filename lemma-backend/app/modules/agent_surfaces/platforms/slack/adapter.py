@@ -7,6 +7,7 @@ from app.modules.agent_surfaces.domain.entities import (
     ParsedSurfaceInteraction,
 )
 from app.modules.agent_surfaces.domain.models import (
+    SurfaceApprovalRenderPlan,
     SurfaceChannelInfo,
     SurfaceDisplayRenderPlan,
     SurfaceQuestionRenderPlan,
@@ -104,6 +105,18 @@ class SlackSurfaceAdapter(BaseSurfaceAdapter):
     ) -> bool:
         return await self._service(credentials).send_questions(
             event=event, question_plan=question_plan, metadata=metadata
+        )
+
+    async def send_approval(
+        self,
+        *,
+        credentials: dict[str, Any],
+        event: ParsedInboundSurfaceEvent,
+        approval_plan: SurfaceApprovalRenderPlan,
+        metadata: dict[str, Any] | None = None,
+    ) -> bool:
+        return await self._service(credentials).send_approval(
+            event=event, approval_plan=approval_plan, metadata=metadata
         )
 
     async def parse_inbound_interaction(

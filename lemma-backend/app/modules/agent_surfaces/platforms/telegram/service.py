@@ -13,6 +13,7 @@ from pydantic_ai.tools import RunContext
 from app.modules.agent.contracts import ConversationContext
 from app.modules.agent_surfaces.domain.entities import ParsedInboundSurfaceEvent
 from app.modules.agent_surfaces.domain.models import (
+    SurfaceApprovalRenderPlan,
     SurfaceDisplayRenderPlan,
     SurfaceQuestionRenderPlan,
     SurfaceSenderProfile,
@@ -204,6 +205,43 @@ class TelegramPlatformService:
                 question.question,
                 metadata={"reply_markup": {"inline_keyboard": rows}},
             )
+        return True
+
+    async def send_approval(
+        self,
+        event: ParsedInboundSurfaceEvent,
+        approval_plan: SurfaceApprovalRenderPlan,
+        metadata: dict[str, Any] | None = None,
+    ) -> bool:
+        """Render a request_approval prompt as an inline keyboard.
+
+        One message with Approve/Deny (and optionally Approve-for-session)
+        buttons; each button's ``callback_data`` is a short token resolving to
+        ``{callback_id, decision}`` (Telegram caps callback_data at 64 bytes).
+        """
+        del metadata
+        chat_id = event.reply_target.get("chat_id") or event.external_channel_id
+        if not chat_id:
+            return False
+        rows: list[list[dict[str, str]]] = []
+        for button in approval_plan.buttons:
+            token = await put_callback_token(
+                {
+                    "callback_id": approval_plan.callback_id,
+                    "decision": button.decision,
+                }
+            )
+            rows.append([{"text": button.label[:64], "callback_data": token}])
+        body_lines = [approval_plan.title]
+        if approval_plan.reason:
+            body_lines.append(approval_plan.reason)
+        if approval_plan.action_summary:
+            body_lines.append(f"Action: {approval_plan.action_summary}")
+        await self.send_message(
+            event,
+            "\n\n".join(body_lines),
+            metadata={"reply_markup": {"inline_keyboard": rows}},
+        )
         return True
 
     async def _send_chunk(self, payload: dict[str, Any], raw_text: str) -> None:

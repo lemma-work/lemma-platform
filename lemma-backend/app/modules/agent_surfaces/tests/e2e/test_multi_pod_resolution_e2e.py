@@ -435,12 +435,8 @@ async def test_shared_system_bot_multi_user_routing_matrix(
         if continuity_first.surface_id == UUID(surface_a["id"])
         else surface_a
     )
-    await _set_user_default_surface(
-        async_client,
-        user=continuity_user,
-        platform=platform,
-        surface_id=opposite_surface["id"],
-    )
+    # With NO default set, a follow-up message continues on the same surface and
+    # conversation (continuity holds).
     continuity_second = await _prepare_platform_dm(
         db_session,
         platform,
@@ -454,6 +450,29 @@ async def test_shared_system_bot_multi_user_routing_matrix(
     assert isinstance(continuity_second, SurfaceChatContext)
     assert continuity_second.surface_id == continuity_first.surface_id
     assert continuity_second.conversation_id == continuity_first.conversation_id
+
+    # Now the user picks a default on the OTHER pod. A valid default is
+    # authoritative — it overrides continuity, re-routing new messages to the
+    # chosen surface and starting a fresh conversation there (issue 3).
+    await _set_user_default_surface(
+        async_client,
+        user=continuity_user,
+        platform=platform,
+        surface_id=opposite_surface["id"],
+    )
+    continuity_third = await _prepare_platform_dm(
+        db_session,
+        platform,
+        _dm_payload(
+            platform,
+            external_id=continuity_external,
+            text="default now wins",
+            message_id=108,
+        ),
+    )
+    assert isinstance(continuity_third, SurfaceChatContext)
+    assert continuity_third.surface_id == UUID(opposite_surface["id"])
+    assert continuity_third.conversation_id != continuity_first.conversation_id
 
     duplicate_user = await org_a.create_user(f"{platform.lower()}-duplicate")
     await org_a.add_user_to_pod(user=duplicate_user, role="POD_EDITOR")

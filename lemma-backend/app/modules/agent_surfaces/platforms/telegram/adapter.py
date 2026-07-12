@@ -9,6 +9,7 @@ from app.modules.agent_surfaces.domain.entities import (
     ParsedSurfaceInteraction,
 )
 from app.modules.agent_surfaces.domain.models import (
+    SurfaceApprovalRenderPlan,
     SurfaceContextMessage,
     SurfaceDisplayRenderPlan,
     SurfaceQuestionRenderPlan,
@@ -92,15 +93,28 @@ class TelegramSurfaceAdapter(BaseSurfaceAdapter):
             event, question_plan, metadata
         )
 
+    async def send_approval(
+        self,
+        *,
+        credentials: dict[str, Any],
+        event: ParsedInboundSurfaceEvent,
+        approval_plan: SurfaceApprovalRenderPlan,
+        metadata: dict[str, Any] | None = None,
+    ) -> bool:
+        return await TelegramPlatformService(credentials).send_approval(
+            event, approval_plan, metadata
+        )
+
     async def parse_inbound_interaction(
         self, payload: dict[str, Any], headers: dict[str, str] | None = None
     ) -> ParsedSurfaceInteraction | None:
-        """Resolve an inline-keyboard tap into an ask_user answer.
+        """Resolve an inline-keyboard tap into an ask_user answer or approval.
 
         The button's ``callback_data`` is a short token that resolves to the
-        stored ``{callback_id, header, value}``. The "Other" sentinel and any
-        unknown/expired token return ``None`` so the message path (typed reply)
-        takes over instead.
+        stored payload — either ``{callback_id, header, value}`` (ask_user) or
+        ``{callback_id, decision}`` (request_approval). The "Other" sentinel and
+        any unknown/expired token return ``None`` so the message path (typed
+        reply) takes over instead.
         """
         del headers
         if not isinstance(payload, dict):
@@ -113,26 +127,31 @@ class TelegramSurfaceAdapter(BaseSurfaceAdapter):
         if not stored:
             return None
         callback_id = str(stored.get("callback_id") or "").strip()
-        header = str(stored.get("header") or "").strip()
-        value = stored.get("value")
-        if not callback_id or not header or value == _OTHER_CALLBACK_VALUE:
+        if not callback_id:
             return None
+        decision = str(stored.get("decision") or "").strip()
+        header = str(stored.get("header") or "").strip()
         message = callback_query.get("message") or {}
         chat = message.get("chat") or {}
         from_user = callback_query.get("from") or {}
         chat_id = str(chat.get("id") or "").strip() or None
         thread_id = message.get("message_thread_id")
-        return ParsedSurfaceInteraction(
-            platform="TELEGRAM",
-            external_channel_id=chat_id,
-            external_thread_id=str(thread_id) if thread_id is not None else None,
-            external_user_id=str(from_user.get("id") or "").strip() or None,
-            callback_id=callback_id,
-            values={header: value},
-            reply_target={"chat_id": chat_id} if chat_id else {},
-            dedup_id=str(callback_query.get("id") or "").strip() or None,
-            raw_payload=payload,
-        )
+        common_kwargs: dict[str, Any] = {
+            "platform": "TELEGRAM",
+            "external_channel_id": chat_id,
+            "external_thread_id": str(thread_id) if thread_id is not None else None,
+            "external_user_id": str(from_user.get("id") or "").strip() or None,
+            "callback_id": callback_id,
+            "reply_target": {"chat_id": chat_id} if chat_id else {},
+            "dedup_id": str(callback_query.get("id") or "").strip() or None,
+            "raw_payload": payload,
+        }
+        if decision:
+            return ParsedSurfaceInteraction(approval_decision=decision, **common_kwargs)
+        value = stored.get("value")
+        if not header or value == _OTHER_CALLBACK_VALUE:
+            return None
+        return ParsedSurfaceInteraction(values={header: value}, **common_kwargs)
 
     async def add_processing_indicator(
         self,

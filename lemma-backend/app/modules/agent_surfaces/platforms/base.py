@@ -13,6 +13,7 @@ from app.modules.agent_surfaces.domain.entities import (
     ParsedSurfaceInteraction,
 )
 from app.modules.agent_surfaces.domain.models import (
+    SurfaceApprovalRenderPlan,
     SurfaceChannelInfo,
     SurfaceContextMessage,
     SurfaceDisplayRenderPlan,
@@ -72,6 +73,19 @@ class BaseSurfaceAdapter:
         """Render ask_user questions as native tappable choices. Default: not
         supported → False so the caller falls back to a formatted text message."""
         del credentials, event, question_plan, metadata
+        return False
+
+    async def send_approval(
+        self,
+        *,
+        credentials: dict[str, Any],
+        event: ParsedInboundSurfaceEvent,
+        approval_plan: SurfaceApprovalRenderPlan,
+        metadata: dict[str, Any] | None = None,
+    ) -> bool:
+        """Render a request_approval prompt as native Approve/Deny buttons.
+        Default: not supported → False so the caller falls back to a text prompt."""
+        del credentials, event, approval_plan, metadata
         return False
 
     async def send_voice_note(

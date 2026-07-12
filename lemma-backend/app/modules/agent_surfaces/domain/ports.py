@@ -16,6 +16,7 @@ from app.modules.agent_surfaces.domain.models import SurfaceDisplayRenderPlan
 from app.modules.agent_surfaces.domain.models import SurfaceChannelInfo
 from app.modules.agent_surfaces.domain.models import SurfaceContextMessage
 from app.modules.agent_surfaces.domain.models import SurfaceQuestionRenderPlan
+from app.modules.agent_surfaces.domain.models import SurfaceApprovalRenderPlan
 
 
 class SurfaceAccountInfo(BaseModel):
@@ -178,6 +179,19 @@ class SurfacePlatformAdapterPort(Protocol):
         metadata: dict[str, Any] | None = None,
     ) -> bool: ...
 
+    async def send_approval(
+        self,
+        *,
+        credentials: dict[str, Any],
+        event: ParsedInboundSurfaceEvent,
+        approval_plan: "SurfaceApprovalRenderPlan",
+        metadata: dict[str, Any] | None = None,
+    ) -> bool: ...
+
+    # Render a request_approval prompt as native Approve/Deny buttons (Slack
+    # blocks / Teams card / Telegram or WhatsApp buttons). True → rendered
+    # natively; False → caller falls back to a formatted text prompt.
+
     async def send_voice_note(
         self,
         *,
@@ -319,4 +333,13 @@ class SurfacePodMembershipPort(Protocol):
         """The user's preferred surface id for ``platform`` (from
         ``users.preferences``), used to disambiguate a sender reachable via a
         shared system bot across pods in multiple orgs. None if unset."""
+        ...
+
+    async def clear_user_default_surface_id(
+        self, user_id: UUID, platform: str
+    ) -> None:
+        """Clear the user's stored default surface for ``platform``.
+
+        Called when a stored default points at a surface the user is no longer a
+        member of (a stale default), so routing stops silently honoring it."""
         ...

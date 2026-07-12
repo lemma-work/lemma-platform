@@ -349,6 +349,11 @@ async def test_whatsapp_send_questions_uses_buttons_for_few_options():
         captured["payload"] = json
 
         class _Resp:
+            status_code = 200
+
+            def json(self):
+                return {"messages": [{"id": "wamid.1"}]}
+
             def raise_for_status(self):
                 return None
 

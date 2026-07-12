@@ -193,6 +193,10 @@ class ParsedSurfaceInteraction(BaseModel):
     external_user_id: str | None = None
     callback_id: str
     values: dict[str, Any] = Field(default_factory=dict)
+    # Set when the tapped control is a native approval button; carries the
+    # canonical AgentRunApprovalDecision value (APPROVE_ONCE / DENY /
+    # APPROVE_FOR_SESSION). None means this is an ask_user answer submission.
+    approval_decision: str | None = None
     reply_target: dict[str, Any] = Field(default_factory=dict)
     dedup_id: str | None = None
     raw_payload: dict[str, Any] = Field(default_factory=dict)

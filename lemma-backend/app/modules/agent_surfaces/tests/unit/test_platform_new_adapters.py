@@ -21,6 +21,7 @@ from app.modules.agent_surfaces.platforms.whatsapp.parser import (
     WhatsAppMessageParser,
 )
 from app.modules.agent_surfaces.platforms.whatsapp import (
+    client as whatsapp_client_module,
     service as whatsapp_service_module,
 )
 from app.modules.agent_surfaces.platforms.gmail.parser import (
@@ -137,8 +138,13 @@ async def test_whatsapp_send_display_resource_uses_cta_url_payload(monkeypatch):
     posted: dict = {}
 
     class _Response:
+        status_code = 200
+
         def raise_for_status(self):
             return None
+
+        def json(self):
+            return {"messages": [{"id": "wamid.1"}]}
 
     class _Client:
         async def __aenter__(self):
@@ -154,7 +160,7 @@ async def test_whatsapp_send_display_resource_uses_cta_url_payload(monkeypatch):
             return _Response()
 
     monkeypatch.setattr(
-        whatsapp_service_module.httpx,
+        whatsapp_client_module.httpx,
         "AsyncClient",
         lambda *args, **kwargs: _Client(),
     )
@@ -208,6 +214,8 @@ async def test_whatsapp_display_phone_number_lookup_uses_graph_phone_id(monkeypa
     requested: dict = {}
 
     class _Response:
+        status_code = 200
+
         def raise_for_status(self):
             return None
 
@@ -228,7 +236,7 @@ async def test_whatsapp_display_phone_number_lookup_uses_graph_phone_id(monkeypa
             return _Response()
 
     monkeypatch.setattr(
-        whatsapp_service_module.httpx,
+        whatsapp_client_module.httpx,
         "AsyncClient",
         lambda *args, **kwargs: _Client(),
     )

@@ -80,6 +80,7 @@ from app.modules.agent_surfaces.services.surface_file_ingest_service import (
     SurfaceFileIngestService,
 )
 from app.modules.agent_surfaces.services.display_resource_renderer import (
+    build_approval_render_plan,
     build_ask_user_render_plan,
     build_display_resource_render_plan,
     merge_other_answers,
@@ -971,17 +972,22 @@ class AgentSurfaceIngressService:
         conversation_id: UUID,
         tool_call_id: str | None = None,
     ) -> bool:
-        """Render a pending ``request_approval`` as a text prompt on the surface.
+        """Render a pending ``request_approval`` on the surface.
 
-        The user replies "approve" / "yes" to proceed or "deny" / "no" to cancel.
-        The typed-reply path in ``start_agent_chat`` routes the answer back via
-        ``_maybe_resume_pending_interaction``.
+        Delivers native Approve/Deny buttons where supported (the tapped decision
+        routes back via ``handle_interaction``); on any platform without native
+        buttons, or if the native render fails, falls back to a text prompt the
+        user answers "approve"/"deny" (routed back by the typed-reply path in
+        ``start_agent_chat`` via ``_maybe_resume_pending_interaction``). Never
+        swallowed.
         """
         target = await self._resolve_egress_target(conversation_id)
         if target is None:
             return False
         if target.surface.surface_type.is_email:
             # Email is non-interactive: never pause for an approve/deny reply.
+            # (The tool now fails fast on email before pausing; this stays as a
+            # defense-in-depth guard.)
             logger.info(
                 "request_approval suppressed on email surface conversation=%s",
                 conversation_id,
@@ -993,22 +999,43 @@ class AgentSurfaceIngressService:
         if not isinstance(pending, dict) or pending.get("kind") != "request_approval":
             return False
         tool_args = pending.get("tool_args") or {}
-        title = sanitize_user_visible_text(
-            str(tool_args.get("title") or "Action requires your approval")
+        # An approve-for-session button only makes sense when the paused call
+        # carries a real permission gate (it lets the exact action skip future
+        # prompts); otherwise it is noise.
+        permission_ids = tool_args.get("permission_ids")
+        allow_session = bool(
+            isinstance(permission_ids, list) and permission_ids
         )
-        reason = sanitize_user_visible_text(str(tool_args.get("reason") or "")).strip()
-        inner_tool = str(tool_args.get("tool_name") or "")
-        lines = [f"Approval needed: {title}"]
-        if reason:
-            lines.append(reason)
-        if inner_tool:
-            lines.append(f"Action: {inner_tool}")
-        lines.append('\nReply "approve" to run it or "deny" to cancel.')
+        plan = build_approval_render_plan(
+            conversation_id=conversation_id,
+            tool_call_id=str(pending.get("tool_call_id") or tool_call_id or ""),
+            title=str(tool_args.get("title") or "Action requires your approval"),
+            reason=str(tool_args.get("reason") or "") or None,
+            tool_name=str(tool_args.get("tool_name") or "") or None,
+            allow_session=allow_session,
+        )
         metadata = await self._egress_metadata_with_agent_name(target, None)
+        try:
+            if await target.adapter.send_approval(
+                credentials=target.credentials,
+                event=target.event,
+                approval_plan=plan,
+                metadata=metadata,
+            ):
+                return True
+        except Exception as exc:
+            logger.warning(
+                "Surface request_approval native render failed conversation=%s "
+                "error=%s",
+                conversation_id,
+                exc,
+            )
+        # Fallback: a text prompt; the user replies "approve"/"deny" and the
+        # typed-reply path resumes the run with their decision.
         await target.adapter.send_message(
             credentials=target.credentials,
             event=target.event,
-            message="\n".join(lines),
+            message=plan.to_plain_text(),
             metadata=metadata,
         )
         return True
@@ -1237,7 +1264,15 @@ class AgentSurfaceIngressService:
             if conversation is None:
                 return
 
-            answers = merge_other_answers(parsed.values)
+            # An approval button carries an explicit decision (approve / deny /
+            # approve-for-session) with no answer payload; an ask_user submit
+            # carries answers keyed by question header.
+            if parsed.approval_decision is not None:
+                decision = AgentRunApprovalDecision(parsed.approval_decision)
+                response: dict[str, object] = {}
+            else:
+                decision = AgentRunApprovalDecision.APPROVE_ONCE
+                response = {"answers": merge_other_answers(parsed.values)}
             auth_ctx = await create_authorization_data_service(self.uow).build_user_context(
                 user_id=conversation.user_id,
                 pod_id=conversation.pod_id,
@@ -1249,8 +1284,8 @@ class AgentSurfaceIngressService:
                     approval_id=tool_call_id,
                     user_id=conversation.user_id,
                     pod_id=conversation.pod_id,
-                    decision=AgentRunApprovalDecision.APPROVE_ONCE,
-                    response={"answers": answers},
+                    decision=decision,
+                    response=response,
                 )
             finally:
                 reset_current_context(token)
@@ -1366,20 +1401,28 @@ class AgentSurfaceIngressService:
         Deterministic precedence — this is what makes a sender reachable via a
         shared system bot/number across pods in multiple orgs route consistently:
 
-        1. **Continuity** — reuse the surface an existing conversation for this
-           exact chat already lives on, so a returning chat never bounces between
-           pods (independent of pod-membership ordering).
-        2. **Pod membership** — only surfaces whose pod the sender belongs to.
-        3. **User default** — when the sender belongs to several such pods,
-           honor ``users.preferences.default_surfaces[platform]``.
+        1. **Pod membership** — only surfaces whose pod the sender belongs to are
+           eligible.
+        2. **User default (authoritative)** — a valid saved
+           ``users.preferences.default_surfaces[platform]`` wins over everything
+           else, including an existing conversation on another pod, so changing
+           the default re-routes new messages to the chosen pod (starting a fresh
+           conversation there). A *stale* default (pointing at a pod the user left)
+           is cleared and ignored.
+        3. **Continuity** — otherwise reuse the surface an existing conversation
+           for this exact chat already lives on, so a returning chat doesn't bounce
+           between pods.
         4. **Deterministic tiebreak** — the first member candidate (``candidates``
            is ordered by ``created_at, id``).
 
-        Membership is still re-validated downstream in ``_prepare_surface_context``
-        (which sends the pod-access/signup reply when appropriate), so continuity
-        only decides *which* candidate — never bypasses the access check.
+        For an unresolved sender (or one who belongs to no candidate pod), fall
+        back to continuity alone. Membership is still re-validated downstream in
+        ``_prepare_surface_context`` (which sends the pod-access/signup reply when
+        appropriate), so this only decides *which* candidate — never bypasses the
+        access check.
         """
-        # 1. Continuity — reuse the surface this chat already lives on.
+        # Resolve continuity once — it is both a fallback for unresolved senders
+        # and the tie-decider when no valid default is set.
         continuity_id = (
             await self.conversation_link_repository.find_surface_id_for_external_thread(
                 platform=platform,
@@ -1388,44 +1431,77 @@ class AgentSurfaceIngressService:
                 external_user_id=parsed.sender_external_user_id,
             )
         )
-        if continuity_id is not None:
-            for surface in candidates:
-                if surface.id == continuity_id:
-                    return surface
-
-        if resolved_user is None or resolved_user.internal_user_id is None:
-            return None
-        if not self.pod_membership_port:
-            return None
-
-        user_pod_ids = set(
-            await self.pod_membership_port.get_user_pod_ids(
-                resolved_user.internal_user_id
-            )
+        continuity_surface = (
+            next((s for s in candidates if s.id == continuity_id), None)
+            if continuity_id is not None
+            else None
         )
+
+        # Unresolved / no-membership-port senders: continuity is all we have.
+        if (
+            resolved_user is None
+            or resolved_user.internal_user_id is None
+            or not self.pod_membership_port
+        ):
+            return continuity_surface
+
+        user_id = resolved_user.internal_user_id
+        user_pod_ids = set(await self.pod_membership_port.get_user_pod_ids(user_id))
         member_candidates = [s for s in candidates if s.pod_id in user_pod_ids]
         if not member_candidates:
-            return None
-        if len(member_candidates) == 1:
-            return member_candidates[0]
+            # No pod the user belongs to; keep continuity if any (membership is
+            # re-validated downstream), else nothing to route to.
+            return continuity_surface
 
-        # 3. Several pods across orgs share this bot — honor the user's default.
+        member_by_id = {s.id: s for s in member_candidates}
+
+        # 2. A valid saved default is authoritative — it wins over continuity.
         get_default = getattr(
             self.pod_membership_port, "get_user_default_surface_id", None
         )
         if get_default is not None:
-            default_id = await get_default(resolved_user.internal_user_id, platform)
+            default_id = await get_default(user_id, platform)
             if default_id is not None:
-                for surface in member_candidates:
-                    if surface.id == default_id:
-                        return surface
+                if default_id in member_by_id:
+                    return member_by_id[default_id]
+                # Stale default: it points at a surface the user is no longer a
+                # member of. Clear it so routing stops silently honoring it.
+                logger.warning(
+                    "Agent surface default for user=%s platform=%s points at "
+                    "surface=%s the user no longer has access to; clearing it.",
+                    user_id,
+                    platform,
+                    default_id,
+                )
+                clear_default = getattr(
+                    self.pod_membership_port, "clear_user_default_surface_id", None
+                )
+                if clear_default is not None:
+                    try:
+                        await clear_default(user_id, platform)
+                    except Exception as exc:
+                        logger.warning(
+                            "Failed to clear stale surface default user=%s "
+                            "platform=%s: %s",
+                            user_id,
+                            platform,
+                            exc,
+                        )
+
+        # 3. Continuity — reuse the surface this chat already lives on (only when
+        # it is a pod the user still belongs to).
+        if continuity_surface is not None and continuity_surface.id in member_by_id:
+            return continuity_surface
+
+        if len(member_candidates) == 1:
+            return member_candidates[0]
 
         # 4. Deterministic tiebreak (candidates are ordered by created_at, id).
         # The user can pick a default via GET/PUT /surfaces/me when this happens.
         logger.info(
             "Agent surface sender resolves to %d candidate surfaces on shared "
-            "platform=%s with no default set; routing to the oldest (surface=%s). "
-            "User can set a default via /surfaces/me.",
+            "platform=%s with no valid default set; routing to the oldest "
+            "(surface=%s). User can set a default via /surfaces/me.",
             len(member_candidates),
             platform,
             member_candidates[0].id,

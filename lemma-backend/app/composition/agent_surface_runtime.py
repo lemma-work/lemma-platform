@@ -40,6 +40,19 @@ def platform_is_email(platform: str | None) -> bool:
     return bool(capabilities and capabilities.is_email)
 
 
+def surface_history_limits() -> tuple[int, int]:
+    """Runtime history bounds for surface conversations: ``(max_messages,
+    window_hours)`` from ``SurfaceSettings``. ``window_hours <= 0`` disables the
+    age filter. Read through this bridge so the agent module never imports
+    surface config directly."""
+    from app.modules.agent_surfaces.config import surface_settings
+
+    return (
+        surface_settings.surface_runtime_history_max_messages,
+        surface_settings.surface_runtime_history_window_hours,
+    )
+
+
 def platform_supports_chat_delivery(platform: str | None) -> bool:
     from app.modules.agent_surfaces.platforms.platform_capabilities import (
         get_platform_capabilities,

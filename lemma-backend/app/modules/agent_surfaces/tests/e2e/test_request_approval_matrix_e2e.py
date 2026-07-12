@@ -1,17 +1,16 @@
-"""request_approval tool-coverage matrix: text-prompt render + typed
-"approve"/"deny" resume, across every chat platform (Slack, Teams, Telegram,
+"""request_approval tool-coverage matrix: native Approve/Deny button render +
+native-submission resume, across every chat platform (Slack, Teams, Telegram,
 WhatsApp), plus negative cases proving the tool is suppressed on email
 surfaces (Gmail, Outlook, Resend) — email is non-interactive, so the agent
 must complete via its single reply-tool call instead of ever pausing.
 
-Unlike ``ask_user``, ``request_approval`` has NO native rendering on any
-platform: the prompt is always a plain text message
-(``send_approval_prompt_for_conversation`` in ``ingress_service.py``), and the
-answer always arrives as an ordinary typed reply ("approve"/"deny") resolved
-by ``_maybe_resume_pending_interaction`` — the SAME code path as any other
-inbound chat message, not a native form submission. So every platform's
-resume step is identical: send another ordinary inbound message through
-``process_ingress_and_run_scripted`` with the typed decision text.
+``request_approval`` renders as native tappable Approve/Deny buttons on every
+chat platform (``send_approval_prompt_for_conversation`` →
+``adapter.send_approval`` in ``ingress_service.py``). A tapped button routes
+back through ``handler.try_handle_interaction`` → ``handle_interaction``, which
+resolves the paused run with the button's decision (APPROVE_ONCE / DENY). A
+typed "approve"/"deny" reply still works as the text fallback path, but these
+tests exercise the native button submission end-to-end.
 """
 
 from __future__ import annotations
@@ -23,6 +22,7 @@ import pytest
 from httpx import AsyncClient
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
 from app.modules.agent.infrastructure.models import AgentModel
 from app.modules.agent_surfaces.config import surface_settings
 from app.modules.agent_surfaces.domain.ingress_context import SurfaceChatContext
@@ -30,11 +30,17 @@ from app.modules.agent_surfaces.domain.ingress_request import (
     SurfacePlatformWebhookIngress,
     SurfaceScheduleIngress,
 )
+from app.modules.agent_surfaces.events.handlers import build_surface_event_handler
 from app.modules.agent_surfaces.infrastructure.models import AgentSurface
+from app.modules.agent_surfaces.platforms.teams.parser import (
+    TEAMS_APPROVAL_DECISION_KEY,
+    TEAMS_FORM_CALLBACK_KEY,
+)
 from app.modules.agent_surfaces.tests.e2e.helpers import (
     E2E_RUNTIME_MODEL_NAME,
     REAL_TEAMS_CHANNEL_ID,
     REAL_TEAMS_TENANT_ID,
+    REAL_TEAMS_THREAD_ID,
     _create_agent_surface,
     _ensure_connector_account,
     _ensure_connector_trigger,
@@ -53,6 +59,7 @@ from app.modules.agent_surfaces.tests.e2e.helpers import (
 from app.modules.agent_surfaces.tests.e2e.mock_infrastructure import wait_for_messages
 from app.modules.agent_surfaces.tests.e2e.scripted_llm import (
     process_ingress_and_run_scripted,
+    resume_latest_scripted_run,
     script_email_reply,
     script_request_approval,
     script_text,
@@ -119,7 +126,28 @@ async def _make_approved_tool_resolvable(
     await db_session.commit()
 
 
-async def test_request_approval_slack_text_prompt_then_resumes_on_approve(
+def _slack_approval_submission_payload(
+    *, callback_id: str, user_id: str, channel_id: str, action_id: str
+) -> dict:
+    """A Slack block_actions submission tapping a native approval button."""
+    return {
+        "type": "block_actions",
+        "user": {"id": user_id},
+        "team": {"id": "T0123456"},
+        "channel": {"id": channel_id},
+        "container": {"message_ts": "1700000000.700700"},
+        "message": {"ts": "1700000000.700700"},
+        "actions": [
+            {
+                "action_id": action_id,
+                "value": callback_id,
+                "action_ts": "1700000000.700800",
+            }
+        ],
+    }
+
+
+async def test_request_approval_slack_native_buttons_then_resumes_on_approve(
     authenticated_client: AsyncClient,
     db_session: AsyncSession,
     test_pod,
@@ -129,8 +157,8 @@ async def test_request_approval_slack_text_prompt_then_resumes_on_approve(
     message_store,
     monkeypatch,
 ):
-    """request_approval renders as a plain text prompt (no native card); a
-    typed "approve" reply resumes with a REAL RequestApprovalResponse."""
+    """request_approval renders native Approve/Deny buttons; a tapped Approve
+    button resumes the paused run with a REAL RequestApprovalResponse."""
     from app.core.config import settings as app_settings
 
     monkeypatch.setattr(app_settings, "api_url", "https://api.example.test")
@@ -175,29 +203,32 @@ async def test_request_approval_slack_text_prompt_then_resumes_on_approve(
     channel_id = dm_payload["event"]["channel"]
 
     slack_messages = await wait_for_messages(message_store, "SLACK", min_count=1)
-    prompt = slack_messages[-1]["text"]
-    assert "Approval needed: Show a widget" in prompt
-    assert "Needs your OK first" in prompt
-    assert "Action: display_resource" in prompt
-    assert 'Reply "approve"' in prompt
-    # No native structure of any kind — request_approval never renders one.
-    assert "blocks" not in slack_messages[-1]
+    rendered = json.dumps(slack_messages)
+    assert "Show a widget" in rendered
+    # Native Approve/Deny action buttons — not a plain-text prompt.
+    assert "lemma_approval_approve" in rendered
+    assert "lemma_approval_deny" in rendered
 
-    # A Slack DM's conversation-link identity is keyed by thread_ts-or-ts (see
-    # SlackMessageParser), so the "approve" reply must carry the ORIGINAL
-    # message's ts as thread_ts to resolve back to the same conversation
-    # instead of starting a new one.
-    approve_payload = _load_slack_dm_fixture(
-        text="approve",
-        ts="1700000200.700700",
-        thread_ts="1700000100.600600",
+    submission = _slack_approval_submission_payload(
+        callback_id=f"{conversation_id}|{_TOOL_CALL_ID}",
+        user_id=sender_id,
+        channel_id=channel_id,
+        action_id="lemma_approval_approve",
     )
-    approve_payload["event"]["user"] = sender_id
-    approve_payload["event"]["channel"] = channel_id
-    await process_ingress_and_run_scripted(
+    uow = SqlAlchemyUnitOfWork(db_session)
+    handler = build_surface_event_handler(uow)
+    handled = await handler.try_handle_interaction(
+        SurfacePlatformWebhookIngress(source="slack", payload=submission, headers={})
+    )
+    assert handled is True
+    await uow.commit()
+
+    await resume_latest_scripted_run(
         db_session,
-        SurfacePlatformWebhookIngress(source="slack", payload=approve_payload, headers={}),
-        script=None,
+        conversation_id=context.conversation_id,
+        user_id=context.user_id,
+        pod_id=context.pod_id,
+        agent_name=context.agent_name,
     )
 
     slack_messages = await wait_for_messages(message_store, "SLACK", min_count=2)
@@ -214,6 +245,101 @@ async def test_request_approval_slack_text_prompt_then_resumes_on_approve(
     result = tool_return["tool_result"]
     assert result["decision"] == "APPROVE_ONCE"
     assert result["executed"] is True
+
+
+async def test_request_approval_slack_native_deny_skips_wrapped_tool(
+    authenticated_client: AsyncClient,
+    db_session: AsyncSession,
+    test_pod,
+    fixed_test_user,
+    fixed_test_org,
+    fake_slack,
+    message_store,
+    monkeypatch,
+):
+    """A tapped Deny button resolves DENY and never runs the wrapped tool."""
+    from app.core.config import settings as app_settings
+
+    monkeypatch.setattr(app_settings, "api_url", "https://api.example.test")
+    monkeypatch.setattr(surface_settings, "slack_signing_secret", "slack-secret")
+    pod_id = test_pod["id"]
+    account = await _ensure_connector_account(
+        db_session,
+        user_id=fixed_test_user["id"],
+        connector_id="slack",
+        credentials={
+            "access_token": "xoxb-approval-native-deny",
+            "scope": "chat:write",
+            "api_base_url": fake_slack.base_url,
+            "raw_response": {
+                "bot_user_id": "U0AGSSTQZLH",
+                "team_id": "T0123456",
+                "api_base_url": fake_slack.base_url,
+            },
+        },
+    )
+    agent, surface = await _create_agent_surface(
+        authenticated_client,
+        pod_id,
+        config={"type": "SLACK", "account_id": str(account.id)},
+        toolsets=["USER_INTERACTION"],
+    )
+    await _make_approved_tool_resolvable(
+        db_session, agent_id=agent["id"], organization_id=fixed_test_org["id"]
+    )
+
+    dm_payload = _load_slack_dm_fixture(
+        text="please show the widget", ts="1700003100.600600"
+    )
+    context = await process_ingress_and_run_scripted(
+        db_session,
+        SurfacePlatformWebhookIngress(source="slack", payload=dm_payload, headers={}),
+        script=_approval_script("Okay, cancelled."),
+    )
+    assert isinstance(context, SurfaceChatContext)
+    conversation_id = str(context.conversation_id)
+    sender_id = dm_payload["event"]["user"]
+    channel_id = dm_payload["event"]["channel"]
+
+    await wait_for_messages(message_store, "SLACK", min_count=1)
+
+    submission = _slack_approval_submission_payload(
+        callback_id=f"{conversation_id}|{_TOOL_CALL_ID}",
+        user_id=sender_id,
+        channel_id=channel_id,
+        action_id="lemma_approval_deny",
+    )
+    uow = SqlAlchemyUnitOfWork(db_session)
+    handler = build_surface_event_handler(uow)
+    handled = await handler.try_handle_interaction(
+        SurfacePlatformWebhookIngress(source="slack", payload=submission, headers={})
+    )
+    assert handled is True
+    await uow.commit()
+
+    await resume_latest_scripted_run(
+        db_session,
+        conversation_id=context.conversation_id,
+        user_id=context.user_id,
+        pod_id=context.pod_id,
+        agent_name=context.agent_name,
+    )
+
+    slack_messages = await wait_for_messages(message_store, "SLACK", min_count=2)
+    assert "Okay, cancelled." in slack_messages[-1]["text"]
+
+    messages = await _messages_for_conversation(
+        authenticated_client, pod_id=pod_id, conversation_id=conversation_id
+    )
+    tool_return = next(
+        m
+        for m in messages
+        if m.get("tool_call_id") == _TOOL_CALL_ID and m.get("kind") == "TOOL_RETURN"
+    )
+    result = tool_return["tool_result"]
+    assert result["decision"] == "DENY"
+    assert result["executed"] is False
+    assert result["result"] is None
 
 
 async def test_request_approval_slack_typed_deny_skips_wrapped_tool(
@@ -302,7 +428,7 @@ async def test_request_approval_slack_typed_deny_skips_wrapped_tool(
     assert result["result"] is None
 
 
-async def test_request_approval_teams_text_prompt_then_resumes_on_approve(
+async def test_request_approval_teams_native_buttons_then_resumes_on_approve(
     authenticated_client: AsyncClient,
     db_session: AsyncSession,
     test_pod,
@@ -366,24 +492,39 @@ async def test_request_approval_teams_text_prompt_then_resumes_on_approve(
     conversation_id = str(context.conversation_id)
 
     teams_messages = await wait_for_messages(message_store, "TEAMS", min_count=1)
-    prompt_bodies = [
-        item["body"]
-        for item in teams_messages
-        if item.get("body", {}).get("type") == "message"
-    ]
-    assert "Approval needed: Show a widget" in prompt_bodies[-1].get("text", "")
+    rendered = json.dumps(teams_messages)
+    # Native Adaptive Card with Approve/Deny Action.Submit — not plain text.
+    assert "Show a widget" in rendered
+    assert TEAMS_APPROVAL_DECISION_KEY in rendered
+    assert '"Approve"' in rendered and '"Deny"' in rendered
 
-    # A Teams channel reply's external_thread_id is the root message's own id
-    # (see TeamsMessageParser._parse_bot_framework_message) — set replyToId to
-    # that root id so "approve" resolves back to the same conversation.
-    approve_payload = dict(payload)
-    approve_payload["id"] = "1776236638099"
-    approve_payload["replyToId"] = payload["id"]
-    approve_payload["text"] = "approve"
-    await process_ingress_and_run_scripted(
+    submission = {
+        "type": "message",
+        "id": "teams-approval-activity-1",
+        "serviceUrl": fake_teams.service_url,
+        "from": payload["from"],
+        "conversation": payload["conversation"],
+        "channelData": payload["channelData"],
+        "replyToId": REAL_TEAMS_THREAD_ID,
+        "value": {
+            TEAMS_FORM_CALLBACK_KEY: f"{conversation_id}|{_TOOL_CALL_ID}",
+            TEAMS_APPROVAL_DECISION_KEY: "APPROVE_ONCE",
+        },
+    }
+    uow = SqlAlchemyUnitOfWork(db_session)
+    handler = build_surface_event_handler(uow)
+    handled = await handler.try_handle_interaction(
+        SurfacePlatformWebhookIngress(source="teams", payload=submission, headers={})
+    )
+    assert handled is True
+    await uow.commit()
+
+    await resume_latest_scripted_run(
         db_session,
-        SurfacePlatformWebhookIngress(source="teams", payload=approve_payload, headers={}),
-        script=None,
+        conversation_id=context.conversation_id,
+        user_id=context.user_id,
+        pod_id=context.pod_id,
+        agent_name=context.agent_name,
     )
 
     teams_messages = await wait_for_messages(message_store, "TEAMS", min_count=2)
@@ -407,7 +548,7 @@ async def test_request_approval_teams_text_prompt_then_resumes_on_approve(
     assert result["executed"] is True
 
 
-async def test_request_approval_telegram_text_prompt_then_resumes_on_approve(
+async def test_request_approval_telegram_native_buttons_then_resumes_on_approve(
     authenticated_client: AsyncClient,
     db_session: AsyncSession,
     test_pod,
@@ -454,20 +595,48 @@ async def test_request_approval_telegram_text_prompt_then_resumes_on_approve(
     conversation_id = str(context.conversation_id)
 
     telegram_messages = await wait_for_messages(message_store, "TELEGRAM", min_count=1)
-    assert any(
-        "Approval needed: Show a widget" in m.get("text", "") for m in telegram_messages
-    )
+    assert any("Show a widget" in m.get("text", "") for m in telegram_messages)
+    # Native inline-keyboard Approve/Deny buttons — not a plain-text prompt.
+    keyboard_message = next(m for m in telegram_messages if "reply_markup" in m)
+    inline_keyboard = keyboard_message["reply_markup"]["inline_keyboard"]
+    button_labels = [row[0]["text"] for row in inline_keyboard]
+    assert button_labels[:2] == ["Approve", "Deny"]
+    approve_token = inline_keyboard[0][0]["callback_data"]
 
-    # A Telegram private chat's external_thread_id is the stable chat_id, so a
-    # follow-up message from the same sender naturally continues the same
-    # conversation — no explicit threading needed.
-    approve_payload = _telegram_payload(
-        text="approve", message_id=912, sender_id=sender_id
+    submission = {
+        "update_id": 100701,
+        "callback_query": {
+            "id": "cbq-approval-1",
+            "from": {
+                "id": sender_id,
+                "is_bot": False,
+                "first_name": "Surface",
+                "username": "surfaceuser",
+            },
+            "message": {
+                "message_id": 902,
+                "chat": {"id": sender_id, "type": "private"},
+                "date": 1700000200,
+                "text": "Show a widget",
+            },
+            "chat_instance": "1234567890123456789",
+            "data": approve_token,
+        },
+    }
+    uow = SqlAlchemyUnitOfWork(db_session)
+    handler = build_surface_event_handler(uow)
+    handled = await handler.try_handle_interaction(
+        SurfacePlatformWebhookIngress(source="telegram", payload=submission, headers={})
     )
-    await process_ingress_and_run_scripted(
+    assert handled is True
+    await uow.commit()
+
+    await resume_latest_scripted_run(
         db_session,
-        SurfacePlatformWebhookIngress(source="telegram", payload=approve_payload, headers={}),
-        script=None,
+        conversation_id=context.conversation_id,
+        user_id=context.user_id,
+        pod_id=context.pod_id,
+        agent_name=context.agent_name,
     )
 
     telegram_messages = message_store.get_all("TELEGRAM")
@@ -489,7 +658,7 @@ async def test_request_approval_telegram_text_prompt_then_resumes_on_approve(
     assert result["executed"] is True
 
 
-async def test_request_approval_whatsapp_text_prompt_then_resumes_on_approve(
+async def test_request_approval_whatsapp_native_buttons_then_resumes_on_approve(
     authenticated_client: AsyncClient,
     db_session: AsyncSession,
     test_pod,
@@ -542,22 +711,70 @@ async def test_request_approval_whatsapp_text_prompt_then_resumes_on_approve(
     conversation_id = str(context.conversation_id)
 
     whatsapp_messages = await wait_for_messages(message_store, "WHATSAPP", min_count=1)
-    text_messages = [m for m in whatsapp_messages if m.get("type") == "text"]
-    assert "Approval needed: Show a widget" in text_messages[-1]["text"]["body"]
+    interactive_messages = [
+        m for m in whatsapp_messages if m.get("type") == "interactive"
+    ]
+    assert interactive_messages
+    rendered = json.dumps(interactive_messages)
+    # Native reply buttons carrying the approval decision — not plain text.
+    assert "Show a widget" in rendered
+    assert "__approval__" in rendered
+    assert "Approve" in rendered and "Deny" in rendered
 
-    # A WhatsApp thread's external_thread_id is the stable sender@phone_number_id
-    # pair, so a follow-up message naturally continues the same conversation.
-    approve_payload = _whatsapp_payload(
-        text="approve",
-        message_id="wamid-e2e-approval-002",
-        phone_number_id="1234567890",
-        waba_id="waba-001",
-        sender_phone="15550777777",
+    submission = {
+        "object": "whatsapp_business_account",
+        "entry": [
+            {
+                "id": "waba-001",
+                "changes": [
+                    {
+                        "value": {
+                            "messaging_product": "whatsapp",
+                            "metadata": {"phone_number_id": "1234567890"},
+                            "contacts": [
+                                {
+                                    "wa_id": "15550777777",
+                                    "profile": {"name": "Surface Test User"},
+                                }
+                            ],
+                            "messages": [
+                                {
+                                    "from": "15550777777",
+                                    "id": "wamid-e2e-approval-reply-001",
+                                    "type": "interactive",
+                                    "interactive": {
+                                        "type": "button_reply",
+                                        "button_reply": {
+                                            "id": (
+                                                f"{conversation_id}|{_TOOL_CALL_ID}"
+                                                "~__approval__~APPROVE_ONCE"
+                                            ),
+                                            "title": "Approve",
+                                        },
+                                    },
+                                    "timestamp": "1700000001",
+                                }
+                            ],
+                        }
+                    }
+                ],
+            }
+        ],
+    }
+    uow = SqlAlchemyUnitOfWork(db_session)
+    handler = build_surface_event_handler(uow)
+    handled = await handler.try_handle_interaction(
+        SurfacePlatformWebhookIngress(source="whatsapp", payload=submission, headers={})
     )
-    await process_ingress_and_run_scripted(
+    assert handled is True
+    await uow.commit()
+
+    await resume_latest_scripted_run(
         db_session,
-        SurfacePlatformWebhookIngress(source="whatsapp", payload=approve_payload, headers={}),
-        script=None,
+        conversation_id=context.conversation_id,
+        user_id=context.user_id,
+        pod_id=context.pod_id,
+        agent_name=context.agent_name,
     )
 
     whatsapp_messages = await wait_for_messages(message_store, "WHATSAPP", min_count=2)

@@ -9,6 +9,7 @@ from app.modules.agent_surfaces.domain.entities import (
     ParsedSurfaceInteraction,
 )
 from app.modules.agent_surfaces.domain.models import (
+    SurfaceApprovalRenderPlan,
     SurfaceDisplayRenderPlan,
     SurfaceQuestionRenderPlan,
     SurfaceSenderProfile,
@@ -72,6 +73,18 @@ class WhatsAppSurfaceAdapter(BaseSurfaceAdapter):
     ) -> bool:
         return await WhatsAppPlatformService(credentials).send_questions(
             event, question_plan, metadata
+        )
+
+    async def send_approval(
+        self,
+        *,
+        credentials: dict[str, Any],
+        event: ParsedInboundSurfaceEvent,
+        approval_plan: SurfaceApprovalRenderPlan,
+        metadata: dict[str, Any] | None = None,
+    ) -> bool:
+        return await WhatsAppPlatformService(credentials).send_approval(
+            event, approval_plan, metadata
         )
 
     async def parse_inbound_interaction(

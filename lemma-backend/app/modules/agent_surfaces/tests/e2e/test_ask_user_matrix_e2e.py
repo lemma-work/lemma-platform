@@ -820,6 +820,80 @@ async def test_ask_user_suppressed_on_gmail_reply_completes_via_reply_tool(
     assert "Here is my answer." in json.dumps(reply["payload"])
 
 
+async def test_ask_user_on_email_fails_fast_and_completes_via_reply_tool(
+    authenticated_client: AsyncClient,
+    db_session: AsyncSession,
+    test_pod,
+    fixed_test_user,
+    fake_gmail,
+    fake_composio_email,
+    message_store,
+    monkeypatch,
+):
+    """Even when an email agent DOES have the USER_INTERACTION toolset and calls
+    ask_user, the tool must fail fast (never pause) so the run completes and the
+    email reply is still delivered — no permanent WAITING stall."""
+    monkeypatch.setattr(
+        ManagersFactory, "get_manager", lambda *args, **kwargs: _FakeScheduleManager()
+    )
+    pod_id = test_pod["id"]
+    account = await _ensure_connector_account(
+        db_session,
+        user_id=fixed_test_user["id"],
+        connector_id="gmail",
+        credentials={
+            "access_token": "gmail-token",
+            "api_base_url": fake_gmail.api_base,
+        },
+        email="assistant@gmail.test",
+        provider=AuthProvider.COMPOSIO,
+    )
+    await _ensure_connector_trigger(
+        db_session,
+        connector_id="gmail",
+        trigger_id="gmail_new_message_ask_user_failfast_e2e",
+        event_type="GMAIL_NEW_GMAIL_MESSAGE",
+    )
+    _agent, surface = await _create_agent_surface(
+        authenticated_client,
+        pod_id,
+        config={"type": "GMAIL", "account_id": str(account.id)},
+        toolsets=["USER_INTERACTION"],
+    )
+    surface_model = await db_session.get(AgentSurface, UUID(surface["id"]))
+    assert surface_model is not None
+    assert surface_model.schedule_id is not None
+
+    # The model calls ask_user first (which must fall through on email), then
+    # delivers via the reply tool. If ask_user paused instead, the reply step
+    # would never run and wait_for_messages would time out.
+    await process_ingress_and_run_scripted(
+        db_session,
+        SurfaceScheduleIngress(
+            schedule_id=surface_model.schedule_id,
+            payload=_gmail_payload(
+                sender_email=fixed_test_user["email"],
+                assistant_email="assistant@gmail.test",
+                thread_id="gmail-thread-ask-user-failfast-e2e",
+                message_id="gmail-message-ask-user-failfast-1",
+                text="Can you help over Gmail?",
+            ),
+            account_id=account.id,
+            pod_id=UUID(pod_id),
+            user_id=UUID(fixed_test_user["id"]),
+        ),
+        script=[
+            script_ask_user(_QUESTIONS, tool_call_id=_TOOL_CALL_ID),
+            script_email_reply("gmail_reply_email", "Here is my answer."),
+        ],
+    )
+
+    gmail_messages = await wait_for_messages(message_store, "GMAIL_REPLY", min_count=1)
+    reply = gmail_messages[-1]
+    assert reply["operation_name"] == "GMAIL_REPLY_TO_THREAD"
+    assert "Here is my answer." in json.dumps(reply["payload"])
+
+
 async def test_ask_user_suppressed_on_outlook_reply_completes_via_reply_tool(
     authenticated_client: AsyncClient,
     db_session: AsyncSession,

@@ -15,6 +15,7 @@ from app.modules.agent_surfaces.domain.entities import (
 )
 from app.modules.agent_surfaces.domain.models import (
     OTHER_ANSWER_SUFFIX,
+    SurfaceApprovalRenderPlan,
     SurfaceDisplayRenderPlan,
     SurfaceQuestion,
     SurfaceQuestionRenderPlan,
@@ -24,6 +25,7 @@ from app.modules.agent_surfaces.platforms.base import BaseSurfaceAdapter
 from app.modules.agent_surfaces.platforms.teams import client
 from app.modules.agent_surfaces.platforms.teams.client import GRAPH_BASE
 from app.modules.agent_surfaces.platforms.teams.parser import (
+    TEAMS_APPROVAL_DECISION_KEY,
     TEAMS_FORM_CALLBACK_KEY,
     TeamsMessageParser,
     extract_graph_message_attachments,
@@ -388,6 +390,53 @@ class TeamsSurfaceAdapter(BaseSurfaceAdapter):
                 response.raise_for_status()
         return True
 
+    async def send_approval(
+        self,
+        *,
+        credentials: dict[str, Any],
+        event: ParsedInboundSurfaceEvent,
+        approval_plan: SurfaceApprovalRenderPlan,
+        metadata: dict[str, Any] | None = None,
+    ) -> bool:
+        """Render a request_approval prompt as an Adaptive Card with
+        Approve/Deny Action.Submit buttons carrying the decision."""
+        del credentials, metadata
+        tenant_id = event.tenant_id
+        conversation_id = event.reply_target.get("conversation_id")
+        if not tenant_id or not conversation_id:
+            return False
+        token = await self._get_bot_token(tenant_id)
+        if not token:
+            return False
+
+        url = (
+            f"{client.bf_service_url(event.reply_target.get('service_url'))}"
+            f"/v3/conversations/{quote(str(conversation_id))}/activities"
+        )
+        body: dict[str, Any] = {
+            "type": "message",
+            "attachments": [
+                {
+                    "contentType": "application/vnd.microsoft.card.adaptive",
+                    "content": _teams_approval_card(approval_plan),
+                }
+            ],
+        }
+        reply_to_id = event.reply_target.get("reply_to_id")
+        if reply_to_id:
+            body["replyToId"] = reply_to_id
+
+        async with aiohttp.ClientSession(
+            timeout=aiohttp.ClientTimeout(total=30)
+        ) as session:
+            async with session.post(
+                url,
+                headers=client.auth_headers(token),
+                json=body,
+            ) as response:
+                response.raise_for_status()
+        return True
+
     async def parse_inbound_interaction(
         self, payload: dict[str, Any], headers: dict[str, str] | None = None
     ) -> ParsedSurfaceInteraction | None:
@@ -716,4 +765,48 @@ def _teams_question_card(plan: SurfaceQuestionRenderPlan) -> dict[str, Any]:
                 "data": {TEAMS_FORM_CALLBACK_KEY: plan.callback_id},
             }
         ],
+    }
+
+
+def _teams_approval_card(plan: SurfaceApprovalRenderPlan) -> dict[str, Any]:
+    """Adaptive Card with the approval title/reason and one Action.Submit per
+    decision (Approve / Deny / optionally Approve-for-session), each carrying the
+    callback id + its decision in ``data``."""
+    body: list[dict[str, Any]] = [
+        {
+            "type": "TextBlock",
+            "text": f"Approval needed: {plan.title}",
+            "weight": "Bolder",
+            "size": "Medium",
+            "wrap": True,
+        }
+    ]
+    if plan.reason:
+        body.append({"type": "TextBlock", "text": plan.reason, "wrap": True})
+    if plan.action_summary:
+        body.append(
+            {
+                "type": "TextBlock",
+                "text": f"Action: {plan.action_summary}",
+                "isSubtle": True,
+                "wrap": True,
+            }
+        )
+    actions = [
+        {
+            "type": "Action.Submit",
+            "title": button.label,
+            "data": {
+                TEAMS_FORM_CALLBACK_KEY: plan.callback_id,
+                TEAMS_APPROVAL_DECISION_KEY: button.decision,
+            },
+        }
+        for button in plan.buttons
+    ]
+    return {
+        "$schema": "http://adaptivecards.io/schemas/adaptive-card.json",
+        "type": "AdaptiveCard",
+        "version": "1.4",
+        "body": body,
+        "actions": actions,
     }

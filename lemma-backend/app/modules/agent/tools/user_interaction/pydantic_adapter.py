@@ -273,6 +273,23 @@ async def request_approval(
                 "continue once they reply."
             ),
         )
+    # Email surfaces are non-interactive — they can't pause for an approve/deny
+    # reply, and pausing would strand the run in WAITING with nothing delivered.
+    # Fail fast so the model proceeds and delivers via the email reply tool.
+    from app.composition.agent_surface_runtime import platform_is_email
+
+    if platform_is_email(getattr(deps, "surface_platform", None)):
+        return RequestApprovalResponse(
+            success=False,
+            interaction_fallback=True,
+            message=(
+                "This is an email conversation — it can't pause for an approval. "
+                f"Explain in your reply what you want to do ({tool_name}) and why "
+                "it needs their authority, ask them to confirm by replying, and "
+                "deliver everything through the email reply tool. Do not call "
+                "request_approval here."
+            ),
+        )
     if not ctx.tool_call_id:
         return RequestApprovalResponse(
             success=False,
@@ -402,6 +419,22 @@ async def ask_user(
                 "This runtime can't pause to collect a multiple-choice answer. Ask "
                 "the user your question(s) directly in your reply and end your turn; "
                 "their next message will continue this conversation with the answer."
+            ),
+        )
+    # Email surfaces are non-interactive — they can't pause for an answer, and
+    # pausing would strand the run in WAITING with nothing delivered. Fail fast so
+    # the model inlines the question (or picks a sensible default) and continues.
+    from app.composition.agent_surface_runtime import platform_is_email
+
+    if platform_is_email(getattr(deps, "surface_platform", None)):
+        return AskUserResponse(
+            success=False,
+            interaction_fallback=True,
+            message=(
+                "This is an email conversation — it can't pause for a "
+                "multiple-choice answer. Ask your question(s) directly in your "
+                "reply (or pick the most sensible default and proceed), then "
+                "deliver everything through the email reply tool."
             ),
         )
     if not ctx.tool_call_id:

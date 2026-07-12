@@ -9,6 +9,7 @@ from app.modules.agent_surfaces.domain.entities import (
 )
 from app.modules.agent_surfaces.platforms.common import render_attachment_prompt_block
 from app.modules.agent_surfaces.platforms.slack.models import (
+    SLACK_APPROVAL_DECISION_BY_ACTION_ID as _APPROVAL_DECISION_BY_ACTION_ID,
     SLACK_FORM_SUBMIT_ACTION_ID as _FORM_SUBMIT_ACTION_ID,
     SlackChannelMessageSnapshot,
     SlackFileAttachment,
@@ -128,6 +129,17 @@ class SlackMessageParser:
             if payload.get("type") != "block_actions":
                 return None
             actions = payload.get("actions") or []
+            # An approval button tap (Approve/Deny/Approve-for-session) carries the
+            # decision in its action_id and the callback id in its value.
+            approval = next(
+                (
+                    a
+                    for a in actions
+                    if isinstance(a, dict)
+                    and str(a.get("action_id") or "") in _APPROVAL_DECISION_BY_ACTION_ID
+                ),
+                None,
+            )
             submit = next(
                 (
                     a
@@ -137,14 +149,23 @@ class SlackMessageParser:
                 ),
                 None,
             )
-            if submit is None:
+            action = approval or submit
+            if action is None:
                 return None
-            callback_id = str(submit.get("value") or "").strip()
+            callback_id = str(action.get("value") or "").strip()
             if not callback_id:
                 return None
 
-            state_values = (payload.get("state") or {}).get("values") or {}
-            values = _flatten_block_state_values(state_values)
+            approval_decision = (
+                _APPROVAL_DECISION_BY_ACTION_ID.get(str(action.get("action_id") or ""))
+                if approval is not None
+                else None
+            )
+            if approval_decision is not None:
+                values: dict[str, Any] = {}
+            else:
+                state_values = (payload.get("state") or {}).get("values") or {}
+                values = _flatten_block_state_values(state_values)
 
             user = payload.get("user") or {}
             channel = payload.get("channel") or {}
@@ -166,8 +187,9 @@ class SlackMessageParser:
                 external_user_id=str(user.get("id") or "").strip() or None,
                 callback_id=callback_id,
                 values=values,
+                approval_decision=approval_decision,
                 reply_target={"channel": channel_id, "thread_ts": thread_ts},
-                dedup_id=f"{message_ts}:{submit.get('action_ts') or ''}",
+                dedup_id=f"{message_ts}:{action.get('action_ts') or ''}",
                 raw_payload=payload,
             )
         except Exception as exc:

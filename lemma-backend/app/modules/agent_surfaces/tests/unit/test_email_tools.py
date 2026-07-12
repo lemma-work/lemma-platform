@@ -34,6 +34,92 @@ class _FakeHttpResponse:
         return self._json_data
 
 
+def _email_ctx(platform: str) -> SimpleNamespace:
+    """A run context on an email surface with pause support available (so only
+    the email guard, not the daemon guard, can trigger the fallback)."""
+    return SimpleNamespace(
+        deps=SimpleNamespace(
+            agent_run_id=uuid4(),
+            conversation_id=uuid4(),
+            supports_pause_signal=True,
+            surface_platform=platform,
+        ),
+        tool_call_id="tool-1",
+    )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("platform", ["GMAIL", "OUTLOOK", "RESEND"])
+async def test_ask_user_fails_fast_on_email_surface(platform):
+    """ask_user must never pause (raise AgentInputRequired) on an email surface —
+    it returns a recoverable interaction_fallback instead so the run completes."""
+    from app.modules.agent.tools.tool_errors import AgentInputRequired
+    from app.modules.agent.tools.user_interaction.models import AskUserRequest
+    from app.modules.agent.tools.user_interaction.pydantic_adapter import ask_user
+
+    request = AskUserRequest.model_validate(
+        {
+            "questions": [
+                {
+                    "header": "color",
+                    "question": "Which color?",
+                    "options": [{"label": "Red"}, {"label": "Blue"}],
+                }
+            ]
+        }
+    )
+    try:
+        response = await ask_user(_email_ctx(platform), request)
+    except AgentInputRequired:  # pragma: no cover - the bug this guards against
+        pytest.fail("ask_user paused the run on an email surface")
+    assert response.success is False
+    assert response.interaction_fallback is True
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("platform", ["GMAIL", "OUTLOOK", "RESEND"])
+async def test_request_approval_fails_fast_on_email_surface(platform):
+    """request_approval must never pause on an email surface."""
+    from app.modules.agent.tools.tool_errors import AgentInputRequired
+    from app.modules.agent.tools.user_interaction.pydantic_adapter import (
+        request_approval,
+    )
+
+    try:
+        response = await request_approval(
+            _email_ctx(platform),
+            tool_name="pod_write_record",
+            args={"table_id": "t", "data": {}},
+            title="Write a record",
+        )
+    except AgentInputRequired:  # pragma: no cover - the bug this guards against
+        pytest.fail("request_approval paused the run on an email surface")
+    assert response.success is False
+    assert response.interaction_fallback is True
+
+
+@pytest.mark.asyncio
+async def test_ask_user_still_pauses_on_chat_surface():
+    """The email guard must not affect chat surfaces — ask_user still pauses."""
+    from app.modules.agent.tools.tool_errors import AgentInputRequired
+    from app.modules.agent.tools.user_interaction.models import AskUserRequest
+    from app.modules.agent.tools.user_interaction.pydantic_adapter import ask_user
+
+    request = AskUserRequest.model_validate(
+        {
+            "questions": [
+                {
+                    "header": "color",
+                    "question": "Which color?",
+                    "options": [{"label": "Red"}, {"label": "Blue"}],
+                }
+            ]
+        }
+    )
+    with pytest.raises(AgentInputRequired):
+        await ask_user(_email_ctx("WHATSAPP"), request)
+
+
 def test_render_email_content_adds_display_resource_html_card():
     plain, html = render_email_content(
         content="I prepared the report.",

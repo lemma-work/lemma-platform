@@ -14,7 +14,12 @@ from app.modules.agent.contracts import (
     DisplayResourceType,
 )
 from app.modules.agent_surfaces.domain.models import (
+    APPROVAL_DECISION_APPROVE,
+    APPROVAL_DECISION_DENY,
+    APPROVAL_DECISION_SESSION,
     OTHER_ANSWER_SUFFIX,
+    SurfaceApprovalButton,
+    SurfaceApprovalRenderPlan,
     SurfaceDisplayAction,
     SurfaceDisplayRenderPlan,
     SurfaceQuestion,
@@ -86,6 +91,47 @@ def build_ask_user_render_plan(
         title=title,
         questions=questions,
         callback_id=build_callback_id(conversation_id, tool_call_id),
+    )
+
+
+def build_approval_render_plan(
+    *,
+    conversation_id: UUID,
+    tool_call_id: str,
+    title: str,
+    reason: str | None,
+    tool_name: str | None,
+    allow_session: bool = False,
+) -> SurfaceApprovalRenderPlan:
+    """Build a platform-neutral plan for rendering a ``request_approval`` prompt.
+
+    Always includes Approve + Deny; the approve-for-session button is added only
+    when ``allow_session`` is set (i.e. the paused call carries a real permission
+    gate). ``callback_id`` routes the tapped decision back to the waiting run.
+    """
+    clean_title = sanitize_user_visible_text(title) or "Action requires your approval"
+    clean_reason = sanitize_user_visible_text(reason).strip() if reason else None
+    clean_tool = sanitize_user_visible_text(tool_name).strip() if tool_name else None
+    buttons = [
+        SurfaceApprovalButton(
+            label="Approve", decision=APPROVAL_DECISION_APPROVE, style="primary"
+        ),
+        SurfaceApprovalButton(
+            label="Deny", decision=APPROVAL_DECISION_DENY, style="danger"
+        ),
+    ]
+    if allow_session:
+        buttons.append(
+            SurfaceApprovalButton(
+                label="Approve for session", decision=APPROVAL_DECISION_SESSION
+            )
+        )
+    return SurfaceApprovalRenderPlan(
+        title=clean_title,
+        reason=clean_reason or None,
+        action_summary=clean_tool or None,
+        callback_id=build_callback_id(conversation_id, tool_call_id),
+        buttons=buttons,
     )
 
 

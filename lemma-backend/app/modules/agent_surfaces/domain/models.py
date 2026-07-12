@@ -134,3 +134,51 @@ class SurfaceQuestionRenderPlan(BaseModel):
     callback_id: str
     submit_label: str = "Submit"
     allow_other: bool = True
+
+
+# Canonical decision values a native approval button carries back. These match
+# ``AgentRunApprovalDecision`` values but are kept as plain strings so the
+# ``agent_surfaces`` domain never imports the agent module.
+APPROVAL_DECISION_APPROVE = "APPROVE_ONCE"
+APPROVAL_DECISION_DENY = "DENY"
+APPROVAL_DECISION_SESSION = "APPROVE_FOR_SESSION"
+
+
+class SurfaceApprovalButton(BaseModel):
+    """One tappable approval choice (approve / deny / approve-for-session)."""
+
+    label: str
+    decision: str  # one of APPROVAL_DECISION_*
+    style: str = "default"  # default | primary | danger — advisory per platform
+
+
+class SurfaceApprovalRenderPlan(BaseModel):
+    """Platform-neutral plan for rendering a ``request_approval`` prompt in-chat.
+
+    Built from a paused ``request_approval`` call. ``callback_id`` carries the
+    conversation + tool_call id so a tapped Approve/Deny button routes back to the
+    waiting run (the tapped button's ``decision`` becomes the run's approval
+    decision). ``buttons`` always contains at least Approve + Deny; the optional
+    approve-for-session button is included only when the action carries a real
+    permission gate.
+    """
+
+    title: str
+    reason: str | None = None
+    action_summary: str | None = None  # inner tool_name, e.g. "exec_command"
+    callback_id: str
+    buttons: list[SurfaceApprovalButton]
+
+    def to_plain_text(self) -> str:
+        """Text fallback used when a platform can't render native buttons.
+
+        Mirrors the historical approval prompt so the typed-reply resume path
+        (``approve`` / ``deny``) still works.
+        """
+        lines = [f"Approval needed: {self.title}"]
+        if self.reason:
+            lines.append(self.reason)
+        if self.action_summary:
+            lines.append(f"Action: {self.action_summary}")
+        lines.append('\nReply "approve" to run it or "deny" to cancel.')
+        return "\n".join(lines)

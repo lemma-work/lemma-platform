@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import time
-from datetime import datetime
+from datetime import datetime, timedelta, timezone
 from typing import Awaitable, Callable, Protocol
 from uuid import UUID
 
@@ -88,6 +88,23 @@ from app.core.crypto import get_secret_cipher
 from app.core.authorization.delegation import DEFAULT_POD_AGENT_NAME
 logger = get_logger(__name__)
 FULL_HISTORY_AGENT_RUN_COUNT = 5
+
+
+def _newest_message_time(run: AgentRun) -> datetime | None:
+    """The newest message ``created_at`` in a run as an aware UTC datetime, or
+    None when the run has no timestamped messages. Naive timestamps are treated
+    as UTC (matching the DM-reset window handling)."""
+    newest: datetime | None = None
+    for message in run.messages:
+        created = getattr(message, "created_at", None)
+        if created is None:
+            continue
+        if created.tzinfo is None:
+            created = created.replace(tzinfo=timezone.utc)
+        if newest is None or created > newest:
+            newest = created
+    return newest
+
 
 async def _finalize_safely(coro: Awaitable[None], *, agent_run_id: UUID) -> None:
     """Await a finalization coroutine, swallowing all errors.
@@ -581,7 +598,7 @@ class AgentRunnerService:
                 user_id=user_id,
                 agent_name=agent_name,
             )
-            messages = self._select_runtime_history(runs)
+            messages = self._select_runtime_history(runs, conversation)
             return conversation, agent, agent_run, messages
 
     async def _handle_harness_event(
@@ -978,7 +995,61 @@ class AgentRunnerService:
                 return run
         raise ConversationNotFoundError()
 
-    def _select_runtime_history(self, runs: list[AgentRun]) -> list[Message]:
+    def _apply_surface_history_window(
+        self, runs: list[AgentRun], conversation: Conversation | None
+    ) -> list[AgentRun]:
+        """For surface conversations, bound history by age + message count.
+
+        Trims at run granularity (a tool-call and its return live in the same run,
+        so whole-run trimming never splits a pair) and always keeps at least the
+        most recent run. No-op for non-surface conversations or when a limit is
+        disabled. Runs are assumed chronologically ordered.
+        """
+        if conversation is None or not runs:
+            return runs
+        metadata = conversation.metadata or {}
+        if not metadata.get("surface_platform"):
+            return runs
+
+        from app.composition.agent_surface_runtime import surface_history_limits
+
+        max_messages, window_hours = surface_history_limits()
+
+        trimmed = list(runs)
+        # Age window: drop whole runs whose newest message predates the window,
+        # keeping the most recent run regardless.
+        if window_hours > 0 and len(trimmed) > 1:
+            cutoff = datetime.now(timezone.utc) - timedelta(hours=window_hours)
+            kept: list[AgentRun] = []
+            for index, run in enumerate(trimmed):
+                is_last = index == len(trimmed) - 1
+                newest = _newest_message_time(run)
+                if is_last or newest is None or newest >= cutoff:
+                    kept.append(run)
+            trimmed = kept or trimmed[-1:]
+
+        # Message-count budget: keep the most recent whole runs that fit, always
+        # keeping the most recent run.
+        if max_messages > 0:
+            result: list[AgentRun] = []
+            total = 0
+            for run in reversed(trimmed):
+                count = len(run.ordered_messages())
+                if result and total + count > max_messages:
+                    break
+                result.insert(0, run)
+                total += count
+            trimmed = result or trimmed[-1:]
+
+        return trimmed
+
+    def _select_runtime_history(
+        self, runs: list[AgentRun], conversation: Conversation | None = None
+    ) -> list[Message]:
+        # Surface (Slack/Telegram/WhatsApp/…) conversations bound how much prior
+        # history reaches the model by age + count. Trim at run granularity first
+        # so tool-call/tool-return pairs (which live within a run) stay intact.
+        runs = self._apply_surface_history_window(runs, conversation)
         if len(runs) <= FULL_HISTORY_AGENT_RUN_COUNT:
             return [message for run in runs for message in run.ordered_messages()]
 

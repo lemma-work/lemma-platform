@@ -1247,6 +1247,47 @@ async def test_handle_interaction_resumes_via_approval_path():
     service.conversation_service.add_user_message_and_start_run.assert_not_awaited()
 
 
+@pytest.mark.parametrize(
+    "decision_value, expected",
+    [
+        ("APPROVE_ONCE", AgentRunApprovalDecision.APPROVE_ONCE),
+        ("DENY", AgentRunApprovalDecision.DENY),
+        ("APPROVE_FOR_SESSION", AgentRunApprovalDecision.APPROVE_FOR_SESSION),
+    ],
+)
+async def test_handle_interaction_routes_approval_decision(decision_value, expected):
+    surface = _slack_surface()
+    conversation_id = uuid4()
+    parsed_event = _slack_event()
+    link = await _ask_user_link(surface, conversation_id, parsed_event)
+    adapter = AsyncMock()
+    service = _build_service(adapter=adapter, surfaces=[surface], existing_link=link)
+    service.conversation_link_repository.get_by_conversation_id.return_value = link
+    owner = link.external_user_id
+    conversation = SimpleNamespace(user_id=uuid4(), pod_id=surface.pod_id)
+    service.conversation_service.conversation_repository = SimpleNamespace(
+        get_conversation=AsyncMock(return_value=conversation)
+    )
+
+    interaction = ParsedSurfaceInteraction(
+        platform=SurfacePlatform.SLACK,
+        external_channel_id=parsed_event.external_channel_id,
+        external_thread_id=parsed_event.external_thread_id,
+        external_user_id=owner,
+        callback_id=f"{conversation_id}|tool-9",
+        approval_decision=decision_value,
+        dedup_id="m-approval-1",
+    )
+    await service.handle_interaction(interaction)
+
+    service.conversation_service.resolve_user_approval_internal.assert_awaited_once()
+    kwargs = service.conversation_service.resolve_user_approval_internal.await_args.kwargs
+    assert kwargs["approval_id"] == "tool-9"
+    assert kwargs["decision"] == expected
+    # An approval button carries a decision, not an answer payload.
+    assert kwargs["response"] == {}
+
+
 _REQUEST_APPROVAL_TOOL_ARGS = {
     "tool_name": "pod_write_record",
     "title": "Write a record",
@@ -1255,12 +1296,44 @@ _REQUEST_APPROVAL_TOOL_ARGS = {
 }
 
 
-async def test_send_approval_prompt_for_conversation_sends_text():
+async def test_send_approval_prompt_renders_native_buttons():
     surface = _slack_surface()
     conversation_id = uuid4()
     parsed_event = _slack_event()
     link = await _ask_user_link(surface, conversation_id, parsed_event)
     adapter = AsyncMock()
+    adapter.send_approval.return_value = True  # platform rendered native buttons
+    service = _build_service(adapter=adapter, surfaces=[surface], existing_link=link)
+    service.conversation_link_repository.get_by_conversation_id.return_value = link
+    service.conversation_service.get_pending_user_interaction.return_value = {
+        "tool_call_id": "tool-2",
+        "kind": "request_approval",
+        "tool_args": _REQUEST_APPROVAL_TOOL_ARGS,
+        "agent_run_id": uuid4(),
+    }
+
+    sent = await service.send_approval_prompt_for_conversation(
+        conversation_id=conversation_id, tool_call_id="tool-2"
+    )
+    assert sent is True
+    # Native render is attempted; the plan carries Approve + Deny and the callback.
+    plan = adapter.send_approval.await_args.kwargs["approval_plan"]
+    assert [b.decision for b in plan.buttons] == ["APPROVE_ONCE", "DENY"]
+    assert plan.callback_id == f"{conversation_id}|tool-2"
+    assert plan.title == "Write a record"
+    # No permission_ids on this call → no approve-for-session button.
+    assert all(b.decision != "APPROVE_FOR_SESSION" for b in plan.buttons)
+    # When native buttons render, we do NOT also post the text prompt.
+    adapter.send_message.assert_not_awaited()
+
+
+async def test_send_approval_prompt_falls_back_to_text():
+    surface = _slack_surface()
+    conversation_id = uuid4()
+    parsed_event = _slack_event()
+    link = await _ask_user_link(surface, conversation_id, parsed_event)
+    adapter = AsyncMock()
+    adapter.send_approval.return_value = False  # platform has no native buttons
     service = _build_service(adapter=adapter, surfaces=[surface], existing_link=link)
     service.conversation_link_repository.get_by_conversation_id.return_value = link
     service.conversation_service.get_pending_user_interaction.return_value = {
@@ -1278,6 +1351,36 @@ async def test_send_approval_prompt_for_conversation_sends_text():
     assert "Write a record" in msg
     assert "approve" in msg.lower()
     assert "deny" in msg.lower()
+
+
+async def test_send_approval_prompt_adds_session_button_with_permission_ids():
+    surface = _slack_surface()
+    conversation_id = uuid4()
+    parsed_event = _slack_event()
+    link = await _ask_user_link(surface, conversation_id, parsed_event)
+    adapter = AsyncMock()
+    adapter.send_approval.return_value = True
+    service = _build_service(adapter=adapter, surfaces=[surface], existing_link=link)
+    service.conversation_link_repository.get_by_conversation_id.return_value = link
+    service.conversation_service.get_pending_user_interaction.return_value = {
+        "tool_call_id": "tool-2",
+        "kind": "request_approval",
+        "tool_args": {
+            **_REQUEST_APPROVAL_TOOL_ARGS,
+            "permission_ids": ["perm-1"],
+        },
+        "agent_run_id": uuid4(),
+    }
+
+    await service.send_approval_prompt_for_conversation(
+        conversation_id=conversation_id, tool_call_id="tool-2"
+    )
+    plan = adapter.send_approval.await_args.kwargs["approval_plan"]
+    assert [b.decision for b in plan.buttons] == [
+        "APPROVE_ONCE",
+        "DENY",
+        "APPROVE_FOR_SESSION",
+    ]
 
 
 async def test_send_approval_prompt_skips_when_no_pending():
