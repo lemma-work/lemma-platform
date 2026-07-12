@@ -1,5 +1,5 @@
 version = 1
-revision = 2
+revision = 3
 requires-python = ">=3.14"
 resolution-markers = [
     "sys_platform == 'win32'",
@@ -25,7 +25,7 @@ requires-dist = [
 dev = [
     { name = "fastapi", extras = ["standard"], specifier = ">=0.128.0" },
     { name = "kubernetes", specifier = ">=34.1.0" },
-    { name = "pydantic-settings", specifier = ">=2.11.0" },
+    { name = "pydantic-settings", specifier = ">=2.14.2" },
     { name = "pytest", specifier = ">=8.4.0" },
     { name = "uvicorn", extras = ["standard"], specifier = ">=0.42.0" },
 ]
@@ -1820,7 +1820,7 @@ requires-dist = [
     { name = "pydantic-settings", specifier = ">=2.11.0" },
     { name = "pypdfium2", specifier = ">=5.10.1" },
     { name = "pytz", specifier = ">=2025.2" },
-    { name = "redis", specifier = ">=6.4.0,<7" },
+    { name = "redis", specifier = ">=6.4.0,<9" },
     { name = "scalar-fastapi", specifier = ">=1.6.1" },
     { name = "slack-sdk", specifier = ">=3.39.0" },
     { name = "sqlglot", specifier = ">=25.0.0" },
