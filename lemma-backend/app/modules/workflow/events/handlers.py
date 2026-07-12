@@ -235,6 +235,7 @@ async def on_schedule_fired(
 ):
     """Handle ScheduleFired: wake workflow waits or launch scheduled targets."""
     schedule_id = event.get("schedule_id")
+    user_id = event.get("user_id")
     payload = event.get("payload")
     metadata = event.get("metadata")
     llm_output = event.get("llm_output")
@@ -268,6 +269,7 @@ async def on_schedule_fired(
     await job_queue.enqueue(
         "check_and_start_flows_for_schedule",
         schedule_id=str(schedule_id),
+        user_id=str(user_id) if user_id else None,
         payload=payload or {},
         metadata=metadata or {},
         llm_output=llm_output,
@@ -287,6 +289,7 @@ async def on_schedule_fired(
 async def check_and_start_flows_for_schedule(
     schedule_id: str,
     payload: dict,
+    user_id: str | None = None,
     metadata: dict | None = None,
     llm_output: dict | None = None,
     schedule_event_id: str | None = None,
@@ -300,6 +303,7 @@ async def check_and_start_flows_for_schedule(
         service = ScheduleStartService(WorkflowEngine(uow))
         await service.handle_schedule_fired(
             schedule_id=schedule_id,
+            user_id=user_id,
             payload=payload,
             metadata=metadata,
             llm_output=llm_output,

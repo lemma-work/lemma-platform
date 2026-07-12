@@ -12,7 +12,7 @@ from app.modules.schedule.handlers.schedule_consumer import handle_llm_filter_ta
 from app.modules.schedule.infrastructure.adapters.schedule_event_publisher import (
     DurableScheduleEventPublisher,
 )
-from app.modules.schedule.scheduler import scheduler_service
+from app.modules.schedule.scheduler import events, scheduler_service
 
 
 @pytest.mark.asyncio
@@ -49,7 +49,28 @@ async def test_durable_schedule_publisher_stages_versioned_event(monkeypatch) ->
     stream, event = publish.await_args.args
     assert stream == "schedule_events"
     assert event.schedule_id == schedule.id
+    assert event.user_id == schedule.user_id
     assert event.source_event_id == "cron:2026-07-10T00:00:00Z"
+
+
+@pytest.mark.asyncio
+async def test_time_event_resolves_schedule_owner(monkeypatch) -> None:
+    schedule_id = uuid4()
+    user_id = uuid4()
+    publish = AsyncMock()
+    monkeypatch.setattr(events, "resolve_schedule_user_id", AsyncMock(return_value=user_id))
+    monkeypatch.setattr(events.EventPublisher, "publish", publish)
+    emitter = events.SchedulerEventEmitter()
+    await emitter.start()
+
+    await emitter.emit_scheduled_job_event(
+        schedule_id,
+        {"source": "cron"},
+        scheduled_at=datetime(2026, 7, 10, tzinfo=timezone.utc),
+    )
+
+    _, event = publish.await_args.args
+    assert event.user_id == user_id
 
 
 @pytest.mark.asyncio

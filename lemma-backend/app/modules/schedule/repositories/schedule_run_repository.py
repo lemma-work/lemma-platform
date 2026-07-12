@@ -28,6 +28,7 @@ class ScheduleRunRepository:
         self,
         *,
         schedule_id: UUID,
+        user_id: UUID,
         source_event_id: str,
         target_kind: str,
         payload: dict,
@@ -40,6 +41,7 @@ class ScheduleRunRepository:
             insert(ScheduleRun)
             .values(
                 schedule_id=schedule_id,
+                user_id=user_id,
                 source_event_id=source_event_id,
                 status=ScheduleRunStatus.PROCESSING.value,
                 attempts=1,

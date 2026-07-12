@@ -193,7 +193,11 @@ async def test_update_and_delete_emit_record_events():
         (),
         {"user_id": uuid4(), "id": record_id, "data": {"merchant": "Retreat"}},
     )()
-    record_repository.delete_record.return_value = True
+    record_repository.delete_record.return_value = type(
+        "DeletedRecord",
+        (),
+        {"user_id": user_id, "id": record_id, "data": {"merchant": "Retreat"}},
+    )()
     message_bus = AsyncMock()
     service = RecordService(record_repository=record_repository, message_bus=message_bus)
 
@@ -280,7 +284,11 @@ async def test_delete_record_event_owner_defaults_to_caller_on_rls_table():
     caller = uuid4()
     record_id = str(uuid4())
     record_repository = AsyncMock()
-    record_repository.delete_record.return_value = True
+    record_repository.delete_record.return_value = type(
+        "DeletedRecord",
+        (),
+        {"user_id": caller, "id": record_id, "data": {}},
+    )()
     message_bus = AsyncMock()
     service = RecordService(record_repository=record_repository, message_bus=message_bus)
 
@@ -289,6 +297,54 @@ async def test_delete_record_event_owner_defaults_to_caller_on_rls_table():
     _, event = message_bus.publish.await_args.args
     assert event.operation == DatastoreRecordOperation.DELETE
     assert event.owner_user_id == caller
+
+
+async def test_transactional_admin_delete_stages_original_rls_row_owner():
+    ctx = _events_enabled_rls_context()
+    actor = uuid4()
+    row_owner = uuid4()
+    record_id = str(uuid4())
+    deleted = type(
+        "DeletedRecord",
+        (),
+        {"user_id": row_owner, "id": record_id, "data": {}},
+    )()
+    staged_events = []
+    record_repository = AsyncMock()
+
+    async def delete_record(
+        _ctx,
+        _record_id,
+        _user_id,
+        *,
+        enforce_user_scope,
+        event_factory,
+    ):
+        assert enforce_user_scope is False
+        staged_events.append(event_factory(deleted))
+        return deleted
+
+    record_repository.delete_record.side_effect = delete_record
+    message_bus = AsyncMock()
+    auth_context = AsyncMock()
+    auth_context.can.return_value = True
+    service = RecordService(
+        record_repository=record_repository,
+        message_bus=message_bus,
+        authorization_service=object(),
+        transactional_events=True,
+    )
+
+    token = set_current_context(auth_context)
+    try:
+        await service.delete_record(ctx, record_id, actor, admin_mode=True)
+    finally:
+        reset_current_context(token)
+
+    message_bus.publish.assert_not_called()
+    assert len(staged_events) == 1
+    assert staged_events[0].actor_id == actor
+    assert staged_events[0].owner_user_id == row_owner
 
 
 async def test_create_record_ignores_user_supplied_timestamps():

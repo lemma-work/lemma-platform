@@ -404,28 +404,37 @@ class RecordService:
             ctx=ctx,
             admin_mode=admin_mode,
         )
-        event = self.events.build(
-            ctx, str(record_id), DatastoreRecordOperation.DELETE, {}, user_id
+        event_factory = None
+        if self.transactional_events and ctx.events_enabled:
+            event_factory = partial(
+                self.events.required_for_record,
+                ctx=ctx,
+                operation=DatastoreRecordOperation.DELETE,
+                payload={},
+                user_id=user_id,
+            )
+
+        deleted_record = await self.record_repository.delete_record(
+            ctx,
+            record_id,
+            user_id,
+            enforce_user_scope=enforce_user_scope,
+            event_factory=event_factory,
         )
-        if self.transactional_events and event is not None:
-            deleted = await self.record_repository.delete_record(
-                ctx,
-                record_id,
-                user_id,
-                enforce_user_scope=enforce_user_scope,
-                event=event,
-            )
+        if event_factory is not None:
             await self.events.dispatch()
-        else:
-            deleted = await self.record_repository.delete_record(
+        elif ctx.events_enabled:
+            event = self.events.build(
                 ctx,
-                record_id,
+                str(deleted_record.id),
+                DatastoreRecordOperation.DELETE,
+                {},
                 user_id,
-                enforce_user_scope=enforce_user_scope,
+                owner_user_id=deleted_record.user_id,
             )
-            if deleted and event is not None:
+            if event is not None:
                 await self.events.publish(event)
-        return deleted
+        return True
 
     async def bulk_create_records(
         self,

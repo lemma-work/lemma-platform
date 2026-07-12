@@ -565,9 +565,9 @@ class DatastoreRecordRepository(DatastoreRecordRepositoryPort):
         user_id: UUID,
         *,
         enforce_user_scope: bool = True,
-        event: DomainEvent | None = None,
-    ) -> bool:
-        if event is not None:
+        event_factory: Callable[[RecordEntity], DomainEvent] | None = None,
+    ) -> RecordEntity:
+        if event_factory is not None:
             await ensure_datastore_event_outbox()
         parsed_id = ctx.parse_primary_key(record_id)
         where_clauses = [f'"{ctx.primary_key_column}" = :id']
@@ -581,7 +581,7 @@ class DatastoreRecordRepository(DatastoreRecordRepositoryPort):
         )
         sql = (
             f'DELETE FROM "{ctx.schema_name}"."{ctx.table_name}" '
-            f'WHERE {" AND ".join(where_clauses)}'
+            f'WHERE {" AND ".join(where_clauses)} RETURNING *'
         )
 
         async with self.schema_manager.session_factory() as session:
@@ -593,10 +593,12 @@ class DatastoreRecordRepository(DatastoreRecordRepositoryPort):
                 )
             try:
                 result = await session.execute(text(sql), params)
-                if result.rowcount == 0:
+                row = result.fetchone()
+                if row is None:
                     raise DatastoreRecordNotFoundError()
-                if event is not None:
-                    await stage_domain_events(session, [event])
+                entity = self._row_to_entity(dict(row._mapping), ctx)
+                if event_factory is not None:
+                    await stage_domain_events(session, [event_factory(entity)])
                 await session.commit()
             except IntegrityError as exc:
                 await session.rollback()
@@ -604,4 +606,4 @@ class DatastoreRecordRepository(DatastoreRecordRepositoryPort):
                     "Cannot delete: this record is still referenced by other "
                     "records. Remove or reassign those first."
                 ) from exc
-            return True
+            return entity

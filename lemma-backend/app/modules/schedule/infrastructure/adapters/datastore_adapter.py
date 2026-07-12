@@ -39,6 +39,7 @@ class DatastoreAdapter:
             fired = await self.schedule_processor.process_event(
                 schedule=schedule,
                 payload=event.payload,
+                user_id=event.owner_user_id or schedule.user_id,
                 metadata={
                     "table_name": event.table_name,
                     "record_id": event.record_id,

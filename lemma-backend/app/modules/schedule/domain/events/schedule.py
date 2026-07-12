@@ -47,6 +47,8 @@ class ScheduleFired(ScheduleEvent):
     """Event emitted when any schedule source fires.
 
     Unified event for all schedule source types (TIME, WEBHOOK, DATASTORE).
+    ``user_id`` is the single owner of the resulting schedule/target run: the
+    row owner for RLS datastore events, otherwise the schedule owner.
     """
 
     event_type: str = "schedule.fired"

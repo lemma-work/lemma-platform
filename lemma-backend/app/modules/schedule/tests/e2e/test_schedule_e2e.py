@@ -997,6 +997,72 @@ async def test_datastore_schedule_starts_workflow_from_record_api(
 
 
 @pytest.mark.asyncio
+async def test_rls_datastore_schedule_run_and_workflow_belong_to_row_owner(
+    authenticated_client: AsyncClient,
+    async_client: AsyncClient,
+    fixed_test_org,
+    worker,
+):
+    _ = worker
+    pod_id = await _create_pod(authenticated_client, fixed_test_org["id"])
+    await _create_datastore_table(authenticated_client, pod_id)
+    workflow = await _create_workflow(
+        authenticated_client,
+        pod_id,
+        start={
+            "type": "DATASTORE_EVENT",
+            "config": {"table_name": "schedule_records", "operations": ["INSERT"]},
+        },
+        name_prefix="row-owner-workflow",
+    )
+    schedule = await _create_schedule(
+        authenticated_client,
+        pod_id,
+        schedule_type=ScheduleType.DATASTORE.value,
+        workflow_name=workflow["name"],
+        config={"table_name": "schedule_records", "operations": ["INSERT"]},
+    )
+    row_owner = await signup_user(async_client, "schedule-row-owner")
+    org_member = await invite_org_member(
+        authenticated_client,
+        async_client,
+        org_id=fixed_test_org["id"],
+        user=row_owner,
+    )
+    await add_pod_member(
+        authenticated_client,
+        pod_id=pod_id,
+        organization_member_id=org_member["id"],
+        role="POD_USER",
+        roles=["POD_USER"],
+    )
+
+    record = await async_client.post(
+        f"/pods/{pod_id}/datastore/tables/schedule_records/records",
+        headers=auth_headers(row_owner),
+        json={"data": {"source": "row-owner-record", "value": "hello"}},
+    )
+    assert record.status_code == 201, record.text
+
+    workflow_run = await _wait_for_workflow_run(
+        authenticated_client,
+        pod_id,
+        workflow["name"],
+        source="row-owner-record",
+    )
+    assert workflow_run["user_id"] == row_owner["id"]
+
+    schedule_runs = await authenticated_client.get(
+        f"/pods/{pod_id}/schedules/{schedule['id']}/runs"
+    )
+    assert schedule_runs.status_code == 200, schedule_runs.text
+    run_items = schedule_runs.json()["items"]
+    assert len(run_items) == 1
+    assert run_items[0]["user_id"] == row_owner["id"]
+    assert run_items[0]["target_run_id"] == workflow_run["id"]
+
+
+@pytest.mark.asyncio
 async def test_schedule_crud_uses_new_pod_scoped_routes(
     authenticated_client: AsyncClient,
     fixed_test_org,

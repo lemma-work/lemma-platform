@@ -105,7 +105,7 @@ class ScheduleService:
             [
                 ScheduleFired(
                     schedule_id=schedule.id,
-                    user_id=schedule.user_id,
+                    user_id=schedule_run.user_id,
                     schedule_type=schedule.schedule_type,
                     pod_id=schedule.pod_id,
                     account_id=schedule.account_id,

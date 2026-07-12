@@ -154,6 +154,7 @@ class ScheduleListResponse(BaseModel):
 class ScheduleRunResponse(BaseModel):
     id: UUID
     schedule_id: UUID
+    user_id: UUID
     source_event_id: str
     status: ScheduleRunStatus
     attempts: int

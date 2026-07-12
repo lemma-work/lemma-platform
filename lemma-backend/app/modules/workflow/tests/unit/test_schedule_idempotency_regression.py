@@ -122,6 +122,150 @@ async def test_duplicate_agent_schedule_fire_is_skipped(monkeypatch):
 
 
 @pytest.mark.anyio
+async def test_agent_schedule_run_and_conversation_use_event_user(monkeypatch):
+    engine = _engine_with_mocks()
+    conversation_id = uuid4()
+    engine.agent_adapter.run_agent_by_id = AsyncMock(return_value=conversation_id)
+    schedule = SimpleNamespace(
+        id=uuid4(),
+        pod_id=uuid4(),
+        user_id=uuid4(),
+        workflow_id=None,
+        agent_id=uuid4(),
+        is_active=True,
+        schedule_type=SimpleNamespace(value="DATASTORE"),
+    )
+    row_owner_id = uuid4()
+    schedule_run = SimpleNamespace(id=uuid4(), user_id=row_owner_id)
+    schedule_repo = Mock(get=AsyncMock(return_value=schedule))
+    run_repo = Mock(
+        claim=AsyncMock(return_value=schedule_run),
+        mark_dispatched=AsyncMock(),
+    )
+    monkeypatch.setattr(
+        "app.modules.workflow.services.schedule_start_service.ScheduleRepository",
+        lambda uow: schedule_repo,
+    )
+    monkeypatch.setattr(
+        "app.modules.workflow.services.schedule_start_service.ScheduleRunRepository",
+        lambda uow: run_repo,
+    )
+    context = AsyncMock()
+    service = ScheduleStartService(engine)
+    service._build_user_context = AsyncMock(return_value=context)
+    service._record_fire = AsyncMock()
+
+    await service.handle_schedule_fired(
+        schedule_id=str(schedule.id),
+        user_id=row_owner_id,
+        payload={"id": "row-1"},
+        schedule_event_id="datastore:event-1",
+    )
+
+    assert run_repo.claim.await_args.kwargs["user_id"] == row_owner_id
+    assert engine.agent_adapter.run_agent_by_id.await_args.kwargs["user_id"] == row_owner_id
+    context.require.assert_awaited_once()
+    run_repo.mark_dispatched.assert_awaited_once_with(
+        schedule_run.id,
+        target_run_id=str(conversation_id),
+    )
+
+
+@pytest.mark.anyio
+async def test_workflow_schedule_run_uses_event_user(monkeypatch):
+    engine = _engine_with_mocks()
+    schedule = SimpleNamespace(
+        id=uuid4(),
+        pod_id=uuid4(),
+        user_id=uuid4(),
+        workflow_id=uuid4(),
+        agent_id=None,
+        is_active=True,
+        schedule_type=SimpleNamespace(value="DATASTORE"),
+    )
+    row_owner_id = uuid4()
+    schedule_run = SimpleNamespace(id=uuid4(), user_id=row_owner_id)
+    schedule_repo = Mock(get=AsyncMock(return_value=schedule))
+    run_repo = Mock(
+        claim=AsyncMock(return_value=schedule_run),
+        mark_dispatched=AsyncMock(),
+    )
+    monkeypatch.setattr(
+        "app.modules.workflow.services.schedule_start_service.ScheduleRepository",
+        lambda uow: schedule_repo,
+    )
+    monkeypatch.setattr(
+        "app.modules.workflow.services.schedule_start_service.ScheduleRunRepository",
+        lambda uow: run_repo,
+    )
+    service = ScheduleStartService(engine)
+    service._start_workflow_for_schedule = AsyncMock(return_value="workflow-run-1")
+    service._record_fire = AsyncMock()
+
+    await service.handle_schedule_fired(
+        schedule_id=str(schedule.id),
+        user_id=row_owner_id,
+        payload={"id": "row-1"},
+        schedule_event_id="datastore:event-2",
+    )
+
+    assert run_repo.claim.await_args.kwargs["user_id"] == row_owner_id
+    assert (
+        service._start_workflow_for_schedule.await_args.kwargs["user_id"]
+        == row_owner_id
+    )
+
+
+@pytest.mark.anyio
+async def test_unauthorized_event_user_fails_agent_schedule_without_fallback(
+    monkeypatch,
+):
+    engine = _engine_with_mocks()
+    engine.agent_adapter.run_agent_by_id = AsyncMock()
+    schedule = SimpleNamespace(
+        id=uuid4(),
+        pod_id=uuid4(),
+        user_id=uuid4(),
+        workflow_id=None,
+        agent_id=uuid4(),
+        is_active=True,
+        schedule_type=SimpleNamespace(value="DATASTORE"),
+    )
+    row_owner_id = uuid4()
+    schedule_run = SimpleNamespace(id=uuid4(), user_id=row_owner_id)
+    schedule_repo = Mock(get=AsyncMock(return_value=schedule))
+    run_repo = Mock(
+        claim=AsyncMock(return_value=schedule_run),
+        mark_failed=AsyncMock(return_value=ScheduleRunStatus.FAILED),
+    )
+    monkeypatch.setattr(
+        "app.modules.workflow.services.schedule_start_service.ScheduleRepository",
+        lambda uow: schedule_repo,
+    )
+    monkeypatch.setattr(
+        "app.modules.workflow.services.schedule_start_service.ScheduleRunRepository",
+        lambda uow: run_repo,
+    )
+    context = AsyncMock()
+    context.require.side_effect = PermissionError("agent.execute denied")
+    service = ScheduleStartService(engine)
+    service._build_user_context = AsyncMock(return_value=context)
+    service._record_fire = AsyncMock()
+
+    with pytest.raises(PermissionError, match="agent.execute denied"):
+        await service.handle_schedule_fired(
+            schedule_id=str(schedule.id),
+            user_id=row_owner_id,
+            payload={"id": "row-1"},
+            schedule_event_id="datastore:event-3",
+        )
+
+    engine.agent_adapter.run_agent_by_id.assert_not_awaited()
+    run_repo.mark_failed.assert_awaited_once()
+    assert run_repo.claim.await_args.kwargs["user_id"] == row_owner_id
+
+
+@pytest.mark.anyio
 @pytest.mark.parametrize(
     "run_status,count,expect_deactivate",
     [

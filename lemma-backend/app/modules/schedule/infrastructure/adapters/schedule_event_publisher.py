@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from typing import Any, Dict, Optional
+from uuid import UUID
 
 from app.core.infrastructure.events.publisher import EventPublisher
 from app.modules.schedule.domain.events.schedule import ScheduleFired
@@ -20,13 +21,14 @@ class DurableScheduleEventPublisher(ScheduleEventPublisher):
         self,
         schedule: ScheduleEntity,
         payload: Dict[str, Any],
+        user_id: UUID | None = None,
         metadata: Optional[Dict[str, Any]] = None,
         llm_output: Optional[Dict[str, Any]] = None,
         source_event_id: str | None = None,
     ) -> None:
         event = ScheduleFired(
             schedule_id=schedule.id,
-            user_id=schedule.user_id,
+            user_id=user_id or schedule.user_id,
             schedule_type=schedule.schedule_type,
             payload=payload,
             metadata=metadata,

@@ -73,12 +73,14 @@ async def test_processor_publishes_filter_output_and_source_identity():
     assert await processor.process_event(
         schedule=schedule,
         payload={"id": 1},
+        user_id=None,
         metadata={"provider": "custom"},
         source_event_id="provider:event-1",
     ) is True
     publisher.publish_schedule_fired.assert_awaited_once_with(
         schedule=schedule,
         payload={"id": 1},
+        user_id=None,
         metadata={"provider": "custom"},
         llm_output={"category": "urgent"},
         source_event_id="provider:event-1",

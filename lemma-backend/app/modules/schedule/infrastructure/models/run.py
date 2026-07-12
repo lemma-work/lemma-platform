@@ -24,6 +24,9 @@ class ScheduleRun(UUIDAuditBase):
     schedule_id: Mapped[UUID] = mapped_column(
         ForeignKey("schedules.id", ondelete="CASCADE"), nullable=False
     )
+    user_id: Mapped[UUID] = mapped_column(
+        ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True
+    )
     source_event_id: Mapped[str] = mapped_column(String(255), nullable=False)
     status: Mapped[str] = mapped_column(
         String(32), nullable=False, default=ScheduleRunStatus.RECEIVED.value
@@ -67,6 +70,7 @@ class ScheduleRun(UUIDAuditBase):
             created_at=self.created_at,
             updated_at=self.updated_at,
             schedule_id=self.schedule_id,
+            user_id=self.user_id,
             source_event_id=self.source_event_id,
             status=ScheduleRunStatus(self.status),
             attempts=self.attempts,

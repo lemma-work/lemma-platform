@@ -33,12 +33,14 @@ async def test_run_ledger_concurrent_dedup_and_retry_api(
         config={"cron": "0 0 * * *"},
     )
     schedule_id = UUID(schedule["id"])
+    user_id = UUID(schedule["user_id"])
     factory = SessionUnitOfWorkFactory(db_manager.session_factory)
 
     async def claim_once():
         async with factory() as uow:
             return await ScheduleRunRepository(uow).claim(
                 schedule_id=schedule_id,
+                user_id=user_id,
                 source_event_id="provider-event-42",
                 target_kind="AGENT",
                 payload={"ticket": 42},

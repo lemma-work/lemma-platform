@@ -95,6 +95,7 @@ class ScheduleRunStatus(str, Enum):
 
 class ScheduleRunEntity(Entity):
     schedule_id: UUID
+    user_id: UUID
     source_event_id: str
     status: ScheduleRunStatus
     attempts: int = 0

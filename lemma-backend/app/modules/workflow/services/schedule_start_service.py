@@ -5,9 +5,10 @@ from __future__ import annotations
 from datetime import datetime
 from uuid import UUID
 
-from app.core.authorization.context import Context
+from app.core.authorization.context import Context, ResourceRef, ResourceType
 from app.core.authorization.current import reset_current_context, set_current_context
 from app.core.authorization.factory import create_authorization_data_service
+from app.core.authorization.permissions import Permissions
 from app.modules.workflow.domain.context import TriggerContext
 from app.modules.workflow.domain.errors import WorkflowConflictError
 from app.modules.workflow.domain.start import WorkflowStartType
@@ -22,6 +23,8 @@ from app.composition.workflow_schedule_runtime import (
 from app.modules.schedule.contracts import ScheduleFireStatus, ScheduleRunStatus
 
 logger = get_logger(__name__)
+
+_LEGACY_MISSING_USER_ID = UUID("00000000-0000-0000-0000-000000000000")
 
 
 def _schedule_pod_id(schedule) -> UUID:
@@ -48,6 +51,7 @@ class ScheduleStartService:
         self,
         *,
         schedule_id: str,
+        user_id: UUID | str | None = None,
         payload: dict,
         metadata: dict | None = None,
         llm_output: dict | None = None,
@@ -82,9 +86,14 @@ class ScheduleStartService:
         if not schedule_event_id:
             raise ValueError("schedule_event_id is required for durable delivery")
 
+        run_user_id = UUID(str(user_id)) if user_id is not None else schedule.user_id
+        if run_user_id == _LEGACY_MISSING_USER_ID:
+            run_user_id = schedule.user_id
+
         run_repo = ScheduleRunRepository(self._uow)
         schedule_run = await run_repo.claim(
             schedule_id=schedule.id,
+            user_id=run_user_id,
             source_event_id=schedule_event_id,
             target_kind="WORKFLOW" if schedule.workflow_id is not None else "AGENT",
             payload=payload,
@@ -111,6 +120,7 @@ class ScheduleStartService:
             try:
                 run_id = await self._start_workflow_for_schedule(
                     schedule=schedule,
+                    user_id=schedule_run.user_id,
                     trigger=trigger,
                     schedule_event_id=schedule_event_id,
                 )
@@ -139,16 +149,33 @@ class ScheduleStartService:
 
         if schedule.agent_id is not None:
             try:
-                conversation_id = await self._engine.agent_adapter.run_agent_by_id(
-                    agent_id=schedule.agent_id,
-                    input_data=trigger.to_context_value(),
-                    pod_id=_schedule_pod_id(schedule),
-                    user_id=schedule.user_id,
-                    source="SCHEDULE",
-                    conversation_metadata={"schedule_id": str(schedule_id)},
-                    origin_type="SCHEDULE_RUN",
-                    origin_id=schedule_run.id,
+                pod_id = _schedule_pod_id(schedule)
+                ctx = await self._build_user_context(
+                    user_id=schedule_run.user_id,
+                    pod_id=pod_id,
                 )
+                await ctx.require(
+                    Permissions.AGENT_EXECUTE,
+                    ResourceRef(
+                        resource_type=ResourceType.AGENT,
+                        resource_id=schedule.agent_id,
+                        pod_id=pod_id,
+                    ),
+                )
+                ctx_token = set_current_context(ctx)
+                try:
+                    conversation_id = await self._engine.agent_adapter.run_agent_by_id(
+                        agent_id=schedule.agent_id,
+                        input_data=trigger.to_context_value(),
+                        pod_id=pod_id,
+                        user_id=schedule_run.user_id,
+                        source="SCHEDULE",
+                        conversation_metadata={"schedule_id": str(schedule_id)},
+                        origin_type="SCHEDULE_RUN",
+                        origin_id=schedule_run.id,
+                    )
+                finally:
+                    reset_current_context(ctx_token)
                 await run_repo.mark_dispatched(
                     schedule_run.id, target_run_id=str(conversation_id)
                 )
@@ -236,6 +263,7 @@ class ScheduleStartService:
         self,
         *,
         schedule,
+        user_id: UUID,
         trigger: TriggerContext,
         schedule_event_id: str | None,
     ) -> str | None:
@@ -244,14 +272,14 @@ class ScheduleStartService:
         )
         try:
             ctx = await self._build_user_context(
-                user_id=schedule.user_id,
+                user_id=user_id,
                 pod_id=_schedule_pod_id(schedule),
             )
             ctx_token = set_current_context(ctx)
             try:
                 run = await self._engine.start_run(
                     flow_id=schedule.workflow_id,
-                    user_id=schedule.user_id,
+                    user_id=user_id,
                     trigger=trigger,
                     schedule_event_id=workflow_schedule_event_id,
                     ctx=ctx,
