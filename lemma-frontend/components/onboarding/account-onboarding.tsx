@@ -69,13 +69,14 @@ import {
   buildPromptFromIntent,
   defaultWorkspaceName,
   inferFullName,
+  nextTeamSetupStep,
+  normalizeOnboardingStep,
   podNameForAudience,
   personalWorkspaceName,
   setupStepsForAudience,
   splitName,
   startRecipesForAudience,
   teamLabelForKind,
-  teamWorkspaceName,
   previousOnboardingStep,
   resolveOnboardingStartStep,
   type Audience,
@@ -268,7 +269,12 @@ function SetupAssistant({
   const workDomain = workDomainFromEmail(email);
   const normalizedWorkDomain = normalizeEmailDomain(workDomain);
   const inferredName = inferFullName(profile);
-  const [step, setStep] = useState<SetupStep>(initialStep);
+  const normalizedInitialStep = normalizeOnboardingStep(
+    initialStep,
+    initialAudience,
+    Boolean(initialOrganization),
+  );
+  const [step, setStep] = useState<SetupStep>(normalizedInitialStep);
   const [createdOrganization, setCreatedOrganization] =
     useState<Organization | null>(null);
   const [basePod, setBasePod] = useState<Pod | null>(() =>
@@ -282,7 +288,8 @@ function SetupAssistant({
   );
   const [identityName, setIdentityName] = useState(inferredName);
   const [workspaceName, setWorkspaceName] = useState(
-    initialDraft?.workspaceName || defaultWorkspaceName(inferredName),
+    initialDraft?.workspaceName ||
+      defaultWorkspaceName(inferredName, workDomain),
   );
   const [audience, setAudience] = useState<Audience | null>(
     initialDraft?.audience || initialAudience,
@@ -321,10 +328,10 @@ function SetupAssistant({
   const activeOrganization = createdOrganization || initialOrganization;
 
   useEffect(() => {
-    if (step === "boot" && initialStep !== "boot") {
-      setStep(initialStep);
+    if (step === "boot" && normalizedInitialStep !== "boot") {
+      setStep(normalizedInitialStep);
     }
-  }, [initialStep, step]);
+  }, [normalizedInitialStep, step]);
 
   useEffect(() => {
     if (!basePod && initialDraft?.basePodId) {
@@ -362,7 +369,7 @@ function SetupAssistant({
       {
         onSuccess: () => {
           toast.success("Operator profile saved");
-          const nextWorkspaceName = defaultWorkspaceName(identityName);
+          const nextWorkspaceName = defaultWorkspaceName(identityName, workDomain);
           setWorkspaceName(nextWorkspaceName);
           saveOnboardingDraft({ workspaceName: nextWorkspaceName });
           goTo("audience");
@@ -378,17 +385,17 @@ function SetupAssistant({
 
   const ensureOrganization = async (
     audienceForPod: Audience,
-    teamName = "",
     organizationOverride?: Organization | null,
   ): Promise<Organization | null> => {
     if (organizationOverride) return organizationOverride;
     if (activeOrganization) return activeOrganization;
 
+    // Team workspaces are user-owned identity and must be created or joined
+    // explicitly before a team pod can be created.
+    if (audienceForPod === "team") return null;
+
     const organization = await createOrganization.mutateAsync({
-      name:
-        audienceForPod === "personal"
-          ? personalWorkspaceName(identityName)
-          : teamWorkspaceName(teamName),
+      name: personalWorkspaceName(identityName),
       join_policy: OrganizationJoinPolicy.INVITE_ONLY,
       email_domain: null,
     });
@@ -430,7 +437,6 @@ function SetupAssistant({
       try {
         const organization = await ensureOrganization(
           audienceForPod,
-          teamName,
           organizationOverride,
         );
         if (!organization) {
@@ -478,7 +484,12 @@ function SetupAssistant({
     setSelectedRecipeId(startRecipesForAudience(value)[0]?.id ?? "");
 
     if (value === "team") {
-      goTo("team");
+      goTo(
+        nextTeamSetupStep({
+          hasOrganization: Boolean(activeOrganization),
+          hasPod: false,
+        }),
+      );
       return;
     }
 
@@ -493,13 +504,10 @@ function SetupAssistant({
       return;
     }
 
-    const nextWorkspaceName = teamWorkspaceName(teamName);
-    setWorkspaceName(nextWorkspaceName);
     saveOnboardingDraft({
       audience: "team",
       teamKind,
       customTeamName,
-      workspaceName: nextWorkspaceName,
     });
 
     if (!activeOrganization) {
@@ -508,7 +516,14 @@ function SetupAssistant({
     }
 
     const pod = await createBasePod("team", teamName, activeOrganization);
-    if (pod) goTo("connect");
+    if (pod) {
+      goTo(
+        nextTeamSetupStep({
+          hasOrganization: true,
+          hasPod: true,
+        }),
+      );
+    }
   };
 
   const handleJoinSuggested = async () => {
@@ -532,12 +547,12 @@ function SetupAssistant({
         return;
       }
 
-      const pod = await createBasePod(
-        "team",
-        resolveTeamName(),
-        organization,
+      goTo(
+        nextTeamSetupStep({
+          hasOrganization: true,
+          hasPod: false,
+        }),
       );
-      if (pod) goTo("connect");
     } catch (error) {
       const message = error instanceof Error ? error.message : "Unknown error";
       toast.error(`Could not join workspace: ${message}`);
@@ -558,12 +573,12 @@ function SetupAssistant({
       setCreatedOrganization(organization);
       onOrganizationReady(organization);
       saveOnboardingDraft({ organizationId: organization.id });
-      const pod = await createBasePod(
-        "team",
-        resolveTeamName(),
-        organization,
+      goTo(
+        nextTeamSetupStep({
+          hasOrganization: true,
+          hasPod: false,
+        }),
       );
-      if (pod) goTo("connect");
     } catch (error) {
       const message = error instanceof Error ? error.message : "Unknown error";
       toast.error(`Failed to create workspace: ${message}`);
@@ -578,10 +593,8 @@ function SetupAssistant({
 
     setIsConnectingAi(true);
     try {
-      const teamName = resolveTeamName();
       const organization = await ensureOrganization(
         audience ?? "personal",
-        teamName,
       );
       if (!organization) {
         toast.error("Could not prepare your workspace");

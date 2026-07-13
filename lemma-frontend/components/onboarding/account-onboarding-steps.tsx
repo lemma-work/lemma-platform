@@ -431,7 +431,7 @@ export function TeamStep({
   return (
     <SetupSplitPanel
       title="What team do you work in?"
-      subtitle="We will create one clean starting pod for that team. Teammates, permissions, and workspace details can wait."
+      subtitle="This becomes the pod for that team's agents, apps, workflows, and operating data."
       preview={
         <StartPreviewBody
           podTitle={podTitle}

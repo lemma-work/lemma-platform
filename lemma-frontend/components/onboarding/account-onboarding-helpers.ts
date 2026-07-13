@@ -40,8 +40,8 @@ export const SETUP_STEPS: SetupStep[] = [
   "boot",
   "identity",
   "audience",
-  "team",
   "workspace",
+  "team",
   "connect",
   "start",
 ];
@@ -77,13 +77,38 @@ export function setupStepsForAudience(audience: Audience | null): SetupStep[] {
       "boot",
       "identity",
       "audience",
-      "team",
       "workspace",
+      "team",
       "connect",
       "start",
     ];
   }
   return SETUP_STEPS;
+}
+
+export function nextTeamSetupStep({
+  hasOrganization,
+  hasPod,
+}: {
+  hasOrganization: boolean;
+  hasPod: boolean;
+}): Extract<SetupStep, "workspace" | "team" | "connect"> {
+  if (hasPod) return "connect";
+  return hasOrganization ? "team" : "workspace";
+}
+
+export function normalizeOnboardingStep(
+  step: SetupStep,
+  audience: Audience | null,
+  hasOrganization: boolean,
+): SetupStep {
+  // Drafts created by the old team-first flow may resume on the team step
+  // before an organization exists. Send those users through workspace setup
+  // instead of letting the pod CTA lead to another unrelated step.
+  if (audience === "team" && step === "team" && !hasOrganization) {
+    return "workspace";
+  }
+  return step;
 }
 
 export type TeamKind =
@@ -385,7 +410,43 @@ export function splitName(value: string) {
   };
 }
 
-export function defaultWorkspaceName(name: string) {
+const COMMON_COUNTRY_CODE_SECOND_LEVEL_DOMAINS = new Set([
+  "ac",
+  "co",
+  "com",
+  "edu",
+  "gov",
+  "net",
+  "org",
+]);
+
+export function workspaceNameFromWorkDomain(domain: string) {
+  const labels = domain
+    .trim()
+    .toLowerCase()
+    .replace(/^@+/, "")
+    .split(".")
+    .filter(Boolean);
+  if (labels.length < 2) return null;
+
+  const topLevelDomain = labels.at(-1) || "";
+  const secondLevelDomain = labels.at(-2) || "";
+  const organizationLabel =
+    labels.length >= 3 &&
+    topLevelDomain.length === 2 &&
+    COMMON_COUNTRY_CODE_SECOND_LEVEL_DOMAINS.has(secondLevelDomain)
+      ? labels.at(-3) || ""
+      : secondLevelDomain;
+  const organizationName = toTitleCase(
+    organizationLabel.replace(/[-_]+/g, " "),
+  );
+  return organizationName ? `${organizationName} Workspace` : null;
+}
+
+export function defaultWorkspaceName(name: string, workDomain = "") {
+  const domainWorkspaceName = workspaceNameFromWorkDomain(workDomain);
+  if (domainWorkspaceName) return domainWorkspaceName;
+
   const firstName = splitName(name).firstName || "My";
   return `${firstName}'s Workspace`;
 }
@@ -395,11 +456,6 @@ export function defaultWorkspaceName(name: string) {
 export function personalWorkspaceName(name: string) {
   const firstName = splitName(name).firstName || "My";
   return `${firstName}'s Space`;
-}
-
-export function teamWorkspaceName(teamName: string) {
-  const label = toTitleCase(teamName.trim() || "Team");
-  return `${label} Workspace`;
 }
 
 export function podNameForAudience(audience: Audience, teamName = "") {
