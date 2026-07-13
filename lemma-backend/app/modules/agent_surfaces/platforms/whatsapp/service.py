@@ -358,8 +358,15 @@ class WhatsAppPlatformService:
                     message_id=message_id,
                 )
                 return
-            except Exception:
-                pass
+            except Exception as exc:
+                # Best-effort indicator; log at debug so it is diagnosable without
+                # spamming warnings, then fall through to the reaction fallback.
+                logger.debug(
+                    "WhatsApp mark_read_and_typing failed (best-effort) "
+                    "message_id=%s: %s",
+                    message_id,
+                    exc,
+                )
 
         # Fallback: no inbound id (or read/typing rejected) — post a reaction so
         # the user still sees the agent acknowledged the message.
@@ -372,8 +379,12 @@ class WhatsAppPlatformService:
                 message_id=message_id,
                 emoji="\U0001f4ac",
             )
-        except Exception:
-            pass
+        except Exception as exc:
+            logger.debug(
+                "WhatsApp reaction indicator failed (best-effort) message_id=%s: %s",
+                message_id,
+                exc,
+            )
 
     async def download_attachment_bytes(
         self,

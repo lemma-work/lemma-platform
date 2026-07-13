@@ -406,8 +406,8 @@ class TelegramPlatformService:
         # Best-effort: a failed typing indicator must never break the run.
         try:
             await self._client.call("sendChatAction", payload)
-        except Exception:
-            pass
+        except Exception as exc:
+            logger.debug("Telegram typing indicator failed (best-effort): %s", exc)
 
     async def stream_progress(
         self,
@@ -455,8 +455,14 @@ class TelegramPlatformService:
             await self._client.call(
                 "deleteMessage", {"chat_id": chat_id, "message_id": message_id}
             )
-        except Exception:
-            pass
+        except Exception as exc:
+            logger.debug(
+                "Telegram progress-message cleanup failed (best-effort) "
+                "chat_id=%s message_id=%s: %s",
+                chat_id,
+                message_id,
+                exc,
+            )
 
     async def download_attachment_bytes(
         self,

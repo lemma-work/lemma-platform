@@ -496,8 +496,8 @@ class TeamsSurfaceAdapter(BaseSurfaceAdapter):
                     json={"type": "typing"},
                 ):
                     pass  # best-effort, ignore status
-        except Exception:
-            pass
+        except Exception as exc:
+            logger.debug("Teams typing indicator failed (best-effort): %s", exc)
 
     async def stream_progress(
         self,
