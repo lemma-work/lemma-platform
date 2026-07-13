@@ -10,7 +10,7 @@
 
 <a href="https://github.com/lemma-work/lemma-platform/releases/latest"><img src="https://img.shields.io/badge/Download_for_macOS-141414?style=for-the-badge&logo=apple&logoColor=white" alt="Download Lemma for macOS"></a>
 
-[Quickstart](#quickstart) · [Why an app](#why-an-app-not-another-chat) · [Inside a pod](#inside-a-pod) · [Surfaces](#chat-is-a-door-not-the-building) · [Coding agents](#build-and-operate-with-the-coding-agent-you-already-have) · [Docs](https://lemma.work/docs)
+[Quickstart](#quickstart) · [Why an app](#why-an-app-not-another-chat) · [Inside a pod](#inside-a-pod) · [Surfaces](#one-app-many-surfaces) · [Coding agents](#build-and-operate-with-the-coding-agent-you-already-have) · [Docs](https://lemma.work/docs)
 
 Website → **[lemma.work](https://lemma.work)**
 
@@ -20,7 +20,7 @@ Website → **[lemma.work](https://lemma.work)**
 
 A **Telegram bot** that tracks your expenses. A **research room** where agents gather sources, compare findings, and challenge each other's claims. A **support desk** where agents triage requests in the background and people step in for decisions.
 
-These jobs have different things to remember, different actions to take, and different ways people need to see the work. A blank chat box gives all of them the same empty interface. Lemma gives each job its own app — and gives the agents inside it the memory, tools, routines, and boundaries they need to keep it running.
+Each job carries its own state, actions, and ways for people to see the work. Lemma gives each job its own app: a place for people to see and direct the work, and for agents to remember, act, and keep it moving.
 
 **Open source. Runs locally. Use Claude Code or Codex through your existing subscription, Lemma-managed models, or any OpenAI-compatible or Anthropic-compatible provider. Run it on your laptop, your server, or Lemma Cloud.**
 
@@ -30,11 +30,11 @@ These jobs have different things to remember, different actions to take, and dif
 
 <table>
   <tr>
-    <td align="center"><img src="docs/Assets/Logos/claude.svg" height="40" alt="Claude Code"><br><sub>Claude Code</sub></td>
-    <td align="center"><img src="docs/Assets/Logos/codex.svg" height="40" alt="Codex"><br><sub>Codex</sub></td>
-    <td align="center"><img src="docs/Assets/Logos/opencode-logo-light.svg" height="40" alt="OpenCode"><br><sub>OpenCode</sub></td>
-    <td align="center"><img src="docs/Assets/Logos/cursor.svg" height="40" alt="Cursor"><br><sub>Cursor</sub></td>
-    <td align="center"><img src="lemma-frontend/public/harnesslogos/antigravity.png" height="40" alt="Antigravity"><br><sub>Antigravity</sub></td>
+    <td align="center" width="112"><img src="docs/Assets/Logos/claude.svg" height="36" alt="Claude Code"><br><sub>Claude Code</sub></td>
+    <td align="center" width="112"><img src="docs/Assets/Logos/codex.svg" height="36" alt="Codex"><br><sub>Codex</sub></td>
+    <td align="center" width="112"><img src="docs/Assets/Logos/opencode-logo-light.svg" height="36" alt="OpenCode"><br><sub>OpenCode</sub></td>
+    <td align="center" width="112"><img src="docs/Assets/Logos/cursor.svg" height="36" alt="Cursor"><br><sub>Cursor</sub></td>
+    <td align="center" width="112"><img src="lemma-frontend/public/harnesslogos/antigravity.png" height="36" alt="Antigravity"><br><sub>Antigravity</sub></td>
   </tr>
 </table>
 
@@ -66,7 +66,7 @@ curl -fsSL https://raw.githubusercontent.com/lemma-work/lemma-platform/main/inst
 iwr https://raw.githubusercontent.com/lemma-work/lemma-platform/main/install.ps1 | iex
 ```
 
-The installer opens Lemma at `http://127-0-0-1.sslip.io:3711`. Use that exact host rather than `localhost`; authentication is scoped to it. Manage the installation with `lemma-stack start|stop|status|logs|config|uninstall`.
+The installer opens Lemma at `http://127-0-0-1.sslip.io:3711`. Authentication is scoped to that exact host, so keep it as shown. Manage the installation with `lemma-stack start|stop|status|logs|config|uninstall`.
 
 Install the CLI, point it at the local stack, and give your coding agent Lemma's skills:
 
@@ -105,7 +105,7 @@ See [installation](docs/installation.md#configure) for every provider and connec
 
 ### Use Lemma Cloud
 
-Sign up at [lemma.work](https://lemma.work) when you want the same stack hosted and reachable by teammates and surfaces without running it yourself:
+Sign up at [lemma.work](https://lemma.work) when you want the same stack hosted and reachable by teammates and surfaces:
 
 ```bash
 uv tool install lemma-terminal
@@ -118,24 +118,19 @@ lemma chat "what can you do in this pod?"
 
 ## Why an app, not another chat
 
-A capable model in a blank box still doesn't know what it's responsible for, what happened yesterday, what's true right now, what it may do alone, or who to ask when it shouldn't act. The agentic app is the harness that gives the model a job and a place to do it:
+The shape of an agentic app follows the job. Picture three of them:
 
-| The agent needs | The agentic app includes |
-|---|---|
-| **A job** | A role, instructions, and a queue. Work is assigned to the agent, not pasted at it. |
-| **Memory** | Files, playbooks, decisions, and history that persist between runs. |
-| **Current state** | Typed tables and records shared with people and other agents through the same APIs. |
-| **Tools** | Functions, connectors, APIs, and other agents. |
-| **Routines** | Workflows, schedules, triggers, waits, and loops. |
-| **Boundaries** | Permissions and grants scoped to specific resources and actions. |
-| **Human judgment** | Forms and approvals that pause the work and resume it after a decision. |
-| **A place to work** | An app UI and connected surfaces over the same state. |
+**Personal expenses.** Send a receipt or voice note through Telegram. An agent extracts the purchase, asks when something is unclear, and keeps the ledger current. The app is where you review transactions, correct categories, and see where the money went.
 
-People and agents work against the same state from different interfaces: app views and approval queues for people, APIs and the CLI for agents, and Slack, email, Telegram, or WhatsApp when those are the best entry points.
+**Research.** Agents gather sources, extract claims, and challenge weak evidence in the background. The app holds the sources, claims, open questions, and evolving brief. You inspect the work, redirect the investigation, and shape the result.
 
-## The app gets better instead of the chat getting longer
+**Customer support.** Agents read new requests, gather the relevant context, draft replies, and flag decisions. The app brings together the conversation, proposed response, customer history, and the controls to edit, approve, or direct what happens next.
 
-In a chat tool, day thirty looks exactly like day one: a blank box. In a Lemma app, work leaves structure behind. A triaged email becomes a record. You save repeated corrections as standing instructions, promote repeated sequences to workflows, and encode recurring judgment in agent roles — with approval gates wherever people stay responsible.
+Each app gives its job a purpose-built interface, shared state, and agents that keep working between visits. People work with what the agents produce and direct what happens next; the agents carry that direction back into the work.
+
+## Work compounds inside the app
+
+Completed work leaves reusable structure behind. A triaged email becomes a record. You save repeated corrections as standing instructions, promote repeated sequences to workflows, and encode recurring judgment in agent roles — with approval gates wherever people stay responsible.
 
 A pod exports as portable files: tables, agents, workflows, permissions, apps, and the rest of the system. The same coding agent that built it can export, change, verify, and re-import it. Remix it, share it, or start from one somebody else built:
 
@@ -151,20 +146,20 @@ Everything in Lemma lives in a **pod** — a self-contained environment for one 
 | Primitive | What it gives you |
 |---|---|
 | **Tables** | Typed, queryable business data with row-level security. Leads, tickets, tasks, approvals — readable by agents, owned by the pod. |
-| **Files** | Markdown memory for everything structure can't capture — preferences, playbooks, voice guides, notes. Full-text searchable, permission-scoped, read and written by agents alongside the tables. |
-| **Agents** | LLM workers with a role, tool grants, and scoped access to specific tables, files, and connectors — never vague access to everything. |
+| **Files** | Markdown memory for preferences, playbooks, voice guides, and notes. Full-text searchable, permission-scoped, read and written by agents alongside the tables. |
+| **Agents** | LLM workers with a role, tool grants, and access scoped to specific tables, files, and connectors. |
 | **Workflows** | Graphs that mix agents, functions, decisions, loops, waits, and **human approval steps**. Triggered by schedules, webhooks, table events, chat, or the API. |
-| **Functions** | Deterministic logic alongside the agents — validators, transitions, actions. Not everything should be LLM reasoning. |
+| **Functions** | Predictable validators, transitions, and actions alongside agent judgment. |
 | **Permissions** | Roles for people *and* agents: pod-level roles, table grants, resource visibility, delegation tokens. |
 | **Approvals** | Workflow steps that pause, route to a specific person, and resume on their decision — in the app or in Slack. |
-| **Apps** | The operator UI your team works from, deployed at a URL, built on the same pod APIs — a single-file HTML page (no build) or a full React app. |
+| **Apps** | The UI where people see the job, direct work, and handle decisions — deployed at a URL and built on the same pod APIs as the agents. |
 | **Surfaces** | Slack, Microsoft Teams, Gmail, Outlook, Telegram, and WhatsApp — wired to pod agents with identity resolution and conversation linking. |
 
-## Chat is a door, not the building
+## One app, many surfaces
 
 A teammate approves a refund **in Slack**. A field update arrives as a **WhatsApp** voice note and lands as a structured record. An agent drafts a customer reply **in Gmail** and waits for a human before sending. The conversation is the surface — underneath, all of it reads and writes the same tables, runs through the same workflows, and respects the same permissions.
 
-Supported today: **Slack, Microsoft Teams, Gmail, Outlook, Telegram, WhatsApp** — each with webhook ingress, identity resolution, and agent-initiated actions. Telegram long-polling and Slack Socket Mode are built in, so local setups work without a public webhook URL.
+Supported today: **Slack, Microsoft Teams, Gmail, Outlook, Telegram, WhatsApp** — each with webhook ingress, identity resolution, and agent-initiated actions. Telegram long-polling and Slack Socket Mode connect local setups directly.
 
 <div align="center">
 
@@ -184,7 +179,7 @@ Supported today: **Slack, Microsoft Teams, Gmail, Outlook, Telegram, WhatsApp** 
 
 </div>
 
-This isn't only for teams. A pod of one human and a few agents — with WhatsApp as the front door and tables as the memory — is a personal assistant that keeps state, asks before it acts, and picks up tomorrow where it left off today.
+A pod also works for one person. One human and a few agents — with WhatsApp as the front door and tables as the memory — make a personal assistant that keeps state, asks before it acts, and picks up tomorrow where it left off today.
 
 ## Build and operate with the coding agent you already have
 
@@ -206,7 +201,7 @@ lemma pod import ./the-pod-your-agent-wrote
 lemma apps deploy my-app ./index.html   # deploy a no-build HTML app (or a Vite project dir)
 ```
 
-**Or run your agent inside Lemma.** `lemma daemon start` connects your local Claude Code, Codex, OpenCode, Cursor, or Antigravity to the pod: it picks up tasks from a shared queue, streams its work back through the pod, and gets stopped by the same approvals as everyone else. Two agents working the same pod see the same state — a task queue, not a terminal session that evaporates.
+**Or run your agent inside Lemma.** `lemma daemon start` connects your local Claude Code, Codex, OpenCode, Cursor, or Antigravity to the pod: it picks up tasks from a shared queue, streams its work back through the pod, and pauses at approval gates before protected actions. Two agents working the same pod share persistent state, a task queue, and run history.
 
 ```bash
 lemma daemon start --background  # your local agent serves pod-assigned runs
@@ -228,10 +223,10 @@ If you're reading this inside a coding agent session: that agent can work a pod 
 
 Python and TypeScript SDKs (with 25+ React hooks) live in [`lemma-python/`](lemma-python/) and [`lemma-typescript/`](lemma-typescript/). Generating your frontend elsewhere? Back it with a pod — the TypeScript SDK gives any app tables, agents, workflows, and permissions out of the box.
 
-## Local-first, no lock-in
+## Open, local, and portable
 
-- **Your machine.** The full stack runs self-contained on your laptop. Your data never leaves unless you wire it somewhere.
-- **Our cloud, when you want it.** [lemma.work](https://lemma.work) runs the same open-source stack — for when you want your pod reachable by teammates and surfaces without hosting anything.
+- **Your machine.** The full stack runs self-contained on your laptop. You choose which external services receive data.
+- **Our cloud, when you want it.** [lemma.work](https://lemma.work) runs the same open-source stack as a hosted option for pods that need to reach teammates and surfaces.
 - **Your subscription, managed models, or your keys.** Pod-assigned runs use your local **Claude Code or Codex login** through the daemon. Server-run agents use Lemma-managed models or an **Anthropic-compatible or OpenAI-compatible** key or endpoint — a cloud provider, a self-hosted gateway, or a local model. Runtime profiles are per pod, so different agents can use different models.
 - **Your code.** Core is [AGPLv3](LICENSE); SDKs, CLI, and tools are [Apache-2.0](LICENSES/Apache-2.0.txt).
 
@@ -252,7 +247,7 @@ Python and TypeScript SDKs (with 25+ React hooks) live in [`lemma-python/`](lemm
 | `docs/` | Installation and setup guides | — |
 | `install.sh` | One-line bootstrap installer | — |
 
-No git submodules — everything is a normal directory in one repo.
+Everything is a normal directory in one repo.
 
 ## Development
 
