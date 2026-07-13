@@ -226,14 +226,29 @@ class SurfaceAgentRunProgressObserver:
             service = self.service_factory(uow)
             try:
                 if kind == "ask_user":
-                    await service.send_questions_for_conversation(
+                    delivered = await service.send_questions_for_conversation(
                         conversation_id=conversation.id,
                         tool_call_id=tool_call_id or None,
                     )
                 else:
-                    await service.send_approval_prompt_for_conversation(
+                    delivered = await service.send_approval_prompt_for_conversation(
                         conversation_id=conversation.id,
                         tool_call_id=tool_call_id or None,
+                    )
+                if not delivered:
+                    # Nothing reached the user (the send method logs the precise
+                    # reason). Drop the rendered-key so a later WAITING event for
+                    # this same tool call can retry instead of being deduped away,
+                    # and surface it loudly — a stuck WAITING run must never be
+                    # silent (this is the swallow class that hid the ask_user bug).
+                    if rendered_key is not None:
+                        self._rendered_waiting_tool_calls.discard(rendered_key)
+                    logger.warning(
+                        "Surface %s is WAITING but nothing was delivered to the "
+                        "user conversation=%s tool_call_id=%s — run is stuck",
+                        kind,
+                        conversation.id,
+                        tool_call_id,
                     )
             except Exception as exc:
                 if rendered_key is not None:

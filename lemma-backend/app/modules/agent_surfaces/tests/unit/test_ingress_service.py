@@ -1165,17 +1165,17 @@ async def _ask_user_link(surface, conversation_id, parsed_event):
     )
 
 
-_ASK_USER_TOOL_ARGS = {
-    "request": {
-        "questions": [
-            {
-                "question": "Pick a color",
-                "header": "color",
-                "options": [{"label": "Red"}, {"label": "Blue"}],
-            }
-        ]
+_ASK_USER_QUESTIONS = [
+    {
+        "question": "Pick a color",
+        "header": "color",
+        "options": [{"label": "Red"}, {"label": "Blue"}],
     }
-}
+]
+# Wrapped shape (hand-built / legacy). pydantic-ai actually flattens the single
+# `request: AskUserRequest` param, so production persists the FLAT shape below.
+_ASK_USER_TOOL_ARGS = {"request": {"questions": _ASK_USER_QUESTIONS}}
+_ASK_USER_TOOL_ARGS_FLAT = {"questions": _ASK_USER_QUESTIONS}
 
 
 async def test_send_questions_for_conversation_renders_native_then_falls_back():
@@ -1210,6 +1210,56 @@ async def test_send_questions_for_conversation_renders_native_then_falls_back():
     )
     assert sent is True
     assert "Pick a color" in adapter.send_message.await_args.kwargs["message"]
+
+
+async def test_send_questions_reads_flattened_pydantic_ai_args():
+    """Regression: pydantic-ai flattens ask_user's single-model param, so the
+    persisted args are {"questions": [...]} (NOT {"request": {...}}). The question
+    must still be delivered — reading tool_args["request"] here swallowed it in
+    production (no card, no text, run stuck WAITING)."""
+    surface = _slack_surface()
+    conversation_id = uuid4()
+    parsed_event = _slack_event()
+    link = await _ask_user_link(surface, conversation_id, parsed_event)
+    adapter = AsyncMock()
+    adapter.send_questions.return_value = True
+    service = _build_service(adapter=adapter, surfaces=[surface], existing_link=link)
+    service.conversation_link_repository.get_by_conversation_id.return_value = link
+    service.conversation_service.get_pending_ask_user.return_value = {
+        "tool_call_id": "tool-1",
+        "tool_args": _ASK_USER_TOOL_ARGS_FLAT,  # the real production shape
+        "agent_run_id": uuid4(),
+    }
+
+    sent = await service.send_questions_for_conversation(
+        conversation_id=conversation_id, tool_call_id="tool-1"
+    )
+    assert sent is True
+    plan = adapter.send_questions.await_args.kwargs["question_plan"]
+    assert [q.header for q in plan.questions] == ["color"]
+
+    # Native False → guaranteed text fallback still fires with the flat shape.
+    adapter.send_questions.return_value = False
+    await service.send_questions_for_conversation(
+        conversation_id=conversation_id, tool_call_id="tool-1"
+    )
+    assert "Pick a color" in adapter.send_message.await_args.kwargs["message"]
+
+
+async def test_ask_user_request_dict_accepts_both_shapes():
+    from app.modules.agent_surfaces.services.ingress_service import (
+        _ask_user_request_dict,
+    )
+
+    assert _ask_user_request_dict(_ASK_USER_TOOL_ARGS_FLAT) == {
+        "questions": _ASK_USER_QUESTIONS
+    }
+    assert _ask_user_request_dict(_ASK_USER_TOOL_ARGS) == {
+        "questions": _ASK_USER_QUESTIONS
+    }
+    assert _ask_user_request_dict({"foo": 1}) is None
+    assert _ask_user_request_dict("not-a-dict") is None
+    assert _ask_user_request_dict(None) is None
 
 
 async def test_handle_interaction_resumes_via_approval_path():

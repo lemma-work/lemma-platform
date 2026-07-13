@@ -686,10 +686,9 @@ class AgentSurfaceIngressService:
                 return False
 
             if kind == "ask_user":
-                tool_args = pending.get("tool_args") or {}
-                raw_request = tool_args.get("request") if isinstance(tool_args, dict) else None
+                raw_request = _ask_user_request_dict(pending.get("tool_args"))
                 questions = []
-                if isinstance(raw_request, dict):
+                if raw_request is not None:
                     try:
                         questions = AskUserRequest.model_validate(raw_request).questions
                     except Exception:
@@ -908,6 +907,11 @@ class AgentSurfaceIngressService:
         """
         target = await self._resolve_egress_target(conversation_id)
         if target is None:
+            logger.warning(
+                "Surface ask_user NOT delivered: no egress target (surface/link/"
+                "credentials unresolved) conversation=%s",
+                conversation_id,
+            )
             return False
         if target.surface.surface_type.is_email:
             # Email is non-interactive: never pause for a tappable/typed answer.
@@ -920,10 +924,21 @@ class AgentSurfaceIngressService:
             conversation_id=conversation_id
         )
         if not isinstance(pending, dict):
+            logger.warning(
+                "Surface ask_user NOT delivered: no pending ask_user tool call "
+                "found conversation=%s",
+                conversation_id,
+            )
             return False
-        tool_args = pending.get("tool_args")
-        raw_request = tool_args.get("request") if isinstance(tool_args, dict) else None
-        if not isinstance(raw_request, dict):
+        raw_request = _ask_user_request_dict(pending.get("tool_args"))
+        if raw_request is None:
+            tool_args = pending.get("tool_args")
+            logger.warning(
+                "Surface ask_user NOT delivered: could not read questions from "
+                "persisted tool args conversation=%s tool_args_keys=%s",
+                conversation_id,
+                sorted(tool_args.keys()) if isinstance(tool_args, dict) else None,
+            )
             return False
         try:
             request = AskUserRequest.model_validate(raw_request)
@@ -935,6 +950,11 @@ class AgentSurfaceIngressService:
             )
             return False
         if not request.questions:
+            logger.warning(
+                "Surface ask_user NOT delivered: request has no questions "
+                "conversation=%s",
+                conversation_id,
+            )
             return False
         plan = build_ask_user_render_plan(
             request=request,
@@ -958,12 +978,24 @@ class AgentSurfaceIngressService:
             )
         # Fallback: a well-formatted text message; the user replies in chat and the
         # typed-reply path in start_agent_chat resumes the run with their answer.
-        await target.adapter.send_message(
-            credentials=target.credentials,
-            event=target.event,
-            message=render_questions_as_text(plan),
-            metadata=metadata,
-        )
+        # This is the guaranteed "never swallowed" path — if it ALSO fails, the
+        # question reaches nobody and the run is stuck WAITING, so surface it
+        # loudly and report failure to the caller (the observer logs it too).
+        try:
+            await target.adapter.send_message(
+                credentials=target.credentials,
+                event=target.event,
+                message=render_questions_as_text(plan),
+                metadata=metadata,
+            )
+        except Exception as exc:
+            logger.warning(
+                "Surface ask_user text fallback ALSO failed — question delivered "
+                "to nobody conversation=%s error=%s",
+                conversation_id,
+                exc,
+            )
+            return False
         return True
 
     async def send_approval_prompt_for_conversation(
@@ -2227,12 +2259,30 @@ class AgentSurfaceIngressService:
         return f"{title[: _CONVERSATION_TITLE_MAX_LENGTH - 3].rstrip()}..."
 
 
+def _ask_user_request_dict(tool_args: object) -> dict[str, Any] | None:
+    """The ``AskUserRequest`` payload from a persisted ask_user call's args.
+
+    pydantic-ai flattens a tool's single pydantic-model parameter, so a real
+    ``ask_user(ctx, request: AskUserRequest)`` call persists its args as the
+    model's own fields — ``{"questions": [...]}`` — NOT ``{"request": {...}}``.
+    Older/hand-built (e.g. scripted-test) calls may still use the wrapped shape.
+    Accept both so the questions are never lost (which silently swallows the
+    whole ask_user — no card, no text fallback, run stuck WAITING).
+    """
+    if not isinstance(tool_args, dict):
+        return None
+    request = tool_args.get("request")
+    if isinstance(request, dict):
+        return request
+    if isinstance(tool_args.get("questions"), list):
+        return tool_args
+    return None
+
+
 def _ask_user_question_headers(tool_args: object) -> list[str]:
     """Extract question headers from a persisted ask_user tool call's args."""
-    if not isinstance(tool_args, dict):
-        return []
-    request = tool_args.get("request")
-    if not isinstance(request, dict):
+    request = _ask_user_request_dict(tool_args)
+    if request is None:
         return []
     questions = request.get("questions")
     if not isinstance(questions, list):
