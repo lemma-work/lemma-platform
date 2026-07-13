@@ -984,7 +984,7 @@ async def test_execute_chat_logs_missing_fallback_credentials(monkeypatch):
     )
     log = Mock()
     monkeypatch.setattr(
-        "app.modules.agent_surfaces.services.ingress_service.logger", log
+        "app.modules.agent_surfaces.services.fallback_reply_service.logger", log
     )
     context = SurfaceReplyContext(
         platform="TELEGRAM",
@@ -1015,7 +1015,7 @@ async def test_execute_chat_logs_delivery_failure_without_secret(monkeypatch):
     )
     log = Mock()
     monkeypatch.setattr(
-        "app.modules.agent_surfaces.services.ingress_service.logger", log
+        "app.modules.agent_surfaces.services.fallback_reply_service.logger", log
     )
     context = SurfaceReplyContext(
         platform="TELEGRAM",
