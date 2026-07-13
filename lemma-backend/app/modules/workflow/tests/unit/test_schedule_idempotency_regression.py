@@ -1,13 +1,7 @@
 """Regression tests for the workflow+schedule idempotency fixes.
 
-Covers:
-- C1 (LP-057): start_run persists the run row BEFORE advancing, so the
-  schedule-event unique constraint gates node side effects.
-- C3 (LP-102): a duplicate agent-target schedule fire is skipped via the durable
-  PostgreSQL ledger, so the agent conversation is not started twice.
-- E: the failure circuit breaker counts distinct dead-lettered schedule runs,
-  ignores delivery attempts, resets on successful dispatch, and deactivates at
-  the threshold.
+Covers run-before-side-effect persistence, durable fire deduplication, and
+single-owner target dispatch.
 """
 
 from __future__ import annotations
@@ -18,12 +12,9 @@ from uuid import uuid4
 
 import pytest
 
-from app.modules.schedule.domain.events.schedule import ScheduleDeactivated
-from app.modules.schedule.domain.schedule import (
-    ScheduleFireStatus,
-    ScheduleRunStatus,
-    ScheduleType,
-)
+from app.modules.schedule.domain.schedule import ScheduleRunStatus
+from app.modules.workflow.domain.events import WorkflowRunTerminalEvent
+from app.modules.workflow.domain.run import WorkflowRunEntity
 from app.modules.workflow.execution.engine import WorkflowEngine
 from app.modules.workflow.services.schedule_start_service import ScheduleStartService
 
@@ -55,7 +46,7 @@ async def test_start_run_persists_row_before_advancing():
     engine._entry_node_id = Mock(return_value="entry")
 
     engine.run_repo = AsyncMock()
-    engine.run_repo.update.return_value = SimpleNamespace(wait=None)
+    engine.run_repo.update.side_effect = lambda run: run
 
     stepper = Mock()
     stepper.advance = AsyncMock(return_value=SimpleNamespace(wait=None))
@@ -74,6 +65,59 @@ async def test_start_run_persists_row_before_advancing():
     assert call_names.index("create") < call_names.index("advance"), (
         "run row must be persisted before node side effects run"
     )
+
+
+@pytest.mark.anyio
+async def test_start_run_emits_transactional_terminal_event():
+    engine = _engine_with_mocks()
+    flow_id, pod_id, user_id = uuid4(), uuid4(), uuid4()
+    engine.flow_repo.get = AsyncMock(
+        return_value=SimpleNamespace(id=flow_id, pod_id=pod_id)
+    )
+    engine._require_action = AsyncMock(return_value=None)
+    engine._entry_node_id = Mock(return_value="entry")
+    engine.run_repo = AsyncMock()
+    engine.run_repo.update.side_effect = lambda run: run
+
+    async def complete(run, _flow):
+        run.complete()
+        return SimpleNamespace(wait=None)
+
+    stepper = Mock(advance=AsyncMock(side_effect=complete))
+    engine._stepper = Mock(return_value=stepper)
+
+    run = await engine.start_run(flow_id, user_id)
+
+    event = engine.uow.collect_events.call_args.args[0][0]
+    assert isinstance(event, WorkflowRunTerminalEvent)
+    assert event.run_id == run.id
+    assert event.status.value == "COMPLETED"
+
+
+@pytest.mark.anyio
+async def test_reserved_workflow_run_id_is_idempotent():
+    engine = _engine_with_mocks()
+    run_id, flow_id, pod_id, user_id = uuid4(), uuid4(), uuid4(), uuid4()
+    existing = WorkflowRunEntity(
+        id=run_id,
+        flow_id=flow_id,
+        pod_id=pod_id,
+        user_id=user_id,
+        status="RUNNING",
+    )
+    engine.flow_repo.get = AsyncMock(
+        return_value=SimpleNamespace(id=flow_id, pod_id=pod_id)
+    )
+    engine._require_action = AsyncMock(return_value=None)
+    engine._entry_node_id = Mock(return_value="entry")
+    engine.run_repo = AsyncMock(get=AsyncMock(return_value=existing))
+    engine._stepper = Mock()
+
+    result = await engine.start_run(flow_id, user_id, run_id=run_id)
+
+    assert result is existing
+    engine.run_repo.create.assert_not_awaited()
+    engine._stepper.assert_not_called()
 
 
 @pytest.mark.anyio
@@ -178,7 +222,13 @@ async def test_agent_schedule_run_and_conversation_use_event_user(monkeypatch):
         schedule_type=SimpleNamespace(value="DATASTORE"),
     )
     row_owner_id = uuid4()
-    schedule_run = SimpleNamespace(id=uuid4(), user_id=row_owner_id)
+    target_run_id = uuid4()
+    schedule_run = SimpleNamespace(
+        id=uuid4(),
+        user_id=row_owner_id,
+        status=ScheduleRunStatus.PROCESSING,
+        target_run_id=str(target_run_id),
+    )
     schedule_repo = Mock(get=AsyncMock(return_value=schedule))
     run_repo = Mock(
         claim=AsyncMock(return_value=schedule_run),
@@ -206,11 +256,12 @@ async def test_agent_schedule_run_and_conversation_use_event_user(monkeypatch):
 
     assert run_repo.claim.await_args.kwargs["user_id"] == row_owner_id
     assert engine.agent_adapter.run_agent_by_id.await_args.kwargs["user_id"] == row_owner_id
-    context.require.assert_awaited_once()
-    run_repo.mark_dispatched.assert_awaited_once_with(
-        schedule_run.id,
-        target_run_id=str(conversation_id),
+    assert (
+        engine.agent_adapter.run_agent_by_id.await_args.kwargs["conversation_id"]
+        == target_run_id
     )
+    context.require.assert_awaited_once()
+    run_repo.mark_dispatched.assert_awaited_once_with(schedule_run.id)
 
 
 @pytest.mark.anyio
@@ -226,7 +277,13 @@ async def test_workflow_schedule_run_uses_event_user(monkeypatch):
         schedule_type=SimpleNamespace(value="DATASTORE"),
     )
     row_owner_id = uuid4()
-    schedule_run = SimpleNamespace(id=uuid4(), user_id=row_owner_id)
+    target_run_id = uuid4()
+    schedule_run = SimpleNamespace(
+        id=uuid4(),
+        user_id=row_owner_id,
+        status=ScheduleRunStatus.PROCESSING,
+        target_run_id=str(target_run_id),
+    )
     schedule_repo = Mock(get=AsyncMock(return_value=schedule))
     run_repo = Mock(
         claim=AsyncMock(return_value=schedule_run),
@@ -256,6 +313,10 @@ async def test_workflow_schedule_run_uses_event_user(monkeypatch):
         service._start_workflow_for_schedule.await_args.kwargs["user_id"]
         == row_owner_id
     )
+    assert (
+        service._start_workflow_for_schedule.await_args.kwargs["target_run_id"]
+        == str(target_run_id)
+    )
 
 
 @pytest.mark.anyio
@@ -274,7 +335,12 @@ async def test_unauthorized_event_user_fails_agent_schedule_without_fallback(
         schedule_type=SimpleNamespace(value="DATASTORE"),
     )
     row_owner_id = uuid4()
-    schedule_run = SimpleNamespace(id=uuid4(), user_id=row_owner_id)
+    schedule_run = SimpleNamespace(
+        id=uuid4(),
+        user_id=row_owner_id,
+        status=ScheduleRunStatus.PROCESSING,
+        target_run_id=str(uuid4()),
+    )
     schedule_repo = Mock(get=AsyncMock(return_value=schedule))
     run_repo = Mock(
         claim=AsyncMock(return_value=schedule_run),
@@ -305,95 +371,4 @@ async def test_unauthorized_event_user_fails_agent_schedule_without_fallback(
     engine.agent_adapter.run_agent_by_id.assert_not_awaited()
     run_repo.mark_failed.assert_awaited_once()
     assert run_repo.claim.await_args.kwargs["user_id"] == row_owner_id
-
-
-@pytest.mark.anyio
-@pytest.mark.parametrize(
-    "run_status,count,expect_deactivate",
-    [
-        (ScheduleRunStatus.DISPATCHED, None, False),
-        (ScheduleRunStatus.FAILED, None, False),
-        (ScheduleRunStatus.DEAD_LETTERED, 2, False),
-        (ScheduleRunStatus.DEAD_LETTERED, 3, True),
-    ],
-)
-async def test_failure_circuit_breaker(
-    monkeypatch,
-    run_status,
-    count,
-    expect_deactivate,
-):
-    """Only distinct terminal runs contribute to the breaker streak."""
-    monkeypatch.setattr(
-        "app.modules.schedule.config.schedule_settings.schedule_max_consecutive_failures",
-        3,
-    )
-
-    svc = ScheduleStartService(_engine_with_mocks())
-    schedule = SimpleNamespace(id=uuid4(), user_id=uuid4(), schedule_type="TIME")
-    schedule_repo = Mock()
-    schedule_repo.update = AsyncMock()
-    schedule_repo.set_consecutive_failures = AsyncMock()
-    run_repo = Mock()
-    run_repo.consecutive_terminal_failures = AsyncMock(return_value=count)
-
-    tripped = await svc._apply_failure_policy(
-        schedule_repo,
-        run_repo,
-        schedule,
-        run_status,
-    )
-
-    if run_status == ScheduleRunStatus.DISPATCHED:
-        schedule_repo.set_consecutive_failures.assert_awaited_once_with(schedule.id, 0)
-        run_repo.consecutive_terminal_failures.assert_not_awaited()
-        assert tripped is None
-    elif run_status == ScheduleRunStatus.FAILED:
-        schedule_repo.set_consecutive_failures.assert_not_awaited()
-        run_repo.consecutive_terminal_failures.assert_not_awaited()
-        assert tripped is None
-    elif expect_deactivate:
-        schedule_repo.set_consecutive_failures.assert_awaited_once_with(
-            schedule.id, count
-        )
-        schedule_repo.update.assert_awaited_once_with(schedule.id, is_active=False)
-        assert tripped == count
-    else:
-        schedule_repo.set_consecutive_failures.assert_awaited_once_with(
-            schedule.id, count
-        )
-        schedule_repo.update.assert_not_awaited()
-        assert tripped is None
-
-
-@pytest.mark.anyio
-async def test_deactivation_event_is_staged_before_fire_transaction_commits(
-    monkeypatch,
-):
-    engine = _engine_with_mocks()
-    service = ScheduleStartService(engine)
-    schedule = SimpleNamespace(
-        id=uuid4(),
-        user_id=uuid4(),
-        schedule_type=ScheduleType.TIME,
-    )
-    schedule_repo = Mock()
-    schedule_repo.record_fire = AsyncMock()
-    run_repo = Mock()
-    monkeypatch.setattr(service, "_apply_failure_policy", AsyncMock(return_value=3))
-
-    await service._record_fire(
-        schedule_repo,
-        run_repo,
-        schedule,
-        status=ScheduleFireStatus.ERROR,
-        error="target dispatch failed",
-        run_status=ScheduleRunStatus.DEAD_LETTERED,
-    )
-
-    staged = engine.uow.collect_events.call_args.args[0]
-    assert len(staged) == 1
-    assert isinstance(staged[0], ScheduleDeactivated)
-    assert staged[0].schedule_id == schedule.id
-    assert staged[0].consecutive_failures == 3
-    engine.uow.commit.assert_awaited_once()
+    assert service._record_fire.await_args.kwargs["dispatch_dead_lettered"] is False

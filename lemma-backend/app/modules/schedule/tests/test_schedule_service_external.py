@@ -1,5 +1,5 @@
 import pytest
-from unittest.mock import AsyncMock, Mock
+from unittest.mock import AsyncMock
 from types import SimpleNamespace
 from uuid import uuid4
 
@@ -7,6 +7,7 @@ from app.modules.schedule.domain.schedule import (
     ScheduleCreateEntity,
     ScheduleEntity,
     ScheduleType,
+    ScheduleUpdateEntity,
 )
 from app.modules.schedule.api.schemas.schedule_schemas import CreateScheduleRequest
 from app.modules.schedule.domain.errors import (
@@ -18,49 +19,43 @@ from app.modules.schedule.services.schedule_service import ScheduleService
 
 
 @pytest.mark.asyncio
-async def test_retry_preserves_schedule_run_user_id():
-    uow = SimpleNamespace(session=AsyncMock(), collect_events=Mock())
+@pytest.mark.parametrize("was_active, should_reset", [(False, True), (True, False)])
+async def test_only_explicit_reactivation_resets_failure_streak(
+    was_active,
+    should_reset,
+):
+    schedule_repo = AsyncMock()
     service = ScheduleService(
-        uow=uow,
-        schedule_repository=AsyncMock(),
+        uow=AsyncMock(),
+        schedule_repository=schedule_repo,
         scheduler_service=AsyncMock(),
         external_schedule_writer=AsyncMock(),
-        target_resolver=AsyncMock(),
     )
     schedule = ScheduleEntity(
         id=uuid4(),
         user_id=uuid4(),
-        pod_id=uuid4(),
         schedule_type=ScheduleType.DATASTORE,
-        workflow_id=uuid4(),
-        config={"table_name": "rows", "operations": ["INSERT"]},
+        config={"table_name": "records", "operations": ["INSERT"]},
+        is_active=was_active,
+        consecutive_failures=3,
     )
-    run_user_id = uuid4()
-    schedule_run = SimpleNamespace(
-        id=uuid4(),
-        user_id=run_user_id,
-        payload={"id": "row-1"},
-        metadata={},
-        llm_output={},
-        source_occurred_at=None,
-        source_event_id="datastore:event-1",
+    schedule_repo.get.return_value = schedule
+    schedule_repo.update.return_value = schedule.model_copy(
+        update={"is_active": True}
     )
-    service.get_schedule = AsyncMock(return_value=schedule)
-    service.run_repository = SimpleNamespace(
-        reset_for_retry=AsyncMock(return_value=schedule_run)
-    )
-    ctx = AsyncMock()
-
-    result = await service.retry_schedule_run(
-        pod_id=schedule.pod_id,
-        schedule_id=schedule.id,
-        run_id=schedule_run.id,
-        ctx=ctx,
+    service._resolve_update_target = AsyncMock(  # type: ignore[method-assign]
+        return_value={"is_active": True}
     )
 
-    assert result is schedule_run
-    event = uow.collect_events.call_args.args[0][0]
-    assert event.user_id == run_user_id
+    await service.update_schedule(
+        schedule.id,
+        ScheduleUpdateEntity(is_active=True),
+    )
+
+    if should_reset:
+        schedule_repo.reset_consecutive_failures.assert_awaited_once_with(schedule.id)
+    else:
+        schedule_repo.reset_consecutive_failures.assert_not_awaited()
 
 
 @pytest.mark.asyncio

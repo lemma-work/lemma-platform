@@ -35,13 +35,14 @@ class ScheduleRunResponse:
         source_event_id (str):
         status (ScheduleRunStatus):
         target_kind (str):
+        target_run_id (str):
         updated_at (datetime.datetime):
+        user_id (UUID):
         completed_at (datetime.datetime | None | Unset):
         error_code (None | str | Unset):
         error_type (None | str | Unset):
         source_occurred_at (datetime.datetime | None | Unset):
         started_at (datetime.datetime | None | Unset):
-        target_run_id (None | str | Unset):
     """
 
     attempts: int
@@ -54,13 +55,14 @@ class ScheduleRunResponse:
     source_event_id: str
     status: ScheduleRunStatus
     target_kind: str
+    target_run_id: str
     updated_at: datetime.datetime
+    user_id: UUID
     completed_at: datetime.datetime | None | Unset = UNSET
     error_code: None | str | Unset = UNSET
     error_type: None | str | Unset = UNSET
     source_occurred_at: datetime.datetime | None | Unset = UNSET
     started_at: datetime.datetime | None | Unset = UNSET
-    target_run_id: None | str | Unset = UNSET
     additional_properties: dict[str, Any] = _attrs_field(init=False, factory=dict)
 
     def to_dict(self) -> dict[str, Any]:
@@ -84,7 +86,11 @@ class ScheduleRunResponse:
 
         target_kind = self.target_kind
 
+        target_run_id = self.target_run_id
+
         updated_at = self.updated_at.isoformat()
+
+        user_id = str(self.user_id)
 
         completed_at: None | str | Unset
         if isinstance(self.completed_at, Unset):
@@ -122,12 +128,6 @@ class ScheduleRunResponse:
         else:
             started_at = self.started_at
 
-        target_run_id: None | str | Unset
-        if isinstance(self.target_run_id, Unset):
-            target_run_id = UNSET
-        else:
-            target_run_id = self.target_run_id
-
         field_dict: dict[str, Any] = {}
         field_dict.update(self.additional_properties)
         field_dict.update(
@@ -142,7 +142,9 @@ class ScheduleRunResponse:
                 "source_event_id": source_event_id,
                 "status": status,
                 "target_kind": target_kind,
+                "target_run_id": target_run_id,
                 "updated_at": updated_at,
+                "user_id": user_id,
             }
         )
         if completed_at is not UNSET:
@@ -155,8 +157,6 @@ class ScheduleRunResponse:
             field_dict["source_occurred_at"] = source_occurred_at
         if started_at is not UNSET:
             field_dict["started_at"] = started_at
-        if target_run_id is not UNSET:
-            field_dict["target_run_id"] = target_run_id
 
         return field_dict
 
@@ -189,7 +189,11 @@ class ScheduleRunResponse:
 
         target_kind = d.pop("target_kind")
 
+        target_run_id = d.pop("target_run_id")
+
         updated_at = isoparse(d.pop("updated_at"))
+
+        user_id = UUID(d.pop("user_id"))
 
         def _parse_completed_at(data: object) -> datetime.datetime | None | Unset:
             if data is None:
@@ -262,15 +266,6 @@ class ScheduleRunResponse:
 
         started_at = _parse_started_at(d.pop("started_at", UNSET))
 
-        def _parse_target_run_id(data: object) -> None | str | Unset:
-            if data is None:
-                return data
-            if isinstance(data, Unset):
-                return data
-            return cast(None | str | Unset, data)
-
-        target_run_id = _parse_target_run_id(d.pop("target_run_id", UNSET))
-
         schedule_run_response = cls(
             attempts=attempts,
             created_at=created_at,
@@ -282,13 +277,14 @@ class ScheduleRunResponse:
             source_event_id=source_event_id,
             status=status,
             target_kind=target_kind,
+            target_run_id=target_run_id,
             updated_at=updated_at,
+            user_id=user_id,
             completed_at=completed_at,
             error_code=error_code,
             error_type=error_type,
             source_occurred_at=source_occurred_at,
             started_at=started_at,
-            target_run_id=target_run_id,
         )
 
         schedule_run_response.additional_properties = d

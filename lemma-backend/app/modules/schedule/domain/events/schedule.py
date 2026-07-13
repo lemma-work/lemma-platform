@@ -73,5 +73,6 @@ class ScheduleEvents:
     CONSUMER_GROUPS = (
         "workflow-schedule-events",
         "schedule-notifications",
+        "schedule-runtime-lifecycle",
         "surface-schedule-events",
     )

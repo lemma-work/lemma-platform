@@ -88,6 +88,9 @@ class ScheduleRunStatus(str, Enum):
     RECEIVED = "RECEIVED"
     PROCESSING = "PROCESSING"
     DISPATCHED = "DISPATCHED"
+    COMPLETED = "COMPLETED"
+    TARGET_FAILED = "TARGET_FAILED"
+    CANCELLED = "CANCELLED"
     FILTERED = "FILTERED"
     FAILED = "FAILED"
     DEAD_LETTERED = "DEAD_LETTERED"
@@ -100,7 +103,7 @@ class ScheduleRunEntity(Entity):
     status: ScheduleRunStatus
     attempts: int = 0
     target_kind: str
-    target_run_id: str | None = None
+    target_run_id: str
     payload: dict[str, Any] = Field(default_factory=dict)
     metadata: dict[str, Any] = Field(default_factory=dict)
     llm_output: dict[str, Any] = Field(default_factory=dict)

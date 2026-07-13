@@ -1,5 +1,7 @@
 import asyncio
+import json
 from datetime import datetime, timedelta, timezone
+from pathlib import Path
 from uuid import UUID, uuid4
 
 import pytest
@@ -7,6 +9,7 @@ from httpx import AsyncClient
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core.infrastructure.events.models import DomainEventOutbox
 from app.modules.connectors.infrastructure.models.connector import Connector
 from app.modules.connectors.infrastructure.models.connector_trigger import (
     ConnectorTrigger,
@@ -270,6 +273,53 @@ async def _wait_for_agent_conversation(
             return items[0]
         await asyncio.sleep(SCHEDULE_E2E_POLL_SECONDS)
     pytest.fail(f"Timed out waiting for scheduled agent conversation {agent_name}")
+
+
+async def _wait_for_schedule_runs(
+    client: AsyncClient,
+    pod_id: str,
+    schedule_id: str,
+    *,
+    count: int,
+    status: str,
+) -> list[dict]:
+    deadline = asyncio.get_running_loop().time() + SCHEDULE_E2E_TIMEOUT_SECONDS
+    while asyncio.get_running_loop().time() < deadline:
+        response = await client.get(
+            f"/pods/{pod_id}/schedules/{schedule_id}/runs"
+        )
+        assert response.status_code == 200, response.text
+        items = response.json()["items"]
+        if len(items) == count and all(item["status"] == status for item in items):
+            return items
+        await asyncio.sleep(SCHEDULE_E2E_POLL_SECONDS)
+    pytest.fail(
+        f"Timed out waiting for {count} schedule runs with status {status}"
+    )
+
+
+async def _wait_for_schedule_run_status_counts(
+    client: AsyncClient,
+    pod_id: str,
+    schedule_id: str,
+    expected: dict[str, int],
+) -> list[dict]:
+    deadline = asyncio.get_running_loop().time() + SCHEDULE_E2E_TIMEOUT_SECONDS
+    expected_total = sum(expected.values())
+    while asyncio.get_running_loop().time() < deadline:
+        response = await client.get(
+            f"/pods/{pod_id}/schedules/{schedule_id}/runs"
+        )
+        assert response.status_code == 200, response.text
+        items = response.json()["items"]
+        actual = {
+            status: sum(item["status"] == status for item in items)
+            for status in expected
+        }
+        if len(items) == expected_total and actual == expected:
+            return items
+        await asyncio.sleep(SCHEDULE_E2E_POLL_SECONDS)
+    pytest.fail(f"Timed out waiting for schedule run statuses {expected}")
 
 
 def _composio_log_payload() -> dict:
@@ -1128,6 +1178,256 @@ async def test_rls_datastore_schedule_run_and_workflow_belong_to_row_owner(
 
 
 @pytest.mark.asyncio
+async def test_five_row_owner_workflow_failures_deactivate_schedule_owner_schedule(
+    authenticated_client: AsyncClient,
+    async_client: AsyncClient,
+    fixed_test_user,
+    fixed_test_org,
+    db_manager,
+    e2e_settings,
+    worker,
+):
+    _ = worker
+    pod_id = await _create_pod(authenticated_client, fixed_test_org["id"])
+    await _create_datastore_table(authenticated_client, pod_id)
+    workflow = await _create_workflow(
+        authenticated_client,
+        pod_id,
+        start={
+            "type": "DATASTORE_EVENT",
+            "config": {"table_name": "schedule_records", "operations": ["INSERT"]},
+        },
+        name_prefix="breaker-row-owner-workflow",
+        nodes=[
+            {
+                "id": "call_missing_agent",
+                "type": "AGENT",
+                "label": "Fail deterministically",
+                "config": {
+                    "agent_name": "does-not-exist",
+                    "input_mapping": {},
+                },
+            },
+            {"id": "end", "type": "END", "label": "Done"},
+        ],
+        edges=[
+            {
+                "id": "missing-agent-end",
+                "source": "call_missing_agent",
+                "target": "end",
+            }
+        ],
+    )
+    schedule = await _create_schedule(
+        authenticated_client,
+        pod_id,
+        schedule_type=ScheduleType.DATASTORE.value,
+        workflow_name=workflow["name"],
+        config={"table_name": "schedule_records", "operations": ["INSERT"]},
+    )
+    row_owner = await signup_user(async_client, "schedule-breaker-row-owner")
+    org_member = await invite_org_member(
+        authenticated_client,
+        async_client,
+        org_id=fixed_test_org["id"],
+        user=row_owner,
+    )
+    await add_pod_member(
+        authenticated_client,
+        pod_id=pod_id,
+        organization_member_id=org_member["id"],
+        role="POD_USER",
+        roles=["POD_USER"],
+    )
+
+    for index in range(5):
+        record = await async_client.post(
+            f"/pods/{pod_id}/datastore/tables/schedule_records/records",
+            headers=auth_headers(row_owner),
+            json={
+                "data": {
+                    "source": f"breaker-row-{index}",
+                    "value": "fail target workflow",
+                }
+            },
+        )
+        assert record.status_code == 201, record.text
+        await _wait_for_schedule_runs(
+            authenticated_client,
+            pod_id,
+            schedule["id"],
+            count=index + 1,
+            status="TARGET_FAILED",
+        )
+
+    async with db_manager.session_factory() as session:
+        persisted = await session.get(Schedule, UUID(schedule["id"]))
+        assert persisted is not None
+        assert persisted.is_active is False
+        assert persisted.consecutive_failures == 5
+
+        events = (
+            await session.scalars(
+                select(DomainEventOutbox).where(
+                    DomainEventOutbox.event_type == "schedule.deactivated"
+                )
+            )
+        ).all()
+        matching_events = [
+            event
+            for event in events
+            if event.payload.get("schedule_id") == schedule["id"]
+        ]
+        assert len(matching_events) == 1
+        assert matching_events[0].payload["user_id"] == schedule["user_id"]
+
+    email_deadline = (
+        asyncio.get_running_loop().time() + SCHEDULE_E2E_TIMEOUT_SECONDS
+    )
+    matching_emails: list[dict] = []
+    while asyncio.get_running_loop().time() < email_deadline:
+        matching_emails = []
+        for path in Path(e2e_settings.email_output_dir).glob("*.json"):
+            message = json.loads(path.read_text(encoding="utf-8"))
+            if (
+                message.get("to_email") == fixed_test_user["email"]
+                and message.get("subject")
+                == "A scheduled automation was paused after repeated failures"
+            ):
+                matching_emails.append(message)
+        if matching_emails:
+            break
+        await asyncio.sleep(SCHEDULE_E2E_POLL_SECONDS)
+    assert len(matching_emails) == 1
+
+    workflow_runs = await _workflow_runs(
+        authenticated_client, pod_id, workflow["name"]
+    )
+    assert len(workflow_runs) == 5
+    assert {run["status"] for run in workflow_runs} == {"FAILED"}
+    assert {run["user_id"] for run in workflow_runs} == {row_owner["id"]}
+
+    sixth = await async_client.post(
+        f"/pods/{pod_id}/datastore/tables/schedule_records/records",
+        headers=auth_headers(row_owner),
+        json={
+            "data": {
+                "source": "breaker-row-sixth",
+                "value": "must not launch",
+            }
+        },
+    )
+    assert sixth.status_code == 201, sixth.text
+    await asyncio.sleep(2)
+
+    schedule_runs = await authenticated_client.get(
+        f"/pods/{pod_id}/schedules/{schedule['id']}/runs"
+    )
+    assert schedule_runs.status_code == 200, schedule_runs.text
+    assert len(schedule_runs.json()["items"]) == 5
+    assert len(await _workflow_runs(authenticated_client, pod_id, workflow["name"])) == 5
+
+
+@pytest.mark.asyncio
+async def test_successful_target_resets_partial_failure_streak(
+    authenticated_client: AsyncClient,
+    fixed_test_org,
+    db_manager,
+    worker,
+):
+    _ = worker
+    pod_id = await _create_pod(authenticated_client, fixed_test_org["id"])
+    await _create_datastore_table(authenticated_client, pod_id)
+    start = {
+        "type": "DATASTORE_EVENT",
+        "config": {"table_name": "schedule_records", "operations": ["INSERT"]},
+    }
+    workflow = await _create_workflow(
+        authenticated_client,
+        pod_id,
+        start=start,
+        name_prefix="breaker-reset-workflow",
+        nodes=[
+            {
+                "id": "call_missing_agent",
+                "type": "AGENT",
+                "config": {
+                    "agent_name": "does-not-exist",
+                    "input_mapping": {},
+                },
+            },
+            {"id": "end", "type": "END"},
+        ],
+        edges=[
+            {
+                "id": "missing-agent-end",
+                "source": "call_missing_agent",
+                "target": "end",
+            }
+        ],
+    )
+    schedule = await _create_schedule(
+        authenticated_client,
+        pod_id,
+        schedule_type=ScheduleType.DATASTORE.value,
+        workflow_name=workflow["name"],
+        config={"table_name": "schedule_records", "operations": ["INSERT"]},
+    )
+
+    for index in range(2):
+        record = await authenticated_client.post(
+            f"/pods/{pod_id}/datastore/tables/schedule_records/records",
+            json={
+                "data": {
+                    "source": f"partial-failure-{index}",
+                    "value": "fail target workflow",
+                }
+            },
+        )
+        assert record.status_code == 201, record.text
+        await _wait_for_schedule_runs(
+            authenticated_client,
+            pod_id,
+            schedule["id"],
+            count=index + 1,
+            status="TARGET_FAILED",
+        )
+
+    graph = await authenticated_client.put(
+        f"/pods/{pod_id}/workflows/{workflow['name']}/graph",
+        json={
+            "start": start,
+            "nodes": [{"id": "end", "type": "END", "label": "Done"}],
+            "edges": [],
+        },
+    )
+    assert graph.status_code == 200, graph.text
+
+    success = await authenticated_client.post(
+        f"/pods/{pod_id}/datastore/tables/schedule_records/records",
+        json={
+            "data": {
+                "source": "breaker-reset-success",
+                "value": "complete target workflow",
+            }
+        },
+    )
+    assert success.status_code == 201, success.text
+    await _wait_for_schedule_run_status_counts(
+        authenticated_client,
+        pod_id,
+        schedule["id"],
+        {"TARGET_FAILED": 2, "COMPLETED": 1},
+    )
+
+    async with db_manager.session_factory() as session:
+        persisted = await session.get(Schedule, UUID(schedule["id"]))
+        assert persisted is not None
+        assert persisted.is_active is True
+        assert persisted.consecutive_failures == 0
+
+
+@pytest.mark.asyncio
 async def test_schedule_crud_uses_new_pod_scoped_routes(
     authenticated_client: AsyncClient,
     fixed_test_org,
@@ -1374,6 +1674,7 @@ async def test_matcher_skips_invalid_or_empty_operations(
     from app.modules.schedule.repositories.schedule_repository import (
         ScheduleRepository as ScheduleRepositoryImpl,
     )
+    from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
 
     pod_id = await _create_pod(authenticated_client, fixed_test_org["id"])
     workflow = await _create_workflow(
@@ -1392,7 +1693,7 @@ async def test_matcher_skips_invalid_or_empty_operations(
         workflow_name=workflow["name"],
         config={"table_name": "corrupt_records", "operations": ["INSERT"]},
     )
-    repo = ScheduleRepositoryImpl(session=db_session)
+    repo = ScheduleRepositoryImpl(uow=SqlAlchemyUnitOfWork(db_session))
 
     # Sanity: a canonical row matches.
     matched = await repo.find_by_pod_table_event(

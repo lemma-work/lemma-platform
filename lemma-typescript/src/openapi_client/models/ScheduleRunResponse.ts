@@ -19,6 +19,7 @@ export type ScheduleRunResponse = {
     started_at?: (string | null);
     status: ScheduleRunStatus;
     target_kind: string;
-    target_run_id?: (string | null);
+    target_run_id: string;
     updated_at: string;
+    user_id: string;
 };

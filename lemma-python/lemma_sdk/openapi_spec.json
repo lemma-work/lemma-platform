@@ -4902,6 +4902,17 @@
             "title": "Allowed Actions",
             "type": "array"
           },
+          "content_sha256": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Content Sha256"
+          },
           "created_at": {
             "format": "date-time",
             "title": "Created At",
@@ -4997,6 +5008,11 @@
             "format": "uuid",
             "title": "Pod Id",
             "type": "string"
+          },
+          "processing_attempts": {
+            "default": 0,
+            "title": "Processing Attempts",
+            "type": "integer"
           },
           "search_enabled": {
             "default": true,
@@ -7639,6 +7655,17 @@
           "name": {
             "title": "Name",
             "type": "string"
+          },
+          "slug": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Slug"
           }
         },
         "required": [
@@ -7684,6 +7711,7 @@
         "description": "Organization invitation request schema.",
         "properties": {
           "email": {
+            "format": "email",
             "title": "Email",
             "type": "string"
           },
@@ -7753,6 +7781,7 @@
             "type": "string"
           },
           "email": {
+            "format": "email",
             "title": "Email",
             "type": "string"
           },
@@ -10203,29 +10232,29 @@
             "type": "string"
           },
           "target_run_id": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Target Run Id"
+            "title": "Target Run Id",
+            "type": "string"
           },
           "updated_at": {
             "format": "date-time",
             "title": "Updated At",
+            "type": "string"
+          },
+          "user_id": {
+            "format": "uuid",
+            "title": "User Id",
             "type": "string"
           }
         },
         "required": [
           "id",
           "schedule_id",
+          "user_id",
           "source_event_id",
           "status",
           "attempts",
           "target_kind",
+          "target_run_id",
           "payload",
           "metadata",
           "llm_output",
@@ -10240,6 +10269,9 @@
           "RECEIVED",
           "PROCESSING",
           "DISPATCHED",
+          "COMPLETED",
+          "TARGET_FAILED",
+          "CANCELLED",
           "FILTERED",
           "FAILED",
           "DEAD_LETTERED"
@@ -12623,6 +12655,7 @@
             "title": "Date Of Birth"
           },
           "email": {
+            "format": "email",
             "title": "Email",
             "type": "string"
           },
@@ -14654,7 +14687,7 @@
   "info": {
     "description": "Authentication API with JWT, user management, and OAuth support",
     "title": "Lemma Backend",
-    "version": "4.0.1"
+    "version": "4.0.2"
   },
   "openapi": "3.1.0",
   "paths": {
@@ -23861,7 +23894,7 @@
             "name": "email",
             "required": true,
             "schema": {
-              "minLength": 3,
+              "format": "email",
               "title": "Email",
               "type": "string"
             }
@@ -25345,79 +25378,6 @@
           "resource": "schedule.run",
           "result": "collection",
           "verb": "list"
-        }
-      }
-    },
-    "/pods/{pod_id}/schedules/{schedule_id}/runs/{run_id}/retry": {
-      "post": {
-        "operationId": "schedule.run.retry",
-        "parameters": [
-          {
-            "in": "path",
-            "name": "pod_id",
-            "required": true,
-            "schema": {
-              "format": "uuid",
-              "title": "Pod Id",
-              "type": "string"
-            }
-          },
-          {
-            "in": "path",
-            "name": "schedule_id",
-            "required": true,
-            "schema": {
-              "format": "uuid",
-              "title": "Schedule Id",
-              "type": "string"
-            }
-          },
-          {
-            "in": "path",
-            "name": "run_id",
-            "required": true,
-            "schema": {
-              "format": "uuid",
-              "title": "Run Id",
-              "type": "string"
-            }
-          }
-        ],
-        "responses": {
-          "202": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ScheduleRunResponse"
-                }
-              }
-            },
-            "description": "Successful Response"
-          },
-          "422": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorResponse"
-                }
-              }
-            },
-            "description": "Validation Error"
-          }
-        },
-        "summary": "Retry Schedule Run",
-        "tags": [
-          "Schedules"
-        ],
-        "x-lemma": {
-          "invalidates": [
-            "schedule.run"
-          ],
-          "kind": "mutation",
-          "paginates": false,
-          "resource": "schedule.run",
-          "result": "entity",
-          "verb": "retry"
         }
       }
     },

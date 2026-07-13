@@ -9795,7 +9795,7 @@ var LemmaClient = (() => {
   }
 
   // src/version.ts
-  var SDK_VERSION = "0.6.2";
+  var SDK_VERSION = "0.6.3";
   var CLIENT_HEADER_NAME = "X-Lemma-Client";
   var CLIENT_HEADER_VALUE = `lemma-sdk-ts/${SDK_VERSION}`;
 
@@ -10197,7 +10197,7 @@ var LemmaClient = (() => {
   // src/openapi_client/core/OpenAPI.ts
   var OpenAPI = {
     BASE: "",
-    VERSION: "4.0.1",
+    VERSION: "4.0.2",
     WITH_CREDENTIALS: false,
     CREDENTIALS: "include",
     TOKEN: void 0,
@@ -14972,28 +14972,6 @@ var LemmaClient = (() => {
         },
         query: {
           "limit": limit
-        },
-        errors: {
-          422: `Validation Error`
-        }
-      });
-    }
-    /**
-     * Retry Schedule Run
-     * @param podId
-     * @param scheduleId
-     * @param runId
-     * @returns ScheduleRunResponse Successful Response
-     * @throws ApiError
-     */
-    static scheduleRunRetry(podId, scheduleId, runId) {
-      return request(OpenAPI, {
-        method: "POST",
-        url: "/pods/{pod_id}/schedules/{schedule_id}/runs/{run_id}/retry",
-        path: {
-          "pod_id": podId,
-          "schedule_id": scheduleId,
-          "run_id": runId
         },
         errors: {
           422: `Validation Error`

@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
-from uuid import UUID
+from uuid import UUID, uuid7
 
 from sqlalchemy import select, update
 from sqlalchemy.dialects.postgresql import insert
@@ -46,6 +46,7 @@ class ScheduleRunRepository:
                 status=ScheduleRunStatus.PROCESSING.value,
                 attempts=1,
                 target_kind=target_kind,
+                target_run_id=str(uuid7()),
                 payload=payload,
                 fire_metadata=metadata or {},
                 llm_output=llm_output or {},
@@ -74,7 +75,11 @@ class ScheduleRunRepository:
             return None
         if model.status in {
             ScheduleRunStatus.DISPATCHED.value,
+            ScheduleRunStatus.COMPLETED.value,
+            ScheduleRunStatus.TARGET_FAILED.value,
+            ScheduleRunStatus.CANCELLED.value,
             ScheduleRunStatus.FILTERED.value,
+            ScheduleRunStatus.DEAD_LETTERED.value,
         }:
             return None
         if (
@@ -87,7 +92,7 @@ class ScheduleRunRepository:
             model.status = ScheduleRunStatus.DEAD_LETTERED.value
             model.completed_at = now
             await self.session.flush()
-            return None
+            return model.to_entity()
 
         model.status = ScheduleRunStatus.PROCESSING.value
         model.attempts += 1
@@ -98,17 +103,39 @@ class ScheduleRunRepository:
         await self.session.flush()
         return model.to_entity()
 
-    async def mark_dispatched(self, run_id: UUID, *, target_run_id: str | None) -> None:
-        await self._mark(
-            run_id,
-            status=ScheduleRunStatus.DISPATCHED,
-            target_run_id=target_run_id,
+    async def mark_dispatched(self, run_id: UUID) -> bool:
+        """Mark launch complete unless a synchronous target outcome won the race."""
+        changed = await self.session.scalar(
+            update(ScheduleRun)
+            .where(
+                ScheduleRun.id == run_id,
+                ScheduleRun.status == ScheduleRunStatus.PROCESSING.value,
+            )
+            .values(
+                status=ScheduleRunStatus.DISPATCHED.value,
+                error_type=None,
+                error_code=None,
+                completed_at=None,
+            )
+            .returning(ScheduleRun.id)
         )
+        return changed is not None
 
     async def mark_failed(self, run_id: UUID, exc: Exception) -> ScheduleRunStatus:
         model = await self.session.get(ScheduleRun, run_id, with_for_update=True)
         if model is None:
             raise LookupError(f"Schedule run {run_id} no longer exists")
+        if model.status in {
+            ScheduleRunStatus.COMPLETED.value,
+            ScheduleRunStatus.TARGET_FAILED.value,
+            ScheduleRunStatus.CANCELLED.value,
+            ScheduleRunStatus.DEAD_LETTERED.value,
+        }:
+            return ScheduleRunStatus(model.status)
+        if model.status != ScheduleRunStatus.PROCESSING.value:
+            raise RuntimeError(
+                f"Cannot fail schedule run {run_id} from {model.status}"
+            )
         status = (
             ScheduleRunStatus.DEAD_LETTERED
             if model.attempts >= self.MAX_ATTEMPTS
@@ -121,50 +148,43 @@ class ScheduleRunRepository:
         await self.session.flush()
         return status
 
-    async def consecutive_terminal_failures(self, schedule_id: UUID) -> int:
-        """Count distinct dead-lettered runs since the latest dispatch."""
-        statuses = (
-            await self.session.scalars(
-                select(ScheduleRun.status)
-                .where(
-                    ScheduleRun.schedule_id == schedule_id,
-                    ScheduleRun.status.in_(
-                        (
-                            ScheduleRunStatus.DISPATCHED.value,
-                            ScheduleRunStatus.DEAD_LETTERED.value,
-                        )
-                    ),
-                )
-                .order_by(ScheduleRun.created_at.desc(), ScheduleRun.id.desc())
-            )
-        ).all()
-        failures = 0
-        for status in statuses:
-            if status == ScheduleRunStatus.DISPATCHED.value:
-                break
-            failures += 1
-        return failures
-
-    async def _mark(
+    async def transition_target_outcome(
         self,
-        run_id: UUID,
         *,
+        target_kind: str,
+        target_run_id: str,
         status: ScheduleRunStatus,
-        target_run_id: str | None = None,
+        completed_at: datetime | None,
         error_type: str | None = None,
-        error_code: str | None = None,
-    ) -> None:
-        await self.session.execute(
-            update(ScheduleRun)
-            .where(ScheduleRun.id == run_id)
-            .values(
-                status=status.value,
-                target_run_id=target_run_id,
-                error_type=error_type,
-                error_code=error_code,
-                completed_at=datetime.now(timezone.utc),
+    ) -> ScheduleRunEntity | None:
+        """Apply one target outcome, using the state transition as its idempotency gate."""
+        if status not in {
+            ScheduleRunStatus.COMPLETED,
+            ScheduleRunStatus.TARGET_FAILED,
+            ScheduleRunStatus.CANCELLED,
+        }:
+            raise ValueError(f"Invalid target outcome status: {status.value}")
+
+        model = await self.session.scalar(
+            select(ScheduleRun)
+            .where(
+                ScheduleRun.target_kind == target_kind,
+                ScheduleRun.target_run_id == target_run_id,
             )
+            .with_for_update()
         )
+        if model is None or model.status not in {
+            ScheduleRunStatus.PROCESSING.value,
+            ScheduleRunStatus.DISPATCHED.value,
+        }:
+            return None
+
+        model.status = status.value
+        model.error_type = error_type
+        model.error_code = None
+        model.completed_at = completed_at or datetime.now(timezone.utc)
+        await self.session.flush()
+        return model.to_entity()
 
     async def list_for_schedule(
         self, schedule_id: UUID, *, limit: int = 100
@@ -176,24 +196,3 @@ class ScheduleRunRepository:
             .limit(limit)
         )
         return [row.to_entity() for row in rows.all()]
-
-    async def reset_for_retry(
-        self, *, schedule_id: UUID, run_id: UUID
-    ) -> ScheduleRunEntity | None:
-        model = await self.session.scalar(
-            select(ScheduleRun)
-            .where(ScheduleRun.id == run_id, ScheduleRun.schedule_id == schedule_id)
-            .with_for_update()
-        )
-        if model is None or model.status not in {
-            ScheduleRunStatus.FAILED.value,
-            ScheduleRunStatus.DEAD_LETTERED.value,
-        }:
-            return None
-        model.status = ScheduleRunStatus.RECEIVED.value
-        model.attempts = 0
-        model.completed_at = None
-        model.error_type = None
-        model.error_code = None
-        await self.session.flush()
-        return model.to_entity()

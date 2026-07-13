@@ -33,7 +33,7 @@ class ScheduleRun(UUIDAuditBase):
     )
     attempts: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     target_kind: Mapped[str] = mapped_column(String(32), nullable=False)
-    target_run_id: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    target_run_id: Mapped[str] = mapped_column(String(255), nullable=False)
     payload: Mapped[dict] = mapped_column(JSONB, nullable=False, default=dict)
     fire_metadata: Mapped[dict] = mapped_column("metadata", JSONB, nullable=False, default=dict)
     llm_output: Mapped[dict] = mapped_column(JSONB, nullable=False, default=dict)
@@ -56,11 +56,10 @@ class ScheduleRun(UUIDAuditBase):
             text("id DESC"),
         ),
         Index(
-            "ix_schedule_runs_retryable_recovery",
-            "status",
-            "updated_at",
-            "schedule_id",
-            postgresql_where=text("status IN ('RECEIVED', 'PROCESSING', 'FAILED')"),
+            "uq_schedule_runs_target",
+            "target_kind",
+            "target_run_id",
+            unique=True,
         ),
     )
 

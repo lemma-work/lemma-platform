@@ -111,7 +111,7 @@ def test_schedule_run_contract_has_no_new_fire_aliases() -> None:
     schemas = spec["components"]["schemas"]
 
     assert "/pods/{pod_id}/schedules/{schedule_id}/runs" in paths
-    assert "/pods/{pod_id}/schedules/{schedule_id}/runs/{run_id}/retry" in paths
+    assert "/pods/{pod_id}/schedules/{schedule_id}/runs/{run_id}/retry" not in paths
     assert not any("/fires" in path for path in paths)
     assert "ScheduleRunResponse" in schemas
     assert "ScheduleRunListResponse" in schemas
@@ -119,10 +119,16 @@ def test_schedule_run_contract_has_no_new_fire_aliases() -> None:
         "RECEIVED",
         "PROCESSING",
         "DISPATCHED",
+        "COMPLETED",
+        "TARGET_FAILED",
+        "CANCELLED",
         "FILTERED",
         "FAILED",
         "DEAD_LETTERED",
     ]
+    assert {"user_id", "target_run_id"} <= set(
+        schemas["ScheduleRunResponse"]["required"]
+    )
     assert "ScheduleFireStatus" in schemas
     assert "ScheduleFireResponse" not in schemas
     assert "ScheduleFireListResponse" not in schemas

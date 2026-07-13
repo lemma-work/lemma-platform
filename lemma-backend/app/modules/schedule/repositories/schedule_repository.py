@@ -114,6 +114,36 @@ class ScheduleRepository(ScheduleRepositoryInterface):
         row = result.one_or_none()
         return self._to_entity_with_allowed_actions(row[0], row[1]) if row else None
 
+    async def get_for_update(self, schedule_id: UUID) -> ScheduleEntity | None:
+        """Lock a schedule while applying a target outcome and breaker update."""
+        model = await self.session.scalar(
+            select(Schedule).where(Schedule.id == schedule_id).with_for_update()
+        )
+        return model.to_entity() if model is not None else None
+
+    async def deactivate_if_active(self, schedule_id: UUID) -> bool:
+        """Deactivate once; callers hold the schedule row lock."""
+        changed = await self.session.scalar(
+            update(Schedule)
+            .where(Schedule.id == schedule_id, Schedule.is_active.is_(True))
+            .values(is_active=False)
+            .returning(Schedule.id)
+        )
+        return changed is not None
+
+    async def lock_breaker_candidates(self, threshold: int) -> list[ScheduleEntity]:
+        """Lock active schedules whose persisted failure streak already tripped."""
+        rows = await self.session.scalars(
+            select(Schedule)
+            .where(
+                Schedule.is_active.is_(True),
+                Schedule.consecutive_failures >= threshold,
+            )
+            .order_by(Schedule.id)
+            .with_for_update()
+        )
+        return [row.to_entity() for row in rows.all()]
+
     async def get_by_name(
         self,
         *,
@@ -436,12 +466,4 @@ class ScheduleRepository(ScheduleRepositoryInterface):
             update(Schedule)
             .where(Schedule.id == schedule_id)
             .values(consecutive_failures=0)
-        )
-
-    async def set_consecutive_failures(self, schedule_id: UUID, count: int) -> None:
-        """Set the streak derived from distinct terminal schedule runs."""
-        await self.session.execute(
-            update(Schedule)
-            .where(Schedule.id == schedule_id)
-            .values(consecutive_failures=max(0, count))
         )

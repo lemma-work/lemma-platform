@@ -159,7 +159,7 @@ class ScheduleRunResponse(BaseModel):
     status: ScheduleRunStatus
     attempts: int
     target_kind: str
-    target_run_id: str | None = None
+    target_run_id: str
     payload: dict
     metadata: dict
     llm_output: dict

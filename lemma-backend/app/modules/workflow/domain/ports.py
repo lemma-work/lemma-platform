@@ -136,6 +136,7 @@ class AgentPort(ABC):
         input_data: Dict[str, Any],
         pod_id: UUID,
         user_id: UUID,
+        conversation_id: UUID | None = None,
         workflow_run_id: UUID | None = None,
         source: str = "WORKFLOW_RUN",
         conversation_metadata: Dict[str, Any] | None = None,

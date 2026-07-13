@@ -23,7 +23,6 @@ from app.modules.schedule.domain.schedule import (
     ScheduleUpdateEntity,
     normalize_datastore_schedule_config,
 )
-from app.modules.schedule.domain.events.schedule import ScheduleFired
 from app.modules.schedule.repositories.schedule_run_repository import (
     ScheduleRunRepository,
 )
@@ -34,6 +33,14 @@ from app.modules.schedule.scheduler.api_client import SchedulerAPIClient
 from app.core.log.log import get_logger
 
 logger = get_logger(__name__)
+
+
+def _is_explicit_reactivation(existing, updated, update_data: dict) -> bool:
+    return bool(
+        updated
+        and update_data.get("is_active") is True
+        and not existing.is_active
+    )
 
 
 class ScheduleService:
@@ -81,44 +88,6 @@ class ScheduleService:
             return None
         await ctx.require(Permissions.SCHEDULE_READ, ResourceRef.schedule(pod_id, schedule_id))
         return await self.run_repository.list_for_schedule(schedule_id, limit=limit)
-
-    async def retry_schedule_run(
-        self,
-        *,
-        pod_id: UUID,
-        schedule_id: UUID,
-        run_id: UUID,
-        ctx: Context,
-    ):
-        schedule = await self.get_schedule(schedule_id, ctx=ctx)
-        if schedule is None or schedule.pod_id != pod_id:
-            return None
-        await ctx.require(
-            Permissions.SCHEDULE_UPDATE, ResourceRef.schedule(pod_id, schedule_id)
-        )
-        schedule_run = await self.run_repository.reset_for_retry(
-            schedule_id=schedule_id, run_id=run_id
-        )
-        if schedule_run is None:
-            return None
-        self.uow.collect_events(
-            [
-                ScheduleFired(
-                    schedule_id=schedule.id,
-                    user_id=schedule_run.user_id,
-                    schedule_type=schedule.schedule_type,
-                    pod_id=schedule.pod_id,
-                    account_id=schedule.account_id,
-                    payload=schedule_run.payload,
-                    metadata=schedule_run.metadata,
-                    llm_output=schedule_run.llm_output,
-                    scheduled_at=schedule_run.source_occurred_at,
-                    source_event_id=schedule_run.source_event_id,
-                    causation_id=schedule_run.id,
-                )
-            ]
-        )
-        return schedule_run
 
     async def create_schedule(
         self,
@@ -473,7 +442,7 @@ class ScheduleService:
                     )
         updated = await self.schedule_repository.update(schedule_id, **update_data)
 
-        if updated and update_data.get("is_active") is True:
+        if _is_explicit_reactivation(existing, updated, update_data):
             # Reactivating a schedule clears its circuit-breaker failure streak so
             # a re-enabled schedule starts fresh instead of tripping again on the
             # next failure.

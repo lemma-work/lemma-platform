@@ -10,15 +10,14 @@ from app.core.authorization.current import reset_current_context, set_current_co
 from app.core.authorization.factory import create_authorization_data_service
 from app.core.authorization.permissions import Permissions
 from app.modules.workflow.domain.context import TriggerContext
-from app.modules.workflow.domain.errors import WorkflowConflictError
 from app.modules.workflow.domain.start import WorkflowStartType
 from app.modules.workflow.domain.wait import WorkflowRunWaitType
 from app.modules.workflow.execution.engine import WorkflowEngine
 from app.core.log.log import get_logger
 from app.composition.workflow_schedule_runtime import (
     ScheduleRepository,
+    ScheduleRunOutcomeService,
     ScheduleRunRepository,
-    schedule_settings,
 )
 from app.modules.schedule.contracts import ScheduleFireStatus, ScheduleRunStatus
 
@@ -104,6 +103,16 @@ class ScheduleStartService:
                 source_event_id=schedule_event_id,
             )
             return
+        if schedule_run.status == ScheduleRunStatus.DEAD_LETTERED:
+            await self._record_fire(
+                schedule_repo,
+                schedule,
+                run_id=schedule_run.target_run_id,
+                status=ScheduleFireStatus.ERROR,
+                error="Target dispatch exhausted automatic retries",
+                dispatch_dead_lettered=True,
+            )
+            return
 
         trigger = self._build_trigger(
             schedule.schedule_type.value if schedule.schedule_type else None,
@@ -119,26 +128,25 @@ class ScheduleStartService:
                     user_id=schedule_run.user_id,
                     trigger=trigger,
                     schedule_event_id=schedule_event_id,
+                    target_run_id=schedule_run.target_run_id,
                 )
-                await run_repo.mark_dispatched(
-                    schedule_run.id, target_run_id=run_id
-                )
+                await run_repo.mark_dispatched(schedule_run.id)
                 await self._record_fire(
                     schedule_repo,
-                    run_repo,
                     schedule,
                     run_id=run_id,
-                    run_status=ScheduleRunStatus.DISPATCHED,
                 )
             except Exception as exc:
                 run_status = await run_repo.mark_failed(schedule_run.id, exc)
                 await self._record_fire(
                     schedule_repo,
-                    run_repo,
                     schedule,
+                    run_id=schedule_run.target_run_id,
                     status=ScheduleFireStatus.ERROR,
                     error=f"{type(exc).__name__}: target dispatch failed",
-                    run_status=run_status,
+                    dispatch_dead_lettered=(
+                        run_status == ScheduleRunStatus.DEAD_LETTERED
+                    ),
                 )
                 raise
             return
@@ -165,22 +173,16 @@ class ScheduleStartService:
                         input_data=trigger.to_context_value(),
                         pod_id=pod_id,
                         user_id=schedule_run.user_id,
+                        conversation_id=UUID(schedule_run.target_run_id),
                         source="SCHEDULE",
-                        conversation_metadata={"schedule_id": str(schedule_id)},
-                        origin_type="SCHEDULE_RUN",
-                        origin_id=schedule_run.id,
                     )
                 finally:
                     reset_current_context(ctx_token)
-                await run_repo.mark_dispatched(
-                    schedule_run.id, target_run_id=str(conversation_id)
-                )
+                await run_repo.mark_dispatched(schedule_run.id)
                 await self._record_fire(
                     schedule_repo,
-                    run_repo,
                     schedule,
                     run_id=str(conversation_id),
-                    run_status=ScheduleRunStatus.DISPATCHED,
                 )
             except Exception as exc:
                 run_status = await run_repo.mark_failed(schedule_run.id, exc)
@@ -191,11 +193,13 @@ class ScheduleStartService:
                 )
                 await self._record_fire(
                     schedule_repo,
-                    run_repo,
                     schedule,
+                    run_id=schedule_run.target_run_id,
                     status=ScheduleFireStatus.ERROR,
                     error=f"{type(exc).__name__}: target dispatch failed",
-                    run_status=run_status,
+                    dispatch_dead_lettered=(
+                        run_status == ScheduleRunStatus.DEAD_LETTERED
+                    ),
                 )
                 raise
 
@@ -261,42 +265,36 @@ class ScheduleStartService:
         user_id: UUID,
         trigger: TriggerContext,
         schedule_event_id: str,
-    ) -> str | None:
+        target_run_id: str,
+    ) -> str:
         workflow_schedule_event_id = f"{schedule.id}:{schedule_event_id}"
+        ctx = await self._build_user_context(
+            user_id=user_id,
+            pod_id=_schedule_pod_id(schedule),
+        )
+        ctx_token = set_current_context(ctx)
         try:
-            ctx = await self._build_user_context(
+            run = await self._engine.start_run(
+                run_id=UUID(target_run_id),
+                flow_id=schedule.workflow_id,
                 user_id=user_id,
-                pod_id=_schedule_pod_id(schedule),
+                trigger=trigger,
+                schedule_event_id=workflow_schedule_event_id,
+                ctx=ctx,
             )
-            ctx_token = set_current_context(ctx)
-            try:
-                run = await self._engine.start_run(
-                    flow_id=schedule.workflow_id,
-                    user_id=user_id,
-                    trigger=trigger,
-                    schedule_event_id=workflow_schedule_event_id,
-                    ctx=ctx,
-                )
-                return str(run.id)
-            finally:
-                reset_current_context(ctx_token)
-        except WorkflowConflictError:
-            logger.info(
-                "Workflow run already exists for schedule event",
-                source_event_id=schedule_event_id,
-            )
-            return None
+            return str(run.id)
+        finally:
+            reset_current_context(ctx_token)
 
     async def _record_fire(
         self,
         schedule_repo,
-        run_repo,
         schedule,
         *,
         run_id: str | None = None,
         status=None,
         error: str | None = None,
-        run_status=None,
+        dispatch_dead_lettered: bool = False,
     ) -> None:
         resolved = status or ScheduleFireStatus.TRIGGERED
         await schedule_repo.record_fire(
@@ -305,45 +303,8 @@ class ScheduleStartService:
             run_id=run_id,
             error=error,
         )
-        tripped_count = await self._apply_failure_policy(
-            schedule_repo, run_repo, schedule, run_status
-        )
-        if tripped_count is not None:
-            from app.modules.schedule.domain.events.schedule import ScheduleDeactivated
-
-            self._uow.collect_events(
-                [
-                    ScheduleDeactivated(
-                        schedule_id=schedule.id,
-                        user_id=schedule.user_id,
-                        schedule_type=schedule.schedule_type,
-                        consecutive_failures=tripped_count,
-                    )
-                ]
-            )
+        if dispatch_dead_lettered:
+            await ScheduleRunOutcomeService(
+                self._uow
+            ).record_dispatch_dead_letter(schedule)
         await self._uow.commit()
-
-    async def _apply_failure_policy(
-        self, schedule_repo, run_repo, schedule, run_status
-    ) -> int | None:
-        """Derive the breaker from distinct terminal schedule runs."""
-        if run_status == ScheduleRunStatus.DISPATCHED:
-            await schedule_repo.set_consecutive_failures(schedule.id, 0)
-            return None
-        if run_status != ScheduleRunStatus.DEAD_LETTERED:
-            return None
-
-        count = await run_repo.consecutive_terminal_failures(schedule.id)
-        await schedule_repo.set_consecutive_failures(schedule.id, count)
-        threshold = schedule_settings.schedule_max_consecutive_failures
-        if threshold <= 0 or count < threshold:
-            return None
-
-        # Trip: stop the schedule from firing (all matcher queries filter is_active).
-        await schedule_repo.update(schedule.id, is_active=False)
-        logger.warning(
-            "Circuit breaker deactivated schedule",
-            schedule_id=str(schedule.id),
-            consecutive_failures=count,
-        )
-        return count

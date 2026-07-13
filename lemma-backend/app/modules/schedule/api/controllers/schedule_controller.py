@@ -137,33 +137,6 @@ async def list_schedule_runs(
     )
 
 
-@router.post(
-    "/{schedule_id}/runs/{run_id}/retry",
-    response_model=ScheduleRunResponse,
-    status_code=status.HTTP_202_ACCEPTED,
-    operation_id="schedule.run.retry",
-)
-async def retry_schedule_run(
-    pod_id: UUID,
-    schedule_id: UUID,
-    run_id: UUID,
-    service: ScheduleServiceDep,
-    ctx: PodContextDep,
-) -> ScheduleRunResponse:
-    schedule_run = await service.retry_schedule_run(
-        pod_id=pod_id,
-        schedule_id=schedule_id,
-        run_id=run_id,
-        ctx=ctx,
-    )
-    if schedule_run is None:
-        raise HTTPException(
-            status_code=409,
-            detail="Schedule run is not failed, dead-lettered, or does not exist",
-        )
-    return ScheduleRunResponse.model_validate(schedule_run)
-
-
 @router.get(
     "/{schedule_id}",
     response_model=ScheduleDetailResponse,
