@@ -312,7 +312,7 @@ class SurfaceEventDedupStorePort(Protocol):
     async def claim_message(
         self,
         *,
-        surface_installation_id: UUID,
+        surface_installation_id: UUID | None,
         platform: str,
         external_channel_id: str | None,
         external_thread_id: str | None,

@@ -323,6 +323,7 @@ async def test_prepare_webhook_returns_signup_context_for_unresolved_user():
 
     assert isinstance(context, SurfaceReplyContext)
     assert context.surface_id == surface.id
+    assert context.reply_kind == "signup"
     assert context.agent_display_name == "Surface Agent"
     service.conversation_service.create_conversation.assert_not_called()
 
@@ -368,7 +369,8 @@ async def test_prepare_webhook_avoids_pod_access_link_for_system_non_member():
     assert isinstance(context, SurfaceReplyContext)
     assert "Request access" not in (context.reply_message or "")
     assert str(surface.pod_id) not in (context.reply_message or "")
-    assert "shared bot" in (context.reply_message or "")
+    assert context.reply_kind == "surface_setup"
+    assert "set up or select a surface" in (context.reply_message or "")
     service.conversation_service.create_conversation.assert_not_called()
 
 
@@ -415,9 +417,164 @@ async def test_prepare_webhook_returns_pod_access_link_for_custom_non_member():
     )
 
     assert isinstance(context, SurfaceReplyContext)
+    assert context.reply_kind == "pod_access"
     assert "Request access" in (context.reply_message or "")
     assert str(surface.pod_id) in (context.reply_message or "")
     service.conversation_service.create_conversation.assert_not_called()
+
+
+@pytest.mark.parametrize(
+    "platform", [SurfacePlatform.TELEGRAM, SurfacePlatform.WHATSAPP]
+)
+async def test_unresolved_managed_dm_with_multiple_surfaces_gets_one_fallback(
+    platform: SurfacePlatform,
+):
+    surfaces = [
+        AgentSurfaceEntity(
+            id=uuid4(),
+            pod_id=uuid4(),
+            name=f"{platform.value.lower()}-{index}",
+            agent_id=uuid4(),
+            surface_type=platform,
+            mode=SurfaceMode.DM,
+            account_id=None,
+            credential_mode=SurfaceCredentialMode.SYSTEM,
+            config=SurfaceConfig(),
+            is_active=True,
+        )
+        for index in range(2)
+    ]
+    event = ParsedInboundSurfaceEvent(
+        platform=platform,
+        conversation_type=ConversationType.EXTERNAL_DM,
+        external_channel_id="dm-123",
+        external_thread_id="dm-123",
+        external_message_id="message-123",
+        sender_external_user_id="external-123",
+        message_text="hello",
+        is_dm=True,
+        reply_target={"chat_id": "dm-123", "sender_wa_id": "external-123"},
+    )
+    adapter = AsyncMock()
+    adapter.parse_inbound_event.return_value = event
+    adapter.unresolved_sender_reply.return_value = None
+    service = _build_service(
+        adapter=adapter,
+        surfaces=surfaces,
+        resolved_user=ResolvedSurfaceUser(
+            internal_user_id=None,
+            external_user_id="external-123",
+        ),
+    )
+    service.event_dedup_store.claim_message.side_effect = [True, False]
+
+    first = await service.prepare_ingress(
+        SurfacePlatformWebhookIngress(
+            source=platform.value.lower(), payload={}, headers={}
+        )
+    )
+    second = await service.prepare_ingress(
+        SurfacePlatformWebhookIngress(
+            source=platform.value.lower(), payload={}, headers={}
+        )
+    )
+
+    assert isinstance(first, SurfaceReplyContext)
+    assert first.reply_kind == "signup"
+    assert first.surface_id is None
+    assert second is None
+    assert (
+        service.event_dedup_store.claim_message.await_args.kwargs[
+            "surface_installation_id"
+        ]
+        is None
+    )
+
+
+async def test_resolved_dm_without_matching_surface_gets_setup_link(monkeypatch):
+    from app.core.config import settings as app_settings
+
+    monkeypatch.setattr(app_settings, "frontend_url", "https://app.example.test/")
+    surfaces = [_telegram_surface(), _telegram_surface()]
+    event = _telegram_event(chat_id="dm-setup", message_id="message-setup")
+    adapter = AsyncMock()
+    adapter.parse_inbound_event.return_value = event
+    service = _build_service(
+        adapter=adapter,
+        surfaces=surfaces,
+        resolved_user=ResolvedSurfaceUser(
+            internal_user_id=uuid4(),
+            external_user_id="777",
+            email="signed-in@example.com",
+        ),
+    )
+    service.pod_membership_port = SimpleNamespace(
+        get_user_pod_ids=AsyncMock(return_value=[]),
+        get_user_email=AsyncMock(return_value="signed-in@example.com"),
+    )
+
+    context = await service.prepare_ingress(
+        SurfacePlatformWebhookIngress(source="telegram", payload={}, headers={})
+    )
+
+    assert isinstance(context, SurfaceReplyContext)
+    assert context.reply_kind == "surface_setup"
+    assert context.surface_id is None
+    assert context.reply_message.endswith("https://app.example.test")
+
+
+async def test_unroutable_group_remains_silent():
+    surfaces = [_slack_surface(), _slack_surface()]
+    event = _slack_channel_event()
+    adapter = AsyncMock()
+    adapter.parse_inbound_event.return_value = event
+    service = _build_service(
+        adapter=adapter,
+        surfaces=surfaces,
+        resolved_user=ResolvedSurfaceUser(
+            internal_user_id=None,
+            external_user_id="U123",
+        ),
+    )
+
+    context = await service.prepare_ingress(
+        SurfacePlatformWebhookIngress(source="slack", payload={}, headers={})
+    )
+
+    assert context is None
+    service.event_dedup_store.claim_message.assert_not_awaited()
+
+
+async def test_resolved_dm_with_no_route_gets_setup_reply():
+    surface = _slack_surface()
+    user_id = uuid4()
+    event = _slack_event()
+    adapter = AsyncMock()
+    service = _build_service(
+        adapter=adapter,
+        surfaces=[surface],
+        resolved_user=ResolvedSurfaceUser(
+            internal_user_id=user_id,
+            external_user_id="U123",
+            email="sender@example.com",
+        ),
+    )
+    service._resolve_route = AsyncMock(return_value=None)
+
+    context = await service._prepare_surface_context(
+        surface=surface,
+        parsed=event,
+        adapter=adapter,
+        resolved_user=ResolvedSurfaceUser(
+            internal_user_id=user_id,
+            external_user_id="U123",
+            email="sender@example.com",
+        ),
+    )
+
+    assert isinstance(context, SurfaceReplyContext)
+    assert context.reply_kind == "surface_setup"
+    assert "set up or select a surface" in context.reply_message
 
 
 async def test_prepare_webhook_creates_conversation_link_for_resolved_user():
@@ -792,6 +949,9 @@ async def test_execute_chat_sends_direct_replies():
     parsed_event = _slack_event()
     adapter = AsyncMock()
     service = _build_service(adapter=adapter)
+    service._resolve_credentials_from_context = AsyncMock(
+        return_value={"bot_token": "test-token", "access_token": "test-token"}
+    )
     signup_context = SurfaceReplyContext(
         platform="SLACK",
         agent_display_name="Lemma",
@@ -813,6 +973,67 @@ async def test_execute_chat_sends_direct_replies():
     assert adapter.send_message.await_args.kwargs["metadata"]["reply_markup"] == {
         "remove_keyboard": True
     }
+
+
+async def test_execute_chat_logs_missing_fallback_credentials(monkeypatch):
+    parsed_event = _telegram_event(chat_id="123", message_id="missing-creds")
+    adapter = AsyncMock()
+    service = _build_service(adapter=adapter)
+    service._resolve_credentials_from_context = AsyncMock(
+        return_value={"bot_token": ""}
+    )
+    log = Mock()
+    monkeypatch.setattr(
+        "app.modules.agent_surfaces.services.ingress_service.logger", log
+    )
+    context = SurfaceReplyContext(
+        platform="TELEGRAM",
+        reply_kind="signup",
+        reply_message="Please sign up",
+        event=parsed_event,
+    )
+
+    await service.execute_chat(context)
+
+    adapter.send_message.assert_not_awaited()
+    log.error.assert_called_once_with(
+        "Surface fallback delivery unavailable",
+        platform="TELEGRAM",
+        reply_kind="signup",
+        message_id="missing-creds",
+        failure_reason="missing_credentials",
+    )
+
+
+async def test_execute_chat_logs_delivery_failure_without_secret(monkeypatch):
+    parsed_event = _telegram_event(chat_id="123", message_id="failed-delivery")
+    adapter = AsyncMock()
+    adapter.send_message.side_effect = RuntimeError("provider exposed secret-token")
+    service = _build_service(adapter=adapter)
+    service._resolve_credentials_from_context = AsyncMock(
+        return_value={"bot_token": "secret-token"}
+    )
+    log = Mock()
+    monkeypatch.setattr(
+        "app.modules.agent_surfaces.services.ingress_service.logger", log
+    )
+    context = SurfaceReplyContext(
+        platform="TELEGRAM",
+        reply_kind="surface_setup",
+        reply_message="Set up a surface",
+        event=parsed_event,
+    )
+
+    await service.execute_chat(context)
+
+    log.error.assert_called_once_with(
+        "Surface fallback delivery failed",
+        platform="TELEGRAM",
+        reply_kind="surface_setup",
+        message_id="failed-delivery",
+        failure_reason="RuntimeError",
+    )
+    assert "secret-token" not in repr(log.error.call_args)
 
 
 async def test_execute_chat_starts_agent_run_with_surface_metadata():

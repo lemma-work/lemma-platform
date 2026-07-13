@@ -76,9 +76,10 @@ async def test_system_bot_signed_up_non_member_does_not_get_pod_access_link(
     )
 
     assert isinstance(context, SurfaceReplyContext)
+    assert context.reply_kind == "surface_setup"
     message = context.reply_message or ""
     assert f"/pods/{pod_id}" not in message
-    assert "shared bot" in message.lower()
+    assert "set up or select a surface" in message.lower()
 
 
 async def test_custom_bot_signed_up_non_member_gets_pod_access_link(
@@ -122,6 +123,7 @@ async def test_custom_bot_signed_up_non_member_gets_pod_access_link(
 
     # Instead of being dropped, they get a pod-access / join-request link.
     assert isinstance(context, SurfaceReplyContext)
+    assert context.reply_kind == "pod_access"
     message = context.reply_message or ""
     assert "access" in message.lower()
     assert f"/pods/{pod_id}" in message

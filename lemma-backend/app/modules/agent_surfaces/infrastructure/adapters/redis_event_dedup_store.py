@@ -38,21 +38,24 @@ class RedisSurfaceEventDedupStore:
     def _key(
         self,
         *,
-        surface_installation_id: UUID,
+        surface_installation_id: UUID | None,
         platform: str,
         external_channel_id: str | None,
         external_message_id: str,
     ) -> str:
         channel_key = external_channel_id or "none"
+        surface_key = (
+            str(surface_installation_id) if surface_installation_id else "unrouted"
+        )
         return (
             "agent_surfaces:event_dedup:"
-            f"{platform.lower()}:{surface_installation_id}:{channel_key}:{external_message_id}"
+            f"{platform.lower()}:{surface_key}:{channel_key}:{external_message_id}"
         )
 
     async def claim_message(
         self,
         *,
-        surface_installation_id: UUID,
+        surface_installation_id: UUID | None,
         platform: str,
         external_channel_id: str | None,
         external_thread_id: str | None,
