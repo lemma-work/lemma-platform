@@ -46,6 +46,25 @@ export const SETUP_STEPS: SetupStep[] = [
   "start",
 ];
 
+export function resolveOnboardingStartStep(
+  storedStep: SetupStep | null | undefined,
+  needsProfile: boolean,
+): SetupStep {
+  if (storedStep && storedStep !== "boot") return storedStep;
+  return needsProfile ? "identity" : "audience";
+}
+
+export function previousOnboardingStep(
+  steps: SetupStep[],
+  currentStep: SetupStep,
+): SetupStep | null {
+  const currentIndex = steps.indexOf(currentStep);
+  if (currentIndex <= 0) return null;
+
+  const previousStep = steps[currentIndex - 1];
+  return previousStep === "boot" ? null : previousStep;
+}
+
 // Solo users skip the workspace step entirely — their workspace is created
 // silently when the first pod lands. SetupProgressBar uses this so its fill
 // matches the path the user is actually on.

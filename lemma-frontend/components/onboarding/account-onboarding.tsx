@@ -76,6 +76,8 @@ import {
   startRecipesForAudience,
   teamLabelForKind,
   teamWorkspaceName,
+  previousOnboardingStep,
+  resolveOnboardingStartStep,
   type Audience,
   type ConnectChoice,
   type SetupStep,
@@ -154,13 +156,10 @@ export function AccountOnboarding({
     pendingInvitations.length === 0 &&
     shouldResumeOnboarding(onboardingDraft, pods.length);
   const [setupActive, setSetupActive] = useState(false);
-  const nextSetupStep: SetupStep =
-    onboardingDraft?.step ||
-    (needsProfile
-      ? "identity"
-      : needsOrganization || needsFirstPod
-        ? "audience"
-        : "audience");
+  const nextSetupStep = resolveOnboardingStartStep(
+    onboardingDraft?.step,
+    needsProfile,
+  );
   const setupInitialStep: SetupStep =
     setupActive || needsFirstPod || hasOnboardingDraft ? nextSetupStep : "boot";
 
@@ -771,11 +770,12 @@ function SetupAssistant({
   const orderedSteps = setupStepsForAudience(audience).filter(
     (candidate) => candidate !== "workspace" || !activeOrganization,
   );
+  const previousStep = previousOnboardingStep(orderedSteps, step);
   const handleBack = () => {
-    const currentIndex = orderedSteps.indexOf(step);
-    if (currentIndex <= 0) return;
-    goTo(orderedSteps[currentIndex - 1]);
+    if (!previousStep) return;
+    goTo(previousStep);
   };
+  const onBack = previousStep ? handleBack : undefined;
 
   return (
     <SetupShell fullBleed>
@@ -786,7 +786,7 @@ function SetupAssistant({
           isSaving={updateProfile.isPending}
           onNameChange={setIdentityName}
           onSubmit={handleIdentitySubmit}
-          onBack={handleBack}
+          onBack={onBack}
           steps={orderedSteps}
         />
       ) : step === "audience" ? (
@@ -795,7 +795,7 @@ function SetupAssistant({
           isSaving={isCreatingPod}
           savingAudience="personal"
           onSelect={handleAudienceSelect}
-          onBack={handleBack}
+          onBack={onBack}
           steps={orderedSteps}
         />
       ) : step === "team" ? (
@@ -812,7 +812,7 @@ function SetupAssistant({
             saveOnboardingDraft({ customTeamName: value });
           }}
           onContinue={handleTeamContinue}
-          onBack={handleBack}
+          onBack={onBack}
           steps={orderedSteps}
         />
       ) : step === "workspace" ? (
@@ -834,14 +834,14 @@ function SetupAssistant({
           }}
           onJoinSuggested={() => void handleJoinSuggested()}
           onCreateWorkspace={() => void handleCreateWorkspace()}
-          onBack={handleBack}
+          onBack={onBack}
           steps={orderedSteps}
         />
       ) : step === "connect" ? (
         <ConnectStep
           isSaving={isConnectingAi}
           onContinue={handleConnectContinue}
-          onBack={handleBack}
+          onBack={onBack}
           steps={orderedSteps}
         />
       ) : (
@@ -864,7 +864,7 @@ function SetupAssistant({
           onBuildWithLemma={handleBuildWithLemma}
           onContinue={handleCreateFromStart}
           onSkip={handleSkipFirstPod}
-          onBack={handleBack}
+          onBack={onBack}
           steps={orderedSteps}
         />
       )}
