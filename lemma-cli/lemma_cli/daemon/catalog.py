@@ -38,6 +38,12 @@ CLAUDE_CODE_MODEL_CATALOG: tuple[dict[str, Any], ...] = (
         "provider_model_name": "claude-opus-4-8",
         "metadata": {"alias": "opus", "context_window": "standard"},
     },
+    {
+        "name": "fable",
+        "display_name": "Claude Fable 5",
+        "provider_model_name": "claude-fable-5",
+        "metadata": {"alias": "fable", "context_window": "standard"},
+    },
 )
 
 # Bare alias -> standard-context model id, used to rewrite ``--model`` for

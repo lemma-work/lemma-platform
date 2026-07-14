@@ -1594,7 +1594,7 @@ def test_discover_harness_catalog_uses_real_cli_model_commands(monkeypatch, tmp_
         import sys
 
         if "--help" in sys.argv:
-            print("--model <model> alias 'sonnet' or 'opus'")
+            print("--model <model> alias 'sonnet', 'opus', or 'fable'")
             raise SystemExit(0)
         if "--version" in sys.argv:
             print("claude fake")
@@ -1610,7 +1610,7 @@ def test_discover_harness_catalog_uses_real_cli_model_commands(monkeypatch, tmp_
         "openai/gpt-5.5",
         "anthropic/claude-sonnet-4-5",
     ]
-    assert catalog["CLAUDE_CODE"]["models"] == ["sonnet", "opus"]
+    assert catalog["CLAUDE_CODE"]["models"] == ["sonnet", "opus", "fable"]
     # Claude Code aliases are advertised with full standard-context model ids so
     # the default path never opts into the paid 1M-context variant.
     claude_catalog = catalog["CLAUDE_CODE"]["model_catalog"]
@@ -1619,6 +1619,9 @@ def test_discover_harness_catalog_uses_real_cli_model_commands(monkeypatch, tmp_
     assert by_name["sonnet"]["display_name"] == "Claude Sonnet 4.6"
     assert by_name["sonnet"]["metadata"]["context_window"] == "standard"
     assert by_name["opus"]["provider_model_name"] == "claude-opus-4-8"
+    assert by_name["fable"]["provider_model_name"] == "claude-fable-5"
+    assert by_name["fable"]["display_name"] == "Claude Fable 5"
+    assert by_name["fable"]["metadata"]["context_window"] == "standard"
     # Other harnesses keep selection name == provider model name.
     codex_catalog = {entry["name"]: entry for entry in catalog["CODEX"]["model_catalog"]}
     assert codex_catalog["gpt-5.5"]["provider_model_name"] == "gpt-5.5"
@@ -1684,6 +1687,7 @@ def test_normalize_provider_model_name_maps_claude_aliases():
     # Bare aliases resolve to standard-context full ids.
     assert daemon.normalize_provider_model_name("CLAUDE_CODE", "sonnet") == "claude-sonnet-4-6"
     assert daemon.normalize_provider_model_name("CLAUDE_CODE", " opus ") == "claude-opus-4-8"
+    assert daemon.normalize_provider_model_name("CLAUDE_CODE", "fable") == "claude-fable-5"
     # Full ids, "default", and unknown names pass through untouched.
     assert daemon.normalize_provider_model_name("CLAUDE_CODE", "claude-sonnet-4-6") == "claude-sonnet-4-6"
     assert daemon.normalize_provider_model_name("CLAUDE_CODE", "default") == "default"

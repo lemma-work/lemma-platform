@@ -295,7 +295,7 @@ class Settings(BaseSettings):
         description="Default public model name for the server-provided Anthropic-compatible Lemma profile.",
     )
     lemma_anthropic_model_names: str = Field(
-        default="claude-sonnet-4-5,claude-haiku-4-5",
+        default="claude-sonnet-4-5,claude-haiku-4-5,claude-fable-5",
         description="Comma-separated public model names for the server-provided Anthropic-compatible Lemma profile.",
     )
     web_search_provider: Literal["auto", "duckduckgo", "searxng", "brave"] = Field(

@@ -80,7 +80,7 @@ URL and the models to expose. Set them **together** so the profile resolves.
 ```bash
 lemma-stack config set LEMMA_DEFAULT_MODEL_TYPE anthropic_compat
 lemma-stack config set LEMMA_ANTHROPIC_API_KEY sk-ant-...
-# optional — these default to claude-sonnet-4-5 / claude-haiku-4-5:
+# optional — these default to claude-sonnet-4-5, claude-haiku-4-5, claude-fable-5:
 lemma-stack config set LEMMA_ANTHROPIC_DEFAULT_MODEL claude-sonnet-4-5
 lemma-stack config set LEMMA_ANTHROPIC_MODEL_NAMES claude-sonnet-4-5,claude-haiku-4-5
 ```
@@ -102,6 +102,11 @@ lemma-stack config set LEMMA_OPENAI_VISION_MODEL_NAMES gpt-4o            # subse
 > receives image content. Leave empty if none of your models accept images.
 > (Anthropic-compatible models are all multimodal, so this isn't needed there.)
 
+> GPT-5.6 ships as three tiers — Sol, Terra, and Luna:
+> ```bash
+> lemma-stack config set LEMMA_OPENAI_MODEL_NAMES gpt-5.6-sol,gpt-5.6-terra,gpt-5.6-luna
+> lemma-stack config set LEMMA_OPENAI_DEFAULT_MODEL gpt-5.6-sol
+> ```
 > Defaults are OpenAI/Anthropic, not any specific gateway — point `*_BASE_URL` and
 > `*_MODEL*` at whatever provider your key is for.
 
