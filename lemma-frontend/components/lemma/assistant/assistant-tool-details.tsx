@@ -12,7 +12,6 @@ import {
   isAskUserToolName,
   isLongRunningToolResult,
   isToolInvocationActive,
-  isUserApprovalToolName,
   isUserInteractionToolName,
   isRenderableUserInteractionInvocation,
   userApprovalResolvedDecision,
@@ -35,6 +34,8 @@ import {
 } from "./assistant-format";
 import { DetailsWithCopy, contextualToolDetails } from "./assistant-tool-cards";
 import { ReasoningPartCard } from "./assistant-parts";
+import { SubagentActivityRollup } from "./assistant-subagent-activity";
+import { isSubagentLifecycleToolName } from "@/lib/assistant/subagent-activity";
 import {
   currentPodIdFromBrowserPath,
   isCurrentBrowserHref,
@@ -470,12 +471,12 @@ export function ToolActivityRollup({
   const [activeDetailId, setActiveDetailId] = useState<string | null>(null);
   const [expandedGroupId, setExpandedGroupId] = useState<string | null>(null);
   const [isExpanded, setIsExpanded] = useState(false);
-  const visibleDetailParts = detailParts.filter((part) => {
-    if (part.type !== "tool") return true;
-    const invocation = part.toolInvocation;
-    if (isUserApprovalToolName(invocation.toolName)) return true;
-    return true;
-  });
+  const subagentToolParts = detailParts.filter((part): part is ToolActivityPart => (
+    part.type === "tool" && isSubagentLifecycleToolName(part.toolInvocation.toolName)
+  ));
+  const visibleDetailParts = detailParts.filter((part) => (
+    part.type !== "tool" || !isSubagentLifecycleToolName(part.toolInvocation.toolName)
+  ));
   const toolParts = visibleDetailParts.filter((part): part is Extract<AssistantMessagePart, { type: "tool" }> => part.type === "tool");
   const reasoningParts = visibleDetailParts.filter((part): part is Extract<AssistantMessagePart, { type: "reasoning" }> => part.type === "reasoning");
   const totalThoughtDurationMs = reasoningParts.reduce((total, part) => total + (part.durationMs ?? 0), 0);
@@ -488,13 +489,21 @@ export function ToolActivityRollup({
   // so a master header would just repeat that group's "×N" label — skip it.
   const onlyBlock = activityBlocks.length === 1 ? activityBlocks[0] : null;
   const hasLongToolGroup = onlyBlock?.type === "tool-group" && onlyBlock.parts.length > 2;
-  const shouldShowHeader = hasRunHeader || hasLongToolGroup;
+  const hasPendingUserInteraction = toolParts.some((part) => {
+    const invocation = part.toolInvocation;
+    if (!isUserInteractionToolName(invocation.toolName)) return false;
+    const resultData = (invocation.result || {}) as ToolCardResult;
+    return invocation.state !== "result" && !userApprovalResolvedDecision(resultData);
+  });
+  const shouldShowHeader = hasRunHeader
+    || hasLongToolGroup
+    || (Boolean(isRunActive) && !hasPendingUserInteraction);
   const failedCount = toolParts.filter((part) => (
     part.toolInvocation.state === "result"
     && !isLongRunningToolResult(part.toolInvocation)
     && part.toolInvocation.result?.success === false
   )).length;
-  const isWorking = reasoningParts.some((part) => part.state === "streaming");
+  const isWorking = Boolean(isRunActive) || reasoningParts.some((part) => part.state === "streaming");
   const isSingleDetail = visibleDetailParts.length === 1;
   const completionSummary = activitySummary
     ? activitySummary
@@ -502,18 +511,13 @@ export function ToolActivityRollup({
       ? `Thought for ${formatDurationCompact(totalThoughtDurationMs)}`
       : "Completed";
   const summary = isWorking
-    ? "Thinking"
+    ? (activitySummary ? `Working · ${activitySummary}` : "Thinking")
     : `${completionSummary}${failedCount > 0 ? ` · ${failedCount} failed` : ""}`;
-  const collapsedSummary = collapsedLabel
-    || (isWorking
-      ? summary
-      : toolParts.length > 0
-      ? `${completionSummary}${failedCount > 0 ? ` · ${failedCount} failed` : ""}`
-      : summary);
+  const collapsedSummary = `${collapsedLabel || summary}${isWorking && failedCount > 0 ? ` · ${failedCount} failed` : ""}`;
 
-  if (visibleDetailParts.length === 0) return null;
+  if (visibleDetailParts.length === 0 && subagentToolParts.length === 0) return null;
 
-  const isTraceExpanded = isExpanded || isRunActive;
+  const isTraceExpanded = isExpanded || hasPendingUserInteraction;
 
   const renderToolActivityPart = (part: ToolActivityPart): ReactNode => {
     const invocation = part.toolInvocation;
@@ -588,12 +592,21 @@ export function ToolActivityRollup({
   };
 
   return (
-    <div className={cn("flex min-w-0 flex-col", hasRunHeader ? "gap-3" : "gap-1.5")} data-single={isSingleDetail ? "true" : "false"}>
+    <div className="flex min-w-0 flex-col gap-3">
+      {subagentToolParts.length > 0 ? (
+        <SubagentActivityRollup
+          parts={subagentToolParts}
+          parentConversationId={activeConversationId}
+          isRunActive={isRunActive}
+        />
+      ) : null}
+      {visibleDetailParts.length > 0 ? (
+        <div className={cn("flex min-w-0 flex-col", hasRunHeader ? "gap-3" : "gap-1.5")} data-single={isSingleDetail ? "true" : "false"}>
       {hasRunHeader ? (
         <RunTraceHeader
           label={collapsedSummary}
           isExpanded={isTraceExpanded}
-          isInteractive={!isRunActive}
+          isInteractive
           onToggle={() => setIsExpanded((prev) => !prev)}
         />
       ) : shouldShowHeader ? (
@@ -654,8 +667,7 @@ export function ToolActivityRollup({
             }
 
             const groupSummary = formatToolActivitySummary(block.parts) || `Used ${pluralize(block.parts.length, "tool")}`;
-            const hasActiveTool = block.parts.some((part) => isToolInvocationActive(part.toolInvocation));
-            const isGroupSelected = expandedGroupId === block.id || (isRunActive && hasActiveTool);
+            const isGroupSelected = expandedGroupId === block.id;
             return (
               <div key={block.id} className="flex flex-col gap-1.5">
                 <button
@@ -673,6 +685,8 @@ export function ToolActivityRollup({
               </div>
             );
           })}
+        </div>
+      ) : null}
         </div>
       ) : null}
     </div>
