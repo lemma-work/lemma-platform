@@ -14,6 +14,7 @@ from apscheduler.jobstores.sqlalchemy import SQLAlchemyJobStore
 from apscheduler.triggers.cron import CronTrigger
 from apscheduler.triggers.date import DateTrigger
 from pytz import utc
+from sqlalchemy.engine import make_url
 
 from app.core.config import settings
 from app.core.log.log import get_logger
@@ -24,6 +25,26 @@ from app.modules.schedule.scheduler.executor import (
 )
 
 logger = get_logger(__name__)
+
+
+def build_sync_jobstore_url(database_url: str) -> str:
+    """Build the synchronous psycopg URL used by APScheduler.
+
+    The application uses asyncpg, whose TLS query parameter is ``ssl``. Psycopg
+    expects the libpq spelling, ``sslmode``. Keeping that parameter unchanged
+    makes Azure PostgreSQL reject the connection before the scheduler starts.
+    """
+    url = make_url(database_url)
+
+    if url.drivername in {"postgresql", "postgresql+asyncpg"}:
+        url = url.set(drivername="postgresql+psycopg")
+
+    query = dict(url.query)
+    if "ssl" in query and "sslmode" not in query:
+        query["sslmode"] = query.pop("ssl")
+        url = url.set(query=query)
+
+    return url.render_as_string(hide_password=False)
 
 
 async def execute_scheduled_job(schedule_id: str, payload: dict | None = None):
@@ -57,17 +78,7 @@ class SchedulerService:
     def __init__(self):
         # Convert async database URL to sync for APScheduler
         # APScheduler's SQLAlchemyJobStore requires a synchronous engine
-        sync_db_url = str(settings.database_url)
-        # Replace asyncpg with psycopg2 for synchronous connection
-        if "+asyncpg" in sync_db_url:
-            sync_db_url = sync_db_url.replace("+asyncpg", "+psycopg")
-        elif "postgresql+asyncpg" in sync_db_url:
-            sync_db_url = sync_db_url.replace(
-                "postgresql+asyncpg", "postgresql+psycopg"
-            )
-        # If it's already sync or doesn't have a driver, ensure it has psycopg2
-        elif sync_db_url.startswith("postgresql://") and "+" not in sync_db_url:
-            sync_db_url = sync_db_url.replace("postgresql://", "postgresql+psycopg://")
+        sync_db_url = build_sync_jobstore_url(str(settings.database_url))
 
         # Configure job stores - using PostgreSQL with synchronous engine
         jobstores = {"default": SQLAlchemyJobStore(url=sync_db_url)}

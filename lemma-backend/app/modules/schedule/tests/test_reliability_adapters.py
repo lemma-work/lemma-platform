@@ -15,6 +15,35 @@ from app.modules.schedule.infrastructure.adapters.schedule_event_publisher impor
 from app.modules.schedule.scheduler import scheduler_service
 
 
+@pytest.mark.parametrize(
+    ("database_url", "expected_sslmode"),
+    [
+        (
+            "postgresql+asyncpg://lemma:p%40ss@db.example/gappynew?ssl=require&application_name=lemma",
+            "require",
+        ),
+        (
+            "postgresql://lemma:secret@db.example/gappynew?sslmode=verify-full",
+            "verify-full",
+        ),
+    ],
+)
+def test_sync_jobstore_url_uses_psycopg_and_libpq_sslmode(
+    database_url: str,
+    expected_sslmode: str,
+) -> None:
+    from sqlalchemy.engine import make_url
+
+    result = make_url(scheduler_service.build_sync_jobstore_url(database_url))
+
+    assert result.drivername == "postgresql+psycopg"
+    assert result.password in {"p@ss", "secret"}
+    assert result.query["sslmode"] == expected_sslmode
+    assert "ssl" not in result.query
+    if "application_name" in database_url:
+        assert result.query["application_name"] == "lemma"
+
+
 @pytest.mark.asyncio
 async def test_llm_filter_task_requires_stable_source_event_id() -> None:
     with pytest.raises(ValueError, match="schedule_id is required"):
