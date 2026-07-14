@@ -64,7 +64,20 @@ class PostgresSearchService:
                 text("SELECT pg_advisory_xact_lock(:key)"),
                 {"key": self._ENSURE_SCHEMA_LOCK_KEY},
             )
-            await conn.execute(text("CREATE EXTENSION IF NOT EXISTS vector"))
+            # Azure Database for PostgreSQL checks CREATE EXTENSION privileges
+            # even when IF NOT EXISTS would otherwise be a no-op. The runtime
+            # datastore role is intentionally not an azure_pg_admin member, so
+            # first check the database-scoped catalog and only attempt creation
+            # for self-hosted installations where the extension is absent.
+            vector_installed = await conn.scalar(
+                text(
+                    "SELECT EXISTS ("
+                    "SELECT 1 FROM pg_extension WHERE extname = 'vector'"
+                    ")"
+                )
+            )
+            if not vector_installed:
+                await conn.execute(text("CREATE EXTENSION vector"))
             await conn.execute(
                 text(f'CREATE SCHEMA IF NOT EXISTS "{self.schema_name}"')
             )
