@@ -4,6 +4,47 @@ export function normalizeConversationStatus(status: unknown): string {
         : '';
 }
 
+function appendAgentScope(href: string, agentName?: string | null): string {
+    const normalizedAgentName = agentName?.trim();
+    if (!normalizedAgentName) return href;
+
+    const params = new URLSearchParams({ agent: normalizedAgentName });
+    return `${href}?${params.toString()}`;
+}
+
+export function buildPodConversationsHref(podId: string, agentName?: string | null): string {
+    return appendAgentScope(`/pod/${encodeURIComponent(podId)}/conversations`, agentName);
+}
+
+export function buildPodConversationHref(
+    podId: string,
+    conversationId: string,
+    agentName?: string | null,
+): string {
+    const href = `/pod/${encodeURIComponent(podId)}/conversations/${encodeURIComponent(conversationId)}`;
+    return appendAgentScope(href, agentName);
+}
+
+export function getConversationRouteId(pathname: string): string | null {
+    const match = /^\/pod\/[^/]+\/conversations\/([^/]+)\/?$/.exec(pathname);
+    if (!match?.[1]) return null;
+
+    try {
+        const conversationId = decodeURIComponent(match[1]);
+        return conversationId === 'new' ? null : conversationId;
+    } catch {
+        return match[1] === 'new' ? null : match[1];
+    }
+}
+
+export function findConversationAgentName(
+    agentId: string | null | undefined,
+    agents: Array<{ id?: string | null; name?: string | null }> | null | undefined,
+): string | null {
+    if (!agentId || !agents) return null;
+    return agents.find((agent) => agent.id === agentId)?.name?.trim() || null;
+}
+
 export type ConversationStatusState = 'running' | 'stopping' | 'waiting' | 'completed' | 'failed' | 'stopped' | 'unknown';
 export type ConversationStatusTone = 'live' | 'warning' | 'neutral' | 'danger' | 'muted';
 

@@ -5,6 +5,7 @@ import { MessageSquarePlus } from 'lucide-react';
 
 import { Button } from '@/components/ui/button';
 import { cn } from '@/lib/utils';
+import { buildPodConversationHref } from '@/lib/utils/conversations';
 
 // Opens the pod's new-conversation composer, optionally scoped to a specific
 // agent via `?agent=` (the pod layout reads it and scopes the assistant). No
@@ -29,8 +30,7 @@ export function StartConversationButton({
     const router = useRouter();
 
     const start = () => {
-        const query = agentName ? `?agent=${encodeURIComponent(agentName)}` : '';
-        router.push(`/pod/${podId}/conversations/new${query}`);
+        router.push(buildPodConversationHref(podId, 'new', agentName));
     };
 
     return (

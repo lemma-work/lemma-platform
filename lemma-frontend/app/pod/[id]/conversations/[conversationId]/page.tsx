@@ -17,7 +17,12 @@ import { usePod } from '@/lib/hooks/use-pods';
 import { usePodAccess } from '@/lib/hooks/use-pod-access';
 import type { AgentRuntimeConfig } from '@/lib/types';
 import { cn } from '@/lib/utils';
-import { getConversationStatusView, type ConversationStatusView } from '@/lib/utils/conversations';
+import {
+    buildPodConversationHref,
+    buildPodConversationsHref,
+    getConversationStatusView,
+    type ConversationStatusView,
+} from '@/lib/utils/conversations';
 
 function ConversationStatusPill({ statusView }: { statusView: ConversationStatusView }) {
     if (statusView.state === 'unknown' || statusView.state === 'completed') return null;
@@ -92,6 +97,7 @@ export default function PodConversationPage({
         sendMessage,
     } = assistant;
     const assistantMessage = searchParams.get('assistantMessage');
+    const scopedAgentName = searchParams.get('agent');
     const conversationInstructions = searchParams.get('conversationInstructions');
     const conversationMetadata = useMemo(
         () => parseConversationMetadata(searchParams.get('conversationMetadata')),
@@ -159,8 +165,8 @@ export default function PodConversationPage({
         if (assistantMessage) return;
         if (!isNewConversation || !activeConversationId) return;
         if (activeConversationId === ignoredConversationIdAfterNewRef.current) return;
-        router.replace(`/pod/${podId}/conversations/${encodeURIComponent(activeConversationId)}`);
-    }, [activeConversationId, assistantMessage, isNewConversation, podId, router]);
+        router.replace(buildPodConversationHref(podId, activeConversationId, scopedAgentName));
+    }, [activeConversationId, assistantMessage, isNewConversation, podId, router, scopedAgentName]);
 
     useEffect(() => {
         if (!isNewConversation || !assistantMessage || !isReady) return;
@@ -198,7 +204,7 @@ export default function PodConversationPage({
     }, [assistantMessage, clearMessages, closeAssistant, conversationInstructions, conversationMetadata, isNewConversation, isReady, podId, router, searchParams, sendMessage]);
 
     const startNewConversation = () => {
-        router.push(`/pod/${podId}/conversations/new`);
+        router.push(buildPodConversationHref(podId, 'new', scopedAgentName));
     };
 
     return (
@@ -218,7 +224,7 @@ export default function PodConversationPage({
                             </button>
                         ) : null}
                         <Link
-                            href={`/pod/${podId}/conversations`}
+                            href={buildPodConversationsHref(podId, scopedAgentName)}
                             className="custom-focus-ring inline-flex h-8 shrink-0 items-center gap-1 rounded-md px-1.5 leading-none text-[var(--text-tertiary)] transition-colors hover:bg-[var(--surface-2)] hover:text-[var(--text-primary)]"
                         >
                             <ArrowLeft className="h-3.5 w-3.5" strokeWidth={1.8} />

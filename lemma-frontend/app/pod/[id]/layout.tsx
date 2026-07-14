@@ -23,9 +23,12 @@ import { getLemmaClient } from "@/lib/sdk/lemma-client";
 import { usePod } from "@/lib/hooks/use-pods";
 import { usePodContext } from "@/lib/hooks/use-pod-context";
 import { usePodAccess } from "@/lib/hooks/use-pod-access";
+import { useAgents } from "@/lib/hooks/use-agents";
+import { useConversation } from "@/lib/hooks/use-assistants";
 import { clearLastOpenedPodId, writeLastOpenedPodId } from "@/lib/pods/last-opened-pod";
 import type { PodRoutePolicyKey } from "@/lib/authz/pod-permissions";
 import { cn } from "@/lib/utils";
+import { findConversationAgentName, getConversationRouteId } from "@/lib/utils/conversations";
 import type { Pod } from "@/lib/types";
 import type { PodContext } from "@/lib/types/ai";
 
@@ -783,14 +786,33 @@ function PodAssistantScope({
     const [shouldLoadPodContext, setShouldLoadPodContext] = useState(false);
     const { context: loadedPodContext } = usePodContext(pod.id, { enabled: shouldLoadPodContext });
     const pathname = usePathname();
+    const router = useRouter();
     const searchParams = useSearchParams();
-    // A conversation route may name the agent it targets via `?agent=`, so the
-    // "message this agent" composer starts a chat scoped to that agent rather than
-    // the pod default. Only applies on conversation routes; absent elsewhere.
-    const scopedAgentName = useMemo(() => {
+    // Agent-scoped links carry `?agent=` for a fast handoff. Direct/bookmarked
+    // conversation URLs recover the scope from the conversation's agent id and
+    // canonicalize the URL before mounting the assistant controller.
+    const explicitAgentName = useMemo(() => {
         if (!/\/conversations(?:\/|$)/.test(pathname)) return null;
         return searchParams.get("agent");
     }, [pathname, searchParams]);
+    const routeConversationId = useMemo(() => getConversationRouteId(pathname), [pathname]);
+    const shouldResolveConversationAgent = Boolean(routeConversationId && !explicitAgentName);
+    const routeConversationQuery = useConversation(
+        shouldResolveConversationAgent ? pod.id : "",
+        shouldResolveConversationAgent ? routeConversationId || "" : "",
+    );
+    const routeConversationAgentId = routeConversationQuery.data?.agent_id;
+    const shouldLoadConversationAgents = shouldResolveConversationAgent && Boolean(routeConversationAgentId);
+    const routeAgentsQuery = useAgents(shouldLoadConversationAgents ? pod.id : undefined);
+    const inferredAgentName = useMemo(
+        () => findConversationAgentName(routeConversationAgentId, routeAgentsQuery.data?.items),
+        [routeAgentsQuery.data?.items, routeConversationAgentId],
+    );
+    const scopedAgentName = explicitAgentName || inferredAgentName;
+    const isResolvingConversationAgent = shouldResolveConversationAgent && (
+        routeConversationQuery.isLoading
+        || (Boolean(routeConversationAgentId) && routeAgentsQuery.isLoading)
+    );
     const conversationScopeOverride = useMemo(
         () => (scopedAgentName ? { agentName: scopedAgentName } : undefined),
         [scopedAgentName],
@@ -804,6 +826,18 @@ function PodAssistantScope({
         appPages: [],
         connectedAccounts: [],
     }), [pod]);
+
+    useEffect(() => {
+        if (explicitAgentName || !inferredAgentName || !routeConversationId) return;
+
+        const nextSearchParams = new URLSearchParams(searchParams.toString());
+        nextSearchParams.set("agent", inferredAgentName);
+        router.replace(`${pathname}?${nextSearchParams.toString()}`, { scroll: false });
+    }, [explicitAgentName, inferredAgentName, pathname, routeConversationId, router, searchParams]);
+
+    if (isResolvingConversationAgent) {
+        return <PageLoader />;
+    }
 
     return (
         <AIAssistantProvider

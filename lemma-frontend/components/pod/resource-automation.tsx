@@ -30,6 +30,7 @@ import { formatAgentName } from '@/lib/utils/agents';
 import { ScheduleType, type Schedule } from '@/lib/types';
 import type { AssistantSurface } from '@/lib/types';
 import { cn } from '@/lib/utils';
+import { buildPodConversationHref } from '@/lib/utils/conversations';
 
 // ---------------------------------------------------------------------------
 // Layout wrapper — a scrollable, centered pane for detail-page automation tabs.
@@ -431,7 +432,7 @@ export function RecentConversations({
                     return (
                         <Link
                             key={conversation.id}
-                            href={`/pod/${podId}/conversations/${conversation.id}`}
+                            href={buildPodConversationHref(podId, conversation.id, agentName)}
                             className="lemma-index-row group flex items-center gap-2.5"
                         >
                             <MessageCircle className="h-3.5 w-3.5 shrink-0 text-[var(--text-tertiary)]" aria-hidden />
