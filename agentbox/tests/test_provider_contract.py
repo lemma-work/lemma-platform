@@ -145,7 +145,9 @@ def test_endpoint_carries_websocket_auth_without_persisting_it() -> None:
     provider = FakeLifecycleProvider()
     asyncio.run(provider.create("sandbox-1", SandboxEnsureRequest()))
     endpoint = asyncio.run(
-        provider.resolve_endpoint("sandbox-1", sandbox_app("browser"), protocol="websocket")
+        provider.resolve_endpoint(
+            "sandbox-1", sandbox_app("browser"), protocol="websocket"
+        )
     )
 
     assert endpoint.url(protocol="websocket").startswith("wss://")

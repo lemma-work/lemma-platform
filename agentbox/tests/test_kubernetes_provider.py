@@ -43,7 +43,9 @@ class _FakeCoreV1:
         self.pod = _pod("Running", ready=True)
         return self.pod
 
-    def delete_namespaced_pod(self, name: str, namespace: str, grace_period_seconds: int):  # noqa: ANN001
+    def delete_namespaced_pod(
+        self, name: str, namespace: str, grace_period_seconds: int
+    ):  # noqa: ANN001
         del name, namespace, grace_period_seconds
         self.deleted += 1
         self.pod = None

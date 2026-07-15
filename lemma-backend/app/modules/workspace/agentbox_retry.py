@@ -52,6 +52,7 @@ DEFAULT_INITIAL_RETRY_DELAY_SECONDS = 0.25
 DEFAULT_MAX_RETRY_DELAY_SECONDS = 2.0
 
 T = TypeVar("T")
+REQUEST_NOT_DELIVERED_HEADER = "X-Agentbox-Request-Not-Delivered"
 
 
 def truncate_message(
@@ -82,6 +83,17 @@ def is_retryable_http_error(exc: httpx.HTTPStatusError) -> bool:
     return exc.response.status_code in RETRYABLE_HTTP_STATUS_CODES
 
 
+def is_request_proven_not_delivered(exc: httpx.HTTPStatusError) -> bool:
+    """Trust only a manager-authored pre-routing failure marker.
+
+    AgentBox strips this header from every sandbox-app response before adding
+    it to its own routing failure, so user code cannot forge permission to
+    replay a side-effecting request.
+    """
+
+    return exc.response.headers.get(REQUEST_NOT_DELIVERED_HEADER, "").lower() == "true"
+
+
 def format_transport_error(exc: BaseException) -> str:
     return truncate_message(f"{type(exc).__name__}: {exc}")
 
@@ -94,7 +106,10 @@ async def retry_on_transient_agentbox_error(
     max_delay: float = DEFAULT_MAX_RETRY_DELAY_SECONDS,
     on_retry: Callable[[int, str], None] | None = None,
     retryable_status_codes: frozenset[int] = RETRYABLE_HTTP_STATUS_CODES,
-    retryable_transport_errors: tuple[type[BaseException], ...] = RETRYABLE_TRANSPORT_ERRORS,
+    retryable_transport_errors: tuple[
+        type[BaseException], ...
+    ] = RETRYABLE_TRANSPORT_ERRORS,
+    retryable_http_error: Callable[[httpx.HTTPStatusError], bool] | None = None,
 ) -> T:
     """Run ``operation`` retrying only transient transport / retryable-5xx errors.
 
@@ -115,10 +130,10 @@ async def retry_on_transient_agentbox_error(
         try:
             return await operation()
         except httpx.HTTPStatusError as exc:
-            if (
-                exc.response.status_code not in retryable_status_codes
-                or attempt == max_attempts
-            ):
+            retryable_http = exc.response.status_code in retryable_status_codes or (
+                retryable_http_error is not None and retryable_http_error(exc)
+            )
+            if not retryable_http or attempt == max_attempts:
                 raise
             error = format_http_status_error(exc)
         except retryable_transport_errors as exc:

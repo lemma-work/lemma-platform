@@ -105,9 +105,7 @@ class DaytonaSandboxProvider(LegacyRuntimeProviderMixin):
         self._counted_provider_ids: set[str] = set()
         self._capacity_generation = 0
         self._observed_active_count: int | None = None
-        self._create_semaphore = asyncio.Semaphore(
-            self.config.create_max_in_flight
-        )
+        self._create_semaphore = asyncio.Semaphore(self.config.create_max_in_flight)
         self._create_rate_lock = asyncio.Lock()
         self._next_create_at = 0.0
 
@@ -127,13 +125,16 @@ class DaytonaSandboxProvider(LegacyRuntimeProviderMixin):
     def capacity_policy(self) -> ProviderCapacityPolicy:
         return ProviderCapacityPolicy(
             scope=(
-                f"{self.provider_name}:{self.config.owner}:"
-                f"{self.config.environment}"
+                f"{self.provider_name}:{self.config.owner}:{self.config.environment}"
             ),
             max_active=self.config.max_active,
         )
 
-    def _labels(self, sandbox_id: str | None = None) -> dict[str, str]:
+    def _labels(
+        self,
+        sandbox_id: str | None = None,
+        generation_token: str | None = None,
+    ) -> dict[str, str]:
         labels = {
             "managed-by": "agentbox",
             "agentbox-owner": self.config.owner,
@@ -141,6 +142,8 @@ class DaytonaSandboxProvider(LegacyRuntimeProviderMixin):
         }
         if sandbox_id:
             labels["agentbox-id"] = sandbox_id
+        if generation_token:
+            labels["agentbox-generation"] = generation_token
         return labels
 
     @staticmethod
@@ -153,15 +156,31 @@ class DaytonaSandboxProvider(LegacyRuntimeProviderMixin):
         async for sandbox in self.daytona.list(query):
             yield sandbox
 
-    async def _find(self, sandbox_id: str, *, validate_cached: bool = False):
+    async def _find(
+        self,
+        sandbox_id: str,
+        generation_token: str | None = None,
+        *,
+        validate_cached: bool = False,
+    ):
         cached = self._sandboxes.get(sandbox_id)
-        if cached is not None and not validate_cached:
+        cached_labels = dict(getattr(cached, "labels", None) or {})
+        if (
+            cached is not None
+            and not validate_cached
+            and (
+                generation_token is None
+                or cached_labels.get("agentbox-generation") == generation_token
+            )
+        ):
             return cached
         try:
-            async for sandbox in self._iter(self._labels(sandbox_id)):
-                if (getattr(sandbox, "labels", None) or {}).get(
-                    "agentbox-id"
-                ) == sandbox_id:
+            async for sandbox in self._iter(self._labels(sandbox_id, generation_token)):
+                labels = dict(getattr(sandbox, "labels", None) or {})
+                if labels.get("agentbox-id") == sandbox_id and (
+                    generation_token is None
+                    or labels.get("agentbox-generation") == generation_token
+                ):
                     if self._state(sandbox) in {
                         "started",
                         "creating",
@@ -183,6 +202,62 @@ class DaytonaSandboxProvider(LegacyRuntimeProviderMixin):
 
     def invalidate_sandbox_cache(self, sandbox_id: str) -> None:
         self._sandboxes.pop(sandbox_id, None)
+
+    async def adopt(self, sandbox_id: str, provider_id: str) -> bool:
+        """Adopt only the exact durable Daytona generation; never replace it."""
+
+        cached = self._sandboxes.get(sandbox_id)
+        if cached is not None:
+            cached_id = str(getattr(cached, "id", ""))
+            if cached_id != provider_id:
+                self.invalidate_sandbox_cache(sandbox_id)
+                sandbox = None
+            else:
+                sandbox = cached
+        else:
+            sandbox = None
+        if sandbox is None:
+            try:
+                async for candidate in self._iter(self._labels(sandbox_id)):
+                    if str(getattr(candidate, "id", "")) == provider_id:
+                        sandbox = candidate
+                        break
+            except self._sdk.error as exc:
+                raise ProviderError(
+                    "Daytona durable provider generation could not be reconnected",
+                    code="provider_adoption_unavailable",
+                    retryable=True,
+                    status_code=503,
+                ) from exc
+            if sandbox is None:
+                # An empty eventually-consistent inventory cannot prove that a
+                # previously recorded generation is gone.
+                raise ProviderError(
+                    "Daytona durable provider generation is not yet observable",
+                    code="provider_adoption_unavailable",
+                    retryable=True,
+                    status_code=503,
+                    headers={"Retry-After": "1"},
+                )
+            self._sandboxes[sandbox_id] = sandbox
+
+        state = self._state(sandbox)
+        try:
+            if state == "error" and self._is_recoverable(sandbox):
+                await sandbox.recover(timeout=self.config.ready_timeout_seconds)
+            elif state in {"stopped", "paused", "archived"}:
+                await self.daytona.start(
+                    sandbox,
+                    timeout=self.config.ready_timeout_seconds,
+                )
+        except (self._sdk.not_found_error, self._sdk.error) as exc:
+            raise ProviderError(
+                "Daytona durable provider generation could not be resumed",
+                code="provider_adoption_unavailable",
+                retryable=True,
+                status_code=503,
+            ) from exc
+        return True
 
     def _commit_complete_inventory(
         self,
@@ -261,9 +336,7 @@ class DaytonaSandboxProvider(LegacyRuntimeProviderMixin):
                         retryable=True,
                         status_code=429,
                         headers={
-                            "Retry-After": str(
-                                self.config.capacity_retry_after_seconds
-                            )
+                            "Retry-After": str(self.config.capacity_retry_after_seconds)
                         },
                     )
                 try:
@@ -322,9 +395,7 @@ class DaytonaSandboxProvider(LegacyRuntimeProviderMixin):
             self._capacity_generation += 1
             self._capacity_condition.notify_all()
 
-    async def _record_capacity_removed(
-        self, provider_id: str | None
-    ) -> None:
+    async def _record_capacity_removed(self, provider_id: str | None) -> None:
         async with self._capacity_condition:
             if provider_id:
                 self._counted_provider_ids.discard(provider_id)
@@ -381,9 +452,35 @@ class DaytonaSandboxProvider(LegacyRuntimeProviderMixin):
     async def create(
         self, sandbox_id: str, request: SandboxEnsureRequest
     ) -> SandboxInternalStatus:
+        return await self._create(sandbox_id, request, generation_token=None)
+
+    async def create_generation(
+        self,
+        sandbox_id: str,
+        request: SandboxEnsureRequest,
+        *,
+        generation_token: str,
+    ) -> SandboxInternalStatus:
+        return await self._create(
+            sandbox_id,
+            request,
+            generation_token=generation_token,
+        )
+
+    async def _create(
+        self,
+        sandbox_id: str,
+        request: SandboxEnsureRequest,
+        *,
+        generation_token: str | None,
+    ) -> SandboxInternalStatus:
         lock = self._create_locks.setdefault(sandbox_id, asyncio.Lock())
         async with lock:
-            existing = await self._find(sandbox_id, validate_cached=True)
+            existing = await self._find(
+                sandbox_id,
+                generation_token,
+                validate_cached=True,
+            )
             if existing is not None:
                 state = self._state(existing)
                 if state == "started":
@@ -421,9 +518,7 @@ class DaytonaSandboxProvider(LegacyRuntimeProviderMixin):
                         )
                         resumed = True
                     if not resumed:
-                        await self._finish_reservation(
-                            sandbox_id, created=False
-                        )
+                        await self._finish_reservation(sandbox_id, created=False)
                 if not missing:
                     self._sandboxes[sandbox_id] = existing
                     return await self._status(sandbox_id, existing)
@@ -433,22 +528,17 @@ class DaytonaSandboxProvider(LegacyRuntimeProviderMixin):
             try:
                 common = {
                     "env_vars": request.env,
-                    "labels": self._labels(sandbox_id),
+                    "labels": self._labels(sandbox_id, generation_token),
                     "public": False,
                     "auto_stop_interval": self.config.auto_stop_minutes,
                     "auto_archive_interval": self.config.auto_archive_minutes,
                     "auto_delete_interval": self.config.auto_delete_minutes,
                     "network_block_all": bool(
-                        self.config.network_allow_list
-                        or self.config.domain_allow_list
+                        self.config.network_allow_list or self.config.domain_allow_list
                     ),
-                    "network_allow_list": ",".join(
-                        self.config.network_allow_list
-                    )
+                    "network_allow_list": ",".join(self.config.network_allow_list)
                     or None,
-                    "domain_allow_list": ",".join(
-                        self.config.domain_allow_list
-                    )
+                    "domain_allow_list": ",".join(self.config.domain_allow_list)
                     or None,
                 }
                 params = (
@@ -461,11 +551,17 @@ class DaytonaSandboxProvider(LegacyRuntimeProviderMixin):
                 try:
                     sandbox = await self._create_at_provider(params)
                 except self._sdk.error as exc:
-                    # Daytona may accept create before the client sees a
-                    # transport failure. Re-list the scoped logical ID first.
+                    # AsyncDaytona.create combines the POST with subsequent
+                    # readiness polling. Even a DaytonaError carrying 4xx can
+                    # therefore be post-acceptance (for example a transient
+                    # 404/429 from that poll). The SDK exposes no dispatch
+                    # boundary or idempotency key, so every error from this
+                    # combined call is ambiguous. Re-list only the durable
+                    # create attempt; never authorize a second create merely
+                    # from the exception status.
                     self.invalidate_sandbox_cache(sandbox_id)
                     try:
-                        sandbox = await self._find(sandbox_id)
+                        sandbox = await self._find(sandbox_id, generation_token)
                     except Exception as lookup_exc:
                         await self._mark_reservation_ambiguous(sandbox_id)
                         reservation_finished = True
@@ -475,8 +571,11 @@ class DaytonaSandboxProvider(LegacyRuntimeProviderMixin):
                             retryable=True,
                         ) from lookup_exc
                     if sandbox is None:
+                        await self._mark_reservation_ambiguous(sandbox_id)
+                        reservation_finished = True
                         raise ProviderError(
-                            f"Daytona sandbox creation failed: {exc}",
+                            "Daytona create outcome is unknown",
+                            code="provider_create_outcome_unknown",
                             retryable=True,
                         ) from exc
                 await self._finish_reservation(
@@ -618,7 +717,8 @@ class DaytonaSandboxProvider(LegacyRuntimeProviderMixin):
         except self._sdk.not_found_error:
             self.invalidate_sandbox_cache(sandbox_id)
             await self._record_capacity_removed(provider_id)
-            return False
+            # The exact provider ID is already absent; deletion converged.
+            return True
         except self._sdk.error as exc:
             raise ProviderError(
                 f"Daytona sandbox deletion failed: {exc}", retryable=True
@@ -627,17 +727,39 @@ class DaytonaSandboxProvider(LegacyRuntimeProviderMixin):
     async def purge_managed(self, ref: SandboxRef) -> bool:
         """Purge only the provider generation observed by reconciliation."""
 
-        target = None
-        async for sandbox in self._iter(self._labels(ref.sandbox_id)):
-            if str(getattr(sandbox, "id", "")) == ref.provider_id:
-                target = sandbox
-                break
+        cached = self._sandboxes.get(ref.sandbox_id)
+        target = (
+            cached
+            if cached is not None
+            and str(getattr(cached, "id", "")) == ref.provider_id
+            else None
+        )
         if target is None:
-            return False
+            try:
+                # Use the durable exact ID. Label inventory is eventually
+                # consistent and cannot confirm deletion after a lost reply.
+                target = await self.daytona.get(ref.provider_id)
+            except self._sdk.not_found_error:
+                cached = self._sandboxes.get(ref.sandbox_id)
+                if cached is None or str(getattr(cached, "id", "")) == ref.provider_id:
+                    self.invalidate_sandbox_cache(ref.sandbox_id)
+                await self._record_capacity_removed(ref.provider_id)
+                return True
+        if str(getattr(target, "id", "")) != ref.provider_id:
+            raise ProviderError(
+                "Daytona exact lookup returned a different provider generation",
+                code="endpoint_generation_changed",
+                retryable=True,
+                status_code=409,
+            )
         try:
             await self.daytona.delete(target)
         except self._sdk.not_found_error:
-            return False
+            cached = self._sandboxes.get(ref.sandbox_id)
+            if cached is None or str(getattr(cached, "id", "")) == ref.provider_id:
+                self.invalidate_sandbox_cache(ref.sandbox_id)
+            await self._record_capacity_removed(ref.provider_id)
+            return True
         except self._sdk.error as exc:
             raise ProviderError(
                 f"Daytona managed sandbox purge failed: {exc}", retryable=True
@@ -682,6 +804,7 @@ class DaytonaSandboxProvider(LegacyRuntimeProviderMixin):
                 "X-Daytona-Skip-Preview-Warning": "true",
             },
             instance_id=self._instance_id(sandbox),
+            provider_id=str(getattr(sandbox, "id", "")) or None,
         )
 
     async def close(self) -> None:

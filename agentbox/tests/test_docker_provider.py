@@ -13,6 +13,23 @@ from agentbox.providers.podman import PodmanSandboxProvider  # noqa: E402
 from agentbox.schemas import SandboxEnsureRequest, SandboxInternalStatus  # noqa: E402
 
 
+def test_docker_provider_purges_only_the_validated_workspace(monkeypatch, tmp_path):
+    monkeypatch.setattr("shutil.which", lambda _name: "/usr/bin/docker")
+    monkeypatch.setattr(settings, "agentbox_storage_root", str(tmp_path))
+    monkeypatch.setattr(settings, "agentbox_storage_host_root", None)
+    provider = DockerSandboxProvider()
+    workspace = tmp_path / "sandbox-1"
+    workspace.mkdir()
+    (workspace / "sentinel.txt").write_text("private")
+    neighbor = tmp_path / "keep-me"
+    neighbor.mkdir()
+
+    assert asyncio.run(provider.purge_storage("sandbox-1")) is True
+    assert not workspace.exists()
+    assert neighbor.exists()
+    assert asyncio.run(provider.purge_storage("sandbox-1")) is False
+
+
 def test_docker_provider_uses_default_image_without_image_type(
     monkeypatch,
     tmp_path,
@@ -46,7 +63,9 @@ def test_docker_provider_uses_default_image_without_image_type(
     monkeypatch.setattr(provider, "_run_docker", fake_run_docker)
     monkeypatch.setattr(provider, "_inspect_sandbox", fake_inspect_sandbox)
     monkeypatch.setattr(provider, "get_status", fake_get_status)
-    monkeypatch.setattr(provider, "_wait_until_runtime_ready", fake_wait_until_runtime_ready)
+    monkeypatch.setattr(
+        provider, "_wait_until_runtime_ready", fake_wait_until_runtime_ready
+    )
 
     result = asyncio.run(
         provider.create(
@@ -100,7 +119,9 @@ def test_docker_provider_uses_host_storage_root_for_sandbox_mount(
     monkeypatch.setattr(provider, "_run_docker", fake_run_docker)
     monkeypatch.setattr(provider, "_inspect_sandbox", fake_inspect_sandbox)
     monkeypatch.setattr(provider, "get_status", fake_get_status)
-    monkeypatch.setattr(provider, "_wait_until_runtime_ready", fake_wait_until_runtime_ready)
+    monkeypatch.setattr(
+        provider, "_wait_until_runtime_ready", fake_wait_until_runtime_ready
+    )
 
     asyncio.run(provider.create("sandbox-1", SandboxEnsureRequest()))
 
@@ -197,7 +218,9 @@ def test_docker_provider_network_mode_joins_network_without_published_ports(
     monkeypatch.setattr(provider, "_run_docker", fake_run_docker)
     monkeypatch.setattr(provider, "_inspect_sandbox", fake_inspect_sandbox)
     monkeypatch.setattr(provider, "get_status", fake_get_status)
-    monkeypatch.setattr(provider, "_wait_until_runtime_ready", fake_wait_until_runtime_ready)
+    monkeypatch.setattr(
+        provider, "_wait_until_runtime_ready", fake_wait_until_runtime_ready
+    )
 
     asyncio.run(provider.create("sandbox-1", SandboxEnsureRequest()))
 

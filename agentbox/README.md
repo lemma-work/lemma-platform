@@ -113,3 +113,37 @@ make push TAG=<immutable-release-tag>
 Set `AGENTBOX_RUNTIME_IMAGE` to that immutable image in Docker/Kubernetes. E2B
 uses `E2B_SANDBOX_TEMPLATE`; Daytona uses exactly one of
 `DAYTONA_SANDBOX_SNAPSHOT` or `DAYTONA_SANDBOX_IMAGE`.
+
+`/workspace` is reserved for user projects and function working data. Browser
+profiles, cookies, saved sessions, locks, and caches are compute-ephemeral under
+`/tmp`; runtime startup also removes legacy browser state from `/workspace`.
+
+## Verification
+
+The default suite is hermetic and does not contact a sandbox provider:
+
+```bash
+uv run pytest -m "not e2e"
+```
+
+The real local-provider contract builds the current checkout for both Docker
+and Podman, then verifies runtime sessions, concurrent API/JOB functions,
+browser proxying, `/workspace/c/{date}/{slug}` continuity, suspend/resume, and
+permanent deletion:
+
+```bash
+uv run pytest tests/e2e/test_local_providers_real_e2e.py -m e2e
+```
+
+The E2B contract requires credentials and a template containing the current
+runtime code. Supply secrets through the environment, never command arguments:
+
+```bash
+E2B_API_KEY=... \
+E2B_SANDBOX_TEMPLATE=... \
+uv run pytest tests/e2e/test_e2b_real_e2e.py -m e2e
+```
+
+Real-provider tests create billable resources. Every resource receives a
+test-specific logical ID and is permanently deleted in fixture cleanup, with a
+provider-scoped E2B sweep as a failure backstop.

@@ -4,6 +4,7 @@ from app.modules.workspace.agentbox_retry import (
     CONNECT_PHASE_TRANSPORT_ERRORS,
     RETRYABLE_HTTP_STATUS_CODES,
     RETRYABLE_TRANSPORT_ERRORS,
+    is_request_proven_not_delivered,
     retry_on_transient_agentbox_error,
     truncate_message,
 )
@@ -20,6 +21,7 @@ __all__ = [
     "agentbox_sandbox_id",
     "get_function_workspace_runtime",
     "invalidate_function_workspace_env_cache",
+    "is_request_proven_not_delivered",
     "retry_on_transient_agentbox_error",
     "truncate_message",
 ]

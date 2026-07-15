@@ -26,8 +26,15 @@ class E2BProviderConfig:
     capacity_retry_after_seconds: int = 15
     create_rate_per_second: float = 1.0
     create_max_in_flight: int = 3
-    runtime_user: str = "10001"
-    runtime_bootstrap_timeout_seconds: float = 30.0
+    # E2B's commands API accepts an account name, not a numeric UID. The
+    # runtime OCI image maps UID/GID 10001 to this account.
+    runtime_user: str = "appuser"
+    # E2B imports the image filesystem but does not reliably retain OCI ENV.
+    # Keep the runtime package location explicit for the bootstrap process.
+    runtime_pythonpath: str = "/app"
+    runtime_bootstrap_timeout_seconds: float = 120.0
+    status_retry_seconds: float = 15.0
+    request_timeout_seconds: float = 20.0
 
     @classmethod
     def from_env(cls) -> "E2BProviderConfig":
@@ -45,11 +52,18 @@ class E2BProviderConfig:
         capacity_retry_after = int(
             os.environ.get("E2B_SANDBOX_RETRY_AFTER_SECONDS", "15")
         )
-        create_rate = float(
-            os.environ.get("E2B_SANDBOX_CREATE_RATE_PER_SECOND", "1")
-        )
+        create_rate = float(os.environ.get("E2B_SANDBOX_CREATE_RATE_PER_SECOND", "1"))
         create_max_in_flight = int(
             os.environ.get("E2B_SANDBOX_CREATE_MAX_IN_FLIGHT", "3")
+        )
+        status_retry_seconds = float(
+            os.environ.get("E2B_SANDBOX_STATUS_RETRY_SECONDS", "15")
+        )
+        request_timeout_seconds = float(
+            os.environ.get("E2B_REQUEST_TIMEOUT_SECONDS", "20")
+        )
+        runtime_bootstrap_timeout_seconds = float(
+            os.environ.get("E2B_RUNTIME_BOOTSTRAP_TIMEOUT_SECONDS", "120")
         )
         if not 0 < admission_wait <= 600:
             raise RuntimeError(
@@ -68,6 +82,16 @@ class E2BProviderConfig:
             raise RuntimeError(
                 "E2B_SANDBOX_CREATE_MAX_IN_FLIGHT must be between 1 and 100"
             )
+        if not 0 <= status_retry_seconds <= 30:
+            raise RuntimeError(
+                "E2B_SANDBOX_STATUS_RETRY_SECONDS must be between 0 and 30"
+            )
+        if not 1 <= request_timeout_seconds <= 120:
+            raise RuntimeError("E2B_REQUEST_TIMEOUT_SECONDS must be between 1 and 120")
+        if not 10 <= runtime_bootstrap_timeout_seconds <= 300:
+            raise RuntimeError(
+                "E2B_RUNTIME_BOOTSTRAP_TIMEOUT_SECONDS must be between 10 and 300"
+            )
         return cls(
             api_key=_required("E2B_API_KEY", "E2B"),
             template=_required("E2B_SANDBOX_TEMPLATE", "E2B"),
@@ -85,10 +109,11 @@ class E2BProviderConfig:
             capacity_retry_after_seconds=capacity_retry_after,
             create_rate_per_second=create_rate,
             create_max_in_flight=create_max_in_flight,
-            runtime_user=os.environ.get("E2B_RUNTIME_USER", "10001"),
-            runtime_bootstrap_timeout_seconds=float(
-                os.environ.get("E2B_RUNTIME_BOOTSTRAP_TIMEOUT_SECONDS", "30")
-            ),
+            runtime_user=os.environ.get("E2B_RUNTIME_USER", "appuser"),
+            runtime_pythonpath=os.environ.get("E2B_RUNTIME_PYTHONPATH", "/app"),
+            status_retry_seconds=status_retry_seconds,
+            request_timeout_seconds=request_timeout_seconds,
+            runtime_bootstrap_timeout_seconds=runtime_bootstrap_timeout_seconds,
         )
 
 
@@ -125,13 +150,9 @@ class DaytonaProviderConfig:
             )
         max_active = int(os.environ.get("DAYTONA_SANDBOX_MAX_ACTIVE", "10"))
         if not 1 <= max_active <= 100:
-            raise RuntimeError(
-                "DAYTONA_SANDBOX_MAX_ACTIVE must be between 1 and 100"
-            )
+            raise RuntimeError("DAYTONA_SANDBOX_MAX_ACTIVE must be between 1 and 100")
         auto_stop = int(os.environ.get("DAYTONA_SANDBOX_AUTO_STOP_MINUTES", "0"))
-        auto_archive = int(
-            os.environ.get("DAYTONA_SANDBOX_AUTO_ARCHIVE_MINUTES", "60")
-        )
+        auto_archive = int(os.environ.get("DAYTONA_SANDBOX_AUTO_ARCHIVE_MINUTES", "60"))
         auto_delete = int(
             os.environ.get("DAYTONA_SANDBOX_AUTO_DELETE_MINUTES", "10080")
         )
@@ -146,9 +167,7 @@ class DaytonaProviderConfig:
         admission_wait = float(
             os.environ.get("DAYTONA_SANDBOX_ADMISSION_WAIT_SECONDS", "60")
         )
-        retry_after = int(
-            os.environ.get("DAYTONA_SANDBOX_RETRY_AFTER_SECONDS", "15")
-        )
+        retry_after = int(os.environ.get("DAYTONA_SANDBOX_RETRY_AFTER_SECONDS", "15"))
         create_rate = float(
             os.environ.get("DAYTONA_SANDBOX_CREATE_RATE_PER_SECOND", "1")
         )
@@ -194,16 +213,12 @@ class DaytonaProviderConfig:
             create_max_in_flight=create_max_in_flight,
             network_allow_list=tuple(
                 item.strip()
-                for item in os.environ.get(
-                    "DAYTONA_NETWORK_ALLOW_LIST", ""
-                ).split(",")
+                for item in os.environ.get("DAYTONA_NETWORK_ALLOW_LIST", "").split(",")
                 if item.strip()
             ),
             domain_allow_list=tuple(
                 item.strip()
-                for item in os.environ.get(
-                    "DAYTONA_DOMAIN_ALLOW_LIST", ""
-                ).split(",")
+                for item in os.environ.get("DAYTONA_DOMAIN_ALLOW_LIST", "").split(",")
                 if item.strip()
             ),
             allow_unsafe_private_egress=os.environ.get(

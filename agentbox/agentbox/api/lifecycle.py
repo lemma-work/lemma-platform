@@ -9,6 +9,7 @@ from fastapi import HTTPException
 from agentbox.config import settings
 from agentbox.lifecycle_manager import SandboxLifecycleManager
 from agentbox.providers import SandboxProvider
+from agentbox.providers.errors import ProviderError
 from agentbox.providers.protocol import SandboxReleaseProvider
 from agentbox.state_store.protocol import AsyncStateStore
 
@@ -32,6 +33,8 @@ async def activity_lease(
             raise HTTPException(status_code=404, detail="Sandbox not found")
         if record.desired_state == "suspended":
             await manager.resume_claimed(sandbox_id)
+        else:
+            await manager.bind_exact_generation_claimed(record)
         lease = await store.acquire_activity_lease(
             sandbox_id,
             session_id=session_id,
@@ -43,6 +46,7 @@ async def activity_lease(
         detail = "Runtime session not found" if session_id else "Sandbox not found"
         raise HTTPException(status_code=404, detail=detail)
 
+    await _renew_provider_lease(manager, sandbox_id, lease.lease_id)
     renewal = asyncio.create_task(
         _renew_activity_lease(
             store,
@@ -81,6 +85,25 @@ async def _renew_activity_lease(
             if owner_task is not None:
                 owner_task.cancel()
             return
+        await _renew_provider_lease(manager, renewed.sandbox_id, lease_id)
+
+
+async def _renew_provider_lease(
+    manager: SandboxLifecycleManager,
+    sandbox_id: str,
+    lease_id: str,
+) -> None:
+    """Best-effort provider renewal; the durable activity lease remains primary."""
+
+    try:
+        await manager.renew_provider_lease(sandbox_id)
+    except (ProviderError, HTTPException) as exc:
+        logger.warning(
+            "agentbox_provider_lease_renewal_failed lease_id=%s sandbox_id=%s error=%s",
+            lease_id,
+            sandbox_id,
+            exc,
+        )
 
 
 async def delete_runtime_session_if_present(
@@ -122,9 +145,7 @@ async def cleanup_once(manager: SandboxLifecycleManager) -> None:
         await manager.suspend_if_idle(sandbox.sandbox_id)
 
 
-async def release_sandbox_compute(
-    provider: SandboxProvider, sandbox_id: str
-) -> bool:
+async def release_sandbox_compute(provider: SandboxProvider, sandbox_id: str) -> bool:
     """Use optional suspension, falling back to compute deletion for plugins."""
 
     if isinstance(provider, SandboxReleaseProvider):

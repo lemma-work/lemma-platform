@@ -24,18 +24,19 @@ _RESPONSE_FD_ENV = "_AGENTBOX_KERNEL_RESPONSE_FD"
 
 
 def _harden_child_process() -> None:
-    """Protect credentials and ensure a Linux child cannot outlive its parent."""
+    """Protect credentials before the kernel receives session environment."""
     if not sys.platform.startswith("linux"):
         return
     try:
         libc = ctypes.CDLL(None, use_errno=True)
-        # Linux prctl(PR_SET_PDEATHSIG, SIGKILL) and
-        # prctl(PR_SET_DUMPABLE, 0). Do both before the first request, which is
-        # when the child first receives session credentials.
-        libc.prctl(1, signal.SIGKILL, 0, 0, 0)
+        # Mark the process non-dumpable before the first request, which is when
+        # it first receives session credentials. Do not use PR_SET_PDEATHSIG
+        # here: ThreadingHTTPServer starts a kernel from a request thread and
+        # Linux associates that signal with the creating *thread*. The kernel
+        # would therefore be killed as soon as the request completed. The
+        # private close-on-exec request pipe provides parent-lifetime cleanup,
+        # while explicit session/timeout cleanup terminates the process group.
         libc.prctl(4, 0, 0, 0, 0)
-        if os.getppid() == 1:
-            os.kill(os.getpid(), signal.SIGKILL)
     except (AttributeError, OSError):
         # This is defense in depth. The sandbox remains the security boundary
         # on platforms that do not expose prctl.

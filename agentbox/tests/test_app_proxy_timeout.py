@@ -6,6 +6,7 @@ synchronous function execute is not cut off mid-run. An upstream read timeout is
 classified distinctly so the proxy can surface it as 504 (non-retryable) rather
 than a retryable 502.
 """
+
 from __future__ import annotations
 
 import types

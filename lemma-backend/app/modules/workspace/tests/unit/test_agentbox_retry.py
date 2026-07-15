@@ -6,6 +6,8 @@ import pytest
 from app.modules.workspace import agentbox_retry
 from app.modules.workspace.agentbox_retry import (
     CONNECT_PHASE_TRANSPORT_ERRORS,
+    REQUEST_NOT_DELIVERED_HEADER,
+    is_request_proven_not_delivered,
     is_retryable_http_error,
     retry_on_transient_agentbox_error,
 )
@@ -13,9 +15,18 @@ from app.modules.workspace.agentbox_retry import (
 pytestmark = pytest.mark.asyncio
 
 
-def _http_status_error(status_code: int) -> httpx.HTTPStatusError:
+def _http_status_error(
+    status_code: int,
+    *,
+    headers: dict[str, str] | None = None,
+) -> httpx.HTTPStatusError:
     request = httpx.Request("POST", "https://agentbox.test/x")
-    response = httpx.Response(status_code, request=request, text="{}")
+    response = httpx.Response(
+        status_code,
+        request=request,
+        text="{}",
+        headers=headers,
+    )
     return httpx.HTTPStatusError("error", request=request, response=response)
 
 
@@ -74,6 +85,49 @@ async def test_non_retryable_http_raises_immediately():
 
     with pytest.raises(httpx.HTTPStatusError):
         await retry_on_transient_agentbox_error(_op, max_attempts=5)
+    assert calls["n"] == 1
+
+
+async def test_manager_proven_not_delivered_response_can_be_retried_when_narrowed():
+    calls = {"n": 0}
+
+    async def _op():
+        calls["n"] += 1
+        if calls["n"] == 1:
+            raise _http_status_error(
+                503,
+                headers={REQUEST_NOT_DELIVERED_HEADER: "true"},
+            )
+        return "ok"
+
+    result = await retry_on_transient_agentbox_error(
+        _op,
+        max_attempts=3,
+        retryable_status_codes=frozenset({404, 409}),
+        retryable_transport_errors=CONNECT_PHASE_TRANSPORT_ERRORS,
+        retryable_http_error=is_request_proven_not_delivered,
+    )
+
+    assert result == "ok"
+    assert calls["n"] == 2
+
+
+async def test_unmarked_503_is_not_retried_when_narrowed():
+    calls = {"n": 0}
+
+    async def _op():
+        calls["n"] += 1
+        raise _http_status_error(503)
+
+    with pytest.raises(httpx.HTTPStatusError):
+        await retry_on_transient_agentbox_error(
+            _op,
+            max_attempts=3,
+            retryable_status_codes=frozenset({404, 409}),
+            retryable_transport_errors=CONNECT_PHASE_TRANSPORT_ERRORS,
+            retryable_http_error=is_request_proven_not_delivered,
+        )
+
     assert calls["n"] == 1
 
 

@@ -42,7 +42,7 @@ dev = [
 [package.metadata]
 requires-dist = [
     { name = "daytona", marker = "extra == 'daytona'", specifier = ">=0.196.0,<0.198.0" },
-    { name = "e2b", marker = "extra == 'e2b'", specifier = ">=2.32.0,<2.33.0" },
+    { name = "e2b", marker = "extra == 'e2b'", specifier = "==2.32.1" },
     { name = "fastapi", extras = ["standard"], specifier = ">=0.128.0" },
     { name = "kubernetes", specifier = ">=34.1.0" },
     { name = "psycopg", extras = ["binary"], marker = "extra == 'postgres'", specifier = ">=3.2.0" },

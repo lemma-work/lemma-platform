@@ -8,7 +8,9 @@ import pytest
 pytestmark = [pytest.mark.e2e, pytest.mark.agentbox]
 
 
-def _exec(manager, sandbox_id: str, session_id: str, cmd: str, *, timeout: int = 60) -> dict:
+def _exec(
+    manager, sandbox_id: str, session_id: str, cmd: str, *, timeout: int = 60
+) -> dict:
     response = manager.request_json(
         "POST",
         f"/sandboxes/{sandbox_id}/sessions/{session_id}/exec-command",

@@ -84,9 +84,7 @@ class Settings(BaseSettings):
             "AGENTBOX_FUNCTION_MAX_CONCURRENCY": str(
                 self.agentbox_function_max_concurrency
             ),
-            "AGENTBOX_FUNCTION_MAX_QUEUED": str(
-                self.agentbox_function_max_queued
-            ),
+            "AGENTBOX_FUNCTION_MAX_QUEUED": str(self.agentbox_function_max_queued),
         }
 
 

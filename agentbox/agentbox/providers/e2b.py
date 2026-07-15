@@ -7,6 +7,8 @@ import logging
 import random
 from dataclasses import dataclass
 from typing import Any
+from urllib import error as urlerror
+from urllib import request as urlrequest
 
 from agentbox.apps import SANDBOX_APPS, SandboxAppSpec
 from agentbox.schemas import (
@@ -38,6 +40,8 @@ class _E2BSdk:
     rate_limit_error: type[Exception]
     not_found_error: type[Exception]
     sandbox_error: type[Exception]
+    urlopen: Any = urlrequest.urlopen
+    definitive_create_errors: tuple[type[Exception], ...] = ()
 
 
 @dataclass(frozen=True)
@@ -51,10 +55,13 @@ def _load_sdk() -> _E2BSdk:
     try:
         from e2b import (
             AsyncSandbox,
+            AuthenticationException,
+            InvalidArgumentException,
             RateLimitException,
             SandboxException,
             SandboxNotFoundException,
             SandboxQuery,
+            TemplateException,
         )
     except ImportError as exc:  # pragma: no cover - installation diagnostic
         raise RuntimeError(
@@ -66,6 +73,11 @@ def _load_sdk() -> _E2BSdk:
         rate_limit_error=RateLimitException,
         not_found_error=SandboxNotFoundException,
         sandbox_error=SandboxException,
+        definitive_create_errors=(
+            AuthenticationException,
+            InvalidArgumentException,
+            TemplateException,
+        ),
     )
 
 
@@ -92,6 +104,8 @@ class E2BSandboxProvider(LegacyRuntimeProviderMixin):
         # Capacity is atomic inside one manager process. The manager lifespan
         # rejects multiple replicas until reservations become distributed.
         self._create_locks: dict[str, asyncio.Lock] = {}
+        self._lease_renewal_locks: dict[str, asyncio.Lock] = {}
+        self._lease_renewed_at: dict[str, float] = {}
         self._list_lock = asyncio.Lock()
         self._sandboxes: dict[str, object] = {}
         self._known_infos: dict[str, _E2BManagedInfo] = {}
@@ -102,9 +116,7 @@ class E2BSandboxProvider(LegacyRuntimeProviderMixin):
         self._counted_provider_ids: set[str] = set()
         self._capacity_generation = 0
         self._observed_active_count: int | None = None
-        self._create_semaphore = asyncio.Semaphore(
-            self.config.create_max_in_flight
-        )
+        self._create_semaphore = asyncio.Semaphore(self.config.create_max_in_flight)
         self._create_in_flight = 0
         self._create_rate_lock = asyncio.Lock()
         self._next_create_at = 0.0
@@ -113,21 +125,27 @@ class E2BSandboxProvider(LegacyRuntimeProviderMixin):
     def capacity_policy(self) -> ProviderCapacityPolicy:
         return ProviderCapacityPolicy(
             scope=(
-                f"{self.provider_name}:{self.config.owner}:"
-                f"{self.config.environment}"
+                f"{self.provider_name}:{self.config.owner}:{self.config.environment}"
             ),
             max_active=self.config.max_active,
         )
 
-    def _api_options(self) -> dict[str, str]:
-        options = {"api_key": self.config.api_key}
+    def _api_options(self) -> dict[str, Any]:
+        options: dict[str, Any] = {
+            "api_key": self.config.api_key,
+            "request_timeout": self.config.request_timeout_seconds,
+        }
         if self.config.api_url:
             options["api_url"] = self.config.api_url
         if self.config.domain:
             options["domain"] = self.config.domain
         return options
 
-    def _metadata(self, sandbox_id: str | None = None) -> dict[str, str]:
+    def _metadata(
+        self,
+        sandbox_id: str | None = None,
+        generation_token: str | None = None,
+    ) -> dict[str, str]:
         metadata = {
             "managed-by": "agentbox",
             "agentbox-owner": self.config.owner,
@@ -135,6 +153,8 @@ class E2BSandboxProvider(LegacyRuntimeProviderMixin):
         }
         if sandbox_id:
             metadata["agentbox-id"] = sandbox_id
+        if generation_token:
+            metadata["agentbox-generation"] = generation_token
         return metadata
 
     @staticmethod
@@ -166,9 +186,7 @@ class E2BSandboxProvider(LegacyRuntimeProviderMixin):
                     retry_at = parsedate_to_datetime(str(value))
                     if retry_at.tzinfo is None:
                         retry_at = retry_at.replace(tzinfo=timezone.utc)
-                    seconds = (
-                        retry_at - datetime.now(timezone.utc)
-                    ).total_seconds()
+                    seconds = (retry_at - datetime.now(timezone.utc)).total_seconds()
                 except (TypeError, ValueError, OverflowError):
                     continue
             return max(seconds, 0.0)
@@ -193,23 +211,14 @@ class E2BSandboxProvider(LegacyRuntimeProviderMixin):
                         retryable=True,
                         status_code=429,
                         headers={
-                            "Retry-After": str(
-                                self.config.capacity_retry_after_seconds
-                            )
+                            "Retry-After": str(self.config.capacity_retry_after_seconds)
                         },
                     ) from exc
                 provider_delay = self._provider_retry_after(exc)
                 base_delay = (
-                    provider_delay
-                    if provider_delay is not None
-                    else max(
-                        fallback_delay,
-                        float(self.config.capacity_retry_after_seconds),
-                    )
+                    provider_delay if provider_delay is not None else fallback_delay
                 )
-                jitter = random.uniform(
-                    0.0, min(max(base_delay * 0.2, 0.05), 2.0)
-                )
+                jitter = random.uniform(0.0, min(max(base_delay * 0.2, 0.05), 2.0))
                 delay = base_delay + jitter
                 logger.warning(
                     "agentbox_e2b_rate_limit attempt=%d "
@@ -250,15 +259,25 @@ class E2BSandboxProvider(LegacyRuntimeProviderMixin):
                 for item in await self._with_rate_limit_retry(paginator.next_items):
                     yield item
 
-    async def _find(self, sandbox_id: str):
+    async def _find(
+        self,
+        sandbox_id: str,
+        generation_token: str | None = None,
+    ):
         cached = self._known_infos.get(sandbox_id)
-        if cached is not None:
+        if cached is not None and (
+            generation_token is None
+            or cached.metadata.get("agentbox-generation") == generation_token
+        ):
             return cached
         try:
-            async for info in self._list(self._metadata(sandbox_id)):
+            async for info in self._list(self._metadata(sandbox_id, generation_token)):
                 normalized = self._normalize_info(info)
                 metadata = normalized.metadata
-                if metadata.get("agentbox-id") == sandbox_id:
+                if metadata.get("agentbox-id") == sandbox_id and (
+                    generation_token is None
+                    or metadata.get("agentbox-generation") == generation_token
+                ):
                     self._known_infos[sandbox_id] = normalized
                     return normalized
         except self._sdk.not_found_error:
@@ -280,6 +299,16 @@ class E2BSandboxProvider(LegacyRuntimeProviderMixin):
     def invalidate_sandbox_cache(self, sandbox_id: str) -> None:
         self._sandboxes.pop(sandbox_id, None)
         self._known_infos.pop(sandbox_id, None)
+        self._lease_renewed_at.pop(sandbox_id, None)
+
+    def invalidate_endpoint_cache(self, sandbox_id: str) -> None:
+        """Discard only the SDK connection, retaining the exact provider ID."""
+
+        self._sandboxes.pop(sandbox_id, None)
+
+    def _clear_lease_tracking(self, sandbox_id: str) -> None:
+        self._lease_renewed_at.pop(sandbox_id, None)
+        self._lease_renewal_locks.pop(sandbox_id, None)
 
     def _commit_complete_inventory(
         self,
@@ -287,6 +316,7 @@ class E2BSandboxProvider(LegacyRuntimeProviderMixin):
         *,
         known_at_start: dict[str, _E2BManagedInfo],
         sandboxes_at_start: dict[str, object],
+        preserve_missing: set[str],
     ) -> None:
         """Atomically prune stale scoped cache after a complete inventory.
 
@@ -300,6 +330,10 @@ class E2BSandboxProvider(LegacyRuntimeProviderMixin):
             if info.metadata.get("agentbox-id")
         }
         committed_infos = dict(observed)
+        for sandbox_id in preserve_missing:
+            info = self._known_infos.get(sandbox_id)
+            if info is known_at_start.get(sandbox_id):
+                committed_infos[sandbox_id] = info
         for sandbox_id, info in self._known_infos.items():
             if known_at_start.get(sandbox_id) is not info:
                 committed_infos[sandbox_id] = info
@@ -313,15 +347,33 @@ class E2BSandboxProvider(LegacyRuntimeProviderMixin):
                 committed_sandboxes[sandbox_id] = sandbox
                 continue
             info = committed_infos.get(sandbox_id)
-            if info is not None and str(
-                getattr(sandbox, "sandbox_id", "")
-            ) == info.provider_id:
+            if (
+                info is not None
+                and str(getattr(sandbox, "sandbox_id", "")) == info.provider_id
+            ):
                 committed_sandboxes[sandbox_id] = sandbox
 
         # No awaits occur between these assignments, so other coroutines cannot
         # observe a partially pruned cache pair.
         self._known_infos = committed_infos
         self._sandboxes = committed_sandboxes
+
+    async def _preserve_missing_inventory_entries(
+        self,
+        infos: list[_E2BManagedInfo],
+        *,
+        known_at_start: dict[str, _E2BManagedInfo],
+        sandboxes_at_start: dict[str, object],
+    ) -> set[str]:
+        """Never treat an empty eventual inventory as exact deletion proof."""
+
+        del sandboxes_at_start
+        observed_ids = {info.metadata.get("agentbox-id") for info in infos}
+        return {
+            sandbox_id
+            for sandbox_id in known_at_start
+            if sandbox_id not in observed_ids
+        }
 
     async def _connect(
         self,
@@ -332,7 +384,12 @@ class E2BSandboxProvider(LegacyRuntimeProviderMixin):
     ):
         cached = self._sandboxes.get(sandbox_id)
         if cached is not None:
-            return cached
+            if (
+                info is None
+                or str(getattr(cached, "sandbox_id", "")) == info.provider_id
+            ):
+                return cached
+            self._sandboxes.pop(sandbox_id, None)
         info = info or await self._find(sandbox_id)
         if info is None:
             return None
@@ -342,27 +399,116 @@ class E2BSandboxProvider(LegacyRuntimeProviderMixin):
                 code="sandbox_suspended",
                 status_code=409,
             )
-        try:
-            sandbox = await self._with_rate_limit_retry(
-                lambda: self._sdk.sandbox_cls.connect(
-                    info.provider_id,
-                    timeout=self.config.timeout_seconds,
-                    **self._api_options(),
+        # Once an exact provider ID is known, a connect 404 is ambiguous under
+        # E2B's eventually consistent control plane. Retry only that exact ID;
+        # never turn the miss into logical absence or replacement permission.
+        resume_deadline = self._clock() + self.config.status_retry_seconds
+        while True:
+            try:
+                sandbox = await self._with_rate_limit_retry(
+                    lambda: self._sdk.sandbox_cls.connect(
+                        info.provider_id,
+                        timeout=self.config.timeout_seconds,
+                        **self._api_options(),
+                    )
                 )
-            )
-        except self._sdk.not_found_error:
-            self.invalidate_sandbox_cache(sandbox_id)
-            return None
+                break
+            except self._sdk.not_found_error:
+                # A transient control-plane 404 does not erase the exact
+                # durable provider identity or permit a replacement
+                # generation. Resume retries only this exact provider ID.
+                self.invalidate_endpoint_cache(sandbox_id)
+                if self._clock() >= resume_deadline:
+                    raise ProviderError(
+                        "E2B durable provider generation could not be reconnected",
+                        code="provider_adoption_unavailable",
+                        retryable=True,
+                        status_code=503,
+                        headers={"Retry-After": "1"},
+                    )
+                await self._sleep(random.uniform(0.05, 0.2))
         self._sandboxes[sandbox_id] = sandbox
         self._known_infos[sandbox_id] = _E2BManagedInfo(
             provider_id=info.provider_id,
             metadata=info.metadata,
             state="running",
         )
+        self._lease_renewed_at[sandbox_id] = self._clock()
         await self._record_capacity_observed(
             sandbox_id, getattr(sandbox, "sandbox_id", None)
         )
         return sandbox
+
+    async def adopt(self, sandbox_id: str, provider_id: str) -> bool:
+        """Reconnect the durable E2B generation without relying on list()."""
+
+        cached = self._sandboxes.get(sandbox_id)
+        cached_provider_id = (
+            str(getattr(cached, "sandbox_id", "")) if cached is not None else None
+        )
+        known = self._known_infos.get(sandbox_id)
+        known_provider_id = known.provider_id if known is not None else None
+        if any(
+            observed_id and observed_id != provider_id
+            for observed_id in (cached_provider_id, known_provider_id)
+        ):
+            # Process-local inventory/cache is advisory. The provider ID in
+            # the durable state store is authoritative.
+            self.invalidate_sandbox_cache(sandbox_id)
+            cached = None
+            known = None
+        if cached is not None:
+            return True
+
+        info = _E2BManagedInfo(
+            provider_id=provider_id,
+            metadata=known.metadata
+            if known is not None
+            else self._metadata(sandbox_id),
+            state="running",
+        )
+        deadline = self._clock() + self.config.status_retry_seconds
+        last_error: Exception | None = None
+        sandbox = None
+        while True:
+            try:
+                sandbox = await self._with_rate_limit_retry(
+                    lambda: self._sdk.sandbox_cls.connect(
+                        provider_id,
+                        timeout=self.config.timeout_seconds,
+                        **self._api_options(),
+                    )
+                )
+                break
+            except (self._sdk.not_found_error, self._sdk.sandbox_error) as exc:
+                # A provider 404 is not authoritative absence: real E2B routes
+                # and connect calls can temporarily disagree while the exact
+                # generation remains alive. Explicit DELETE is the only path
+                # that clears durable identity and permits replacement.
+                last_error = exc
+                if self._clock() >= deadline:
+                    raise ProviderError(
+                        "E2B durable provider generation could not be reconnected",
+                        code="provider_adoption_unavailable",
+                        retryable=True,
+                        status_code=503,
+                        headers={"Retry-After": "1"},
+                    ) from last_error
+                await self._sleep(random.uniform(0.05, 0.2))
+        assert sandbox is not None
+        if str(getattr(sandbox, "sandbox_id", "")) != provider_id:
+            self.invalidate_sandbox_cache(sandbox_id)
+            raise ProviderError(
+                "E2B adoption returned a different provider generation",
+                code="endpoint_generation_changed",
+                retryable=True,
+                status_code=409,
+            )
+        self._sandboxes[sandbox_id] = sandbox
+        self._known_infos[sandbox_id] = info
+        self._lease_renewed_at[sandbox_id] = self._clock()
+        await self._record_capacity_observed(sandbox_id, provider_id)
+        return True
 
     async def _active_provider_ids(self) -> set[str]:
         provider_ids: set[str] = set()
@@ -435,9 +581,7 @@ class E2BSandboxProvider(LegacyRuntimeProviderMixin):
                         retryable=True,
                         status_code=429,
                         headers={
-                            "Retry-After": str(
-                                self.config.capacity_retry_after_seconds
-                            )
+                            "Retry-After": str(self.config.capacity_retry_after_seconds)
                         },
                     )
                 self._log_capacity(
@@ -537,16 +681,26 @@ class E2BSandboxProvider(LegacyRuntimeProviderMixin):
         async with self._capacity_condition:
             inventory_generation = self._capacity_generation
         normalized_infos = [
-            self._normalize_info(info)
-            async for info in self._list(self._metadata())
+            self._normalize_info(info) async for info in self._list(self._metadata())
         ]
         provider_ids = {
             info.provider_id for info in normalized_infos if info.state == "running"
         }
+        preserve_missing = await self._preserve_missing_inventory_entries(
+            normalized_infos,
+            known_at_start=known_at_start,
+            sandboxes_at_start=sandboxes_at_start,
+        )
+        provider_ids.update(
+            known_at_start[sandbox_id].provider_id
+            for sandbox_id in preserve_missing
+            if known_at_start[sandbox_id].state == "running"
+        )
         self._commit_complete_inventory(
             normalized_infos,
             known_at_start=known_at_start,
             sandboxes_at_start=sandboxes_at_start,
+            preserve_missing=preserve_missing,
         )
         async with self._capacity_condition:
             if (
@@ -577,6 +731,7 @@ class E2BSandboxProvider(LegacyRuntimeProviderMixin):
                 self._create_in_flight += 1
                 self._log_capacity("provider_create_start", sandbox_id=sandbox_id)
             try:
+
                 async def rate_limited_operation():
                     await self._wait_for_create_rate_slot()
                     return await operation()
@@ -607,52 +762,208 @@ class E2BSandboxProvider(LegacyRuntimeProviderMixin):
         sessions, function execution, or app transport.
         """
 
-        processes = await self._with_rate_limit_retry(sandbox.commands.list)
-        running = any(
-            "/usr/local/bin/start-runtime"
-            in " ".join(
-                [str(getattr(process, "cmd", "")), *map(str, getattr(process, "args", []))]
-            )
-            for process in processes
+        deadline = self._clock() + self.config.runtime_bootstrap_timeout_seconds
+        runtime_started = False
+        health_command = (
+            'python -c "import urllib.request; '
+            "[urllib.request.urlopen('http://127.0.0.1:%d/health' % port, "
+            'timeout=1).read() for port in (8080, 8090)]"'
         )
-        if running:
-            return
-        await self._with_rate_limit_retry(
-            lambda: sandbox.commands.run(
-                "/usr/local/bin/start-runtime",
-                background=True,
-                envs=env,
-                user=self.config.runtime_user,
-                timeout=self.config.runtime_bootstrap_timeout_seconds,
-            )
-        )
+        last_error: Exception | None = None
+        while self._clock() < deadline:
+            try:
+                # A newly created E2B sandbox can be visible to the control
+                # plane before its commands data plane accepts connections.
+                # Limit retries to bootstrap: replaying arbitrary user
+                # commands would not be safe. If starting the runtime had an
+                # ambiguous outcome, re-listing processes on the next pass
+                # prevents a duplicate start.
+                if not runtime_started:
+                    processes = await self._with_rate_limit_retry(sandbox.commands.list)
+                    running = any(
+                        "/usr/local/bin/start-runtime"
+                        in " ".join(
+                            [
+                                str(getattr(process, "cmd", "")),
+                                *map(str, getattr(process, "args", [])),
+                            ]
+                        )
+                        for process in processes
+                    )
+                    if not running:
+                        await self._with_rate_limit_retry(
+                            lambda: sandbox.commands.run(
+                                "/usr/local/bin/start-runtime",
+                                background=True,
+                                envs={
+                                    **env,
+                                    "PYTHONPATH": self.config.runtime_pythonpath,
+                                },
+                                user=self.config.runtime_user,
+                                timeout=(self.config.runtime_bootstrap_timeout_seconds),
+                            )
+                        )
+                    runtime_started = True
+
+                # The provider object being running is not enough: E2B can
+                # accept the background command before the imported OCI
+                # runtime and function executor are listening. Require both
+                # local and authenticated public health before publishing
+                # readiness.
+                result = await self._with_rate_limit_retry(
+                    lambda: sandbox.commands.run(
+                        health_command,
+                        envs={"PYTHONPATH": self.config.runtime_pythonpath},
+                        user=self.config.runtime_user,
+                        timeout=3,
+                    )
+                )
+                if getattr(result, "exit_code", 1) != 0:
+                    await self._sleep(0.25)
+                    continue
+
+                if await self._public_runtime_ready(sandbox):
+                    return
+            except (self._sdk.not_found_error, self._sdk.sandbox_error) as exc:
+                # E2B currently reports the same early data-plane propagation
+                # race as either SandboxNotFoundException or TimeoutException
+                # (both provider sandbox errors). Retry only within the
+                # configured readiness budget and fail closed below.
+                last_error = exc
+            await self._sleep(0.25)
+        raise ProviderError(
+            "E2B runtime did not become ready inside the sandbox",
+            code="runtime_bootstrap_failed",
+            retryable=True,
+            status_code=504,
+        ) from last_error
+
+    async def _public_runtime_ready(self, sandbox) -> bool:  # type: ignore[no-untyped-def]
+        """Use E2B's authenticated runtime gateway as data-plane evidence."""
+
+        token = getattr(sandbox, "traffic_access_token", None)
+        if not token:
+            return False
+        def check_public_endpoint() -> bool:
+            for port in (8080, 8090):
+                public_request = urlrequest.Request(
+                    f"https://{sandbox.get_host(port)}/health",
+                    headers={"e2b-traffic-access-token": str(token)},
+                    method="GET",
+                )
+                try:
+                    with self._sdk.urlopen(public_request, timeout=2) as response:
+                        if not 200 <= response.status < 300:
+                            return False
+                except (urlerror.URLError, OSError, TimeoutError):
+                    return False
+            return True
+
+        return await asyncio.to_thread(check_public_endpoint)
+
+    async def _renew_timeout(self, sandbox, sandbox_id: str) -> bool:  # type: ignore[no-untyped-def]
+        """Best-effort lease renewal without rejecting healthy data-plane work."""
+
+        deadline = self._clock() + self.config.status_retry_seconds
+        last_error: Exception | None = None
+        while True:
+            try:
+                await self._with_rate_limit_retry(
+                    lambda: sandbox.set_timeout(
+                        self.config.timeout_seconds, **self._api_options()
+                    )
+                )
+                return True
+            except (self._sdk.not_found_error, self._sdk.sandbox_error) as exc:
+                last_error = exc
+                if await self._public_runtime_ready(sandbox):
+                    logger.warning(
+                        "agentbox_e2b_timeout_renewal_deferred "
+                        "sandbox_id=%s provider_id=%s",
+                        sandbox_id,
+                        getattr(sandbox, "sandbox_id", None),
+                    )
+                    return False
+                if self._clock() >= deadline:
+                    raise ProviderError(
+                        "E2B timeout renewal remained unavailable",
+                        code="provider_lease_unavailable",
+                        retryable=True,
+                        status_code=503,
+                    ) from last_error
+                await self._sleep(random.uniform(0.05, 0.2))
+
+    async def renew_lease(self, sandbox_id: str) -> None:
+        """Extend one running sandbox timeout at most once per timeout third."""
+
+        lock = self._lease_renewal_locks.setdefault(sandbox_id, asyncio.Lock())
+        async with lock:
+            now = self._clock()
+            renewed_at = self._lease_renewed_at.get(sandbox_id)
+            if (
+                renewed_at is not None
+                and now - renewed_at < self.config.timeout_seconds / 3
+            ):
+                return
+            sandbox = self._sandboxes.get(sandbox_id)
+            if sandbox is None:
+                sandbox = await self._connect(sandbox_id)
+                if sandbox is None:
+                    raise SandboxNotFoundError(sandbox_id)
+                return
+            if await self._renew_timeout(sandbox, sandbox_id):
+                self._lease_renewed_at[sandbox_id] = self._clock()
 
     async def create(
         self, sandbox_id: str, request: SandboxEnsureRequest
     ) -> SandboxInternalStatus:
+        return await self._create(sandbox_id, request, generation_token=None)
+
+    async def create_generation(
+        self,
+        sandbox_id: str,
+        request: SandboxEnsureRequest,
+        *,
+        generation_token: str,
+    ) -> SandboxInternalStatus:
+        return await self._create(
+            sandbox_id,
+            request,
+            generation_token=generation_token,
+        )
+
+    async def _create(
+        self,
+        sandbox_id: str,
+        request: SandboxEnsureRequest,
+        *,
+        generation_token: str | None,
+    ) -> SandboxInternalStatus:
         lock = self._create_locks.setdefault(sandbox_id, asyncio.Lock())
         async with lock:
-            existing = await self._find(sandbox_id)
+            existing = await self._find(sandbox_id, generation_token)
             if existing is not None:
                 if existing.state == "running":
                     try:
                         sandbox = await self._connect(sandbox_id, existing)
                         if sandbox is not None:
-                            await sandbox.set_timeout(
-                                self.config.timeout_seconds, **self._api_options()
-                            )
-                            await self._bootstrap_sandbox(sandbox, request.env)
+                            await self.renew_lease(sandbox_id)
                             return await self._status(sandbox_id, sandbox)
-                    except SandboxNotFoundError:
-                        self.invalidate_sandbox_cache(sandbox_id)
+                        raise SandboxNotFoundError(sandbox_id)
+                    except SandboxNotFoundError as exc:
+                        self.invalidate_endpoint_cache(sandbox_id)
+                        raise ProviderError(
+                            "E2B durable provider generation could not be reconnected",
+                            code="provider_adoption_unavailable",
+                            retryable=True,
+                            status_code=503,
+                            headers={"Retry-After": "1"},
+                        ) from exc
                 else:
                     await self._reserve_capacity(sandbox_id)
                     resumed = False
-                    missing = False
                     try:
-                        sandbox = await self._connect(
-                            sandbox_id, existing, resume=True
-                        )
+                        sandbox = await self._connect(sandbox_id, existing, resume=True)
                         if sandbox is None:
                             raise SandboxNotFoundError(sandbox_id)
                         await self._finish_reservation(
@@ -661,33 +972,35 @@ class E2BSandboxProvider(LegacyRuntimeProviderMixin):
                             provider_id=existing.provider_id,
                         )
                         resumed = True
-                        await self._bootstrap_sandbox(sandbox, request.env)
                         return await self._status(sandbox_id, sandbox)
-                    except SandboxNotFoundError:
-                        self.invalidate_sandbox_cache(sandbox_id)
-                        missing = True
+                    except SandboxNotFoundError as exc:
+                        self.invalidate_endpoint_cache(sandbox_id)
+                        raise ProviderError(
+                            "E2B durable provider generation could not be resumed",
+                            code="provider_adoption_unavailable",
+                            retryable=True,
+                            status_code=503,
+                            headers={"Retry-After": "1"},
+                        ) from exc
                     except Exception:
                         if resumed:
                             await self.release(sandbox_id)
                         raise
                     finally:
                         if not resumed:
-                            await self._finish_reservation(
-                                sandbox_id, created=False
-                            )
-                    if not missing:
-                        raise RuntimeError("unreachable E2B resume state")
+                            await self._finish_reservation(sandbox_id, created=False)
 
             await self._reserve_capacity(sandbox_id)
             reservation_finished = False
             sandbox = None
             try:
                 try:
+
                     async def create_at_provider():
                         return await self._sdk.sandbox_cls.create(
                             self.config.template,
                             timeout=self.config.timeout_seconds,
-                            metadata=self._metadata(sandbox_id),
+                            metadata=self._metadata(sandbox_id, generation_token),
                             envs=request.env,
                             secure=True,
                             allow_internet_access=self.config.allow_internet_access,
@@ -705,11 +1018,20 @@ class E2BSandboxProvider(LegacyRuntimeProviderMixin):
                     sandbox = await self._create_provider_sandbox(
                         create_at_provider, sandbox_id
                     )
+                except self._sdk.definitive_create_errors as exc:
+                    raise ProviderError(
+                        "E2B rejected sandbox creation before acceptance",
+                        code="provider_create_rejected",
+                        retryable=False,
+                        status_code=400,
+                    ) from exc
                 except self._sdk.sandbox_error as exc:
                     # A transport timeout can happen after E2B accepted create.
-                    # Re-list by our scoped logical ID before freeing capacity.
+                    # Re-list only this durable create attempt before freeing
+                    # capacity. A visible older generation for the same user
+                    # must never be mistaken for this accepted request.
                     try:
-                        info = await self._find(sandbox_id)
+                        info = await self._find(sandbox_id, generation_token)
                     except Exception as lookup_exc:
                         # Keep the local reservation counted until a later
                         # inventory pass can prove whether create succeeded.
@@ -721,8 +1043,11 @@ class E2BSandboxProvider(LegacyRuntimeProviderMixin):
                             retryable=True,
                         ) from lookup_exc
                     if info is None:
+                        await self._mark_reservation_ambiguous(sandbox_id)
+                        reservation_finished = True
                         raise ProviderError(
-                            f"E2B sandbox creation failed: {exc}",
+                            "E2B create outcome is unknown",
+                            code="provider_create_outcome_unknown",
                             retryable=True,
                         ) from exc
                     sandbox = await self._connect(
@@ -739,11 +1064,12 @@ class E2BSandboxProvider(LegacyRuntimeProviderMixin):
                             retryable=True,
                         ) from exc
                 self._sandboxes[sandbox_id] = sandbox
+                self._lease_renewed_at[sandbox_id] = self._clock()
                 provider_id = getattr(sandbox, "sandbox_id", None)
                 if provider_id:
                     self._known_infos[sandbox_id] = _E2BManagedInfo(
                         provider_id=str(provider_id),
-                        metadata=self._metadata(sandbox_id),
+                        metadata=self._metadata(sandbox_id, generation_token),
                         state="running",
                     )
                 await self._finish_reservation(
@@ -753,11 +1079,19 @@ class E2BSandboxProvider(LegacyRuntimeProviderMixin):
                 )
                 reservation_finished = True
                 try:
-                    await self._bootstrap_sandbox(sandbox, request.env)
                     return await self._status(sandbox_id, sandbox)
-                except Exception:
-                    await self._discard_provider(sandbox_id, provider_id)
-                    raise
+                except Exception as exc:
+                    # The provider already accepted create and returned an
+                    # exact ID. A post-create status failure is ambiguous: do
+                    # not delete the only generation and strand the durable
+                    # attempt token. Recovery will adopt this exact token/ID.
+                    raise ProviderError(
+                        "E2B create succeeded but initial status is unavailable",
+                        code="provider_create_outcome_unknown",
+                        retryable=True,
+                        status_code=503,
+                        headers={"Retry-After": "1"},
+                    ) from exc
             finally:
                 if not reservation_finished:
                     await self._finish_reservation(sandbox_id, created=False)
@@ -768,7 +1102,19 @@ class E2BSandboxProvider(LegacyRuntimeProviderMixin):
             status = await self._status(sandbox_id, sandbox)
             if status.ready:
                 return status
-            self.invalidate_sandbox_cache(sandbox_id)
+            provider_id = str(getattr(sandbox, "sandbox_id", ""))
+            known = self._known_infos.get(sandbox_id)
+            if known is not None and known.provider_id == provider_id:
+                self._known_infos[sandbox_id] = _E2BManagedInfo(
+                    provider_id=known.provider_id,
+                    metadata=known.metadata,
+                    state="paused",
+                )
+            self.invalidate_endpoint_cache(sandbox_id)
+            self._clear_lease_tracking(sandbox_id)
+            if provider_id:
+                await self._record_capacity_removed(sandbox_id, provider_id)
+            return status
         info = await self._find(sandbox_id)
         if info is None:
             raise SandboxNotFoundError(sandbox_id)
@@ -795,22 +1141,80 @@ class E2BSandboxProvider(LegacyRuntimeProviderMixin):
         )
 
     async def _status(self, sandbox_id: str, sandbox) -> SandboxInternalStatus:
+        deadline = self._clock() + self.config.status_retry_seconds
+        current = sandbox
+        last_error: Exception | None = None
         try:
-            running = bool(await sandbox.is_running())
-        except self._sdk.not_found_error as exc:
-            self.invalidate_sandbox_cache(sandbox_id)
-            raise SandboxNotFoundError(sandbox_id) from exc
+            while True:
+                try:
+                    running = bool(await current.is_running())
+                    # A successful false response is STOPPED unless the
+                    # authenticated data plane proves this is another E2B
+                    # propagation race. The bounded retry budget remains only
+                    # for NotFound/Timeout exceptions.
+                    if not running and await self._public_runtime_ready(current):
+                        running = True
+                        logger.warning(
+                            "agentbox_e2b_status_false_data_plane_override "
+                            "sandbox_id=%s provider_id=%s",
+                            sandbox_id,
+                            getattr(current, "sandbox_id", None),
+                        )
+                    break
+                except (self._sdk.not_found_error, self._sdk.sandbox_error) as exc:
+                    last_error = exc
+                    if await self._public_runtime_ready(current):
+                        running = True
+                        logger.warning(
+                            "agentbox_e2b_status_data_plane_fallback "
+                            "sandbox_id=%s provider_id=%s",
+                            sandbox_id,
+                            getattr(current, "sandbox_id", None),
+                        )
+                        break
+                    if self._clock() >= deadline:
+                        self.invalidate_endpoint_cache(sandbox_id)
+                        raise ProviderError(
+                            "E2B exact sandbox status is temporarily unavailable",
+                            code="provider_adoption_unavailable",
+                            retryable=True,
+                            status_code=503,
+                            headers={"Retry-After": "1"},
+                        ) from exc
+                    info = self._known_infos.get(sandbox_id)
+                    await self._sleep(random.uniform(0.05, 0.2))
+                    if info is None or info.state != "running":
+                        continue
+                    try:
+                        current = await self._with_rate_limit_retry(
+                            lambda: self._sdk.sandbox_cls.connect(
+                                info.provider_id,
+                                timeout=self.config.timeout_seconds,
+                                **self._api_options(),
+                            )
+                        )
+                    except (self._sdk.not_found_error, self._sdk.sandbox_error):
+                        continue
+                    self._sandboxes[sandbox_id] = current
+                    logger.info(
+                        "agentbox_e2b_status_reconnected sandbox_id=%s provider_id=%s",
+                        sandbox_id,
+                        info.provider_id,
+                    )
         except self._sdk.sandbox_error as exc:
             raise ProviderError(
                 f"E2B sandbox status failed: {exc}", retryable=True
-            ) from exc
+            ) from (last_error or exc)
+        sandbox = current
         apps = {
             app.name: SandboxInternalAppStatus(
                 name=app.name,
                 public_slug=app.public_slug,
                 port=app.port,
                 ready=running,
-                private_url=(f"https://{sandbox.get_host(app.port)}" if running else None),
+                private_url=(
+                    f"https://{sandbox.get_host(app.port)}" if running else None
+                ),
             )
             for app in SANDBOX_APPS.values()
         }
@@ -845,10 +1249,26 @@ class E2BSandboxProvider(LegacyRuntimeProviderMixin):
                     metadata=metadata,
                 )
             )
+        preserve_missing = await self._preserve_missing_inventory_entries(
+            infos,
+            known_at_start=known_at_start,
+            sandboxes_at_start=sandboxes_at_start,
+        )
+        for sandbox_id in preserve_missing:
+            info = known_at_start[sandbox_id]
+            managed.append(
+                ManagedSandbox(
+                    ref=SandboxRef(sandbox_id, info.provider_id),
+                    status=self._status_from_info(sandbox_id, info),
+                    instance_id=info.provider_id,
+                    metadata=info.metadata,
+                )
+            )
         self._commit_complete_inventory(
             infos,
             known_at_start=known_at_start,
             sandboxes_at_start=sandboxes_at_start,
+            preserve_missing=preserve_missing,
         )
         by_sandbox = {
             item.ref.sandbox_id: item.ref.provider_id
@@ -867,9 +1287,11 @@ class E2BSandboxProvider(LegacyRuntimeProviderMixin):
     async def release(self, sandbox_id: str) -> bool:
         info = await self._find(sandbox_id)
         if info is None:
+            self._clear_lease_tracking(sandbox_id)
             await self._refresh_capacity_inventory("release_not_found")
             return False
         if info.state != "running":
+            self._clear_lease_tracking(sandbox_id)
             await self._record_capacity_removed(sandbox_id, info.provider_id)
             return False
         try:
@@ -884,6 +1306,7 @@ class E2BSandboxProvider(LegacyRuntimeProviderMixin):
             )
         except self._sdk.not_found_error:
             self.invalidate_sandbox_cache(sandbox_id)
+            self._clear_lease_tracking(sandbox_id)
             await self._refresh_capacity_inventory("release_not_found")
             return False
         except self._sdk.sandbox_error as exc:
@@ -891,6 +1314,7 @@ class E2BSandboxProvider(LegacyRuntimeProviderMixin):
                 f"E2B sandbox release failed: {exc}", retryable=True
             ) from exc
         self._sandboxes.pop(sandbox_id, None)
+        self._clear_lease_tracking(sandbox_id)
         self._known_infos[sandbox_id] = _E2BManagedInfo(
             provider_id=info.provider_id,
             metadata=info.metadata,
@@ -903,9 +1327,16 @@ class E2BSandboxProvider(LegacyRuntimeProviderMixin):
         info = await self._find(sandbox_id)
         self._sandboxes.pop(sandbox_id, None)
         if info is None:
+            self._clear_lease_tracking(sandbox_id)
             await self._refresh_capacity_inventory("delete_not_found")
             return False
         try:
+            logger.warning(
+                "agentbox_e2b_kill_requested reason=logical_delete "
+                "sandbox_id=%s provider_id=%s",
+                sandbox_id,
+                info.provider_id,
+            )
             deleted = bool(
                 await self._with_rate_limit_retry(
                     lambda: self._sdk.sandbox_cls.kill(
@@ -913,17 +1344,30 @@ class E2BSandboxProvider(LegacyRuntimeProviderMixin):
                     )
                 )
             )
-            await self._record_capacity_removed(
-                sandbox_id, info.provider_id
-            )
+            if not deleted:
+                logger.info(
+                    "agentbox_e2b_kill_already_absent reason=logical_delete "
+                    "sandbox_id=%s provider_id=%s",
+                    sandbox_id,
+                    info.provider_id,
+                )
+            await self._record_capacity_removed(sandbox_id, info.provider_id)
             self._known_infos.pop(sandbox_id, None)
-            return deleted
+            self._clear_lease_tracking(sandbox_id)
+            # E2B returns False only when this exact provider-generated ID no
+            # longer exists. The requested terminal state is already reached.
+            return True
         except self._sdk.not_found_error:
-            await self._record_capacity_removed(
-                sandbox_id, info.provider_id
+            logger.info(
+                "agentbox_e2b_kill_already_absent reason=logical_delete "
+                "sandbox_id=%s provider_id=%s",
+                sandbox_id,
+                info.provider_id,
             )
+            await self._record_capacity_removed(sandbox_id, info.provider_id)
             self._known_infos.pop(sandbox_id, None)
-            return False
+            self._clear_lease_tracking(sandbox_id)
+            return True
         except self._sdk.sandbox_error as exc:
             raise ProviderError(
                 f"E2B sandbox deletion failed: {exc}", retryable=True
@@ -934,6 +1378,7 @@ class E2BSandboxProvider(LegacyRuntimeProviderMixin):
     ) -> None:
         cached = self._sandboxes.pop(sandbox_id, None)
         self._known_infos.pop(sandbox_id, None)
+        self._clear_lease_tracking(sandbox_id)
         provider_id = provider_id or getattr(cached, "sandbox_id", None)
         if not provider_id:
             await self._refresh_capacity_inventory("discard_missing_id")
@@ -943,10 +1388,14 @@ class E2BSandboxProvider(LegacyRuntimeProviderMixin):
                 retryable=True,
             )
         try:
+            logger.warning(
+                "agentbox_e2b_kill_requested reason=failed_create_cleanup "
+                "sandbox_id=%s provider_id=%s",
+                sandbox_id,
+                provider_id,
+            )
             await self._with_rate_limit_retry(
-                lambda: self._sdk.sandbox_cls.kill(
-                    provider_id, **self._api_options()
-                )
+                lambda: self._sdk.sandbox_cls.kill(provider_id, **self._api_options())
             )
         except self._sdk.not_found_error:
             pass
@@ -966,6 +1415,12 @@ class E2BSandboxProvider(LegacyRuntimeProviderMixin):
         """Purge one exact provider generation without targeting a replacement."""
 
         try:
+            logger.warning(
+                "agentbox_e2b_kill_requested reason=orphan_purge "
+                "sandbox_id=%s provider_id=%s",
+                ref.sandbox_id,
+                ref.provider_id,
+            )
             deleted = bool(
                 await self._with_rate_limit_retry(
                     lambda: self._sdk.sandbox_cls.kill(
@@ -973,7 +1428,20 @@ class E2BSandboxProvider(LegacyRuntimeProviderMixin):
                     )
                 )
             )
+            if not deleted:
+                logger.info(
+                    "agentbox_e2b_kill_already_absent reason=orphan_purge "
+                    "sandbox_id=%s provider_id=%s",
+                    ref.sandbox_id,
+                    ref.provider_id,
+                )
         except self._sdk.not_found_error:
+            logger.info(
+                "agentbox_e2b_kill_already_absent reason=orphan_purge "
+                "sandbox_id=%s provider_id=%s",
+                ref.sandbox_id,
+                ref.provider_id,
+            )
             deleted = False
         except self._sdk.sandbox_error as exc:
             raise ProviderError(
@@ -983,7 +1451,10 @@ class E2BSandboxProvider(LegacyRuntimeProviderMixin):
         if known is None or known.provider_id == ref.provider_id:
             self.invalidate_sandbox_cache(ref.sandbox_id)
         await self._record_capacity_removed(ref.sandbox_id, ref.provider_id)
-        return deleted
+        # E2B returns False for a 404 from DELETE /sandboxes/{sandboxID}.
+        # Unlike an eventually-consistent list/connect miss, this exact-ID
+        # deletion response proves the requested terminal state is reached.
+        return True
 
     async def resolve_endpoint(
         self,
@@ -996,6 +1467,113 @@ class E2BSandboxProvider(LegacyRuntimeProviderMixin):
         sandbox = await self._connect(sandbox_id)
         if sandbox is None:
             raise SandboxNotFoundError(sandbox_id)
+        return self._endpoint_from_sandbox(sandbox_id, sandbox, app)
+
+    async def refresh_endpoint(
+        self,
+        sandbox_id: str,
+        app: SandboxAppSpec,
+        *,
+        instance_id: str,
+        protocol: EndpointProtocol = "http",
+    ) -> SandboxEndpoint:
+        """Refresh one proven provider route without consulting inventory.
+
+        E2B list results are eventually consistent immediately after create.
+        The structured gateway miss already supplies the exact provider ID, so
+        reconnect that generation directly to refresh its domain and traffic
+        token. Never delete or pause compute on refresh failure.
+        """
+
+        del protocol
+        known = self._known_infos.get(sandbox_id)
+        if known is not None and known.provider_id != instance_id:
+            raise ProviderError(
+                "E2B endpoint generation changed during route refresh",
+                code="endpoint_generation_changed",
+                retryable=True,
+                status_code=409,
+            )
+        cached = self._sandboxes.get(sandbox_id)
+        cached_provider_id = (
+            str(getattr(cached, "sandbox_id", "")) if cached is not None else None
+        )
+        if cached_provider_id not in {None, "", instance_id}:
+            raise ProviderError(
+                "E2B cached endpoint belongs to a different provider generation",
+                code="endpoint_generation_changed",
+                retryable=True,
+                status_code=409,
+            )
+        deadline = self._clock() + self.config.status_retry_seconds
+        last_error: Exception | None = None
+        while True:
+            try:
+                sandbox = await self._with_rate_limit_retry(
+                    lambda: self._sdk.sandbox_cls.connect(
+                        instance_id,
+                        timeout=self.config.timeout_seconds,
+                        **self._api_options(),
+                    )
+                )
+                break
+            except (self._sdk.not_found_error, self._sdk.sandbox_error) as exc:
+                # E2B's connect control plane can lag the authenticated gateway
+                # while the sandbox remains alive. Retry the exact provider ID
+                # only; inventory, pause, and delete are deliberately excluded
+                # from endpoint recovery.
+                last_error = exc
+                if self._clock() >= deadline:
+                    if cached is not None:
+                        # A gateway miss does not prove this exact sandbox is
+                        # gone. Keep its authenticated endpoint and grant the
+                        # transport another bounded retry window rather than
+                        # converting route flapping into lifecycle churn.
+                        logger.warning(
+                            "agentbox_e2b_endpoint_refresh_control_plane_lag "
+                            "sandbox_id=%s provider_id=%s",
+                            sandbox_id,
+                            instance_id,
+                        )
+                        return self._endpoint_from_sandbox(
+                            sandbox_id,
+                            cached,
+                            app,
+                        )
+                    raise ProviderError(
+                        "E2B endpoint route refresh is temporarily unavailable",
+                        code="endpoint_routing_unavailable",
+                        retryable=True,
+                        status_code=503,
+                        headers={"Retry-After": "1"},
+                    ) from last_error
+                await self._sleep(random.uniform(0.05, 0.2))
+        provider_id = str(getattr(sandbox, "sandbox_id", ""))
+        if provider_id != instance_id:
+            raise ProviderError(
+                "E2B endpoint refresh returned a different provider generation",
+                code="endpoint_generation_changed",
+                retryable=True,
+                status_code=409,
+            )
+        self._sandboxes[sandbox_id] = sandbox
+        self._known_infos[sandbox_id] = _E2BManagedInfo(
+            provider_id=instance_id,
+            metadata=known.metadata
+            if known is not None
+            else self._metadata(sandbox_id),
+            state="running",
+        )
+        self._lease_renewed_at[sandbox_id] = self._clock()
+        await self._record_capacity_observed(sandbox_id, instance_id)
+        return self._endpoint_from_sandbox(sandbox_id, sandbox, app)
+
+    @staticmethod
+    def _endpoint_from_sandbox(
+        sandbox_id: str,
+        sandbox,
+        app: SandboxAppSpec,
+    ) -> SandboxEndpoint:
         token = getattr(sandbox, "traffic_access_token", None)
         if not token:
             raise ProviderError(
@@ -1005,8 +1583,12 @@ class E2BSandboxProvider(LegacyRuntimeProviderMixin):
             base_url=f"https://{sandbox.get_host(app.port)}",
             headers={"e2b-traffic-access-token": str(token)},
             instance_id=str(getattr(sandbox, "sandbox_id", sandbox_id)),
+            provider_id=str(getattr(sandbox, "sandbox_id", sandbox_id)),
+            transient_gateway="e2b",
         )
 
     async def close(self) -> None:
         self._sandboxes.clear()
         self._known_infos.clear()
+        self._lease_renewed_at.clear()
+        self._lease_renewal_locks.clear()

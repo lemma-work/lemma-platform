@@ -28,6 +28,10 @@ class AsyncStateStore(Protocol):
         self, sandbox_id: str, request: SandboxEnsureRequest
     ) -> SandboxRecord: ...
 
+    async def insert_sandbox_if_missing(self, sandbox_id: str) -> SandboxRecord: ...
+    async def insert_sandbox_tombstone_if_missing(
+        self, sandbox_id: str
+    ) -> SandboxRecord: ...
     async def ensure_sandbox_defaults(self, sandbox_id: str) -> SandboxRecord: ...
     async def get_sandbox(self, sandbox_id: str) -> SandboxRecord | None: ...
     async def list_sandboxes(self) -> list[SandboxRecord]: ...
@@ -43,6 +47,22 @@ class AsyncStateStore(Protocol):
         provider_id: str,
         instance_id: str | None,
         observed_generation: int,
+    ) -> SandboxRecord | None: ...
+    async def set_sandbox_provider_identity(
+        self,
+        sandbox_id: str,
+        *,
+        provider_name: str,
+        provider_id: str,
+        instance_id: str | None,
+        desired_generation: int,
+    ) -> SandboxRecord | None: ...
+    async def clear_sandbox_provider_identity(
+        self,
+        sandbox_id: str,
+        *,
+        provider_id: str,
+        desired_generation: int,
     ) -> SandboxRecord | None: ...
 
     async def upsert_session(
@@ -90,6 +110,13 @@ class AsyncStateStore(Protocol):
     async def release_activity_lease(self, lease_id: str, *, owner: str) -> bool: ...
     async def prune_expired_activity_leases(self) -> int: ...
 
+    async def has_active_activity_lease(
+        self,
+        sandbox_id: str,
+        *,
+        session_id: str | None = None,
+    ) -> bool: ...
+
     async def acquire_lifecycle_claim(
         self,
         sandbox_id: str,
@@ -119,6 +146,12 @@ class AsyncStateStore(Protocol):
         *,
         inventory_started_at: float,
     ) -> list[OrphanCandidate]: ...
+    async def list_orphans(
+        self,
+        provider_name: str,
+        *,
+        sandbox_id: str | None = None,
+    ) -> list[OrphanCandidate]: ...
     async def clear_orphan(self, provider_name: str, provider_id: str) -> bool: ...
 
     async def reserve_provider_allocation(
@@ -140,6 +173,14 @@ class AsyncStateStore(Protocol):
         provider_id: str,
     ) -> ProviderAllocation | None: ...
 
+    async def hold_provider_allocation(
+        self,
+        provider_scope: str,
+        allocation_id: str,
+        *,
+        owner: str,
+    ) -> ProviderAllocation | None: ...
+
     async def release_provider_allocation(
         self, provider_scope: str, allocation_id: str
     ) -> bool: ...
@@ -151,9 +192,20 @@ class AsyncStateStore(Protocol):
     async def reconcile_provider_allocations(
         self,
         provider_scope: str,
-        active_provider_objects: dict[str, str],
+        active_provider_objects: dict[str, tuple[str, str | None]],
         *,
         inventory_started_at: float,
     ) -> None: ...
+
+    async def reconcile_provider_inventory(
+        self,
+        provider_scope: str,
+        provider_name: str,
+        provider_objects: dict[str, tuple[str, str | None, bool]],
+        *,
+        inventory_started_at: float,
+    ) -> None:
+        """Atomically publish allocation and orphan evidence from one snapshot."""
+        ...
 
     async def close(self) -> None: ...

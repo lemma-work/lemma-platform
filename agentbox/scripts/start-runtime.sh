@@ -6,9 +6,9 @@ SCREEN="${WORKSPACE_XVFB_SCREEN:-1440x960x24}"
 DASHBOARD_PORT="${AGENT_BROWSER_DASHBOARD_PORT:-4848}"
 DASHBOARD_INTERNAL_PORT="${AGENT_BROWSER_DASHBOARD_INTERNAL_PORT:-$((DASHBOARD_PORT + 1))}"
 FUNCTION_EXECUTOR_PORT="${AGENTBOX_FUNCTION_EXECUTOR_PORT:-8090}"
-PROFILE_DIR="${AGENT_BROWSER_PROFILE:-/workspace/.browser-profile}"
-RUNTIME_DIR="${XDG_RUNTIME_DIR:-/tmp/workspace-runtime}"
-CONFIG_PATH="${AGENT_BROWSER_CONFIG:-/workspace/agent-browser.json}"
+PROFILE_DIR="${AGENT_BROWSER_PROFILE:-/tmp/agentbox-browser/profile}"
+RUNTIME_DIR="${XDG_RUNTIME_DIR:-/tmp/agentbox-browser/runtime}"
+CONFIG_PATH="${AGENT_BROWSER_CONFIG:-/tmp/agentbox-browser/config.json}"
 EXECUTABLE_PATH="${AGENT_BROWSER_EXECUTABLE_PATH:-/usr/local/bin/workspace-chrome}"
 DISPLAY_NUMBER="${DISPLAY_VALUE#:}"
 DISPLAY_NUMBER="${DISPLAY_NUMBER%%.*}"
@@ -22,10 +22,22 @@ export HOME="$HOME_DIR"
 export DISPLAY="$DISPLAY_VALUE"
 export AGENT_BROWSER_HEADED="${AGENT_BROWSER_HEADED:-true}"
 export AGENT_BROWSER_PROFILE="$PROFILE_DIR"
-export AGENT_BROWSER_SESSION_NAME="${AGENT_BROWSER_SESSION_NAME:-workspace}"
 export AGENT_BROWSER_SESSION="${AGENT_BROWSER_SESSION:-workspace}"
 export XDG_RUNTIME_DIR="$RUNTIME_DIR"
+unset AGENT_BROWSER_SESSION_NAME
 
+# Browser credentials, cookies, caches, and lock files are compute-ephemeral.
+# A retained provider disk may preserve /tmp, so clear this state whenever the
+# runtime process starts after a stop/resume. Remove the legacy workspace paths
+# once so an upgraded retained sandbox cannot silently reuse old credentials.
+case "$PROFILE_DIR" in
+  /tmp/*) rm -rf -- "$PROFILE_DIR" ;;
+esac
+case "$CONFIG_PATH" in
+  /tmp/*) rm -f -- "$CONFIG_PATH" ;;
+esac
+rm -rf -- "$HOME_DIR/.agent-browser" /workspace/.browser-profile
+rm -f -- /workspace/agent-browser.json
 mkdir -p "$PROFILE_DIR" "$XDG_RUNTIME_DIR" /tmp/.X11-unix
 rm -f \
   "$PROFILE_DIR/SingletonCookie" \
@@ -38,7 +50,6 @@ if [ ! -f "$CONFIG_PATH" ]; then
 {
   "headed": true,
   "profile": "$PROFILE_DIR",
-  "sessionName": "${AGENT_BROWSER_SESSION_NAME:-workspace}",
   "executablePath": "$EXECUTABLE_PATH",
   "args": "--no-sandbox,--disable-dev-shm-usage,--no-first-run,--no-default-browser-check"
 }

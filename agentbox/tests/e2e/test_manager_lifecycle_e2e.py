@@ -84,4 +84,3 @@ def test_manager_rejects_removed_create_fields(agentbox_server, sandbox_id):
         },
     )
     assert response.status_code == HTTPStatus.UNPROCESSABLE_ENTITY
-

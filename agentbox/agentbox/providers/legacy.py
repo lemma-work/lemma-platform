@@ -1,8 +1,16 @@
 from __future__ import annotations
 
+from collections.abc import Awaitable, Callable
+from typing import TypeVar
+
 from fastapi import HTTPException
 
 from agentbox.apps import sandbox_app
+from agentbox.endpoint_transport import (
+    EndpointRoutingUnavailable,
+    REQUEST_NOT_DELIVERED_HEADER,
+)
+from agentbox.providers.models import SandboxEndpoint
 from agentbox.runtime_proxy import RuntimeProxy
 from agentbox.schemas import (
     ExecCommandRequest,
@@ -15,6 +23,9 @@ from agentbox.schemas import (
 )
 
 
+_T = TypeVar("_T")
+
+
 class LegacyRuntimeProviderMixin:
     """Compatibility facade for the pre-transport provider API.
 
@@ -23,19 +34,73 @@ class LegacyRuntimeProviderMixin:
     third-party callers can continue calling the historical methods.
     """
 
-    async def _runtime_proxy(self, sandbox_id: str) -> RuntimeProxy:
-        status = await self.get_status(sandbox_id)  # type: ignore[attr-defined]
-        if not status.ready:
-            raise HTTPException(status_code=409, detail="Sandbox is not running")
-        endpoint = await self.resolve_endpoint(  # type: ignore[attr-defined]
-            sandbox_id,
-            sandbox_app("runtime"),
+    async def _runtime_proxy(
+        self,
+        sandbox_id: str,
+        endpoint: SandboxEndpoint | None = None,
+    ) -> RuntimeProxy:
+        runtime = sandbox_app("runtime")
+        endpoint = endpoint or await self.resolve_endpoint(  # type: ignore[attr-defined]
+            sandbox_id, runtime
         )
         return RuntimeProxy(
             endpoint.base_url,
             sandbox_id,
             headers=dict(endpoint.headers),
+            transient_gateway=endpoint.transient_gateway,
+            instance_id=endpoint.instance_id,
+            port=runtime.port,
         )
+
+    def _invalidate_runtime_endpoint(self, sandbox_id: str) -> None:
+        invalidate = getattr(self, "invalidate_sandbox_cache", None)
+        if invalidate is not None:
+            invalidate(sandbox_id)
+
+    async def _with_runtime_endpoint_refresh(
+        self,
+        sandbox_id: str,
+        operation: Callable[[RuntimeProxy], Awaitable[_T]],
+    ) -> _T:
+        proxy = await self._runtime_proxy(sandbox_id)
+        try:
+            return await operation(proxy)
+        except EndpointRoutingUnavailable as routing_error:
+            # This exception is proof of a provider pre-routing miss, not a
+            # generic 502. Reconnect once to refresh the route/domain/token and
+            # safely replay the operation. Any response that may have reached
+            # the runtime is never retried here.
+            runtime = sandbox_app("runtime")
+            refresh = getattr(self, "refresh_endpoint", None)
+            if refresh is not None:
+                endpoint = await refresh(
+                    sandbox_id,
+                    runtime,
+                    instance_id=routing_error.instance_id,
+                    protocol="http",
+                )
+                proxy = await self._runtime_proxy(sandbox_id, endpoint)
+            else:
+                self._invalidate_runtime_endpoint(sandbox_id)
+                proxy = await self._runtime_proxy(sandbox_id)
+            try:
+                return await operation(proxy)
+            except EndpointRoutingUnavailable as exc:
+                raise HTTPException(
+                    status_code=503,
+                    headers={
+                        "Retry-After": "1",
+                        REQUEST_NOT_DELIVERED_HEADER: "true",
+                    },
+                    detail={
+                        "message": (
+                            "Sandbox runtime routing is temporarily unavailable"
+                        ),
+                        "code": "endpoint_routing_unavailable",
+                        "retryable": True,
+                        "provider_id": exc.instance_id,
+                    },
+                ) from exc
 
     async def execute_code(
         self,
@@ -44,11 +109,19 @@ class LegacyRuntimeProviderMixin:
         code: str,
         timeout_seconds: int,
     ) -> ExecutePythonResponse:
-        proxy = await self._runtime_proxy(sandbox_id)
-        stdout, stderr, result, error_name, exit_code = await proxy.execute_code(
-            code,
-            timeout_seconds,
-            session_id=session_id,
+        (
+            stdout,
+            stderr,
+            result,
+            error_name,
+            exit_code,
+        ) = await self._with_runtime_endpoint_refresh(
+            sandbox_id,
+            lambda proxy: proxy.execute_code(
+                code,
+                timeout_seconds,
+                session_id=session_id,
+            ),
         )
         return ExecutePythonResponse(
             sandbox_id=sandbox_id,
@@ -67,12 +140,16 @@ class LegacyRuntimeProviderMixin:
         session_id: str,
         request_obj: RuntimeSessionRequest,
     ) -> RuntimeSessionResponse:
-        return await (await self._runtime_proxy(sandbox_id)).create_session(
-            session_id, request_obj
+        return await self._with_runtime_endpoint_refresh(
+            sandbox_id,
+            lambda proxy: proxy.create_session(session_id, request_obj),
         )
 
     async def delete_session(self, sandbox_id: str, session_id: str) -> bool:
-        return await (await self._runtime_proxy(sandbox_id)).delete_session(session_id)
+        return await self._with_runtime_endpoint_refresh(
+            sandbox_id,
+            lambda proxy: proxy.delete_session(session_id),
+        )
 
     async def exec_session_process_command(
         self,
@@ -80,8 +157,9 @@ class LegacyRuntimeProviderMixin:
         session_id: str,
         request_obj: ExecCommandRequest,
     ) -> ExecCommandResponse:
-        return await (await self._runtime_proxy(sandbox_id)).exec_session_process_command(
-            session_id, request_obj
+        return await self._with_runtime_endpoint_refresh(
+            sandbox_id,
+            lambda proxy: proxy.exec_session_process_command(session_id, request_obj),
         )
 
     async def write_session_process_stdin(
@@ -90,8 +168,9 @@ class LegacyRuntimeProviderMixin:
         session_id: str,
         request_obj: WriteStdinRequest,
     ) -> ExecCommandResponse:
-        return await (await self._runtime_proxy(sandbox_id)).write_session_process_stdin(
-            session_id, request_obj
+        return await self._with_runtime_endpoint_refresh(
+            sandbox_id,
+            lambda proxy: proxy.write_session_process_stdin(session_id, request_obj),
         )
 
     async def terminate_session_process(
@@ -100,8 +179,9 @@ class LegacyRuntimeProviderMixin:
         session_id: str,
         process_id: str,
     ) -> ExecCommandResponse:
-        return await (await self._runtime_proxy(sandbox_id)).terminate_session_process(
-            session_id, process_id
+        return await self._with_runtime_endpoint_refresh(
+            sandbox_id,
+            lambda proxy: proxy.terminate_session_process(session_id, process_id),
         )
 
     async def list_session_processes(
@@ -109,8 +189,9 @@ class LegacyRuntimeProviderMixin:
         sandbox_id: str,
         session_id: str,
     ) -> ListProcessesResponse:
-        return await (await self._runtime_proxy(sandbox_id)).list_session_processes(
-            session_id
+        return await self._with_runtime_endpoint_refresh(
+            sandbox_id,
+            lambda proxy: proxy.list_session_processes(session_id),
         )
 
     async def close(self) -> None:

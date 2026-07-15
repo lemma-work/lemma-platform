@@ -63,6 +63,24 @@ async def test_factory_parses_durable_env_csv_as_keys_not_characters(tmp_path):
 
 
 @pytest.mark.asyncio
+async def test_orphan_tombstone_insert_is_non_destructive(tmp_path):
+    store = await SQLiteStateStore.open(str(tmp_path / "state.db"))
+    try:
+        tombstone = await store.insert_sandbox_tombstone_if_missing("orphan")
+        assert tombstone.desired_state == "deleted"
+
+        existing = await store.upsert_sandbox(
+            "present",
+            SandboxEnsureRequest(env={"LEMMA_BASE_URL": "https://api.example"}),
+        )
+        unchanged = await store.insert_sandbox_tombstone_if_missing("present")
+        assert unchanged.desired_state == "present"
+        assert unchanged.env == existing.env
+    finally:
+        await store.close()
+
+
+@pytest.mark.asyncio
 async def test_versioned_sqlite_migration_preserves_rows_and_unknown_tables(tmp_path):
     path = tmp_path / "legacy.db"
     conn = sqlite3.connect(path)
@@ -334,9 +352,32 @@ async def test_lifecycle_claim_is_exclusive_and_orphan_grace_respects_it(tmp_pat
         await store.observe_orphan(
             "e2b", "provider-orphan", sandbox_id="sandbox", observed_at=now - 100
         )
+        assert [
+            orphan.provider_id
+            for orphan in await store.list_orphans(
+                "e2b",
+                sandbox_id="sandbox",
+            )
+        ] == ["provider-orphan"]
         assert await store.expired_orphans(10, inventory_started_at=now) == []
 
+        await store.reconcile_provider_allocations(
+            "e2b:test",
+            {"provider-during-claim": ("sandbox", None)},
+            inventory_started_at=now,
+        )
+        assert await store.list_provider_allocations("e2b:test") == []
+
         assert await store.release_lifecycle_claim(claim.claim_id, owner="manager-a")
+        await store.reconcile_provider_allocations(
+            "e2b:test",
+            {"provider-after-claim": ("sandbox", None)},
+            inventory_started_at=now + 1,
+        )
+        assert [
+            row.provider_id
+            for row in await store.list_provider_allocations("e2b:test")
+        ] == ["provider-after-claim"]
         candidates = await store.expired_orphans(10, inventory_started_at=now)
         assert [candidate.provider_id for candidate in candidates] == [
             "provider-orphan"
@@ -386,7 +427,10 @@ async def test_provider_reconcile_counts_duplicate_objects_and_adopts_reservatio
         inventory_started_at = time.time() + 0.01
         await store.reconcile_provider_allocations(
             "e2b:test",
-            {"provider-one": "same", "provider-two": "same"},
+            {
+                "provider-one": ("same", reservation.allocation_id),
+                "provider-two": ("same", None),
+            },
             inventory_started_at=inventory_started_at,
         )
         allocations = await store.list_provider_allocations("e2b:test")
@@ -395,6 +439,19 @@ async def test_provider_reconcile_counts_duplicate_objects_and_adopts_reservatio
             "provider-two",
         }
         assert all(row.state == "active" for row in allocations)
+
+        # One empty eventually consistent inventory snapshot must not erase
+        # either the durable create-attempt token or a reconciler-discovered
+        # provider generation. Only exact lifecycle cleanup releases them.
+        await store.reconcile_provider_allocations(
+            "e2b:test",
+            {},
+            inventory_started_at=inventory_started_at + 1,
+        )
+        after_empty_inventory = await store.list_provider_allocations("e2b:test")
+        assert {
+            (row.allocation_id, row.provider_id) for row in after_empty_inventory
+        } == {(row.allocation_id, row.provider_id) for row in allocations}
 
         await store.upsert_sandbox("other", SandboxEnsureRequest())
         blocked = await store.reserve_provider_allocation(
@@ -407,9 +464,7 @@ async def test_provider_reconcile_counts_duplicate_objects_and_adopts_reservatio
         assert blocked is None
 
         exact = next(row for row in allocations if row.provider_id == "provider-one")
-        assert await store.release_provider_allocation(
-            "e2b:test", exact.allocation_id
-        )
+        assert await store.release_provider_allocation("e2b:test", exact.allocation_id)
         remaining = await store.list_provider_allocations("e2b:test")
         assert [row.provider_id for row in remaining] == ["provider-two"]
     finally:
@@ -421,9 +476,7 @@ async def test_activity_lease_is_fenced_by_another_manager_lifecycle_claim(tmp_p
     store = await SQLiteStateStore.open(str(tmp_path / "state.db"))
     try:
         await store.upsert_sandbox("sandbox", SandboxEnsureRequest())
-        await store.upsert_session(
-            "sandbox", "session", cwd="/workspace", env_keys=[]
-        )
+        await store.upsert_session("sandbox", "session", cwd="/workspace", env_keys=[])
         claim = await store.acquire_lifecycle_claim(
             "sandbox", operation="idle-suspend", owner="manager-a", ttl_seconds=60
         )
@@ -447,13 +500,9 @@ async def test_activity_lease_is_fenced_by_another_manager_lifecycle_claim(tmp_p
         )
         assert own is not None
         assert await store.mark_sandbox_active("sandbox", owner="manager-a")
-        assert await store.touch_session(
-            "sandbox", "session", owner="manager-a"
-        )
+        assert await store.touch_session("sandbox", "session", owner="manager-a")
         assert not await store.mark_sandbox_active("sandbox", owner="manager-b")
-        assert not await store.touch_session(
-            "sandbox", "session", owner="manager-b"
-        )
+        assert not await store.touch_session("sandbox", "session", owner="manager-b")
     finally:
         await store.close()
 
@@ -589,6 +638,55 @@ async def test_postgres_legacy_schema_migration_and_store_parity():
         resumed = await store.ensure_sandbox_defaults("new")
         assert resumed.desired_state == "present"
         assert resumed.desired_generation == 3
+
+        tombstone = await store.insert_sandbox_tombstone_if_missing("orphan")
+        assert tombstone.desired_state == "deleted"
+
+        await store.observe_orphan(
+            "e2b",
+            "provider-orphan",
+            sandbox_id="orphan",
+            observed_at=time.time(),
+        )
+        assert [
+            candidate.provider_id
+            for candidate in await store.list_orphans(
+                "e2b",
+                sandbox_id="orphan",
+            )
+        ] == ["provider-orphan"]
+
+        claim = await store.acquire_lifecycle_claim(
+            "new", operation="ensure", owner="manager-a", ttl_seconds=60
+        )
+        assert claim is not None
+        await store.reconcile_provider_allocations(
+            "e2b:test",
+            {"provider-during-claim": ("new", None)},
+            inventory_started_at=time.time(),
+        )
+        assert await store.list_provider_allocations("e2b:test") == []
+        assert await store.release_lifecycle_claim(claim.claim_id, owner="manager-a")
+        await store.reconcile_provider_allocations(
+            "e2b:test",
+            {"provider-after-claim": ("new", None)},
+            inventory_started_at=time.time(),
+        )
+        assert [
+            row.provider_id
+            for row in await store.list_provider_allocations("e2b:test")
+        ] == ["provider-after-claim"]
+
+        await store.reconcile_provider_inventory(
+            "e2b:inventory",
+            "e2b",
+            {"provider-paused": ("new", "attempt-paused", False)},
+            inventory_started_at=time.time(),
+        )
+        assert [
+            orphan.provider_id
+            for orphan in await store.list_orphans("e2b", sandbox_id="new")
+        ] == ["provider-paused"]
 
         lease = await store.acquire_activity_lease(
             "new",

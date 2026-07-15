@@ -228,7 +228,8 @@ def execute_command(
         return {
             "ok": False,
             "stdout": stdout or "",
-            "stderr": (stderr or "") + f"\nCommand timed out after {timeout_seconds} seconds",
+            "stderr": (stderr or "")
+            + f"\nCommand timed out after {timeout_seconds} seconds",
             "exit_code": None,
         }
     except OSError as exc:
@@ -395,14 +396,22 @@ def _process_response(
             runtime_process.popen.wait(timeout=wait_ms / 1000)
 
     with runtime_process.lock:
-        stdout = _truncate_output(_drain_output(runtime_process.stdout), max_output_tokens)
-        stderr = _truncate_output(_drain_output(runtime_process.stderr), max_output_tokens)
+        stdout = _truncate_output(
+            _drain_output(runtime_process.stdout), max_output_tokens
+        )
+        stderr = _truncate_output(
+            _drain_output(runtime_process.stderr), max_output_tokens
+        )
         exit_code = runtime_process.popen.poll()
         completed = exit_code is not None
         if completed:
             time.sleep(0.01)
-            stdout += _truncate_output(_drain_output(runtime_process.stdout), max_output_tokens)
-            stderr += _truncate_output(_drain_output(runtime_process.stderr), max_output_tokens)
+            stdout += _truncate_output(
+                _drain_output(runtime_process.stdout), max_output_tokens
+            )
+            stderr += _truncate_output(
+                _drain_output(runtime_process.stderr), max_output_tokens
+            )
             with session.processes_lock:
                 session.processes.pop(runtime_process.process_id, None)
 
@@ -436,8 +445,7 @@ def list_processes(session_id: str) -> dict[str, Any]:
         runtime_processes = list(session.processes.values())
     return {
         "processes": [
-            _process_info(runtime_process)
-            for runtime_process in runtime_processes
+            _process_info(runtime_process) for runtime_process in runtime_processes
         ]
     }
 
@@ -526,11 +534,21 @@ def start_interactive_command(
             }
         session.processes[process_id] = runtime_process
     if pty_master_fd is not None:
-        Thread(target=_read_pty, args=(pty_master_fd, runtime_process.stdout), daemon=True).start()
+        Thread(
+            target=_read_pty, args=(pty_master_fd, runtime_process.stdout), daemon=True
+        ).start()
     elif popen.stdout is not None:
-        Thread(target=_read_stream, args=(popen.stdout, runtime_process.stdout), daemon=True).start()
+        Thread(
+            target=_read_stream,
+            args=(popen.stdout, runtime_process.stdout),
+            daemon=True,
+        ).start()
     if pty_master_fd is None and popen.stderr is not None:
-        Thread(target=_read_stream, args=(popen.stderr, runtime_process.stderr), daemon=True).start()
+        Thread(
+            target=_read_stream,
+            args=(popen.stderr, runtime_process.stderr),
+            daemon=True,
+        ).start()
     return _process_response(
         session,
         runtime_process,
@@ -561,10 +579,18 @@ def write_process_stdin(
             "error": "Process not found",
         }
     with runtime_process.lock:
-        if chars and runtime_process.popen.poll() is None and runtime_process.pty_master_fd is not None:
+        if (
+            chars
+            and runtime_process.popen.poll() is None
+            and runtime_process.pty_master_fd is not None
+        ):
             with contextlib.suppress(OSError):
                 os.write(runtime_process.pty_master_fd, chars.encode("utf-8"))
-        elif chars and runtime_process.popen.stdin and runtime_process.popen.poll() is None:
+        elif (
+            chars
+            and runtime_process.popen.stdin
+            and runtime_process.popen.poll() is None
+        ):
             try:
                 runtime_process.popen.stdin.write(chars)
                 runtime_process.popen.stdin.flush()
@@ -672,22 +698,34 @@ class RuntimeHandler(BaseHTTPRequestHandler):
         if len(parts) == 2 and parts[0] == "sessions":
             session = get_or_create_session(
                 parts[1],
-                env=payload.get("env") if isinstance(payload.get("env"), dict) else None,
+                env=payload.get("env")
+                if isinstance(payload.get("env"), dict)
+                else None,
                 cwd=payload.get("cwd") if isinstance(payload.get("cwd"), str) else None,
             )
             self._send_json(
                 HTTPStatus.OK,
-                {"session_id": session.session_id, "cwd": session.cwd, "env_keys": sorted(session.env)},
+                {
+                    "session_id": session.session_id,
+                    "cwd": session.cwd,
+                    "env_keys": sorted(session.env),
+                },
             )
             return
 
         if self.path == "/execute" or (
             len(parts) == 3 and parts[0] == "sessions" and parts[2] == "execute"
         ):
-            session_id = parts[1] if len(parts) == 3 else str(payload.get("session_id") or "default")
+            session_id = (
+                parts[1]
+                if len(parts) == 3
+                else str(payload.get("session_id") or "default")
+            )
             code = payload.get("code")
             if not isinstance(code, str):
-                self._send_json(HTTPStatus.BAD_REQUEST, {"detail": "Field 'code' must be a string"})
+                self._send_json(
+                    HTTPStatus.BAD_REQUEST, {"detail": "Field 'code' must be a string"}
+                )
                 return
             timeout_seconds = payload.get("timeout_seconds", 60)
             if (
@@ -697,7 +735,9 @@ class RuntimeHandler(BaseHTTPRequestHandler):
             ):
                 self._send_json(
                     HTTPStatus.BAD_REQUEST,
-                    {"detail": "Field 'timeout_seconds' must be an integer from 1 to 600"},
+                    {
+                        "detail": "Field 'timeout_seconds' must be an integer from 1 to 600"
+                    },
                 )
                 return
             self._send_json(
@@ -713,17 +753,28 @@ class RuntimeHandler(BaseHTTPRequestHandler):
         if self.path == "/command" or (
             len(parts) == 3 and parts[0] == "sessions" and parts[2] == "command"
         ):
-            session_id = parts[1] if len(parts) == 3 else str(payload.get("session_id") or "default")
+            session_id = (
+                parts[1]
+                if len(parts) == 3
+                else str(payload.get("session_id") or "default")
+            )
             command = payload.get("command")
-            if not isinstance(command, list) or not all(isinstance(part, str) for part in command):
-                self._send_json(HTTPStatus.BAD_REQUEST, {"detail": "Field 'command' must be a string list"})
+            if not isinstance(command, list) or not all(
+                isinstance(part, str) for part in command
+            ):
+                self._send_json(
+                    HTTPStatus.BAD_REQUEST,
+                    {"detail": "Field 'command' must be a string list"},
+                )
                 return
             try:
                 response = execute_command(
                     session_id,
                     command,
                     timeout_seconds=int(payload.get("timeout_seconds") or 60),
-                    cwd=payload.get("cwd") if isinstance(payload.get("cwd"), str) else None,
+                    cwd=payload.get("cwd")
+                    if isinstance(payload.get("cwd"), str)
+                    else None,
                 )
             except subprocess.TimeoutExpired as exc:
                 response = {
@@ -763,7 +814,9 @@ class RuntimeHandler(BaseHTTPRequestHandler):
 
             cmd = payload.get("cmd")
             if not isinstance(cmd, str):
-                self._send_json(HTTPStatus.BAD_REQUEST, {"detail": "Field 'cmd' must be a string"})
+                self._send_json(
+                    HTTPStatus.BAD_REQUEST, {"detail": "Field 'cmd' must be a string"}
+                )
                 return
             yield_time_ms = payload.get("yield_time_ms")
             interactive = bool(payload.get("tty")) or isinstance(yield_time_ms, int)
@@ -771,12 +824,16 @@ class RuntimeHandler(BaseHTTPRequestHandler):
                 response = start_interactive_command(
                     session_id,
                     cmd=cmd,
-                    cwd=payload.get("workdir") if isinstance(payload.get("workdir"), str) else None,
+                    cwd=payload.get("workdir")
+                    if isinstance(payload.get("workdir"), str)
+                    else None,
                     tty=bool(payload.get("tty")),
                     max_output_tokens=payload.get("max_output_tokens")
                     if isinstance(payload.get("max_output_tokens"), int)
                     else None,
-                    yield_time_ms=yield_time_ms if isinstance(yield_time_ms, int) else None,
+                    yield_time_ms=yield_time_ms
+                    if isinstance(yield_time_ms, int)
+                    else None,
                 )
             else:
                 try:
@@ -784,7 +841,9 @@ class RuntimeHandler(BaseHTTPRequestHandler):
                         session_id,
                         cmd,
                         timeout_seconds=int(payload.get("timeout") or 300),
-                        cwd=payload.get("workdir") if isinstance(payload.get("workdir"), str) else None,
+                        cwd=payload.get("workdir")
+                        if isinstance(payload.get("workdir"), str)
+                        else None,
                     )
                     response = {
                         "success": bool(result.get("ok")),
@@ -821,14 +880,19 @@ class RuntimeHandler(BaseHTTPRequestHandler):
         if len(parts) == 3 and parts[0] == "sessions" and parts[2] == "write-stdin":
             process_id = payload.get("process_id")
             if not isinstance(process_id, str):
-                self._send_json(HTTPStatus.BAD_REQUEST, {"detail": "Field 'process_id' must be a string"})
+                self._send_json(
+                    HTTPStatus.BAD_REQUEST,
+                    {"detail": "Field 'process_id' must be a string"},
+                )
                 return
             self._send_json(
                 HTTPStatus.OK,
                 write_process_stdin(
                     parts[1],
                     process_id=process_id,
-                    chars=payload.get("chars") if isinstance(payload.get("chars"), str) else None,
+                    chars=payload.get("chars")
+                    if isinstance(payload.get("chars"), str)
+                    else None,
                     max_output_tokens=payload.get("max_output_tokens")
                     if isinstance(payload.get("max_output_tokens"), int)
                     else None,
@@ -845,7 +909,11 @@ class RuntimeHandler(BaseHTTPRequestHandler):
         return
 
     def _path_parts(self) -> list[str]:
-        return [unquote(part) for part in urlparse(self.path).path.strip("/").split("/") if part]
+        return [
+            unquote(part)
+            for part in urlparse(self.path).path.strip("/").split("/")
+            if part
+        ]
 
     def _read_json(self) -> dict[str, Any] | None:
         try:
@@ -855,7 +923,9 @@ class RuntimeHandler(BaseHTTPRequestHandler):
             self._send_json(HTTPStatus.BAD_REQUEST, {"detail": "Invalid JSON body"})
             return None
         if not isinstance(payload, dict):
-            self._send_json(HTTPStatus.BAD_REQUEST, {"detail": "JSON body must be an object"})
+            self._send_json(
+                HTTPStatus.BAD_REQUEST, {"detail": "JSON body must be an object"}
+            )
             return None
         return payload
 

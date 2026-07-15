@@ -115,6 +115,13 @@ jobs:
         run: |
           docker version
           docker info
+      - name: Real Docker provider contract
+        timeout-minutes: 20
+        run: >-
+          uv run python -m pytest
+          tests/e2e/test_local_providers_real_e2e.py
+          -m e2e -k docker
+          --junitxml=agentbox-docker-e2e.xml
 
   backend-unit:
     name: lemma-backend unit

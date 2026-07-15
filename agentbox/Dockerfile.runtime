@@ -17,14 +17,13 @@ ENV PYTHONUNBUFFERED=1 \
     NPM_CONFIG_UPDATE_NOTIFIER=false \
     DISPLAY=:99 \
     HOME=/home/appuser \
-    XDG_RUNTIME_DIR=/tmp/workspace-runtime \
+    XDG_RUNTIME_DIR=/tmp/agentbox-browser/runtime \
     WORKSPACE_XVFB_SCREEN=1440x960x24 \
-    AGENT_BROWSER_CONFIG=/workspace/agent-browser.json \
+    AGENT_BROWSER_CONFIG=/tmp/agentbox-browser/config.json \
     AGENT_BROWSER_DASHBOARD_PORT=4848 \
     AGENT_BROWSER_DASHBOARD_INTERNAL_PORT=4849 \
     AGENT_BROWSER_EXECUTABLE_PATH=/usr/local/bin/workspace-chrome \
-    AGENT_BROWSER_PROFILE=/workspace/.browser-profile \
-    AGENT_BROWSER_SESSION_NAME=workspace \
+    AGENT_BROWSER_PROFILE=/tmp/agentbox-browser/profile \
     AGENT_BROWSER_SESSION=workspace \
     AGENT_BROWSER_HEADED=true \
     AGENTBOX_FUNCTION_EXECUTOR_PORT=8090 \
@@ -69,9 +68,9 @@ RUN ln -sf /usr/local/lib/node_modules/npm/bin/npm-cli.js /usr/local/bin/npm \
 
 RUN groupadd --gid 10001 appuser \
     && useradd --uid 10001 --gid 10001 -d /home/appuser -m appuser \
-    && mkdir -p /workspace /workspace/.browser-profile /home/appuser/.cache /tmp/.X11-unix /tmp/workspace-runtime \
+    && mkdir -p /workspace /home/appuser/.cache /tmp/.X11-unix /tmp/agentbox-browser/runtime \
     && chmod 1777 /tmp/.X11-unix \
-    && chown -R appuser:appuser /workspace /home/appuser /tmp/workspace-runtime
+    && chown -R appuser:appuser /workspace /home/appuser /tmp/agentbox-browser
 
 RUN pip install --no-cache-dir --disable-pip-version-check uv
 RUN uv pip install --system --no-cache-dir \
@@ -122,17 +121,6 @@ RUN echo "cache-bust: ${CACHE_BUST}" \
         echo "ERROR: system chromium is not installed" >&2; \
         exit 1; \
     fi
-
-RUN printf '%s\n' \
-    '{' \
-    '  "headed": true,' \
-    '  "profile": "/workspace/.browser-profile",' \
-    '  "sessionName": "workspace",' \
-    '  "executablePath": "/usr/local/bin/workspace-chrome",' \
-    '  "args": "--no-sandbox,--disable-dev-shm-usage,--no-first-run,--no-default-browser-check"' \
-    '}' \
-    > /workspace/agent-browser.json \
-    && chown appuser:appuser /workspace/agent-browser.json
 
 COPY lemma-python /sdk/lemma-python
 COPY lemma-pod-bundle /sdk/lemma-pod-bundle

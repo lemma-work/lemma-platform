@@ -600,9 +600,20 @@ async def test_execute_function_api_uses_cached_workspace_command(
     clients = _install_executor(
         service,
         [
-            FunctionInvokeResponse(
+            FunctionJobAcceptedResponse(
+                run_id=run.id,
+                job_id=f"function:{run.id}",
+            ),
+            FunctionJobStatusResponse(
+                run_id=run.id,
+                job_id=f"function:{run.id}",
                 status="completed",
                 output_data={"done": True},
+                code_hash="abc123",
+                duration_ms=10,
+            ),
+            FunctionLogsResponse(
+                run_id=run.id,
                 logs=[
                     FunctionLogEntry(
                         timestamp="2026-06-02T00:00:00Z",
@@ -610,9 +621,7 @@ async def test_execute_function_api_uses_cached_workspace_command(
                         message="ok",
                     )
                 ],
-                code_hash="abc123",
-                duration_ms=10,
-            )
+            ),
         ],
     )
 
@@ -631,7 +640,13 @@ async def test_execute_function_api_uses_cached_workspace_command(
     assert execute_call["function_name"] == function.name
     assert execute_call["request"].input_data == {"a": 1}
     assert not hasattr(execute_call["request"], "env_vars")
-    assert execute_call["request"].async_job is False
+    assert execute_call["request"].async_job is True
+    assert [call for client in clients for call in client.status_calls][-1][
+        "run_id"
+    ] == run.id
+    assert [call for client in clients for call in client.log_calls][-1][
+        "run_id"
+    ] == run.id
     service._get_code.assert_not_awaited()
 
 
@@ -1184,15 +1199,19 @@ def _gateway_timeout_error() -> httpx.HTTPStatusError:
     return httpx.HTTPStatusError("gateway timeout", request=request, response=response)
 
 
-async def test_execute_function_api_sync_504_times_out_without_retry(
+async def test_execute_function_api_submit_504_retries_same_run_id(
     service: FunctionService,
     function_repo: AsyncMock,
     run_repo: AsyncMock,
     workspace_service: AsyncMock,
     ctx: Context,
+    monkeypatch,
 ):
-    """A synchronous (API) execute that 504s at the proxy must NOT be retried --
-    the function may have run -- and surfaces as a timeout, not a re-run."""
+    """The short async admission request is idempotent by run ID.
+
+    A response-leg 504 may be retried against the same durable sandbox; the
+    executor joins the already-admitted run instead of replaying user code.
+    """
     function = _function_entity(code_path="f.py")
     function_repo.get_by_name.return_value = function
     run = _run_entity(
@@ -1200,11 +1219,35 @@ async def test_execute_function_api_sync_504_times_out_without_retry(
     )
     run_repo.create_run.return_value = run
     workspace_service.get_session.return_value = _FakeSession([])
-    clients = _install_executor(service, [_gateway_timeout_error()])
+    import app.modules.function.application.function_run_executor as ex
+
+    monkeypatch.setattr(ex, "_FUNCTION_EXECUTE_RETRY_MAX_ATTEMPTS", 2)
+    clients = _install_executor(
+        service,
+        [
+            _gateway_timeout_error(),
+            FunctionJobAcceptedResponse(
+                run_id=run.id,
+                job_id=f"function:{run.id}",
+            ),
+            FunctionJobStatusResponse(
+                run_id=run.id,
+                job_id=f"function:{run.id}",
+                status="completed",
+                output_data={"done": True},
+                code_hash="hash",
+                duration_ms=10,
+            ),
+            FunctionLogsResponse(run_id=run.id, logs=[]),
+        ],
+    )
 
     result = await _execute(service, function, run)
 
-    assert result.status == FunctionRunStatus.FAILED
-    assert "execution timeout" in (result.error or "").lower()
-    # Non-idempotent sync execute: the 504 is terminal, called exactly once.
-    assert len(clients[0].execute_calls) == 1
+    assert result.status == FunctionRunStatus.COMPLETED
+    assert result.output_data == {"done": True}
+    assert len(clients[0].execute_calls) == 2
+    assert {
+        call["request"].run_id for call in clients[0].execute_calls
+    } == {run.id}
+    assert all(call["request"].async_job for call in clients[0].execute_calls)

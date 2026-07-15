@@ -5,9 +5,9 @@ DISPLAY_VALUE="${DISPLAY:-:99}"
 SCREEN="${WORKSPACE_XVFB_SCREEN:-1440x960x24}"
 DASHBOARD_PORT="${AGENT_BROWSER_DASHBOARD_PORT:-4848}"
 DASHBOARD_INTERNAL_PORT="${AGENT_BROWSER_DASHBOARD_INTERNAL_PORT:-$((DASHBOARD_PORT + 1))}"
-PROFILE_DIR="${AGENT_BROWSER_PROFILE:-/workspace/.browser-profile}"
-RUNTIME_DIR="${XDG_RUNTIME_DIR:-/tmp/workspace-runtime}"
-CONFIG_PATH="${AGENT_BROWSER_CONFIG:-/workspace/agent-browser.json}"
+PROFILE_DIR="${AGENT_BROWSER_PROFILE:-/tmp/agentbox-browser/profile}"
+RUNTIME_DIR="${XDG_RUNTIME_DIR:-/tmp/agentbox-browser/runtime}"
+CONFIG_PATH="${AGENT_BROWSER_CONFIG:-/tmp/agentbox-browser/config.json}"
 EXECUTABLE_PATH="${AGENT_BROWSER_EXECUTABLE_PATH:-/usr/local/bin/workspace-chrome}"
 DISPLAY_NUMBER="${DISPLAY_VALUE#:}"
 DISPLAY_NUMBER="${DISPLAY_NUMBER%%.*}"
@@ -20,8 +20,8 @@ export HOME="$HOME_DIR"
 export DISPLAY="$DISPLAY_VALUE"
 export AGENT_BROWSER_HEADED="${AGENT_BROWSER_HEADED:-true}"
 export AGENT_BROWSER_PROFILE="$PROFILE_DIR"
-export AGENT_BROWSER_SESSION_NAME="${AGENT_BROWSER_SESSION_NAME:-workspace}"
 export AGENT_BROWSER_SESSION="${AGENT_BROWSER_SESSION:-workspace}"
+unset AGENT_BROWSER_SESSION_NAME
 
 mkdir -p "$PROFILE_DIR" /tmp/.X11-unix
 rm -f \
@@ -35,7 +35,6 @@ if [ ! -f "$CONFIG_PATH" ]; then
 {
   "headed": true,
   "profile": "$PROFILE_DIR",
-  "sessionName": "${AGENT_BROWSER_SESSION_NAME:-workspace}",
   "executablePath": "$EXECUTABLE_PATH",
   "args": "--no-sandbox,--disable-dev-shm-usage,--no-first-run,--no-default-browser-check"
 }

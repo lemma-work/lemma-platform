@@ -20,7 +20,7 @@ import pytest
 
 
 def pytest_configure(config: pytest.Config) -> None:
-    config.addinivalue_line("markers", "e2e: real Docker-backed AgentBox tests")
+    config.addinivalue_line("markers", "e2e: real sandbox-provider AgentBox tests")
     config.addinivalue_line("markers", "agentbox: AgentBox tests")
 
 
@@ -86,7 +86,9 @@ class AgentBoxHttpClient:
                 raw = response.read().decode("utf-8", errors="replace")
                 return HttpResponse(
                     status_code=response.status,
-                    headers={key.lower(): value for key, value in response.headers.items()},
+                    headers={
+                        key.lower(): value for key, value in response.headers.items()
+                    },
                     text=raw,
                 )
         except error.HTTPError as exc:
@@ -236,7 +238,9 @@ def agentbox_server(
             stderr=subprocess.PIPE,
             text=True,
         )
-        server = AgentBoxServer(base_url=base_url, api_key=api_key, app_domain=app_domain)
+        server = AgentBoxServer(
+            base_url=base_url, api_key=api_key, app_domain=app_domain
+        )
         try:
             deadline = time.monotonic() + 30
             while time.monotonic() < deadline:
@@ -247,7 +251,9 @@ def agentbox_server(
                         f"STDOUT:\n{stdout}\nSTDERR:\n{stderr}"
                     )
                 try:
-                    health = server.anonymous_client.request_json("GET", "/health", timeout=2)
+                    health = server.anonymous_client.request_json(
+                        "GET", "/health", timeout=2
+                    )
                     if health.status_code == HTTPStatus.OK:
                         break
                 except error.URLError:
@@ -266,8 +272,12 @@ def agentbox_server(
 
 
 @pytest.fixture
-def sandbox_id(request: pytest.FixtureRequest, agentbox_server: AgentBoxServer) -> Generator[str, None, None]:
-    value = f"e2e-{request.node.name.lower().replace('_', '-')[:32]}-{os.urandom(4).hex()}"
+def sandbox_id(
+    request: pytest.FixtureRequest, agentbox_server: AgentBoxServer
+) -> Generator[str, None, None]:
+    value = (
+        f"e2e-{request.node.name.lower().replace('_', '-')[:32]}-{os.urandom(4).hex()}"
+    )
     yield value
     agentbox_server.cleanup_sandbox(value)
 
@@ -306,7 +316,9 @@ class _FakeLemmaApiHandler(BaseHTTPRequestHandler):
                 },
             )
             return
-        expected_path = f"/pods/{fixture.pod_id}/functions/{parse.quote(fixture.name, safe='')}"
+        expected_path = (
+            f"/pods/{fixture.pod_id}/functions/{parse.quote(fixture.name, safe='')}"
+        )
         if path == expected_path:
             self._send(
                 HTTPStatus.OK,
@@ -334,7 +346,9 @@ class _FakeLemmaApiHandler(BaseHTTPRequestHandler):
 
 
 @pytest.fixture
-def fake_lemma_function_server() -> Generator[tuple[str, FakeLemmaFunction], None, None]:
+def fake_lemma_function_server() -> Generator[
+    tuple[str, FakeLemmaFunction], None, None
+]:
     from uuid import uuid4
 
     function_name = f"agentbox_e2e_{uuid4().hex[:8]}"
@@ -372,9 +386,9 @@ async def {function_name}(ctx, data: AgentBoxInput) -> AgentBoxOutput:
 
 
 @pytest.fixture
-def fake_lemma_counter_function_server() -> (
-    Generator[tuple[str, FakeLemmaFunction], None, None]
-):
+def fake_lemma_counter_function_server() -> Generator[
+    tuple[str, FakeLemmaFunction], None, None
+]:
     """Serves a function with an OBSERVABLE side effect: it appends one line to a
     per-marker file on every real invocation and returns the line count. The
     returned count reveals whether a re-POSTed run_id actually re-ran the body --
@@ -435,9 +449,9 @@ def _serve_fake_function(
 
 
 @pytest.fixture
-def fake_lemma_package_function_server() -> (
-    Generator[tuple[str, FakeLemmaFunction], None, None]
-):
+def fake_lemma_package_function_server() -> Generator[
+    tuple[str, FakeLemmaFunction], None, None
+]:
     """A function that declares a pip dependency (cowsay) and imports it at module
     top level — so it only loads/runs if the executor installed it first."""
     from uuid import uuid4

@@ -11,7 +11,11 @@ from kubernetes.client.rest import ApiException
 from agentbox.apps import SANDBOX_APPS, SandboxAppSpec
 from agentbox.config import settings
 from agentbox.sandbox_ids import sandbox_pod_name
-from agentbox.schemas import SandboxEnsureRequest, SandboxInternalAppStatus, SandboxInternalStatus
+from agentbox.schemas import (
+    SandboxEnsureRequest,
+    SandboxInternalAppStatus,
+    SandboxInternalStatus,
+)
 from agentbox.to_thread import run_sync
 from agentbox.providers.legacy import LegacyRuntimeProviderMixin
 from agentbox.providers.errors import ProviderError
@@ -87,7 +91,9 @@ class SandboxKubernetesClient(LegacyRuntimeProviderMixin):
             )
         except ApiException as exc:
             if exc.status == 404:
-                raise HTTPException(status_code=404, detail="Sandbox not found") from exc
+                raise HTTPException(
+                    status_code=404, detail="Sandbox not found"
+                ) from exc
             raise _provider_error(exc, "sandbox status") from exc
 
         return self._status_from_pod(sandbox_id, pod)
@@ -319,7 +325,9 @@ class SandboxKubernetesClient(LegacyRuntimeProviderMixin):
             )
         except ApiException as exc:
             if exc.status == 404:
-                raise HTTPException(status_code=404, detail="Sandbox not found") from exc
+                raise HTTPException(
+                    status_code=404, detail="Sandbox not found"
+                ) from exc
             raise _provider_error(exc, "endpoint resolution") from exc
         status_obj = self._status_from_pod(sandbox_id, pod)
         if not status_obj.ready:
@@ -329,14 +337,18 @@ class SandboxKubernetesClient(LegacyRuntimeProviderMixin):
         if app.name == "runtime" and not base_url:
             base_url = status_obj.runtime_url
         if not base_url:
-            raise HTTPException(status_code=409, detail="Sandbox app endpoint is missing")
+            raise HTTPException(
+                status_code=409, detail="Sandbox app endpoint is missing"
+            )
         provider_id = getattr(getattr(pod, "metadata", None), "uid", None)
         return SandboxEndpoint(
             base_url=base_url,
             instance_id=str(provider_id) if provider_id else status_obj.pod_ip,
         )
 
-    def _status_from_pod(self, sandbox_id: str, pod: client.V1Pod) -> SandboxInternalStatus:
+    def _status_from_pod(
+        self, sandbox_id: str, pod: client.V1Pod
+    ) -> SandboxInternalStatus:
         ready = False
         for status_obj in pod.status.container_statuses or []:
             if status_obj.name == "sandbox" and status_obj.ready:

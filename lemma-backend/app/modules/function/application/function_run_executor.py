@@ -62,6 +62,7 @@ from app.composition.function_workspace import (
     CONNECT_PHASE_TRANSPORT_ERRORS,
     RETRYABLE_HTTP_STATUS_CODES,
     RETRYABLE_TRANSPORT_ERRORS,
+    is_request_proven_not_delivered,
     retry_on_transient_agentbox_error,
     truncate_message,
 )
@@ -383,9 +384,15 @@ class FunctionRunExecutor:
 
         # When called from an agent tool, reuse the agent's cached delegation token
         # (keyed by workload_type/workload_id) instead of minting a separate function token.
-        effective_workload_type = run_as_workload.workload_type if run_as_workload else "function"
-        effective_workload_id = run_as_workload.workload_id if run_as_workload else function.id
-        effective_workload_name = run_as_workload.workload_name if run_as_workload else function.name
+        effective_workload_type = (
+            run_as_workload.workload_type if run_as_workload else "function"
+        )
+        effective_workload_id = (
+            run_as_workload.workload_id if run_as_workload else function.id
+        )
+        effective_workload_name = (
+            run_as_workload.workload_name if run_as_workload else function.name
+        )
 
         async def _attempt() -> FunctionInvokeResponse:
             session = await self.workspace_service.get_session(
@@ -405,13 +412,28 @@ class FunctionRunExecutor:
                     workspace_session_id=session.session_id,
                     workspace_process_id=None,
                 )
-                return await self._execute_via_function_executor(
-                    function=function,
-                    run=run,
-                    session=session,
-                    timeout_seconds=timeout_seconds,
-                    async_job=False,
-                )
+                # Keep the public API-function semantics synchronous, but use
+                # the executor's accepted-run + polling transport internally.
+                # A long function must not hold one E2B public-port request
+                # open through queueing and execution; E2B can transiently
+                # withdraw that route even while the exact sandbox and process
+                # remain healthy. Short idempotent requests keyed by run_id are
+                # recoverable without duplicating function side effects.
+                async with self._keep_sandbox_alive(session):
+                    executor_response = await self._execute_via_function_executor(
+                        function=function,
+                        run=run,
+                        session=session,
+                        timeout_seconds=timeout_seconds,
+                        async_job=True,
+                    )
+                    if isinstance(executor_response, FunctionJobAcceptedResponse):
+                        executor_response = await self._poll_executor_job(
+                            session=session,
+                            run_id=run.id,
+                            timeout_seconds=timeout_seconds,
+                        )
+                return executor_response
             finally:
                 close = getattr(session, "close", None)
                 if close is not None:
@@ -503,7 +525,9 @@ class FunctionRunExecutor:
         exc: BaseException,
         *,
         status_codes: frozenset[int] = _RECOVERABLE_SANDBOX_STATUS_CODES,
-        transport_errors: tuple[type[BaseException], ...] = _RECOVERABLE_SANDBOX_TRANSPORT_ERRORS,
+        transport_errors: tuple[
+            type[BaseException], ...
+        ] = _RECOVERABLE_SANDBOX_TRANSPORT_ERRORS,
     ) -> bool:
         """True for errors that mean "the sandbox is internally unavailable right
         now" -- a missing/not-running pod or a manager/transport blip -- as
@@ -515,7 +539,10 @@ class FunctionRunExecutor:
         non-idempotent (synchronous) execute so a request that may have already
         run is not re-run."""
         if isinstance(exc, httpx.HTTPStatusError):
-            return exc.response.status_code in status_codes
+            return (
+                exc.response.status_code in status_codes
+                or is_request_proven_not_delivered(exc)
+            )
         return isinstance(exc, transport_errors)
 
     async def _execute_with_sandbox_recovery(
@@ -524,7 +551,9 @@ class FunctionRunExecutor:
         run: FunctionRunEntity,
         make_attempt,
         recoverable_status_codes: frozenset[int] = _RECOVERABLE_SANDBOX_STATUS_CODES,
-        recoverable_transport_errors: tuple[type[BaseException], ...] = _RECOVERABLE_SANDBOX_TRANSPORT_ERRORS,
+        recoverable_transport_errors: tuple[
+            type[BaseException], ...
+        ] = _RECOVERABLE_SANDBOX_TRANSPORT_ERRORS,
     ) -> FunctionInvokeResponse:
         """Run an execution attempt, recovering from transient sandbox failures.
 
@@ -572,8 +601,10 @@ class FunctionRunExecutor:
                     )
                 )
         # Unreachable: the final attempt returns or re-raises above.
-        raise last_exc if last_exc is not None else RuntimeError(
-            "sandbox recovery exhausted without result"
+        raise (
+            last_exc
+            if last_exc is not None
+            else RuntimeError("sandbox recovery exhausted without result")
         )
 
     @contextlib.asynccontextmanager
@@ -633,7 +664,9 @@ class FunctionRunExecutor:
         env_vars = getattr(session, "env_vars", {}) or {}
         lemma_token = env_vars.get("LEMMA_TOKEN")
         if not lemma_token:
-            raise FunctionValidationError("Workspace session did not include LEMMA_TOKEN")
+            raise FunctionValidationError(
+                "Workspace session did not include LEMMA_TOKEN"
+            )
         sandbox_id = getattr(session, "sandbox_id", agentbox_sandbox_id(run.user_id))
         client = self._build_function_executor_client(lemma_token)
         async with managed_executor_client(client, sandbox_id, run.id):
@@ -660,28 +693,20 @@ class FunctionRunExecutor:
                     ),
                 )
 
-            # A synchronous execute is non-idempotent. Every upstream 5xx is
-            # ambiguous: the function may have completed its side effect before
-            # the response failed. Only 404/409 (the manager could not route to a
-            # running app) and connect-phase failures prove the execute request
-            # did not reach the function. An async job submission is safely
-            # deduplicated by run_id, so it retains the broader transient set.
-            retryable_status_codes = (
-                RETRYABLE_HTTP_STATUS_CODES
-                if async_job
-                else _NON_IDEMPOTENT_RECOVERABLE_SANDBOX_STATUS_CODES
-            )
-            retryable_transport_errors = (
-                RETRYABLE_TRANSPORT_ERRORS
-                if async_job
-                else CONNECT_PHASE_TRANSPORT_ERRORS
-            )
+            # Both API and JOB submissions are idempotent at this boundary:
+            # the executor admits by run_id and duplicate requests join or
+            # return the original result. Retrying the same request against the
+            # same durable sandbox generation is therefore safe across E2B
+            # route 5xx and response-leg transport failures. The *outer*
+            # sandbox-recovery loop remains narrow for synchronous functions;
+            # it must not replay the run in a newly created sandbox whose
+            # in-memory run registry would be empty.
             try:
                 return await retry_on_transient_agentbox_error(
                     _do_execute,
                     max_attempts=_FUNCTION_EXECUTE_RETRY_MAX_ATTEMPTS,
-                    retryable_status_codes=retryable_status_codes,
-                    retryable_transport_errors=retryable_transport_errors,
+                    retryable_status_codes=RETRYABLE_HTTP_STATUS_CODES,
+                    retryable_transport_errors=RETRYABLE_TRANSPORT_ERRORS,
                     on_retry=lambda attempt, message: logger.info(
                         "function_executor execute not ready sandbox=%s run=%s attempt=%s: %s",
                         sandbox_id,
@@ -705,8 +730,7 @@ class FunctionRunExecutor:
                         error=RuntimeErrorInfo(
                             name="GatewayTimeout",
                             message=(
-                                "Function did not return before the execution "
-                                "timeout."
+                                "Function did not return before the execution timeout."
                             ),
                         ),
                         logs=[],
@@ -725,10 +749,14 @@ class FunctionRunExecutor:
         env_vars = getattr(session, "env_vars", {}) or {}
         lemma_token = env_vars.get("LEMMA_TOKEN")
         if not lemma_token:
-            raise FunctionValidationError("Workspace session did not include LEMMA_TOKEN")
+            raise FunctionValidationError(
+                "Workspace session did not include LEMMA_TOKEN"
+            )
         sandbox_id = getattr(session, "sandbox_id", None)
         if not sandbox_id:
-            raise FunctionValidationError("Workspace session did not include sandbox_id")
+            raise FunctionValidationError(
+                "Workspace session did not include sandbox_id"
+            )
         client = self._build_function_executor_client(lemma_token)
         deadline = time.monotonic() + timeout_seconds
         async with managed_executor_client(client, sandbox_id, run_id):
@@ -781,9 +809,12 @@ class FunctionRunExecutor:
         run: FunctionRunEntity,
         response: FunctionInvokeResponse,
     ) -> None:
-        run.logs = "\n".join(
-            redact_text(entry.message) for entry in response.logs if entry.message
-        ) or None
+        run.logs = (
+            "\n".join(
+                redact_text(entry.message) for entry in response.logs if entry.message
+            )
+            or None
+        )
         if response.status == "completed":
             run.status = FunctionRunStatus.COMPLETED
             run.output_data = response.output_data
@@ -819,7 +850,9 @@ class FunctionRunExecutor:
 
     # -- Pure formatting / parsing helpers --------------------------------
 
-    def _build_execution_error_details(self, result: Any, *, stage: str) -> dict[str, Any]:
+    def _build_execution_error_details(
+        self, result: Any, *, stage: str
+    ) -> dict[str, Any]:
         details: dict[str, Any] = {"stage": stage}
 
         stdout = getattr(result, "stdout", None)
@@ -897,8 +930,7 @@ class FunctionRunExecutor:
         if isinstance(exc, FunctionValidationError):
             # Already authored to be user-facing (e.g. schema mismatch).
             return (
-                truncate_message(redact_text(str(exc)))
-                or "Function validation failed."
+                truncate_message(redact_text(str(exc))) or "Function validation failed."
             )
         if isinstance(exc, httpx.HTTPStatusError):
             status_code = exc.response.status_code

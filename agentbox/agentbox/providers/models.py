@@ -8,6 +8,7 @@ from agentbox.schemas import SandboxInternalStatus
 
 
 EndpointProtocol = Literal["http", "websocket"]
+TransientGateway = Literal["e2b"]
 
 
 @dataclass(frozen=True)
@@ -70,6 +71,8 @@ class SandboxEndpoint:
     websocket_subprotocols: tuple[str, ...] = ()
     expires_at: float | None = None
     instance_id: str | None = None
+    provider_id: str | None = None
+    transient_gateway: TransientGateway | None = None
 
     def url(self, *, protocol: EndpointProtocol = "http") -> str:
         parsed = urlparse(self.base_url)

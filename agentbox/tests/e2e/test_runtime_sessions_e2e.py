@@ -12,7 +12,7 @@ def _ensure_session(agentbox_server, sandbox_id: str, session_id: str) -> None:
     created = agentbox_server.client.request_json(
         "PUT",
         f"/sandboxes/{sandbox_id}",
-        body={"env": {"RUNTIME_ROOT_MARK": "sandbox-env"}},
+        body={"env": {"LEMMA_BASE_URL": "https://api.test.invalid"}},
         timeout=180,
     )
     assert created.status_code == HTTPStatus.OK, created.text
@@ -65,7 +65,7 @@ def test_stateful_python_shell_cwd_env_stdin_and_process_lifecycle(
         body={"code": "counter += 1\ncounter", "timeout_seconds": 30},
     )
     assert get_python_state.status_code == HTTPStatus.OK, get_python_state.text
-    assert get_python_state.json()["result"] == "42"
+    assert get_python_state.json()["result"] == "42", get_python_state.text
 
     isolated_session_id = "conversation-isolated"
     _ensure_session(agentbox_server, sandbox_id, isolated_session_id)
@@ -91,14 +91,17 @@ def test_stateful_python_shell_cwd_env_stdin_and_process_lifecycle(
         "POST",
         f"/sandboxes/{sandbox_id}/sessions/{session_id}/exec-command",
         body={
-            "cmd": "pwd; printf 'session=%s root=%s\\n' \"$SESSION_MARK\" \"$RUNTIME_ROOT_MARK\"",
+            "cmd": (
+                "pwd; printf 'session=%s concurrency=%s\\n' "
+                '"$SESSION_MARK" "$AGENTBOX_FUNCTION_MAX_CONCURRENCY"'
+            ),
             "timeout": 30,
         },
     )
     assert shell.status_code == HTTPStatus.OK, shell.text
     assert shell.json()["success"] is True
     assert "/workspace/e2e-session" in shell.json()["stdout"]
-    assert "session=session-env root=sandbox-env" in shell.json()["stdout"]
+    assert "session=session-env concurrency=8" in shell.json()["stdout"]
 
     changed_cwd = manager.request_json(
         "POST",
@@ -154,7 +157,7 @@ def test_stateful_python_shell_cwd_env_stdin_and_process_lifecycle(
         body={
             "cmd": (
                 "python -c 'import sys; "
-                "print(f\"stdin={sys.stdin.isatty()} stdout={sys.stdout.isatty()}\")'"
+                'print(f"stdin={sys.stdin.isatty()} stdout={sys.stdout.isatty()}")\''
             ),
             "tty": True,
             "yield_time_ms": 1000,

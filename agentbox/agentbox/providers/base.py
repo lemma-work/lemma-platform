@@ -17,7 +17,6 @@ from agentbox.schemas import (
 
 
 class SandboxProvider(SandboxLifecycleProvider, Protocol):
-
     async def execute_code(
         self,
         sandbox_id: str,

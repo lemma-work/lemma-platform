@@ -63,6 +63,27 @@ class SandboxReleaseProvider(Protocol):
 
 
 @runtime_checkable
+class SandboxLeaseProvider(Protocol):
+    """Optional hook for extending a running provider sandbox's lease."""
+
+    async def renew_lease(self, sandbox_id: str) -> None: ...
+
+
+@runtime_checkable
+class SandboxAdoptionProvider(Protocol):
+    """Reconnect an exact durable provider generation after manager restart."""
+
+    async def adopt(self, sandbox_id: str, provider_id: str) -> bool: ...
+
+
+@runtime_checkable
+class SandboxStoragePurgeProvider(Protocol):
+    """Optional permanent removal of storage owned by one logical sandbox."""
+
+    async def purge_storage(self, sandbox_id: str) -> bool: ...
+
+
+@runtime_checkable
 class SandboxCacheProvider(Protocol):
     """Optional cache hook used after a proxy observes a stale endpoint."""
 
@@ -79,6 +100,19 @@ class SandboxCapabilitiesProvider(Protocol):
 class SandboxCapacityProvider(Protocol):
     @property
     def capacity_policy(self) -> ProviderCapacityPolicy: ...
+
+
+@runtime_checkable
+class SandboxGenerationCreateProvider(Protocol):
+    """Create or recover only the provider object for one durable intent."""
+
+    async def create_generation(
+        self,
+        sandbox_id: str,
+        request: SandboxEnsureRequest,
+        *,
+        generation_token: str,
+    ) -> SandboxInternalStatus: ...
 
 
 @runtime_checkable

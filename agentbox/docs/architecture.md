@@ -42,10 +42,53 @@ state separately records the provider-native ID and observed instance ID.
 `PUT /sandboxes/{sandbox_id}` is an idempotent ensure: it resumes or recreates
 compute as required and does not expose the provider ID to callers.
 
-AgentBox makes a best effort to resume the same provider-native instance when
-the adapter supports stable stop/start identity. If that instance has expired
-or the provider cannot resume it, AgentBox creates a replacement and atomically
-updates the provider mapping while the public logical ID remains unchanged.
+AgentBox resumes the exact provider-native instance when the adapter supports
+stable stop/start identity. It never interprets an eventually consistent 404
+or empty inventory as permission to create a replacement.
+
+E2B and Daytona do not expose a documented idempotency key or client-selected
+sandbox ID. Before their create call, AgentBox therefore persists an at-most-
+once create intent and sends its allocation ID as `agentbox-generation`
+metadata. Recovery filters by that exact token and then records the provider-
+assigned ID. An unknowable create remains fenced and returns a retryable error;
+it cannot create again merely because inventory is temporarily empty. This
+chooses availability loss over duplicate user sandboxes. Active attempt
+allocations are released only by an exact suspend/delete/purge operation, never
+because a periodic inventory omitted them. Orphan deletion likewise keeps a
+durable tombstone until deletion of the exact provider ID is confirmed.
+Inventory-only `provider:<id>` capacity rows are discovery bookkeeping, not
+create intent. They can never authorize adoption or protect a stray generation
+from orphan cleanup; only an attempt-token allocation or the record's exact
+provider ID can do that. One attempt token is not assumed to identify one
+provider object: if duplicate native IDs carry the same token, only the native
+ID durably bound to the sandbox/allocation is accepted and every other exact ID
+is retained as an orphan. Allocation and orphan evidence from each provider
+snapshot is published in one state-store transaction, serialized with
+lifecycle claims; snapshots for a sandbox with a live claim are skipped.
+Environment replacement exact-purges the durable ID, every allocation ID, and
+every currently observed generation before publishing new environment state.
+An exact E2B `DELETE /sandboxes/{sandboxID}` response of `404` is terminal: the
+provider-generated ID is already absent, so the tombstone may be cleared. This
+rule does not apply to list, status, connect, or endpoint-route misses, which
+remain ambiguous under eventual consistency.
+Daytona follows the same postcondition through an exact-ID lookup/delete; a
+missing exact ID during permanent purge is terminal, while label-list absence
+alone is never used as deletion proof.
+
+E2B's structured gateway 502 body is not authenticated against sandbox code.
+Provider lifecycle creation is therefore never replayed after dispatch. Normal
+side-effecting app requests are retried only when a manager-owned pre-routing
+failure proves they were not dispatched. Function admission is the deliberate
+exception: it is a short POST keyed by a durable `run_id`, and the executor
+joins duplicate admissions instead of running the function twice. Lemma polls
+that run to preserve the synchronous API-function contract without holding a
+long E2B route open for the full execution. Sandbox response headers cannot
+grant replay permission.
+
+Cloud bootstrap publishes a sandbox as ready only after both the runtime on
+port 8080 and the function executor on port 8090 pass local and authenticated
+provider-route health checks. A healthy runtime alone is not sufficient for
+the AgentBox contract.
 
 Suspension and permanent deletion have intentionally different meanings:
 
@@ -57,15 +100,18 @@ Suspension and permanent deletion have intentionally different meanings:
   later ensure creates a new pod/provider generation behind the same logical
   ID. Filesystem preservation must therefore come from an external volume, not
   the provider abstraction.
-- `DELETE /sandboxes/{sandbox_id}` is a permanent purge. It removes provider
-  compute and the durable mapping. It remains destructive for API compatibility;
-  backend stop flows and routine idle cleanup use suspension instead.
+- `DELETE /sandboxes/{sandbox_id}` is a permanent purge. It removes exact
+  provider generations and the durable mapping. When a cloud create outcome is
+  still unknowable, DELETE retains a tombstone and returns a retryable error
+  until the matching generation token can be observed and purged. Backend stop
+  flows and routine idle cleanup use suspension instead.
 
 Lifecycle claims prevent two manager revisions from creating or deleting the
 same logical sandbox concurrently. Provider allocations give E2B and Daytona a
-durable, environment-scoped capacity limit. Reconciliation adopts known
-provider instances, corrects allocations, and purges unknown orphans only after
-the configured grace period.
+durable, environment-scoped capacity limit and double as create-intent tokens.
+Reconciliation adopts only an exact native ID or matching generation token,
+corrects allocations, and purges unknown orphans only after the configured
+grace period.
 
 ## Provider capabilities
 
@@ -79,6 +125,21 @@ the configured grace period.
 Capabilities are diagnostic facts, not permission to weaken a deployment. A
 provider with insufficient network isolation should be rejected for untrusted
 workloads unless the operator makes an explicit, reviewed exception.
+
+## Workspace and ephemeral runtime state
+
+`/workspace` is the fixed user-project root. Conversation work uses
+`/workspace/c/{date}/{slug}`; function source and code-hash dependency caches
+use `/workspace/pods/{pod_id}/functions/...`. The Lemma backend mirrors only the
+path suffix into the separate pod filesystem (`/workspace/...` -> `/me/...`);
+it does not treat `/me` and the sandbox disk as the same storage system.
+
+E2B, Daytona, and Docker/Podman preserve `/workspace` across their release and
+resume operations. Kubernetes does not preserve it without an external volume.
+Browser credentials are not project data: Chromium profiles, agent-browser
+session state, locks, and caches live under `/tmp` and are cleared whenever the
+runtime starts after a compute restart. Never place browser credentials or
+profiles under `/workspace`.
 
 ## State backend and secret boundary
 
@@ -160,12 +221,19 @@ E2B_SANDBOX_ADMISSION_WAIT_SECONDS=60
 E2B_SANDBOX_RETRY_AFTER_SECONDS=15
 E2B_SANDBOX_CREATE_RATE_PER_SECOND=1
 E2B_SANDBOX_CREATE_MAX_IN_FLIGHT=1
+E2B_REQUEST_TIMEOUT_SECONDS=20
+E2B_SANDBOX_STATUS_RETRY_SECONDS=15
+E2B_RUNTIME_BOOTSTRAP_TIMEOUT_SECONDS=120
 ```
 
 E2B networking denies loopback, link-local, metadata, and private IPv4/IPv6
 ranges at the template boundary. `E2B_ALLOW_INTERNET_ACCESS` controls public
 internet access. Provider rate limits honor `Retry-After` before returning a
-structured retryable error.
+structured retryable error. Control-plane requests are independently bounded
+so the one-hour sandbox lifetime cannot be mistaken for an HTTP request
+timeout. Active AgentBox heartbeats renew that lifetime through a throttled
+provider lease; idle suspension preserves the E2B filesystem until retention
+purges it.
 
 ### Daytona
 
@@ -228,5 +296,7 @@ atomic readiness markers instead of mutating one shared user site.
 
 Public CI installs every optional provider/state extra, runs Ruff, exercises all
 non-e2e tests against a real PostgreSQL service, runs the AgentBox client suite,
-and verifies that a Docker daemon can start a container. Provider-account smoke
-tests remain approval-gated because they consume E2B/Daytona resources.
+and runs the real Docker provider contract against a runtime image built from
+the current checkout. Podman and provider-account smoke tests remain manual or
+approval-gated because they require an additional daemon or consume
+E2B/Daytona resources.

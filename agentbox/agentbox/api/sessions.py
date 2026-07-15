@@ -15,12 +15,13 @@ from agentbox.schemas import (
     RuntimeSessionHeartbeatResponse,
     RuntimeSessionRequest,
     RuntimeSessionResponse,
+    SandboxEnsureRequest,
     WriteStdinRequest,
 )
 from agentbox.state_store.protocol import AsyncStateStore
 
 from .deps import lifecycle_manager, sandbox_provider, state_store
-from .lifecycle import activity_lease, delete_runtime_session_if_present
+from .lifecycle import activity_lease
 
 router = APIRouter(dependencies=[Depends(require_api_key)])
 
@@ -38,8 +39,13 @@ async def create_runtime_session(
     manager: SandboxLifecycleManager = Depends(lifecycle_manager),
 ) -> RuntimeSessionResponse:
     validate_sandbox_id(sandbox_id)
-    sandbox_record = await store.ensure_sandbox_defaults(sandbox_id)
-    await manager.ensure(sandbox_id, sandbox_record.to_ensure_request())
+    sandbox_record = await store.get_sandbox(sandbox_id)
+    await manager.ensure(
+        sandbox_id,
+        sandbox_record.to_ensure_request()
+        if sandbox_record is not None
+        else SandboxEnsureRequest(),
+    )
     async with activity_lease(
         store,
         manager,
@@ -83,12 +89,10 @@ async def heartbeat_runtime_session(
 async def delete_runtime_session(
     sandbox_id: str,
     session_id: str,
-    provider: SandboxProvider = Depends(sandbox_provider),
-    store: AsyncStateStore = Depends(state_store),
+    manager: SandboxLifecycleManager = Depends(lifecycle_manager),
 ) -> dict[str, str | bool]:
     validate_sandbox_id(sandbox_id)
-    deleted = await delete_runtime_session_if_present(provider, sandbox_id, session_id)
-    deleted = await store.delete_session(sandbox_id, session_id) or deleted
+    deleted = await manager.delete_session(sandbox_id, session_id)
     return {"sandbox_id": sandbox_id, "session_id": session_id, "deleted": deleted}
 
 
@@ -155,7 +159,9 @@ async def write_runtime_process_stdin(
     async with activity_lease(
         store, manager, sandbox_id, session_id=session_id, operation="stdin"
     ):
-        return await provider.write_session_process_stdin(sandbox_id, session_id, request)
+        return await provider.write_session_process_stdin(
+            sandbox_id, session_id, request
+        )
 
 
 @router.get(
@@ -192,4 +198,6 @@ async def terminate_runtime_process(
     async with activity_lease(
         store, manager, sandbox_id, session_id=session_id, operation="terminate"
     ):
-        return await provider.terminate_session_process(sandbox_id, session_id, process_id)
+        return await provider.terminate_session_process(
+            sandbox_id, session_id, process_id
+        )

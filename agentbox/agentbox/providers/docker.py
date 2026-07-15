@@ -167,6 +167,35 @@ class DockerSandboxProvider(LegacyRuntimeProviderMixin):
         except RuntimeError:
             return False
 
+    async def purge_storage(self, sandbox_id: str) -> bool:
+        """Permanently remove a sandbox workspace after compute is gone.
+
+        This is deliberately separate from ``delete`` because the lifecycle
+        manager also replaces compute for durable environment changes. Those
+        replacements must preserve user files; explicit DELETE and retention
+        expiry invoke this hook only after provider compute has been removed.
+        """
+
+        validated_id = validate_sandbox_id(sandbox_id)
+
+        def purge() -> bool:
+            root = self.storage_root.resolve()
+            path = root / validated_id
+            if path.parent != root:
+                raise RuntimeError("Sandbox workspace escaped the storage root")
+            if path.is_symlink():
+                path.unlink()
+                return True
+            if path.is_dir():
+                shutil.rmtree(path)
+                return True
+            if path.exists():
+                path.unlink()
+                return True
+            return False
+
+        return await run_sync(purge)
+
     async def release(self, sandbox_id: str) -> bool:
         """Stop compute but retain the container and its workspace mount."""
 
@@ -210,14 +239,18 @@ class DockerSandboxProvider(LegacyRuntimeProviderMixin):
                     ref=SandboxRef(
                         sandbox_id=sandbox_id,
                         provider_id=(
-                            provider_id if isinstance(provider_id, str) else container_name
+                            provider_id
+                            if isinstance(provider_id, str)
+                            else container_name
                         ),
                     ),
                     status=self._status_from_inspect(sandbox_id, inspect_data),
                     instance_id=(
                         provider_id if isinstance(provider_id, str) else container_name
                     ),
-                    metadata={str(key): str(value) for key, value in label_data.items()},
+                    metadata={
+                        str(key): str(value) for key, value in label_data.items()
+                    },
                 )
             )
         return managed
@@ -241,7 +274,9 @@ class DockerSandboxProvider(LegacyRuntimeProviderMixin):
         if app.name == "runtime" and not base_url:
             base_url = status.runtime_url
         if not base_url:
-            raise HTTPException(status_code=409, detail="Sandbox app endpoint is missing")
+            raise HTTPException(
+                status_code=409, detail="Sandbox app endpoint is missing"
+            )
         provider_id = inspect_data.get("Id")
         return SandboxEndpoint(
             base_url=base_url,
@@ -256,7 +291,9 @@ class DockerSandboxProvider(LegacyRuntimeProviderMixin):
             return None
         return self._status_from_inspect(sandbox_id, inspect_data)
 
-    async def _get_status_or_none(self, sandbox_id: str) -> SandboxInternalStatus | None:
+    async def _get_status_or_none(
+        self, sandbox_id: str
+    ) -> SandboxInternalStatus | None:
         try:
             return await self.get_status(sandbox_id)
         except HTTPException as exc:
@@ -354,7 +391,9 @@ class DockerSandboxProvider(LegacyRuntimeProviderMixin):
                 ready=running,
                 pod_ip=dns_name if running else None,
                 runtime_url=(
-                    f"http://{dns_name}:{settings.agentbox_runtime_port}" if running else None
+                    f"http://{dns_name}:{settings.agentbox_runtime_port}"
+                    if running
+                    else None
                 ),
                 apps=self._app_statuses_from_network(dns_name, running),
             )
