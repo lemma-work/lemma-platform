@@ -1,9 +1,11 @@
 from __future__ import annotations
 
 import http.client
+import concurrent.futures
 import io
 import json
 import logging
+import os
 import sys
 import time
 import types
@@ -53,6 +55,7 @@ if "kubernetes" not in sys.modules:
 
 from agentbox import kubernetes, runtime_server  # noqa: E402
 from agentbox.api import apps  # noqa: E402
+from agentbox.runtime_proxy import RuntimeProxy  # noqa: E402
 from agentbox.schemas import (  # noqa: E402
     ExecCommandRequest,
     SandboxInternalAppStatus,
@@ -63,6 +66,13 @@ from agentbox.schemas import (  # noqa: E402
 @pytest.fixture
 def anyio_backend():
     return "asyncio"
+
+
+@pytest.fixture(autouse=True)
+def cleanup_runtime_sessions():
+    yield
+    for session_id in list(runtime_server.sessions):
+        runtime_server.delete_session(session_id)
 
 
 class _FakeProxyProvider:
@@ -606,15 +616,251 @@ def test_runtime_python_resolves_typing_annotations_for_schema_extraction(tmp_pa
     assert set(schema["properties"]) == {"a", "b"}
 
 
-def test_runtime_python_session_module_is_unregistered_on_delete(tmp_path):
+def test_runtime_python_session_kernel_is_terminated_on_delete(tmp_path):
     session_id = f"test-{uuid4().hex}"
     session = runtime_server.get_or_create_session(session_id, cwd=str(tmp_path))
-    module_name = session.globals["__name__"]
-
-    assert sys.modules.get(module_name) is not None
+    result = runtime_server.execute_python(session_id, "value = 42")
+    assert result["ok"] is True
+    kernel = session.python_kernel
+    assert kernel is not None
+    assert kernel.process.poll() is None
 
     assert runtime_server.delete_session(session_id) is True
-    assert module_name not in sys.modules
+    assert kernel.process.poll() is not None
+
+
+def test_runtime_python_sessions_overlap_and_isolate_env_and_output(tmp_path):
+    session_a = f"test-a-{uuid4().hex}"
+    session_b = f"test-b-{uuid4().hex}"
+    runtime_server.get_or_create_session(
+        session_a,
+        cwd=str(tmp_path / "a"),
+        env={"SESSION_SECRET": "alpha"},
+    )
+    runtime_server.get_or_create_session(
+        session_b,
+        cwd=str(tmp_path / "b"),
+        env={"SESSION_SECRET": "beta"},
+    )
+    # Warm both child interpreters so the timing assertion measures execution,
+    # not process startup variance.
+    assert runtime_server.execute_python(session_a, "warm = True")["ok"]
+    assert runtime_server.execute_python(session_b, "warm = True")["ok"]
+
+    source = (
+        "import os, time\n"
+        "secret = os.environ['SESSION_SECRET']\n"
+        "time.sleep(0.6)\n"
+        "print(secret)\n"
+        "secret"
+    )
+    started = time.monotonic()
+    with concurrent.futures.ThreadPoolExecutor(max_workers=2) as pool:
+        future_a = pool.submit(runtime_server.execute_python, session_a, source)
+        future_b = pool.submit(runtime_server.execute_python, session_b, source)
+        result_a = future_a.result(timeout=3)
+        result_b = future_b.result(timeout=3)
+    elapsed = time.monotonic() - started
+
+    assert elapsed < 1.0, "different session kernels should execute concurrently"
+    assert result_a["stdout"] == "alpha\n"
+    assert result_a["result"] == "'alpha'"
+    assert result_b["stdout"] == "beta\n"
+    assert result_b["result"] == "'beta'"
+    runtime_server.delete_session(session_a)
+    runtime_server.delete_session(session_b)
+
+
+def test_runtime_python_same_session_is_serial_and_stateful(tmp_path):
+    session_id = f"test-{uuid4().hex}"
+    runtime_server.get_or_create_session(session_id, cwd=str(tmp_path))
+    runtime_server.execute_python(session_id, "events = []")
+
+    def append_after(delay: float, value: str):
+        return runtime_server.execute_python(
+            session_id,
+            f"import time\ntime.sleep({delay})\nevents.append('{value}')\nlist(events)",
+        )
+
+    with concurrent.futures.ThreadPoolExecutor(max_workers=2) as pool:
+        first = pool.submit(append_after, 0.3, "first")
+        time.sleep(0.05)
+        second = pool.submit(append_after, 0.0, "second")
+        first_result = first.result(timeout=2)
+        second_result = second.result(timeout=2)
+
+    assert first_result["result"] == "['first']"
+    assert second_result["result"] == "['first', 'second']"
+    runtime_server.delete_session(session_id)
+
+
+def test_runtime_python_timeout_kills_only_that_kernel_and_resets_state(tmp_path):
+    timed_session = f"timed-{uuid4().hex}"
+    healthy_session = f"healthy-{uuid4().hex}"
+    runtime_server.get_or_create_session(timed_session, cwd=str(tmp_path / "timed"))
+    runtime_server.get_or_create_session(healthy_session, cwd=str(tmp_path / "healthy"))
+    runtime_server.execute_python(timed_session, "sentinel = 42")
+    runtime_server.execute_python(healthy_session, "sentinel = 99")
+    old_kernel = runtime_server.get_or_create_session(timed_session).python_kernel
+    assert old_kernel is not None
+
+    timed_out = runtime_server.execute_python(
+        timed_session,
+        "import time; time.sleep(30)",
+        timeout_seconds=1,
+    )
+    assert timed_out["ok"] is False
+    assert timed_out["error_name"] == "TimeoutError"
+    assert old_kernel.process.poll() is not None
+
+    reset = runtime_server.execute_python(timed_session, "sentinel")
+    healthy = runtime_server.execute_python(healthy_session, "sentinel")
+    assert reset["ok"] is False
+    assert reset["error_name"] == "NameError"
+    assert healthy["result"] == "99"
+    runtime_server.delete_session(timed_session)
+    runtime_server.delete_session(healthy_session)
+
+
+def test_runtime_python_delete_kills_kernel_descendants(tmp_path):
+    session_id = f"test-{uuid4().hex}"
+    runtime_server.get_or_create_session(session_id, cwd=str(tmp_path))
+    result = runtime_server.execute_python(
+        session_id,
+        "import subprocess\nchild = subprocess.Popen(['sleep', '30'])\nchild.pid",
+    )
+    assert result["ok"] is True
+    child_pid = int(result["result"])
+
+    assert runtime_server.delete_session(session_id) is True
+    deadline = time.monotonic() + 2
+    while time.monotonic() < deadline:
+        try:
+            os.kill(child_pid, 0)
+        except ProcessLookupError:
+            break
+        time.sleep(0.02)
+    else:
+        pytest.fail("session child process survived kernel process-group cleanup")
+
+
+def test_shell_and_tty_processes_have_isolated_env_and_process_groups(tmp_path):
+    session_a = f"shell-a-{uuid4().hex}"
+    session_b = f"shell-b-{uuid4().hex}"
+    runtime_server.get_or_create_session(
+        session_a,
+        cwd=str(tmp_path / "a"),
+        env={"SESSION_MARK": "alpha"},
+    )
+    runtime_server.get_or_create_session(
+        session_b,
+        cwd=str(tmp_path / "b"),
+        env={"SESSION_MARK": "beta"},
+    )
+
+    process_a = runtime_server.start_interactive_command(
+        session_a,
+        cmd="printf '%s\\n' \"$SESSION_MARK\"; sleep 30",
+        yield_time_ms=100,
+    )
+    process_b = runtime_server.start_interactive_command(
+        session_b,
+        cmd="printf '%s\\n' \"$SESSION_MARK\"; sleep 30",
+        tty=True,
+        yield_time_ms=100,
+    )
+    assert process_a["completed"] is False
+    assert process_b["completed"] is False
+    assert "alpha" in process_a["stdout"]
+    assert "beta" in process_b["stdout"]
+    assert "beta" not in process_a["stdout"]
+    assert "alpha" not in process_b["stdout"]
+
+    runtime_a = runtime_server.get_or_create_session(session_a).processes[
+        process_a["process_id"]
+    ]
+    runtime_b = runtime_server.get_or_create_session(session_b).processes[
+        process_b["process_id"]
+    ]
+    assert os.getpgid(runtime_a.popen.pid) == runtime_a.popen.pid
+    assert os.getpgid(runtime_b.popen.pid) == runtime_b.popen.pid
+    assert runtime_a.popen.pid != runtime_b.popen.pid
+
+    runtime_server.delete_session(session_a)
+    assert runtime_a.popen.poll() is not None
+    assert runtime_b.popen.poll() is None
+    runtime_server.delete_session(session_b)
+    assert runtime_b.popen.poll() is not None
+
+
+def test_runtime_health_stays_responsive_during_python_execution(tmp_path):
+    session_id = f"test-{uuid4().hex}"
+    marker = tmp_path / "started"
+    runtime_server.get_or_create_session(session_id, cwd=str(tmp_path))
+    server = runtime_server._RuntimeHTTPServer(  # noqa: SLF001
+        ("127.0.0.1", 0), runtime_server.RuntimeHandler
+    )
+    server_thread = Thread(target=server.serve_forever, daemon=True)
+    server_thread.start()
+    try:
+        with concurrent.futures.ThreadPoolExecutor(max_workers=1) as pool:
+            executing = pool.submit(
+                runtime_server.execute_python,
+                session_id,
+                f"from pathlib import Path\nimport time\nPath({str(marker)!r}).touch()\ntime.sleep(1)",
+            )
+            deadline = time.monotonic() + 2
+            while not marker.exists() and time.monotonic() < deadline:
+                time.sleep(0.01)
+            assert marker.exists()
+
+            started = time.monotonic()
+            connection = http.client.HTTPConnection(*server.server_address, timeout=1)
+            connection.request("GET", "/health")
+            response = connection.getresponse()
+            body = json.loads(response.read())
+            connection.close()
+            elapsed = time.monotonic() - started
+
+            assert response.status == 200
+            assert body == {"status": "ok"}
+            assert elapsed < 0.5
+            assert executing.result(timeout=2)["ok"] is True
+    finally:
+        server.shutdown()
+        server.server_close()
+        server_thread.join(timeout=5)
+        runtime_server.delete_session(session_id)
+
+
+@pytest.mark.anyio
+async def test_runtime_proxy_forwards_python_timeout_with_termination_grace(monkeypatch):
+    captured: dict[str, object] = {}
+
+    class _Response:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, tb):
+            return False
+
+        def read(self):
+            return b'{"ok":false,"stderr":"timed out","error_name":"TimeoutError"}'
+
+    def fake_urlopen(req, timeout):
+        captured["payload"] = json.loads(req.data)
+        captured["timeout"] = timeout
+        return _Response()
+
+    monkeypatch.setattr(request, "urlopen", fake_urlopen)
+    proxy = RuntimeProxy("http://runtime", "sandbox-1")
+    response = await proxy.execute_code("pass", 7, "session-1")
+
+    assert captured == {
+        "payload": {"code": "pass", "timeout_seconds": 7},
+        "timeout": 12,
+    }
+    assert response[3] == "TimeoutError"
 
 
 def test_malformed_runtime_json_is_logged_and_returned_bounded(monkeypatch, caplog):

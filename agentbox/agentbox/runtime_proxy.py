@@ -189,7 +189,9 @@ class RuntimeProxy:
     ) -> tuple[str, str, str | None, str | None, int | None]:
         def _execute() -> tuple[str, str, str | None, str | None, int | None]:
             path = "/execute" if session_id is None else f"/sessions/{session_id}/execute"
-            body = json.dumps({"code": code}).encode("utf-8")
+            body = json.dumps(
+                {"code": code, "timeout_seconds": timeout_seconds}
+            ).encode("utf-8")
             req = request.Request(
                 f"{self.base_url}{path}",
                 data=body,
@@ -198,7 +200,10 @@ class RuntimeProxy:
             )
             payload = request_runtime_json(
                 req,
-                timeout=timeout_seconds,
+                # The runtime owns execution timeout and needs a small grace
+                # window to terminate the session process group and return its
+                # structured TimeoutError response.
+                timeout=timeout_seconds + 5,
                 operation="code execution request",
             )
             return (

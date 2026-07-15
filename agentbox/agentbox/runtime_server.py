@@ -1,26 +1,24 @@
 from __future__ import annotations
 
-import ast
 import contextlib
-import io
 import json
 import logging
 import os
 import pty
 import signal
 import subprocess
-import sys
 import time
 import traceback
-import types
 from dataclasses import dataclass, field
 from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from queue import Empty, Queue
-from threading import Lock, Thread
+from threading import Event, Lock, Thread
 from typing import Any
 from urllib.parse import unquote, urlparse
 from uuid import uuid4
+
+from agentbox.runtime_kernel import RuntimePythonKernel
 
 logger = logging.getLogger(__name__)
 MAX_RUNTIME_RESPONSE_ERROR_LENGTH = 2000
@@ -55,30 +53,18 @@ class RuntimeSession:
     session_id: str
     env: dict[str, str] = field(default_factory=dict)
     cwd: str = "/workspace"
-    globals: dict[str, Any] = field(default_factory=dict)
     processes: dict[str, RuntimeProcess] = field(default_factory=dict)
-
-    def __post_init__(self) -> None:
-        if not self.globals:
-            # Back the execution namespace with a real module registered in
-            # sys.modules. Under Python 3.14 (PEP 649) annotations are evaluated
-            # lazily, and libraries like pydantic resolve a class's deferred
-            # annotations via sys.modules[cls.__module__].__dict__. Without a
-            # registered module, names imported by the user code (e.g.
-            # ``typing.Optional``) are unresolvable at schema-build time and only
-            # builtins-only annotations like ``int | None`` work. Pointing the
-            # module's __dict__ at session.globals keeps every user import in
-            # scope for that resolution.
-            module_name = f"__agentbox_{self.session_id}__"
-            module = types.ModuleType(module_name)
-            module.__dict__["__builtins__"] = __builtins__
-            sys.modules[module_name] = module
-            self.globals = module.__dict__
+    transient_processes: dict[int, subprocess.Popen[str]] = field(default_factory=dict)
+    python_kernel: RuntimePythonKernel | None = None
+    config_lock: Lock = field(default_factory=Lock)
+    processes_lock: Lock = field(default_factory=Lock)
+    kernel_state_lock: Lock = field(default_factory=Lock)
+    python_execution_lock: Lock = field(default_factory=Lock)
+    closed: Event = field(default_factory=Event)
 
 
 sessions: dict[str, RuntimeSession] = {}
 sessions_lock = Lock()
-execution_lock = Lock()
 
 
 def _truncate_error(value: str) -> str:
@@ -98,10 +84,11 @@ def get_or_create_session(
         if session is None:
             session = RuntimeSession(session_id=session_id)
             sessions[session_id] = session
-        if env:
-            session.env.update({str(key): str(value) for key, value in env.items()})
-        if cwd:
-            session.cwd = cwd
+        with session.config_lock:
+            if env:
+                session.env.update({str(key): str(value) for key, value in env.items()})
+            if cwd:
+                session.cwd = cwd
         return session
 
 
@@ -110,71 +97,90 @@ def delete_session(session_id: str) -> bool:
         session = sessions.pop(session_id, None)
     if session is None:
         return False
-    module_name = session.globals.get("__name__")
-    if isinstance(module_name, str):
-        sys.modules.pop(module_name, None)
-    for process_id in list(session.processes):
+    session.closed.set()
+    _reset_python_kernel(session)
+    with session.processes_lock:
+        process_ids = list(session.processes)
+        transient_processes = list(session.transient_processes.values())
+    for process_id in process_ids:
         terminate_process(session_id, process_id, session=session)
+    for process in transient_processes:
+        _terminate_process_group(process)
     return True
 
 
-@contextlib.contextmanager
-def session_process_context(session: RuntimeSession):
-    old_cwd = os.getcwd()
-    old_env = os.environ.copy()
-    try:
-        os.environ.update(session.env)
-        os.makedirs(session.cwd, exist_ok=True)
-        os.chdir(session.cwd)
-        yield
-    finally:
-        session.cwd = os.getcwd()
-        os.chdir(old_cwd)
-        os.environ.clear()
-        os.environ.update(old_env)
+def _reset_python_kernel(
+    session: RuntimeSession,
+    *,
+    expected: RuntimePythonKernel | None = None,
+) -> None:
+    with session.kernel_state_lock:
+        kernel = session.python_kernel
+        if expected is not None and kernel is not expected:
+            return
+        session.python_kernel = None
+    if kernel is not None:
+        kernel.terminate()
 
 
-def execute_python(session_id: str, source: str) -> dict[str, Any]:
+def _session_python_kernel(session: RuntimeSession) -> RuntimePythonKernel:
+    with session.kernel_state_lock:
+        if session.closed.is_set():
+            raise RuntimeError("Runtime session was deleted")
+        kernel = session.python_kernel
+        if kernel is None or not kernel.alive:
+            if kernel is not None:
+                kernel.terminate()
+            kernel = RuntimePythonKernel.start()
+            session.python_kernel = kernel
+        return kernel
+
+
+def execute_python(
+    session_id: str,
+    source: str,
+    *,
+    timeout_seconds: int = 60,
+) -> dict[str, Any]:
     session = get_or_create_session(session_id)
-    stdout = io.StringIO()
-    stderr = io.StringIO()
-    result_repr: str | None = None
+    with session.python_execution_lock:
+        with session.config_lock:
+            env = dict(session.env)
+            cwd = session.cwd
+        kernel: RuntimePythonKernel | None = None
+        try:
+            kernel = _session_python_kernel(session)
+            response = kernel.execute(
+                code=source,
+                env=env,
+                cwd=cwd,
+                timeout_seconds=timeout_seconds,
+            )
+        except TimeoutError as exc:
+            _reset_python_kernel(session, expected=kernel)
+            return {
+                "ok": False,
+                "stdout": "",
+                "stderr": str(exc),
+                "result": None,
+                "error_name": "TimeoutError",
+            }
+        except Exception as exc:
+            if kernel is not None:
+                _reset_python_kernel(session, expected=kernel)
+            return {
+                "ok": False,
+                "stdout": "",
+                "stderr": str(exc),
+                "result": None,
+                "error_name": exc.__class__.__name__,
+            }
 
-    with execution_lock:
-        with session_process_context(session):
-            with contextlib.redirect_stdout(stdout), contextlib.redirect_stderr(stderr):
-                try:
-                    tree = ast.parse(source, filename="<agentbox>", mode="exec")
-                    if tree.body and isinstance(tree.body[-1], ast.Expr):
-                        prefix = ast.Module(body=tree.body[:-1], type_ignores=tree.type_ignores)
-                        ast.fix_missing_locations(prefix)
-                        if prefix.body:
-                            exec(compile(prefix, "<agentbox>", "exec"), session.globals)
-
-                        expression = ast.Expression(tree.body[-1].value)
-                        ast.fix_missing_locations(expression)
-                        result = eval(compile(expression, "<agentbox>", "eval"), session.globals)
-                        if result is not None:
-                            result_repr = repr(result)
-                    else:
-                        exec(compile(tree, "<agentbox>", "exec"), session.globals)
-                except BaseException as exc:
-                    traceback.print_exc(file=stderr)
-                    return {
-                        "ok": False,
-                        "stdout": stdout.getvalue(),
-                        "stderr": stderr.getvalue(),
-                        "result": None,
-                        "error_name": exc.__class__.__name__,
-                    }
-
-    return {
-        "ok": True,
-        "stdout": stdout.getvalue(),
-        "stderr": stderr.getvalue(),
-        "result": result_repr,
-        "error_name": None,
-    }
+        resulting_cwd = response.pop("cwd", None)
+        if isinstance(resulting_cwd, str) and resulting_cwd.startswith("/"):
+            with session.config_lock:
+                session.cwd = resulting_cwd
+        return response
 
 
 def execute_command(
@@ -189,6 +195,8 @@ def execute_command(
     stdout = ""
     stderr = ""
     try:
+        if session.closed.is_set():
+            raise OSError("Runtime session was deleted")
         resolved_cwd = _resolve_cwd(session, cwd)
         proc = subprocess.Popen(
             command,
@@ -199,6 +207,11 @@ def execute_command(
             cwd=resolved_cwd,
             start_new_session=True,
         )
+        with session.processes_lock:
+            if session.closed.is_set():
+                _terminate_process_group(proc)
+                raise OSError("Runtime session was deleted")
+            session.transient_processes[proc.pid] = proc
         stdout, stderr = proc.communicate(timeout=timeout_seconds)
     except subprocess.TimeoutExpired:
         if proc is not None:
@@ -225,6 +238,10 @@ def execute_command(
             "stderr": str(exc),
             "exit_code": None,
         }
+    finally:
+        if proc is not None:
+            with session.processes_lock:
+                session.transient_processes.pop(proc.pid, None)
     return {
         "ok": proc.returncode == 0,
         "stdout": stdout,
@@ -265,20 +282,55 @@ def execute_shell_command(
             cwd_end = len(stdout)
         new_cwd = stdout[cwd_start:cwd_end].strip()
         if new_cwd.startswith("/"):
-            get_or_create_session(session_id).cwd = new_cwd
+            session = get_or_create_session(session_id)
+            with session.config_lock:
+                session.cwd = new_cwd
         result["stdout"] = stdout[:marker_position]
     return result
 
 
 def _session_env(session: RuntimeSession) -> dict[str, str]:
-    return {**os.environ, **session.env}
+    with session.config_lock:
+        return {**os.environ, **session.env}
 
 
 def _resolve_cwd(session: RuntimeSession, cwd: str | None = None) -> str:
-    resolved = cwd or session.cwd or "/workspace"
+    with session.config_lock:
+        resolved = cwd or session.cwd or "/workspace"
+        session.cwd = resolved
     os.makedirs(resolved, exist_ok=True)
-    session.cwd = resolved
     return resolved
+
+
+def _terminate_process_group(
+    process: subprocess.Popen[str],
+    *,
+    grace_seconds: float = 2.0,
+) -> None:
+    with contextlib.suppress(ProcessLookupError):
+        os.killpg(process.pid, signal.SIGTERM)
+    deadline = time.monotonic() + grace_seconds
+    if process.poll() is None:
+        with contextlib.suppress(subprocess.TimeoutExpired):
+            process.wait(timeout=grace_seconds)
+    while time.monotonic() < deadline and _process_group_exists(process.pid):
+        time.sleep(0.01)
+    if _process_group_exists(process.pid):
+        with contextlib.suppress(ProcessLookupError):
+            os.killpg(process.pid, signal.SIGKILL)
+    if process.poll() is None:
+        with contextlib.suppress(subprocess.TimeoutExpired):
+            process.wait(timeout=grace_seconds)
+
+
+def _process_group_exists(process_group_id: int) -> bool:
+    try:
+        os.killpg(process_group_id, 0)
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        return True
+    return True
 
 
 def _read_stream(stream: Any, output: Queue[str]) -> None:
@@ -351,7 +403,8 @@ def _process_response(
             time.sleep(0.01)
             stdout += _truncate_output(_drain_output(runtime_process.stdout), max_output_tokens)
             stderr += _truncate_output(_drain_output(runtime_process.stderr), max_output_tokens)
-            session.processes.pop(runtime_process.process_id, None)
+            with session.processes_lock:
+                session.processes.pop(runtime_process.process_id, None)
 
     return {
         "success": exit_code == 0 if completed else True,
@@ -379,10 +432,12 @@ def _process_info(runtime_process: RuntimeProcess) -> dict[str, Any]:
 
 def list_processes(session_id: str) -> dict[str, Any]:
     session = get_or_create_session(session_id)
+    with session.processes_lock:
+        runtime_processes = list(session.processes.values())
     return {
         "processes": [
             _process_info(runtime_process)
-            for runtime_process in session.processes.values()
+            for runtime_process in runtime_processes
         ]
     }
 
@@ -399,6 +454,8 @@ def start_interactive_command(
     session = get_or_create_session(session_id, cwd=cwd)
     process_id = f"proc-{uuid4().hex}"
     try:
+        if session.closed.is_set():
+            raise OSError("Runtime session was deleted")
         resolved_cwd = _resolve_cwd(session, cwd)
         pty_master_fd: int | None = None
         if tty:
@@ -455,7 +512,19 @@ def start_interactive_command(
         tty=tty,
         pty_master_fd=pty_master_fd,
     )
-    session.processes[process_id] = runtime_process
+    with session.processes_lock:
+        if session.closed.is_set():
+            _terminate_process_group(popen)
+            return {
+                "success": False,
+                "stdout": "",
+                "stderr": "Runtime session was deleted",
+                "exit_code": None,
+                "completed": True,
+                "process_id": None,
+                "error": "Runtime session was deleted",
+            }
+        session.processes[process_id] = runtime_process
     if pty_master_fd is not None:
         Thread(target=_read_pty, args=(pty_master_fd, runtime_process.stdout), daemon=True).start()
     elif popen.stdout is not None:
@@ -479,7 +548,8 @@ def write_process_stdin(
     yield_time_ms: int | None = None,
 ) -> dict[str, Any]:
     session = get_or_create_session(session_id)
-    runtime_process = session.processes.get(process_id)
+    with session.processes_lock:
+        runtime_process = session.processes.get(process_id)
     if runtime_process is None:
         return {
             "success": False,
@@ -515,7 +585,8 @@ def terminate_process(
     session: RuntimeSession | None = None,
 ) -> dict[str, Any]:
     runtime_session = session or get_or_create_session(session_id)
-    runtime_process = runtime_session.processes.pop(process_id, None)
+    with runtime_session.processes_lock:
+        runtime_process = runtime_session.processes.pop(process_id, None)
     if runtime_process is None:
         return {
             "success": False,
@@ -528,15 +599,7 @@ def terminate_process(
         }
 
     popen = runtime_process.popen
-    if popen.poll() is None:
-        with contextlib.suppress(Exception):
-            os.killpg(popen.pid, signal.SIGTERM)
-        try:
-            popen.wait(timeout=5)
-        except subprocess.TimeoutExpired:
-            with contextlib.suppress(Exception):
-                os.killpg(popen.pid, signal.SIGKILL)
-            popen.wait(timeout=5)
+    _terminate_process_group(popen)
 
     if runtime_process.pty_master_fd is not None:
         with contextlib.suppress(OSError):
@@ -626,7 +689,25 @@ class RuntimeHandler(BaseHTTPRequestHandler):
             if not isinstance(code, str):
                 self._send_json(HTTPStatus.BAD_REQUEST, {"detail": "Field 'code' must be a string"})
                 return
-            self._send_json(HTTPStatus.OK, execute_python(session_id, code))
+            timeout_seconds = payload.get("timeout_seconds", 60)
+            if (
+                not isinstance(timeout_seconds, int)
+                or isinstance(timeout_seconds, bool)
+                or not 1 <= timeout_seconds <= 600
+            ):
+                self._send_json(
+                    HTTPStatus.BAD_REQUEST,
+                    {"detail": "Field 'timeout_seconds' must be an integer from 1 to 600"},
+                )
+                return
+            self._send_json(
+                HTTPStatus.OK,
+                execute_python(
+                    session_id,
+                    code,
+                    timeout_seconds=timeout_seconds,
+                ),
+            )
             return
 
         if self.path == "/command" or (

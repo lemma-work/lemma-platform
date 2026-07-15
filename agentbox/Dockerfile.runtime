@@ -156,7 +156,7 @@ COPY lemma-skills /sdk/lemma-skills
 RUN uv pip install --system /sdk/lemma-python /sdk/lemma-pod-bundle /sdk/lemma-cli \
     && chmod -R a+rX /sdk
 
-COPY agentbox/agentbox/__init__.py agentbox/agentbox/runtime_server.py agentbox/agentbox/function_executor.py ./agentbox/
+COPY agentbox/agentbox/__init__.py agentbox/agentbox/runtime_server.py agentbox/agentbox/runtime_kernel.py agentbox/agentbox/function_executor.py ./agentbox/
 RUN python -m compileall -q ./agentbox
 
 COPY agentbox/scripts/start-browser.sh /usr/local/bin/start-browser
