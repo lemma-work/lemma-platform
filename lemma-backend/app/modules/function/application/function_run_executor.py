@@ -694,6 +694,9 @@ class FunctionRunExecutor:
                         sandbox_id,
                         run.id,
                     )
+                    await self._cancel_executor_run(
+                        client, sandbox_id=sandbox_id, run_id=run.id
+                    )
                     return FunctionInvokeResponse(
                         status="timeout",
                         output_data=None,
@@ -709,6 +712,11 @@ class FunctionRunExecutor:
                         duration_ms=0,
                     )
                 raise
+        except asyncio.CancelledError:
+            await asyncio.shield(
+                self._cancel_executor_run(client, sandbox_id=sandbox_id, run_id=run.id)
+            )
+            raise
         finally:
             await client.close()
 
@@ -756,10 +764,33 @@ class FunctionRunExecutor:
                         duration_ms=status.duration_ms or 0,
                     )
                 if time.monotonic() >= deadline:
+                    await self._cancel_executor_run(
+                        client, sandbox_id=sandbox_id, run_id=run_id
+                    )
                     raise TimeoutError("Function job did not finish before timeout")
                 await asyncio.sleep(_FUNCTION_POLL_INTERVAL_SECONDS)
+        except asyncio.CancelledError:
+            await asyncio.shield(
+                self._cancel_executor_run(client, sandbox_id=sandbox_id, run_id=run_id)
+            )
+            raise
         finally:
             await client.close()
+
+    @staticmethod
+    async def _cancel_executor_run(client, *, sandbox_id: str, run_id: UUID) -> None:
+        cancel = getattr(client, "cancel", None)
+        if not callable(cancel):
+            return
+        try:
+            await cancel(sandbox_id=sandbox_id, run_id=run_id)
+        except Exception as exc:
+            logger.warning(
+                "function_executor cancellation failed sandbox=%s run=%s: %s",
+                sandbox_id,
+                run_id,
+                exc,
+            )
 
     def _build_function_executor_client(self, lemma_token: str):
         if self.function_executor_client_factory is not None:

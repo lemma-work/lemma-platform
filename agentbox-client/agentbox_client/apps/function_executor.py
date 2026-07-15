@@ -119,6 +119,17 @@ class FunctionExecutorClient:
         response.raise_for_status()
         return FunctionLogsResponse.model_validate(response.json())
 
+    async def cancel(
+        self, *, sandbox_id: str, run_id: UUID
+    ) -> FunctionJobStatusResponse:
+        """Idempotently cancel an invocation and return its resulting status."""
+
+        response = await self.client.post(
+            f"/sandboxes/{sandbox_id}/apps/function_executor/runs/{run_id}/cancel"
+        )
+        response.raise_for_status()
+        return FunctionJobStatusResponse.model_validate(response.json())
+
     async def health(self, *, sandbox_id: str) -> bool:
         """Return True if the function_executor app is serving requests.
 
@@ -192,4 +203,3 @@ class FunctionExecutorClient:
     async def close(self) -> None:
         if self._owns_client:
             await self.client.aclose()
-

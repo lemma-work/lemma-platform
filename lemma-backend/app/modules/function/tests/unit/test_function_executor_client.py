@@ -69,3 +69,46 @@ async def test_function_executor_client_posts_through_manager_app_proxy():
     assert calls[0].headers["x-api-key"] == "manager-key"
     assert calls[0].headers["authorization"] == "Bearer lemma-token"
     assert "env_vars" not in json.loads(calls[0].content)
+
+
+@pytest.mark.asyncio
+async def test_function_executor_client_cancels_through_manager_app_proxy():
+    calls: list[httpx.Request] = []
+    run_id = uuid4()
+
+    async def handler(request: httpx.Request) -> httpx.Response:
+        calls.append(request)
+        return httpx.Response(
+            200,
+            json={
+                "run_id": str(run_id),
+                "job_id": f"function:{run_id}",
+                "status": "cancelled",
+            },
+        )
+
+    transport = httpx.MockTransport(handler)
+    http_client = httpx.AsyncClient(
+        base_url="https://manager.test",
+        transport=transport,
+        headers={
+            "X-API-Key": "manager-key",
+            "Authorization": "Bearer lemma-token",
+        },
+    )
+    client = FunctionExecutorClient(
+        manager_base_url="https://manager.test",
+        manager_api_key="manager-key",
+        lemma_token="lemma-token",
+        client=http_client,
+    )
+    try:
+        status = await client.cancel(sandbox_id="sandbox-1", run_id=run_id)
+    finally:
+        await http_client.aclose()
+
+    assert calls[0].method == "POST"
+    assert status.status == "cancelled"
+    assert calls[0].url.path == (
+        f"/sandboxes/sandbox-1/apps/function_executor/runs/{run_id}/cancel"
+    )

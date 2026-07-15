@@ -3,24 +3,21 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import hashlib
-import importlib
-import importlib.util
-import inspect
-import io
 import json
 import os
 import re
-import site
+import shutil
+import signal
 import subprocess
 import sys
 import time
 import traceback
-from collections import OrderedDict
+from collections import OrderedDict, deque
+from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
 from pathlib import Path
-from types import ModuleType
 from typing import Any, Literal
-from uuid import UUID
+from uuid import UUID, uuid4
 from urllib import error as urlerror
 from urllib import parse as urlparse
 from urllib import request as urlrequest
@@ -31,6 +28,10 @@ from pydantic import BaseModel, Field
 
 FUNCTION_FILE_NAME = "function.py"
 MANIFEST_NAME = ".lemma-function-cache.json"
+CACHE_READY_NAME = ".lemma-function-ready"
+DEPENDENCIES_DIR_NAME = ".dependencies"
+DEPENDENCIES_READY_NAME = ".dependencies-ready"
+_TERMINATION_GRACE_SECONDS = 2.0
 
 # A function may declare pip dependencies in its `#python_packages:` header. The
 # values are passed to `pip install`, so each must match a PEP 508-ish spec
@@ -40,8 +41,8 @@ MAX_PYTHON_PACKAGES = 30
 MAX_PACKAGE_SPEC_LENGTH = 128
 PACKAGE_INSTALL_TIMEOUT_SECONDS = 180
 _PACKAGE_SPEC_RE = re.compile(
-    r"^[A-Za-z0-9][A-Za-z0-9._-]*"          # distribution name
-    r"(\[[A-Za-z0-9._,-]+\])?"               # optional extras, e.g. [socks,security]
+    r"^[A-Za-z0-9][A-Za-z0-9._-]*"  # distribution name
+    r"(\[[A-Za-z0-9._,-]+\])?"  # optional extras, e.g. [socks,security]
     r"([<>=!~]=?[A-Za-z0-9._*+!,<>=~-]*)?$"  # optional version specifier(s)
 )
 
@@ -182,7 +183,9 @@ class FunctionExecutionContext(BaseModel):
 class StoredJob:
     run_id: UUID
     job_id: str
-    status: Literal["queued", "running", "completed", "failed", "cancelled", "timeout"] = "queued"
+    status: Literal[
+        "queued", "running", "completed", "failed", "cancelled", "timeout"
+    ] = "queued"
     logs: list[FunctionLogEntry] = field(default_factory=list)
     output_data: dict[str, Any] | None = None
     error: RuntimeErrorInfo | None = None
@@ -190,6 +193,25 @@ class StoredJob:
     started_at: str | None = None
     completed_at: str | None = None
     duration_ms: int | None = None
+
+
+@dataclass
+class _RunHandle:
+    run_id: UUID
+    fingerprint: str
+    submitted_at: float
+    deadline: float
+    runner: Callable[["_RunHandle"], Awaitable[Any]]
+    future: asyncio.Future[Any]
+    job: StoredJob | None = None
+    task: asyncio.Task[None] | None = None
+    expiry_task: asyncio.Task[None] | None = None
+    process: asyncio.subprocess.Process | None = None
+    queued: bool = False
+    cancel_requested: bool = False
+    cache_result: bool = False
+    ephemeral: bool = False
+    redactions: tuple[str, ...] = ()
 
 
 def utc_timestamp() -> str:
@@ -228,26 +250,16 @@ def parse_code_headers(code: str) -> tuple[str, str, str, str | None]:
     return input_model or "", output_model or "", function_name or "", config_model
 
 
-def log_entry(stream: Literal["stdout", "stderr", "system"], message: str) -> FunctionLogEntry:
+def log_entry(
+    stream: Literal["stdout", "stderr", "system"], message: str
+) -> FunctionLogEntry:
     return FunctionLogEntry(timestamp=utc_timestamp(), stream=stream, message=message)
 
 
-@contextlib.contextmanager
-def patched_environ(values: dict[str, str]):
-    original = {key: os.environ.get(key) for key in values}
-    os.environ.update(values)
-    try:
-        yield
-    finally:
-        for key, value in original.items():
-            if value is None:
-                os.environ.pop(key, None)
-            else:
-                os.environ[key] = value
-
-
 class LemmaFunctionApiClient:
-    def __init__(self, *, base_url: str, token: str, timeout_seconds: float = 30.0) -> None:
+    def __init__(
+        self, *, base_url: str, token: str, timeout_seconds: float = 30.0
+    ) -> None:
         self.base_url = base_url.rstrip("/")
         self.token = token
         self.timeout_seconds = timeout_seconds
@@ -275,12 +287,18 @@ class LemmaFunctionApiClient:
                 raw = response.read()
         except urlerror.HTTPError as exc:
             body = exc.read().decode("utf-8", errors="replace")
-            raise HTTPException(status_code=exc.code, detail=body or exc.reason) from exc
+            raise HTTPException(
+                status_code=exc.code, detail=body or exc.reason
+            ) from exc
         except urlerror.URLError as exc:
-            raise HTTPException(status_code=502, detail=f"Lemma API request failed: {exc}") from exc
+            raise HTTPException(
+                status_code=502, detail=f"Lemma API request failed: {exc}"
+            ) from exc
         payload = json.loads(raw.decode("utf-8"))
         if not isinstance(payload, dict):
-            raise HTTPException(status_code=502, detail="Lemma API returned non-object JSON")
+            raise HTTPException(
+                status_code=502, detail="Lemma API returned non-object JSON"
+            )
         return payload
 
 
@@ -304,23 +322,45 @@ class FunctionExecutor:
         *,
         workspace_root: str = "/workspace",
         lemma_base_url: str | None = None,
+        max_active: int | None = None,
+        max_queued: int | None = None,
     ) -> None:
         self.workspace_root = Path(workspace_root)
-        self.lemma_base_url = lemma_base_url or os.environ.get("LEMMA_BASE_URL", "http://localhost:8000")
+        self.lemma_base_url = lemma_base_url or os.environ.get(
+            "LEMMA_BASE_URL", "http://localhost:8000"
+        )
+        configured_active = os.environ.get(
+            "FUNCTION_EXECUTOR_MAX_ACTIVE",
+            os.environ.get(
+                "AGENTBOX_FUNCTION_MAX_CONCURRENCY",
+                os.environ.get("AGENTBOX_FUNCTION_EXECUTOR_MAX_ACTIVE", "8"),
+            ),
+        )
+        configured_queued = os.environ.get(
+            "FUNCTION_EXECUTOR_MAX_QUEUED",
+            os.environ.get(
+                "AGENTBOX_FUNCTION_MAX_QUEUED",
+                os.environ.get("AGENTBOX_FUNCTION_EXECUTOR_MAX_QUEUED", "32"),
+            ),
+        )
+        self.max_active = (
+            max_active if max_active is not None else int(configured_active)
+        )
+        self.max_queued = (
+            max_queued if max_queued is not None else int(configured_queued)
+        )
+        if self.max_active < 1 or self.max_queued < 0:
+            raise RuntimeError("Function executor capacity must be positive")
         self.jobs: dict[UUID, StoredJob] = {}
-        self.invocation_lock = asyncio.Lock()
-        # pip specs already installed in this container, so repeat runs don't reinstall.
-        self._ensured_packages: set[str] = set()
-        # Idempotency by function run_id. A function run is non-idempotent (it can
-        # have side effects, e.g. creating an Outlook draft), so a re-POSTed
-        # /execute for the same run_id -- a backend transport-retry or any
-        # double-dispatch -- must NOT run the function again. `run_id` is a stable
-        # DB id reused on every retry, so it is a valid idempotency key. Per-run
-        # locks serialize same-run_id requests (the second awaits, then returns
-        # the cached result); `_completed` caches terminal sync results for the
-        # backend's full retry window; the async path dedupes against `self.jobs`.
-        self._run_locks: dict[UUID, asyncio.Lock] = {}
+        self._runs: dict[UUID, _RunHandle] = {}
+        self._queued: deque[_RunHandle] = deque()
+        self._active = 0
         self._registry_lock = asyncio.Lock()
+        self._cache_registry_lock = asyncio.Lock()
+        self._cache_locks: dict[str, asyncio.Lock] = {}
+        self._cache_tasks: dict[
+            str, asyncio.Task[tuple[Path, dict[str, Any], Path]]
+        ] = {}
         self._completed: "OrderedDict[UUID, tuple[float, FunctionInvokeResponse]]" = (
             OrderedDict()
         )
@@ -336,84 +376,44 @@ class FunctionExecutor:
         request: FunctionExecuteRequest,
         token: str,
     ) -> FunctionInvokeResponse | FunctionJobAcceptedResponse:
-        # Gate every execute by a per-run_id lock so a re-POST for the same run
-        # (transport retry / double-dispatch) joins the original instead of
-        # starting a second invocation of a non-idempotent function.
-        run_lock = await self._run_lock_for(request.run_id)
-        async with run_lock:
-            if request.async_job:
-                # Async path dedup: if the job already exists (running or done),
-                # return the existing acceptance and let the backend poll it.
-                # Never launch a second _run_job for the same run_id.
-                existing = self.jobs.get(request.run_id)
-                if existing is not None:
-                    return FunctionJobAcceptedResponse(
-                        run_id=request.run_id, job_id=existing.job_id
-                    )
-                job = StoredJob(
-                    run_id=request.run_id, job_id=f"function:{request.run_id}"
-                )
-                self.jobs[request.run_id] = job
-                asyncio.create_task(
-                    self._run_job(
-                        job,
-                        pod_id=pod_id,
-                        function_name=function_name,
-                        request=request,
-                        token=token,
-                    )
-                )
-                return FunctionJobAcceptedResponse(
-                    run_id=request.run_id, job_id=job.job_id
-                )
+        fingerprint = self._fingerprint(pod_id, function_name, request)
+        job = (
+            StoredJob(run_id=request.run_id, job_id=f"function:{request.run_id}")
+            if request.async_job
+            else None
+        )
 
-            # Sync path: return the cached terminal result on a duplicate, else
-            # run once and cache. Caches ALL terminal outcomes (completed/failed/
-            # timeout) so a function that ran its side effect then failed is never
-            # re-run.
-            cached = self._completed.get(request.run_id)
-            if cached is not None:
-                return cached[1]
-            response = await self._execute_sync(
+        async def runner(handle: _RunHandle) -> FunctionInvokeResponse:
+            return await self._execute_isolated(
+                handle,
                 pod_id=pod_id,
                 function_name=function_name,
                 request=request,
                 token=token,
             )
-            self._completed[request.run_id] = (time.monotonic(), response)
-            return response
 
-    async def _run_lock_for(self, run_id: UUID) -> asyncio.Lock:
-        """Get-or-create the per-run lock and opportunistically evict expired
-        idempotency state (no background task needed)."""
-        async with self._registry_lock:
-            self._sweep_expired()
-            lock = self._run_locks.get(run_id)
-            if lock is None:
-                lock = asyncio.Lock()
-                self._run_locks[run_id] = lock
-            return lock
-
-    def _sweep_expired(self) -> None:
-        """Evict completed sync results past the TTL or over the size cap, and
-        drop per-run locks that are no longer needed. Never evicts a lock that is
-        currently held (an in-flight run -- timeout_seconds can be up to 3600)."""
-        now = time.monotonic()
-        while self._completed:
-            run_id, (completed_at, _response) = next(iter(self._completed.items()))
-            over_cap = len(self._completed) > _MAX_COMPLETED_RESULTS
-            if not over_cap and now - completed_at <= _RESULT_TTL_SECONDS:
-                break
-            self._completed.popitem(last=False)
-        # A lock is safe to drop once its run has no cached result and is not
-        # in-flight (not locked) and not a live async job.
-        for run_id, lock in list(self._run_locks.items()):
-            if (
-                run_id not in self._completed
-                and run_id not in self.jobs
-                and not lock.locked()
-            ):
-                self._run_locks.pop(run_id, None)
+        handle, created = await self._admit(
+            run_id=request.run_id,
+            fingerprint=fingerprint,
+            timeout_seconds=request.timeout_seconds,
+            runner=runner,
+            job=job,
+            cache_result=not request.async_job,
+            redactions=(token,),
+        )
+        if request.async_job:
+            actual_job = handle.job
+            if actual_job is None:
+                raise HTTPException(
+                    status_code=409,
+                    detail="run_id is already used by a synchronous invocation",
+                )
+            if created:
+                self.jobs[request.run_id] = actual_job
+            return FunctionJobAcceptedResponse(
+                run_id=request.run_id, job_id=actual_job.job_id
+            )
+        return await asyncio.shield(handle.future)
 
     async def schemas(
         self,
@@ -423,29 +423,561 @@ class FunctionExecutor:
         request: FunctionSchemaRequest,
         token: str,
     ) -> FunctionSchemaResponse:
-        verified, metadata = self._authorize_and_fetch(
+        run_id = uuid4()
+        timeout_seconds = int(
+            os.environ.get("FUNCTION_EXECUTOR_SCHEMA_TIMEOUT_SECONDS", "120")
+        )
+
+        async def runner(handle: _RunHandle) -> FunctionSchemaResponse:
+            (
+                verified,
+                metadata,
+                cache_dir,
+                manifest,
+                dependency_dir,
+            ) = await self._prepare_invocation(pod_id, function_name, token)
+            del verified
+            if (
+                request.code_hash
+                and metadata.code_hash
+                and request.code_hash != metadata.code_hash
+            ):
+                raise HTTPException(
+                    status_code=409, detail="Function code hash mismatch"
+                )
+            worker_result, _logs = await self._run_worker(
+                handle,
+                {
+                    "mode": "schemas",
+                    "cache_dir": str(cache_dir),
+                    "dependency_dir": str(dependency_dir),
+                    "manifest": manifest,
+                },
+                timeout_seconds=max(0.001, handle.deadline - time.monotonic()),
+                token=token,
+            )
+            if not worker_result.get("ok"):
+                error = worker_result.get("error") or {}
+                raise RuntimeError(str(error.get("message") or "Schema worker failed"))
+            return FunctionSchemaResponse(
+                input_schema=worker_result["input_schema"],
+                output_schema=worker_result["output_schema"],
+                config_schema=worker_result.get("config_schema"),
+                code_hash=manifest["code_hash"],
+            )
+
+        handle, _ = await self._admit(
+            run_id=run_id,
+            fingerprint=f"schema:{pod_id}:{function_name}:{request.code_hash}",
+            timeout_seconds=timeout_seconds,
+            runner=runner,
+            ephemeral=True,
+            redactions=(token,),
+        )
+        return await asyncio.shield(handle.future)
+
+    async def _admit(
+        self,
+        *,
+        run_id: UUID,
+        fingerprint: str,
+        timeout_seconds: float,
+        runner: Callable[[_RunHandle], Awaitable[Any]],
+        job: StoredJob | None = None,
+        cache_result: bool = False,
+        ephemeral: bool = False,
+        redactions: tuple[str, ...] = (),
+    ) -> tuple[_RunHandle, bool]:
+        loop = asyncio.get_running_loop()
+        now = time.monotonic()
+        async with self._registry_lock:
+            self._sweep_expired_locked(now)
+            existing = self._runs.get(run_id)
+            if existing is not None:
+                if existing.fingerprint != fingerprint:
+                    raise HTTPException(
+                        status_code=409,
+                        detail="run_id was already submitted with a different request",
+                    )
+                return existing, False
+            handle = _RunHandle(
+                run_id=run_id,
+                fingerprint=fingerprint,
+                submitted_at=now,
+                deadline=now + timeout_seconds,
+                runner=runner,
+                future=loop.create_future(),
+                job=job,
+                cache_result=cache_result,
+                ephemeral=ephemeral,
+                redactions=redactions,
+            )
+            self._runs[run_id] = handle
+            if self._active < self.max_active:
+                self._start_handle_locked(handle)
+            elif len(self._queued) < self.max_queued:
+                handle.queued = True
+                self._queued.append(handle)
+                handle.expiry_task = asyncio.create_task(self._expire_queued(handle))
+            else:
+                self._runs.pop(run_id, None)
+                raise HTTPException(
+                    status_code=429,
+                    detail="Function executor queue is full",
+                    headers={"Retry-After": "1"},
+                )
+        return handle, True
+
+    def _start_handle_locked(self, handle: _RunHandle) -> None:
+        handle.queued = False
+        if handle.expiry_task is not None:
+            handle.expiry_task.cancel()
+            handle.expiry_task = None
+        self._active += 1
+        if handle.job is not None:
+            handle.job.status = "running"
+            handle.job.started_at = utc_timestamp()
+        handle.task = asyncio.create_task(self._drive_handle(handle))
+
+    async def _expire_queued(self, handle: _RunHandle) -> None:
+        await asyncio.sleep(max(0.0, handle.deadline - time.monotonic()))
+        async with self._registry_lock:
+            if not handle.queued or handle.future.done():
+                return
+            with contextlib.suppress(ValueError):
+                self._queued.remove(handle)
+            handle.queued = False
+            if handle.ephemeral:
+                if not handle.future.done():
+                    handle.future.set_exception(
+                        TimeoutError("Function schema extraction timed out in queue")
+                    )
+                self._runs.pop(handle.run_id, None)
+            else:
+                response = self._timeout_response(handle.submitted_at)
+                self._complete_handle_locked(handle, response)
+
+    async def _drive_handle(self, handle: _RunHandle) -> None:
+        try:
+            if handle.cancel_requested:
+                result: Any = self._cancelled_response(handle.submitted_at)
+            elif time.monotonic() >= handle.deadline:
+                result = self._timeout_response(handle.submitted_at)
+            else:
+                result = await handle.runner(handle)
+        except asyncio.CancelledError:
+            result = self._cancelled_response(handle.submitted_at)
+        except Exception as exc:
+            if handle.cancel_requested and not handle.ephemeral:
+                result = self._cancelled_response(handle.submitted_at)
+            elif handle.ephemeral:
+                if not handle.future.done():
+                    handle.future.set_exception(
+                        self._redacted_exception(exc, handle.redactions)
+                    )
+                result = None
+            else:
+                result = self._failure_response(
+                    handle.submitted_at, exc, redactions=handle.redactions
+                )
+        async with self._registry_lock:
+            if handle.cancel_requested and not handle.ephemeral:
+                result = self._cancelled_response(handle.submitted_at)
+            if result is not None:
+                self._complete_handle_locked(handle, result)
+            self._active = max(0, self._active - 1)
+            self._start_queued_locked()
+
+    def _start_queued_locked(self) -> None:
+        while self._queued and self._active < self.max_active:
+            next_handle = self._queued.popleft()
+            if next_handle.future.done() or next_handle.cancel_requested:
+                continue
+            self._start_handle_locked(next_handle)
+
+    def _complete_handle_locked(self, handle: _RunHandle, result: Any) -> None:
+        if not handle.future.done():
+            handle.future.set_result(result)
+        if isinstance(result, FunctionInvokeResponse):
+            if handle.job is not None:
+                self._update_job(handle.job, result)
+            if handle.cache_result:
+                self._completed[handle.run_id] = (time.monotonic(), result)
+        if handle.ephemeral:
+            self._runs.pop(handle.run_id, None)
+
+    @staticmethod
+    def _update_job(job: StoredJob, result: FunctionInvokeResponse) -> None:
+        job.logs = result.logs
+        job.output_data = result.output_data
+        job.error = result.error
+        job.code_hash = result.code_hash
+        job.duration_ms = result.duration_ms
+        job.completed_at = utc_timestamp()
+        job.status = result.status
+
+    def _sweep_expired_locked(self, now: float) -> None:
+        while self._completed:
+            run_id, (completed_at, _response) = next(iter(self._completed.items()))
+            if (
+                len(self._completed) <= _MAX_COMPLETED_RESULTS
+                and now - completed_at <= _RESULT_TTL_SECONDS
+            ):
+                break
+            self._completed.popitem(last=False)
+            handle = self._runs.get(run_id)
+            if handle is not None and handle.future.done() and handle.job is None:
+                self._runs.pop(run_id, None)
+
+    async def _execute_isolated(
+        self,
+        handle: _RunHandle,
+        *,
+        pod_id: UUID,
+        function_name: str,
+        request: FunctionExecuteRequest,
+        token: str,
+    ) -> FunctionInvokeResponse:
+        try:
+            remaining = handle.deadline - time.monotonic()
+            if remaining <= 0:
+                return self._timeout_response(handle.submitted_at)
+            (
+                verified,
+                metadata,
+                cache_dir,
+                manifest,
+                dependency_dir,
+            ) = await asyncio.wait_for(
+                self._prepare_invocation(pod_id, function_name, token),
+                timeout=remaining,
+            )
+            remaining = handle.deadline - time.monotonic()
+            if remaining <= 0:
+                return self._timeout_response(handle.submitted_at)
+            worker_result, logs = await self._run_worker(
+                handle,
+                {
+                    "mode": "execute",
+                    "cache_dir": str(cache_dir),
+                    "dependency_dir": str(dependency_dir),
+                    "manifest": manifest,
+                    "metadata": metadata.model_dump(mode="json"),
+                    "verified": verified.model_dump(mode="json"),
+                    "request": request.model_dump(mode="json"),
+                    "token": token,
+                    "lemma_base_url": self.lemma_base_url,
+                    "workspace_root": str(self.workspace_root),
+                },
+                timeout_seconds=remaining,
+                token=token,
+            )
+            if handle.cancel_requested:
+                return self._cancelled_response(handle.submitted_at, logs=logs)
+            if worker_result.get("ok"):
+                return FunctionInvokeResponse(
+                    status="completed",
+                    output_data=worker_result.get("output_data"),
+                    logs=logs,
+                    code_hash=manifest["code_hash"],
+                    duration_ms=self._duration_ms(handle.submitted_at),
+                )
+            error = worker_result.get("error") or {}
+            return FunctionInvokeResponse(
+                status="failed",
+                error=RuntimeErrorInfo(
+                    name=str(error.get("name") or "RuntimeError"),
+                    message=self._redact(
+                        str(error.get("message") or "Function failed"), token
+                    ),
+                    traceback=[
+                        self._redact(str(line), token)
+                        for line in error.get("traceback") or []
+                    ],
+                ),
+                logs=logs,
+                code_hash=manifest["code_hash"],
+                duration_ms=self._duration_ms(handle.submitted_at),
+            )
+        except TimeoutError:
+            await self._terminate_handle_process(handle)
+            return self._timeout_response(handle.submitted_at)
+        except asyncio.CancelledError:
+            await self._terminate_handle_process(handle)
+            raise
+
+    async def _prepare_invocation(
+        self, pod_id: UUID, function_name: str, token: str
+    ) -> tuple[VerifiedToken, FunctionMetadata, Path, dict[str, Any], Path]:
+        verified, metadata = await asyncio.to_thread(
+            self._authorize_and_fetch,
             pod_id=pod_id,
             function_name=function_name,
             token=token,
         )
-        del verified
-        if request.code_hash and metadata.code_hash and request.code_hash != metadata.code_hash:
-            raise HTTPException(status_code=409, detail="Function code hash mismatch")
-        cache_dir, manifest = self.ensure_cached(metadata)
-        module = self.load_module(cache_dir, manifest["code_hash"])
-        runtime = manifest["runtime"]
-        input_model = getattr(module, runtime["input_model"])
-        output_model = getattr(module, runtime["output_model"])
-        config_model = (
-            getattr(module, runtime["config_model"])
-            if runtime.get("config_model")
-            else None
+        code_hash = metadata.code_hash or function_code_hash(metadata.code)
+        lock = await self._cache_lock_for(code_hash)
+        async with lock:
+            cache_task = self._cache_tasks.get(code_hash)
+            if cache_task is None:
+                cache_task = asyncio.create_task(
+                    asyncio.to_thread(self.ensure_cached, metadata)
+                )
+                self._cache_tasks[code_hash] = cache_task
+
+                def discard(done: asyncio.Task, *, key: str = code_hash) -> None:
+                    with contextlib.suppress(asyncio.CancelledError):
+                        done.exception()
+                    if self._cache_tasks.get(key) is done:
+                        self._cache_tasks.pop(key, None)
+
+                cache_task.add_done_callback(discard)
+        cache_dir, manifest, dependency_dir = await asyncio.shield(cache_task)
+        return verified, metadata, cache_dir, manifest, dependency_dir
+
+    async def _cache_lock_for(self, code_hash: str) -> asyncio.Lock:
+        async with self._cache_registry_lock:
+            return self._cache_locks.setdefault(code_hash, asyncio.Lock())
+
+    async def _run_worker(
+        self,
+        handle: _RunHandle,
+        payload: dict[str, Any],
+        *,
+        timeout_seconds: float,
+        token: str,
+    ) -> tuple[dict[str, Any], list[FunctionLogEntry]]:
+        read_fd, write_fd = os.pipe()
+        os.set_inheritable(write_fd, True)
+        env = self._worker_environment(write_fd)
+        process: asyncio.subprocess.Process | None = None
+        result_task: asyncio.Task[bytes] | None = None
+        try:
+            process = await asyncio.create_subprocess_exec(
+                sys.executable,
+                "-m",
+                "agentbox.function_executor_worker",
+                stdin=asyncio.subprocess.PIPE,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
+                start_new_session=True,
+                pass_fds=(write_fd,),
+                env=env,
+            )
+            handle.process = process
+            os.close(write_fd)
+            write_fd = -1
+            result_task = asyncio.create_task(asyncio.to_thread(self._read_fd, read_fd))
+            stdout, stderr = await asyncio.wait_for(
+                process.communicate(
+                    json.dumps(payload, separators=(",", ":"), default=str).encode(
+                        "utf-8"
+                    )
+                ),
+                timeout=timeout_seconds,
+            )
+            raw_result = await asyncio.wait_for(result_task, timeout=2.0)
+            logs: list[FunctionLogEntry] = []
+            stdout_text = self._redact(stdout.decode("utf-8", errors="replace"), token)
+            stderr_text = self._redact(stderr.decode("utf-8", errors="replace"), token)
+            if stdout_text:
+                logs.append(log_entry("stdout", stdout_text))
+            if stderr_text:
+                logs.append(log_entry("stderr", stderr_text))
+            if process.returncode != 0 and not raw_result:
+                raise RuntimeError(
+                    f"Function worker exited with status {process.returncode}"
+                )
+            try:
+                result = json.loads(raw_result.decode("utf-8"))
+            except json.JSONDecodeError as exc:
+                raise RuntimeError("Function worker returned malformed data") from exc
+            if not isinstance(result, dict):
+                raise RuntimeError("Function worker returned a non-object result")
+            return result, logs
+        except (TimeoutError, asyncio.CancelledError):
+            if process is not None:
+                await self._terminate_process(process)
+            raise
+        finally:
+            handle.process = None
+            if write_fd >= 0:
+                os.close(write_fd)
+            if result_task is not None and not result_task.done():
+                with contextlib.suppress(Exception):
+                    await asyncio.wait_for(result_task, timeout=2.0)
+            elif result_task is None:
+                with contextlib.suppress(OSError):
+                    os.close(read_fd)
+
+    @staticmethod
+    def _worker_environment(result_fd: int) -> dict[str, str]:
+        allowed = {
+            "PATH",
+            "HOME",
+            "PYTHONPATH",
+            "TMPDIR",
+            "TZ",
+            "LANG",
+            "LC_ALL",
+            "SSL_CERT_FILE",
+            "SSL_CERT_DIR",
+            "REQUESTS_CA_BUNDLE",
+            "HTTP_PROXY",
+            "HTTPS_PROXY",
+            "NO_PROXY",
+        }
+        env = {key: value for key, value in os.environ.items() if key in allowed}
+        package_root = str(Path(__file__).resolve().parents[1])
+        inherited_pythonpath = env.get("PYTHONPATH")
+        env["PYTHONPATH"] = os.pathsep.join(
+            part for part in (package_root, inherited_pythonpath) if part
         )
-        return FunctionSchemaResponse(
-            input_schema=input_model.model_json_schema(),
-            output_schema=output_model.model_json_schema(),
-            config_schema=config_model.model_json_schema() if config_model else None,
-            code_hash=manifest["code_hash"],
+        env["LEMMA_FUNCTION_RESULT_FD"] = str(result_fd)
+        env["PYTHONUNBUFFERED"] = "1"
+        return env
+
+    @staticmethod
+    def _read_fd(fd: int) -> bytes:
+        chunks: list[bytes] = []
+        try:
+            while True:
+                chunk = os.read(fd, 65536)
+                if not chunk:
+                    return b"".join(chunks)
+                chunks.append(chunk)
+        finally:
+            with contextlib.suppress(OSError):
+                os.close(fd)
+
+    async def _terminate_handle_process(self, handle: _RunHandle) -> None:
+        process = handle.process
+        if process is not None:
+            await self._terminate_process(process)
+
+    @staticmethod
+    async def _terminate_process(process: asyncio.subprocess.Process) -> None:
+        process_group = process.pid
+        with contextlib.suppress(ProcessLookupError):
+            os.killpg(process_group, signal.SIGTERM)
+        deadline = time.monotonic() + _TERMINATION_GRACE_SECONDS
+        while FunctionExecutor._process_group_exists(process_group):
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                break
+            if process.returncode is None:
+                with contextlib.suppress(TimeoutError):
+                    await asyncio.wait_for(process.wait(), timeout=min(0.05, remaining))
+            else:
+                await asyncio.sleep(min(0.05, remaining))
+        with contextlib.suppress(ProcessLookupError):
+            os.killpg(process_group, signal.SIGKILL)
+        if process.returncode is None:
+            with contextlib.suppress(TimeoutError):
+                await asyncio.wait_for(
+                    process.wait(), timeout=_TERMINATION_GRACE_SECONDS
+                )
+
+    @staticmethod
+    def _process_group_exists(process_group: int) -> bool:
+        try:
+            os.killpg(process_group, 0)
+        except ProcessLookupError:
+            return False
+        except PermissionError:
+            return True
+        return True
+
+    async def cancel_run(self, run_id: UUID) -> bool:
+        task: asyncio.Task[None] | None = None
+        process: asyncio.subprocess.Process | None = None
+        async with self._registry_lock:
+            handle = self._runs.get(run_id)
+            if handle is None:
+                return False
+            if handle.future.done():
+                result = handle.future.result()
+                return (
+                    isinstance(result, FunctionInvokeResponse)
+                    and result.status == "cancelled"
+                )
+            handle.cancel_requested = True
+            if handle.queued:
+                with contextlib.suppress(ValueError):
+                    self._queued.remove(handle)
+                handle.queued = False
+                if handle.expiry_task is not None:
+                    handle.expiry_task.cancel()
+                    handle.expiry_task = None
+                self._complete_handle_locked(
+                    handle, self._cancelled_response(handle.submitted_at)
+                )
+                return True
+            task = handle.task
+            process = handle.process
+            if process is None and task is not None:
+                task.cancel()
+        if process is not None:
+            await self._terminate_process(process)
+        if task is not None:
+            with contextlib.suppress(asyncio.CancelledError):
+                await task
+        return True
+
+    async def delete_job(self, run_id: UUID) -> bool:
+        await self.cancel_run(run_id)
+        async with self._registry_lock:
+            deleted = self.jobs.pop(run_id, None) is not None
+            handle = self._runs.get(run_id)
+            if handle is not None and (handle.future.done() or handle.cancel_requested):
+                self._runs.pop(run_id, None)
+            self._completed.pop(run_id, None)
+            return deleted
+
+    async def cancel_status(self, run_id: UUID) -> FunctionJobStatusResponse:
+        async with self._registry_lock:
+            if run_id not in self._runs and run_id not in self.jobs:
+                raise HTTPException(status_code=404, detail="Function run not found")
+        await self.cancel_run(run_id)
+        return self.run_status(run_id)
+
+    def run_status(self, run_id: UUID) -> FunctionJobStatusResponse:
+        if run_id in self.jobs:
+            return self.job_status(run_id)
+        handle = self._runs.get(run_id)
+        if handle is None:
+            raise HTTPException(status_code=404, detail="Function run not found")
+        status: Literal[
+            "queued", "running", "completed", "failed", "cancelled", "timeout"
+        ] = "queued" if handle.queued else "running"
+        output_data = None
+        error_info = None
+        code_hash = None
+        duration_ms = None
+        completed_at = None
+        if handle.future.done():
+            try:
+                result = handle.future.result()
+            except Exception as exc:
+                status = "failed"
+                error_info = RuntimeErrorInfo(name=type(exc).__name__, message=str(exc))
+            else:
+                if isinstance(result, FunctionInvokeResponse):
+                    status = result.status
+                    output_data = result.output_data
+                    error_info = result.error
+                    code_hash = result.code_hash
+                    duration_ms = result.duration_ms
+                    completed_at = utc_timestamp()
+        return FunctionJobStatusResponse(
+            run_id=run_id,
+            job_id=f"function:{run_id}",
+            status=status,
+            output_data=output_data,
+            error=error_info,
+            code_hash=code_hash,
+            completed_at=completed_at,
+            duration_ms=duration_ms,
         )
 
     def job_status(self, run_id: UUID) -> FunctionJobStatusResponse:
@@ -466,103 +998,98 @@ class FunctionExecutor:
         job = self._get_job(run_id)
         return FunctionLogsResponse(run_id=run_id, logs=job.logs)
 
-    def delete_job(self, run_id: UUID) -> bool:
-        return self.jobs.pop(run_id, None) is not None
-
     def _get_job(self, run_id: UUID) -> StoredJob:
         job = self.jobs.get(run_id)
         if job is None:
             raise HTTPException(status_code=404, detail="Function job not found")
         return job
 
-    async def _run_job(
-        self,
-        job: StoredJob,
-        *,
-        pod_id: UUID,
-        function_name: str,
-        request: FunctionExecuteRequest,
-        token: str,
-    ) -> None:
-        job.status = "running"
-        job.started_at = utc_timestamp()
-        result = await self._execute_sync(
-            pod_id=pod_id,
-            function_name=function_name,
-            request=request,
-            token=token,
+    @staticmethod
+    def _fingerprint(
+        pod_id: UUID, function_name: str, request: FunctionExecuteRequest
+    ) -> str:
+        value = json.dumps(
+            {
+                "pod_id": str(pod_id),
+                "function_name": function_name,
+                "request": request.model_dump(mode="json"),
+            },
+            sort_keys=True,
+            separators=(",", ":"),
         )
-        job.logs = result.logs
-        job.output_data = result.output_data
-        job.error = result.error
-        job.code_hash = result.code_hash
-        job.duration_ms = result.duration_ms
-        job.completed_at = utc_timestamp()
-        job.status = {
-            "completed": "completed",
-            "failed": "failed",
-            "cancelled": "cancelled",
-            "timeout": "timeout",
-        }[result.status]
+        return hashlib.sha256(value.encode("utf-8")).hexdigest()
 
-    async def _execute_sync(
-        self,
-        *,
-        pod_id: UUID,
-        function_name: str,
-        request: FunctionExecuteRequest,
-        token: str,
+    @staticmethod
+    def _duration_ms(started_at: float) -> int:
+        return int((time.monotonic() - started_at) * 1000)
+
+    @classmethod
+    def _timeout_response(cls, started_at: float) -> FunctionInvokeResponse:
+        return FunctionInvokeResponse(
+            status="timeout",
+            error=RuntimeErrorInfo(name="TimeoutError", message="Function timed out"),
+            code_hash="",
+            duration_ms=cls._duration_ms(started_at),
+        )
+
+    @classmethod
+    def _cancelled_response(
+        cls, started_at: float, *, logs: list[FunctionLogEntry] | None = None
     ) -> FunctionInvokeResponse:
-        started = time.monotonic()
-        logs: list[FunctionLogEntry] = []
-        try:
-            verified, metadata = self._authorize_and_fetch(
-                pod_id=pod_id,
-                function_name=function_name,
-                token=token,
+        return FunctionInvokeResponse(
+            status="cancelled",
+            error=RuntimeErrorInfo(name="CancelledError", message="Function cancelled"),
+            logs=logs or [],
+            code_hash="",
+            duration_ms=cls._duration_ms(started_at),
+        )
+
+    @classmethod
+    def _failure_response(
+        cls,
+        started_at: float,
+        exc: Exception,
+        *,
+        redactions: tuple[str, ...] = (),
+    ) -> FunctionInvokeResponse:
+        message = cls._redact_many(str(exc), redactions)
+        return FunctionInvokeResponse(
+            status="failed",
+            error=RuntimeErrorInfo(
+                name=type(exc).__name__,
+                message=message,
+                traceback=[
+                    cls._redact_many(line, redactions)
+                    for line in traceback.format_exc().splitlines()
+                ],
+            ),
+            logs=[log_entry("system", message)],
+            code_hash="",
+            duration_ms=cls._duration_ms(started_at),
+        )
+
+    @staticmethod
+    def _redact(value: str, token: str) -> str:
+        return value.replace(token, "[REDACTED]") if token else value
+
+    @classmethod
+    def _redact_many(cls, value: str, secrets: tuple[str, ...]) -> str:
+        for secret in secrets:
+            value = cls._redact(value, secret)
+        return value
+
+    @classmethod
+    def _redacted_exception(cls, exc: Exception, secrets: tuple[str, ...]) -> Exception:
+        if isinstance(exc, HTTPException):
+            detail = exc.detail
+            if isinstance(detail, str):
+                detail = cls._redact_many(detail, secrets)
+            return HTTPException(
+                status_code=exc.status_code,
+                detail=detail,
+                headers=exc.headers,
             )
-            cache_dir, manifest = self.ensure_cached(metadata)
-            module = self.load_module(cache_dir, manifest["code_hash"])
-            output = await asyncio.wait_for(
-                self.invoke_module(
-                    module,
-                    manifest=manifest,
-                    metadata=metadata,
-                    verified=verified,
-                    request=request,
-                    token=token,
-                    logs=logs,
-                ),
-                timeout=request.timeout_seconds,
-            )
-            return FunctionInvokeResponse(
-                status="completed",
-                output_data=output,
-                logs=logs,
-                code_hash=manifest["code_hash"],
-                duration_ms=int((time.monotonic() - started) * 1000),
-            )
-        except asyncio.TimeoutError:
-            return FunctionInvokeResponse(
-                status="timeout",
-                error=RuntimeErrorInfo(name="TimeoutError", message="Function timed out"),
-                logs=logs,
-                code_hash="",
-                duration_ms=int((time.monotonic() - started) * 1000),
-            )
-        except Exception as exc:
-            logs.append(log_entry("system", str(exc)))
-            return FunctionInvokeResponse(
-                status="failed",
-                error=RuntimeErrorInfo(
-                    name=type(exc).__name__,
-                    message=str(exc),
-                    traceback=traceback.format_exc().splitlines(),
-                ),
-                logs=logs,
-                code_hash="",
-                duration_ms=int((time.monotonic() - started) * 1000),
-            )
+        return RuntimeError(cls._redact_many(str(exc), secrets))
 
     def _authorize_and_fetch(
         self,
@@ -574,14 +1101,25 @@ class FunctionExecutor:
         client = self.api_client(token)
         verified = client.verify_token()
         if verified.pod_id is not None and verified.pod_id != pod_id:
-            raise HTTPException(status_code=403, detail="Token is not delegated to this pod")
-        if verified.function_name is not None and verified.function_name != function_name:
-            raise HTTPException(status_code=403, detail="Token is not delegated to this function")
+            raise HTTPException(
+                status_code=403, detail="Token is not delegated to this pod"
+            )
+        if (
+            verified.function_name is not None
+            and verified.function_name != function_name
+        ):
+            raise HTTPException(
+                status_code=403, detail="Token is not delegated to this function"
+            )
         metadata = client.get_function(pod_id, function_name)
         if metadata.pod_id != pod_id or metadata.name != function_name:
-            raise HTTPException(status_code=409, detail="Function metadata does not match request path")
+            raise HTTPException(
+                status_code=409, detail="Function metadata does not match request path"
+            )
         if verified.function_id is not None and verified.function_id != metadata.id:
-            raise HTTPException(status_code=403, detail="Token is not delegated to this function")
+            raise HTTPException(
+                status_code=403, detail="Token is not delegated to this function"
+            )
         return verified, metadata
 
     def cache_dir(self, metadata: FunctionMetadata, code_hash: str) -> Path:
@@ -594,80 +1132,92 @@ class FunctionExecutor:
             / code_hash
         )
 
-    def ensure_packages(self, packages: list[str]) -> None:
-        """Install the function's declared pip dependencies into the user site.
+    def ensure_packages(self, packages: list[str], dependency_dir: Path) -> None:
+        """Install dependencies into this code hash's private import directory."""
 
-        Runs as the non-root runtime user, so `pip install --user` lands in
-        ~/.local (on this interpreter's sys.path) and is importable by the loaded
-        function module. Idempotent per container via ``_ensured_packages``; raises
-        a clear error on an invalid spec or a failed/slow install so the run fails
-        with a readable message instead of an opaque ImportError.
-        """
-        pending: list[str] = []
         for spec in packages:
             if not is_valid_python_package(spec):
                 raise RuntimeError(f"Invalid python package specifier: {spec!r}")
-            if spec not in self._ensured_packages:
-                pending.append(spec)
-        if not pending:
-            return
-        if len(pending) > MAX_PYTHON_PACKAGES:
+        if len(packages) > MAX_PYTHON_PACKAGES:
             raise RuntimeError(
-                f"Too many python packages declared ({len(pending)} > {MAX_PYTHON_PACKAGES})."
+                f"Too many python packages declared ({len(packages)} > {MAX_PYTHON_PACKAGES})."
             )
+        ready_path = dependency_dir.parent / DEPENDENCIES_READY_NAME
+        expected_marker = sorted(packages)
+        if ready_path.exists() and dependency_dir.is_dir():
+            try:
+                if json.loads(ready_path.read_text()) == expected_marker:
+                    return
+            except (json.JSONDecodeError, OSError):
+                pass
+        ready_path.unlink(missing_ok=True)
+        temporary_dir = dependency_dir.parent / (
+            f"{DEPENDENCIES_DIR_NAME}.tmp-{os.getpid()}-{uuid4().hex}"
+        )
+        temporary_dir.mkdir(parents=True, exist_ok=False)
         try:
-            proc = subprocess.run(
-                [
-                    sys.executable, "-m", "pip", "install", "--user",
-                    "--no-input", "--disable-pip-version-check", "-q", *pending,
-                ],
-                capture_output=True,
-                text=True,
-                timeout=PACKAGE_INSTALL_TIMEOUT_SECONDS,
-            )
-        except subprocess.TimeoutExpired as exc:
-            raise RuntimeError(
-                f"Installing python package(s) {pending} timed out after "
-                f"{PACKAGE_INSTALL_TIMEOUT_SECONDS}s."
-            ) from exc
-        if proc.returncode != 0:
-            tail = (proc.stderr or proc.stdout or "").strip()[-1500:]
-            raise RuntimeError(
-                f"Failed to install python package(s) {pending}: {tail}"
-            )
-        self._ensured_packages.update(pending)
-        # `pip install --user` writes to the user site, but site.py only puts that
-        # dir on sys.path at startup *if it already existed*. In a long-running
-        # executor whose first install just created it, the dir is missing from
-        # sys.path — so add it (addsitedir also processes any .pth files) before the
-        # new module is imported.
-        user_site = site.getusersitepackages()
-        if user_site and os.path.isdir(user_site) and user_site not in sys.path:
-            site.addsitedir(user_site)
-        importlib.invalidate_caches()
+            if packages:
+                try:
+                    proc = subprocess.run(
+                        [
+                            sys.executable,
+                            "-m",
+                            "pip",
+                            "install",
+                            "--target",
+                            str(temporary_dir),
+                            "--no-input",
+                            "--disable-pip-version-check",
+                            "-q",
+                            *packages,
+                        ],
+                        capture_output=True,
+                        text=True,
+                        timeout=PACKAGE_INSTALL_TIMEOUT_SECONDS,
+                    )
+                except subprocess.TimeoutExpired as exc:
+                    raise RuntimeError(
+                        f"Installing python package(s) {packages} timed out after "
+                        f"{PACKAGE_INSTALL_TIMEOUT_SECONDS}s."
+                    ) from exc
+                if proc.returncode != 0:
+                    tail = (proc.stderr or proc.stdout or "").strip()[-1500:]
+                    raise RuntimeError(
+                        f"Failed to install python package(s) {packages}: {tail}"
+                    )
+            if dependency_dir.exists():
+                shutil.rmtree(dependency_dir)
+            os.replace(temporary_dir, dependency_dir)
+            self._atomic_write(ready_path, json.dumps(expected_marker))
+        finally:
+            if temporary_dir.exists():
+                shutil.rmtree(temporary_dir, ignore_errors=True)
 
-    def ensure_cached(self, metadata: FunctionMetadata) -> tuple[Path, dict[str, Any]]:
+    def ensure_cached(
+        self, metadata: FunctionMetadata
+    ) -> tuple[Path, dict[str, Any], Path]:
         code_hash = metadata.code_hash or function_code_hash(metadata.code)
-        # Ensure declared dependencies before any module load (execute AND schema
-        # extraction both call ensure_cached, so a top-level `import <dep>` works in
-        # both). Idempotent, so it's safe to run on cache hits too.
         packages = parse_python_packages(metadata.code)
-        if packages:
-            self.ensure_packages(packages)
         cache_dir = self.cache_dir(metadata, code_hash)
+        cache_dir.mkdir(parents=True, exist_ok=True)
         manifest_path = cache_dir / MANIFEST_NAME
         function_path = cache_dir / FUNCTION_FILE_NAME
-        if manifest_path.exists() and function_path.exists():
+        ready_path = cache_dir / CACHE_READY_NAME
+        dependency_dir = cache_dir / DEPENDENCIES_DIR_NAME
+        self.ensure_packages(packages, dependency_dir)
+        if ready_path.exists() and manifest_path.exists() and function_path.exists():
             try:
                 manifest = json.loads(manifest_path.read_text())
-                if manifest.get("code_hash") == code_hash:
-                    return cache_dir, manifest
-            except json.JSONDecodeError:
+                if (
+                    ready_path.read_text() == code_hash
+                    and manifest.get("code_hash") == code_hash
+                ):
+                    return cache_dir, manifest, dependency_dir
+            except (json.JSONDecodeError, OSError):
                 pass
-
-        cache_dir.mkdir(parents=True, exist_ok=True)
-        input_model, output_model, entrypoint, config_model = parse_code_headers(metadata.code)
-        function_path.write_text(metadata.code)
+        input_model, output_model, entrypoint, config_model = parse_code_headers(
+            metadata.code
+        )
         manifest = {
             "code_hash": code_hash,
             "function": metadata.model_dump(mode="json", exclude={"code"}),
@@ -679,90 +1229,20 @@ class FunctionExecutor:
                 "config_model": config_model,
             },
         }
-        manifest_path.write_text(json.dumps(manifest, sort_keys=True))
-        return cache_dir, manifest
+        ready_path.unlink(missing_ok=True)
+        self._atomic_write(function_path, metadata.code)
+        self._atomic_write(manifest_path, json.dumps(manifest, sort_keys=True))
+        self._atomic_write(ready_path, code_hash)
+        return cache_dir, manifest, dependency_dir
 
-    def load_module(self, cache_dir: Path, code_hash: str) -> ModuleType:
-        source_path = cache_dir / FUNCTION_FILE_NAME
-        module_name = f"_lemma_function_executor_{code_hash}"
-        spec = importlib.util.spec_from_file_location(module_name, source_path)
-        if spec is None or spec.loader is None:
-            raise RuntimeError(f"Unable to load function source at {source_path}")
-        module = importlib.util.module_from_spec(spec)
-        sys.modules[module_name] = module
-        spec.loader.exec_module(module)
-        return module
-
-    async def invoke_module(
-        self,
-        module: ModuleType,
-        *,
-        manifest: dict[str, Any],
-        metadata: FunctionMetadata,
-        verified: VerifiedToken,
-        request: FunctionExecuteRequest,
-        token: str,
-        logs: list[FunctionLogEntry],
-    ) -> dict[str, Any]:
-        runtime = manifest["runtime"]
-        input_model = getattr(module, runtime["input_model"])
-        output_model = getattr(module, runtime["output_model"])
-        function = getattr(module, runtime["function_name"])
-        config_model = (
-            getattr(module, runtime["config_model"])
-            if runtime.get("config_model")
-            else None
-        )
-        config = metadata.config
-        if config_model is not None and metadata.config is not None:
-            config = config_model(**metadata.config)
-        data = input_model(**request.input_data)
-        ctx = FunctionExecutionContext(
-            run_id=request.run_id,
-            function_id=metadata.id,
-            function_name=metadata.name,
-            pod_id=metadata.pod_id,
-            organization_id=verified.organization_id,
-            user_id=verified.user_id,
-            user_email=verified.email,
-            lemma_token=token,
-            lemma_base_url=self.lemma_base_url,
-            config=config,
-            workspace_root=str(self.workspace_root),
-        )
-        stdout = io.StringIO()
-        stderr = io.StringIO()
-        invocation_env = {
-            "LEMMA_TOKEN": token,
-            "LEMMA_BASE_URL": self.lemma_base_url,
-            "LEMMA_USER_ID": str(verified.user_id),
-            "LEMMA_POD_ID": str(metadata.pod_id),
-        }
-        if verified.organization_id is not None:
-            invocation_env["LEMMA_ORG_ID"] = str(verified.organization_id)
-        if verified.email:
-            invocation_env["LEMMA_USER_EMAIL"] = verified.email
-        async with self.invocation_lock:
-            with (
-                patched_environ(invocation_env),
-                contextlib.redirect_stdout(stdout),
-                contextlib.redirect_stderr(stderr),
-            ):
-                result = function(ctx, data)
-                if inspect.isawaitable(result):
-                    result = await result
-        if stdout.getvalue():
-            logs.append(log_entry("stdout", stdout.getvalue()))
-        if stderr.getvalue():
-            logs.append(log_entry("stderr", stderr.getvalue()))
-        if hasattr(result, "model_dump"):
-            output = result.model_dump()
-        elif isinstance(result, dict):
-            output = result
-        else:
-            output = output_model.model_validate(result).model_dump()
-        output_model(**output)
-        return output
+    @staticmethod
+    def _atomic_write(path: Path, value: str) -> None:
+        temporary = path.with_name(f"{path.name}.tmp-{os.getpid()}-{uuid4().hex}")
+        try:
+            temporary.write_text(value)
+            os.replace(temporary, path)
+        finally:
+            temporary.unlink(missing_ok=True)
 
 
 def bearer_token(authorization: str | None) -> str:
@@ -832,7 +1312,14 @@ def build_app(executor: FunctionExecutor | None = None) -> FastAPI:
 
     @app.delete("/runs/{run_id}")
     async def delete_run(run_id: UUID) -> dict[str, bool | str]:
-        return {"run_id": str(run_id), "deleted": app.state.executor.delete_job(run_id)}
+        return {
+            "run_id": str(run_id),
+            "deleted": await app.state.executor.delete_job(run_id),
+        }
+
+    @app.post("/runs/{run_id}/cancel", response_model=FunctionJobStatusResponse)
+    async def cancel_run(run_id: UUID) -> FunctionJobStatusResponse:
+        return await app.state.executor.cancel_status(run_id)
 
     return app
 

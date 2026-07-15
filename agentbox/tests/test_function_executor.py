@@ -6,12 +6,14 @@ from pathlib import Path
 from uuid import uuid4
 
 import pytest
+from fastapi import HTTPException
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from agentbox.function_executor import (  # noqa: E402
     FunctionExecuteRequest,
     FunctionExecutor,
+    FunctionInvokeResponse,
     FunctionMetadata,
     FunctionSchemaRequest,
     VerifiedToken,
@@ -74,12 +76,47 @@ class _FakeLemmaClient:
 
 class _TestExecutor(FunctionExecutor):
     def __init__(self, *, client: _FakeLemmaClient, workspace_root: str):
-        super().__init__(workspace_root=workspace_root, lemma_base_url="http://lemma.test")
+        super().__init__(
+            workspace_root=workspace_root, lemma_base_url="http://lemma.test"
+        )
         self.client = client
 
     def api_client(self, token: str):
         assert token == "token"
         return self.client
+
+
+class _CapacityExecutor(_TestExecutor):
+    def __init__(
+        self,
+        *,
+        client: _FakeLemmaClient,
+        workspace_root: str,
+        max_active: int,
+        max_queued: int,
+    ):
+        super().__init__(client=client, workspace_root=workspace_root)
+        self.max_active = max_active
+        self.max_queued = max_queued
+        self.gate = asyncio.Event()
+        self.started = asyncio.Event()
+        self.active_invocations = 0
+        self.peak_invocations = 0
+
+    async def _execute_isolated(self, handle, **_kwargs):
+        self.active_invocations += 1
+        self.peak_invocations = max(self.peak_invocations, self.active_invocations)
+        self.started.set()
+        try:
+            await self.gate.wait()
+        finally:
+            self.active_invocations -= 1
+        return FunctionInvokeResponse(
+            status="completed",
+            output_data={"ok": True},
+            code_hash="capacity-test",
+            duration_ms=1,
+        )
 
 
 @pytest.fixture
@@ -248,7 +285,7 @@ async def test_function_executor_runs_async_job_and_exposes_status(tmp_path):
     )
 
     assert accepted.status == "accepted"
-    for _ in range(20):
+    for _ in range(100):
         status = executor.job_status(run_id)
         if status.status == "completed":
             break
@@ -281,7 +318,10 @@ async def run_function(ctx, data):
 
 
 def test_parse_python_packages_and_validation():
-    from agentbox.function_executor import is_valid_python_package, parse_python_packages
+    from agentbox.function_executor import (
+        is_valid_python_package,
+        parse_python_packages,
+    )
 
     assert parse_python_packages(PACKAGE_FUNCTION_CODE) == ["cowsay", "tabulate"]
     assert is_valid_python_package("pandas==2.2")
@@ -333,7 +373,8 @@ async def test_executor_installs_declared_packages_once(tmp_path, monkeypatch):
     assert first.status == "completed"
     assert len(calls) == 1
     cmd = calls[0]
-    assert cmd[1:5] == ["-m", "pip", "install", "--user"]
+    assert cmd[1:5] == ["-m", "pip", "install", "--target"]
+    assert ".dependencies.tmp-" in cmd[5]
     assert "cowsay" in cmd and "tabulate" in cmd
 
     # Idempotent within the container: a second run does not reinstall.
@@ -371,6 +412,55 @@ async def test_executor_package_install_failure_fails_run(tmp_path, monkeypatch)
     )
     assert response.status == "failed"
     assert "install" in (response.error.message or "").lower()
+
+
+@pytest.mark.anyio
+async def test_dependency_marker_mismatch_rebuilds_private_dependency_dir(
+    tmp_path, monkeypatch
+):
+    from types import SimpleNamespace
+
+    calls = 0
+
+    def fake_run(_cmd, **_kwargs):
+        nonlocal calls
+        calls += 1
+        return SimpleNamespace(returncode=0, stdout="", stderr="")
+
+    monkeypatch.setattr("agentbox.function_executor.subprocess.run", fake_run)
+    metadata = _package_metadata(PACKAGE_FUNCTION_CODE)
+    executor = _executor_for(metadata, tmp_path)
+    cache_dir, _manifest, _dependency_dir = executor.ensure_cached(metadata)
+    assert calls == 1
+    (cache_dir / ".dependencies-ready").write_text('["different-package"]')
+
+    executor.ensure_cached(metadata)
+    assert calls == 2
+
+
+@pytest.mark.anyio
+async def test_authorization_failure_redacts_invocation_token(tmp_path):
+    secret = "CANARY-DELEGATION-TOKEN"
+    metadata = _package_metadata(FUNCTION_CODE)
+    metadata.name = "increment"
+
+    class _LeakingClient(_FakeLemmaClient):
+        def verify_token(self):
+            raise RuntimeError(f"upstream rejected bearer {secret}")
+
+    executor = FunctionExecutor(workspace_root=str(tmp_path))
+    executor.api_client = lambda _token: _LeakingClient(  # type: ignore[method-assign]
+        verified=VerifiedToken(user_id=uuid4()), metadata=metadata
+    )
+    response = await executor.execute(
+        pod_id=metadata.pod_id,
+        function_name=metadata.name,
+        request=FunctionExecuteRequest(run_id=uuid4(), input_data={"x": 1}),
+        token=secret,
+    )
+    assert response.status == "failed"
+    assert secret not in response.model_dump_json()
+    assert "[REDACTED]" in response.model_dump_json()
 
 
 # --- idempotency by run_id --------------------------------------------------
@@ -521,3 +611,297 @@ async def test_executor_rejects_invalid_package_spec(tmp_path, monkeypatch):
     )
     assert response.status == "failed"
     assert installed is False
+
+
+@pytest.mark.anyio
+async def test_sync_and_job_invocations_share_bounded_admission(tmp_path):
+    metadata = _package_metadata(FUNCTION_CODE)
+    metadata.name = "increment"
+    executor = _CapacityExecutor(
+        client=_FakeLemmaClient(
+            verified=VerifiedToken(user_id=uuid4()), metadata=metadata
+        ),
+        workspace_root=str(tmp_path),
+        max_active=1,
+        max_queued=1,
+    )
+    active = asyncio.create_task(
+        executor.execute(
+            pod_id=metadata.pod_id,
+            function_name=metadata.name,
+            request=FunctionExecuteRequest(run_id=uuid4(), input_data={"x": 1}),
+            token="token",
+        )
+    )
+    await executor.started.wait()
+
+    queued_id = uuid4()
+    accepted = await executor.execute(
+        pod_id=metadata.pod_id,
+        function_name=metadata.name,
+        request=FunctionExecuteRequest(
+            run_id=queued_id, input_data={"x": 2}, async_job=True
+        ),
+        token="token",
+    )
+    assert accepted.status == "accepted"
+    assert executor.job_status(queued_id).status == "queued"
+
+    with pytest.raises(HTTPException) as exc_info:
+        await executor.execute(
+            pod_id=metadata.pod_id,
+            function_name=metadata.name,
+            request=FunctionExecuteRequest(run_id=uuid4(), input_data={"x": 3}),
+            token="token",
+        )
+    assert exc_info.value.status_code == 429
+    assert exc_info.value.headers == {"Retry-After": "1"}
+
+    executor.gate.set()
+    assert (await active).status == "completed"
+    for _ in range(50):
+        if executor.job_status(queued_id).status == "completed":
+            break
+        await asyncio.sleep(0.01)
+    assert executor.job_status(queued_id).status == "completed"
+    assert executor.peak_invocations == 1
+
+
+@pytest.mark.anyio
+async def test_queue_wait_counts_against_invocation_timeout(tmp_path):
+    metadata = _package_metadata(FUNCTION_CODE)
+    metadata.name = "increment"
+    executor = _CapacityExecutor(
+        client=_FakeLemmaClient(
+            verified=VerifiedToken(user_id=uuid4()), metadata=metadata
+        ),
+        workspace_root=str(tmp_path),
+        max_active=1,
+        max_queued=1,
+    )
+    active = asyncio.create_task(
+        executor.execute(
+            pod_id=metadata.pod_id,
+            function_name=metadata.name,
+            request=FunctionExecuteRequest(
+                run_id=uuid4(), input_data={"x": 1}, timeout_seconds=10
+            ),
+            token="token",
+        )
+    )
+    await executor.started.wait()
+    queued = asyncio.create_task(
+        executor.execute(
+            pod_id=metadata.pod_id,
+            function_name=metadata.name,
+            request=FunctionExecuteRequest(
+                run_id=uuid4(), input_data={"x": 2}, timeout_seconds=1
+            ),
+            token="token",
+        )
+    )
+    response = await queued
+    assert response.status == "timeout"
+    assert executor.peak_invocations == 1
+    executor.gate.set()
+    await active
+
+
+SLOW_FUNCTION_CODE = """#input_type_name: InputModel
+#output_type_name: OutputModel
+#function_name: run_function
+import asyncio
+from pydantic import BaseModel
+
+class InputModel(BaseModel):
+    x: int
+
+class OutputModel(BaseModel):
+    y: int
+
+async def run_function(ctx, data):
+    await asyncio.sleep(60)
+    return OutputModel(y=data.x)
+"""
+
+
+@pytest.mark.anyio
+async def test_active_child_cancellation_is_idempotent_and_reports_cancelled(tmp_path):
+    executor = _increment_executor(tmp_path, code=SLOW_FUNCTION_CODE)
+    run_id = uuid4()
+    accepted = await executor.execute(
+        pod_id=executor.client.metadata.pod_id,
+        function_name="increment",
+        request=FunctionExecuteRequest(
+            run_id=run_id,
+            input_data={"x": 1},
+            async_job=True,
+            timeout_seconds=120,
+        ),
+        token="token",
+    )
+    assert accepted.status == "accepted"
+    for _ in range(100):
+        handle = executor._runs[run_id]
+        if handle.process is not None:
+            break
+        await asyncio.sleep(0.01)
+    assert executor._runs[run_id].process is not None
+
+    first_status = await executor.cancel_status(run_id)
+    second_status = await executor.cancel_status(run_id)
+    assert first_status.status == "cancelled"
+    assert second_status.status == "cancelled"
+    assert executor.job_status(run_id).status == "cancelled"
+
+
+@pytest.mark.anyio
+async def test_cancelling_completed_run_preserves_completed_status(tmp_path):
+    executor = _increment_executor(tmp_path)
+    run_id = uuid4()
+    response = await executor.execute(
+        pod_id=executor.client.metadata.pod_id,
+        function_name="increment",
+        request=FunctionExecuteRequest(run_id=run_id, input_data={"x": 1}),
+        token="token",
+    )
+    assert response.status == "completed"
+    assert (await executor.cancel_status(run_id)).status == "completed"
+
+    with pytest.raises(HTTPException) as exc_info:
+        await executor.cancel_status(uuid4())
+    assert exc_info.value.status_code == 404
+
+
+DESCENDANT_FUNCTION_CODE = r'''#input_type_name: InputModel
+#output_type_name: OutputModel
+#function_name: run_function
+import asyncio
+import subprocess
+import sys
+from pathlib import Path
+from pydantic import BaseModel
+
+class InputModel(BaseModel):
+    marker: str
+
+class OutputModel(BaseModel):
+    ok: bool
+
+async def run_function(ctx, data):
+    root = Path(ctx.workspace_root)
+    ready = root / f"{data.marker}.child-ready"
+    stopped = root / f"{data.marker}.child-stopped"
+    child_code = r"""
+import os
+import signal
+import sys
+import time
+from pathlib import Path
+
+stopped = Path(sys.argv[1])
+ready = Path(sys.argv[2])
+
+def terminate(_signum, _frame):
+    stopped.write_text("terminated")
+    raise SystemExit(0)
+
+signal.signal(signal.SIGTERM, terminate)
+ready.write_text(str(os.getpid()))
+while True:
+    time.sleep(1)
+"""
+    subprocess.Popen([sys.executable, "-c", child_code, str(stopped), str(ready)])
+    while not ready.exists():
+        await asyncio.sleep(0.01)
+    await asyncio.sleep(60)
+    return OutputModel(ok=True)
+'''
+
+
+@pytest.mark.anyio
+async def test_cancellation_terminates_worker_descendants(tmp_path):
+    executor = _increment_executor(tmp_path, code=DESCENDANT_FUNCTION_CODE)
+    marker = uuid4().hex
+    run_id = uuid4()
+    await executor.execute(
+        pod_id=executor.client.metadata.pod_id,
+        function_name="increment",
+        request=FunctionExecuteRequest(
+            run_id=run_id,
+            input_data={"marker": marker},
+            async_job=True,
+            timeout_seconds=120,
+        ),
+        token="token",
+    )
+    ready = tmp_path / f"{marker}.child-ready"
+    stopped = tmp_path / f"{marker}.child-stopped"
+    for _ in range(200):
+        if ready.exists():
+            break
+        await asyncio.sleep(0.01)
+    assert ready.exists()
+
+    assert (await executor.cancel_status(run_id)).status == "cancelled"
+    for _ in range(200):
+        if stopped.exists():
+            break
+        await asyncio.sleep(0.01)
+    assert stopped.read_text() == "terminated"
+
+
+ENV_ISOLATION_FUNCTION_CODE = """#input_type_name: InputModel
+#output_type_name: OutputModel
+#function_name: run_function
+import os
+from pydantic import BaseModel
+
+class InputModel(BaseModel):
+    marker: str
+
+class OutputModel(BaseModel):
+    marker: str
+    inherited_secret: bool
+
+async def run_function(ctx, data):
+    print(data.marker)
+    return OutputModel(
+        marker=data.marker,
+        inherited_secret=bool(os.environ.get("CANARY_PARENT_SECRET")),
+    )
+"""
+
+
+@pytest.mark.anyio
+async def test_workers_isolate_parent_environment_and_invocation_logs(
+    tmp_path, monkeypatch
+):
+    monkeypatch.setenv("CANARY_PARENT_SECRET", "must-not-cross-worker-boundary")
+    executor = _increment_executor(tmp_path, code=ENV_ISOLATION_FUNCTION_CODE)
+    pod_id = executor.client.metadata.pod_id
+    first, second = await asyncio.gather(
+        executor.execute(
+            pod_id=pod_id,
+            function_name="increment",
+            request=FunctionExecuteRequest(
+                run_id=uuid4(), input_data={"marker": "ONLY-FIRST"}
+            ),
+            token="token",
+        ),
+        executor.execute(
+            pod_id=pod_id,
+            function_name="increment",
+            request=FunctionExecuteRequest(
+                run_id=uuid4(), input_data={"marker": "ONLY-SECOND"}
+            ),
+            token="token",
+        ),
+    )
+    assert first.output_data == {"marker": "ONLY-FIRST", "inherited_secret": False}
+    assert second.output_data == {
+        "marker": "ONLY-SECOND",
+        "inherited_secret": False,
+    }
+    assert "ONLY-SECOND" not in "".join(entry.message for entry in first.logs)
+    assert "ONLY-FIRST" not in "".join(entry.message for entry in second.logs)

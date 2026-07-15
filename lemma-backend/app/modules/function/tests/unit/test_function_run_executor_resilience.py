@@ -9,6 +9,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import httpx
 import pytest
 from agentbox_client.apps.function_executor import (
@@ -232,3 +233,86 @@ async def test_default_recovery_reruns_read_error_for_job_path():
             run=_FakeRun(), make_attempt=_attempt
         )
     assert calls["n"] == fre._SANDBOX_RECOVERY_MAX_ATTEMPTS
+
+
+async def test_poll_timeout_cancels_remote_executor_run():
+    calls: list[tuple[str, object]] = []
+
+    class _Client:
+        async def get_status(self, **_kwargs):
+            return SimpleNamespace(status="running")
+
+        async def cancel(self, *, sandbox_id, run_id):
+            calls.append((sandbox_id, run_id))
+            return True
+
+        async def close(self):
+            return None
+
+    run_id = uuid4()
+    executor = FunctionRunExecutor(
+        workspace_service=None,
+        storage_factory=None,
+        function_executor_client_factory=lambda _token: _Client(),
+    )
+    with pytest.raises(TimeoutError):
+        await executor._poll_executor_job(
+            session=SimpleNamespace(
+                env_vars={"LEMMA_TOKEN": "test-token"}, sandbox_id="sandbox-1"
+            ),
+            run_id=run_id,
+            timeout_seconds=0,
+        )
+    assert calls == [("sandbox-1", run_id)]
+
+
+async def test_cancelled_execute_cancels_remote_executor_run():
+    started = asyncio.Event()
+    cancelled: list[tuple[str, object]] = []
+
+    class _Client:
+        async def wait_until_ready(self, **_kwargs):
+            return None
+
+        async def execute(self, **_kwargs):
+            started.set()
+            await asyncio.Event().wait()
+
+        async def cancel(self, *, sandbox_id, run_id):
+            cancelled.append((sandbox_id, run_id))
+            return True
+
+        async def close(self):
+            return None
+
+    function_id = uuid4()
+    function = FunctionEntity(
+        id=function_id,
+        pod_id=uuid4(),
+        user_id=uuid4(),
+        name="long_running",
+    )
+    run = FunctionRunEntity(
+        id=uuid4(), function_id=function_id, user_id=function.user_id
+    )
+    executor = FunctionRunExecutor(
+        workspace_service=None,
+        storage_factory=None,
+        function_executor_client_factory=lambda _token: _Client(),
+    )
+    task = asyncio.create_task(
+        executor._execute_via_function_executor(
+            function=function,
+            run=run,
+            session=SimpleNamespace(
+                env_vars={"LEMMA_TOKEN": "test-token"}, sandbox_id="sandbox-1"
+            ),
+            timeout_seconds=120,
+            async_job=False,
+        )
+    )
+    await started.wait()
+    task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await task
+    assert cancelled == [("sandbox-1", run.id)]
