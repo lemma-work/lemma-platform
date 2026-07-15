@@ -18,7 +18,14 @@ from agentbox.schemas import (
 from .cloud_config import E2BProviderConfig
 from .errors import ProviderError, SandboxNotFoundError
 from .legacy import LegacyRuntimeProviderMixin
-from .models import EndpointProtocol, ManagedSandbox, SandboxEndpoint, SandboxRef
+from .models import (
+    EndpointProtocol,
+    ManagedSandbox,
+    ProviderCapabilities,
+    ProviderCapacityPolicy,
+    SandboxEndpoint,
+    SandboxRef,
+)
 
 
 logger = logging.getLogger(__name__)
@@ -66,6 +73,13 @@ class E2BSandboxProvider(LegacyRuntimeProviderMixin):
     """E2B compute adapter; all runtime and app transport remains in core."""
 
     provider_name = "e2b"
+    capabilities = ProviderCapabilities(
+        stable_release_identity=True,
+        release_preserves_filesystem=True,
+        private_egress_isolation=True,
+        authenticated_http=True,
+        authenticated_websocket=True,
+    )
 
     def __init__(
         self,
@@ -93,6 +107,16 @@ class E2BSandboxProvider(LegacyRuntimeProviderMixin):
         self._create_in_flight = 0
         self._create_rate_lock = asyncio.Lock()
         self._next_create_at = 0.0
+
+    @property
+    def capacity_policy(self) -> ProviderCapacityPolicy:
+        return ProviderCapacityPolicy(
+            scope=(
+                f"{self.provider_name}:{self.config.owner}:"
+                f"{self.config.environment}"
+            ),
+            max_active=self.config.max_active,
+        )
 
     def _api_options(self) -> dict[str, str]:
         options = {"api_key": self.config.api_key}
@@ -610,9 +634,35 @@ class E2BSandboxProvider(LegacyRuntimeProviderMixin):
                         create_at_provider, sandbox_id
                     )
                 except self._sdk.sandbox_error as exc:
-                    raise ProviderError(
-                        f"E2B sandbox creation failed: {exc}", retryable=True
-                    ) from exc
+                    # A transport timeout can happen after E2B accepted create.
+                    # Re-list by our scoped logical ID before freeing capacity.
+                    try:
+                        info = await self._find(sandbox_id)
+                    except Exception as lookup_exc:
+                        # Keep the local reservation counted until a later
+                        # inventory pass can prove whether create succeeded.
+                        reservation_finished = True
+                        raise ProviderError(
+                            "E2B create outcome is unknown",
+                            code="provider_create_outcome_unknown",
+                            retryable=True,
+                        ) from lookup_exc
+                    if info is None:
+                        raise ProviderError(
+                            f"E2B sandbox creation failed: {exc}",
+                            retryable=True,
+                        ) from exc
+                    sandbox = await self._connect(
+                        sandbox_id,
+                        info,
+                        resume=info.state != "running",
+                    )
+                    if sandbox is None:
+                        raise ProviderError(
+                            "E2B create outcome is unknown",
+                            code="provider_create_outcome_unknown",
+                            retryable=True,
+                        ) from exc
                 self._sandboxes[sandbox_id] = sandbox
                 provider_id = getattr(sandbox, "sandbox_id", None)
                 await self._finish_reservation(
@@ -709,6 +759,18 @@ class E2BSandboxProvider(LegacyRuntimeProviderMixin):
                     metadata=metadata,
                 )
             )
+        by_sandbox = {
+            item.ref.sandbox_id: item.ref.provider_id
+            for item in managed
+            if item.status.status in {"CREATING", "RUNNING"}
+        }
+        for sandbox_id in tuple(self._capacity_reservations):
+            provider_id = by_sandbox.get(sandbox_id)
+            await self._finish_reservation(
+                sandbox_id,
+                created=provider_id is not None,
+                provider_id=provider_id,
+            )
         return managed
 
     async def release(self, sandbox_id: str) -> bool:
@@ -782,23 +844,55 @@ class E2BSandboxProvider(LegacyRuntimeProviderMixin):
         cached = self._sandboxes.pop(sandbox_id, None)
         self._known_infos.pop(sandbox_id, None)
         provider_id = provider_id or getattr(cached, "sandbox_id", None)
+        if not provider_id:
+            await self._refresh_capacity_inventory("discard_missing_id")
+            raise ProviderError(
+                "E2B cleanup outcome is unknown",
+                code="provider_cleanup_outcome_unknown",
+                retryable=True,
+            )
         try:
-            if provider_id:
-                try:
-                    await self._with_rate_limit_retry(
-                        lambda: self._sdk.sandbox_cls.kill(
-                            provider_id, **self._api_options()
-                        )
+            await self._with_rate_limit_retry(
+                lambda: self._sdk.sandbox_cls.kill(
+                    provider_id, **self._api_options()
+                )
+            )
+        except self._sdk.not_found_error:
+            pass
+        except Exception as exc:
+            logger.exception(
+                "Failed to discard unbootstrapped E2B sandbox %s",
+                sandbox_id,
+            )
+            raise ProviderError(
+                "E2B cleanup outcome is unknown",
+                code="provider_cleanup_outcome_unknown",
+                retryable=True,
+            ) from exc
+        await self._record_capacity_removed(sandbox_id, provider_id)
+
+    async def purge_managed(self, ref: SandboxRef) -> bool:
+        """Purge one exact provider generation without targeting a replacement."""
+
+        try:
+            deleted = bool(
+                await self._with_rate_limit_retry(
+                    lambda: self._sdk.sandbox_cls.kill(
+                        ref.provider_id, **self._api_options()
                     )
-                except self._sdk.not_found_error:
-                    pass
-                except Exception:
-                    logger.exception(
-                        "Failed to discard unbootstrapped E2B sandbox %s",
-                        sandbox_id,
-                    )
-        finally:
-            await self._record_capacity_removed(sandbox_id, provider_id)
+                )
+            )
+        except self._sdk.not_found_error:
+            deleted = False
+        except self._sdk.sandbox_error as exc:
+            raise ProviderError(
+                f"E2B managed sandbox purge failed: {exc}", retryable=True
+            ) from exc
+        known = self._known_infos.get(ref.sandbox_id)
+        if known is None or known.provider_id == ref.provider_id:
+            self.invalidate_sandbox_cache(ref.sandbox_id)
+        await self._record_capacity_removed(ref.sandbox_id, ref.provider_id)
+        return deleted
 
     async def resolve_endpoint(
         self,

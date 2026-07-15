@@ -123,7 +123,7 @@ async def test_versioned_sqlite_migration_preserves_rows_and_unknown_tables(tmp_
             volume = store._store._conn.execute(
                 "SELECT volume_id FROM agentbox_workspace_volumes WHERE sandbox_id = 'old'"
             ).fetchone()
-        assert [row[0] for row in versions] == [1, 2, 3]
+        assert [row[0] for row in versions] == [1, 2, 3, 4]
         assert volume[0] == "volume"
     finally:
         await store.close()
@@ -341,6 +341,119 @@ async def test_lifecycle_claim_is_exclusive_and_orphan_grace_respects_it(tmp_pat
         assert [candidate.provider_id for candidate in candidates] == [
             "provider-orphan"
         ]
+    finally:
+        await store.close()
+
+
+@pytest.mark.asyncio
+async def test_provider_final_slot_is_atomic_across_sqlite_managers(tmp_path):
+    path = str(tmp_path / "state.db")
+    first = await SQLiteStateStore.open(path)
+    second = await SQLiteStateStore.open(path)
+    try:
+        await first.upsert_sandbox("one", SandboxEnsureRequest())
+        await first.upsert_sandbox("two", SandboxEnsureRequest())
+        results = await asyncio.gather(
+            first.reserve_provider_allocation(
+                "e2b:test", "one", owner="manager-a", max_active=1, ttl_seconds=60
+            ),
+            second.reserve_provider_allocation(
+                "e2b:test", "two", owner="manager-b", max_active=1, ttl_seconds=60
+            ),
+        )
+        assert sum(result is not None for result in results) == 1
+        assert len(await first.list_provider_allocations("e2b:test")) == 1
+    finally:
+        await first.close()
+        await second.close()
+
+
+@pytest.mark.asyncio
+async def test_provider_reconcile_counts_duplicate_objects_and_adopts_reservation(
+    tmp_path,
+):
+    store = await SQLiteStateStore.open(str(tmp_path / "state.db"))
+    try:
+        await store.upsert_sandbox("same", SandboxEnsureRequest())
+        reservation = await store.reserve_provider_allocation(
+            "e2b:test",
+            "same",
+            owner="manager-a",
+            max_active=10,
+            ttl_seconds=600,
+        )
+        assert reservation is not None
+        inventory_started_at = time.time() + 0.01
+        await store.reconcile_provider_allocations(
+            "e2b:test",
+            {"provider-one": "same", "provider-two": "same"},
+            inventory_started_at=inventory_started_at,
+        )
+        allocations = await store.list_provider_allocations("e2b:test")
+        assert {row.provider_id for row in allocations} == {
+            "provider-one",
+            "provider-two",
+        }
+        assert all(row.state == "active" for row in allocations)
+
+        await store.upsert_sandbox("other", SandboxEnsureRequest())
+        blocked = await store.reserve_provider_allocation(
+            "e2b:test",
+            "other",
+            owner="manager-b",
+            max_active=2,
+            ttl_seconds=60,
+        )
+        assert blocked is None
+
+        exact = next(row for row in allocations if row.provider_id == "provider-one")
+        assert await store.release_provider_allocation(
+            "e2b:test", exact.allocation_id
+        )
+        remaining = await store.list_provider_allocations("e2b:test")
+        assert [row.provider_id for row in remaining] == ["provider-two"]
+    finally:
+        await store.close()
+
+
+@pytest.mark.asyncio
+async def test_activity_lease_is_fenced_by_another_manager_lifecycle_claim(tmp_path):
+    store = await SQLiteStateStore.open(str(tmp_path / "state.db"))
+    try:
+        await store.upsert_sandbox("sandbox", SandboxEnsureRequest())
+        await store.upsert_session(
+            "sandbox", "session", cwd="/workspace", env_keys=[]
+        )
+        claim = await store.acquire_lifecycle_claim(
+            "sandbox", operation="idle-suspend", owner="manager-a", ttl_seconds=60
+        )
+        assert claim is not None
+        assert (
+            await store.acquire_activity_lease(
+                "sandbox",
+                session_id=None,
+                operation="http",
+                owner="manager-b",
+                ttl_seconds=60,
+            )
+            is None
+        )
+        own = await store.acquire_activity_lease(
+            "sandbox",
+            session_id=None,
+            operation="http",
+            owner="manager-a",
+            ttl_seconds=60,
+        )
+        assert own is not None
+        assert await store.mark_sandbox_active("sandbox", owner="manager-a")
+        assert await store.touch_session(
+            "sandbox", "session", owner="manager-a"
+        )
+        assert not await store.mark_sandbox_active("sandbox", owner="manager-b")
+        assert not await store.touch_session(
+            "sandbox", "session", owner="manager-b"
+        )
     finally:
         await store.close()
 

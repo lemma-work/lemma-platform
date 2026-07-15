@@ -31,6 +31,30 @@ class ManagedSandbox:
 
 
 @dataclass(frozen=True)
+class ProviderCapabilities:
+    stable_release_identity: bool
+    release_preserves_filesystem: bool
+    private_egress_isolation: bool
+    authenticated_http: bool
+    authenticated_websocket: bool
+
+    def diagnostic(self) -> dict[str, bool]:
+        return {
+            "stable_release_identity": self.stable_release_identity,
+            "release_preserves_filesystem": self.release_preserves_filesystem,
+            "private_egress_isolation": self.private_egress_isolation,
+            "authenticated_http": self.authenticated_http,
+            "authenticated_websocket": self.authenticated_websocket,
+        }
+
+
+@dataclass(frozen=True)
+class ProviderCapacityPolicy:
+    scope: str
+    max_active: int
+
+
+@dataclass(frozen=True)
 class SandboxEndpoint:
     """A possibly authenticated endpoint for an app inside a sandbox.
 

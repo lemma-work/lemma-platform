@@ -1,3 +1,4 @@
+from pydantic import Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -39,9 +40,21 @@ class Settings(BaseSettings):
     agentbox_state_db_path: str = "/data/agentbox-manager/state.db"
     agentbox_state_database_url: str | None = None
     agentbox_state_durable_env_keys: str = "LEMMA_BASE_URL"
+    # Static, non-secret runtime capacity is copied into each sandbox env and
+    # included in desired-generation hashing. Invocation identity/tokens remain
+    # request-scoped and are never persisted here.
+    agentbox_function_max_concurrency: int = Field(default=8, ge=1, le=128)
+    agentbox_function_max_queued: int = Field(default=32, ge=0, le=4096)
     agentbox_session_idle_timeout_seconds: int = 300
-    agentbox_sandbox_idle_timeout_seconds: int = 300
+    agentbox_sandbox_idle_timeout_seconds: int = 180
     agentbox_cleanup_interval_seconds: int = 30
+    agentbox_activity_lease_ttl_seconds: float = 60.0
+    agentbox_lifecycle_claim_ttl_seconds: float = 120.0
+    agentbox_lifecycle_claim_wait_seconds: float = 30.0
+    agentbox_provider_allocation_ttl_seconds: float = 600.0
+    agentbox_reconcile_interval_seconds: float = 60.0
+    agentbox_orphan_grace_seconds: float = 120.0
+    agentbox_suspended_retention_seconds: float = 604800.0
     agentbox_storage_root: str = "/tmp/agentbox-workspaces"
     agentbox_storage_host_root: str | None = None
     agentbox_endpoint_host: str = "127.0.0.1"
@@ -60,7 +73,19 @@ class Settings(BaseSettings):
 
         from agentbox.state_store.factory import parse_durable_env_keys
 
-        return parse_durable_env_keys(self.agentbox_state_durable_env_keys)
+        return parse_durable_env_keys(self.agentbox_state_durable_env_keys) | {
+            "FUNCTION_EXECUTOR_MAX_ACTIVE",
+            "FUNCTION_EXECUTOR_MAX_QUEUED",
+        }
+
+    @property
+    def agentbox_static_runtime_env(self) -> dict[str, str]:
+        return {
+            "FUNCTION_EXECUTOR_MAX_ACTIVE": str(
+                self.agentbox_function_max_concurrency
+            ),
+            "FUNCTION_EXECUTOR_MAX_QUEUED": str(self.agentbox_function_max_queued),
+        }
 
 
 settings = Settings()

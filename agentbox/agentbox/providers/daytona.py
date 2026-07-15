@@ -15,7 +15,14 @@ from agentbox.schemas import (
 from .cloud_config import DaytonaProviderConfig
 from .errors import ProviderError, SandboxNotFoundError
 from .legacy import LegacyRuntimeProviderMixin
-from .models import EndpointProtocol, ManagedSandbox, SandboxEndpoint, SandboxRef
+from .models import (
+    EndpointProtocol,
+    ManagedSandbox,
+    ProviderCapabilities,
+    ProviderCapacityPolicy,
+    SandboxEndpoint,
+    SandboxRef,
+)
 
 
 logger = logging.getLogger(__name__)
@@ -71,6 +78,16 @@ class DaytonaSandboxProvider(LegacyRuntimeProviderMixin):
         client=None,
     ) -> None:
         self.config = config or DaytonaProviderConfig.from_env()
+        if (
+            not self.config.network_allow_list
+            and not self.config.domain_allow_list
+            and not self.config.allow_unsafe_private_egress
+        ):
+            raise RuntimeError(
+                "Daytona cannot enforce private-network egress denial; configure "
+                "DAYTONA_NETWORK_ALLOW_LIST or DAYTONA_DOMAIN_ALLOW_LIST, or explicitly "
+                "set AGENTBOX_ALLOW_UNSAFE_PRIVATE_EGRESS=true"
+            )
         self._sdk = sdk or _load_sdk()
         self.daytona = client or self._sdk.client_cls(
             self._sdk.config_cls(
@@ -92,6 +109,28 @@ class DaytonaSandboxProvider(LegacyRuntimeProviderMixin):
         )
         self._create_rate_lock = asyncio.Lock()
         self._next_create_at = 0.0
+
+    @property
+    def capabilities(self) -> ProviderCapabilities:
+        return ProviderCapabilities(
+            stable_release_identity=True,
+            release_preserves_filesystem=True,
+            private_egress_isolation=bool(
+                self.config.network_allow_list or self.config.domain_allow_list
+            ),
+            authenticated_http=True,
+            authenticated_websocket=True,
+        )
+
+    @property
+    def capacity_policy(self) -> ProviderCapacityPolicy:
+        return ProviderCapacityPolicy(
+            scope=(
+                f"{self.provider_name}:{self.config.owner}:"
+                f"{self.config.environment}"
+            ),
+            max_active=self.config.max_active,
+        )
 
     def _labels(self, sandbox_id: str | None = None) -> dict[str, str]:
         labels = {
@@ -355,6 +394,18 @@ class DaytonaSandboxProvider(LegacyRuntimeProviderMixin):
                     "auto_stop_interval": self.config.auto_stop_minutes,
                     "auto_archive_interval": self.config.auto_archive_minutes,
                     "auto_delete_interval": self.config.auto_delete_minutes,
+                    "network_block_all": bool(
+                        self.config.network_allow_list
+                        or self.config.domain_allow_list
+                    ),
+                    "network_allow_list": ",".join(
+                        self.config.network_allow_list
+                    )
+                    or None,
+                    "domain_allow_list": ",".join(
+                        self.config.domain_allow_list
+                    )
+                    or None,
                 }
                 params = (
                     self._sdk.snapshot_params_cls(
@@ -366,9 +417,23 @@ class DaytonaSandboxProvider(LegacyRuntimeProviderMixin):
                 try:
                     sandbox = await self._create_at_provider(params)
                 except self._sdk.error as exc:
-                    raise ProviderError(
-                        f"Daytona sandbox creation failed: {exc}", retryable=True
-                    ) from exc
+                    # Daytona may accept create before the client sees a
+                    # transport failure. Re-list the scoped logical ID first.
+                    self.invalidate_sandbox_cache(sandbox_id)
+                    try:
+                        sandbox = await self._find(sandbox_id)
+                    except Exception as lookup_exc:
+                        reservation_finished = True
+                        raise ProviderError(
+                            "Daytona create outcome is unknown",
+                            code="provider_create_outcome_unknown",
+                            retryable=True,
+                        ) from lookup_exc
+                    if sandbox is None:
+                        raise ProviderError(
+                            f"Daytona sandbox creation failed: {exc}",
+                            retryable=True,
+                        ) from exc
                 await self._finish_reservation(
                     sandbox_id,
                     created=True,
@@ -430,6 +495,18 @@ class DaytonaSandboxProvider(LegacyRuntimeProviderMixin):
                     instance_id=self._instance_id(sandbox),
                     metadata=labels,
                 )
+            )
+        by_sandbox = {
+            item.ref.sandbox_id: item.ref.provider_id
+            for item in managed
+            if item.status.status in {"CREATING", "RUNNING"}
+        }
+        for sandbox_id in tuple(self._capacity_reservations):
+            provider_id = by_sandbox.get(sandbox_id)
+            await self._finish_reservation(
+                sandbox_id,
+                created=provider_id is not None,
+                provider_id=provider_id,
             )
         return managed
 
@@ -496,6 +573,30 @@ class DaytonaSandboxProvider(LegacyRuntimeProviderMixin):
             raise ProviderError(
                 f"Daytona sandbox deletion failed: {exc}", retryable=True
             ) from exc
+
+    async def purge_managed(self, ref: SandboxRef) -> bool:
+        """Purge only the provider generation observed by reconciliation."""
+
+        target = None
+        async for sandbox in self._iter(self._labels(ref.sandbox_id)):
+            if str(getattr(sandbox, "id", "")) == ref.provider_id:
+                target = sandbox
+                break
+        if target is None:
+            return False
+        try:
+            await self.daytona.delete(target)
+        except self._sdk.not_found_error:
+            return False
+        except self._sdk.error as exc:
+            raise ProviderError(
+                f"Daytona managed sandbox purge failed: {exc}", retryable=True
+            ) from exc
+        cached = self._sandboxes.get(ref.sandbox_id)
+        if cached is None or str(getattr(cached, "id", "")) == ref.provider_id:
+            self.invalidate_sandbox_cache(ref.sandbox_id)
+        await self._record_capacity_removed(ref.provider_id)
+        return True
 
     async def resolve_endpoint(
         self,

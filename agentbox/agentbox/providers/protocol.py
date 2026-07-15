@@ -5,7 +5,14 @@ from typing import Protocol, runtime_checkable
 from agentbox.apps import SandboxAppSpec
 from agentbox.schemas import SandboxEnsureRequest, SandboxInternalStatus
 
-from .models import EndpointProtocol, ManagedSandbox, SandboxEndpoint
+from .models import (
+    EndpointProtocol,
+    ManagedSandbox,
+    ProviderCapabilities,
+    ProviderCapacityPolicy,
+    SandboxEndpoint,
+    SandboxRef,
+)
 
 
 @runtime_checkable
@@ -60,3 +67,22 @@ class SandboxCacheProvider(Protocol):
     """Optional cache hook used after a proxy observes a stale endpoint."""
 
     def invalidate_sandbox_cache(self, sandbox_id: str) -> None: ...
+
+
+@runtime_checkable
+class SandboxCapabilitiesProvider(Protocol):
+    @property
+    def capabilities(self) -> ProviderCapabilities: ...
+
+
+@runtime_checkable
+class SandboxCapacityProvider(Protocol):
+    @property
+    def capacity_policy(self) -> ProviderCapacityPolicy: ...
+
+
+@runtime_checkable
+class SandboxManagedPurgeProvider(Protocol):
+    """Optional exact-instance purge used by orphan reconciliation."""
+
+    async def purge_managed(self, ref: SandboxRef) -> bool: ...

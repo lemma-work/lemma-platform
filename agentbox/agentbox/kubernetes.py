@@ -18,6 +18,7 @@ from agentbox.providers.errors import ProviderError
 from agentbox.providers.models import (
     EndpointProtocol,
     ManagedSandbox,
+    ProviderCapabilities,
     SandboxEndpoint,
     SandboxRef,
 )
@@ -60,6 +61,13 @@ def _provider_error(exc: ApiException, operation: str) -> ProviderError:
 
 class SandboxKubernetesClient(LegacyRuntimeProviderMixin):
     provider_name = "kubernetes"
+    capabilities = ProviderCapabilities(
+        stable_release_identity=False,
+        release_preserves_filesystem=False,
+        private_egress_isolation=True,
+        authenticated_http=False,
+        authenticated_websocket=False,
+    )
 
     def __init__(self) -> None:
         try:

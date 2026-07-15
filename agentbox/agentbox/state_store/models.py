@@ -7,6 +7,7 @@ from agentbox.schemas import SandboxEnsureRequest
 
 
 DesiredSandboxState = Literal["present", "suspended", "deleted"]
+ProviderAllocationState = Literal["reserved", "active"]
 
 
 @dataclass(frozen=True)
@@ -19,6 +20,7 @@ class SandboxRecord:
     provider_name: str | None = None
     provider_id: str | None = None
     instance_id: str | None = None
+    idle_since_at: float | None = None
     last_active_at: float | None = None
     last_observed_at: float | None = None
 
@@ -62,3 +64,15 @@ class OrphanCandidate:
     sandbox_id: str | None
     first_seen_at: float
     last_seen_at: float
+
+
+@dataclass(frozen=True)
+class ProviderAllocation:
+    allocation_id: str
+    provider_scope: str
+    sandbox_id: str
+    owner: str
+    state: ProviderAllocationState
+    provider_id: str | None
+    expires_at: float | None
+    updated_at: float

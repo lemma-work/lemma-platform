@@ -408,6 +408,11 @@ class AgentBoxStateStore:
             provider_name=row["provider_name"] if "provider_name" in columns else None,
             provider_id=row["provider_id"] if "provider_id" in columns else None,
             instance_id=row["instance_id"] if "instance_id" in columns else None,
+            idle_since_at=(
+                float(row["idle_since_at"])
+                if "idle_since_at" in columns and row["idle_since_at"] is not None
+                else None
+            ),
             last_active_at=(
                 float(row["last_active_at"])
                 if "last_active_at" in columns and row["last_active_at"] is not None

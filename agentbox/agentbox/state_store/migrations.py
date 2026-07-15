@@ -75,6 +75,40 @@ SQLITE_MIGRATIONS: tuple[tuple[int, str, tuple[str, ...]], ...] = (
             """,
         ),
     ),
+    (
+        4,
+        "distributed_provider_allocations",
+        (
+            """
+            CREATE TABLE IF NOT EXISTS agentbox_provider_allocations (
+                allocation_id TEXT NOT NULL,
+                provider_scope TEXT NOT NULL,
+                sandbox_id TEXT NOT NULL,
+                owner TEXT NOT NULL,
+                state TEXT NOT NULL CHECK (state IN ('reserved', 'active')),
+                provider_id TEXT,
+                expires_at REAL,
+                created_at REAL NOT NULL,
+                updated_at REAL NOT NULL,
+                PRIMARY KEY (provider_scope, allocation_id)
+            )
+            """,
+            """
+            CREATE UNIQUE INDEX IF NOT EXISTS agentbox_provider_allocations_reservation_idx
+            ON agentbox_provider_allocations (provider_scope, sandbox_id)
+            WHERE state = 'reserved'
+            """,
+            """
+            CREATE UNIQUE INDEX IF NOT EXISTS agentbox_provider_allocations_id_idx
+            ON agentbox_provider_allocations (provider_scope, provider_id)
+            WHERE provider_id IS NOT NULL
+            """,
+            """
+            CREATE INDEX IF NOT EXISTS agentbox_provider_allocations_capacity_idx
+            ON agentbox_provider_allocations (provider_scope, state, expires_at)
+            """,
+        ),
+    ),
 )
 
 
@@ -99,8 +133,7 @@ POSTGRES_MIGRATIONS: tuple[tuple[int, str, tuple[str, ...]], ...] = (
             """,
             """
             CREATE TABLE IF NOT EXISTS agentbox_sessions (
-                sandbox_id text NOT NULL REFERENCES agentbox_sandboxes(sandbox_id)
-                    ON DELETE CASCADE,
+                sandbox_id text NOT NULL,
                 session_id text NOT NULL,
                 cwd text NOT NULL,
                 env_keys jsonb NOT NULL DEFAULT '[]'::jsonb,
@@ -182,6 +215,40 @@ POSTGRES_MIGRATIONS: tuple[tuple[int, str, tuple[str, ...]], ...] = (
             """
             CREATE INDEX IF NOT EXISTS agentbox_orphan_candidates_grace_idx
             ON agentbox_orphan_candidates (first_seen_at, last_seen_at)
+            """,
+        ),
+    ),
+    (
+        4,
+        "distributed_provider_allocations",
+        (
+            """
+            CREATE TABLE IF NOT EXISTS agentbox_provider_allocations (
+                allocation_id text NOT NULL,
+                provider_scope text NOT NULL,
+                sandbox_id text NOT NULL,
+                owner text NOT NULL,
+                state text NOT NULL CHECK (state IN ('reserved', 'active')),
+                provider_id text,
+                expires_at timestamptz,
+                created_at timestamptz NOT NULL DEFAULT now(),
+                updated_at timestamptz NOT NULL DEFAULT now(),
+                PRIMARY KEY (provider_scope, allocation_id)
+            )
+            """,
+            """
+            CREATE UNIQUE INDEX IF NOT EXISTS agentbox_provider_allocations_reservation_idx
+            ON agentbox_provider_allocations (provider_scope, sandbox_id)
+            WHERE state = 'reserved'
+            """,
+            """
+            CREATE UNIQUE INDEX IF NOT EXISTS agentbox_provider_allocations_id_idx
+            ON agentbox_provider_allocations (provider_scope, provider_id)
+            WHERE provider_id IS NOT NULL
+            """,
+            """
+            CREATE INDEX IF NOT EXISTS agentbox_provider_allocations_capacity_idx
+            ON agentbox_provider_allocations (provider_scope, state, expires_at)
             """,
         ),
     ),

@@ -71,6 +71,7 @@ class _E2BSandbox:
     connect_count = 0
     list_count = 0
     pause_count = 0
+    fail_after_accept = False
 
     def __init__(self, sandbox_id: str) -> None:
         self.sandbox_id = sandbox_id
@@ -87,6 +88,7 @@ class _E2BSandbox:
         cls.connect_count = 0
         cls.list_count = 0
         cls.pause_count = 0
+        cls.fail_after_accept = False
 
     @classmethod
     def list(cls, *, query, limit, **kwargs):
@@ -111,6 +113,9 @@ class _E2BSandbox:
             metadata=dict(metadata),
             state="running",
         )
+        if cls.fail_after_accept:
+            cls.fail_after_accept = False
+            raise _ProviderFailure("accepted then disconnected")
         return sandbox
 
     @classmethod
@@ -450,6 +455,7 @@ class _DaytonaClient:
         self.create_count = 0
         self.list_count = 0
         self.fail_next_create = False
+        self.fail_after_accept = False
 
     async def list(self, query):
         self.list_count += 1
@@ -471,6 +477,9 @@ class _DaytonaClient:
             f"daytona-{self.create_count}", params.values["labels"]
         )
         self.sandboxes[sandbox.id] = sandbox
+        if self.fail_after_accept:
+            self.fail_after_accept = False
+            raise _ProviderFailure("accepted then disconnected")
         return sandbox
 
     async def start(self, sandbox, *, timeout):
@@ -508,6 +517,7 @@ def _daytona_provider(**changes) -> tuple[DaytonaSandboxProvider, _DaytonaClient
         "snapshot": "snapshot",
         "max_active": 2,
         "create_rate_per_second": 100,
+        "allow_unsafe_private_egress": True,
         **changes,
     }
     provider = DaytonaSandboxProvider(
@@ -670,3 +680,56 @@ def test_daytona_capacity_waiter_wakes_after_delete() -> None:
     assert client.create_count == 2
     assert provider._observed_active_count == 1
     assert provider._capacity_reservations == set()
+
+
+def test_e2b_adopts_create_accepted_before_transport_failure() -> None:
+    provider = _e2b_provider_with()
+    _E2BSandbox.fail_after_accept = True
+    status = asyncio.run(provider.create("sandbox-1", SandboxEnsureRequest()))
+    assert status.ready
+    assert _E2BSandbox.create_count == 1
+    assert len(asyncio.run(provider.list_managed())) == 1
+
+
+def test_daytona_fails_closed_without_network_policy_or_explicit_override() -> None:
+    with pytest.raises(RuntimeError, match="private-network egress denial"):
+        DaytonaSandboxProvider(
+            DaytonaProviderConfig(
+                api_key="key",
+                owner="tests",
+                environment="unit",
+                snapshot="snapshot",
+            ),
+            sdk=_DaytonaSdk(
+                client_cls=None,
+                config_cls=None,
+                query_cls=_Query,
+                snapshot_params_cls=_Params,
+                image_params_cls=_Params,
+                error=_ProviderFailure,
+                not_found_error=_NotFound,
+            ),
+            client=_DaytonaClient(),
+        )
+
+
+def test_daytona_enforces_configured_egress_policy() -> None:
+    provider, client = _daytona_provider(
+        allow_unsafe_private_egress=False,
+        network_allow_list=("0.0.0.0/0",),
+        domain_allow_list=("api.lemma.work",),
+    )
+    asyncio.run(provider.create("sandbox-1", SandboxEnsureRequest()))
+    assert client.created_params.values["network_block_all"] is True
+    assert client.created_params.values["network_allow_list"] == "0.0.0.0/0"
+    assert client.created_params.values["domain_allow_list"] == "api.lemma.work"
+    assert provider.capabilities.private_egress_isolation is True
+
+
+def test_daytona_adopts_create_accepted_before_transport_failure() -> None:
+    provider, client = _daytona_provider()
+    client.fail_after_accept = True
+    status = asyncio.run(provider.create("sandbox-1", SandboxEnsureRequest()))
+    assert status.ready
+    assert client.create_count == 1
+    assert len(asyncio.run(provider.list_managed())) == 1

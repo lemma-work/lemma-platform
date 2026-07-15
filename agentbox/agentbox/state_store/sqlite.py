@@ -17,11 +17,13 @@ from .models import (
     DesiredSandboxState,
     LifecycleClaim,
     OrphanCandidate,
+    ProviderAllocation,
     SandboxRecord,
     SessionRecord,
 )
 
 T = TypeVar("T")
+_LEGACY_OPERATION_STALE_SECONDS = 2 * 60 * 60
 
 
 class SQLiteStateStore:
@@ -347,7 +349,9 @@ class SQLiteStateStore:
         await self._touch_sandbox_activity(sandbox_id)
         return record
 
-    async def _touch_sandbox_activity(self, sandbox_id: str) -> bool:
+    async def _touch_sandbox_activity(
+        self, sandbox_id: str, owner: str | None = None
+    ) -> bool:
         def touch() -> bool:
             store = self._store
             now = time.time()
@@ -356,19 +360,53 @@ class SQLiteStateStore:
                     """
                     UPDATE sandboxes SET idle_since_at = NULL,
                         last_active_at = ?, updated_at = ?
-                    WHERE sandbox_id = ?
+                    WHERE sandbox_id = ? AND desired_state = 'present'
+                      AND NOT EXISTS (
+                        SELECT 1 FROM agentbox_lifecycle_claims c
+                        WHERE c.sandbox_id = sandboxes.sandbox_id
+                          AND c.expires_at > ?
+                          AND (? IS NULL OR c.owner <> ?)
+                      )
                     """,
-                    (now, now, sandbox_id),
+                    (now, now, sandbox_id, now, owner, owner),
                 )
                 return bool(cursor.rowcount)
 
         return await self._run(touch)
 
-    async def touch_session(self, sandbox_id: str, session_id: str) -> bool:
-        touched = await self._run(self._store.touch_session, sandbox_id, session_id)
+    async def touch_session(
+        self, sandbox_id: str, session_id: str, *, owner: str | None = None
+    ) -> bool:
+        touched = await self._run(
+            self._touch_session_fenced,
+            sandbox_id,
+            session_id,
+            owner,
+        )
         if touched:
-            await self._touch_sandbox_activity(sandbox_id)
+            await self._touch_sandbox_activity(sandbox_id, owner)
         return touched
+
+    def _touch_session_fenced(
+        self, sandbox_id: str, session_id: str, owner: str | None
+    ) -> bool:
+        store = self._store
+        now = time.time()
+        with store._lock, store._conn:
+            cursor = store._conn.execute(
+                """
+                UPDATE sessions SET last_active_at = ?, updated_at = ?
+                WHERE sandbox_id = ? AND session_id = ?
+                  AND NOT EXISTS (
+                    SELECT 1 FROM agentbox_lifecycle_claims c
+                    WHERE c.sandbox_id = sessions.sandbox_id
+                      AND c.expires_at > ?
+                      AND (? IS NULL OR c.owner <> ?)
+                  )
+                """,
+                (now, now, sandbox_id, session_id, now, owner, owner),
+            )
+            return bool(cursor.rowcount)
 
     async def get_session(
         self, sandbox_id: str, session_id: str
@@ -395,6 +433,22 @@ class SQLiteStateStore:
     async def delete_session(self, sandbox_id: str, session_id: str) -> bool:
         return await self._run(self._delete_session, sandbox_id, session_id)
 
+    def _delete_sandbox_sessions(self, sandbox_id: str) -> int:
+        store = self._store
+        with store._lock, store._conn:
+            store._conn.execute(
+                "DELETE FROM agentbox_activity_leases WHERE sandbox_id = ?",
+                (sandbox_id,),
+            )
+            cursor = store._conn.execute(
+                "DELETE FROM sessions WHERE sandbox_id = ?", (sandbox_id,)
+            )
+            self._mark_idle_if_empty_locked(sandbox_id)
+            return int(cursor.rowcount)
+
+    async def delete_sandbox_sessions(self, sandbox_id: str) -> int:
+        return await self._run(self._delete_sandbox_sessions, sandbox_id)
+
     def _expired_sessions(self, idle_timeout_seconds: int) -> list[SessionRecord]:
         store = self._store
         now = time.time()
@@ -402,6 +456,19 @@ class SQLiteStateStore:
         with store._lock, store._conn:
             store._conn.execute(
                 "DELETE FROM agentbox_activity_leases WHERE expires_at <= ?", (now,)
+            )
+            store._conn.execute(
+                """
+                UPDATE sessions SET active_operations = 0, updated_at = ?
+                WHERE active_operations > 0 AND updated_at < ?
+                  AND NOT EXISTS (
+                    SELECT 1 FROM agentbox_activity_leases l
+                    WHERE l.sandbox_id = sessions.sandbox_id
+                      AND (l.session_id IS NULL OR l.session_id = sessions.session_id)
+                      AND l.expires_at > ?
+                  )
+                """,
+                (now, now - _LEGACY_OPERATION_STALE_SECONDS, now),
             )
             rows = store._conn.execute(
                 """
@@ -432,7 +499,7 @@ class SQLiteStateStore:
             )
             store._conn.execute(
                 """
-                UPDATE sandboxes SET idle_since_at = ?
+                UPDATE sandboxes SET idle_since_at = COALESCE(last_active_at, ?)
                 WHERE idle_since_at IS NULL
                   AND desired_state = 'present'
                   AND NOT EXISTS (
@@ -464,8 +531,10 @@ class SQLiteStateStore:
     async def idle_sandboxes(self, idle_timeout_seconds: int) -> list[SandboxRecord]:
         return await self._run(self._idle_sandboxes, idle_timeout_seconds)
 
-    async def mark_sandbox_active(self, sandbox_id: str) -> bool:
-        return await self._touch_sandbox_activity(sandbox_id)
+    async def mark_sandbox_active(
+        self, sandbox_id: str, *, owner: str | None = None
+    ) -> bool:
+        return await self._touch_sandbox_activity(sandbox_id, owner)
 
     def _mark_pod_stopped(self, sandbox_id: str) -> SandboxRecord | None:
         store = self._store
@@ -533,16 +602,37 @@ class SQLiteStateStore:
         lease_id = str(uuid.uuid4())
         expires_at = now + ttl_seconds
         with store._lock, store._conn:
+            if not store._conn.execute(
+                "SELECT 1 FROM sandboxes WHERE sandbox_id = ?", (sandbox_id,)
+            ).fetchone():
+                return None
             if session_id is None:
                 exists = store._conn.execute(
-                    "SELECT 1 FROM sandboxes WHERE sandbox_id = ?", (sandbox_id,)
+                    """
+                    SELECT 1 FROM sandboxes
+                    WHERE sandbox_id = ? AND desired_state = 'present'
+                      AND NOT EXISTS (
+                        SELECT 1 FROM agentbox_lifecycle_claims c
+                        WHERE c.sandbox_id = sandboxes.sandbox_id
+                          AND c.expires_at > ? AND c.owner <> ?
+                      )
+                    """,
+                    (sandbox_id, now, owner),
                 ).fetchone()
             else:
                 exists = store._conn.execute(
                     """
-                    SELECT 1 FROM sessions WHERE sandbox_id = ? AND session_id = ?
+                    SELECT 1 FROM sessions x JOIN sandboxes s
+                      ON s.sandbox_id = x.sandbox_id
+                    WHERE x.sandbox_id = ? AND x.session_id = ?
+                      AND s.desired_state = 'present'
+                      AND NOT EXISTS (
+                        SELECT 1 FROM agentbox_lifecycle_claims c
+                        WHERE c.sandbox_id = s.sandbox_id AND c.expires_at > ?
+                          AND c.owner <> ?
+                      )
                     """,
-                    (sandbox_id, session_id),
+                    (sandbox_id, session_id, now, owner),
                 ).fetchone()
             if not exists:
                 return None
@@ -849,6 +939,344 @@ class SQLiteStateStore:
     async def clear_orphan(self, provider_name: str, provider_id: str) -> bool:
         return await self._run(self._clear_orphan, provider_name, provider_id)
 
+    def _reserve_provider_allocation(
+        self,
+        provider_scope: str,
+        sandbox_id: str,
+        owner: str,
+        max_active: int,
+        ttl_seconds: float,
+    ) -> ProviderAllocation | None:
+        store = self._store
+        now = time.time()
+        expires_at = now + ttl_seconds
+        with store._lock:
+            store._conn.execute("BEGIN IMMEDIATE")
+            try:
+                result = self._reserve_provider_allocation_locked(
+                    provider_scope,
+                    sandbox_id,
+                    owner,
+                    max_active,
+                    now,
+                    expires_at,
+                )
+                store._conn.commit()
+                return result
+            except BaseException:
+                store._conn.rollback()
+                raise
+
+    def _reserve_provider_allocation_locked(
+        self,
+        provider_scope: str,
+        sandbox_id: str,
+        owner: str,
+        max_active: int,
+        now: float,
+        expires_at: float,
+    ) -> ProviderAllocation | None:
+        store = self._store
+        if not store._conn.execute(
+            "SELECT 1 FROM sandboxes WHERE sandbox_id = ?", (sandbox_id,)
+        ).fetchone():
+            return None
+        store._conn.execute(
+            """
+            DELETE FROM agentbox_provider_allocations
+            WHERE provider_scope = ? AND state = 'reserved'
+              AND expires_at <= ?
+            """,
+            (provider_scope, now),
+        )
+        active = store._conn.execute(
+            """
+            SELECT * FROM agentbox_provider_allocations
+            WHERE provider_scope = ? AND sandbox_id = ? AND state = 'active'
+            ORDER BY updated_at DESC LIMIT 1
+            """,
+            (provider_scope, sandbox_id),
+        ).fetchone()
+        if active is not None:
+            return self._provider_allocation(active)
+        row = store._conn.execute(
+            """
+            SELECT * FROM agentbox_provider_allocations
+            WHERE provider_scope = ? AND sandbox_id = ? AND state = 'reserved'
+            """,
+            (provider_scope, sandbox_id),
+        ).fetchone()
+        if row is not None:
+            if row["owner"] != owner and float(row["expires_at"]) > now:
+                return None
+            row = store._conn.execute(
+                """
+                UPDATE agentbox_provider_allocations
+                SET owner = ?, expires_at = ?, updated_at = ?
+                WHERE provider_scope = ? AND allocation_id = ?
+                RETURNING *
+                """,
+                (owner, expires_at, now, provider_scope, row["allocation_id"]),
+            ).fetchone()
+            return self._provider_allocation(row)
+        count = int(
+            store._conn.execute(
+                """
+                SELECT count(*) FROM agentbox_provider_allocations
+                WHERE provider_scope = ? AND (
+                    state = 'active' OR (state = 'reserved' AND expires_at > ?)
+                )
+                """,
+                (provider_scope, now),
+            ).fetchone()[0]
+        )
+        if count >= max_active:
+            return None
+        allocation_id = str(uuid.uuid4())
+        row = store._conn.execute(
+            """
+            INSERT INTO agentbox_provider_allocations (
+                allocation_id, provider_scope, sandbox_id, owner, state,
+                provider_id, expires_at, created_at, updated_at
+            ) VALUES (?, ?, ?, ?, 'reserved', NULL, ?, ?, ?)
+            RETURNING *
+            """,
+            (
+                allocation_id,
+                provider_scope,
+                sandbox_id,
+                owner,
+                expires_at,
+                now,
+                now,
+            ),
+        ).fetchone()
+        return self._provider_allocation(row)
+
+    async def reserve_provider_allocation(
+        self,
+        provider_scope: str,
+        sandbox_id: str,
+        *,
+        owner: str,
+        max_active: int,
+        ttl_seconds: float,
+    ) -> ProviderAllocation | None:
+        if max_active < 1 or ttl_seconds <= 0:
+            raise ValueError("provider allocation limits must be positive")
+        return await self._run(
+            self._reserve_provider_allocation,
+            provider_scope,
+            sandbox_id,
+            owner,
+            max_active,
+            ttl_seconds,
+        )
+
+    def _activate_provider_allocation(
+        self,
+        provider_scope: str,
+        allocation_id: str,
+        owner: str,
+        provider_id: str,
+    ) -> ProviderAllocation | None:
+        store = self._store
+        now = time.time()
+        with store._lock, store._conn:
+            row = store._conn.execute(
+                """
+                UPDATE agentbox_provider_allocations
+                SET state = 'active', provider_id = ?, expires_at = NULL,
+                    updated_at = ?
+                WHERE provider_scope = ? AND allocation_id = ?
+                  AND ((state = 'reserved' AND owner = ?)
+                    OR (state = 'active' AND provider_id = ?))
+                RETURNING *
+                """,
+                (
+                    provider_id,
+                    now,
+                    provider_scope,
+                    allocation_id,
+                    owner,
+                    provider_id,
+                ),
+            ).fetchone()
+        return self._provider_allocation(row) if row else None
+
+    async def activate_provider_allocation(
+        self,
+        provider_scope: str,
+        allocation_id: str,
+        *,
+        owner: str,
+        provider_id: str,
+    ) -> ProviderAllocation | None:
+        return await self._run(
+            self._activate_provider_allocation,
+            provider_scope,
+            allocation_id,
+            owner,
+            provider_id,
+        )
+
+    def _release_provider_allocation(
+        self, provider_scope: str, allocation_id: str
+    ) -> bool:
+        store = self._store
+        with store._lock, store._conn:
+            cursor = store._conn.execute(
+                """
+                DELETE FROM agentbox_provider_allocations
+                WHERE provider_scope = ? AND allocation_id = ?
+                """,
+                (provider_scope, allocation_id),
+            )
+            return bool(cursor.rowcount)
+
+    async def release_provider_allocation(
+        self, provider_scope: str, allocation_id: str
+    ) -> bool:
+        return await self._run(
+            self._release_provider_allocation, provider_scope, allocation_id
+        )
+
+    def _list_provider_allocations(
+        self, provider_scope: str
+    ) -> list[ProviderAllocation]:
+        store = self._store
+        with store._lock:
+            rows = store._conn.execute(
+                """
+                SELECT * FROM agentbox_provider_allocations
+                WHERE provider_scope = ? ORDER BY sandbox_id, allocation_id
+                """,
+                (provider_scope,),
+            ).fetchall()
+        return [self._provider_allocation(row) for row in rows]
+
+    async def list_provider_allocations(
+        self, provider_scope: str
+    ) -> list[ProviderAllocation]:
+        return await self._run(self._list_provider_allocations, provider_scope)
+
+    def _reconcile_provider_allocations(
+        self,
+        provider_scope: str,
+        active_provider_objects: dict[str, str],
+        inventory_started_at: float,
+    ) -> None:
+        store = self._store
+        now = time.time()
+        with store._lock:
+            store._conn.execute("BEGIN IMMEDIATE")
+            try:
+                store._conn.execute(
+                    """
+                    DELETE FROM agentbox_provider_allocations
+                    WHERE provider_scope = ? AND state = 'reserved'
+                      AND expires_at <= ?
+                    """,
+                    (provider_scope, now),
+                )
+                for provider_id, sandbox_id in active_provider_objects.items():
+                    row = store._conn.execute(
+                        """
+                        SELECT allocation_id FROM agentbox_provider_allocations
+                        WHERE provider_scope = ? AND provider_id = ?
+                        """,
+                        (provider_scope, provider_id),
+                    ).fetchone()
+                    if row is None:
+                        store._conn.execute(
+                            """
+                            INSERT INTO agentbox_provider_allocations (
+                                allocation_id, provider_scope, sandbox_id, owner,
+                                state, provider_id, expires_at, created_at, updated_at
+                            ) VALUES (
+                                ?, ?, ?, 'reconciler', 'active', ?, NULL, ?, ?
+                            )
+                            """,
+                            (
+                                f"provider:{provider_id}",
+                                provider_scope,
+                                sandbox_id,
+                                provider_id,
+                                inventory_started_at,
+                                inventory_started_at,
+                            ),
+                        )
+                    else:
+                        store._conn.execute(
+                            """
+                            UPDATE agentbox_provider_allocations
+                            SET sandbox_id = ?, state = 'active', expires_at = NULL,
+                                updated_at = ?
+                            WHERE provider_scope = ? AND allocation_id = ?
+                            """,
+                            (
+                                sandbox_id,
+                                inventory_started_at,
+                                provider_scope,
+                                row["allocation_id"],
+                            ),
+                        )
+                    # Adoption proves an earlier ambiguous reservation became
+                    # this provider object. Clear only reservations that
+                    # predate this inventory snapshot; a newer concurrent
+                    # reservation remains fenced and counted.
+                    store._conn.execute(
+                        """
+                        DELETE FROM agentbox_provider_allocations
+                        WHERE provider_scope = ? AND sandbox_id = ?
+                          AND state = 'reserved' AND updated_at <= ?
+                        """,
+                        (provider_scope, sandbox_id, inventory_started_at),
+                    )
+                rows = store._conn.execute(
+                    """
+                    SELECT allocation_id, provider_id, updated_at
+                    FROM agentbox_provider_allocations
+                    WHERE provider_scope = ? AND state = 'active'
+                    """,
+                    (provider_scope,),
+                ).fetchall()
+                for row in rows:
+                    if (
+                        str(row["provider_id"]) not in active_provider_objects
+                        and float(row["updated_at"]) <= inventory_started_at
+                    ):
+                        store._conn.execute(
+                            """
+                            DELETE FROM agentbox_provider_allocations
+                            WHERE provider_scope = ? AND allocation_id = ?
+                              AND updated_at <= ?
+                            """,
+                            (
+                                provider_scope,
+                                row["allocation_id"],
+                                inventory_started_at,
+                            ),
+                        )
+                store._conn.commit()
+            except BaseException:
+                store._conn.rollback()
+                raise
+
+    async def reconcile_provider_allocations(
+        self,
+        provider_scope: str,
+        active_provider_objects: dict[str, str],
+        *,
+        inventory_started_at: float,
+    ) -> None:
+        await self._run(
+            self._reconcile_provider_allocations,
+            provider_scope,
+            active_provider_objects,
+            inventory_started_at,
+        )
+
     async def close(self) -> None:
         if self._legacy is not None:
             store, self._legacy = self._legacy, None
@@ -883,4 +1311,19 @@ class SQLiteStateStore:
             sandbox_id=str(row["sandbox_id"]) if row["sandbox_id"] else None,
             first_seen_at=float(row["first_seen_at"]),
             last_seen_at=float(row["last_seen_at"]),
+        )
+
+    @staticmethod
+    def _provider_allocation(row: sqlite3.Row) -> ProviderAllocation:
+        return ProviderAllocation(
+            allocation_id=str(row["allocation_id"]),
+            provider_scope=str(row["provider_scope"]),
+            sandbox_id=str(row["sandbox_id"]),
+            owner=str(row["owner"]),
+            state=str(row["state"]),
+            provider_id=str(row["provider_id"]) if row["provider_id"] else None,
+            expires_at=float(row["expires_at"])
+            if row["expires_at"] is not None
+            else None,
+            updated_at=float(row["updated_at"]),
         )

@@ -8,6 +8,7 @@ from .models import (
     ActivityLease,
     LifecycleClaim,
     OrphanCandidate,
+    ProviderAllocation,
     SandboxRecord,
     SessionRecord,
     DesiredSandboxState,
@@ -53,18 +54,23 @@ class AsyncStateStore(Protocol):
         env_keys: list[str],
     ) -> SessionRecord: ...
 
-    async def touch_session(self, sandbox_id: str, session_id: str) -> bool: ...
+    async def touch_session(
+        self, sandbox_id: str, session_id: str, *, owner: str | None = None
+    ) -> bool: ...
     async def get_session(
         self, sandbox_id: str, session_id: str
     ) -> SessionRecord | None: ...
     async def delete_session(self, sandbox_id: str, session_id: str) -> bool: ...
+    async def delete_sandbox_sessions(self, sandbox_id: str) -> int: ...
     async def expired_sessions(
         self, idle_timeout_seconds: int
     ) -> list[SessionRecord]: ...
     async def idle_sandboxes(
         self, idle_timeout_seconds: int
     ) -> list[SandboxRecord]: ...
-    async def mark_sandbox_active(self, sandbox_id: str) -> bool: ...
+    async def mark_sandbox_active(
+        self, sandbox_id: str, *, owner: str | None = None
+    ) -> bool: ...
     async def mark_pod_stopped(self, sandbox_id: str) -> SandboxRecord | None: ...
     async def mark_idle_if_empty(self, sandbox_id: str) -> None: ...
 
@@ -114,4 +120,40 @@ class AsyncStateStore(Protocol):
         inventory_started_at: float,
     ) -> list[OrphanCandidate]: ...
     async def clear_orphan(self, provider_name: str, provider_id: str) -> bool: ...
+
+    async def reserve_provider_allocation(
+        self,
+        provider_scope: str,
+        sandbox_id: str,
+        *,
+        owner: str,
+        max_active: int,
+        ttl_seconds: float,
+    ) -> ProviderAllocation | None: ...
+
+    async def activate_provider_allocation(
+        self,
+        provider_scope: str,
+        allocation_id: str,
+        *,
+        owner: str,
+        provider_id: str,
+    ) -> ProviderAllocation | None: ...
+
+    async def release_provider_allocation(
+        self, provider_scope: str, allocation_id: str
+    ) -> bool: ...
+
+    async def list_provider_allocations(
+        self, provider_scope: str
+    ) -> list[ProviderAllocation]: ...
+
+    async def reconcile_provider_allocations(
+        self,
+        provider_scope: str,
+        active_provider_objects: dict[str, str],
+        *,
+        inventory_started_at: float,
+    ) -> None: ...
+
     async def close(self) -> None: ...

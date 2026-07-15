@@ -2,6 +2,7 @@ from .models import (
     ActivityLease,
     LifecycleClaim,
     OrphanCandidate,
+    ProviderAllocation,
     SandboxRecord,
     SessionRecord,
 )
@@ -20,6 +21,7 @@ __all__ = [
     "AsyncStateStore",
     "LifecycleClaim",
     "OrphanCandidate",
+    "ProviderAllocation",
     "SandboxRecord",
     "SessionRecord",
     "create_state_store",

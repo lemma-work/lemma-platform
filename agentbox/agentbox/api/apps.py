@@ -17,13 +17,16 @@ from fastapi.responses import RedirectResponse, Response
 from agentbox.apps import SandboxAppSpec, sandbox_app, sandbox_app_from_slug
 from agentbox.auth import require_api_key
 from agentbox.config import settings
+from agentbox.lifecycle_manager import SandboxLifecycleManager
 from agentbox.providers import SandboxProvider
 from agentbox.providers.models import SandboxEndpoint
 from agentbox.sandbox_ids import validate_sandbox_id
 from agentbox.schemas import AppAccessRequest, AppAccessResponse, SandboxInternalStatus
 from agentbox.to_thread import run_sync
+from agentbox.state_store.protocol import AsyncStateStore
 
-from .deps import sandbox_provider
+from .deps import lifecycle_manager, sandbox_provider, state_store
+from .lifecycle import activity_lease
 
 router = APIRouter()
 
@@ -70,12 +73,21 @@ async def get_sandbox_app_access_url(
     app_name: str,
     request: AppAccessRequest,
     provider: SandboxProvider = Depends(sandbox_provider),
+    store: AsyncStateStore = Depends(state_store),
+    manager: SandboxLifecycleManager = Depends(lifecycle_manager),
 ) -> AppAccessResponse:
     validate_sandbox_id(sandbox_id)
     app_spec = resolve_sandbox_app(app_name)
     if app_spec.exposure != "workspace_user":
         raise HTTPException(status_code=404, detail="Sandbox app is not user accessible")
-    await provider.get_status(sandbox_id)
+    async with activity_lease(
+        store,
+        manager,
+        sandbox_id,
+        session_id=None,
+        operation=f"app-access:{app_spec.name}",
+    ):
+        await provider.get_status(sandbox_id)
 
     expires_at = int(time.time()) + request.ttl_seconds
     token = create_app_access_token(sandbox_id, app_spec.name, expires_at)
@@ -98,19 +110,28 @@ async def proxy_sandbox_app_internal(
     path: str,
     request: Request,
     provider: SandboxProvider = Depends(sandbox_provider),
+    store: AsyncStateStore = Depends(state_store),
+    manager: SandboxLifecycleManager = Depends(lifecycle_manager),
 ) -> Response:
     validate_sandbox_id(sandbox_id)
     app_spec = resolve_sandbox_app(app_name)
     if app_spec.auth_mode != "manager_api_key":
         raise HTTPException(status_code=404, detail="Sandbox app is not private")
-    return await proxy_sandbox_app_http_request(
-        app_spec,
+    async with activity_lease(
+        store,
+        manager,
         sandbox_id,
-        path,
-        request,
-        provider,
-        forward_authorization=True,
-    )
+        session_id=None,
+        operation=f"http:{app_spec.name}",
+    ):
+        return await proxy_sandbox_app_http_request(
+            app_spec,
+            sandbox_id,
+            path,
+            request,
+            provider,
+            forward_authorization=True,
+        )
 
 
 @router.api_route(
@@ -122,6 +143,8 @@ async def proxy_sandbox_app_public_host(
     request: Request,
     path: str,
     provider: SandboxProvider = Depends(sandbox_provider),
+    store: AsyncStateStore = Depends(state_store),
+    manager: SandboxLifecycleManager = Depends(lifecycle_manager),
 ) -> Response:
     target = sandbox_app_from_request_host(request)
     if target is None:
@@ -135,14 +158,21 @@ async def proxy_sandbox_app_public_host(
     ):
         return app_access_redirect_response(request, token)
 
-    response = await proxy_sandbox_app_http_request(
-        app_spec,
+    async with activity_lease(
+        store,
+        manager,
         sandbox_id,
-        path,
-        request,
-        provider,
-        access_token=token,
-    )
+        session_id=None,
+        operation=f"public-http:{app_spec.name}",
+    ):
+        response = await proxy_sandbox_app_http_request(
+            app_spec,
+            sandbox_id,
+            path,
+            request,
+            provider,
+            access_token=token,
+        )
     if token:
         set_app_access_cookie(response, app_spec, sandbox_id, token)
     return response
@@ -153,6 +183,8 @@ async def proxy_sandbox_app_public_websocket(
     websocket: WebSocket,
     path: str,
     provider: SandboxProvider = Depends(sandbox_provider),
+    store: AsyncStateStore = Depends(state_store),
+    manager: SandboxLifecycleManager = Depends(lifecycle_manager),
 ) -> None:
     target = sandbox_app_from_host(websocket.headers.get("host") or "")
     if target is None:
@@ -162,7 +194,23 @@ async def proxy_sandbox_app_public_websocket(
     if not validate_sandbox_app_websocket_access(app_spec, sandbox_id, websocket):
         await websocket.close(code=1008)
         return
-    await proxy_sandbox_app_websocket_request(app_spec, sandbox_id, path, websocket, provider)
+    try:
+        async with activity_lease(
+            store,
+            manager,
+            sandbox_id,
+            session_id=None,
+            operation=f"websocket:{app_spec.name}",
+        ):
+            await proxy_sandbox_app_websocket_request(
+                app_spec,
+                sandbox_id,
+                path,
+                websocket,
+                provider,
+            )
+    except HTTPException:
+        await websocket.close(code=1011)
 
 
 def resolve_sandbox_app(app_name: str) -> SandboxAppSpec:

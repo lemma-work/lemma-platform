@@ -21,7 +21,13 @@ from agentbox.schemas import (
 from agentbox.to_thread import run_sync
 
 from .legacy import LegacyRuntimeProviderMixin
-from .models import EndpointProtocol, ManagedSandbox, SandboxEndpoint, SandboxRef
+from .models import (
+    EndpointProtocol,
+    ManagedSandbox,
+    ProviderCapabilities,
+    SandboxEndpoint,
+    SandboxRef,
+)
 
 
 def docker_container_name(sandbox_id: str) -> str:
@@ -32,6 +38,13 @@ class DockerSandboxProvider(LegacyRuntimeProviderMixin):
     cli_name = "docker"
     namespace = "docker"
     provider_name = "docker"
+    capabilities = ProviderCapabilities(
+        stable_release_identity=True,
+        release_preserves_filesystem=True,
+        private_egress_isolation=False,
+        authenticated_http=False,
+        authenticated_websocket=False,
+    )
 
     def __init__(self) -> None:
         if not shutil.which(self.cli_name):

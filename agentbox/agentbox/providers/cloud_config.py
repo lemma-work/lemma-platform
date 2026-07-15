@@ -104,12 +104,15 @@ class DaytonaProviderConfig:
     max_active: int = 10
     auto_stop_minutes: int = 0
     auto_archive_minutes: int = 60
-    auto_delete_minutes: int = 1440
+    auto_delete_minutes: int = 10080
     ready_timeout_seconds: float = 120.0
     admission_wait_seconds: float = 60.0
     capacity_retry_after_seconds: int = 15
     create_rate_per_second: float = 1.0
     create_max_in_flight: int = 3
+    network_allow_list: tuple[str, ...] = ()
+    domain_allow_list: tuple[str, ...] = ()
+    allow_unsafe_private_egress: bool = False
 
     @classmethod
     def from_env(cls) -> "DaytonaProviderConfig":
@@ -130,7 +133,7 @@ class DaytonaProviderConfig:
             os.environ.get("DAYTONA_SANDBOX_AUTO_ARCHIVE_MINUTES", "60")
         )
         auto_delete = int(
-            os.environ.get("DAYTONA_SANDBOX_AUTO_DELETE_MINUTES", "1440")
+            os.environ.get("DAYTONA_SANDBOX_AUTO_DELETE_MINUTES", "10080")
         )
         if (
             auto_stop < 0
@@ -189,4 +192,22 @@ class DaytonaProviderConfig:
             capacity_retry_after_seconds=retry_after,
             create_rate_per_second=create_rate,
             create_max_in_flight=create_max_in_flight,
+            network_allow_list=tuple(
+                item.strip()
+                for item in os.environ.get(
+                    "DAYTONA_NETWORK_ALLOW_LIST", ""
+                ).split(",")
+                if item.strip()
+            ),
+            domain_allow_list=tuple(
+                item.strip()
+                for item in os.environ.get(
+                    "DAYTONA_DOMAIN_ALLOW_LIST", ""
+                ).split(",")
+                if item.strip()
+            ),
+            allow_unsafe_private_egress=os.environ.get(
+                "AGENTBOX_ALLOW_UNSAFE_PRIVATE_EGRESS", "false"
+            ).lower()
+            in {"1", "true", "yes"},
         )
