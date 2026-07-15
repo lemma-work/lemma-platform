@@ -18,6 +18,7 @@ from agentbox.apps import SandboxAppSpec, sandbox_app, sandbox_app_from_slug
 from agentbox.auth import require_api_key
 from agentbox.config import settings
 from agentbox.providers import SandboxProvider
+from agentbox.providers.models import SandboxEndpoint
 from agentbox.sandbox_ids import validate_sandbox_id
 from agentbox.schemas import AppAccessRequest, AppAccessResponse, SandboxInternalStatus
 from agentbox.to_thread import run_sync
@@ -409,16 +410,45 @@ def sandbox_app_upstream_base_url(
     return None
 
 
+async def resolve_sandbox_app_endpoint(
+    provider: SandboxProvider,
+    sandbox_id: str,
+    app_spec: SandboxAppSpec,
+    *,
+    status_obj: SandboxInternalStatus | None = None,
+    protocol: str = "http",
+) -> SandboxEndpoint:
+    """Resolve provider authentication without coupling the proxy to its SDK."""
+
+    resolver = getattr(provider, "resolve_endpoint", None)
+    if resolver is not None:
+        return await resolver(sandbox_id, app_spec, protocol=protocol)
+    # Transitional fallback for external providers implementing the historical
+    # status-only contract. This can be removed after one deprecation cycle.
+    status_obj = status_obj or await provider.get_status(sandbox_id)
+    base_url = sandbox_app_upstream_base_url(status_obj, app_spec)
+    if base_url is None:
+        raise HTTPException(status_code=409, detail="Sandbox app endpoint is missing")
+    return SandboxEndpoint(base_url=base_url)
+
+
 async def wait_until_sandbox_app_ready(
     app_spec: SandboxAppSpec,
     sandbox_id: str,
     upstream_base_url: str,
     request: Request,
+    *,
+    endpoint_headers: dict[str, str] | None = None,
+    instance_id: str | None = None,
 ) -> None:
     if not app_spec.health_path:
         return
     ready_cache = getattr(request.app.state, "sandbox_app_ready_cache", None)
-    cache_key = (sandbox_id, app_spec.name, upstream_base_url)
+    cache_key = (
+        (sandbox_id, app_spec.name, upstream_base_url, instance_id)
+        if instance_id is not None
+        else (sandbox_id, app_spec.name, upstream_base_url)
+    )
     if ready_cache is not None and cache_key in ready_cache:
         return
 
@@ -426,7 +456,12 @@ async def wait_until_sandbox_app_ready(
     last_error: Exception | None = None
     while time.monotonic() < deadline:
         try:
-            if await run_sync(check_sandbox_app_health, upstream_base_url, app_spec):
+            if await run_sync(
+                check_sandbox_app_health,
+                upstream_base_url,
+                app_spec,
+                endpoint_headers,
+            ):
                 if ready_cache is not None:
                     ready_cache.add(cache_key)
                 return
@@ -444,9 +479,14 @@ async def wait_until_sandbox_app_ready(
 def check_sandbox_app_health(
     upstream_base_url: str,
     app_spec: SandboxAppSpec,
+    headers: dict[str, str] | None = None,
 ) -> bool:
     path = app_spec.health_path if app_spec.health_path.startswith("/") else f"/{app_spec.health_path}"
-    req = urlrequest.Request(f"{upstream_base_url.rstrip('/')}{path}", method="GET")
+    req = urlrequest.Request(
+        f"{upstream_base_url.rstrip('/')}{path}",
+        headers=headers or {},
+        method="GET",
+    )
     with urlrequest.urlopen(req, timeout=2) as response:
         return 200 <= response.status < 300
 
@@ -493,10 +533,23 @@ async def proxy_sandbox_app_http_request(
     status_obj = await provider.get_status(sandbox_id)
     if not status_obj.ready:
         raise HTTPException(status_code=409, detail="Sandbox is not running")
-    upstream_base_url = sandbox_app_upstream_base_url(status_obj, app_spec)
+    endpoint = await resolve_sandbox_app_endpoint(
+        provider,
+        sandbox_id,
+        app_spec,
+        status_obj=status_obj,
+    )
+    upstream_base_url = endpoint.base_url.rstrip("/")
     if upstream_base_url is None:
         raise HTTPException(status_code=409, detail="Sandbox app endpoint is missing")
-    await wait_until_sandbox_app_ready(app_spec, sandbox_id, upstream_base_url, incoming_request)
+    await wait_until_sandbox_app_ready(
+        app_spec,
+        sandbox_id,
+        upstream_base_url,
+        incoming_request,
+        endpoint_headers=dict(endpoint.headers),
+        instance_id=endpoint.instance_id,
+    )
 
     query_pairs = [
         (key, value)
@@ -523,8 +576,20 @@ async def proxy_sandbox_app_http_request(
             "x-api-key",
             UPSTREAM_TIMEOUT_HEADER.lower(),
         }
-        and (forward_authorization or key.lower() != "authorization")
+        and key.lower() != "authorization"
     }
+    caller_authorization = incoming_request.headers.get("authorization")
+    endpoint_uses_authorization = any(
+        key.lower() == "authorization" for key in endpoint.headers
+    )
+    if forward_authorization and caller_authorization:
+        authorization_header = (
+            "X-Agentbox-Forwarded-Authorization"
+            if endpoint_uses_authorization
+            else "Authorization"
+        )
+        headers[authorization_header] = caller_authorization
+    headers.update(endpoint.headers)
     headers["Accept-Encoding"] = "identity"
     upstream_origin = upstream_base_url.rstrip("/")
     if incoming_request.headers.get("origin"):
@@ -574,6 +639,11 @@ async def proxy_sandbox_app_http_request(
             incoming_request.app.state, "sandbox_app_ready_cache", None
         )
         if ready_cache is not None:
+            ready_cache.discard(
+                (sandbox_id, app_spec.name, upstream_base_url, endpoint.instance_id)
+            )
+            # Compatibility with caches populated before endpoint generations
+            # were included in the key.
             ready_cache.discard((sandbox_id, app_spec.name, upstream_base_url))
         raise
     content, response_headers = rewrite_sandbox_app_response(
@@ -723,6 +793,26 @@ def sandbox_app_upstream_websocket_url(
     return f"{scheme}://{parsed.netloc}{upstream_path}{'?' + upstream_query if upstream_query else ''}"
 
 
+def sandbox_app_upstream_websocket_url_from_endpoint(
+    endpoint: SandboxEndpoint,
+    path: str,
+    query: str,
+) -> str:
+    parsed = urlparse.urlparse(endpoint.url(protocol="websocket"))
+    upstream_path = f"/{path}" if path else "/"
+    query_pairs = [
+        (key, value)
+        for key, value in urlparse.parse_qsl(query, keep_blank_values=True)
+        if key != APP_ACCESS_TOKEN_PARAM
+    ]
+    query_pairs.extend(endpoint.websocket_query.items())
+    upstream_query = urlparse.urlencode(query_pairs, doseq=True)
+    return (
+        f"{parsed.scheme}://{parsed.netloc}{upstream_path}"
+        f"{'?' + upstream_query if upstream_query else ''}"
+    )
+
+
 async def proxy_sandbox_app_websocket_request(
     app_spec: SandboxAppSpec,
     sandbox_id: str,
@@ -734,9 +824,19 @@ async def proxy_sandbox_app_websocket_request(
     if not status_obj.ready:
         await websocket.close(code=1011)
         return
-    upstream_url = sandbox_app_upstream_websocket_url(
-        status_obj,
-        app_spec,
+    try:
+        endpoint = await resolve_sandbox_app_endpoint(
+            provider,
+            sandbox_id,
+            app_spec,
+            status_obj=status_obj,
+            protocol="websocket",
+        )
+    except HTTPException:
+        await websocket.close(code=1011)
+        return
+    upstream_url = sandbox_app_upstream_websocket_url_from_endpoint(
+        endpoint,
         path,
         websocket.url.query,
     )
@@ -750,7 +850,11 @@ async def proxy_sandbox_app_websocket_request(
         await websocket.close(code=1011)
         return
     try:
-        async with websockets.connect(upstream_url) as upstream:
+        async with websockets.connect(
+            upstream_url,
+            additional_headers=dict(endpoint.headers),
+            subprotocols=list(endpoint.websocket_subprotocols) or None,
+        ) as upstream:
             await relay_app_websocket(websocket, upstream)
     except Exception:
         await websocket.close(code=1011)

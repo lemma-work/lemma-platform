@@ -1,196 +1,66 @@
 from __future__ import annotations
 
 import asyncio
-import json
 import logging
-import socket
 import time
-from urllib import error, request
 
 from fastapi import HTTPException, status
 from kubernetes import client, config
 from kubernetes.client.rest import ApiException
-from pydantic import ValidationError
 
-from agentbox.apps import SANDBOX_APPS
+from agentbox.apps import SANDBOX_APPS, SandboxAppSpec
 from agentbox.config import settings
 from agentbox.sandbox_ids import sandbox_pod_name
-from agentbox.schemas import (
-    ExecCommandResponse,
-    ExecCommandRequest,
-    ExecutePythonResponse,
-    ListProcessesResponse,
-    RuntimeSessionRequest,
-    RuntimeSessionResponse,
-    SandboxEnsureRequest,
-    SandboxInternalAppStatus,
-    SandboxInternalStatus,
-    WriteStdinRequest,
-)
+from agentbox.schemas import SandboxEnsureRequest, SandboxInternalAppStatus, SandboxInternalStatus
 from agentbox.to_thread import run_sync
+from agentbox.providers.legacy import LegacyRuntimeProviderMixin
+from agentbox.providers.errors import ProviderError
+from agentbox.providers.models import (
+    EndpointProtocol,
+    ManagedSandbox,
+    SandboxEndpoint,
+    SandboxRef,
+)
+from agentbox.runtime_proxy import (
+    _MAX_RUNTIME_ERROR_BODY_LENGTH as _SHARED_MAX_RUNTIME_ERROR_BODY_LENGTH,
+    request_runtime_json,
+)
 
 logger = logging.getLogger(__name__)
-
-_MAX_RUNTIME_ERROR_BODY_LENGTH = 2000
-
-
-def _truncate_runtime_error_body(value: str) -> str:
-    if len(value) <= _MAX_RUNTIME_ERROR_BODY_LENGTH:
-        return value
-    return f"{value[:_MAX_RUNTIME_ERROR_BODY_LENGTH]}... [truncated]"
+_MAX_RUNTIME_ERROR_BODY_LENGTH = _SHARED_MAX_RUNTIME_ERROR_BODY_LENGTH
 
 
-def _decode_runtime_error_body(raw: bytes) -> object:
-    text = raw.decode("utf-8", errors="replace")
-    if not text:
-        return None
+def _request_runtime_json(*args, **kwargs):  # type: ignore[no-untyped-def]
+    """Deprecated compatibility wrapper around the shared runtime transport."""
+
     try:
-        return json.loads(text)
-    except json.JSONDecodeError:
-        return _truncate_runtime_error_body(text)
+        return request_runtime_json(*args, **kwargs)
+    except HTTPException as exc:
+        detail = exc.detail if isinstance(exc.detail, dict) else {}
+        runtime_status = detail.get("runtime_status")
+        if runtime_status is not None:
+            logger.warning("Sandbox runtime returned HTTP %s", runtime_status)
+        elif detail.get("error") == "runtime returned malformed JSON":
+            logger.warning("Sandbox runtime returned malformed JSON")
+        raise
 
 
-def _bounded_runtime_body(value: object) -> object:
-    if value is None:
-        return None
-    if isinstance(value, str):
-        return _truncate_runtime_error_body(value)
-    try:
-        text = json.dumps(value, separators=(",", ":"), default=str)
-    except (TypeError, ValueError):
-        return _truncate_runtime_error_body(str(value))
-    if len(text) <= _MAX_RUNTIME_ERROR_BODY_LENGTH:
-        return value
-    return {
-        "truncated": True,
-        "preview": _truncate_runtime_error_body(text),
-    }
-
-
-def _runtime_failure_detail(
-    operation: str,
-    message: str,
-    *,
-    runtime_status: int | None = None,
-    runtime_body: object | None = None,
-) -> dict[str, object]:
-    detail: dict[str, object] = {
-        "message": f"Sandbox runtime {operation} failed",
-        "error": _truncate_runtime_error_body(message),
-    }
-    if runtime_status is not None:
-        detail["runtime_status"] = runtime_status
-    if runtime_body is not None:
-        detail["runtime_body"] = _bounded_runtime_body(runtime_body)
-    return detail
-
-
-def _invalid_runtime_response(
-    operation: str,
-    payload: object,
-    exc: Exception,
-) -> HTTPException:
-    detail = _runtime_failure_detail(
-        operation,
-        f"runtime returned an invalid response: {exc}",
-        runtime_body=payload,
-    )
-    logger.warning(
-        "Sandbox runtime %s returned invalid response: %s; body=%r",
-        operation,
-        exc,
-        detail.get("runtime_body"),
-    )
-    return HTTPException(
-        status_code=502,
-        detail=detail,
+def _provider_error(exc: ApiException, operation: str) -> ProviderError:
+    status_code = int(exc.status or 0)
+    if not 400 <= status_code < 600:
+        status_code = 502
+    reason = exc.reason or "Kubernetes API request failed"
+    return ProviderError(
+        f"Kubernetes {operation} failed: {reason}",
+        code="kubernetes_api_error",
+        retryable=status_code in {409, 429} or status_code >= 500,
+        status_code=status_code,
     )
 
 
-def _request_runtime_json(
-    req: request.Request,
-    *,
-    timeout: int | float,
-    operation: str,
-) -> dict:
-    try:
-        with request.urlopen(req, timeout=timeout) as resp:
-            raw = resp.read()
-    except error.HTTPError as exc:
-        try:
-            runtime_body = _decode_runtime_error_body(exc.read())
-        finally:
-            exc.close()
-        detail = _runtime_failure_detail(
-            operation,
-            f"runtime returned HTTP {exc.code}",
-            runtime_status=exc.code,
-            runtime_body=runtime_body,
-        )
-        logger.warning(
-            "Sandbox runtime %s returned HTTP %s for %s; body=%r",
-            operation,
-            exc.code,
-            req.full_url,
-            detail.get("runtime_body"),
-        )
-        raise HTTPException(
-            status_code=502,
-            detail=detail,
-        ) from exc
-    except (error.URLError, TimeoutError, socket.timeout, OSError) as exc:
-        detail = _runtime_failure_detail(operation, str(exc))
-        logger.warning(
-            "Sandbox runtime %s transport failure for %s: %s",
-            operation,
-            req.full_url,
-            exc,
-        )
-        raise HTTPException(
-            status_code=502,
-            detail=detail,
-        ) from exc
+class SandboxKubernetesClient(LegacyRuntimeProviderMixin):
+    provider_name = "kubernetes"
 
-    try:
-        payload = json.loads(raw.decode("utf-8"))
-    except (UnicodeDecodeError, json.JSONDecodeError) as exc:
-        runtime_body = _decode_runtime_error_body(raw)
-        detail = _runtime_failure_detail(
-            operation,
-            "runtime returned malformed JSON",
-            runtime_body=runtime_body,
-        )
-        logger.warning(
-            "Sandbox runtime %s returned malformed JSON for %s: %s; body=%r",
-            operation,
-            req.full_url,
-            exc,
-            detail.get("runtime_body"),
-        )
-        raise HTTPException(
-            status_code=502,
-            detail=detail,
-        ) from exc
-    if not isinstance(payload, dict):
-        detail = _runtime_failure_detail(
-            operation,
-            "runtime returned a non-object JSON response",
-            runtime_body=payload,
-        )
-        logger.warning(
-            "Sandbox runtime %s returned non-object JSON for %s; body=%r",
-            operation,
-            req.full_url,
-            detail.get("runtime_body"),
-        )
-        raise HTTPException(
-            status_code=502,
-            detail=detail,
-        )
-    return payload
-
-
-class SandboxKubernetesClient:
     def __init__(self) -> None:
         try:
             config.load_incluster_config()
@@ -210,7 +80,7 @@ class SandboxKubernetesClient:
         except ApiException as exc:
             if exc.status == 404:
                 raise HTTPException(status_code=404, detail="Sandbox not found") from exc
-            raise
+            raise _provider_error(exc, "sandbox status") from exc
 
         return self._status_from_pod(sandbox_id, pod)
 
@@ -227,7 +97,7 @@ class SandboxKubernetesClient:
             )
         except ApiException as exc:
             if exc.status != 404:
-                raise
+                raise _provider_error(exc, "sandbox lookup") from exc
             existing = None
 
         if existing is not None:
@@ -263,6 +133,7 @@ class SandboxKubernetesClient:
                 labels={
                     "app.kubernetes.io/name": "agentbox-sandbox",
                     "agentbox.work/sandbox-id": sandbox_id,
+                    "agentbox.work/provider": self.provider_name,
                 },
             ),
             spec=client.V1PodSpec(
@@ -342,7 +213,7 @@ class SandboxKubernetesClient:
                 if not status_obj.ready:
                     return await self.wait_until_running(sandbox_id)
                 return status_obj
-            raise
+            raise _provider_error(exc, "sandbox creation") from exc
         del created
         return await self.wait_until_running(sandbox_id)
 
@@ -390,249 +261,67 @@ class SandboxKubernetesClient:
         except ApiException as exc:
             if exc.status == 404:
                 return False
-            raise
+            raise _provider_error(exc, "sandbox deletion") from exc
 
-    async def execute_code(
+    async def list_managed(self) -> list[ManagedSandbox]:
+        try:
+            pod_list = await run_sync(
+                self.core_v1.list_namespaced_pod,
+                namespace=settings.agentbox_namespace,
+                label_selector="app.kubernetes.io/name=agentbox-sandbox",
+            )
+        except ApiException as exc:
+            raise _provider_error(exc, "sandbox inventory") from exc
+        managed: list[ManagedSandbox] = []
+        for pod in pod_list.items or []:
+            labels = dict(pod.metadata.labels or {})
+            sandbox_id = labels.get("agentbox.work/sandbox-id")
+            if not sandbox_id:
+                continue
+            provider_id = str(pod.metadata.uid or pod.metadata.name)
+            managed.append(
+                ManagedSandbox(
+                    ref=SandboxRef(sandbox_id=sandbox_id, provider_id=provider_id),
+                    status=self._status_from_pod(sandbox_id, pod),
+                    instance_id=provider_id,
+                    metadata=labels,
+                )
+            )
+        return managed
+
+    async def resolve_endpoint(
         self,
         sandbox_id: str,
-        session_id: str,
-        code: str,
-        timeout_seconds: int,
-    ) -> ExecutePythonResponse:
-        status_obj = await self.get_status(sandbox_id)
+        app: SandboxAppSpec,
+        *,
+        protocol: EndpointProtocol = "http",
+    ) -> SandboxEndpoint:
+        del protocol
+        pod_name = sandbox_pod_name(sandbox_id)
+        try:
+            pod = await run_sync(
+                self.core_v1.read_namespaced_pod,
+                name=pod_name,
+                namespace=settings.agentbox_namespace,
+            )
+        except ApiException as exc:
+            if exc.status == 404:
+                raise HTTPException(status_code=404, detail="Sandbox not found") from exc
+            raise _provider_error(exc, "endpoint resolution") from exc
+        status_obj = self._status_from_pod(sandbox_id, pod)
         if not status_obj.ready:
             raise HTTPException(status_code=409, detail="Sandbox is not running")
-        if not status_obj.pod_ip:
-            raise HTTPException(status_code=409, detail="Sandbox has no pod IP")
-
-        def _execute() -> ExecutePythonResponse:
-            path = f"/sessions/{session_id}/execute"
-            body = json.dumps({"code": code}).encode("utf-8")
-            req = request.Request(
-                f"http://{status_obj.pod_ip}:{settings.agentbox_runtime_port}{path}",
-                data=body,
-                headers={
-                    "Content-Type": "application/json",
-                    "Accept": "application/json",
-                },
-                method="POST",
-            )
-            payload = _request_runtime_json(
-                req,
-                timeout=timeout_seconds,
-                operation="code execution request",
-            )
-            exit_code = 0 if payload.get("ok") else 1
-            return ExecutePythonResponse(
-                sandbox_id=sandbox_id,
-                session_id=session_id,
-                stdout=payload.get("stdout") or "",
-                stderr=payload.get("stderr") or "",
-                result=payload.get("result"),
-                error_name=payload.get("error_name"),
-                exit_code=exit_code,
-                status="completed" if exit_code == 0 else "error",
-            )
-
-        return await run_sync(_execute)
-
-    async def create_session(
-        self, sandbox_id: str, session_id: str, request_obj: RuntimeSessionRequest
-    ) -> RuntimeSessionResponse:
-        status_obj = await self.get_status(sandbox_id)
-        if not status_obj.ready:
-            raise HTTPException(status_code=409, detail="Sandbox is not running")
-        if not status_obj.pod_ip:
-            raise HTTPException(status_code=409, detail="Sandbox has no pod IP")
-
-        def _create() -> RuntimeSessionResponse:
-            body = json.dumps(
-                {"env": request_obj.env, "cwd": request_obj.cwd}
-            ).encode("utf-8")
-            req = request.Request(
-                f"http://{status_obj.pod_ip}:{settings.agentbox_runtime_port}/sessions/{session_id}",
-                data=body,
-                headers={"Content-Type": "application/json", "Accept": "application/json"},
-                method="POST",
-            )
-            payload = _request_runtime_json(
-                req,
-                timeout=settings.agentbox_sandbox_ready_timeout_seconds,
-                operation="session create request",
-            )
-            try:
-                return RuntimeSessionResponse(sandbox_id=sandbox_id, **payload)
-            except ValidationError as exc:
-                raise _invalid_runtime_response(
-                    "session create request",
-                    payload,
-                    exc,
-                ) from exc
-
-        return await run_sync(_create)
-
-    async def delete_session(self, sandbox_id: str, session_id: str) -> bool:
-        status_obj = await self.get_status(sandbox_id)
-        if not status_obj.ready:
-            raise HTTPException(status_code=409, detail="Sandbox is not running")
-        if not status_obj.pod_ip:
-            raise HTTPException(status_code=409, detail="Sandbox has no pod IP")
-
-        def _delete() -> bool:
-            req = request.Request(
-                f"http://{status_obj.pod_ip}:{settings.agentbox_runtime_port}/sessions/{session_id}",
-                method="DELETE",
-            )
-            payload = _request_runtime_json(
-                req,
-                timeout=30,
-                operation="session delete request",
-            )
-            return bool(payload.get("deleted"))
-
-        return await run_sync(_delete)
-
-    async def exec_session_process_command(
-        self,
-        sandbox_id: str,
-        session_id: str,
-        request_obj: ExecCommandRequest,
-    ) -> ExecCommandResponse:
-        status_obj = await self.get_status(sandbox_id)
-        if not status_obj.ready:
-            raise HTTPException(status_code=409, detail="Sandbox is not running")
-        if not status_obj.pod_ip:
-            raise HTTPException(status_code=409, detail="Sandbox has no pod IP")
-
-        def _execute() -> dict:
-            body = request_obj.model_dump(exclude_none=True).copy()
-            payload = json.dumps(body).encode("utf-8")
-            timeout = request_obj.timeout or 300
-            if request_obj.yield_time_ms is not None:
-                timeout = max(timeout, int(request_obj.yield_time_ms / 1000) + 30)
-            req = request.Request(
-                f"http://{status_obj.pod_ip}:{settings.agentbox_runtime_port}/sessions/{session_id}/exec-command",
-                data=payload,
-                headers={"Content-Type": "application/json", "Accept": "application/json"},
-                method="POST",
-            )
-            payload = _request_runtime_json(
-                req,
-                timeout=timeout + 5,
-                operation="process command request",
-            )
-            try:
-                return ExecCommandResponse(**payload)
-            except ValidationError as exc:
-                raise _invalid_runtime_response(
-                    "process command request",
-                    payload,
-                    exc,
-                ) from exc
-
-        return await run_sync(_execute)
-
-    async def write_session_process_stdin(
-        self,
-        sandbox_id: str,
-        session_id: str,
-        request_obj: WriteStdinRequest,
-    ) -> ExecCommandResponse:
-        status_obj = await self.get_status(sandbox_id)
-        if not status_obj.ready:
-            raise HTTPException(status_code=409, detail="Sandbox is not running")
-        if not status_obj.pod_ip:
-            raise HTTPException(status_code=409, detail="Sandbox has no pod IP")
-
-        def _execute() -> dict:
-            body = json.dumps(request_obj.model_dump(exclude_none=True)).encode("utf-8")
-            wait_ms = request_obj.yield_time_ms or 0
-            req = request.Request(
-                f"http://{status_obj.pod_ip}:{settings.agentbox_runtime_port}/sessions/{session_id}/write-stdin",
-                data=body,
-                headers={"Content-Type": "application/json", "Accept": "application/json"},
-                method="POST",
-            )
-            payload = _request_runtime_json(
-                req,
-                timeout=int(wait_ms / 1000) + 35,
-                operation="process stdin request",
-            )
-            try:
-                return ExecCommandResponse(**payload)
-            except ValidationError as exc:
-                raise _invalid_runtime_response(
-                    "process stdin request",
-                    payload,
-                    exc,
-                ) from exc
-
-        return await run_sync(_execute)
-
-    async def terminate_session_process(
-        self,
-        sandbox_id: str,
-        session_id: str,
-        process_id: str,
-    ) -> ExecCommandResponse:
-        status_obj = await self.get_status(sandbox_id)
-        if not status_obj.ready:
-            raise HTTPException(status_code=409, detail="Sandbox is not running")
-        if not status_obj.pod_ip:
-            raise HTTPException(status_code=409, detail="Sandbox has no pod IP")
-
-        def _delete() -> dict:
-            req = request.Request(
-                f"http://{status_obj.pod_ip}:{settings.agentbox_runtime_port}/sessions/{session_id}/processes/{process_id}",
-                method="DELETE",
-            )
-            payload = _request_runtime_json(
-                req,
-                timeout=30,
-                operation="process terminate request",
-            )
-            try:
-                return ExecCommandResponse(**payload)
-            except ValidationError as exc:
-                raise _invalid_runtime_response(
-                    "process terminate request",
-                    payload,
-                    exc,
-                ) from exc
-
-        return await run_sync(_delete)
-
-    async def list_session_processes(
-        self,
-        sandbox_id: str,
-        session_id: str,
-    ) -> ListProcessesResponse:
-        status_obj = await self.get_status(sandbox_id)
-        if not status_obj.ready:
-            raise HTTPException(status_code=409, detail="Sandbox is not running")
-        if not status_obj.pod_ip:
-            raise HTTPException(status_code=409, detail="Sandbox has no pod IP")
-
-        def _list() -> ListProcessesResponse:
-            req = request.Request(
-                f"http://{status_obj.pod_ip}:{settings.agentbox_runtime_port}/sessions/{session_id}/processes",
-                method="GET",
-            )
-            payload = _request_runtime_json(
-                req,
-                timeout=30,
-                operation="process list request",
-            )
-            try:
-                return ListProcessesResponse(**payload)
-            except ValidationError as exc:
-                raise _invalid_runtime_response(
-                    "process list request",
-                    payload,
-                    exc,
-                ) from exc
-
-        return await run_sync(_list)
+        app_status = status_obj.apps.get(app.name)
+        base_url = app_status.private_url if app_status else None
+        if app.name == "runtime" and not base_url:
+            base_url = status_obj.runtime_url
+        if not base_url:
+            raise HTTPException(status_code=409, detail="Sandbox app endpoint is missing")
+        provider_id = getattr(getattr(pod, "metadata", None), "uid", None)
+        return SandboxEndpoint(
+            base_url=base_url,
+            instance_id=str(provider_id) if provider_id else status_obj.pod_ip,
+        )
 
     def _status_from_pod(self, sandbox_id: str, pod: client.V1Pod) -> SandboxInternalStatus:
         ready = False

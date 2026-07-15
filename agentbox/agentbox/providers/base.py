@@ -3,6 +3,8 @@ from __future__ import annotations
 from typing import Protocol
 
 from agentbox.config import settings
+from agentbox.providers.protocol import SandboxLifecycleProvider
+from agentbox.providers.registry import build_provider
 from agentbox.schemas import (
     ExecCommandRequest,
     ExecCommandResponse,
@@ -10,22 +12,11 @@ from agentbox.schemas import (
     ListProcessesResponse,
     RuntimeSessionRequest,
     RuntimeSessionResponse,
-    SandboxEnsureRequest,
-    SandboxInternalStatus,
     WriteStdinRequest,
 )
 
 
-class SandboxProvider(Protocol):
-    async def create(
-        self,
-        sandbox_id: str,
-        request: SandboxEnsureRequest,
-    ) -> SandboxInternalStatus: ...
-
-    async def get_status(self, sandbox_id: str) -> SandboxInternalStatus: ...
-
-    async def delete(self, sandbox_id: str) -> bool: ...
+class SandboxProvider(SandboxLifecycleProvider, Protocol):
 
     async def execute_code(
         self,
@@ -73,14 +64,4 @@ class SandboxProvider(Protocol):
 
 
 def build_sandbox_provider() -> SandboxProvider:
-    if settings.agentbox_provider == "docker":
-        from agentbox.providers.docker import DockerSandboxProvider
-
-        return DockerSandboxProvider()
-    if settings.agentbox_provider == "podman":
-        from agentbox.providers.podman import PodmanSandboxProvider
-
-        return PodmanSandboxProvider()
-    from agentbox.kubernetes import SandboxKubernetesClient
-
-    return SandboxKubernetesClient()
+    return build_provider(settings.agentbox_provider)  # type: ignore[return-value]

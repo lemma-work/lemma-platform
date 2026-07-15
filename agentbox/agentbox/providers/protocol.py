@@ -1,0 +1,37 @@
+from __future__ import annotations
+
+from typing import Protocol, runtime_checkable
+
+from agentbox.apps import SandboxAppSpec
+from agentbox.schemas import SandboxEnsureRequest, SandboxInternalStatus
+
+from .models import EndpointProtocol, ManagedSandbox, SandboxEndpoint
+
+
+@runtime_checkable
+class SandboxLifecycleProvider(Protocol):
+    """Compute lifecycle and connection contract implemented by providers."""
+
+    provider_name: str
+
+    async def create(
+        self,
+        sandbox_id: str,
+        request: SandboxEnsureRequest,
+    ) -> SandboxInternalStatus: ...
+
+    async def get_status(self, sandbox_id: str) -> SandboxInternalStatus: ...
+
+    async def list_managed(self) -> list[ManagedSandbox]: ...
+
+    async def delete(self, sandbox_id: str) -> bool: ...
+
+    async def resolve_endpoint(
+        self,
+        sandbox_id: str,
+        app: SandboxAppSpec,
+        *,
+        protocol: EndpointProtocol = "http",
+    ) -> SandboxEndpoint: ...
+
+    async def close(self) -> None: ...

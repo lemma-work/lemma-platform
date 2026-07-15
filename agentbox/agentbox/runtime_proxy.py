@@ -162,9 +162,24 @@ def request_runtime_json(
 
 
 class RuntimeProxy:
-    def __init__(self, base_url: str, sandbox_id: str) -> None:
+    def __init__(
+        self,
+        base_url: str,
+        sandbox_id: str,
+        *,
+        headers: dict[str, str] | None = None,
+    ) -> None:
         self.base_url = base_url.rstrip("/")
         self.sandbox_id = sandbox_id
+        self.headers = dict(headers or {})
+
+    def _headers(self, *, json_body: bool = False) -> dict[str, str]:
+        headers = dict(self.headers)
+        if json_body:
+            headers.update(
+                {"Content-Type": "application/json", "Accept": "application/json"}
+            )
+        return headers
 
     async def execute_code(
         self,
@@ -178,7 +193,7 @@ class RuntimeProxy:
             req = request.Request(
                 f"{self.base_url}{path}",
                 data=body,
-                headers={"Content-Type": "application/json", "Accept": "application/json"},
+                headers=self._headers(json_body=True),
                 method="POST",
             )
             payload = request_runtime_json(
@@ -206,7 +221,7 @@ class RuntimeProxy:
             req = request.Request(
                 f"{self.base_url}/sessions/{session_id}",
                 data=body,
-                headers={"Content-Type": "application/json", "Accept": "application/json"},
+                headers=self._headers(json_body=True),
                 method="POST",
             )
             payload = request_runtime_json(
@@ -225,6 +240,7 @@ class RuntimeProxy:
         def _delete() -> bool:
             req = request.Request(
                 f"{self.base_url}/sessions/{session_id}",
+                headers=self._headers(),
                 method="DELETE",
             )
             payload = request_runtime_json(req, timeout=30, operation="session delete request")
@@ -246,7 +262,7 @@ class RuntimeProxy:
             req = request.Request(
                 f"{self.base_url}/sessions/{session_id}/command",
                 data=body,
-                headers={"Content-Type": "application/json", "Accept": "application/json"},
+                headers=self._headers(json_body=True),
                 method="POST",
             )
             payload = request_runtime_json(
@@ -276,7 +292,7 @@ class RuntimeProxy:
             req = request.Request(
                 f"{self.base_url}/sessions/{session_id}/exec-command",
                 data=body,
-                headers={"Content-Type": "application/json", "Accept": "application/json"},
+                headers=self._headers(json_body=True),
                 method="POST",
             )
             payload = request_runtime_json(
@@ -302,7 +318,7 @@ class RuntimeProxy:
             req = request.Request(
                 f"{self.base_url}/sessions/{session_id}/write-stdin",
                 data=body,
-                headers={"Content-Type": "application/json", "Accept": "application/json"},
+                headers=self._headers(json_body=True),
                 method="POST",
             )
             payload = request_runtime_json(
@@ -325,6 +341,7 @@ class RuntimeProxy:
         def _delete() -> ExecCommandResponse:
             req = request.Request(
                 f"{self.base_url}/sessions/{session_id}/processes/{process_id}",
+                headers=self._headers(),
                 method="DELETE",
             )
             payload = request_runtime_json(req, timeout=30, operation="process terminate request")
@@ -339,6 +356,7 @@ class RuntimeProxy:
         def _list() -> ListProcessesResponse:
             req = request.Request(
                 f"{self.base_url}/sessions/{session_id}/processes",
+                headers=self._headers(),
                 method="GET",
             )
             payload = request_runtime_json(req, timeout=30, operation="process list request")
