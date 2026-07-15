@@ -80,6 +80,7 @@ class DaytonaSandboxProvider(LegacyRuntimeProviderMixin):
             )
         )
         self._create_locks: dict[str, asyncio.Lock] = {}
+        self._sandboxes: dict[str, object] = {}
         self._capacity_condition = asyncio.Condition()
         self._capacity_init_lock = asyncio.Lock()
         self._capacity_reservations: set[str] = set()
@@ -96,6 +97,7 @@ class DaytonaSandboxProvider(LegacyRuntimeProviderMixin):
         labels = {
             "managed-by": "agentbox",
             "agentbox-owner": self.config.owner,
+            "agentbox-environment": self.config.environment,
         }
         if sandbox_id:
             labels["agentbox-id"] = sandbox_id
@@ -112,6 +114,9 @@ class DaytonaSandboxProvider(LegacyRuntimeProviderMixin):
             yield sandbox
 
     async def _find(self, sandbox_id: str):
+        cached = self._sandboxes.get(sandbox_id)
+        if cached is not None:
+            return cached
         try:
             async for sandbox in self._iter(self._labels(sandbox_id)):
                 if (getattr(sandbox, "labels", None) or {}).get(
@@ -120,15 +125,25 @@ class DaytonaSandboxProvider(LegacyRuntimeProviderMixin):
                     await self._record_capacity_observed(
                         sandbox_id, str(getattr(sandbox, "id", ""))
                     )
+                    self._sandboxes[sandbox_id] = sandbox
                     return sandbox
         except self._sdk.not_found_error:
             pass
         return None
 
+    def invalidate_sandbox_cache(self, sandbox_id: str) -> None:
+        self._sandboxes.pop(sandbox_id, None)
+
     async def _active_provider_ids(self) -> set[str]:
         provider_ids: set[str] = set()
         async for sandbox in self._iter(self._labels()):
-            if self._state(sandbox) not in {"destroyed", "destroying"}:
+            if self._state(sandbox) in {
+                "started",
+                "creating",
+                "restoring",
+                "starting",
+                "resuming",
+            }:
                 provider_ids.add(str(getattr(sandbox, "id", "")))
         return provider_ids
 
@@ -176,6 +191,7 @@ class DaytonaSandboxProvider(LegacyRuntimeProviderMixin):
                     raise ProviderError(
                         f"Daytona concurrency limit ({self.config.max_active}) reached",
                         code="capacity_exhausted",
+                        retryable=True,
                         status_code=429,
                         headers={
                             "Retry-After": str(
@@ -241,6 +257,31 @@ class DaytonaSandboxProvider(LegacyRuntimeProviderMixin):
             self._capacity_generation += 1
             self._capacity_condition.notify_all()
 
+    async def _refresh_capacity_inventory(self) -> None:
+        async with self._capacity_condition:
+            inventory_generation = self._capacity_generation
+        sandboxes = [sandbox async for sandbox in self._iter(self._labels())]
+        provider_ids = {
+            str(getattr(sandbox, "id", ""))
+            for sandbox in sandboxes
+            if self._state(sandbox)
+            in {"started", "creating", "restoring", "starting", "resuming"}
+        }
+        async with self._capacity_condition:
+            if (
+                inventory_generation == self._capacity_generation
+                and not self._capacity_reservations
+            ):
+                self._counted_provider_ids = provider_ids
+                self._observed_active_count = len(provider_ids)
+                self._sandboxes = {
+                    str((getattr(sandbox, "labels", None) or {})["agentbox-id"]): sandbox
+                    for sandbox in sandboxes
+                    if (getattr(sandbox, "labels", None) or {}).get("agentbox-id")
+                }
+                self._capacity_generation += 1
+            self._capacity_condition.notify_all()
+
     async def _wait_for_create_rate_slot(self) -> None:
         interval = 1.0 / self.config.create_rate_per_second
         async with self._create_rate_lock:
@@ -267,12 +308,20 @@ class DaytonaSandboxProvider(LegacyRuntimeProviderMixin):
             existing = await self._find(sandbox_id)
             if existing is not None:
                 state = self._state(existing)
+                if state == "started":
+                    return await self._status(sandbox_id, existing)
+                should_resume = state in {"stopped", "paused", "archived"}
+                should_recover = state == "error" and self._is_recoverable(existing)
+                if not should_resume and not should_recover:
+                    return await self._status(sandbox_id, existing)
+                await self._reserve_capacity(sandbox_id)
+                resumed = False
                 try:
-                    if state == "archived":
+                    if should_recover:
                         await existing.recover(
                             timeout=self.config.ready_timeout_seconds
                         )
-                    elif state in {"stopped", "paused"}:
+                    else:
                         await self.daytona.start(
                             existing,
                             timeout=self.config.ready_timeout_seconds,
@@ -281,6 +330,19 @@ class DaytonaSandboxProvider(LegacyRuntimeProviderMixin):
                     raise ProviderError(
                         f"Daytona sandbox resume failed: {exc}", retryable=True
                     ) from exc
+                finally:
+                    if self._state(existing) == "started":
+                        await self._finish_reservation(
+                            sandbox_id,
+                            created=True,
+                            provider_id=str(getattr(existing, "id", "")),
+                        )
+                        resumed = True
+                    if not resumed:
+                        await self._finish_reservation(
+                            sandbox_id, created=False
+                        )
+                self._sandboxes[sandbox_id] = existing
                 return await self._status(sandbox_id, existing)
 
             await self._reserve_capacity(sandbox_id)
@@ -291,7 +353,7 @@ class DaytonaSandboxProvider(LegacyRuntimeProviderMixin):
                     "labels": self._labels(sandbox_id),
                     "public": False,
                     "auto_stop_interval": self.config.auto_stop_minutes,
-                    "auto_archive_interval": 0,
+                    "auto_archive_interval": self.config.auto_archive_minutes,
                     "auto_delete_interval": self.config.auto_delete_minutes,
                 }
                 params = (
@@ -313,6 +375,7 @@ class DaytonaSandboxProvider(LegacyRuntimeProviderMixin):
                     provider_id=str(getattr(sandbox, "id", "")),
                 )
                 reservation_finished = True
+                self._sandboxes[sandbox_id] = sandbox
                 return await self._status(sandbox_id, sandbox)
             finally:
                 if not reservation_finished:
@@ -359,6 +422,7 @@ class DaytonaSandboxProvider(LegacyRuntimeProviderMixin):
             if not sandbox_id:
                 continue
             provider_id = str(getattr(sandbox, "id", sandbox_id))
+            self._sandboxes[sandbox_id] = sandbox
             managed.append(
                 ManagedSandbox(
                     ref=SandboxRef(sandbox_id, provider_id),
@@ -370,6 +434,44 @@ class DaytonaSandboxProvider(LegacyRuntimeProviderMixin):
         return managed
 
     @staticmethod
+    def _is_recoverable(sandbox) -> bool:  # type: ignore[no-untyped-def]
+        if bool(getattr(sandbox, "recoverable", False)):
+            return True
+        error_reason = getattr(sandbox, "error_reason", None)
+        return bool(getattr(error_reason, "recoverable", False))
+
+    async def release(self, sandbox_id: str) -> bool:
+        sandbox = await self._find(sandbox_id)
+        if sandbox is None:
+            await self._refresh_capacity_inventory()
+            return False
+        provider_id = str(getattr(sandbox, "id", ""))
+        if self._state(sandbox) not in {
+            "started",
+            "creating",
+            "restoring",
+            "starting",
+            "resuming",
+        }:
+            await self._record_capacity_removed(provider_id)
+            return False
+        try:
+            await self.daytona.stop(
+                sandbox,
+                timeout=self.config.ready_timeout_seconds,
+            )
+            await self._record_capacity_removed(provider_id)
+            return True
+        except self._sdk.not_found_error:
+            self.invalidate_sandbox_cache(sandbox_id)
+            await self._refresh_capacity_inventory()
+            return False
+        except self._sdk.error as exc:
+            raise ProviderError(
+                f"Daytona sandbox release failed: {exc}", retryable=True
+            ) from exc
+
+    @staticmethod
     def _instance_id(sandbox) -> str:
         provider_id = str(getattr(sandbox, "id", "unknown"))
         updated_at = getattr(sandbox, "updated_at", None)
@@ -378,13 +480,16 @@ class DaytonaSandboxProvider(LegacyRuntimeProviderMixin):
     async def delete(self, sandbox_id: str) -> bool:
         sandbox = await self._find(sandbox_id)
         if sandbox is None:
+            await self._refresh_capacity_inventory()
             return False
         provider_id = str(getattr(sandbox, "id", ""))
         try:
             await self.daytona.delete(sandbox)
+            self.invalidate_sandbox_cache(sandbox_id)
             await self._record_capacity_removed(provider_id)
             return True
         except self._sdk.not_found_error:
+            self.invalidate_sandbox_cache(sandbox_id)
             await self._record_capacity_removed(provider_id)
             return False
         except self._sdk.error as exc:
@@ -426,6 +531,7 @@ class DaytonaSandboxProvider(LegacyRuntimeProviderMixin):
         )
 
     async def close(self) -> None:
+        self._sandboxes.clear()
         close = getattr(self.daytona, "close", None)
         if close is not None:
             await close()

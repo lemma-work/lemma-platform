@@ -142,6 +142,27 @@ def test_docker_status_reads_runtime_url_from_published_port(monkeypatch, tmp_pa
     assert status.apps["browser"].private_url == "http://127.0.0.1:49153"
 
 
+def test_docker_release_stops_without_removing_container(monkeypatch, tmp_path):
+    monkeypatch.setattr("shutil.which", lambda _name: "/usr/bin/docker")
+    monkeypatch.setattr(settings, "agentbox_storage_root", str(tmp_path))
+    monkeypatch.setattr(settings, "agentbox_storage_host_root", None)
+    provider = DockerSandboxProvider()
+    commands: list[tuple[str, ...]] = []
+
+    async def fake_inspect(_sandbox_id: str) -> SandboxInternalStatus:
+        return SandboxInternalStatus(id="sandbox-1", status="RUNNING", ready=True)
+
+    async def fake_run(*args: str) -> str:
+        commands.append(args)
+        return ""
+
+    monkeypatch.setattr(provider, "_inspect_sandbox", fake_inspect)
+    monkeypatch.setattr(provider, "_run_docker", fake_run)
+
+    assert asyncio.run(provider.release("sandbox-1")) is True
+    assert commands == [("stop", "agentbox-sandbox-1")]
+
+
 def test_docker_provider_network_mode_joins_network_without_published_ports(
     monkeypatch,
     tmp_path,

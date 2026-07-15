@@ -11,11 +11,13 @@ from agentbox.schemas import (
     SandboxHeartbeatResponse,
     SandboxResponse,
     SandboxSummary,
+    SuspendResponse,
     sandbox_summary,
 )
 from agentbox.state import AgentBoxStateStore
 
 from .deps import sandbox_provider, state_store
+from .lifecycle import release_sandbox_compute
 
 router = APIRouter(dependencies=[Depends(require_api_key)])
 
@@ -62,6 +64,23 @@ async def heartbeat_sandbox(
     validate_sandbox_id(sandbox_id)
     store.mark_sandbox_active(sandbox_id)
     return SandboxHeartbeatResponse(sandbox_id=sandbox_id, active=True)
+
+
+@router.post(
+    "/sandboxes/{sandbox_id}/suspend",
+    response_model=SuspendResponse,
+)
+async def suspend_sandbox(
+    sandbox_id: str,
+    provider: SandboxProvider = Depends(sandbox_provider),
+    store: AgentBoxStateStore = Depends(state_store),
+) -> SuspendResponse:
+    """Release idle compute while retaining the logical user sandbox."""
+
+    validate_sandbox_id(sandbox_id)
+    suspended = await release_sandbox_compute(provider, sandbox_id)
+    store.mark_pod_stopped(sandbox_id)
+    return SuspendResponse(sandbox_id=sandbox_id, suspended=suspended)
 
 
 @router.delete("/sandboxes/{sandbox_id}", response_model=DeleteResponse)

@@ -630,7 +630,7 @@ async def proxy_sandbox_app_http_request(
 
     try:
         status_code, response_headers, content = await run_sync(_request)
-    except HTTPException:
+    except HTTPException as exc:
         # A proxy-level connection failure (connection refused / reset) means a
         # previously cached "ready" is now stale -- the in-sandbox app died or
         # restarted. Drop the cache entry so the next request re-probes
@@ -645,6 +645,8 @@ async def proxy_sandbox_app_http_request(
             # Compatibility with caches populated before endpoint generations
             # were included in the key.
             ready_cache.discard((sandbox_id, app_spec.name, upstream_base_url))
+        if exc.status_code == 502:
+            invalidate_provider_sandbox_cache(provider, sandbox_id)
         raise
     content, response_headers = rewrite_sandbox_app_response(
         app_spec,
@@ -857,7 +859,16 @@ async def proxy_sandbox_app_websocket_request(
         ) as upstream:
             await relay_app_websocket(websocket, upstream)
     except Exception:
+        invalidate_provider_sandbox_cache(provider, sandbox_id)
         await websocket.close(code=1011)
+
+
+def invalidate_provider_sandbox_cache(
+    provider: SandboxProvider, sandbox_id: str
+) -> None:
+    invalidate = getattr(provider, "invalidate_sandbox_cache", None)
+    if invalidate is not None:
+        invalidate(sandbox_id)
 
 
 async def relay_app_websocket(websocket: WebSocket, upstream) -> None:

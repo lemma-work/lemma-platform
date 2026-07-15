@@ -263,6 +263,11 @@ class SandboxKubernetesClient(LegacyRuntimeProviderMixin):
                 return False
             raise _provider_error(exc, "sandbox deletion") from exc
 
+    async def release(self, sandbox_id: str) -> bool:
+        """Kubernetes cannot suspend a pod, so release its compute by deleting it."""
+
+        return await self.delete(sandbox_id)
+
     async def list_managed(self) -> list[ManagedSandbox]:
         try:
             pod_list = await run_sync(

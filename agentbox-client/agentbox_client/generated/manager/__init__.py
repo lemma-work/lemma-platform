@@ -12,9 +12,11 @@ from agentbox_client.generated.manager.models import (
     RuntimeSessionRequest,
     RuntimeSessionResponse,
     SandboxEnsureRequest,
+    SandboxHeartbeatResponse,
     SandboxLifecycleStatus,
     SandboxResponse,
     SandboxSummary,
+    SuspendResponse,
     WriteStdinRequest,
 )
 
@@ -32,9 +34,10 @@ __all__ = [
     "RuntimeSessionRequest",
     "RuntimeSessionResponse",
     "SandboxEnsureRequest",
+    "SandboxHeartbeatResponse",
     "SandboxLifecycleStatus",
     "SandboxResponse",
     "SandboxSummary",
+    "SuspendResponse",
     "WriteStdinRequest",
 ]
-

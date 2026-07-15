@@ -53,6 +53,9 @@ class AgentBoxSandbox(ISandbox):
     async def delete_sandbox(self, user_id: UUID) -> None:
         await self.client.delete_sandbox(agentbox_sandbox_id(user_id))
 
+    async def suspend_sandbox(self, user_id: UUID) -> None:
+        await self.client.suspend_sandbox(agentbox_sandbox_id(user_id))
+
     async def is_sandbox_running(self, user_id: UUID) -> bool:
         info = await self.get_sandbox(user_id)
         return info is not None and info.status == "RUNNING"

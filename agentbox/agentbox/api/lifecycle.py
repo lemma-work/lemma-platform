@@ -7,6 +7,7 @@ from fastapi import HTTPException
 
 from agentbox.config import settings
 from agentbox.providers import SandboxProvider
+from agentbox.providers.protocol import SandboxReleaseProvider
 from agentbox.state import AgentBoxStateStore
 
 logger = logging.getLogger(__name__)
@@ -53,5 +54,15 @@ async def cleanup_once(provider: SandboxProvider, store: AgentBoxStateStore) -> 
         store.delete_session(session.sandbox_id, session.session_id)
 
     for sandbox in store.idle_sandboxes(settings.agentbox_sandbox_idle_timeout_seconds):
-        await provider.delete(sandbox.sandbox_id)
+        await release_sandbox_compute(provider, sandbox.sandbox_id)
         store.mark_pod_stopped(sandbox.sandbox_id)
+
+
+async def release_sandbox_compute(
+    provider: SandboxProvider, sandbox_id: str
+) -> bool:
+    """Use optional suspension, falling back to compute deletion for plugins."""
+
+    if isinstance(provider, SandboxReleaseProvider):
+        return await provider.release(sandbox_id)
+    return await provider.delete(sandbox_id)

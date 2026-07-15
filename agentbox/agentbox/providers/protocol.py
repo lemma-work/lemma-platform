@@ -46,3 +46,17 @@ class SandboxBootstrapProvider(Protocol):
         sandbox_id: str,
         request: SandboxEnsureRequest,
     ) -> None: ...
+
+
+@runtime_checkable
+class SandboxReleaseProvider(Protocol):
+    """Optional provider capability for releasing idle compute without purge."""
+
+    async def release(self, sandbox_id: str) -> bool: ...
+
+
+@runtime_checkable
+class SandboxCacheProvider(Protocol):
+    """Optional cache hook used after a proxy observes a stale endpoint."""
+
+    def invalidate_sandbox_cache(self, sandbox_id: str) -> None: ...

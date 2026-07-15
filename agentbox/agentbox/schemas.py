@@ -29,6 +29,11 @@ class DeleteResponse(BaseModel):
     deleted: bool
 
 
+class SuspendResponse(BaseModel):
+    sandbox_id: str
+    suspended: bool
+
+
 class SandboxHeartbeatResponse(BaseModel):
     sandbox_id: str
     active: bool

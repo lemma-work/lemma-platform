@@ -102,3 +102,12 @@ def test_create_provisions_when_pod_missing() -> None:
     assert core.deleted == 0
     assert core.created == 1
     assert status.ready is True
+
+
+def test_release_deletes_compute_for_recreation() -> None:
+    core = _FakeCoreV1(_pod("Running", ready=True))
+    client = _client(core)
+
+    assert asyncio.run(client.release("sandbox1")) is True
+    assert core.deleted == 1
+    assert core.pod is None

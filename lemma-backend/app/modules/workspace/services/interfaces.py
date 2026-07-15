@@ -32,6 +32,15 @@ class ISandbox(ABC):
         """Delete a user's sandbox."""
         pass
 
+    async def suspend_sandbox(self, user_id: UUID) -> None:
+        """Release compute while retaining the user's logical sandbox identity.
+
+        Providers without a suspend primitive retain historical behavior by
+        deleting compute; the next ensure still uses the same logical user ID.
+        """
+
+        await self.delete_sandbox(user_id)
+
     @abstractmethod
     async def is_sandbox_running(self, user_id: UUID) -> bool:
         """Check if the user's sandbox is running."""

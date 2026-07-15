@@ -29,6 +29,16 @@ class DeleteResponse(BaseModel):
     deleted: bool
 
 
+class SuspendResponse(BaseModel):
+    sandbox_id: str
+    suspended: bool
+
+
+class SandboxHeartbeatResponse(BaseModel):
+    sandbox_id: str
+    active: bool
+
+
 class RuntimeSessionRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -122,4 +132,3 @@ class AppAccessResponse(BaseModel):
     app: str
     url: str
     expires_at: int
-

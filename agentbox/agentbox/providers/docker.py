@@ -154,6 +154,19 @@ class DockerSandboxProvider(LegacyRuntimeProviderMixin):
         except RuntimeError:
             return False
 
+    async def release(self, sandbox_id: str) -> bool:
+        """Stop compute but retain the container and its workspace mount."""
+
+        validate_sandbox_id(sandbox_id)
+        existing = await self._inspect_sandbox(sandbox_id)
+        if existing is None or not existing.ready:
+            return False
+        try:
+            await self._run_docker("stop", self.container_name(sandbox_id))
+            return True
+        except RuntimeError:
+            return False
+
     async def list_managed(self) -> list[ManagedSandbox]:
         output = await self._run_docker(
             "ps",

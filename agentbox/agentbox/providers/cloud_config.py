@@ -15,11 +15,12 @@ def _required(name: str, provider: str) -> str:
 class E2BProviderConfig:
     api_key: str = field(repr=False)
     template: str
+    owner: str
+    environment: str
     max_active: int = 10
     timeout_seconds: int = 3600
     api_url: str | None = None
     domain: str | None = None
-    owner: str = "agentbox"
     allow_internet_access: bool = True
     admission_wait_seconds: float = 60.0
     capacity_retry_after_seconds: int = 15
@@ -70,12 +71,12 @@ class E2BProviderConfig:
         return cls(
             api_key=_required("E2B_API_KEY", "E2B"),
             template=_required("E2B_SANDBOX_TEMPLATE", "E2B"),
+            owner=_required("AGENTBOX_PROVIDER_OWNER", "E2B"),
+            environment=_required("AGENTBOX_ENVIRONMENT", "E2B"),
             max_active=max_active,
             timeout_seconds=timeout,
             api_url=os.environ.get("E2B_API_URL", "").strip() or None,
             domain=os.environ.get("E2B_DOMAIN", "").strip() or None,
-            owner=os.environ.get("AGENTBOX_PROVIDER_OWNER", "agentbox").strip()
-            or "agentbox",
             allow_internet_access=os.environ.get(
                 "E2B_ALLOW_INTERNET_ACCESS", "true"
             ).lower()
@@ -94,14 +95,16 @@ class E2BProviderConfig:
 @dataclass(frozen=True)
 class DaytonaProviderConfig:
     api_key: str = field(repr=False)
+    owner: str
+    environment: str
     snapshot: str | None = None
     image: str | None = None
     api_url: str = "https://app.daytona.io/api"
     target: str | None = None
     max_active: int = 10
-    auto_stop_minutes: int = 3
+    auto_stop_minutes: int = 0
+    auto_archive_minutes: int = 60
     auto_delete_minutes: int = 1440
-    owner: str = "agentbox"
     ready_timeout_seconds: float = 120.0
     admission_wait_seconds: float = 60.0
     capacity_retry_after_seconds: int = 15
@@ -122,12 +125,21 @@ class DaytonaProviderConfig:
             raise RuntimeError(
                 "DAYTONA_SANDBOX_MAX_ACTIVE must be between 1 and 100"
             )
-        auto_stop = int(os.environ.get("DAYTONA_SANDBOX_AUTO_STOP_MINUTES", "3"))
+        auto_stop = int(os.environ.get("DAYTONA_SANDBOX_AUTO_STOP_MINUTES", "0"))
+        auto_archive = int(
+            os.environ.get("DAYTONA_SANDBOX_AUTO_ARCHIVE_MINUTES", "60")
+        )
         auto_delete = int(
             os.environ.get("DAYTONA_SANDBOX_AUTO_DELETE_MINUTES", "1440")
         )
-        if auto_stop < 1 or auto_delete < auto_stop:
-            raise RuntimeError("Daytona auto-delete must not precede auto-stop")
+        if (
+            auto_stop < 0
+            or auto_archive < max(auto_stop, 1)
+            or auto_delete < auto_archive
+        ):
+            raise RuntimeError(
+                "Daytona auto-stop, auto-archive, and auto-delete must be ordered"
+            )
         admission_wait = float(
             os.environ.get("DAYTONA_SANDBOX_ADMISSION_WAIT_SECONDS", "60")
         )
@@ -158,6 +170,8 @@ class DaytonaProviderConfig:
             )
         return cls(
             api_key=_required("DAYTONA_API_KEY", "Daytona"),
+            owner=_required("AGENTBOX_PROVIDER_OWNER", "Daytona"),
+            environment=_required("AGENTBOX_ENVIRONMENT", "Daytona"),
             snapshot=snapshot,
             image=image,
             api_url=os.environ.get(
@@ -166,9 +180,8 @@ class DaytonaProviderConfig:
             target=os.environ.get("DAYTONA_TARGET", "").strip() or None,
             max_active=max_active,
             auto_stop_minutes=auto_stop,
+            auto_archive_minutes=auto_archive,
             auto_delete_minutes=auto_delete,
-            owner=os.environ.get("AGENTBOX_PROVIDER_OWNER", "agentbox").strip()
-            or "agentbox",
             ready_timeout_seconds=float(
                 os.environ.get("DAYTONA_READY_TIMEOUT_SECONDS", "120")
             ),

@@ -20,6 +20,7 @@ from agentbox_client.generated.manager.models import (
     SandboxEnsureRequest,
     SandboxResponse,
     SandboxSummary,
+    SuspendResponse,
     WriteStdinRequest,
 )
 from agentbox_client.timeouts import (
@@ -90,6 +91,13 @@ class AgentBoxClient:
             "DELETE",
             f"/sandboxes/{sandbox_id}",
             DeleteResponse,
+        )
+
+    async def suspend_sandbox(self, sandbox_id: str) -> SuspendResponse:
+        return await self._request_model(
+            "POST",
+            f"/sandboxes/{sandbox_id}/suspend",
+            SuspendResponse,
         )
 
     async def create_session(
@@ -299,4 +307,3 @@ class AgentBoxClient:
     async def close(self) -> None:
         if self._owns_client:
             await self.client.aclose()
-

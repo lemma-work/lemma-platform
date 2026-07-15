@@ -168,6 +168,12 @@ class WorkspaceSandboxService:
 
     async def _delete_sandbox(self, user_id: UUID, sandbox_info: SandboxInfo | None) -> None:
         del sandbox_info
+        suspend = getattr(self.sandbox, "suspend_sandbox", None)
+        if suspend is not None:
+            await suspend(user_id)
+            return
+        # Compatibility for external ISandbox implementations written before
+        # non-destructive suspension became an optional capability.
         await self.sandbox.delete_sandbox(user_id)
 
     async def _touch_workspace_activity(

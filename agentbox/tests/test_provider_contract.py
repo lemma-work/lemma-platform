@@ -10,6 +10,7 @@ from urllib import request
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from agentbox.apps import SandboxAppSpec, sandbox_app
+from agentbox.api.lifecycle import release_sandbox_compute
 from agentbox.providers.legacy import LegacyRuntimeProviderMixin
 from agentbox.providers.models import ManagedSandbox, SandboxEndpoint, SandboxRef
 from agentbox.providers.registry import build_provider, register_provider
@@ -65,6 +66,15 @@ class FakeLifecycleProvider(LegacyRuntimeProviderMixin):
 
     async def delete(self, sandbox_id: str) -> bool:
         return self.resources.pop(sandbox_id, None) is not None
+
+    async def release(self, sandbox_id: str) -> bool:
+        status = self.resources.get(sandbox_id)
+        if status is None or not status.ready:
+            return False
+        self.resources[sandbox_id] = status.model_copy(
+            update={"ready": False, "status": "STOPPED"}
+        )
+        return True
 
     async def resolve_endpoint(
         self,
@@ -141,3 +151,20 @@ def test_endpoint_carries_websocket_auth_without_persisting_it() -> None:
     assert endpoint.url(protocol="websocket").startswith("wss://")
     assert endpoint.websocket_query == {"provider_token": "short-lived"}
     assert endpoint.websocket_subprotocols == ("agentbox",)
+
+
+def test_release_capability_falls_back_for_legacy_entry_point_provider() -> None:
+    class LegacyProvider:
+        def __init__(self) -> None:
+            self.deleted: list[str] = []
+
+        async def delete(self, sandbox_id: str) -> bool:
+            self.deleted.append(sandbox_id)
+            return True
+
+    provider = LegacyProvider()
+
+    assert asyncio.run(
+        release_sandbox_compute(provider, "sandbox-1")  # type: ignore[arg-type]
+    )
+    assert provider.deleted == ["sandbox-1"]

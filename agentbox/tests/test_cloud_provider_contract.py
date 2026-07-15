@@ -5,6 +5,8 @@ import sys
 from pathlib import Path
 from types import SimpleNamespace
 
+import pytest
+
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from agentbox.apps import sandbox_app  # noqa: E402
@@ -66,6 +68,9 @@ class _E2BSandbox:
     infos: dict[str, SimpleNamespace] = {}
     instances: dict[str, "_E2BSandbox"] = {}
     create_count = 0
+    connect_count = 0
+    list_count = 0
+    pause_count = 0
 
     def __init__(self, sandbox_id: str) -> None:
         self.sandbox_id = sandbox_id
@@ -79,10 +84,14 @@ class _E2BSandbox:
         cls.infos = {}
         cls.instances = {}
         cls.create_count = 0
+        cls.connect_count = 0
+        cls.list_count = 0
+        cls.pause_count = 0
 
     @classmethod
     def list(cls, *, query, limit, **kwargs):
         del limit, kwargs
+        cls.list_count += 1
         items = [
             info
             for info in cls.infos.values()
@@ -100,16 +109,37 @@ class _E2BSandbox:
         cls.infos[provider_id] = SimpleNamespace(
             sandbox_id=provider_id,
             metadata=dict(metadata),
+            state="running",
         )
         return sandbox
 
     @classmethod
     async def connect(cls, provider_id, **kwargs):
         del kwargs
+        cls.connect_count += 1
         try:
-            return cls.instances[provider_id]
+            sandbox = cls.instances[provider_id]
         except KeyError as exc:
             raise _NotFound from exc
+        sandbox.running = True
+        sandbox.commands = _FakeCommands()
+        cls.infos[provider_id].state = "running"
+        return sandbox
+
+    @classmethod
+    async def pause(cls, provider_id, *, keep_memory, **kwargs):
+        del kwargs
+        assert keep_memory is False
+        cls.pause_count += 1
+        try:
+            sandbox = cls.instances[provider_id]
+        except KeyError as exc:
+            raise _NotFound from exc
+        if not sandbox.running:
+            return False
+        sandbox.running = False
+        cls.infos[provider_id].state = "paused"
+        return True
 
     @classmethod
     async def kill(cls, provider_id, **kwargs):
@@ -134,7 +164,13 @@ class _E2BSandbox:
 def _e2b_provider() -> E2BSandboxProvider:
     _E2BSandbox.reset()
     return E2BSandboxProvider(
-        E2BProviderConfig(api_key="key", template="template", max_active=2),
+        E2BProviderConfig(
+            api_key="key",
+            template="template",
+            owner="tests",
+            environment="unit",
+            max_active=2,
+        ),
         sdk=_E2BSdk(
             sandbox_cls=_E2BSandbox,
             query_cls=_Query,
@@ -150,6 +186,8 @@ def _e2b_provider_with(**changes) -> E2BSandboxProvider:
     values = {
         "api_key": "key",
         "template": "template",
+        "owner": "tests",
+        "environment": "unit",
         "max_active": 2,
         "create_rate_per_second": 100,
         **changes,
@@ -184,6 +222,9 @@ def test_e2b_contract_is_idempotent_and_refreshes_endpoint_token() -> None:
 
     assert first.ready and second.ready
     assert _E2BSandbox.create_count == 1
+    assert next(iter(_E2BSandbox.infos.values())).metadata[
+        "agentbox-environment"
+    ] == "unit"
     assert len(sandbox.commands.run_calls) == 1
     assert sandbox.commands.run_calls[0]["envs"] == {
         "LEMMA_BASE_URL": "https://lemma.test"
@@ -195,6 +236,69 @@ def test_e2b_contract_is_idempotent_and_refreshes_endpoint_token() -> None:
     assert inventory[0].ref.provider_id == endpoint_two.instance_id
     assert asyncio.run(provider.delete("sandbox-1")) is True
     assert asyncio.run(provider.delete("sandbox-1")) is False
+
+
+def test_e2b_endpoint_cache_avoids_inventory_but_refreshes_token() -> None:
+    provider = _e2b_provider_with()
+    asyncio.run(provider.create("sandbox-1", SandboxEnsureRequest()))
+    inventory_lookups = _E2BSandbox.list_count
+
+    first = asyncio.run(
+        provider.resolve_endpoint("sandbox-1", sandbox_app("runtime"))
+    )
+    _E2BSandbox.instances[first.instance_id or ""].traffic_access_token = "fresh"
+    second = asyncio.run(
+        provider.resolve_endpoint("sandbox-1", sandbox_app("runtime"))
+    )
+
+    assert _E2BSandbox.list_count == inventory_lookups
+    assert first.headers["e2b-traffic-access-token"] != "fresh"
+    assert second.headers["e2b-traffic-access-token"] == "fresh"
+
+
+def test_e2b_release_preserves_provider_id_and_does_not_resume_on_status() -> None:
+    provider = _e2b_provider_with(max_active=1)
+
+    first = asyncio.run(provider.create("sandbox-1", SandboxEnsureRequest()))
+    provider_id = next(iter(_E2BSandbox.instances))
+    assert first.ready
+    assert asyncio.run(provider.release("sandbox-1")) is True
+    connects_after_release = _E2BSandbox.connect_count
+
+    status = asyncio.run(provider.get_status("sandbox-1"))
+    inventory = asyncio.run(provider.list_managed())
+    assert status.status == "STOPPED"
+    assert inventory[0].status.status == "STOPPED"
+    assert _E2BSandbox.connect_count == connects_after_release
+    assert provider._observed_active_count == 0
+
+    resumed = asyncio.run(provider.create("sandbox-1", SandboxEnsureRequest()))
+    assert resumed.ready
+    assert next(iter(_E2BSandbox.instances)) == provider_id
+    assert _E2BSandbox.create_count == 1
+
+
+def test_e2b_release_frees_capacity_for_another_sandbox() -> None:
+    provider = _e2b_provider_with(max_active=1, admission_wait_seconds=0.05)
+    asyncio.run(provider.create("sandbox-1", SandboxEnsureRequest()))
+    asyncio.run(provider.release("sandbox-1"))
+
+    second = asyncio.run(provider.create("sandbox-2", SandboxEnsureRequest()))
+
+    assert second.ready
+    assert provider._observed_active_count == 1
+
+
+def test_e2b_explicit_delete_purges_provider_identity() -> None:
+    provider = _e2b_provider_with()
+    asyncio.run(provider.create("sandbox-1", SandboxEnsureRequest()))
+    original_id = next(iter(_E2BSandbox.instances))
+    asyncio.run(provider.release("sandbox-1"))
+
+    assert asyncio.run(provider.delete("sandbox-1")) is True
+    asyncio.run(provider.create("sandbox-1", SandboxEnsureRequest()))
+
+    assert next(iter(_E2BSandbox.instances)) != original_id
 
 
 def test_e2b_capacity_timeout_is_retryable_and_exact() -> None:
@@ -209,6 +313,7 @@ def test_e2b_capacity_timeout_is_retryable_and_exact() -> None:
         asyncio.run(provider.create("sandbox-2", SandboxEnsureRequest()))
     except ProviderError as exc:
         assert exc.status_code == 429
+        assert exc.retryable is True
         assert exc.headers == {"Retry-After": "23"}
     else:
         raise AssertionError("capacity admission unexpectedly succeeded")
@@ -216,6 +321,64 @@ def test_e2b_capacity_timeout_is_retryable_and_exact() -> None:
     assert _E2BSandbox.create_count == 1
     assert provider._observed_active_count == 1
     assert provider._capacity_reservations == set()
+
+
+def test_e2b_concurrent_ensure_is_idempotent() -> None:
+    provider = _e2b_provider_with()
+
+    async def scenario() -> None:
+        statuses = await asyncio.gather(
+            provider.create("sandbox-1", SandboxEnsureRequest()),
+            provider.create("sandbox-1", SandboxEnsureRequest()),
+        )
+        assert all(status.ready for status in statuses)
+
+    asyncio.run(scenario())
+    assert _E2BSandbox.create_count == 1
+
+
+def test_e2b_concurrent_capacity_does_not_oversubscribe() -> None:
+    provider = _e2b_provider_with(
+        max_active=1,
+        admission_wait_seconds=0.01,
+    )
+
+    async def scenario() -> list[object]:
+        return await asyncio.gather(
+            provider.create("sandbox-1", SandboxEnsureRequest()),
+            provider.create("sandbox-2", SandboxEnsureRequest()),
+            return_exceptions=True,
+        )
+
+    results = asyncio.run(scenario())
+    errors = [result for result in results if isinstance(result, ProviderError)]
+    assert len(errors) == 1
+    assert errors[0].retryable is True
+    assert _E2BSandbox.create_count == 1
+
+
+def test_e2b_provider_retry_after_is_respected(monkeypatch) -> None:
+    provider = _e2b_provider_with()
+    attempts = 0
+    delays: list[float] = []
+
+    async def operation():
+        nonlocal attempts
+        attempts += 1
+        if attempts == 1:
+            error = _RateLimit()
+            error.headers = {"Retry-After": "7"}  # type: ignore[attr-defined]
+            raise error
+        return "ok"
+
+    async def record_sleep(delay: float) -> None:
+        delays.append(delay)
+
+    provider._sleep = record_sleep  # type: ignore[method-assign]
+    monkeypatch.setattr("agentbox.providers.e2b.random.uniform", lambda *_: 0.0)
+
+    assert asyncio.run(provider._with_rate_limit_retry(operation)) == "ok"
+    assert delays == [7.0]
 
 
 def test_e2b_bootstrap_failure_deletes_new_provider_and_releases_capacity() -> None:
@@ -285,8 +448,11 @@ class _DaytonaClient:
         self.sandboxes: dict[str, _DaytonaSandbox] = {}
         self.created_params = None
         self.create_count = 0
+        self.list_count = 0
+        self.fail_next_create = False
 
     async def list(self, query):
+        self.list_count += 1
         for sandbox in list(self.sandboxes.values()):
             if all(
                 sandbox.labels.get(key) == value
@@ -296,6 +462,9 @@ class _DaytonaClient:
 
     async def create(self, params, *, timeout):
         del timeout
+        if self.fail_next_create:
+            self.fail_next_create = False
+            raise _ProviderFailure("create failed")
         self.created_params = params
         self.create_count += 1
         sandbox = _DaytonaSandbox(
@@ -308,6 +477,11 @@ class _DaytonaClient:
         del timeout
         sandbox.state = "started"
         sandbox.updated_at = "generation-resumed"
+
+    async def stop(self, sandbox, *, timeout):
+        del timeout
+        sandbox.state = "stopped"
+        sandbox.updated_at = "generation-stopped"
 
     async def delete(self, sandbox):
         self.sandboxes.pop(sandbox.id, None)
@@ -329,6 +503,8 @@ def _daytona_provider(**changes) -> tuple[DaytonaSandboxProvider, _DaytonaClient
     )
     values = {
         "api_key": "key",
+        "owner": "tests",
+        "environment": "unit",
         "snapshot": "snapshot",
         "max_active": 2,
         "create_rate_per_second": 100,
@@ -360,12 +536,116 @@ def test_daytona_contract_uses_async_client_and_refreshes_preview_token() -> Non
     assert status.ready
     assert client.created_params.values["snapshot"] == "snapshot"
     assert client.created_params.values["labels"]["agentbox-id"] == "sandbox-1"
+    assert client.created_params.values["labels"]["agentbox-environment"] == "unit"
     assert endpoint_one.headers["X-Daytona-Preview-Token"] == "preview-1"
     assert endpoint_two.headers["X-Daytona-Preview-Token"] == "preview-2"
     assert endpoint_one.instance_id != endpoint_two.instance_id
     assert inventory[0].instance_id == endpoint_two.instance_id
     assert asyncio.run(provider.delete("sandbox-1")) is True
     assert asyncio.run(provider.delete("sandbox-1")) is False
+
+
+def test_daytona_endpoint_cache_avoids_inventory_but_refreshes_token() -> None:
+    provider, client = _daytona_provider()
+    asyncio.run(provider.create("sandbox-1", SandboxEnsureRequest()))
+    inventory_lookups = client.list_count
+
+    first = asyncio.run(
+        provider.resolve_endpoint("sandbox-1", sandbox_app("browser"))
+    )
+    second = asyncio.run(
+        provider.resolve_endpoint("sandbox-1", sandbox_app("browser"))
+    )
+
+    assert client.list_count == inventory_lookups
+    assert first.headers["X-Daytona-Preview-Token"] == "preview-1"
+    assert second.headers["X-Daytona-Preview-Token"] == "preview-2"
+
+
+def test_daytona_concurrent_ensure_is_idempotent() -> None:
+    provider, client = _daytona_provider()
+
+    async def scenario() -> None:
+        statuses = await asyncio.gather(
+            provider.create("sandbox-1", SandboxEnsureRequest()),
+            provider.create("sandbox-1", SandboxEnsureRequest()),
+        )
+        assert all(status.ready for status in statuses)
+
+    asyncio.run(scenario())
+    assert client.create_count == 1
+
+
+def test_daytona_capacity_timeout_is_retryable_and_exact() -> None:
+    provider, client = _daytona_provider(
+        max_active=1,
+        admission_wait_seconds=0.01,
+        capacity_retry_after_seconds=19,
+    )
+    asyncio.run(provider.create("sandbox-1", SandboxEnsureRequest()))
+
+    with pytest.raises(ProviderError) as caught:
+        asyncio.run(provider.create("sandbox-2", SandboxEnsureRequest()))
+
+    assert caught.value.status_code == 429
+    assert caught.value.retryable is True
+    assert caught.value.headers == {"Retry-After": "19"}
+    assert client.create_count == 1
+
+
+def test_daytona_creation_failure_releases_capacity() -> None:
+    provider, client = _daytona_provider(max_active=1)
+    client.fail_next_create = True
+
+    with pytest.raises(ProviderError):
+        asyncio.run(provider.create("sandbox-1", SandboxEnsureRequest()))
+
+    assert provider._observed_active_count == 0
+    assert provider._capacity_reservations == set()
+    assert asyncio.run(
+        provider.create("sandbox-2", SandboxEnsureRequest())
+    ).ready
+
+
+def test_daytona_release_preserves_provider_id_and_status_does_not_resume() -> None:
+    provider, client = _daytona_provider(max_active=1)
+    asyncio.run(provider.create("sandbox-1", SandboxEnsureRequest()))
+    provider_id = next(iter(client.sandboxes))
+
+    assert asyncio.run(provider.release("sandbox-1")) is True
+    lookups_after_release = client.list_count
+    assert asyncio.run(provider.get_status("sandbox-1")).status == "STOPPED"
+    assert asyncio.run(provider.list_managed())[0].status.status == "STOPPED"
+    assert client.list_count == lookups_after_release + 1
+    assert provider._observed_active_count == 0
+
+    assert asyncio.run(
+        provider.create("sandbox-1", SandboxEnsureRequest())
+    ).ready
+    assert next(iter(client.sandboxes)) == provider_id
+    assert client.create_count == 1
+
+
+def test_daytona_delete_missing_refreshes_capacity_and_wakes_waiter() -> None:
+    provider, client = _daytona_provider(
+        max_active=1,
+        admission_wait_seconds=1,
+    )
+
+    async def scenario() -> None:
+        await provider.create("sandbox-1", SandboxEnsureRequest())
+        client.sandboxes.clear()
+        provider.invalidate_sandbox_cache("sandbox-1")
+        waiting = asyncio.create_task(
+            provider.create("sandbox-2", SandboxEnsureRequest())
+        )
+        await asyncio.sleep(0.01)
+        assert not waiting.done()
+        assert await provider.delete("sandbox-1") is False
+        assert (await asyncio.wait_for(waiting, timeout=1)).ready
+
+    asyncio.run(scenario())
+    assert provider._observed_active_count == 1
 
 
 def test_daytona_capacity_waiter_wakes_after_delete() -> None:

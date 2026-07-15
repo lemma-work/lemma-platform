@@ -111,6 +111,33 @@ async def test_get_sandbox_reads_minimal_summary():
     assert response.status == "RUNNING"
 
 
+@pytest.mark.asyncio
+async def test_suspend_sandbox_uses_non_destructive_endpoint():
+    calls: list[tuple[str, str]] = []
+
+    async def handler(request: httpx.Request) -> httpx.Response:
+        calls.append((request.method, request.url.path))
+        return httpx.Response(
+            200,
+            json={"sandbox_id": "user-1", "suspended": True},
+        )
+
+    client = AgentBoxClient(base_url="https://agentbox.test", api_key="test-key")
+    await client.client.aclose()
+    client.client = httpx.AsyncClient(
+        base_url="https://agentbox.test",
+        transport=httpx.MockTransport(handler),
+    )
+
+    try:
+        response = await client.suspend_sandbox("user-1")
+    finally:
+        await client.client.aclose()
+
+    assert response.suspended is True
+    assert calls == [("POST", "/sandboxes/user-1/suspend")]
+
+
 def test_exec_command_without_yield_uses_command_timeout_plus_grace():
     assert (
         exec_command_http_timeout(
