@@ -122,7 +122,8 @@ AGENTBOX_SANDBOX_IDLE_TIMEOUT_SECONDS=180
 AGENTBOX_CLEANUP_INTERVAL_SECONDS=15
 ```
 
-The package defaults remain five minutes for local compatibility. Suspended
+The local session default remains five minutes for compatibility; sandbox
+compute defaults to the same three-minute idle window shown above. Suspended
 state is retained for seven days by default, then permanently purged if it has
 not been resumed:
 
