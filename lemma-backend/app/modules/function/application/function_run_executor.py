@@ -54,6 +54,10 @@ from app.modules.function.domain.events import (
 from app.modules.function.services.function_runtime_command import (
     function_workspace_cwd,
 )
+from app.modules.function.services.function_executor_cancellation import (
+    cancel_executor_run,
+    managed_executor_client,
+)
 from app.composition.function_workspace import (
     CONNECT_PHASE_TRANSPORT_ERRORS,
     RETRYABLE_HTTP_STATUS_CODES,
@@ -632,7 +636,7 @@ class FunctionRunExecutor:
             raise FunctionValidationError("Workspace session did not include LEMMA_TOKEN")
         sandbox_id = getattr(session, "sandbox_id", agentbox_sandbox_id(run.user_id))
         client = self._build_function_executor_client(lemma_token)
-        try:
+        async with managed_executor_client(client, sandbox_id, run.id):
             # The in-sandbox function_executor app starts lazily after the VM is
             # RUNNING, so wait for it to be serving before posting, then retry the
             # execute on transient proxy errors as a backstop for the manager's
@@ -694,9 +698,7 @@ class FunctionRunExecutor:
                         sandbox_id,
                         run.id,
                     )
-                    await self._cancel_executor_run(
-                        client, sandbox_id=sandbox_id, run_id=run.id
-                    )
+                    await cancel_executor_run(client, sandbox_id, run.id)
                     return FunctionInvokeResponse(
                         status="timeout",
                         output_data=None,
@@ -712,13 +714,6 @@ class FunctionRunExecutor:
                         duration_ms=0,
                     )
                 raise
-        except asyncio.CancelledError:
-            await asyncio.shield(
-                self._cancel_executor_run(client, sandbox_id=sandbox_id, run_id=run.id)
-            )
-            raise
-        finally:
-            await client.close()
 
     async def _poll_executor_job(
         self,
@@ -736,7 +731,7 @@ class FunctionRunExecutor:
             raise FunctionValidationError("Workspace session did not include sandbox_id")
         client = self._build_function_executor_client(lemma_token)
         deadline = time.monotonic() + timeout_seconds
-        try:
+        async with managed_executor_client(client, sandbox_id, run_id):
             while True:
                 # Absorb a transient blip (the outer deadline loop provides the
                 # macro retry budget); a real TimeoutError below is not retried.
@@ -764,33 +759,9 @@ class FunctionRunExecutor:
                         duration_ms=status.duration_ms or 0,
                     )
                 if time.monotonic() >= deadline:
-                    await self._cancel_executor_run(
-                        client, sandbox_id=sandbox_id, run_id=run_id
-                    )
+                    await cancel_executor_run(client, sandbox_id, run_id)
                     raise TimeoutError("Function job did not finish before timeout")
                 await asyncio.sleep(_FUNCTION_POLL_INTERVAL_SECONDS)
-        except asyncio.CancelledError:
-            await asyncio.shield(
-                self._cancel_executor_run(client, sandbox_id=sandbox_id, run_id=run_id)
-            )
-            raise
-        finally:
-            await client.close()
-
-    @staticmethod
-    async def _cancel_executor_run(client, *, sandbox_id: str, run_id: UUID) -> None:
-        cancel = getattr(client, "cancel", None)
-        if not callable(cancel):
-            return
-        try:
-            await cancel(sandbox_id=sandbox_id, run_id=run_id)
-        except Exception as exc:
-            logger.warning(
-                "function_executor cancellation failed sandbox=%s run=%s: %s",
-                sandbox_id,
-                run_id,
-                exc,
-            )
 
     def _build_function_executor_client(self, lemma_token: str):
         if self.function_executor_client_factory is not None:
