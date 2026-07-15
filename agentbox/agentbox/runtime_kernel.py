@@ -3,22 +3,24 @@ from __future__ import annotations
 import ast
 import contextlib
 import ctypes
-import io
 import json
 import os
 import signal
 import subprocess
 import sys
+import tempfile
 import time
 import traceback
 import types
 from dataclasses import dataclass, field
 from pathlib import Path
 from threading import Lock
-from typing import Any, TextIO
+from typing import Any, BinaryIO, Iterator, TextIO
 
 
 _TERMINATION_GRACE_SECONDS = 2.0
+_REQUEST_FD_ENV = "_AGENTBOX_KERNEL_REQUEST_FD"
+_RESPONSE_FD_ENV = "_AGENTBOX_KERNEL_RESPONSE_FD"
 
 
 def _harden_child_process() -> None:
@@ -57,97 +59,208 @@ def _execute_source(source: str, namespace: dict[str, Any]) -> str | None:
     return None
 
 
-def _kernel_main() -> None:
+@contextlib.contextmanager
+def _redirect_process_output(
+    stdout_target: BinaryIO,
+    stderr_target: BinaryIO,
+) -> Iterator[None]:
+    """Redirect Python, native, and descendant output for one invocation."""
+    previous_stdout = sys.stdout
+    previous_stderr = sys.stderr
+    saved_stdout_fd: int | None = None
+    saved_stderr_fd: int | None = None
+    with contextlib.suppress(Exception):
+        previous_stdout.flush()
+    with contextlib.suppress(Exception):
+        previous_stderr.flush()
+    try:
+        saved_stdout_fd = os.dup(1)
+        saved_stderr_fd = os.dup(2)
+        os.dup2(stdout_target.fileno(), 1)
+        os.dup2(stderr_target.fileno(), 2)
+        yield
+    finally:
+        # User code may replace or close sys.stdout/sys.stderr. Flush whatever
+        # remains while fd 1/2 still point at this invocation's capture files,
+        # then restore both the descriptors and the interpreter objects.
+        with contextlib.suppress(Exception):
+            sys.stdout.flush()
+        with contextlib.suppress(Exception):
+            sys.stderr.flush()
+        if saved_stdout_fd is not None:
+            with contextlib.suppress(OSError):
+                os.dup2(saved_stdout_fd, 1)
+            os.close(saved_stdout_fd)
+        if saved_stderr_fd is not None:
+            with contextlib.suppress(OSError):
+                os.dup2(saved_stderr_fd, 2)
+            os.close(saved_stderr_fd)
+        sys.stdout = previous_stdout
+        sys.stderr = previous_stderr
+
+
+def _read_capture(stream: BinaryIO) -> str:
+    stream.flush()
+    stream.seek(0)
+    return stream.read().decode("utf-8", errors="replace")
+
+
+def _execute_request(
+    request: dict[str, Any],
+    namespace: dict[str, Any],
+) -> dict[str, Any]:
+    if request.get("op") != "execute":
+        raise ValueError("Unsupported runtime kernel request")
+    source = request.get("code")
+    cwd = request.get("cwd")
+    env = request.get("env")
+    if not isinstance(source, str):
+        raise ValueError("Runtime kernel code must be a string")
+    if not isinstance(cwd, str):
+        raise ValueError("Runtime kernel cwd must be a string")
+    if not isinstance(env, dict) or not all(
+        isinstance(key, str) and isinstance(value, str) for key, value in env.items()
+    ):
+        raise ValueError("Runtime kernel env must be a string mapping")
+
+    result_repr: str | None = None
+    error_name: str | None = None
+    previous_env = os.environ.copy()
+    resulting_cwd = os.getcwd()
+    with (
+        tempfile.TemporaryFile(mode="w+b") as stdout_capture,
+        tempfile.TemporaryFile(mode="w+b") as stderr_capture,
+    ):
+        try:
+            os.environ.update(env)
+            Path(cwd).mkdir(parents=True, exist_ok=True)
+            os.chdir(cwd)
+            with _redirect_process_output(stdout_capture, stderr_capture):
+                try:
+                    result_repr = _execute_source(source, namespace)
+                except BaseException as exc:
+                    traceback.print_exc()
+                    error_name = exc.__class__.__name__
+        finally:
+            resulting_cwd = os.getcwd()
+            os.environ.clear()
+            os.environ.update(previous_env)
+
+        return {
+            "ok": error_name is None,
+            "stdout": _read_capture(stdout_capture),
+            "stderr": _read_capture(stderr_capture),
+            "result": result_repr,
+            "error_name": error_name,
+            "cwd": resulting_cwd,
+        }
+
+
+def _kernel_main(request_fd: int, response_fd: int) -> None:
     _harden_child_process()
+    # These descriptors must remain private to the kernel. In particular,
+    # user-created descendants must not keep the control pipes open after the
+    # kernel exits or learn the descriptor numbers through sys.argv/env.
+    os.set_inheritable(request_fd, False)
+    os.set_inheritable(response_fd, False)
     module_name = f"__agentbox_kernel_{os.getpid()}__"
     module = types.ModuleType(module_name)
     module.__dict__["__builtins__"] = __builtins__
     sys.modules[module_name] = module
     namespace = module.__dict__
 
-    for raw_request in sys.stdin:
-        try:
-            request = json.loads(raw_request)
-            if not isinstance(request, dict) or request.get("op") != "execute":
-                raise ValueError("Unsupported runtime kernel request")
-            source = request.get("code")
-            cwd = request.get("cwd")
-            env = request.get("env")
-            if not isinstance(source, str):
-                raise ValueError("Runtime kernel code must be a string")
-            if not isinstance(cwd, str):
-                raise ValueError("Runtime kernel cwd must be a string")
-            if not isinstance(env, dict) or not all(
-                isinstance(key, str) and isinstance(value, str)
-                for key, value in env.items()
-            ):
-                raise ValueError("Runtime kernel env must be a string mapping")
-
-            stdout = io.StringIO()
-            stderr = io.StringIO()
-            result_repr: str | None = None
-            error_name: str | None = None
-            previous_env = os.environ.copy()
+    with (
+        os.fdopen(request_fd, "r", encoding="utf-8") as request_stream,
+        os.fdopen(response_fd, "w", encoding="utf-8", buffering=1) as response_stream,
+    ):
+        for raw_request in request_stream:
             try:
-                os.environ.update(env)
-                Path(cwd).mkdir(parents=True, exist_ok=True)
-                os.chdir(cwd)
-                with (
-                    contextlib.redirect_stdout(stdout),
-                    contextlib.redirect_stderr(stderr),
-                ):
-                    try:
-                        result_repr = _execute_source(source, namespace)
-                    except BaseException as exc:
-                        traceback.print_exc(file=stderr)
-                        error_name = exc.__class__.__name__
-            finally:
-                resulting_cwd = os.getcwd()
-                os.environ.clear()
-                os.environ.update(previous_env)
-
-            response = {
-                "ok": error_name is None,
-                "stdout": stdout.getvalue(),
-                "stderr": stderr.getvalue(),
-                "result": result_repr,
-                "error_name": error_name,
-                "cwd": resulting_cwd,
-            }
-        except BaseException as exc:
-            response = {
-                "ok": False,
-                "stdout": "",
-                "stderr": traceback.format_exc(),
-                "result": None,
-                "error_name": exc.__class__.__name__,
-                "cwd": os.getcwd(),
-            }
-        sys.stdout.write(json.dumps(response, separators=(",", ":")) + "\n")
-        sys.stdout.flush()
+                request = json.loads(raw_request)
+                if not isinstance(request, dict):
+                    raise ValueError("Runtime kernel request must be an object")
+                response = _execute_request(request, namespace)
+            except BaseException as exc:
+                response = {
+                    "ok": False,
+                    "stdout": "",
+                    "stderr": traceback.format_exc(),
+                    "result": None,
+                    "error_name": exc.__class__.__name__,
+                    "cwd": os.getcwd(),
+                }
+            response_stream.write(json.dumps(response, separators=(",", ":")) + "\n")
+            response_stream.flush()
 
 
 @dataclass
 class RuntimePythonKernel:
     """One stateful Python child, owned by exactly one runtime session."""
 
-    process: subprocess.Popen[str]
+    process: subprocess.Popen[bytes]
+    request_stream: TextIO
+    response_stream: TextIO
     _io_lock: Lock = field(default_factory=Lock)
 
     @classmethod
     def start(cls) -> RuntimePythonKernel:
         kernel_path = Path(__file__).resolve()
-        process = subprocess.Popen(
-            [sys.executable, str(kernel_path), "--child"],
-            stdin=subprocess.PIPE,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.DEVNULL,
-            text=True,
-            bufsize=1,
-            start_new_session=True,
-            close_fds=True,
-        )
-        return cls(process=process)
+        request_read_fd, request_write_fd = os.pipe()
+        response_read_fd, response_write_fd = os.pipe()
+        process: subprocess.Popen[bytes] | None = None
+        request_stream: TextIO | None = None
+        response_stream: TextIO | None = None
+        try:
+            child_env = os.environ.copy()
+            child_env[_REQUEST_FD_ENV] = str(request_read_fd)
+            child_env[_RESPONSE_FD_ENV] = str(response_write_fd)
+            process = subprocess.Popen(
+                [sys.executable, str(kernel_path), "--child"],
+                stdin=subprocess.DEVNULL,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                env=child_env,
+                start_new_session=True,
+                close_fds=True,
+                pass_fds=(request_read_fd, response_write_fd),
+            )
+            os.close(request_read_fd)
+            request_read_fd = -1
+            os.close(response_write_fd)
+            response_write_fd = -1
+            request_stream = os.fdopen(
+                request_write_fd,
+                "w",
+                encoding="utf-8",
+                buffering=1,
+            )
+            request_write_fd = -1
+            response_stream = os.fdopen(response_read_fd, "r", encoding="utf-8")
+            response_read_fd = -1
+            return cls(
+                process=process,
+                request_stream=request_stream,
+                response_stream=response_stream,
+            )
+        except BaseException:
+            if request_stream is not None:
+                request_stream.close()
+            if response_stream is not None:
+                response_stream.close()
+            for fd in (
+                request_read_fd,
+                request_write_fd,
+                response_read_fd,
+                response_write_fd,
+            ):
+                if fd >= 0:
+                    with contextlib.suppress(OSError):
+                        os.close(fd)
+            if process is not None:
+                with contextlib.suppress(ProcessLookupError):
+                    os.killpg(process.pid, signal.SIGKILL)
+                with contextlib.suppress(subprocess.TimeoutExpired):
+                    process.wait(timeout=_TERMINATION_GRACE_SECONDS)
+            raise
 
     @property
     def alive(self) -> bool:
@@ -166,15 +279,17 @@ class RuntimePythonKernel:
             separators=(",", ":"),
         )
         with self._io_lock:
-            if not self.alive or self.process.stdin is None or self.process.stdout is None:
+            if not self.alive:
                 raise RuntimeError("Python kernel is not running")
             try:
-                self.process.stdin.write(request + "\n")
-                self.process.stdin.flush()
+                self.request_stream.write(request + "\n")
+                self.request_stream.flush()
             except (BrokenPipeError, OSError) as exc:
-                raise RuntimeError("Python kernel stopped before accepting code") from exc
+                raise RuntimeError(
+                    "Python kernel stopped before accepting code"
+                ) from exc
 
-            line = _readline_with_timeout(self.process.stdout, timeout_seconds)
+            line = _readline_with_timeout(self.response_stream, timeout_seconds)
             if line is None:
                 raise TimeoutError(
                     f"Python execution timed out after {timeout_seconds} seconds"
@@ -207,10 +322,9 @@ class RuntimePythonKernel:
         if process.poll() is None:
             with contextlib.suppress(subprocess.TimeoutExpired):
                 process.wait(timeout=_TERMINATION_GRACE_SECONDS)
-        for stream in (process.stdin, process.stdout):
-            if stream is not None:
-                with contextlib.suppress(Exception):
-                    stream.close()
+        for stream in (self.request_stream, self.response_stream):
+            with contextlib.suppress(Exception):
+                stream.close()
 
 
 def _process_group_exists(process_group_id: int) -> bool:
@@ -240,6 +354,8 @@ def _readline_with_timeout(stream: TextIO, timeout_seconds: int) -> str | None:
 
 if __name__ == "__main__":
     if len(sys.argv) == 2 and sys.argv[1] == "--child":
-        _kernel_main()
+        request_fd = int(os.environ.pop(_REQUEST_FD_ENV))
+        response_fd = int(os.environ.pop(_RESPONSE_FD_ENV))
+        _kernel_main(request_fd, response_fd)
     else:
         raise SystemExit("runtime_kernel.py is an internal AgentBox child process")

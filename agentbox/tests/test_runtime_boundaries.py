@@ -589,6 +589,46 @@ def test_runtime_python_session_behaves_like_notebook(tmp_path):
     assert second["result"] == "42"
 
 
+def test_runtime_python_captures_native_os_writes_without_corrupting_protocol(
+    tmp_path,
+):
+    session_id = f"test-{uuid4().hex}"
+    runtime_server.get_or_create_session(session_id, cwd=str(tmp_path))
+
+    result = runtime_server.execute_python(
+        session_id,
+        "import os\nos.write(1, b'native stdout\\n')\n"
+        "os.write(2, b'native stderr\\n')\n'protocol intact'",
+    )
+
+    assert result == {
+        "ok": True,
+        "stdout": "native stdout\n",
+        "stderr": "native stderr\n",
+        "result": "'protocol intact'",
+        "error_name": None,
+    }
+
+
+def test_runtime_python_captures_subprocess_stdout_and_stderr(tmp_path):
+    session_id = f"test-{uuid4().hex}"
+    runtime_server.get_or_create_session(session_id, cwd=str(tmp_path))
+
+    result = runtime_server.execute_python(
+        session_id,
+        "import subprocess, sys\n"
+        "subprocess.run([sys.executable, '-c', "
+        "\"import os; os.write(1, b'child stdout\\\\n'); "
+        "os.write(2, b'child stderr\\\\n')\"], check=True)\n"
+        "73",
+    )
+
+    assert result["ok"] is True
+    assert result["stdout"] == "child stdout\n"
+    assert result["stderr"] == "child stderr\n"
+    assert result["result"] == "73"
+
+
 def test_runtime_python_resolves_typing_annotations_for_schema_extraction(tmp_path):
     # Under Python 3.14 (PEP 649) annotations are evaluated lazily; pydantic
     # resolves a model's deferred annotations via sys.modules[__module__].
@@ -669,6 +709,49 @@ def test_runtime_python_sessions_overlap_and_isolate_env_and_output(tmp_path):
     assert result_b["result"] == "'beta'"
     runtime_server.delete_session(session_a)
     runtime_server.delete_session(session_b)
+
+
+def test_runtime_python_native_output_isolated_across_concurrent_sessions(tmp_path):
+    session_a = f"native-a-{uuid4().hex}"
+    session_b = f"native-b-{uuid4().hex}"
+    runtime_server.get_or_create_session(
+        session_a,
+        cwd=str(tmp_path / "a"),
+        env={"SESSION_MARK": "alpha"},
+    )
+    runtime_server.get_or_create_session(
+        session_b,
+        cwd=str(tmp_path / "b"),
+        env={"SESSION_MARK": "beta"},
+    )
+    assert runtime_server.execute_python(session_a, "warm = True")["ok"]
+    assert runtime_server.execute_python(session_b, "warm = True")["ok"]
+
+    source = (
+        "import os, subprocess, sys, time\n"
+        "mark = os.environ['SESSION_MARK']\n"
+        "time.sleep(0.6)\n"
+        "os.write(1, f'{mark} native\\n'.encode())\n"
+        "subprocess.run([sys.executable, '-c', "
+        "'import os,sys; os.write(2, sys.argv[1].encode())', "
+        "mark + ' child\\n'], check=True)\n"
+        "mark"
+    )
+    started = time.monotonic()
+    with concurrent.futures.ThreadPoolExecutor(max_workers=2) as pool:
+        future_a = pool.submit(runtime_server.execute_python, session_a, source)
+        future_b = pool.submit(runtime_server.execute_python, session_b, source)
+        result_a = future_a.result(timeout=3)
+        result_b = future_b.result(timeout=3)
+    elapsed = time.monotonic() - started
+
+    assert elapsed < 1.1, "different session kernels should execute concurrently"
+    assert result_a["stdout"] == "alpha native\n"
+    assert result_a["stderr"] == "alpha child\n"
+    assert result_a["result"] == "'alpha'"
+    assert result_b["stdout"] == "beta native\n"
+    assert result_b["stderr"] == "beta child\n"
+    assert result_b["result"] == "'beta'"
 
 
 def test_runtime_python_same_session_is_serial_and_stateful(tmp_path):
