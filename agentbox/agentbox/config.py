@@ -74,17 +74,19 @@ class Settings(BaseSettings):
         from agentbox.state_store.factory import parse_durable_env_keys
 
         return parse_durable_env_keys(self.agentbox_state_durable_env_keys) | {
-            "FUNCTION_EXECUTOR_MAX_ACTIVE",
-            "FUNCTION_EXECUTOR_MAX_QUEUED",
+            "AGENTBOX_FUNCTION_MAX_CONCURRENCY",
+            "AGENTBOX_FUNCTION_MAX_QUEUED",
         }
 
     @property
     def agentbox_static_runtime_env(self) -> dict[str, str]:
         return {
-            "FUNCTION_EXECUTOR_MAX_ACTIVE": str(
+            "AGENTBOX_FUNCTION_MAX_CONCURRENCY": str(
                 self.agentbox_function_max_concurrency
             ),
-            "FUNCTION_EXECUTOR_MAX_QUEUED": str(self.agentbox_function_max_queued),
+            "AGENTBOX_FUNCTION_MAX_QUEUED": str(
+                self.agentbox_function_max_queued
+            ),
         }
 
 

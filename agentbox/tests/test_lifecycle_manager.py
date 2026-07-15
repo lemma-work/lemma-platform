@@ -29,13 +29,14 @@ class FakeLifecycleProvider:
         self.create_count = 0
         self.release_count = 0
         self.delete_count = 0
+        self.requests: dict[str, dict[str, str]] = {}
 
     @property
     def capacity_policy(self) -> ProviderCapacityPolicy:
         return ProviderCapacityPolicy(scope="fake:test", max_active=10)
 
     async def create(self, sandbox_id, request):
-        del request
+        self.requests[sandbox_id] = dict(request.env)
         self.create_started.set()
         await self.allow_create.wait()
         self.create_count += 1
@@ -125,6 +126,10 @@ async def test_cancelled_create_is_recorded_before_cancellation_propagates(tmp_p
         assert [(row.state, row.provider_id) for row in allocations] == [
             ("active", "provider-sandbox")
         ]
+        assert provider.requests["sandbox"] == {
+            "AGENTBOX_FUNCTION_MAX_CONCURRENCY": "8",
+            "AGENTBOX_FUNCTION_MAX_QUEUED": "32",
+        }
     finally:
         await store.close()
 
