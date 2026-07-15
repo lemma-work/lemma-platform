@@ -13,10 +13,10 @@ dependencies = [
 
 [project.optional-dependencies]
 daytona = [
-    "daytona>=0.196.0",
+    "daytona>=0.196.0,<0.198.0",
 ]
 e2b = [
-    "e2b>=2.32.0",
+    "e2b>=2.32.0,<2.33.0",
 ]
 postgres = [
     "psycopg[binary]>=3.2.0",
@@ -28,6 +28,7 @@ dev = [
     "agentbox-client",
     "pytest>=8.4.0",
     "pytest-asyncio>=1.2.0",
+    "ruff>=0.15.0,<0.16.0",
 ]
 
 [tool.uv.sources]
