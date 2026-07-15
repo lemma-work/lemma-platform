@@ -12,6 +12,12 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
+daytona = [
+    "daytona>=0.196.0",
+]
+e2b = [
+    "e2b>=2.32.0",
+]
 postgres = [
     "psycopg[binary]>=3.2.0",
     "psycopg-pool>=3.2.0",

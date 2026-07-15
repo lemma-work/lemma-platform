@@ -35,3 +35,14 @@ class SandboxLifecycleProvider(Protocol):
     ) -> SandboxEndpoint: ...
 
     async def close(self) -> None: ...
+
+
+@runtime_checkable
+class SandboxBootstrapProvider(Protocol):
+    """Optional narrow hook for providers whose templates snapshot too early."""
+
+    async def bootstrap(
+        self,
+        sandbox_id: str,
+        request: SandboxEnsureRequest,
+    ) -> None: ...

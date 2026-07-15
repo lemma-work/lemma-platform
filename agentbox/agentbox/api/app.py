@@ -46,6 +46,7 @@ async def provider_exception_handler(
     del request
     return JSONResponse(
         status_code=exc.status_code,
+        headers=exc.headers,
         content={
             "detail": {
                 "message": str(exc),
