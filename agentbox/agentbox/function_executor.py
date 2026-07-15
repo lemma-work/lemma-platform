@@ -32,6 +32,12 @@ CACHE_READY_NAME = ".lemma-function-ready"
 DEPENDENCIES_DIR_NAME = ".dependencies"
 DEPENDENCIES_READY_NAME = ".dependencies-ready"
 _TERMINATION_GRACE_SECONDS = 2.0
+_DEFAULT_STDOUT_LIMIT_BYTES = 256 * 1024
+_DEFAULT_STDERR_LIMIT_BYTES = 256 * 1024
+_DEFAULT_RESULT_LIMIT_BYTES = 2 * 1024 * 1024
+_MIN_OUTPUT_LIMIT_BYTES = 1024
+_MAX_LOG_LIMIT_BYTES = 8 * 1024 * 1024
+_MAX_RESULT_LIMIT_BYTES = 16 * 1024 * 1024
 
 # A function may declare pip dependencies in its `#python_packages:` header. The
 # values are passed to `pip install`, so each must match a PEP 508-ish spec
@@ -214,6 +220,22 @@ class _RunHandle:
     redactions: tuple[str, ...] = ()
 
 
+@dataclass(frozen=True)
+class _RunTombstone:
+    """Small, lifetime idempotency record without retained output or logs."""
+
+    fingerprint: str
+    async_job: bool
+    status: Literal["completed", "failed", "cancelled", "timeout"]
+    code_hash: str
+    duration_ms: int
+    completed_at: str
+
+
+class ResultPayloadTooLargeError(RuntimeError):
+    """The isolated worker exceeded the configured result-channel limit."""
+
+
 def utc_timestamp() -> str:
     return time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
 
@@ -302,16 +324,9 @@ class LemmaFunctionApiClient:
         return payload
 
 
-# Retention for the run_id idempotency cache. The TTL is comfortably longer than
-# the backend's full retry window for a single run (≈12 execute attempts + 3
-# sandbox-recovery attempts with backoff), after which a duplicate /execute can
-# no longer arrive for that run_id. The size cap keeps only the most-recent few
-# completed results so a long-lived sandbox never accumulates many cached
-# FunctionInvokeResponse objects (which carry logs/output) -- bounding RAM.
-# Retries arrive within seconds of the original, so the original is always among
-# the most-recent entries; if a result is evicted before a (much) later
-# duplicate, that duplicate simply re-runs (the pod-side guard still prevents a
-# duplicate side effect).
+# Full output/log payloads are retained briefly and in a bounded cache. A separate
+# lightweight tombstone remains for the sandbox lifetime, so cache eviction can
+# never turn a transport retry into a second function execution.
 _RESULT_TTL_SECONDS = 600.0
 _MAX_COMPLETED_RESULTS = 32
 
@@ -324,6 +339,9 @@ class FunctionExecutor:
         lemma_base_url: str | None = None,
         max_active: int | None = None,
         max_queued: int | None = None,
+        max_stdout_bytes: int | None = None,
+        max_stderr_bytes: int | None = None,
+        max_result_bytes: int | None = None,
     ) -> None:
         self.workspace_root = Path(workspace_root)
         self.lemma_base_url = lemma_base_url or os.environ.get(
@@ -351,6 +369,24 @@ class FunctionExecutor:
         )
         if self.max_active < 1 or self.max_queued < 0:
             raise RuntimeError("Function executor capacity must be positive")
+        self.max_stdout_bytes = self._configured_byte_limit(
+            value=max_stdout_bytes,
+            env_name="AGENTBOX_FUNCTION_MAX_STDOUT_BYTES",
+            default=_DEFAULT_STDOUT_LIMIT_BYTES,
+            maximum=_MAX_LOG_LIMIT_BYTES,
+        )
+        self.max_stderr_bytes = self._configured_byte_limit(
+            value=max_stderr_bytes,
+            env_name="AGENTBOX_FUNCTION_MAX_STDERR_BYTES",
+            default=_DEFAULT_STDERR_LIMIT_BYTES,
+            maximum=_MAX_LOG_LIMIT_BYTES,
+        )
+        self.max_result_bytes = self._configured_byte_limit(
+            value=max_result_bytes,
+            env_name="AGENTBOX_FUNCTION_MAX_RESULT_BYTES",
+            default=_DEFAULT_RESULT_LIMIT_BYTES,
+            maximum=_MAX_RESULT_LIMIT_BYTES,
+        )
         self.jobs: dict[UUID, StoredJob] = {}
         self._runs: dict[UUID, _RunHandle] = {}
         self._queued: deque[_RunHandle] = deque()
@@ -364,6 +400,20 @@ class FunctionExecutor:
         self._completed: "OrderedDict[UUID, tuple[float, FunctionInvokeResponse]]" = (
             OrderedDict()
         )
+        self._tombstones: dict[UUID, _RunTombstone] = {}
+
+    @staticmethod
+    def _configured_byte_limit(
+        *, value: int | None, env_name: str, default: int, maximum: int
+    ) -> int:
+        configured = (
+            value if value is not None else int(os.environ.get(env_name, default))
+        )
+        if not _MIN_OUTPUT_LIMIT_BYTES <= configured <= maximum:
+            raise RuntimeError(
+                f"{env_name} must be between {_MIN_OUTPUT_LIMIT_BYTES} and {maximum}"
+            )
+        return configured
 
     def api_client(self, token: str) -> LemmaFunctionApiClient:
         return LemmaFunctionApiClient(base_url=self.lemma_base_url, token=token)
@@ -495,11 +545,34 @@ class FunctionExecutor:
             existing = self._runs.get(run_id)
             if existing is not None:
                 if existing.fingerprint != fingerprint:
-                    raise HTTPException(
-                        status_code=409,
-                        detail="run_id was already submitted with a different request",
-                    )
+                    raise self._run_id_conflict(run_id)
                 return existing, False
+            tombstone = self._tombstones.get(run_id)
+            if tombstone is not None:
+                if tombstone.fingerprint != fingerprint:
+                    raise self._run_id_conflict(run_id)
+                cached = self._completed.get(run_id)
+                if tombstone.async_job:
+                    response = cached[1] if cached is not None else None
+                    prior_job = self.jobs.get(run_id)
+                    completed_job = prior_job or self._job_from_tombstone(
+                        run_id, tombstone, response
+                    )
+                    return self._completed_handle(
+                        run_id=run_id,
+                        fingerprint=fingerprint,
+                        runner=runner,
+                        response=response,
+                        job=completed_job,
+                    ), False
+                if cached is None:
+                    raise self._result_evicted(run_id, tombstone)
+                return self._completed_handle(
+                    run_id=run_id,
+                    fingerprint=fingerprint,
+                    runner=runner,
+                    response=cached[1],
+                ), False
             handle = _RunHandle(
                 run_id=run_id,
                 fingerprint=fingerprint,
@@ -527,6 +600,58 @@ class FunctionExecutor:
                     headers={"Retry-After": "1"},
                 )
         return handle, True
+
+    @staticmethod
+    def _run_id_conflict(run_id: UUID) -> HTTPException:
+        return HTTPException(
+            status_code=409,
+            detail={
+                "code": "run_id_conflict",
+                "message": "run_id was already submitted with a different request",
+                "run_id": str(run_id),
+            },
+        )
+
+    @staticmethod
+    def _result_evicted(run_id: UUID, tombstone: _RunTombstone) -> HTTPException:
+        return HTTPException(
+            status_code=409,
+            detail={
+                "code": "run_result_evicted",
+                "message": (
+                    "This run already reached a terminal state; its response payload "
+                    "is no longer retained and the function was not re-executed."
+                ),
+                "run_id": str(run_id),
+                "terminal_status": tombstone.status,
+                "request_fingerprint": tombstone.fingerprint,
+                "code_hash": tombstone.code_hash,
+                "duration_ms": tombstone.duration_ms,
+                "completed_at": tombstone.completed_at,
+            },
+        )
+
+    @staticmethod
+    def _completed_handle(
+        *,
+        run_id: UUID,
+        fingerprint: str,
+        runner: Callable[[_RunHandle], Awaitable[Any]],
+        response: FunctionInvokeResponse | None,
+        job: StoredJob | None = None,
+    ) -> _RunHandle:
+        loop = asyncio.get_running_loop()
+        future: asyncio.Future[Any] = loop.create_future()
+        future.set_result(response)
+        return _RunHandle(
+            run_id=run_id,
+            fingerprint=fingerprint,
+            submitted_at=time.monotonic(),
+            deadline=time.monotonic(),
+            runner=runner,
+            future=future,
+            job=job,
+        )
 
     def _start_handle_locked(self, handle: _RunHandle) -> None:
         handle.queued = False
@@ -598,11 +723,21 @@ class FunctionExecutor:
     def _complete_handle_locked(self, handle: _RunHandle, result: Any) -> None:
         if not handle.future.done():
             handle.future.set_result(result)
-        if isinstance(result, FunctionInvokeResponse):
+        if isinstance(result, FunctionInvokeResponse) and not handle.ephemeral:
             if handle.job is not None:
                 self._update_job(handle.job, result)
-            if handle.cache_result:
-                self._completed[handle.run_id] = (time.monotonic(), result)
+            completed_at = utc_timestamp()
+            self._tombstones[handle.run_id] = _RunTombstone(
+                fingerprint=handle.fingerprint,
+                async_job=handle.job is not None,
+                status=result.status,
+                code_hash=result.code_hash[:128],
+                duration_ms=result.duration_ms,
+                completed_at=completed_at,
+            )
+            self._completed[handle.run_id] = (time.monotonic(), result)
+            self._completed.move_to_end(handle.run_id)
+            self._sweep_expired_locked(time.monotonic())
         if handle.ephemeral:
             self._runs.pop(handle.run_id, None)
 
@@ -626,8 +761,39 @@ class FunctionExecutor:
                 break
             self._completed.popitem(last=False)
             handle = self._runs.get(run_id)
-            if handle is not None and handle.future.done() and handle.job is None:
+            if handle is not None and handle.future.done():
                 self._runs.pop(run_id, None)
+            self.jobs.pop(run_id, None)
+
+    @classmethod
+    def _job_from_tombstone(
+        cls,
+        run_id: UUID,
+        tombstone: _RunTombstone,
+        response: FunctionInvokeResponse | None = None,
+    ) -> StoredJob:
+        job = StoredJob(
+            run_id=run_id,
+            job_id=f"function:{run_id}",
+            status=tombstone.status,
+            code_hash=tombstone.code_hash,
+            completed_at=tombstone.completed_at,
+            duration_ms=tombstone.duration_ms,
+        )
+        if response is not None:
+            cls._update_job(job, response)
+            job.completed_at = tombstone.completed_at
+        else:
+            message = (
+                "This run already reached a terminal state; its detailed result "
+                "and logs are no longer retained."
+            )
+            job.error = RuntimeErrorInfo(
+                name="ResultNotRetained",
+                message=message,
+            )
+            job.logs = [log_entry("system", message)]
+        return job
 
     async def _execute_isolated(
         self,
@@ -752,6 +918,9 @@ class FunctionExecutor:
         env = self._worker_environment(write_fd)
         process: asyncio.subprocess.Process | None = None
         result_task: asyncio.Task[bytes] | None = None
+        stdout_task: asyncio.Task[bytes] | None = None
+        stderr_task: asyncio.Task[bytes] | None = None
+        process_task: asyncio.Task[int] | None = None
         try:
             process = await asyncio.create_subprocess_exec(
                 sys.executable,
@@ -767,16 +936,44 @@ class FunctionExecutor:
             handle.process = process
             os.close(write_fd)
             write_fd = -1
-            result_task = asyncio.create_task(asyncio.to_thread(self._read_fd, read_fd))
-            stdout, stderr = await asyncio.wait_for(
-                process.communicate(
-                    json.dumps(payload, separators=(",", ":"), default=str).encode(
-                        "utf-8"
-                    )
-                ),
-                timeout=timeout_seconds,
+            result_task = asyncio.create_task(
+                asyncio.to_thread(self._read_fd_limited, read_fd, self.max_result_bytes)
             )
-            raw_result = await asyncio.wait_for(result_task, timeout=2.0)
+            if (
+                process.stdout is None
+                or process.stderr is None
+                or process.stdin is None
+            ):
+                raise RuntimeError("Function worker pipes were not created")
+            stdout_task = asyncio.create_task(
+                self._read_stream_limited(
+                    process.stdout, self.max_stdout_bytes, stream_name="stdout"
+                )
+            )
+            stderr_task = asyncio.create_task(
+                self._read_stream_limited(
+                    process.stderr, self.max_stderr_bytes, stream_name="stderr"
+                )
+            )
+            process_task = asyncio.create_task(process.wait())
+
+            async def exchange() -> tuple[bytes, bytes, bytes, int]:
+                encoded_payload = json.dumps(
+                    payload, separators=(",", ":"), default=str
+                ).encode("utf-8")
+                process.stdin.write(encoded_payload)
+                await process.stdin.drain()
+                process.stdin.close()
+                with contextlib.suppress(BrokenPipeError, ConnectionResetError):
+                    await process.stdin.wait_closed()
+                raw_result, stdout, stderr, return_code = await asyncio.gather(
+                    result_task, stdout_task, stderr_task, process_task
+                )
+                return raw_result, stdout, stderr, return_code
+
+            raw_result, stdout, stderr, return_code = await asyncio.wait_for(
+                exchange(), timeout=timeout_seconds
+            )
             logs: list[FunctionLogEntry] = []
             stdout_text = self._redact(stdout.decode("utf-8", errors="replace"), token)
             stderr_text = self._redact(stderr.decode("utf-8", errors="replace"), token)
@@ -784,10 +981,8 @@ class FunctionExecutor:
                 logs.append(log_entry("stdout", stdout_text))
             if stderr_text:
                 logs.append(log_entry("stderr", stderr_text))
-            if process.returncode != 0 and not raw_result:
-                raise RuntimeError(
-                    f"Function worker exited with status {process.returncode}"
-                )
+            if return_code != 0 and not raw_result:
+                raise RuntimeError(f"Function worker exited with status {return_code}")
             try:
                 result = json.loads(raw_result.decode("utf-8"))
             except json.JSONDecodeError as exc:
@@ -795,7 +990,7 @@ class FunctionExecutor:
             if not isinstance(result, dict):
                 raise RuntimeError("Function worker returned a non-object result")
             return result, logs
-        except (TimeoutError, asyncio.CancelledError):
+        except BaseException:
             if process is not None:
                 await self._terminate_process(process)
             raise
@@ -803,15 +998,21 @@ class FunctionExecutor:
             handle.process = None
             if write_fd >= 0:
                 os.close(write_fd)
-            if result_task is not None and not result_task.done():
-                with contextlib.suppress(Exception):
-                    await asyncio.wait_for(result_task, timeout=2.0)
-            elif result_task is None:
+            tasks = [
+                task
+                for task in (result_task, stdout_task, stderr_task, process_task)
+                if task is not None
+            ]
+            for task in tasks:
+                if not task.done():
+                    task.cancel()
+            if tasks:
+                await asyncio.gather(*tasks, return_exceptions=True)
+            if result_task is None:
                 with contextlib.suppress(OSError):
                     os.close(read_fd)
 
-    @staticmethod
-    def _worker_environment(result_fd: int) -> dict[str, str]:
+    def _worker_environment(self, result_fd: int) -> dict[str, str]:
         allowed = {
             "PATH",
             "HOME",
@@ -834,21 +1035,50 @@ class FunctionExecutor:
             part for part in (package_root, inherited_pythonpath) if part
         )
         env["LEMMA_FUNCTION_RESULT_FD"] = str(result_fd)
+        env["LEMMA_FUNCTION_MAX_RESULT_BYTES"] = str(self.max_result_bytes)
         env["PYTHONUNBUFFERED"] = "1"
         return env
 
     @staticmethod
-    def _read_fd(fd: int) -> bytes:
-        chunks: list[bytes] = []
+    def _read_fd_limited(fd: int, limit: int) -> bytes:
+        retained = bytearray()
         try:
             while True:
-                chunk = os.read(fd, 65536)
+                chunk = os.read(fd, min(65536, limit - len(retained) + 1))
                 if not chunk:
-                    return b"".join(chunks)
-                chunks.append(chunk)
+                    return bytes(retained)
+                retained.extend(chunk)
+                if len(retained) > limit:
+                    raise ResultPayloadTooLargeError(
+                        f"Function result exceeded the {limit}-byte limit"
+                    )
         finally:
             with contextlib.suppress(OSError):
                 os.close(fd)
+
+    @staticmethod
+    async def _read_stream_limited(
+        stream: asyncio.StreamReader, limit: int, *, stream_name: str
+    ) -> bytes:
+        retained = bytearray()
+        truncated = False
+        while True:
+            chunk = await stream.read(65536)
+            if not chunk:
+                break
+            remaining = limit - len(retained)
+            if remaining > 0:
+                retained.extend(chunk[:remaining])
+            if len(chunk) > remaining:
+                truncated = True
+        if truncated:
+            marker = (f"\n... [{stream_name} truncated after {limit} bytes]\n").encode(
+                "utf-8"
+            )
+            keep = max(0, limit - len(marker))
+            del retained[keep:]
+            retained.extend(marker[:limit])
+        return bytes(retained)
 
     async def _terminate_handle_process(self, handle: _RunHandle) -> None:
         process = handle.process
@@ -936,7 +1166,11 @@ class FunctionExecutor:
 
     async def cancel_status(self, run_id: UUID) -> FunctionJobStatusResponse:
         async with self._registry_lock:
-            if run_id not in self._runs and run_id not in self.jobs:
+            if (
+                run_id not in self._runs
+                and run_id not in self.jobs
+                and run_id not in self._tombstones
+            ):
                 raise HTTPException(status_code=404, detail="Function run not found")
         await self.cancel_run(run_id)
         return self.run_status(run_id)
@@ -946,6 +1180,15 @@ class FunctionExecutor:
             return self.job_status(run_id)
         handle = self._runs.get(run_id)
         if handle is None:
+            tombstone = self._tombstones.get(run_id)
+            if tombstone is not None:
+                cached = self._completed.get(run_id)
+                job = self._job_from_tombstone(
+                    run_id,
+                    tombstone,
+                    cached[1] if cached is not None else None,
+                )
+                return self._status_from_job(job)
             raise HTTPException(status_code=404, detail="Function run not found")
         status: Literal[
             "queued", "running", "completed", "failed", "cancelled", "timeout"
@@ -982,6 +1225,10 @@ class FunctionExecutor:
 
     def job_status(self, run_id: UUID) -> FunctionJobStatusResponse:
         job = self._get_job(run_id)
+        return self._status_from_job(job)
+
+    @staticmethod
+    def _status_from_job(job: StoredJob) -> FunctionJobStatusResponse:
         return FunctionJobStatusResponse(
             run_id=job.run_id,
             job_id=job.job_id,
@@ -1000,6 +1247,13 @@ class FunctionExecutor:
 
     def _get_job(self, run_id: UUID) -> StoredJob:
         job = self.jobs.get(run_id)
+        if job is None:
+            tombstone = self._tombstones.get(run_id)
+            if tombstone is not None and tombstone.async_job:
+                cached = self._completed.get(run_id)
+                return self._job_from_tombstone(
+                    run_id, tombstone, cached[1] if cached is not None else None
+                )
         if job is None:
             raise HTTPException(status_code=404, detail="Function job not found")
         return job

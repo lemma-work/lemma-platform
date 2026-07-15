@@ -8,10 +8,21 @@ import inspect
 import json
 import os
 import sys
+import tempfile
 import traceback
 from pathlib import Path
 from types import ModuleType
 from typing import Any
+
+
+_DEFAULT_RESULT_LIMIT_BYTES = 2 * 1024 * 1024
+_MIN_RESULT_LIMIT_BYTES = 1024
+_MAX_RESULT_LIMIT_BYTES = 16 * 1024 * 1024
+_ENCODE_CHUNK_CHARACTERS = 16 * 1024
+
+
+class _ResultSizeExceeded(Exception):
+    pass
 
 
 def _mark_non_dumpable() -> None:
@@ -143,16 +154,63 @@ def _schemas(payload: dict[str, Any]) -> dict[str, Any]:
     }
 
 
-def _write_result(result_fd: int, result: dict[str, Any]) -> None:
-    payload = json.dumps(result, separators=(",", ":"), default=str).encode("utf-8")
-    view = memoryview(payload)
-    while view:
-        written = os.write(result_fd, view)
-        view = view[written:]
+def _result_limit() -> int:
+    raw = os.environ.pop(
+        "LEMMA_FUNCTION_MAX_RESULT_BYTES", str(_DEFAULT_RESULT_LIMIT_BYTES)
+    )
+    limit = int(raw)
+    if not _MIN_RESULT_LIMIT_BYTES <= limit <= _MAX_RESULT_LIMIT_BYTES:
+        raise ValueError("Invalid function result-channel byte limit")
+    return limit
+
+
+def _encode_result_limited(result: dict[str, Any], limit: int):
+    spool = tempfile.SpooledTemporaryFile(max_size=min(limit, 64 * 1024))
+    size = 0
+    encoder = json.JSONEncoder(separators=(",", ":"), default=str)
+    try:
+        for piece in encoder.iterencode(result):
+            for offset in range(0, len(piece), _ENCODE_CHUNK_CHARACTERS):
+                encoded = piece[offset : offset + _ENCODE_CHUNK_CHARACTERS].encode(
+                    "utf-8"
+                )
+                size += len(encoded)
+                if size > limit:
+                    raise _ResultSizeExceeded
+                spool.write(encoded)
+        spool.seek(0)
+        return spool
+    except BaseException:
+        spool.close()
+        raise
+
+
+def _write_result(result_fd: int, result: dict[str, Any], limit: int) -> None:
+    try:
+        spool = _encode_result_limited(result, limit)
+    except _ResultSizeExceeded:
+        result = {
+            "ok": False,
+            "error": {
+                "name": "ResultPayloadTooLargeError",
+                "message": f"Function result exceeded the {limit}-byte limit",
+                "traceback": [],
+            },
+        }
+        spool = _encode_result_limited(result, limit)
+    try:
+        while chunk := spool.read(65536):
+            view = memoryview(chunk)
+            while view:
+                written = os.write(result_fd, view)
+                view = view[written:]
+    finally:
+        spool.close()
 
 
 def main() -> None:
     result_fd = int(os.environ.pop("LEMMA_FUNCTION_RESULT_FD"))
+    result_limit = _result_limit()
     os.set_inheritable(result_fd, False)
     try:
         # This must happen before stdin is read: stdin carries the delegated token.
@@ -176,7 +234,7 @@ def main() -> None:
             },
         }
     try:
-        _write_result(result_fd, result)
+        _write_result(result_fd, result, result_limit)
     finally:
         os.close(result_fd)
 

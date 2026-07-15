@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import sys
 import asyncio
+import time
 from pathlib import Path
 from uuid import uuid4
 
@@ -75,9 +76,17 @@ class _FakeLemmaClient:
 
 
 class _TestExecutor(FunctionExecutor):
-    def __init__(self, *, client: _FakeLemmaClient, workspace_root: str):
+    def __init__(
+        self,
+        *,
+        client: _FakeLemmaClient,
+        workspace_root: str,
+        **executor_options,
+    ):
         super().__init__(
-            workspace_root=workspace_root, lemma_base_url="http://lemma.test"
+            workspace_root=workspace_root,
+            lemma_base_url="http://lemma.test",
+            **executor_options,
         )
         self.client = client
 
@@ -560,6 +569,139 @@ async def test_sync_execute_caches_failed_result(tmp_path):
 
 
 @pytest.mark.anyio
+async def test_sync_run_id_never_reexecutes_after_result_count_eviction(tmp_path):
+    executor = _increment_executor(tmp_path)
+    pod_id = executor.client.metadata.pod_id
+    first_run_id = uuid4()
+    first_request = FunctionExecuteRequest(run_id=first_run_id, input_data={"x": 1})
+    first = await executor.execute(
+        pod_id=pod_id,
+        function_name="increment",
+        request=first_request,
+        token="token",
+    )
+    for value in range(32):
+        await executor.execute(
+            pod_id=pod_id,
+            function_name="increment",
+            request=FunctionExecuteRequest(
+                run_id=uuid4(), input_data={"x": value + 10}
+            ),
+            token="token",
+        )
+    calls_before_retry = executor.client.function_calls
+
+    with pytest.raises(HTTPException) as exc_info:
+        await executor.execute(
+            pod_id=pod_id,
+            function_name="increment",
+            request=first_request,
+            token="token",
+        )
+
+    assert first.status == "completed"
+    assert exc_info.value.status_code == 409
+    assert exc_info.value.detail["code"] == "run_result_evicted"
+    assert exc_info.value.detail["terminal_status"] == "completed"
+    assert exc_info.value.detail["request_fingerprint"]
+    assert executor.client.function_calls == calls_before_retry
+
+
+@pytest.mark.anyio
+async def test_sync_run_id_never_reexecutes_after_result_ttl(tmp_path):
+    executor = _increment_executor(tmp_path)
+    pod_id = executor.client.metadata.pod_id
+    run_id = uuid4()
+    request = FunctionExecuteRequest(run_id=run_id, input_data={"x": 2})
+    await executor.execute(
+        pod_id=pod_id,
+        function_name="increment",
+        request=request,
+        token="token",
+    )
+    _completed_at, response = executor._completed[run_id]
+    executor._completed[run_id] = (time.monotonic() - 601, response)
+    calls_before_retry = executor.client.function_calls
+
+    with pytest.raises(HTTPException) as exc_info:
+        await executor.execute(
+            pod_id=pod_id,
+            function_name="increment",
+            request=request,
+            token="token",
+        )
+
+    assert exc_info.value.detail["code"] == "run_result_evicted"
+    assert executor.client.function_calls == calls_before_retry
+
+
+@pytest.mark.anyio
+async def test_evicted_run_id_preserves_fingerprint_conflict(tmp_path):
+    executor = _increment_executor(tmp_path)
+    pod_id = executor.client.metadata.pod_id
+    run_id = uuid4()
+    request = FunctionExecuteRequest(run_id=run_id, input_data={"x": 2})
+    await executor.execute(
+        pod_id=pod_id,
+        function_name="increment",
+        request=request,
+        token="token",
+    )
+    _completed_at, response = executor._completed[run_id]
+    executor._completed[run_id] = (time.monotonic() - 601, response)
+    calls_before_retry = executor.client.function_calls
+
+    with pytest.raises(HTTPException) as exc_info:
+        await executor.execute(
+            pod_id=pod_id,
+            function_name="increment",
+            request=FunctionExecuteRequest(run_id=run_id, input_data={"x": 999}),
+            token="token",
+        )
+
+    assert exc_info.value.status_code == 409
+    assert exc_info.value.detail["code"] == "run_id_conflict"
+    assert executor.client.function_calls == calls_before_retry
+
+
+@pytest.mark.anyio
+async def test_evicted_job_run_id_returns_original_terminal_status(tmp_path):
+    executor = _increment_executor(tmp_path)
+    pod_id = executor.client.metadata.pod_id
+    run_id = uuid4()
+    request = FunctionExecuteRequest(run_id=run_id, input_data={"x": 5}, async_job=True)
+    await executor.execute(
+        pod_id=pod_id,
+        function_name="increment",
+        request=request,
+        token="token",
+    )
+    for _ in range(100):
+        if executor.job_status(run_id).status == "completed":
+            break
+        await asyncio.sleep(0.01)
+    _completed_at, response = executor._completed[run_id]
+    executor._completed[run_id] = (time.monotonic() - 601, response)
+    executor._sweep_expired_locked(time.monotonic())
+    calls_before_retry = executor.client.function_calls
+
+    accepted = await executor.execute(
+        pod_id=pod_id,
+        function_name="increment",
+        request=request,
+        token="token",
+    )
+    status = executor.job_status(run_id)
+
+    assert accepted.status == "accepted"
+    assert status.status == "completed"
+    assert status.output_data is None
+    assert status.error is not None
+    assert status.error.name == "ResultNotRetained"
+    assert executor.client.function_calls == calls_before_retry
+
+
+@pytest.mark.anyio
 async def test_async_execute_dedups_on_run_id(tmp_path):
     executor = _increment_executor(tmp_path)
     pod_id = executor.client.metadata.pod_id
@@ -905,3 +1047,155 @@ async def test_workers_isolate_parent_environment_and_invocation_logs(
     }
     assert "ONLY-SECOND" not in "".join(entry.message for entry in first.logs)
     assert "ONLY-FIRST" not in "".join(entry.message for entry in second.logs)
+
+
+NOISY_FUNCTION_CODE = """#input_type_name: InputModel
+#output_type_name: OutputModel
+#function_name: run_function
+import sys
+from pydantic import BaseModel
+
+class InputModel(BaseModel):
+    x: int
+
+class OutputModel(BaseModel):
+    ok: bool
+
+async def run_function(ctx, data):
+    print("O" * 5000)
+    print("E" * 5000, file=sys.stderr)
+    return OutputModel(ok=True)
+"""
+
+
+LARGE_RESULT_FUNCTION_CODE = """#input_type_name: InputModel
+#output_type_name: OutputModel
+#function_name: run_function
+from pydantic import BaseModel
+
+class InputModel(BaseModel):
+    size: int
+
+class OutputModel(BaseModel):
+    text: str
+
+async def run_function(ctx, data):
+    return OutputModel(text="X" * data.size)
+"""
+
+
+@pytest.mark.anyio
+async def test_worker_stdout_and_stderr_are_truncated_at_byte_caps(tmp_path):
+    metadata = FunctionMetadata(
+        id=uuid4(),
+        name="noisy",
+        pod_id=uuid4(),
+        code=NOISY_FUNCTION_CODE,
+        code_hash=function_code_hash(NOISY_FUNCTION_CODE),
+    )
+    executor = _TestExecutor(
+        client=_FakeLemmaClient(
+            verified=VerifiedToken(user_id=uuid4()), metadata=metadata
+        ),
+        workspace_root=str(tmp_path),
+        max_stdout_bytes=1024,
+        max_stderr_bytes=1024,
+    )
+
+    response = await executor.execute(
+        pod_id=metadata.pod_id,
+        function_name=metadata.name,
+        request=FunctionExecuteRequest(run_id=uuid4(), input_data={"x": 1}),
+        token="token",
+    )
+
+    assert response.status == "completed"
+    logs = {entry.stream: entry.message for entry in response.logs}
+    assert len(logs["stdout"].encode()) <= 1024
+    assert len(logs["stderr"].encode()) <= 1024
+    assert "[stdout truncated after 1024 bytes]" in logs["stdout"]
+    assert "[stderr truncated after 1024 bytes]" in logs["stderr"]
+
+
+@pytest.mark.anyio
+async def test_worker_rejects_oversized_result_without_losing_capacity(tmp_path):
+    metadata = FunctionMetadata(
+        id=uuid4(),
+        name="large_result",
+        pod_id=uuid4(),
+        code=LARGE_RESULT_FUNCTION_CODE,
+        code_hash=function_code_hash(LARGE_RESULT_FUNCTION_CODE),
+    )
+    client = _FakeLemmaClient(
+        verified=VerifiedToken(user_id=uuid4()), metadata=metadata
+    )
+    executor = _TestExecutor(
+        client=client,
+        workspace_root=str(tmp_path),
+        max_active=1,
+        max_result_bytes=1024,
+    )
+
+    oversized = await executor.execute(
+        pod_id=metadata.pod_id,
+        function_name=metadata.name,
+        request=FunctionExecuteRequest(run_id=uuid4(), input_data={"size": 5000}),
+        token="token",
+    )
+    assert oversized.status == "failed"
+    assert oversized.error is not None
+    assert oversized.error.name == "ResultPayloadTooLargeError"
+    assert executor._active == 0
+
+    client.metadata.code = FUNCTION_CODE
+    client.metadata.code_hash = function_code_hash(FUNCTION_CODE)
+    client.metadata.name = "increment"
+    recovered = await executor.execute(
+        pod_id=metadata.pod_id,
+        function_name="increment",
+        request=FunctionExecuteRequest(run_id=uuid4(), input_data={"x": 4}),
+        token="token",
+    )
+    assert recovered.status == "completed"
+    assert recovered.output_data == {"y": 5}
+    assert executor._active == 0
+
+
+@pytest.mark.anyio
+async def test_parent_terminates_worker_that_exceeds_result_channel_cap(
+    tmp_path, monkeypatch
+):
+    metadata = FunctionMetadata(
+        id=uuid4(),
+        name="large_result",
+        pod_id=uuid4(),
+        code=LARGE_RESULT_FUNCTION_CODE,
+        code_hash=function_code_hash(LARGE_RESULT_FUNCTION_CODE),
+    )
+    executor = _TestExecutor(
+        client=_FakeLemmaClient(
+            verified=VerifiedToken(user_id=uuid4()), metadata=metadata
+        ),
+        workspace_root=str(tmp_path),
+        max_active=1,
+        max_result_bytes=1024,
+    )
+    original_environment = executor._worker_environment
+
+    def worker_environment(result_fd):
+        env = original_environment(result_fd)
+        env["LEMMA_FUNCTION_MAX_RESULT_BYTES"] = "8192"
+        return env
+
+    monkeypatch.setattr(executor, "_worker_environment", worker_environment)
+    response = await executor.execute(
+        pod_id=metadata.pod_id,
+        function_name=metadata.name,
+        request=FunctionExecuteRequest(run_id=uuid4(), input_data={"size": 5000}),
+        token="token",
+    )
+
+    assert response.status == "failed"
+    assert response.error is not None
+    assert response.error.name == "ResultPayloadTooLargeError"
+    assert executor._active == 0
