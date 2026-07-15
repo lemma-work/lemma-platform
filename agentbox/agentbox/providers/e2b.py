@@ -281,6 +281,48 @@ class E2BSandboxProvider(LegacyRuntimeProviderMixin):
         self._sandboxes.pop(sandbox_id, None)
         self._known_infos.pop(sandbox_id, None)
 
+    def _commit_complete_inventory(
+        self,
+        infos: list[_E2BManagedInfo],
+        *,
+        known_at_start: dict[str, _E2BManagedInfo],
+        sandboxes_at_start: dict[str, object],
+    ) -> None:
+        """Atomically prune stale scoped cache after a complete inventory.
+
+        Cache entries created while inventory was in flight win over the older
+        snapshot. A failed/partial inventory never reaches this commit point.
+        """
+
+        observed = {
+            info.metadata["agentbox-id"]: info
+            for info in infos
+            if info.metadata.get("agentbox-id")
+        }
+        committed_infos = dict(observed)
+        for sandbox_id, info in self._known_infos.items():
+            if known_at_start.get(sandbox_id) is not info:
+                committed_infos[sandbox_id] = info
+        for sandbox_id in known_at_start:
+            if sandbox_id not in self._known_infos:
+                committed_infos.pop(sandbox_id, None)
+
+        committed_sandboxes: dict[str, object] = {}
+        for sandbox_id, sandbox in self._sandboxes.items():
+            if sandboxes_at_start.get(sandbox_id) is not sandbox:
+                committed_sandboxes[sandbox_id] = sandbox
+                continue
+            info = committed_infos.get(sandbox_id)
+            if info is not None and str(
+                getattr(sandbox, "sandbox_id", "")
+            ) == info.provider_id:
+                committed_sandboxes[sandbox_id] = sandbox
+
+        # No awaits occur between these assignments, so other coroutines cannot
+        # observe a partially pruned cache pair.
+        self._known_infos = committed_infos
+        self._sandboxes = committed_sandboxes
+
     async def _connect(
         self,
         sandbox_id: str,
@@ -300,13 +342,17 @@ class E2BSandboxProvider(LegacyRuntimeProviderMixin):
                 code="sandbox_suspended",
                 status_code=409,
             )
-        sandbox = await self._with_rate_limit_retry(
-            lambda: self._sdk.sandbox_cls.connect(
-                info.provider_id,
-                timeout=self.config.timeout_seconds,
-                **self._api_options(),
+        try:
+            sandbox = await self._with_rate_limit_retry(
+                lambda: self._sdk.sandbox_cls.connect(
+                    info.provider_id,
+                    timeout=self.config.timeout_seconds,
+                    **self._api_options(),
+                )
             )
-        )
+        except self._sdk.not_found_error:
+            self.invalidate_sandbox_cache(sandbox_id)
+            return None
         self._sandboxes[sandbox_id] = sandbox
         self._known_infos[sandbox_id] = _E2BManagedInfo(
             provider_id=info.provider_id,
@@ -486,6 +532,8 @@ class E2BSandboxProvider(LegacyRuntimeProviderMixin):
             self._log_capacity("observed_existing", provider_id=provider_id)
 
     async def _refresh_capacity_inventory(self, event: str) -> None:
+        known_at_start = dict(self._known_infos)
+        sandboxes_at_start = dict(self._sandboxes)
         async with self._capacity_condition:
             inventory_generation = self._capacity_generation
         normalized_infos = [
@@ -495,6 +543,11 @@ class E2BSandboxProvider(LegacyRuntimeProviderMixin):
         provider_ids = {
             info.provider_id for info in normalized_infos if info.state == "running"
         }
+        self._commit_complete_inventory(
+            normalized_infos,
+            known_at_start=known_at_start,
+            sandboxes_at_start=sandboxes_at_start,
+        )
         async with self._capacity_condition:
             if (
                 inventory_generation == self._capacity_generation
@@ -502,11 +555,6 @@ class E2BSandboxProvider(LegacyRuntimeProviderMixin):
             ):
                 self._counted_provider_ids = provider_ids
                 self._observed_active_count = len(provider_ids)
-                self._known_infos = {
-                    info.metadata["agentbox-id"]: info
-                    for info in normalized_infos
-                    if info.metadata.get("agentbox-id")
-                }
                 self._capacity_generation += 1
                 self._log_capacity(event)
             else:
@@ -587,16 +635,20 @@ class E2BSandboxProvider(LegacyRuntimeProviderMixin):
             existing = await self._find(sandbox_id)
             if existing is not None:
                 if existing.state == "running":
-                    sandbox = await self._connect(sandbox_id, existing)
-                    if sandbox is not None:
-                        await sandbox.set_timeout(
-                            self.config.timeout_seconds, **self._api_options()
-                        )
-                        await self._bootstrap_sandbox(sandbox, request.env)
-                        return await self._status(sandbox_id, sandbox)
+                    try:
+                        sandbox = await self._connect(sandbox_id, existing)
+                        if sandbox is not None:
+                            await sandbox.set_timeout(
+                                self.config.timeout_seconds, **self._api_options()
+                            )
+                            await self._bootstrap_sandbox(sandbox, request.env)
+                            return await self._status(sandbox_id, sandbox)
+                    except SandboxNotFoundError:
+                        self.invalidate_sandbox_cache(sandbox_id)
                 else:
                     await self._reserve_capacity(sandbox_id)
                     resumed = False
+                    missing = False
                     try:
                         sandbox = await self._connect(
                             sandbox_id, existing, resume=True
@@ -611,6 +663,9 @@ class E2BSandboxProvider(LegacyRuntimeProviderMixin):
                         resumed = True
                         await self._bootstrap_sandbox(sandbox, request.env)
                         return await self._status(sandbox_id, sandbox)
+                    except SandboxNotFoundError:
+                        self.invalidate_sandbox_cache(sandbox_id)
+                        missing = True
                     except Exception:
                         if resumed:
                             await self.release(sandbox_id)
@@ -620,6 +675,8 @@ class E2BSandboxProvider(LegacyRuntimeProviderMixin):
                             await self._finish_reservation(
                                 sandbox_id, created=False
                             )
+                    if not missing:
+                        raise RuntimeError("unreachable E2B resume state")
 
             await self._reserve_capacity(sandbox_id)
             reservation_finished = False
@@ -683,6 +740,12 @@ class E2BSandboxProvider(LegacyRuntimeProviderMixin):
                         ) from exc
                 self._sandboxes[sandbox_id] = sandbox
                 provider_id = getattr(sandbox, "sandbox_id", None)
+                if provider_id:
+                    self._known_infos[sandbox_id] = _E2BManagedInfo(
+                        provider_id=str(provider_id),
+                        metadata=self._metadata(sandbox_id),
+                        state="running",
+                    )
                 await self._finish_reservation(
                     sandbox_id,
                     created=True,
@@ -761,16 +824,19 @@ class E2BSandboxProvider(LegacyRuntimeProviderMixin):
         )
 
     async def list_managed(self) -> list[ManagedSandbox]:
+        known_at_start = dict(self._known_infos)
+        sandboxes_at_start = dict(self._sandboxes)
         async with self._capacity_condition:
             ambiguous_at_start = tuple(self._ambiguous_capacity_reservations)
         managed: list[ManagedSandbox] = []
+        infos: list[_E2BManagedInfo] = []
         async for raw_info in self._list(self._metadata()):
             info = self._normalize_info(raw_info)
+            infos.append(info)
             metadata = info.metadata
             sandbox_id = metadata.get("agentbox-id")
             if not sandbox_id:
                 continue
-            self._known_infos[sandbox_id] = info
             managed.append(
                 ManagedSandbox(
                     ref=SandboxRef(sandbox_id, info.provider_id),
@@ -779,6 +845,11 @@ class E2BSandboxProvider(LegacyRuntimeProviderMixin):
                     metadata=metadata,
                 )
             )
+        self._commit_complete_inventory(
+            infos,
+            known_at_start=known_at_start,
+            sandboxes_at_start=sandboxes_at_start,
+        )
         by_sandbox = {
             item.ref.sandbox_id: item.ref.provider_id
             for item in managed

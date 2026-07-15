@@ -20,7 +20,10 @@ from agentbox.providers.daytona import (  # noqa: E402
 )
 from agentbox.providers.e2b import E2BSandboxProvider, _E2BSdk  # noqa: E402
 from agentbox.schemas import SandboxEnsureRequest  # noqa: E402
-from agentbox.providers.errors import ProviderError  # noqa: E402
+from agentbox.providers.errors import (  # noqa: E402
+    ProviderError,
+    SandboxNotFoundError,
+)
 
 
 class _NotFound(Exception):
@@ -41,12 +44,18 @@ class _Query:
 
 
 class _Paginator:
-    def __init__(self, items):
+    def __init__(self, items, *, fail_after_first: bool = False):
         self.items = list(items)
         self.has_next = True
+        self.fail_after_first = fail_after_first
+        self.calls = 0
 
     async def next_items(self):
-        self.has_next = False
+        self.calls += 1
+        if self.fail_after_first and self.calls > 1:
+            self.has_next = False
+            raise _ProviderFailure("inventory page failed")
+        self.has_next = self.fail_after_first
         return self.items
 
 
@@ -74,6 +83,7 @@ class _E2BSandbox:
     fail_after_accept = False
     fail_lookup_after_accept = False
     fail_next_list = False
+    fail_partial_next_list = False
 
     def __init__(self, sandbox_id: str) -> None:
         self.sandbox_id = sandbox_id
@@ -93,6 +103,7 @@ class _E2BSandbox:
         cls.fail_after_accept = False
         cls.fail_lookup_after_accept = False
         cls.fail_next_list = False
+        cls.fail_partial_next_list = False
 
     @classmethod
     def list(cls, *, query, limit, **kwargs):
@@ -106,7 +117,9 @@ class _E2BSandbox:
             for info in cls.infos.values()
             if all(info.metadata.get(key) == value for key, value in query.filters.items())
         ]
-        return _Paginator(items)
+        fail_partial = cls.fail_partial_next_list
+        cls.fail_partial_next_list = False
+        return _Paginator(items, fail_after_first=fail_partial)
 
     @classmethod
     async def create(cls, template, *, metadata, envs, **kwargs):
@@ -166,6 +179,8 @@ class _E2BSandbox:
         return True
 
     async def is_running(self):
+        if self.sandbox_id not in type(self).instances:
+            raise _NotFound
         return self.running
 
     async def set_timeout(self, timeout, **kwargs):
@@ -468,18 +483,28 @@ class _DaytonaClient:
         self.fail_after_accept = False
         self.fail_lookup_after_accept = False
         self.fail_next_list = False
+        self.fail_partial_next_list = False
+        self.fail_next_start_not_found = False
 
     async def list(self, query):
         self.list_count += 1
         if self.fail_next_list:
             self.fail_next_list = False
             raise _ProviderFailure("inventory temporarily unavailable")
+        yielded = False
+        fail_partial = self.fail_partial_next_list
+        self.fail_partial_next_list = False
         for sandbox in list(self.sandboxes.values()):
             if all(
                 sandbox.labels.get(key) == value
                 for key, value in query.filters.items()
             ):
+                yielded = True
                 yield sandbox
+                if fail_partial:
+                    raise _ProviderFailure("inventory page failed")
+        if fail_partial and not yielded:
+            raise _ProviderFailure("inventory page failed")
 
     async def create(self, params, *, timeout):
         del timeout
@@ -502,6 +527,10 @@ class _DaytonaClient:
 
     async def start(self, sandbox, *, timeout):
         del timeout
+        if self.fail_next_start_not_found:
+            self.fail_next_start_not_found = False
+            self.sandboxes.pop(sandbox.id, None)
+            raise _NotFound
         sandbox.state = "started"
         sandbox.updated_at = "generation-resumed"
 
@@ -644,7 +673,9 @@ def test_daytona_release_preserves_provider_id_and_status_does_not_resume() -> N
     lookups_after_release = client.list_count
     assert asyncio.run(provider.get_status("sandbox-1")).status == "STOPPED"
     assert asyncio.run(provider.list_managed())[0].status.status == "STOPPED"
-    assert client.list_count == lookups_after_release + 1
+    # Status revalidates the cached identity, and list_managed performs its own
+    # complete inventory without resuming the stopped sandbox.
+    assert client.list_count == lookups_after_release + 2
     assert provider._observed_active_count == 0
 
     assert asyncio.run(
@@ -798,3 +829,117 @@ def test_daytona_inventory_reconciles_ambiguous_local_reservation() -> None:
     assert asyncio.run(
         provider.create("sandbox-2", SandboxEnsureRequest())
     ).ready
+
+
+def test_e2b_complete_inventory_prunes_out_of_band_deleted_cache() -> None:
+    provider = _e2b_provider_with()
+    asyncio.run(provider.create("sandbox-1", SandboxEnsureRequest()))
+    assert asyncio.run(provider.get_status("sandbox-1")).ready
+    provider_id = provider._known_infos["sandbox-1"].provider_id
+
+    _E2BSandbox.instances.pop(provider_id)
+    _E2BSandbox.infos.pop(provider_id)
+    assert asyncio.run(provider.list_managed()) == []
+    assert "sandbox-1" not in provider._known_infos
+    assert "sandbox-1" not in provider._sandboxes
+
+    assert asyncio.run(
+        provider.create("sandbox-1", SandboxEnsureRequest())
+    ).ready
+    assert _E2BSandbox.create_count == 2
+
+
+def test_e2b_not_found_status_invalidates_cache_and_ensure_recreates() -> None:
+    provider = _e2b_provider_with()
+    asyncio.run(provider.create("sandbox-1", SandboxEnsureRequest()))
+    provider_id = provider._known_infos["sandbox-1"].provider_id
+    _E2BSandbox.instances.pop(provider_id)
+    _E2BSandbox.infos.pop(provider_id)
+
+    with pytest.raises(SandboxNotFoundError):
+        asyncio.run(provider.get_status("sandbox-1"))
+    assert "sandbox-1" not in provider._known_infos
+    assert "sandbox-1" not in provider._sandboxes
+    assert asyncio.run(
+        provider.create("sandbox-1", SandboxEnsureRequest())
+    ).ready
+    assert _E2BSandbox.create_count == 2
+
+
+def test_e2b_partial_inventory_does_not_prune_cache() -> None:
+    provider = _e2b_provider_with()
+    asyncio.run(provider.create("sandbox-1", SandboxEnsureRequest()))
+    provider_id = provider._known_infos["sandbox-1"].provider_id
+    _E2BSandbox.instances.pop(provider_id)
+    _E2BSandbox.infos.pop(provider_id)
+    _E2BSandbox.fail_partial_next_list = True
+
+    with pytest.raises(_ProviderFailure):
+        asyncio.run(provider.list_managed())
+    assert provider._known_infos["sandbox-1"].provider_id == provider_id
+
+
+def test_daytona_complete_inventory_prunes_out_of_band_deleted_cache() -> None:
+    provider, client = _daytona_provider()
+    asyncio.run(provider.create("sandbox-1", SandboxEnsureRequest()))
+    assert asyncio.run(provider.get_status("sandbox-1")).ready
+    client.sandboxes.clear()
+
+    assert asyncio.run(provider.list_managed()) == []
+    assert "sandbox-1" not in provider._sandboxes
+    assert asyncio.run(
+        provider.create("sandbox-1", SandboxEnsureRequest())
+    ).ready
+    assert client.create_count == 2
+
+
+def test_daytona_status_revalidates_cache_and_ensure_recreates() -> None:
+    provider, client = _daytona_provider()
+    asyncio.run(provider.create("sandbox-1", SandboxEnsureRequest()))
+    client.sandboxes.clear()
+
+    with pytest.raises(SandboxNotFoundError):
+        asyncio.run(provider.get_status("sandbox-1"))
+    assert "sandbox-1" not in provider._sandboxes
+    assert asyncio.run(
+        provider.create("sandbox-1", SandboxEnsureRequest())
+    ).ready
+    assert client.create_count == 2
+
+
+def test_daytona_partial_inventory_does_not_prune_cache() -> None:
+    provider, client = _daytona_provider()
+    asyncio.run(provider.create("sandbox-1", SandboxEnsureRequest()))
+    cached = provider._sandboxes["sandbox-1"]
+    client.sandboxes.clear()
+    client.fail_partial_next_list = True
+
+    with pytest.raises(_ProviderFailure):
+        asyncio.run(provider.list_managed())
+    assert provider._sandboxes["sandbox-1"] is cached
+
+
+def test_e2b_not_found_during_resume_recreates_provider_object() -> None:
+    provider = _e2b_provider_with(max_active=1)
+    asyncio.run(provider.create("sandbox-1", SandboxEnsureRequest()))
+    provider_id = provider._known_infos["sandbox-1"].provider_id
+    assert asyncio.run(provider.release("sandbox-1")) is True
+    _E2BSandbox.instances.pop(provider_id)
+    _E2BSandbox.infos.pop(provider_id)
+
+    assert asyncio.run(
+        provider.create("sandbox-1", SandboxEnsureRequest())
+    ).ready
+    assert _E2BSandbox.create_count == 2
+
+
+def test_daytona_not_found_during_resume_recreates_provider_object() -> None:
+    provider, client = _daytona_provider(max_active=1)
+    asyncio.run(provider.create("sandbox-1", SandboxEnsureRequest()))
+    assert asyncio.run(provider.release("sandbox-1")) is True
+    client.fail_next_start_not_found = True
+
+    assert asyncio.run(
+        provider.create("sandbox-1", SandboxEnsureRequest())
+    ).ready
+    assert client.create_count == 2
