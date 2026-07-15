@@ -575,6 +575,7 @@ async def test_postgres_legacy_schema_migration_and_store_parity():
         assert session.active_operations == 9
         assert await store.mark_sandbox_active("missing") is False
         assert await store.mark_sandbox_active("legacy") is True
+        assert await store.touch_session("legacy", "session") is True
 
         defaults = await asyncio.gather(
             *(store.ensure_sandbox_defaults("new") for _ in range(10))

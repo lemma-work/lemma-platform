@@ -394,21 +394,27 @@ class PostgresStateStore:
     async def touch_session(
         self, sandbox_id: str, session_id: str, *, owner: str | None = None
     ) -> bool:
+        # Do not bind a bare NULL solely to ``%s IS NULL``: PostgreSQL cannot
+        # infer its type.  Omitting the owner predicate also expresses the
+        # intended fence directly -- an anonymous caller is blocked by any
+        # live lifecycle claim, while an owner may pass its own claim.
+        owner_fence = "" if owner is None else "AND c.owner <> %s"
+        owner_params: tuple[str, ...] = () if owner is None else (owner,)
         async with self._pool.connection() as conn:
             row = await (
                 await conn.execute(
-                    """
+                    f"""
                     UPDATE agentbox_sessions SET last_active_at = now(), updated_at = now()
                     WHERE sandbox_id = %s AND session_id = %s
                       AND NOT EXISTS (
                         SELECT 1 FROM agentbox_lifecycle_claims c
                         WHERE c.sandbox_id = agentbox_sessions.sandbox_id
                           AND c.expires_at > now()
-                          AND (%s IS NULL OR c.owner <> %s)
+                          {owner_fence}
                       )
                     RETURNING 1
                     """,
-                    (sandbox_id, session_id, owner, owner),
+                    (sandbox_id, session_id, *owner_params),
                 )
             ).fetchone()
             if row:
@@ -577,10 +583,12 @@ class PostgresStateStore:
     async def mark_sandbox_active(
         self, sandbox_id: str, *, owner: str | None = None
     ) -> bool:
+        owner_fence = "" if owner is None else "AND c.owner <> %s"
+        owner_params: tuple[str, ...] = () if owner is None else (owner,)
         async with self._pool.connection() as conn:
             row = await (
                 await conn.execute(
-                    """
+                    f"""
                     UPDATE agentbox_sandboxes SET idle_since_at = NULL,
                         last_active_at = now(), updated_at = now()
                     WHERE sandbox_id = %s AND desired_state = 'present'
@@ -588,11 +596,11 @@ class PostgresStateStore:
                         SELECT 1 FROM agentbox_lifecycle_claims c
                         WHERE c.sandbox_id = agentbox_sandboxes.sandbox_id
                           AND c.expires_at > now()
-                          AND (%s IS NULL OR c.owner <> %s)
+                          {owner_fence}
                       )
                     RETURNING 1
                     """,
-                    (sandbox_id, owner, owner),
+                    (sandbox_id, *owner_params),
                 )
             ).fetchone()
         return bool(row)
@@ -647,22 +655,35 @@ class PostgresStateStore:
         if ttl_seconds <= 0:
             raise ValueError("ttl_seconds must be positive")
         lease_id = uuid.uuid4()
+        # As above, branch instead of sending an untyped NULL to ``%s IS
+        # NULL``.  A sandbox-wide lease needs no session lookup; a
+        # session-scoped lease must reference an existing session.
+        session_fence = (
+            ""
+            if session_id is None
+            else """
+                        AND EXISTS (
+                            SELECT 1 FROM agentbox_sessions x
+                            WHERE x.sandbox_id = s.sandbox_id
+                              AND x.session_id = %s
+                        )
+            """
+        )
+        session_params: tuple[str, ...] = (
+            () if session_id is None else (session_id,)
+        )
         async with self._pool.connection() as conn:
             row = await (
                 await conn.execute(
-                    """
+                    f"""
                     INSERT INTO agentbox_activity_leases (
                         lease_id, sandbox_id, session_id, operation, owner, expires_at
                     )
                     SELECT %s, s.sandbox_id, %s, %s, %s,
                         now() + make_interval(secs => %s)
                     FROM agentbox_sandboxes s
-                    WHERE s.sandbox_id = %s AND s.desired_state = 'present' AND (
-                        %s IS NULL OR EXISTS (
-                            SELECT 1 FROM agentbox_sessions x
-                            WHERE x.sandbox_id = s.sandbox_id AND x.session_id = %s
-                        )
-                    )
+                    WHERE s.sandbox_id = %s AND s.desired_state = 'present'
+                      {session_fence}
                       AND NOT EXISTS (
                         SELECT 1 FROM agentbox_lifecycle_claims c
                         WHERE c.sandbox_id = s.sandbox_id AND c.expires_at > now()
@@ -678,8 +699,7 @@ class PostgresStateStore:
                         owner,
                         ttl_seconds,
                         sandbox_id,
-                        session_id,
-                        session_id,
+                        *session_params,
                         owner,
                     ),
                 )
