@@ -3,30 +3,11 @@ from __future__ import annotations
 import json
 import sqlite3
 import time
-from dataclasses import dataclass
 from pathlib import Path
 from threading import Lock
 
 from agentbox.schemas import SandboxEnsureRequest
-
-
-@dataclass(frozen=True)
-class SandboxRecord:
-    sandbox_id: str
-    env: dict[str, str]
-
-    def to_ensure_request(self) -> SandboxEnsureRequest:
-        return SandboxEnsureRequest(env=self.env)
-
-
-@dataclass(frozen=True)
-class SessionRecord:
-    sandbox_id: str
-    session_id: str
-    cwd: str
-    env_keys: list[str]
-    last_active_at: float
-    active_operations: int
+from agentbox.state_store.models import SandboxRecord, SessionRecord
 
 
 class AgentBoxStateStore:
@@ -41,36 +22,43 @@ class AgentBoxStateStore:
         self._init_schema()
 
     def _init_schema(self) -> None:
-        with self._lock, self._conn:
-            self._conn.execute(
-                """
-                CREATE TABLE IF NOT EXISTS sandboxes (
-                    sandbox_id TEXT PRIMARY KEY,
-                    env_json TEXT NOT NULL,
-                    idle_since_at REAL,
-                    created_at REAL NOT NULL,
-                    updated_at REAL NOT NULL
+        with self._lock:
+            self._conn.execute("BEGIN IMMEDIATE")
+            try:
+                self._conn.execute(
+                    """
+                    CREATE TABLE IF NOT EXISTS sandboxes (
+                        sandbox_id TEXT PRIMARY KEY,
+                        env_json TEXT NOT NULL,
+                        idle_since_at REAL,
+                        created_at REAL NOT NULL,
+                        updated_at REAL NOT NULL
+                    )
+                    """
                 )
-                """
-            )
-            self._migrate_sandboxes_schema_locked()
-            self._conn.execute(
-                """
-                CREATE TABLE IF NOT EXISTS sessions (
-                    sandbox_id TEXT NOT NULL,
-                    session_id TEXT NOT NULL,
-                    cwd TEXT NOT NULL,
-                    env_keys_json TEXT NOT NULL,
-                    last_active_at REAL NOT NULL,
-                    active_operations INTEGER NOT NULL DEFAULT 0,
-                    created_at REAL NOT NULL,
-                    updated_at REAL NOT NULL,
-                    PRIMARY KEY (sandbox_id, session_id),
-                    FOREIGN KEY (sandbox_id) REFERENCES sandboxes(sandbox_id)
-                        ON DELETE CASCADE
+                self._migrate_sandboxes_schema_locked()
+                self._conn.execute(
+                    """
+                    CREATE TABLE IF NOT EXISTS sessions (
+                        sandbox_id TEXT NOT NULL,
+                        session_id TEXT NOT NULL,
+                        cwd TEXT NOT NULL,
+                        env_keys_json TEXT NOT NULL,
+                        last_active_at REAL NOT NULL,
+                        active_operations INTEGER NOT NULL DEFAULT 0,
+                        created_at REAL NOT NULL,
+                        updated_at REAL NOT NULL,
+                        PRIMARY KEY (sandbox_id, session_id),
+                        FOREIGN KEY (sandbox_id) REFERENCES sandboxes(sandbox_id)
+                            ON DELETE CASCADE
+                    )
+                    """
                 )
-                """
-            )
+            except BaseException:
+                self._conn.rollback()
+                raise
+            else:
+                self._conn.commit()
 
     def _migrate_sandboxes_schema_locked(self) -> None:
         columns = self._conn.execute("PRAGMA table_info(sandboxes)").fetchall()
@@ -82,19 +70,41 @@ class AgentBoxStateStore:
             "created_at",
             "updated_at",
         ]
-        if column_names == expected_columns:
+        official_columns = {
+            "desired_state",
+            "desired_generation",
+            "observed_generation",
+            "provider_name",
+            "provider_id",
+            "instance_id",
+            "last_active_at",
+            "last_observed_at",
+        }
+        extra_columns = set(column_names) - set(expected_columns)
+        if (
+            set(expected_columns).issubset(column_names)
+            and extra_columns <= official_columns
+        ):
             return
 
         now = time.time()
         expressions = {
             "sandbox_id": "sandbox_id" if "sandbox_id" in column_names else "''",
-            "env_json": "COALESCE(env_json, '{}')" if "env_json" in column_names else "'{}'",
-            "idle_since_at": "idle_since_at" if "idle_since_at" in column_names else "NULL",
+            "env_json": "COALESCE(env_json, '{}')"
+            if "env_json" in column_names
+            else "'{}'",
+            "idle_since_at": "idle_since_at"
+            if "idle_since_at" in column_names
+            else "NULL",
             "created_at": (
-                f"COALESCE(created_at, {now})" if "created_at" in column_names else str(now)
+                f"COALESCE(created_at, {now})"
+                if "created_at" in column_names
+                else str(now)
             ),
             "updated_at": (
-                f"COALESCE(updated_at, {now})" if "updated_at" in column_names else str(now)
+                f"COALESCE(updated_at, {now})"
+                if "updated_at" in column_names
+                else str(now)
             ),
         }
         self._conn.execute("DROP TABLE IF EXISTS sandboxes_new")
@@ -127,7 +137,9 @@ class AgentBoxStateStore:
         self._conn.execute("DROP TABLE sandboxes")
         self._conn.execute("ALTER TABLE sandboxes_new RENAME TO sandboxes")
 
-    def upsert_sandbox(self, sandbox_id: str, request: SandboxEnsureRequest) -> SandboxRecord:
+    def upsert_sandbox(
+        self, sandbox_id: str, request: SandboxEnsureRequest
+    ) -> SandboxRecord:
         now = time.time()
         env_json = json.dumps(request.env, sort_keys=True)
         with self._lock, self._conn:
@@ -149,7 +161,9 @@ class AgentBoxStateStore:
                     now,
                 ),
             )
-        return self.get_sandbox(sandbox_id) or self._record_from_request(sandbox_id, request)
+        return self.get_sandbox(sandbox_id) or self._record_from_request(
+            sandbox_id, request
+        )
 
     def ensure_sandbox_defaults(self, sandbox_id: str) -> SandboxRecord:
         existing = self.get_sandbox(sandbox_id)
@@ -167,8 +181,12 @@ class AgentBoxStateStore:
 
     def delete_sandbox(self, sandbox_id: str) -> None:
         with self._lock, self._conn:
-            self._conn.execute("DELETE FROM sessions WHERE sandbox_id = ?", (sandbox_id,))
-            self._conn.execute("DELETE FROM sandboxes WHERE sandbox_id = ?", (sandbox_id,))
+            self._conn.execute(
+                "DELETE FROM sessions WHERE sandbox_id = ?", (sandbox_id,)
+            )
+            self._conn.execute(
+                "DELETE FROM sandboxes WHERE sandbox_id = ?", (sandbox_id,)
+            )
 
     def upsert_session(
         self,
@@ -372,9 +390,34 @@ class AgentBoxStateStore:
         )
 
     def _record_from_row(self, row: sqlite3.Row) -> SandboxRecord:
+        columns = set(row.keys())
         return SandboxRecord(
             sandbox_id=row["sandbox_id"],
             env=json.loads(row["env_json"]),
+            desired_state=(
+                row["desired_state"] if "desired_state" in columns else "present"
+            ),
+            desired_generation=(
+                int(row["desired_generation"]) if "desired_generation" in columns else 1
+            ),
+            observed_generation=(
+                int(row["observed_generation"])
+                if "observed_generation" in columns
+                else 0
+            ),
+            provider_name=row["provider_name"] if "provider_name" in columns else None,
+            provider_id=row["provider_id"] if "provider_id" in columns else None,
+            instance_id=row["instance_id"] if "instance_id" in columns else None,
+            last_active_at=(
+                float(row["last_active_at"])
+                if "last_active_at" in columns and row["last_active_at"] is not None
+                else None
+            ),
+            last_observed_at=(
+                float(row["last_observed_at"])
+                if "last_observed_at" in columns and row["last_observed_at"] is not None
+                else None
+            ),
         )
 
     def _session_from_row(self, row: sqlite3.Row) -> SessionRecord:

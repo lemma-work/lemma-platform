@@ -1,5 +1,3 @@
-from typing import Literal
-
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -14,7 +12,7 @@ class Settings(BaseSettings):
     agentbox_api_key: str
     agentbox_api_url: str
     agentbox_app_domain: str | None = None
-    agentbox_provider: Literal["kubernetes", "docker", "podman"] = "kubernetes"
+    agentbox_provider: str = "kubernetes"
     agentbox_namespace: str = "agentbox"
     agentbox_runtime_image: str = (
         "ghcr.io/lemma-work/lemma-agentbox-runtime:latest"
@@ -41,6 +39,8 @@ class Settings(BaseSettings):
     agentbox_app_proxy_timeout_seconds: float = 60.0
     agentbox_app_proxy_max_timeout_seconds: float = 3700.0
     agentbox_state_db_path: str = "/data/agentbox-manager/state.db"
+    agentbox_state_database_url: str | None = None
+    agentbox_state_durable_env_keys: str = "LEMMA_BASE_URL"
     agentbox_session_idle_timeout_seconds: int = 300
     agentbox_sandbox_idle_timeout_seconds: int = 300
     agentbox_cleanup_interval_seconds: int = 30

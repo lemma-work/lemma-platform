@@ -11,6 +11,12 @@ dependencies = [
     "uvicorn[standard]>=0.42.0",
 ]
 
+[project.optional-dependencies]
+postgres = [
+    "psycopg[binary]>=3.2.0",
+    "psycopg-pool>=3.2.0",
+]
+
 [dependency-groups]
 dev = [
     "agentbox-client",

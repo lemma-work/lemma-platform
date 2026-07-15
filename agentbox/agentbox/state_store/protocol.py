@@ -1,0 +1,116 @@
+from __future__ import annotations
+
+from typing import Protocol, runtime_checkable
+
+from agentbox.schemas import SandboxEnsureRequest
+
+from .models import (
+    ActivityLease,
+    LifecycleClaim,
+    OrphanCandidate,
+    SandboxRecord,
+    SessionRecord,
+)
+
+
+@runtime_checkable
+class AsyncStateStore(Protocol):
+    """Durable manager state independent of a sandbox provider.
+
+    Implementations must make lifecycle claims atomic across manager replicas.
+    Activity leases deliberately expire so a crashed manager cannot keep a
+    sandbox alive forever.
+    """
+
+    async def upsert_sandbox(
+        self, sandbox_id: str, request: SandboxEnsureRequest
+    ) -> SandboxRecord: ...
+
+    async def ensure_sandbox_defaults(self, sandbox_id: str) -> SandboxRecord: ...
+    async def get_sandbox(self, sandbox_id: str) -> SandboxRecord | None: ...
+    async def list_sandboxes(self) -> list[SandboxRecord]: ...
+    async def delete_sandbox(self, sandbox_id: str) -> None: ...
+    async def set_sandbox_desired_state(
+        self, sandbox_id: str, desired_state: str
+    ) -> SandboxRecord | None: ...
+    async def set_sandbox_observation(
+        self,
+        sandbox_id: str,
+        *,
+        provider_name: str,
+        provider_id: str,
+        instance_id: str | None,
+        observed_generation: int,
+    ) -> SandboxRecord | None: ...
+
+    async def upsert_session(
+        self,
+        sandbox_id: str,
+        session_id: str,
+        *,
+        cwd: str,
+        env_keys: list[str],
+    ) -> SessionRecord: ...
+
+    async def touch_session(self, sandbox_id: str, session_id: str) -> bool: ...
+    async def get_session(
+        self, sandbox_id: str, session_id: str
+    ) -> SessionRecord | None: ...
+    async def delete_session(self, sandbox_id: str, session_id: str) -> bool: ...
+    async def expired_sessions(
+        self, idle_timeout_seconds: int
+    ) -> list[SessionRecord]: ...
+    async def idle_sandboxes(
+        self, idle_timeout_seconds: int
+    ) -> list[SandboxRecord]: ...
+    async def mark_sandbox_active(self, sandbox_id: str) -> None: ...
+    async def mark_pod_stopped(self, sandbox_id: str) -> None: ...
+    async def mark_idle_if_empty(self, sandbox_id: str) -> None: ...
+
+    async def acquire_activity_lease(
+        self,
+        sandbox_id: str,
+        *,
+        session_id: str | None,
+        operation: str,
+        owner: str,
+        ttl_seconds: float,
+    ) -> ActivityLease | None: ...
+
+    async def renew_activity_lease(
+        self, lease_id: str, *, owner: str, ttl_seconds: float
+    ) -> ActivityLease | None: ...
+    async def release_activity_lease(self, lease_id: str, *, owner: str) -> bool: ...
+    async def prune_expired_activity_leases(self) -> int: ...
+
+    async def acquire_lifecycle_claim(
+        self,
+        sandbox_id: str,
+        *,
+        operation: str,
+        owner: str,
+        ttl_seconds: float,
+    ) -> LifecycleClaim | None: ...
+
+    async def renew_lifecycle_claim(
+        self, claim_id: str, *, owner: str, ttl_seconds: float
+    ) -> LifecycleClaim | None: ...
+    async def release_lifecycle_claim(self, claim_id: str, *, owner: str) -> bool: ...
+
+    async def observe_orphan(
+        self,
+        provider_name: str,
+        provider_id: str,
+        *,
+        sandbox_id: str | None,
+        observed_at: float | None = None,
+    ) -> OrphanCandidate: ...
+
+    async def expired_orphans(
+        self,
+        grace_seconds: float,
+        *,
+        inventory_started_at: float,
+    ) -> list[OrphanCandidate]: ...
+    async def clear_orphan(self, provider_name: str, provider_id: str) -> bool: ...
+    async def close(self) -> None: ...
