@@ -98,6 +98,7 @@ class E2BSandboxProvider(LegacyRuntimeProviderMixin):
         self._capacity_condition = asyncio.Condition()
         self._capacity_init_lock = asyncio.Lock()
         self._capacity_reservations: set[str] = set()
+        self._ambiguous_capacity_reservations: set[str] = set()
         self._counted_provider_ids: set[str] = set()
         self._capacity_generation = 0
         self._observed_active_count: int | None = None
@@ -420,6 +421,7 @@ class E2BSandboxProvider(LegacyRuntimeProviderMixin):
             if sandbox_id not in self._capacity_reservations:
                 return
             self._capacity_reservations.remove(sandbox_id)
+            self._ambiguous_capacity_reservations.discard(sandbox_id)
             if created:
                 if not provider_id:
                     raise RuntimeError("created E2B reservation is missing provider ID")
@@ -431,6 +433,19 @@ class E2BSandboxProvider(LegacyRuntimeProviderMixin):
                 "create_committed" if created else "reservation_released",
                 sandbox_id=sandbox_id,
             )
+
+    async def _mark_reservation_ambiguous(self, sandbox_id: str) -> None:
+        """Retain admission until a successful inventory resolves uncertainty."""
+
+        async with self._capacity_condition:
+            if sandbox_id in self._capacity_reservations:
+                self._ambiguous_capacity_reservations.add(sandbox_id)
+                self._capacity_generation += 1
+                self._log_capacity(
+                    "reservation_ambiguous",
+                    sandbox_id=sandbox_id,
+                    level=logging.WARNING,
+                )
 
     async def _record_capacity_removed(
         self, sandbox_id: str, provider_id: str | None
@@ -641,6 +656,7 @@ class E2BSandboxProvider(LegacyRuntimeProviderMixin):
                     except Exception as lookup_exc:
                         # Keep the local reservation counted until a later
                         # inventory pass can prove whether create succeeded.
+                        await self._mark_reservation_ambiguous(sandbox_id)
                         reservation_finished = True
                         raise ProviderError(
                             "E2B create outcome is unknown",
@@ -658,6 +674,8 @@ class E2BSandboxProvider(LegacyRuntimeProviderMixin):
                         resume=info.state != "running",
                     )
                     if sandbox is None:
+                        await self._mark_reservation_ambiguous(sandbox_id)
+                        reservation_finished = True
                         raise ProviderError(
                             "E2B create outcome is unknown",
                             code="provider_create_outcome_unknown",
@@ -743,6 +761,8 @@ class E2BSandboxProvider(LegacyRuntimeProviderMixin):
         )
 
     async def list_managed(self) -> list[ManagedSandbox]:
+        async with self._capacity_condition:
+            ambiguous_at_start = tuple(self._ambiguous_capacity_reservations)
         managed: list[ManagedSandbox] = []
         async for raw_info in self._list(self._metadata()):
             info = self._normalize_info(raw_info)
@@ -764,7 +784,7 @@ class E2BSandboxProvider(LegacyRuntimeProviderMixin):
             for item in managed
             if item.status.status in {"CREATING", "RUNNING"}
         }
-        for sandbox_id in tuple(self._capacity_reservations):
+        for sandbox_id in ambiguous_at_start:
             provider_id = by_sandbox.get(sandbox_id)
             await self._finish_reservation(
                 sandbox_id,

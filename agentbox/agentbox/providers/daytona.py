@@ -101,6 +101,7 @@ class DaytonaSandboxProvider(LegacyRuntimeProviderMixin):
         self._capacity_condition = asyncio.Condition()
         self._capacity_init_lock = asyncio.Lock()
         self._capacity_reservations: set[str] = set()
+        self._ambiguous_capacity_reservations: set[str] = set()
         self._counted_provider_ids: set[str] = set()
         self._capacity_generation = 0
         self._observed_active_count: int | None = None
@@ -258,6 +259,7 @@ class DaytonaSandboxProvider(LegacyRuntimeProviderMixin):
             if sandbox_id not in self._capacity_reservations:
                 return
             self._capacity_reservations.remove(sandbox_id)
+            self._ambiguous_capacity_reservations.discard(sandbox_id)
             if created:
                 if not provider_id:
                     raise RuntimeError(
@@ -267,6 +269,14 @@ class DaytonaSandboxProvider(LegacyRuntimeProviderMixin):
                 self._observed_active_count = len(self._counted_provider_ids)
             self._capacity_generation += 1
             self._capacity_condition.notify_all()
+
+    async def _mark_reservation_ambiguous(self, sandbox_id: str) -> None:
+        """Retain admission until a successful inventory resolves uncertainty."""
+
+        async with self._capacity_condition:
+            if sandbox_id in self._capacity_reservations:
+                self._ambiguous_capacity_reservations.add(sandbox_id)
+                self._capacity_generation += 1
 
     async def _record_capacity_observed(
         self, sandbox_id: str, provider_id: str | None
@@ -423,6 +433,7 @@ class DaytonaSandboxProvider(LegacyRuntimeProviderMixin):
                     try:
                         sandbox = await self._find(sandbox_id)
                     except Exception as lookup_exc:
+                        await self._mark_reservation_ambiguous(sandbox_id)
                         reservation_finished = True
                         raise ProviderError(
                             "Daytona create outcome is unknown",
@@ -480,6 +491,8 @@ class DaytonaSandboxProvider(LegacyRuntimeProviderMixin):
         )
 
     async def list_managed(self) -> list[ManagedSandbox]:
+        async with self._capacity_condition:
+            ambiguous_at_start = tuple(self._ambiguous_capacity_reservations)
         managed: list[ManagedSandbox] = []
         async for sandbox in self._iter(self._labels()):
             labels = dict(getattr(sandbox, "labels", None) or {})
@@ -501,7 +514,7 @@ class DaytonaSandboxProvider(LegacyRuntimeProviderMixin):
             for item in managed
             if item.status.status in {"CREATING", "RUNNING"}
         }
-        for sandbox_id in tuple(self._capacity_reservations):
+        for sandbox_id in ambiguous_at_start:
             provider_id = by_sandbox.get(sandbox_id)
             await self._finish_reservation(
                 sandbox_id,

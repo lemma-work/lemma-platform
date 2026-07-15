@@ -72,6 +72,8 @@ class _E2BSandbox:
     list_count = 0
     pause_count = 0
     fail_after_accept = False
+    fail_lookup_after_accept = False
+    fail_next_list = False
 
     def __init__(self, sandbox_id: str) -> None:
         self.sandbox_id = sandbox_id
@@ -89,11 +91,16 @@ class _E2BSandbox:
         cls.list_count = 0
         cls.pause_count = 0
         cls.fail_after_accept = False
+        cls.fail_lookup_after_accept = False
+        cls.fail_next_list = False
 
     @classmethod
     def list(cls, *, query, limit, **kwargs):
         del limit, kwargs
         cls.list_count += 1
+        if cls.fail_next_list:
+            cls.fail_next_list = False
+            raise _ProviderFailure("inventory temporarily unavailable")
         items = [
             info
             for info in cls.infos.values()
@@ -113,7 +120,10 @@ class _E2BSandbox:
             metadata=dict(metadata),
             state="running",
         )
-        if cls.fail_after_accept:
+        if cls.fail_after_accept or cls.fail_lookup_after_accept:
+            if cls.fail_lookup_after_accept:
+                cls.fail_lookup_after_accept = False
+                cls.fail_next_list = True
             cls.fail_after_accept = False
             raise _ProviderFailure("accepted then disconnected")
         return sandbox
@@ -456,9 +466,14 @@ class _DaytonaClient:
         self.list_count = 0
         self.fail_next_create = False
         self.fail_after_accept = False
+        self.fail_lookup_after_accept = False
+        self.fail_next_list = False
 
     async def list(self, query):
         self.list_count += 1
+        if self.fail_next_list:
+            self.fail_next_list = False
+            raise _ProviderFailure("inventory temporarily unavailable")
         for sandbox in list(self.sandboxes.values()):
             if all(
                 sandbox.labels.get(key) == value
@@ -477,7 +492,10 @@ class _DaytonaClient:
             f"daytona-{self.create_count}", params.values["labels"]
         )
         self.sandboxes[sandbox.id] = sandbox
-        if self.fail_after_accept:
+        if self.fail_after_accept or self.fail_lookup_after_accept:
+            if self.fail_lookup_after_accept:
+                self.fail_lookup_after_accept = False
+                self.fail_next_list = True
             self.fail_after_accept = False
             raise _ProviderFailure("accepted then disconnected")
         return sandbox
@@ -733,3 +751,50 @@ def test_daytona_adopts_create_accepted_before_transport_failure() -> None:
     assert status.ready
     assert client.create_count == 1
     assert len(asyncio.run(provider.list_managed())) == 1
+
+
+def test_e2b_inventory_reconciles_ambiguous_local_reservation() -> None:
+    provider = _e2b_provider_with(max_active=1, admission_wait_seconds=0.01)
+    _E2BSandbox.fail_lookup_after_accept = True
+
+    with pytest.raises(ProviderError) as caught:
+        asyncio.run(provider.create("sandbox-1", SandboxEnsureRequest()))
+    assert caught.value.code == "provider_create_outcome_unknown"
+    assert provider._capacity_reservations == {"sandbox-1"}
+    assert provider._ambiguous_capacity_reservations == {"sandbox-1"}
+
+    inventory = asyncio.run(provider.list_managed())
+    assert [item.ref.sandbox_id for item in inventory] == ["sandbox-1"]
+    assert provider._capacity_reservations == set()
+    assert provider._ambiguous_capacity_reservations == set()
+    assert provider._observed_active_count == 1
+
+    assert asyncio.run(provider.release("sandbox-1")) is True
+    assert asyncio.run(
+        provider.create("sandbox-2", SandboxEnsureRequest())
+    ).ready
+
+
+def test_daytona_inventory_reconciles_ambiguous_local_reservation() -> None:
+    provider, client = _daytona_provider(
+        max_active=1,
+        admission_wait_seconds=0.01,
+    )
+    client.fail_lookup_after_accept = True
+
+    with pytest.raises(ProviderError) as caught:
+        asyncio.run(provider.create("sandbox-1", SandboxEnsureRequest()))
+    assert caught.value.code == "provider_create_outcome_unknown"
+    assert provider._capacity_reservations == {"sandbox-1"}
+    assert provider._ambiguous_capacity_reservations == {"sandbox-1"}
+
+    inventory = asyncio.run(provider.list_managed())
+    assert [item.ref.sandbox_id for item in inventory] == ["sandbox-1"]
+    assert provider._capacity_reservations == set()
+    assert provider._ambiguous_capacity_reservations == set()
+    assert provider._observed_active_count == 1
+
+    assert asyncio.run(provider.release("sandbox-1")) is True
+    assert asyncio.run(
+        provider.create("sandbox-2", SandboxEnsureRequest())
+    ).ready
