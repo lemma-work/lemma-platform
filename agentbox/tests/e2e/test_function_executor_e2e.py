@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import concurrent.futures
 import time
 from http import HTTPStatus
 from uuid import uuid4
@@ -193,15 +194,11 @@ def test_private_function_executor_installs_declared_python_package(
     assert "moo" in result["output_data"]["rendered"]
 
 
-
 # --- run_id idempotency against the real Docker AgentBox ---------------------
 #
 # A function run is non-idempotent (it can create an Outlook draft, etc.). These
 # exercise the real sandbox to prove a re-POSTed run_id never re-runs the body,
 # concurrent duplicates collapse to one run, and distinct run_ids each execute.
-
-import concurrent.futures
-from uuid import uuid4
 
 
 def _counter_headers(agentbox_server, sandbox_id, function, lemma_base_url):
@@ -218,7 +215,9 @@ def _counter_headers(agentbox_server, sandbox_id, function, lemma_base_url):
     }
 
 
-def _post_execute(manager, sandbox_id, function, headers, *, run_id, marker, async_job=False):
+def _post_execute(
+    manager, sandbox_id, function, headers, *, run_id, marker, async_job=False
+):
     return manager.request_json(
         "POST",
         f"/sandboxes/{sandbox_id}/apps/function_executor/"
@@ -243,9 +242,13 @@ def test_sync_execute_idempotent_on_run_id(
     run_id = str(uuid4())
     marker = uuid4().hex
 
-    first = _post_execute(manager, sandbox_id, function, headers, run_id=run_id, marker=marker)
+    first = _post_execute(
+        manager, sandbox_id, function, headers, run_id=run_id, marker=marker
+    )
     # A backend transport-retry re-POSTs the SAME run_id.
-    second = _post_execute(manager, sandbox_id, function, headers, run_id=run_id, marker=marker)
+    second = _post_execute(
+        manager, sandbox_id, function, headers, run_id=run_id, marker=marker
+    )
 
     assert first.status_code == HTTPStatus.OK, first.text
     assert second.status_code == HTTPStatus.OK, second.text
@@ -264,8 +267,12 @@ def test_distinct_run_ids_each_execute(
     headers = _counter_headers(agentbox_server, sandbox_id, function, lemma_base_url)
     marker = uuid4().hex
 
-    first = _post_execute(manager, sandbox_id, function, headers, run_id=str(uuid4()), marker=marker)
-    second = _post_execute(manager, sandbox_id, function, headers, run_id=str(uuid4()), marker=marker)
+    first = _post_execute(
+        manager, sandbox_id, function, headers, run_id=str(uuid4()), marker=marker
+    )
+    second = _post_execute(
+        manager, sandbox_id, function, headers, run_id=str(uuid4()), marker=marker
+    )
 
     # Distinct logical runs each execute (idempotency is per run_id, not global).
     assert first.json()["output_data"] == {"invocations": 1}
@@ -285,7 +292,15 @@ def test_concurrent_same_run_id_runs_once(
     # race the original). The per-run lock must collapse them to a single run.
     with concurrent.futures.ThreadPoolExecutor(max_workers=2) as pool:
         futures = [
-            pool.submit(_post_execute, manager, sandbox_id, function, headers, run_id=run_id, marker=marker)
+            pool.submit(
+                _post_execute,
+                manager,
+                sandbox_id,
+                function,
+                headers,
+                run_id=run_id,
+                marker=marker,
+            )
             for _ in range(2)
         ]
         responses = [f.result() for f in futures]
@@ -305,8 +320,24 @@ def test_async_execute_idempotent_on_run_id(
     run_id = str(uuid4())
     marker = uuid4().hex
 
-    first = _post_execute(manager, sandbox_id, function, headers, run_id=run_id, marker=marker, async_job=True)
-    second = _post_execute(manager, sandbox_id, function, headers, run_id=run_id, marker=marker, async_job=True)
+    first = _post_execute(
+        manager,
+        sandbox_id,
+        function,
+        headers,
+        run_id=run_id,
+        marker=marker,
+        async_job=True,
+    )
+    second = _post_execute(
+        manager,
+        sandbox_id,
+        function,
+        headers,
+        run_id=run_id,
+        marker=marker,
+        async_job=True,
+    )
     assert first.json()["status"] == "accepted"
     # A re-POST returns the same job, never launching a second run.
     assert second.json()["job_id"] == first.json()["job_id"]
