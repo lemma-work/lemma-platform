@@ -14,6 +14,7 @@ from agentbox.state import AgentBoxStateStore
 from .migrations import SQLITE_MIGRATIONS
 from .models import (
     ActivityLease,
+    DesiredSandboxState,
     LifecycleClaim,
     OrphanCandidate,
     SandboxRecord,
@@ -156,7 +157,12 @@ class SQLiteStateStore:
                     env_json = excluded.env_json,
                     idle_since_at = NULL,
                     desired_state = 'present',
-                    desired_generation = sandboxes.desired_generation + 1,
+                    desired_generation = CASE
+                        WHEN sandboxes.env_json <> excluded.env_json
+                          OR sandboxes.desired_state <> 'present'
+                        THEN sandboxes.desired_generation + 1
+                        ELSE sandboxes.desired_generation
+                    END,
                     last_active_at = excluded.last_active_at,
                     updated_at = excluded.updated_at
                 """,
@@ -175,10 +181,37 @@ class SQLiteStateStore:
         return await self._run(self._upsert_sandbox, sandbox_id, request)
 
     async def ensure_sandbox_defaults(self, sandbox_id: str) -> SandboxRecord:
-        existing = await self.get_sandbox(sandbox_id)
-        if existing is not None:
-            return existing
-        return await self.upsert_sandbox(sandbox_id, SandboxEnsureRequest())
+        def ensure() -> SandboxRecord:
+            store = self._store
+            now = time.time()
+            with store._lock, store._conn:
+                store._conn.execute(
+                    """
+                    INSERT INTO sandboxes (
+                        sandbox_id, env_json, idle_since_at, created_at, updated_at,
+                        desired_state, desired_generation, last_active_at
+                    ) VALUES (?, '{}', NULL, ?, ?, 'present', 1, ?)
+                    ON CONFLICT(sandbox_id) DO UPDATE SET
+                        idle_since_at = NULL,
+                        desired_state = 'present',
+                        desired_generation = CASE
+                            WHEN sandboxes.desired_state <> 'present'
+                            THEN sandboxes.desired_generation + 1
+                            ELSE sandboxes.desired_generation
+                        END,
+                        last_active_at = excluded.last_active_at,
+                        updated_at = excluded.updated_at
+                    """,
+                    (sandbox_id, now, now, now),
+                )
+                row = store._conn.execute(
+                    "SELECT * FROM sandboxes WHERE sandbox_id = ?", (sandbox_id,)
+                ).fetchone()
+            if row is None:
+                raise RuntimeError("failed to ensure sandbox defaults")
+            return store._record_from_row(row)
+
+        return await self._run(ensure)
 
     async def get_sandbox(self, sandbox_id: str) -> SandboxRecord | None:
         return await self._run(self._store.get_sandbox, sandbox_id)
@@ -216,7 +249,7 @@ class SQLiteStateStore:
         await self._run(self._delete_sandbox, sandbox_id)
 
     def _set_sandbox_desired_state(
-        self, sandbox_id: str, desired_state: str
+        self, sandbox_id: str, desired_state: DesiredSandboxState
     ) -> SandboxRecord | None:
         store = self._store
         now = time.time()
@@ -224,18 +257,24 @@ class SQLiteStateStore:
             row = store._conn.execute(
                 """
                 UPDATE sandboxes SET desired_state = ?,
-                    desired_generation = desired_generation + 1, updated_at = ?
+                    desired_generation = CASE
+                        WHEN desired_state <> ? THEN desired_generation + 1
+                        ELSE desired_generation
+                    END,
+                    updated_at = ?
                 WHERE sandbox_id = ? RETURNING *
                 """,
-                (desired_state, now, sandbox_id),
+                (desired_state, desired_state, now, sandbox_id),
             ).fetchone()
         return store._record_from_row(row) if row else None
 
     async def set_sandbox_desired_state(
-        self, sandbox_id: str, desired_state: str
+        self, sandbox_id: str, desired_state: DesiredSandboxState
     ) -> SandboxRecord | None:
-        if desired_state not in {"present", "deleted"}:
-            raise ValueError("desired_state must be 'present' or 'deleted'")
+        if desired_state not in {"present", "suspended", "deleted"}:
+            raise ValueError(
+                "desired_state must be 'present', 'suspended', or 'deleted'"
+            )
         return await self._run(
             self._set_sandbox_desired_state, sandbox_id, desired_state
         )
@@ -308,12 +347,12 @@ class SQLiteStateStore:
         await self._touch_sandbox_activity(sandbox_id)
         return record
 
-    async def _touch_sandbox_activity(self, sandbox_id: str) -> None:
-        def touch() -> None:
+    async def _touch_sandbox_activity(self, sandbox_id: str) -> bool:
+        def touch() -> bool:
             store = self._store
             now = time.time()
             with store._lock, store._conn:
-                store._conn.execute(
+                cursor = store._conn.execute(
                     """
                     UPDATE sandboxes SET idle_since_at = NULL,
                         last_active_at = ?, updated_at = ?
@@ -321,8 +360,9 @@ class SQLiteStateStore:
                     """,
                     (now, now, sandbox_id),
                 )
+                return bool(cursor.rowcount)
 
-        await self._run(touch)
+        return await self._run(touch)
 
     async def touch_session(self, sandbox_id: str, session_id: str) -> bool:
         touched = await self._run(self._store.touch_session, sandbox_id, session_id)
@@ -349,7 +389,7 @@ class SQLiteStateStore:
                 "DELETE FROM sessions WHERE sandbox_id = ? AND session_id = ?",
                 (sandbox_id, session_id),
             )
-            store.mark_idle_if_empty_locked(sandbox_id)
+            self._mark_idle_if_empty_locked(sandbox_id)
             return bool(cursor.rowcount)
 
     async def delete_session(self, sandbox_id: str, session_id: str) -> bool:
@@ -394,6 +434,7 @@ class SQLiteStateStore:
                 """
                 UPDATE sandboxes SET idle_since_at = ?
                 WHERE idle_since_at IS NULL
+                  AND desired_state = 'present'
                   AND NOT EXISTS (
                     SELECT 1 FROM sessions
                     WHERE sessions.sandbox_id = sandboxes.sandbox_id
@@ -408,7 +449,8 @@ class SQLiteStateStore:
             rows = store._conn.execute(
                 """
                 SELECT s.* FROM sandboxes s
-                WHERE s.idle_since_at IS NOT NULL AND s.idle_since_at < ?
+                WHERE s.desired_state = 'present'
+                  AND s.idle_since_at IS NOT NULL AND s.idle_since_at < ?
                   AND NOT EXISTS (
                     SELECT 1 FROM agentbox_activity_leases l
                     WHERE l.sandbox_id = s.sandbox_id AND l.expires_at > ?
@@ -422,14 +464,61 @@ class SQLiteStateStore:
     async def idle_sandboxes(self, idle_timeout_seconds: int) -> list[SandboxRecord]:
         return await self._run(self._idle_sandboxes, idle_timeout_seconds)
 
-    async def mark_sandbox_active(self, sandbox_id: str) -> None:
-        await self._touch_sandbox_activity(sandbox_id)
+    async def mark_sandbox_active(self, sandbox_id: str) -> bool:
+        return await self._touch_sandbox_activity(sandbox_id)
 
-    async def mark_pod_stopped(self, sandbox_id: str) -> None:
-        await self._run(self._store.mark_pod_stopped, sandbox_id)
+    def _mark_pod_stopped(self, sandbox_id: str) -> SandboxRecord | None:
+        store = self._store
+        now = time.time()
+        with store._lock, store._conn:
+            row = store._conn.execute(
+                """
+                UPDATE sandboxes SET idle_since_at = ?,
+                    desired_state = 'suspended',
+                    desired_generation = CASE
+                        WHEN desired_state <> 'suspended'
+                        THEN desired_generation + 1
+                        ELSE desired_generation
+                    END,
+                    updated_at = ?
+                WHERE sandbox_id = ? RETURNING *
+                """,
+                (now, now, sandbox_id),
+            ).fetchone()
+        return store._record_from_row(row) if row else None
+
+    async def mark_pod_stopped(self, sandbox_id: str) -> SandboxRecord | None:
+        return await self._run(self._mark_pod_stopped, sandbox_id)
+
+    def _mark_idle_if_empty_locked(
+        self, sandbox_id: str, now: float | None = None
+    ) -> None:
+        now = now if now is not None else time.time()
+        self._store._conn.execute(
+            """
+            UPDATE sandboxes SET idle_since_at = COALESCE(idle_since_at, ?),
+                updated_at = ?
+            WHERE sandbox_id = ?
+              AND desired_state = 'present'
+              AND NOT EXISTS (
+                  SELECT 1 FROM sessions
+                  WHERE sessions.sandbox_id = sandboxes.sandbox_id
+              )
+              AND NOT EXISTS (
+                  SELECT 1 FROM agentbox_activity_leases l
+                  WHERE l.sandbox_id = sandboxes.sandbox_id AND l.expires_at > ?
+              )
+            """,
+            (now, now, sandbox_id, now),
+        )
+
+    def _mark_idle_if_empty(self, sandbox_id: str) -> None:
+        store = self._store
+        with store._lock, store._conn:
+            self._mark_idle_if_empty_locked(sandbox_id)
 
     async def mark_idle_if_empty(self, sandbox_id: str) -> None:
-        await self._run(self._store.mark_idle_if_empty, sandbox_id)
+        await self._run(self._mark_idle_if_empty, sandbox_id)
 
     def _acquire_activity_lease(
         self,
@@ -476,8 +565,12 @@ class SQLiteStateStore:
                 ),
             )
             store._conn.execute(
-                "UPDATE sandboxes SET idle_since_at = NULL, updated_at = ? WHERE sandbox_id = ?",
-                (now, sandbox_id),
+                """
+                UPDATE sandboxes SET idle_since_at = NULL,
+                    last_active_at = ?, updated_at = ?
+                WHERE sandbox_id = ?
+                """,
+                (now, now, sandbox_id),
             )
         return ActivityLease(
             lease_id, sandbox_id, session_id, operation, owner, expires_at
@@ -530,12 +623,38 @@ class SQLiteStateStore:
 
     def _release_activity_lease(self, lease_id: str, owner: str) -> bool:
         store = self._store
+        now = time.time()
         with store._lock, store._conn:
-            cursor = store._conn.execute(
-                "DELETE FROM agentbox_activity_leases WHERE lease_id = ? AND owner = ?",
+            row = store._conn.execute(
+                """
+                DELETE FROM agentbox_activity_leases
+                WHERE lease_id = ? AND owner = ?
+                RETURNING sandbox_id, session_id
+                """,
                 (lease_id, owner),
+            ).fetchone()
+            if row is None:
+                return False
+            sandbox_id = str(row["sandbox_id"])
+            session_id = row["session_id"]
+            if session_id is not None:
+                store._conn.execute(
+                    """
+                    UPDATE sessions SET last_active_at = ?, updated_at = ?
+                    WHERE sandbox_id = ? AND session_id = ?
+                    """,
+                    (now, now, sandbox_id, session_id),
+                )
+            store._conn.execute(
+                """
+                UPDATE sandboxes SET idle_since_at = NULL,
+                    last_active_at = ?, updated_at = ?
+                WHERE sandbox_id = ?
+                """,
+                (now, now, sandbox_id),
             )
-            return bool(cursor.rowcount)
+            self._mark_idle_if_empty_locked(sandbox_id, now)
+            return True
 
     async def release_activity_lease(self, lease_id: str, *, owner: str) -> bool:
         return await self._run(self._release_activity_lease, lease_id, owner)

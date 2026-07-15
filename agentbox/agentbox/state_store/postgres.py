@@ -9,6 +9,7 @@ from agentbox.schemas import SandboxEnsureRequest
 from .migrations import POSTGRES_MIGRATIONS
 from .models import (
     ActivityLease,
+    DesiredSandboxState,
     LifecycleClaim,
     OrphanCandidate,
     SandboxRecord,
@@ -208,7 +209,12 @@ class PostgresStateStore:
                         idle_since_at = NULL,
                         last_active_at = now(),
                         desired_state = 'present',
-                        desired_generation = agentbox_sandboxes.desired_generation + 1,
+                        desired_generation = CASE
+                            WHEN agentbox_sandboxes.env IS DISTINCT FROM EXCLUDED.env
+                              OR agentbox_sandboxes.desired_state <> 'present'
+                            THEN agentbox_sandboxes.desired_generation + 1
+                            ELSE agentbox_sandboxes.desired_generation
+                        END,
                         updated_at = now()
                     RETURNING {self._sandbox_columns()}
                     """,
@@ -218,10 +224,39 @@ class PostgresStateStore:
         return self._sandbox(row)
 
     async def ensure_sandbox_defaults(self, sandbox_id: str) -> SandboxRecord:
-        existing = await self.get_sandbox(sandbox_id)
-        if existing is not None:
-            return existing
-        return await self.upsert_sandbox(sandbox_id, SandboxEnsureRequest())
+        async with self._pool.connection() as conn:
+            async with conn.transaction():
+                await conn.execute(
+                    """
+                    INSERT INTO agentbox_sandboxes (
+                        sandbox_id, env, idle_since_at, last_active_at,
+                        desired_state, desired_generation
+                    ) VALUES (%s, '{}'::jsonb, NULL, now(), 'present', 1)
+                    ON CONFLICT (sandbox_id) DO UPDATE SET
+                        idle_since_at = NULL,
+                        last_active_at = now(),
+                        desired_state = 'present',
+                        desired_generation = CASE
+                            WHEN agentbox_sandboxes.desired_state <> 'present'
+                            THEN agentbox_sandboxes.desired_generation + 1
+                            ELSE agentbox_sandboxes.desired_generation
+                        END,
+                        updated_at = now()
+                    """,
+                    (sandbox_id,),
+                )
+                row = await (
+                    await conn.execute(
+                        f"""
+                        SELECT {self._sandbox_columns()} FROM agentbox_sandboxes
+                        WHERE sandbox_id = %s
+                        """,
+                        (sandbox_id,),
+                    )
+                ).fetchone()
+        if row is None:
+            raise RuntimeError("failed to ensure sandbox defaults")
+        return self._sandbox(row)
 
     async def get_sandbox(self, sandbox_id: str) -> SandboxRecord | None:
         async with self._pool.connection() as conn:
@@ -255,21 +290,26 @@ class PostgresStateStore:
             )
 
     async def set_sandbox_desired_state(
-        self, sandbox_id: str, desired_state: str
+        self, sandbox_id: str, desired_state: DesiredSandboxState
     ) -> SandboxRecord | None:
-        if desired_state not in {"present", "deleted"}:
-            raise ValueError("desired_state must be 'present' or 'deleted'")
+        if desired_state not in {"present", "suspended", "deleted"}:
+            raise ValueError(
+                "desired_state must be 'present', 'suspended', or 'deleted'"
+            )
         async with self._pool.connection() as conn:
             row = await (
                 await conn.execute(
                     f"""
                     UPDATE agentbox_sandboxes SET desired_state = %s,
-                        desired_generation = desired_generation + 1,
+                        desired_generation = CASE
+                            WHEN desired_state <> %s THEN desired_generation + 1
+                            ELSE desired_generation
+                        END,
                         updated_at = now()
                     WHERE sandbox_id = %s
                     RETURNING {self._sandbox_columns()}
                     """,
-                    (desired_state, sandbox_id),
+                    (desired_state, desired_state, sandbox_id),
                 )
             ).fetchone()
         return self._sandbox(row) if row else None
@@ -402,8 +442,12 @@ class PostgresStateStore:
                 """
                 UPDATE agentbox_sandboxes s
                 SET idle_since_at = coalesce(idle_since_at, now()), updated_at = now()
-                WHERE sandbox_id = %s AND NOT EXISTS (
+                WHERE sandbox_id = %s AND desired_state = 'present'
+                  AND NOT EXISTS (
                     SELECT 1 FROM agentbox_sessions x WHERE x.sandbox_id = s.sandbox_id
+                ) AND NOT EXISTS (
+                    SELECT 1 FROM agentbox_activity_leases l
+                    WHERE l.sandbox_id = s.sandbox_id AND l.expires_at > now()
                 )
                 """,
                 (sandbox_id,),
@@ -446,6 +490,7 @@ class PostgresStateStore:
                 """
                 UPDATE agentbox_sandboxes s SET idle_since_at = now()
                 WHERE idle_since_at IS NULL
+                  AND desired_state = 'present'
                   AND NOT EXISTS (
                     SELECT 1 FROM agentbox_sessions x WHERE x.sandbox_id = s.sandbox_id
                   )
@@ -459,7 +504,8 @@ class PostgresStateStore:
                 await conn.execute(
                     f"""
                     SELECT {self._sandbox_columns()} FROM agentbox_sandboxes s
-                    WHERE idle_since_at < now() - make_interval(secs => %s)
+                    WHERE desired_state = 'present'
+                      AND idle_since_at < now() - make_interval(secs => %s)
                       AND NOT EXISTS (
                         SELECT 1 FROM agentbox_activity_leases l
                         WHERE l.sandbox_id = s.sandbox_id AND l.expires_at > now()
@@ -471,26 +517,40 @@ class PostgresStateStore:
             ).fetchall()
         return [self._sandbox(row) for row in rows]
 
-    async def mark_sandbox_active(self, sandbox_id: str) -> None:
+    async def mark_sandbox_active(self, sandbox_id: str) -> bool:
         async with self._pool.connection() as conn:
-            await conn.execute(
-                """
-                UPDATE agentbox_sandboxes SET idle_since_at = NULL,
-                    last_active_at = now(), updated_at = now()
-                WHERE sandbox_id = %s
-                """,
-                (sandbox_id,),
-            )
+            row = await (
+                await conn.execute(
+                    """
+                    UPDATE agentbox_sandboxes SET idle_since_at = NULL,
+                        last_active_at = now(), updated_at = now()
+                    WHERE sandbox_id = %s RETURNING 1
+                    """,
+                    (sandbox_id,),
+                )
+            ).fetchone()
+        return bool(row)
 
-    async def mark_pod_stopped(self, sandbox_id: str) -> None:
+    async def mark_pod_stopped(self, sandbox_id: str) -> SandboxRecord | None:
         async with self._pool.connection() as conn:
-            await conn.execute(
-                """
-                UPDATE agentbox_sandboxes SET idle_since_at = now(), updated_at = now()
-                WHERE sandbox_id = %s
-                """,
-                (sandbox_id,),
-            )
+            row = await (
+                await conn.execute(
+                    f"""
+                    UPDATE agentbox_sandboxes SET idle_since_at = now(),
+                        desired_state = 'suspended',
+                        desired_generation = CASE
+                            WHEN desired_state <> 'suspended'
+                            THEN desired_generation + 1
+                            ELSE desired_generation
+                        END,
+                        updated_at = now()
+                    WHERE sandbox_id = %s
+                    RETURNING {self._sandbox_columns()}
+                    """,
+                    (sandbox_id,),
+                )
+            ).fetchone()
+        return self._sandbox(row) if row else None
 
     async def mark_idle_if_empty(self, sandbox_id: str) -> None:
         async with self._pool.connection() as conn:
@@ -500,7 +560,11 @@ class PostgresStateStore:
                 SET idle_since_at = coalesce(idle_since_at, now()), updated_at = now()
                 WHERE sandbox_id = %s AND NOT EXISTS (
                     SELECT 1 FROM agentbox_sessions x WHERE x.sandbox_id = s.sandbox_id
+                ) AND NOT EXISTS (
+                    SELECT 1 FROM agentbox_activity_leases l
+                    WHERE l.sandbox_id = s.sandbox_id AND l.expires_at > now()
                 )
+                  AND desired_state = 'present'
                 """,
                 (sandbox_id,),
             )
@@ -581,15 +645,48 @@ class PostgresStateStore:
 
     async def release_activity_lease(self, lease_id: str, *, owner: str) -> bool:
         async with self._pool.connection() as conn:
-            row = await (
-                await conn.execute(
-                    """
-                    DELETE FROM agentbox_activity_leases
-                    WHERE lease_id = %s AND owner = %s RETURNING 1
-                    """,
-                    (lease_id, owner),
-                )
-            ).fetchone()
+            async with conn.transaction():
+                row = await (
+                    await conn.execute(
+                        """
+                        DELETE FROM agentbox_activity_leases
+                        WHERE lease_id = %s AND owner = %s
+                        RETURNING sandbox_id, session_id
+                        """,
+                        (lease_id, owner),
+                    )
+                ).fetchone()
+                if row:
+                    sandbox_id = str(row["sandbox_id"])
+                    session_id = row["session_id"]
+                    if session_id is not None:
+                        await conn.execute(
+                            """
+                            UPDATE agentbox_sessions
+                            SET last_active_at = now(), updated_at = now()
+                            WHERE sandbox_id = %s AND session_id = %s
+                            """,
+                            (sandbox_id, session_id),
+                        )
+                    await conn.execute(
+                        """
+                        UPDATE agentbox_sandboxes s
+                        SET last_active_at = now(), updated_at = now(),
+                            idle_since_at = CASE
+                                WHEN NOT EXISTS (
+                                    SELECT 1 FROM agentbox_sessions x
+                                    WHERE x.sandbox_id = s.sandbox_id
+                                ) AND NOT EXISTS (
+                                    SELECT 1 FROM agentbox_activity_leases l
+                                    WHERE l.sandbox_id = s.sandbox_id
+                                      AND l.expires_at > now()
+                                ) THEN now()
+                                ELSE NULL
+                            END
+                        WHERE sandbox_id = %s
+                        """,
+                        (sandbox_id,),
+                    )
         return bool(row)
 
     async def prune_expired_activity_leases(self) -> int:

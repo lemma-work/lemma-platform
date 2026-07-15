@@ -1,15 +1,19 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from typing import Literal
 
 from agentbox.schemas import SandboxEnsureRequest
+
+
+DesiredSandboxState = Literal["present", "suspended", "deleted"]
 
 
 @dataclass(frozen=True)
 class SandboxRecord:
     sandbox_id: str
     env: dict[str, str]
-    desired_state: str = "present"
+    desired_state: DesiredSandboxState = "present"
     desired_generation: int = 1
     observed_generation: int = 0
     provider_name: str | None = None

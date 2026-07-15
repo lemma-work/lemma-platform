@@ -73,7 +73,6 @@ SQLITE_MIGRATIONS: tuple[tuple[int, str, tuple[str, ...]], ...] = (
             CREATE INDEX IF NOT EXISTS agentbox_orphan_candidates_grace_idx
             ON agentbox_orphan_candidates (first_seen_at, last_seen_at)
             """,
-            "UPDATE sessions SET active_operations = 0 WHERE active_operations != 0",
         ),
     ),
 )
@@ -184,7 +183,6 @@ POSTGRES_MIGRATIONS: tuple[tuple[int, str, tuple[str, ...]], ...] = (
             CREATE INDEX IF NOT EXISTS agentbox_orphan_candidates_grace_idx
             ON agentbox_orphan_candidates (first_seen_at, last_seen_at)
             """,
-            "UPDATE agentbox_sessions SET active_operations = 0 WHERE active_operations != 0",
         ),
     ),
 )

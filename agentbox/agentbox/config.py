@@ -14,9 +14,7 @@ class Settings(BaseSettings):
     agentbox_app_domain: str | None = None
     agentbox_provider: str = "kubernetes"
     agentbox_namespace: str = "agentbox"
-    agentbox_runtime_image: str = (
-        "ghcr.io/lemma-work/lemma-agentbox-runtime:latest"
-    )
+    agentbox_runtime_image: str = "ghcr.io/lemma-work/lemma-agentbox-runtime:latest"
     agentbox_sandbox_image_pull_policy: str = "IfNotPresent"
     agentbox_runtime_port: int = 8080
     agentbox_runtime_class_name: str = "gvisor"
@@ -55,6 +53,14 @@ class Settings(BaseSettings):
     agentbox_memory_limit: str | None = None
     agentbox_cpu_limit: str | None = None
     agentbox_e2e_label: bool = False
+
+    @property
+    def agentbox_state_durable_env_key_set(self) -> frozenset[str]:
+        """Return the canonical allowlist parsed from the CSV setting."""
+
+        from agentbox.state_store.factory import parse_durable_env_keys
+
+        return parse_durable_env_keys(self.agentbox_state_durable_env_keys)
 
 
 settings = Settings()
