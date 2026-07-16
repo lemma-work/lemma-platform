@@ -1,5 +1,7 @@
 from pathlib import Path
 
+import pytest
+
 
 AGENTBOX_ROOT = Path(__file__).resolve().parents[1]
 
@@ -28,3 +30,13 @@ def test_runtime_start_clears_ephemeral_and_legacy_browser_state() -> None:
     assert "unset AGENT_BROWSER_SESSION_NAME" in script
     assert 'rm -rf -- "$HOME_DIR/.agent-browser" /workspace/.browser-profile' in script
     assert "rm -f -- /workspace/agent-browser.json" in script
+
+
+@pytest.mark.parametrize("name", ["start-runtime.sh", "start-browser.sh"])
+def test_runtime_scripts_fall_back_from_an_unwritable_home(name: str) -> None:
+    script = (AGENTBOX_ROOT / "scripts" / name).read_text()
+
+    assert 'HOME_DIR="/tmp/agentbox-home-${UID:-10001}"' in script
+    assert 'NPM_CACHE_DIR="/tmp/agentbox-npm-${UID:-10001}"' in script
+    assert 'export HOME="$HOME_DIR"' in script
+    assert 'export NPM_CONFIG_CACHE="$NPM_CACHE_DIR"' in script
