@@ -238,6 +238,39 @@ async def test_expiring_activity_lease_protects_idle_session(tmp_path):
 
 
 @pytest.mark.asyncio
+async def test_deleting_expired_session_preserves_sandbox_inactivity_clock(tmp_path):
+    store = await SQLiteStateStore.open(str(tmp_path / "state.db"))
+    try:
+        await store.upsert_sandbox("sandbox", SandboxEnsureRequest())
+        await store.upsert_session("sandbox", "session", cwd="/workspace", env_keys=[])
+        stale_at = time.time() - 120
+        with store._store._lock, store._store._conn:
+            store._store._conn.execute(
+                "UPDATE sessions SET last_active_at = ? WHERE sandbox_id = ?",
+                (stale_at, "sandbox"),
+            )
+            store._store._conn.execute(
+                """
+                UPDATE sandboxes SET last_active_at = ?, idle_since_at = NULL
+                WHERE sandbox_id = ?
+                """,
+                (stale_at, "sandbox"),
+            )
+
+        assert [row.session_id for row in await store.expired_sessions(60)] == [
+            "session"
+        ]
+        assert await store.delete_session("sandbox", "session") is True
+
+        record = await store.get_sandbox("sandbox")
+        assert record is not None
+        assert record.idle_since_at == pytest.approx(stale_at)
+        assert [row.sandbox_id for row in await store.idle_sandboxes(60)] == ["sandbox"]
+    finally:
+        await store.close()
+
+
+@pytest.mark.asyncio
 async def test_missing_heartbeat_returns_false_and_existing_returns_true(tmp_path):
     store = await SQLiteStateStore.open(str(tmp_path / "state.db"))
     try:
@@ -625,6 +658,30 @@ async def test_postgres_legacy_schema_migration_and_store_parity():
         assert await store.mark_sandbox_active("missing") is False
         assert await store.mark_sandbox_active("legacy") is True
         assert await store.touch_session("legacy", "session") is True
+
+        await store.ensure_sandbox_defaults("idle")
+        await store.upsert_session("idle", "session", cwd="/workspace", env_keys=[])
+        await admin.execute(
+            """
+            UPDATE agentbox_sessions
+            SET last_active_at = now() - interval '120 seconds'
+            WHERE sandbox_id = 'idle';
+            UPDATE agentbox_sandboxes
+            SET last_active_at = now() - interval '120 seconds',
+                idle_since_at = NULL
+            WHERE sandbox_id = 'idle';
+            """
+        )
+        assert [row.session_id for row in await store.expired_sessions(60)] == [
+            "session"
+        ]
+        assert await store.delete_session("idle", "session") is True
+        idle_record = await store.get_sandbox("idle")
+        assert idle_record is not None
+        assert idle_record.idle_since_at is not None
+        assert idle_record.idle_since_at < time.time() - 60
+        assert "idle" in {row.sandbox_id for row in await store.idle_sandboxes(60)}
+        assert await store.mark_pod_stopped("idle") is not None
 
         defaults = await asyncio.gather(
             *(store.ensure_sandbox_defaults("new") for _ in range(10))

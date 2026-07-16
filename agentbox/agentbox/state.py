@@ -371,7 +371,9 @@ class AgentBoxStateStore:
             self._conn.execute(
                 """
                 UPDATE sandboxes
-                SET idle_since_at = COALESCE(idle_since_at, ?), updated_at = ?
+                SET idle_since_at = COALESCE(
+                    idle_since_at, last_active_at, ?
+                ), updated_at = ?
                 WHERE sandbox_id = ?
                 """,
                 (now, now, sandbox_id),

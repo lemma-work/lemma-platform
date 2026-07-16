@@ -1221,6 +1221,41 @@ async def test_suspended_retention_is_measured_from_suspension(tmp_path, monkeyp
 
 
 @pytest.mark.asyncio
+async def test_cleanup_suspends_sandbox_when_its_last_session_expires(
+    tmp_path, monkeypatch
+):
+    manager, provider, store = await _manager(tmp_path)
+    try:
+        monkeypatch.setattr(settings, "agentbox_session_idle_timeout_seconds", 60)
+        monkeypatch.setattr(settings, "agentbox_sandbox_idle_timeout_seconds", 60)
+        await manager.ensure("sandbox", SandboxEnsureRequest())
+        await store.upsert_session("sandbox", "session", cwd="/workspace", env_keys=[])
+        stale_at = time.time() - 120
+        with store._store._lock, store._store._conn:
+            store._store._conn.execute(
+                "UPDATE sessions SET last_active_at = ? WHERE sandbox_id = ?",
+                (stale_at, "sandbox"),
+            )
+            store._store._conn.execute(
+                """
+                UPDATE sandboxes SET last_active_at = ?, idle_since_at = NULL
+                WHERE sandbox_id = ?
+                """,
+                (stale_at, "sandbox"),
+            )
+
+        await lifecycle_module.cleanup_once(manager)
+
+        assert await store.get_session("sandbox", "session") is None
+        record = await store.get_sandbox("sandbox")
+        assert record is not None
+        assert record.desired_state == "suspended"
+        assert provider.release_count == 1
+    finally:
+        await store.close()
+
+
+@pytest.mark.asyncio
 async def test_lost_activity_lease_cancels_owner(monkeypatch):
     class LostStore:
         async def renew_activity_lease(self, *args, **kwargs):

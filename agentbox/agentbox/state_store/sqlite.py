@@ -704,7 +704,9 @@ class SQLiteStateStore:
         now = now if now is not None else time.time()
         self._store._conn.execute(
             """
-            UPDATE sandboxes SET idle_since_at = COALESCE(idle_since_at, ?),
+            UPDATE sandboxes SET idle_since_at = COALESCE(
+                    idle_since_at, last_active_at, ?
+                ),
                 updated_at = ?
             WHERE sandbox_id = ?
               AND desired_state = 'present'

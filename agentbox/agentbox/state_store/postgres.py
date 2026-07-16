@@ -579,7 +579,10 @@ class PostgresStateStore:
             await conn.execute(
                 """
                 UPDATE agentbox_sandboxes s
-                SET idle_since_at = coalesce(idle_since_at, now()), updated_at = now()
+                SET idle_since_at = coalesce(
+                        idle_since_at, last_active_at, now()
+                    ),
+                    updated_at = now()
                 WHERE sandbox_id = %s AND desired_state = 'present'
                   AND NOT EXISTS (
                     SELECT 1 FROM agentbox_sessions x WHERE x.sandbox_id = s.sandbox_id
@@ -606,7 +609,9 @@ class PostgresStateStore:
                 await conn.execute(
                     """
                     UPDATE agentbox_sandboxes
-                    SET idle_since_at = coalesce(idle_since_at, now()),
+                    SET idle_since_at = coalesce(
+                            idle_since_at, last_active_at, now()
+                        ),
                         updated_at = now()
                     WHERE sandbox_id = %s AND desired_state = 'present'
                     """,
@@ -744,7 +749,10 @@ class PostgresStateStore:
             await conn.execute(
                 """
                 UPDATE agentbox_sandboxes s
-                SET idle_since_at = coalesce(idle_since_at, now()), updated_at = now()
+                SET idle_since_at = coalesce(
+                        idle_since_at, last_active_at, now()
+                    ),
+                    updated_at = now()
                 WHERE sandbox_id = %s AND NOT EXISTS (
                     SELECT 1 FROM agentbox_sessions x WHERE x.sandbox_id = s.sandbox_id
                 ) AND NOT EXISTS (
