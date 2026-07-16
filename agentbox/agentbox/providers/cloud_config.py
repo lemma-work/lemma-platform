@@ -17,6 +17,7 @@ class E2BProviderConfig:
     template: str
     owner: str
     environment: str
+    managed_by: str = "agentbox"
     max_active: int = 10
     timeout_seconds: int = 3600
     api_url: str | None = None
@@ -65,6 +66,9 @@ class E2BProviderConfig:
         runtime_bootstrap_timeout_seconds = float(
             os.environ.get("E2B_RUNTIME_BOOTSTRAP_TIMEOUT_SECONDS", "120")
         )
+        managed_by = os.environ.get("E2B_SANDBOX_MANAGED_BY", "agentbox").strip()
+        if not managed_by:
+            raise RuntimeError("E2B_SANDBOX_MANAGED_BY cannot be empty")
         if not 0 < admission_wait <= 600:
             raise RuntimeError(
                 "E2B_SANDBOX_ADMISSION_WAIT_SECONDS must be greater than 0 "
@@ -97,6 +101,7 @@ class E2BProviderConfig:
             template=_required("E2B_SANDBOX_TEMPLATE", "E2B"),
             owner=_required("AGENTBOX_PROVIDER_OWNER", "E2B"),
             environment=_required("AGENTBOX_ENVIRONMENT", "E2B"),
+            managed_by=managed_by,
             max_active=max_active,
             timeout_seconds=timeout,
             api_url=os.environ.get("E2B_API_URL", "").strip() or None,

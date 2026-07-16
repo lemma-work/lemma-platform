@@ -149,7 +149,13 @@ class E2BSandboxProvider(LegacyRuntimeProviderMixin):
         generation_token: str | None = None,
     ) -> dict[str, str]:
         metadata = {
-            "managed-by": "agentbox",
+            # ``managed-by`` is the outermost inventory fence. Owner and
+            # environment remain mandatory inner scopes, but older AgentBox
+            # managers queried only this key. A versioned value lets a new
+            # deployment share an E2B team/API key with that legacy manager
+            # without either reconciler seeing or purging the other's
+            # sandboxes during a rolling migration.
+            "managed-by": self.config.managed_by,
             "agentbox-owner": self.config.owner,
             "agentbox-environment": self.config.environment,
         }

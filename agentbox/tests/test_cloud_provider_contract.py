@@ -327,6 +327,42 @@ def test_e2b_sandbox_timeout_config_is_applied(
     assert E2BProviderConfig.from_env().timeout_seconds == 900
 
 
+def test_e2b_managed_by_scope_default_and_env(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _set_required_e2b_env(monkeypatch)
+    monkeypatch.delenv("E2B_SANDBOX_MANAGED_BY", raising=False)
+
+    assert E2BProviderConfig.from_env().managed_by == "agentbox"
+
+    monkeypatch.setenv("E2B_SANDBOX_MANAGED_BY", "agentbox-v2")
+    config = E2BProviderConfig.from_env()
+    assert config.managed_by == "agentbox-v2"
+
+    provider = E2BSandboxProvider(
+        config,
+        sdk=_E2BSdk(
+            sandbox_cls=_E2BSandbox,
+            query_cls=_Query,
+            rate_limit_error=_RateLimit,
+            not_found_error=_NotFound,
+            sandbox_error=_ProviderFailure,
+            urlopen=_healthy_urlopen,
+        ),
+    )
+    assert provider._metadata()["managed-by"] == "agentbox-v2"
+
+
+def test_e2b_managed_by_scope_rejects_empty_env(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _set_required_e2b_env(monkeypatch)
+    monkeypatch.setenv("E2B_SANDBOX_MANAGED_BY", "   ")
+
+    with pytest.raises(RuntimeError, match="E2B_SANDBOX_MANAGED_BY cannot be empty"):
+        E2BProviderConfig.from_env()
+
+
 def test_e2b_runtime_bootstrap_timeout_config_default_and_env(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -427,9 +463,7 @@ def test_e2b_uses_native_authenticated_ingress_and_default_egress() -> None:
 
     asyncio.run(provider.create("sandbox-1", SandboxEnsureRequest()))
 
-    assert _E2BSandbox.last_create_kwargs["network"] == {
-        "allow_public_traffic": False
-    }
+    assert _E2BSandbox.last_create_kwargs["network"] == {"allow_public_traffic": False}
     assert _E2BSandbox.last_create_kwargs["allow_internet_access"] is True
 
 
