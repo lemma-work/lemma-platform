@@ -259,19 +259,19 @@ def real_local_provider_server(
             ],
             cwd=repo_root,
             env=env,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            text=True,
+            # Let pytest capture the manager output directly. PIPE without a
+            # concurrent reader eventually fills during the 20-call function
+            # test and blocks the manager in a log write, making healthy HTTP
+            # endpoints appear deadlocked.
         )
         server = _RealProviderServer(provider, base_url, api_key, app_domain)
         try:
             deadline = time.monotonic() + 30
             while time.monotonic() < deadline:
                 if proc.poll() is not None:
-                    stdout, stderr = proc.communicate(timeout=2)
                     pytest.fail(
-                        f"{provider} manager exited during startup\n"
-                        f"stdout:\n{stdout}\nstderr:\n{stderr}"
+                        f"{provider} manager exited during startup "
+                        f"with status {proc.returncode}; see captured output"
                     )
                 try:
                     health = server.client.raw("GET", f"{base_url}/health", timeout=2)
