@@ -51,6 +51,8 @@ from app.modules.function.domain.events import (
     FunctionRunFailedEvent,
 )
 from app.modules.function.application.function_executor_polling import (
+    API_FUNCTION_POLL_INTERVAL_SECONDS as _API_FUNCTION_POLL_INTERVAL_SECONDS,
+    JOB_FUNCTION_POLL_INTERVAL_SECONDS as _JOB_FUNCTION_POLL_INTERVAL_SECONDS,
     poll_session_executor_job,
 )
 from app.modules.function.services.function_runtime_command import (
@@ -85,18 +87,6 @@ _FUNCTION_EXECUTOR_READY_TIMEOUT_SECONDS = 30.0
 # small budget because the outer poll deadline provides the macro retry budget.
 _FUNCTION_EXECUTE_RETRY_MAX_ATTEMPTS = 12
 _FUNCTION_POLL_RETRY_MAX_ATTEMPTS = 4
-# API functions remain synchronous to their caller, so poll accepted executor
-# runs quickly enough that a short function does not pay the coarse JOB polling
-# interval. The executor run is idempotent by run ID, making these status reads
-# safe and cheap.
-_API_FUNCTION_POLL_INTERVAL_SECONDS = float(
-    os.getenv("LEMMA_API_FUNCTION_POLL_INTERVAL_SECONDS", "0.5")
-)
-# JOB functions are asynchronous/background and can keep the coarser interval
-# to avoid unnecessary manager and in-sandbox status traffic.
-_JOB_FUNCTION_POLL_INTERVAL_SECONDS = float(
-    os.getenv("LEMMA_FUNCTION_POLL_INTERVAL_SECONDS", "5")
-)
 # How often to heartbeat the sandbox while a JOB runs. A JOB occupies the
 # sandbox through the function_executor app and holds no runtime session, so
 # without this the idle reaper deletes the pod mid-run once it exceeds the

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import os
 import time
 from collections.abc import Callable
 from uuid import UUID
@@ -17,6 +18,13 @@ from app.modules.function.domain.errors import FunctionValidationError
 from app.modules.function.services.function_executor_cancellation import (
     cancel_executor_run,
     managed_executor_client,
+)
+
+API_FUNCTION_POLL_INTERVAL_SECONDS = float(
+    os.getenv("LEMMA_API_FUNCTION_POLL_INTERVAL_SECONDS", "0.5")
+)
+JOB_FUNCTION_POLL_INTERVAL_SECONDS = float(
+    os.getenv("LEMMA_FUNCTION_POLL_INTERVAL_SECONDS", "5")
 )
 
 
