@@ -20,7 +20,6 @@ import asyncio
 import contextlib
 import json
 import os
-import time
 from datetime import datetime
 from typing import Any
 from uuid import UUID
@@ -50,6 +49,9 @@ from app.modules.function.domain.errors import FunctionValidationError
 from app.modules.function.domain.events import (
     FunctionRunCompletedEvent,
     FunctionRunFailedEvent,
+)
+from app.modules.function.application.function_executor_polling import (
+    poll_session_executor_job,
 )
 from app.modules.function.services.function_runtime_command import (
     function_workspace_cwd,
@@ -746,50 +748,14 @@ class FunctionRunExecutor:
         run_id: UUID,
         timeout_seconds: int,
     ) -> FunctionInvokeResponse:
-        env_vars = getattr(session, "env_vars", {}) or {}
-        lemma_token = env_vars.get("LEMMA_TOKEN")
-        if not lemma_token:
-            raise FunctionValidationError(
-                "Workspace session did not include LEMMA_TOKEN"
-            )
-        sandbox_id = getattr(session, "sandbox_id", None)
-        if not sandbox_id:
-            raise FunctionValidationError(
-                "Workspace session did not include sandbox_id"
-            )
-        client = self._build_function_executor_client(lemma_token)
-        deadline = time.monotonic() + timeout_seconds
-        async with managed_executor_client(client, sandbox_id, run_id):
-            while True:
-                # Absorb a transient blip (the outer deadline loop provides the
-                # macro retry budget); a real TimeoutError below is not retried.
-                status = await retry_on_transient_agentbox_error(
-                    lambda: client.get_status(sandbox_id=sandbox_id, run_id=run_id),
-                    max_attempts=_FUNCTION_POLL_RETRY_MAX_ATTEMPTS,
-                )
-                if status.status in {"completed", "failed", "cancelled", "timeout"}:
-                    logs = await retry_on_transient_agentbox_error(
-                        lambda: client.get_logs(sandbox_id=sandbox_id, run_id=run_id),
-                        max_attempts=_FUNCTION_POLL_RETRY_MAX_ATTEMPTS,
-                    )
-                    mapped_status = {
-                        "completed": "completed",
-                        "failed": "failed",
-                        "cancelled": "cancelled",
-                        "timeout": "timeout",
-                    }[status.status]
-                    return FunctionInvokeResponse(
-                        status=mapped_status,
-                        output_data=status.output_data,
-                        error=status.error,
-                        logs=logs.logs,
-                        code_hash=status.code_hash or "",
-                        duration_ms=status.duration_ms or 0,
-                    )
-                if time.monotonic() >= deadline:
-                    await cancel_executor_run(client, sandbox_id, run_id)
-                    raise TimeoutError("Function job did not finish before timeout")
-                await asyncio.sleep(_FUNCTION_POLL_INTERVAL_SECONDS)
+        return await poll_session_executor_job(
+            session=session,
+            run_id=run_id,
+            timeout_seconds=timeout_seconds,
+            retry_max_attempts=_FUNCTION_POLL_RETRY_MAX_ATTEMPTS,
+            poll_interval_seconds=_FUNCTION_POLL_INTERVAL_SECONDS,
+            client_factory=self._build_function_executor_client,
+        )
 
     def _build_function_executor_client(self, lemma_token: str):
         if self.function_executor_client_factory is not None:
