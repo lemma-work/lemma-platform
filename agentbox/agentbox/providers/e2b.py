@@ -154,7 +154,9 @@ class E2BSandboxProvider(LegacyRuntimeProviderMixin):
             # managers queried only this key. A versioned value lets a new
             # deployment share an E2B team/API key with that legacy manager
             # without either reconciler seeing or purging the other's
-            # sandboxes during a rolling migration.
+            # sandboxes during a rolling migration. Environment-specific
+            # values such as ``agentbox-dev`` and ``agentbox-prod`` are
+            # recommended when environments share an E2B team.
             "managed-by": self.config.managed_by,
             "agentbox-owner": self.config.owner,
             "agentbox-environment": self.config.environment,

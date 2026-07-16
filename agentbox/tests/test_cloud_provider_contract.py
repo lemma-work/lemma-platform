@@ -335,9 +335,9 @@ def test_e2b_managed_by_scope_default_and_env(
 
     assert E2BProviderConfig.from_env().managed_by == "agentbox"
 
-    monkeypatch.setenv("E2B_SANDBOX_MANAGED_BY", "agentbox-v2")
+    monkeypatch.setenv("E2B_SANDBOX_MANAGED_BY", "agentbox-dev")
     config = E2BProviderConfig.from_env()
-    assert config.managed_by == "agentbox-v2"
+    assert config.managed_by == "agentbox-dev"
 
     provider = E2BSandboxProvider(
         config,
@@ -350,7 +350,7 @@ def test_e2b_managed_by_scope_default_and_env(
             urlopen=_healthy_urlopen,
         ),
     )
-    assert provider._metadata()["managed-by"] == "agentbox-v2"
+    assert provider._metadata()["managed-by"] == "agentbox-dev"
 
 
 def test_e2b_managed_by_scope_rejects_empty_env(
