@@ -507,6 +507,53 @@ async def test_ambiguous_create_blocks_environment_replacement(tmp_path):
 
 
 @pytest.mark.asyncio
+async def test_reconcile_defers_legacy_env_upgrade_with_unresolved_allocation(
+    tmp_path,
+    caplog,
+):
+    provider = AmbiguousLifecycleProvider()
+    manager, _, store = await _manager(tmp_path, provider)
+    try:
+        # Simulate a record written before function concurrency became part of
+        # the durable sandbox environment, plus a create whose provider outcome
+        # is still unknown. Startup must preserve that fence without crashing.
+        await store.upsert_sandbox(
+            "legacy-sandbox",
+            SandboxEnsureRequest(env={"LEMMA_BASE_URL": "https://lemma.test"}),
+        )
+        allocation = await store.reserve_provider_allocation(
+            "fake:test",
+            "legacy-sandbox",
+            owner="manager-that-exited",
+            max_active=10,
+            ttl_seconds=600,
+        )
+        assert allocation is not None
+        held = await store.hold_provider_allocation(
+            "fake:test",
+            allocation.allocation_id,
+            owner="agentbox:outcome-unknown",
+        )
+        assert held is not None
+
+        with caplog.at_level("WARNING"):
+            await manager.reconcile()
+
+        record = await store.get_sandbox("legacy-sandbox")
+        assert record is not None
+        assert record.env == {"LEMMA_BASE_URL": "https://lemma.test"}
+        allocations = await store.list_provider_allocations("fake:test")
+        assert [(row.state, row.provider_id) for row in allocations] == [
+            ("reserved", None)
+        ]
+        assert provider.create_count == 0
+        assert "sandbox_id=legacy-sandbox" in caplog.text
+        assert "code=provider_create_outcome_unknown" in caplog.text
+    finally:
+        await store.close()
+
+
+@pytest.mark.asyncio
 async def test_create_intent_without_observed_compute_never_retries_create(tmp_path):
     provider = AmbiguousLifecycleProvider()
     manager, _, store = await _manager(tmp_path, provider)

@@ -1299,12 +1299,26 @@ class SandboxLifecycleManager:
                             record.to_ensure_request(),
                         )
                 except ProviderError as exc:
-                    if exc.code != "lifecycle_busy":
-                        raise
-                    logger.debug(
-                        "AgentBox reconciliation skipped busy lifecycle; sandbox_id=%s",
-                        record.sandbox_id,
-                    )
+                    if exc.code == "lifecycle_busy":
+                        logger.debug(
+                            "AgentBox reconciliation skipped busy lifecycle; "
+                            "sandbox_id=%s",
+                            record.sandbox_id,
+                        )
+                        continue
+                    if exc.code in _OUTCOME_UNKNOWN_CODES:
+                        # One unresolved cloud create/delete must remain fenced,
+                        # but it must not keep the manager from serving every
+                        # other sandbox. The periodic reconciler will retry this
+                        # record after a later provider inventory pass.
+                        logger.warning(
+                            "AgentBox reconciliation deferred unresolved provider "
+                            "outcome; sandbox_id=%s code=%s",
+                            record.sandbox_id,
+                            exc.code,
+                        )
+                        continue
+                    raise
 
             expired = await self.store.expired_orphans(
                 settings.agentbox_orphan_grace_seconds,
