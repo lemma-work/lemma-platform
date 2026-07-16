@@ -85,9 +85,16 @@ _FUNCTION_EXECUTOR_READY_TIMEOUT_SECONDS = 30.0
 # small budget because the outer poll deadline provides the macro retry budget.
 _FUNCTION_EXECUTE_RETRY_MAX_ATTEMPTS = 12
 _FUNCTION_POLL_RETRY_MAX_ATTEMPTS = 4
-# How often to poll a JOB function's status while it runs. Kept coarse (the run
-# is async/background) so we don't hammer the manager proxy + in-sandbox app.
-_FUNCTION_POLL_INTERVAL_SECONDS = int(
+# API functions remain synchronous to their caller, so poll accepted executor
+# runs quickly enough that a short function does not pay the coarse JOB polling
+# interval. The executor run is idempotent by run ID, making these status reads
+# safe and cheap.
+_API_FUNCTION_POLL_INTERVAL_SECONDS = float(
+    os.getenv("LEMMA_API_FUNCTION_POLL_INTERVAL_SECONDS", "0.5")
+)
+# JOB functions are asynchronous/background and can keep the coarser interval
+# to avoid unnecessary manager and in-sandbox status traffic.
+_JOB_FUNCTION_POLL_INTERVAL_SECONDS = float(
     os.getenv("LEMMA_FUNCTION_POLL_INTERVAL_SECONDS", "5")
 )
 # How often to heartbeat the sandbox while a JOB runs. A JOB occupies the
@@ -434,6 +441,7 @@ class FunctionRunExecutor:
                             session=session,
                             run_id=run.id,
                             timeout_seconds=timeout_seconds,
+                            poll_interval_seconds=(_API_FUNCTION_POLL_INTERVAL_SECONDS),
                         )
                 return executor_response
             finally:
@@ -747,13 +755,14 @@ class FunctionRunExecutor:
         session,
         run_id: UUID,
         timeout_seconds: int,
+        poll_interval_seconds: float = _JOB_FUNCTION_POLL_INTERVAL_SECONDS,
     ) -> FunctionInvokeResponse:
         return await poll_session_executor_job(
             session=session,
             run_id=run_id,
             timeout_seconds=timeout_seconds,
             retry_max_attempts=_FUNCTION_POLL_RETRY_MAX_ATTEMPTS,
-            poll_interval_seconds=_FUNCTION_POLL_INTERVAL_SECONDS,
+            poll_interval_seconds=poll_interval_seconds,
             client_factory=self._build_function_executor_client,
         )
 

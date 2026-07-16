@@ -373,6 +373,42 @@ async def test_poll_timeout_cancels_remote_executor_run():
     assert calls == [("sandbox-1", run_id)]
 
 
+async def test_api_and_job_poll_intervals_are_independent(monkeypatch):
+    observed: list[float] = []
+
+    async def _poll(**kwargs):
+        observed.append(kwargs["poll_interval_seconds"])
+        return FunctionInvokeResponse(
+            status="completed",
+            output_data={"ok": True},
+            code_hash="hash",
+            duration_ms=1,
+        )
+
+    monkeypatch.setattr(fre, "poll_session_executor_job", _poll)
+    executor = _executor()
+    session = SimpleNamespace(
+        env_vars={"LEMMA_TOKEN": "test-token"}, sandbox_id="sandbox-1"
+    )
+
+    await executor._poll_executor_job(
+        session=session,
+        run_id=uuid4(),
+        timeout_seconds=30,
+        poll_interval_seconds=fre._API_FUNCTION_POLL_INTERVAL_SECONDS,
+    )
+    await executor._poll_executor_job(
+        session=session,
+        run_id=uuid4(),
+        timeout_seconds=30,
+    )
+
+    assert observed == [
+        fre._API_FUNCTION_POLL_INTERVAL_SECONDS,
+        fre._JOB_FUNCTION_POLL_INTERVAL_SECONDS,
+    ]
+
+
 async def test_cancelled_execute_cancels_remote_executor_run():
     started = asyncio.Event()
     cancelled: list[tuple[str, object]] = []

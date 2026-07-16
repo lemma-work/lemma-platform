@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+from collections.abc import Awaitable, Callable
 from datetime import datetime, timezone
 from email.utils import parsedate_to_datetime
 import logging
@@ -845,12 +846,21 @@ class E2BSandboxProvider(LegacyRuntimeProviderMixin):
             status_code=504,
         ) from last_error
 
-    async def _public_runtime_ready(self, sandbox) -> bool:  # type: ignore[no-untyped-def]
+    async def _public_runtime_ready(
+        self,
+        sandbox,  # type: ignore[no-untyped-def]
+        *,
+        request_timeout: float | None = None,
+    ) -> bool:
         """Use E2B's authenticated runtime gateway as data-plane evidence."""
 
         token = getattr(sandbox, "traffic_access_token", None)
         if not token:
             return False
+
+        endpoint_timeout = 5.0
+        if request_timeout is not None:
+            endpoint_timeout = max(min(endpoint_timeout, request_timeout), 0.001)
 
         def check_public_endpoint() -> bool:
             for port in (8080, 8090):
@@ -860,7 +870,9 @@ class E2BSandboxProvider(LegacyRuntimeProviderMixin):
                     method="GET",
                 )
                 try:
-                    with self._sdk.urlopen(public_request, timeout=5) as response:
+                    with self._sdk.urlopen(
+                        public_request, timeout=endpoint_timeout
+                    ) as response:
                         if not 200 <= response.status < 300:
                             return False
                 except (urlerror.URLError, OSError, TimeoutError):
@@ -868,6 +880,22 @@ class E2BSandboxProvider(LegacyRuntimeProviderMixin):
             return True
 
         return await asyncio.to_thread(check_public_endpoint)
+
+    async def _bounded_status_probe(
+        self,
+        operation: Callable[[float], Awaitable[Any]],
+        *,
+        deadline: float,
+    ) -> Any:
+        """Run one status probe without exceeding the shared status deadline."""
+
+        remaining = min(
+            self.config.request_timeout_seconds,
+            max(deadline - self._clock(), 0.0),
+        )
+        if remaining <= 0:
+            raise TimeoutError("E2B sandbox status probe deadline expired")
+        return await asyncio.wait_for(operation(remaining), timeout=remaining)
 
     async def _renew_timeout(self, sandbox, sandbox_id: str) -> bool:  # type: ignore[no-untyped-def]
         """Best-effort lease renewal without rejecting healthy data-plane work."""
@@ -1152,77 +1180,112 @@ class E2BSandboxProvider(LegacyRuntimeProviderMixin):
         )
 
     async def _status(self, sandbox_id: str, sandbox) -> SandboxInternalStatus:
-        deadline = self._clock() + self.config.status_retry_seconds
+        started_at = self._clock()
+        # Status is a hot read on every session/function handout. Never let the
+        # provider's general 15-20 second retry budgets leak into this path.
+        # Data-plane health, control-plane status, and an optional exact-ID
+        # reconnect share one strict two-second observation budget.
+        probe_deadline = started_at + min(
+            self.config.request_timeout_seconds,
+            2.0,
+        )
         current = sandbox
         last_error: Exception | None = None
-        try:
-            while True:
+
+        async def observe(candidate) -> tuple[bool | None, Exception | None]:  # type: ignore[no-untyped-def]
+            try:
+                public_ready = bool(
+                    await self._bounded_status_probe(
+                        lambda remaining: self._public_runtime_ready(
+                            candidate,
+                            # Two public ports are checked serially. Give each
+                            # at most 500ms so a slow gateway still leaves time
+                            # for the authoritative control-plane check.
+                            request_timeout=min(remaining / 2, 0.5),
+                        ),
+                        deadline=probe_deadline,
+                    )
+                )
+            except TimeoutError:
+                public_ready = False
+            if public_ready:
+                return True, None
+
+            try:
+                return (
+                    bool(
+                        await self._bounded_status_probe(
+                            lambda _remaining: candidate.is_running(),
+                            deadline=probe_deadline,
+                        )
+                    ),
+                    None,
+                )
+            except (
+                self._sdk.not_found_error,
+                self._sdk.sandbox_error,
+                TimeoutError,
+            ) as exc:
+                return None, exc
+
+        running, last_error = await observe(current)
+        if running is not True:
+            info = self._known_infos.get(sandbox_id)
+            if info is not None and info.state == "running":
                 try:
-                    running = bool(await current.is_running())
-                    if running:
-                        break
-                    if await self._public_runtime_ready(current):
-                        running = True
-                        logger.warning(
-                            "agentbox_e2b_status_false_data_plane_override "
-                            "sandbox_id=%s provider_id=%s",
-                            sandbox_id,
-                            getattr(current, "sandbox_id", None),
-                        )
-                        break
-                    # E2B can transiently return a successful `false` for a
-                    # running generation while both public routes propagate.
-                    # Require the whole bounded observation window before
-                    # converting a cached known-running generation to paused.
-                    # Explicit release already removes the cache and records
-                    # the generation as paused, so status remains non-resuming.
-                    if self._clock() >= deadline:
-                        break
-                    await self._sleep(random.uniform(0.05, 0.2))
-                except (self._sdk.not_found_error, self._sdk.sandbox_error) as exc:
-                    last_error = exc
-                    if await self._public_runtime_ready(current):
-                        running = True
-                        logger.warning(
-                            "agentbox_e2b_status_data_plane_fallback "
-                            "sandbox_id=%s provider_id=%s",
-                            sandbox_id,
-                            getattr(current, "sandbox_id", None),
-                        )
-                        break
-                    if self._clock() >= deadline:
-                        self.invalidate_endpoint_cache(sandbox_id)
-                        raise ProviderError(
-                            "E2B exact sandbox status is temporarily unavailable",
-                            code="provider_adoption_unavailable",
-                            retryable=True,
-                            status_code=503,
-                            headers={"Retry-After": "1"},
-                        ) from exc
-                    info = self._known_infos.get(sandbox_id)
-                    await self._sleep(random.uniform(0.05, 0.2))
-                    if info is None or info.state != "running":
-                        continue
-                    try:
-                        current = await self._with_rate_limit_retry(
+                    reconnected = await self._bounded_status_probe(
+                        lambda _remaining: self._with_rate_limit_retry(
                             lambda: self._sdk.sandbox_cls.connect(
                                 info.provider_id,
                                 timeout=self.config.timeout_seconds,
                                 **self._api_options(),
                             )
-                        )
-                    except (self._sdk.not_found_error, self._sdk.sandbox_error):
-                        continue
-                    self._sandboxes[sandbox_id] = current
-                    logger.info(
-                        "agentbox_e2b_status_reconnected sandbox_id=%s provider_id=%s",
-                        sandbox_id,
-                        info.provider_id,
+                        ),
+                        deadline=probe_deadline,
                     )
-        except self._sdk.sandbox_error as exc:
-            raise ProviderError(
-                f"E2B sandbox status failed: {exc}", retryable=True
-            ) from (last_error or exc)
+                except (
+                    self._sdk.not_found_error,
+                    self._sdk.sandbox_error,
+                    TimeoutError,
+                ) as exc:
+                    # A successful control-plane `false` is authoritative
+                    # enough to report STOPPED. An unavailable first check is
+                    # not: preserve the durable identity and fail closed.
+                    if running is None:
+                        last_error = exc
+                    else:
+                        running = False
+                else:
+                    if str(getattr(reconnected, "sandbox_id", "")) != info.provider_id:
+                        last_error = ProviderError(
+                            "E2B reconnect returned a different provider generation",
+                            code="endpoint_generation_changed",
+                            retryable=True,
+                            status_code=409,
+                        )
+                        running = None
+                    else:
+                        current = reconnected
+                        self._sandboxes[sandbox_id] = current
+                        logger.info(
+                            "agentbox_e2b_status_reconnected "
+                            "sandbox_id=%s provider_id=%s",
+                            sandbox_id,
+                            info.provider_id,
+                        )
+                        running, last_error = await observe(current)
+
+            if running is None:
+                self.invalidate_endpoint_cache(sandbox_id)
+                raise ProviderError(
+                    "E2B exact sandbox status is temporarily unavailable",
+                    code="provider_adoption_unavailable",
+                    retryable=True,
+                    status_code=503,
+                    headers={"Retry-After": "1"},
+                ) from last_error
+
+        assert running is not None
         sandbox = current
         apps = {
             app.name: SandboxInternalAppStatus(

@@ -3,6 +3,8 @@ from __future__ import annotations
 import json
 
 import pytest
+from redis.exceptions import ConnectionError as RedisConnectionError
+from redis.exceptions import TimeoutError as RedisTimeoutError
 
 from app.core.infrastructure.channels import channel_service as channel_module
 from app.core.infrastructure.channels.channel_service import RedisChannelAdapter
@@ -29,14 +31,18 @@ class _FakePubSub:
 
 
 class _FakeRedis:
-    def __init__(self) -> None:
-        self.pubsub_instance = _FakePubSub()
+    def __init__(self, pubsub_instances: list[_FakePubSub] | None = None) -> None:
+        self.pubsub_instances = pubsub_instances or [_FakePubSub()]
+        self.pubsub_instance = self.pubsub_instances[0]
+        self.pubsub_calls = 0
         self.published: list[tuple[str, str | bytes]] = []
         self.closed = False
 
     def pubsub(self, *, ignore_subscribe_messages: bool):
         assert ignore_subscribe_messages is True
-        return self.pubsub_instance
+        instance = self.pubsub_instances[self.pubsub_calls]
+        self.pubsub_calls += 1
+        return instance
 
     async def publish(self, channel: str, payload: str | bytes) -> None:
         self.published.append((channel, payload))
@@ -63,6 +69,73 @@ async def test_realtime_adapter_publishes_json_and_releases_subscription() -> No
     assert redis.pubsub_instance.closed is False
     await adapter.disconnect()
     assert redis.pubsub_instance.closed is True
+
+
+class _FailsOnSubscribePubSub(_FakePubSub):
+    def __init__(self, error: BaseException, *, after: int = 0) -> None:
+        super().__init__()
+        self.error = error
+        self.after = after
+        self.subscribe_calls: list[tuple[str, ...]] = []
+
+    async def subscribe(self, *channels: str) -> None:
+        self.subscribe_calls.append(channels)
+        if len(self.subscribe_calls) > self.after:
+            raise self.error
+        await super().subscribe(*channels)
+
+
+@pytest.mark.asyncio
+async def test_realtime_adapter_replaces_stale_pubsub_on_subscribe() -> None:
+    stale = _FailsOnSubscribePubSub(RedisConnectionError("stale"))
+    replacement = _FakePubSub()
+    redis = _FakeRedis([stale, replacement])
+    adapter = RedisChannelAdapter(client=redis)  # type: ignore[arg-type]
+
+    async with adapter.subscribe(["conversation:1"]):
+        assert stale.closed is True
+        assert replacement.subscribed == ("conversation:1",)
+
+    await adapter.disconnect()
+
+
+@pytest.mark.asyncio
+async def test_realtime_adapter_resubscribes_existing_channels_after_stale_subscribe() -> (
+    None
+):
+    stale = _FailsOnSubscribePubSub(
+        RedisConnectionError("stale"),
+        after=1,
+    )
+    replacement = _FakePubSub()
+    redis = _FakeRedis([stale, replacement])
+    adapter = RedisChannelAdapter(client=redis)  # type: ignore[arg-type]
+
+    async with adapter.subscribe(["conversation:1"]):
+        async with adapter.subscribe(["conversation:2"]):
+            assert stale.closed is True
+            assert replacement.subscribed == (
+                "conversation:1",
+                "conversation:2",
+            )
+
+    await adapter.disconnect()
+
+
+@pytest.mark.asyncio
+async def test_realtime_adapter_propagates_second_subscribe_failure() -> None:
+    stale = _FailsOnSubscribePubSub(RedisConnectionError("stale"))
+    unavailable = _FailsOnSubscribePubSub(RedisTimeoutError("still unavailable"))
+    redis = _FakeRedis([stale, unavailable])
+    adapter = RedisChannelAdapter(client=redis)  # type: ignore[arg-type]
+
+    with pytest.raises(RedisTimeoutError, match="still unavailable"):
+        async with adapter.subscribe(["conversation:1"]):
+            pass
+
+    assert stale.closed is True
+    assert unavailable.closed is False
+    await adapter.disconnect()
 
 
 @pytest.mark.asyncio

@@ -27,7 +27,7 @@ async def poll_executor_job(
     run_id: UUID,
     timeout_seconds: int,
     retry_max_attempts: int,
-    poll_interval_seconds: int,
+    poll_interval_seconds: float,
 ) -> FunctionInvokeResponse:
     """Poll one idempotent run without holding an E2B request open."""
 
@@ -62,7 +62,7 @@ async def poll_session_executor_job(
     run_id: UUID,
     timeout_seconds: int,
     retry_max_attempts: int,
-    poll_interval_seconds: int,
+    poll_interval_seconds: float,
     client_factory: Callable[[str], FunctionExecutorClient],
 ) -> FunctionInvokeResponse:
     """Build the authenticated client and poll one session's accepted run."""

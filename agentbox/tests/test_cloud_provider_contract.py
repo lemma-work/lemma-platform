@@ -116,6 +116,7 @@ class _E2BSandbox:
     bootstrap_list_failures = 0
     timeout_not_found_failures = 0
     status_false_failures = 0
+    status_check_count = 0
     timeout_set_count = 0
     connect_not_found_failures = 0
     last_create_kwargs: dict[str, object] = {}
@@ -143,6 +144,7 @@ class _E2BSandbox:
         cls.bootstrap_list_failures = 0
         cls.timeout_not_found_failures = 0
         cls.status_false_failures = 0
+        cls.status_check_count = 0
         cls.timeout_set_count = 0
         cls.connect_not_found_failures = 0
         cls.last_create_kwargs = {}
@@ -230,6 +232,7 @@ class _E2BSandbox:
         return True
 
     async def is_running(self):
+        type(self).status_check_count += 1
         if type(self).status_false_failures:
             type(self).status_false_failures -= 1
             return False
@@ -689,6 +692,7 @@ def test_e2b_public_readiness_uses_gateway_safe_timeout() -> None:
     provider = _e2b_provider_with(urlopen=capture_timeout)
     request = SandboxEnsureRequest()
     asyncio.run(provider.create("sandbox-1", request))
+    timeouts.clear()
 
     asyncio.run(provider.bootstrap("sandbox-1", request))
 
@@ -779,6 +783,46 @@ def test_e2b_status_uses_authenticated_data_plane_when_control_plane_flaps() -> 
     assert provider._sandboxes["sandbox-1"].sandbox_id == provider_id
 
 
+def test_e2b_status_checks_healthy_data_plane_before_control_plane() -> None:
+    provider = _e2b_provider_with(status_retry_seconds=1)
+    asyncio.run(provider.create("sandbox-1", SandboxEnsureRequest()))
+    _E2BSandbox.status_check_count = 0
+
+    status = asyncio.run(provider.get_status("sandbox-1"))
+
+    assert status.ready is True
+    assert _E2BSandbox.status_check_count == 0
+
+
+def test_e2b_status_bounds_hung_data_and_control_plane_probes(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    provider = _e2b_provider_with(
+        status_retry_seconds=0.01,
+        request_timeout_seconds=0.02,
+    )
+    asyncio.run(provider.create("sandbox-1", SandboxEnsureRequest()))
+    sandbox = provider._sandboxes["sandbox-1"]
+
+    async def hung_public_runtime_ready(*args, **kwargs):
+        del args, kwargs
+        await asyncio.sleep(1)
+        return False
+
+    async def hung_is_running():
+        await asyncio.sleep(1)
+        return True
+
+    monkeypatch.setattr(provider, "_public_runtime_ready", hung_public_runtime_ready)
+    monkeypatch.setattr(sandbox, "is_running", hung_is_running)
+
+    with pytest.raises(ProviderError) as error:
+        asyncio.run(asyncio.wait_for(provider.get_status("sandbox-1"), timeout=0.2))
+
+    assert error.value.code == "provider_adoption_unavailable"
+    assert error.value.status_code == 503
+
+
 def test_e2b_status_uses_data_plane_when_control_plane_temporarily_says_stopped() -> (
     None
 ):
@@ -792,38 +836,71 @@ def test_e2b_status_uses_data_plane_when_control_plane_temporarily_says_stopped(
     assert status.status == "RUNNING"
 
 
-def test_e2b_status_retries_transient_false_without_pausing_generation() -> None:
-    public_failures = 2
+def test_e2b_status_reconnects_once_after_transient_false() -> None:
+    data_plane_available = True
 
-    def delayed_gateway(req, **kwargs):
-        nonlocal public_failures
+    def conditional_gateway(req, **kwargs):
         del kwargs
-        if public_failures:
-            public_failures -= 1
-            raise urlerror.HTTPError(
-                str(getattr(req, "full_url", req)),
-                502,
-                "sandbox not found",
-                {},
-                None,
-            )
-        return _healthy_urlopen(req)
+        if data_plane_available:
+            return _healthy_urlopen(req)
+        raise urlerror.HTTPError(
+            str(getattr(req, "full_url", req)),
+            502,
+            "sandbox not found",
+            {},
+            None,
+        )
 
     provider = _e2b_provider_with(
         status_retry_seconds=1,
-        urlopen=delayed_gateway,
+        urlopen=conditional_gateway,
     )
     asyncio.run(provider.create("sandbox-1", SandboxEnsureRequest()))
     provider_id = provider._known_infos["sandbox-1"].provider_id
-    _E2BSandbox.status_false_failures = 2
+    data_plane_available = False
+    _E2BSandbox.status_false_failures = 1
+    _E2BSandbox.status_check_count = 0
 
     status = asyncio.run(provider.get_status("sandbox-1"))
 
     assert status.ready is True
     assert provider._known_infos["sandbox-1"].state == "running"
     assert provider._sandboxes["sandbox-1"].sandbox_id == provider_id
-    assert _E2BSandbox.connect_count == 0
+    assert _E2BSandbox.status_check_count == 2
+    assert _E2BSandbox.connect_count == 1
     assert _E2BSandbox.pause_count == 0
+
+
+def test_e2b_status_does_not_poll_successful_false_until_retry_deadline() -> None:
+    data_plane_available = True
+
+    def conditional_gateway(req, **kwargs):
+        del kwargs
+        if data_plane_available:
+            return _healthy_urlopen(req)
+        raise urlerror.HTTPError(
+            str(getattr(req, "full_url", req)),
+            502,
+            "sandbox not found",
+            {},
+            None,
+        )
+
+    provider = _e2b_provider_with(
+        status_retry_seconds=15,
+        urlopen=conditional_gateway,
+    )
+    asyncio.run(provider.create("sandbox-1", SandboxEnsureRequest()))
+    data_plane_available = False
+    _E2BSandbox.status_false_failures = 2
+    _E2BSandbox.status_check_count = 0
+
+    status = asyncio.run(provider.get_status("sandbox-1"))
+
+    assert status.ready is False
+    assert status.status == "STOPPED"
+    assert _E2BSandbox.status_check_count == 2
+    assert _E2BSandbox.connect_count == 1
 
 
 def test_e2b_status_fails_when_control_and_data_planes_are_unavailable() -> None:
