@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import shutil
 import sys
 from pathlib import Path
 
@@ -28,6 +29,54 @@ def test_docker_provider_purges_only_the_validated_workspace(monkeypatch, tmp_pa
     assert not workspace.exists()
     assert neighbor.exists()
     assert asyncio.run(provider.purge_storage("sandbox-1")) is False
+
+
+def test_docker_provider_purges_runtime_owned_workspace_through_daemon(
+    monkeypatch,
+    tmp_path,
+):
+    monkeypatch.setattr("shutil.which", lambda _name: "/usr/bin/docker")
+    storage_root = tmp_path / "manager-storage"
+    host_root = tmp_path / "daemon-storage"
+    monkeypatch.setattr(settings, "agentbox_storage_root", str(storage_root))
+    monkeypatch.setattr(settings, "agentbox_storage_host_root", str(host_root))
+    monkeypatch.setattr(settings, "agentbox_runtime_image", "runtime@sha256:test")
+    provider = DockerSandboxProvider()
+    workspace = storage_root / "sandbox-1"
+    workspace.mkdir()
+    (workspace / "runtime-owned.txt").write_text("private")
+    original_rmtree = shutil.rmtree
+    commands: list[tuple[str, ...]] = []
+
+    def permission_denied(_path: Path) -> None:
+        raise PermissionError("runtime UID owns the workspace")
+
+    async def fake_run_docker(*args: str) -> str:
+        commands.append(args)
+        original_rmtree(workspace)
+        return ""
+
+    monkeypatch.setattr("agentbox.providers.docker.shutil.rmtree", permission_denied)
+    monkeypatch.setattr(provider, "_run_docker", fake_run_docker)
+
+    assert asyncio.run(provider.purge_storage("sandbox-1")) is True
+    assert not workspace.exists()
+    assert commands == [
+        (
+            "run",
+            "--rm",
+            "--user",
+            "0:0",
+            "--entrypoint",
+            "/bin/rm",
+            "-v",
+            f"{host_root}:/agentbox-storage",
+            "runtime@sha256:test",
+            "-rf",
+            "--",
+            "/agentbox-storage/sandbox-1",
+        )
+    ]
 
 
 def test_docker_provider_uses_default_image_without_image_type(

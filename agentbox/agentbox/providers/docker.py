@@ -178,23 +178,61 @@ class DockerSandboxProvider(LegacyRuntimeProviderMixin):
 
         validated_id = validate_sandbox_id(sandbox_id)
 
-        def purge() -> bool:
+        def purge_locally() -> bool | None:
             root = self.storage_root.resolve()
             path = root / validated_id
             if path.parent != root:
                 raise RuntimeError("Sandbox workspace escaped the storage root")
-            if path.is_symlink():
-                path.unlink()
-                return True
-            if path.is_dir():
-                shutil.rmtree(path)
-                return True
-            if path.exists():
-                path.unlink()
-                return True
-            return False
+            try:
+                if path.is_symlink():
+                    path.unlink()
+                    return True
+                if path.is_dir():
+                    shutil.rmtree(path)
+                    return True
+                if path.exists():
+                    path.unlink()
+                    return True
+                return False
+            except PermissionError:
+                # Runtime files use UID/GID 10001. A non-root Linux manager
+                # cannot remove their nested directories even though it owns
+                # the configured storage root. Fall through to a daemon-side
+                # cleanup container instead of weakening runtime ownership.
+                return None
 
-        return await run_sync(purge)
+        local_result = await run_sync(purge_locally)
+        if local_result is not None:
+            return local_result
+
+        host_root = self.storage_host_root.expanduser().resolve()
+        workspace_mount = f"{host_root}:/agentbox-storage"
+        if self._selinux_enabled():
+            workspace_mount += ":z"
+        await self._run_docker(
+            "run",
+            "--rm",
+            "--user",
+            "0:0",
+            "--entrypoint",
+            "/bin/rm",
+            "-v",
+            workspace_mount,
+            settings.agentbox_runtime_image,
+            "-rf",
+            "--",
+            f"/agentbox-storage/{validated_id}",
+        )
+
+        def verify_purged() -> bool:
+            path = self.storage_root.resolve() / validated_id
+            if path.exists() or path.is_symlink():
+                raise RuntimeError(
+                    "Provider cleanup completed but sandbox workspace remains"
+                )
+            return True
+
+        return await run_sync(verify_purged)
 
     async def release(self, sandbox_id: str) -> bool:
         """Stop compute but retain the container and its workspace mount."""
