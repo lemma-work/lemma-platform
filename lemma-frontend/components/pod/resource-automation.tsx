@@ -9,6 +9,7 @@ import { toast } from 'sonner';
 import { ProductIcon } from '@/components/pod/product-icon';
 import { InlineTriggerForm, type TriggerTarget } from '@/components/pod/inline-trigger-form';
 import { StartConversationButton } from '@/components/pod/start-conversation-button';
+import { buildScopedConversationHref } from '@/lib/assistant/conversation-composer-context';
 import { EmptyState } from '@/components/shared/empty-state';
 import { DestructiveConfirmationDialog } from '@/components/shared/destructive-confirmation-dialog';
 import { DestructiveResourceActionItem, ResourceActionsMenu } from '@/components/shared/resource-actions-menu';
@@ -431,7 +432,11 @@ export function RecentConversations({
                     return (
                         <Link
                             key={conversation.id}
-                            href={`/pod/${podId}/conversations/${conversation.id}`}
+                            href={buildScopedConversationHref({
+                                podId,
+                                conversationId: conversation.id,
+                                agentName,
+                            })}
                             className="lemma-index-row group flex items-center gap-2.5"
                         >
                             <MessageCircle className="h-3.5 w-3.5 shrink-0 text-[var(--text-tertiary)]" aria-hidden />

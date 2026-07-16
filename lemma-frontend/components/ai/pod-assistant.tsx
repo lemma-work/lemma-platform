@@ -85,6 +85,9 @@ interface PodAssistantEmbeddedProps {
   showConversationList?: boolean;
   contentWidthClassName?: string;
   composerWidthClassName?: string;
+  emptyState?: ReactNode;
+  draft?: string;
+  onDraftChange?: (value: string) => void;
 }
 
 function parseAssistantPrefillDetail(
@@ -136,12 +139,12 @@ function buildControllerView(
   return {
     messages: assistant.messages,
     conversations: assistant.conversations,
-    activeConversationId: assistant.activeConversationId,
+    activeConversationId: assistant.openedConversationId,
     availableModels: assistant.availableModels,
     conversationModel: assistant.conversationModel,
     conversationRuntime: assistant.conversationRuntime,
     setConversationModel: assistant.setConversationModel,
-    isActiveConversationRunning: assistant.isActiveConversationRunning,
+    isActiveConversationRunning: assistant.isOpenedConversationRunning,
     isLoading: assistant.isLoading,
     isLoadingConversations: assistant.isLoadingConversations,
     isLoadingMessages: assistant.isLoadingMessages,
@@ -207,6 +210,7 @@ function PodAssistantSurface({
   className,
   contentWidthClassName,
   composerWidthClassName,
+  emptyState,
 }: {
   title: ReactNode;
   subtitle: ReactNode;
@@ -224,6 +228,7 @@ function PodAssistantSurface({
   className?: string;
   contentWidthClassName?: string;
   composerWidthClassName?: string;
+  emptyState?: ReactNode;
 }) {
   const assistant = useAIAssistant();
   const mentionPodId = assistant.conversationPodId || assistant.podContext?.pod?.id;
@@ -287,6 +292,7 @@ function PodAssistantSurface({
         className={`${className ?? ""} min-h-0 flex-1 min-w-0`}
         contentWidthClassName={contentWidthClassName}
         composerWidthClassName={composerWidthClassName}
+        emptyState={emptyState}
         emptyStateSuggestions={
           assistant.hasPodContext
             ? [
@@ -477,11 +483,11 @@ export function PodAssistantSidebar({
   });
   useAssistantPrefillDraft(setDraft);
   const activeConversation = useMemo(() => {
-    const activeConversationId = assistant.activeConversationId;
-    if (!activeConversationId) return null;
-    return assistant.conversations.find((conversation) => conversation.id === activeConversationId) ?? null;
-  }, [assistant.activeConversationId, assistant.conversations]);
-  const assistantTitle = activeConversation?.title?.trim() || (assistant.activeConversationId ? "Untitled conversation" : "New conversation");
+    const openedConversationId = assistant.openedConversationId;
+    if (!openedConversationId) return null;
+    return assistant.conversations.find((conversation) => conversation.id === openedConversationId) ?? null;
+  }, [assistant.conversations, assistant.openedConversationId]);
+  const assistantTitle = activeConversation?.title?.trim() || (assistant.openedConversationId ? "Untitled conversation" : "New conversation");
   const activeStatusView = getConversationStatusView(activeConversation?.status);
 
   const handleCollapseAssistant = useCallback(() => {
@@ -495,12 +501,12 @@ export function PodAssistantSidebar({
   const openConversationPage = useCallback(() => {
     const podId = assistant.conversationPodId || assistant.podContext?.pod?.id;
     if (!podId) return;
-    const conversationId = assistant.activeConversationId;
+    const conversationId = assistant.openedConversationId;
     closeAssistant({ skipUrlSync: true });
     router.push(conversationId
       ? `/pod/${podId}/conversations/${encodeURIComponent(conversationId)}`
       : `/pod/${podId}/conversations/new`);
-  }, [assistant.activeConversationId, assistant.conversationPodId, assistant.podContext?.pod?.id, closeAssistant, router]);
+  }, [assistant.conversationPodId, assistant.openedConversationId, assistant.podContext?.pod?.id, closeAssistant, router]);
 
   // Resize only applies to the docked panel; the overlay is a fixed-width float.
   const handleResizePointerDown = useCallback(
@@ -637,6 +643,9 @@ export function PodAssistantEmbedded({
   showConversationList = false,
   contentWidthClassName,
   composerWidthClassName,
+  emptyState,
+  draft,
+  onDraftChange,
 }: PodAssistantEmbeddedProps = {}) {
   return (
     <div className="h-full min-h-0">
@@ -650,6 +659,9 @@ export function PodAssistantEmbedded({
         showNewConversationButton={showNewConversationButton}
         contentWidthClassName={contentWidthClassName}
         composerWidthClassName={composerWidthClassName}
+        emptyState={emptyState}
+        draft={draft}
+        onDraftChange={onDraftChange}
         density={density}
         showHeader={showHeader}
         className={cn(

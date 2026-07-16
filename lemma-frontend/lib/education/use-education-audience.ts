@@ -14,7 +14,7 @@ export function usePodIdFromPath(): string | undefined {
 /**
  * Education (primers, tours, inline hints, the first-win checklist) is for the
  * people who build a pod: admins and editors. Operators — teammates who only
- * work a app app — don't need "hire your first agent" or "scope what this
+ * work in an app — don't need "hire your first agent" or "scope what this
  * agent can touch". This gates all of that on builder access.
  *
  * Defaults to hidden while permissions are still loading so an operator never

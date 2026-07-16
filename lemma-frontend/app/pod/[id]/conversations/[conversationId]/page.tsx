@@ -1,51 +1,31 @@
 'use client';
 
-import { use, useEffect, useMemo, useRef } from 'react';
-import Link from 'next/link';
+import { use, useEffect, useMemo, useRef, useState } from 'react';
 import { useRouter, useSearchParams } from 'next/navigation';
-import { ArrowLeft, PanelLeftOpen, Plus, XCircle } from 'lucide-react';
 
 import { useAIAssistant } from '@/components/ai/ai-assistant-context';
 import { PodAssistantEmbedded } from '@/components/ai/pod-assistant';
 import { resolveDefaultAgentRuntime } from '@/components/agents/agent-runtime-helpers';
-import { RuntimeModelPicker } from '@/components/lemma/assistant/model-picker';
 import { InlineLoader } from '@/components/brand/loader';
-import { usePodLayout } from '@/components/pod/pod-layout-context';
-import { Button } from '@/components/ui/button';
+import { ConversationComposerContext } from '@/components/conversations/conversation-composer-context';
+import { PodNewWorkspace } from '@/components/pod/pod-new-workspace';
+import { ConversationPresentationStage } from '@/components/pod/conversation-presentation-stage';
+import {
+    buildScopedConversationHref,
+    resolveConversationAgentName,
+    resolveHydratedConversationRuntime,
+    updateConversationAgentQuery,
+} from '@/lib/assistant/conversation-composer-context';
+import {
+    normalizeConversationPresentedResourceHref,
+    removeConversationPresentationParam,
+} from '@/lib/assistant/conversation-presentation';
 import { useAgentRuntimes, useAvailableAgentRuntimeHarnesses } from '@/lib/hooks/use-agent-runtime';
+import { useAgent, useAgents } from '@/lib/hooks/use-agents';
+import { useConversation } from '@/lib/hooks/use-assistants';
 import { usePod } from '@/lib/hooks/use-pods';
 import { usePodAccess } from '@/lib/hooks/use-pod-access';
 import type { AgentRuntimeConfig } from '@/lib/types';
-import { cn } from '@/lib/utils';
-import { getConversationStatusView, type ConversationStatusView } from '@/lib/utils/conversations';
-
-function ConversationStatusPill({ statusView }: { statusView: ConversationStatusView }) {
-    if (statusView.state === 'unknown' || statusView.state === 'completed') return null;
-
-    return (
-        <span
-            className={cn(
-                'inline-flex h-6 shrink-0 items-center gap-1.5 rounded-full border px-2 text-xs font-medium',
-                statusView.tone === 'live' && 'state-badge-brand',
-                statusView.tone === 'warning' && 'state-badge-warning',
-                statusView.tone === 'danger' && 'state-badge-error',
-                statusView.tone === 'muted' && 'chip-muted'
-            )}
-        >
-            {statusView.state === 'failed' ? (
-                <XCircle className="h-3 w-3" strokeWidth={1.9} />
-            ) : (
-                <span
-                    className={cn(
-                        'h-1.5 w-1.5 rounded-full bg-current',
-                        statusView.isActive && 'animate-pulse'
-                    )}
-                />
-            )}
-            {statusView.label}
-        </span>
-    );
-}
 
 function waitForConversationReset() {
     if (typeof window === 'undefined') {
@@ -78,89 +58,156 @@ export default function PodConversationPage({
     const router = useRouter();
     const searchParams = useSearchParams();
     const assistant = useAIAssistant();
-    const { isCompact, toggleNav } = usePodLayout();
+    const [newWorkspaceDraft, setNewWorkspaceDraft] = useState('');
+    const [runtimeOverride, setRuntimeOverride] = useState<AgentRuntimeConfig | null | undefined>(undefined);
     const podAccess = usePodAccess(podId);
     const { data: pod } = usePod(podId);
+    const canReadAgents = podAccess.can('agent.read');
+    const { data: agentsData } = useAgents(canReadAgents ? podId : undefined);
     const { data: runtimeCatalog } = useAgentRuntimes(pod?.organization_id);
     const { data: availableHarnesses } = useAvailableAgentRuntimeHarnesses();
     const {
-        activeConversationId,
+        openedConversationId,
         clearMessages,
         closeAssistant,
         isReady,
-        selectConversation,
+        openConversation,
         sendMessage,
+        setConversationModel,
     } = assistant;
     const assistantMessage = searchParams.get('assistantMessage');
+    const searchParamsString = searchParams.toString();
+    const scopedAgentName = searchParams.get('agent')?.trim() || null;
+    const presentedResourceHref = normalizeConversationPresentedResourceHref(
+        searchParams.get('presented'),
+        podId,
+    );
     const conversationInstructions = searchParams.get('conversationInstructions');
     const conversationMetadata = useMemo(
         () => parseConversationMetadata(searchParams.get('conversationMetadata')),
         [searchParams]
     );
     const isNewConversation = conversationId === 'new';
-    const newRouteInitializedRef = useRef(false);
+    const newConversationScopeKey = scopedAgentName ?? '__pod_default__';
+    const { data: fetchedConversation } = useConversation(
+        podId,
+        isNewConversation ? '' : conversationId,
+    );
+    const newRouteScopeRef = useRef<string | null>(null);
     const ignoredConversationIdAfterNewRef = useRef<string | null>(null);
-    const activeConversationIdRef = useRef<string | null>(activeConversationId);
+    const openedConversationIdRef = useRef<string | null>(openedConversationId);
     const handledAssistantMessageRef = useRef<string | null>(null);
-    const activeConversation = useMemo(() => {
+    const listedConversation = useMemo(() => {
         const resolvedConversationId = isNewConversation ? null : conversationId;
         if (!resolvedConversationId) return null;
         return assistant.conversations.find((conversation) => conversation.id === resolvedConversationId) ?? null;
     }, [assistant.conversations, conversationId, isNewConversation]);
+    const activeConversation = listedConversation ?? fetchedConversation ?? null;
+    const agents = useMemo(() => agentsData?.items ?? [], [agentsData?.items]);
+    const persistedAgentName = useMemo(
+        () => resolveConversationAgentName(activeConversation?.agent_id, agents),
+        [activeConversation?.agent_id, agents],
+    );
+    const selectedAgentName = isNewConversation
+        ? scopedAgentName
+        : activeConversation?.agent_id
+            ? persistedAgentName ?? scopedAgentName
+            : null;
+    const { data: selectedAgent } = useAgent(
+        canReadAgents ? podId : undefined,
+        selectedAgentName ?? undefined,
+    );
     const conversationTitle = isNewConversation
         ? 'New conversation'
         : activeConversation?.title?.trim() || 'Untitled conversation';
-    const activeStatusView = getConversationStatusView(activeConversation?.status);
-    const isRouteConversationSelected = isNewConversation || activeConversationId === conversationId;
-    const isSelectingRouteConversation = !isNewConversation && activeConversationId !== conversationId;
+    const isRouteConversationSelected = isNewConversation || openedConversationId === conversationId;
+    const isSelectingRouteConversation = !isNewConversation && openedConversationId !== conversationId;
     const canWriteConversations = podAccess.can('conversation.write');
     const podDefaultRuntime = pod?.config?.default_runtime
         ?? resolveDefaultAgentRuntime(runtimeCatalog, pod?.config?.default_profile_id, availableHarnesses);
-    const selectedCommandRuntime = assistant.conversationRuntime ?? null;
+    const hydratedConversationRuntime = resolveHydratedConversationRuntime({
+        isNewConversation,
+        hasPersistedConversation: Boolean(activeConversation),
+        persistedRuntime: activeConversation?.agent_runtime,
+        controllerRuntime: assistant.conversationRuntime,
+    });
+    const selectedCommandRuntime = runtimeOverride !== undefined
+        ? runtimeOverride
+        : hydratedConversationRuntime;
+    const effectiveDefaultRuntime = selectedAgent?.agent_runtime ?? podDefaultRuntime;
     const handleCommandRuntimeChange = (runtime: AgentRuntimeConfig | null) => {
-        void assistant.setConversationModel((runtime?.model_name ?? null) as never, runtime);
+        setRuntimeOverride(runtime);
+        void setConversationModel((runtime?.model_name ?? null) as never, runtime)
+            .catch(() => setRuntimeOverride(undefined));
     };
-    const composerModelControl = isNewConversation ? (
-        <RuntimeModelPicker
-            catalog={runtimeCatalog}
+    const handleAgentChange = (agentName: string | null) => {
+        setRuntimeOverride(undefined);
+        ignoredConversationIdAfterNewRef.current = openedConversationIdRef.current;
+        clearMessages();
+        void setConversationModel(null, null);
+        newRouteScopeRef.current = agentName?.trim() || '__pod_default__';
+        const nextQuery = updateConversationAgentQuery(searchParamsString, agentName);
+        router.replace(
+            `/pod/${podId}/conversations/new${nextQuery ? `?${nextQuery}` : ''}`,
+            { scroll: false },
+        );
+    };
+    const composerContextControl = (isNewConversation || activeConversation) ? (
+        <ConversationComposerContext
+            agents={agents}
+            selectedAgentName={selectedAgentName}
+            agentDisplayLabel={!isNewConversation && activeConversation?.agent_id && !selectedAgentName ? 'Agent' : undefined}
+            selectedRuntime={selectedCommandRuntime}
+            defaultRuntime={effectiveDefaultRuntime}
+            runtimeCatalog={runtimeCatalog}
             availableHarnesses={availableHarnesses}
-            defaultRuntime={podDefaultRuntime}
-            value={selectedCommandRuntime}
-            onChange={handleCommandRuntimeChange}
-            disabled={!canWriteConversations}
-            compact
-            scopeHint="Just for this chat"
-            manageHref={pod?.organization_id ? `/organizations/${pod.organization_id}/settings/agent-runtimes` : undefined}
+            isNewConversation={isNewConversation}
+            canWrite={canWriteConversations}
+            onAgentChange={handleAgentChange}
+            onRuntimeChange={handleCommandRuntimeChange}
+            manageModelsHref={pod?.organization_id ? `/organizations/${pod.organization_id}/settings/agent-runtimes` : undefined}
         />
     ) : undefined;
+    const closePresentedResource = () => {
+        const nextQuery = removeConversationPresentationParam(searchParamsString);
+        router.replace(
+            `/pod/${podId}/conversations/${encodeURIComponent(conversationId)}${nextQuery ? `?${nextQuery}` : ''}`,
+            { scroll: false },
+        );
+    };
 
     useEffect(() => {
-        activeConversationIdRef.current = activeConversationId;
-    }, [activeConversationId]);
+        openedConversationIdRef.current = openedConversationId;
+    }, [openedConversationId]);
 
     useEffect(() => {
         closeAssistant({ suppressUrlRestore: false });
         if (isNewConversation) {
-            if (!newRouteInitializedRef.current) {
-                ignoredConversationIdAfterNewRef.current = activeConversationIdRef.current;
+            if (newRouteScopeRef.current !== newConversationScopeKey) {
+                ignoredConversationIdAfterNewRef.current = openedConversationIdRef.current;
                 clearMessages();
-                newRouteInitializedRef.current = true;
+                void setConversationModel(null, null);
+                newRouteScopeRef.current = newConversationScopeKey;
             }
             return;
         }
-        newRouteInitializedRef.current = false;
+        newRouteScopeRef.current = null;
         ignoredConversationIdAfterNewRef.current = null;
-        if (activeConversationId !== conversationId) {
-            selectConversation(conversationId);
+        if (openedConversationId !== conversationId) {
+            openConversation(conversationId);
         }
-    }, [activeConversationId, clearMessages, closeAssistant, conversationId, isNewConversation, selectConversation]);
+    }, [clearMessages, closeAssistant, conversationId, isNewConversation, newConversationScopeKey, openConversation, openedConversationId, setConversationModel]);
 
     useEffect(() => {
         if (assistantMessage) return;
-        if (!isNewConversation || !activeConversationId) return;
-        if (activeConversationId === ignoredConversationIdAfterNewRef.current) return;
-        router.replace(`/pod/${podId}/conversations/${encodeURIComponent(activeConversationId)}`);
-    }, [activeConversationId, assistantMessage, isNewConversation, podId, router]);
+        if (!isNewConversation || !openedConversationId) return;
+        if (openedConversationId === ignoredConversationIdAfterNewRef.current) return;
+        router.replace(buildScopedConversationHref({
+            podId,
+            conversationId: openedConversationId,
+            agentName: scopedAgentName,
+        }));
+    }, [assistantMessage, isNewConversation, openedConversationId, podId, router, scopedAgentName]);
 
     useEffect(() => {
         if (!isNewConversation || !assistantMessage || !isReady) return;
@@ -175,8 +222,8 @@ export default function PodConversationPage({
         void (async () => {
             closeAssistant({ suppressUrlRestore: false });
             clearMessages();
-            ignoredConversationIdAfterNewRef.current = activeConversationIdRef.current;
-            newRouteInitializedRef.current = true;
+            ignoredConversationIdAfterNewRef.current = openedConversationIdRef.current;
+            newRouteScopeRef.current = newConversationScopeKey;
             await waitForConversationReset();
             await sendMessage(message, {
                 forceNewConversation: true,
@@ -195,47 +242,38 @@ export default function PodConversationPage({
             const nextQuery = nextParams.toString();
             router.replace(`/pod/${podId}/conversations/new${nextQuery ? `?${nextQuery}` : ''}`);
         })();
-    }, [assistantMessage, clearMessages, closeAssistant, conversationInstructions, conversationMetadata, isNewConversation, isReady, podId, router, searchParams, sendMessage]);
+    }, [assistantMessage, clearMessages, closeAssistant, conversationInstructions, conversationMetadata, isNewConversation, isReady, newConversationScopeKey, podId, router, searchParams, sendMessage]);
 
-    const startNewConversation = () => {
-        router.push(`/pod/${podId}/conversations/new`);
-    };
+    if (isNewConversation) {
+        return (
+            <div className="h-full min-h-0 bg-[var(--pod-main-bg)]">
+                <PodAssistantEmbedded
+                    title="New"
+                    subtitle=""
+                    placeholder="Message"
+                    showHeader={false}
+                    showModelPicker={false}
+                    composerModelControl={composerContextControl}
+                    showNewConversationButton={false}
+                    density="spacious"
+                    contentWidthClassName="!max-w-4xl"
+                    composerWidthClassName="!max-w-4xl"
+                    className="h-full rounded-none border-0 bg-transparent shadow-none"
+                    draft={newWorkspaceDraft}
+                    onDraftChange={setNewWorkspaceDraft}
+                    emptyState={(
+                        <PodNewWorkspace
+                            podId={podId}
+                            onPreparePrompt={setNewWorkspaceDraft}
+                        />
+                    )}
+                />
+            </div>
+        );
+    }
 
-    return (
+    const conversationSurface = (
         <div className="flex h-full min-h-0 flex-col bg-[var(--pod-main-bg)]">
-            <header className="pod-shell-topbar flex h-14 shrink-0 items-center px-4 sm:px-6 lg:px-8">
-                <div className="flex h-8 w-full items-center justify-between gap-3">
-                    <div className="flex min-w-0 items-center gap-2 text-sm">
-                        {isCompact ? (
-                            <button
-                                type="button"
-                                onClick={toggleNav}
-                                className="lemma-shell-icon-button custom-focus-ring h-8 w-8 shrink-0 text-[var(--text-tertiary)]"
-                                aria-label="Open navigation"
-                                title="Open navigation"
-                            >
-                                <PanelLeftOpen className="h-4 w-4" strokeWidth={1.8} />
-                            </button>
-                        ) : null}
-                        <Link
-                            href={`/pod/${podId}/conversations`}
-                            className="custom-focus-ring inline-flex h-8 shrink-0 items-center gap-1 rounded-md px-1.5 leading-none text-[var(--text-tertiary)] transition-colors hover:bg-[var(--surface-2)] hover:text-[var(--text-primary)]"
-                        >
-                            <ArrowLeft className="h-3.5 w-3.5" strokeWidth={1.8} />
-                            <span className="hidden sm:inline">Conversations</span>
-                        </Link>
-                        <h1 className="min-w-0 truncate text-sm font-medium leading-none text-[var(--text-primary)]">
-                            {conversationTitle}
-                        </h1>
-                        <ConversationStatusPill statusView={activeStatusView} />
-                    </div>
-                    <Button type="button" variant="ghost" size="sm" className="h-8 shrink-0 gap-1.5 px-2 text-sm text-[var(--text-secondary)]" onClick={startNewConversation}>
-                        <Plus className="h-3.5 w-3.5" />
-                        New
-                    </Button>
-                </div>
-            </header>
-
             <section className="min-h-0 flex-1">
                 {isRouteConversationSelected ? (
                     <PodAssistantEmbedded
@@ -244,7 +282,7 @@ export default function PodConversationPage({
                         placeholder="Message"
                         showHeader={false}
                         showModelPicker={false}
-                        composerModelControl={composerModelControl}
+                        composerModelControl={composerContextControl}
                         showNewConversationButton={false}
                         density="spacious"
                         contentWidthClassName="!max-w-4xl"
@@ -263,4 +301,17 @@ export default function PodConversationPage({
             </section>
         </div>
     );
+
+    if (presentedResourceHref) {
+        return (
+            <ConversationPresentationStage
+                resourceHref={presentedResourceHref}
+                onClose={closePresentedResource}
+            >
+                {conversationSurface}
+            </ConversationPresentationStage>
+        );
+    }
+
+    return conversationSurface;
 }

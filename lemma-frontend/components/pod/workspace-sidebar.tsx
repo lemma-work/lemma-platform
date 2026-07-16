@@ -7,7 +7,8 @@ import type { ComponentType, ReactNode } from 'react';
 import {
     Bot,
     CalendarClock,
-    ChevronsUpDown,
+    Check,
+    ChevronDown,
     Database,
     FolderOpen,
     Home,
@@ -31,7 +32,6 @@ import { Logo } from '@/components/brand/logo';
 import { FileTypeIcon } from '@/components/documents/file-type-icon';
 import { ShareSheet } from '@/components/bundle/share-sheet';
 import { ImportDialog } from '@/components/bundle/import-dialog';
-import { usePodLayoutOptional } from '@/components/pod/pod-layout-context';
 import { ProductIcon, type ProductIconTone } from '@/components/pod/product-icon';
 import { SidebarEmptyState } from '@/components/shared/empty-state';
 import { ResourceIcon } from '@/components/shared/resource-icon';
@@ -226,15 +226,9 @@ export function WorkspaceSidebar({ podId, podName, podIconUrl, onCollapse }: Wor
     const { data: flowsData } = useFlows(canUseWorkflows ? podId : undefined);
     const {
         conversations,
-        activeConversationId,
-        selectConversation,
-        openAssistant,
-        clearMessages,
+        openedConversationId,
         isLoadingConversations,
     } = useAIAssistant();
-    // On focus routes the assistant can't dock, so conversation actions open the
-    // full conversation page instead of silently toggling a panel that won't show.
-    const isFocusRoute = usePodLayoutOptional()?.isFocusRoute ?? false;
 
     const pods = podsData?.items || [];
     const podGroups = podsData?.groups || [];
@@ -257,7 +251,6 @@ export function WorkspaceSidebar({ podId, podName, podIconUrl, onCollapse }: Wor
     const isConnectorsRoute = isActive(`${basePath}/connectors`);
     const isKitsRoute = isActive(`${basePath}/kits`) || isActive(`${basePath}/recipes`);
     const isSchedulesRoute = isActive(`${basePath}/schedules`);
-    const isConversationRoute = pathname === `${basePath}/conversations` || pathname.startsWith(`${basePath}/conversations/`);
     const isPodHome = pathname === basePath || pathname === `${basePath}/`;
     const hasRouteWorktree = isDocsRoute || isAgentsRoute || isWorkflowsRoute || isDataRoute || isAppsRoute || isConnectorsRoute || isKitsRoute || isSchedulesRoute;
     const canShowCreateMenu = canWriteConversations || canCreateAgents || canCreateApps || canCreateWorkflows || canCreateSchedules || canCreateTables;
@@ -382,22 +375,12 @@ export function WorkspaceSidebar({ podId, podName, podIconUrl, onCollapse }: Wor
     };
 
     const openConversation = (conversationId: string) => {
-        if (isConversationRoute || isPodHome || isFocusRoute) {
-            router.push(`${basePath}/conversations/${encodeURIComponent(conversationId)}`);
-            return;
-        }
-        selectConversation(conversationId);
-        openAssistant();
+        router.push(`${basePath}/conversations/${encodeURIComponent(conversationId)}`);
     };
 
     const startConversation = () => {
         if (!canWriteConversations) return;
-        if (isConversationRoute || isPodHome || isFocusRoute) {
-            router.push(`${basePath}/conversations/new`);
-            return;
-        }
-        clearMessages();
-        openAssistant();
+        router.push(`${basePath}/conversations/new`);
     };
 
     const startFullPageConversation = () => {
@@ -608,13 +591,13 @@ export function WorkspaceSidebar({ podId, podName, podIconUrl, onCollapse }: Wor
     return (
         <aside className="flex h-full w-full shrink-0 flex-col overflow-hidden bg-[var(--pod-shell-bg)] text-[var(--text-secondary)]">
             <div className="flex h-14 shrink-0 items-center gap-1.5 border-b border-[color:color-mix(in_srgb,var(--border-subtle)_32%,transparent)] px-3">
-                <div className="min-w-0 flex-1 rounded-md border border-[color:color-mix(in_srgb,var(--border-subtle)_46%,transparent)] bg-transparent p-0.5">
+                <div className="min-w-0 flex-1">
                     <DropdownMenu.Root>
                         <DropdownMenu.Trigger asChild>
                             <button
                                 type="button"
-                                className="workspace-sidebar-trigger-button custom-focus-ring flex w-full min-w-0 items-center gap-2 rounded-md px-1.5 py-1.5 text-left text-[var(--text-primary)] transition-colors hover:bg-[color:color-mix(in_srgb,var(--surface-2)_48%,transparent)]"
-                                aria-label="Switch pod"
+                                className="workspace-sidebar-trigger-button custom-focus-ring flex w-full min-w-0 items-center gap-2 rounded-md border border-[color:var(--border-subtle)] bg-transparent px-2 py-1.5 text-left text-[var(--text-primary)] transition-colors hover:border-[var(--border-strong)] hover:bg-[var(--surface-2)] data-[state=open]:border-[var(--border-strong)] data-[state=open]:bg-[var(--surface-2)]"
+                                aria-label={`Switch pod. Current pod: ${podName || 'Current pod'}`}
                             >
                                 <ResourceIcon
                                     iconUrl={podIconUrl}
@@ -637,10 +620,10 @@ export function WorkspaceSidebar({ podId, podName, podIconUrl, onCollapse }: Wor
                                         {podName || 'Current pod'}
                                     </span>
                                     <span className="block truncate text-xs leading-4 text-[var(--text-tertiary)]">
-                                        Lemma Pod
+                                        Switch pod
                                     </span>
                                 </span>
-                                <ChevronsUpDown className="h-3.5 w-3.5 shrink-0 text-[var(--text-tertiary)]" />
+                                <ChevronDown className="h-4 w-4 shrink-0 text-[var(--text-secondary)]" />
                             </button>
                         </DropdownMenu.Trigger>
                         <PodSwitcherMenu
@@ -903,7 +886,7 @@ export function WorkspaceSidebar({ podId, podName, podIconUrl, onCollapse }: Wor
                                 key={conversation.id}
                                 type="button"
                                 onClick={() => openConversation(conversation.id)}
-                                data-active={activeConversationId === conversation.id ? 'true' : undefined}
+                                data-active={openedConversationId === conversation.id ? 'true' : undefined}
                                 className="lemma-sidebar-row lemma-sidebar-row-sm custom-focus-ring font-normal"
                             >
                                 <span className="min-w-0 flex-1 truncate">{conversation.title || 'Untitled conversation'}</span>
@@ -1020,7 +1003,7 @@ function PodSwitcherMenu({
                 className="surface-panel z-50 flex w-72 flex-col p-1 shadow-[var(--shadow-lg)]"
             >
                 <div className="shrink-0 px-2 py-1.5 type-eyebrow">
-                    Pods
+                    Switch pod
                 </div>
                 <div className="min-h-0 max-h-96 overflow-y-auto">
                     {pods.length === 0 ? (
@@ -1044,6 +1027,15 @@ function PodSwitcherMenu({
                     )}
                 </div>
                 <DropdownMenu.Separator className="my-1 h-px shrink-0 bg-[var(--border-subtle)]" />
+                <DropdownMenu.Item asChild>
+                    <Link
+                        href="/home"
+                        className="lemma-menu-row shrink-0"
+                    >
+                        <Home className="h-3.5 w-3.5" />
+                        Manage pods
+                    </Link>
+                </DropdownMenu.Item>
                 <DropdownMenu.Item
                     onSelect={() => router.push('/create-pod')}
                     className="flex shrink-0 cursor-pointer items-center gap-2 rounded-lg px-2 py-2 text-sm font-medium text-[var(--delight)] outline-none transition-colors hover:bg-[var(--delight-soft)]"
@@ -1071,7 +1063,10 @@ function PodSwitcherMenuItem({
             >
                 <span className="truncate">{toDisplayLabel(pod.name)}</span>
                 {pod.id === podId ? (
-                    <span className="h-1.5 w-1.5 rounded-full bg-[var(--delight)]" />
+                    <span className="flex shrink-0 items-center gap-1.5 text-xs text-[var(--text-tertiary)]">
+                        <Check className="h-3.5 w-3.5 text-[var(--delight)]" />
+                        Current
+                    </span>
                 ) : null}
             </Link>
         </DropdownMenu.Item>

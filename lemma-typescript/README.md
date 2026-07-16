@@ -43,7 +43,7 @@ const tables = await client.tables.list();
 const records = await client.records.list("tickets");
 ```
 
-Pod-scoped namespaces include `tables`, `records`, `agents`, `conversations`, `workflows`, `schedules`, `functions`, `files`, `desks`, `integrations`, `resources`, and `datastore`. New runtime code should use agents plus conversations.
+Pod-scoped namespaces include `tables`, `records`, `agents`, `conversations`, `workflows`, `schedules`, `functions`, `files`, the apps facade (`desks`), `integrations`, `resources`, and `datastore`. New runtime code should use agents plus conversations.
 
 ### Live datastore changes (WebSocket)
 
@@ -74,7 +74,7 @@ handle.close(); // stop the stream and prevent further reconnects
 
 ## Browser bundle (no-build HTML)
 
-For a no-build HTML desk or a conversation widget, load the prebuilt bundle from the host instead of npm-importing. The host injects pod context as `window.__LEMMA_CONFIG__` (podId / apiUrl / authUrl), so the client takes no arguments:
+For a no-build HTML app or a conversation widget, load the prebuilt bundle from the host instead of npm-importing. The host injects pod context as `window.__LEMMA_CONFIG__` (podId / apiUrl / authUrl), so the client takes no arguments:
 
 ```html
 <script src="https://api.lemma.work/public/sdk/lemma-client.js"></script>
@@ -90,7 +90,7 @@ The bundle exposes the same client and namespaces as the npm package (a legacy `
 
 ### Agent web components (`lemma-ui.js`)
 
-For a drop-in agent UI on a no-build desk, load the **opt-in** UI bundle *after* the client bundle. It registers two framework-agnostic custom elements that drive the same agent core, reuse `window.LemmaClient`, and read `window.__LEMMA_CONFIG__`:
+For a drop-in agent UI in a no-build app, load the **opt-in** UI bundle *after* the client bundle. It registers two framework-agnostic custom elements that drive the same agent core, reuse `window.LemmaClient`, and read `window.__LEMMA_CONFIG__`:
 
 ```html
 <script src="https://api.lemma.work/public/sdk/lemma-client.js"></script>
@@ -104,7 +104,7 @@ For a drop-in agent UI on a no-build desk, load the **opt-in** UI bundle *after*
 - `<lemma-agent-thread>` — `agent`, `pod?`, `conversation-id?`; method `send(text)`.
 - Shadow DOM, themed by CSS custom properties (`--lemma-bg`, `--lemma-surface`, `--lemma-accent`, `--lemma-radius`, `--lemma-font`, …) and `::part(...)`.
 
-In a Vite/React app, import the elements instead of the bundle: `import { defineLemmaElements } from "lemma-sdk/elements"; defineLemmaElements();` (or `import "lemma-sdk/ui-bundle"`). The bundle is kept separate from `lemma-client.js` so desks that don't use the components don't pay for it. Workflow ships no element by design — render its form with `useWorkflowForm` / `<WorkflowForm>`.
+In a Vite/React app, import the elements instead of the bundle: `import { defineLemmaElements } from "lemma-sdk/elements"; defineLemmaElements();` (or `import "lemma-sdk/ui-bundle"`). The bundle is kept separate from `lemma-client.js` so apps that don't use the components don't pay for it. Workflow ships no element by design — render its form with `useWorkflowForm` / `<WorkflowForm>`.
 
 Org and user surfaces include `users`, `organizations`, `pods`, `podMembers`, `podJoinRequests`, and `podSurfaces`.
 
@@ -138,7 +138,7 @@ import {
 | Tables | `useTables`, `useRecords`, `useRecord`, `useJoinedRecords`, `useRelatedRecords`, `useReverseRelatedRecords`, `useReferencingRecords`, `useDatastoreQuery`, `useRecordAggregates` | Stable | Build custom table browsers, details views, related-record views, raw SQL-backed reads, and chart/KPI queries. |
 | Record mutations | `useCreateRecord`, `useUpdateRecord`, `useDeleteRecord`, `useBulkRecords` | Stable | Create, update, delete, or bulk-delete rows from headless UI. Function-backed mutations via `createVia`/`updateVia` options. |
 | Record forms | `useRecordSchema`, `useRecordForm`, `useForeignKeyOptions`, `useSchemaForm` | Stable | Render schema-driven record forms, enum fields, and foreign-key selectors. `useRecordForm` is the canonical table-bound form hook; `useSchemaForm` remains available for raw JSON-schema flows. |
-| Files | `useFiles`, `useFile`, `useUploadFile`, `useUpdateFile`, `useDeleteFile`, `useCreateFolder`, `useFileSearch`, `useFileTree`, `useFilePreview`, `useGlobalSearch` | Stable | Browse private or pod folders, mutate file state, search indexed files, load directory trees, preview content, and compose multi-source desk search. |
+| Files | `useFiles`, `useFile`, `useUploadFile`, `useUpdateFile`, `useDeleteFile`, `useCreateFolder`, `useFileSearch`, `useFileTree`, `useFilePreview`, `useGlobalSearch` | Stable | Browse private or pod folders, mutate file state, search indexed files, load directory trees, preview content, and compose multi-source app search. |
 | Conversations | `useConversations`, `useConversationMessages`, `useAssistantSession`, `useAssistantRuntime`, `useAssistantController` | Stable except controller/runtime | Build custom chat, conversation lists, streaming output, and final-answer views for default assistant conversations or named agents. |
 | Agents | `useAgentInputSchema` | Stable | Inspect structured input/output schemas for named agents. Agent execution goes through conversations. |
 | Agent & form presets | `useAgentTask` / `AgentTask`, `AgentThread`, `useWorkflowForm` / `WorkflowForm` | Stable | Headless, render-prop presets over the core: `useAgentTask`/`<AgentTask>` for a one-shot run (working → schema-parsed output), `<AgentThread>` for a full multi-turn chat you style yourself, `useWorkflowForm`/`<WorkflowForm>` to bind a run parked on a HUMAN/FORM wait to its fields + submit (pair with `useWorkflowResume`). |
@@ -151,8 +151,8 @@ import {
 ### Generated CRUD hooks (cache-correct)
 
 `lemma-sdk/react` also ships **generated** TanStack-Query hooks for plain CRUD on the
-pod-scoped resources `record`, `agent`, `table`, `schedule`, `desk`, `function`, and
-`workflow` — `useRecordList` / `useRecordGet` / `useRecordCreate` / `useRecordUpdate` /
+pod-scoped resources `record`, `agent`, `table`, `schedule`, `function`, and `workflow`,
+plus the app resource exposed as `desk` — `useRecordList` / `useRecordGet` / `useRecordCreate` / `useRecordUpdate` /
 `useDeleteRecord` … (`use<Resource><Verb>` per resource). They are generated from the
 backend's `x-lemma` route metadata, so a mutation **auto-invalidates the matching list
 queries** — no manual refetch. They require a `@tanstack/react-query` `QueryClientProvider`
@@ -176,7 +176,7 @@ Prefer these for straight CRUD; use the hand-written hooks above (`useRecords` w
 
 ### Headless Helpers
 
-Alongside hooks, `lemma-sdk` exports shared headless helpers for common desk logic:
+Alongside hooks, `lemma-sdk` exports shared headless helpers for common app logic:
 
 - record display helpers: `formatRecordDisplayValue`, `humanizeRecordFieldName`, `detectRecordStatusColumn`
 - form/schema helpers: `buildRecordSchemaFields`, `buildSchemaFormFields`
@@ -249,19 +249,37 @@ function SupportThread({ client }: { client: LemmaClient }) {
 
   const messages = useConversationMessages({
     client,
-    conversationId: conversations.effectiveSelectedConversationId,
+    conversationId: conversations.selectedConversationId,
     autoResume: true,
   });
 
-  return <pre>{messages.finalOutputText || messages.outputText || "No output yet."}</pre>;
+  return (
+    <div>
+      {conversations.conversations.map((conversation) => (
+        <button
+          key={conversation.id}
+          onClick={() => conversations.selectConversation(conversation.id)}
+        >
+          {conversation.title || "Untitled conversation"}
+        </button>
+      ))}
+      <pre>{messages.finalOutputText || messages.outputText || "Select a conversation."}</pre>
+    </div>
+  );
 }
 ```
+
+Loading conversation history does not select a conversation. Use
+`initialConversationId`, `selectConversation`, or `selectLatestConversation`
+when the UI explicitly opens one. `useAssistantController` follows the same
+rule through `openedConversationId`, `openConversation`, and
+`closeConversation`; its active/selection fields remain compatibility aliases.
 
 #### Raw conversation message shapes
 
 `useConversationMessages` derives `finalOutputText` for you. If you read messages
 directly instead — `client.conversations.*`, the browser SDK, or the HTTP API
-(e.g. an HTML desk or a non-React poller) — you get the raw turn stream, and
+(e.g. an HTML app or a non-React poller) — you get the raw turn stream, and
 picking the answer out of it is easy to get wrong. A single assistant turn emits
 **multiple messages, all with `role: "assistant"`**, distinguished by `kind`:
 
@@ -559,7 +577,7 @@ Useful helpers:
 
 `resolveSafeRedirectUri(...)` allows same-origin redirects by default and falls
 back to `/` for invalid, auth-loop, or untrusted cross-origin targets. Pass
-`allowedOrigins`, `allowedOriginSuffixes` (for example, a desk-app domain
+`allowedOrigins`, `allowedOriginSuffixes` (for example, an app domain
 suffix), or `allowLoopback` for explicit local callback flows.
 
 When `client.podId` is set and the signed-in user is not a pod member, `AuthGuard` can render the request-access flow and create or show pod join requests.

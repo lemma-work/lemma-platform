@@ -253,7 +253,7 @@ export function getRecipeHighlights(recipe: Recipe): string[] {
             ];
         default:
             return [
-                'A app you open to do the work',
+                'An app you open to do the work',
                 'An agent drafts and flags; a human decides',
                 'Seeded with sample data so it’s usable immediately',
             ];

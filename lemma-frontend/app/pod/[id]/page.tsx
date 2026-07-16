@@ -77,7 +77,7 @@ function PodBlankChatHome({ podId }: { podId: string }) {
 
     const isLaunchingComposer = launchAnimation !== null;
     const isBlankingHome = isLaunchingComposer || isRouteHandoff;
-    const isBusy = isSending || isBlankingHome || assistant.isLoading || assistant.isActiveConversationRunning || assistant.isUploadingFiles;
+    const isBusy = isSending || isBlankingHome || assistant.isLoading || assistant.isOpenedConversationRunning || assistant.isUploadingFiles;
     const canSend = canWriteConversations && draft.trim().length > 0 && !isBusy;
     const podDefaultRuntime = pod?.config?.default_runtime
         ?? resolveDefaultAgentRuntime(runtimeCatalog, pod?.config?.default_profile_id, availableHarnesses);
@@ -93,16 +93,16 @@ function PodBlankChatHome({ podId }: { podId: string }) {
     useEffect(() => {
         const previousConversationId = submittedFromConversationRef.current;
         if (previousConversationId === null) return;
-        if (!assistant.activeConversationId) return;
-        if (assistant.activeConversationId === previousConversationId) return;
+        if (!assistant.openedConversationId) return;
+        if (assistant.openedConversationId === previousConversationId) return;
         submittedFromConversationRef.current = null;
         if (launchAnimation && !launchAnimation.done) {
-            setPendingRouteConversationId(assistant.activeConversationId);
+            setPendingRouteConversationId(assistant.openedConversationId);
             return;
         }
         setIsRouteHandoff(true);
-        router.replace(`/pod/${podId}/conversations/${encodeURIComponent(assistant.activeConversationId)}`);
-    }, [assistant.activeConversationId, launchAnimation, podId, router]);
+        router.replace(`/pod/${podId}/conversations/${encodeURIComponent(assistant.openedConversationId)}`);
+    }, [assistant.openedConversationId, launchAnimation, podId, router]);
 
     useEffect(() => {
         if (!pendingRouteConversationId || (launchAnimation && !launchAnimation.done)) return;
@@ -181,7 +181,7 @@ function PodBlankChatHome({ podId }: { podId: string }) {
     const submit = async () => {
         const message = draft.trim();
         if (!canWriteConversations || !message || isBusy) return;
-        submittedFromConversationRef.current = assistant.activeConversationId || '';
+        submittedFromConversationRef.current = assistant.openedConversationId || '';
         startComposerLaunchAnimation(message);
         setIsSending(true);
         try {

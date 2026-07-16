@@ -2,7 +2,7 @@
 
 `lemma-sdk` is the Python client library for Lemma. It wraps a generated OpenAPI
 client with a pod-first, ergonomic surface for tables, files, functions, agents,
-workflows, schedules, surfaces, desks, and connectors.
+workflows, schedules, surfaces, apps, and connectors.
 
 It is the same SDK that runs **inside Lemma functions** (where the runtime injects
 auth automatically) and in **standalone application code** (where you supply a

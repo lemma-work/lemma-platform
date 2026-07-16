@@ -25,11 +25,13 @@ export function AppFrameHost({
     podId,
     visible,
     activeSlug,
+    openAppSlugs,
     canUpdateApp,
 }: {
     podId: string;
     visible: boolean;
     activeSlug: string | null;
+    openAppSlugs: string[];
     canUpdateApp: boolean;
 }) {
     const { pages } = useApp();
@@ -47,7 +49,11 @@ export function AppFrameHost({
         });
     }
 
-    const livePages = pages.filter((page) => activated.includes(page.slug) && page.url);
+    // Pinned app tabs remain eligible for keep-alive after their first activation;
+    // the FIFO cap still bounds how many hidden app frames can stay live.
+    const livePages = pages.filter(
+        (page) => openAppSlugs.includes(page.slug) && activated.includes(page.slug) && page.url,
+    );
     const activePage = activeSlug ? pages.find((page) => page.slug === activeSlug) : null;
     const hasActiveFrame = livePages.some((page) => page.slug === activeSlug);
 

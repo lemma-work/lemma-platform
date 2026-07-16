@@ -82,10 +82,12 @@ export type AssistantUserApprovalDecision = "APPROVE_ONCE" | "APPROVE_FOR_SESSIO
 export interface UseAssistantControllerResult {
   messages: AssistantRenderableMessage[];
   conversations: Conversation[];
+  openedConversationId: string | null;
   activeConversationId: string | null;
   availableModels: AvailableModelInfo[];
   conversationModel: ConversationModel | null;
   conversationRuntime: AgentRuntimeConfig | null;
+  isOpenedConversationRunning: boolean;
   isActiveConversationRunning: boolean;
   isLoading: boolean;
   isLoadingConversations: boolean;
@@ -101,6 +103,8 @@ export interface UseAssistantControllerResult {
   pendingActions: AssistantAction[];
   completedActions: AssistantAction[];
   streamingTool: AssistantStreamingTool | null;
+  openConversation: (conversationId: string) => void;
+  closeConversation: () => void;
   selectConversation: (conversationId: string | null) => void;
   setConversationModel: (model: ConversationModel | null, runtime?: AgentRuntimeConfig | null) => Promise<void>;
   sendMessage: (content: string, options?: SendAssistantControllerMessageOptions) => Promise<void>;
@@ -650,7 +654,6 @@ export function useAssistantController({
   const conversationsRef = useRef<Conversation[]>([]);
   const isStreamingRef = useRef(false);
   const sessionIsStreamingRef = useRef(false);
-  const suppressAutoSelectRef = useRef(false);
   const lastAutoLoadedConversationIdRef = useRef<string | null>(null);
   const loadingConversationIdRef = useRef<string | null>(null);
   const skipInitialLoadConversationIdsRef = useRef<Set<string>>(new Set());
@@ -794,18 +797,17 @@ export function useAssistantController({
     try {
       const response = await sessionListConversations({ scope, limit: CONVERSATIONS_PAGE_SIZE });
       const nextConversations = sortConversationsByUpdatedAt(response.items || []);
-      setConversations(nextConversations);
-      setConversationsCursor(response.next_page_token ?? null);
-
-      setActiveConversationId((current) => {
-        if (current && nextConversations.some((conversation) => conversation.id === current)) {
-          return current;
+      setConversations((currentConversations) => {
+        const openedConversationId = activeConversationIdRef.current;
+        if (!openedConversationId || nextConversations.some((conversation) => conversation.id === openedConversationId)) {
+          return nextConversations;
         }
-        if (suppressAutoSelectRef.current) {
-          return null;
-        }
-        return nextConversations[0]?.id ?? null;
+        const openedConversation = currentConversations.find((conversation) => conversation.id === openedConversationId);
+        return openedConversation
+          ? sortConversationsByUpdatedAt([...nextConversations, openedConversation])
+          : nextConversations;
       });
+      setConversationsCursor(response.next_page_token ?? null);
     } catch (err) {
       setLocalError((prev) => prev || (err instanceof Error ? err.message : "Failed to load conversations"));
     } finally {
@@ -998,7 +1000,6 @@ export function useAssistantController({
     if (!enabled) {
       sessionCancel();
       clearRuntimeMessages();
-      suppressAutoSelectRef.current = false;
       activeConversationIdRef.current = null;
       lastAutoLoadedConversationIdRef.current = null;
       loadingConversationIdRef.current = null;
@@ -1018,7 +1019,6 @@ export function useAssistantController({
       return;
     }
 
-    suppressAutoSelectRef.current = false;
     activeConversationIdRef.current = null;
     lastAutoLoadedConversationIdRef.current = null;
     loadingConversationIdRef.current = null;
@@ -1150,7 +1150,6 @@ export function useAssistantController({
       return;
     }
 
-    suppressAutoSelectRef.current = conversationId === null;
     setLocalError(null);
     activeConversationIdRef.current = conversationId;
     lastAutoLoadedConversationIdRef.current = null;
@@ -1159,12 +1158,32 @@ export function useAssistantController({
     clearRuntimeMessages();
     setIsLoadingMessages(Boolean(conversationId && autoLoadMessages));
     setActiveConversationId(conversationId);
-  }, [autoLoadMessages, clearRuntimeMessages, sessionCancel]);
+    if (conversationId && !conversationsRef.current.some((conversation) => conversation.id === conversationId)) {
+      void client.conversations.get(conversationId, {
+        pod_id: scope.podId ?? undefined,
+      }).then((openedConversation) => {
+        if (!openedConversation || activeConversationIdRef.current !== conversationId) return;
+        setConversations((previous) => sortConversationsByUpdatedAt([
+          openedConversation,
+          ...previous.filter((conversation) => conversation.id !== openedConversation.id),
+        ]));
+        setConversationModelState(openedConversation.model ?? null);
+        setConversationRuntimeState(openedConversation.agent_runtime ?? null);
+      }).catch(() => undefined);
+    }
+  }, [autoLoadMessages, clearRuntimeMessages, client, scope.podId, sessionCancel]);
+
+  const openConversation = useCallback((conversationId: string) => {
+    selectConversation(conversationId);
+  }, [selectConversation]);
+
+  const closeConversation = useCallback(() => {
+    selectConversation(null);
+  }, [selectConversation]);
 
   const resetConversationState = useCallback((keepPendingFiles = false) => {
     stop();
     clearRuntimeMessages();
-    suppressAutoSelectRef.current = true;
     activeConversationIdRef.current = null;
     lastAutoLoadedConversationIdRef.current = null;
     loadingConversationIdRef.current = null;
@@ -1200,7 +1219,6 @@ export function useAssistantController({
       ...scope,
     });
 
-    suppressAutoSelectRef.current = false;
     setConversations((prev) => sortConversationsByUpdatedAt([
       createdConversation,
       ...prev.filter((conversation) => conversation.id !== createdConversation.id),
@@ -1433,10 +1451,12 @@ export function useAssistantController({
   return useMemo(() => ({
     messages,
     conversations,
+    openedConversationId: activeConversationId,
     activeConversationId,
     availableModels,
     conversationModel,
     conversationRuntime,
+    isOpenedConversationRunning: isActiveConversationRunning,
     isActiveConversationRunning,
     isLoading,
     isLoadingConversations,
@@ -1452,6 +1472,8 @@ export function useAssistantController({
     pendingActions,
     completedActions,
     streamingTool: sessionStreamingTool,
+    openConversation,
+    closeConversation,
     selectConversation,
     setConversationModel,
     sendMessage,
@@ -1466,6 +1488,7 @@ export function useAssistantController({
   }), [
     activeConversationId,
     availableModels,
+    closeConversation,
     clearMessages,
     clearPendingFiles,
     completedActions,
@@ -1488,6 +1511,7 @@ export function useAssistantController({
     pendingActions,
     pendingFileUploads,
     pendingFiles,
+    openConversation,
     removePendingFile,
     resolveUserApproval,
     selectConversation,

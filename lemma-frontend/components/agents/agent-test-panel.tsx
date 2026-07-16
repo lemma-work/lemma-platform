@@ -8,6 +8,7 @@ import { useMessages } from '@/lib/hooks/use-assistants';
 import { useAccounts, useConnectors, useAuthConfigs, useCreateConnectRequest } from '@/lib/hooks/use-connectors';
 import { usePod } from '@/lib/hooks/use-pods';
 import { getLemmaClient } from '@/lib/sdk/lemma-client';
+import { buildScopedConversationHref } from '@/lib/assistant/conversation-composer-context';
 import { useInfiniteScroll } from '@/lib/hooks/use-infinite-scroll';
 import { Button } from '@/components/ui/button';
 import { EmptyState } from '@/components/shared/empty-state';
@@ -193,26 +194,26 @@ export function AgentTestPanel({
         client,
         podId,
         agentName: agent?.name || agentName,
-        conversationId: controller.activeConversationId,
-        enabled: Boolean(agent && controller.activeConversationId),
+        conversationId: controller.openedConversationId,
+        enabled: Boolean(agent && controller.openedConversationId),
         autoLoad: true,
         autoResume: true,
         syncOnTurnEnd: true,
         limit: 100,
     });
     const refreshConversationMessages = conversationMessages.refresh;
-    const activeConversationId = controller.activeConversationId;
-    const selectConversation = controller.selectConversation;
+    const openedConversationId = controller.openedConversationId;
+    const openConversation = controller.openConversation;
     const settledConversationRef = useRef<string | null>(null);
     const handledOpenRequestRef = useRef<string | number | null>(null);
-    const { data: rawMessagesData, refetch: refetchRawMessages } = useMessages(podId, activeConversationId || '', { limit: 100 });
+    const { data: rawMessagesData, refetch: refetchRawMessages } = useMessages(podId, openedConversationId || '', { limit: 100 });
     const rawMessages = useMemo(
         () => (rawMessagesData as { items?: Message[] } | undefined)?.items || [],
         [rawMessagesData],
     );
     const activeConversation = useMemo(
-        () => controller.conversations.find((conversation) => conversation.id === activeConversationId) ?? null,
-        [activeConversationId, controller.conversations],
+        () => controller.conversations.find((conversation) => conversation.id === openedConversationId) ?? null,
+        [controller.conversations, openedConversationId],
     );
     const controllerView = useMemo<AssistantControllerView>(() => {
         const base = controller as unknown as AssistantControllerView;
@@ -249,28 +250,28 @@ export function AgentTestPanel({
         if (handledOpenRequestRef.current === requestKey) return;
         handledOpenRequestRef.current = requestKey;
 
-        if (activeConversationId !== openConversationId) {
-            selectConversation(openConversationId);
+        if (openedConversationId !== openConversationId) {
+            openConversation(openConversationId);
         }
 
         void refreshConversationMessages({ conversationId: openConversationId, limit: 100 });
     }, [
-        activeConversationId,
+        openedConversationId,
         agent,
         openConversationId,
         openConversationRequestKey,
         refreshConversationMessages,
-        selectConversation,
+        openConversation,
     ]);
 
     useEffect(() => {
-        const conversationId = controller.activeConversationId;
+        const conversationId = controller.openedConversationId;
         if (!conversationId) {
             settledConversationRef.current = null;
             return;
         }
 
-        if (controller.isActiveConversationRunning) {
+        if (controller.isOpenedConversationRunning) {
             settledConversationRef.current = null;
             return;
         }
@@ -281,12 +282,12 @@ export function AgentTestPanel({
             refetchRawMessages(),
             refreshConversationMessages({ conversationId, limit: 100 }),
         ]);
-    }, [controller.activeConversationId, controller.isActiveConversationRunning, refetchRawMessages, refreshConversationMessages]);
+    }, [controller.isOpenedConversationRunning, controller.openedConversationId, refetchRawMessages, refreshConversationMessages]);
 
     useEffect(() => {
-        const conversationId = controller.activeConversationId;
+        const conversationId = controller.openedConversationId;
         const hasVisibleOutput = hasOutputSchema ? Boolean(parsedOutput) : Boolean(parsedOutput || assistantText);
-        if (!conversationId || controller.isActiveConversationRunning || hasVisibleOutput) return;
+        if (!conversationId || controller.isOpenedConversationRunning || hasVisibleOutput) return;
 
         let cancelled = false;
         let attempts = 0;
@@ -313,8 +314,8 @@ export function AgentTestPanel({
         };
     }, [
         assistantText,
-        controller.activeConversationId,
-        controller.isActiveConversationRunning,
+        controller.isOpenedConversationRunning,
+        controller.openedConversationId,
         hasOutputSchema,
         parsedOutput,
         refetchRawMessages,
@@ -350,7 +351,7 @@ export function AgentTestPanel({
         try {
             const payload = buildInputDataFromForm(formData, agent?.input_schema);
             await controller.sendMessage(formatAgentRunInput(payload), { forceNewConversation: true });
-            const conversationId = controller.activeConversationId;
+            const conversationId = controller.openedConversationId;
             if (conversationId) {
                 void Promise.allSettled([
                     refetchRawMessages(),
@@ -370,13 +371,17 @@ export function AgentTestPanel({
     };
 
     const openActiveConversationPage = useCallback(() => {
-        if (controller.activeConversationId) {
-            router.push(`/pod/${podId}/conversations/${encodeURIComponent(controller.activeConversationId)}`);
+        if (controller.openedConversationId) {
+            router.push(buildScopedConversationHref({
+                podId,
+                conversationId: controller.openedConversationId,
+                agentName: agent?.name || agentName,
+            }));
             return;
         }
 
         onToggleFullView?.();
-    }, [controller.activeConversationId, onToggleFullView, podId, router]);
+    }, [agent?.name, agentName, controller.openedConversationId, onToggleFullView, podId, router]);
 
     const visibleApps = (agent?.accessible_connectors || []).filter(config => {
         const app = resolveConnector(config.app_name);
@@ -400,7 +405,7 @@ export function AgentTestPanel({
             || title.toLowerCase().includes(normalizedSearch);
     });
 
-    const hasActiveRun = Boolean(controller.activeConversationId);
+    const hasActiveRun = Boolean(controller.openedConversationId);
     const historyScrollRef = useRef<HTMLDivElement | null>(null);
     const historySentinelRef = useInfiniteScroll({
         hasMore: controller.hasMoreConversations,
@@ -452,7 +457,7 @@ export function AgentTestPanel({
                 ) : (
                   <>
                     {filteredConversations.map((conversation) => {
-                    const isActive = controller.activeConversationId === conversation.id;
+                    const isActive = controller.openedConversationId === conversation.id;
                     return (
                         <button
                             key={conversation.id}
@@ -464,7 +469,7 @@ export function AgentTestPanel({
                                     : 'border-transparent bg-transparent hover:border-[color:var(--row-border)] hover:bg-[var(--card-bg)]'
                             )}
                             onClick={() => {
-                                controller.selectConversation(conversation.id);
+                                controller.openConversation(conversation.id);
                                 void refreshConversationMessages({ conversationId: conversation.id, limit: 100 });
                             }}
                         >
@@ -515,7 +520,7 @@ export function AgentTestPanel({
                         outputSchema={agent?.output_schema}
                         headerActions={(
                             <>
-                                {onToggleFullView || controller.activeConversationId ? (
+                                {onToggleFullView || controller.openedConversationId ? (
                                     <Button
                                         variant="ghost"
                                         size="icon"
@@ -564,7 +569,7 @@ export function AgentTestPanel({
                     </div>
 
                     <div className="flex items-center gap-2">
-                        {onToggleFullView || controller.activeConversationId ? (
+                        {onToggleFullView || controller.openedConversationId ? (
                             <Button
                                 variant="ghost"
                                 size="icon"
@@ -747,10 +752,10 @@ export function AgentTestPanel({
                                     </span>
                                     <Button
                                         onClick={handleRun}
-                                        disabled={isStartingRun || controller.isActiveConversationRunning || missingRequiredKeys.length > 0}
+                                        disabled={isStartingRun || controller.isOpenedConversationRunning || missingRequiredKeys.length > 0}
                                         className="agent-test-run-button"
                                     >
-                                        {isStartingRun || controller.isActiveConversationRunning ? <Loader2 className="w-4 h-4 animate-spin mr-2" /> : <Play className="w-4 h-4 mr-2" />}
+                                        {isStartingRun || controller.isOpenedConversationRunning ? <Loader2 className="w-4 h-4 animate-spin mr-2" /> : <Play className="w-4 h-4 mr-2" />}
                                         Start run
                                     </Button>
                                 </div>

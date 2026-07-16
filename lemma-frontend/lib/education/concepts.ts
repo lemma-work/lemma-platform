@@ -86,7 +86,7 @@ export const CONCEPTS: Record<ConceptId, ConceptEntry> = {
             'Because access is controlled per row and per agent, an agent can work the Tickets table without ever seeing Payroll.',
         ],
         example:
-            'A Leads table with name, company, source, and status — agents append rows, your team works them from a app.',
+            'A Leads table with name, company, source, and status — agents append rows, your team works them from an app.',
         tone: 'tables',
         guideSlug: 'concepts/tables',
         related: ['file', 'agent', 'app', 'grant'],

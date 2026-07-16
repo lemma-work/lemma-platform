@@ -325,13 +325,13 @@ function AgentStepChamber({
         agentName: agentName || undefined,
         enabled: Boolean(agentName || conversationId),
     });
-    const activeConversationId = controller.activeConversationId;
-    const selectConversation = controller.selectConversation;
+    const openedConversationId = controller.openedConversationId;
+    const openConversation = controller.openConversation;
 
     useEffect(() => {
-        if (!conversationId || activeConversationId === conversationId) return;
-        selectConversation(conversationId);
-    }, [activeConversationId, conversationId, selectConversation]);
+        if (!conversationId || openedConversationId === conversationId) return;
+        openConversation(conversationId);
+    }, [conversationId, openConversation, openedConversationId]);
 
     useEffect(() => {
         if (!conversationId) {
@@ -339,8 +339,8 @@ function AgentStepChamber({
             return;
         }
 
-        if (controller.isActiveConversationRunning || controller.isLoading) {
-            if (controller.isActiveConversationRunning) settledConversationRef.current = null;
+        if (controller.isOpenedConversationRunning || controller.isLoading) {
+            if (controller.isOpenedConversationRunning) settledConversationRef.current = null;
             return;
         }
 
@@ -352,7 +352,7 @@ function AgentStepChamber({
         void onAgentSettled?.();
     }, [
         conversationId,
-        controller.isActiveConversationRunning,
+        controller.isOpenedConversationRunning,
         controller.isLoading,
         controller.messages.length,
         onAgentSettled,
@@ -364,7 +364,7 @@ function AgentStepChamber({
         [controller]
     );
     const hasConversationSurface = Boolean(agentName || conversationId);
-    const isBusy = controller.isActiveConversationRunning || controller.isLoading || isActiveStepStatus(stepStatus) || state === 'running';
+    const isBusy = controller.isOpenedConversationRunning || controller.isLoading || isActiveStepStatus(stepStatus) || state === 'running';
     const fallbackText = getStepSummaryText(outputData) || (hasVisibleData(outputData) ? formatStructuredOutput(outputData) : '');
     const showInput = hasVisibleData(inputData);
     const showOutput = hasVisibleData(outputData);

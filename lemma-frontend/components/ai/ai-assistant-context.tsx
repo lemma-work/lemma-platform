@@ -20,6 +20,7 @@ import {
     extractDisplayResourceFromInvocation,
     type DisplayResourceRequest,
 } from '@/lib/assistant/display-resource';
+import { buildConversationPresentationHref } from '@/lib/assistant/conversation-presentation';
 
 interface ConversationScope {
     podId?: string | null;
@@ -140,12 +141,16 @@ interface AIAssistantContextType {
     toggleAssistant: () => void;
     messages: Message[];
     conversations: Conversation[];
+    openedConversationId: string | null;
     activeConversationId: string | null;
     availableModels: AvailableModelInfo[];
     conversationModel: ConversationModel | null;
     conversationRuntime?: AgentRuntimeConfig | null;
     setConversationModel: (model: ConversationModel | null, runtime?: AgentRuntimeConfig | null) => Promise<void>;
+    isOpenedConversationRunning: boolean;
     isActiveConversationRunning: boolean;
+    openConversation: (conversationId: string) => void;
+    closeConversation: () => void;
     selectConversation: (conversationId: string | null) => void;
     isLoading: boolean;
     isLoadingConversations: boolean;
@@ -381,13 +386,13 @@ export function AIAssistantProvider({
     });
 
     const rawMessagesQuery = useQuery({
-        queryKey: ['assistant-raw-conversation-messages', conversationScope.podId, controller.activeConversationId],
+        queryKey: ['assistant-raw-conversation-messages', conversationScope.podId, controller.openedConversationId],
         queryFn: async () => {
-            if (!conversationScope.podId || !controller.activeConversationId) {
+            if (!conversationScope.podId || !controller.openedConversationId) {
                 return [] as RawConversationMessage[];
             }
             const response = await controllerClient.conversations.messages.list(
-                controller.activeConversationId,
+                controller.openedConversationId,
                 {
                     pod_id: conversationScope.podId,
                     limit: 100,
@@ -395,7 +400,7 @@ export function AIAssistantProvider({
             );
             return (response.items || []) as RawConversationMessage[];
         },
-        enabled: !!conversationScope.podId && !!controller.activeConversationId && isProviderEnabled && shouldLoadActiveConversationMessages,
+        enabled: !!conversationScope.podId && !!controller.openedConversationId && isProviderEnabled && shouldLoadActiveConversationMessages,
         refetchOnWindowFocus: false,
     });
     const rawMessages = useMemo(() => rawMessagesQuery.data ?? [], [rawMessagesQuery.data]);
@@ -452,9 +457,9 @@ export function AIAssistantProvider({
 
         if (
             urlAssistantConversationId
-            && controllerRef.current.activeConversationId !== urlAssistantConversationId
+            && controllerRef.current.openedConversationId !== urlAssistantConversationId
         ) {
-            controllerRef.current.selectConversation(urlAssistantConversationId);
+            controllerRef.current.openConversation(urlAssistantConversationId);
         }
     }, [isProviderEnabled, openAssistant, shouldRestoreAssistantFromUrl, urlAssistantConversationId]);
 
@@ -490,8 +495,8 @@ export function AIAssistantProvider({
         };
 
         if (isOpen) {
-            if (controller.activeConversationId) {
-                setParam(ASSISTANT_CONVERSATION_PARAM, controller.activeConversationId);
+            if (controller.openedConversationId) {
+                setParam(ASSISTANT_CONVERSATION_PARAM, controller.openedConversationId);
             } else if (!urlAssistantConversationId) {
                 deleteParam(ASSISTANT_CONVERSATION_PARAM);
             }
@@ -506,7 +511,7 @@ export function AIAssistantProvider({
         const nextQuery = nextParams.toString();
         router.replace(nextQuery ? `${pathname}?${nextQuery}` : pathname, { scroll: false });
     }, [
-        controller.activeConversationId,
+        controller.openedConversationId,
         isConversationRoute,
         isOpen,
         isProviderEnabled,
@@ -516,6 +521,16 @@ export function AIAssistantProvider({
         shouldRestoreAssistantFromUrl,
         urlAssistantConversationId,
     ]);
+
+    const navigateToResolvedResource = useCallback((href: string) => {
+        const conversationPresentationHref = buildConversationPresentationHref({
+            pathname,
+            searchParams: searchParamsString,
+            resourceHref: href,
+            activeConversationId: controllerRef.current.openedConversationId,
+        });
+        router.push(conversationPresentationHref || href);
+    }, [pathname, router, searchParamsString]);
 
     const navigateToResource = useCallback((resourceType: string, resourceId: string, meta?: Record<string, unknown>) => {
         if (resourceType === 'pod') {
@@ -544,11 +559,11 @@ export function AIAssistantProvider({
                 request,
                 conversationId: typeof meta?.conversationId === 'string'
                     ? meta.conversationId
-                    : controllerRef.current.activeConversationId || urlAssistantConversationId,
+                    : controllerRef.current.openedConversationId || urlAssistantConversationId,
                 toolCallId: resourceId,
             });
             if (href) {
-                router.push(href);
+                navigateToResolvedResource(href);
             }
             return;
         }
@@ -569,14 +584,14 @@ export function AIAssistantProvider({
         if (route) {
             const routeConversationId = typeof meta?.conversationId === 'string'
                 ? meta.conversationId
-                : controllerRef.current.activeConversationId || urlAssistantConversationId;
+                : controllerRef.current.openedConversationId || urlAssistantConversationId;
             setLastCreatedResource({ type: resourceType, id: resourceId });
             router.push(appendAssistantConversationParam(
                 route,
                 routeConversationId,
             ));
         }
-    }, [pathname, podContext?.pod?.id, router, urlAssistantConversationId]);
+    }, [navigateToResolvedResource, pathname, podContext?.pod?.id, router, urlAssistantConversationId]);
 
     const displayMessages = useMemo(
         () => hydrateToolReturnMessages(controller.messages, rawMessages),
@@ -585,9 +600,9 @@ export function AIAssistantProvider({
 
     useEffect(() => {
         if (!shouldLoadActiveConversationMessages) return;
-        if (!controller.activeConversationId || controller.isLoading) return;
+        if (!controller.openedConversationId || controller.isLoading) return;
         void refetchRawMessages();
-    }, [controller.activeConversationId, controller.isLoading, refetchRawMessages, shouldLoadActiveConversationMessages]);
+    }, [controller.openedConversationId, controller.isLoading, refetchRawMessages, shouldLoadActiveConversationMessages]);
 
     useEffect(() => {
         const successfulTools = latestSuccessfulToolInvocations(displayMessages);
@@ -620,11 +635,11 @@ export function AIAssistantProvider({
             }
 
             const displayResource = extractDisplayResourceFromInvocation(lastTool);
-            if (displayResource && conversationScope.podId && controller.activeConversationId) {
+            if (displayResource && conversationScope.podId && controller.openedConversationId) {
                 const href = buildDisplayResourceHref({
                     podId: conversationScope.podId,
                     request: displayResource.request,
-                    conversationId: controller.activeConversationId,
+                    conversationId: controller.openedConversationId,
                     toolCallId: displayResource.toolCallId,
                 });
                 if (href) {
@@ -632,7 +647,7 @@ export function AIAssistantProvider({
                         type: displayResource.request.type.toLowerCase(),
                         id: displayResource.request.name || displayResource.request.path || displayResource.toolCallId,
                     });
-                    router.push(href);
+                    navigateToResolvedResource(href);
                     return;
                 }
             }
@@ -650,16 +665,28 @@ export function AIAssistantProvider({
                 }, 500);
             }
         }
-    }, [controller.activeConversationId, conversationScope.podId, displayMessages, navigateToResource, router]);
+    }, [controller.openedConversationId, conversationScope.podId, displayMessages, navigateToResolvedResource, navigateToResource]);
 
     const clearMessages = useCallback(() => {
         setLastCreatedResource(null);
-        controllerRef.current.selectConversation(null);
+        controllerRef.current.closeConversation();
         controllerRef.current.clearPendingFiles();
     }, []);
 
+    const openConversation = useCallback((conversationId: string) => {
+        controllerRef.current.openConversation(conversationId);
+    }, []);
+
+    const closeConversation = useCallback(() => {
+        controllerRef.current.closeConversation();
+    }, []);
+
     const selectConversation = useCallback((conversationId: string | null) => {
-        controllerRef.current.selectConversation(conversationId);
+        if (conversationId) {
+            controllerRef.current.openConversation(conversationId);
+            return;
+        }
+        controllerRef.current.closeConversation();
     }, []);
 
     const sendMessage = useCallback(async (content: string, options?: SendMessageOptions) => {
@@ -671,8 +698,8 @@ export function AIAssistantProvider({
         markToolInvocationsSeen(seenAutoNavigationToolCallIds.current, displayMessages);
         allowAutoNavigationRef.current = true;
 
-        if (options?.forceNewConversation && controllerRef.current.activeConversationId) {
-            controllerRef.current.selectConversation(null);
+        if (options?.forceNewConversation && controllerRef.current.openedConversationId) {
+            controllerRef.current.closeConversation();
             await waitForControllerReset();
         }
 
@@ -713,12 +740,16 @@ export function AIAssistantProvider({
         toggleAssistant,
         messages: displayMessages,
         conversations: controller.conversations,
-        activeConversationId: controller.activeConversationId,
+        openedConversationId: controller.openedConversationId,
+        activeConversationId: controller.openedConversationId,
         availableModels: controller.availableModels,
         conversationModel: controller.conversationModel as ConversationModel | null,
         conversationRuntime: controller.conversationRuntime,
         setConversationModel: controller.setConversationModel as (model: ConversationModel | null, runtime?: AgentRuntimeConfig | null) => Promise<void>,
-        isActiveConversationRunning: controller.isActiveConversationRunning,
+        isOpenedConversationRunning: controller.isOpenedConversationRunning,
+        isActiveConversationRunning: controller.isOpenedConversationRunning,
+        openConversation,
+        closeConversation,
         selectConversation,
         isLoading: controller.isLoading,
         isLoadingConversations: controller.isLoadingConversations,
@@ -747,7 +778,8 @@ export function AIAssistantProvider({
         clearMessages,
         closeAssistant,
         completedActions,
-        controller.activeConversationId,
+        closeConversation,
+        controller.openedConversationId,
         controller.availableModels,
         controller.clearPendingFiles,
         controller.conversationModel,
@@ -755,7 +787,7 @@ export function AIAssistantProvider({
         controller.conversations,
         controller.error,
         controller.hasOlderMessages,
-        controller.isActiveConversationRunning,
+        controller.isOpenedConversationRunning,
         controller.isLoading,
         controller.isLoadingConversations,
         controller.isLoadingMessages,
@@ -775,6 +807,7 @@ export function AIAssistantProvider({
         isProviderEnabled,
         lastCreatedResource,
         navigateToResource,
+        openConversation,
         openAssistant,
         pendingActions,
         podContext,

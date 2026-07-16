@@ -216,6 +216,25 @@
   display: none;
 }
 
+.conversation-presentation-layout {
+  grid-template-columns: minmax(22rem, 0.88fr) minmax(30rem, 1.12fr);
+}
+
+@container pod-surface (max-width: 980px) {
+  .conversation-presentation-layout {
+    display: block;
+  }
+
+  .conversation-presentation-chat {
+    display: none;
+  }
+
+  .conversation-presentation-stage {
+    height: 100%;
+    border-left-width: 0;
+  }
+}
+
 .lemma-assistant-inline-tool-button,
 .lemma-assistant-inline-approval-button {
   color: var(--text-secondary);

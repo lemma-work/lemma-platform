@@ -1,7 +1,7 @@
 "use client";
 
 import { ApiError } from "lemma-sdk";
-import { use, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { use, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import { AIAssistantProvider, useAIAssistant } from "@/components/ai/ai-assistant-context";
@@ -10,20 +10,26 @@ import { PodAssistantSidebar } from "@/components/ai/pod-assistant";
 import { InlineLoader, PageLoader } from "@/components/brand/loader";
 import { AppProvider, useApp } from "@/components/app/app-context";
 import { AppFrameHost } from "@/components/app/app-frame-host";
-import { PodAppTabs } from "@/components/pod/pod-app-tabs";
+import { PodWorkspaceTabs } from "@/components/pod/pod-workspace-tabs";
+import { usePodWorkspaceTabs } from "@/components/pod/use-pod-workspace-tabs";
 import { useOrganization } from "@/components/dashboard/org-context";
 import { PodTopbarProvider, type PodTopbarState } from "@/components/pod/pod-topbar-context";
 import { MobileSidebarDrawer } from "@/components/pod/mobile-sidebar-drawer";
 import { PodLayoutProvider, usePodLayout } from "@/components/pod/pod-layout-context";
 import { WorkspaceSidebar } from "@/components/pod/workspace-sidebar";
 import { Button } from "@/components/ui/button";
-import { ArrowLeft, Home, PanelLeftOpen, Settings, X } from "lucide-react";
+import { ArrowLeft, PanelLeftOpen, Settings, X } from "lucide-react";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
 import { getLemmaClient } from "@/lib/sdk/lemma-client";
 import { usePod } from "@/lib/hooks/use-pods";
 import { usePodContext } from "@/lib/hooks/use-pod-context";
 import { usePodAccess } from "@/lib/hooks/use-pod-access";
 import { clearLastOpenedPodId, writeLastOpenedPodId } from "@/lib/pods/last-opened-pod";
+import { getWorkspaceTabAfterClose, getWorkspaceTabHref } from "@/lib/pods/workspace-tabs";
+import {
+    CONVERSATION_STAGE_EMBED_PARAM,
+    CONVERSATION_STAGE_EMBED_VALUE,
+} from "@/lib/assistant/conversation-presentation";
 import type { PodRoutePolicyKey } from "@/lib/authz/pod-permissions";
 import { cn } from "@/lib/utils";
 import type { Pod } from "@/lib/types";
@@ -38,15 +44,6 @@ interface PodHeaderData {
 }
 
 type PodAccessState = "idle" | "checking" | "denied" | "not_found" | "error";
-
-type PodHistoryScreen = {
-    href: string;
-    label: string;
-};
-
-type PodBackTarget = PodHistoryScreen & {
-    source: "history" | "configured";
-};
 
 type SearchParamsReader = {
     get(name: string): string | null;
@@ -181,11 +178,6 @@ function getPathBasename(value: string | null | undefined) {
     return decoded.split("/").filter(Boolean).at(-1) || decoded;
 }
 
-function getHrefPath(value: string | null | undefined) {
-    if (!value) return "";
-    return value.split("?")[0]?.split("#")[0] || "";
-}
-
 function appendAssistantConversationParam(href: string, assistantConversationId: string | null) {
     if (!assistantConversationId) return href;
     const [withoutHash, hash = ""] = href.split("#");
@@ -262,6 +254,8 @@ function PodShell({
     const router = useRouter();
     const searchParams = useSearchParams();
     const {
+        openedConversationId,
+        conversations,
         isOpen: isAssistantOpen,
         isReady,
         openAssistant,
@@ -282,11 +276,9 @@ function PodShell({
         assistantDockWidth,
         setAssistantDockWidth,
     } = usePodLayout();
-    const { pages: appPages } = useApp();
+    const { pages: appPages, isLoading: appPagesLoading } = useApp();
     const [topbar, setTopbar] = useState<PodTopbarState>({});
-    const [previousScreen, setPreviousScreen] = useState<PodHistoryScreen | null>(null);
     const [isPresentedClosing, setIsPresentedClosing] = useState(false);
-    const currentScreenRef = useRef<PodHistoryScreen | null>(null);
     const handledAssistantMessageRef = useRef<string | null>(null);
     const assistantMessage = searchParams.get("assistantMessage");
     const conversationInstructions = searchParams.get("conversationInstructions");
@@ -322,10 +314,33 @@ function PodShell({
         searchParams.get("mode") === "edit";
     const isPodHome = pathname === `/pod/${pod.id}` || pathname === `/pod/${pod.id}/`;
     const isAppViewRoute = pathname.startsWith(`/pod/${pod.id}/app/view`);
-    // Show the workspace tab strip (Home + app tabs) on home and while viewing an
-    // app, but only once the pod actually has apps — a pod with none keeps the
-    // clean, header-less home canvas.
-    const showAppTabsBar = (isPodHome || isAppViewRoute) && appPages.length > 0;
+    const isConversationRoute = pathname === `/pod/${pod.id}/conversations` || pathname.startsWith(`/pod/${pod.id}/conversations/`);
+    const appSlug = isAppViewRoute ? searchParams.get("page") : null;
+    const isConversationStageEmbed =
+        searchParams.get(CONVERSATION_STAGE_EMBED_PARAM) === CONVERSATION_STAGE_EMBED_VALUE;
+    const sectionLabel = getPodSectionLabel(pod.id, pathname);
+    const topbarRouteTitle = typeof topbar.title === "string" ? topbar.title.trim() : "";
+    const workspaceTabs = usePodWorkspaceTabs({
+        podId: pod.id,
+        pathname,
+        currentHref,
+        routeTitle: topbarRouteTitle && topbarRouteTitle !== sectionLabel
+            ? topbarRouteTitle
+            : currentScreenLabel,
+        appSlug,
+        pages: appPages,
+        appsLoaded: !appPagesLoading,
+        conversations,
+        openedConversationId,
+    });
+    const embeddedOpenAppSlugs = useMemo(
+        () => appSlug && !workspaceTabs.openAppSlugs.includes(appSlug)
+            ? [...workspaceTabs.openAppSlugs, appSlug]
+            : workspaceTabs.openAppSlugs,
+        [appSlug, workspaceTabs.openAppSlugs],
+    );
+    // Every non-fullscreen pod route is a workspace. The route decides which tab
+    // is active; the page's own title and actions live in the contextual row.
     // A stable key for the "which app-workspace view is this" decision below:
     // changes when you switch apps, land on home, or leave for another section.
     const appNavIntent = isAppViewRoute
@@ -333,7 +348,6 @@ function PodShell({
         : isPodHome
             ? "home"
             : "other";
-    const isConversationRoute = pathname === `/pod/${pod.id}/conversations` || pathname.startsWith(`/pod/${pod.id}/conversations/`);
     const isPresentedInteractionRoute =
         pathname === `/pod/${pod.id}/widgets/view`;
     const presentedConversationId = assistantConversationId || searchParams.get("conversationId");
@@ -354,7 +368,6 @@ function PodShell({
     // On compact viewports the nav is an off-canvas drawer, reached by a single
     // hamburger in the topbar (resource/presented routes render the shell topbar).
     const showMobileNavTrigger = isCompact && !isPresentedInteractionRoute;
-    const sectionLabel = getPodSectionLabel(pod.id, pathname);
     const routePolicyKey = getPodRoutePolicyKey(pod.id, pathname);
     const canUseCurrentRoute = !routePolicyKey || podAccess.canAccessRoute(routePolicyKey);
     const canUseSettings = podAccess.canAccessRoute("settings");
@@ -366,24 +379,16 @@ function PodShell({
     // to a launcher instead of docking, so it can never double up the topbar.
     const isFullscreenSurface =
         isWorkflowEditRoute || isWorkflowRunRoute || (!isWorkflowRoute && Boolean(topbar.fullscreen));
-    const backTarget = useMemo<PodBackTarget | null>(() => {
-        if (!topbar.backHref || !topbar.backLabel) return null;
-        if (getHrefPath(topbar.backHref) === pathname) {
-            return {
-                href: topbar.backHref,
-                label: topbar.backLabel,
-                source: "configured",
-            };
+    const handleWorkspaceTabClose = useCallback((tabId: string) => {
+        const fallbackTab = getWorkspaceTabAfterClose(workspaceTabs.tabs, tabId);
+        workspaceTabs.closeTab(tabId);
+        if (workspaceTabs.activeTabId === tabId) {
+            router.replace(getWorkspaceTabHref(fallbackTab, pod.id));
         }
-        if (previousScreen && previousScreen.href !== currentHref) {
-            return { ...previousScreen, source: "history" };
-        }
-        return {
-            href: topbar.backHref,
-            label: topbar.backLabel,
-            source: "configured",
-        };
-    }, [currentHref, pathname, previousScreen, topbar.backHref, topbar.backLabel]);
+    }, [pod.id, router, workspaceTabs]);
+    const backTarget = topbar.backHref && topbar.backLabel
+        ? { href: topbar.backHref, label: topbar.backLabel }
+        : null;
 
     useEffect(() => {
         writeLastOpenedPodId(pod.id);
@@ -402,26 +407,6 @@ function PodShell({
             openNav();
         }
     }, [appNavIntent, isCompact, closeNav, openNav]);
-
-    useLayoutEffect(() => {
-        const nextScreen = { href: currentHref, label: currentScreenLabel };
-        const currentScreen = currentScreenRef.current;
-
-        if (!currentScreen) {
-            currentScreenRef.current = nextScreen;
-            return;
-        }
-
-        if (currentScreen.href !== nextScreen.href) {
-            setPreviousScreen(currentScreen);
-            currentScreenRef.current = nextScreen;
-            return;
-        }
-
-        if (currentScreen.label !== nextScreen.label) {
-            currentScreenRef.current = nextScreen;
-        }
-    }, [currentHref, currentScreenLabel]);
 
     useEffect(() => {
         if (!assistantMessage || !isReady) return;
@@ -521,6 +506,27 @@ function PodShell({
         );
     }
 
+    if (isConversationStageEmbed) {
+        return (
+            <div className="h-screen overflow-hidden bg-[var(--pod-main-bg)] text-[var(--text-primary)]">
+                <PodTopbarProvider value={topbarContextValue}>
+                    <main className="relative h-full min-h-0 w-full overflow-hidden">
+                        <div className="h-full min-h-0 w-full overflow-hidden">
+                            {children}
+                        </div>
+                        <AppFrameHost
+                            podId={pod.id}
+                            visible={isAppViewRoute}
+                            activeSlug={appSlug}
+                            openAppSlugs={embeddedOpenAppSlugs}
+                            canUpdateApp={podAccess.can("app.update")}
+                        />
+                    </main>
+                </PodTopbarProvider>
+            </div>
+        );
+    }
+
     if (isFullscreenSurface) {
         return (
             <div className="h-screen overflow-hidden bg-[var(--pod-shell-bg)] text-[var(--text-primary)]">
@@ -545,16 +551,6 @@ function PodShell({
                     />
                 </div>
             </MobileSidebarDrawer>
-            {isPodHome && isCompact && !showAppTabsBar ? (
-                <button
-                    type="button"
-                    onClick={() => setMobileNavOpen(true)}
-                    className="lemma-shell-icon-button custom-focus-ring fixed left-3 top-3 z-30 h-9 w-9 border border-[var(--border-subtle)] bg-[var(--pod-main-bg)] text-[var(--text-tertiary)]"
-                    aria-label="Open navigation"
-                >
-                    <PanelLeftOpen className="h-4 w-4" strokeWidth={1.8} />
-                </button>
-            ) : null}
             <div className={sidebarSlotClassName}>
                 {showWorkspaceSidebar ? (
                     <div className="pod-sidebar-panel h-full">
@@ -593,9 +589,8 @@ function PodShell({
             ) : null}
 
             <main className="pod-workspace-main flex min-w-0 flex-1 flex-col overflow-hidden">
-                {showAppTabsBar ? (
-                    <header className="pod-shell-topbar flex h-14 shrink-0 items-center justify-between gap-4 bg-[var(--pod-main-bg)] px-4">
-                        <div className="flex h-7 min-w-0 flex-1 items-center gap-2">
+                <header className="pod-shell-topbar pod-workspace-tabbar flex h-14 shrink-0 items-center justify-between gap-4 bg-[var(--pod-main-bg)] px-4">
+                        <div className="flex h-8 min-w-0 flex-1 items-center gap-2">
                             {showMobileNavTrigger ? (
                                 <button
                                     type="button"
@@ -607,7 +602,13 @@ function PodShell({
                                     <PanelLeftOpen className="h-4 w-4" strokeWidth={1.8} />
                                 </button>
                             ) : null}
-                            <PodAppTabs podId={pod.id} />
+                            <PodWorkspaceTabs
+                                podId={pod.id}
+                                tabs={workspaceTabs.tabs}
+                                activeTabId={workspaceTabs.activeTabId}
+                                canStartConversation={podAccess.can("conversation.write")}
+                                onClose={handleWorkspaceTabClose}
+                            />
                         </div>
                         <div className="pod-shell-topbar-actions flex h-7 shrink-0 items-center gap-1.5">
                             <TooltipProvider>
@@ -628,11 +629,11 @@ function PodShell({
                                 ) : null}
                             </TooltipProvider>
                         </div>
-                    </header>
-                ) : !isPodHome && !isConversationRoute ? (
+                </header>
+                {!isPodHome && !isConversationRoute && !isAppViewRoute ? (
                     <header
                         className={cn(
-                            "pod-shell-topbar flex h-14 shrink-0 items-center justify-between gap-4 bg-[var(--pod-main-bg)] px-4",
+                            "pod-shell-topbar pod-shell-contextbar flex h-12 shrink-0 items-center justify-between gap-4 bg-[var(--pod-main-bg)] px-4",
                             isPresentedInteractionRoute && "pod-presented-resource-topbar"
                         )}
                     >
@@ -654,39 +655,17 @@ function PodShell({
                         ) : (
                             <>
                         <div key={`${currentHref}:topbar-title`} className="pod-shell-topbar-title-cluster flex h-7 min-w-0 flex-1 items-center gap-2">
-                            {showMobileNavTrigger ? (
-                                <button
-                                    type="button"
-                                    onClick={toggleNav}
-                                    className="lemma-shell-icon-button custom-focus-ring h-7 w-7 shrink-0 text-[var(--text-tertiary)]"
-                                    aria-label="Open navigation"
-                                    title="Open navigation"
-                                >
-                                    <PanelLeftOpen className="h-4 w-4" strokeWidth={1.8} />
-                                </button>
-                            ) : null}
                             {backTarget ? (
-                                backTarget.source === "history" ? (
-                                    <button
-                                        type="button"
-                                        onClick={() => router.back()}
-                                        className="lemma-shell-link lemma-shell-link-sm hidden sm:inline-flex"
-                                    >
-                                        <ArrowLeft className="h-3.5 w-3.5" />
-                                        {backTarget.label}
-                                    </button>
-                                ) : (
-                                    <Link
-                                        href={appendAssistantConversationParam(backTarget.href, assistantConversationId)}
-                                        className="lemma-shell-link lemma-shell-link-sm hidden sm:inline-flex"
-                                    >
-                                        <ArrowLeft className="h-3.5 w-3.5" />
-                                        {backTarget.label}
-                                    </Link>
-                                )
+                                <Link
+                                    href={appendAssistantConversationParam(backTarget.href, assistantConversationId)}
+                                    className="lemma-shell-link lemma-shell-link-sm hidden sm:inline-flex"
+                                >
+                                    <ArrowLeft className="h-3.5 w-3.5" />
+                                    {backTarget.label}
+                                </Link>
                             ) : null}
                             <div className="pod-shell-topbar-title min-w-0 truncate font-display text-base font-semibold leading-7 text-[var(--text-primary)]">
-                                {topbar.title || sectionLabel}
+                                {topbar.title || currentScreenLabel || sectionLabel}
                             </div>
                             {topbar.switcher ? <span className="shrink-0">{topbar.switcher}</span> : null}
                             {topbar.meta ? (
@@ -700,38 +679,7 @@ function PodShell({
                         </div>
                         {topbar.tabs ? <div className="hidden min-w-0 shrink overflow-x-auto xl:block">{topbar.tabs}</div> : null}
                         <div key={`${currentHref}:topbar-actions`} className="pod-shell-topbar-actions flex h-7 shrink-0 items-center gap-1.5">
-                            <TooltipProvider>
                             {topbar.actions}
-                            <HelpMenu />
-                            {!isCompact ? (
-                                <Tooltip>
-                                    <TooltipTrigger asChild>
-                                        <Link
-                                            href={`/pod/${pod.id}`}
-                                            className="lemma-shell-icon-button custom-focus-ring"
-                                            aria-label="Pod home"
-                                        >
-                                            <Home className="h-4 w-4" strokeWidth={1.8} />
-                                        </Link>
-                                    </TooltipTrigger>
-                                    <TooltipContent>Pod home</TooltipContent>
-                                </Tooltip>
-                            ) : null}
-                            {canUseSettings ? (
-                                <Tooltip>
-                                    <TooltipTrigger asChild>
-                                        <Link
-                                            href={`/pod/${pod.id}/settings`}
-                                            className="lemma-shell-icon-button custom-focus-ring"
-                                            aria-label="Pod settings"
-                                        >
-                                            <Settings className="h-4 w-4" strokeWidth={1.8} />
-                                        </Link>
-                                    </TooltipTrigger>
-                                    <TooltipContent>Pod settings</TooltipContent>
-                                </Tooltip>
-                            ) : null}
-                            </TooltipProvider>
                         </div>
                             </>
                         )}
@@ -741,7 +689,8 @@ function PodShell({
                 <PodTopbarProvider value={topbarContextValue}>
                     <div
                         className={cn(
-                            "pod-page-scroll min-h-0 flex-1 overflow-auto",
+                            "pod-page-scroll min-h-0 flex-1",
+                            isConversationRoute ? "overflow-hidden" : "overflow-auto",
                             isPodHome
                                 ? "bg-[var(--pod-main-bg)] shadow-none"
                                 : isConversationRoute
@@ -750,7 +699,13 @@ function PodShell({
                             assistantDocked && "pod-page-scroll-assistant-open"
                         )}
                     >
-                        <div key={pathname} className="pod-page-surface">
+                        <div
+                            key={pathname}
+                            className={cn(
+                                "pod-page-surface",
+                                isConversationRoute && "pod-conversation-workspace-surface",
+                            )}
+                        >
                             {isPresentedInteractionRoute && isPresentedClosing ? (
                                 <main className="flex min-h-full items-center justify-center bg-[var(--pod-main-bg)] p-8">
                                     <InlineLoader size="sm" label="Opening conversation" />
@@ -764,7 +719,8 @@ function PodShell({
                 <AppFrameHost
                     podId={pod.id}
                     visible={isAppViewRoute}
-                    activeSlug={isAppViewRoute ? (searchParams.get("page") || null) : null}
+                    activeSlug={appSlug}
+                    openAppSlugs={workspaceTabs.openAppSlugs}
                     canUpdateApp={podAccess.can("app.update")}
                 />
                 </div>

@@ -139,10 +139,10 @@ export default function AppPagesRoute({ params }: { params: Promise<{ id: string
                             onClick={() => {
                                 void createAppWithAssistant();
                             }}
-                            disabled={assistant.isLoading || assistant.isActiveConversationRunning}
+                            disabled={assistant.isLoading || assistant.isOpenedConversationRunning}
                             className="h-9 w-fit gap-2 rounded-md px-3 text-sm"
                         >
-                            {assistant.isLoading || assistant.isActiveConversationRunning ? (
+                            {assistant.isLoading || assistant.isOpenedConversationRunning ? (
                                 <Loader2 className="h-4 w-4 animate-spin" />
                             ) : (
                                 <Plus className="h-4 w-4" />

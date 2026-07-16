@@ -593,6 +593,14 @@
   animation: pod-page-enter 180ms var(--ease-out) both;
 }
 
+/* Conversations are viewport workspaces: the transcript and any presented
+   resource own their scrolling. Keeping the generic page scroller out of this
+   chain prevents an embedded resource from being intrinsically height-capped. */
+.pod-page-surface.pod-conversation-workspace-surface {
+  min-height: 0;
+  overflow: hidden;
+}
+
 .presented-resource-surface {
   animation: presented-resource-enter 240ms cubic-bezier(0.22, 1, 0.36, 1) both;
 }

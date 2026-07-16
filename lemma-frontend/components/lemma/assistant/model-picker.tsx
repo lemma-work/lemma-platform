@@ -109,11 +109,16 @@ export interface ModelPickerProps extends Omit<ComponentPropsWithoutRef<"div">, 
   autoSubtitle?: ReactNode;
   /** Short name of the model Auto resolves to — shown on the trigger as "Auto · <model>". */
   autoModelLabel?: string;
+  /** Optional compact trigger text when Auto is selected. The dialog row still uses autoLabel. */
+  autoTriggerLabel?: ReactNode;
   /** Footer hint, e.g. "Just for this chat" or "Default for this agent". */
   scopeHint?: ReactNode;
   /** Where "Manage models" links — connect providers, set up coding agents. */
   manageHref?: string;
   compact?: boolean;
+  /** Optional classes for the trigger button and its visible label. */
+  triggerClassName?: string;
+  triggerLabelClassName?: string;
   onChange: (value: string | null, runtime?: AgentRuntimeConfig | null) => void;
 }
 
@@ -134,9 +139,12 @@ export const ModelPicker = forwardRef<HTMLDivElement, ModelPickerProps>(function
     autoLabel = "Default",
     autoSubtitle = "Use the workspace default",
     autoModelLabel,
+    autoTriggerLabel,
     scopeHint = "Just for this chat",
     manageHref,
     compact = false,
+    triggerClassName,
+    triggerLabelClassName,
     onChange,
     className,
     ...props
@@ -175,11 +183,11 @@ export const ModelPicker = forwardRef<HTMLDivElement, ModelPickerProps>(function
       : null;
   // On an explicit pick, show the model. On Auto, show what it resolves to —
   // "Auto · <model>" — so a configured default is visible without opening the picker.
-  const autoTriggerLabel = autoModelLabel
+  const resolvedAutoTriggerLabel = autoTriggerLabel ?? (autoModelLabel
     ? `${typeof autoLabel === "string" ? autoLabel : "Auto"} · ${autoModelLabel}`
-    : autoLabel;
+    : autoLabel);
   // With Auto hidden, an unset value has nothing to inherit — prompt a pick.
-  const triggerLabel = selectedModelLabel ?? (allowAuto ? autoTriggerLabel : "Choose a model");
+  const triggerLabel = selectedModelLabel ?? (allowAuto ? resolvedAutoTriggerLabel : "Choose a model");
 
   const groups = useMemo<ProviderGroup[]>(() => {
     const byKey = new Map<string, ProviderGroup>();
@@ -280,6 +288,7 @@ export const ModelPicker = forwardRef<HTMLDivElement, ModelPickerProps>(function
         className={cn(
           "lemma-assistant-runtime-trigger-button inline-flex max-w-[240px] items-center rounded-lg border border-[var(--row-border)] bg-[var(--field-bg)] text-left text-sm font-medium shadow-none transition-colors hover:border-[var(--field-border-hover)] disabled:cursor-not-allowed disabled:opacity-55",
           compact ? "h-8 min-w-0 gap-1.5 px-2" : "h-9 min-w-28 gap-2 px-2.5",
+          triggerClassName,
         )}
         aria-label="Conversation model"
       >
@@ -291,7 +300,7 @@ export const ModelPicker = forwardRef<HTMLDivElement, ModelPickerProps>(function
         >
           Model
         </span>
-        <span className="min-w-0 flex-1 truncate text-sm font-semibold text-[var(--text-primary)]">
+        <span className={cn("min-w-0 flex-1 truncate text-sm font-semibold text-[var(--text-primary)]", triggerLabelClassName)}>
           {triggerLabel}
         </span>
         <ChevronDown className="size-3.5 shrink-0 text-[var(--text-tertiary)]" />
@@ -480,6 +489,8 @@ export interface RuntimeModelPickerProps {
   scopeHint?: ReactNode;
   manageHref?: string;
   className?: string;
+  triggerClassName?: string;
+  triggerLabelClassName?: string;
   /** Dialog heading. Defaults to "Choose a model". */
   title?: string;
   /** Dialog subheading — say what picking here actually sets. */
@@ -488,6 +499,8 @@ export interface RuntimeModelPickerProps {
   autoLabel?: ReactNode;
   /** Subtitle for that row. Defaults to what the default currently resolves to. */
   autoSubtitle?: ReactNode;
+  /** Optional compact trigger text when the inherited default is selected. */
+  autoTriggerLabel?: ReactNode;
   /** Show the "inherit the default" (Auto) row. Off for surfaces that set the
    *  default themselves. Defaults to true. */
   allowAuto?: boolean;
@@ -511,10 +524,13 @@ export function RuntimeModelPicker({
   scopeHint,
   manageHref,
   className,
+  triggerClassName,
+  triggerLabelClassName,
   title,
   description,
   autoLabel,
   autoSubtitle,
+  autoTriggerLabel,
   allowAuto,
 }: RuntimeModelPickerProps) {
   const options = useMemo(
@@ -531,6 +547,8 @@ export function RuntimeModelPicker({
   return (
     <ModelPicker
       className={className}
+      triggerClassName={triggerClassName}
+      triggerLabelClassName={triggerLabelClassName}
       value={value?.model_name ?? null}
       runtime={value ?? null}
       options={options}
@@ -538,6 +556,7 @@ export function RuntimeModelPicker({
       autoLabel={autoLabel}
       autoSubtitle={resolvedAutoSubtitle}
       autoModelLabel={defaultModelLabel}
+      autoTriggerLabel={autoTriggerLabel}
       allowAuto={allowAuto}
       scopeHint={scopeHint}
       manageHref={manageHref}

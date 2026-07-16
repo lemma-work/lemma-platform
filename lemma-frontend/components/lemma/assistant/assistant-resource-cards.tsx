@@ -16,6 +16,7 @@ import {
   extractDisplayResourceFromInvocation,
   type DisplayResourceRequest,
 } from "@/lib/assistant/display-resource";
+import { CONVERSATION_PRESENTED_RESOURCE_PARAM } from "@/lib/assistant/conversation-presentation";
 import { getLemmaClient } from "@/lib/sdk/lemma-client";
 import { fileNameFromPath } from "./assistant-format";
 import { displayResourceIcon } from "./assistant-parts";
@@ -59,7 +60,12 @@ export function isCurrentBrowserHref(value: string | null): boolean {
   if (!value || typeof window === "undefined") return false;
   const current = canonicalLocalHref(`${window.location.pathname}${window.location.search}`);
   const target = canonicalLocalHref(value);
-  return !!current && !!target && current === target;
+  if (!!current && !!target && current === target) return true;
+
+  const presented = new URLSearchParams(window.location.search)
+    .get(CONVERSATION_PRESENTED_RESOURCE_PARAM);
+  const presentedTarget = presented ? canonicalLocalHref(presented) : null;
+  return !!presentedTarget && !!target && presentedTarget === target;
 }
 
 export function humanizeResourceName(value: string): string {

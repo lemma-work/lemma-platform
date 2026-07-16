@@ -1,0 +1,242 @@
+import { act, createElement } from "react";
+import { createRoot, type Root } from "react-dom/client";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import type { LemmaClient } from "../client.js";
+import type { Conversation } from "../types.js";
+import {
+  useAssistantController,
+  useConversations,
+  type UseAssistantControllerResult,
+  type UseConversationsResult,
+} from "../react/index.js";
+
+(globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
+
+const roots: Root[] = [];
+
+function captureHookResult<T>() {
+  let value: T | null = null;
+  return {
+    set(nextValue: T) {
+      value = nextValue;
+    },
+    get() {
+      if (!value) throw new Error("Hook result is not available.");
+      return value;
+    },
+  };
+}
+
+function conversation(id: string, updatedAt: string): Conversation {
+  return {
+    id,
+    pod_id: "pod-1",
+    title: id,
+    status: "WAITING",
+    created_at: updatedAt,
+    updated_at: updatedAt,
+  } as Conversation;
+}
+
+function fakeClient(items: Conversation[]) {
+  const createdConversation = conversation("created", "2026-07-16T12:00:00.000Z");
+  const list = vi.fn(async () => ({
+    items,
+    limit: 30,
+    next_page_token: null,
+    total: items.length,
+  }));
+  const create = vi.fn(async () => createdConversation);
+  const get = vi.fn(async (id: string) => (
+    items.find((item) => item.id === id)
+    ?? conversation(id, "2026-07-01T12:00:00.000Z")
+  ));
+  const encoder = new TextEncoder();
+  const sendMessageStream = vi.fn(async () => new ReadableStream<Uint8Array>({
+    start(controller) {
+      controller.enqueue(encoder.encode('data: {"type":"completed"}\n\n'));
+      controller.close();
+    },
+  }));
+
+  const client = {
+    podId: "pod-1",
+    withPod() {
+      return this;
+    },
+    conversations: {
+      list,
+      create,
+      get,
+      listModels: vi.fn(async () => ({ items: [] })),
+      messages: {
+        list: vi.fn(async () => ({ items: [], limit: 100, next_page_token: null })),
+      },
+      sendMessageStream,
+      resumeStream: vi.fn(),
+      stopRun: vi.fn(),
+      update: vi.fn(),
+    },
+  } as unknown as LemmaClient;
+
+  return { client, create, get, list, sendMessageStream };
+}
+
+async function render(element: ReturnType<typeof createElement>) {
+  const container = document.createElement("div");
+  document.body.appendChild(container);
+  const root = createRoot(container);
+  roots.push(root);
+  await act(async () => {
+    root.render(element);
+    await Promise.resolve();
+  });
+  return root;
+}
+
+async function settle() {
+  await act(async () => {
+    await new Promise((resolve) => setTimeout(resolve, 0));
+  });
+}
+
+afterEach(async () => {
+  while (roots.length > 0) {
+    const root = roots.pop();
+    if (!root) continue;
+    await act(async () => root.unmount());
+  }
+  document.body.innerHTML = "";
+});
+
+describe("explicit conversation selection", () => {
+  it("loads controller history without opening the newest conversation", async () => {
+    const { client, list } = fakeClient([
+      conversation("newest", "2026-07-16T12:00:00.000Z"),
+      conversation("older", "2026-07-15T12:00:00.000Z"),
+    ]);
+    const controller = captureHookResult<UseAssistantControllerResult>();
+
+    function Harness({ agentName }: { agentName: string }) {
+      controller.set(useAssistantController({
+        client,
+        podId: "pod-1",
+        agentName,
+        autoLoadMessages: false,
+      }));
+      return null;
+    }
+
+    const root = await render(createElement(Harness, { agentName: "alpha" }));
+    await settle();
+
+    expect(list).toHaveBeenCalled();
+    expect(controller.get().conversations.map((item) => item.id)).toEqual(["newest", "older"]);
+    expect(controller.get().openedConversationId).toBeNull();
+    expect(controller.get().activeConversationId).toBeNull();
+
+    await act(async () => controller.get().openConversation("older"));
+    expect(controller.get().openedConversationId).toBe("older");
+
+    await act(async () => controller.get().openConversation("off-page"));
+    await settle();
+    expect(controller.get().openedConversationId).toBe("off-page");
+    expect(controller.get().conversations.some((item) => item.id === "off-page")).toBe(true);
+
+    await act(async () => {
+      root.render(createElement(Harness, { agentName: "beta" }));
+      await Promise.resolve();
+    });
+    await settle();
+
+    expect(controller.get().openedConversationId).toBeNull();
+  });
+
+  it("requires list selection and preserves an explicitly selected off-page conversation", async () => {
+    const { client, create, get } = fakeClient([
+      conversation("newest", "2026-07-16T12:00:00.000Z"),
+      conversation("older", "2026-07-15T12:00:00.000Z"),
+    ]);
+    const conversations = captureHookResult<UseConversationsResult>();
+
+    function Harness({ initialConversationId }: { initialConversationId: string | null }) {
+      conversations.set(useConversations({
+        client,
+        podId: "pod-1",
+        initialConversationId,
+      }));
+      return null;
+    }
+
+    const root = await render(createElement(Harness, { initialConversationId: null }));
+    await settle();
+
+    expect(conversations.get().selectedConversationId).toBeNull();
+    expect(conversations.get().effectiveSelectedConversationId).toBeNull();
+    await act(async () => conversations.get().selectLatestConversation());
+    expect(conversations.get().selectedConversationId).toBe("newest");
+
+    await act(async () => {
+      root.render(createElement(Harness, { initialConversationId: "off-page" }));
+      await Promise.resolve();
+    });
+    await settle();
+
+    expect(conversations.get().selectedConversationId).toBe("off-page");
+    await act(async () => {
+      await conversations.get().ensureConversation();
+    });
+    expect(get).toHaveBeenCalledWith("off-page", { pod_id: "pod-1" });
+    expect(create).not.toHaveBeenCalled();
+  });
+
+  it("creates and selects a conversation only when no conversation was selected", async () => {
+    const { client, create } = fakeClient([
+      conversation("newest", "2026-07-16T12:00:00.000Z"),
+    ]);
+    const conversations = captureHookResult<UseConversationsResult>();
+
+    function Harness() {
+      conversations.set(useConversations({ client, podId: "pod-1" }));
+      return null;
+    }
+
+    await render(createElement(Harness));
+    await settle();
+
+    await act(async () => {
+      await conversations.get().ensureConversation({ title: "New conversation" });
+    });
+
+    expect(create).toHaveBeenCalledOnce();
+    expect(conversations.get().selectedConversationId).toBe("created");
+  });
+
+  it("opens a newly created controller conversation on the first send", async () => {
+    const { client, create, sendMessageStream } = fakeClient([
+      conversation("newest", "2026-07-16T12:00:00.000Z"),
+    ]);
+    const controller = captureHookResult<UseAssistantControllerResult>();
+
+    function Harness() {
+      controller.set(useAssistantController({
+        client,
+        podId: "pod-1",
+        autoLoadMessages: false,
+      }));
+      return null;
+    }
+
+    await render(createElement(Harness));
+    await settle();
+    expect(controller.get().openedConversationId).toBeNull();
+
+    await act(async () => {
+      await controller.get().sendMessage("hello");
+    });
+
+    expect(create).toHaveBeenCalledOnce();
+    expect(sendMessageStream).toHaveBeenCalledOnce();
+    expect(controller.get().openedConversationId).toBe("created");
+  });
+});
