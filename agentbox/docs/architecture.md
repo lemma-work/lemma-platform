@@ -226,14 +226,15 @@ E2B_SANDBOX_STATUS_RETRY_SECONDS=15
 E2B_RUNTIME_BOOTSTRAP_TIMEOUT_SECONDS=120
 ```
 
-E2B networking denies loopback, link-local, metadata, and private IPv4/IPv6
-ranges at the template boundary. `E2B_ALLOW_INTERNET_ACCESS` controls public
-internet access. Provider rate limits honor `Retry-After` before returning a
-structured retryable error. Control-plane requests are independently bounded
-so the one-hour sandbox lifetime cannot be mistaken for an HTTP request
-timeout. Active AgentBox heartbeats renew that lifetime through a throttled
-provider lease; idle suspension preserves the E2B filesystem until retention
-purges it.
+E2B uses provider-default egress and its native restricted-public-traffic mode,
+so runtime and function ports require the E2B traffic token. AgentBox does not
+apply the Docker/Kubernetes private-range policy to E2B-managed infrastructure;
+`E2B_ALLOW_INTERNET_ACCESS` controls public internet access. Provider rate
+limits honor `Retry-After` before returning a structured retryable error.
+Control-plane requests are independently bounded so the one-hour sandbox
+lifetime cannot be mistaken for an HTTP request timeout. Active AgentBox
+heartbeats renew that lifetime through a throttled provider lease; idle
+suspension preserves the E2B filesystem until retention purges it.
 
 ### Daytona
 

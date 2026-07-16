@@ -5,6 +5,7 @@ description = "AgentBox sandbox manager and Python client"
 requires-python = ">=3.12"
 dependencies = [
     "fastapi[standard]>=0.128.0",
+    "httpx>=0.28.1",
     "kubernetes>=34.1.0",
     "pydantic>=2.11.0",
     "pydantic-settings>=2.14.2",

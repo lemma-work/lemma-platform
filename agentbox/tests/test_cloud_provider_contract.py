@@ -118,6 +118,7 @@ class _E2BSandbox:
     status_false_failures = 0
     timeout_set_count = 0
     connect_not_found_failures = 0
+    last_create_kwargs: dict[str, object] = {}
 
     def __init__(self, sandbox_id: str) -> None:
         self.sandbox_id = sandbox_id
@@ -144,6 +145,7 @@ class _E2BSandbox:
         cls.status_false_failures = 0
         cls.timeout_set_count = 0
         cls.connect_not_found_failures = 0
+        cls.last_create_kwargs = {}
 
     @classmethod
     def list(cls, *, query, limit, **kwargs):
@@ -165,7 +167,8 @@ class _E2BSandbox:
 
     @classmethod
     async def create(cls, template, *, metadata, envs, **kwargs):
-        del template, envs, kwargs
+        del template, envs
+        cls.last_create_kwargs = dict(kwargs)
         cls.create_count += 1
         provider_id = f"e2b-{cls.create_count}"
         sandbox = cls(provider_id)
@@ -419,6 +422,17 @@ def test_e2b_contract_is_idempotent_and_refreshes_endpoint_token() -> None:
     assert asyncio.run(provider.delete("sandbox-1")) is False
 
 
+def test_e2b_uses_native_authenticated_ingress_and_default_egress() -> None:
+    provider = _e2b_provider()
+
+    asyncio.run(provider.create("sandbox-1", SandboxEnsureRequest()))
+
+    assert _E2BSandbox.last_create_kwargs["network"] == {
+        "allow_public_traffic": False
+    }
+    assert _E2BSandbox.last_create_kwargs["allow_internet_access"] is True
+
+
 def test_e2b_endpoint_refresh_retries_direct_connect_without_inventory() -> None:
     provider = _e2b_provider_with(status_retry_seconds=1)
     request = SandboxEnsureRequest(env={"LEMMA_BASE_URL": "https://lemma.test"})
@@ -612,10 +626,10 @@ def test_e2b_bootstrap_retries_transient_commands_data_plane() -> None:
     assert status.ready is True
     sandbox = next(iter(_E2BSandbox.instances.values()))
     assert sandbox.commands.list_failures == 0
-    assert _E2BSandbox.connect_count == 1
+    assert _E2BSandbox.connect_count == 0
 
 
-def test_e2b_bootstrap_reconnects_only_the_exact_provider_generation() -> None:
+def test_e2b_bootstrap_never_reconnects_or_creates_a_replacement() -> None:
     provider = _e2b_provider_with(runtime_bootstrap_timeout_seconds=1)
     _E2BSandbox.bootstrap_list_failures = 1
 
@@ -624,40 +638,28 @@ def test_e2b_bootstrap_reconnects_only_the_exact_provider_generation() -> None:
     provider_id = provider._known_infos["sandbox-1"].provider_id
     asyncio.run(provider.bootstrap("sandbox-1", request))
 
-    assert _E2BSandbox.connect_count == 1
+    assert _E2BSandbox.connect_count == 0
     assert _E2BSandbox.create_count == 1
     assert set(_E2BSandbox.instances) == {provider_id}
     assert provider._sandboxes["sandbox-1"].sandbox_id == provider_id
 
 
-def test_e2b_bootstrap_refreshes_stale_public_route_credentials() -> None:
-    def stale_until_reconnect(req, **kwargs):
-        del kwargs
-        token = dict(req.header_items()).get("E2b-traffic-access-token", "")
-        if "-connected-" not in token:
-            raise urlerror.HTTPError(
-                str(getattr(req, "full_url", req)),
-                502,
-                "sandbox not found",
-                {},
-                None,
-            )
+def test_e2b_public_readiness_uses_gateway_safe_timeout() -> None:
+    timeouts: list[float] = []
+
+    def capture_timeout(req, **kwargs):
+        del req
+        timeouts.append(kwargs["timeout"])
         return _HealthResponse()
 
-    provider = _e2b_provider_with(
-        urlopen=stale_until_reconnect,
-        runtime_bootstrap_timeout_seconds=3,
-    )
+    provider = _e2b_provider_with(urlopen=capture_timeout)
     request = SandboxEnsureRequest()
     asyncio.run(provider.create("sandbox-1", request))
-    provider_id = provider._known_infos["sandbox-1"].provider_id
 
     asyncio.run(provider.bootstrap("sandbox-1", request))
 
-    assert _E2BSandbox.connect_count == 1
-    assert _E2BSandbox.create_count == 1
-    assert set(_E2BSandbox.instances) == {provider_id}
-    assert "-connected-" in provider._sandboxes["sandbox-1"].traffic_access_token
+    assert timeouts == [5, 5]
+    assert _E2BSandbox.connect_count == 0
 
 
 def test_e2b_bootstrap_fails_closed_when_commands_data_plane_never_arrives() -> None:
