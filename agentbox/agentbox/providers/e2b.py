@@ -751,9 +751,49 @@ class E2BSandboxProvider(LegacyRuntimeProviderMixin):
         sandbox = await self._connect(sandbox_id, resume=True)
         if sandbox is None:
             raise SandboxNotFoundError(sandbox_id)
-        await self._bootstrap_sandbox(sandbox, request.env)
+        sandbox = await self._bootstrap_sandbox(sandbox_id, sandbox, request.env)
+        self._sandboxes[sandbox_id] = sandbox
 
-    async def _bootstrap_sandbox(self, sandbox, env: dict[str, str]) -> None:
+    async def _reconnect_bootstrap_generation(self, sandbox_id: str, sandbox):
+        """Refresh SDK data-plane credentials for one fenced generation."""
+
+        info = self._known_infos.get(sandbox_id)
+        provider_id = str(getattr(sandbox, "sandbox_id", ""))
+        if info is None or not provider_id or info.provider_id != provider_id:
+            raise ProviderError(
+                "E2B bootstrap lost its durable provider generation",
+                code="provider_identity_mismatch",
+                retryable=False,
+                status_code=409,
+            )
+        refreshed = await self._with_rate_limit_retry(
+            lambda: self._sdk.sandbox_cls.connect(
+                provider_id,
+                timeout=self.config.timeout_seconds,
+                **self._api_options(),
+            )
+        )
+        self._sandboxes[sandbox_id] = refreshed
+        self._known_infos[sandbox_id] = _E2BManagedInfo(
+            provider_id=provider_id,
+            metadata=info.metadata,
+            state="running",
+        )
+        self._lease_renewed_at[sandbox_id] = self._clock()
+        self.invalidate_endpoint_cache(sandbox_id)
+        logger.info(
+            "agentbox_e2b_bootstrap_reconnected sandbox_id=%s provider_id=%s",
+            sandbox_id,
+            provider_id,
+        )
+        return refreshed
+
+    async def _bootstrap_sandbox(
+        self,
+        sandbox_id: str,
+        sandbox,
+        env: dict[str, str],
+    ):
         """Start the runtime after create-time env exists in the sandbox.
 
         E2B template start commands run during the build snapshot and cannot
@@ -763,6 +803,7 @@ class E2BSandboxProvider(LegacyRuntimeProviderMixin):
         """
 
         deadline = self._clock() + self.config.runtime_bootstrap_timeout_seconds
+        next_route_refresh_at = self._clock() + 1.0
         runtime_started = False
         health_command = (
             'python -c "import urllib.request; '
@@ -800,7 +841,10 @@ class E2BSandboxProvider(LegacyRuntimeProviderMixin):
                                     "PYTHONPATH": self.config.runtime_pythonpath,
                                 },
                                 user=self.config.runtime_user,
-                                timeout=(self.config.runtime_bootstrap_timeout_seconds),
+                                # Keep the background command connection valid
+                                # for the sandbox lease. The shorter bootstrap
+                                # deadline below only bounds readiness checks.
+                                timeout=self.config.timeout_seconds,
                             )
                         )
                     runtime_started = True
@@ -823,13 +867,44 @@ class E2BSandboxProvider(LegacyRuntimeProviderMixin):
                     continue
 
                 if await self._public_runtime_ready(sandbox):
-                    return
+                    return sandbox
+                # Local health with a missing public route can mean the
+                # resumed SDK object still carries stale routing credentials.
+                # Refresh at most once per second and only by exact provider
+                # ID; do not inventory or create another generation.
+                if self._clock() >= next_route_refresh_at:
+                    try:
+                        sandbox = await self._reconnect_bootstrap_generation(
+                            sandbox_id, sandbox
+                        )
+                    except (
+                        self._sdk.not_found_error,
+                        self._sdk.sandbox_error,
+                    ) as reconnect_error:
+                        last_error = reconnect_error
+                    else:
+                        runtime_started = False
+                    next_route_refresh_at = self._clock() + 1.0
             except (self._sdk.not_found_error, self._sdk.sandbox_error) as exc:
                 # E2B currently reports the same early data-plane propagation
                 # race as either SandboxNotFoundException or TimeoutException
-                # (both provider sandbox errors). Retry only within the
-                # configured readiness budget and fail closed below.
+                # (both provider sandbox errors). A resumed SDK object can
+                # retain stale command/route tokens, so reconnect only the
+                # already fenced provider generation before retrying. Never
+                # inventory by logical ID and never create a replacement here.
                 last_error = exc
+                try:
+                    sandbox = await self._reconnect_bootstrap_generation(
+                        sandbox_id, sandbox
+                    )
+                except (
+                    self._sdk.not_found_error,
+                    self._sdk.sandbox_error,
+                ) as reconnect_error:
+                    last_error = reconnect_error
+                else:
+                    runtime_started = False
+                next_route_refresh_at = self._clock() + 1.0
             await self._sleep(0.25)
         raise ProviderError(
             "E2B runtime did not become ready inside the sandbox",
@@ -844,6 +919,7 @@ class E2BSandboxProvider(LegacyRuntimeProviderMixin):
         token = getattr(sandbox, "traffic_access_token", None)
         if not token:
             return False
+
         def check_public_endpoint() -> bool:
             for port in (8080, 8090):
                 public_request = urlrequest.Request(
@@ -1148,11 +1224,9 @@ class E2BSandboxProvider(LegacyRuntimeProviderMixin):
             while True:
                 try:
                     running = bool(await current.is_running())
-                    # A successful false response is STOPPED unless the
-                    # authenticated data plane proves this is another E2B
-                    # propagation race. The bounded retry budget remains only
-                    # for NotFound/Timeout exceptions.
-                    if not running and await self._public_runtime_ready(current):
+                    if running:
+                        break
+                    if await self._public_runtime_ready(current):
                         running = True
                         logger.warning(
                             "agentbox_e2b_status_false_data_plane_override "
@@ -1160,7 +1234,16 @@ class E2BSandboxProvider(LegacyRuntimeProviderMixin):
                             sandbox_id,
                             getattr(current, "sandbox_id", None),
                         )
-                    break
+                        break
+                    # E2B can transiently return a successful `false` for a
+                    # running generation while both public routes propagate.
+                    # Require the whole bounded observation window before
+                    # converting a cached known-running generation to paused.
+                    # Explicit release already removes the cache and records
+                    # the generation as paused, so status remains non-resuming.
+                    if self._clock() >= deadline:
+                        break
+                    await self._sleep(random.uniform(0.05, 0.2))
                 except (self._sdk.not_found_error, self._sdk.sandbox_error) as exc:
                     last_error = exc
                     if await self._public_runtime_ready(current):

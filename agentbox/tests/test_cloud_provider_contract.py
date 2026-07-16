@@ -54,10 +54,7 @@ def _healthy_urlopen(req, **kwargs):
     del kwargs
     url = str(getattr(req, "full_url", req))
     if "e2b.test" in url and not any(
-        any(
-            f"{provider_id}-{port}.e2b.test" in url
-            for port in (8080, 8090)
-        )
+        any(f"{provider_id}-{port}.e2b.test" in url for port in (8080, 8090))
         and sandbox.running
         for provider_id, sandbox in _E2BSandbox.instances.items()
     ):
@@ -199,6 +196,9 @@ class _E2BSandbox:
             raise _NotFound from exc
         sandbox.running = True
         sandbox.commands = _FakeCommands()
+        sandbox.traffic_access_token = (
+            f"token-{provider_id}-connected-{cls.connect_count}"
+        )
         cls.infos[provider_id].state = "running"
         return sandbox
 
@@ -405,6 +405,7 @@ def test_e2b_contract_is_idempotent_and_refreshes_endpoint_token() -> None:
         "PYTHONPATH": "/app",
     }
     assert sandbox.commands.run_calls[0]["user"] == "appuser"
+    assert sandbox.commands.run_calls[0]["timeout"] == 3600
     assert all("urlopen" in call["cmd"] for call in sandbox.commands.run_calls[1:])
     assert (
         endpoint_one.headers["e2b-traffic-access-token"]
@@ -611,6 +612,52 @@ def test_e2b_bootstrap_retries_transient_commands_data_plane() -> None:
     assert status.ready is True
     sandbox = next(iter(_E2BSandbox.instances.values()))
     assert sandbox.commands.list_failures == 0
+    assert _E2BSandbox.connect_count == 1
+
+
+def test_e2b_bootstrap_reconnects_only_the_exact_provider_generation() -> None:
+    provider = _e2b_provider_with(runtime_bootstrap_timeout_seconds=1)
+    _E2BSandbox.bootstrap_list_failures = 1
+
+    request = SandboxEnsureRequest()
+    asyncio.run(provider.create("sandbox-1", request))
+    provider_id = provider._known_infos["sandbox-1"].provider_id
+    asyncio.run(provider.bootstrap("sandbox-1", request))
+
+    assert _E2BSandbox.connect_count == 1
+    assert _E2BSandbox.create_count == 1
+    assert set(_E2BSandbox.instances) == {provider_id}
+    assert provider._sandboxes["sandbox-1"].sandbox_id == provider_id
+
+
+def test_e2b_bootstrap_refreshes_stale_public_route_credentials() -> None:
+    def stale_until_reconnect(req, **kwargs):
+        del kwargs
+        token = dict(req.header_items()).get("E2b-traffic-access-token", "")
+        if "-connected-" not in token:
+            raise urlerror.HTTPError(
+                str(getattr(req, "full_url", req)),
+                502,
+                "sandbox not found",
+                {},
+                None,
+            )
+        return _HealthResponse()
+
+    provider = _e2b_provider_with(
+        urlopen=stale_until_reconnect,
+        runtime_bootstrap_timeout_seconds=3,
+    )
+    request = SandboxEnsureRequest()
+    asyncio.run(provider.create("sandbox-1", request))
+    provider_id = provider._known_infos["sandbox-1"].provider_id
+
+    asyncio.run(provider.bootstrap("sandbox-1", request))
+
+    assert _E2BSandbox.connect_count == 1
+    assert _E2BSandbox.create_count == 1
+    assert set(_E2BSandbox.instances) == {provider_id}
+    assert "-connected-" in provider._sandboxes["sandbox-1"].traffic_access_token
 
 
 def test_e2b_bootstrap_fails_closed_when_commands_data_plane_never_arrives() -> None:
@@ -707,6 +754,40 @@ def test_e2b_status_uses_data_plane_when_control_plane_temporarily_says_stopped(
 
     assert status.ready is True
     assert status.status == "RUNNING"
+
+
+def test_e2b_status_retries_transient_false_without_pausing_generation() -> None:
+    public_failures = 2
+
+    def delayed_gateway(req, **kwargs):
+        nonlocal public_failures
+        del kwargs
+        if public_failures:
+            public_failures -= 1
+            raise urlerror.HTTPError(
+                str(getattr(req, "full_url", req)),
+                502,
+                "sandbox not found",
+                {},
+                None,
+            )
+        return _healthy_urlopen(req)
+
+    provider = _e2b_provider_with(
+        status_retry_seconds=1,
+        urlopen=delayed_gateway,
+    )
+    asyncio.run(provider.create("sandbox-1", SandboxEnsureRequest()))
+    provider_id = provider._known_infos["sandbox-1"].provider_id
+    _E2BSandbox.status_false_failures = 2
+
+    status = asyncio.run(provider.get_status("sandbox-1"))
+
+    assert status.ready is True
+    assert provider._known_infos["sandbox-1"].state == "running"
+    assert provider._sandboxes["sandbox-1"].sandbox_id == provider_id
+    assert _E2BSandbox.connect_count == 0
+    assert _E2BSandbox.pause_count == 0
 
 
 def test_e2b_status_fails_when_control_and_data_planes_are_unavailable() -> None:
@@ -880,9 +961,7 @@ def test_e2b_exact_purge_converges_when_provider_id_is_already_absent() -> None:
     _E2BSandbox.instances.pop(provider_id)
     _E2BSandbox.infos.pop(provider_id)
 
-    deleted = asyncio.run(
-        provider.purge_managed(SandboxRef("sandbox-1", provider_id))
-    )
+    deleted = asyncio.run(provider.purge_managed(SandboxRef("sandbox-1", provider_id)))
 
     assert deleted is True
     assert "sandbox-1" not in provider._known_infos
@@ -1047,8 +1126,8 @@ def test_e2b_provider_rate_limit_without_header_uses_short_backoff(
 def test_e2b_bootstrap_failure_is_separate_from_compute_create() -> None:
     provider = _e2b_provider_with(max_active=1)
 
-    async def fail_bootstrap(sandbox, env):
-        del sandbox, env
+    async def fail_bootstrap(sandbox_id, sandbox, env):
+        del sandbox_id, sandbox, env
         raise RuntimeError("bootstrap failed")
 
     provider._bootstrap_sandbox = fail_bootstrap  # type: ignore[method-assign]
@@ -1278,9 +1357,7 @@ def test_daytona_exact_purge_converges_when_provider_id_is_already_absent() -> N
     client.sandboxes.pop(provider_id)
     provider.invalidate_sandbox_cache("sandbox-1")
 
-    deleted = asyncio.run(
-        provider.purge_managed(SandboxRef("sandbox-1", provider_id))
-    )
+    deleted = asyncio.run(provider.purge_managed(SandboxRef("sandbox-1", provider_id)))
 
     assert deleted is True
     assert "sandbox-1" not in provider._sandboxes
