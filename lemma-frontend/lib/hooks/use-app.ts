@@ -21,6 +21,17 @@ interface AppPageQueryOptions {
     mode?: 'editor' | 'view';
 }
 
+type AppIndexItem = Record<string, unknown>;
+
+export const appIndexQueryKey = (podId: string) => ['apps', 'index', podId] as const;
+
+async function listAppIndex(podId: string): Promise<AppIndexItem[]> {
+    const response = await getLemmaClient(podId).apps.list({ limit: 1000 }) as { items?: unknown[] };
+    return Array.isArray(response?.items)
+        ? response.items.map((item) => (item || {}) as AppIndexItem)
+        : [];
+}
+
 function toOptionalString(value: unknown): string | undefined {
     return typeof value === 'string' && value.trim().length > 0 ? value.trim() : undefined;
 }
@@ -38,14 +49,15 @@ function normalizeAllowedActions(value: unknown): string[] | null {
 }
 
 export async function listAppPageRefs(podId: string): Promise<AppPageRef[]> {
-    const response = await getLemmaClient(podId).apps.list({ limit: 1000 }) as { items?: unknown[] };
-    const items = Array.isArray(response?.items) ? response.items : [];
+    return appPageRefsFromIndex(await listAppIndex(podId));
+}
+
+function appPageRefsFromIndex(items: AppIndexItem[]): AppPageRef[] {
     const existingSlugs: string[] = [];
 
     return items
         .map((item, index) => {
-            const parsed = (item || {}) as Record<string, unknown>;
-            const pageName = toOptionalString(parsed.name);
+            const pageName = toOptionalString(item.name);
             if (!pageName) return null;
             const slug = createUniqueAppPageSlug({
                 title: pageName,
@@ -54,30 +66,31 @@ export async function listAppPageRefs(podId: string): Promise<AppPageRef[]> {
             });
             existingSlugs.push(slug);
             return {
-                id: toOptionalString(parsed.id),
+                id: toOptionalString(item.id),
                 slug,
                 title: pageName,
                 appName: pageName,
-                url: normalizeAppUrl(toOptionalString(parsed.url)),
+                url: normalizeAppUrl(toOptionalString(item.url)),
                 order: index,
                 path: `pages/${slug}.json`,
-                visibility: typeof parsed.visibility === 'string' ? parsed.visibility : null,
-                allowed_actions: normalizeAllowedActions(parsed.allowed_actions),
+                visibility: typeof item.visibility === 'string' ? item.visibility : null,
+                allowed_actions: normalizeAllowedActions(item.allowed_actions),
             } as AppPageRef;
         })
         .filter((item): item is AppPageRef => item !== null);
 }
 
 export async function listApps(podId: string): Promise<AppListItem[]> {
-    const response = await getLemmaClient(podId).apps.list({ limit: 1000 }) as { items?: unknown[] };
-    const items = Array.isArray(response?.items) ? response.items : [];
+    return appsFromIndex(await listAppIndex(podId));
+}
+
+function appsFromIndex(items: AppIndexItem[]): AppListItem[] {
     const apps: AppListItem[] = [];
 
     for (const item of items) {
-        const parsed = (item || {}) as Record<string, unknown>;
-        const id = toOptionalString(parsed.id);
-        const name = toOptionalString(parsed.name);
-        const url = normalizeAppUrl(toOptionalString(parsed.url));
+        const id = toOptionalString(item.id);
+        const name = toOptionalString(item.name);
+        const url = normalizeAppUrl(toOptionalString(item.url));
 
         if (!id || !name || !url) continue;
 
@@ -85,11 +98,11 @@ export async function listApps(podId: string): Promise<AppListItem[]> {
             id,
             name,
             url,
-            description: typeof parsed.description === 'string' ? parsed.description : null,
-            public_slug: toOptionalString(parsed.public_slug),
-            status: toOptionalString(parsed.status),
-            visibility: typeof parsed.visibility === 'string' ? parsed.visibility : null,
-            allowed_actions: normalizeAllowedActions(parsed.allowed_actions),
+            description: typeof item.description === 'string' ? item.description : null,
+            public_slug: toOptionalString(item.public_slug),
+            status: toOptionalString(item.status),
+            visibility: typeof item.visibility === 'string' ? item.visibility : null,
+            allowed_actions: normalizeAllowedActions(item.allowed_actions),
         });
     }
 
@@ -98,13 +111,14 @@ export async function listApps(podId: string): Promise<AppListItem[]> {
 
 export function useAppConfig(podId: string) {
     return useQuery({
-        queryKey: ['app-config', podId],
-        queryFn: async (): Promise<AppConfig | null> => {
-            const pages = await listAppPageRefs(podId);
+        queryKey: appIndexQueryKey(podId),
+        queryFn: () => listAppIndex(podId),
+        select: (items): AppConfig | null => {
+            const pages = appPageRefsFromIndex(items);
             if (pages.length === 0) return null;
             const now = new Date().toISOString();
             return {
-                id: `${Date.now()}-${Math.random().toString(36).slice(2, 9)}`,
+                id: `app-index-${podId}`,
                 podId,
                 name: 'Default App',
                 pages,
@@ -132,8 +146,9 @@ export function useAppPages(podId: string) {
 
 export function useApps(podId: string) {
     return useQuery({
-        queryKey: ['apps', podId],
-        queryFn: () => listApps(podId),
+        queryKey: appIndexQueryKey(podId),
+        queryFn: () => listAppIndex(podId),
+        select: appsFromIndex,
         enabled: !!podId,
         staleTime: 2 * 60 * 1000,
         gcTime: 30 * 60 * 1000,
@@ -147,8 +162,7 @@ export function useDeleteApp() {
         mutationFn: ({ podId, name }: { podId: string; name: string }) =>
             getLemmaClient(podId).apps.delete(name),
         onSuccess: (_, variables) => {
-            queryClient.invalidateQueries({ queryKey: ['apps', variables.podId] });
-            queryClient.invalidateQueries({ queryKey: ['app-config', variables.podId] });
+            queryClient.invalidateQueries({ queryKey: appIndexQueryKey(variables.podId) });
             queryClient.invalidateQueries({ queryKey: ['app-page', variables.podId] });
         },
     });
@@ -162,11 +176,17 @@ export function useAppPage(
     options?: AppPageQueryOptions
 ) {
     const mode = options?.mode || 'view';
+    const queryClient = useQueryClient();
 
     return useQuery({
         queryKey: ['app-page', podId, pageRef?.slug || pageSlug, mode],
         queryFn: async (): Promise<AppPage> => {
-            const refs = await listAppPageRefs(podId);
+            const index = await queryClient.ensureQueryData({
+                queryKey: appIndexQueryKey(podId),
+                queryFn: () => listAppIndex(podId),
+                staleTime: 2 * 60 * 1000,
+            });
+            const refs = appPageRefsFromIndex(index);
             const targetRef = pageRef
                 ? refs.find((entry) => entry.slug === pageRef.slug) || pageRef
                 : refs.find((entry) => entry.slug === normalizeAppPageSlug(pageSlug || ''));

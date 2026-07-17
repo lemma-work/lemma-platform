@@ -53,6 +53,34 @@ describe("AuthManager.checkAuth cookie-mode session gate", () => {
     expect(state.status).toBe("authenticated");
     expect(fetchSpy).toHaveBeenCalledTimes(1);
     expect(fetchSpy.mock.calls[0][0]).toBe("https://api.x.test/users/me");
+    const headers = new Headers(fetchSpy.mock.calls[0][1]?.headers);
+    expect(headers.get("accept")).toBe("application/json");
+    expect(headers.has("content-type")).toBe(false);
+  });
+
+  it("coalesces concurrent auth checks into one session check and one request", async () => {
+    let resolveSessionCheck: ((exists: boolean) => void) | undefined;
+    doesSessionExist.mockReturnValue(
+      new Promise<boolean>((resolve) => {
+        resolveSessionCheck = resolve;
+      }),
+    );
+    const fetchSpy = vi.spyOn(globalThis, "fetch").mockResolvedValue(
+      new Response(JSON.stringify({ id: "u1", email: "a@b.c" }), {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      }),
+    );
+
+    const auth = new AuthManager("https://api.x.test", "https://auth.x.test");
+    const first = auth.checkAuth();
+    const second = auth.checkAuth();
+
+    expect(first).toBe(second);
+    expect(doesSessionExist).toHaveBeenCalledTimes(1);
+    resolveSessionCheck?.(true);
+    await expect(Promise.all([first, second])).resolves.toHaveLength(2);
+    expect(fetchSpy).toHaveBeenCalledTimes(1);
   });
 
   it("bypasses the session gate in injected-token mode", async () => {
@@ -70,6 +98,36 @@ describe("AuthManager.checkAuth cookie-mode session gate", () => {
     expect(state.status).toBe("authenticated");
     expect(doesSessionExist).not.toHaveBeenCalled();
     expect(fetchSpy).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("AuthManager request headers", () => {
+  afterEach(() => {
+    clearTestingToken();
+  });
+
+  it("keeps the public headers value plain while normalizing supported HeadersInit inputs", () => {
+    setTestingToken("TESTTOKEN");
+    const auth = new AuthManager("https://api.x.test", "https://auth.x.test");
+    const init = auth.getRequestInit({
+      method: "POST",
+      body: JSON.stringify({ ok: true }),
+      headers: new Headers({ "X-Custom": "present" }),
+    });
+
+    expect(init.headers).not.toBeInstanceOf(Headers);
+    expect(Object.getPrototypeOf(init.headers as object)).toBe(Object.prototype);
+    expect(init.headers).toMatchObject({
+      Accept: "application/json",
+      Authorization: "Bearer TESTTOKEN",
+      "Content-Type": "application/json",
+    });
+    const headers = new Headers(init.headers);
+    expect(headers.get("accept")).toBe("application/json");
+    expect(headers.get("authorization")).toBe("Bearer TESTTOKEN");
+    expect(headers.get("content-type")).toBe("application/json");
+    expect(headers.get("x-custom")).toBe("present");
+    expect(init.credentials).toBe("omit");
   });
 });
 

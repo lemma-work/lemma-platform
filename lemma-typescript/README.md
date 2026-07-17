@@ -487,7 +487,7 @@ Collaboration and analytics blocks support:
 
 Agent conversation blocks support:
 
-- agent-name-first configuration through `agentName` today; omit it to target the default pod agent conversation
+- agent-name-first creation through `agentName`; conversation lists span the pod by default, accept an agent name to filter, and accept an explicit `null` for only the default pod assistant
 - shared `appearance` and `density` controls on the conversation experience surface
 - `chromeStyle`, `statusPlacement`, `radius`, model picker, conversation list, and render overrides for deeper customization
 - bounded default heights for `page` and `side-panel` modes so the message viewport scrolls instead of stretching with content; pass `className="h-full min-h-0"` inside an explicit-height parent when you want a fill-layout agent conversation like inbox CRM

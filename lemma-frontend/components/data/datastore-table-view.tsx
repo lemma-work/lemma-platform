@@ -1,6 +1,7 @@
 'use client';
 
 import { useState, type ReactNode } from 'react';
+import dynamic from 'next/dynamic';
 import { useRouter } from 'next/navigation';
 import { ArrowDown, ArrowUp, Plus, Filter, Trash2, Edit, MoreVertical, Maximize2, Table as TableIcon } from '@/components/ui/icons';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
@@ -16,66 +17,41 @@ import {
     DropdownMenuItem,
     DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu';
-import { FilterBuilder } from '@/components/records/filter-builder';
-import { RecordEditor } from '@/components/records/record-editor';
-import { AddColumnDialog } from '@/components/tables/add-column-dialog';
 import { EditableCell } from '@/components/tables/cells/editable-cell';
-import { RecordDetail } from '@/components/tables/record-detail';
 import { ViewSwitcher, type ViewType } from '@/components/tables/view-switcher';
 import { ResourceShareButton, ResourceVisibilityBadge, type ResourceVisibilityValue } from '@/components/shared/resource-visibility';
-import { ListView } from '@/components/tables/views/list-view';
 import { resourceAllows } from '@/lib/authz/resource-actions';
-import { useDeleteRecord, useDeleteTable } from '@/lib/hooks/use-datastores';
+import {
+    normalizeTable,
+    tableQueryOptions,
+    tableRecordsQueryOptions,
+    tablesQueryOptions,
+    useDeleteRecord,
+    useDeleteTable,
+} from '@/lib/hooks/use-datastores';
 import { useTableShortcuts } from '@/lib/hooks/use-table-shortcuts';
 import { getLemmaClient } from '@/lib/sdk/lemma-client';
 import type { Column, Table } from '@/lib/types';
 import type { FilterRule } from '@/lib/types/app';
-import { buildRecordQueryFilters, buildRecordQuerySort, getDisplayColumns, sanitizeRecordPayload } from '@/lib/utils/datastore-records';
+import { getDisplayColumns, sanitizeRecordPayload } from '@/lib/utils/datastore-records';
+
+const FilterBuilder = dynamic(
+    () => import('@/components/records/filter-builder').then((module) => module.FilterBuilder)
+);
+const RecordEditor = dynamic(
+    () => import('@/components/records/record-editor').then((module) => module.RecordEditor)
+);
+const AddColumnDialog = dynamic(
+    () => import('@/components/tables/add-column-dialog').then((module) => module.AddColumnDialog)
+);
+const RecordDetail = dynamic(
+    () => import('@/components/tables/record-detail').then((module) => module.RecordDetail)
+);
+const ListView = dynamic(
+    () => import('@/components/tables/views/list-view').then((module) => module.ListView)
+);
 
 type TableRecord = Record<string, unknown>;
-type RecordListResponseLike = {
-    items?: TableRecord[];
-    records?: TableRecord[];
-    rows?: TableRecord[];
-    total?: number;
-    limit?: number;
-    next_page_token?: string | null;
-};
-
-function normalizeColumn(raw: Record<string, unknown>): Column {
-    return {
-        name: String(raw.name || ''),
-        type: String(raw.type || 'TEXT') as Column['type'],
-        description: (raw.description as string | null | undefined) ?? undefined,
-        required: (raw.required as boolean | undefined) ?? undefined,
-        unique: (raw.unique as boolean | undefined) ?? undefined,
-        default: raw.default as Column['default'],
-        foreign_key: (raw.foreign_key as Column['foreign_key']) ?? undefined,
-        max_length: (raw.max_length as number | undefined) ?? undefined,
-        type_params: (raw.type_params as Record<string, unknown> | undefined) ?? undefined,
-        options: (raw.options as string[] | undefined) ?? undefined,
-        auto: (raw.auto as boolean | undefined) ?? undefined,
-        computed: (raw.computed as boolean | undefined) ?? undefined,
-        expression: (raw.expression as string | undefined) ?? undefined,
-    };
-}
-
-function normalizeTable(raw: Record<string, unknown>): Table {
-    const columns = Array.isArray(raw.columns)
-        ? (raw.columns as Record<string, unknown>[]).map(normalizeColumn)
-        : [];
-
-    return {
-        name: String(raw.name || raw.name || ''),
-        primary_key_column: String(raw.primary_key_column || 'id'),
-        columns,
-        visibility: raw.visibility as Table['visibility'],
-        enable_rls: typeof raw.enable_rls === 'boolean' ? raw.enable_rls : undefined,
-        config: (raw.config as Table['config']) ?? undefined,
-        allowed_actions: Array.isArray(raw.allowed_actions) ? raw.allowed_actions.filter((action): action is string => typeof action === 'string') : undefined,
-    };
-}
-
 interface DatastoreTableViewProps {
     podId: string;
     datastoreName: string;
@@ -136,50 +112,23 @@ export function DatastoreTableView({
     });
 
     const { data: table, isLoading: tableLoading } = useQuery({
-        queryKey: ['table', podId, datastoreName, tableName],
-        queryFn: async () => {
-            const response = await getLemmaClient(podId).tables.get(tableName);
-            return normalizeTable(response as unknown as Record<string, unknown>);
-        },
+        ...tableQueryOptions(podId, tableName),
     });
 
     const { data: recordsData, isLoading: recordsLoading } = useQuery({
-        queryKey: ['records', podId, datastoreName, tableName, page, sortField, sortOrder, filters, queryPageTokens[page] ?? null],
-        queryFn: async () => {
-            const response = (usesStructuredQuery
-                ? await getLemmaClient(podId).records.query(tableName, {
-                    filters: buildRecordQueryFilters(filters),
-                    sort: buildRecordQuerySort(sortField, sortOrder),
-                    limit,
-                    page_token: queryPageTokens[page] ?? undefined,
-                })
-                : await getLemmaClient(podId).records.list(
-                    tableName,
-                    {
-                        limit,
-                        offset: page * limit,
-                    }
-                )) as RecordListResponseLike;
-            const items = response.items || response.records || response.rows || [];
-            return {
-                ...response,
-                items,
-                total: response.total ?? items.length,
-                limit: response.limit ?? limit,
-            };
-        },
-        enabled: !!table,
+        ...tableRecordsQueryOptions(podId, datastoreName, tableName, {
+            page,
+            limit,
+            sortField,
+            sortOrder,
+            filters,
+            pageToken: queryPageTokens[page] ?? null,
+        }),
+        enabled: !!tableName,
     });
 
     const { data: tablesData } = useQuery({
-        queryKey: ['tables', podId],
-        queryFn: async () => {
-            const response = await getLemmaClient(podId).tables.list({ limit: 100 });
-            return {
-                ...response,
-                items: (response.items || []).map((item) => normalizeTable(item as unknown as Record<string, unknown>)),
-            };
-        },
+        ...tablesQueryOptions(podId),
         enabled: showAddColumnDialog,
     });
     const availableTables: Table[] = tablesData?.items || [];
@@ -193,9 +142,8 @@ export function DatastoreTableView({
             return normalizeTable(response as unknown as Record<string, unknown>);
         },
         onSuccess: (updatedTable) => {
-            queryClient.setQueryData(['table', podId, datastoreName, tableName], updatedTable);
+            queryClient.setQueryData(['table', podId, tableName], updatedTable);
             queryClient.invalidateQueries({ queryKey: ['tables', podId] });
-            queryClient.invalidateQueries({ queryKey: ['table', podId, tableName] });
             toast.success('Table sharing updated');
         },
         onError: () => {
@@ -295,7 +243,7 @@ export function DatastoreTableView({
                 ? getLemmaClient(podId).tables.columns.remove(tableName, columnName)
                 : Promise.reject(new Error('You do not have permission to edit table schema.')),
         onSuccess: () => {
-            queryClient.invalidateQueries({ queryKey: ['table', podId, datastoreName, tableName] });
+            queryClient.invalidateQueries({ queryKey: ['table', podId, tableName] });
             queryClient.invalidateQueries({ queryKey: ['records', podId, datastoreName, tableName] });
             queryClient.invalidateQueries({ queryKey: ['tables', podId] });
             setColumnPendingDelete(null);

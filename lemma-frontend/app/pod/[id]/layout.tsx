@@ -3,10 +3,10 @@
 import { ApiError } from "lemma-sdk";
 import { use, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
+import dynamic from "next/dynamic";
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import { AIAssistantProvider, useAIAssistant } from "@/components/ai/ai-assistant-context";
 import { HelpMenu } from "@/components/education/help-menu";
-import { PodAssistantSidebar } from "@/components/ai/pod-assistant";
 import { InlineLoader, PageLoader } from "@/components/brand/loader";
 import { AppProvider, useApp } from "@/components/app/app-context";
 import { AppFrameHost } from "@/components/app/app-frame-host";
@@ -34,6 +34,10 @@ import type { PodRoutePolicyKey } from "@/lib/authz/pod-permissions";
 import { cn } from "@/lib/utils";
 import type { Pod } from "@/lib/types";
 import type { PodContext } from "@/lib/types/ai";
+
+const PodAssistantSidebar = dynamic(
+    () => import("@/components/ai/pod-assistant").then((module) => module.PodAssistantSidebar)
+);
 
 interface PodHeaderData {
     id: string;
@@ -578,7 +582,7 @@ function PodShell({
                 ) : null}
             </div>
 
-            {canShowAssistantSidebar ? (
+            {canShowAssistantSidebar && assistantPresentation !== "closed" ? (
                 <PodAssistantSidebar
                     presentationMode={isPresentedInteractionRoute}
                     onClose={clearAssistantSideViewUrl}

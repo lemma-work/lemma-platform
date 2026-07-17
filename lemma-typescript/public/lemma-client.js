@@ -9409,6 +9409,27 @@ var LemmaClient = (() => {
       return fallback;
     }
   }
+  function toHeaderRecord(headers) {
+    if (!headers) return {};
+    if (typeof Headers !== "undefined" && headers instanceof Headers) {
+      const result = {};
+      headers.forEach((value, key) => {
+        result[key] = value;
+      });
+      return result;
+    }
+    if (Array.isArray(headers)) {
+      return Object.fromEntries(headers);
+    }
+    return { ...headers };
+  }
+  function setHeader(headers, name, value) {
+    const existingName = Object.keys(headers).find((key) => key.toLowerCase() === name.toLowerCase());
+    headers[existingName != null ? existingName : name] = value;
+  }
+  function hasHeader(headers, name) {
+    return Object.keys(headers).some((key) => key.toLowerCase() === name.toLowerCase());
+  }
   var AuthManager = class {
     constructor(apiUrl, authUrl) {
       __publicField(this, "apiUrl");
@@ -9416,6 +9437,7 @@ var LemmaClient = (() => {
       __publicField(this, "injectedToken");
       __publicField(this, "state", { status: "loading", user: null });
       __publicField(this, "listeners", /* @__PURE__ */ new Set());
+      __publicField(this, "authCheckPromise", null);
       this.apiUrl = apiUrl;
       this.authUrl = authUrl;
       this.injectedToken = detectInjectedToken();
@@ -9599,13 +9621,16 @@ var LemmaClient = (() => {
      * and lets cookies carry the session.
      */
     getRequestInit(init = {}) {
-      const headers = {
-        "Content-Type": "application/json",
-        Accept: "application/json",
-        ...init.headers
-      };
+      const headers = toHeaderRecord(init.headers);
+      if (!hasHeader(headers, "Accept")) {
+        setHeader(headers, "Accept", "application/json");
+      }
+      const isFormData2 = typeof FormData !== "undefined" && init.body instanceof FormData;
+      if (init.body !== void 0 && !isFormData2 && !hasHeader(headers, "Content-Type")) {
+        setHeader(headers, "Content-Type", "application/json");
+      }
       if (this.injectedToken) {
-        headers["Authorization"] = `Bearer ${this.injectedToken}`;
+        setHeader(headers, "Authorization", `Bearer ${this.injectedToken}`);
       }
       return {
         ...init,
@@ -9617,7 +9642,16 @@ var LemmaClient = (() => {
      * Call GET /users/me to determine auth state.
      * Sets internal state and notifies listeners.
      */
-    async checkAuth() {
+    checkAuth() {
+      if (this.authCheckPromise) {
+        return this.authCheckPromise;
+      }
+      this.authCheckPromise = this.performAuthCheck().finally(() => {
+        this.authCheckPromise = null;
+      });
+      return this.authCheckPromise;
+    }
+    async performAuthCheck() {
       this.setState({ status: "loading", user: null });
       if (!this.injectedToken && typeof window !== "undefined") {
         ensureCookieSessionSupport(this.apiUrl, () => this.markUnauthenticated());
@@ -9798,6 +9832,20 @@ var LemmaClient = (() => {
   var SDK_VERSION = "0.6.2";
   var CLIENT_HEADER_NAME = "X-Lemma-Client";
   var CLIENT_HEADER_VALUE = `lemma-sdk-ts/${SDK_VERSION}`;
+  function shouldSendClientHeader(apiUrl, method) {
+    const normalizedMethod = method.toUpperCase();
+    if (normalizedMethod !== "GET" && normalizedMethod !== "HEAD") {
+      return true;
+    }
+    if (typeof window === "undefined") {
+      return true;
+    }
+    try {
+      return new URL(apiUrl, window.location.origin).origin === window.location.origin;
+    } catch {
+      return true;
+    }
+  }
 
   // src/http.ts
   var DEFAULT_TIMEOUT_MS = 3e4;
@@ -9979,21 +10027,13 @@ var LemmaClient = (() => {
       return JSON.stringify(options.body);
     }
     buildRequestInit(method, options) {
-      var _a;
       const initBase = {
         method,
         body: this.getRequestBody(options),
         signal: options.signal
       };
-      const withAuth = options.isFormData ? {
-        ...this.auth.getRequestInit(initBase),
-        headers: Object.fromEntries(
-          Object.entries(
-            (_a = this.auth.getRequestInit(initBase).headers) != null ? _a : {}
-          ).filter(([key]) => key.toLowerCase() !== "content-type")
-        )
-      } : this.auth.getRequestInit(initBase);
-      const withClient = this.mergeHeaders(withAuth, { [CLIENT_HEADER_NAME]: CLIENT_HEADER_VALUE });
+      const withAuth = this.auth.getRequestInit(initBase);
+      const withClient = shouldSendClientHeader(this.apiUrl, method) ? this.mergeHeaders(withAuth, { [CLIENT_HEADER_NAME]: CLIENT_HEADER_VALUE }) : withAuth;
       return this.mergeHeaders(withClient, options.headers);
     }
     async request(method, path, options = {}) {
@@ -10244,7 +10284,12 @@ var LemmaClient = (() => {
       OpenAPI.WITH_CREDENTIALS = true;
       OpenAPI.CREDENTIALS = this.auth.isTokenMode ? "omit" : "include";
       OpenAPI.TOKEN = (_a = this.auth.getBearerToken()) != null ? _a : void 0;
-      OpenAPI.HEADERS = { [CLIENT_HEADER_NAME]: CLIENT_HEADER_VALUE };
+      OpenAPI.HEADERS = async (options) => {
+        if (shouldSendClientHeader(this.apiUrl, options.method)) {
+          return { [CLIENT_HEADER_NAME]: CLIENT_HEADER_VALUE };
+        }
+        return {};
+      };
     }
     async request(operation) {
       this.configure();
@@ -11025,7 +11070,7 @@ var LemmaClient = (() => {
       const podId = this.requirePodId(options.pod_id);
       return this.http.request("GET", `/pods/${podId}/conversations`, {
         params: {
-          agent_name: options.agent_name,
+          agent_name: options.agent_name === null ? "" : options.agent_name,
           parent_id: options.parent_id,
           type: options.type,
           limit: (_a = options.limit) != null ? _a : 20,
@@ -11035,6 +11080,9 @@ var LemmaClient = (() => {
     }
     listByAgent(agentName, options = {}) {
       return this.list({ ...options, agent_name: agentName });
+    }
+    listDefault(options = {}) {
+      return this.list({ ...options, agent_name: null });
     }
     async listModels(options = {}) {
       var _a;

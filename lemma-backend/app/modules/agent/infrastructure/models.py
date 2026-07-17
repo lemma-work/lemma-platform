@@ -259,6 +259,13 @@ class ConversationModel(UUIDAuditBase):
             "parent_id",
             "id",
         ),
+        Index(
+            "ix_agent_conv_user_pod_roots",
+            "user_id",
+            "pod_id",
+            "id",
+            postgresql_where=text("parent_id IS NULL"),
+        ),
         Index("ix_agent_conv_parent", "parent_id"),
         Index(
             "ix_agent_conv_metadata",

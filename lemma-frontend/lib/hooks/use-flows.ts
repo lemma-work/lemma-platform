@@ -221,13 +221,17 @@ function sortFlowRuns(runs: WorkflowRun[]): WorkflowRun[] {
     });
 }
 
-export const useFlows = (podId: string | undefined) => {
-    return useQuery({
+export const flowsQueryOptions = (podId: string | undefined) => ({
         queryKey: ['flows', podId],
         queryFn: async () => {
             const response = await getLemmaClient(podId).workflows.list();
             return (response.items || []).map((item) => normalizeFlow(item as unknown as Record<string, unknown>));
         },
+});
+
+export const useFlows = (podId: string | undefined) => {
+    return useQuery({
+        ...flowsQueryOptions(podId),
         enabled: !!podId,
     });
 };

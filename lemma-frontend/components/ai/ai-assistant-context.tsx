@@ -21,6 +21,7 @@ import {
     type DisplayResourceRequest,
 } from '@/lib/assistant/display-resource';
 import { buildConversationPresentationHref } from '@/lib/assistant/conversation-presentation';
+import { resolveAssistantControllerGates } from '@/lib/assistant/controller-gates';
 
 interface ConversationScope {
     podId?: string | null;
@@ -256,6 +257,7 @@ export function AIAssistantProvider({
     onOpenAssistant,
 }: AIAssistantProviderProps) {
     const [isOpen, setIsOpen] = useState(false);
+    const [hasActivatedController, setHasActivatedController] = useState(false);
     const [lastCreatedResource, setLastCreatedResource] = useState<{ type: string; id: string } | null>(null);
     const [sideViewMessageLoadGeneration, setSideViewMessageLoadGeneration] = useState(0);
     const [readySideViewMessageLoadGeneration, setReadySideViewMessageLoadGeneration] = useState(-1);
@@ -332,6 +334,15 @@ export function AIAssistantProvider({
     const isConversationRoute = /^\/pod\/[^/]+\/conversations(?:\/|$)/.test(pathname);
     const urlAssistantConversationId = searchParams.get(ASSISTANT_CONVERSATION_PARAM);
     const shouldRestoreAssistantFromUrl = !isConversationRoute && Boolean(urlAssistantConversationId);
+    const hasAssistantLaunchRequest = Boolean(searchParams.get('assistantMessage'));
+    const isControllerEnabled = isProviderEnabled && (
+        hasActivatedController
+        || isOpen
+        || isConversationRoute
+        || shouldRestoreAssistantFromUrl
+        || hasAssistantLaunchRequest
+    );
+    const controllerGates = resolveAssistantControllerGates(isProviderEnabled, isControllerEnabled);
     const shouldPrepareSideViewMessages = isProviderEnabled && !isConversationRoute && isOpen;
 
     const queryClient = useQueryClient();
@@ -381,7 +392,8 @@ export function AIAssistantProvider({
         podId: conversationScope.podId ?? undefined,
         agentName: resolvedAgentName,
         organizationId: conversationScope.organizationId ?? undefined,
-        enabled: isProviderEnabled,
+        enabled: controllerGates.enabled,
+        autoLoad: controllerGates.autoLoad,
         autoLoadMessages: shouldLoadActiveConversationMessages,
     });
 
@@ -400,7 +412,7 @@ export function AIAssistantProvider({
             );
             return (response.items || []) as RawConversationMessage[];
         },
-        enabled: !!conversationScope.podId && !!controller.openedConversationId && isProviderEnabled && shouldLoadActiveConversationMessages,
+        enabled: !!conversationScope.podId && !!controller.openedConversationId && isControllerEnabled && shouldLoadActiveConversationMessages,
         refetchOnWindowFocus: false,
     });
     const rawMessages = useMemo(() => rawMessagesQuery.data ?? [], [rawMessagesQuery.data]);
@@ -419,6 +431,7 @@ export function AIAssistantProvider({
         suppressAssistantUrlRestoreRef.current = false;
         skipNextAssistantUrlSyncRef.current = false;
         onOpenAssistant?.();
+        setHasActivatedController(true);
         if (isOpenRef.current) return;
         isOpenRef.current = true;
         setSideViewMessageLoadGeneration((generation) => generation + 1);
@@ -437,6 +450,7 @@ export function AIAssistantProvider({
             isOpenRef.current = next;
             if (next) {
                 onOpenAssistant?.();
+                setHasActivatedController(true);
                 setSideViewMessageLoadGeneration((generation) => generation + 1);
             }
             return next;
@@ -674,6 +688,7 @@ export function AIAssistantProvider({
     }, []);
 
     const openConversation = useCallback((conversationId: string) => {
+        setHasActivatedController(true);
         controllerRef.current.openConversation(conversationId);
     }, []);
 
@@ -683,6 +698,7 @@ export function AIAssistantProvider({
 
     const selectConversation = useCallback((conversationId: string | null) => {
         if (conversationId) {
+            setHasActivatedController(true);
             controllerRef.current.openConversation(conversationId);
             return;
         }
@@ -694,6 +710,8 @@ export function AIAssistantProvider({
         if (!trimmed || !isProviderEnabled) {
             return;
         }
+
+        setHasActivatedController(true);
 
         markToolInvocationsSeen(seenAutoNavigationToolCallIds.current, displayMessages);
         allowAutoNavigationRef.current = true;

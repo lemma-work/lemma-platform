@@ -10,6 +10,7 @@ import { ResourceShareButton, type ResourceVisibilityValue } from '@/components/
 import { Button } from '@/components/ui/button';
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/components/ui/tooltip';
 import { getLemmaClient } from '@/lib/sdk/lemma-client';
+import { appIndexQueryKey } from '@/lib/hooks/use-app';
 
 interface AppFrameProps {
     podId: string;
@@ -54,8 +55,7 @@ export function AppFrame({
         if (!appName) return;
 
         await getLemmaClient(podId).apps.update(appName, { visibility: nextVisibility });
-        void queryClient.invalidateQueries({ queryKey: ['apps', podId] });
-        void queryClient.invalidateQueries({ queryKey: ['app-config', podId] });
+        void queryClient.invalidateQueries({ queryKey: appIndexQueryKey(podId) });
         void queryClient.invalidateQueries({ queryKey: ['app-page', podId] });
         toast.success('Sharing updated');
     }, [appName, podId, queryClient]);

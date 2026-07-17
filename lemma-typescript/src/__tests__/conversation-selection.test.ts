@@ -58,6 +58,7 @@ function fakeClient(items: Conversation[]) {
       controller.close();
     },
   }));
+  const listModels = vi.fn(async () => ({ items: [] }));
 
   const client = {
     podId: "pod-1",
@@ -68,7 +69,7 @@ function fakeClient(items: Conversation[]) {
       list,
       create,
       get,
-      listModels: vi.fn(async () => ({ items: [] })),
+      listModels,
       messages: {
         list: vi.fn(async () => ({ items: [], limit: 100, next_page_token: null })),
       },
@@ -79,7 +80,7 @@ function fakeClient(items: Conversation[]) {
     },
   } as unknown as LemmaClient;
 
-  return { client, create, get, list, sendMessageStream };
+  return { client, create, get, list, listModels, sendMessageStream };
 }
 
 async function render(element: ReturnType<typeof createElement>) {
@@ -130,7 +131,11 @@ describe("explicit conversation selection", () => {
     const root = await render(createElement(Harness, { agentName: "alpha" }));
     await settle();
 
-    expect(list).toHaveBeenCalled();
+    expect(list).toHaveBeenCalledWith({
+      pod_id: "pod-1",
+      limit: 30,
+      page_token: undefined,
+    });
     expect(controller.get().conversations.map((item) => item.id)).toEqual(["newest", "older"]);
     expect(controller.get().openedConversationId).toBeNull();
     expect(controller.get().activeConversationId).toBeNull();
@@ -142,6 +147,7 @@ describe("explicit conversation selection", () => {
     await settle();
     expect(controller.get().openedConversationId).toBe("off-page");
     expect(controller.get().conversations.some((item) => item.id === "off-page")).toBe(true);
+    const historyBeforeAgentChange = controller.get().conversations.map((item) => item.id);
 
     await act(async () => {
       root.render(createElement(Harness, { agentName: "beta" }));
@@ -150,6 +156,8 @@ describe("explicit conversation selection", () => {
     await settle();
 
     expect(controller.get().openedConversationId).toBeNull();
+    expect(controller.get().conversations.map((item) => item.id)).toEqual(historyBeforeAgentChange);
+    expect(list).toHaveBeenCalledOnce();
   });
 
   it("requires list selection and preserves an explicitly selected off-page conversation", async () => {
@@ -231,6 +239,42 @@ describe("explicit conversation selection", () => {
     await settle();
     expect(controller.get().openedConversationId).toBeNull();
 
+    await act(async () => {
+      await controller.get().sendMessage("hello");
+    });
+
+    expect(create).toHaveBeenCalledOnce();
+    expect(sendMessageStream).toHaveBeenCalledOnce();
+    expect(controller.get().openedConversationId).toBe("created");
+  });
+
+  it("keeps commands available while automatic controller loading is deferred", async () => {
+    const { client, create, list, listModels, sendMessageStream } = fakeClient([]);
+    const controller = captureHookResult<UseAssistantControllerResult>();
+
+    function Harness() {
+      controller.set(useAssistantController({
+        client,
+        podId: "pod-1",
+        autoLoad: false,
+        autoLoadMessages: false,
+      }));
+      return null;
+    }
+
+    await render(createElement(Harness));
+    await settle();
+
+    expect(list).not.toHaveBeenCalled();
+    expect(listModels).not.toHaveBeenCalled();
+
+    const attachment = new File(["notes"], "notes.txt", { type: "text/plain" });
+    await act(async () => {
+      await controller.get().uploadFiles([attachment], { deferUntilSend: true });
+    });
+    expect(controller.get().pendingFiles).toEqual([attachment]);
+
+    await act(async () => controller.get().clearPendingFiles());
     await act(async () => {
       await controller.get().sendMessage("hello");
     });

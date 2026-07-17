@@ -7,13 +7,13 @@ import {
   useState,
   useSyncExternalStore,
 } from "react";
+import dynamic from "next/dynamic";
 import { useRouter } from "next/navigation";
 import { useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
 
 import { LoadingState } from "@/components/brand/loader";
 import { useOrganization } from "@/components/dashboard/org-context";
-import { AnomalousOrb } from "@/components/ui/anomalous-orb";
 import { getLemmaClient } from "@/lib/sdk/lemma-client";
 import {
   readLastOpenedPodId,
@@ -94,6 +94,11 @@ import {
   TeamStep,
   WorkspaceStep,
 } from "./account-onboarding-steps";
+
+const AnomalousOrb = dynamic(
+  () => import("@/components/ui/anomalous-orb").then((module) => module.AnomalousOrb),
+  { ssr: false },
+);
 
 export function AccountOnboarding({
   children,

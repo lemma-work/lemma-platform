@@ -170,8 +170,7 @@ function normalizeAgent(raw: Record<string, unknown>): Agent {
     };
 }
 
-export const useAgents = (podId: string | undefined) => {
-    return useQuery({
+export const agentsQueryOptions = (podId: string | undefined) => ({
         queryKey: ['agents', podId],
         queryFn: async (): Promise<AgentListResponse> => {
             const response = await getLemmaClient(podId).agents.list();
@@ -182,9 +181,14 @@ export const useAgents = (podId: string | undefined) => {
                 next_page_token: response.next_page_token,
             };
         },
-        enabled: !!podId,
         refetchOnWindowFocus: true,
         staleTime: 30000,
+});
+
+export const useAgents = (podId: string | undefined) => {
+    return useQuery({
+        ...agentsQueryOptions(podId),
+        enabled: !!podId,
     });
 };
 

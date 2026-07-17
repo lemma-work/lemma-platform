@@ -683,6 +683,7 @@ class ConversationRepository:
         user_id: UUID,
         pod_id: UUID,
         agent_id: UUID | None,
+        filter_by_agent: bool = True,
         status: ConversationStatus | None = None,
         conversation_type: ConversationType | None = None,
         metadata_filters: JsonObject | None = None,
@@ -700,13 +701,11 @@ class ConversationRepository:
             stmt = stmt.where(ConversationModel.parent_id.is_(None))
         else:
             stmt = stmt.where(ConversationModel.parent_id == parent_id)
-        if agent_id is not None:
-            stmt = stmt.where(ConversationModel.agent_id == agent_id)
-        elif parent_id is None:
-            # Root list with no agent filter → the default pod agent's
-            # conversations (agent_id IS NULL). Children, by contrast, belong to
-            # whatever sub-agent was spawned, so don't constrain their agent_id.
-            stmt = stmt.where(ConversationModel.agent_id.is_(None))
+        if filter_by_agent:
+            if agent_id is not None:
+                stmt = stmt.where(ConversationModel.agent_id == agent_id)
+            elif parent_id is None:
+                stmt = stmt.where(ConversationModel.agent_id.is_(None))
         if status is not None:
             stmt = stmt.where(
                 ConversationModel.status.in_(_conversation_status_values_for_db(status))

@@ -143,11 +143,12 @@ async def create_conversation(
     operation_id="agent.conversation.list",
     summary="List Pod Agent Conversations",
     description=(
-        "List root conversations for the current user in a pod. Use "
-        "agent_name to list conversations for a specific pod agent; omit it "
-        "to list default pod assistant conversations. Child (sub-agent) "
-        "conversations are omitted by default; pass parent_id to list the "
-        "children of a specific conversation instead."
+        "List root conversations for the current user in a pod. Omit "
+        "agent_name to list conversations across the pod, pass an empty "
+        "agent_name to list default pod assistant conversations, or pass a "
+        "name to list conversations for a specific pod agent. Child "
+        "(sub-agent) conversations are omitted by default; pass parent_id to "
+        "list the children of a specific conversation instead."
     ),
 )
 async def list_conversations(
@@ -164,9 +165,11 @@ async def list_conversations(
     limit: int = Query(default=20, ge=1, le=100),
 ) -> ConversationListResponse:
     _ = ctx
+    include_all_agents = "agent_name" not in request.query_params
     conversations, next_cursor = await service.list_conversations(
         pod_id=pod_id,
-        agent_name=agent_name,
+        agent_name=agent_name or None,
+        include_all_agents=include_all_agents,
         user_id=user.id,
         status=run_status,
         type=conversation_type,

@@ -42,7 +42,7 @@ export default function PodAssistantPage({
     // schedules: the default assistant isn't a named target a trigger can wake.
     const automation = usePodAutomation(podId, { schedules: false, surfaces: canUseSurfaces });
     const defaultSurfaces = automation.defaultSurfaces;
-    // Omitting agent_name lists the default pod assistant's own conversations.
+    // Omitting agent_name lists conversations across the pod.
     const { data: conversationsPage } = useScopedConversations({ podId }, { limit: 4, enabled: canReadConversations });
     const recentConversations = conversationsPage?.items ?? [];
 

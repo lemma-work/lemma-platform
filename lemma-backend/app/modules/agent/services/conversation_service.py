@@ -235,6 +235,7 @@ class ConversationService:
         *,
         pod_id: UUID,
         agent_name: str | None,
+        include_all_agents: bool = False,
         user_id: UUID,
         status: ConversationStatus | None = None,
         type: ConversationType | None = None,
@@ -243,9 +244,8 @@ class ConversationService:
         cursor: UUID | None = None,
         limit: int = 20,
     ) -> tuple[list[Conversation], UUID | None]:
-        expected_agent_id = await self._expected_agent_id(
-            pod_id=pod_id,
-            agent_name=agent_name,
+        expected_agent_id = None if include_all_agents else await self._expected_agent_id(
+            pod_id=pod_id, agent_name=agent_name
         )
         await self._require_agent_action(
             user_id=user_id,
@@ -257,6 +257,7 @@ class ConversationService:
             user_id=user_id,
             pod_id=pod_id,
             agent_id=expected_agent_id,
+            filter_by_agent=not include_all_agents,
             status=status,
             conversation_type=type,
             metadata_filters=metadata_filters,

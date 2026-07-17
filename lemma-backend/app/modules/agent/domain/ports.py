@@ -92,9 +92,11 @@ class ConversationRepository(Protocol):
         user_id: UUID,
         pod_id: UUID,
         agent_id: UUID | None,
+        filter_by_agent: bool = True,
         status: ConversationStatus | None = None,
         conversation_type: ConversationType | None = None,
         metadata_filters: JsonObject | None = None,
+        parent_id: UUID | None = None,
         cursor: UUID | None = None,
         limit: int = 20,
     ) -> tuple[list[Conversation], UUID | None]: ...

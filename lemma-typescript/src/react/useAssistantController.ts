@@ -66,6 +66,7 @@ export interface AssistantPendingFileUpload {
 export interface UseAssistantControllerOptions extends AssistantConversationScope {
   client: LemmaClient;
   enabled?: boolean;
+  autoLoad?: boolean;
   instructions?: string | null;
   autoLoadMessages?: boolean;
 }
@@ -144,12 +145,7 @@ type AssistantApiConversationMessage = ConversationMessage & {
 
 const CONVERSATIONS_PAGE_SIZE = 30;
 
-const EMPTY_SCOPE_KEY = JSON.stringify({
-  podId: null,
-  assistantName: null,
-  assistantId: null,
-  organizationId: null,
-});
+const EMPTY_HISTORY_SCOPE_KEY = JSON.stringify({ podId: null });
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return !!value && typeof value === "object" && !Array.isArray(value);
@@ -631,6 +627,7 @@ export function useAssistantController({
   assistantId,
   organizationId,
   enabled = true,
+  autoLoad = true,
   instructions,
   autoLoadMessages = true,
 }: UseAssistantControllerOptions): UseAssistantControllerResult {
@@ -679,6 +676,11 @@ export function useAssistantController({
     }),
     [scope.agentName, scope.assistantId, scope.assistantName, scope.organizationId, scope.podId],
   );
+  const historyScopeKey = useMemo(
+    () => JSON.stringify({ podId: scope.podId ?? client.podId ?? null }),
+    [client.podId, scope.podId],
+  );
+  const previousHistoryScopeKeyRef = useRef(historyScopeKey);
 
   const handleAssistantSessionError = useCallback((sessionError: unknown) => {
     setLocalError((prev) => prev || (sessionError instanceof Error ? sessionError.message : "Agent session failed"));
@@ -699,7 +701,6 @@ export function useAssistantController({
 
   const {
     conversationId: sessionConversationId,
-    listConversations: sessionListConversations,
     loadMessages: sessionLoadMessages,
     sendMessage: sessionSendMessage,
     createConversation: sessionCreateConversation,
@@ -792,10 +793,24 @@ export function useAssistantController({
     }
   }, [availableModels, client, scope.podId, touchConversation]);
 
+  const listConversationHistory = useCallback(async (input: {
+    limit?: number;
+    pageToken?: string;
+  } = {}) => {
+    const scopedClient = scope.podId && scope.podId !== client.podId
+      ? client.withPod(scope.podId)
+      : client;
+    return scopedClient.conversations.list({
+      pod_id: scope.podId ?? scopedClient.podId ?? undefined,
+      limit: input.limit,
+      page_token: input.pageToken,
+    });
+  }, [client, scope.podId]);
+
   const loadConversations = useCallback(async () => {
     setIsLoadingConversations(true);
     try {
-      const response = await sessionListConversations({ scope, limit: CONVERSATIONS_PAGE_SIZE });
+      const response = await listConversationHistory({ limit: CONVERSATIONS_PAGE_SIZE });
       const nextConversations = sortConversationsByUpdatedAt(response.items || []);
       setConversations((currentConversations) => {
         const openedConversationId = activeConversationIdRef.current;
@@ -813,7 +828,7 @@ export function useAssistantController({
     } finally {
       setIsLoadingConversations(false);
     }
-  }, [scope, sessionListConversations]);
+  }, [listConversationHistory]);
 
   const loadMoreConversations = useCallback(async (): Promise<Conversation[]> => {
     if (!conversationsCursor || isLoadingConversations || isLoadingMoreConversations) {
@@ -822,8 +837,7 @@ export function useAssistantController({
 
     setIsLoadingMoreConversations(true);
     try {
-      const response = await sessionListConversations({
-        scope,
+      const response = await listConversationHistory({
         limit: CONVERSATIONS_PAGE_SIZE,
         pageToken: conversationsCursor,
       });
@@ -843,7 +857,7 @@ export function useAssistantController({
     } finally {
       setIsLoadingMoreConversations(false);
     }
-  }, [conversationsCursor, isLoadingConversations, isLoadingMoreConversations, scope, sessionListConversations]);
+  }, [conversationsCursor, isLoadingConversations, isLoadingMoreConversations, listConversationHistory]);
 
   const loadAvailableModels = useCallback(async (): Promise<AvailableModelInfo[]> => {
     try {
@@ -942,6 +956,7 @@ export function useAssistantController({
       setAvailableModels([]);
       return;
     }
+    if (!autoLoad) return;
 
     let cancelled = false;
     void loadAvailableModels()
@@ -954,7 +969,7 @@ export function useAssistantController({
     return () => {
       cancelled = true;
     };
-  }, [enabled, loadAvailableModels]);
+  }, [autoLoad, enabled, loadAvailableModels]);
 
   const messages = useMemo(() => {
     if (!activeConversationId) return [];
@@ -997,6 +1012,9 @@ export function useAssistantController({
   }, [activeConversationId, conversations]);
 
   useEffect(() => {
+    const historyScopeChanged = previousHistoryScopeKeyRef.current !== historyScopeKey;
+    previousHistoryScopeKeyRef.current = historyScopeKey;
+
     if (!enabled) {
       sessionCancel();
       clearRuntimeMessages();
@@ -1026,15 +1044,19 @@ export function useAssistantController({
     setActiveConversationId(null);
     setConversationModelState(null);
     setConversationRuntimeState(null);
-    setConversations([]);
-    setConversationsCursor(null);
+    if (historyScopeChanged) {
+      setConversations([]);
+      setConversationsCursor(null);
+    }
     setLocalError(null);
     clearRuntimeMessages();
     setOlderMessagesCursor(null);
-    if (scopeKey !== EMPTY_SCOPE_KEY) {
-      void loadConversations();
-    }
-  }, [clearRuntimeMessages, enabled, loadConversations, scopeKey, sessionCancel]);
+  }, [clearRuntimeMessages, enabled, historyScopeKey, scopeKey, sessionCancel]);
+
+  useEffect(() => {
+    if (!enabled || !autoLoad || historyScopeKey === EMPTY_HISTORY_SCOPE_KEY) return;
+    void loadConversations();
+  }, [autoLoad, enabled, historyScopeKey, loadConversations]);
 
   useEffect(() => {
     if (!enabled || !activeConversationId) {

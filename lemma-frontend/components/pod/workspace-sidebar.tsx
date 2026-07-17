@@ -2,8 +2,9 @@
 
 import Link from 'next/link';
 import { usePathname, useRouter, useSearchParams } from 'next/navigation';
-import { useMemo, useState } from 'react';
+import { useCallback, useMemo, useState } from 'react';
 import type { ReactNode } from 'react';
+import { useQueryClient } from '@tanstack/react-query';
 import {
     Check,
     ChevronDown,
@@ -40,12 +41,15 @@ import { Textarea } from '@/components/ui/textarea';
 import { useApp } from '@/components/app/app-context';
 import { usePodAccess } from '@/lib/hooks/use-pod-access';
 import { cn } from '@/lib/utils';
-import { useAgents } from '@/lib/hooks/use-agents';
+import { agentsQueryOptions, useAgents } from '@/lib/hooks/use-agents';
 import {
+    tableQueryOptions,
+    tableRecordsQueryOptions,
+    tablesQueryOptions,
     useDatastoreFiles,
     useTables,
 } from '@/lib/hooks/use-datastores';
-import { useFlows } from '@/lib/hooks/use-flows';
+import { flowsQueryOptions, useFlows } from '@/lib/hooks/use-flows';
 import { useAccessiblePods, type AccessiblePodGroup } from '@/lib/hooks/use-pods';
 import { useProfile } from '@/lib/hooks/use-user';
 import { getAppRecipeExamples } from '@/lib/recipes/recipes';
@@ -185,14 +189,18 @@ function getDocEntryLabel(file: DatastoreFile): string {
 export function WorkspaceSidebar({ podId, podName, podIconUrl, onCollapse }: WorkspaceSidebarProps) {
     const pathname = usePathname();
     const router = useRouter();
+    const queryClient = useQueryClient();
     const searchParams = useSearchParams();
     const searchParamsString = searchParams.toString();
     const [assistantCreationKind, setAssistantCreationKind] = useState<AssistantCreationKind | null>(null);
     const [assistantCreationPrompt, setAssistantCreationPrompt] = useState('');
     const [bundleShareOpen, setBundleShareOpen] = useState(false);
     const [bundleImportOpen, setBundleImportOpen] = useState(false);
+    const [podSwitcherOpen, setPodSwitcherOpen] = useState(false);
     const { pages = [] } = useApp();
-    const { data: podsData } = useAccessiblePods();
+    const { data: podsData, isLoading: isLoadingPods } = useAccessiblePods({
+        enabled: podSwitcherOpen,
+    });
     const { data: profile } = useProfile();
     const podAccess = usePodAccess(podId);
     const canUseConversations = podAccess.canAccessRoute('conversations');
@@ -211,9 +219,21 @@ export function WorkspaceSidebar({ podId, podName, podIconUrl, onCollapse }: Wor
     const canCreateWorkflows = podAccess.can('workflow.create');
     const canCreateSchedules = podAccess.can('schedule.create');
     const canCreateTables = podAccess.can('datastore.table.create');
-    const { data: agentsData } = useAgents(canUseAgents ? podId : undefined);
-    const { data: tablesData } = useTables(canUseData ? podId : undefined);
-    const { data: flowsData } = useFlows(canUseWorkflows ? podId : undefined);
+    const basePath = `/pod/${podId}`;
+    const isActive = (href: string) => pathname === href || pathname.startsWith(`${href}/`);
+    const isDocsRoute = isActive(`${basePath}/files`);
+    const isAgentsRoute = isActive(`${basePath}/ai`) || isActive(`${basePath}/agents`);
+    const isWorkflowsRoute = isActive(`${basePath}/flows`);
+    const isDataRoute = isActive(`${basePath}/data`) || isActive(`${basePath}/datastores`);
+    const isAppsRoute = isActive(`${basePath}/app`);
+    const isConnectorsRoute = isActive(`${basePath}/connectors`);
+    const isKitsRoute = isActive(`${basePath}/kits`) || isActive(`${basePath}/recipes`);
+    const isSchedulesRoute = isActive(`${basePath}/schedules`);
+    const isPodHome = pathname === basePath || pathname === `${basePath}/`;
+    const hasRouteWorktree = isDocsRoute || isAgentsRoute || isWorkflowsRoute || isDataRoute || isAppsRoute || isConnectorsRoute || isKitsRoute || isSchedulesRoute;
+    const { data: agentsData } = useAgents(canUseAgents && isAgentsRoute ? podId : undefined);
+    const { data: tablesData } = useTables(canUseData && isDataRoute ? podId : undefined);
+    const { data: flowsData } = useFlows(canUseWorkflows && isWorkflowsRoute ? podId : undefined);
     const {
         conversations,
         openedConversationId,
@@ -231,18 +251,6 @@ export function WorkspaceSidebar({ podId, podName, podIconUrl, onCollapse }: Wor
         : profile?.email?.[0].toUpperCase() || 'U';
     const assistantCreationCopy = assistantCreationKind ? ASSISTANT_CREATION_COPY[assistantCreationKind] : null;
 
-    const basePath = `/pod/${podId}`;
-    const isActive = (href: string) => pathname === href || pathname.startsWith(`${href}/`);
-    const isDocsRoute = isActive(`${basePath}/files`);
-    const isAgentsRoute = isActive(`${basePath}/ai`) || isActive(`${basePath}/agents`);
-    const isWorkflowsRoute = isActive(`${basePath}/flows`);
-    const isDataRoute = isActive(`${basePath}/data`) || isActive(`${basePath}/datastores`);
-    const isAppsRoute = isActive(`${basePath}/app`);
-    const isConnectorsRoute = isActive(`${basePath}/connectors`);
-    const isKitsRoute = isActive(`${basePath}/kits`) || isActive(`${basePath}/recipes`);
-    const isSchedulesRoute = isActive(`${basePath}/schedules`);
-    const isPodHome = pathname === basePath || pathname === `${basePath}/`;
-    const hasRouteWorktree = isDocsRoute || isAgentsRoute || isWorkflowsRoute || isDataRoute || isAppsRoute || isConnectorsRoute || isKitsRoute || isSchedulesRoute;
     const canShowCreateMenu = canWriteConversations || canCreateAgents || canCreateApps || canCreateWorkflows || canCreateSchedules || canCreateTables;
     const visibleConversations = canUseConversations ? conversations.slice(0, hasRouteWorktree ? 3 : 7) : [];
     const docsFolderPath = isDocsRoute ? searchParams.get('folder') : null;
@@ -279,6 +287,33 @@ export function WorkspaceSidebar({ podId, podName, podIconUrl, onCollapse }: Wor
         else router.push(nextUrl, { scroll: false });
     };
 
+    const prefetchAgents = useCallback(() => {
+        router.prefetch(`${basePath}/ai`);
+        void queryClient.prefetchQuery(agentsQueryOptions(podId));
+    }, [basePath, podId, queryClient, router]);
+
+    const prefetchWorkflows = useCallback(() => {
+        router.prefetch(`${basePath}/flows`);
+        void queryClient.prefetchQuery(flowsQueryOptions(podId));
+    }, [basePath, podId, queryClient, router]);
+
+    const prefetchData = useCallback(() => {
+        router.prefetch(`${basePath}/data`);
+        void queryClient.ensureQueryData(tablesQueryOptions(podId)).then((tablesPage) => {
+            const firstTableName = tablesPage.items[0]?.name;
+            if (!firstTableName) return;
+
+            void Promise.all([
+                queryClient.prefetchQuery(tableQueryOptions(podId, firstTableName)),
+                queryClient.prefetchQuery(tableRecordsQueryOptions(
+                    podId,
+                    DATASTORE_NAME,
+                    firstTableName
+                )),
+            ]);
+        });
+    }, [basePath, podId, queryClient, router]);
+
     const rails = [
         {
             href: `${basePath}/app/pages`,
@@ -293,6 +328,7 @@ export function WorkspaceSidebar({ podId, podName, podIconUrl, onCollapse }: Wor
             kind: 'agents' as const,
             active: isActive(`${basePath}/ai`) || isActive(`${basePath}/agents`),
             visible: canUseAgents,
+            onIntent: prefetchAgents,
         },
         {
             href: `${basePath}/flows`,
@@ -300,6 +336,7 @@ export function WorkspaceSidebar({ podId, podName, podIconUrl, onCollapse }: Wor
             kind: 'workflows' as const,
             active: isActive(`${basePath}/flows`),
             visible: canUseWorkflows,
+            onIntent: prefetchWorkflows,
         },
         {
             href: `${basePath}/data`,
@@ -307,6 +344,7 @@ export function WorkspaceSidebar({ podId, podName, podIconUrl, onCollapse }: Wor
             kind: 'data' as const,
             active: isActive(`${basePath}/data`) || isActive(`${basePath}/datastores`),
             visible: canUseData,
+            onIntent: prefetchData,
         },
         {
             href: `${basePath}/files`,
@@ -573,7 +611,7 @@ export function WorkspaceSidebar({ podId, podName, podIconUrl, onCollapse }: Wor
         <aside className="flex h-full w-full shrink-0 flex-col overflow-hidden bg-[var(--pod-shell-bg)] text-[var(--text-secondary)]">
             <div className="flex h-14 shrink-0 items-center gap-1.5 border-b border-[color:color-mix(in_srgb,var(--border-subtle)_32%,transparent)] px-3">
                 <div className="min-w-0 flex-1">
-                    <DropdownMenu.Root>
+                    <DropdownMenu.Root open={podSwitcherOpen} onOpenChange={setPodSwitcherOpen}>
                         <DropdownMenu.Trigger asChild>
                             <button
                                 type="button"
@@ -610,6 +648,7 @@ export function WorkspaceSidebar({ podId, podName, podIconUrl, onCollapse }: Wor
                         <PodSwitcherMenu
                             pods={pods}
                             podGroups={podGroups}
+                            isLoading={isLoadingPods}
                             showOrganizationLabels={showPodOrganizationLabels}
                             podId={podId}
                             router={router}
@@ -963,6 +1002,7 @@ export function WorkspaceSidebar({ podId, podName, podIconUrl, onCollapse }: Wor
 function PodSwitcherMenu({
     pods,
     podGroups,
+    isLoading,
     showOrganizationLabels,
     podId,
     router,
@@ -970,6 +1010,7 @@ function PodSwitcherMenu({
 }: {
     pods: Array<{ id: string; name: string }>;
     podGroups: AccessiblePodGroup[];
+    isLoading: boolean;
     showOrganizationLabels?: boolean;
     podId: string;
     router: ReturnType<typeof useRouter>;
@@ -987,7 +1028,9 @@ function PodSwitcherMenu({
                     Switch pod
                 </div>
                 <div className="min-h-0 max-h-96 overflow-y-auto">
-                    {pods.length === 0 ? (
+                    {isLoading ? (
+                        <div className="px-2 py-2 text-sm text-[var(--text-tertiary)]">Loading pods…</div>
+                    ) : pods.length === 0 ? (
                         <div className="px-2 py-2 text-sm text-[var(--text-tertiary)]">No pods yet.</div>
                     ) : null}
                     {showOrganizationLabels ? (
@@ -1099,12 +1142,16 @@ function RailLink(props: {
     label: string;
     kind: ProductIconKind;
     active?: boolean;
+    onIntent?: () => void;
 }) {
-    const { href, label, kind, active } = props;
+    const { href, label, kind, active, onIntent } = props;
 
     return (
         <Link
             href={href}
+            onPointerEnter={onIntent}
+            onFocus={onIntent}
+            onTouchStart={onIntent}
             data-active={active ? 'true' : undefined}
             className="lemma-product-nav-item lemma-sidebar-row lemma-sidebar-row-base custom-focus-ring group font-normal"
         >

@@ -8,6 +8,7 @@ from uuid import uuid4
 
 import pytest
 from fastapi import HTTPException
+from starlette.datastructures import QueryParams
 
 from app.modules.agent.api.controllers import conversation_controller
 from app.modules.agent.api.controllers.conversation_controller import (
@@ -74,6 +75,51 @@ class _ConversationService:
         if self.exc is not None:
             raise self.exc
         return self.result
+
+
+class _ConversationListService:
+    def __init__(self) -> None:
+        self.kwargs = None
+
+    async def list_conversations(self, **kwargs):
+        self.kwargs = kwargs
+        return [], None
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("query", "agent_name", "expected_all", "expected_agent_name"),
+    [
+        ("", None, True, None),
+        ("agent_name=", "", False, None),
+        ("agent_name=researcher", "researcher", False, "researcher"),
+    ],
+)
+async def test_list_conversations_preserves_agent_filter_presence(
+    query,
+    agent_name,
+    expected_all,
+    expected_agent_name,
+) -> None:
+    service = _ConversationListService()
+
+    response = await conversation_controller.list_conversations(
+        pod_id=uuid4(),
+        request=SimpleNamespace(query_params=QueryParams(query)),
+        user=SimpleNamespace(id=uuid4()),
+        service=service,
+        ctx=SimpleNamespace(),
+        agent_name=agent_name,
+        run_status=None,
+        conversation_type=None,
+        parent_id=None,
+        page_token=None,
+        limit=20,
+    )
+
+    assert response.items == []
+    assert service.kwargs["include_all_agents"] is expected_all
+    assert service.kwargs["agent_name"] == expected_agent_name
 
 
 class _ChannelService:

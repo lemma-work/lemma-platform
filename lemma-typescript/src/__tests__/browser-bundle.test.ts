@@ -57,7 +57,7 @@ describe("browser bundle globals", () => {
       vi.unstubAllGlobals();
     });
 
-    it("issues a real pod-scoped request with the X-Lemma-Client header", async () => {
+    it("keeps cross-origin reads simple so the browser can skip a CORS preflight", async () => {
       (window as unknown as Record<string, unknown>).__LEMMA_CONFIG__ = {
         apiUrl: "https://api.example.test",
         podId: "pod-xyz",
@@ -82,7 +82,35 @@ describe("browser bundle globals", () => {
       const [url, init] = fetchMock.mock.calls[0];
       expect(String(url)).toContain("/pods/pod-xyz/datastore/tables");
       const headers = new Headers(init?.headers ?? {});
+      expect(headers.has("x-lemma-client")).toBe(false);
+      expect(headers.has("content-type")).toBe(false);
+    });
+
+    it("keeps client identity and JSON headers on cross-origin writes", async () => {
+      (window as unknown as Record<string, unknown>).__LEMMA_CONFIG__ = {
+        apiUrl: "https://api.example.test",
+        podId: "pod-xyz",
+        authUrl: "https://auth.example.test",
+      };
+      loadBundle();
+
+      const fetchMock = vi.fn(
+        async (_input: RequestInfo | URL, _init?: RequestInit): Promise<Response> =>
+          new Response(JSON.stringify({}), {
+            status: 200,
+            headers: { "content-type": "application/json" },
+          }),
+      );
+      vi.stubGlobal("fetch", fetchMock);
+
+      const g = globalThis as Record<string, any>;
+      const client = new g.LemmaClient.LemmaClient();
+      await client.tables.create({ name: "tasks", columns: [] });
+
+      const [, init] = fetchMock.mock.calls[0];
+      const headers = new Headers(init?.headers ?? {});
       expect(headers.get("x-lemma-client")).toMatch(/^lemma-sdk-ts\//);
+      expect(headers.get("content-type")).toBe("application/json");
     });
   });
 });

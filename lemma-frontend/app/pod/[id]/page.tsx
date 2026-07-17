@@ -39,6 +39,7 @@ const FAILED_RUN_STATUSES = new Set(['FAILED', 'ERROR', 'CANCELLED', 'CANCELED']
 const COMPLETED_RUN_STATUSES = new Set(['COMPLETED', 'SUCCESS', 'SUCCEEDED']);
 const RECENT_CONVERSATION_STATUSES = new Set(['completed', 'complete', 'success', 'succeeded', 'failed', 'error']);
 const COMPOSER_LAUNCH_DURATION_MS = 560;
+const HOME_PANELS_DEFER_MS = 600;
 
 interface ComposerLaunchAnimation {
     id: number;
@@ -67,6 +68,7 @@ function PodBlankChatHome({ podId }: { podId: string }) {
     const [launchAnimation, setLaunchAnimation] = useState<ComposerLaunchAnimation | null>(null);
     const [pendingRouteConversationId, setPendingRouteConversationId] = useState<string | null>(null);
     const [isRouteHandoff, setIsRouteHandoff] = useState(false);
+    const [showHomePanels, setShowHomePanels] = useState(false);
     const rootRef = useRef<HTMLDivElement>(null);
     const fileInputRef = useRef<HTMLInputElement>(null);
     const composerFormRef = useRef<HTMLFormElement>(null);
@@ -89,6 +91,11 @@ function PodBlankChatHome({ podId }: { podId: string }) {
             runtime,
         );
     };
+
+    useEffect(() => {
+        const timer = window.setTimeout(() => setShowHomePanels(true), HOME_PANELS_DEFER_MS);
+        return () => window.clearTimeout(timer);
+    }, []);
 
     useEffect(() => {
         const previousConversationId = submittedFromConversationRef.current;
@@ -302,7 +309,7 @@ function PodBlankChatHome({ podId }: { podId: string }) {
                         </button>
                     </form>
                 </div>
-                <PodAgentWorkflowKanban podId={podId} />
+                {showHomePanels ? <PodAgentWorkflowKanban podId={podId} /> : null}
             </main>
             {launchAnimation && launchAnimationStyle ? (
                 <div

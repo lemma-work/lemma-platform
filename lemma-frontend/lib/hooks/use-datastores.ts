@@ -5,7 +5,7 @@ import { getLemmaClient } from '@/lib/sdk/lemma-client';
 import type { Column, Datastore, Table } from '@/lib/types';
 import type { FileSearchResponse, RecordSort } from 'lemma-sdk';
 import type { FilterRule } from '../types/app';
-import { buildRecordQueryFilters } from '@/lib/utils/datastore-records';
+import { buildRecordQueryFilters, buildRecordQuerySort } from '@/lib/utils/datastore-records';
 
 const DEFAULT_DATASTORE_NAME = 'default';
 
@@ -133,7 +133,7 @@ function normalizeColumn(raw: Record<string, unknown>): Column {
     };
 }
 
-function normalizeTable(raw: Record<string, unknown>): Table {
+export function normalizeTable(raw: Record<string, unknown>): Table {
     const columns = Array.isArray(raw.columns)
         ? (raw.columns as Record<string, unknown>[]).map(normalizeColumn)
         : [];
@@ -299,6 +299,17 @@ interface UseTablesOptions {
     enabled?: boolean;
 }
 
+export const tablesQueryOptions = (podId: string | undefined) => ({
+    queryKey: ['tables', podId] as const,
+    queryFn: async () => {
+        const response = await getLemmaClient(podId).tables.list();
+        return {
+            ...toCursorPage(response),
+            items: (response.items || []).map((item) => normalizeTable(item as unknown as Record<string, unknown>)),
+        };
+    },
+});
+
 export const useTables = (
     podId: string | undefined,
     datastoreName?: string | undefined,
@@ -306,26 +317,23 @@ export const useTables = (
 ) => {
     void datastoreName;
     return useQuery({
-        queryKey: ['tables', podId],
-        queryFn: async () => {
-            const response = await getLemmaClient(podId).tables.list();
-            return {
-                ...toCursorPage(response),
-                items: (response.items || []).map((item) => normalizeTable(item as unknown as Record<string, unknown>)),
-            };
-        },
+        ...tablesQueryOptions(podId),
         enabled: (options.enabled ?? true) && !!podId,
     });
 };
 
+export const tableQueryOptions = (podId: string | undefined, tableName: string | undefined) => ({
+    queryKey: ['table', podId, tableName] as const,
+    queryFn: async () => {
+        const response = await getLemmaClient(podId).tables.get(tableName!);
+        return normalizeTable(response as unknown as Record<string, unknown>);
+    },
+});
+
 export const useTable = (podId: string | undefined, datastoreName: string | undefined, tableName: string | undefined) => {
     void datastoreName;
     return useQuery({
-        queryKey: ['table', podId, tableName],
-        queryFn: async () => {
-            const response = await getLemmaClient(podId).tables.get(tableName!);
-            return normalizeTable(response as unknown as Record<string, unknown>);
-        },
+        ...tableQueryOptions(podId, tableName),
         enabled: !!podId && !!tableName,
     });
 };
@@ -381,6 +389,55 @@ export const useDeleteTable = () => {
 };
 
 // Records
+interface TableRecordsQueryOptions {
+    page?: number;
+    limit?: number;
+    sortField?: string | null;
+    sortOrder?: 'asc' | 'desc';
+    filters?: FilterRule[];
+    pageToken?: string | null;
+}
+
+export const tableRecordsQueryOptions = (
+    podId: string | undefined,
+    datastoreName: string | undefined,
+    tableName: string | undefined,
+    options: TableRecordsQueryOptions = {}
+) => {
+    const page = options.page ?? 0;
+    const limit = options.limit ?? 50;
+    const sortField = options.sortField ?? null;
+    const sortOrder = options.sortOrder ?? 'asc';
+    const filters = options.filters ?? [];
+    const pageToken = options.pageToken ?? null;
+    const usesStructuredQuery = filters.length > 0 || sortField !== null;
+
+    return {
+        queryKey: ['records', podId, datastoreName, tableName, page, sortField, sortOrder, filters, pageToken] as const,
+        queryFn: async () => {
+            const response = (usesStructuredQuery
+                ? await getLemmaClient(podId).records.query(tableName!, {
+                    filters: buildRecordQueryFilters(filters),
+                    sort: buildRecordQuerySort(sortField, sortOrder),
+                    limit,
+                    page_token: pageToken ?? undefined,
+                })
+                : await getLemmaClient(podId).records.list(tableName!, {
+                    limit,
+                    offset: page * limit,
+                })) as RecordListResponseLike;
+            const items = response.items || response.records || response.rows || [];
+
+            return {
+                ...response,
+                items,
+                total: response.total ?? items.length,
+                limit: response.limit ?? limit,
+            };
+        },
+    };
+};
+
 export const useRecords = (
     podId: string | undefined,
     datastoreName: string | undefined,

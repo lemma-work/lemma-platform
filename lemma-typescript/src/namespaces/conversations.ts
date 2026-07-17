@@ -184,7 +184,7 @@ export class ConversationsNamespace {
     const podId = this.requirePodId(options.pod_id);
     return this.http.request<ConversationListResponse>("GET", `/pods/${podId}/conversations`, {
       params: {
-        agent_name: options.agent_name,
+        agent_name: options.agent_name === null ? "" : options.agent_name,
         parent_id: options.parent_id,
         type: options.type,
         limit: options.limit ?? 20,
@@ -202,6 +202,16 @@ export class ConversationsNamespace {
     } = {},
   ): Promise<ConversationListResponse> {
     return this.list({ ...options, agent_name: agentName });
+  }
+
+  listDefault(
+    options: {
+      pod_id?: string | null;
+      limit?: number;
+      page_token?: string | null;
+    } = {},
+  ): Promise<ConversationListResponse> {
+    return this.list({ ...options, agent_name: null });
   }
 
   async listModels(options: { orgId?: string | null } = {}): Promise<{ items: AvailableModelInfo[]; limit: number; next_page_token: null }> {
