@@ -54,7 +54,7 @@ export class ConnectorsService {
     }
     /**
      * OAuth Callback
-     * Handle OAuth callback and complete account connection. This endpoint is public and uses state parameter for security.
+     * Handle OAuth callback and complete account connection. Requires an authenticated session; the callback is bound to the user who initiated the connect request.
      * @param error
      * @param format
      * @returns string Successful Response

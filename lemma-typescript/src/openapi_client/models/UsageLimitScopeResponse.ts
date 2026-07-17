@@ -8,6 +8,7 @@ export type UsageLimitScopeResponse = {
     remaining_usd?: (number | null);
     reserved_usd: number;
     reset_at: string;
+    scope: string;
     used_usd: number;
     window_start: string;
 };

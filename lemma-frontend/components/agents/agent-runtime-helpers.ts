@@ -38,10 +38,7 @@ export const LOCAL_RUNTIME_SETUP_OPTIONS: Array<{
     { harnessKind: HarnessKind.OPENCODE, title: 'OpenCode' },
     { harnessKind: HarnessKind.CURSOR, title: 'Cursor' },
     { harnessKind: HarnessKind.ANTIGRAVITY, title: 'Antigravity' },
-    // GG_CODER isn't in the SDK's HarnessKind enum yet (added upstream in
-    // value_objects.py). Cast as any to keep TS happy until the OpenAPI
-    // schema regen picks up the new enum member.
-    { harnessKind: 'GG_CODER' as HarnessKind, title: 'GG Coder' },
+    { harnessKind: HarnessKind.GG_CODER, title: 'GG Coder' },
 ];
 
 export function runtimeKey(runtime: AgentRuntimeConfig): string {

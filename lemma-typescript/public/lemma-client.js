@@ -12321,7 +12321,7 @@ var LemmaClient = (() => {
     }
     /**
      * OAuth Callback
-     * Handle OAuth callback and complete account connection. This endpoint is public and uses state parameter for security.
+     * Handle OAuth callback and complete account connection. Requires an authenticated session; the callback is bound to the user who initiated the connect request.
      * @param error
      * @param format
      * @returns string Successful Response
@@ -14075,6 +14075,27 @@ var LemmaClient = (() => {
 
   // src/openapi_client/services/AgentSurfacesService.ts
   var AgentSurfacesService = class {
+    /**
+     * List Available Surfaces
+     * The connectable-surface catalog: every surface platform with its connector,
+     * supported credential modes, and the schema to connect an account. Platform-
+     * level (no surface need exist); the pod scopes authorization only.
+     * @param podId
+     * @returns AvailableSurfacesResponse Successful Response
+     * @throws ApiError
+     */
+    static agentSurfaceAvailable(podId) {
+      return request(OpenAPI, {
+        method: "GET",
+        url: "/pods/{pod_id}/available-surfaces",
+        path: {
+          "pod_id": podId
+        },
+        errors: {
+          422: `Validation Error`
+        }
+      });
+    }
     /**
      * Get Surface Setup Guide
      * The static pre-creation checklist for a platform (env/OAuth

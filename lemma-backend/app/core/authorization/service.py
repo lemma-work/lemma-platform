@@ -63,6 +63,7 @@ from app.modules.function.infrastructure.models import FunctionModel
 from app.modules.identity.infrastructure.models.organization_models import (
     OrganizationMember,
 )
+from app.modules.identity.infrastructure.models.user_models import User
 from app.modules.connectors.infrastructure.models.account import Account
 from app.modules.connectors.infrastructure.models.auth_config import AuthConfig
 from app.modules.pod.domain.visibility import (
@@ -395,6 +396,11 @@ class AuthorizationDataService:
         request_id: str | None = None,
     ) -> Context:
         authorizer = Authorizer(self.session)
+        # Always read users.is_superuser from the DB \u2014 it controls the bypass at
+        # service.py / sql_actions.py and is security-critical, so we do NOT
+        # cache it. The PK lookup is sub-millisecond and avoids stale bypass.
+        user_row = await self.session.get(User, user_id)
+        is_superuser = bool(user_row and user_row.is_superuser)
         if organization_id is None and pod_id is None:
             return Context(
                 actor_type=ActorType.USER,
@@ -402,6 +408,7 @@ class AuthorizationDataService:
                 user_id=user_id,
                 authorizer=authorizer,
                 request_id=request_id,
+                is_superuser=is_superuser,
             )
 
         if pod_id is not None:
@@ -428,6 +435,7 @@ class AuthorizationDataService:
                 grant_principal_sets=cached.grant_principal_sets,
                 authorizer=authorizer,
                 request_id=request_id,
+                is_superuser=is_superuser,
             )
 
         role_ids: set[UUID] = set()
@@ -488,6 +496,7 @@ class AuthorizationDataService:
             grant_principal_sets=snapshot.grant_principal_sets,
             authorizer=authorizer,
             request_id=request_id,
+            is_superuser=is_superuser,
         )
 
     async def build_workload_context(
@@ -632,6 +641,13 @@ class AuthorizationDataService:
             delegation_actor_name=delegation_actor_name,
             authorizer=Authorizer(self.session),
             request_id=request_id,
+            # Forward the user-level superuser flag so delegated workloads also
+            # bypass org/pod permission gates when the invoker is a superuser.
+            # Mirrors the wiring in ``build_user_context`` — without this, a
+            # superuser invoking a non-default-pod-agent workload (function,
+            # subagent) loses the bypass because the merged Context defaults
+            # ``is_superuser`` to False.
+            is_superuser=user_ctx.is_superuser,
         )
 
     async def build_context_from_delegation_claims(

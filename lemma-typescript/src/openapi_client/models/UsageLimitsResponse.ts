@@ -8,6 +8,7 @@ export type UsageLimitsResponse = {
     org_monthly: UsageLimitScopeResponse;
     organization_id: (string | null);
     user_id: string;
+    user_monthly: UsageLimitScopeResponse;
     user_weekly: UsageLimitScopeResponse;
 };
 

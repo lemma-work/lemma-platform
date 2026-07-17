@@ -12,4 +12,5 @@ export enum HarnessKind {
     OPENCODE = 'OPENCODE',
     CURSOR = 'CURSOR',
     ANTIGRAVITY = 'ANTIGRAVITY',
+    GG_CODER = 'GG_CODER',
 }

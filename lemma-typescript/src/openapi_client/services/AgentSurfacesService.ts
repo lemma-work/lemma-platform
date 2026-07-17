@@ -5,6 +5,7 @@
 import type { AgentSurfaceListResponse } from '../models/AgentSurfaceListResponse.js';
 import type { AgentSurfaceResponse } from '../models/AgentSurfaceResponse.js';
 import type { AvailableSurfaceChannelsResponse } from '../models/AvailableSurfaceChannelsResponse.js';
+import type { AvailableSurfacesResponse } from '../models/AvailableSurfacesResponse.js';
 import type { SurfaceCreateRequest } from '../models/SurfaceCreateRequest.js';
 import type { SurfacePlatformSetupGuide } from '../models/SurfacePlatformSetupGuide.js';
 import type { SurfaceSendRequest } from '../models/SurfaceSendRequest.js';
@@ -15,6 +16,29 @@ import type { CancelablePromise } from '../core/CancelablePromise.js';
 import { OpenAPI } from '../core/OpenAPI.js';
 import { request as __request } from '../core/request.js';
 export class AgentSurfacesService {
+    /**
+     * List Available Surfaces
+     * The connectable-surface catalog: every surface platform with its connector,
+     * supported credential modes, and the schema to connect an account. Platform-
+     * level (no surface need exist); the pod scopes authorization only.
+     * @param podId
+     * @returns AvailableSurfacesResponse Successful Response
+     * @throws ApiError
+     */
+    public static agentSurfaceAvailable(
+        podId: string,
+    ): CancelablePromise<AvailableSurfacesResponse> {
+        return __request(OpenAPI, {
+            method: 'GET',
+            url: '/pods/{pod_id}/available-surfaces',
+            path: {
+                'pod_id': podId,
+            },
+            errors: {
+                422: `Validation Error`,
+            },
+        });
+    }
     /**
      * Get Surface Setup Guide
      * The static pre-creation checklist for a platform (env/OAuth
