@@ -8,6 +8,7 @@ from uuid import UUID
 
 from sqlalchemy import (
     BigInteger,
+    CheckConstraint,
     DateTime,
     ForeignKey,
     Index,
@@ -52,6 +53,10 @@ class AgentModel(UUIDAuditBase):
 
     __tablename__ = "agents"
     __table_args__ = (
+        CheckConstraint(
+            "name NOT IN ('POD_DEFAULT', 'pod_default')",
+            name="ck_agents_name_not_pod_default_selector",
+        ),
         UniqueConstraint("pod_id", "name", name="uq_agent_pod_name"),
         Index("ix_agent_pod_name", "pod_id", "name"),
     )
@@ -244,29 +249,23 @@ class ConversationModel(UUIDAuditBase):
     __tablename__ = "agent_conversations"
     __table_args__ = (
         Index(
-            "ix_agent_conv_pod_assistant_roots",
-            "user_id",
-            "agent_id",
-            "pod_id",
-            "parent_id",
-            "id",
-        ),
-        Index(
-            "ix_agent_conv_pod_agent_roots",
-            "pod_id",
-            "agent_id",
-            "user_id",
-            "parent_id",
-            "id",
-        ),
-        Index(
             "ix_agent_conv_user_pod_roots",
             "user_id",
             "pod_id",
             "id",
             postgresql_where=text("parent_id IS NULL"),
         ),
-        Index("ix_agent_conv_parent", "parent_id"),
+        Index(
+            "ix_agent_conv_user_pod_agent_roots",
+            "user_id",
+            "pod_id",
+            text(
+                "COALESCE(agent_id, "
+                "'00000000-0000-0000-0000-000000000001'::uuid)"
+            ),
+            "id",
+            postgresql_where=text("parent_id IS NULL"),
+        ),
         Index(
             "ix_agent_conv_metadata",
             "conversation_metadata",

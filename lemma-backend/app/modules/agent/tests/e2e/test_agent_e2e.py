@@ -609,14 +609,49 @@ class TestPodAgentLifecycle:
             named_id,
         }
 
+        first_page = await authenticated_client.get(
+            f"/pods/{pod_id}/conversations",
+            params={"limit": 1},
+        )
+        assert first_page.status_code == 200, first_page.text
+        first_page_body = first_page.json()
+        assert len(first_page_body["items"]) == 1
+        assert first_page_body["next_page_token"] is not None
+        second_page = await authenticated_client.get(
+            f"/pods/{pod_id}/conversations",
+            params={"limit": 1, "page_token": first_page_body["next_page_token"]},
+        )
+        assert second_page.status_code == 200, second_page.text
+        assert {
+            first_page_body["items"][0]["id"],
+            second_page.json()["items"][0]["id"],
+        } == {default_id, named_id}
+
         default_conversations = await authenticated_client.get(
             f"/pods/{pod_id}/conversations",
-            params={"agent_name": ""},
+            params={"agent_name": "POD_DEFAULT"},
         )
         assert default_conversations.status_code == 200, default_conversations.text
         assert [item["id"] for item in default_conversations.json()["items"]] == [
             default_id
         ]
+
+        default_alias_conversations = await authenticated_client.get(
+            f"/pods/{pod_id}/conversations",
+            params={"agent_name": "pod_default"},
+        )
+        assert default_alias_conversations.status_code == 200, (
+            default_alias_conversations.text
+        )
+        assert [
+            item["id"] for item in default_alias_conversations.json()["items"]
+        ] == [default_id]
+
+        empty_agent_name = await authenticated_client.get(
+            f"/pods/{pod_id}/conversations",
+            params={"agent_name": ""},
+        )
+        assert empty_agent_name.status_code == 422, empty_agent_name.text
 
         named_conversations = await authenticated_client.get(
             f"/pods/{pod_id}/conversations",
@@ -626,6 +661,25 @@ class TestPodAgentLifecycle:
         assert [item["id"] for item in named_conversations.json()["items"]] == [
             named_id
         ]
+
+    @pytest.mark.parametrize("reserved_name", ["POD_DEFAULT", "pod_default"])
+    async def test_agent_names_reserve_pod_default_history_selectors(
+        self,
+        authenticated_client,
+        fixed_test_org,
+        reserved_name,
+    ):
+        pod_id = await _create_test_pod(authenticated_client, fixed_test_org)
+
+        response = await authenticated_client.post(
+            f"/pods/{pod_id}/agents",
+            json={
+                "name": reserved_name,
+                "instruction": "This name must remain reserved.",
+            },
+        )
+
+        assert response.status_code == 400, response.text
 
     @pytest.mark.real_llm
     @pytest.mark.skipif(not system_lemma_available(), reason=SYSTEM_LEMMA_SKIP_REASON)

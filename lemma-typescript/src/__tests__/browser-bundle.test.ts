@@ -32,6 +32,7 @@ describe("browser bundle globals", () => {
     const g = globalThis as Record<string, any>;
     expect(g.LemmaClient).toBeDefined();
     expect(typeof g.LemmaClient.LemmaClient).toBe("function");
+    expect(g.LemmaClient.POD_DEFAULT_AGENT_SELECTOR).toBe("POD_DEFAULT");
     // Back-compat alias for widgets authored against `new Lemma.LemmaClient()`.
     expect(g.Lemma).toBeDefined();
     expect(g.Lemma.LemmaClient).toBe(g.LemmaClient.LemmaClient);

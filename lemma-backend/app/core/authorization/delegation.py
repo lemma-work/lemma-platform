@@ -31,6 +31,10 @@ CLAIM_DELEGATION_VERSION = "gpy_delegation_version"
 DELEGATION_VERSION = 1
 DEFAULT_POD_AGENT_ID = UUID("00000000-0000-0000-0000-000000000001")
 DEFAULT_POD_AGENT_NAME = "pod_default"
+POD_DEFAULT_AGENT_SELECTOR = "POD_DEFAULT"
+POD_DEFAULT_AGENT_SELECTOR_ALIASES = frozenset(
+    {POD_DEFAULT_AGENT_SELECTOR, DEFAULT_POD_AGENT_NAME}
+)
 
 # No workload — the default pod agent included — performs these by default.
 # A workload needs either an explicit grant of the destructive permission

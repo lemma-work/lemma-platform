@@ -14,6 +14,7 @@ import { getLemmaClient } from '../sdk/lemma-client';
 
 export interface ConversationScope {
     podId?: string | null;
+    agentName?: string | null;
     assistantName?: string | null;
     assistantId?: string | null; // deprecated alias
     organizationId?: string | null;
@@ -155,10 +156,10 @@ export function useScopedConversations(scope: ConversationScope, params?: { limi
     return useQuery({
         queryKey: ['conversations', scope, params],
         queryFn: async () => {
-            const assistantName = scope.assistantName ?? scope.assistantId ?? undefined;
+            const agentName = scope.agentName ?? scope.assistantName ?? scope.assistantId ?? undefined;
             const response = await getLemmaClient(scope.podId || undefined).conversations.list({
                 pod_id: scope.podId ?? undefined,
-                agent_name: assistantName,
+                agent_name: agentName,
                 limit: params?.limit,
                 page_token: params?.cursor,
             });

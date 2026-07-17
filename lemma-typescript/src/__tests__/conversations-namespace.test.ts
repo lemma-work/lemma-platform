@@ -30,7 +30,7 @@ describe("ConversationsNamespace.list", () => {
     );
   });
 
-  it("encodes explicit null as an empty agent_name for the default assistant", async () => {
+  it("encodes explicit null as POD_DEFAULT for the default assistant", async () => {
     const { conversations, request } = setup();
 
     await conversations.list({ agent_name: null });
@@ -39,7 +39,7 @@ describe("ConversationsNamespace.list", () => {
       "GET",
       "/pods/pod-1/conversations",
       expect.objectContaining({
-        params: expect.objectContaining({ agent_name: "" }),
+        params: expect.objectContaining({ agent_name: "POD_DEFAULT" }),
       }),
     );
   });
@@ -67,7 +67,7 @@ describe("ConversationsNamespace.list", () => {
       "GET",
       "/pods/pod-1/conversations",
       expect.objectContaining({
-        params: expect.objectContaining({ agent_name: "" }),
+        params: expect.objectContaining({ agent_name: "POD_DEFAULT" }),
       }),
     );
   });

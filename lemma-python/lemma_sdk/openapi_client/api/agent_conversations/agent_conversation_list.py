@@ -127,9 +127,9 @@ def sync_detailed(
     """List Pod Agent Conversations
 
      List root conversations for the current user in a pod. Omit agent_name to list conversations across
-    the pod, pass an empty agent_name to list default pod assistant conversations, or pass a name to
-    list conversations for a specific pod agent. Child (sub-agent) conversations are omitted by default;
-    pass parent_id to list the children of a specific conversation instead.
+    the pod, pass POD_DEFAULT (or pod_default) to list default pod assistant conversations, or pass a
+    name to list conversations for a specific pod agent. Child (sub-agent) conversations are omitted by
+    default; pass parent_id to list the children of a specific conversation instead.
 
     Args:
         pod_id (UUID):
@@ -179,9 +179,9 @@ def sync(
     """List Pod Agent Conversations
 
      List root conversations for the current user in a pod. Omit agent_name to list conversations across
-    the pod, pass an empty agent_name to list default pod assistant conversations, or pass a name to
-    list conversations for a specific pod agent. Child (sub-agent) conversations are omitted by default;
-    pass parent_id to list the children of a specific conversation instead.
+    the pod, pass POD_DEFAULT (or pod_default) to list default pod assistant conversations, or pass a
+    name to list conversations for a specific pod agent. Child (sub-agent) conversations are omitted by
+    default; pass parent_id to list the children of a specific conversation instead.
 
     Args:
         pod_id (UUID):
@@ -226,9 +226,9 @@ async def asyncio_detailed(
     """List Pod Agent Conversations
 
      List root conversations for the current user in a pod. Omit agent_name to list conversations across
-    the pod, pass an empty agent_name to list default pod assistant conversations, or pass a name to
-    list conversations for a specific pod agent. Child (sub-agent) conversations are omitted by default;
-    pass parent_id to list the children of a specific conversation instead.
+    the pod, pass POD_DEFAULT (or pod_default) to list default pod assistant conversations, or pass a
+    name to list conversations for a specific pod agent. Child (sub-agent) conversations are omitted by
+    default; pass parent_id to list the children of a specific conversation instead.
 
     Args:
         pod_id (UUID):
@@ -276,9 +276,9 @@ async def asyncio(
     """List Pod Agent Conversations
 
      List root conversations for the current user in a pod. Omit agent_name to list conversations across
-    the pod, pass an empty agent_name to list default pod assistant conversations, or pass a name to
-    list conversations for a specific pod agent. Child (sub-agent) conversations are omitted by default;
-    pass parent_id to list the children of a specific conversation instead.
+    the pod, pass POD_DEFAULT (or pod_default) to list default pod assistant conversations, or pass a
+    name to list conversations for a specific pod agent. Child (sub-agent) conversations are omitted by
+    default; pass parent_id to list the children of a specific conversation instead.
 
     Args:
         pod_id (UUID):

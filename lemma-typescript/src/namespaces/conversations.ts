@@ -20,6 +20,8 @@ import type {
   CursorPage,
 } from "../types.js";
 
+export const POD_DEFAULT_AGENT_SELECTOR = "POD_DEFAULT" as const;
+
 type ConversationCreateInput = CreateConversationRequest & {
   agent_runtime?: AgentRuntimeConfig | null;
   agent_name?: string | null;
@@ -184,7 +186,9 @@ export class ConversationsNamespace {
     const podId = this.requirePodId(options.pod_id);
     return this.http.request<ConversationListResponse>("GET", `/pods/${podId}/conversations`, {
       params: {
-        agent_name: options.agent_name === null ? "" : options.agent_name,
+        agent_name: options.agent_name === null
+          ? POD_DEFAULT_AGENT_SELECTOR
+          : options.agent_name,
         parent_id: options.parent_id,
         type: options.type,
         limit: options.limit ?? 20,
@@ -211,7 +215,7 @@ export class ConversationsNamespace {
       page_token?: string | null;
     } = {},
   ): Promise<ConversationListResponse> {
-    return this.list({ ...options, agent_name: null });
+    return this.list({ ...options, agent_name: POD_DEFAULT_AGENT_SELECTOR });
   }
 
   async listModels(options: { orgId?: string | null } = {}): Promise<{ items: AvailableModelInfo[]; limit: number; next_page_token: null }> {

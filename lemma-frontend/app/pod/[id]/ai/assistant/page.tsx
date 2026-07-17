@@ -2,6 +2,7 @@
 
 import { use, useState } from 'react';
 import { useRouter } from 'next/navigation';
+import { POD_DEFAULT_AGENT_SELECTOR } from 'lemma-sdk';
 import { ArrowUp } from '@/components/ui/icons';
 
 import { LemmaMark } from '@/components/brand/logo';
@@ -42,8 +43,10 @@ export default function PodAssistantPage({
     // schedules: the default assistant isn't a named target a trigger can wake.
     const automation = usePodAutomation(podId, { schedules: false, surfaces: canUseSurfaces });
     const defaultSurfaces = automation.defaultSurfaces;
-    // Omitting agent_name lists conversations across the pod.
-    const { data: conversationsPage } = useScopedConversations({ podId }, { limit: 4, enabled: canReadConversations });
+    const { data: conversationsPage } = useScopedConversations(
+        { podId, agentName: POD_DEFAULT_AGENT_SELECTOR },
+        { limit: 4, enabled: canReadConversations },
+    );
     const recentConversations = conversationsPage?.items ?? [];
 
     const [message, setMessage] = useState('');

@@ -6,11 +6,12 @@ from collections.abc import Sequence
 from datetime import datetime, timedelta, timezone
 from uuid import UUID
 
-from sqlalchemy import func, literal, select, update
+from sqlalchemy import func, literal, literal_column, select, update
 from sqlalchemy.dialects.postgresql import JSONB, array
 from sqlalchemy.orm import selectinload
 
 from app.core.authorization.context import Context, ResourceType, ResourceVisibility
+from app.core.authorization.delegation import DEFAULT_POD_AGENT_ID
 from app.core.authorization.grants import (
     delete_grantee_grants,
     delete_resource_grants,
@@ -42,6 +43,8 @@ from app.modules.agent.domain.value_objects import (
     AgentRunApprovalDecision,
     AgentRunFinishResult,
     AgentRunStatus,
+    ConversationAgentScope,
+    ConversationAgentSelection,
     ConversationStatus,
     ConversationType,
     JsonObject,
@@ -70,6 +73,7 @@ from app.modules.connectors.contracts import SecretEncryptionPort
 
 
 _ACTIVE_AGENT_RUN_STATUS_VALUES = _run_status_values_for_db(ACTIVE_AGENT_RUN_STATUSES)
+_DEFAULT_POD_AGENT_ID_SQL = literal_column(f"'{DEFAULT_POD_AGENT_ID}'::uuid")
 
 
 class AgentRuntimeProfileRepository:
@@ -682,8 +686,7 @@ class ConversationRepository:
         *,
         user_id: UUID,
         pod_id: UUID,
-        agent_id: UUID | None,
-        filter_by_agent: bool = True,
+        agent_selection: ConversationAgentSelection[UUID],
         status: ConversationStatus | None = None,
         conversation_type: ConversationType | None = None,
         metadata_filters: JsonObject | None = None,
@@ -701,11 +704,12 @@ class ConversationRepository:
             stmt = stmt.where(ConversationModel.parent_id.is_(None))
         else:
             stmt = stmt.where(ConversationModel.parent_id == parent_id)
-        if filter_by_agent:
-            if agent_id is not None:
-                stmt = stmt.where(ConversationModel.agent_id == agent_id)
-            elif parent_id is None:
-                stmt = stmt.where(ConversationModel.agent_id.is_(None))
+        if agent_selection.scope is not ConversationAgentScope.ALL:
+            selected_agent_id = DEFAULT_POD_AGENT_ID
+            if agent_selection.scope is ConversationAgentScope.NAMED:
+                selected_agent_id = agent_selection.named_value
+            agent_scope_id = func.coalesce(ConversationModel.agent_id, _DEFAULT_POD_AGENT_ID_SQL)
+            stmt = stmt.where(agent_scope_id == selected_agent_id)
         if status is not None:
             stmt = stmt.where(
                 ConversationModel.status.in_(_conversation_status_values_for_db(status))

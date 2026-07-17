@@ -2,12 +2,13 @@ from __future__ import annotations
 
 from typing import Any
 
-from lemma_sdk import Lemma
+from lemma_sdk import Lemma, POD_DEFAULT_AGENT_SELECTOR
 from lemma_sdk.openapi_client.models.agent_toolset import AgentToolset
 from lemma_sdk.openapi_client.models.approval_decision_response import (
     ApprovalDecisionResponse,
 )
 from lemma_sdk.openapi_client.models.message_response import MessageResponse
+from lemma_sdk.openapi_client.types import UNSET
 
 
 class StubTransport:
@@ -67,6 +68,23 @@ def test_create_for_agent_omits_parent_id_when_not_a_subagent():
 
     # compact() drops the unset parent_id so top-level conversations stay clean.
     assert "parent_id" not in transport.calls[0]["body"]
+
+
+def test_list_without_agent_name_lists_across_the_pod():
+    pod, transport = _pod()
+
+    pod.conversations.list()
+
+    assert transport.calls[0]["kwargs"]["agent_name"] is UNSET
+
+
+def test_list_default_uses_canonical_selector():
+    pod, transport = _pod()
+
+    pod.conversations.list_default()
+
+    assert POD_DEFAULT_AGENT_SELECTOR == "POD_DEFAULT"
+    assert transport.calls[0]["kwargs"]["agent_name"] == "POD_DEFAULT"
 
 
 def test_flat_message_response_parses_tool_call_without_nested_content():

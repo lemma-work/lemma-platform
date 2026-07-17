@@ -26,6 +26,7 @@ import {
   setTestingToken,
 } from "./auth.js";
 import { ApiError } from "./http.js";
+import { POD_DEFAULT_AGENT_SELECTOR } from "./namespaces/conversations.js";
 
 export {
   LemmaClient,
@@ -37,6 +38,7 @@ export {
   resolveSafeRedirectUri,
   setTestingToken,
   ApiError,
+  POD_DEFAULT_AGENT_SELECTOR,
 };
 
 // Browser globals. We standardize on `window.LemmaClient` (the skills, the app
@@ -56,6 +58,7 @@ if (typeof globalThis !== "undefined") {
     resolveSafeRedirectUri,
     setTestingToken,
     ApiError,
+    POD_DEFAULT_AGENT_SELECTOR,
   };
   if (!scope.LemmaClient) {
     scope.LemmaClient = surface;

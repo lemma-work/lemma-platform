@@ -5,6 +5,7 @@ from __future__ import annotations
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
 from enum import Enum
+from typing import Generic, TypeVar
 from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
@@ -15,6 +16,9 @@ from app.modules.usage.contracts import AgentRunUsage as AgentRunUsage
 JsonPrimitive = str | int | float | bool | None
 JsonValue = object
 JsonObject = dict[str, object]
+
+ConversationAgentValue = TypeVar("ConversationAgentValue")
+ResolvedConversationAgentValue = TypeVar("ResolvedConversationAgentValue")
 
 
 class HarnessKind(str, Enum):
@@ -435,6 +439,61 @@ class ConversationType(str, Enum):
     # and conversations created with parent_id pointing at it inherit that cwd
     # (see ConversationService.create_conversation). Usually empty (no runs).
     PROJECT = "PROJECT"
+
+
+class ConversationAgentScope(str, Enum):
+    """Agent boundary applied when listing conversations."""
+
+    ALL = "ALL"
+    POD_DEFAULT = "POD_DEFAULT"
+    NAMED = "NAMED"
+
+
+@dataclass(frozen=True, slots=True)
+class ConversationAgentSelection(Generic[ConversationAgentValue]):
+    """A validated conversation-list selection before or after name resolution."""
+
+    scope: ConversationAgentScope
+    value: ConversationAgentValue | None = None
+
+    def __post_init__(self) -> None:
+        has_value = self.value is not None
+        if self.scope is ConversationAgentScope.NAMED and not has_value:
+            raise ValueError("NAMED conversation selection requires a value")
+        if self.scope is not ConversationAgentScope.NAMED and has_value:
+            raise ValueError(f"{self.scope.value} conversation selection cannot have a value")
+
+    @property
+    def named_value(self) -> ConversationAgentValue:
+        if self.scope is not ConversationAgentScope.NAMED or self.value is None:
+            raise ValueError("Conversation selection is not NAMED")
+        return self.value
+
+    def resolve(
+        self,
+        value: ResolvedConversationAgentValue | None,
+    ) -> ConversationAgentSelection[ResolvedConversationAgentValue]:
+        if self.scope is ConversationAgentScope.NAMED:
+            if value is None:
+                raise ValueError("NAMED conversation selection requires a resolved value")
+            return ConversationAgentSelection.named(value)
+        if value is not None:
+            raise ValueError(f"{self.scope.value} conversation selection cannot resolve a value")
+        return ConversationAgentSelection(scope=self.scope)
+
+    @classmethod
+    def all(cls) -> ConversationAgentSelection[ConversationAgentValue]:
+        return cls(scope=ConversationAgentScope.ALL)
+
+    @classmethod
+    def pod_default(cls) -> ConversationAgentSelection[ConversationAgentValue]:
+        return cls(scope=ConversationAgentScope.POD_DEFAULT)
+
+    @classmethod
+    def named(
+        cls, value: ConversationAgentValue
+    ) -> ConversationAgentSelection[ConversationAgentValue]:
+        return cls(scope=ConversationAgentScope.NAMED, value=value)
 
 
 class AgentEvent(BaseModel):

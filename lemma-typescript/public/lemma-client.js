@@ -9095,6 +9095,7 @@ var LemmaClient = (() => {
     ApiError: () => ApiError,
     AuthManager: () => AuthManager,
     LemmaClient: () => LemmaClient,
+    POD_DEFAULT_AGENT_SELECTOR: () => POD_DEFAULT_AGENT_SELECTOR,
     buildAuthUrl: () => buildAuthUrl,
     buildFederatedLogoutUrl: () => buildFederatedLogoutUrl,
     clearTestingToken: () => clearTestingToken,
@@ -10906,6 +10907,7 @@ var LemmaClient = (() => {
   };
 
   // src/namespaces/conversations.ts
+  var POD_DEFAULT_AGENT_SELECTOR = "POD_DEFAULT";
   function normalizeConversation(conversation) {
     var _a, _b, _c, _d, _e;
     if (!conversation) return conversation;
@@ -11070,7 +11072,7 @@ var LemmaClient = (() => {
       const podId = this.requirePodId(options.pod_id);
       return this.http.request("GET", `/pods/${podId}/conversations`, {
         params: {
-          agent_name: options.agent_name === null ? "" : options.agent_name,
+          agent_name: options.agent_name === null ? POD_DEFAULT_AGENT_SELECTOR : options.agent_name,
           parent_id: options.parent_id,
           type: options.type,
           limit: (_a = options.limit) != null ? _a : 20,
@@ -11082,7 +11084,7 @@ var LemmaClient = (() => {
       return this.list({ ...options, agent_name: agentName });
     }
     listDefault(options = {}) {
-      return this.list({ ...options, agent_name: null });
+      return this.list({ ...options, agent_name: POD_DEFAULT_AGENT_SELECTOR });
     }
     async listModels(options = {}) {
       var _a;
@@ -16082,7 +16084,8 @@ var LemmaClient = (() => {
       getTestingToken,
       resolveSafeRedirectUri,
       setTestingToken,
-      ApiError
+      ApiError,
+      POD_DEFAULT_AGENT_SELECTOR
     };
     if (!scope.LemmaClient) {
       scope.LemmaClient = surface;

@@ -29,6 +29,8 @@ from ..openapi_client.types import UNSET
 from ..types import Metadata
 from .base import BoundResource, as_uuid, compact
 
+POD_DEFAULT_AGENT_SELECTOR = "POD_DEFAULT"
+
 
 class PodConversations(BoundResource):
     def list(
@@ -51,6 +53,22 @@ class PodConversations(BoundResource):
             parent_id=as_uuid(parent_id) if parent_id is not None else UNSET,
             type_=type if type is not None else UNSET,
             status=status if status is not None else UNSET,
+            limit=limit,
+        )
+
+    def list_default(
+        self,
+        *,
+        parent_id: str | None = None,
+        type: ConversationType | str | None = None,
+        status: ConversationStatus | str | None = None,
+        limit: int = 20,
+    ) -> ConversationListResponse:
+        return self.list(
+            agent_name=POD_DEFAULT_AGENT_SELECTOR,
+            parent_id=parent_id,
+            type=type,
+            status=status,
             limit=limit,
         )
 
