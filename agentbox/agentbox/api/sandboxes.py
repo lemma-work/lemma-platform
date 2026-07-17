@@ -4,7 +4,6 @@ from fastapi import APIRouter, Depends, HTTPException
 
 from agentbox.auth import require_api_key
 from agentbox.lifecycle_manager import SandboxLifecycleManager
-from agentbox.providers import SandboxProvider
 from agentbox.sandbox_ids import validate_sandbox_id
 from agentbox.schemas import (
     DeleteResponse,
@@ -16,7 +15,7 @@ from agentbox.schemas import (
     sandbox_summary,
 )
 
-from .deps import lifecycle_manager, sandbox_provider
+from .deps import lifecycle_manager
 
 router = APIRouter(dependencies=[Depends(require_api_key)])
 
@@ -35,10 +34,10 @@ async def ensure_sandbox(
 @router.get("/sandboxes/{sandbox_id}", response_model=SandboxSummary)
 async def get_sandbox(
     sandbox_id: str,
-    provider: SandboxProvider = Depends(sandbox_provider),
+    manager: SandboxLifecycleManager = Depends(lifecycle_manager),
 ) -> SandboxSummary:
     validate_sandbox_id(sandbox_id)
-    return sandbox_summary(await provider.get_status(sandbox_id))
+    return sandbox_summary(await manager.database_status(sandbox_id))
 
 
 @router.post(

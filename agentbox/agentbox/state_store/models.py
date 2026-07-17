@@ -1,12 +1,23 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Literal
+from typing import Any, Literal
 
 from agentbox.schemas import SandboxEnsureRequest
 
 
 DesiredSandboxState = Literal["present", "suspended", "deleted"]
+ObservedSandboxState = Literal[
+    "starting",
+    "running",
+    "degraded",
+    "suspending",
+    "suspended",
+    "deleting",
+    "deleted",
+    "lost",
+    "error",
+]
 ProviderAllocationState = Literal["reserved", "active"]
 
 
@@ -20,6 +31,11 @@ class SandboxRecord:
     provider_name: str | None = None
     provider_id: str | None = None
     instance_id: str | None = None
+    observed_state: ObservedSandboxState = "starting"
+    status_data: dict[str, Any] | None = None
+    endpoint_data: dict[str, Any] | None = None
+    last_failure: str | None = None
+    reconcile_after: float | None = None
     idle_since_at: float | None = None
     last_active_at: float | None = None
     last_observed_at: float | None = None
@@ -36,6 +52,7 @@ class SessionRecord:
     env_keys: list[str]
     last_active_at: float
     active_operations: int
+    sandbox_generation: int = 0
 
 
 @dataclass(frozen=True)
@@ -46,6 +63,7 @@ class ActivityLease:
     operation: str
     owner: str
     expires_at: float
+    sandbox_generation: int = 0
 
 
 @dataclass(frozen=True)

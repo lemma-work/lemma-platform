@@ -26,6 +26,7 @@ Build the runtime image, then start the manager with SQLite state and Docker:
 ```bash
 cd agentbox
 make build
+export AGENTBOX_ENDPOINT_STATE_KEYS="$(openssl rand -base64 32 | tr '+/' '-_')"
 
 AGENTBOX_PROVIDER=docker \
 AGENTBOX_API_KEY=dev-agentbox-key \
@@ -34,6 +35,10 @@ AGENTBOX_RUNTIME_IMAGE=ghcr.io/lemma-work/lemma-agentbox-runtime:latest \
 AGENTBOX_STATE_DB_PATH=/tmp/agentbox-state.db \
 uv run uvicorn agentbox.server:app --host 127.0.0.1 --port 8711
 ```
+
+`AGENTBOX_ENDPOINT_STATE_KEYS` is a comma-separated newest-first keyring of
+URL-safe base64-encoded 32-byte AES keys. Use a dedicated secret; do not reuse
+`AGENTBOX_API_KEY`.
 
 Use the same `AGENTBOX_API_URL` and `AGENTBOX_API_KEY` in lemma-backend.
 

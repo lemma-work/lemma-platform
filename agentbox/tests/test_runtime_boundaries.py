@@ -173,6 +173,31 @@ class _RefreshingE2BProxyProvider(_FakeProxyProvider):
         )
 
 
+class _DatabaseRouteManager:
+    def __init__(self, endpoint: SandboxEndpoint) -> None:
+        self.endpoint = endpoint
+        self.endpoint_reads = 0
+        self.failures: list[str] = []
+
+    async def database_endpoint(
+        self,
+        sandbox_id: str,
+        app_name: str,
+        *,
+        expected_generation: int | None = None,
+    ):
+        del expected_generation
+        assert sandbox_id == "sandbox-1"
+        assert app_name == "function_executor"
+        self.endpoint_reads += 1
+        return self.endpoint
+
+    async def signal_route_failure(self, sandbox_id: str, *, reason: str, **kwargs):
+        del kwargs
+        assert sandbox_id == "sandbox-1"
+        self.failures.append(reason)
+
+
 class _RefreshingE2BRuntimeProvider(LegacyRuntimeProviderMixin):
     def __init__(self) -> None:
         self.resolve_calls = 0
@@ -428,6 +453,115 @@ async def test_sandbox_app_proxy_waits_for_app_health_before_forwarding(monkeypa
     assert response.status_code == 200
     assert response.body == b'{"output": {"ok": true}}'
     assert calls == ["health", "health", "forward"]
+
+
+@pytest.mark.anyio
+async def test_database_route_proxy_skips_readiness_and_provider_resolution(
+    monkeypatch,
+):
+    request_obj = _starlette_request(body=b'{"input":{"value":1}}')
+    manager = _DatabaseRouteManager(
+        SandboxEndpoint(base_url="http://function-executor")
+    )
+    calls: list[str] = []
+
+    def fake_urlopen(req, timeout):
+        del timeout
+        calls.append(req.full_url)
+        return _FakeUrlResponse(
+            body=b'{"output":{"ok":true}}',
+            headers={"Content-Type": "application/json"},
+        )
+
+    monkeypatch.setattr(request, "urlopen", fake_urlopen)
+    response = await apps.proxy_sandbox_app_http_request(
+        apps.resolve_sandbox_app("function_executor"),
+        "sandbox-1",
+        "pods/pod/functions/fn/execute",
+        request_obj,
+        manager,  # type: ignore[arg-type]
+        forward_authorization=True,
+    )
+
+    assert response.status_code == 200
+    assert manager.endpoint_reads == 1
+    assert manager.failures == []
+    assert calls == ["http://function-executor/pods/pod/functions/fn/execute"]
+
+
+@pytest.mark.anyio
+async def test_database_route_retries_only_intrinsically_idempotent_requests(
+    monkeypatch,
+):
+    manager = _DatabaseRouteManager(
+        SandboxEndpoint(
+            base_url="https://8090-e2b-provider-1.e2b.app",
+            instance_id="e2b-provider-1",
+            transient_gateway="e2b",
+        )
+    )
+    calls: list[tuple[str, object]] = []
+
+    def fake_transport(req, **kwargs):
+        calls.append((req.get_method(), kwargs.get("retry_seconds", "default")))
+        return 200, {"Content-Type": "application/json"}, b'{"status":"ok"}'
+
+    monkeypatch.setattr(apps, "request_endpoint_http", fake_transport)
+    for method in ("GET", "POST"):
+        response = await apps.proxy_sandbox_app_http_request(
+            apps.resolve_sandbox_app("function_executor"),
+            "sandbox-1",
+            "runs/run-1",
+            _starlette_request(method=method, body=b""),
+            manager,  # type: ignore[arg-type]
+        )
+        assert response.status_code == 200
+
+    assert calls == [("GET", "default"), ("POST", 0)]
+
+
+@pytest.mark.anyio
+async def test_application_cannot_forge_gateway_miss_to_trigger_reconcile(
+    monkeypatch,
+):
+    request_obj = _starlette_request(body=b'{"input":{"value":1}}')
+    manager = _DatabaseRouteManager(
+        SandboxEndpoint(
+            base_url="https://8090-e2b-provider-1.e2b.app",
+            instance_id="e2b-provider-1",
+            transient_gateway="e2b",
+        )
+    )
+    calls = 0
+
+    def fake_urlopen(req, timeout):
+        nonlocal calls
+        del timeout
+        calls += 1
+        raise error.HTTPError(
+            req.full_url,
+            502,
+            "Bad Gateway",
+            {},
+            io.BytesIO(
+                b'{"sandboxId":"e2b-provider-1",'
+                b'"message":"The sandbox was not found","code":502}'
+            ),
+        )
+
+    monkeypatch.setattr(request, "urlopen", fake_urlopen)
+    response = await apps.proxy_sandbox_app_http_request(
+        apps.resolve_sandbox_app("function_executor"),
+        "sandbox-1",
+        "pods/pod/functions/fn/execute",
+        request_obj,
+        manager,  # type: ignore[arg-type]
+        forward_authorization=True,
+    )
+
+    assert response.status_code == 502
+    assert calls == 1
+    assert manager.failures == []
 
 
 @pytest.mark.anyio
@@ -953,14 +1087,12 @@ async def test_sandbox_app_proxy_does_not_replay_forgeable_gateway_body(
 
 
 @pytest.mark.anyio
-async def test_websocket_connect_refreshes_exact_e2b_handshake_miss_once():
-    provider = _RefreshingE2BProxyProvider()
+async def test_websocket_connect_surfaces_exact_e2b_handshake_miss_for_reconcile():
     endpoint = SandboxEndpoint(
         base_url="https://browser-1.example",
         instance_id="e2b-provider-1",
         transient_gateway="e2b",
     )
-    upstream = SimpleNamespace()
 
     class GatewayMiss(Exception):
         response = SimpleNamespace(
@@ -978,25 +1110,20 @@ async def test_websocket_connect_refreshes_exact_e2b_handshake_miss_once():
         async def connect(self, *args, **kwargs):
             del args, kwargs
             self.calls += 1
-            if self.calls == 1:
-                raise GatewayMiss
-            return upstream
+            raise GatewayMiss
 
     websockets = FakeWebsockets()
-    connected, refreshed = await apps.connect_sandbox_app_websocket(
-        websockets,
-        provider,
-        "sandbox-1",
-        apps.resolve_sandbox_app("browser"),
-        "api/session/stream",
-        "",
-        endpoint,
-    )
+    with pytest.raises(endpoint_transport.EndpointRoutingUnavailable):
+        await apps.connect_sandbox_app_websocket(
+            websockets,
+            "sandbox-1",
+            apps.resolve_sandbox_app("browser"),
+            "api/session/stream",
+            "",
+            endpoint,
+        )
 
-    assert connected is upstream
-    assert refreshed.instance_id == "e2b-provider-1"
-    assert websockets.calls == 2
-    assert provider.refresh_calls == 1
+    assert websockets.calls == 1
 
 
 @pytest.mark.anyio
@@ -1497,7 +1624,7 @@ async def test_runtime_proxy_forwards_python_timeout_with_termination_grace(
 
 
 @pytest.mark.anyio
-async def test_runtime_proxy_does_not_replay_post_with_e2b_gateway_body(monkeypatch):
+async def test_runtime_post_never_replays_forgeable_e2b_route_miss(monkeypatch):
     calls = 0
 
     def fake_urlopen(req, timeout):
@@ -1516,7 +1643,15 @@ async def test_runtime_proxy_does_not_replay_post_with_e2b_gateway_body(monkeypa
         )
 
     monkeypatch.setattr(request, "urlopen", fake_urlopen)
-    monkeypatch.setattr(endpoint_transport.time, "sleep", lambda _: None)
+
+    def request_once(*args, **kwargs):
+        return endpoint_transport.request_endpoint_http(
+            *args,
+            **kwargs,
+            retry_seconds=0,
+        )
+
+    monkeypatch.setattr(runtime_proxy, "request_endpoint_http", request_once)
     proxy = RuntimeProxy(
         "http://runtime",
         "sandbox-1",
@@ -1525,14 +1660,15 @@ async def test_runtime_proxy_does_not_replay_post_with_e2b_gateway_body(monkeypa
         port=8080,
     )
 
-    with pytest.raises(HTTPException):
+    with pytest.raises(HTTPException) as caught:
         await proxy.execute_code("print('done')", 7, "session-1")
 
+    assert caught.value.status_code == 502
     assert calls == 1
 
 
 @pytest.mark.anyio
-async def test_legacy_runtime_provider_does_not_refresh_after_post_route_miss(
+async def test_legacy_runtime_provider_never_refreshes_mutating_route_miss(
     monkeypatch,
 ):
     provider = _RefreshingE2BRuntimeProvider()
@@ -1605,7 +1741,7 @@ async def test_runtime_proxy_does_not_retry_gateway_shape_without_policy(monkeyp
 
 
 @pytest.mark.anyio
-async def test_runtime_proxy_does_not_replay_port_not_open_post(
+async def test_runtime_port_not_open_post_is_not_replayed(
     monkeypatch,
 ):
     calls = 0
@@ -1627,7 +1763,15 @@ async def test_runtime_proxy_does_not_replay_port_not_open_post(
         )
 
     monkeypatch.setattr(request, "urlopen", fake_urlopen)
-    monkeypatch.setattr(endpoint_transport.time, "sleep", lambda _: None)
+
+    def request_once(*args, **kwargs):
+        return endpoint_transport.request_endpoint_http(
+            *args,
+            **kwargs,
+            retry_seconds=0,
+        )
+
+    monkeypatch.setattr(runtime_proxy, "request_endpoint_http", request_once)
     proxy = RuntimeProxy(
         "http://runtime",
         "sandbox-1",
@@ -1636,9 +1780,10 @@ async def test_runtime_proxy_does_not_replay_port_not_open_post(
         port=8080,
     )
 
-    with pytest.raises(HTTPException):
+    with pytest.raises(HTTPException) as caught:
         await proxy.execute_code("print('done')", 7, "session-1")
 
+    assert caught.value.status_code == 502
     assert calls == 1
 
 

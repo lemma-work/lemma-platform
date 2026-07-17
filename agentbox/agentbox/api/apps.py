@@ -31,7 +31,7 @@ from agentbox.schemas import AppAccessRequest, AppAccessResponse, SandboxInterna
 from agentbox.to_thread import run_sync
 from agentbox.state_store.protocol import AsyncStateStore
 
-from .deps import lifecycle_manager, sandbox_provider, state_store
+from .deps import lifecycle_manager, state_store
 from .lifecycle import activity_lease
 
 router = APIRouter()
@@ -78,7 +78,6 @@ async def get_sandbox_app_access_url(
     sandbox_id: str,
     app_name: str,
     request: AppAccessRequest,
-    provider: SandboxProvider = Depends(sandbox_provider),
     store: AsyncStateStore = Depends(state_store),
     manager: SandboxLifecycleManager = Depends(lifecycle_manager),
 ) -> AppAccessResponse:
@@ -95,7 +94,7 @@ async def get_sandbox_app_access_url(
         session_id=None,
         operation=f"app-access:{app_spec.name}",
     ):
-        await provider.get_status(sandbox_id)
+        pass
 
     expires_at = int(time.time()) + request.ttl_seconds
     token = create_app_access_token(sandbox_id, app_spec.name, expires_at)
@@ -117,7 +116,6 @@ async def proxy_sandbox_app_internal(
     app_name: str,
     path: str,
     request: Request,
-    provider: SandboxProvider = Depends(sandbox_provider),
     store: AsyncStateStore = Depends(state_store),
     manager: SandboxLifecycleManager = Depends(lifecycle_manager),
 ) -> Response:
@@ -131,13 +129,14 @@ async def proxy_sandbox_app_internal(
         sandbox_id,
         session_id=None,
         operation=f"http:{app_spec.name}",
-    ):
+    ) as lease:
         return await proxy_sandbox_app_http_request(
             app_spec,
             sandbox_id,
             path,
             request,
-            provider,
+            manager,
+            sandbox_generation=lease.sandbox_generation,
             forward_authorization=True,
         )
 
@@ -150,7 +149,6 @@ async def proxy_sandbox_app_internal(
 async def proxy_sandbox_app_public_host(
     request: Request,
     path: str,
-    provider: SandboxProvider = Depends(sandbox_provider),
     store: AsyncStateStore = Depends(state_store),
     manager: SandboxLifecycleManager = Depends(lifecycle_manager),
 ) -> Response:
@@ -172,13 +170,14 @@ async def proxy_sandbox_app_public_host(
         sandbox_id,
         session_id=None,
         operation=f"public-http:{app_spec.name}",
-    ):
+    ) as lease:
         response = await proxy_sandbox_app_http_request(
             app_spec,
             sandbox_id,
             path,
             request,
-            provider,
+            manager,
+            sandbox_generation=lease.sandbox_generation,
             access_token=token,
         )
     if token:
@@ -190,7 +189,6 @@ async def proxy_sandbox_app_public_host(
 async def proxy_sandbox_app_public_websocket(
     websocket: WebSocket,
     path: str,
-    provider: SandboxProvider = Depends(sandbox_provider),
     store: AsyncStateStore = Depends(state_store),
     manager: SandboxLifecycleManager = Depends(lifecycle_manager),
 ) -> None:
@@ -209,13 +207,14 @@ async def proxy_sandbox_app_public_websocket(
             sandbox_id,
             session_id=None,
             operation=f"websocket:{app_spec.name}",
-        ):
+        ) as lease:
             await proxy_sandbox_app_websocket_request(
                 app_spec,
                 sandbox_id,
                 path,
                 websocket,
-                provider,
+                manager,
+                sandbox_generation=lease.sandbox_generation,
             )
     except HTTPException:
         await websocket.close(code=1011)
@@ -604,43 +603,62 @@ async def proxy_sandbox_app_http_request(
     sandbox_id: str,
     path: str,
     incoming_request: Request,
-    provider: SandboxProvider,
+    manager: SandboxLifecycleManager | SandboxProvider,
     *,
+    sandbox_generation: int | None = None,
     forward_authorization: bool = False,
     access_token: str | None = None,
     _endpoint_refresh_attempted: bool = False,
     _endpoint_override: SandboxEndpoint | None = None,
 ) -> Response:
-    endpoint = _endpoint_override or await resolve_sandbox_app_endpoint(
-        provider, sandbox_id, app_spec
+    lifecycle_manager = (
+        manager
+        if hasattr(manager, "database_endpoint")
+        and hasattr(manager, "signal_route_failure")
+        else None
     )
+    legacy_provider = manager if lifecycle_manager is None else None
+    endpoint = _endpoint_override
+    if endpoint is None:
+        if lifecycle_manager is not None:
+            endpoint = await lifecycle_manager.database_endpoint(
+                sandbox_id,
+                app_spec.name,
+                expected_generation=sandbox_generation,
+            )
+        else:
+            endpoint = await resolve_sandbox_app_endpoint(
+                legacy_provider,
+                sandbox_id,
+                app_spec,
+            )
     upstream_base_url = endpoint.base_url.rstrip("/")
     if upstream_base_url is None:
         raise HTTPException(status_code=409, detail="Sandbox app endpoint is missing")
-    try:
-        await wait_until_sandbox_app_ready(
-            app_spec,
-            sandbox_id,
-            upstream_base_url,
-            incoming_request,
-            endpoint_headers=dict(endpoint.headers),
-            instance_id=endpoint.instance_id,
-            transient_gateway=endpoint.transient_gateway,
-        )
-    except EndpointRoutingUnavailable as exc:
-        return await retry_sandbox_app_http_after_route_refresh(
-            app_spec,
-            sandbox_id,
-            path,
-            incoming_request,
-            provider,
-            exc,
-            endpoint,
-            forward_authorization=forward_authorization,
-            access_token=access_token,
-            endpoint_refresh_attempted=_endpoint_refresh_attempted,
-        )
-
+    if legacy_provider is not None:
+        try:
+            await wait_until_sandbox_app_ready(
+                app_spec,
+                sandbox_id,
+                upstream_base_url,
+                incoming_request,
+                endpoint_headers=dict(endpoint.headers),
+                instance_id=endpoint.instance_id,
+                transient_gateway=endpoint.transient_gateway,
+            )
+        except EndpointRoutingUnavailable as exc:
+            return await retry_sandbox_app_http_after_route_refresh(
+                app_spec,
+                sandbox_id,
+                path,
+                incoming_request,
+                legacy_provider,
+                exc,
+                endpoint,
+                forward_authorization=forward_authorization,
+                access_token=access_token,
+                endpoint_refresh_attempted=_endpoint_refresh_attempted,
+            )
     query_pairs = [
         (key, value)
         for key, value in incoming_request.query_params.multi_items()
@@ -697,13 +715,24 @@ async def proxy_sandbox_app_http_request(
             method=incoming_request.method,
         )
         try:
-            return request_endpoint_http(
-                req,
-                timeout=upstream_timeout,
-                transient_gateway=endpoint.transient_gateway,
-                expected_instance_id=endpoint.instance_id,
-                expected_port=app_spec.port,
-            )
+            request_kwargs = {
+                "timeout": upstream_timeout,
+                "transient_gateway": endpoint.transient_gateway,
+                "expected_instance_id": endpoint.instance_id,
+                "expected_port": app_spec.port,
+            }
+            if lifecycle_manager is not None and incoming_request.method.upper() not in {
+                "GET",
+                "HEAD",
+                "OPTIONS",
+                "TRACE",
+            }:
+                # A mutating request may have reached a user-controlled app,
+                # so it is never replayed implicitly. Idempotent reads retain
+                # the bounded provider-route retry budget; this absorbs E2B
+                # route propagation without involving lifecycle control.
+                request_kwargs["retry_seconds"] = 0
+            return request_endpoint_http(req, **request_kwargs)
         except (urlerror.URLError, http.client.HTTPException, OSError) as exc:
             # An upstream read timeout is distinct from an unreachable app: the
             # request reached the in-sandbox app and it did not respond in time
@@ -726,32 +755,49 @@ async def proxy_sandbox_app_http_request(
     try:
         status_code, response_headers, content = await run_sync(_request)
     except EndpointRoutingUnavailable as exc:
-        return await retry_sandbox_app_http_after_route_refresh(
-            app_spec,
+        if legacy_provider is not None:
+            return await retry_sandbox_app_http_after_route_refresh(
+                app_spec,
+                sandbox_id,
+                path,
+                incoming_request,
+                legacy_provider,
+                exc,
+                endpoint,
+                forward_authorization=forward_authorization,
+                access_token=access_token,
+                endpoint_refresh_attempted=_endpoint_refresh_attempted,
+            )
+        assert lifecycle_manager is not None
+        await lifecycle_manager.signal_route_failure(
             sandbox_id,
-            path,
-            incoming_request,
-            provider,
-            exc,
-            endpoint,
-            forward_authorization=forward_authorization,
-            access_token=access_token,
-            endpoint_refresh_attempted=_endpoint_refresh_attempted,
+            generation=sandbox_generation,
+            reason="provider_gateway_routing",
         )
+        raise HTTPException(
+            status_code=503,
+            headers={
+                "Retry-After": "1",
+                REQUEST_NOT_DELIVERED_HEADER: "true",
+            },
+            detail={
+                "message": "Sandbox endpoint routing is temporarily unavailable",
+                "code": "endpoint_routing_unavailable",
+                "retryable": True,
+                "provider_id": exc.instance_id,
+            },
+        ) from exc
     except HTTPException as exc:
-        # A proxy-level connection failure (connection refused / reset) means a
-        # previously cached "ready" is now stale -- the in-sandbox app died or
-        # restarted. Drop the cache entry so the next request re-probes
-        # readiness instead of trusting the stale cache and 502-ing again.
-        invalidate_sandbox_app_ready_cache(
-            incoming_request,
-            sandbox_id,
-            app_spec,
-            upstream_base_url,
-            endpoint.instance_id,
-        )
         if exc.status_code == 502:
-            invalidate_provider_endpoint_cache(provider, sandbox_id)
+            if legacy_provider is not None:
+                invalidate_provider_endpoint_cache(legacy_provider, sandbox_id)
+            else:
+                assert lifecycle_manager is not None
+                await lifecycle_manager.signal_route_failure(
+                    sandbox_id,
+                    generation=sandbox_generation,
+                    reason="endpoint_connect_failure",
+                )
         raise
     content, response_headers = rewrite_sandbox_app_response(
         app_spec,
@@ -990,14 +1036,15 @@ async def proxy_sandbox_app_websocket_request(
     sandbox_id: str,
     path: str,
     websocket: WebSocket,
-    provider: SandboxProvider,
+    manager: SandboxLifecycleManager,
+    *,
+    sandbox_generation: int,
 ) -> None:
     try:
-        endpoint = await resolve_sandbox_app_endpoint(
-            provider,
+        endpoint = await manager.database_endpoint(
             sandbox_id,
-            app_spec,
-            protocol="websocket",
+            app_spec.name,
+            expected_generation=sandbox_generation,
         )
     except HTTPException:
         await websocket.close(code=1011)
@@ -1010,7 +1057,6 @@ async def proxy_sandbox_app_websocket_request(
     try:
         upstream, endpoint = await connect_sandbox_app_websocket(
             websockets,
-            provider,
             sandbox_id,
             app_spec,
             path,
@@ -1018,12 +1064,19 @@ async def proxy_sandbox_app_websocket_request(
             endpoint,
         )
     except EndpointRoutingUnavailable:
-        # The exact provider generation is still known. Keep it cached so the
-        # next browser reconnect can retry the route without inventory lookup.
+        await manager.signal_route_failure(
+            sandbox_id,
+            generation=sandbox_generation,
+            reason="websocket_provider_gateway_routing",
+        )
         await websocket.close(code=1013)
         return
     except Exception:
-        invalidate_provider_endpoint_cache(provider, sandbox_id)
+        await manager.signal_route_failure(
+            sandbox_id,
+            generation=sandbox_generation,
+            reason="websocket_connect_failure",
+        )
         await websocket.close(code=1011)
         return
     try:
@@ -1038,53 +1091,35 @@ async def proxy_sandbox_app_websocket_request(
 
 async def connect_sandbox_app_websocket(
     websockets_module,
-    provider: SandboxProvider,
     sandbox_id: str,
     app_spec: SandboxAppSpec,
     path: str,
     query: str,
     endpoint: SandboxEndpoint,
 ):
-    """Open a websocket, refreshing one exact E2B pre-routing failure once."""
+    """Open one websocket against the DB-published exact provider route."""
 
-    current = endpoint
-    for refresh_attempted in (False, True):
-        upstream_url = sandbox_app_upstream_websocket_url_from_endpoint(
-            current,
-            path,
-            query,
+    upstream_url = sandbox_app_upstream_websocket_url_from_endpoint(
+        endpoint,
+        path,
+        query,
+    )
+    try:
+        upstream = await websockets_module.connect(
+            upstream_url,
+            additional_headers=dict(endpoint.headers),
+            subprotocols=list(endpoint.websocket_subprotocols) or None,
         )
-        try:
-            upstream = await websockets_module.connect(
-                upstream_url,
-                additional_headers=dict(current.headers),
-                subprotocols=list(current.websocket_subprotocols) or None,
-            )
-            return upstream, current
-        except Exception as exc:
-            routing_error = websocket_endpoint_routing_error(
-                exc,
-                current,
-                expected_port=app_spec.port,
-            )
-            if routing_error is None:
-                raise
-            if refresh_attempted:
-                raise routing_error from exc
-            refreshed = await refresh_sandbox_app_endpoint(
-                provider,
-                sandbox_id,
-                app_spec,
-                instance_id=routing_error.instance_id,
-                protocol="websocket",
-            )
-            current = refreshed or await resolve_sandbox_app_endpoint(
-                provider,
-                sandbox_id,
-                app_spec,
-                protocol="websocket",
-            )
-    raise RuntimeError("unreachable websocket endpoint refresh state")
+    except Exception as exc:
+        routing_error = websocket_endpoint_routing_error(
+            exc,
+            endpoint,
+            expected_port=app_spec.port,
+        )
+        if routing_error is not None:
+            raise routing_error from exc
+        raise
+    return upstream, endpoint
 
 
 def websocket_endpoint_routing_error(

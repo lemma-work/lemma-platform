@@ -199,6 +199,50 @@ authority. Keep Daytona auto-stop disabled so a long function is not stopped
 merely because the provider saw no external activity; its one-hour archive and
 seven-day delete settings can remain leak protection.
 
+## Database-authoritative request path
+
+The state store is authoritative for the manager's desired state, accepted
+provider generation, observed readiness, and routed app endpoints. After a
+create or resume passes runtime readiness, AgentBox publishes all routes for
+that exact generation in one observation update. Provider route credentials
+are authenticated and encrypted at rest with a dedicated versioned keyring:
+
+```bash
+# URL-safe base64-encoded 32-byte AES keys, newest first.
+AGENTBOX_ENDPOINT_STATE_KEYS=current-key,previous-key
+```
+
+The API authentication key is never reused for route encryption. Keep the
+previous key during a rolling key rotation; routes are resealed with the first
+key when provider reconciliation republishes them. Unsealed or malformed route
+rows fail closed and trigger exact-generation repair rather than being treated
+as URLs.
+
+Warm HTTP, function, runtime-session, Python, command, stdin, and browser
+requests acquire a generation-bound activity lease and use the published route
+directly. They do not acquire a lifecycle claim, inspect/adopt the provider,
+renew its timeout, or issue a readiness request. Sandbox and session heartbeats
+likewise update only durable activity state. Provider timeout renewal is
+coalesced into background maintenance.
+
+A typed transport failure records route suspicion without immediately taking
+the last proven route away from concurrent work. Concurrent failures
+singleflight behind one lifecycle-controller inspection of the exact durable
+provider ID. Read-side not-found, stopped, and missing-inventory observations
+remain `degraded` and schedule another check because cloud control planes are
+eventually consistent; only an explicit exact-ID terminal mutation may clear a
+durable generation fence. An application HTTP response, including 4xx or 5xx,
+never changes sandbox lifecycle state. Only intrinsically idempotent endpoint
+requests may retry a recognized E2B pre-routing response. Mutating runtime and
+proxied application requests are never transparently replayed.
+
+Migration 5 is forward-only for SQLite, so drain an older SQLite manager before
+starting the new binary. PostgreSQL supports rolling readers: legacy
+generation-zero sessions are bound to the current generation on their first
+fenced heartbeat/request and are discarded at suspension or environment
+replacement boundaries. Migrated running sandboxes are adopted by exact
+provider ID and have sealed routes republished before becoming ready.
+
 ## Cloud provider configuration
 
 Every cloud provider requires an environment-scoped owner. Use different

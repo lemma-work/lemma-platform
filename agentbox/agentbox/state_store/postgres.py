@@ -11,6 +11,7 @@ from .models import (
     ActivityLease,
     DesiredSandboxState,
     LifecycleClaim,
+    ObservedSandboxState,
     OrphanCandidate,
     ProviderAllocation,
     SandboxRecord,
@@ -129,6 +130,17 @@ class PostgresStateStore:
             provider_name=row.get("provider_name"),
             provider_id=row.get("provider_id"),
             instance_id=row.get("instance_id"),
+            observed_state=str(row.get("observed_state") or "starting"),
+            status_data=(dict(row["status_data"]) if row.get("status_data") else None),
+            endpoint_data=(
+                dict(row["endpoint_data"]) if row.get("endpoint_data") else None
+            ),
+            last_failure=row.get("last_failure"),
+            reconcile_after=(
+                float(row["reconcile_after"])
+                if row.get("reconcile_after") is not None
+                else None
+            ),
             idle_since_at=(
                 float(row["idle_since_at"])
                 if row.get("idle_since_at") is not None
@@ -155,6 +167,7 @@ class PostgresStateStore:
             env_keys=list(row["env_keys"] or []),
             last_active_at=float(row["last_active_at"]),
             active_operations=int(row["active_operations"]),
+            sandbox_generation=int(row.get("sandbox_generation") or 0),
         )
 
     @staticmethod
@@ -166,6 +179,7 @@ class PostgresStateStore:
             operation=str(row["operation"]),
             owner=str(row["owner"]),
             expires_at=float(row["expires_at"]),
+            sandbox_generation=int(row.get("sandbox_generation") or 0),
         )
 
     @staticmethod
@@ -193,6 +207,8 @@ class PostgresStateStore:
         return """
             sandbox_id, env, desired_state, desired_generation,
             observed_generation, provider_name, provider_id, instance_id,
+            observed_state, status_data, endpoint_data, last_failure,
+            extract(epoch FROM reconcile_after) AS reconcile_after,
             extract(epoch FROM idle_since_at) AS idle_since_at,
             extract(epoch FROM last_active_at) AS last_active_at,
             extract(epoch FROM last_observed_at) AS last_observed_at
@@ -388,6 +404,9 @@ class PostgresStateStore:
         provider_id: str,
         instance_id: str | None,
         observed_generation: int,
+        observed_state: ObservedSandboxState = "running",
+        status_data: dict[str, object] | None = None,
+        endpoint_data: dict[str, object] | None = None,
     ) -> SandboxRecord | None:
         async with self._pool.connection() as conn:
             row = await (
@@ -396,6 +415,9 @@ class PostgresStateStore:
                     UPDATE agentbox_sandboxes SET provider_name = %s,
                         provider_id = %s, instance_id = %s,
                         observed_generation = %s, last_observed_at = now(),
+                        observed_state = %s, status_data = %s,
+                        endpoint_data = %s, last_failure = NULL,
+                        reconcile_after = NULL,
                         updated_at = now()
                     WHERE sandbox_id = %s AND desired_generation = %s
                     RETURNING {self._sandbox_columns()}
@@ -405,8 +427,56 @@ class PostgresStateStore:
                         provider_id,
                         instance_id,
                         observed_generation,
+                        observed_state,
+                        self._jsonb(status_data) if status_data is not None else None,
+                        self._jsonb(endpoint_data)
+                        if endpoint_data is not None
+                        else None,
                         sandbox_id,
                         observed_generation,
+                    ),
+                )
+            ).fetchone()
+        return self._sandbox(row) if row else None
+
+    async def set_sandbox_observed_state(
+        self,
+        sandbox_id: str,
+        *,
+        observed_state: ObservedSandboxState,
+        expected_generation: int,
+        expected_observed_state: ObservedSandboxState | None = None,
+        last_failure: str | None = None,
+        reconcile_after: float | None = None,
+    ) -> SandboxRecord | None:
+        async with self._pool.connection() as conn:
+            row = await (
+                await conn.execute(
+                    f"""
+                    UPDATE agentbox_sandboxes SET observed_state = %s,
+                        last_failure = %s,
+                        reconcile_after = CASE
+                            WHEN %s IS NULL THEN NULL
+                            ELSE to_timestamp(%s)
+                        END,
+                        last_observed_at = now(), updated_at = now()
+                    WHERE sandbox_id = %s
+                      AND desired_state = 'present'
+                      AND desired_generation = %s
+                      AND observed_generation = %s
+                      AND (%s IS NULL OR observed_state = %s)
+                    RETURNING {self._sandbox_columns()}
+                    """,
+                    (
+                        observed_state,
+                        last_failure,
+                        reconcile_after,
+                        reconcile_after,
+                        sandbox_id,
+                        expected_generation,
+                        expected_generation,
+                        expected_observed_state,
+                        expected_observed_state,
                     ),
                 )
             ).fetchone()
@@ -459,6 +529,9 @@ class PostgresStateStore:
                     UPDATE agentbox_sandboxes SET provider_name = NULL,
                         provider_id = NULL, instance_id = NULL,
                         observed_generation = 0, last_observed_at = NULL,
+                        observed_state = 'starting', status_data = NULL,
+                        endpoint_data = NULL, last_failure = NULL,
+                        reconcile_after = NULL,
                         updated_at = now()
                     WHERE sandbox_id = %s AND provider_id = %s
                       AND desired_generation = %s
@@ -476,69 +549,117 @@ class PostgresStateStore:
         *,
         cwd: str,
         env_keys: list[str],
-    ) -> SessionRecord:
+        expected_generation: int | None = None,
+    ) -> SessionRecord | None:
+        generation_fence = (
+            "" if expected_generation is None else "AND observed_generation = %s"
+        )
+        generation_params: tuple[int, ...] = (
+            () if expected_generation is None else (expected_generation,)
+        )
         async with self._pool.connection() as conn:
-            row = await (
+            async with conn.transaction():
                 await conn.execute(
-                    """
+                    "SELECT pg_advisory_xact_lock(hashtext(%s))",
+                    (f"agentbox:lifecycle:{sandbox_id}",),
+                )
+                row = await (
+                    await conn.execute(
+                        f"""
                     INSERT INTO agentbox_sessions (
-                        sandbox_id, session_id, cwd, env_keys, last_active_at
-                    ) VALUES (%s, %s, %s, %s, now())
+                        sandbox_id, session_id, cwd, env_keys, last_active_at,
+                        sandbox_generation
+                    ) SELECT %s, %s, %s, %s, now(), observed_generation
+                      FROM agentbox_sandboxes
+                     WHERE sandbox_id = %s AND desired_state = 'present'
+                       AND observed_state IN ('running', 'degraded')
+                       AND observed_generation = desired_generation
+                       {generation_fence}
+                       AND NOT EXISTS (
+                         SELECT 1 FROM agentbox_lifecycle_claims c
+                         WHERE c.sandbox_id = agentbox_sandboxes.sandbox_id
+                           AND c.expires_at > now()
+                           AND c.operation <> 'route-repair'
+                       )
                     ON CONFLICT (sandbox_id, session_id) DO UPDATE SET
                         cwd = EXCLUDED.cwd, env_keys = EXCLUDED.env_keys,
+                        sandbox_generation = EXCLUDED.sandbox_generation,
                         last_active_at = now(), updated_at = now()
                     RETURNING sandbox_id, session_id, cwd, env_keys,
                         extract(epoch FROM last_active_at) AS last_active_at,
-                        active_operations
+                        active_operations, sandbox_generation
                     """,
-                    (sandbox_id, session_id, cwd, self._jsonb(sorted(env_keys))),
-                )
-            ).fetchone()
-            await conn.execute(
-                """
-                UPDATE agentbox_sandboxes SET idle_since_at = NULL,
-                    last_active_at = now(), updated_at = now()
-                WHERE sandbox_id = %s
-                """,
-                (sandbox_id,),
-            )
-        return self._session(row)
+                        (
+                            sandbox_id,
+                            session_id,
+                            cwd,
+                            self._jsonb(sorted(env_keys)),
+                            sandbox_id,
+                            *generation_params,
+                        ),
+                    )
+                ).fetchone()
+                if row:
+                    await conn.execute(
+                        """
+                        UPDATE agentbox_sandboxes SET idle_since_at = NULL,
+                            last_active_at = now(), updated_at = now()
+                        WHERE sandbox_id = %s
+                        """,
+                        (sandbox_id,),
+                    )
+        return self._session(row) if row else None
 
     async def touch_session(
         self, sandbox_id: str, session_id: str, *, owner: str | None = None
     ) -> bool:
-        # Do not bind a bare NULL solely to ``%s IS NULL``: PostgreSQL cannot
-        # infer its type.  Omitting the owner predicate also expresses the
-        # intended fence directly -- an anonymous caller is blocked by any
-        # live lifecycle claim, while an owner may pass its own claim.
-        owner_fence = "" if owner is None else "AND c.owner <> %s"
-        owner_params: tuple[str, ...] = () if owner is None else (owner,)
+        del owner
         async with self._pool.connection() as conn:
-            row = await (
+            async with conn.transaction():
                 await conn.execute(
-                    f"""
-                    UPDATE agentbox_sessions SET last_active_at = now(), updated_at = now()
+                    "SELECT pg_advisory_xact_lock(hashtext(%s))",
+                    (f"agentbox:lifecycle:{sandbox_id}",),
+                )
+                row = await (
+                    await conn.execute(
+                        """
+                    UPDATE agentbox_sessions SET last_active_at = now(),
+                        sandbox_generation = (
+                            SELECT observed_generation FROM agentbox_sandboxes s
+                            WHERE s.sandbox_id = agentbox_sessions.sandbox_id
+                        ),
+                        updated_at = now()
                     WHERE sandbox_id = %s AND session_id = %s
-                      AND NOT EXISTS (
-                        SELECT 1 FROM agentbox_lifecycle_claims c
-                        WHERE c.sandbox_id = agentbox_sessions.sandbox_id
-                          AND c.expires_at > now()
-                          {owner_fence}
+                      AND EXISTS (
+                        SELECT 1 FROM agentbox_sandboxes s
+                        WHERE s.sandbox_id = agentbox_sessions.sandbox_id
+                          AND s.desired_state = 'present'
+                          AND s.observed_state IN ('running', 'degraded')
+                          AND s.observed_generation = s.desired_generation
+                          AND agentbox_sessions.sandbox_generation IN (
+                            0, s.observed_generation
+                          )
+                          AND NOT EXISTS (
+                            SELECT 1 FROM agentbox_lifecycle_claims c
+                            WHERE c.sandbox_id = s.sandbox_id
+                              AND c.expires_at > now()
+                              AND c.operation <> 'route-repair'
+                          )
                       )
                     RETURNING 1
                     """,
-                    (sandbox_id, session_id, *owner_params),
-                )
-            ).fetchone()
-            if row:
-                await conn.execute(
-                    """
+                        (sandbox_id, session_id),
+                    )
+                ).fetchone()
+                if row:
+                    await conn.execute(
+                        """
                     UPDATE agentbox_sandboxes SET idle_since_at = NULL,
                         last_active_at = now(), updated_at = now()
                     WHERE sandbox_id = %s
                     """,
-                    (sandbox_id,),
-                )
+                        (sandbox_id,),
+                    )
         return bool(row)
 
     async def get_session(
@@ -550,7 +671,7 @@ class PostgresStateStore:
                     """
                     SELECT sandbox_id, session_id, cwd, env_keys,
                         extract(epoch FROM last_active_at) AS last_active_at,
-                        active_operations
+                        active_operations, sandbox_generation
                     FROM agentbox_sessions WHERE sandbox_id = %s AND session_id = %s
                     """,
                     (sandbox_id, session_id),
@@ -644,7 +765,7 @@ class PostgresStateStore:
                     """
                     SELECT s.sandbox_id, s.session_id, s.cwd, s.env_keys,
                         extract(epoch FROM s.last_active_at) AS last_active_at,
-                        s.active_operations
+                        s.active_operations, s.sandbox_generation
                     FROM agentbox_sessions s
                     WHERE s.last_active_at < now() - make_interval(secs => %s)
                       AND s.active_operations = 0
@@ -701,48 +822,202 @@ class PostgresStateStore:
     async def mark_sandbox_active(
         self, sandbox_id: str, *, owner: str | None = None
     ) -> bool:
-        owner_fence = "" if owner is None else "AND c.owner <> %s"
-        owner_params: tuple[str, ...] = () if owner is None else (owner,)
+        del owner
         async with self._pool.connection() as conn:
-            row = await (
+            async with conn.transaction():
                 await conn.execute(
-                    f"""
+                    "SELECT pg_advisory_xact_lock(hashtext(%s))",
+                    (f"agentbox:lifecycle:{sandbox_id}",),
+                )
+                row = await (
+                    await conn.execute(
+                        """
                     UPDATE agentbox_sandboxes SET idle_since_at = NULL,
                         last_active_at = now(), updated_at = now()
                     WHERE sandbox_id = %s AND desired_state = 'present'
+                      AND observed_state IN ('running', 'degraded')
+                      AND observed_generation = desired_generation
                       AND NOT EXISTS (
                         SELECT 1 FROM agentbox_lifecycle_claims c
                         WHERE c.sandbox_id = agentbox_sandboxes.sandbox_id
                           AND c.expires_at > now()
-                          {owner_fence}
+                          AND c.operation <> 'route-repair'
                       )
                     RETURNING 1
                     """,
-                    (sandbox_id, *owner_params),
-                )
-            ).fetchone()
+                        (sandbox_id,),
+                    )
+                ).fetchone()
         return bool(row)
 
-    async def mark_pod_stopped(self, sandbox_id: str) -> SandboxRecord | None:
+    async def begin_sandbox_suspend(
+        self,
+        sandbox_id: str,
+        *,
+        idle_timeout_seconds: int,
+        require_no_sessions: bool = True,
+    ) -> SandboxRecord | None:
         async with self._pool.connection() as conn:
+            async with conn.transaction():
+                await conn.execute(
+                    "SELECT pg_advisory_xact_lock(hashtext(%s))",
+                    (f"agentbox:lifecycle:{sandbox_id}",),
+                )
+                row = await (
+                    await conn.execute(
+                        f"""
+                    UPDATE agentbox_sandboxes s
+                    SET desired_state = 'suspended',
+                        desired_generation = desired_generation + 1,
+                        observed_state = 'suspending', updated_at = now()
+                    WHERE sandbox_id = %s
+                      AND desired_state = 'present'
+                      AND observed_state = 'running'
+                      AND observed_generation = desired_generation
+                      AND last_active_at < now() - make_interval(secs => %s)
+                      AND (%s = FALSE OR NOT EXISTS (
+                        SELECT 1 FROM agentbox_sessions x
+                        WHERE x.sandbox_id = s.sandbox_id
+                      ))
+                      AND NOT EXISTS (
+                        SELECT 1 FROM agentbox_activity_leases l
+                        WHERE l.sandbox_id = s.sandbox_id
+                          AND l.expires_at > now()
+                      )
+                    RETURNING {self._sandbox_columns()}
+                    """,
+                        (sandbox_id, idle_timeout_seconds, require_no_sessions),
+                    )
+                ).fetchone()
+        return self._sandbox(row) if row else None
+
+    async def mark_pod_stopped(
+        self,
+        sandbox_id: str,
+        *,
+        expected_provider_id: str | None = None,
+        expected_desired_generation: int | None = None,
+    ) -> SandboxRecord | None:
+        async with self._pool.connection() as conn:
+            if expected_provider_id is None and expected_desired_generation is None:
+                row = await (
+                    await conn.execute(
+                        f"""
+                        UPDATE agentbox_sandboxes SET idle_since_at = now(),
+                            observed_generation = CASE
+                                WHEN desired_state <> 'suspended'
+                                THEN desired_generation + 1
+                                ELSE desired_generation
+                            END,
+                            desired_generation = CASE
+                                WHEN desired_state <> 'suspended'
+                                THEN desired_generation + 1
+                                ELSE desired_generation
+                            END,
+                            desired_state = 'suspended',
+                            observed_state = 'suspended', updated_at = now()
+                        WHERE sandbox_id = %s
+                        RETURNING {self._sandbox_columns()}
+                        """,
+                        (sandbox_id,),
+                    )
+                ).fetchone()
+                return self._sandbox(row) if row else None
             row = await (
                 await conn.execute(
                     f"""
                     UPDATE agentbox_sandboxes SET idle_since_at = now(),
                         desired_state = 'suspended',
-                        desired_generation = CASE
-                            WHEN desired_state <> 'suspended'
-                            THEN desired_generation + 1
-                            ELSE desired_generation
-                        END,
+                        observed_state = 'suspended',
+                        observed_generation = desired_generation,
                         updated_at = now()
-                    WHERE sandbox_id = %s
+                    WHERE sandbox_id = %s AND desired_state = 'suspended'
+                      AND provider_id = COALESCE(%s::text, provider_id)
+                      AND desired_generation = COALESCE(%s::bigint, desired_generation)
                     RETURNING {self._sandbox_columns()}
                     """,
-                    (sandbox_id,),
+                    (
+                        sandbox_id,
+                        expected_provider_id,
+                        expected_desired_generation,
+                    ),
                 )
             ).fetchone()
         return self._sandbox(row) if row else None
+
+    async def finalize_sandbox_suspend(
+        self,
+        sandbox_id: str,
+        *,
+        expected_provider_id: str,
+        expected_desired_generation: int,
+        previous_observed_generation: int,
+        claim_id: str,
+        claim_owner: str,
+        provider_scope: str | None,
+    ) -> SandboxRecord | None:
+        async with self._pool.connection() as conn:
+            async with conn.transaction():
+                await conn.execute(
+                    "SELECT pg_advisory_xact_lock(hashtext(%s))",
+                    (f"agentbox:lifecycle:{sandbox_id}",),
+                )
+                row = await (
+                    await conn.execute(
+                        f"""
+                        UPDATE agentbox_sandboxes s
+                        SET idle_since_at = now(), observed_state = 'suspended',
+                            observed_generation = desired_generation,
+                            updated_at = now()
+                        WHERE s.sandbox_id = %s
+                          AND s.desired_state = 'suspended'
+                          AND s.provider_id = %s
+                          AND s.desired_generation = %s
+                          AND EXISTS (
+                            SELECT 1 FROM agentbox_lifecycle_claims c
+                            WHERE c.sandbox_id = s.sandbox_id
+                              AND c.claim_id = %s AND c.owner = %s
+                              AND c.expires_at > now()
+                          )
+                        RETURNING {self._sandbox_columns()}
+                        """,
+                        (
+                            sandbox_id,
+                            expected_provider_id,
+                            expected_desired_generation,
+                            claim_id,
+                            claim_owner,
+                        ),
+                    )
+                ).fetchone()
+                if row is None:
+                    return None
+                await conn.execute(
+                    """
+                    DELETE FROM agentbox_activity_leases
+                    WHERE sandbox_id = %s
+                      AND sandbox_generation IN (0, %s)
+                    """,
+                    (sandbox_id, previous_observed_generation),
+                )
+                await conn.execute(
+                    """
+                    DELETE FROM agentbox_sessions
+                    WHERE sandbox_id = %s
+                      AND sandbox_generation IN (0, %s)
+                    """,
+                    (sandbox_id, previous_observed_generation),
+                )
+                if provider_scope is not None:
+                    await conn.execute(
+                        """
+                        DELETE FROM agentbox_provider_allocations
+                        WHERE provider_scope = %s AND sandbox_id = %s
+                          AND (provider_id = %s OR state = 'reserved')
+                        """,
+                        (provider_scope, sandbox_id, expected_provider_id),
+                    )
+        return self._sandbox(row)
 
     async def mark_idle_if_empty(self, sandbox_id: str) -> None:
         async with self._pool.connection() as conn:
@@ -772,6 +1047,7 @@ class PostgresStateStore:
         operation: str,
         owner: str,
         ttl_seconds: float,
+        touch_activity: bool = True,
     ) -> ActivityLease | None:
         if ttl_seconds <= 0:
             raise ValueError("ttl_seconds must be positive")
@@ -787,51 +1063,61 @@ class PostgresStateStore:
                             SELECT 1 FROM agentbox_sessions x
                             WHERE x.sandbox_id = s.sandbox_id
                               AND x.session_id = %s
+                              AND x.sandbox_generation IN (0, s.observed_generation)
                         )
             """
         )
         session_params: tuple[str, ...] = () if session_id is None else (session_id,)
         async with self._pool.connection() as conn:
-            row = await (
+            async with conn.transaction():
                 await conn.execute(
-                    f"""
+                    "SELECT pg_advisory_xact_lock(hashtext(%s))",
+                    (f"agentbox:lifecycle:{sandbox_id}",),
+                )
+                row = await (
+                    await conn.execute(
+                        f"""
                     INSERT INTO agentbox_activity_leases (
-                        lease_id, sandbox_id, session_id, operation, owner, expires_at
+                        lease_id, sandbox_id, session_id, operation, owner, expires_at,
+                        sandbox_generation
                     )
                     SELECT %s, s.sandbox_id, %s, %s, %s,
-                        now() + make_interval(secs => %s)
+                        now() + make_interval(secs => %s), s.observed_generation
                     FROM agentbox_sandboxes s
                     WHERE s.sandbox_id = %s AND s.desired_state = 'present'
+                      AND s.observed_state IN ('running', 'degraded')
+                      AND s.observed_generation = s.desired_generation
                       {session_fence}
                       AND NOT EXISTS (
                         SELECT 1 FROM agentbox_lifecycle_claims c
-                        WHERE c.sandbox_id = s.sandbox_id AND c.expires_at > now()
-                          AND c.owner <> %s
+                        WHERE c.sandbox_id = s.sandbox_id
+                          AND c.expires_at > now()
+                          AND c.operation <> 'route-repair'
                       )
                     RETURNING lease_id, sandbox_id, session_id, operation, owner,
-                        extract(epoch FROM expires_at) AS expires_at
+                        extract(epoch FROM expires_at) AS expires_at,
+                        sandbox_generation
                     """,
-                    (
-                        lease_id,
-                        session_id,
-                        operation,
-                        owner,
-                        ttl_seconds,
-                        sandbox_id,
-                        *session_params,
-                        owner,
-                    ),
-                )
-            ).fetchone()
-            if row:
-                await conn.execute(
-                    """
+                        (
+                            lease_id,
+                            session_id,
+                            operation,
+                            owner,
+                            ttl_seconds,
+                            sandbox_id,
+                            *session_params,
+                        ),
+                    )
+                ).fetchone()
+                if row and touch_activity:
+                    await conn.execute(
+                        """
                     UPDATE agentbox_sandboxes SET idle_since_at = NULL,
                         last_active_at = now(), updated_at = now()
                     WHERE sandbox_id = %s
                     """,
-                    (sandbox_id,),
-                )
+                        (sandbox_id,),
+                    )
         return self._activity_lease(row) if row else None
 
     async def renew_activity_lease(
@@ -840,29 +1126,82 @@ class PostgresStateStore:
         if ttl_seconds <= 0:
             raise ValueError("ttl_seconds must be positive")
         async with self._pool.connection() as conn:
-            row = await (
+            async with conn.transaction():
+                lease = await (
+                    await conn.execute(
+                        """
+                        SELECT sandbox_id FROM agentbox_activity_leases
+                        WHERE lease_id = %s AND owner = %s
+                        """,
+                        (lease_id, owner),
+                    )
+                ).fetchone()
+                if lease is None:
+                    return None
+                sandbox_id = str(lease["sandbox_id"])
                 await conn.execute(
-                    """
+                    "SELECT pg_advisory_xact_lock(hashtext(%s))",
+                    (f"agentbox:lifecycle:{sandbox_id}",),
+                )
+                row = await (
+                    await conn.execute(
+                        """
                     UPDATE agentbox_activity_leases
                     SET expires_at = now() + make_interval(secs => %s), updated_at = now()
                     WHERE lease_id = %s AND owner = %s AND expires_at > now()
+                      AND EXISTS (
+                        SELECT 1 FROM agentbox_sandboxes s
+                        WHERE s.sandbox_id = agentbox_activity_leases.sandbox_id
+                          AND s.desired_state = 'present'
+                          AND s.observed_state IN ('running', 'degraded')
+                          AND s.observed_generation = s.desired_generation
+                          AND s.observed_generation = agentbox_activity_leases.sandbox_generation
+                          AND NOT EXISTS (
+                            SELECT 1 FROM agentbox_lifecycle_claims c
+                            WHERE c.sandbox_id = s.sandbox_id
+                              AND c.expires_at > now()
+                              AND c.operation <> 'route-repair'
+                          )
+                      )
                     RETURNING lease_id, sandbox_id, session_id, operation, owner,
-                        extract(epoch FROM expires_at) AS expires_at
+                        extract(epoch FROM expires_at) AS expires_at,
+                        sandbox_generation
                     """,
-                    (ttl_seconds, lease_id, owner),
-                )
-            ).fetchone()
+                        (ttl_seconds, lease_id, owner),
+                    )
+                ).fetchone()
         return self._activity_lease(row) if row else None
 
     async def release_activity_lease(self, lease_id: str, *, owner: str) -> bool:
         async with self._pool.connection() as conn:
             async with conn.transaction():
+                # Learn the sandbox without taking a row lock, then acquire the
+                # same lifecycle advisory fence used by finalization before
+                # mutating lease/session/sandbox rows. This gives every path the
+                # order fence -> lease -> session -> sandbox and prevents a
+                # release/finalize deadlock.
+                probe = await (
+                    await conn.execute(
+                        """
+                        SELECT sandbox_id FROM agentbox_activity_leases
+                        WHERE lease_id = %s AND owner = %s
+                        """,
+                        (lease_id, owner),
+                    )
+                ).fetchone()
+                if probe is None:
+                    return False
+                sandbox_id = str(probe["sandbox_id"])
+                await conn.execute(
+                    "SELECT pg_advisory_xact_lock(hashtext(%s))",
+                    (f"agentbox:lifecycle:{sandbox_id}",),
+                )
                 row = await (
                     await conn.execute(
                         """
                         DELETE FROM agentbox_activity_leases
                         WHERE lease_id = %s AND owner = %s
-                        RETURNING sandbox_id, session_id
+                        RETURNING sandbox_id, session_id, sandbox_generation, operation
                         """,
                         (lease_id, owner),
                     )
@@ -870,17 +1209,21 @@ class PostgresStateStore:
                 if row:
                     sandbox_id = str(row["sandbox_id"])
                     session_id = row["session_id"]
-                    if session_id is not None:
+                    generation = int(row["sandbox_generation"])
+                    touch_activity = row["operation"] != "provider-lease-renewal"
+                    if touch_activity and session_id is not None:
                         await conn.execute(
                             """
                             UPDATE agentbox_sessions
                             SET last_active_at = now(), updated_at = now()
                             WHERE sandbox_id = %s AND session_id = %s
+                              AND sandbox_generation = %s
                             """,
-                            (sandbox_id, session_id),
+                            (sandbox_id, session_id, generation),
                         )
-                    await conn.execute(
-                        """
+                    if touch_activity:
+                        await conn.execute(
+                            """
                         UPDATE agentbox_sandboxes s
                         SET last_active_at = now(), updated_at = now(),
                             idle_since_at = CASE
@@ -895,9 +1238,11 @@ class PostgresStateStore:
                                 ELSE NULL
                             END
                         WHERE sandbox_id = %s
+                          AND desired_generation = %s
+                          AND observed_generation = %s
                         """,
-                        (sandbox_id,),
-                    )
+                            (sandbox_id, generation, generation),
+                        )
         return bool(row)
 
     async def prune_expired_activity_leases(self) -> int:
@@ -942,6 +1287,13 @@ class PostgresStateStore:
         claim_id = uuid.uuid4()
         async with self._pool.connection() as conn:
             async with conn.transaction():
+                # Every lifecycle/activity transaction acquires the advisory
+                # fence before touching the sandbox row. A single global lock
+                # order prevents heartbeat/claim deadlocks in PostgreSQL.
+                await conn.execute(
+                    "SELECT pg_advisory_xact_lock(hashtext(%s))",
+                    (f"agentbox:lifecycle:{sandbox_id}",),
+                )
                 sandbox = await (
                     await conn.execute(
                         """
@@ -953,16 +1305,29 @@ class PostgresStateStore:
                 ).fetchone()
                 if not sandbox:
                     return None
+                if operation not in {
+                    "route-repair",
+                    "session-delete",
+                    "idle-session-delete",
+                }:
+                    active = await (
+                        await conn.execute(
+                            """
+                            SELECT 1 FROM agentbox_activity_leases
+                            WHERE sandbox_id = %s AND expires_at > now()
+                            LIMIT 1
+                            """,
+                            (sandbox_id,),
+                        )
+                    ).fetchone()
+                    if active:
+                        return None
                 # Share this transaction-scoped per-sandbox fence with
                 # allocation reconciliation. If reconciliation started first,
                 # it publishes any discovered provider generation before the
                 # lifecycle operation snapshots allocations/inventory. If the
                 # lifecycle operation started first, reconciliation observes
                 # the live claim and skips this sandbox.
-                await conn.execute(
-                    "SELECT pg_advisory_xact_lock(hashtext(%s))",
-                    (f"agentbox:lifecycle:{sandbox_id}",),
-                )
                 await conn.execute(
                     """
                     DELETE FROM agentbox_lifecycle_claims
@@ -1018,6 +1383,21 @@ class PostgresStateStore:
                 )
             ).fetchone()
         return bool(row)
+
+    async def get_lifecycle_claim(self, sandbox_id: str) -> LifecycleClaim | None:
+        async with self._pool.connection() as conn:
+            row = await (
+                await conn.execute(
+                    """
+                    SELECT claim_id, sandbox_id, operation, owner,
+                        extract(epoch FROM expires_at) AS expires_at
+                    FROM agentbox_lifecycle_claims
+                    WHERE sandbox_id = %s AND expires_at > now()
+                    """,
+                    (sandbox_id,),
+                )
+            ).fetchone()
+        return self._lifecycle_claim(row) if row else None
 
     async def observe_orphan(
         self,
@@ -1092,11 +1472,7 @@ class PostgresStateStore:
         sandbox_id: str | None = None,
     ) -> list[OrphanCandidate]:
         sandbox_filter = "" if sandbox_id is None else "AND sandbox_id = %s"
-        params = (
-            (provider_name,)
-            if sandbox_id is None
-            else (provider_name, sandbox_id)
-        )
+        params = (provider_name,) if sandbox_id is None else (provider_name, sandbox_id)
         async with self._pool.connection() as conn:
             rows = await (
                 await conn.execute(

@@ -892,7 +892,7 @@ def test_real_local_provider_idle_suspend_resumes_same_filesystem_then_deletes(
             "timeout": 30,
         },
     )
-    assert sentinel.json()["success"] is True
+    assert sentinel.json().get("success") is True, sentinel.text
     deleted_session = server.client.request(
         "DELETE", f"/sandboxes/{sandbox_id}/sessions/{session_id}"
     )

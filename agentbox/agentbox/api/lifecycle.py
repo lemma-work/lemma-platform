@@ -9,7 +9,6 @@ from fastapi import HTTPException
 from agentbox.config import settings
 from agentbox.lifecycle_manager import SandboxLifecycleManager
 from agentbox.providers import SandboxProvider
-from agentbox.providers.errors import ProviderError
 from agentbox.providers.protocol import SandboxReleaseProvider
 from agentbox.state_store.protocol import AsyncStateStore
 
@@ -27,14 +26,30 @@ async def activity_lease(
 ):
     """Hold a renewable durable lease for the entire proxied operation."""
 
-    async with manager.claim(sandbox_id, f"activity:{operation}"):
-        record = await store.get_sandbox(sandbox_id)
-        if record is None or record.desired_state == "deleted":
-            raise HTTPException(status_code=404, detail="Sandbox not found")
-        if record.desired_state == "suspended":
-            await manager.resume_claimed(sandbox_id)
-        else:
-            await manager.bind_exact_generation_claimed(record)
+    record = await store.get_sandbox(sandbox_id)
+    if record is None or record.desired_state == "deleted":
+        raise HTTPException(status_code=404, detail="Sandbox not found")
+    if record.desired_state == "suspended":
+        await manager.ensure(sandbox_id, record.to_ensure_request())
+    elif (
+        record.desired_state != "present"
+        or record.observed_state not in {"running", "degraded"}
+        or record.observed_generation != record.desired_generation
+    ):
+        raise HTTPException(
+            status_code=503,
+            headers={"Retry-After": "1"},
+            detail={
+                "message": "Sandbox lifecycle is transitioning",
+                "code": "sandbox_starting",
+                "retryable": True,
+                "state": record.observed_state,
+            },
+        )
+    lease = None
+    claim = None
+    deadline = asyncio.get_running_loop().time() + 1.0
+    while lease is None and asyncio.get_running_loop().time() < deadline:
         lease = await store.acquire_activity_lease(
             sandbox_id,
             session_id=session_id,
@@ -42,11 +57,34 @@ async def activity_lease(
             owner=manager.owner,
             ttl_seconds=settings.agentbox_activity_lease_ttl_seconds,
         )
+        if lease is not None:
+            break
+        claim = await store.get_lifecycle_claim(sandbox_id)
+        # A claim can commit and disappear between the failed acquisition and
+        # this diagnostic read. Retry the DB-only acquisition until the short
+        # transition budget expires instead of surfacing a false 503.
+        await asyncio.sleep(0.01)
     if lease is None:
-        detail = "Runtime session not found" if session_id else "Sandbox not found"
-        raise HTTPException(status_code=404, detail=detail)
+        current = await store.get_sandbox(sandbox_id)
+        if current is None or current.desired_state == "deleted":
+            raise HTTPException(status_code=404, detail="Sandbox not found")
+        if (
+            session_id is not None
+            and await store.get_session(sandbox_id, session_id) is None
+        ):
+            raise HTTPException(status_code=404, detail="Runtime session not found")
+        raise HTTPException(
+            status_code=503,
+            headers={"Retry-After": "1"},
+            detail={
+                "message": "Sandbox lifecycle is transitioning",
+                "code": "sandbox_starting",
+                "retryable": True,
+                "state": current.observed_state,
+                "lifecycle_operation": claim.operation if claim else None,
+            },
+        )
 
-    await _renew_provider_lease(manager, sandbox_id, lease.lease_id)
     renewal = asyncio.create_task(
         _renew_activity_lease(
             store,
@@ -85,25 +123,6 @@ async def _renew_activity_lease(
             if owner_task is not None:
                 owner_task.cancel()
             return
-        await _renew_provider_lease(manager, renewed.sandbox_id, lease_id)
-
-
-async def _renew_provider_lease(
-    manager: SandboxLifecycleManager,
-    sandbox_id: str,
-    lease_id: str,
-) -> None:
-    """Best-effort provider renewal; the durable activity lease remains primary."""
-
-    try:
-        await manager.renew_provider_lease(sandbox_id)
-    except (ProviderError, HTTPException) as exc:
-        logger.warning(
-            "agentbox_provider_lease_renewal_failed lease_id=%s sandbox_id=%s error=%s",
-            lease_id,
-            sandbox_id,
-            exc,
-        )
 
 
 async def delete_runtime_session_if_present(
@@ -143,6 +162,18 @@ async def cleanup_once(manager: SandboxLifecycleManager) -> None:
         settings.agentbox_sandbox_idle_timeout_seconds
     ):
         await manager.suspend_if_idle(sandbox.sandbox_id)
+
+
+async def provider_lease_renewal_loop(manager: SandboxLifecycleManager) -> None:
+    """Renew cloud leases independently from idle/session cleanup."""
+
+    interval = min(max(settings.agentbox_cleanup_interval_seconds, 5), 15)
+    while True:
+        await asyncio.sleep(interval)
+        try:
+            await manager.renew_active_provider_leases()
+        except Exception:
+            logger.exception("AgentBox provider lease renewal pass failed")
 
 
 async def release_sandbox_compute(provider: SandboxProvider, sandbox_id: str) -> bool:

@@ -109,6 +109,24 @@ SQLITE_MIGRATIONS: tuple[tuple[int, str, tuple[str, ...]], ...] = (
             """,
         ),
     ),
+    (
+        5,
+        "database_authoritative_lifecycle",
+        (
+            "ALTER TABLE sandboxes ADD COLUMN observed_state TEXT NOT NULL DEFAULT 'starting'",
+            "ALTER TABLE sandboxes ADD COLUMN status_json TEXT",
+            "ALTER TABLE sandboxes ADD COLUMN endpoint_json TEXT",
+            "ALTER TABLE sandboxes ADD COLUMN last_failure TEXT",
+            "ALTER TABLE sandboxes ADD COLUMN reconcile_after REAL",
+            "ALTER TABLE sessions ADD COLUMN sandbox_generation INTEGER NOT NULL DEFAULT 0",
+            "ALTER TABLE agentbox_activity_leases ADD COLUMN sandbox_generation INTEGER NOT NULL DEFAULT 0",
+            "UPDATE sandboxes SET observed_state = 'suspended' WHERE desired_state = 'suspended'",
+            "UPDATE sandboxes SET observed_state = 'deleted' WHERE desired_state = 'deleted'",
+            "UPDATE sessions SET sandbox_generation = COALESCE((SELECT observed_generation FROM sandboxes WHERE sandboxes.sandbox_id = sessions.sandbox_id), 0) WHERE sandbox_generation = 0",
+            "UPDATE agentbox_activity_leases SET sandbox_generation = COALESCE((SELECT observed_generation FROM sandboxes WHERE sandboxes.sandbox_id = agentbox_activity_leases.sandbox_id), 0) WHERE sandbox_generation = 0",
+            "CREATE INDEX IF NOT EXISTS agentbox_sandboxes_reconcile_idx ON sandboxes (reconcile_after)",
+        ),
+    ),
 )
 
 
@@ -250,6 +268,24 @@ POSTGRES_MIGRATIONS: tuple[tuple[int, str, tuple[str, ...]], ...] = (
             CREATE INDEX IF NOT EXISTS agentbox_provider_allocations_capacity_idx
             ON agentbox_provider_allocations (provider_scope, state, expires_at)
             """,
+        ),
+    ),
+    (
+        5,
+        "database_authoritative_lifecycle",
+        (
+            "ALTER TABLE agentbox_sandboxes ADD COLUMN IF NOT EXISTS observed_state text NOT NULL DEFAULT 'starting'",
+            "ALTER TABLE agentbox_sandboxes ADD COLUMN IF NOT EXISTS status_data jsonb",
+            "ALTER TABLE agentbox_sandboxes ADD COLUMN IF NOT EXISTS endpoint_data jsonb",
+            "ALTER TABLE agentbox_sandboxes ADD COLUMN IF NOT EXISTS last_failure text",
+            "ALTER TABLE agentbox_sandboxes ADD COLUMN IF NOT EXISTS reconcile_after timestamptz",
+            "ALTER TABLE agentbox_sessions ADD COLUMN IF NOT EXISTS sandbox_generation bigint NOT NULL DEFAULT 0",
+            "ALTER TABLE agentbox_activity_leases ADD COLUMN IF NOT EXISTS sandbox_generation bigint NOT NULL DEFAULT 0",
+            "UPDATE agentbox_sandboxes SET observed_state = 'suspended' WHERE desired_state = 'suspended'",
+            "UPDATE agentbox_sandboxes SET observed_state = 'deleted' WHERE desired_state = 'deleted'",
+            "UPDATE agentbox_sessions x SET sandbox_generation = s.observed_generation FROM agentbox_sandboxes s WHERE x.sandbox_id = s.sandbox_id AND x.sandbox_generation = 0",
+            "UPDATE agentbox_activity_leases l SET sandbox_generation = s.observed_generation FROM agentbox_sandboxes s WHERE l.sandbox_id = s.sandbox_id AND l.sandbox_generation = 0",
+            "CREATE INDEX IF NOT EXISTS agentbox_sandboxes_reconcile_idx ON agentbox_sandboxes (reconcile_after) WHERE reconcile_after IS NOT NULL",
         ),
     ),
 )

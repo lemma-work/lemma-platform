@@ -253,6 +253,9 @@ async def local_agentbox_server(
     env_updates = {
         "AGENTBOX_PROVIDER": "docker",
         "AGENTBOX_API_KEY": api_key,
+        "AGENTBOX_ENDPOINT_STATE_KEYS": (
+            "YWdlbnRib3gtZW5kcG9pbnQtc3RhdGUtdGVzdC1rZXk="
+        ),
         "AGENTBOX_API_URL": manager_url,
         "AGENTBOX_APP_DOMAIN": app_domain,
         "AGENTBOX_RUNTIME_IMAGE": workspace_image,

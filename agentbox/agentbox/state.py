@@ -79,6 +79,11 @@ class AgentBoxStateStore:
             "instance_id",
             "last_active_at",
             "last_observed_at",
+            "observed_state",
+            "status_json",
+            "endpoint_json",
+            "last_failure",
+            "reconcile_after",
         }
         extra_columns = set(column_names) - set(expected_columns)
         if (
@@ -393,6 +398,18 @@ class AgentBoxStateStore:
 
     def _record_from_row(self, row: sqlite3.Row) -> SandboxRecord:
         columns = set(row.keys())
+        status_data = None
+        endpoint_data = None
+        if "status_json" in columns and row["status_json"]:
+            try:
+                status_data = json.loads(row["status_json"])
+            except (TypeError, json.JSONDecodeError):
+                status_data = None
+        if "endpoint_json" in columns and row["endpoint_json"]:
+            try:
+                endpoint_data = json.loads(row["endpoint_json"])
+            except (TypeError, json.JSONDecodeError):
+                endpoint_data = None
         return SandboxRecord(
             sandbox_id=row["sandbox_id"],
             env=json.loads(row["env_json"]),
@@ -410,6 +427,19 @@ class AgentBoxStateStore:
             provider_name=row["provider_name"] if "provider_name" in columns else None,
             provider_id=row["provider_id"] if "provider_id" in columns else None,
             instance_id=row["instance_id"] if "instance_id" in columns else None,
+            observed_state=(
+                row["observed_state"]
+                if "observed_state" in columns and row["observed_state"]
+                else "starting"
+            ),
+            status_data=status_data if isinstance(status_data, dict) else None,
+            endpoint_data=endpoint_data if isinstance(endpoint_data, dict) else None,
+            last_failure=(row["last_failure"] if "last_failure" in columns else None),
+            reconcile_after=(
+                float(row["reconcile_after"])
+                if "reconcile_after" in columns and row["reconcile_after"] is not None
+                else None
+            ),
             idle_since_at=(
                 float(row["idle_since_at"])
                 if "idle_since_at" in columns and row["idle_since_at"] is not None
@@ -428,6 +458,7 @@ class AgentBoxStateStore:
         )
 
     def _session_from_row(self, row: sqlite3.Row) -> SessionRecord:
+        columns = set(row.keys())
         return SessionRecord(
             sandbox_id=row["sandbox_id"],
             session_id=row["session_id"],
@@ -435,4 +466,7 @@ class AgentBoxStateStore:
             env_keys=json.loads(row["env_keys_json"]),
             last_active_at=float(row["last_active_at"]),
             active_operations=int(row["active_operations"]),
+            sandbox_generation=(
+                int(row["sandbox_generation"]) if "sandbox_generation" in columns else 0
+            ),
         )

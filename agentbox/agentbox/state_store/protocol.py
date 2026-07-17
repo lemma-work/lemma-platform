@@ -12,6 +12,7 @@ from .models import (
     SandboxRecord,
     SessionRecord,
     DesiredSandboxState,
+    ObservedSandboxState,
 )
 
 
@@ -47,6 +48,19 @@ class AsyncStateStore(Protocol):
         provider_id: str,
         instance_id: str | None,
         observed_generation: int,
+        observed_state: ObservedSandboxState = "running",
+        status_data: dict[str, object] | None = None,
+        endpoint_data: dict[str, object] | None = None,
+    ) -> SandboxRecord | None: ...
+    async def set_sandbox_observed_state(
+        self,
+        sandbox_id: str,
+        *,
+        observed_state: ObservedSandboxState,
+        expected_generation: int,
+        expected_observed_state: ObservedSandboxState | None = None,
+        last_failure: str | None = None,
+        reconcile_after: float | None = None,
     ) -> SandboxRecord | None: ...
     async def set_sandbox_provider_identity(
         self,
@@ -72,7 +86,8 @@ class AsyncStateStore(Protocol):
         *,
         cwd: str,
         env_keys: list[str],
-    ) -> SessionRecord: ...
+        expected_generation: int | None = None,
+    ) -> SessionRecord | None: ...
 
     async def touch_session(
         self, sandbox_id: str, session_id: str, *, owner: str | None = None
@@ -91,7 +106,31 @@ class AsyncStateStore(Protocol):
     async def mark_sandbox_active(
         self, sandbox_id: str, *, owner: str | None = None
     ) -> bool: ...
-    async def mark_pod_stopped(self, sandbox_id: str) -> SandboxRecord | None: ...
+    async def mark_pod_stopped(
+        self,
+        sandbox_id: str,
+        *,
+        expected_provider_id: str | None = None,
+        expected_desired_generation: int | None = None,
+    ) -> SandboxRecord | None: ...
+    async def finalize_sandbox_suspend(
+        self,
+        sandbox_id: str,
+        *,
+        expected_provider_id: str,
+        expected_desired_generation: int,
+        previous_observed_generation: int,
+        claim_id: str,
+        claim_owner: str,
+        provider_scope: str | None,
+    ) -> SandboxRecord | None: ...
+    async def begin_sandbox_suspend(
+        self,
+        sandbox_id: str,
+        *,
+        idle_timeout_seconds: int,
+        require_no_sessions: bool = True,
+    ) -> SandboxRecord | None: ...
     async def mark_idle_if_empty(self, sandbox_id: str) -> None: ...
 
     async def acquire_activity_lease(
@@ -102,6 +141,7 @@ class AsyncStateStore(Protocol):
         operation: str,
         owner: str,
         ttl_seconds: float,
+        touch_activity: bool = True,
     ) -> ActivityLease | None: ...
 
     async def renew_activity_lease(
@@ -130,6 +170,7 @@ class AsyncStateStore(Protocol):
         self, claim_id: str, *, owner: str, ttl_seconds: float
     ) -> LifecycleClaim | None: ...
     async def release_lifecycle_claim(self, claim_id: str, *, owner: str) -> bool: ...
+    async def get_lifecycle_claim(self, sandbox_id: str) -> LifecycleClaim | None: ...
 
     async def observe_orphan(
         self,

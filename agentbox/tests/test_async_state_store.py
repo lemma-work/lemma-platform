@@ -11,9 +11,26 @@ import pytest
 
 from agentbox.schemas import SandboxEnsureRequest
 from agentbox.state_store import AsyncStateStore, create_state_store
-from agentbox.state_store.migrations import POSTGRES_MIGRATIONS
+from agentbox.state_store.migrations import POSTGRES_MIGRATIONS, SQLITE_MIGRATIONS
 from agentbox.state_store.postgres import PostgresStateStore
 from agentbox.state_store.sqlite import SQLiteStateStore
+
+
+async def _observe_running(store: AsyncStateStore, sandbox_id: str) -> None:
+    record = await store.get_sandbox(sandbox_id)
+    assert record is not None
+    observed = await store.set_sandbox_observation(
+        sandbox_id,
+        provider_name="test",
+        provider_id=f"provider-{sandbox_id}",
+        instance_id=f"instance-{sandbox_id}",
+        observed_generation=record.desired_generation,
+        status_data={"id": sandbox_id, "ready": True, "status": "RUNNING"},
+        endpoint_data={
+            "runtime": {"base_url": "http://runtime.test"},
+        },
+    )
+    assert observed is not None
 
 
 @pytest.mark.asyncio
@@ -141,8 +158,98 @@ async def test_versioned_sqlite_migration_preserves_rows_and_unknown_tables(tmp_
             volume = store._store._conn.execute(
                 "SELECT volume_id FROM agentbox_workspace_volumes WHERE sandbox_id = 'old'"
             ).fetchone()
-        assert [row[0] for row in versions] == [1, 2, 3, 4]
+        assert [row[0] for row in versions] == [1, 2, 3, 4, 5]
         assert volume[0] == "volume"
+    finally:
+        await store.close()
+
+
+@pytest.mark.asyncio
+async def test_v4_to_v5_migration_backfills_terminal_state_and_generations(tmp_path):
+    path = tmp_path / "v4.db"
+    conn = sqlite3.connect(path)
+    try:
+        conn.executescript(
+            """
+            CREATE TABLE sandboxes (
+                sandbox_id TEXT PRIMARY KEY,
+                env_json TEXT NOT NULL,
+                idle_since_at REAL,
+                created_at REAL NOT NULL,
+                updated_at REAL NOT NULL
+            );
+            CREATE TABLE sessions (
+                sandbox_id TEXT NOT NULL,
+                session_id TEXT NOT NULL,
+                cwd TEXT NOT NULL,
+                env_keys_json TEXT NOT NULL,
+                last_active_at REAL NOT NULL,
+                active_operations INTEGER NOT NULL DEFAULT 0,
+                created_at REAL NOT NULL,
+                updated_at REAL NOT NULL,
+                PRIMARY KEY (sandbox_id, session_id)
+            );
+            CREATE TABLE agentbox_schema_migrations (
+                version INTEGER PRIMARY KEY,
+                name TEXT NOT NULL,
+                applied_at REAL NOT NULL
+            );
+            INSERT INTO agentbox_schema_migrations VALUES (1, 'legacy', 1);
+            """
+        )
+        for version, name, statements in SQLITE_MIGRATIONS:
+            if version not in {2, 3, 4}:
+                continue
+            for statement in statements:
+                conn.execute(statement)
+            conn.execute(
+                "INSERT INTO agentbox_schema_migrations VALUES (?, ?, ?)",
+                (version, name, float(version)),
+            )
+        conn.executescript(
+            """
+            INSERT INTO sandboxes (
+                sandbox_id, env_json, created_at, updated_at, desired_state,
+                desired_generation, observed_generation, provider_name,
+                provider_id, instance_id, last_active_at, last_observed_at
+            ) VALUES
+                ('running', '{}', 1, 1, 'present', 3, 3, 'e2b',
+                 'provider-running', 'provider-running', 1, 1),
+                ('stopped', '{}', 1, 1, 'suspended', 4, 4, 'e2b',
+                 'provider-stopped', 'provider-stopped', 1, 1);
+            INSERT INTO sessions (
+                sandbox_id, session_id, cwd, env_keys_json, last_active_at,
+                active_operations, created_at, updated_at
+            ) VALUES ('running', 'session', '/workspace', '[]', 1, 0, 1, 1);
+            INSERT INTO agentbox_activity_leases (
+                lease_id, sandbox_id, session_id, operation, owner,
+                expires_at, created_at, updated_at
+            ) VALUES ('lease', 'running', 'session', 'function', 'manager',
+                      9999999999, 1, 1);
+            """
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+    store = await SQLiteStateStore.open(str(path))
+    try:
+        running = await store.get_sandbox("running")
+        stopped = await store.get_sandbox("stopped")
+        session = await store.get_session("running", "session")
+        assert running is not None
+        assert running.observed_state == "starting"
+        assert running.endpoint_data is None
+        assert stopped is not None and stopped.observed_state == "suspended"
+        assert session is not None and session.sandbox_generation == 3
+        with store._store._lock:
+            lease_generation = store._store._conn.execute(
+                """
+                SELECT sandbox_generation FROM agentbox_activity_leases
+                WHERE lease_id = 'lease'
+                """
+            ).fetchone()[0]
+        assert lease_generation == 3
     finally:
         await store.close()
 
@@ -197,6 +304,7 @@ async def test_expiring_activity_lease_protects_idle_session(tmp_path):
     store = await SQLiteStateStore.open(str(tmp_path / "state.db"))
     try:
         await store.upsert_sandbox("sandbox", SandboxEnsureRequest())
+        await _observe_running(store, "sandbox")
         await store.upsert_session("sandbox", "session", cwd="/workspace", env_keys=[])
         with store._store._lock, store._store._conn:
             store._store._conn.execute(
@@ -242,6 +350,7 @@ async def test_deleting_expired_session_preserves_sandbox_inactivity_clock(tmp_p
     store = await SQLiteStateStore.open(str(tmp_path / "state.db"))
     try:
         await store.upsert_sandbox("sandbox", SandboxEnsureRequest())
+        await _observe_running(store, "sandbox")
         await store.upsert_session("sandbox", "session", cwd="/workspace", env_keys=[])
         stale_at = time.time() - 120
         with store._store._lock, store._store._conn:
@@ -276,6 +385,7 @@ async def test_missing_heartbeat_returns_false_and_existing_returns_true(tmp_pat
     try:
         assert await store.mark_sandbox_active("missing") is False
         await store.upsert_sandbox("sandbox", SandboxEnsureRequest())
+        await _observe_running(store, "sandbox")
         assert await store.mark_sandbox_active("sandbox") is True
     finally:
         await store.close()
@@ -333,6 +443,7 @@ async def test_activity_lease_defers_idle_start_until_release(tmp_path):
     store = await SQLiteStateStore.open(str(tmp_path / "state.db"))
     try:
         await store.upsert_sandbox("sandbox", SandboxEnsureRequest())
+        await _observe_running(store, "sandbox")
         lease = await store.acquire_activity_lease(
             "sandbox",
             session_id=None,
@@ -408,8 +519,7 @@ async def test_lifecycle_claim_is_exclusive_and_orphan_grace_respects_it(tmp_pat
             inventory_started_at=now + 1,
         )
         assert [
-            row.provider_id
-            for row in await store.list_provider_allocations("e2b:test")
+            row.provider_id for row in await store.list_provider_allocations("e2b:test")
         ] == ["provider-after-claim"]
         candidates = await store.expired_orphans(10, inventory_started_at=now)
         assert [candidate.provider_id for candidate in candidates] == [
@@ -509,6 +619,7 @@ async def test_activity_lease_is_fenced_by_another_manager_lifecycle_claim(tmp_p
     store = await SQLiteStateStore.open(str(tmp_path / "state.db"))
     try:
         await store.upsert_sandbox("sandbox", SandboxEnsureRequest())
+        await _observe_running(store, "sandbox")
         await store.upsert_session("sandbox", "session", cwd="/workspace", env_keys=[])
         claim = await store.acquire_lifecycle_claim(
             "sandbox", operation="idle-suspend", owner="manager-a", ttl_seconds=60
@@ -531,11 +642,278 @@ async def test_activity_lease_is_fenced_by_another_manager_lifecycle_claim(tmp_p
             owner="manager-a",
             ttl_seconds=60,
         )
-        assert own is not None
-        assert await store.mark_sandbox_active("sandbox", owner="manager-a")
-        assert await store.touch_session("sandbox", "session", owner="manager-a")
+        assert own is None
+        assert not await store.mark_sandbox_active("sandbox", owner="manager-a")
+        assert not await store.touch_session("sandbox", "session", owner="manager-a")
         assert not await store.mark_sandbox_active("sandbox", owner="manager-b")
         assert not await store.touch_session("sandbox", "session", owner="manager-b")
+    finally:
+        await store.close()
+
+
+@pytest.mark.asyncio
+async def test_suspend_and_activity_are_generation_fenced_atomically(tmp_path):
+    store = await SQLiteStateStore.open(str(tmp_path / "state.db"))
+    try:
+        await store.upsert_sandbox("sandbox", SandboxEnsureRequest())
+        await _observe_running(store, "sandbox")
+        with store._store._lock, store._store._conn:
+            store._store._conn.execute(
+                "UPDATE sandboxes SET last_active_at = ? WHERE sandbox_id = ?",
+                (time.time() - 1000, "sandbox"),
+            )
+
+        lease = await store.acquire_activity_lease(
+            "sandbox",
+            session_id=None,
+            operation="function",
+            owner="manager-a",
+            ttl_seconds=60,
+        )
+        assert lease is not None
+        assert (
+            await store.begin_sandbox_suspend(
+                "sandbox",
+                idle_timeout_seconds=60,
+            )
+            is None
+        )
+
+        assert await store.release_activity_lease(lease.lease_id, owner="manager-a")
+        with store._store._lock, store._store._conn:
+            store._store._conn.execute(
+                "UPDATE sandboxes SET last_active_at = ? WHERE sandbox_id = ?",
+                (time.time() - 1000, "sandbox"),
+            )
+        suspending = await store.begin_sandbox_suspend(
+            "sandbox",
+            idle_timeout_seconds=60,
+        )
+        assert suspending is not None
+        assert suspending.observed_state == "suspending"
+        assert (
+            await store.acquire_activity_lease(
+                "sandbox",
+                session_id=None,
+                operation="late-function",
+                owner="manager-b",
+                ttl_seconds=60,
+            )
+            is None
+        )
+    finally:
+        await store.close()
+
+
+@pytest.mark.asyncio
+async def test_route_failure_cannot_overwrite_a_newer_suspend_generation(tmp_path):
+    store = await SQLiteStateStore.open(str(tmp_path / "state.db"))
+    try:
+        await store.upsert_sandbox("sandbox", SandboxEnsureRequest())
+        await _observe_running(store, "sandbox")
+        suspending = await store.begin_sandbox_suspend(
+            "sandbox",
+            idle_timeout_seconds=0,
+        )
+        assert suspending is not None
+        assert (
+            await store.set_sandbox_observed_state(
+                "sandbox",
+                observed_state="degraded",
+                expected_generation=suspending.observed_generation,
+                expected_observed_state="running",
+                last_failure="stale-route",
+            )
+            is None
+        )
+        current = await store.get_sandbox("sandbox")
+        assert current is not None
+        assert current.observed_state == "suspending"
+        assert current.last_failure is None
+    finally:
+        await store.close()
+
+
+@pytest.mark.asyncio
+async def test_lost_suspend_claim_cannot_delete_sessions_or_allocations(tmp_path):
+    store = await SQLiteStateStore.open(str(tmp_path / "state.db"))
+    try:
+        await store.upsert_sandbox("sandbox", SandboxEnsureRequest())
+        await _observe_running(store, "sandbox")
+        await store.upsert_session(
+            "sandbox",
+            "session",
+            cwd="/workspace",
+            env_keys=[],
+        )
+        reservation = await store.reserve_provider_allocation(
+            "test:scope",
+            "sandbox",
+            owner="manager-a",
+            max_active=10,
+            ttl_seconds=60,
+        )
+        assert reservation is not None
+        active = await store.activate_provider_allocation(
+            "test:scope",
+            reservation.allocation_id,
+            owner="manager-a",
+            provider_id="provider-sandbox",
+        )
+        assert active is not None
+        claim = await store.acquire_lifecycle_claim(
+            "sandbox",
+            operation="suspend",
+            owner="manager-a",
+            ttl_seconds=60,
+        )
+        assert claim is not None
+        suspending = await store.begin_sandbox_suspend(
+            "sandbox",
+            idle_timeout_seconds=0,
+            require_no_sessions=False,
+        )
+        assert suspending is not None
+        assert await store.release_lifecycle_claim(
+            claim.claim_id,
+            owner="manager-a",
+        )
+
+        assert (
+            await store.finalize_sandbox_suspend(
+                "sandbox",
+                expected_provider_id="provider-sandbox",
+                expected_desired_generation=suspending.desired_generation,
+                previous_observed_generation=suspending.observed_generation,
+                claim_id=claim.claim_id,
+                claim_owner="manager-a",
+                provider_scope="test:scope",
+            )
+            is None
+        )
+        assert await store.get_session("sandbox", "session") is not None
+        assert len(await store.list_provider_allocations("test:scope")) == 1
+    finally:
+        await store.close()
+
+
+@pytest.mark.asyncio
+async def test_suspend_finalizer_removes_legacy_generation_zero_activity(tmp_path):
+    store = await SQLiteStateStore.open(str(tmp_path / "state.db"))
+    try:
+        await store.upsert_sandbox("sandbox", SandboxEnsureRequest())
+        await _observe_running(store, "sandbox")
+        claim = await store.acquire_lifecycle_claim(
+            "sandbox",
+            operation="suspend",
+            owner="manager-a",
+            ttl_seconds=60,
+        )
+        assert claim is not None
+        suspending = await store.begin_sandbox_suspend(
+            "sandbox",
+            idle_timeout_seconds=0,
+            require_no_sessions=False,
+        )
+        assert suspending is not None
+
+        # Model a pre-v5 replica that published generation-zero activity after
+        # the suspension transition began. Finalization must fence it out of
+        # the retained provider generation.
+        now = time.time()
+        with store._store._lock, store._store._conn:
+            store._store._conn.execute(
+                """
+                INSERT INTO sessions (
+                    sandbox_id, session_id, cwd, env_keys_json,
+                    last_active_at, active_operations, sandbox_generation,
+                    created_at, updated_at
+                ) VALUES (?, ?, ?, '[]', ?, 1, 0, ?, ?)
+                """,
+                ("sandbox", "legacy", "/workspace", now, now, now),
+            )
+            store._store._conn.execute(
+                """
+                INSERT INTO agentbox_activity_leases (
+                    lease_id, sandbox_id, session_id, operation, owner,
+                    expires_at, sandbox_generation, created_at, updated_at
+                ) VALUES (?, ?, ?, ?, ?, ?, 0, ?, ?)
+                """,
+                (
+                    "legacy-lease",
+                    "sandbox",
+                    "legacy",
+                    "legacy-request",
+                    "old-manager",
+                    now + 60,
+                    now,
+                    now,
+                ),
+            )
+
+        finalized = await store.finalize_sandbox_suspend(
+            "sandbox",
+            expected_provider_id="provider-sandbox",
+            expected_desired_generation=suspending.desired_generation,
+            previous_observed_generation=suspending.observed_generation,
+            claim_id=claim.claim_id,
+            claim_owner="manager-a",
+            provider_scope=None,
+        )
+        assert finalized is not None
+        assert await store.get_session("sandbox", "legacy") is None
+        assert not await store.has_active_activity_lease("sandbox")
+    finally:
+        await store.close()
+
+
+@pytest.mark.asyncio
+async def test_stale_activity_release_does_not_touch_replacement_generation(tmp_path):
+    store = await SQLiteStateStore.open(str(tmp_path / "state.db"))
+    try:
+        await store.upsert_sandbox("sandbox", SandboxEnsureRequest())
+        await _observe_running(store, "sandbox")
+        await store.upsert_session("sandbox", "session", cwd="/workspace", env_keys=[])
+        lease = await store.acquire_activity_lease(
+            "sandbox",
+            session_id="session",
+            operation="old-request",
+            owner="manager-a",
+            ttl_seconds=60,
+        )
+        assert lease is not None
+
+        replacement = await store.upsert_sandbox(
+            "sandbox",
+            SandboxEnsureRequest(env={"LEMMA_BASE_URL": "https://new.example"}),
+        )
+        await _observe_running(store, "sandbox")
+        await store.upsert_session(
+            "sandbox",
+            "session",
+            cwd="/workspace/new",
+            env_keys=[],
+            expected_generation=replacement.desired_generation,
+        )
+        with store._store._lock, store._store._conn:
+            store._store._conn.execute(
+                "UPDATE sandboxes SET last_active_at = 123 WHERE sandbox_id = 'sandbox'"
+            )
+            store._store._conn.execute(
+                """
+                UPDATE sessions SET last_active_at = 123
+                WHERE sandbox_id = 'sandbox' AND session_id = 'session'
+                """
+            )
+
+        assert await store.release_activity_lease(
+            lease.lease_id,
+            owner="manager-a",
+        )
+        current = await store.get_sandbox("sandbox")
+        session = await store.get_session("sandbox", "session")
+        assert current is not None and current.last_active_at == 123
+        assert session is not None and session.last_active_at == 123
     finally:
         await store.close()
 
@@ -656,10 +1034,112 @@ async def test_postgres_legacy_schema_migration_and_store_parity():
         assert session is not None
         assert session.active_operations == 9
         assert await store.mark_sandbox_active("missing") is False
+        await _observe_running(store, "legacy")
         assert await store.mark_sandbox_active("legacy") is True
         assert await store.touch_session("legacy", "session") is True
 
+        await store.ensure_sandbox_defaults("lock-order")
+        await _observe_running(store, "lock-order")
+
+        async def claim_worker() -> None:
+            for _ in range(25):
+                claim = await store.acquire_lifecycle_claim(
+                    "lock-order",
+                    operation="stress",
+                    owner="claim-worker",
+                    ttl_seconds=5,
+                )
+                if claim is not None:
+                    await store.release_lifecycle_claim(
+                        claim.claim_id,
+                        owner="claim-worker",
+                    )
+                await asyncio.sleep(0)
+
+        async def activity_worker() -> None:
+            for _ in range(25):
+                activity = await store.acquire_activity_lease(
+                    "lock-order",
+                    session_id=None,
+                    operation="stress",
+                    owner="activity-worker",
+                    ttl_seconds=5,
+                )
+                if activity is not None:
+                    await store.release_activity_lease(
+                        activity.lease_id,
+                        owner="activity-worker",
+                    )
+                await asyncio.sleep(0)
+
+        await asyncio.wait_for(
+            asyncio.gather(claim_worker(), activity_worker()),
+            timeout=5,
+        )
+        await store.delete_sandbox("lock-order")
+
+        # Exercise the exact historical deadlock shape on separate pool
+        # connections: lease release and suspension finalization must both
+        # acquire the lifecycle advisory fence before row mutations.
+        for index in range(20):
+            sandbox_id = f"release-finalize-{index}"
+            await store.ensure_sandbox_defaults(sandbox_id)
+            await _observe_running(store, sandbox_id)
+            claim = await store.acquire_lifecycle_claim(
+                sandbox_id,
+                operation="route-repair",
+                owner="race-manager",
+                ttl_seconds=30,
+            )
+            assert claim is not None
+            lease = await store.acquire_activity_lease(
+                sandbox_id,
+                session_id=None,
+                operation="race-request",
+                owner="race-manager",
+                ttl_seconds=30,
+            )
+            assert lease is not None
+            previous = await store.get_sandbox(sandbox_id)
+            assert previous is not None
+            await admin.execute(
+                """
+                UPDATE agentbox_sandboxes
+                SET desired_state = 'suspended',
+                    desired_generation = desired_generation + 1,
+                    observed_state = 'suspending',
+                    updated_at = now()
+                WHERE sandbox_id = %s
+                """,
+                (sandbox_id,),
+            )
+            suspending = await store.get_sandbox(sandbox_id)
+            assert suspending is not None
+
+            released, finalized = await asyncio.wait_for(
+                asyncio.gather(
+                    store.release_activity_lease(
+                        lease.lease_id,
+                        owner="race-manager",
+                    ),
+                    store.finalize_sandbox_suspend(
+                        sandbox_id,
+                        expected_provider_id=f"provider-{sandbox_id}",
+                        expected_desired_generation=suspending.desired_generation,
+                        previous_observed_generation=previous.observed_generation,
+                        claim_id=claim.claim_id,
+                        claim_owner="race-manager",
+                        provider_scope=None,
+                    ),
+                ),
+                timeout=2,
+            )
+            assert released in {True, False}
+            assert finalized is not None
+            await store.delete_sandbox(sandbox_id)
+
         await store.ensure_sandbox_defaults("idle")
+        await _observe_running(store, "idle")
         await store.upsert_session("idle", "session", cwd="/workspace", env_keys=[])
         await admin.execute(
             """
@@ -695,6 +1175,7 @@ async def test_postgres_legacy_schema_migration_and_store_parity():
         resumed = await store.ensure_sandbox_defaults("new")
         assert resumed.desired_state == "present"
         assert resumed.desired_generation == 3
+        await _observe_running(store, "new")
 
         tombstone = await store.insert_sandbox_tombstone_if_missing("orphan")
         assert tombstone.desired_state == "deleted"
@@ -730,8 +1211,7 @@ async def test_postgres_legacy_schema_migration_and_store_parity():
             inventory_started_at=time.time(),
         )
         assert [
-            row.provider_id
-            for row in await store.list_provider_allocations("e2b:test")
+            row.provider_id for row in await store.list_provider_allocations("e2b:test")
         ] == ["provider-after-claim"]
 
         await store.reconcile_provider_inventory(
@@ -753,10 +1233,24 @@ async def test_postgres_legacy_schema_migration_and_store_parity():
             ttl_seconds=60,
         )
         assert lease is not None
+        assert await store.begin_sandbox_suspend("new", idle_timeout_seconds=0) is None
         await store.mark_idle_if_empty("new")
         assert await store.idle_sandboxes(0) == []
         assert await store.release_activity_lease(lease.lease_id, owner="manager-a")
         assert await store.idle_sandboxes(60) == []
+        await admin.execute(
+            """
+            UPDATE agentbox_sandboxes
+            SET last_active_at = now() - interval '120 seconds'
+            WHERE sandbox_id = 'new'
+            """
+        )
+        suspending = await store.begin_sandbox_suspend(
+            "new",
+            idle_timeout_seconds=60,
+        )
+        assert suspending is not None
+        assert suspending.observed_state == "suspending"
 
         volume = await (
             await admin.execute(

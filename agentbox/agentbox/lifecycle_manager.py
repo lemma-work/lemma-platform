@@ -2,24 +2,31 @@ from __future__ import annotations
 
 import asyncio
 from contextlib import asynccontextmanager
+import inspect
 import logging
 import time
+from collections.abc import Awaitable, Callable
+from typing import TypeVar
 from urllib import error as urlerror
 from urllib import request as urlrequest
 
 from fastapi import HTTPException
+from cryptography.exceptions import InvalidTag
 
-from agentbox.apps import sandbox_app
+from agentbox.apps import SANDBOX_APPS, sandbox_app
 from agentbox.config import settings
 from agentbox.endpoint_transport import (
     EndpointRoutingUnavailable,
+    REQUEST_NOT_DELIVERED_HEADER,
     request_endpoint_http,
 )
+from agentbox.endpoint_state import open_endpoint_state, seal_endpoint_state
 from agentbox.providers import SandboxProvider
 from agentbox.providers.errors import ProviderError
 from agentbox.providers.models import (
     ManagedSandbox,
     ProviderCapacityPolicy,
+    SandboxEndpoint,
     SandboxRef,
 )
 from agentbox.providers.protocol import (
@@ -32,6 +39,7 @@ from agentbox.providers.protocol import (
     SandboxStoragePurgeProvider,
 )
 from agentbox.schemas import SandboxEnsureRequest, SandboxInternalStatus
+from agentbox.runtime_proxy import RuntimeProxy
 from agentbox.state_store.models import (
     LifecycleClaim,
     OrphanCandidate,
@@ -48,6 +56,7 @@ _OUTCOME_UNKNOWN_CODES = {
     "provider_observation_unknown",
 }
 _OUTCOME_UNKNOWN_ALLOCATION_OWNER = "agentbox:outcome-unknown"
+_T = TypeVar("_T")
 
 
 class SandboxLifecycleManager:
@@ -64,6 +73,334 @@ class SandboxLifecycleManager:
         self.store = store
         self.owner = owner
         self._reconcile_lock = asyncio.Lock()
+        self._failure_tasks: dict[str, asyncio.Task[None]] = {}
+
+    @staticmethod
+    def _status_from_record(record: SandboxRecord) -> SandboxInternalStatus:
+        ready = (
+            record.observed_state in {"running", "degraded"}
+            and record.observed_generation == record.desired_generation
+            and record.endpoint_data is not None
+        )
+        lifecycle_status = (
+            "RUNNING"
+            if ready
+            else "STOPPED"
+            if record.observed_state in {"suspended", "deleted"}
+            else "ERROR"
+            if record.observed_state in {"degraded", "lost", "error"}
+            else "CREATING"
+        )
+        if record.status_data is not None:
+            return SandboxInternalStatus.model_validate(record.status_data).model_copy(
+                update={"ready": ready, "status": lifecycle_status}
+            )
+        return SandboxInternalStatus(
+            id=record.sandbox_id,
+            ready=ready,
+            status=lifecycle_status,
+        )
+
+    async def database_status(self, sandbox_id: str) -> SandboxInternalStatus:
+        record = await self.store.get_sandbox(sandbox_id)
+        if record is None or record.desired_state == "deleted":
+            raise ProviderError(
+                f"Sandbox {sandbox_id} does not exist",
+                code="sandbox_not_found",
+                status_code=404,
+            )
+        return self._status_from_record(record)
+
+    async def database_endpoint(
+        self,
+        sandbox_id: str,
+        app_name: str,
+        *,
+        expected_generation: int | None = None,
+    ) -> SandboxEndpoint:
+        record = await self.store.get_sandbox(sandbox_id)
+        if (
+            record is None
+            or record.desired_state != "present"
+            or record.observed_state not in {"running", "degraded"}
+            or record.observed_generation != record.desired_generation
+            or (
+                expected_generation is not None
+                and record.observed_generation != expected_generation
+            )
+        ):
+            raise ProviderError(
+                "Sandbox is not ready",
+                code="sandbox_starting",
+                retryable=True,
+                status_code=503,
+                headers={"Retry-After": "1"},
+            )
+        sealed_endpoint_data = record.endpoint_data or {}
+        try:
+            endpoint_data = open_endpoint_state(
+                sandbox_id,
+                record.observed_generation,
+                sealed_endpoint_data,
+            )
+            value = endpoint_data[app_name]
+            endpoint = SandboxEndpoint.from_state(value)
+            if endpoint.provider_id not in {None, record.provider_id}:
+                raise ValueError("Persisted endpoint provider identity changed")
+            if (
+                endpoint.instance_id is not None
+                and record.instance_id is not None
+                and endpoint.instance_id != record.instance_id
+            ):
+                raise ValueError("Persisted endpoint instance identity changed")
+        except (InvalidTag, KeyError, RuntimeError, TypeError, ValueError) as exc:
+            await self.signal_route_failure(
+                sandbox_id,
+                generation=record.observed_generation,
+                reason="endpoint_state_invalid",
+            )
+            raise ProviderError(
+                "Sandbox endpoint state must be refreshed",
+                code="endpoint_routing_unavailable",
+                retryable=True,
+                status_code=503,
+                headers={"Retry-After": "1"},
+            ) from exc
+        if endpoint.expires_at is not None and endpoint.expires_at <= time.time():
+            await self.signal_route_failure(
+                sandbox_id,
+                generation=record.observed_generation,
+                reason="endpoint_expired",
+            )
+            raise ProviderError(
+                "Sandbox endpoint expired",
+                code="endpoint_routing_unavailable",
+                retryable=True,
+                status_code=503,
+                headers={"Retry-After": "1"},
+            )
+        return endpoint
+
+    async def runtime_operation(
+        self,
+        sandbox_id: str,
+        sandbox_generation: int,
+        operation: Callable[[RuntimeProxy], Awaitable[_T]],
+    ) -> _T:
+        runtime = sandbox_app("runtime")
+        endpoint = await self.database_endpoint(
+            sandbox_id,
+            runtime.name,
+            expected_generation=sandbox_generation,
+        )
+        proxy = RuntimeProxy(
+            endpoint.base_url,
+            sandbox_id,
+            headers=dict(endpoint.headers),
+            transient_gateway=endpoint.transient_gateway,
+            instance_id=endpoint.instance_id,
+            port=runtime.port,
+        )
+        try:
+            return await operation(proxy)
+        except EndpointRoutingUnavailable as exc:
+            await self.signal_route_failure(
+                sandbox_id,
+                generation=sandbox_generation,
+                reason="runtime_provider_gateway_routing",
+            )
+            raise ProviderError(
+                "Sandbox runtime routing is temporarily unavailable",
+                code="endpoint_routing_unavailable",
+                retryable=True,
+                status_code=503,
+                headers={
+                    "Retry-After": "1",
+                    REQUEST_NOT_DELIVERED_HEADER: "true",
+                },
+            ) from exc
+        except HTTPException as exc:
+            if exc.status_code == 502:
+                await self.signal_route_failure(
+                    sandbox_id,
+                    generation=sandbox_generation,
+                    reason="runtime_connect_failure",
+                )
+            raise
+
+    async def _publish_running_observation(
+        self,
+        sandbox_id: str,
+        record: SandboxRecord,
+        status: SandboxInternalStatus,
+        *,
+        provider_id: str,
+        instance_id: str | None,
+    ) -> SandboxRecord:
+        endpoints: dict[str, dict[str, object]] = {}
+        for app_name, app_spec in SANDBOX_APPS.items():
+            endpoint = await self.provider.resolve_endpoint(sandbox_id, app_spec)
+            if endpoint.provider_id not in {None, provider_id}:
+                raise ProviderError(
+                    "Provider endpoint generation changed while publishing routes",
+                    code="endpoint_generation_changed",
+                    retryable=True,
+                    status_code=409,
+                )
+            endpoints[app_name] = endpoint.to_state()
+        observed = await self.store.set_sandbox_observation(
+            sandbox_id,
+            provider_name=self.provider.provider_name,
+            provider_id=provider_id,
+            instance_id=instance_id,
+            observed_generation=record.desired_generation,
+            observed_state="running",
+            status_data=status.model_dump(mode="json"),
+            endpoint_data=seal_endpoint_state(
+                sandbox_id,
+                record.desired_generation,
+                endpoints,
+            ),
+        )
+        if observed is None:
+            raise ProviderError(
+                "Sandbox desired generation changed while publishing routes",
+                code="provider_observation_unknown",
+                retryable=True,
+                status_code=409,
+            )
+        return observed
+
+    async def signal_route_failure(
+        self,
+        sandbox_id: str,
+        *,
+        reason: str,
+        generation: int | None = None,
+    ) -> None:
+        """Record route suspicion and singleflight exact-provider inspection.
+
+        A transport miss is not authoritative proof that provider compute is
+        unhealthy. Keep the last published route usable for concurrent and
+        already-running work while one background inspection resolves it.
+        """
+
+        record = await self.store.get_sandbox(sandbox_id)
+        if (
+            record is None
+            or record.desired_state != "present"
+            or record.observed_state not in {"running", "degraded"}
+            or record.observed_generation != record.desired_generation
+            or (generation is not None and record.observed_generation != generation)
+        ):
+            return
+        changed = await self.store.set_sandbox_observed_state(
+            sandbox_id,
+            observed_state=record.observed_state,
+            expected_generation=record.observed_generation,
+            expected_observed_state=record.observed_state,
+            last_failure=reason,
+            reconcile_after=time.time(),
+        )
+        if changed is None:
+            return
+        task = self._failure_tasks.get(sandbox_id)
+        if task is not None and not task.done():
+            return
+        task = asyncio.create_task(
+            self._repair_degraded_generation(
+                sandbox_id,
+                record.observed_generation,
+            )
+        )
+        self._failure_tasks[sandbox_id] = task
+        task.add_done_callback(
+            lambda completed, key=sandbox_id: self._failure_task_finished(
+                key,
+                completed,
+            )
+        )
+
+    def _failure_task_finished(self, sandbox_id: str, task: asyncio.Task[None]) -> None:
+        if self._failure_tasks.get(sandbox_id) is task:
+            self._failure_tasks.pop(sandbox_id, None)
+        if task.cancelled():
+            return
+        error = task.exception()
+        if error is not None:
+            logger.error(
+                "agentbox_route_repair_task_failed sandbox_id=%s error=%s",
+                sandbox_id,
+                error,
+            )
+
+    async def _repair_degraded_generation(
+        self,
+        sandbox_id: str,
+        generation: int,
+    ) -> None:
+        try:
+            async with self.claim(sandbox_id, "route-repair"):
+                record = await self.store.get_sandbox(sandbox_id)
+                if (
+                    record is None
+                    or record.desired_state != "present"
+                    or record.observed_generation != generation
+                    or record.observed_state not in {"running", "degraded"}
+                    or record.provider_id is None
+                ):
+                    return
+                if isinstance(self.provider, SandboxAdoptionProvider):
+                    await self.provider.adopt(sandbox_id, record.provider_id)
+                status = await self.provider.get_status(sandbox_id)
+                if not status.ready:
+                    # A negative status observation is not proof that the
+                    # exact provider generation was deleted. Cloud list,
+                    # connect, and public-route views are eventually
+                    # consistent (and a paused sandbox can disappear from an
+                    # inventory page). Preserve the last proven route and
+                    # generation fence while reconciliation retries.
+                    await self.store.set_sandbox_observed_state(
+                        sandbox_id,
+                        observed_state="degraded",
+                        expected_generation=generation,
+                        expected_observed_state=record.observed_state,
+                        last_failure="provider_not_ready",
+                        reconcile_after=time.time() + 1.0,
+                    )
+                    return
+                endpoint = await self._wait_until_runtime_ready(sandbox_id)
+                await self._publish_running_observation(
+                    sandbox_id,
+                    record,
+                    status,
+                    provider_id=record.provider_id,
+                    instance_id=endpoint.instance_id or record.instance_id,
+                )
+        except (ProviderError, HTTPException) as exc:
+            current = await self.store.get_sandbox(sandbox_id)
+            if current is None or current.observed_generation != generation:
+                return
+            # Provider reads are observations, not terminal mutations. Even a
+            # read-side 404 can be eventual (E2B explicitly exhibits this for
+            # connect/list). Only an explicit exact-ID purge/delete may clear
+            # the durable generation fence.
+            await self.store.set_sandbox_observed_state(
+                sandbox_id,
+                observed_state="degraded",
+                expected_generation=generation,
+                expected_observed_state=current.observed_state,
+                last_failure=getattr(exc, "code", type(exc).__name__),
+                reconcile_after=time.time() + 1.0,
+            )
+
+    async def close(self) -> None:
+        tasks = list(self._failure_tasks.values())
+        for task in tasks:
+            task.cancel()
+        if tasks:
+            await asyncio.gather(*tasks, return_exceptions=True)
+        self._failure_tasks.clear()
 
     @property
     def capacity_policy(self) -> ProviderCapacityPolicy | None:
@@ -158,6 +495,23 @@ class SandboxLifecycleManager:
         runtime_request = SandboxEnsureRequest(
             env={**request.env, **settings.agentbox_static_runtime_env}
         )
+        current = await self.store.get_sandbox(sandbox_id)
+        if (
+            current is not None
+            and current.desired_state == "present"
+            and current.env
+            == {
+                key: value
+                for key, value in runtime_request.env.items()
+                if key in settings.agentbox_state_durable_env_key_set
+            }
+            and current.provider_id is not None
+            and current.observed_state == "running"
+            and current.observed_generation == current.desired_generation
+            and current.status_data is not None
+            and current.endpoint_data
+        ):
+            return self._status_from_record(current)
         # Lifecycle claims are foreign-keyed to the sandbox row. Create only
         # defaults before claiming; the desired-state upsert itself remains
         # inside the claim below.
@@ -178,6 +532,22 @@ class SandboxLifecycleManager:
                 # provider generation. Don't treat its empty environment as a
                 # durable-env change that requires deleting compute.
                 previous = None
+            if (
+                previous is not None
+                and previous.desired_state == "present"
+                and previous.env
+                == {
+                    key: value
+                    for key, value in runtime_request.env.items()
+                    if key in settings.agentbox_state_durable_env_key_set
+                }
+                and previous.provider_id is not None
+                and previous.observed_state == "running"
+                and previous.observed_generation == previous.desired_generation
+                and previous.status_data is not None
+                and previous.endpoint_data
+            ):
+                return self._status_from_record(previous)
             if (
                 previous is not None
                 and previous.env != runtime_request.env
@@ -209,6 +579,12 @@ class SandboxLifecycleManager:
                             retryable=True,
                             status_code=409,
                         )
+                # Mixed-version managers used generation zero for runtime
+                # sessions. Environment replacement is an exact provider
+                # generation boundary, so no session or activity lease from
+                # either the old or legacy generation may be promoted into the
+                # replacement.
+                await self.store.delete_sandbox_sessions(sandbox_id)
                 # Publish the new environment only after exact deletion is
                 # confirmed. A failed purge leaves the old request intact.
                 previous = None
@@ -240,6 +616,42 @@ class SandboxLifecycleManager:
         )
         record = await self.store.upsert_sandbox(sandbox_id, runtime_request)
         return await self._ensure_claimed(sandbox_id, previous, record)
+
+    async def _reconcile_present_generation(
+        self,
+        expected: SandboxRecord,
+    ) -> SandboxInternalStatus | None:
+        """Repair only the exact present generation observed by reconciliation.
+
+        Provider inventory and database records are collected before individual
+        lifecycle claims are acquired. A DELETE (or an explicit replacement
+        ENSURE) may therefore complete while reconciliation is still processing
+        that snapshot. Re-entering through the public ``ensure`` path would turn
+        the stale snapshot back into desired state and could recreate a sandbox
+        immediately after deletion. Revalidate the durable generation and exact
+        provider identity under the lifecycle fence instead.
+        """
+
+        try:
+            async with self.claim(expected.sandbox_id, "reconcile"):
+                current = await self.store.get_sandbox(expected.sandbox_id)
+                if (
+                    current is None
+                    or current.desired_state != "present"
+                    or current.desired_generation != expected.desired_generation
+                    or current.provider_id != expected.provider_id
+                    or current.instance_id != expected.instance_id
+                ):
+                    return None
+                return await self._ensure_claimed(
+                    expected.sandbox_id,
+                    current,
+                    current,
+                )
+        except ProviderError as exc:
+            if exc.code == "sandbox_not_found":
+                return None
+            raise
 
     async def _ensure_claimed(
         self,
@@ -322,6 +734,8 @@ class SandboxLifecycleManager:
             and status.ready
             and record.provider_id is not None
             and record.observed_generation == record.desired_generation
+            and record.observed_state == "running"
+            and record.endpoint_data is not None
         ):
             # This exact durable generation already passed bootstrap and both
             # runtime readiness gates. A repeated ensure (for example session
@@ -498,20 +912,13 @@ class SandboxLifecycleManager:
             instance_id = endpoint.instance_id or (
                 managed.instance_id if managed is not None else None
             )
-            observed = await self.store.set_sandbox_observation(
+            await self._publish_running_observation(
                 sandbox_id,
-                provider_name=self.provider.provider_name,
+                record,
+                status,
                 provider_id=provider_id,
                 instance_id=instance_id,
-                observed_generation=record.desired_generation,
             )
-            if observed is None:
-                raise ProviderError(
-                    "Sandbox desired generation changed during create",
-                    code="provider_observation_unknown",
-                    retryable=True,
-                    status_code=409,
-                )
             if cancelled is not None:
                 raise cancelled
             return status
@@ -563,9 +970,7 @@ class SandboxLifecycleManager:
             if row.sandbox_id == sandbox_id
         ]
         discoveries = [
-            row
-            for row in all_allocations
-            if row.allocation_id.startswith("provider:")
+            row for row in all_allocations if row.allocation_id.startswith("provider:")
         ]
         if discoveries:
             raise ProviderError(
@@ -839,30 +1244,69 @@ class SandboxLifecycleManager:
     async def suspend(self, sandbox_id: str) -> bool:
         if await self.store.get_sandbox(sandbox_id) is None:
             return False
-        async with self.claim(sandbox_id, "suspend"):
-            record = await self.store.get_sandbox(sandbox_id)
+        async with self.claim(sandbox_id, "suspend") as claim:
+            current = await self.store.get_sandbox(sandbox_id)
+            if (
+                current is not None
+                and current.desired_state == "suspended"
+                and current.observed_state == "suspending"
+                and current.provider_id is not None
+            ):
+                return await self._suspend_claimed(current, claim)
+            record = await self.store.begin_sandbox_suspend(
+                sandbox_id,
+                idle_timeout_seconds=0,
+                require_no_sessions=False,
+            )
             if record is None or record.provider_id is None:
                 return False
-            return await self._suspend_claimed(record)
+            return await self._suspend_claimed(record, claim)
 
     async def suspend_if_idle(self, sandbox_id: str) -> bool:
         """Fence new activity, recheck idleness, then release compute."""
 
-        async with self.claim(sandbox_id, "idle-suspend"):
-            candidates = {
-                record.sandbox_id: record
-                for record in await self.store.idle_sandboxes(
-                    settings.agentbox_sandbox_idle_timeout_seconds
-                )
-            }
-            record = candidates.get(sandbox_id)
-            if record is None or record.desired_state != "present":
+        async with self.claim(sandbox_id, "idle-suspend") as claim:
+            record = await self.store.begin_sandbox_suspend(
+                sandbox_id,
+                idle_timeout_seconds=settings.agentbox_sandbox_idle_timeout_seconds,
+            )
+            if record is None:
                 return False
-            return await self._suspend_claimed(record)
+            return await self._suspend_claimed(record, claim)
 
-    async def _suspend_claimed(self, record) -> bool:
+    async def finalize_observed_suspension(self, sandbox_id: str) -> bool:
+        """Publish a provider-confirmed stopped state after migration/restart."""
+
+        async with self.claim(sandbox_id, "observe-suspended") as claim:
+            record = await self.store.get_sandbox(sandbox_id)
+            if (
+                record is None
+                or record.desired_state != "suspended"
+                or record.provider_id is None
+            ):
+                return False
+            policy = self.capacity_policy
+            return (
+                await self.store.finalize_sandbox_suspend(
+                    sandbox_id,
+                    expected_provider_id=record.provider_id,
+                    expected_desired_generation=record.desired_generation,
+                    previous_observed_generation=record.observed_generation,
+                    claim_id=claim.claim_id,
+                    claim_owner=self.owner,
+                    provider_scope=policy.scope if policy is not None else None,
+                )
+                is not None
+            )
+
+    async def _suspend_claimed(
+        self,
+        record: SandboxRecord,
+        claim: LifecycleClaim,
+    ) -> bool:
         from agentbox.api.lifecycle import release_sandbox_compute
 
+        assert record.provider_id is not None
         if record.provider_id is not None and isinstance(
             self.provider, SandboxAdoptionProvider
         ):
@@ -873,13 +1317,23 @@ class SandboxLifecycleManager:
             self.provider,
             record.sandbox_id,
         )
-        await self._release_sandbox_allocations(
+        policy = self.capacity_policy
+        finalized = await self.store.finalize_sandbox_suspend(
             record.sandbox_id,
-            provider_id=record.provider_id,
-            include_reservations=True,
+            expected_provider_id=record.provider_id,
+            expected_desired_generation=record.desired_generation,
+            previous_observed_generation=record.observed_generation,
+            claim_id=claim.claim_id,
+            claim_owner=self.owner,
+            provider_scope=policy.scope if policy is not None else None,
         )
-        await self.store.delete_sandbox_sessions(record.sandbox_id)
-        await self.store.mark_pod_stopped(record.sandbox_id)
+        if finalized is None:
+            raise ProviderError(
+                "Sandbox changed while suspension was being finalized",
+                code="lifecycle_changed",
+                retryable=True,
+                status_code=409,
+            )
         return released
 
     async def delete_session(self, sandbox_id: str, session_id: str) -> bool:
@@ -930,56 +1384,108 @@ class SandboxLifecycleManager:
             return await self.store.delete_session(sandbox_id, session_id) or deleted
 
     async def heartbeat_sandbox(self, sandbox_id: str) -> bool:
-        record = await self.store.get_sandbox(sandbox_id)
-        if record is None or record.desired_state != "present":
-            return False
-        async with self.claim(sandbox_id, "sandbox-heartbeat"):
-            active = await self.store.mark_sandbox_active(
-                sandbox_id,
-                owner=self.owner,
-            )
-            if active:
-                await self.renew_provider_lease(sandbox_id)
-            return active
+        return await self.store.mark_sandbox_active(sandbox_id, owner=self.owner)
 
     async def heartbeat_session(self, sandbox_id: str, session_id: str) -> bool:
-        record = await self.store.get_sandbox(sandbox_id)
-        session = await self.store.get_session(sandbox_id, session_id)
-        if record is None or record.desired_state != "present" or session is None:
-            return False
-        async with self.claim(sandbox_id, "session-heartbeat"):
-            active = await self.store.touch_session(
-                sandbox_id,
-                session_id,
-                owner=self.owner,
-            )
-            if active:
-                await self.renew_provider_lease(sandbox_id)
-            return active
+        return await self.store.touch_session(
+            sandbox_id,
+            session_id,
+            owner=self.owner,
+        )
 
-    async def renew_provider_lease(self, sandbox_id: str) -> None:
+    async def renew_provider_lease(
+        self,
+        sandbox_id: str,
+        provider_id: str,
+    ) -> None:
         """Extend provider compute lifetime when the adapter exposes the hook."""
 
         if isinstance(self.provider, SandboxLeaseProvider):
-            await self.provider.renew_lease(sandbox_id)
-
-    async def bind_exact_generation_claimed(self, record: SandboxRecord) -> None:
-        """Bind provider calls to durable identity while lifecycle is claimed."""
-
-        if record.provider_id is None:
-            return
-        if record.provider_name not in {None, self.provider.provider_name}:
-            raise ProviderError(
-                "Sandbox belongs to a different provider",
-                code="provider_mismatch",
-                status_code=409,
+            renew = self.provider.renew_lease
+            try:
+                parameters = inspect.signature(renew).parameters.values()
+            except (TypeError, ValueError):
+                parameters = ()
+            supports_exact_identity = any(
+                parameter.name == "provider_id"
+                or parameter.kind is inspect.Parameter.VAR_KEYWORD
+                for parameter in parameters
             )
-        if not isinstance(self.provider, SandboxAdoptionProvider):
+            if supports_exact_identity:
+                await renew(sandbox_id, provider_id=provider_id)
+            else:
+                # Compatibility for third-party provider plugins implementing
+                # the pre-v5 optional hook. Built-in cloud providers always use
+                # the exact durable provider identity above.
+                await renew(sandbox_id)
+
+    async def renew_active_provider_leases(self) -> None:
+        """Best-effort provider backstop renewal outside the request path."""
+
+        if not isinstance(self.provider, SandboxLeaseProvider):
             return
-        # After manager restart, process-local provider caches are empty and
-        # eventually consistent inventory may omit the sandbox. Reconnect only
-        # the exact durable provider ID before any session/app request.
-        await self.provider.adopt(record.sandbox_id, record.provider_id)
+        active_cutoff = time.time() - settings.agentbox_activity_lease_ttl_seconds
+        candidates: list[SandboxRecord] = []
+        for record in await self.store.list_sandboxes():
+            if (
+                record.desired_state != "present"
+                or record.observed_state not in {"running", "degraded"}
+                or record.observed_generation != record.desired_generation
+                or record.provider_id is None
+            ):
+                continue
+            has_active_lease = await self.store.has_active_activity_lease(
+                record.sandbox_id
+            )
+            if not has_active_lease and (
+                record.last_active_at is None or record.last_active_at < active_cutoff
+            ):
+                continue
+            candidates.append(record)
+
+        semaphore = asyncio.Semaphore(4)
+
+        async def renew(record: SandboxRecord) -> None:
+            async with semaphore:
+                fence = await self.store.acquire_activity_lease(
+                    record.sandbox_id,
+                    session_id=None,
+                    operation="provider-lease-renewal",
+                    owner=self.owner,
+                    ttl_seconds=settings.agentbox_activity_lease_ttl_seconds,
+                    touch_activity=False,
+                )
+                if fence is None:
+                    return
+                try:
+                    current = await self.store.get_sandbox(record.sandbox_id)
+                    if (
+                        current is None
+                        or current.provider_id is None
+                        or current.provider_id != record.provider_id
+                        or current.observed_generation != fence.sandbox_generation
+                        or current.desired_generation != fence.sandbox_generation
+                    ):
+                        return
+                    await self.renew_provider_lease(
+                        current.sandbox_id,
+                        current.provider_id,
+                    )
+                except (ProviderError, HTTPException) as exc:
+                    logger.warning(
+                        "agentbox_background_provider_lease_renewal_failed "
+                        "sandbox_id=%s error=%s",
+                        record.sandbox_id,
+                        exc,
+                    )
+                finally:
+                    await self.store.release_activity_lease(
+                        fence.lease_id,
+                        owner=self.owner,
+                    )
+
+        if candidates:
+            await asyncio.gather(*(renew(record) for record in candidates))
 
     async def delete(self, sandbox_id: str) -> bool:
         # Always fence DELETE, including repeated deletes without a durable
@@ -1008,6 +1514,7 @@ class SandboxLifecycleManager:
                     else:
                         raise
                 deleted = await self._purge_remaining_managed(sandbox_id) or deleted
+                await self._clear_confirmed_local_orphans(sandbox_id)
             deleted = await self._purge_storage(sandbox_id) or deleted
             await self._release_sandbox_allocations(
                 sandbox_id,
@@ -1015,6 +1522,38 @@ class SandboxLifecycleManager:
             )
             await self.store.delete_sandbox(sandbox_id)
             return deleted
+
+    async def _clear_confirmed_local_orphans(self, sandbox_id: str) -> None:
+        """Remove stale local-provider fences after explicit deletion.
+
+        Cloud adapters expose ``purge_managed`` so deletion remains bound to
+        an exact durable provider generation. Local adapters instead own one
+        deterministic object per logical sandbox ID. Once their synchronous
+        inventory confirms that object is gone, any orphan observation for the
+        same logical ID is necessarily stale and must not block recreation.
+        """
+
+        if isinstance(self.provider, SandboxManagedPurgeProvider):
+            return
+        if any(
+            item.ref.sandbox_id == sandbox_id
+            for item in await self.provider.list_managed()
+        ):
+            raise ProviderError(
+                "Provider compute remains after explicit deletion",
+                code="provider_cleanup_outcome_unknown",
+                retryable=True,
+                status_code=503,
+                headers={"Retry-After": "1"},
+            )
+        for orphan in await self.store.list_orphans(
+            self.provider.provider_name,
+            sandbox_id=sandbox_id,
+        ):
+            await self.store.clear_orphan(
+                orphan.provider_name,
+                orphan.provider_id,
+            )
 
     async def _purge_cloud_generations_for_delete(
         self,
@@ -1282,6 +1821,24 @@ class SandboxLifecycleManager:
                             await self.delete(record.sandbox_id)
                         elif exact_item is not None and exact_item.status.ready:
                             await self.suspend(record.sandbox_id)
+                        elif (
+                            exact_item is not None
+                            and record.observed_state != "suspended"
+                        ):
+                            await self.finalize_observed_suspension(record.sandbox_id)
+                    elif (
+                        record.observed_state in {"running", "degraded"}
+                        and record.last_failure is not None
+                        and (
+                            record.reconcile_after is None
+                            or record.reconcile_after <= now
+                        )
+                    ):
+                        await self.signal_route_failure(
+                            record.sandbox_id,
+                            generation=record.observed_generation,
+                            reason=record.last_failure or "background_reconcile",
+                        )
                     elif (
                         record.provider_id is not None
                         and exact_item is None
@@ -1293,26 +1850,25 @@ class SandboxLifecycleManager:
                     elif (
                         exact_item is None
                         or record.observed_generation != record.desired_generation
+                        or record.observed_state not in {"running", "degraded"}
+                        or record.endpoint_data is None
                     ):
-                        await self.ensure(
-                            record.sandbox_id,
-                            record.to_ensure_request(),
-                        )
+                        await self._reconcile_present_generation(record)
                 except ProviderError as exc:
-                    if exc.code == "lifecycle_busy":
+                    if exc.code in {"lifecycle_busy", "sandbox_not_found"}:
                         logger.debug(
                             "AgentBox reconciliation skipped busy lifecycle; "
                             "sandbox_id=%s",
                             record.sandbox_id,
                         )
                         continue
-                    if exc.code in _OUTCOME_UNKNOWN_CODES:
-                        # One unresolved cloud create/delete must remain fenced,
-                        # but it must not keep the manager from serving every
-                        # other sandbox. The periodic reconciler will retry this
-                        # record after a later provider inventory pass.
+                    if exc.retryable or exc.code in _OUTCOME_UNKNOWN_CODES:
+                        # One unavailable or unresolved provider generation
+                        # remains durably fenced, but it must not keep the
+                        # manager from serving every other sandbox. A later
+                        # periodic pass retries this record.
                         logger.warning(
-                            "AgentBox reconciliation deferred unresolved provider "
+                            "AgentBox reconciliation deferred retryable provider "
                             "outcome; sandbox_id=%s code=%s",
                             record.sandbox_id,
                             exc.code,

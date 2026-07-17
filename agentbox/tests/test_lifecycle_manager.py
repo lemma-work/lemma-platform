@@ -37,6 +37,8 @@ class FakeLifecycleProvider:
         self.stopped: set[str] = set()
         self.generation_tokens: dict[str, str] = {}
         self.deleted_sessions: list[tuple[str, str]] = []
+        self.status_count = 0
+        self.endpoint_count = 0
 
     @property
     def capacity_policy(self) -> ProviderCapacityPolicy:
@@ -52,6 +54,7 @@ class FakeLifecycleProvider:
         return self._status(sandbox_id, ready=True)
 
     async def get_status(self, sandbox_id):
+        self.status_count += 1
         return self._status(
             sandbox_id,
             ready=sandbox_id in self.objects and sandbox_id not in self.stopped,
@@ -84,6 +87,7 @@ class FakeLifecycleProvider:
         ]
 
     async def resolve_endpoint(self, sandbox_id, app, *, protocol="http"):
+        self.endpoint_count += 1
         del app, protocol
         return SandboxEndpoint(
             base_url="http://runtime.test",
@@ -121,6 +125,20 @@ class FakeLifecycleProvider:
 
 
 class LeaseLifecycleProvider(FakeLifecycleProvider):
+    def __init__(self) -> None:
+        super().__init__()
+        self.lease_renewals: list[str] = []
+
+    async def renew_lease(
+        self, sandbox_id: str, *, provider_id: str | None = None
+    ) -> None:
+        assert provider_id == self.objects[sandbox_id]
+        self.lease_renewals.append(sandbox_id)
+
+
+class LegacyLeaseLifecycleProvider(FakeLifecycleProvider):
+    """Provider plugin implementing the optional hook from before v5."""
+
     def __init__(self) -> None:
         super().__init__()
         self.lease_renewals: list[str] = []
@@ -229,6 +247,22 @@ class AmbiguousLifecycleProvider(FakeLifecycleProvider):
         return True
 
 
+class PartiallyUnavailableAdoptionProvider(AmbiguousLifecycleProvider):
+    def __init__(self) -> None:
+        super().__init__()
+        self.unavailable: set[str] = set()
+
+    async def adopt(self, sandbox_id: str, provider_id: str) -> bool:
+        if sandbox_id in self.unavailable:
+            raise ProviderError(
+                "exact provider generation is temporarily unavailable",
+                code="provider_adoption_unavailable",
+                retryable=True,
+                status_code=503,
+            )
+        return await super().adopt(sandbox_id, provider_id)
+
+
 class BootstrapLifecycleProvider(AmbiguousLifecycleProvider):
     def __init__(self) -> None:
         super().__init__()
@@ -237,6 +271,20 @@ class BootstrapLifecycleProvider(AmbiguousLifecycleProvider):
     async def bootstrap(self, sandbox_id, request) -> None:
         del sandbox_id, request
         self.bootstrap_count += 1
+
+
+class BlockingInspectionProvider(AmbiguousLifecycleProvider):
+    def __init__(self) -> None:
+        super().__init__()
+        self.block_inspection = False
+        self.inspection_started = asyncio.Event()
+        self.allow_inspection = asyncio.Event()
+
+    async def get_status(self, sandbox_id):
+        if self.block_inspection:
+            self.inspection_started.set()
+            await self.allow_inspection.wait()
+        return await super().get_status(sandbox_id)
 
 
 class EventuallyConsistentPurgeProvider(AmbiguousLifecycleProvider):
@@ -624,8 +672,250 @@ async def test_repeated_ensure_does_not_rebootstrap_observed_generation(tmp_path
         assert second.ready is True
         assert provider.create_count == 1
         assert provider.bootstrap_count == 1
+        assert provider.adopt_count == 0
+    finally:
+        await store.close()
+
+
+@pytest.mark.asyncio
+async def test_migrated_exact_generation_republishes_missing_routes(tmp_path):
+    provider = AmbiguousLifecycleProvider()
+    manager, _, store = await _manager(tmp_path, provider)
+    try:
+        record = await store.upsert_sandbox(
+            "sandbox",
+            SandboxEnsureRequest(env=settings.agentbox_static_runtime_env),
+        )
+        provider.objects["sandbox"] = "provider-sandbox"
+        provider.generation_tokens["sandbox"] = "migrated-generation"
+        identity = await store.set_sandbox_provider_identity(
+            "sandbox",
+            provider_name=provider.provider_name,
+            provider_id="provider-sandbox",
+            instance_id="provider-sandbox",
+            desired_generation=record.desired_generation,
+        )
+        assert identity is not None
+        with store._store._lock, store._store._conn:
+            store._store._conn.execute(
+                """
+                UPDATE sandboxes SET observed_generation = desired_generation,
+                    observed_state = 'starting', endpoint_json = NULL
+                WHERE sandbox_id = 'sandbox'
+                """
+            )
+
+        status = await manager.ensure("sandbox", SandboxEnsureRequest())
+
+        assert status.ready is True
+        repaired = await store.get_sandbox("sandbox")
+        assert repaired is not None
+        assert repaired.observed_state == "running"
+        assert repaired.endpoint_data is not None
+        assert provider.create_count == 0
         assert provider.adopt_count == 1
     finally:
+        await manager.close()
+        await store.close()
+
+
+@pytest.mark.asyncio
+async def test_database_status_and_warm_activity_never_call_provider(tmp_path):
+    provider = AmbiguousLifecycleProvider()
+    manager, _, store = await _manager(tmp_path, provider)
+    try:
+        await manager.ensure("sandbox", SandboxEnsureRequest())
+        status_calls = provider.status_count
+        endpoint_calls = provider.endpoint_count
+        adoption_calls = provider.adopt_count
+
+        status = await manager.database_status("sandbox")
+        assert status.ready is True
+        async with activity_lease(
+            store,
+            manager,
+            "sandbox",
+            session_id=None,
+            operation="warm-request",
+        ):
+            assert await manager.heartbeat_sandbox("sandbox") is True
+
+        assert provider.status_count == status_calls
+        assert provider.endpoint_count == endpoint_calls
+        assert provider.adopt_count == adoption_calls
+    finally:
+        await manager.close()
+        await store.close()
+
+
+@pytest.mark.asyncio
+async def test_activity_retries_when_lifecycle_claim_disappears_between_reads(
+    tmp_path,
+):
+    provider = AmbiguousLifecycleProvider()
+    manager, _, store = await _manager(tmp_path, provider)
+    try:
+        await manager.ensure("sandbox", SandboxEnsureRequest())
+        claim = await store.acquire_lifecycle_claim(
+            "sandbox",
+            operation="reconcile",
+            owner="other-manager",
+            ttl_seconds=60,
+        )
+        assert claim is not None
+
+        async def use_sandbox() -> None:
+            async with activity_lease(
+                store,
+                manager,
+                "sandbox",
+                session_id=None,
+                operation="request-after-reconcile",
+            ):
+                return
+
+        request = asyncio.create_task(use_sandbox())
+        await asyncio.sleep(0.05)
+        assert await store.release_lifecycle_claim(
+            claim.claim_id,
+            owner="other-manager",
+        )
+        await asyncio.wait_for(request, timeout=1)
+    finally:
+        await manager.close()
+        await store.close()
+
+
+@pytest.mark.asyncio
+async def test_database_status_does_not_report_stopped_before_suspend_finishes(
+    tmp_path,
+):
+    provider = AmbiguousLifecycleProvider()
+    manager, _, store = await _manager(tmp_path, provider)
+    try:
+        await manager.ensure("sandbox", SandboxEnsureRequest())
+        async with manager.claim("sandbox", "test-suspend"):
+            suspending = await store.begin_sandbox_suspend(
+                "sandbox",
+                idle_timeout_seconds=0,
+            )
+            assert suspending is not None
+            assert (await manager.database_status("sandbox")).status == "CREATING"
+            finalized = await store.mark_pod_stopped(
+                "sandbox",
+                expected_provider_id=suspending.provider_id,
+                expected_desired_generation=suspending.desired_generation,
+            )
+            assert finalized is not None
+        assert (await manager.database_status("sandbox")).status == "STOPPED"
+    finally:
+        await manager.close()
+        await store.close()
+
+
+@pytest.mark.asyncio
+async def test_concurrent_route_failures_singleflight_provider_inspection(tmp_path):
+    provider = BlockingInspectionProvider()
+    manager, _, store = await _manager(tmp_path, provider)
+    try:
+        await manager.ensure("sandbox", SandboxEnsureRequest())
+        provider.block_inspection = True
+
+        await asyncio.gather(
+            *(
+                manager.signal_route_failure(
+                    "sandbox",
+                    reason="provider_gateway_routing",
+                )
+                for _ in range(100)
+            )
+        )
+        await asyncio.wait_for(provider.inspection_started.wait(), timeout=1)
+        assert provider.status_count == 0
+        assert provider.adopt_count == 1
+        assert len(manager._failure_tasks) == 1
+        suspected = await store.get_sandbox("sandbox")
+        assert suspected is not None
+        assert suspected.observed_state == "running"
+        assert suspected.last_failure == "provider_gateway_routing"
+        # Concurrent work keeps using the last proven route while provider
+        # inspection is unresolved.
+        assert (await manager.database_endpoint("sandbox", "runtime")).base_url
+
+        task = manager._failure_tasks["sandbox"]
+        provider.allow_inspection.set()
+        await asyncio.wait_for(task, timeout=1)
+
+        record = await store.get_sandbox("sandbox")
+        assert record is not None
+        assert record.observed_state == "running"
+        assert record.last_failure is None
+        assert provider.status_count == 1
+        assert provider.adopt_count == 1
+    finally:
+        await manager.close()
+        await store.close()
+
+
+@pytest.mark.asyncio
+async def test_ambiguous_negative_route_inspection_never_erases_generation(tmp_path):
+    provider = AmbiguousLifecycleProvider()
+    manager, _, store = await _manager(tmp_path, provider)
+    try:
+        await manager.ensure("sandbox", SandboxEnsureRequest())
+        provider.stopped.add("sandbox")
+
+        await manager.signal_route_failure("sandbox", reason="gateway-miss")
+        task = manager._failure_tasks.get("sandbox")
+        if task is not None:
+            await asyncio.wait_for(task, timeout=1)
+
+        degraded = await store.get_sandbox("sandbox")
+        assert degraded is not None
+        assert degraded.observed_state == "degraded"
+        assert degraded.provider_id == "provider-sandbox"
+        assert degraded.endpoint_data is not None
+        assert degraded.last_failure == "provider_not_ready"
+        assert degraded.reconcile_after is not None
+        # Concurrent work retains the last proven, exact-generation route.
+        assert (await manager.database_endpoint("sandbox", "runtime")).base_url
+
+        provider.stopped.discard("sandbox")
+        await manager.signal_route_failure("sandbox", reason="retry")
+        task = manager._failure_tasks.get("sandbox")
+        if task is not None:
+            await asyncio.wait_for(task, timeout=1)
+        repaired = await store.get_sandbox("sandbox")
+        assert repaired is not None
+        assert repaired.observed_state == "running"
+        assert repaired.last_failure is None
+        assert repaired.provider_id == "provider-sandbox"
+    finally:
+        await manager.close()
+        await store.close()
+
+
+@pytest.mark.asyncio
+async def test_read_side_not_found_keeps_exact_generation_fenced(tmp_path):
+    provider = AmbiguousLifecycleProvider()
+    manager, _, store = await _manager(tmp_path, provider)
+    try:
+        await manager.ensure("sandbox", SandboxEnsureRequest())
+        del provider.objects["sandbox"]
+
+        await manager.signal_route_failure("sandbox", reason="gateway-miss")
+        task = manager._failure_tasks.get("sandbox")
+        if task is not None:
+            await asyncio.wait_for(task, timeout=1)
+
+        record = await store.get_sandbox("sandbox")
+        assert record is not None
+        assert record.observed_state == "degraded"
+        assert record.provider_id == "provider-sandbox"
+        assert record.endpoint_data is not None
+        assert record.reconcile_after is not None
+    finally:
+        await manager.close()
         await store.close()
 
 
@@ -655,6 +945,36 @@ async def test_reconcile_skips_sandbox_with_busy_lifecycle_claim(
 
         assert provider.create_count == 0
     finally:
+        await store.close()
+
+
+@pytest.mark.asyncio
+async def test_reconcile_isolates_one_retryable_provider_failure(tmp_path):
+    provider = PartiallyUnavailableAdoptionProvider()
+    manager, _, store = await _manager(tmp_path, provider)
+    try:
+        await manager.ensure("broken", SandboxEnsureRequest())
+        await manager.ensure("healthy", SandboxEnsureRequest())
+        provider.unavailable.add("broken")
+        with store._store._lock, store._store._conn:
+            store._store._conn.execute(
+                """
+                UPDATE sandboxes
+                SET observed_state = 'starting', endpoint_json = NULL
+                WHERE sandbox_id IN ('broken', 'healthy')
+                """
+            )
+
+        await manager.reconcile()
+
+        broken = await store.get_sandbox("broken")
+        healthy = await store.get_sandbox("healthy")
+        assert broken is not None and broken.observed_state == "starting"
+        assert broken.provider_id == "provider-broken"
+        assert healthy is not None and healthy.observed_state == "running"
+        assert healthy.endpoint_data is not None
+    finally:
+        await manager.close()
         await store.close()
 
 
@@ -724,9 +1044,7 @@ async def test_discovered_duplicate_allocation_cannot_protect_its_own_orphan(
 
         assert provider.objects == {"sandbox": "provider-sandbox"}
         assert provider.duplicates == {}
-        assert provider.purged == [
-            SandboxRef("sandbox", "provider-duplicate")
-        ]
+        assert provider.purged == [SandboxRef("sandbox", "provider-duplicate")]
         allocations = await store.list_provider_allocations("fake:test")
         assert [row.provider_id for row in allocations] == ["provider-sandbox"]
         assert await store.expired_orphans(0, inventory_started_at=time.time()) == []
@@ -754,9 +1072,7 @@ async def test_same_attempt_token_duplicate_retains_exact_orphan_id(tmp_path):
             provider.provider_name,
             sandbox_id="sandbox",
         )
-        assert [orphan.provider_id for orphan in orphans] == [
-            "provider-duplicate"
-        ]
+        assert [orphan.provider_id for orphan in orphans] == ["provider-duplicate"]
 
         # A later eventual-consistency omission cannot lose the exact ID.
         original_list = provider.list_managed
@@ -798,9 +1114,7 @@ async def test_durable_hidden_orphan_fences_create_until_exact_delete(tmp_path):
         provider.hide_inventory = True
         provider.purge_visible = True
         assert await manager.delete("sandbox") is True
-        assert provider.purge_attempts == [
-            SandboxRef("sandbox", "provider-hidden")
-        ]
+        assert provider.purge_attempts == [SandboxRef("sandbox", "provider-hidden")]
         assert (
             await store.list_orphans(
                 provider.provider_name,
@@ -812,6 +1126,37 @@ async def test_durable_hidden_orphan_fences_create_until_exact_delete(tmp_path):
         await manager.ensure("sandbox", SandboxEnsureRequest())
         assert provider.create_count == 1
     finally:
+        await store.close()
+
+
+@pytest.mark.asyncio
+async def test_local_delete_clears_stale_orphan_before_recreate(tmp_path):
+    provider = FakeLifecycleProvider()
+    manager, _, store = await _manager(tmp_path, provider)
+    try:
+        await manager.ensure("sandbox", SandboxEnsureRequest())
+        provider_id = provider.objects["sandbox"]
+        await store.observe_orphan(
+            provider.provider_name,
+            provider_id,
+            sandbox_id="sandbox",
+            observed_at=time.time(),
+        )
+
+        assert await manager.delete("sandbox") is True
+        assert (
+            await store.list_orphans(
+                provider.provider_name,
+                sandbox_id="sandbox",
+            )
+            == []
+        )
+
+        recreated = await manager.ensure("sandbox", SandboxEnsureRequest())
+        assert recreated.ready is True
+        assert provider.create_count == 2
+    finally:
+        await manager.close()
         await store.close()
 
 
@@ -959,6 +1304,32 @@ async def test_environment_replacement_purges_every_known_generation(tmp_path):
 
 
 @pytest.mark.asyncio
+async def test_environment_replacement_drops_old_runtime_sessions(tmp_path):
+    manager, _, store = await _manager(tmp_path)
+    try:
+        await manager.ensure(
+            "sandbox",
+            SandboxEnsureRequest(env={"LEMMA_BASE_URL": "https://old.example"}),
+        )
+        await store.upsert_session(
+            "sandbox",
+            "legacy",
+            cwd="/workspace/old",
+            env_keys=[],
+        )
+
+        await manager.ensure(
+            "sandbox",
+            SandboxEnsureRequest(env={"LEMMA_BASE_URL": "https://new.example"}),
+        )
+
+        assert await store.get_session("sandbox", "legacy") is None
+        assert not await store.has_active_activity_lease("sandbox")
+    finally:
+        await store.close()
+
+
+@pytest.mark.asyncio
 async def test_delete_purges_every_generation_with_same_attempt_token(tmp_path):
     provider = DuplicateInventoryProvider()
     manager, _, store = await _manager(tmp_path, provider)
@@ -1011,7 +1382,10 @@ async def test_concurrent_managers_create_only_one_provider_generation(tmp_path)
         )
         assert all(status.ready for status in statuses)
         assert provider.create_count == 1
-        assert provider.adopt_count == 1
+        # The losing manager re-reads the authoritative running generation
+        # after acquiring the distributed claim; it must not touch the
+        # provider merely to return an already-published result.
+        assert provider.adopt_count == 0
         assert set(provider.objects) == {"sandbox"}
     finally:
         await store.close()
@@ -1085,8 +1459,15 @@ async def test_suspend_resume_preserves_identity_and_delete_purges(tmp_path):
     manager, provider, store = await _manager(tmp_path)
     try:
         await manager.ensure("sandbox", SandboxEnsureRequest())
+        await store.upsert_session(
+            "sandbox",
+            "explicitly-closed-session",
+            cwd="/workspace",
+            env_keys=[],
+        )
         provider_id = (await store.get_sandbox("sandbox")).provider_id
         assert await manager.suspend("sandbox") is True
+        assert await store.get_session("sandbox", "explicitly-closed-session") is None
         suspended = await store.get_sandbox("sandbox")
         assert suspended is not None and suspended.desired_state == "suspended"
         assert suspended.idle_since_at is not None
@@ -1288,6 +1669,7 @@ async def test_missing_and_suspended_heartbeats_fail_without_claim_wait(tmp_path
         await store.upsert_session("sandbox", "session", cwd="/workspace", env_keys=[])
         assert await manager.heartbeat_sandbox("sandbox") is True
         assert await manager.heartbeat_session("sandbox", "session") is True
+        assert await store.delete_session("sandbox", "session") is True
         await manager.suspend("sandbox")
         assert await manager.heartbeat_sandbox("sandbox") is False
         assert await manager.heartbeat_session("sandbox", "session") is False
@@ -1296,7 +1678,7 @@ async def test_missing_and_suspended_heartbeats_fail_without_claim_wait(tmp_path
 
 
 @pytest.mark.asyncio
-async def test_heartbeats_renew_optional_provider_lease(tmp_path):
+async def test_heartbeats_are_db_only_and_background_renews_provider_lease(tmp_path):
     provider = LeaseLifecycleProvider()
     manager, _, store = await _manager(tmp_path, provider)
     try:
@@ -1305,7 +1687,9 @@ async def test_heartbeats_renew_optional_provider_lease(tmp_path):
 
         assert await manager.heartbeat_sandbox("sandbox") is True
         assert await manager.heartbeat_session("sandbox", "session") is True
-        assert provider.lease_renewals == ["sandbox", "sandbox"]
+        assert provider.lease_renewals == []
+        await manager.renew_active_provider_leases()
+        assert provider.lease_renewals == ["sandbox"]
     finally:
         await store.close()
 
@@ -1322,7 +1706,22 @@ async def test_heartbeats_do_not_require_provider_lease_hook(tmp_path):
 
 
 @pytest.mark.asyncio
-async def test_activity_lease_renews_provider_immediately(tmp_path):
+async def test_background_lease_renewal_supports_legacy_provider_hook(tmp_path):
+    provider = LegacyLeaseLifecycleProvider()
+    manager, _, store = await _manager(tmp_path, provider)
+    try:
+        await manager.ensure("sandbox", SandboxEnsureRequest())
+        assert await manager.heartbeat_sandbox("sandbox") is True
+
+        await manager.renew_active_provider_leases()
+
+        assert provider.lease_renewals == ["sandbox"]
+    finally:
+        await store.close()
+
+
+@pytest.mark.asyncio
+async def test_activity_lease_is_db_only_and_background_renews_provider(tmp_path):
     provider = LeaseLifecycleProvider()
     manager, _, store = await _manager(tmp_path, provider)
     try:
@@ -1334,13 +1733,55 @@ async def test_activity_lease_renews_provider_immediately(tmp_path):
             session_id=None,
             operation="test",
         ):
-            assert provider.lease_renewals == ["sandbox"]
+            assert provider.lease_renewals == []
+        await manager.renew_active_provider_leases()
+        assert provider.lease_renewals == ["sandbox"]
     finally:
         await store.close()
 
 
 @pytest.mark.asyncio
-async def test_activity_after_manager_restart_adopts_exact_provider_id(tmp_path):
+async def test_long_running_lease_renews_provider_without_touching_user_activity(
+    tmp_path,
+):
+    provider = LeaseLifecycleProvider()
+    manager, _, store = await _manager(tmp_path, provider)
+    try:
+        await manager.ensure("sandbox", SandboxEnsureRequest())
+        lease = await store.acquire_activity_lease(
+            "sandbox",
+            session_id=None,
+            operation="long-function",
+            owner=manager.owner,
+            ttl_seconds=600,
+        )
+        assert lease is not None
+        old_activity = time.time() - 300
+        with store._store._lock, store._store._conn:
+            store._store._conn.execute(
+                "UPDATE sandboxes SET last_active_at = ? WHERE sandbox_id = ?",
+                (old_activity, "sandbox"),
+            )
+
+        await manager.renew_active_provider_leases()
+
+        assert provider.lease_renewals == ["sandbox"]
+        record = await store.get_sandbox("sandbox")
+        assert record is not None
+        assert record.last_active_at == old_activity
+        assert await store.release_activity_lease(
+            lease.lease_id,
+            owner=manager.owner,
+        )
+    finally:
+        await manager.close()
+        await store.close()
+
+
+@pytest.mark.asyncio
+async def test_activity_after_manager_restart_uses_db_identity_without_adoption(
+    tmp_path,
+):
     provider = AmbiguousLifecycleProvider()
     manager, _, store = await _manager(tmp_path, provider)
     try:
@@ -1361,7 +1802,7 @@ async def test_activity_after_manager_restart_adopts_exact_provider_id(tmp_path)
             session_id=None,
             operation="test-after-restart",
         ):
-            assert provider.adopt_count == 1
+            assert provider.adopt_count == 0
             assert provider.objects["sandbox"] == provider_id
 
         assert provider.create_count == 1
@@ -1370,7 +1811,7 @@ async def test_activity_after_manager_restart_adopts_exact_provider_id(tmp_path)
 
 
 @pytest.mark.asyncio
-async def test_activity_lease_retries_after_provider_renewal_failure(monkeypatch):
+async def test_activity_lease_renewal_never_calls_provider(monkeypatch):
     renewed_twice = asyncio.Event()
 
     class RenewingStore:
@@ -1419,7 +1860,29 @@ async def test_activity_lease_retries_after_provider_renewal_failure(monkeypatch
     renewal.cancel()
     with pytest.raises(asyncio.CancelledError):
         await renewal
-    assert manager.calls >= 2
+    assert manager.calls == 0
+
+
+@pytest.mark.asyncio
+async def test_stale_reconcile_snapshot_cannot_recreate_deleted_sandbox(tmp_path):
+    manager, provider, store = await _manager(tmp_path)
+    try:
+        await manager.ensure("sandbox", SandboxEnsureRequest())
+        stale_record = await store.get_sandbox("sandbox")
+        assert stale_record is not None
+
+        assert await manager.delete("sandbox") is True
+        creates = provider.create_count
+
+        reconciled = await manager._reconcile_present_generation(stale_record)
+
+        assert reconciled is None
+        assert await store.get_sandbox("sandbox") is None
+        assert "sandbox" not in provider.objects
+        assert provider.create_count == creates
+    finally:
+        await manager.close()
+        await store.close()
 
 
 @pytest.mark.asyncio

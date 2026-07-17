@@ -16,6 +16,7 @@ from .models import (
     ActivityLease,
     DesiredSandboxState,
     LifecycleClaim,
+    ObservedSandboxState,
     OrphanCandidate,
     ProviderAllocation,
     SandboxRecord,
@@ -93,12 +94,36 @@ class SQLiteStateStore:
                             "PRAGMA table_info(sandboxes)"
                         ).fetchall()
                     }
+                    existing_session_columns = {
+                        str(row["name"])
+                        for row in store._conn.execute(
+                            "PRAGMA table_info(sessions)"
+                        ).fetchall()
+                    }
+                    existing_lease_columns = {
+                        str(row["name"])
+                        for row in store._conn.execute(
+                            "PRAGMA table_info(agentbox_activity_leases)"
+                        ).fetchall()
+                    }
                     for statement in statements:
                         if version == 2:
                             column_name = (
                                 statement.split("ADD COLUMN", 1)[1].strip().split()[0]
                             )
                             if column_name in existing_sandbox_columns:
+                                continue
+                        if version == 5 and "ADD COLUMN" in statement:
+                            table_name = statement.split()[2]
+                            column_name = (
+                                statement.split("ADD COLUMN", 1)[1].strip().split()[0]
+                            )
+                            existing = {
+                                "sandboxes": existing_sandbox_columns,
+                                "sessions": existing_session_columns,
+                                "agentbox_activity_leases": existing_lease_columns,
+                            }.get(table_name, set())
+                            if column_name in existing:
                                 continue
                         store._conn.execute(statement)
                     store._conn.execute(
@@ -340,6 +365,9 @@ class SQLiteStateStore:
         provider_id: str,
         instance_id: str | None,
         observed_generation: int,
+        observed_state: ObservedSandboxState,
+        status_data: dict[str, object] | None,
+        endpoint_data: dict[str, object] | None,
     ) -> SandboxRecord | None:
         store = self._store
         now = time.time()
@@ -348,6 +376,8 @@ class SQLiteStateStore:
                 """
                 UPDATE sandboxes SET provider_name = ?, provider_id = ?,
                     instance_id = ?, observed_generation = ?,
+                    observed_state = ?, status_json = ?, endpoint_json = ?,
+                    last_failure = NULL, reconcile_after = NULL,
                     last_observed_at = ?, updated_at = ?
                 WHERE sandbox_id = ? AND desired_generation = ?
                 RETURNING *
@@ -357,6 +387,13 @@ class SQLiteStateStore:
                     provider_id,
                     instance_id,
                     observed_generation,
+                    observed_state,
+                    json.dumps(status_data, sort_keys=True)
+                    if status_data is not None
+                    else None,
+                    json.dumps(endpoint_data, sort_keys=True)
+                    if endpoint_data is not None
+                    else None,
                     now,
                     now,
                     sandbox_id,
@@ -373,6 +410,9 @@ class SQLiteStateStore:
         provider_id: str,
         instance_id: str | None,
         observed_generation: int,
+        observed_state: ObservedSandboxState = "running",
+        status_data: dict[str, object] | None = None,
+        endpoint_data: dict[str, object] | None = None,
     ) -> SandboxRecord | None:
         return await self._run(
             self._set_sandbox_observation,
@@ -381,6 +421,65 @@ class SQLiteStateStore:
             provider_id,
             instance_id,
             observed_generation,
+            observed_state,
+            status_data,
+            endpoint_data,
+        )
+
+    def _set_sandbox_observed_state(
+        self,
+        sandbox_id: str,
+        observed_state: ObservedSandboxState,
+        expected_generation: int,
+        expected_observed_state: ObservedSandboxState | None,
+        last_failure: str | None,
+        reconcile_after: float | None,
+    ) -> SandboxRecord | None:
+        store = self._store
+        now = time.time()
+        with store._lock, store._conn:
+            row = store._conn.execute(
+                """
+                UPDATE sandboxes SET observed_state = ?, last_failure = ?,
+                    reconcile_after = ?, last_observed_at = ?, updated_at = ?
+                WHERE sandbox_id = ? AND desired_state = 'present'
+                  AND desired_generation = ? AND observed_generation = ?
+                  AND (? IS NULL OR observed_state = ?)
+                RETURNING *
+                """,
+                (
+                    observed_state,
+                    last_failure,
+                    reconcile_after,
+                    now,
+                    now,
+                    sandbox_id,
+                    expected_generation,
+                    expected_generation,
+                    expected_observed_state,
+                    expected_observed_state,
+                ),
+            ).fetchone()
+        return store._record_from_row(row) if row else None
+
+    async def set_sandbox_observed_state(
+        self,
+        sandbox_id: str,
+        *,
+        observed_state: ObservedSandboxState,
+        expected_generation: int,
+        expected_observed_state: ObservedSandboxState | None = None,
+        last_failure: str | None = None,
+        reconcile_after: float | None = None,
+    ) -> SandboxRecord | None:
+        return await self._run(
+            self._set_sandbox_observed_state,
+            sandbox_id,
+            observed_state,
+            expected_generation,
+            expected_observed_state,
+            last_failure,
+            reconcile_after,
         )
 
     def _set_sandbox_provider_identity(
@@ -447,7 +546,9 @@ class SQLiteStateStore:
                 """
                 UPDATE sandboxes SET provider_name = NULL, provider_id = NULL,
                     instance_id = NULL, observed_generation = 0,
-                    last_observed_at = NULL, updated_at = ?
+                    observed_state = 'starting', status_json = NULL,
+                    endpoint_json = NULL, last_failure = NULL,
+                    reconcile_after = NULL, last_observed_at = NULL, updated_at = ?
                 WHERE sandbox_id = ? AND provider_id = ?
                   AND desired_generation = ?
                 RETURNING *
@@ -477,20 +578,87 @@ class SQLiteStateStore:
         *,
         cwd: str,
         env_keys: list[str],
-    ) -> SessionRecord:
-        record = await self._run(
-            self._store.upsert_session,
-            sandbox_id,
-            session_id,
-            cwd=cwd,
-            env_keys=env_keys,
-        )
-        await self._touch_sandbox_activity(sandbox_id)
-        return record
+        expected_generation: int | None = None,
+    ) -> SessionRecord | None:
+        def upsert() -> SessionRecord | None:
+            store = self._store
+            now = time.time()
+            with store._lock, store._conn:
+                sandbox = store._conn.execute(
+                    """
+                    SELECT observed_generation FROM sandboxes
+                    WHERE sandbox_id = ? AND desired_state = 'present'
+                      AND observed_state IN ('running', 'degraded')
+                      AND observed_generation = desired_generation
+                    """,
+                    (sandbox_id,),
+                ).fetchone()
+                if sandbox is None:
+                    return None
+                generation = int(sandbox["observed_generation"])
+                if (
+                    expected_generation is not None
+                    and generation != expected_generation
+                ):
+                    return None
+                claim = store._conn.execute(
+                    """
+                    SELECT 1 FROM agentbox_lifecycle_claims
+                    WHERE sandbox_id = ? AND expires_at > ?
+                      AND operation <> 'route-repair'
+                    """,
+                    (sandbox_id, now),
+                ).fetchone()
+                if claim is not None:
+                    return None
+                store._conn.execute(
+                    """
+                    INSERT INTO sessions (
+                        sandbox_id, session_id, cwd, env_keys_json,
+                        last_active_at, active_operations, created_at, updated_at,
+                        sandbox_generation
+                    ) VALUES (?, ?, ?, ?, ?, 0, ?, ?, ?)
+                    ON CONFLICT(sandbox_id, session_id) DO UPDATE SET
+                        cwd = excluded.cwd,
+                        env_keys_json = excluded.env_keys_json,
+                        last_active_at = excluded.last_active_at,
+                        sandbox_generation = excluded.sandbox_generation,
+                        updated_at = excluded.updated_at
+                    """,
+                    (
+                        sandbox_id,
+                        session_id,
+                        cwd,
+                        json.dumps(sorted(env_keys)),
+                        now,
+                        now,
+                        now,
+                        generation,
+                    ),
+                )
+                row = store._conn.execute(
+                    "SELECT * FROM sessions WHERE sandbox_id = ? AND session_id = ?",
+                    (sandbox_id, session_id),
+                ).fetchone()
+                store._conn.execute(
+                    """
+                    UPDATE sandboxes SET idle_since_at = NULL,
+                        last_active_at = ?, updated_at = ?
+                    WHERE sandbox_id = ?
+                    """,
+                    (now, now, sandbox_id),
+                )
+            if row is None:
+                return None
+            return store._session_from_row(row)
+
+        return await self._run(upsert)
 
     async def _touch_sandbox_activity(
         self, sandbox_id: str, owner: str | None = None
     ) -> bool:
+        del owner
+
         def touch() -> bool:
             store = self._store
             now = time.time()
@@ -500,14 +668,16 @@ class SQLiteStateStore:
                     UPDATE sandboxes SET idle_since_at = NULL,
                         last_active_at = ?, updated_at = ?
                     WHERE sandbox_id = ? AND desired_state = 'present'
+                      AND observed_state IN ('running', 'degraded')
+                      AND observed_generation = desired_generation
                       AND NOT EXISTS (
                         SELECT 1 FROM agentbox_lifecycle_claims c
                         WHERE c.sandbox_id = sandboxes.sandbox_id
                           AND c.expires_at > ?
-                          AND (? IS NULL OR c.owner <> ?)
+                          AND c.operation <> 'route-repair'
                       )
                     """,
-                    (now, now, sandbox_id, now, owner, owner),
+                    (now, now, sandbox_id, now),
                 )
                 return bool(cursor.rowcount)
 
@@ -516,35 +686,62 @@ class SQLiteStateStore:
     async def touch_session(
         self, sandbox_id: str, session_id: str, *, owner: str | None = None
     ) -> bool:
-        touched = await self._run(
+        return await self._run(
             self._touch_session_fenced,
             sandbox_id,
             session_id,
             owner,
         )
-        if touched:
-            await self._touch_sandbox_activity(sandbox_id, owner)
-        return touched
 
     def _touch_session_fenced(
         self, sandbox_id: str, session_id: str, owner: str | None
     ) -> bool:
+        del owner
         store = self._store
         now = time.time()
         with store._lock, store._conn:
             cursor = store._conn.execute(
                 """
-                UPDATE sessions SET last_active_at = ?, updated_at = ?
+                UPDATE sessions SET last_active_at = ?,
+                    sandbox_generation = (
+                        SELECT observed_generation FROM sandboxes s
+                        WHERE s.sandbox_id = sessions.sandbox_id
+                    ),
+                    updated_at = ?
                 WHERE sandbox_id = ? AND session_id = ?
-                  AND NOT EXISTS (
-                    SELECT 1 FROM agentbox_lifecycle_claims c
-                    WHERE c.sandbox_id = sessions.sandbox_id
-                      AND c.expires_at > ?
-                      AND (? IS NULL OR c.owner <> ?)
+                  AND EXISTS (
+                    SELECT 1 FROM sandboxes s
+                    WHERE s.sandbox_id = sessions.sandbox_id
+                      AND s.desired_state = 'present'
+                      AND s.observed_state IN ('running', 'degraded')
+                      AND s.observed_generation = s.desired_generation
+                      AND sessions.sandbox_generation IN (0, s.observed_generation)
+                      AND NOT EXISTS (
+                        SELECT 1 FROM agentbox_lifecycle_claims c
+                        WHERE c.sandbox_id = s.sandbox_id
+                          AND c.expires_at > ?
+                          AND c.operation <> 'route-repair'
+                      )
                   )
                 """,
-                (now, now, sandbox_id, session_id, now, owner, owner),
+                (now, now, sandbox_id, session_id, now),
             )
+            if cursor.rowcount:
+                store._conn.execute(
+                    """
+                    UPDATE sandboxes SET idle_since_at = NULL,
+                        last_active_at = ?, updated_at = ?
+                    WHERE sandbox_id = ? AND desired_state = 'present'
+                      AND observed_generation = desired_generation
+                      AND EXISTS (
+                        SELECT 1 FROM sessions x
+                        WHERE x.sandbox_id = sandboxes.sandbox_id
+                          AND x.session_id = ?
+                          AND x.sandbox_generation = sandboxes.observed_generation
+                      )
+                    """,
+                    (now, now, sandbox_id, session_id),
+                )
             return bool(cursor.rowcount)
 
     async def get_session(
@@ -675,28 +872,209 @@ class SQLiteStateStore:
     ) -> bool:
         return await self._touch_sandbox_activity(sandbox_id, owner)
 
-    def _mark_pod_stopped(self, sandbox_id: str) -> SandboxRecord | None:
+    def _begin_sandbox_suspend(
+        self,
+        sandbox_id: str,
+        idle_timeout_seconds: int,
+        require_no_sessions: bool,
+    ) -> SandboxRecord | None:
+        store = self._store
+        now = time.time()
+        cutoff = now - idle_timeout_seconds
+        with store._lock, store._conn:
+            row = store._conn.execute(
+                """
+                UPDATE sandboxes SET desired_state = 'suspended',
+                    desired_generation = desired_generation + 1,
+                    observed_state = 'suspending', updated_at = ?
+                WHERE sandbox_id = ? AND desired_state = 'present'
+                  AND observed_state = 'running'
+                  AND observed_generation = desired_generation
+                  AND last_active_at < ?
+                  AND (? = 0 OR NOT EXISTS (
+                    SELECT 1 FROM sessions x
+                    WHERE x.sandbox_id = sandboxes.sandbox_id
+                  ))
+                  AND NOT EXISTS (
+                    SELECT 1 FROM agentbox_activity_leases l
+                    WHERE l.sandbox_id = sandboxes.sandbox_id
+                      AND l.expires_at > ?
+                  )
+                RETURNING *
+                """,
+                (now, sandbox_id, cutoff, int(require_no_sessions), now),
+            ).fetchone()
+        return store._record_from_row(row) if row else None
+
+    async def begin_sandbox_suspend(
+        self,
+        sandbox_id: str,
+        *,
+        idle_timeout_seconds: int,
+        require_no_sessions: bool = True,
+    ) -> SandboxRecord | None:
+        return await self._run(
+            self._begin_sandbox_suspend,
+            sandbox_id,
+            idle_timeout_seconds,
+            require_no_sessions,
+        )
+
+    def _mark_pod_stopped(
+        self,
+        sandbox_id: str,
+        expected_provider_id: str | None,
+        expected_desired_generation: int | None,
+    ) -> SandboxRecord | None:
+        store = self._store
+        now = time.time()
+        with store._lock, store._conn:
+            if expected_provider_id is None and expected_desired_generation is None:
+                row = store._conn.execute(
+                    """
+                    UPDATE sandboxes SET idle_since_at = ?,
+                        observed_generation = CASE
+                            WHEN desired_state <> 'suspended'
+                            THEN desired_generation + 1
+                            ELSE desired_generation
+                        END,
+                        desired_generation = CASE
+                            WHEN desired_state <> 'suspended'
+                            THEN desired_generation + 1
+                            ELSE desired_generation
+                        END,
+                        desired_state = 'suspended', observed_state = 'suspended',
+                        updated_at = ?
+                    WHERE sandbox_id = ? RETURNING *
+                    """,
+                    (now, now, sandbox_id),
+                ).fetchone()
+                return store._record_from_row(row) if row else None
+            row = store._conn.execute(
+                """
+                UPDATE sandboxes SET idle_since_at = ?,
+                    desired_state = 'suspended',
+                    observed_state = 'suspended',
+                    observed_generation = desired_generation,
+                    updated_at = ?
+                WHERE sandbox_id = ? AND desired_state = 'suspended'
+                  AND (? IS NULL OR provider_id = ?)
+                  AND (? IS NULL OR desired_generation = ?)
+                RETURNING *
+                """,
+                (
+                    now,
+                    now,
+                    sandbox_id,
+                    expected_provider_id,
+                    expected_provider_id,
+                    expected_desired_generation,
+                    expected_desired_generation,
+                ),
+            ).fetchone()
+        return store._record_from_row(row) if row else None
+
+    async def mark_pod_stopped(
+        self,
+        sandbox_id: str,
+        *,
+        expected_provider_id: str | None = None,
+        expected_desired_generation: int | None = None,
+    ) -> SandboxRecord | None:
+        return await self._run(
+            self._mark_pod_stopped,
+            sandbox_id,
+            expected_provider_id,
+            expected_desired_generation,
+        )
+
+    def _finalize_sandbox_suspend(
+        self,
+        sandbox_id: str,
+        expected_provider_id: str,
+        expected_desired_generation: int,
+        previous_observed_generation: int,
+        claim_id: str,
+        claim_owner: str,
+        provider_scope: str | None,
+    ) -> SandboxRecord | None:
         store = self._store
         now = time.time()
         with store._lock, store._conn:
             row = store._conn.execute(
                 """
                 UPDATE sandboxes SET idle_since_at = ?,
-                    desired_state = 'suspended',
-                    desired_generation = CASE
-                        WHEN desired_state <> 'suspended'
-                        THEN desired_generation + 1
-                        ELSE desired_generation
-                    END,
+                    observed_state = 'suspended',
+                    observed_generation = desired_generation,
                     updated_at = ?
-                WHERE sandbox_id = ? RETURNING *
+                WHERE sandbox_id = ? AND desired_state = 'suspended'
+                  AND provider_id = ? AND desired_generation = ?
+                  AND EXISTS (
+                    SELECT 1 FROM agentbox_lifecycle_claims c
+                    WHERE c.sandbox_id = sandboxes.sandbox_id
+                      AND c.claim_id = ? AND c.owner = ? AND c.expires_at > ?
+                  )
+                RETURNING *
                 """,
-                (now, now, sandbox_id),
+                (
+                    now,
+                    now,
+                    sandbox_id,
+                    expected_provider_id,
+                    expected_desired_generation,
+                    claim_id,
+                    claim_owner,
+                    now,
+                ),
             ).fetchone()
-        return store._record_from_row(row) if row else None
+            if row is None:
+                return None
+            store._conn.execute(
+                """
+                DELETE FROM agentbox_activity_leases
+                WHERE sandbox_id = ? AND sandbox_generation IN (0, ?)
+                """,
+                (sandbox_id, previous_observed_generation),
+            )
+            store._conn.execute(
+                """
+                DELETE FROM sessions
+                WHERE sandbox_id = ? AND sandbox_generation IN (0, ?)
+                """,
+                (sandbox_id, previous_observed_generation),
+            )
+            if provider_scope is not None:
+                store._conn.execute(
+                    """
+                    DELETE FROM agentbox_provider_allocations
+                    WHERE provider_scope = ? AND sandbox_id = ?
+                      AND (provider_id = ? OR state = 'reserved')
+                    """,
+                    (provider_scope, sandbox_id, expected_provider_id),
+                )
+        return store._record_from_row(row)
 
-    async def mark_pod_stopped(self, sandbox_id: str) -> SandboxRecord | None:
-        return await self._run(self._mark_pod_stopped, sandbox_id)
+    async def finalize_sandbox_suspend(
+        self,
+        sandbox_id: str,
+        *,
+        expected_provider_id: str,
+        expected_desired_generation: int,
+        previous_observed_generation: int,
+        claim_id: str,
+        claim_owner: str,
+        provider_scope: str | None,
+    ) -> SandboxRecord | None:
+        return await self._run(
+            self._finalize_sandbox_suspend,
+            sandbox_id,
+            expected_provider_id,
+            expected_desired_generation,
+            previous_observed_generation,
+            claim_id,
+            claim_owner,
+            provider_scope,
+        )
 
     def _mark_idle_if_empty_locked(
         self, sandbox_id: str, now: float | None = None
@@ -737,6 +1115,7 @@ class SQLiteStateStore:
         operation: str,
         owner: str,
         ttl_seconds: float,
+        touch_activity: bool,
     ) -> ActivityLease | None:
         store = self._store
         now = time.time()
@@ -750,30 +1129,37 @@ class SQLiteStateStore:
             if session_id is None:
                 exists = store._conn.execute(
                     """
-                    SELECT 1 FROM sandboxes
+                    SELECT observed_generation FROM sandboxes
                     WHERE sandbox_id = ? AND desired_state = 'present'
+                      AND observed_state IN ('running', 'degraded')
+                      AND observed_generation = desired_generation
                       AND NOT EXISTS (
                         SELECT 1 FROM agentbox_lifecycle_claims c
                         WHERE c.sandbox_id = sandboxes.sandbox_id
-                          AND c.expires_at > ? AND c.owner <> ?
+                          AND c.expires_at > ?
+                          AND c.operation <> 'route-repair'
                       )
                     """,
-                    (sandbox_id, now, owner),
+                    (sandbox_id, now),
                 ).fetchone()
             else:
                 exists = store._conn.execute(
                     """
-                    SELECT 1 FROM sessions x JOIN sandboxes s
+                    SELECT s.observed_generation FROM sessions x JOIN sandboxes s
                       ON s.sandbox_id = x.sandbox_id
                     WHERE x.sandbox_id = ? AND x.session_id = ?
                       AND s.desired_state = 'present'
+                      AND s.observed_state IN ('running', 'degraded')
+                      AND s.observed_generation = s.desired_generation
+                      AND x.sandbox_generation IN (0, s.observed_generation)
                       AND NOT EXISTS (
                         SELECT 1 FROM agentbox_lifecycle_claims c
-                        WHERE c.sandbox_id = s.sandbox_id AND c.expires_at > ?
-                          AND c.owner <> ?
+                        WHERE c.sandbox_id = s.sandbox_id
+                          AND c.expires_at > ?
+                          AND c.operation <> 'route-repair'
                       )
                     """,
-                    (sandbox_id, session_id, now, owner),
+                    (sandbox_id, session_id, now),
                 ).fetchone()
             if not exists:
                 return None
@@ -781,8 +1167,9 @@ class SQLiteStateStore:
                 """
                 INSERT INTO agentbox_activity_leases (
                     lease_id, sandbox_id, session_id, operation, owner,
-                    expires_at, created_at, updated_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                    expires_at, created_at, updated_at, sandbox_generation
+                ) SELECT ?, ?, ?, ?, ?, ?, ?, ?, observed_generation
+                    FROM sandboxes WHERE sandbox_id = ?
                 """,
                 (
                     lease_id,
@@ -793,18 +1180,26 @@ class SQLiteStateStore:
                     expires_at,
                     now,
                     now,
+                    sandbox_id,
                 ),
             )
-            store._conn.execute(
-                """
-                UPDATE sandboxes SET idle_since_at = NULL,
-                    last_active_at = ?, updated_at = ?
-                WHERE sandbox_id = ?
-                """,
-                (now, now, sandbox_id),
-            )
+            if touch_activity:
+                store._conn.execute(
+                    """
+                    UPDATE sandboxes SET idle_since_at = NULL,
+                        last_active_at = ?, updated_at = ?
+                    WHERE sandbox_id = ?
+                    """,
+                    (now, now, sandbox_id),
+                )
         return ActivityLease(
-            lease_id, sandbox_id, session_id, operation, owner, expires_at
+            lease_id,
+            sandbox_id,
+            session_id,
+            operation,
+            owner,
+            expires_at,
+            int(exists[0]),
         )
 
     async def acquire_activity_lease(
@@ -815,6 +1210,7 @@ class SQLiteStateStore:
         operation: str,
         owner: str,
         ttl_seconds: float,
+        touch_activity: bool = True,
     ) -> ActivityLease | None:
         if ttl_seconds <= 0:
             raise ValueError("ttl_seconds must be positive")
@@ -825,6 +1221,7 @@ class SQLiteStateStore:
             operation,
             owner,
             ttl_seconds,
+            touch_activity,
         )
 
     def _renew_activity_lease(
@@ -839,9 +1236,23 @@ class SQLiteStateStore:
                 UPDATE agentbox_activity_leases
                 SET expires_at = ?, updated_at = ?
                 WHERE lease_id = ? AND owner = ? AND expires_at > ?
+                  AND EXISTS (
+                    SELECT 1 FROM sandboxes s
+                    WHERE s.sandbox_id = agentbox_activity_leases.sandbox_id
+                      AND s.desired_state = 'present'
+                      AND s.observed_state IN ('running', 'degraded')
+                      AND s.observed_generation = s.desired_generation
+                      AND s.observed_generation = agentbox_activity_leases.sandbox_generation
+                      AND NOT EXISTS (
+                        SELECT 1 FROM agentbox_lifecycle_claims c
+                        WHERE c.sandbox_id = s.sandbox_id
+                          AND c.expires_at > ?
+                          AND c.operation <> 'route-repair'
+                      )
+                  )
                 RETURNING *
                 """,
-                (expires_at, now, lease_id, owner, now),
+                (expires_at, now, lease_id, owner, now, now),
             ).fetchone()
         return self._activity_lease(row) if row else None
 
@@ -860,7 +1271,7 @@ class SQLiteStateStore:
                 """
                 DELETE FROM agentbox_activity_leases
                 WHERE lease_id = ? AND owner = ?
-                RETURNING sandbox_id, session_id
+                RETURNING sandbox_id, session_id, sandbox_generation, operation
                 """,
                 (lease_id, owner),
             ).fetchone()
@@ -868,23 +1279,36 @@ class SQLiteStateStore:
                 return False
             sandbox_id = str(row["sandbox_id"])
             session_id = row["session_id"]
-            if session_id is not None:
+            generation = int(row["sandbox_generation"])
+            touch_activity = row["operation"] != "provider-lease-renewal"
+            if touch_activity and session_id is not None:
                 store._conn.execute(
                     """
                     UPDATE sessions SET last_active_at = ?, updated_at = ?
                     WHERE sandbox_id = ? AND session_id = ?
+                      AND sandbox_generation = ?
                     """,
-                    (now, now, sandbox_id, session_id),
+                    (now, now, sandbox_id, session_id, generation),
                 )
-            store._conn.execute(
-                """
+            if touch_activity:
+                store._conn.execute(
+                    """
                 UPDATE sandboxes SET idle_since_at = NULL,
                     last_active_at = ?, updated_at = ?
                 WHERE sandbox_id = ?
+                  AND desired_generation = ? AND observed_generation = ?
                 """,
-                (now, now, sandbox_id),
-            )
-            self._mark_idle_if_empty_locked(sandbox_id, now)
+                    (now, now, sandbox_id, generation, generation),
+                )
+            current = store._conn.execute(
+                """
+                SELECT 1 FROM sandboxes WHERE sandbox_id = ?
+                  AND desired_generation = ? AND observed_generation = ?
+                """,
+                (sandbox_id, generation, generation),
+            ).fetchone()
+            if touch_activity and current is not None:
+                self._mark_idle_if_empty_locked(sandbox_id, now)
             return True
 
     async def release_activity_lease(self, lease_id: str, *, owner: str) -> bool:
@@ -953,6 +1377,22 @@ class SQLiteStateStore:
             if not store._conn.execute(
                 "SELECT 1 FROM sandboxes WHERE sandbox_id = ?", (sandbox_id,)
             ).fetchone():
+                return None
+            if (
+                operation
+                not in {
+                    "route-repair",
+                    "session-delete",
+                    "idle-session-delete",
+                }
+                and store._conn.execute(
+                    """
+                SELECT 1 FROM agentbox_activity_leases
+                WHERE sandbox_id = ? AND expires_at > ? LIMIT 1
+                """,
+                    (sandbox_id, now),
+                ).fetchone()
+            ):
                 return None
             store._conn.execute(
                 "DELETE FROM agentbox_lifecycle_claims WHERE sandbox_id = ? AND expires_at <= ?",
@@ -1028,6 +1468,22 @@ class SQLiteStateStore:
 
     async def release_lifecycle_claim(self, claim_id: str, *, owner: str) -> bool:
         return await self._run(self._release_lifecycle_claim, claim_id, owner)
+
+    def _get_lifecycle_claim(self, sandbox_id: str) -> LifecycleClaim | None:
+        store = self._store
+        now = time.time()
+        with store._lock, store._conn:
+            row = store._conn.execute(
+                """
+                SELECT * FROM agentbox_lifecycle_claims
+                WHERE sandbox_id = ? AND expires_at > ?
+                """,
+                (sandbox_id, now),
+            ).fetchone()
+        return self._lifecycle_claim(row) if row else None
+
+    async def get_lifecycle_claim(self, sandbox_id: str) -> LifecycleClaim | None:
+        return await self._run(self._get_lifecycle_claim, sandbox_id)
 
     def _observe_orphan(
         self,
@@ -1108,11 +1564,7 @@ class SQLiteStateStore:
     ) -> list[OrphanCandidate]:
         store = self._store
         sandbox_filter = "" if sandbox_id is None else "AND sandbox_id = ?"
-        params = (
-            (provider_name,)
-            if sandbox_id is None
-            else (provider_name, sandbox_id)
-        )
+        params = (provider_name,) if sandbox_id is None else (provider_name, sandbox_id)
         with store._lock, store._conn:
             rows = store._conn.execute(
                 f"""
@@ -1784,6 +2236,7 @@ class SQLiteStateStore:
             operation=str(row["operation"]),
             owner=str(row["owner"]),
             expires_at=float(row["expires_at"]),
+            sandbox_generation=int(row["sandbox_generation"]),
         )
 
     @staticmethod

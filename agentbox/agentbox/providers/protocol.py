@@ -66,7 +66,12 @@ class SandboxReleaseProvider(Protocol):
 class SandboxLeaseProvider(Protocol):
     """Optional hook for extending a running provider sandbox's lease."""
 
-    async def renew_lease(self, sandbox_id: str) -> None: ...
+    async def renew_lease(
+        self,
+        sandbox_id: str,
+        *,
+        provider_id: str | None = None,
+    ) -> None: ...
 
 
 @runtime_checkable

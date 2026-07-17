@@ -40,6 +40,9 @@ class Settings(BaseSettings):
     agentbox_state_db_path: str = "/data/agentbox-manager/state.db"
     agentbox_state_database_url: str | None = None
     agentbox_state_durable_env_keys: str = "LEMMA_BASE_URL"
+    # Comma-separated URL-safe base64 32-byte AES keys. The first key seals
+    # new routes; remaining keys decrypt routes during rotation.
+    agentbox_endpoint_state_keys: str = ""
     # Static, non-secret runtime capacity is copied into each sandbox env and
     # included in desired-generation hashing. Invocation identity/tokens remain
     # request-scoped and are never persisted here.

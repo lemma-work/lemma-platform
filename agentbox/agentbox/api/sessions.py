@@ -4,7 +4,6 @@ from fastapi import APIRouter, Depends
 
 from agentbox.auth import require_api_key
 from agentbox.lifecycle_manager import SandboxLifecycleManager
-from agentbox.providers import SandboxProvider
 from agentbox.sandbox_ids import validate_sandbox_id
 from agentbox.schemas import (
     ExecCommandRequest,
@@ -20,7 +19,7 @@ from agentbox.schemas import (
 )
 from agentbox.state_store.protocol import AsyncStateStore
 
-from .deps import lifecycle_manager, sandbox_provider, state_store
+from .deps import lifecycle_manager, state_store
 from .lifecycle import activity_lease
 
 router = APIRouter(dependencies=[Depends(require_api_key)])
@@ -34,7 +33,6 @@ async def create_runtime_session(
     sandbox_id: str,
     session_id: str,
     request: RuntimeSessionRequest,
-    provider: SandboxProvider = Depends(sandbox_provider),
     store: AsyncStateStore = Depends(state_store),
     manager: SandboxLifecycleManager = Depends(lifecycle_manager),
 ) -> RuntimeSessionResponse:
@@ -52,14 +50,29 @@ async def create_runtime_session(
         sandbox_id,
         session_id=None,
         operation="create-session",
-    ):
-        response = await provider.create_session(sandbox_id, session_id, request)
-        await store.upsert_session(
+    ) as lease:
+        response = await manager.runtime_operation(
+            sandbox_id,
+            lease.sandbox_generation,
+            lambda proxy: proxy.create_session(session_id, request),
+        )
+        stored = await store.upsert_session(
             sandbox_id,
             session_id,
             cwd=response.cwd,
             env_keys=response.env_keys,
+            expected_generation=lease.sandbox_generation,
         )
+        if stored is None:
+            from agentbox.providers.errors import ProviderError
+
+            raise ProviderError(
+                "Sandbox changed while creating the runtime session",
+                code="lifecycle_changed",
+                retryable=True,
+                status_code=409,
+                headers={"Retry-After": "1"},
+            )
     return response
 
 
@@ -104,19 +117,31 @@ async def execute_python(
     sandbox_id: str,
     session_id: str,
     request: ExecutePythonRequest,
-    provider: SandboxProvider = Depends(sandbox_provider),
     store: AsyncStateStore = Depends(state_store),
     manager: SandboxLifecycleManager = Depends(lifecycle_manager),
 ) -> ExecutePythonResponse:
     validate_sandbox_id(sandbox_id)
     async with activity_lease(
         store, manager, sandbox_id, session_id=session_id, operation="python"
-    ):
-        return await provider.execute_code(
+    ) as lease:
+        stdout, stderr, result, error_name, exit_code = await manager.runtime_operation(
             sandbox_id,
-            session_id,
-            request.code,
-            request.timeout_seconds,
+            lease.sandbox_generation,
+            lambda proxy: proxy.execute_code(
+                request.code,
+                request.timeout_seconds,
+                session_id=session_id,
+            ),
+        )
+        return ExecutePythonResponse(
+            sandbox_id=sandbox_id,
+            session_id=session_id,
+            stdout=stdout,
+            stderr=stderr,
+            result=result,
+            error_name=error_name,
+            exit_code=exit_code,
+            status="completed" if exit_code == 0 else "error",
         )
 
 
@@ -128,18 +153,17 @@ async def exec_runtime_process_command(
     sandbox_id: str,
     session_id: str,
     request: ExecCommandRequest,
-    provider: SandboxProvider = Depends(sandbox_provider),
     store: AsyncStateStore = Depends(state_store),
     manager: SandboxLifecycleManager = Depends(lifecycle_manager),
 ) -> ExecCommandResponse:
     validate_sandbox_id(sandbox_id)
     async with activity_lease(
         store, manager, sandbox_id, session_id=session_id, operation="exec-command"
-    ):
-        return await provider.exec_session_process_command(
+    ) as lease:
+        return await manager.runtime_operation(
             sandbox_id,
-            session_id,
-            request,
+            lease.sandbox_generation,
+            lambda proxy: proxy.exec_session_process_command(session_id, request),
         )
 
 
@@ -151,16 +175,17 @@ async def write_runtime_process_stdin(
     sandbox_id: str,
     session_id: str,
     request: WriteStdinRequest,
-    provider: SandboxProvider = Depends(sandbox_provider),
     store: AsyncStateStore = Depends(state_store),
     manager: SandboxLifecycleManager = Depends(lifecycle_manager),
 ) -> ExecCommandResponse:
     validate_sandbox_id(sandbox_id)
     async with activity_lease(
         store, manager, sandbox_id, session_id=session_id, operation="stdin"
-    ):
-        return await provider.write_session_process_stdin(
-            sandbox_id, session_id, request
+    ) as lease:
+        return await manager.runtime_operation(
+            sandbox_id,
+            lease.sandbox_generation,
+            lambda proxy: proxy.write_session_process_stdin(session_id, request),
         )
 
 
@@ -171,15 +196,18 @@ async def write_runtime_process_stdin(
 async def list_runtime_processes(
     sandbox_id: str,
     session_id: str,
-    provider: SandboxProvider = Depends(sandbox_provider),
     store: AsyncStateStore = Depends(state_store),
     manager: SandboxLifecycleManager = Depends(lifecycle_manager),
 ) -> ListProcessesResponse:
     validate_sandbox_id(sandbox_id)
     async with activity_lease(
         store, manager, sandbox_id, session_id=session_id, operation="list-processes"
-    ):
-        return await provider.list_session_processes(sandbox_id, session_id)
+    ) as lease:
+        return await manager.runtime_operation(
+            sandbox_id,
+            lease.sandbox_generation,
+            lambda proxy: proxy.list_session_processes(session_id),
+        )
 
 
 @router.delete(
@@ -190,14 +218,15 @@ async def terminate_runtime_process(
     sandbox_id: str,
     session_id: str,
     process_id: str,
-    provider: SandboxProvider = Depends(sandbox_provider),
     store: AsyncStateStore = Depends(state_store),
     manager: SandboxLifecycleManager = Depends(lifecycle_manager),
 ) -> ExecCommandResponse:
     validate_sandbox_id(sandbox_id)
     async with activity_lease(
         store, manager, sandbox_id, session_id=session_id, operation="terminate"
-    ):
-        return await provider.terminate_session_process(
-            sandbox_id, session_id, process_id
+    ) as lease:
+        return await manager.runtime_operation(
+            sandbox_id,
+            lease.sandbox_generation,
+            lambda proxy: proxy.terminate_session_process(session_id, process_id),
         )

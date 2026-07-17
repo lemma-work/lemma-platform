@@ -186,7 +186,9 @@ async def test_agentbox_manager_api_exercises_real_runtime_and_private_apps(
     ) as manager:
         health = await manager.get("/health")
         assert health.status_code == status.HTTP_200_OK, health.text
-        assert health.json() == {"status": "ok"}
+        health_payload = health.json()
+        assert health_payload["status"] == "ok"
+        assert health_payload["provider"] == "docker"
 
         async with httpx.AsyncClient(
             base_url=manager_url,

@@ -243,15 +243,24 @@ class E2BSandboxProvider(LegacyRuntimeProviderMixin):
         raise RuntimeError("unreachable")
 
     async def _list(self, metadata: dict[str, str]):
-        async with self._list_lock:
-            paginator = self._sdk.sandbox_cls.list(
-                query=self._sdk.query_cls(metadata=metadata),
-                limit=100,
-                **self._api_options(),
-            )
-            while paginator.has_next:
-                for item in await self._with_rate_limit_retry(paginator.next_items):
-                    yield item
+        try:
+            async with self._list_lock:
+                paginator = self._sdk.sandbox_cls.list(
+                    query=self._sdk.query_cls(metadata=metadata),
+                    limit=100,
+                    **self._api_options(),
+                )
+                while paginator.has_next:
+                    for item in await self._with_rate_limit_retry(paginator.next_items):
+                        yield item
+        except httpx.TransportError as exc:
+            raise ProviderError(
+                "E2B inventory is temporarily unavailable",
+                code="provider_inventory_unavailable",
+                retryable=True,
+                status_code=503,
+                headers={"Retry-After": "1"},
+            ) from exc
 
     async def _find(
         self,
@@ -407,7 +416,11 @@ class E2BSandboxProvider(LegacyRuntimeProviderMixin):
                     )
                 )
                 break
-            except self._sdk.not_found_error:
+            except (
+                self._sdk.not_found_error,
+                self._sdk.sandbox_error,
+                httpx.TransportError,
+            ):
                 # A transient control-plane 404 does not erase the exact
                 # durable provider identity or permit a replacement
                 # generation. Resume retries only this exact provider ID.
@@ -474,7 +487,11 @@ class E2BSandboxProvider(LegacyRuntimeProviderMixin):
                     )
                 )
                 break
-            except (self._sdk.not_found_error, self._sdk.sandbox_error) as exc:
+            except (
+                self._sdk.not_found_error,
+                self._sdk.sandbox_error,
+                httpx.TransportError,
+            ) as exc:
                 # A provider 404 is not authoritative absence: real E2B routes
                 # and connect calls can temporarily disagree while the exact
                 # generation remains alive. Explicit DELETE is the only path
@@ -780,7 +797,11 @@ class E2BSandboxProvider(LegacyRuntimeProviderMixin):
                 # ambiguous outcome, re-listing processes on the next pass
                 # prevents a duplicate start.
                 if not runtime_started:
-                    processes = await self._with_rate_limit_retry(sandbox.commands.list)
+                    remaining = max(min(deadline - self._clock(), 10.0), 0.1)
+                    processes = await asyncio.wait_for(
+                        self._with_rate_limit_retry(sandbox.commands.list),
+                        timeout=remaining,
+                    )
                     running = any(
                         "/usr/local/bin/start-runtime"
                         in " ".join(
@@ -792,20 +813,20 @@ class E2BSandboxProvider(LegacyRuntimeProviderMixin):
                         for process in processes
                     )
                     if not running:
-                        await self._with_rate_limit_retry(
-                            lambda: sandbox.commands.run(
-                                "/usr/local/bin/start-runtime",
-                                background=True,
-                                envs={
-                                    **env,
-                                    "PYTHONPATH": self.config.runtime_pythonpath,
-                                },
-                                user=self.config.runtime_user,
-                                # Keep the background command connection valid
-                                # for the sandbox lease. The shorter bootstrap
-                                # deadline below only bounds readiness checks.
-                                timeout=self.config.timeout_seconds,
-                            )
+                        await asyncio.wait_for(
+                            self._with_rate_limit_retry(
+                                lambda: sandbox.commands.run(
+                                    "/usr/local/bin/start-runtime",
+                                    background=True,
+                                    envs={
+                                        **env,
+                                        "PYTHONPATH": self.config.runtime_pythonpath,
+                                    },
+                                    user=self.config.runtime_user,
+                                    timeout=self.config.timeout_seconds,
+                                )
+                            ),
+                            timeout=remaining,
                         )
                     runtime_started = True
 
@@ -814,13 +835,17 @@ class E2BSandboxProvider(LegacyRuntimeProviderMixin):
                 # runtime and function executor are listening. Require both
                 # local and authenticated public health before publishing
                 # readiness.
-                result = await self._with_rate_limit_retry(
-                    lambda: sandbox.commands.run(
-                        health_command,
-                        envs={"PYTHONPATH": self.config.runtime_pythonpath},
-                        user=self.config.runtime_user,
-                        timeout=3,
-                    )
+                remaining = max(min(deadline - self._clock(), 5.0), 0.1)
+                result = await asyncio.wait_for(
+                    self._with_rate_limit_retry(
+                        lambda: sandbox.commands.run(
+                            health_command,
+                            envs={"PYTHONPATH": self.config.runtime_pythonpath},
+                            user=self.config.runtime_user,
+                            timeout=3,
+                        )
+                    ),
+                    timeout=remaining,
                 )
                 if getattr(result, "exit_code", 1) != 0:
                     await self._sleep(0.25)
@@ -832,6 +857,7 @@ class E2BSandboxProvider(LegacyRuntimeProviderMixin):
                 self._sdk.not_found_error,
                 self._sdk.sandbox_error,
                 httpx.TransportError,
+                TimeoutError,
             ) as exc:
                 # E2B can accept create before its command transport is ready.
                 # Retry only operations on this already-fenced SDK object.
@@ -910,7 +936,11 @@ class E2BSandboxProvider(LegacyRuntimeProviderMixin):
                     )
                 )
                 return True
-            except (self._sdk.not_found_error, self._sdk.sandbox_error) as exc:
+            except (
+                self._sdk.not_found_error,
+                self._sdk.sandbox_error,
+                httpx.TransportError,
+            ) as exc:
                 last_error = exc
                 if await self._public_runtime_ready(sandbox):
                     logger.warning(
@@ -929,7 +959,12 @@ class E2BSandboxProvider(LegacyRuntimeProviderMixin):
                     ) from last_error
                 await self._sleep(random.uniform(0.05, 0.2))
 
-    async def renew_lease(self, sandbox_id: str) -> None:
+    async def renew_lease(
+        self,
+        sandbox_id: str,
+        *,
+        provider_id: str | None = None,
+    ) -> None:
         """Extend one running sandbox timeout at most once per timeout third."""
 
         lock = self._lease_renewal_locks.setdefault(sandbox_id, asyncio.Lock())
@@ -942,11 +977,26 @@ class E2BSandboxProvider(LegacyRuntimeProviderMixin):
             ):
                 return
             sandbox = self._sandboxes.get(sandbox_id)
+            if (
+                sandbox is not None
+                and provider_id is not None
+                and str(getattr(sandbox, "sandbox_id", "")) != provider_id
+            ):
+                self.invalidate_endpoint_cache(sandbox_id)
+                sandbox = None
             if sandbox is None:
-                sandbox = await self._connect(sandbox_id)
+                info = (
+                    _E2BManagedInfo(
+                        provider_id=provider_id,
+                        metadata=self._metadata(sandbox_id),
+                        state="running",
+                    )
+                    if provider_id is not None
+                    else None
+                )
+                sandbox = await self._connect(sandbox_id, info)
                 if sandbox is None:
                     raise SandboxNotFoundError(sandbox_id)
-                return
             if await self._renew_timeout(sandbox, sandbox_id):
                 self._lease_renewed_at[sandbox_id] = self._clock()
 
@@ -1224,6 +1274,7 @@ class E2BSandboxProvider(LegacyRuntimeProviderMixin):
             except (
                 self._sdk.not_found_error,
                 self._sdk.sandbox_error,
+                httpx.TransportError,
                 TimeoutError,
             ) as exc:
                 return None, exc
@@ -1246,6 +1297,7 @@ class E2BSandboxProvider(LegacyRuntimeProviderMixin):
                 except (
                     self._sdk.not_found_error,
                     self._sdk.sandbox_error,
+                    httpx.TransportError,
                     TimeoutError,
                 ) as exc:
                     # A successful control-plane `false` is authoritative
@@ -1598,7 +1650,11 @@ class E2BSandboxProvider(LegacyRuntimeProviderMixin):
                     )
                 )
                 break
-            except (self._sdk.not_found_error, self._sdk.sandbox_error) as exc:
+            except (
+                self._sdk.not_found_error,
+                self._sdk.sandbox_error,
+                httpx.TransportError,
+            ) as exc:
                 # E2B's connect control plane can lag the authenticated gateway
                 # while the sandbox remains alive. Retry the exact provider ID
                 # only; inventory, pause, and delete are deliberately excluded
