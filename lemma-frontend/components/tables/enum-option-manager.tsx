@@ -1,7 +1,7 @@
 'use client';
 
 import { useState } from 'react';
-import { Plus, X } from 'lucide-react';
+import { Plus, X } from '@/components/ui/icons';
 import { Button } from '@/components/ui/button';
 import { getEnumColorByIndex } from '@/lib/utils/enum-color-utils';
 

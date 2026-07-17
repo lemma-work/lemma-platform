@@ -2,7 +2,7 @@
 
 import { useEffect, useMemo, useState, type ReactNode } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { Check, Copy, Globe2, LockKeyhole, Share2, Trash2, UserRound, UsersRound, type LucideIcon } from 'lucide-react';
+import { Check, Copy, Globe2, LockKeyhole, Share2, Trash2, UserRound, UsersRound, type LemmaIcon } from '@/components/ui/icons';
 import type { PodMemberResponse, ResourceAccessGrantResponse, ResourceAccessResponse } from 'lemma-sdk';
 
 import { ConceptHint } from '@/components/education/concept-hint';
@@ -37,7 +37,7 @@ type ResourceVisibilityCopy = {
     label: string;
     shortDescription: string;
     description: string;
-    icon: LucideIcon;
+    icon: LemmaIcon;
     className: string;
 };
 

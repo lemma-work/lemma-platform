@@ -3,7 +3,7 @@
 import { useState } from 'react';
 import { useRouter } from 'next/navigation';
 import Link from 'next/link';
-import { ArrowRight, Building2, Sparkles } from 'lucide-react';
+import { ArrowRight, Building2, Sparkles } from '@/components/ui/icons';
 import { getLemmaClient } from '@/lib/sdk/lemma-client';
 import { useOrganizations } from '@/lib/hooks/use-organizations';
 import { ResourceIconUploader } from '@/components/shared/resource-icon-uploader';
@@ -100,7 +100,7 @@ function CreatePodPageContent() {
         <ProtectedRoute>
             <PlainPageShell
                 title="Create pod"
-                icon={<ProductIcon tone="pods" size="sm" />}
+                icon={<ProductIcon kind="pods" size="sm" />}
                 backHref="/home"
                 backLabel="Pods"
                 meta="New AI office"

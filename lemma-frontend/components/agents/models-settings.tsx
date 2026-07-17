@@ -9,7 +9,7 @@ import type {
     AgentRuntimeProfileListResponse,
     AgentRuntimeProfileResponse,
 } from 'lemma-sdk';
-import { Check, KeyRound, Plus, RefreshCw, Sparkles, TerminalSquare } from 'lucide-react';
+import { Check, KeyRound, Plus, RefreshCw, Sparkles, TerminalSquare } from '@/components/ui/icons';
 import { toast } from 'sonner';
 
 import { Button } from '@/components/ui/button';

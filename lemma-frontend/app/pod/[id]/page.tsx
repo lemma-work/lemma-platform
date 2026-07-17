@@ -4,7 +4,7 @@ import { use, useEffect, useMemo, useRef, useState, type CSSProperties } from 'r
 import Image from 'next/image';
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
-import { ArrowRight, ArrowUp, Loader2, MessageCircle, Plus, UserPlus, X } from 'lucide-react';
+import { ArrowRight, ArrowUp, Loader2, MessageCircle, Plus, UserPlus, X } from '@/components/ui/icons';
 
 import { useAIAssistant } from '@/components/ai/ai-assistant-context';
 import { StepLoader } from '@/components/brand/loader';

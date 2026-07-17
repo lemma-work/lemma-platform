@@ -18,7 +18,7 @@ import {
     Minimize2,
     Play,
     RefreshCw,
-} from 'lucide-react';
+} from '@/components/ui/icons';
 import { WorkflowNode, WorkflowRun } from '@/lib/types';
 import {
     formatRunIdShort,

@@ -3,7 +3,7 @@
 import { use, useEffect, useState } from 'react';
 import Link from 'next/link';
 import { useRouter, useSearchParams } from 'next/navigation';
-import { ArrowUpRight, ExternalLink, Loader2, PanelsTopLeft, Plus } from 'lucide-react';
+import { ArrowUpRight, ExternalLink, Loader2, PanelsTopLeft, Plus } from '@/components/ui/icons';
 import { toast } from 'sonner';
 
 import { useAIAssistant } from '@/components/ai/ai-assistant-context';
@@ -130,7 +130,7 @@ export default function AppPagesRoute({ params }: { params: Promise<{ id: string
         <ResourceIndexShell>
             <ResourceIndexHeader
                 title="Apps"
-                productIconTone="apps"
+                productIconKind="apps"
                 meta={<ConceptHint concept="app" />}
                 actions={(
                     canCreateApp ? (

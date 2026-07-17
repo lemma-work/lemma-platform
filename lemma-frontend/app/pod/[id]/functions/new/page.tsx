@@ -2,7 +2,7 @@
 
 import { use, useState } from 'react';
 import { useRouter } from 'next/navigation';
-import { FileCode, Plus } from 'lucide-react';
+import { FileCode, Plus } from '@/components/ui/icons';
 import { toast } from 'sonner';
 
 import { FunctionEditor } from '@/components/functions/function-editor';

@@ -1,10 +1,10 @@
 'use client';
 
 import Link from 'next/link';
-import { ExternalLink, Home, MessageCircle, Plus, Sparkles, X } from 'lucide-react';
+import { ExternalLink, Home, MessageCircle, Plus, Sparkles, X } from '@/components/ui/icons';
 
 import { Button } from '@/components/ui/button';
-import { ProductIcon, type ProductIconTone } from '@/components/pod/product-icon';
+import { ProductIcon, type ProductIconKind } from '@/components/pod/product-icon';
 import { getAppAccent } from '@/lib/app/app-accent';
 import {
     getWorkspaceTabHref,
@@ -13,7 +13,7 @@ import {
 import { cn } from '@/lib/utils';
 import { getConversationStatusView } from '@/lib/utils/conversations';
 
-const routeTabTones: Record<string, ProductIconTone> = {
+const routeTabKinds: Record<string, ProductIconKind> = {
     apps: 'apps',
     agents: 'agents',
     workflows: 'workflows',
@@ -30,8 +30,8 @@ const routeTabTones: Record<string, ProductIconTone> = {
     recipes: 'workflows',
 };
 
-function RouteTabIcon({ routeKey }: { routeKey: string }) {
-    return <ProductIcon tone={routeTabTones[routeKey] || 'pods'} size="xs" />;
+function RouteTabIcon({ routeKey, active }: { routeKey: string; active: boolean }) {
+    return <ProductIcon kind={routeTabKinds[routeKey] || 'pods'} size="xs" state={active ? 'selected' : 'default'} />;
 }
 
 function ConversationActivity({ tab }: { tab: Extract<PodWorkspaceTab, { kind: 'conversation' }> }) {
@@ -98,9 +98,9 @@ export function PodWorkspaceTabs({
                             )}
                         >
                             {tab.kind === 'home' ? (
-                                <Home className="h-3.5 w-3.5 shrink-0" strokeWidth={1.8} />
+                                <Home className="h-3.5 w-3.5 shrink-0" weight={active ? 'fill' : 'regular'} />
                             ) : tab.kind === 'new' ? (
-                                <Sparkles className="h-3.5 w-3.5 shrink-0" strokeWidth={1.8} />
+                                <Sparkles className="h-3.5 w-3.5 shrink-0" weight={active ? 'fill' : 'regular'} />
                             ) : tab.kind === 'app' ? (
                                 <span
                                     data-accent={accent}
@@ -109,9 +109,9 @@ export function PodWorkspaceTabs({
                                     {tab.icon || tab.title.charAt(0)}
                                 </span>
                             ) : tab.kind === 'route' ? (
-                                <RouteTabIcon routeKey={tab.resourceId} />
+                                <RouteTabIcon routeKey={tab.resourceId} active={active} />
                             ) : (
-                                <MessageCircle className="h-3.5 w-3.5 shrink-0" strokeWidth={1.8} />
+                                <MessageCircle className="h-3.5 w-3.5 shrink-0" weight={active ? 'fill' : 'regular'} />
                             )}
                             <span className="min-w-0 flex-1 truncate">{tab.title}</span>
                             {tab.kind === 'conversation' ? <ConversationActivity tab={tab} /> : null}

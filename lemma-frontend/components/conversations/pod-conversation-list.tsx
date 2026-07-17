@@ -3,7 +3,7 @@
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import { formatDistanceToNow } from 'date-fns';
-import { ArrowRight, Loader2, Plus, Sparkles } from 'lucide-react';
+import { ArrowRight, Loader2, Plus, Sparkles } from '@/components/ui/icons';
 import { useAIAssistant } from '@/components/ai/ai-assistant-context';
 import { ResourceList, ResourceMetric, ResourceMetricStrip, ResourceRow } from '@/components/pod/resource-layout';
 import { InlineEmptyState } from '@/components/shared/empty-state';

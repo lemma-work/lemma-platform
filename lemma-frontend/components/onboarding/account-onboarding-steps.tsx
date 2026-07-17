@@ -18,7 +18,7 @@ import {
   Terminal,
   UserRound,
   UsersRound,
-} from "lucide-react";
+} from "@/components/ui/icons";
 
 import { LoadingState } from "@/components/brand/loader";
 import { Button } from "@/components/ui/button";

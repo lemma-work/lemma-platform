@@ -11,7 +11,7 @@ import {
     SelectTrigger,
     SelectValue,
 } from '@/components/ui/select';
-import { Trash2, Plus } from 'lucide-react';
+import { Trash2, Plus } from '@/components/ui/icons';
 import { QuietEmptyState } from '@/components/shared/empty-state';
 import { cn } from '@/lib/utils';
 

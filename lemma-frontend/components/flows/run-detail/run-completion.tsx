@@ -1,4 +1,4 @@
-import { CheckCircle, Flag } from 'lucide-react';
+import { CheckCircle, Flag } from '@/components/ui/icons';
 import { cn } from '@/lib/utils';
 import { QuietEmptyState } from '@/components/shared/empty-state';
 import {

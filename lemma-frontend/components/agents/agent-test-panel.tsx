@@ -35,7 +35,7 @@ import {
     Plus,
     Search,
     X,
-} from 'lucide-react';
+} from '@/components/ui/icons';
 
 interface AgentTestPanelProps {
     podId: string;

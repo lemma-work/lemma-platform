@@ -4,7 +4,7 @@ import type { ButtonHTMLAttributes, ReactNode } from 'react';
 import { forwardRef } from 'react';
 import { useLayoutEffect } from 'react';
 
-import type { ProductIconTone } from '@/components/pod/product-icon';
+import type { ProductIconKind } from '@/components/pod/product-icon';
 import { usePodTopbar } from '@/components/pod/pod-topbar-context';
 import { Tabs, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { cn } from '@/lib/utils';
@@ -87,7 +87,7 @@ export function ResourceIndexShell({
 
 export function ResourceIndexHeader({
     title,
-    productIconTone,
+    productIconKind,
     icon,
     backHref,
     backLabel,
@@ -96,7 +96,7 @@ export function ResourceIndexHeader({
     actions,
 }: {
     title: ReactNode;
-    productIconTone?: ProductIconTone;
+    productIconKind?: ProductIconKind;
     icon?: ReactNode;
     backHref?: string;
     backLabel?: string;
@@ -113,14 +113,14 @@ export function ResourceIndexHeader({
     }, [actions, backHref, backLabel, eyebrow, meta, title, topbar]);
 
     void icon;
-    void productIconTone;
+    void productIconKind;
 
     return null;
 }
 
 export function ResourceObjectHeader({
     title,
-    productIconTone,
+    productIconKind,
     icon,
     backHref,
     backLabel,
@@ -131,7 +131,7 @@ export function ResourceObjectHeader({
     fullscreen,
 }: {
     title: ReactNode;
-    productIconTone?: ProductIconTone;
+    productIconKind?: ProductIconKind;
     icon?: ReactNode;
     backHref: string;
     backLabel: string;
@@ -150,14 +150,14 @@ export function ResourceObjectHeader({
     }, [actions, backHref, backLabel, fullscreen, meta, switcher, tabs, title, topbar]);
 
     void icon;
-    void productIconTone;
+    void productIconKind;
 
     return null;
 }
 
 export function ResourceDetailHeader({
     title,
-    productIconTone,
+    productIconKind,
     icon,
     backHref,
     backLabel,
@@ -169,7 +169,7 @@ export function ResourceDetailHeader({
     className,
 }: {
     title: ReactNode;
-    productIconTone?: ProductIconTone;
+    productIconKind?: ProductIconKind;
     icon?: ReactNode;
     backHref: string;
     backLabel: string;
@@ -180,7 +180,7 @@ export function ResourceDetailHeader({
     fullscreen?: boolean;
     className?: string;
 }) {
-    return <ResourceObjectHeader title={title} productIconTone={productIconTone} icon={icon} backHref={backHref} backLabel={backLabel} meta={meta} switcher={switcher} tabs={tabs} actions={actions} fullscreen={fullscreen} className={className} />;
+    return <ResourceObjectHeader title={title} productIconKind={productIconKind} icon={icon} backHref={backHref} backLabel={backLabel} meta={meta} switcher={switcher} tabs={tabs} actions={actions} fullscreen={fullscreen} className={className} />;
 }
 
 export function ResourceHeaderTabs<TValue extends string>({

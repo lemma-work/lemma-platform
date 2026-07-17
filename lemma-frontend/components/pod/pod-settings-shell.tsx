@@ -37,7 +37,7 @@ export function PodSettingsShell({
                     showBack={false}
                     title={title}
                     description={description}
-                    productIconTone="settings"
+                    productIconKind="settings"
                     meta={stats.length > 0 ? <PodHeaderMetrics items={stats.map((stat) => ({ label: stat.label, value: stat.value }))} /> : undefined}
                     actions={action}
                     switcher={<PodSettingsNav podId={podId} />}

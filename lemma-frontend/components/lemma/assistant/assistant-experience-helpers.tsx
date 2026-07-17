@@ -17,7 +17,7 @@ import {
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
-import { CheckCircle2, XCircle } from "lucide-react";
+import { CheckCircle2, XCircle } from "@/components/ui/icons";
 import { humanizeKey } from "./assistant-format";
 import { suggestionIconForTitle } from "./assistant-parts";
 import type {

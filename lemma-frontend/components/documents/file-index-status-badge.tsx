@@ -1,6 +1,6 @@
 'use client';
 
-import { AlertTriangle, Database, Loader2, Sparkles } from 'lucide-react';
+import { AlertTriangle, Database, Loader2, Sparkles } from '@/components/ui/icons';
 import { cn } from '@/lib/utils';
 import type { DatastoreFile } from '@/lib/types';
 

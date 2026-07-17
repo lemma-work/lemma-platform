@@ -18,7 +18,7 @@ import {
   PanelLeftOpen,
   X,
   XCircle,
-} from "lucide-react";
+} from "@/components/ui/icons";
 import { AssistantExperienceView } from "@/components/lemma/assistant/assistant-experience";
 import type {
   AssistantControllerView,

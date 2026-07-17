@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
-import { Plus, Trash2 } from 'lucide-react';
+import { Plus, Trash2 } from '@/components/ui/icons';
 
 import { ConceptHint } from '@/components/education/concept-hint';
 import { Button } from '@/components/ui/button';

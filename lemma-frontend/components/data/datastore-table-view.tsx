@@ -2,7 +2,7 @@
 
 import { useState, type ReactNode } from 'react';
 import { useRouter } from 'next/navigation';
-import { Plus, Filter, Trash2, Edit, MoreVertical, Maximize2, Table as TableIcon } from 'lucide-react';
+import { ArrowDown, ArrowUp, Plus, Filter, Trash2, Edit, MoreVertical, Maximize2, Table as TableIcon } from '@/components/ui/icons';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { toast } from 'sonner';
 
@@ -476,7 +476,9 @@ export function DatastoreTableView({
                                                         </span>
                                                         {sortField === column.name && (
                                                             <span className="rounded bg-[var(--action-primary-soft)] px-1 py-0.5 text-xs font-bold text-[var(--action-primary)]">
-                                                                {sortOrder === 'asc' ? '↑' : '↓'}
+                                                                {sortOrder === 'asc'
+                                                                    ? <ArrowUp className="size-3" aria-hidden="true" />
+                                                                    : <ArrowDown className="size-3" aria-hidden="true" />}
                                                             </span>
                                                         )}
                                                     </div>

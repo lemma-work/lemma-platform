@@ -24,7 +24,7 @@ export default function PodConnectorsPage({ params }: { params: Promise<{ id: st
         <ResourceIndexShell>
             <ResourceIndexHeader
                 title="Connectors"
-                productIconTone="connectors"
+                productIconKind="connectors"
                 meta={<span>{pod?.name || 'Pod'}</span>}
             />
             <SectionPrimer concept="connector" className="mb-4" />

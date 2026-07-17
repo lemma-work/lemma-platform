@@ -10,10 +10,10 @@ import {
     PanelLeftClose,
     PanelLeftOpen,
     Plus,
-} from 'lucide-react';
+} from '@/components/ui/icons';
 import { Logo } from '@/components/brand/logo';
 import { HomeImportButton } from '@/components/bundle/home-import-button';
-import { ProductIcon, type ProductIconTone } from '@/components/pod/product-icon';
+import { ProductIcon, type ProductIconKind } from '@/components/pod/product-icon';
 import { SidebarEmptyState } from '@/components/shared/empty-state';
 import { ThemeToggle } from '@/components/theme/theme-toggle';
 import { Avatar, AvatarFallback } from '@/components/ui/avatar';
@@ -89,7 +89,7 @@ function SidebarContent({
                         data-active={pathname === '/' ? 'true' : undefined}
                         className="lemma-sidebar-row lemma-sidebar-row-comfy"
                     >
-                        <ProductIcon tone="pods" size="sm" />
+                        <ProductIcon kind="pods" size="sm" state={pathname === '/' ? 'selected' : 'default'} />
                         Pods
                     </Link>
                     <Link
@@ -216,12 +216,12 @@ function PodSidebarLink({
 function RailIconLink({
     href,
     label,
-    tone,
+    kind,
     isActive,
 }: {
     href: string;
     label: string;
-    tone: ProductIconTone;
+    kind: ProductIconKind;
     isActive?: boolean;
 }) {
     return (
@@ -233,7 +233,7 @@ function RailIconLink({
                     data-active={isActive ? 'true' : undefined}
                     className="lemma-sidebar-rail-icon"
                 >
-                    <ProductIcon tone={tone} size="sm" />
+                    <ProductIcon kind={kind} size="sm" state={isActive ? 'selected' : 'default'} />
                 </Link>
             </TooltipTrigger>
             <TooltipContent side="right">{label}</TooltipContent>
@@ -260,7 +260,7 @@ function CollapsedSidebarRail({
         {
             href: '/',
             label: 'Pods',
-            tone: 'pods' as const,
+            kind: 'pods' as const,
             isActive: pathname === '/',
         },
     ];
@@ -304,7 +304,7 @@ function CollapsedSidebarRail({
                             key={item.href}
                             href={item.href}
                             label={item.label}
-                            tone={item.tone}
+                            kind={item.kind}
                             isActive={item.isActive}
                         />
                     ))}

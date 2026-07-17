@@ -21,7 +21,7 @@ import {
     ShieldCheck,
     Smartphone,
     Trash2,
-} from 'lucide-react';
+} from '@/components/ui/icons';
 import { toast } from 'sonner';
 
 import { Button } from '@/components/ui/button';

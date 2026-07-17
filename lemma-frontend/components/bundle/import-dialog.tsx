@@ -17,7 +17,7 @@ import {
     Upload,
     Wrench,
     X,
-} from 'lucide-react';
+} from '@/components/ui/icons';
 import * as DialogPrimitive from '@radix-ui/react-dialog';
 
 import { Button } from '@/components/ui/button';

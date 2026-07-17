@@ -2,7 +2,7 @@
 
 import Image from "next/image";
 import Link from "next/link";
-import { FaGithub } from "react-icons/fa";
+import { GithubLogo, Minus, Plus } from "@/components/ui/icons";
 import { useEffect, useRef, useState } from "react";
 import { Logo } from "@/components/brand/logo";
 import type { SurfaceMode } from "./landing-data";
@@ -85,7 +85,7 @@ export default function LandingPage() {
             target="_blank"
             rel="noreferrer"
           >
-            <FaGithub aria-hidden className="lp-gh-icon" />
+            <GithubLogo aria-hidden className="lp-gh-icon" />
             GitHub
           </a>
         </nav>
@@ -97,7 +97,7 @@ export default function LandingPage() {
             target="_blank"
             rel="noreferrer"
           >
-            <FaGithub aria-hidden className="lp-gh-icon" />
+            <GithubLogo aria-hidden className="lp-gh-icon" />
             Star on GitHub
           </a>
         </div>
@@ -108,7 +108,7 @@ export default function LandingPage() {
           <div className="lp-hero-copy">
             <p className="lp-eyebrow">
               <span className="lp-eyebrow-badge">
-                <FaGithub aria-hidden className="lp-gh-icon" />
+                <GithubLogo aria-hidden className="lp-gh-icon" />
                 Open source
               </span>
               AI-native workspace
@@ -135,7 +135,7 @@ export default function LandingPage() {
                 target="_blank"
                 rel="noreferrer"
               >
-                <FaGithub aria-hidden className="lp-gh-icon" />
+                <GithubLogo aria-hidden className="lp-gh-icon" />
                 View on GitHub
               </a>
             </div>
@@ -189,7 +189,7 @@ export default function LandingPage() {
                           <span>{block.summary}</span>
                         </span>
                         <span className="lp-pod-acc-toggle" aria-hidden="true">
-                          {isOpen ? "−" : "+"}
+                          {isOpen ? <Minus aria-hidden="true" /> : <Plus aria-hidden="true" />}
                         </span>
                       </button>
                       <div className="lp-pod-acc-detail">
@@ -394,7 +394,7 @@ export default function LandingPage() {
                 target="_blank"
                 rel="noreferrer"
               >
-                <FaGithub aria-hidden className="lp-gh-icon" />
+                <GithubLogo aria-hidden className="lp-gh-icon" />
                 Star on GitHub
               </a>
               <a

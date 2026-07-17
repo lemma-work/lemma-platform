@@ -1,7 +1,7 @@
 'use client';
 
 import { use, useMemo, useState } from 'react';
-import { Download, Github, Plus } from 'lucide-react';
+import { Download, Github, Plus } from '@/components/ui/icons';
 
 import { ProtectedRoute } from '@/components/auth/protected-route';
 import { PlainPageShell } from '@/components/dashboard/plain-page-shell';

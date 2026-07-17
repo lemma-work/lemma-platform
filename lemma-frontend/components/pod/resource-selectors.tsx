@@ -20,7 +20,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Button } from '@/components/ui/button';
 import { QuietEmptyState } from '@/components/shared/empty-state';
 import { cn } from '@/lib/utils';
-import { Puzzle, Database, Plus, AlertCircle, Folder, Bot, Code2, X } from 'lucide-react';
+import { Puzzle, Database, Plus, AlertCircle, Folder, Bot, Code2, X } from '@/components/ui/icons';
 
 export function formatAccessLabel(value: string) {
     return value.toLowerCase().replace(/[_-]+/g, ' ').replace(/\b\w/g, (char) => char.toUpperCase());

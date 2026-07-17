@@ -1,4 +1,4 @@
-import { CheckCircle, Circle, Loader2, XCircle } from 'lucide-react';
+import { CheckCircle, Circle, Loader2, XCircle } from '@/components/ui/icons';
 import { cn } from '@/lib/utils';
 import { getNodeIconElement, type ProcedureStepState } from '../run-format';
 

@@ -10,7 +10,7 @@ import {
     Loader2,
     Plus,
     Share2,
-} from 'lucide-react';
+} from '@/components/ui/icons';
 import * as DropdownMenu from '@radix-ui/react-dropdown-menu';
 import { toast } from 'sonner';
 import { StepLoader } from '@/components/brand/loader';
@@ -591,7 +591,7 @@ function HeaderIconEditor({
                 alt={`${name} icon`}
                 label={name}
                 className="h-10 w-10 rounded-lg !border-0 !bg-transparent"
-                fallback={<ProductIcon tone="workflows" size="lg" />}
+                fallback={<ProductIcon kind="workflows" size="lg" />}
             />
             <span className="absolute -bottom-1 -right-1 inline-flex h-4 w-4 items-center justify-center rounded-full border border-[var(--row-border)] bg-[var(--card-bg)] text-[var(--text-tertiary)] shadow-[var(--shadow-xs)]">
                 {isUploading ? <Loader2 className="h-2.5 w-2.5 animate-spin" /> : <ImagePlus className="h-2.5 w-2.5" />}

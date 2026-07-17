@@ -676,7 +676,7 @@
 }
 
 .lemma-product-nav-item {
-  --lemma-nav-tone: var(--brand-accent);
+  --lemma-nav-accent: var(--sidebar-active-accent, var(--action-primary));
   position: relative;
 }
 
@@ -686,7 +686,7 @@
   inset: 3px auto 3px 0;
   width: 2px;
   border-radius: var(--radius-full);
-  background: var(--lemma-nav-tone);
+  background: var(--lemma-nav-accent);
   opacity: 0;
   transform: scaleY(0.36);
   transition:
@@ -694,9 +694,8 @@
     transform var(--dur-base) var(--ease-out);
 }
 
-.lemma-product-nav-item:hover::before,
 .lemma-product-nav-item[data-active="true"]::before {
-  opacity: 0.78;
+  opacity: 0.82;
   transform: scaleY(1);
 }
 
@@ -708,10 +707,8 @@
   align-items: center;
   justify-content: center;
   color: var(--text-tertiary);
-  opacity: 0.55;
-  transition:
-    opacity var(--dur-base) var(--ease-out),
-    transform var(--dur-base) var(--ease-out);
+  opacity: 1;
+  transition: color var(--dur-base) var(--ease-out);
 }
 
 .lemma-product-icon[data-size="sm"] {
@@ -734,79 +731,16 @@
   width: 2.25rem;
 }
 
-.lemma-product-nav-item:hover .lemma-product-icon,
+.lemma-product-icon[data-state="selected"] {
+  color: var(--text-secondary);
+}
+
+.lemma-product-nav-item .lemma-product-icon {
+  color: inherit;
+}
+
 .lemma-product-nav-item[data-active="true"] .lemma-product-icon {
-  opacity: 1;
-  color: var(--lemma-nav-tone);
-  transform: translateY(-1px);
-}
-
-.pod-shell-topbar .lemma-product-icon {
-  opacity: 1;
-}
-
-.lemma-product-icon[data-tone="pods"] { color: var(--action-primary); }
-.lemma-product-icon[data-tone="connectors"] { color: var(--intelligence); }
-.lemma-product-icon[data-tone="apps"] { color: var(--intelligence); }
-.lemma-product-icon[data-tone="agents"] { color: var(--state-success); }
-.lemma-product-icon[data-tone="workflows"] { color: var(--delight); }
-.lemma-product-icon[data-tone="schedules"] { color: var(--state-info); }
-.lemma-product-icon[data-tone="data"],
-.lemma-product-icon[data-tone="tables"],
-.lemma-product-icon[data-tone="functions"] { color: color-mix(in srgb, var(--intelligence) 72%, var(--action-primary)); }
-.lemma-product-icon[data-tone="docs"],
-.lemma-product-icon[data-tone="files"],
-.lemma-product-icon[data-tone="folders"] { color: var(--delight); }
-.lemma-product-icon[data-tone="surfaces"],
-.lemma-product-icon[data-tone="channels"] { color: var(--collaboration); }
-.lemma-product-icon[data-tone="settings"],
-.lemma-product-icon[data-tone="auth-rbac"] { color: var(--text-tertiary); }
-.lemma-product-icon[data-tone="conversation"] { color: var(--action-primary); }
-
-.lemma-product-nav-item[data-tone="pods"] {
-  --lemma-nav-tone: var(--brand-accent);
-}
-
-.lemma-product-nav-item[data-tone="connectors"] {
-  --lemma-nav-tone: var(--brand-blue);
-}
-
-.lemma-product-nav-item[data-tone="apps"] {
-  --lemma-nav-tone: var(--brand-blue);
-}
-
-.lemma-product-nav-item[data-tone="agents"] {
-  --lemma-nav-tone: var(--brand-green);
-}
-
-.lemma-product-nav-item[data-tone="workflows"] {
-  --lemma-nav-tone: var(--brand-warm);
-}
-
-.lemma-product-nav-item[data-tone="schedules"] {
-  --lemma-nav-tone: var(--state-info);
-}
-
-.lemma-product-nav-item[data-tone="data"],
-.lemma-product-nav-item[data-tone="tables"],
-.lemma-product-nav-item[data-tone="functions"] {
-  --lemma-nav-tone: color-mix(in srgb, var(--intelligence) 72%, var(--action-primary));
-}
-
-.lemma-product-nav-item[data-tone="docs"],
-.lemma-product-nav-item[data-tone="files"],
-.lemma-product-nav-item[data-tone="folders"] {
-  --lemma-nav-tone: var(--delight);
-}
-
-.lemma-product-nav-item[data-tone="surfaces"],
-.lemma-product-nav-item[data-tone="channels"] {
-  --lemma-nav-tone: var(--collaboration);
-}
-
-.lemma-product-nav-item[data-tone="settings"],
-.lemma-product-nav-item[data-tone="auth-rbac"] {
-  --lemma-nav-tone: var(--text-tertiary);
+  color: var(--text-secondary);
 }
 
 .lemma-sidebar-row {

@@ -31,7 +31,7 @@ import {
   Users,
   Volume2,
   Wrench,
-} from "lucide-react";
+} from "@/components/ui/icons";
 import { cn } from "@/lib/utils";
 import { formatAgentName } from "@/lib/utils/agents";
 import { getLemmaClient } from "@/lib/sdk/lemma-client";

@@ -1,6 +1,6 @@
 'use client';
 
-import { Database, LayoutGrid, List as ListIcon, UserRound } from 'lucide-react';
+import { Database, LayoutGrid, List as ListIcon, UserRound } from '@/components/ui/icons';
 
 import type { FileNamespaceMode } from '../_lib/file-helpers';
 

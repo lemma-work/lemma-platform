@@ -2,7 +2,7 @@
 
 import { use, useEffect, useRef, useState } from 'react';
 import { useSearchParams } from 'next/navigation';
-import { Loader2 } from 'lucide-react';
+import { Check, Loader2 } from '@/components/ui/icons';
 
 import { getLemmaClient } from '@/lib/sdk/lemma-client';
 import { useAIAssistant } from '@/components/ai/ai-assistant-context';
@@ -111,7 +111,8 @@ export default function DisplayResourceWidgetPage({
                             rel="noreferrer"
                             className="rounded-full bg-[var(--bg-canvas)] px-3 py-1.5 text-xs font-medium text-[var(--text-secondary)] underline shadow-[var(--shadow-xs)]"
                         >
-                            Saved ✓ — open app
+                            <Check className="mr-1 inline size-3" aria-hidden="true" />
+                            Saved — open app
                         </a>
                     ) : (
                         <button

@@ -2,7 +2,7 @@
 
 import { useMemo } from 'react';
 import Link from 'next/link';
-import { ArrowRight, Mail } from 'lucide-react';
+import { ArrowRight, Mail } from '@/components/ui/icons';
 import { useOrganization } from '@/components/dashboard/org-context';
 import { HomeTopbar } from '@/components/home/home-topbar';
 import { HomeWorkspaceOverview } from '@/components/home/home-workspace-overview';

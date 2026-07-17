@@ -20,7 +20,7 @@ import {
     Search,
     UserRound,
     Wand2,
-} from 'lucide-react';
+} from '@/components/ui/icons';
 import { toast } from 'sonner';
 
 import { SchemaBuilder } from '@/components/agents/schema-builder';
@@ -243,7 +243,7 @@ export default function NewAgentPage({
                 eyebrow="Guided builder"
                 backHref={`/pod/${podId}/ai`}
                 backLabel="Agents"
-                productIconTone="agents"
+                productIconKind="agents"
                 meta={(
                     <span className="text-xs text-[var(--text-secondary)]">
                         {hasName ? 'Ready to create' : 'Draft'} · {draftAgent.tool_sets.length} tools

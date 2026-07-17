@@ -8,7 +8,7 @@
 import { useMemo } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { dedupToolInvocations, isFinalAnswerMessage } from "lemma-sdk";
-import { Database } from "lucide-react";
+import { Database } from "@/components/ui/icons";
 import { cn } from "@/lib/utils";
 import { InlineLoader } from "@/components/brand/loader";
 import {

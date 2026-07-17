@@ -2,7 +2,7 @@
 
 import Link from 'next/link';
 import type { ReactNode } from 'react';
-import { ArrowRight, Info } from 'lucide-react';
+import { ArrowRight, Info } from '@/components/ui/icons';
 
 import { ConceptIllustration, hasConceptIllustration } from '@/components/education/concept-illustration';
 import { ProductIcon } from '@/components/pod/product-icon';
@@ -61,7 +61,7 @@ export function ConceptHint({ concept, children, side = 'bottom', className }: C
                     </div>
                 ) : null}
                 <div className="flex items-center gap-2">
-                    <ProductIcon tone={entry.tone} size="sm" />
+                    <ProductIcon kind={entry.iconKind} size="sm" />
                     <span className="text-sm font-semibold text-[var(--text-primary)]">{entry.term}</span>
                 </div>
                 <p className="mt-2 text-xs leading-5 text-[var(--text-primary)]">{entry.oneLiner}</p>

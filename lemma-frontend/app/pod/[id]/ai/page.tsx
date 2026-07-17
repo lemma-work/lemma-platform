@@ -11,8 +11,8 @@ import {
     Plus,
     Share2,
     Waypoints,
-    type LucideIcon,
-} from 'lucide-react';
+    type LemmaIcon,
+} from '@/components/ui/icons';
 import { toast } from 'sonner';
 
 import { LemmaMark } from '@/components/brand/logo';
@@ -126,7 +126,7 @@ export default function AgentsPage({
         <ResourceIndexShell>
             <ResourceIndexHeader
                 title="Agents"
-                productIconTone="agents"
+                productIconKind="agents"
                 meta={<ConceptHint concept="agent" />}
                 actions={(
                     canCreateAgent ? <Link href={`/pod/${podId}/agents/new`}>
@@ -264,7 +264,7 @@ function AgentMonogram({ name }: { name: string }) {
     );
 }
 
-function AgentStat({ icon: Icon, value, label }: { icon: LucideIcon; value: number; label: string }) {
+function AgentStat({ icon: Icon, value, label }: { icon: LemmaIcon; value: number; label: string }) {
     return (
         <span className="inline-flex items-center gap-1" title={label} aria-label={label}>
             <Icon className="h-3.5 w-3.5" aria-hidden />

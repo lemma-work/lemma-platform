@@ -27,7 +27,7 @@ import {
     Table as TableIcon,
     Wrench,
     X,
-} from 'lucide-react';
+} from '@/components/ui/icons';
 import Editor from '@monaco-editor/react';
 import { SchemaBuilder } from '@/components/agents/schema-builder';
 import { MarkdownEditor } from '@/components/documents/markdown-editor';

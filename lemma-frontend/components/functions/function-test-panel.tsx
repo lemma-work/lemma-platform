@@ -11,7 +11,7 @@ import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Badge } from '@/components/ui/badge';
 import { Tabs, TabsList, TabsTrigger } from '@/components/ui/tabs';
-import { Play, Loader2, Clock, FunctionSquare, X, RotateCcw, FileJson, TerminalSquare, AlertCircle, CheckCircle2, ChevronRight } from 'lucide-react';
+import { Play, Loader2, Clock, FunctionSquare, X, RotateCcw, FileJson, TerminalSquare, AlertCircle, CheckCircle2, ChevronRight } from '@/components/ui/icons';
 import type { FunctionRun } from '@/lib/types';
 import { cn } from '@/lib/utils';
 import { toast } from 'sonner';

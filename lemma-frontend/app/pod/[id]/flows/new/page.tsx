@@ -10,7 +10,7 @@ import {
     Plus,
     Sparkles,
     Workflow,
-} from 'lucide-react';
+} from '@/components/ui/icons';
 import { toast } from 'sonner';
 
 import { FlowTemplate, flowTemplates, getTemplateById } from '@/components/flows/flow-templates';
@@ -173,7 +173,7 @@ export default function NewFlowPage({
                 eyebrow="Guided builder"
                 backHref={`/pod/${podId}/flows`}
                 backLabel="Workflows"
-                productIconTone="workflows"
+                productIconKind="workflows"
                 meta={<PodHeaderMetrics items={[
                     { label: 'Status', value: hasName ? 'Ready' : 'Draft', tone: hasName ? 'ready' : 'muted' },
                     { label: 'Starter', value: selectedTemplateName, tone: selectedTemplate ? 'ready' : 'muted' },
@@ -476,7 +476,7 @@ function WorkflowPreview({
                     <img src={iconUrl} alt="" className="h-14 w-14 shrink-0 rounded-md object-cover" />
                 ) : (
                     <span className="flex h-14 w-14 shrink-0 items-center justify-center">
-                        <ProductIcon tone="workflows" size="lg" />
+                        <ProductIcon kind="workflows" size="lg" />
                     </span>
                 )}
                 <div className="min-w-0">

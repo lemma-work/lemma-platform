@@ -16,7 +16,7 @@
  */
 
 import type { ReactNode } from 'react';
-import { Check } from 'lucide-react';
+import { Check } from '@/components/ui/icons';
 
 import { ResourcePanel, ResourcePanelHeader } from '@/components/pod/resource-layout';
 import { cn } from '@/lib/utils';

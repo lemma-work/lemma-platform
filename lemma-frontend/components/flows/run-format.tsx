@@ -13,7 +13,7 @@ import {
     Timer,
     UserRound,
     XCircle,
-} from 'lucide-react';
+} from '@/components/ui/icons';
 import { NodeType, WorkflowNode, WorkflowRun } from '@/lib/types';
 import { getPreviewFields, truncatePreview } from '@/lib/utils/payload-preview';
 

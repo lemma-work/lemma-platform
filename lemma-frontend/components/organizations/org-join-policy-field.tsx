@@ -1,6 +1,6 @@
 'use client';
 
-import { Globe2 } from 'lucide-react';
+import { Globe2 } from '@/components/ui/icons';
 
 import { OrganizationJoinPolicy } from '@/lib/types';
 import { Label } from '@/components/ui/label';

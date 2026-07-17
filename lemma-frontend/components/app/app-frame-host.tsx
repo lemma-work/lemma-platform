@@ -1,7 +1,7 @@
 'use client';
 
 import { useState } from 'react';
-import { PanelsTopLeft } from 'lucide-react';
+import { PanelsTopLeft } from '@/components/ui/icons';
 import { useApp } from '@/components/app/app-context';
 import { AppFrame } from '@/components/app/app-launch';
 import { StepLoader } from '@/components/brand/loader';

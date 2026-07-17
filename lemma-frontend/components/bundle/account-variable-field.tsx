@@ -1,7 +1,7 @@
 'use client';
 
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { Check, ExternalLink, Loader2, Plug, Plus, X } from 'lucide-react';
+import { Check, ExternalLink, Loader2, Plug, Plus, X } from '@/components/ui/icons';
 import { buildSchemaFormPayload, buildSchemaFormValues } from 'lemma-sdk';
 import { toast } from 'sonner';
 

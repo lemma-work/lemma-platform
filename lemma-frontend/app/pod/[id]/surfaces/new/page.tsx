@@ -23,7 +23,7 @@ export default function NewSurfacePage({
                     eyebrow="External entry points"
                     backHref={`/pod/${podId}/surfaces`}
                     backLabel="Surfaces"
-                    productIconTone="surfaces"
+                    productIconKind="surfaces"
                 />
                 <main className="min-h-0 flex-1 overflow-y-auto">
                     <div className="agent-builder-canvas mx-auto w-full max-w-[76rem] px-6 pb-24 pt-6">

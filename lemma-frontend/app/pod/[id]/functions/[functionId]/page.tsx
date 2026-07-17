@@ -1,7 +1,7 @@
 'use client';
 
 import { use, useCallback, useEffect, useRef, useState } from 'react';
-import { Loader2, Play, Save, Share2 } from 'lucide-react';
+import { Loader2, Play, Save, Share2 } from '@/components/ui/icons';
 
 import { FunctionEditor } from '@/components/functions/function-editor';
 import { FunctionTestPanel } from '@/components/functions/function-test-panel';

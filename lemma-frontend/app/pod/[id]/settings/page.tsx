@@ -3,7 +3,7 @@
 import Link from 'next/link';
 import { use, useState } from 'react';
 import type { AgentRuntimeConfig } from 'lemma-sdk';
-import { Info, Loader2, Settings2 } from 'lucide-react';
+import { Info, Loader2, Settings2 } from '@/components/ui/icons';
 
 import { toast } from 'sonner';
 

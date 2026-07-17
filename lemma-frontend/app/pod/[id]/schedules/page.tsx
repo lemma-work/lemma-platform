@@ -3,7 +3,7 @@
 import { use, useMemo, useState, type ReactNode } from 'react';
 import Link from 'next/link';
 import { useSearchParams } from 'next/navigation';
-import { ArrowLeft, ArrowRight, CalendarClock, CheckCircle2, Database, Loader2, Pause, Play, Plus, Share2, Sparkles, Webhook, X } from 'lucide-react';
+import { ArrowLeft, ArrowRight, CalendarClock, CheckCircle2, Database, Loader2, Pause, Play, Plus, Share2, Sparkles, Webhook, X } from '@/components/ui/icons';
 import { toast } from 'sonner';
 
 import { DestructiveConfirmationDialog } from '@/components/shared/destructive-confirmation-dialog';
@@ -491,7 +491,7 @@ export default function PodSchedulesPage({
         <ResourceIndexShell>
             <ResourceIndexHeader
                 title="Schedules"
-                productIconTone="schedules"
+                productIconKind="schedules"
                 meta={<ConceptHint concept="schedule" />}
                 actions={canCreateSchedule ? (
                     <Button asChild size="sm" className="gap-2">
@@ -553,7 +553,7 @@ export default function PodSchedulesPage({
                                     <div className="grid gap-3 sm:grid-cols-2">
                                         <ScheduleChoiceCard
                                             active={targetKind === 'workflow'}
-                                            icon={<ProductIcon tone="workflows" size="lg" />}
+                                            icon={<ProductIcon kind="workflows" size="lg" />}
                                             title="Workflow"
                                             description="Run a repeatable procedure."
                                             onClick={() => {
@@ -563,7 +563,7 @@ export default function PodSchedulesPage({
                                         />
                                         <ScheduleChoiceCard
                                             active={targetKind === 'agent'}
-                                            icon={<ProductIcon tone="agents" size="lg" />}
+                                            icon={<ProductIcon kind="agents" size="lg" />}
                                             title="Agent"
                                             description="Wake up an AI worker."
                                             onClick={() => {
@@ -599,10 +599,10 @@ export default function PodSchedulesPage({
                                                 key={option.value}
                                                 active={scheduleType === option.value}
                                                 icon={option.value === ScheduleType.TIME
-                                                    ? <ProductIcon tone="schedules" size="lg" />
+                                                    ? <ProductIcon kind="schedules" size="lg" />
                                                     : option.value === ScheduleType.DATASTORE
-                                                        ? <ProductIcon tone="data" size="lg" />
-                                                        : <ProductIcon tone="surfaces" size="lg" />}
+                                                        ? <ProductIcon kind="data" size="lg" />
+                                                        : <ProductIcon kind="surfaces" size="lg" />}
                                                 title={option.label}
                                                 description={option.description}
                                                 onClick={() => setScheduleType(option.value)}
@@ -1080,7 +1080,7 @@ function ScheduleCreatePreview({
     return (
         <aside className="lg:self-start">
             <div className="flex items-start gap-3">
-                <ProductIcon tone={targetKind === 'agent' ? 'agents' : 'workflows'} size="lg" />
+                <ProductIcon kind={targetKind === 'agent' ? 'agents' : 'workflows'} size="lg" />
                 <div className="min-w-0">
                     <p className="section-label">Preview</p>
                     <h3 className="mt-1 truncate text-base font-semibold text-[var(--text-primary)]">{formatTargetLabel(targetName)}</h3>
@@ -1159,12 +1159,12 @@ function ScheduleRow({
         ? `On ${workflowEventConfig.connector_trigger_id}${workflowEventConfig.connector_id ? ` from ${workflowEventConfig.connector_id}` : ''}`
         : describeScheduleConfig(schedule);
     // Trigger type drives the glyph; target kind (workflow/agent) closes the flow line.
-    const triggerTone = schedule.schedule_type === ScheduleType.DATASTORE
+    const triggerKind = schedule.schedule_type === ScheduleType.DATASTORE
         ? 'data'
         : schedule.schedule_type === ScheduleType.WEBHOOK
             ? 'connectors'
             : 'schedules';
-    const targetKindTone = kind === 'agent' ? 'agents' : 'workflows';
+    const targetIconKind = kind === 'agent' ? 'agents' : 'workflows';
     const tableDetail = configDetails.find((detail) => detail.label === 'Table');
     const opsDetail = configDetails.find((detail) => detail.label === 'Ops');
     const hasMenuActions = canUpdate || canDelete;
@@ -1176,7 +1176,7 @@ function ScheduleRow({
         <div className="resource-index-card group p-4">
             <div className="flex items-start gap-3">
                 <Link href={getScheduleHref(podId, schedule)} className="flex min-w-0 flex-1 items-center gap-3">
-                    <ProductIcon tone={triggerTone} size="lg" />
+                    <ProductIcon kind={triggerKind} size="lg" />
                     <p className="truncate font-display text-base font-semibold text-[var(--text-primary)]">{targetName}</p>
                 </Link>
                 <div className="flex shrink-0 flex-col items-end gap-2">
@@ -1254,7 +1254,7 @@ function ScheduleRow({
                     )}
                     <ArrowRight className="h-3.5 w-3.5 shrink-0 text-[var(--text-tertiary)]" aria-hidden />
                     <span className="inline-flex items-center gap-1 text-[var(--text-secondary)]">
-                        <ProductIcon tone={targetKindTone} size="xs" />
+                        <ProductIcon kind={targetIconKind} size="xs" />
                         {kind === 'agent' ? 'agent' : 'workflow'}
                     </span>
                     <ResourceVisibilityBadge visibility={schedule.visibility} resourceLabel="schedules" hideWhenDefault />
@@ -1266,4 +1266,3 @@ function ScheduleRow({
         </div>
     );
 }
-

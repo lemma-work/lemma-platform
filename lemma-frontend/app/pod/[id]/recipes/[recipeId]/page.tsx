@@ -2,7 +2,7 @@
 
 import { use, type ReactNode } from 'react';
 import Link from 'next/link';
-import { ArrowLeft, Check, ChevronDown, ExternalLink, PlayCircle, Sparkles } from 'lucide-react';
+import { ArrowLeft, Check, ChevronDown, ExternalLink, PlayCircle, Sparkles } from '@/components/ui/icons';
 
 import { ProtectedRoute } from '@/components/auth/protected-route';
 import { RecipeReadme } from '@/components/recipes/recipe-readme';
@@ -40,7 +40,7 @@ export default function RecipeDetailPage({ params }: { params: Promise<{ id: str
                 <ResourceIndexShell>
                     <ResourceIndexHeader
                         title="Recipe not found"
-                        productIconTone="apps"
+                        productIconKind="apps"
                         backHref={`/pod/${podId}/recipes`}
                         backLabel="Recipes"
                     />
@@ -79,7 +79,7 @@ function RecipeDetail({ podId, recipe }: { podId: string; recipe: Recipe }) {
         <ResourceIndexShell>
             <ResourceIndexHeader
                 title={recipe.name}
-                productIconTone="apps"
+                productIconKind="apps"
                 backHref={`/pod/${podId}/recipes`}
                 backLabel="Recipes"
                 actions={recipe.source.kind === 'repo' ? (

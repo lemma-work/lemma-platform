@@ -18,7 +18,7 @@ import { MobileSidebarDrawer } from "@/components/pod/mobile-sidebar-drawer";
 import { PodLayoutProvider, usePodLayout } from "@/components/pod/pod-layout-context";
 import { WorkspaceSidebar } from "@/components/pod/workspace-sidebar";
 import { Button } from "@/components/ui/button";
-import { ArrowLeft, PanelLeftOpen, Settings, X } from "lucide-react";
+import { ArrowLeft, PanelLeftOpen, Settings, X } from "@/components/ui/icons";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
 import { getLemmaClient } from "@/lib/sdk/lemma-client";
 import { usePod } from "@/lib/hooks/use-pods";

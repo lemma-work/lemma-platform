@@ -28,7 +28,7 @@ import {
     History,
     Settings,
     Clock3,
-} from 'lucide-react';
+} from '@/components/ui/icons';
 import { cn } from '@/lib/utils';
 import { SchemaBuilder } from '@/components/agents/schema-builder';
 import { DropdownMenu, DropdownMenuTrigger, DropdownMenuContent, DropdownMenuItem, DropdownMenuSeparator } from '@/components/ui/dropdown-menu';

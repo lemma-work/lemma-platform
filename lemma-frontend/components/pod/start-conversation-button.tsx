@@ -1,7 +1,7 @@
 'use client';
 
 import { useRouter } from 'next/navigation';
-import { MessageSquarePlus } from 'lucide-react';
+import { MessageSquarePlus } from '@/components/ui/icons';
 
 import { Button } from '@/components/ui/button';
 import { cn } from '@/lib/utils';

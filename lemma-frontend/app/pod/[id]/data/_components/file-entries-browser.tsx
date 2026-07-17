@@ -1,6 +1,6 @@
 'use client';
 
-import { Download, MoreHorizontal, Trash2 } from 'lucide-react';
+import { Download, MoreHorizontal, Trash2 } from '@/components/ui/icons';
 
 import { formatDate, formatFileSize } from '@/components/documents/file-type-icon';
 import { ProductIcon } from '@/components/pod/product-icon';
@@ -62,7 +62,7 @@ export function FileEntriesBrowser({
                                     className="data-file-list-entry-button flex min-w-0 items-center gap-2 rounded px-1 py-1 text-left"
                                     onClick={() => onFolderOpen(getDatastoreFilePath(entry))}
                                 >
-                                    <ProductIcon tone="folders" size="sm" />
+                                    <ProductIcon kind="folders" size="sm" />
                                     <span className="truncate text-[var(--text-primary)]">{entry.name}</span>
                                 </button>
                             ) : (
@@ -79,7 +79,7 @@ export function FileEntriesBrowser({
                                             className="h-6 w-6 shrink-0 rounded object-cover"
                                         />
                                     ) : (
-                                        <ProductIcon tone="files" size="sm" />
+                                        <ProductIcon kind="files" size="sm" />
                                     )}
                                     <span className="truncate text-[var(--text-primary)]">{entry.name}</span>
                                 </button>
@@ -142,7 +142,7 @@ export function FileEntriesBrowser({
                             <div className="mb-3">
                                 {folderEntry ? (
                                     <div className="flex aspect-[4/3] w-full items-center justify-center">
-                                        <ProductIcon tone="folders" size="xl" />
+                                        <ProductIcon kind="folders" size="xl" />
                                     </div>
                                 ) : isImageFile(entry) && imagePreviewUrls[getDatastoreFilePath(entry)] ? (
                                     // eslint-disable-next-line @next/next/no-img-element
@@ -153,7 +153,7 @@ export function FileEntriesBrowser({
                                     />
                                 ) : (
                                     <div className="flex aspect-[4/3] w-full items-center justify-center">
-                                        <ProductIcon tone="files" size="xl" />
+                                        <ProductIcon kind="files" size="xl" />
                                     </div>
                                 )}
                             </div>

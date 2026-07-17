@@ -24,7 +24,7 @@ function OrganizationUsagePageContent({ params }: { params: Promise<{ id: string
     return (
         <PlainPageShell
             title="Usage"
-            icon={<ProductIcon tone="settings" size="sm" />}
+            icon={<ProductIcon kind="settings" size="sm" />}
             backHref="/"
             backLabel="Home"
             meta={organization?.name || 'Organization'}

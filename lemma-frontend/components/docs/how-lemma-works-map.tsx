@@ -2,7 +2,7 @@
 
 import Link from 'next/link';
 import { useMemo, useState } from 'react';
-import { ArrowRight } from 'lucide-react';
+import { ArrowRight } from '@/components/ui/icons';
 
 import { ProductIcon } from '@/components/pod/product-icon';
 import { CONCEPTS, type ConceptId } from '@/lib/education/concepts';
@@ -128,7 +128,7 @@ export function HowLemmaWorksMap() {
             <div className="surface-panel flex flex-col gap-3 p-5 md:flex-row md:items-start md:justify-between">
                 <div className="flex min-w-0 items-start gap-3">
                     <div className="mt-0.5 shrink-0">
-                        <ProductIcon tone={entry.tone} size="md" />
+                        <ProductIcon kind={entry.iconKind} size="md" />
                     </div>
                     <div className="min-w-0">
                         <h3 className="text-base font-semibold text-[var(--text-primary)]">{entry.term}</h3>

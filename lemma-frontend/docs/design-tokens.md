@@ -66,6 +66,39 @@ Component tokens are what primitives should consume:
 
 New shared primitives should prefer these before reaching for raw color tokens.
 
+## Iconography
+
+Lemma uses Phosphor as its single interface glyph family. Product code imports
+from `@/components/ui/icons`; only that vocabulary module imports
+`@phosphor-icons/react` directly.
+
+The governing principle is:
+
+> icons are a grammar: nouns identify things, verbs perform actions, and states report outcomes
+
+Rules:
+
+1. One concept uses one glyph everywhere. The vocabulary module owns the mapping.
+2. Use `regular` weight by default. Use `fill` for selected state, `bold` for
+   very small status marks, and `duotone` only for large explanatory artwork.
+3. Prefer the 12, 16, 20, 24, and 32 pixel size steps.
+4. Navigation and resource-identity icons are monochrome. Inactive navigation
+   uses a tertiary `regular` icon; selected navigation uses a secondary-neutral
+   `fill` icon while its label becomes primary, and the active rail carries the
+   single accent.
+5. Color is reserved for meaning that changes: success, warning, error, live
+   activity, destructive actions, and other semantic state. Resource category
+   never changes an icon's color.
+6. Icon-only controls require an accessible name and, when the action is not
+   universal, a tooltip. Decorative icons use `aria-hidden="true"`.
+7. Do not use emoji, Unicode arrows, or punctuation as interface icons.
+8. Keep brand marks, third-party logos, user-provided images, illustrations,
+   diagrams, progress geometry, and data visualization outside the icon family.
+
+`ProductIcon` keeps the stable resource nouns used across pods. Its `kind`
+selects the glyph and its `state` selects `regular` or `fill`; identity never
+selects color.
+
 ## Usage Rules
 
 1. Use warm neutrals for the frame and surfaces before introducing color.

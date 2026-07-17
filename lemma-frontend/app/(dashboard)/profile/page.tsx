@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { useState } from "react";
-import { Check, CheckCircle2, MessageCircle, Plus, Settings, Smartphone, User } from "lucide-react";
+import { Check, CheckCircle2, MessageCircle, Plus, Settings, Smartphone, User } from "@/components/ui/icons";
 import { useOrganization } from "@/components/dashboard/org-context";
 import { useProfile, useUpdateProfile } from "@/lib/hooks/use-user";
 import { InlineLoader, StepLoader } from "@/components/brand/loader";
@@ -52,7 +52,7 @@ export default function ProfilePage() {
         return (
             <PlainPageShell
                 title="Profile"
-                icon={<ProductIcon tone="settings" size="sm" />}
+                icon={<ProductIcon kind="settings" size="sm" />}
                 backHref="/"
                 backLabel="Home"
                 meta="Account"
@@ -68,7 +68,7 @@ export default function ProfilePage() {
     return (
         <PlainPageShell
             title="Profile"
-            icon={<ProductIcon tone="settings" size="sm" />}
+            icon={<ProductIcon kind="settings" size="sm" />}
             backHref="/"
             backLabel="Home"
             meta="Account"
@@ -119,7 +119,7 @@ export default function ProfilePage() {
                             ) : null}
                             {organizations.length <= 1 && currentOrg ? (
                                 <div className="settings-info-row">
-                                    <ProductIcon tone="pods" size="sm" />
+                                    <ProductIcon kind="pods" size="sm" />
                                     <span className="min-w-0 flex-1 truncate">{currentOrg.name}</span>
                                     <Check className="h-3.5 w-3.5 text-[var(--delight)]" />
                                 </div>

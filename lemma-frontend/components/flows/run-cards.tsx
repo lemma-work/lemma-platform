@@ -1,5 +1,5 @@
 import Link from 'next/link';
-import { Box, ChevronRight, Loader2, Play, Sparkles } from 'lucide-react';
+import { Box, ChevronRight, Loader2, Play, Sparkles } from '@/components/ui/icons';
 import { Button } from '@/components/ui/button';
 import { EmptyState, QuietEmptyState } from '@/components/shared/empty-state';
 import { cn } from '@/lib/utils';

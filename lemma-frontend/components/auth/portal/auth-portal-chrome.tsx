@@ -4,6 +4,7 @@
 
 import { useEffect, useMemo, useState, type ReactNode } from "react";
 import { useLocation } from "react-router-dom";
+import { LockKeyhole, RefreshCw, ShieldCheck } from "@/components/ui/icons";
 
 import {
   clearStoredRedirectUri,
@@ -69,87 +70,8 @@ export function LemmaMark() {
 }
 
 export function AuthIcon({ name }: { name: "lock" | "refresh" | "shield" }) {
-  if (name === "refresh") {
-    return (
-      <svg
-        className="auth-icon"
-        aria-hidden="true"
-        viewBox="0 0 24 24"
-        fill="none"
-      >
-        <path
-          d="M20 11a8 8 0 0 0-14.9-4M4 5v5h5"
-          stroke="currentColor"
-          strokeLinecap="round"
-          strokeLinejoin="round"
-          strokeWidth="2.2"
-        />
-        <path
-          d="M4 13a8 8 0 0 0 14.9 4M20 19v-5h-5"
-          stroke="currentColor"
-          strokeLinecap="round"
-          strokeLinejoin="round"
-          strokeWidth="2.2"
-        />
-      </svg>
-    );
-  }
-
-  if (name === "lock") {
-    return (
-      <svg
-        className="auth-icon"
-        aria-hidden="true"
-        viewBox="0 0 24 24"
-        fill="none"
-      >
-        <rect
-          x="6.5"
-          y="10.5"
-          width="11"
-          height="9"
-          rx="2"
-          stroke="currentColor"
-          strokeWidth="2.2"
-        />
-        <path
-          d="M9 10.5V8a3 3 0 0 1 6 0v2.5"
-          stroke="currentColor"
-          strokeLinecap="round"
-          strokeWidth="2.2"
-        />
-        <path
-          d="M12 14v2"
-          stroke="currentColor"
-          strokeLinecap="round"
-          strokeWidth="2.2"
-        />
-      </svg>
-    );
-  }
-
-  return (
-    <svg
-      className="auth-icon"
-      aria-hidden="true"
-      viewBox="0 0 24 24"
-      fill="none"
-    >
-      <path
-        d="M12 3.5 19 6v5.2c0 4.3-2.7 7.8-7 9.3-4.3-1.5-7-5-7-9.3V6l7-2.5Z"
-        stroke="currentColor"
-        strokeLinejoin="round"
-        strokeWidth="2.2"
-      />
-      <path
-        d="m9 12 2 2 4-4.5"
-        stroke="currentColor"
-        strokeLinecap="round"
-        strokeLinejoin="round"
-        strokeWidth="2.2"
-      />
-    </svg>
-  );
+  const Icon = name === "refresh" ? RefreshCw : name === "lock" ? LockKeyhole : ShieldCheck;
+  return <Icon className="auth-icon" aria-hidden="true" weight="regular" />;
 }
 
 export function DestinationFavicon({

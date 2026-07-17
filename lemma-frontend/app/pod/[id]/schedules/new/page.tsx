@@ -2,7 +2,7 @@
 
 import { use, useMemo, useState, type ReactNode } from 'react';
 import { useRouter, useSearchParams } from 'next/navigation';
-import { ArrowLeft, ArrowRight, CalendarClock, CheckCircle2, Database, Loader2, Sparkles, Webhook } from 'lucide-react';
+import { ArrowLeft, ArrowRight, CalendarClock, CheckCircle2, Database, Loader2, Sparkles, Webhook } from '@/components/ui/icons';
 import { toast } from 'sonner';
 
 import { ProductIcon } from '@/components/pod/product-icon';
@@ -396,7 +396,7 @@ export default function NewSchedulePage({
                 eyebrow="Guided builder"
                 backHref={`/pod/${podId}/schedules`}
                 backLabel="Schedules"
-                productIconTone="schedules"
+                productIconKind="schedules"
                 meta={(
                     <span className="text-xs text-[var(--text-secondary)]">
                         {selectedTargetName ? 'Ready' : 'Draft'} · {scheduleType.toLowerCase()}
@@ -431,7 +431,7 @@ export default function NewSchedulePage({
                                         <div className="grid gap-3 sm:grid-cols-2">
                                             <ScheduleChoiceCard
                                                 active={targetKind === 'workflow'}
-                                                icon={<ProductIcon tone="workflows" size="lg" />}
+                                                icon={<ProductIcon kind="workflows" size="lg" />}
                                                 title="Workflow"
                                                 description="Run a repeatable procedure."
                                                 onClick={() => {
@@ -441,7 +441,7 @@ export default function NewSchedulePage({
                                             />
                                             <ScheduleChoiceCard
                                                 active={targetKind === 'agent'}
-                                                icon={<ProductIcon tone="agents" size="lg" />}
+                                                icon={<ProductIcon kind="agents" size="lg" />}
                                                 title="Agent"
                                                 description="Wake up an AI worker."
                                                 onClick={() => {
@@ -477,10 +477,10 @@ export default function NewSchedulePage({
                                                     key={option.value}
                                                     active={scheduleType === option.value}
                                                     icon={option.value === ScheduleType.TIME
-                                                        ? <ProductIcon tone="schedules" size="lg" />
+                                                        ? <ProductIcon kind="schedules" size="lg" />
                                                         : option.value === ScheduleType.DATASTORE
-                                                            ? <ProductIcon tone="data" size="lg" />
-                                                            : <ProductIcon tone="surfaces" size="lg" />}
+                                                            ? <ProductIcon kind="data" size="lg" />
+                                                            : <ProductIcon kind="surfaces" size="lg" />}
                                                     title={option.label}
                                                     description={option.description}
                                                     onClick={() => setScheduleType(option.value)}
@@ -895,7 +895,7 @@ function ScheduleCreatePreview({
     return (
         <aside className="lg:self-start">
             <div className="flex items-start gap-3">
-                <ProductIcon tone={targetKind === 'agent' ? 'agents' : 'workflows'} size="lg" />
+                <ProductIcon kind={targetKind === 'agent' ? 'agents' : 'workflows'} size="lg" />
                 <div className="min-w-0">
                     <p className="section-label">Preview</p>
                     <h3 className="mt-1 truncate text-base font-normal text-[var(--text-primary)]">{formatTargetLabel(targetName)}</h3>

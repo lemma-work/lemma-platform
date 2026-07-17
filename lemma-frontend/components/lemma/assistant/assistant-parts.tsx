@@ -3,6 +3,7 @@
 import { useEffect, useState, type ReactNode } from "react";
 import {
   ArrowUp,
+  ArrowUpRight,
   BarChart3,
   CheckSquare,
   ChevronDown,
@@ -10,9 +11,12 @@ import {
   FileOutput,
   FileText,
   Mail,
+  MoreHorizontal,
+  Pencil,
+  Sparkles,
   Square,
   Users,
-} from "lucide-react";
+} from "@/components/ui/icons";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -195,10 +199,10 @@ export interface EmptyStateProps {
 }
 
 export const DEFAULT_EMPTY_STATE_SUGGESTIONS: EmptyStateSuggestion[] = [
-  { text: "Help me get started", icon: "→" },
-  { text: "Summarize this for me", icon: "✦" },
-  { text: "Help me draft a reply", icon: "✎" },
-  { text: "Brainstorm next steps", icon: "⋯" },
+  { text: "Help me get started", icon: <ArrowUpRight className="size-3.5" aria-hidden="true" /> },
+  { text: "Summarize this for me", icon: <Sparkles className="size-3.5" aria-hidden="true" /> },
+  { text: "Help me draft a reply", icon: <Pencil className="size-3.5" aria-hidden="true" /> },
+  { text: "Brainstorm next steps", icon: <MoreHorizontal className="size-3.5" aria-hidden="true" /> },
 ];
 
 export function LemmaMarkIcon({ className }: { className?: string }) {
@@ -277,7 +281,7 @@ export function EmptyState({
             onClick={() => onSendMessage(suggestion.text)}
           >
             <span className="lemma-assistant-empty-state-suggestion-icon flex size-5 shrink-0 items-center justify-center rounded border text-xs transition-colors">
-              {suggestion.icon || "↗"}
+              {suggestion.icon || <ArrowUpRight className="size-3.5" aria-hidden="true" />}
             </span>
             <span className="min-w-0 truncate">{suggestion.text}</span>
           </button>

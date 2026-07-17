@@ -2,7 +2,7 @@
 
 import Link from 'next/link';
 import { usePathname, useRouter, useSearchParams } from 'next/navigation';
-import { AlertCircle, CheckCircle2, X } from 'lucide-react';
+import { AlertCircle, CheckCircle2, X } from '@/components/ui/icons';
 import { toast } from 'sonner';
 import { ApiError } from 'lemma-sdk';
 

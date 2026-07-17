@@ -10,7 +10,7 @@ import {
   UserRound,
   UserPlus,
   UsersRound,
-} from "lucide-react";
+} from "@/components/ui/icons";
 
 import { HarnessKind } from "lemma-sdk";
 

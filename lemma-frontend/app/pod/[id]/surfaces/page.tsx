@@ -20,7 +20,7 @@ export default function PodSurfacesPage({
             <ResourceIndexShell>
                 <ResourceIndexHeader
                     title="Surfaces"
-                    productIconTone="surfaces"
+                    productIconKind="surfaces"
                     meta={<ConceptHint concept="surface" />}
                 />
                 <SectionPrimer concept="surface" className="mb-4" />

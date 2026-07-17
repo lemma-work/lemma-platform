@@ -2,7 +2,7 @@
 
 import Link from 'next/link';
 import type { ReactNode } from 'react';
-import { ArrowLeft } from 'lucide-react';
+import { ArrowLeft } from '@/components/ui/icons';
 import { HomeTopbar } from '@/components/home/home-topbar';
 import { cn } from '@/lib/utils';
 

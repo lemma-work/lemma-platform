@@ -16,7 +16,7 @@ import {
   isRenderableUserInteractionInvocation,
   userApprovalResolvedDecision,
 } from "lemma-sdk";
-import { Check, ChevronDown, Copy } from "lucide-react";
+import { Check, ChevronDown, Copy } from "@/components/ui/icons";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
 import {

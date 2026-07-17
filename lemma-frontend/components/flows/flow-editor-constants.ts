@@ -10,7 +10,7 @@ import {
     Timer,
     UserRound,
     Webhook,
-} from 'lucide-react';
+} from '@/components/ui/icons';
 
 import { FlowStartType, NodeType } from '@/lib/types';
 import type { ConditionOperator, StepType } from './flow-editor-types';

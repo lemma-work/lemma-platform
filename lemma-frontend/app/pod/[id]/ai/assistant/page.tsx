@@ -2,7 +2,7 @@
 
 import { use, useState } from 'react';
 import { useRouter } from 'next/navigation';
-import { ArrowUp } from 'lucide-react';
+import { ArrowUp } from '@/components/ui/icons';
 
 import { LemmaMark } from '@/components/brand/logo';
 import { InlineChannelForm } from '@/components/pod/inline-channel-form';
@@ -69,7 +69,7 @@ export default function PodAssistantPage({
         <ResourceDetailShell>
             <ResourceDetailHeader
                 title="Pod Assistant"
-                productIconTone="agents"
+                productIconKind="agents"
                 backHref={`/pod/${podId}/ai`}
                 backLabel="Agents"
                 fullscreen={false}

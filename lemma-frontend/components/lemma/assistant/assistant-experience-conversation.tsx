@@ -4,6 +4,7 @@ import type { ReactNode, RefObject } from "react";
 import { cn } from "@/lib/utils";
 import { InlineLoader } from "@/components/brand/loader";
 import { Button } from "@/components/ui/button";
+import { ArrowDown } from "@/components/ui/icons";
 import {
   collectCompletedRunTraceGroups,
   messageHasToolActivity,
@@ -272,7 +273,7 @@ export function AssistantExperienceConversation({
         className="sticky bottom-2 z-10 ml-auto size-8 shadow-md"
         aria-label="Scroll to latest messages"
       >
-        ↓
+        <ArrowDown className="size-4" aria-hidden="true" />
       </Button>
       ) : null}
       {(hasMessages || isConversationBusy || showAssistantErrorInTranscript) ? (

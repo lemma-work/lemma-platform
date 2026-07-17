@@ -1,7 +1,7 @@
 "use client";
 
 import { forwardRef, type ComponentPropsWithoutRef, type ReactNode } from "react";
-import { X } from "lucide-react";
+import { X } from "@/components/ui/icons";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";

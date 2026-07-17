@@ -2,7 +2,7 @@
 
 import { useCallback, useState } from 'react';
 import { useQueryClient } from '@tanstack/react-query';
-import { Copy, ExternalLink, RefreshCw, Share2 } from 'lucide-react';
+import { Copy, ExternalLink, RefreshCw, Share2 } from '@/components/ui/icons';
 import { toast } from 'sonner';
 
 import { ResourceDetailHeader } from '@/components/pod/resource-layout';
@@ -64,7 +64,7 @@ export function AppFrame({
         <div className="embedded-canvas relative flex h-full w-full flex-col overflow-hidden text-[var(--text-primary)]">
             <ResourceDetailHeader
                 title={title}
-                productIconTone="apps"
+                productIconKind="apps"
                 backHref={`/pod/${podId}/app/pages`}
                 backLabel="Apps"
                 actions={(

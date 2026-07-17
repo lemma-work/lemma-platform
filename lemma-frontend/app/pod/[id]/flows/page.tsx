@@ -18,8 +18,8 @@ import {
     Trash2,
     UserRound,
     Zap,
-    type LucideIcon,
-} from 'lucide-react';
+    type LemmaIcon,
+} from '@/components/ui/icons';
 import { toast } from 'sonner';
 
 import { ConceptHint } from '@/components/education/concept-hint';
@@ -67,7 +67,7 @@ type Participant = {
 };
 
 // Turns the cryptic "Fn S" footer legend into a legible, colored typed-step strip.
-const STEP_KIND_META: Record<ParticipantTone, { label: string; icon: LucideIcon; iconClassName: string }> = {
+const STEP_KIND_META: Record<ParticipantTone, { label: string; icon: LemmaIcon; iconClassName: string }> = {
     ai: { label: 'Agent', icon: Sparkles, iconClassName: 'text-[var(--state-success)]' },
     function: { label: 'Function', icon: Zap, iconClassName: 'text-[var(--state-info)]' },
     human: { label: 'Human', icon: UserRound, iconClassName: 'text-[var(--state-warning)]' },
@@ -347,7 +347,7 @@ export default function FlowsIndexPage({
         <ResourceIndexShell>
             <ResourceIndexHeader
                 title="Workflows"
-                productIconTone="workflows"
+                productIconKind="workflows"
                 meta={<ConceptHint concept="flow" />}
                 actions={(
                     <div className="flex items-center gap-2">
@@ -710,7 +710,7 @@ function WorkflowCard({
                     className="custom-focus-ring rounded-lg"
                     aria-label={`Open workflow ${flow.name}`}
                 >
-                    <ProductIcon tone="workflows" size="lg" />
+                    <ProductIcon kind="workflows" size="lg" />
                 </Link>
                 {hasMenuActions ? (
                     <DropdownMenu>

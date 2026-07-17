@@ -1,7 +1,7 @@
 'use client';
 
 import { useState } from 'react';
-import { ArrowUpRight, Github, PackageOpen, Share2, Upload } from 'lucide-react';
+import { ArrowUpRight, Github, PackageOpen, Share2, Upload } from '@/components/ui/icons';
 import type { PodRecipe } from 'lemma-sdk';
 
 import { PodSettingsPanel } from '@/components/pod/pod-settings-shell';

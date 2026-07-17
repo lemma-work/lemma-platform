@@ -1,7 +1,7 @@
 'use client';
 
 import { use, useMemo, useState } from 'react';
-import { PackageOpen, Search } from 'lucide-react';
+import { PackageOpen, Search } from '@/components/ui/icons';
 
 import { ProtectedRoute } from '@/components/auth/protected-route';
 import { EmptyState } from '@/components/shared/empty-state';
@@ -48,7 +48,7 @@ export default function PodRecipesPage({ params }: { params: Promise<{ id: strin
             <ResourceIndexShell>
                 <ResourceIndexHeader
                     title="Recipes"
-                    productIconTone="apps"
+                    productIconKind="apps"
                     actions={(
                         <div className="relative w-full sm:w-72">
                             <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-[var(--text-tertiary)]" />

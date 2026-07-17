@@ -18,8 +18,8 @@ import {
   Terminal,
   UsersRound,
   Workflow,
-  type LucideIcon,
-} from "lucide-react";
+  type LemmaIcon,
+} from "@/components/ui/icons";
 
 import { ConfettiBurst } from "@/components/shared/resource-feedback";
 import { HARNESS_LOGOS } from "@/components/agents/agent-runtime-helpers";
@@ -38,7 +38,7 @@ function getInitials(name: string, fallback = "?") {
 // Real section names from the pod sidebar (components/pod/workspace-sidebar.tsx)
 // — the mock nav shows the actual vocabulary a pod will have instead of
 // abstract placeholder bars that mean nothing.
-const PREVIEW_NAV_ITEMS: Array<{ label: string; icon: LucideIcon }> = [
+const PREVIEW_NAV_ITEMS: Array<{ label: string; icon: LemmaIcon }> = [
   { label: "Apps", icon: PanelsTopLeft },
   { label: "Agents", icon: Bot },
   { label: "Workflows", icon: Workflow },
@@ -55,7 +55,7 @@ const PREVIEW_NAV_ITEMS: Array<{ label: string; icon: LucideIcon }> = [
 // a person mostly keeps adding to a single pod over time — like a Notion
 // workspace, not a folder per project — so personal renders as one card with
 // items accumulating inside it instead of three standalone cards.
-const TEAM_EXAMPLE_PODS: Array<{ name: string; icon: LucideIcon; blurb: string }> = [
+const TEAM_EXAMPLE_PODS: Array<{ name: string; icon: LemmaIcon; blurb: string }> = [
   { name: "Support", icon: LifeBuoy, blurb: "Answers the common questions, hands you the rest." },
   { name: "Sales", icon: Handshake, blurb: "Drafts a follow-up after every call." },
   { name: "Engineering", icon: Bug, blurb: "Turns a bug report in Slack into a tracked ticket." },
@@ -65,7 +65,7 @@ const TEAM_EXAMPLE_PODS: Array<{ name: string; icon: LucideIcon; blurb: string }
 // single pod holds different building blocks, not just a list of bots.
 const PERSONAL_EXAMPLE_ITEMS: Array<{
   name: string;
-  icon: LucideIcon;
+  icon: LemmaIcon;
   kind: string;
   blurb: string;
 }> = [

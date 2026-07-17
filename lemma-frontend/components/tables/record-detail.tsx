@@ -1,7 +1,7 @@
 'use client';
 
 import { useState } from 'react';
-import { Calendar, ChevronLeft, ChevronRight, Clock, Trash2 } from 'lucide-react';
+import { Calendar, Check, ChevronLeft, ChevronRight, Clock, Trash2 } from '@/components/ui/icons';
 import { Button } from '@/components/ui/button';
 import { DestructiveConfirmationDialog } from '@/components/shared/destructive-confirmation-dialog';
 import { Sheet, SheetContent, SheetHeader, SheetTitle } from '@/components/ui/sheet';
@@ -160,9 +160,7 @@ export function RecordDetail({
                                             )}
                                         >
                                             {Boolean(fieldValue) ? (
-                                                <svg className="h-3 w-3" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={3}>
-                                                    <path strokeLinecap="round" strokeLinejoin="round" d="M5 13l4 4L19 7" />
-                                                </svg>
+                                                <Check className="size-3" weight="bold" aria-hidden="true" />
                                             ) : null}
                                         </button>
                                         <span className="ml-2 text-sm text-[var(--text-secondary)]">{Boolean(fieldValue) ? 'Yes' : 'No'}</span>

@@ -2,7 +2,7 @@
 
 import { use, useCallback, useEffect, useRef, useState, type ReactNode } from 'react';
 import { usePathname, useRouter, useSearchParams } from 'next/navigation';
-import { ArrowUp, Boxes, Loader2, Plus, Save, Share2 } from 'lucide-react';
+import { ArrowUp, Boxes, Loader2, Plus, Save, Share2 } from '@/components/ui/icons';
 import { toast } from 'sonner';
 
 import { AgentEditor } from '@/components/agents/agent-editor';
@@ -233,7 +233,7 @@ export default function AgentDetailPage({
         <ResourceDetailShell>
             <ResourceDetailHeader
                 title={formatAgentName(displayName)}
-                productIconTone="agents"
+                productIconKind="agents"
                 backHref={`/pod/${podId}/ai`}
                 backLabel="Agents"
                 meta={<ResourceVisibilityBadge visibility={localAgent.visibility} resourceLabel="agents" />}

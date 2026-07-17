@@ -3,7 +3,7 @@
 import { useMemo, useState } from 'react';
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
-import { ArrowRight, Building2, Sparkles } from 'lucide-react';
+import { ArrowRight, Building2, Sparkles } from '@/components/ui/icons';
 import { useCreateOrganization } from '@/lib/hooks/use-organizations';
 import { PlainPageShell } from '@/components/dashboard/plain-page-shell';
 import { Button } from '@/components/ui/button';
@@ -58,7 +58,7 @@ function OrgCreatePageContent() {
     return (
         <PlainPageShell
             title="Create organization"
-            icon={<ProductIcon tone="settings" size="sm" />}
+            icon={<ProductIcon kind="settings" size="sm" />}
             backHref="/home"
             backLabel="Home"
             meta="Organization"

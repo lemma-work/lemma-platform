@@ -11,8 +11,8 @@ import {
   PlayCircle,
   Terminal,
   Workflow,
-} from 'lucide-react';
-import type { LucideIcon } from 'lucide-react';
+} from '@/components/ui/icons';
+import type { LemmaIcon } from '@/components/ui/icons';
 
 import {
   conceptDocsGroup,
@@ -67,7 +67,7 @@ export type DocsPage = {
   eyebrow: string;
   description: string;
   group: string;
-  icon: LucideIcon;
+  icon: LemmaIcon;
   blocks: DocsBlock[];
 };
 

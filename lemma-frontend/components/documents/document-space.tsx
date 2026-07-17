@@ -13,7 +13,7 @@ import {
     Search,
     Share2,
     Upload,
-} from 'lucide-react';
+} from '@/components/ui/icons';
 import { toast } from 'sonner';
 
 import { DocumentViewer } from '@/components/documents/document-viewer';
@@ -523,7 +523,7 @@ export function DocumentSpace({ podId }: { podId: string }) {
 
                     <ResourceIndexHeader
                         title={folderPath ? currentFolderName : 'Docs'}
-                        productIconTone="docs"
+                        productIconKind="docs"
                         backHref={folderPath ? folderBackHref : undefined}
                         backLabel={folderPath ? folderBackLabel : undefined}
                         actions={(
@@ -687,7 +687,7 @@ export function DocumentSpace({ podId }: { podId: string }) {
                                             onClick={() => openDocFile(result.path)}
                                             className="document-space-result-button surface-list-row custom-focus-ring items-start gap-3 px-0 py-3 text-left text-sm"
                                         >
-                                            <ProductIcon tone="docs" size="sm" />
+                                            <ProductIcon kind="docs" size="sm" />
                                             <span className="min-w-0 flex-1">
                                                 <span className="block truncate font-normal text-[var(--text-primary)]">{result.fileName}</span>
                                                 <span className="mt-0.5 block truncate text-xs text-[var(--text-tertiary)]">{result.path}</span>
@@ -724,11 +724,11 @@ export function DocumentSpace({ podId }: { podId: string }) {
                                             >
                                                 {folder ? (
                                                     <span className="flex h-8 w-8 shrink-0 items-center justify-center">
-                                                        <ProductIcon tone="folders" size="lg" />
+                                                        <ProductIcon kind="folders" size="lg" />
                                                     </span>
                                                 ) : (
                                                     <span className="flex h-8 w-8 shrink-0 items-center justify-center">
-                                                        <ProductIcon tone="docs" size="lg" />
+                                                        <ProductIcon kind="docs" size="lg" />
                                                     </span>
                                                 )}
                                                 <span className="min-w-0 flex-1 truncate text-[var(--text-primary)]">{label}</span>
@@ -819,7 +819,7 @@ export function DocumentSpace({ podId }: { podId: string }) {
             {!isAssistantPresentation ? (
                 <ResourceDetailHeader
                     title={selectedFileName || 'Docs'}
-                    productIconTone="docs"
+                    productIconKind="docs"
                     backHref={selectedFileBackHref}
                     backLabel={selectedFileBackLabel}
                 />

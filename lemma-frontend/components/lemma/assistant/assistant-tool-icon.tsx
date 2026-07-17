@@ -23,9 +23,9 @@ import {
   Users,
   Volume2,
   Wrench,
-  type LucideIcon,
-  type LucideProps,
-} from "lucide-react";
+  type LemmaIcon,
+  type LemmaIconProps,
+} from "@/components/ui/icons";
 import { normalizeToolNameForDisplay } from "./assistant-format";
 
 export type ToolIconKind =
@@ -102,7 +102,7 @@ const TOOL_ICON_KINDS: Record<string, ToolIconKind> = {
   write_todos: "plan",
 };
 
-const ICONS: Record<ToolIconKind, LucideIcon> = {
+const ICONS: Record<ToolIconKind, LemmaIcon> = {
   agent: Bot,
   approval: ShieldCheck,
   "audio-input": Mic,
@@ -133,7 +133,7 @@ export function toolIconKind(toolName: string): ToolIconKind {
   return TOOL_ICON_KINDS[normalizeToolNameForDisplay(toolName)] || "tool";
 }
 
-export function ToolCallIcon({ toolName, ...props }: { toolName: string } & LucideProps) {
+export function ToolCallIcon({ toolName, ...props }: { toolName: string } & LemmaIconProps) {
   const Icon = ICONS[toolIconKind(toolName)];
   return <Icon aria-hidden="true" strokeWidth={1.8} {...props} />;
 }

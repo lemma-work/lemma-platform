@@ -1,11 +1,11 @@
 'use client';
 
 import Link from 'next/link';
-import { ArrowLeft } from 'lucide-react';
+import { ArrowLeft } from '@/components/ui/icons';
 import type { ReactNode } from 'react';
 import { useLayoutEffect } from 'react';
 
-import type { ProductIconTone } from '@/components/pod/product-icon';
+import type { ProductIconKind } from '@/components/pod/product-icon';
 import { usePodTopbar } from '@/components/pod/pod-topbar-context';
 import { cn } from '@/lib/utils';
 
@@ -30,7 +30,7 @@ interface PodPageHeaderProps {
     backHref?: string;
     backLabel?: string;
     showBack?: boolean;
-    productIconTone?: ProductIconTone;
+    productIconKind?: ProductIconKind;
     icon?: ReactNode;
     actions?: ReactNode;
     switcher?: ReactNode;
@@ -49,7 +49,7 @@ export function PodPageHeader({
     backHref,
     backLabel = 'Pod home',
     showBack = true,
-    productIconTone,
+    productIconKind,
     icon,
     actions,
     switcher,
@@ -79,7 +79,7 @@ export function PodPageHeader({
     }, [actions, eyebrow, meta, resolvedBackLabel, resolvedTopbarBackHref, switcher, tabs, title, topbar]);
 
     void icon;
-    void productIconTone;
+    void productIconKind;
 
     if (topbar) return null;
 

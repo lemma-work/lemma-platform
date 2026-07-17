@@ -17,9 +17,9 @@ import {
     Sparkle,
     SquaresFour,
     Table,
-} from '@phosphor-icons/react';
+} from '@/components/ui/icons';
 
-export type ProductIconTone =
+export type ProductIconKind =
     | 'pods'
     | 'connectors'
     | 'apps'
@@ -38,7 +38,7 @@ export type ProductIconTone =
     | 'auth-rbac'
     | 'conversation';
 
-const iconByTone: Record<ProductIconTone, typeof FolderOpen> = {
+const iconByKind: Record<ProductIconKind, typeof FolderOpen> = {
     pods: FolderOpen,
     connectors: Plugs,
     apps: SquaresFour,
@@ -59,17 +59,19 @@ const iconByTone: Record<ProductIconTone, typeof FolderOpen> = {
 };
 
 export function ProductIcon({
-    tone,
+    kind,
     size = 'md',
+    state = 'default',
 }: {
-    tone: ProductIconTone;
+    kind: ProductIconKind;
     size?: 'xs' | 'sm' | 'md' | 'lg' | 'xl';
+    state?: 'default' | 'selected';
 }) {
-    const Icon = iconByTone[tone] || FolderOpen;
+    const Icon = iconByKind[kind] || FolderOpen;
 
     return (
-        <span className="lemma-product-icon" data-size={size} data-tone={tone}>
-            <Icon weight="regular" className="h-full w-full" />
+        <span className="lemma-product-icon" data-size={size} data-kind={kind} data-state={state}>
+            <Icon weight={state === 'selected' ? 'fill' : 'regular'} className="h-full w-full" />
         </span>
     );
 }

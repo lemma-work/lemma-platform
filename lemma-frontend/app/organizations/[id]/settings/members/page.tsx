@@ -37,7 +37,7 @@ import {
     SelectValue,
 } from "@/components/ui/select";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
-import { Plus, Mail } from 'lucide-react';
+import { Plus, Mail } from '@/components/ui/icons';
 import { toast } from 'sonner';
 import { format } from 'date-fns';
 import { ProtectedRoute } from '@/components/auth/protected-route';
@@ -83,7 +83,7 @@ function OrgMembersPageContent() {
     return (
         <PlainPageShell
             title="Members"
-            icon={<ProductIcon tone="settings" size="sm" />}
+            icon={<ProductIcon kind="settings" size="sm" />}
             backHref="/"
             backLabel="Home"
             meta={organization?.name || 'Organization'}

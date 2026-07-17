@@ -40,7 +40,7 @@ function OrganizationAgentRuntimesPageContent({ params }: { params: Promise<{ id
     return (
         <PlainPageShell
             title="Models"
-            icon={<ProductIcon tone="settings" size="sm" />}
+            icon={<ProductIcon kind="settings" size="sm" />}
             backHref="/"
             backLabel="Home"
             meta={organization?.name || 'Organization'}

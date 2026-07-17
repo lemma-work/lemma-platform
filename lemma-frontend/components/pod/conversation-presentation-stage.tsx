@@ -1,7 +1,7 @@
 'use client';
 
 import Link from 'next/link';
-import { Maximize2, PanelRightClose } from 'lucide-react';
+import { Maximize2, PanelRightClose } from '@/components/ui/icons';
 import type { ReactNode } from 'react';
 
 import { Button } from '@/components/ui/button';

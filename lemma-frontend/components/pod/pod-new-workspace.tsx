@@ -9,7 +9,7 @@ import {
     Plug,
     Sparkles,
     Workflow,
-} from 'lucide-react';
+} from '@/components/ui/icons';
 
 import { useAIAssistant } from '@/components/ai/ai-assistant-context';
 import { renderRecipeIcon } from '@/components/recipes/recipe-icon';

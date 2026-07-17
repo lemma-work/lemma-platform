@@ -9,7 +9,7 @@ import {
     Inbox,
     Lightbulb,
     ListChecks,
-    type LucideIcon,
+    type LemmaIcon,
     MessageSquare,
     MessagesSquare,
     Newspaper,
@@ -21,11 +21,11 @@ import {
     Send,
     Sparkles,
     Workflow,
-} from 'lucide-react';
+} from '@/components/ui/icons';
 
 import type { Recipe, RecipeBuilds } from '@/lib/recipes/recipes';
 
-const BY_ID: Record<string, LucideIcon> = {
+const BY_ID: Record<string, LemmaIcon> = {
     // quick wins
     'personal-crm': Contact2,
     'reading-digest': BookOpen,
@@ -56,7 +56,7 @@ const BY_ID: Record<string, LucideIcon> = {
     'lightweight-crm': Contact2,
 };
 
-const BY_BUILDS: Record<RecipeBuilds, LucideIcon> = {
+const BY_BUILDS: Record<RecipeBuilds, LemmaIcon> = {
     app: PanelsTopLeft,
     agent: Sparkles,
     workflow: Workflow,
@@ -64,7 +64,7 @@ const BY_BUILDS: Record<RecipeBuilds, LucideIcon> = {
     pod: PackageOpen,
 };
 
-function pickRecipeIcon(recipe: Recipe): LucideIcon {
+function pickRecipeIcon(recipe: Recipe): LemmaIcon {
     if (recipe.source.kind === 'repo') return PackageOpen;
     return BY_ID[recipe.id] ?? BY_BUILDS[recipe.builds] ?? PanelsTopLeft;
 }

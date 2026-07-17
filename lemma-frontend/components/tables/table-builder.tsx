@@ -1,7 +1,7 @@
 'use client';
 
 import { useState } from 'react';
-import { ChevronDown, GripVertical, Plus, Sparkles, Trash2 } from 'lucide-react';
+import { ChevronDown, GripVertical, Plus, Sparkles, Trash2 } from '@/components/ui/icons';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { Button } from '@/components/ui/button';
 import { ResourceFeedbackBanner, getResourceErrorMessage } from '@/components/shared/resource-feedback';

@@ -1,5 +1,5 @@
 import { memo } from 'react';
-import { Play, Plus } from 'lucide-react';
+import { Play, Plus } from '@/components/ui/icons';
 import {
     Handle,
     Position,

@@ -3,7 +3,7 @@
 import { useState, type ReactNode } from 'react';
 import Image from 'next/image';
 import Link from 'next/link';
-import { CalendarClock, ChevronRight, MessageCircle, Pause, Play, Plus } from 'lucide-react';
+import { CalendarClock, ChevronRight, MessageCircle, Pause, Play, Plus } from '@/components/ui/icons';
 import { toast } from 'sonner';
 
 import { ProductIcon } from '@/components/pod/product-icon';
@@ -163,7 +163,7 @@ export function TriggerIdentityChip({ schedule }: { schedule: Schedule }) {
     return (
         <span className={identityChipClass} title={active ? 'Active' : 'Paused'}>
             <ProductIcon
-                tone={schedule.schedule_type === ScheduleType.DATASTORE ? 'data' : schedule.schedule_type === ScheduleType.WEBHOOK ? 'connectors' : 'schedules'}
+                kind={schedule.schedule_type === ScheduleType.DATASTORE ? 'data' : schedule.schedule_type === ScheduleType.WEBHOOK ? 'connectors' : 'schedules'}
                 size="sm"
             />
             <span className="truncate text-sm font-medium text-[var(--text-primary)]">{describeScheduleConfig(schedule)}</span>
@@ -230,7 +230,7 @@ export function TriggersSection({
     return (
         <section>
             <SectionHeading
-                icon={<ProductIcon tone="schedules" size="lg" />}
+                icon={<ProductIcon kind="schedules" size="lg" />}
                 title="Triggers"
                 description={description}
                 action={canCreate ? (
@@ -328,7 +328,7 @@ function TriggerRow({
     onDelete: () => void;
 }) {
     const active = schedule.is_active !== false;
-    const triggerTone = schedule.schedule_type === ScheduleType.DATASTORE
+    const triggerKind = schedule.schedule_type === ScheduleType.DATASTORE
         ? 'data'
         : schedule.schedule_type === ScheduleType.WEBHOOK
             ? 'connectors'
@@ -337,7 +337,7 @@ function TriggerRow({
 
     return (
         <li className="lemma-index-row group flex items-center gap-2.5">
-            <ProductIcon tone={triggerTone} size="md" />
+            <ProductIcon kind={triggerKind} size="md" />
             <div className="min-w-0 flex-1">
                 <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
                     <p className="truncate text-sm font-medium text-[var(--text-primary)]">{describeScheduleConfig(schedule)}</p>

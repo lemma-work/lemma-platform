@@ -3,7 +3,7 @@
 import { use, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { usePathname, useRouter, useSearchParams } from 'next/navigation';
 import { useQueryClient } from '@tanstack/react-query';
-import { Database, Loader2, Plus } from 'lucide-react';
+import { Database, Loader2, Plus } from '@/components/ui/icons';
 import { toast } from 'sonner';
 
 import { DatastoreTableView } from '@/components/data/datastore-table-view';
@@ -1069,7 +1069,7 @@ export default function DataHubPage({
         >
             <ResourceIndexHeader
                 className="mb-4"
-                productIconTone={showingFiles ? 'docs' : 'data'}
+                productIconKind={showingFiles ? 'docs' : 'data'}
                 title={showingFiles ? (
                     <FolderTitleSelector
                         selectedFilePath={selectedFilePath}
@@ -1212,7 +1212,7 @@ export default function DataHubPage({
                                         {!loadingFiles && !refreshingFiles && filteredEntries.length === 0 && (
                                             <EmptyState
                                                 variant="compact"
-                                                icon={<ProductIcon tone="files" size="sm" />}
+                                                icon={<ProductIcon kind="files" size="sm" />}
                                                 title={searchQuery ? 'No files or folders match this search' : 'This folder is empty'}
                                                 description={searchQuery ? 'Try another search term.' : 'Upload files or create a folder when this pod needs source material.'}
                                             />

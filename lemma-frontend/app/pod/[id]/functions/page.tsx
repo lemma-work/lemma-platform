@@ -2,7 +2,7 @@
 
 import { use, useState } from 'react';
 import Link from 'next/link';
-import { ChevronRight, Edit2, MoreHorizontal, Play, Plus, Trash2, Workflow, Zap } from 'lucide-react';
+import { ChevronRight, Edit2, MoreHorizontal, Play, Plus, Trash2, Workflow, Zap } from '@/components/ui/icons';
 import { toast } from 'sonner';
 
 import { Button } from '@/components/ui/button';

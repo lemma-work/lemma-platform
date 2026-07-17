@@ -49,6 +49,15 @@ const protectedUiFiles = new Map([
   ],
 ]);
 
+const allowedInlineSvgFiles = new Set([
+  'components/docs/how-lemma-works-map.tsx',
+  'components/education/concept-illustration.tsx',
+  'components/education/first-win-checklist.tsx',
+  'components/landing/landing-animations.tsx',
+  'components/lemma/assistant/assistant-parts.tsx',
+  'components/shared/resource-icon-uploader.tsx',
+]);
+
 if (help) {
   printHelp();
   process.exit(0);
@@ -88,6 +97,38 @@ Common commands:
 }
 
 const checks = [
+  {
+    id: 'foreignIconLibrary',
+    label: 'imports from non-Phosphor icon libraries',
+    pattern: /from\s+['"](?:lucide-react|react-icons(?:\/[^'"]*)?)['"]/g,
+    allowed() {
+      return false;
+    },
+  },
+  {
+    id: 'directPhosphorImport',
+    label: 'direct Phosphor imports outside the icon vocabulary',
+    pattern: /from\s+['"]@phosphor-icons\/react(?:\/ssr)?['"]/g,
+    allowed(path) {
+      return path === 'components/ui/icons.ts';
+    },
+  },
+  {
+    id: 'productIconToneApi',
+    label: 'resource identity passed through a ProductIcon tone API',
+    pattern: /\bproductIconTone\b|<ProductIcon\b[^>]*\btone\s*=/g,
+    allowed() {
+      return false;
+    },
+  },
+  {
+    id: 'unapprovedInlineSvg',
+    label: 'inline SVG outside approved brand, illustration, and visualization files',
+    pattern: /<svg\b/g,
+    allowed(path) {
+      return allowedInlineSvgFiles.has(path);
+    },
+  },
   {
     id: 'rawHex',
     label: 'raw hex colors',

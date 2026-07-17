@@ -1,7 +1,7 @@
 'use client';
 
 import Link from 'next/link';
-import { ArrowRight, PlayCircle, Sparkles } from 'lucide-react';
+import { ArrowRight, PlayCircle, Sparkles } from '@/components/ui/icons';
 
 import { Button } from '@/components/ui/button';
 import { RECIPE_BUILDS_LABEL, getRecipeAccent, type Recipe } from '@/lib/recipes/recipes';

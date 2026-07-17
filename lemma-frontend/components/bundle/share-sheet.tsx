@@ -2,7 +2,7 @@
 
 import { useMemo, useState } from 'react';
 import Link from 'next/link';
-import { ArrowUpRight, Copy, Download, FileText, Github } from 'lucide-react';
+import { ArrowUpRight, Copy, Download, FileText, Github } from '@/components/ui/icons';
 import { toast } from 'sonner';
 
 import {

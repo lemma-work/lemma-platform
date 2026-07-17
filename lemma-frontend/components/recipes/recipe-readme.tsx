@@ -4,7 +4,7 @@
 import { useEffect, useState } from 'react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
-import { ExternalLink, Loader2 } from 'lucide-react';
+import { ExternalLink, Loader2 } from '@/components/ui/icons';
 
 import {
     absolutizeReadmeAssetUrls,

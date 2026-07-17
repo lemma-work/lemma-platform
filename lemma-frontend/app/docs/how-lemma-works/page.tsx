@@ -1,5 +1,5 @@
 import type { Metadata } from 'next';
-import { Map } from 'lucide-react';
+import { Map } from '@/components/ui/icons';
 
 import { DocsShell } from '@/components/docs/docs-shell';
 import { HowLemmaWorksMap } from '@/components/docs/how-lemma-works-map';

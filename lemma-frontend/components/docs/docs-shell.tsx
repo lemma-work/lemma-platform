@@ -1,5 +1,5 @@
 import Link from 'next/link';
-import { ArrowLeft, ArrowRight, BookOpen, Check, Github, Menu } from 'lucide-react';
+import { ArrowLeft, ArrowRight, BookOpen, Check, Github, Menu } from '@/components/ui/icons';
 import { DocsMobileNav, DocsSearch, DocsSidebarNav } from '@/components/docs/docs-nav';
 import { Logo } from '@/components/brand/logo';
 import {

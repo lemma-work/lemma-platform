@@ -11,7 +11,7 @@
 
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
-import { Loader2, Maximize2 } from "lucide-react";
+import { Loader2, Maximize2 } from "@/components/ui/icons";
 import { useTheme } from "next-themes";
 
 import { getLemmaClient } from "@/lib/sdk/lemma-client";

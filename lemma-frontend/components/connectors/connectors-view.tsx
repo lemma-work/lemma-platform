@@ -12,7 +12,7 @@ import {
 import { EmptyState } from '@/components/shared/empty-state';
 import { DestructiveConfirmationDialog } from '@/components/shared/destructive-confirmation-dialog';
 import { Input } from '@/components/ui/input';
-import { CheckCircle2, Loader2, Plug, Search } from 'lucide-react';
+import { CheckCircle2, Loader2, Plug, Search } from '@/components/ui/icons';
 import { useEffect, useMemo, useState } from 'react';
 import { toast } from 'sonner';
 import type { Account, Connector } from '@/lib/types';

@@ -8,7 +8,7 @@ import {
     Loader2,
     MessageCircle,
     XCircle,
-} from 'lucide-react';
+} from '@/components/ui/icons';
 import { Badge } from '@/components/ui/badge';
 import { cn } from '@/lib/utils';
 import { getPreviewFields, truncatePreview } from '@/lib/utils/payload-preview';

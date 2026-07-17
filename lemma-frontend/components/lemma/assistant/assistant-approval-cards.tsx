@@ -6,7 +6,7 @@
 
 import { useCallback, useMemo, useState } from "react";
 import { isAskUserToolName, userApprovalResolvedDecision } from "lemma-sdk";
-import { Check, CheckCircle2, MessageCircleQuestion, ShieldAlert, XCircle } from "lucide-react";
+import { Check, CheckCircle2, MessageCircleQuestion, ShieldAlert, XCircle } from "@/components/ui/icons";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";

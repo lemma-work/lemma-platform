@@ -14,7 +14,7 @@ import type {
   AgentRuntimeProfileListResponse,
   AvailableModelInfo,
 } from "lemma-sdk";
-import { Check, ChevronDown, Clock, Search, Settings2, Sparkles, TerminalSquare } from "lucide-react";
+import { Check, ChevronDown, Clock, Search, Settings2, Sparkles, TerminalSquare } from "@/components/ui/icons";
 
 import {
   Dialog,
