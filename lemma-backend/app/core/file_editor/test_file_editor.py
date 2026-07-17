@@ -1,8 +1,7 @@
 import pytest
 import tempfile
 import os
-from pathlib import Path
-from app.core.file_editor.file_editor import apply_edits, apply_edits_to_file, parse_edit_blocks
+from app.core.file_editor.file_editor import apply_edits_to_file, parse_edit_blocks
 # Assuming the file editor code is in file_editor.py
 # from file_editor import apply_edits_to_file, apply_edits_to_file, parse_edit_blocks
 

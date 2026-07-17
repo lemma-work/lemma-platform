@@ -57,7 +57,7 @@ Manager:
 AGENTBOX_PROVIDER=docker              # docker, podman, or kubernetes
 AGENTBOX_API_KEY=dev-agentbox-key
 AGENTBOX_API_URL=http://127.0.0.1:8721
-AGENTBOX_RUNTIME_IMAGE=ghcr.io/lemma-work/lemma-agentbox-runtime:latest
+AGENTBOX_RUNTIME_IMAGE=ghcr.io/lemma-work/lemma-agentbox-runtime@sha256:4e85bb6327b18b4b7eaf13b3e53f34718e4211967340e0ac908c1635e422d492
 AGENTBOX_RUNTIME_PORT=8080
 AGENTBOX_STATE_DB_PATH=/data/agentbox-manager/state.db
 AGENTBOX_SESSION_IDLE_TIMEOUT_SECONDS=300
@@ -190,7 +190,7 @@ cd agentbox
 AGENTBOX_PROVIDER=docker \
 AGENTBOX_API_KEY=dev-agentbox-key \
 AGENTBOX_API_URL=http://127.0.0.1:8711 \
-AGENTBOX_RUNTIME_IMAGE=ghcr.io/lemma-work/lemma-agentbox-runtime:latest \
+AGENTBOX_RUNTIME_IMAGE=ghcr.io/lemma-work/lemma-agentbox-runtime@sha256:4e85bb6327b18b4b7eaf13b3e53f34718e4211967340e0ac908c1635e422d492 \
 AGENTBOX_STATE_DB_PATH=/tmp/agentbox-state.db \
 uv run uvicorn agentbox.server:app --host 127.0.0.1 --port 8711
 ```
@@ -208,6 +208,27 @@ For managed local Podman execution only, set:
 AGENTBOX_PROVIDER=podman
 LOCAL_PODMAN_MACHINE_NAME=lemma-runtime
 ```
+
+## Pinning the runtime image
+
+The dev path is locked to a manifest-list digest, not `:latest`. Pinning the
+digest blocks a GHCR namespace compromise or accidental republish from
+silently delivering a new image to every `make dev` host. The same digest
+is what the production `lemma-stack install` path resolves through the
+release manifest (`release-local-images.yml`).
+
+To bump the pinned digest (operator-reviewed):
+
+```bash
+make update-agentbox    # resolves the current upstream :latest digest and rewrites Makefile:94
+git diff Makefile       # inspect the change
+make init               # pulls the new image
+```
+
+To pin to a non-`latest` upstream tag, edit the `AGENTBOX_RUNTIME_IMAGE :=`
+line at the top of the Makefile directly — the value is used verbatim by
+the manager (env var) and by `docker run` (argv), so any `name@digest`,
+`name:tag`, or `name:tag@digest` reference is supported.
 
 ## Build And Push Images
 
@@ -230,5 +251,5 @@ lemma-agentbox-runtime:<tag>
 Set the runtime image in the manager environment:
 
 ```bash
-AGENTBOX_RUNTIME_IMAGE=ghcr.io/lemma-work/lemma-agentbox-runtime:<tag>
+AGENTBOX_RUNTIME_IMAGE=ghcr.io/lemma-work/lemma-agentbox-runtime@sha256:<digest>
 ```

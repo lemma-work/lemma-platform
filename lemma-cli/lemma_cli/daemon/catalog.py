@@ -12,6 +12,7 @@ HARNESS_BINARIES = {
     "OPENCODE": "opencode",
     "CURSOR": "cursor-agent",
     "ANTIGRAVITY": "agy",
+    "GG_CODER": "ggcoder",
 }
 
 # Claude Code's bare ``sonnet``/``opus`` aliases resolve to the *latest* model,
@@ -101,6 +102,8 @@ def discover_harness_model_entries(
             return discover_cursor_model_entries(binary), None
         if harness_kind == "ANTIGRAVITY":
             return discover_antigravity_model_entries(binary), None
+        if harness_kind == "GG_CODER":
+            return discover_gg_coder_model_entries(binary), None
     except Exception as exc:  # noqa: BLE001
         return [], str(exc)
     return [], None
@@ -246,6 +249,22 @@ def discover_cursor_model_entries(binary: str) -> list[dict[str, Any]]:
             }
         )
     return entries
+
+
+def discover_gg_coder_model_entries(binary: str) -> list[dict[str, Any]]:
+    """Build a conservative catalog for the GG_CODER harness.
+
+    GG Coder does not currently expose a stable ``models`` subcommand, so prefer
+    an explicit override via ``LEMMA_DAEMON_GG_CODER_MODELS`` and otherwise
+    fall back to a single ``default`` entry that maps to whatever the active
+    provider/model is in ``~/.gg/settings.json``.
+    """
+    configured = configured_harness_models("GG_CODER")
+    if configured is not None:
+        return [_plain_model_entry(name) for name in configured]
+    return [
+        _plain_model_entry("default"),
+    ]
 
 
 def discover_antigravity_model_entries(binary: str) -> list[dict[str, Any]]:

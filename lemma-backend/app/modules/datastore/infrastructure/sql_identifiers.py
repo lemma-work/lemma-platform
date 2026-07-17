@@ -13,7 +13,6 @@ from decimal import Decimal
 
 from app.modules.datastore.domain.errors import (
     DatastoreConflictError,
-    DatastoreInfrastructureError,
     DatastoreValidationError,
 )
 

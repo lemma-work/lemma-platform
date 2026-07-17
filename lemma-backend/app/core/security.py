@@ -41,7 +41,9 @@ EXCLUDED_PATHS = (
     "/workspace/browser/user",
     "/billing/payment",  # payment result pages (success/cancel) — no session needed post-redirect
     "/billing/webhooks",  # payment-provider webhooks (Dodo) — handler verifies the HMAC signature itself; delivered server-to-server with no session
-    "/connectors/connect-requests/oauth/callback",  # OAuth callback - secured by state parameter
+    # NB: /connectors/connect-requests/oauth/callback is NOT excluded — the
+    # handler now requires a session and binds the callback to the user who
+    # initiated the connect request, so the global auth gate must run.
     "/surfaces/teams/admin-consent/callback",  # surface consent callback
     "/surfaces/webhooks",  # surface webhook endpoints
     "/webhooks",

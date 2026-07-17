@@ -458,8 +458,20 @@ class Settings(BaseSettings):
         default=None,
         description=(
             "Primary Fernet key (urlsafe base64) for the static provider. Falls "
-            "back to CONNECTOR_ENCRYPTION_KEY, then to a deterministic local seed "
-            "in local/testing. Required outside local/testing when no keyset is set."
+            "back to CONNECTOR_ENCRYPTION_KEY. In local/testing a deterministic "
+            "repo-public seed is used ONLY when LEMMA_ALLOW_LOCAL_FALLBACK_KEY "
+            "is explicitly set (the seed is public; do not enable for real data). "
+            "Required in any non-local environment unless a keyset is set."
+        ),
+    )
+    allow_local_fallback_key: bool = Field(
+        default=False,
+        description=(
+            "Explicit opt-in that authorises the deterministic Fernet key "
+            "derived from the repo-public LOCAL_KEY_SEED (see app/core/crypto/"
+            "keys.py). Leave unset for any deployment that holds real data; "
+            "set to true only for ephemeral local/testing where protecting "
+            "credentials at rest with a public seed is acceptable."
         ),
     )
     secret_encryption_keyset: Optional[str] = Field(

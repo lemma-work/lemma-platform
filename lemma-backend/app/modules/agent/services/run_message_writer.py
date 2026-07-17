@@ -36,6 +36,21 @@ class RunMessageWriter:
     ) -> Message:
         if isinstance(data, MessageDraft):
             draft = data
+        elif isinstance(data, dict) and isinstance(data.get("text"), str):
+            # Harness MESSAGE events carry the role/kind/text/metadata shape;
+            # persist only the unwrapped text plus its role/kind/metadata,
+            # not str(dict) which would store the entire JSON envelope as
+            # the visible bubble text.
+            draft = MessageDraft(
+                role=data.get("role") or MessageRole.ASSISTANT,
+                kind=data.get("kind") or MessageKind.TEXT,
+                text=data.get("text"),
+                tool_name=data.get("tool_name"),
+                tool_call_id=data.get("tool_call_id"),
+                tool_args=data.get("tool_args"),
+                tool_result=data.get("tool_result"),
+                metadata=data.get("metadata") if isinstance(data.get("metadata"), dict) else None,
+            )
         else:
             draft = MessageDraft.of_text(str(data))
 

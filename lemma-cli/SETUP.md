@@ -174,7 +174,7 @@ Installing and managing a local Lemma stack is handled by the separate
 `lemma-stack` tool, not the CLI. Install and start it with:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/lemma-work/lemma-platform/main/install.sh | bash
+curl -fsSL https://raw.githubusercontent.com/lemma-work/lemma-platform/v0.5.4/install.sh | bash
 ```
 
 `lemma-stack install` registers the stack as the CLI server named `local`

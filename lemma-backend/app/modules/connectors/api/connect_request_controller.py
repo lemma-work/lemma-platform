@@ -87,12 +87,13 @@ def _render_callback_page(
     "/oauth/callback",
     operation_id="connector.oauth.callback",
     summary="OAuth Callback",
-    description="Handle OAuth callback and complete account connection. This endpoint is public and uses state parameter for security.",
+    description="Handle OAuth callback and complete account connection. Requires an authenticated session; the callback is bound to the user who initiated the connect request.",
     response_class=HTMLResponse,
     response_model=None,
 )
 async def oauth_callback(
     request: Request,
+    user: CurrentUser,
     connector_service: ConnectorServiceDep,
     error: Optional[str] = Query(default=None),
     response_format: Optional[str] = Query(default=None, alias="format"),
@@ -120,12 +121,22 @@ async def oauth_callback(
 
     redirect_uri = str(request.url)
     state = request.query_params.get("state")
-    logger.info("State", state=state, redirect_uri=redirect_uri)
+    # Log a redacted view only: never include the full ``state`` (it is the
+    # bearer credential that completes the connect) and never log
+    # ``redirect_uri`` verbatim (it carries the OAuth ``code``).
+    request_id = request.headers.get("x-request-id")
+    logger.info(
+        "OAuth callback received",
+        state_prefix=state[:6] if state else None,
+        has_code=bool(request.query_params.get("code")),
+        request_id=request_id,
+    )
 
     try:
         account = await connector_service.handle_oauth_callback(
             redirect_uri=redirect_uri,
             state=state,
+            expected_user_id=user.id,
         )
     except ConnectorDomainError as exc:
         if wants_json:

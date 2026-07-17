@@ -1890,6 +1890,65 @@ def test_write_provider_mcp_files_noop_without_usable_mcp(tmp_path):
     assert not (tmp_path / ".cursor").exists()
 
 
+def test_write_provider_mcp_files_gg_coder_includes_chrome_devtools_by_default(tmp_path, monkeypatch):
+    """GG_CODER writes <cwd>/.gg/mcp.json with chrome-devtools-mcp (stdio) plus
+    any upstream Lemma MCP HTTP entry from the daemon payload."""
+    from lemma_cli.daemon import mcp
+    from lemma_cli.daemon.mcp import write_provider_mcp_files
+
+    monkeypatch.delenv(mcp.GG_CODER_CHROME_DEVTOOLS_ENABLE_ENV, raising=False)
+    payload = {
+        "url": "https://api.lemma.work/agent-runtime/conversations/abc/mcp",
+        "server_name": "lemma_tools",
+        "token": "tok-1",
+    }
+    write_provider_mcp_files("GG_CODER", tmp_path, payload)
+    config_path = tmp_path / ".gg" / "mcp.json"
+    assert config_path.is_file(), config_path
+    config = json.loads(config_path.read_text())
+    assert set(config["mcpServers"]) == {"chrome-devtools", "lemma_tools"}
+
+    cd = config["mcpServers"]["chrome-devtools"]
+    assert cd["type"] == "stdio"
+    assert cd["command"] == "npx"
+    # Args end with --no-usage-statistics so dev runs don't pollute telemetry.
+    assert cd["args"][-1] == "--no-usage-statistics"
+    assert cd["args"][0:2] == ["-y", "chrome-devtools-mcp@latest"]
+    assert cd["env"] == {}
+
+    lemma = config["mcpServers"]["lemma_tools"]
+    assert lemma["type"] == "http"
+    assert lemma["url"] == payload["url"]
+    assert lemma["headers"]["Authorization"] == "Bearer tok-1"
+
+
+def test_write_provider_mcp_files_gg_coder_drops_chrome_devtools_when_disabled(tmp_path, monkeypatch):
+    from lemma_cli.daemon import mcp
+    from lemma_cli.daemon.mcp import write_provider_mcp_files
+
+    monkeypatch.setenv(mcp.GG_CODER_CHROME_DEVTOOLS_ENABLE_ENV, "0")
+    payload = {
+        "url": "https://api.lemma.work/agent-runtime/conversations/abc/mcp",
+        "server_name": "lemma_tools",
+        "token": "tok-1",
+    }
+    write_provider_mcp_files("GG_CODER", tmp_path, payload)
+    config = json.loads((tmp_path / ".gg" / "mcp.json").read_text())
+    # chrome-devtools dropped; Lemma MCP still wired so the agent still gets
+    # the conversation's tools (just no browser-side inspection).
+    assert set(config["mcpServers"]) == {"lemma_tools"}
+
+
+def test_write_provider_mcp_files_gg_coder_skips_when_both_disabled(tmp_path, monkeypatch):
+    """Opt-out + no upstream payload ⇒ no file written (keeps cwd clean)."""
+    from lemma_cli.daemon import mcp
+    from lemma_cli.daemon.mcp import write_provider_mcp_files
+
+    monkeypatch.setenv(mcp.GG_CODER_CHROME_DEVTOOLS_ENABLE_ENV, "false")
+    write_provider_mcp_files("GG_CODER", tmp_path, {})
+    assert not (tmp_path / ".gg").exists()
+
+
 def test_discover_cursor_model_entries_parses_id_label(tmp_path, monkeypatch):
     from lemma_cli.daemon.catalog import discover_cursor_model_entries
 

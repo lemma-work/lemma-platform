@@ -23,6 +23,7 @@ class HarnessKind(str, Enum):
     OPENCODE = "OPENCODE"
     CURSOR = "CURSOR"
     ANTIGRAVITY = "ANTIGRAVITY"
+    GG_CODER = "GG_CODER"
 
     @classmethod
     def _missing_(cls, value: object) -> "HarnessKind | None":
@@ -40,6 +41,8 @@ class HarnessKind(str, Enum):
             "cursor_agent": cls.CURSOR,
             "antigravity": cls.ANTIGRAVITY,
             "agy": cls.ANTIGRAVITY,
+            "ggcoder": cls.GG_CODER,
+            "gg-framework": cls.GG_CODER,
         }
         if normalized in aliases:
             return aliases[normalized]

@@ -65,7 +65,9 @@ dev = [
   # shipped in the published wheel.
   "httpx>=0.27",
   "psycopg[binary]>=3.1",
-]
+  # Dev-only typechecker. See lemma-pod-bundle/pyproject.toml for rationale.
+  "pyright>=1.1.0",
+] 
 
 [project.scripts]
 lemma = "lemma_cli.cli:main"
@@ -131,3 +133,35 @@ addopts = "-ra --import-mode=importlib --strict-markers"
 # from PyPI (see [project.dependencies]).
 lemma-sdk = { path = "../lemma-python" }
 lemma-pod-bundle = { path = "../lemma-pod-bundle" }
+
+# Ruff formatter + linter. Shared baseline with the rest of the monorepo
+# Python packages: Black-compatible format defaults and Ruff's documented
+# default rule set (pycodestyle E4/E7/E9 + pyflakes F), stated explicitly so
+# contributors know which rules are enforced.
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+# Vendored agent skills (synced from repo-root lemma-skills/ by
+# scripts/sync_cli_skills.py before build) ship as markdown/yaml — not Python
+# — but exclude the directory explicitly so a future sync of Python helpers
+# doesn't get linted as project source.
+extend-exclude = ["lemma_cli/skills"]
+
+[tool.ruff.format]
+quote-style = "double"
+indent-style = "space"
+line-ending = "auto"
+
+[tool.ruff.lint]
+select = ["E4", "E7", "E9", "F"]
+
+# Pyright type-checker: extends the monorepo baseline in ../../pyright.toml.
+# `lemma_cli/skills/` is vendored agent skills (synced from
+# repo-root lemma-skills/ by scripts/sync_cli_skills.py before build):
+# markdown/yaml assets, not Python — keep out of type-checking. pythonVersion
+# mirrors the package's requires-python.
+[tool.pyright]
+extends = "../pyright.toml"
+pythonVersion = "3.11"
+include = ["lemma_cli", "tests"]
+exclude = ["lemma_cli/skills"] 

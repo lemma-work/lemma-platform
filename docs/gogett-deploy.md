@@ -11,12 +11,18 @@ a Cloudflare Tunnel from a single Mac.
    CLI, `lemma-*` Python packages, install URL, and upstream CDN refs are
    untouched — so `git fetch upstream` stays clean and mergeable.
 2. **Custom frontend image.** Upstream's `lemma-frontend` ships without the
-   Next.js `rewrites()` that proxies `/st/auth/*` (SuperTokens SDK) and
-   `/api/v1/*`, `/users/*`, `/organizations/*`, `/pods/*` (backend REST) to the
-   backend service. We rebuild from source with the patched
-   `lemma-frontend/next.config.ts`. Without these rewrites, the browser SDK
-   gets 404s on every auth call and the UI shows "Something went wrong".
-3. **Custom env overrides** for `lemma-stack`:
+   Next.js `rewrites()` that proxy `/st/auth/*` (SuperTokens SDK),
+   `/api/v1/*`, `/users/*`, `/agent-runtime/*`, `/organizations/*`, and
+   `/pods/*` to the backend service after real Next.js pages have a chance
+   to match. We rebuild from source with the patched
+   `lemma-frontend/next.config.ts`; fallback rewrites keep app routes such
+   as `/organizations/*/settings/*` in Next.js while still letting API calls
+   such as `/users/me` reach FastAPI. A `beforeFiles` rewrite for
+   `/auth/cli/:path*` is required so the CLI's `auth login` flow can reach
+   the backend device-link endpoints without the auth UI's catch-all
+   claiming the request (Next.js evaluates `beforeFiles` rewrites before
+   physical routes; `fallback` runs after).
+3. **Custom env overrides** for `lemma-stack**:
    - `CORS_ORIGIN_REGEX` allows `gogett.webrnds.com` (default is locked to
      `127-0-0-1.sslip.io`).
    - `FRONTEND_URL` / `AUTH_FRONTEND_URL` / `API_URL` → `https://gogett.webrnds.com`.
@@ -151,10 +157,18 @@ lemma-stack config set SESSION_COOKIE_SAME_SITE 'lax'
 
 # Model provider (MiniMax example — swap to your own):
 lemma-stack config set LEMMA_DEFAULT_MODEL_TYPE openai_compat
-lemma-stack config set LEMMA_OPENAI_BASE_URL 'https://api.minimax.com/v1'
+lemma-stack config set LEMMA_OPENAI_BASE_URL 'https://api.minimax.io/v1'
 lemma-stack config set LEMMA_OPENAI_API_KEY '<your-key>'
-lemma-stack config set LEMMA_OPENAI_DEFAULT_MODEL 'MiniMax-Text-01'
-lemma-stack config set LEMMA_OPENAI_MODEL_NAMES 'MiniMax-Text-01,MiniMax-VL-01'
+lemma-stack config set LEMMA_OPENAI_DEFAULT_MODEL 'MiniMax-M3'
+lemma-stack config set LEMMA_OPENAI_MODEL_NAMES 'MiniMax-M3,MiniMax-M2.7,MiniMax-M2.7-highspeed'
+
+# At-rest Fernet key for connector creds + webhook secrets — set BEFORE the
+# stack first writes any account/connector. The default local seed is public
+# and now requires LEMMA_ALLOW_LOCAL_FALLBACK_KEY=true to enable; in any
+# non-ephemeral deployment you must generate a real key, then restart, then
+# re-encrypt existing rows forward (e.g. via the scripts/reencrypt_secrets.py
+# helper) if you had any data written under the old seed.
+lemma-stack config set SECRET_ENCRYPTION_KEY "$(uv tool run --from cryptography python -c 'from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())')"
 
 # Frontend NEXT_PUBLIC_* overrides — bare UPPER_SNAKE routes to backend.env
 # in lemma-stack, so use the dotted form:

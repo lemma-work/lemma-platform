@@ -27,6 +27,7 @@ from app.modules.connectors.domain.connect_request import ConnectRequestEntity
 from app.modules.connectors.domain.connect_request import ConnectRequestStatus
 from app.modules.connectors.domain.errors import (
     AccountAlreadyConnectedError,
+    ConnectorAccessDeniedError,
     ConnectorNotFoundError,
     ConnectorValidationError,
     ConnectRequestStateRequiredError,
@@ -530,6 +531,57 @@ async def test_handle_oauth_callback_requires_state():
 
     with pytest.raises(ConnectRequestStateRequiredError):
         await service.handle_oauth_callback(redirect_uri="https://cb", state=None)
+
+
+async def test_handle_oauth_callback_rejects_user_mismatch():
+    """If the session-bound user does not own the connect request, the callback
+    must be refused with 403 and must not exchange the OAuth code or create an
+    account — otherwise an attacker who captured (state, code) from a victim's
+    flow (e.g. via shared backend logs) could replay it against their own
+    session and bind the resulting account to the victim."""
+    pending_user_id = uuid4()
+    session_user_id = uuid4()
+    assert pending_user_id != session_user_id
+
+    auth_config = _auth_config("slack")
+    connect_request = ConnectRequestEntity(
+        id=uuid4(),
+        user_id=pending_user_id,
+        organization_id=ORG_ID,
+        auth_config_id=auth_config.id,
+        connector_id="slack",
+        authorization_url="https://auth",
+        status=ConnectRequestStatus.PENDING,
+        attributes={"state": "state-mismatch"},
+    )
+    auth_provider = AsyncMock()
+    registry = Mock()
+    registry.get.return_value = auth_provider
+
+    connect_repo = AsyncMock()
+    connect_repo.get_by_state.return_value = connect_request
+
+    account_repo = AsyncMock()
+
+    service = _service(
+        connector_repository=AsyncMock(get=AsyncMock(return_value=_connector("slack"))),
+        auth_config_repository=_auth_config_repo(auth_config),
+        account_repository=account_repo,
+        connect_request_repository=connect_repo,
+        auth_provider_registry=registry,
+    )
+
+    with pytest.raises(ConnectorAccessDeniedError) as exc_info:
+        await service.handle_oauth_callback(
+            redirect_uri="https://cb?state=state-mismatch&code=stolen",
+            state="state-mismatch",
+            expected_user_id=session_user_id,
+        )
+
+    assert exc_info.value.status_code == 403
+    auth_provider.exchange_code_for_credentials.assert_not_awaited()
+    account_repo.create.assert_not_awaited()
+    account_repo.update.assert_not_awaited()
 
 
 async def test_list_accounts_with_connector_filter_returns_empty_when_missing():

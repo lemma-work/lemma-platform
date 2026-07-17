@@ -2,6 +2,9 @@
   "name": "lemma-frontend",
   "version": "0.1.0",
   "private": true,
+  "engines": {
+    "node": ">=24.0.0"
+  },
   "scripts": {
     "prepare:lemma-sdk": "npm --prefix ../lemma-typescript run build",
     "predev": "npm run prepare:lemma-sdk && node scripts/gen-runtime-config.mjs",
@@ -12,6 +15,8 @@
     "prelint": "npm run prepare:lemma-sdk",
     "start": "next start",
     "lint": "eslint",
+    "format:check": "prettier . --check",
+    "format": "prettier . --write",
     "pretest": "npm run prepare:lemma-sdk",
     "test": "vitest run",
     "pretypecheck": "npm run prepare:lemma-sdk",
@@ -90,6 +95,7 @@
     "@types/three": "^0.184.1",
     "eslint": "^9",
     "eslint-config-next": "^16.2.9",
+    "prettier": "^3.6.2",
     "tailwindcss": "^4",
     "typescript": "5.9.3",
     "vitest": "^4.1.9"

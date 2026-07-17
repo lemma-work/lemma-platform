@@ -14,6 +14,16 @@ dependencies = [
   "python-dateutil>=2.9.0.post0",
 ]
 
+[dependency-groups]
+dev = [
+  "ruff>=0.9.0",
+  # Dev-only typechecker. See lemma-pod-bundle/pyproject.toml for rationale.
+  # The SDK already ships py.typed (see [tool.setuptools.package-data] below),
+  # so tightening this package to typeCheckingMode = "strict" later won't
+  # require any other metadata changes.
+  "pyright>=1.1.0",
+] 
+
 [build-system]
 requires = ["setuptools>=69.0"]
 build-backend = "setuptools.build_meta"
@@ -34,3 +44,41 @@ markers = [
   "integration: real Lemma API scenarios; requires LEMMA_TOKEN and a running API",
   "connector: real Lemma connector scenarios; requires LEMMA_RUN_CONNECTOR=1 and a running API",
 ]
+
+# Ruff formatter + linter. Shared baseline with the rest of the monorepo
+# Python packages: Black-compatible format defaults and Ruff's documented
+# default rule set (pycodestyle E4/E7/E9 + pyflakes F), stated explicitly so
+# contributors know which rules are enforced.
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+# `lemma_sdk/openapi_client/` and `lemma_sdk/resources/` are generated from
+# scripts/make_models_init_lazy.py and the OpenAPI spec — keep them out of
+# lint/format so regeneration doesn't churn.
+extend-exclude = [
+  "lemma_sdk/openapi_client",
+  "lemma_sdk/resources",
+]
+
+[tool.ruff.format]
+quote-style = "double"
+indent-style = "space"
+line-ending = "auto"
+
+[tool.ruff.lint]
+select = ["E4", "E7", "E9", "F"]
+
+# Pyright type-checker: extends the monorepo baseline in ../../pyright.toml.
+# `lemma_sdk/openapi_client/` and `lemma_sdk/resources/` are generated from
+# scripts/make_models_init_lazy.py and the OpenAPI spec — keep them out of
+# type-checking so regeneration doesn't churn. The non-generated source
+# (lemma_sdk/__init__.py, auth.py, client.py, ...) ships py.typed (see
+# [tool.setuptools.package-data] above), so it's safe to tighten later.
+[tool.pyright]
+extends = "../pyright.toml"
+pythonVersion = "3.11"
+include = ["lemma_sdk", "tests"]
+exclude = [
+  "lemma_sdk/openapi_client",
+  "lemma_sdk/resources",
+] 

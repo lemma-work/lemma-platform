@@ -40,6 +40,7 @@ class RuntimeProfileProtocol(str, Enum):
     OPENCODE = "OPENCODE"
     CURSOR = "CURSOR"
     ANTIGRAVITY = "ANTIGRAVITY"
+    GG_CODER = "GG_CODER"
 
 
 class RuntimeProfileStatus(str, Enum):
@@ -73,6 +74,7 @@ HARNESS_PROTOCOLS = frozenset(
         RuntimeProfileProtocol.OPENCODE,
         RuntimeProfileProtocol.CURSOR,
         RuntimeProfileProtocol.ANTIGRAVITY,
+        RuntimeProfileProtocol.GG_CODER,
     }
 )
 
@@ -251,6 +253,8 @@ class AgentRuntimeProfile(BaseModel):
             return HarnessKind.CURSOR
         if self.protocol is RuntimeProfileProtocol.ANTIGRAVITY:
             return HarnessKind.ANTIGRAVITY
+        if self.protocol is RuntimeProfileProtocol.GG_CODER:
+            return HarnessKind.GG_CODER
         raise ValueError(f"Unsupported runtime profile protocol: {self.protocol}")
 
     def public_dict(self) -> dict[str, Any]:

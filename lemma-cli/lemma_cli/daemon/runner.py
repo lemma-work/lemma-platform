@@ -8,7 +8,7 @@ import os
 import random
 import time
 from dataclasses import dataclass
-from typing import Any, Callable
+from typing import Any, Awaitable, Callable
 
 from ._logging import log as daemon_log, preview as _preview, redact as _redact
 from ._utils import bounded_error_detail
@@ -37,6 +37,30 @@ _PING_INTERVAL_SECONDS_ENV = "LEMMA_DAEMON_PING_INTERVAL_SECONDS"
 _DEFAULT_PING_INTERVAL_SECONDS = 15.0
 _PONG_MISS_LIMIT_ENV = "LEMMA_DAEMON_PONG_MISS_LIMIT"
 _DEFAULT_PONG_MISS_LIMIT = 3
+
+# Bounded reconnects: by default the daemon reconnects forever (held runs survive
+# across disconnects, so giving up would orphan them). To run a finite probe --
+# say, in a CI step or a fly-by inspection -- set ``LEMMA_DAEMON_MAX_RECONNECT_ATTEMPTS``
+# to a positive int. Any failed reconnect increments the counter; a successful
+# connection resets it. ``None`` (the default) means unlimited.
+_MAX_RECONNECT_ATTEMPTS_ENV = "LEMMA_DAEMON_MAX_RECONNECT_ATTEMPTS"
+
+# Reconnect-failure alarm: when ``_CONSECUTIVE_FAILURE_ALARM_THRESHOLD`` failed
+# reconnects happen within ``_CONSECUTIVE_FAILURE_ALARM_WINDOW_SECONDS`` of the
+# first failure, emit one loud ``STATE ALERT`` line so an operator notices the
+# outage even if the daemon is otherwise quiet in the log. The daemon does NOT
+# exit -- the held-runs guarantee still keeps the daemon useful when the network
+# comes back -- but the operator now gets a single grep-able line.
+_CONSECUTIVE_FAILURE_ALARM_THRESHOLD = 5
+_CONSECUTIVE_FAILURE_ALARM_WINDOW_SECONDS = 60.0
+
+# Connection-state markers (logged with the prefix ``STATE`` so they're
+# trivially ``grep``-able). Don't rename these keys without updating any
+# downstream log-parsing tooling that watches for them.
+_STATE_OFFLINE = "offline"
+_STATE_RECONNECTING = "reconnecting"
+_STATE_ONLINE = "online"
+_STATE_ALERT = "alert"
 
 
 def ping_interval_seconds() -> float:
@@ -202,6 +226,109 @@ def reconnect_delay_seconds(attempt: int) -> float:
     return random.uniform(0.0, ceiling)
 
 
+def _log_state(state: str, payload: dict[str, object] | None = None) -> None:
+    """Emit a single grep-able ``STATE <name>`` line.
+
+    The format is ``STATE <name>: <json>`` (when a payload is given) so that
+    ``tail -f daemon.log | grep '^\\[[^]]*\\] STATE '`` is enough to watch
+    connection state at a glance, and ``jq`` can parse the JSON tail for
+    tooling. State names are stable strings -- see ``_STATE_*`` constants.
+    """
+    label = f"STATE {state.upper()}"
+    daemon_log(label, payload or {"state": state})
+
+
+def _record_failure(
+    streak: int,
+    first_failure_at: float | None,
+    *,
+    exc_label: str,
+) -> tuple[int, float | None, bool]:
+    """Update the failure-streak tracker and report whether to fire the
+    loud STATE ALERT. Returns ``(new_streak, new_first_failure_at, alert)``.
+
+    The alarm trips once per window: when ``streak + 1 >= threshold`` AND
+    the elapsed time since ``first_failure_at`` is still within the window,
+    ``alert`` is ``True``. A subsequent call within the same window keeps
+    incrementing the streak but does NOT re-fire (would be log spam); the
+    streak resets to 0 on a successful ``async with`` entry.
+    """
+    new_streak = streak + 1
+    if first_failure_at is None:
+        first_failure_at = time.monotonic()
+    elapsed = time.monotonic() - first_failure_at
+    within_window = elapsed <= _CONSECUTIVE_FAILURE_ALARM_WINDOW_SECONDS
+    alert = (
+        within_window
+        and new_streak >= _CONSECUTIVE_FAILURE_ALARM_THRESHOLD
+        and streak < _CONSECUTIVE_FAILURE_ALARM_THRESHOLD  # fire-once per streak
+    )
+    return new_streak, first_failure_at, alert
+
+
+
+def _read_max_reconnect_attempts() -> int | None:
+    """Return the user-configured bound on consecutive reconnect attempts, or
+    ``None`` for unbounded (the default). Bound is read once at startup so the
+    semantics are predictable; changing the env var at runtime does nothing.
+    """
+    raw = os.getenv(_MAX_RECONNECT_ATTEMPTS_ENV, "").strip()
+    if not raw:
+        return None
+    try:
+        value = int(raw)
+    except ValueError:
+        return None
+    return value if value > 0 else None
+
+
+async def _startup_health_check(
+    *,
+    base_url: str,
+    token: str,
+    verify_ssl: bool,
+    timeout_seconds: float = 5.0,
+) -> tuple[bool, str]:
+    """One-shot backend reachability probe right after the ready handshake.
+
+    Returns ``(ok, detail)``. Hit a cheap, always-available authenticated
+    endpoint (the user "me" endpoint) with the bearer token used by the
+    websocket. A 200 means the daemon is talking to the server it expects; a
+    401 means the token is rejected -- that's a startup failure, not a network
+    failure; a 5xx or timeout means the server is reachable but degraded and
+    the daemon should keep running.
+
+    Errors are swallowed inside the helper so the caller can log without
+    worrying about which exceptions ``urllib``/``http.client`` raise.
+    """
+    import urllib.request
+    import urllib.error
+
+    req = urllib.request.Request(
+        f"{base_url.rstrip('/')}/users/me",
+        headers={
+            "Authorization": f"Bearer {token}",
+            "User-Agent": "lemma-terminal/0 (daemon-startup-health-check)",
+        },
+        method="GET",
+    )
+    ctx = None
+    if verify_ssl is False:
+        import ssl as ssl_module
+        ctx = ssl_module.create_default_context()
+        ctx.check_hostname = False
+        ctx.verify_mode = ssl_module.CERT_NONE
+    try:
+        with urllib.request.urlopen(req, timeout=timeout_seconds, context=ctx) as resp:
+            status = getattr(resp, "status", None) or resp.getcode()
+            return (200 <= status < 300, f"GET /users/me -> {status}")
+    except urllib.error.HTTPError as exc:
+        return (False, f"GET /users/me -> {exc.code} {exc.reason}")
+    except (urllib.error.URLError, TimeoutError, OSError) as exc:
+        return (False, f"GET /users/me failed: {type(exc).__name__}: {exc}")
+
+
+
 def ssl_for_ws_url(ws_url: str, *, verify_ssl: bool) -> Any:
     """Build the ``ssl`` argument for ``websockets.connect``.
 
@@ -274,43 +401,128 @@ async def run_daemon(
     # attempts happen before its grace window elapses.
     held_runs: dict[str, _HeldRun] = {}
     reaper_task = asyncio.create_task(_reap_expired_held_runs(held_runs))
+
+    # Effective bound: prefer the caller's override (tests), fall back to env var.
+    effective_max_reconnect_attempts = (
+        max_reconnect_attempts
+        if max_reconnect_attempts is not None
+        else _read_max_reconnect_attempts()
+    )
+    _log_state(
+        _STATE_OFFLINE,
+        {"server": ws_url, "max_reconnect_attempts": effective_max_reconnect_attempts},
+    )
+
+    # Track consecutive failures for the loud-alarm condition. A run of
+    # ``threshold`` failures within ``window_seconds`` trips one ``STATE ALERT``
+    # so the operator notices. State resets on the first successful connection.
+    consecutive_failure_streak = 0
+    first_failure_at: float | None = None
+
     try:
-        # `backoff_attempt` grows the delay while we can't stay connected and resets
-        # once a connection is established; `reconnects` is a monotonic count of
-        # reconnect cycles used only to bound the loop in tests.
         backoff_attempt = 0
         reconnects = 0
         while True:
             current_token = token_provider() if token_provider is not None else token
-            daemon_log("connecting websocket", {"url": ws_url, "attempt": backoff_attempt})
+            state_label = _STATE_RECONNECTING if backoff_attempt > 0 else _STATE_OFFLINE
+            _log_state(
+                state_label,
+                {
+                    "server": ws_url,
+                    "attempt": backoff_attempt,
+                    "consecutive_failures": consecutive_failure_streak,
+                },
+            )
             try:
                 async with connect_factory(current_token) as websocket:
-                    backoff_attempt = 0  # reset backoff once we're connected
+                    backoff_attempt = 0
+                    consecutive_failure_streak = 0
+                    first_failure_at = None
                     await _serve_connection(
                         websocket,
                         config=config,
                         catalog=catalog,
                         base_url=base_url,
                         held_runs=held_runs,
+                        on_state_change=lambda state, payload: _log_state(state, payload),
+                        on_health_check=lambda: _startup_health_check(
+                            base_url=base_url,
+                            token=current_token,
+                            verify_ssl=verify_ssl,
+                        ),
                     )
                 # _serve_connection returned: the server closed the socket cleanly.
-                daemon_log("websocket closed; reconnecting", {})
+                _log_state(_STATE_OFFLINE, {"reason": "server closed socket cleanly"})
             except asyncio.CancelledError:
                 raise
             except InvalidStatus as exc:
                 status_code = getattr(getattr(exc, "response", None), "status_code", None)
                 if status_code in {401, 403}:
+                    _log_state(
+                        _STATE_OFFLINE,
+                        {"reason": "auth rejected", "status": status_code},
+                    )
                     import click
                     raise click.ClickException(
                         "Daemon websocket authentication failed. Run `lemma auth login` and try again."
                     ) from exc
-                daemon_log("websocket rejected; will retry", {"status": status_code})
+                _log_state(
+                    _STATE_OFFLINE,
+                    {"reason": "websocket rejected", "status": status_code},
+                )
+                consecutive_failure_streak, first_failure_at, alarm_raised = _record_failure(
+                    consecutive_failure_streak,
+                    first_failure_at,
+                    exc_label=f"HTTP {status_code}",
+                )
+                if alarm_raised:
+                    _log_state(
+                        _STATE_ALERT,
+                        {
+                            "consecutive_failures": consecutive_failure_streak,
+                            "window_seconds": _CONSECUTIVE_FAILURE_ALARM_WINDOW_SECONDS,
+                            "message": (
+                                "sustained reconnect failures; check backend / network"
+                            ),
+                        },
+                    )
             except (OSError, WebSocketException) as exc:
-                daemon_log("websocket connection error; will retry", {"error": str(exc)})
+                _log_state(
+                    _STATE_OFFLINE,
+                    {"reason": "connection error", "error": str(exc)},
+                )
+                consecutive_failure_streak, first_failure_at, alarm_raised = (
+                    _record_failure(
+                        consecutive_failure_streak,
+                        first_failure_at,
+                        exc_label=type(exc).__name__,
+                    )
+                )
+                if alarm_raised:
+                    _log_state(
+                        _STATE_ALERT,
+                        {
+                            "consecutive_failures": consecutive_failure_streak,
+                            "window_seconds": _CONSECUTIVE_FAILURE_ALARM_WINDOW_SECONDS,
+                            "message": (
+                                "sustained reconnect failures; check backend / network"
+                            ),
+                        },
+                    )
 
             reconnects += 1
-            if max_reconnect_attempts is not None and reconnects > max_reconnect_attempts:
-                daemon_log("giving up reconnect", {"reconnects": reconnects})
+            if (
+                effective_max_reconnect_attempts is not None
+                and reconnects > effective_max_reconnect_attempts
+            ):
+                _log_state(
+                    _STATE_OFFLINE,
+                    {
+                        "reason": "max reconnect attempts reached",
+                        "reconnects": reconnects,
+                        "max_reconnect_attempts": effective_max_reconnect_attempts,
+                    },
+                )
                 return
             delay = reconnect_delay_seconds(backoff_attempt)
             backoff_attempt += 1
@@ -335,6 +547,7 @@ async def run_daemon(
             # graceful-shutdown path) while a provider subprocess is still
             # orphaned mid-teardown.
             await asyncio.gather(*pending, return_exceptions=True)
+
 
 
 async def run_daemon_with_graceful_shutdown(**kwargs: Any) -> None:
@@ -424,6 +637,8 @@ async def _serve_connection(
     catalog: Any,
     base_url: str,
     held_runs: dict[str, _HeldRun],
+    on_state_change: Callable[[str, dict[str, object]], None] | None = None,
+    on_health_check: Callable[[], Awaitable[tuple[bool, str]]] | None = None,
 ) -> None:
     """Run the ready handshake + message loop until the connection closes.
 
@@ -434,7 +649,14 @@ async def _serve_connection(
     sink pointed live again) the next time a connection comes up. Only the
     daemon-wide reaper (``_reap_expired_held_runs``) or an explicit
     ``run.stop`` actually terminates a run's subprocess.
+
+    ``on_state_change`` and ``on_health_check`` are injected by ``run_daemon``
+    so connection-state transitions emit grep-able ``STATE <name>`` lines
+    and a startup health probe runs once per connection. Both are no-ops if
+    ``None``; that preserves the function's standalone testability.
     """
+    _emit_state = on_state_change or (lambda _s, _p: None)
+
     send_lock = asyncio.Lock()
 
     reattach_runs = [
@@ -469,6 +691,31 @@ async def _serve_connection(
         "connected; waiting for runs",
         {"catalog": catalog, "reattached": len(reattach_runs)},
     )
+    _emit_state(_STATE_ONLINE, {"server": base_url, "daemon_id": config.get("daemon_id")})
+
+    # Startup health check: a one-shot GET against the same authenticated
+    # backend the daemon talks to over the websocket. A 200 means the token
+    # is good and the daemon is talking to the server it expects; a 401 means
+    # the token is rejected (caller will tear down); 5xx/timeout is
+    # degraded-but-OK and we keep running -- runtime traffic will reflect
+    # the same status, and the heartbeat already detects a dead peer.
+    if on_health_check is not None:
+        try:
+            ok, detail = await on_health_check()
+            daemon_log(
+                "startup health check",
+                {"ok": ok, "detail": detail, "server": base_url},
+            )
+            if not ok and detail.startswith("GET /users/me -> 401"):
+                _emit_state(
+                    _STATE_OFFLINE,
+                    {"reason": "startup health check: 401 -- token rejected", "detail": detail},
+                )
+        except Exception as exc:
+            daemon_log(
+                "startup health check raised",
+                {"exception": type(exc).__name__, "message": str(exc)},
+            )
 
     active_runs: dict[str, asyncio.Task[None]] = {}
     active_sinks: dict[str, _RunEventSink] = {}
@@ -715,7 +962,11 @@ async def run_provider_command(
     model_name = str(payload.get("model_name") or "default")
     mcp = payload.get("mcp") if isinstance(payload.get("mcp"), dict) else {}
 
-    if harness_kind in {"CODEX", "CLAUDE_CODE", "OPENCODE", "CURSOR", "ANTIGRAVITY"}:
+    # Stream-based harnesses translate NDJSON lines from the provider into
+    # ``token``/``message`` events for the chat surface. Anything not in this
+    # set falls through to a generic one-shot shell, which dumps raw stdout as
+    # the assistant's text -- so omitting a harness here breaks the chat.
+    if harness_kind in {"CODEX", "CLAUDE_CODE", "OPENCODE", "CURSOR", "ANTIGRAVITY", "GG_CODER"}:
         harness = get_harness(harness_kind)
         allow_recovery = harness_kind == "CODEX"
         system_prompt, user_prompt, session_id = _prompt_parts(prompt, allow_recovery_system_prompt=allow_recovery)

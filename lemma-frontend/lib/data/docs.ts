@@ -118,7 +118,7 @@ lemma auth login`,
         body:
           'Run the released stack on your machine, open the app at http://localhost:3711, create an account, then point the CLI at the local server.',
         language: 'bash',
-        code: `curl -fsSL https://raw.githubusercontent.com/lemma-work/lemma-platform/main/install.sh | bash
+        code: `curl -fsSL https://raw.githubusercontent.com/lemma-work/lemma-platform/v0.5.4/install.sh | bash
 uv tool install lemma-terminal
 lemma servers select local
 lemma auth login`,

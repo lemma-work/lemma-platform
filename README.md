@@ -93,13 +93,19 @@ lemma daemon start            # serves pod-assigned runs via your local Claude C
 
 **macOS / Linux:**
 ```bash
-curl -fsSL https://raw.githubusercontent.com/lemma-work/lemma-platform/main/install.sh | bash
+curl -fsSL https://raw.githubusercontent.com/lemma-work/lemma-platform/v0.5.4/install.sh | bash
 ```
 
 **Windows** (PowerShell, Docker Desktop required):
 ```powershell
-iwr https://raw.githubusercontent.com/lemma-work/lemma-platform/main/install.ps1 | iex
+iwr https://raw.githubusercontent.com/lemma-work/lemma-platform/v0.5.4/install.ps1 | iex
 ```
+
+**Upgrade an existing install** to v0.5.4 in place:
+```bash
+uv tool install --reinstall --from git+https://github.com/lemma-work/lemma-platform.git@v0.5.4#subdirectory=lemma-stack lemma-stack
+```
+Or let subsequent `lemma-stack install` runs follow the latest stable tag with `--channel stable` (full stable/pinned/canary matrix in [the install docs](docs/installation.md#channels-stable-pinned-and-canary)).
 
 This installs the `lemma-stack` tool and runs the app at `http://127-0-0-1.sslip.io:3711` and the API at `http://127-0-0-1.sslip.io:8711` (docs at `/scalar`). Use that `127-0-0-1.sslip.io` host — it resolves to `127.0.0.1`, but sign-in is scoped to it, so `localhost` / `127.0.0.1` won't authenticate. Manage it with `lemma-stack start|stop|status|logs|config|uninstall`. Point the CLI at it:
 

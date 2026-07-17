@@ -36,7 +36,6 @@ from app.modules.pod.tests.e2e.workload_permissions.harness import (
     build_workload_ctx,
     create_agent,
     create_pod,
-    replace_role_grants,
     replace_workload_grants,
     seed_account,
     seed_auth_config,

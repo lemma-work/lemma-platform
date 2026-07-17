@@ -18,6 +18,27 @@ LEMMA_MCP_TOKEN_ENV = "LEMMA_MCP_TOKEN"
 LEMMA_MCP_AUTHORIZATION_ENV = "LEMMA_MCP_AUTHORIZATION"
 ENABLE_PROVIDER_NATIVE_TOOLS_ENV = "LEMMA_DAEMON_ENABLE_PROVIDER_NATIVE_TOOLS"
 
+# ggcoder (KenKaiii/gg-framework) reads MCP servers from
+# ``<cwd>/.gg/mcp.json`` at session boot via
+# ``core/mcp/store.ts::loadServers()`` — there is no CLI flag, only the
+# file. See step 4 in .gg/plans/wire-gg-framework-and-chrome-devtools-mcp.md
+# for the wiring-spine analysis.
+GG_CODER_MCP_FILE = ".gg/mcp.json"
+GG_CODER_CHROME_DEVTOOLS_SERVER_NAME = "chrome-devtools"
+GG_CODER_CHROME_DEVTOOLS_COMMAND = "npx"
+GG_CODER_CHROME_DEVTOOLS_ARGS = (
+    "-y",
+    "chrome-devtools-mcp@latest",
+    # Per GoogleTelemetry defaults: opt-out of crash/usage telemetry so dev
+    # runs don't pollute the upstream dashboard. Picked-up automatically by
+    # chrome-devtools-mcp on launch.
+    "--no-usage-statistics",
+)
+# Per plan D2: chrome-devtools-mcp is enabled by default on GG_CODER; set
+# this env to ``"0"|"false"|"no"|"off"`` to drop it from the injected config
+# (e.g. when running headless against a CI agent image without Chrome).
+GG_CODER_CHROME_DEVTOOLS_ENABLE_ENV = "LEMMA_DAEMON_GG_CODER_CHROME_DEVTOOLS"
+
 DEFAULT_COMMAND_TEMPLATES = {
     "CODEX": "codex app-server {mcp_config_args}",
     "CLAUDE_CODE": (
@@ -29,12 +50,16 @@ DEFAULT_COMMAND_TEMPLATES = {
     # --trust/--force run headless (no workspace-trust or per-command prompts);
     # --approve-mcps auto-approves the MCP server we inject via .cursor/mcp.json.
     "CURSOR": (
-        "cursor-agent -p --model {model} --output-format stream-json "
-        "--trust --force --approve-mcps"
+        "cursor-agent -p --model {model} --output-format stream-json --trust --force --approve-mcps"
     ),
     # agy has no stream-json: -p runs one prompt (read from stdin) and prints the
     # final response. --dangerously-skip-permissions runs headless.
     "ANTIGRAVITY": "agy -p --model {model} --dangerously-skip-permissions",
+    # ggcoder --json streams the AgentSession as NDJSON; the harness passes the
+    # prompt on stdin and exits at turn end. ``--provider minimax`` matches the
+    # default ggcoder login on this stack; override with
+    # ``LEMMA_DAEMON_GG_CODER_COMMAND`` to target a different provider.
+    "GG_CODER": "ggcoder --json --provider minimax --model {model} --max-turns 25",
 }
 
 DEFAULT_CWD_DIRS = {
@@ -43,6 +68,7 @@ DEFAULT_CWD_DIRS = {
     "OPENCODE": "lemma-opencode",
     "CURSOR": "lemma-cursor",
     "ANTIGRAVITY": "lemma-antigravity",
+    "GG_CODER": "lemma-gg-coder",
 }
 
 # Claude Code's own (non-MCP) tools, passed via --disallowedTools so the agent
@@ -111,6 +137,8 @@ def provider_command(
     command = shlex.split(rendered)
     if harness_kind in ("CLAUDE_CODE", "CURSOR") and session_id:
         command.extend(["--resume", session_id])
+    if harness_kind == "GG_CODER" and session_id and os.path.isfile(session_id):
+        command.extend(["--resume", session_id])
     return command
 
 
@@ -157,25 +185,82 @@ def write_provider_mcp_files(harness_kind: str, cwd: Path, mcp: dict[str, Any]) 
 
     Cursor reads ``<cwd>/.cursor/mcp.json`` and Antigravity reads
     ``<cwd>/.agents/mcp_config.json``. Antigravity requires the remote server to
-    use the ``serverUrl`` field (``url``/``httpUrl`` are rejected). Flag-based
-    (Claude Code) and stdio (Codex/OpenCode) harnesses are no-ops here.
+    use the ``serverUrl`` field (``url``/``httpUrl`` are rejected). GG Coder
+    reads ``<cwd>/.gg/mcp.json`` (KenKaiii/gg-framework ``core/mcp/store.ts``,
+    schema `mcpServers: {<name>: {type?, url?, headers?, command?, args?, env?,
+    timeout?, enabled?}}`). Flag-based (Claude Code) and stdio (Codex/OpenCode)
+    harnesses are no-ops here.
+
+    GG Coder's project-scoped ``.gg/mcp.json`` is the *only* injection point —
+    there is no CLI flag for MCP config. We default-on chrome-devtools-mcp (so
+    every GG Coder session can spin up a browser to inspect a running dev server)
+    and respect ``LEMMA_DAEMON_GG_CODER_CHROME_DEVTOOLS=0`` to drop it. Set in
+    CI / headless boxes where launching Chrome would fail.
     """
-    if not has_usable_mcp(mcp):
-        return
-    server_name = mcp_server_name(mcp)
-    url = str(mcp.get("url") or "")
-    headers = {"Authorization": mcp_authorization(mcp)}
     cwd_path = Path(cwd)
     if harness_kind == "CURSOR":
+        if not has_usable_mcp(mcp):
+            return
+        server_name = mcp_server_name(mcp)
+        url = str(mcp.get("url") or "")
+        headers = {"Authorization": mcp_authorization(mcp)}
         _write_json_file(
             cwd_path / ".cursor" / "mcp.json",
             {"mcpServers": {server_name: {"url": url, "headers": headers}}},
         )
     elif harness_kind == "ANTIGRAVITY":
+        if not has_usable_mcp(mcp):
+            return
+        server_name = mcp_server_name(mcp)
+        url = str(mcp.get("url") or "")
+        headers = {"Authorization": mcp_authorization(mcp)}
         _write_json_file(
             cwd_path / ".agents" / "mcp_config.json",
             {"mcpServers": {server_name: {"serverUrl": url, "headers": headers}}},
         )
+    elif harness_kind == "GG_CODER":
+        # GG Coder is always written (chrome-devtools-mcp is the default-on
+        # user server; the upstream Lemma MCP, when present, is added on top).
+        # If both are empty AND no upstream MCP is present, skip — keeps the
+        # cwd clean for runs where chrome-devtools-mcp was explicitly disabled
+        # and the conversation doesn't expose any MCP tool.
+        servers: dict[str, dict[str, Any]] = {}
+        if _gg_coder_chrome_devtools_enabled():
+            servers[GG_CODER_CHROME_DEVTOOLS_SERVER_NAME] = {
+                "type": "stdio",
+                "command": GG_CODER_CHROME_DEVTOOLS_COMMAND,
+                "args": list(GG_CODER_CHROME_DEVTOOLS_ARGS),
+                "env": {},
+            }
+        if has_usable_mcp(mcp):
+            # Reuse the upstream Lemma MCP entry shape so ggcoder reaches the
+            # running conversation's MCP endpoint via ``mcpServers.lemma_tools``.
+            # We keep this distinct from chrome-devtools so the two never collide
+            # on name.
+            servers[mcp_server_name(mcp)] = {
+                "type": "http",
+                "url": str(mcp.get("url") or ""),
+                "headers": {"Authorization": mcp_authorization(mcp)},
+            }
+        if not servers:
+            return
+        _write_json_file(
+            cwd_path / GG_CODER_MCP_FILE,
+            {"mcpServers": servers},
+        )
+
+
+def _gg_coder_chrome_devtools_enabled() -> bool:
+    """Read the chrome-devtools-mcp opt-out env flag for GG_CODER.
+
+    Returns True (the default) when the env var is unset or empty. The accepted
+    truthy/falsy spellings match ``provider_native_tools_enabled`` style
+    ("1"/"true"/"yes"/"on" → enable; anything else → disable).
+    """
+    raw = str(os.getenv(GG_CODER_CHROME_DEVTOOLS_ENABLE_ENV, "")).strip().lower()
+    if not raw:
+        return True
+    return raw in {"1", "true", "yes", "on"}
 
 
 def _write_json_file(path: Path, data: dict[str, Any]) -> None:
@@ -269,7 +354,10 @@ def looks_like_lemma_mcp_payload(payload: object) -> bool:
 
 def provider_native_tools_enabled() -> bool:
     return str(os.getenv(ENABLE_PROVIDER_NATIVE_TOOLS_ENV, "")).strip().lower() in {
-        "1", "true", "yes", "on",
+        "1",
+        "true",
+        "yes",
+        "on",
     }
 
 
@@ -347,15 +435,24 @@ def _codex_mcp_args(mcp: dict[str, Any]) -> list[str]:
         f"mcp_servers.{mcp_server_name(mcp)}={_toml_value(mcp_config)}",
     ]
     if not provider_native_tools_enabled():
-        args.extend([
-            "-c", "apps._default.enabled=false",
-            "-c", "apps.imagegen.enabled=true",
-            "-c", "apps.image_gen.enabled=true",
-            "-c", "features.multi_agent=false",
-            "-c", "features.shell_tool=false",
-            "-c", "features.unified_exec=false",
-            "-c", 'default_permissions=":read-only"',
-        ])
+        args.extend(
+            [
+                "-c",
+                "apps._default.enabled=false",
+                "-c",
+                "apps.imagegen.enabled=true",
+                "-c",
+                "apps.image_gen.enabled=true",
+                "-c",
+                "features.multi_agent=false",
+                "-c",
+                "features.shell_tool=false",
+                "-c",
+                "features.unified_exec=false",
+                "-c",
+                'default_permissions=":read-only"',
+            ]
+        )
     return args
 
 
@@ -372,10 +469,7 @@ def _claude_mcp_args(mcp: dict[str, Any]) -> list[str]:
         json.dumps({"mcpServers": mcp_servers}, separators=(",", ":")),
         "--strict-mcp-config",
     ]
-    allowed_tools = [
-        f"mcp__{mcp_server_name(mcp)}__{name}"
-        for name in mcp_tool_names(mcp)
-    ]
+    allowed_tools = [f"mcp__{mcp_server_name(mcp)}__{name}" for name in mcp_tool_names(mcp)]
     allowed_tool_names = [str(item) for item in allowed_tools if str(item)]
     if allowed_tool_names:
         args.extend(["--allowedTools", ",".join(allowed_tool_names)])
@@ -426,11 +520,7 @@ def _toml_value(value: object) -> str:
     if isinstance(value, list | tuple):
         return "[" + ", ".join(_toml_value(item) for item in value) + "]"
     if isinstance(value, dict):
-        return (
-            "{"
-            + ", ".join(f"{key} = {_toml_value(item)}" for key, item in value.items())
-            + "}"
-        )
+        return "{" + ", ".join(f"{key} = {_toml_value(item)}" for key, item in value.items()) + "}"
     raise TypeError(f"Unsupported TOML override value: {type(value).__name__}")
 
 

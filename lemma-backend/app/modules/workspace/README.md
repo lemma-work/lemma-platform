@@ -36,7 +36,7 @@ Sandbox manager only:
 
 ```bash
 AGENTBOX_PROVIDER=docker
-AGENTBOX_RUNTIME_IMAGE=ghcr.io/lemma-work/lemma-agentbox-runtime:latest
+AGENTBOX_RUNTIME_IMAGE=ghcr.io/lemma-work/lemma-agentbox-runtime@sha256:4e85bb6327b18b4b7eaf13b3e53f34718e4211967340e0ac908c1635e422d492
 AGENTBOX_RUNTIME_PORT=8080
 AGENTBOX_STORAGE_ROOT=/tmp/agentbox-workspaces
 ```

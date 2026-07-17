@@ -33,6 +33,7 @@ from app.modules.connectors.domain.connect_request import (
 from app.modules.connectors.domain.errors import (
     AccountAlreadyConnectedError,
     AccountNotFoundError,
+    ConnectorAccessDeniedError,
     ConnectorNotFoundError,
     ConnectRequestNotFoundError,
     ConnectRequestStateRequiredError,
@@ -944,6 +945,7 @@ class ConnectorService:
         self,
         redirect_uri: str,
         state: Optional[str] = None,
+        expected_user_id: Optional[UUID] = None,
     ) -> AccountEntity:
         if not state:
             raise ConnectRequestStateRequiredError()
@@ -951,6 +953,23 @@ class ConnectorService:
         pending_request = await self.connect_request_repository.get_by_state(state)
         if not pending_request:
             raise ConnectRequestNotFoundError()
+
+        # Bind the callback to the session: the OAuth ``state`` only proves the
+        # callback came from a flow the connector initiated, not that the user
+        # holding the redirect is the user who started the flow. Without this
+        # check, a logged-in attacker who captures (state, code) from logs or a
+        # shared browser could replay the callback against the victim user
+        # and bind the resulting account to the wrong session.
+        if (
+            expected_user_id is not None
+            and pending_request.user_id != expected_user_id
+        ):
+            logger.warning(
+                "OAuth callback user mismatch: state belongs to a different user."
+            )
+            raise ConnectorAccessDeniedError(
+                "OAuth callback does not belong to the current session."
+            )
 
         user_id = pending_request.user_id
         auth_config = await self._resolve_auth_config(

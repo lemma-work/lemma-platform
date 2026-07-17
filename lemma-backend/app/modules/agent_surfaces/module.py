@@ -40,8 +40,12 @@ async def _close_dedup_store() -> None:
     from app.modules.agent_surfaces.infrastructure.adapters.redis_event_dedup_store import (
         close_surface_event_dedup_store,
     )
+    from app.modules.agent_surfaces.services.webhook_security_service import (
+        close_whatsapp_replay_guard,
+    )
 
     await close_surface_event_dedup_store()
+    await close_whatsapp_replay_guard()
 
 
 @asynccontextmanager

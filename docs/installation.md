@@ -19,7 +19,7 @@ The fastest way to get the full stack running: backend, frontend, Postgres, Redi
 ### Install — macOS / Linux
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/lemma-work/lemma-platform/main/install.sh | bash
+curl -fsSL https://raw.githubusercontent.com/lemma-work/lemma-platform/v0.5.4/install.sh | bash
 ```
 
 This installs [uv](https://docs.astral.sh/uv/) (if missing), installs `lemma-stack` as a uv tool, and runs `lemma-stack install`.
@@ -27,7 +27,7 @@ This installs [uv](https://docs.astral.sh/uv/) (if missing), installs `lemma-sta
 To pass arguments through:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/lemma-work/lemma-platform/main/install.sh | bash -s -- --runtime podman -y
+curl -fsSL https://raw.githubusercontent.com/lemma-work/lemma-platform/v0.5.4/install.sh | bash -s -- --runtime podman -y
 ```
 
 ### Install — Windows
@@ -35,13 +35,13 @@ curl -fsSL https://raw.githubusercontent.com/lemma-work/lemma-platform/main/inst
 Requires **PowerShell 5.1+** (built in to Windows 10/11) and **Docker Desktop** running.
 
 ```powershell
-iwr https://raw.githubusercontent.com/lemma-work/lemma-platform/main/install.ps1 | iex
+iwr https://raw.githubusercontent.com/lemma-work/lemma-platform/v0.5.4/install.ps1 | iex
 ```
 
 Or download and run explicitly (avoids execution-policy prompts):
 
 ```powershell
-Invoke-WebRequest https://raw.githubusercontent.com/lemma-work/lemma-platform/main/install.ps1 -OutFile install.ps1
+Invoke-WebRequest https://raw.githubusercontent.com/lemma-work/lemma-platform/v0.5.4/install.ps1 -OutFile install.ps1
 Set-ExecutionPolicy -Scope Process Bypass
 .\install.ps1
 ```
@@ -49,6 +49,24 @@ Set-ExecutionPolicy -Scope Process Bypass
 > **Note:** Podman on Windows requires WSL 2 and is not detected automatically by the installer. Use Docker Desktop with WSL 2 backend for the smoothest experience.
 
 This installs [uv](https://docs.astral.sh/uv/) (if missing), installs `lemma-stack` as a uv tool, and runs `lemma-stack install`.
+
+### Channels: stable, pinned, and canary
+
+The one-line installer hard-pins to a tagged upstream release (`v0.5.4` today)
+— every fresh host installs the **same immutable, named artifact**. There are
+three ways to control what gets installed:
+
+| Mode | How | When to use it |
+|---|---|---|
+| **Default (stable)** | `curl …/v0.5.4/install.sh \| bash` | Production / shared hosts. Recommended for first-time installs. Reproducible. |
+| **Upgrade in place (rolling)** | `uv tool install --force --from 'git+https://github.com/lemma-work/lemma-platform.git@v0.5.4#subdirectory=lemma-stack' lemma-stack` then `lemma-stack install --channel stable` | When you want future `lemma-stack upgrade` calls to follow the latest stable tag. The pin in the URL is what keeps the *initial* install reproducible. |
+| **Canary (`main`)** | `LEMMA_STACK_REF=main curl …/install.sh \| bash` (Linux/macOS), `$env:LEMMA_STACK_REF='main'; iwr …/install.ps1 \| iex` (Windows) | Developer / experimental only. **Not recommended on shared or production hosts** — you are opting back into the mutable-ref risk this script otherwise defends against (BP-003). |
+
+> The `--channel stable` flag inside `lemma-stack install` only resolves
+> *container images* to the latest GitHub Release; it does **not** change the
+> pinned `lemma-stack` Python tool you already have installed. To follow
+> rolling releases, reinstall `lemma-stack` itself with the upgrade command
+> above.
 
 ### What you get
 
@@ -110,12 +128,16 @@ lemma-stack config set LEMMA_OPENAI_VISION_MODEL_NAMES gpt-4o            # subse
 | Variable | What it's for |
 |----------|---------------|
 | `COMPOSIO_API_KEY` | **Recommended.** Powers the app connectors / integrations (Gmail, Slack, Notion, …). Pair with `COMPOSIO_WEBHOOK_SECRET` if you wire up triggers. |
-| `SECRET_ENCRYPTION_KEY` | Fernet key for secrets at rest (connector creds, webhook secrets). In local/testing a dev seed is used; **set this for any real data**. Generate one: `python -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"`. Falls back to the legacy `CONNECTOR_ENCRYPTION_KEY`. |
+| `SECRET_ENCRYPTION_KEY` | Fernet key for secrets at rest (connector creds, webhook secrets). **Required for any deployment that holds real data.** Generate one with `python -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"` and paste it below. Falls back to the legacy `CONNECTOR_ENCRYPTION_KEY`. The keyset form `SECRET_ENCRYPTION_KEYSET` (a JSON `[{kid,key,primary}]`) enables rotation. |
+| `LEMMA_ALLOW_LOCAL_FALLBACK_KEY` | **Opt-in escape hatch for local/testing only.** Set to `true` to use the deterministic Fernet key derived from a public repo seed. The seed is checked into the repo, so this setting lets anyone with the repo decrypt your secrets — leave it unset (or `false`) for any deployment that holds real data. The default is `false` (the backend fails closed with a clear error message if no `SECRET_ENCRYPTION_KEY` is configured). |
 
 ```bash
 lemma-stack config set COMPOSIO_API_KEY <key>
 lemma-stack config set SECRET_ENCRYPTION_KEY <fernet-key>
 lemma-stack restart   # apply everything
+
+# Optional, only for ephemeral local/testing — DO NOT enable for real data:
+# lemma-stack config set LEMMA_ALLOW_LOCAL_FALLBACK_KEY true
 ```
 
 List what's set with `lemma-stack config list`, or edit the file directly with

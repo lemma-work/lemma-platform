@@ -20,6 +20,14 @@ _REAL_MODE = (
 )
 if not _REAL_MODE:
     os.environ.setdefault("LEMMA_DISABLE_DOTENV", "1")
+    # Unit/e2e tests in this tree don't carry a configured SECRET_ENCRYPTION_KEY,
+    # and used to get the deterministic Fernet seed implicitly. After BP-001 the
+    # seed is fail-closed without LEMMA_ALLOW_LOCAL_FALLBACK_KEY, so opt in here
+    # for the test tree only (never set this in the real `.env` for production).
+    # The crypto/key-resolution unit tests in app/core/crypto/tests/unit/test_keys.py
+    # exercise the fail-closed gate explicitly with monkeypatch and would
+    # re-delete this env var, so this default only covers the rest of the suite.
+    os.environ.setdefault("LEMMA_ALLOW_LOCAL_FALLBACK_KEY", "true")
 
 # AgentBox config is required to construct workspace/function services. Default
 # to test-only values (set before app.core.config is imported) so suites run

@@ -1,4 +1,3 @@
-import datetime
 from uuid import UUID
 from fastapi import Request
 from starlette.middleware.base import BaseHTTPMiddleware

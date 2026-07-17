@@ -14,6 +14,15 @@ dependencies = []
 requires = ["setuptools>=69.0"]
 build-backend = "setuptools.build_meta"
 
+[dependency-groups]
+dev = [
+  "ruff>=0.9.0",
+  # Dev-only typechecker; the published wheel does not depend on pyright.
+  # `make typecheck-python` invokes it via `uvx` so this entry never needs to
+  # be installed into the project venv for the root command to work.
+  "pyright>=1.1.0",
+] 
+
 [tool.setuptools]
 package-dir = {"" = "."}
 
@@ -21,3 +30,28 @@ package-dir = {"" = "."}
 where = ["."]
 include = ["lemma_pod_bundle*"]
 exclude = ["build*", "dist*", "*.egg-info*", "tests*"]
+
+# Ruff formatter + linter. Shared baseline with the rest of the monorepo
+# Python packages: Black-compatible format defaults and Ruff's documented
+# default rule set (pycodestyle E4/E7/E9 + pyflakes F), stated explicitly so
+# contributors know which rules are enforced.
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+
+[tool.ruff.format]
+quote-style = "double"
+indent-style = "space"
+line-ending = "auto"
+
+[tool.ruff.lint]
+select = ["E4", "E7", "E9", "F"]
+
+# Pyright type-checker: extends the monorepo baseline in ../../pyright.toml.
+# This package is stdlib-only, so the shared baseline's exclusions are enough;
+# no per-package generated/vendor dirs to add. pythonVersion mirrors the
+# package's requires-python.
+[tool.pyright]
+extends = "../pyright.toml"
+pythonVersion = "3.11"
+include = ["lemma_pod_bundle"] 

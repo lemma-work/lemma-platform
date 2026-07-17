@@ -18,7 +18,9 @@ lemma-stack = "lemma_stack.app:main"
 dev = [
     "pytest>=8.4.0",
     "ruff>=0.9.0",
-]
+    # Dev-only typechecker. See lemma-pod-bundle/pyproject.toml for rationale.
+    "pyright>=1.1.0",
+] 
 
 [build-system]
 requires = ["setuptools>=68"]
@@ -34,8 +36,27 @@ lemma_stack = ["data/**"]
 line-length = 100
 target-version = "py311"
 
+# Black-compatible format defaults; declared explicitly so editors and
+# `ruff format` invocations agree on style.
+[tool.ruff.format]
+quote-style = "double"
+indent-style = "space"
+line-ending = "auto"
+
+# Ruff's documented default rule set (pycodestyle E4/E7/E9 + pyflakes F),
+# stated explicitly so contributors know which rules are enforced.
+[tool.ruff.lint]
+select = ["E4", "E7", "E9", "F"]
+
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 markers = [
   "install_experience: Docker-based cross-platform install tests (slow, need Docker for some)",
 ]
+
+# Pyright type-checker: extends the monorepo baseline in ../../pyright.toml.
+# pythonVersion mirrors the package's requires-python.
+[tool.pyright]
+extends = "../pyright.toml"
+pythonVersion = "3.11"
+include = ["lemma_stack", "tests"] 

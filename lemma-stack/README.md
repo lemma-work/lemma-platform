@@ -4,7 +4,7 @@ Installer and management tool for a fully-local Lemma stack.
 
 ```bash
 # one-line install (from the repo root: ./install.sh)
-curl -fsSL https://raw.githubusercontent.com/lemma-work/lemma-platform/main/install.sh | bash
+curl -fsSL https://raw.githubusercontent.com/lemma-work/lemma-platform/v0.5.4/install.sh | bash
 ```
 
 `lemma-stack install` detects docker/podman (offering to install podman — the

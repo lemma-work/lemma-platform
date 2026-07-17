@@ -16,8 +16,14 @@ class Settings(BaseSettings):
     agentbox_app_domain: str | None = None
     agentbox_provider: Literal["kubernetes", "docker", "podman"] = "kubernetes"
     agentbox_namespace: str = "agentbox"
+    # Security default: digest-pinned to the manifest-list digest that
+    # matches the dev Makefile's `make update-agentbox` target. The dev
+    # Makefile injects AGENTBOX_RUNTIME_IMAGE via the shell env, so this
+    # default only takes effect when the manager is started outside of
+    # `make dev` (e.g. directly via `uv run uvicorn ...`).
     agentbox_runtime_image: str = (
-        "ghcr.io/lemma-work/lemma-agentbox-runtime:latest"
+        "ghcr.io/lemma-work/lemma-agentbox-runtime@sha256:"
+        "4e85bb6327b18b4b7eaf13b3e53f34718e4211967340e0ac908c1635e422d492"
     )
     agentbox_sandbox_image_pull_policy: str = "IfNotPresent"
     agentbox_runtime_port: int = 8080

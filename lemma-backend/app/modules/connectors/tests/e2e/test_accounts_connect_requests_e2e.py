@@ -217,6 +217,121 @@ async def test_oauth_callback_requires_state(authenticated_client):
 
 
 @pytest.mark.asyncio
+async def test_oauth_callback_rejects_session_mismatch(
+    authenticated_client,
+    async_client,
+    fixed_test_org,
+    db_session,
+    monkeypatch,
+):
+    """Replay of user A's ``state`` while authenticated as user B must 403.
+
+    Without the session-binding check in the OAuth callback, an attacker who
+    captured (state, code) from victim A (e.g. via backend logs) could replay
+    the callback against their own session and bind the resulting account to
+    A. This test pins the fix: user B's callback returns 403 and no account
+    is created under A or B.
+    """
+    from app.modules.connectors.infrastructure.models.account import Account
+    from app.modules.test_support.e2e_authz import auth_headers, signup_user
+
+    connector_id = f"oauth-replay-app-{uuid4().hex[:8]}"
+    app = Connector(
+        id=connector_id,
+        title="OAuth Replay App",
+        description="OAuth replay test app",
+        provider_capabilities=[
+            {
+                "provider": "LEMMA",
+                "auth_scheme": "OAUTH2",
+                "supports_org_custom_oauth": True,
+                "oauth2_defaults": {
+                    "default_scopes": ["openid"],
+                    "authorization_url": "https://mock.example.com/auth",
+                    "token_url": "https://mock.example.com/token",
+                },
+            }
+        ],
+        is_active=True,
+    )
+    db_session.add(app)
+    await db_session.commit()
+
+    org_id = fixed_test_org["id"]
+    auth_config_response = await authenticated_client.post(
+        f"/organizations/{org_id}/connectors/auth-configs",
+        json={
+            "connector_id": connector_id,
+            "provider": "LEMMA",
+            "config_source": "ORG_CUSTOM",
+            "credential_config": {
+                "oauth2_credentials": {
+                    "client_id": "client-id",
+                    "client_secret": "client-secret",
+                }
+            },
+        },
+    )
+    assert auth_config_response.status_code == 200, auth_config_response.text
+
+    async def _fake_get_authorization_url(
+        self, connector, user_id, state, redirect_uri
+    ):
+        return ("https://mock.example.com/authorize", "provider_state")
+
+    async def _fake_exchange_code_for_credentials(
+        self, connector, redirect_uri, user_id, state=None
+    ):
+        return OAuthCredentials(
+            access_token="access-token",
+            refresh_token="refresh-token",
+            expires_at=datetime.now(timezone.utc) + timedelta(minutes=30),
+        )
+
+    monkeypatch.setattr(
+        LemmaAuthProvider,
+        "get_authorization_url",
+        _fake_get_authorization_url,
+    )
+    monkeypatch.setattr(
+        LemmaAuthProvider,
+        "exchange_code_for_credentials",
+        _fake_exchange_code_for_credentials,
+    )
+
+    # Victim initiates the flow under user A (authenticated_client).
+    initiate = await authenticated_client.post(
+        f"/organizations/{org_id}/connectors/connect-requests",
+        json={"connector_id": connector_id},
+    )
+    assert initiate.status_code == 200, initiate.text
+    victim_state = initiate.json()["attributes"]["state"]
+    assert victim_state
+
+    # Attacker B signs up separately.
+    attacker = await signup_user(
+        async_client, f"oauth-replay-attacker-{uuid4().hex[:6]}"
+    )
+
+    # Attacker B replays victim A's state with their own bearer token.
+    replay = await async_client.get(
+        "/connectors/connect-requests/oauth/callback",
+        params={"state": victim_state, "code": "stolen", "format": "json"},
+        headers=auth_headers(attacker),
+    )
+
+    assert replay.status_code == 403, replay.text
+    payload = replay.json()
+    assert payload["code"] == "CONNECTOR_ACCESS_DENIED"
+
+    # No account was created for either party from the replay.
+    accounts = (
+        await db_session.execute(Account.__table__.select())
+    ).mappings().all()
+    assert all(a["connector_id"] != connector_id for a in accounts)
+
+
+@pytest.mark.asyncio
 async def test_lemma_system_default_requires_configured_env_credentials(
     authenticated_client,
     fixed_test_org,
