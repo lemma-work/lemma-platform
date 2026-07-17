@@ -985,6 +985,7 @@ class ConcurrencyInput(BaseModel):
     marker: str
     workspace_path: str
     expected_sentinel: str
+    delay_seconds: float = 15.0
 
 class ConcurrencyOutput(BaseModel):
     label: str
@@ -997,7 +998,7 @@ class ConcurrencyOutput(BaseModel):
 async def {function_name}(ctx, data: ConcurrencyInput) -> ConcurrencyOutput:
     started_ns = time.monotonic_ns()
     print(f"start:{{data.label}}:{{data.marker}}")
-    await asyncio.sleep(15)
+    await asyncio.sleep(data.delay_seconds)
     finished_ns = time.monotonic_ns()
     print(f"finish:{{data.label}}:{{data.marker}}")
     return ConcurrencyOutput(
@@ -1075,6 +1076,7 @@ def _function_execute(
     workspace_path: str,
     expected_sentinel: str,
     async_job: bool,
+    delay_seconds: float = 15.0,
 ) -> object:
     response = None
     delay = 0.25
@@ -1091,6 +1093,7 @@ def _function_execute(
                     "marker": marker,
                     "workspace_path": workspace_path,
                     "expected_sentinel": expected_sentinel,
+                    "delay_seconds": delay_seconds,
                 },
                 "async_job": async_job,
                 "timeout_seconds": 120,
@@ -1181,8 +1184,7 @@ def _job_logs(
     for attempt in range(1, 13):
         response = server.client.request_json(
             "GET",
-            f"/sandboxes/{sandbox_id}/apps/function_executor/"
-            f"runs/{run_id}/logs",
+            f"/sandboxes/{sandbox_id}/apps/function_executor/runs/{run_id}/logs",
             timeout=60,
         )
         if response.status_code == HTTPStatus.OK:
@@ -1281,6 +1283,65 @@ def test_real_e2b_twenty_short_function_requests_use_slots_without_leakage(
         "print(urllib.request.urlopen('http://127.0.0.1:8079/health').status)\"",
     )
     assert health["stdout"].strip() == "200"
+
+    api_smoke = {
+        "run_id": str(uuid4()),
+        "label": "api-smoke",
+        "marker": uuid4().hex,
+        "workspace_path": workspace_path,
+        "expected_sentinel": workspace_sentinel,
+        "async_job": False,
+        "delay_seconds": 0.25,
+    }
+    api_response = _function_execute(
+        real_e2b_server,
+        real_e2b_sandbox_id,
+        pod_id=pod_id,
+        function_name=function_name,
+        token=token,
+        **api_smoke,
+    )
+    _assert_function_response_ok(
+        real_e2b_server,
+        real_e2b_sandbox_id,
+        api_response,
+        token=token,
+    )
+    assert api_response.json()["status"] == "completed"
+    assert api_response.json()["output_data"]["marker"] == api_smoke["marker"]
+
+    job_smoke = {
+        "run_id": str(uuid4()),
+        "label": "job-smoke",
+        "marker": uuid4().hex,
+        "workspace_path": workspace_path,
+        "expected_sentinel": workspace_sentinel,
+        "async_job": True,
+        "delay_seconds": 0.25,
+    }
+    job_response = _function_execute(
+        real_e2b_server,
+        real_e2b_sandbox_id,
+        pod_id=pod_id,
+        function_name=function_name,
+        token=token,
+        **job_smoke,
+    )
+    _assert_function_response_ok(
+        real_e2b_server,
+        real_e2b_sandbox_id,
+        job_response,
+        token=token,
+    )
+    assert job_response.json()["status"] == "accepted"
+    job_result = _wait_job(
+        real_e2b_server,
+        real_e2b_sandbox_id,
+        job_smoke["run_id"],
+        token=token,
+    )
+    assert job_result["status"] == "completed", job_result
+    assert job_result["output_data"]["marker"] == job_smoke["marker"]
 
     runs = [
         {
