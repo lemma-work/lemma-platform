@@ -2,6 +2,8 @@ from pathlib import Path
 
 import pytest
 
+from agentbox.apps import sandbox_app
+
 
 AGENTBOX_ROOT = Path(__file__).resolve().parents[1]
 
@@ -30,6 +32,13 @@ def test_runtime_start_clears_ephemeral_and_legacy_browser_state() -> None:
     assert "unset AGENT_BROWSER_SESSION_NAME" in script
     assert 'rm -rf -- "$HOME_DIR/.agent-browser" /workspace/.browser-profile' in script
     assert "rm -f -- /workspace/agent-browser.json" in script
+
+
+def test_function_executor_is_part_of_sandbox_readiness() -> None:
+    script = (AGENTBOX_ROOT / "scripts" / "start-runtime.sh").read_text()
+
+    assert "python -m uvicorn agentbox.function_executor:app" in script
+    assert sandbox_app("function_executor").startup == "eager"
 
 
 @pytest.mark.parametrize("name", ["start-runtime.sh", "start-browser.sh"])

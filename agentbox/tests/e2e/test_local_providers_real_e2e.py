@@ -731,18 +731,6 @@ def test_real_local_provider_runs_twenty_mixed_api_and_job_functions_concurrentl
         ]
         responses = [future.result() for future in futures]
 
-    # Probe after the admission burst. A one-shot health connection racing the
-    # twenty simultaneous proxy connections tests the host TCP backlog, not
-    # executor liveness; every function result below remains authoritative.
-    runtime_health = server.client.request(
-        "GET", f"/sandboxes/{sandbox_id}/apps/runtime/health"
-    )
-    executor_health = server.client.request(
-        "GET", f"/sandboxes/{sandbox_id}/apps/function_executor/health"
-    )
-    assert runtime_health.status_code == HTTPStatus.OK, runtime_health.text
-    assert executor_health.status_code == HTTPStatus.OK, executor_health.text
-
     outputs: list[dict[str, Any]] = []
     for run_id, async_job, response in zip(
         run_ids, async_modes, responses, strict=True
@@ -756,6 +744,18 @@ def test_real_local_provider_runs_twenty_mixed_api_and_job_functions_concurrentl
         assert payload["output_data"]["marker"] == run_id
         assert payload["output_data"]["shared_marker"] == "runtime-to-function"
         outputs.append(payload["output_data"])
+
+    # Probe after every API and JOB invocation is terminal. A one-shot health
+    # connection racing the twenty-request admission burst tests the host TCP
+    # backlog, not whether the services survived the work.
+    runtime_health = server.client.request(
+        "GET", f"/sandboxes/{sandbox_id}/apps/runtime/health"
+    )
+    executor_health = server.client.request(
+        "GET", f"/sandboxes/{sandbox_id}/apps/function_executor/health"
+    )
+    assert runtime_health.status_code == HTTPStatus.OK, runtime_health.text
+    assert executor_health.status_code == HTTPStatus.OK, executor_health.text
 
     elapsed = time.monotonic() - started
     assert len(outputs) == FUNCTION_RUN_COUNT

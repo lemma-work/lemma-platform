@@ -36,7 +36,10 @@ SANDBOX_APPS: dict[str, SandboxAppSpec] = {
         name="function_executor",
         public_slug="function",
         port=8090,
-        startup="lazy",
+        # start-runtime launches this process unconditionally. Treat it as an
+        # eager app so providers do not publish a ready sandbox while port 8090
+        # is still binding and reset the first function invocation burst.
+        startup="eager",
         exposure="private",
         auth_mode="manager_api_key",
     ),
