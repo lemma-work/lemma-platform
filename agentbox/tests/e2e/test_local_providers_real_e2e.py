@@ -729,14 +729,17 @@ def test_real_local_provider_runs_twenty_mixed_api_and_job_functions_concurrentl
             )
             for run_id, async_job in zip(run_ids, async_modes, strict=True)
         ]
-        runtime_health = server.client.request(
-            "GET", f"/sandboxes/{sandbox_id}/apps/runtime/health"
-        )
-        executor_health = server.client.request(
-            "GET", f"/sandboxes/{sandbox_id}/apps/function_executor/health"
-        )
         responses = [future.result() for future in futures]
 
+    # Probe after the admission burst. A one-shot health connection racing the
+    # twenty simultaneous proxy connections tests the host TCP backlog, not
+    # executor liveness; every function result below remains authoritative.
+    runtime_health = server.client.request(
+        "GET", f"/sandboxes/{sandbox_id}/apps/runtime/health"
+    )
+    executor_health = server.client.request(
+        "GET", f"/sandboxes/{sandbox_id}/apps/function_executor/health"
+    )
     assert runtime_health.status_code == HTTPStatus.OK, runtime_health.text
     assert executor_health.status_code == HTTPStatus.OK, executor_health.text
 
