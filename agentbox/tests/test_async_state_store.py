@@ -1035,6 +1035,30 @@ async def test_postgres_legacy_schema_migration_and_store_parity():
         assert session.active_operations == 9
         assert await store.mark_sandbox_active("missing") is False
         await _observe_running(store, "legacy")
+        current = await store.get_sandbox("legacy")
+        assert current is not None
+        degraded = await store.set_sandbox_observed_state(
+            "legacy",
+            observed_state="degraded",
+            expected_generation=current.desired_generation,
+            expected_observed_state=None,
+            last_failure="route unavailable",
+            reconcile_after=None,
+        )
+        assert degraded is not None
+        assert degraded.observed_state == "degraded"
+        assert degraded.last_failure == "route unavailable"
+        assert degraded.reconcile_after is None
+        restored = await store.set_sandbox_observed_state(
+            "legacy",
+            observed_state="running",
+            expected_generation=current.desired_generation,
+            expected_observed_state="degraded",
+            last_failure=None,
+            reconcile_after=None,
+        )
+        assert restored is not None
+        assert restored.observed_state == "running"
         assert await store.mark_sandbox_active("legacy") is True
         assert await store.touch_session("legacy", "session") is True
 

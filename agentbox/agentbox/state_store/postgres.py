@@ -456,15 +456,15 @@ class PostgresStateStore:
                     UPDATE agentbox_sandboxes SET observed_state = %s,
                         last_failure = %s,
                         reconcile_after = CASE
-                            WHEN %s IS NULL THEN NULL
-                            ELSE to_timestamp(%s)
+                            WHEN %s::double precision IS NULL THEN NULL
+                            ELSE to_timestamp(%s::double precision)
                         END,
                         last_observed_at = now(), updated_at = now()
                     WHERE sandbox_id = %s
                       AND desired_state = 'present'
                       AND desired_generation = %s
                       AND observed_generation = %s
-                      AND (%s IS NULL OR observed_state = %s)
+                      AND (%s::text IS NULL OR observed_state = %s::text)
                     RETURNING {self._sandbox_columns()}
                     """,
                     (
