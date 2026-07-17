@@ -29,7 +29,7 @@ from app.core.security import verify_auth
 from app.modules.identity.infrastructure.supertokens_auth.initialization import (
     initialize_supertokens,
 )
-from app.core.log.log import setup_logging, get_logger
+from app.core.log.log import setup_logging, get_logger, validate_release_identity
 from app.core.observability.telemetry import (
     init_telemetry,
     instrument_database_engine,
@@ -140,6 +140,9 @@ async def lifespan(app: FastAPI):
         await get_streaq_job_queue().connect()
         await get_message_bus().connect()
         logger.info("Redis broker started")
+        # One stable startup event after initialization succeeds. service.version
+        # and release.sha are attached by the logging context from LEMMA_RELEASE_SHA.
+        logger.info("service.started")
 
         try:
             # Module-contributed API lifespans (e.g. datastore query-role
@@ -277,6 +280,7 @@ def create_app(modules=OSS_MODULES) -> FastAPI:
         json_logs=settings.json_logs_enabled,
         log_level=settings.log_level,
     )
+    validate_release_identity(settings.environment)
     app = FastAPI(
         title=settings.app_name,
         description="Authentication API with JWT, user management, and OAuth support",
@@ -380,29 +384,96 @@ def create_app(modules=OSS_MODULES) -> FastAPI:
     # routers() thunk. See app/modules/<name>/module.py.
     include_module_routers(app, modules)
 
-    # Health check
-    @app.get("/health")
-    async def health_check():
-        return {"status": "healthy", "message": "API is running"}
-
-    # Liveness: 503 when the event loop is wedged (lag over the unhealthy
-    # threshold), so a Kubernetes liveness probe restarts the process. A fully
-    # blocked loop can't serve this at all, which trips the probe's timeout —
-    # either way a hung process is restarted instead of hanging silently.
+    # Liveness: process/event-loop check only. No DB or network dependency, so
+    # it normally completes within ~100 ms. 503 when the event loop is wedged
+    # (lag over the unhealthy threshold), so a liveness probe restarts the
+    # process. A fully blocked loop can't serve this at all, which trips the
+    # probe's timeout — either way a hung process is restarted instead of
+    # hanging silently.
+    @app.get("/health/live", include_in_schema=False)
     @app.get("/livez", include_in_schema=False)
-    async def livez():
+    async def health_live():
         from app.core.observability.loop_watchdog import (
             get_loop_lag_seconds,
             is_loop_healthy,
         )
 
+        healthy = is_loop_healthy()
         payload = {
-            "status": "ok" if is_loop_healthy() else "unhealthy",
+            "status": "ok" if healthy else "unhealthy",
             "loop_lag_seconds": round(get_loop_lag_seconds(), 3),
         }
-        return JSONResponse(
-            payload, status_code=200 if is_loop_healthy() else 503
+        return JSONResponse(payload, status_code=200 if healthy else 503)
+
+    # Readiness: bounded, concurrent checks for dependencies required to serve
+    # new work. Each check has ~1 s; the whole endpoint has a ~2 s deadline.
+    # 503 when not ready; only generic component states are exposed, never
+    # connection strings or provider responses.
+    @app.get("/health/ready", include_in_schema=False)
+    async def health_ready():
+        import asyncio as _asyncio
+
+        from sqlalchemy import text
+
+        async def _db_ok() -> bool:
+            try:
+                engine = get_engine()
+                async with engine.connect() as conn:
+                    await conn.execute(text("SELECT 1"))
+                return True
+            except Exception:
+                return False
+
+        async def _redis_ok() -> bool:
+            try:
+                return await channel_service.ping()
+            except Exception:
+                return False
+
+        async def _with_timeout(coro, seconds: float) -> bool:
+            try:
+                return await _asyncio.wait_for(coro, timeout=seconds)
+            except Exception:
+                return False
+
+        # Run dependency checks concurrently; each is individually bounded and
+        # the pair is bounded by the overall gather timeout.
+        db_task = redis_task = None
+        try:
+            db_task = _asyncio.create_task(_with_timeout(_db_ok(), 1.0))
+            redis_task = _asyncio.create_task(_with_timeout(_redis_ok(), 1.0))
+            db_ok, redis_ok = await _asyncio.wait_for(
+                _asyncio.gather(db_task, redis_task), timeout=2.0
+            )
+        except Exception:
+            db_ok, redis_ok = False, False
+        finally:
+            for t in (db_task, redis_task):
+                if t is not None and not t.done():
+                    t.cancel()
+
+        components = {
+            "db": "ok" if db_ok else "down",
+            "redis": "ok" if redis_ok else "down",
+        }
+        ready = bool(db_ok) and bool(redis_ok)
+        payload = {"status": "ready" if ready else "not_ready", "components": components}
+        return JSONResponse(payload, status_code=200 if ready else 503)
+
+    # Compatibility alias for /health/live during probe migration.
+    @app.get("/health", include_in_schema=False)
+    async def health_alias():
+        from app.core.observability.loop_watchdog import (
+            get_loop_lag_seconds,
+            is_loop_healthy,
         )
+
+        healthy = is_loop_healthy()
+        payload = {
+            "status": "ok" if healthy else "unhealthy",
+            "loop_lag_seconds": round(get_loop_lag_seconds(), 3),
+        }
+        return JSONResponse(payload, status_code=200 if healthy else 503)
 
     @app.get("/scalar", include_in_schema=False)
     async def scalar_html():

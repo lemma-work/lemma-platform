@@ -98,6 +98,20 @@ class RedisChannelAdapter:
         assert self._redis is not None
         return self._redis
 
+    async def ping(self) -> bool:
+        """Return True if the shared Redis client can respond to ``PING``.
+
+        Used by the ``/health/ready`` check. Never raises: a down Redis is
+        reported as ``False`` so readiness returns 503 rather than erroring.
+        """
+        if self._redis is None:
+            return False
+        try:
+            await self._redis.ping()
+            return True
+        except RedisError:
+            return False
+
     async def publish(self, channel: str, message: object) -> None:
         """Publish a transient payload through the shared Redis pool."""
         payload: str | bytes

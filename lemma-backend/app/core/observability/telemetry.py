@@ -34,6 +34,13 @@ from opentelemetry.sdk.metrics import MeterProvider
 from opentelemetry.sdk.metrics.export import PeriodicExportingMetricReader
 from opentelemetry.sdk.resources import Resource
 from opentelemetry.sdk.trace import ReadableSpan, SpanProcessor, TracerProvider
+from opentelemetry.sdk.trace.sampling import (
+    ALWAYS_OFF,
+    ALWAYS_ON,
+    ParentBased,
+    Sampler,
+    TraceIdRatioBased,
+)
 from opentelemetry.sdk.trace.export import (
     BatchSpanProcessor,
     SpanExporter,
@@ -176,7 +183,32 @@ def _build_resource(service_name: str) -> Resource:
         attributes["service.namespace"] = settings.otel_service_namespace
     if settings.environment:
         attributes["deployment.environment"] = settings.environment
+    # Release identity on the OTLP resource (mirrors the log context fields).
+    # Present even when exporters are disabled so Phase 3 trace enablement is a
+    # config flip, not a code change.
+    release_sha = (settings.release_sha or "").strip()
+    if release_sha:
+        attributes["service.version"] = release_sha
     return Resource.create(attributes)
+
+
+def _build_sampler(settings) -> Sampler:
+    """Build the trace sampler from OTEL_TRACES_SAMPLER + OTEL_TRACES_SAMPLER_ARG.
+
+    Defaults to parent-based 5%% head sampling: a sampled parent propagates the
+    decision; independent roots are sampled at the configured ratio. Honored by
+    the managed Container Apps OTel agent via the same env vars.
+    """
+    strategy = (settings.otel_traces_sampler or "parentbased_traceidratio").strip().lower()
+    ratio = float(settings.otel_traces_sampler_arg)
+    if strategy in {"always_on", "alwayson"}:
+        return ALWAYS_ON
+    if strategy in {"always_off", "alwaysoff"}:
+        return ALWAYS_OFF
+    if strategy in {"traceidratio", "trace_id_ratio", "traceidratio_based"}:
+        return TraceIdRatioBased(ratio)
+    # parentbased_traceidratio (default) and any unrecognized value.
+    return ParentBased(TraceIdRatioBased(ratio))
 
 
 def _endpoint_is_insecure(endpoint: str) -> bool:
@@ -304,7 +336,10 @@ def _llm_otlp_headers() -> dict[str, str] | None:
 
 def _setup_tracing(service_name: str) -> None:
     settings = _get_settings()
-    provider = TracerProvider(resource=_build_resource(service_name))
+    provider = TracerProvider(
+        resource=_build_resource(service_name),
+        sampler=_build_sampler(settings),
+    )
 
     provider.add_span_processor(AgentRunSpanEnricher())
 
@@ -556,7 +591,7 @@ def instrument_fastapi_app(app: FastAPI) -> None:
         app,
         tracer_provider=trace.get_tracer_provider(),
         meter_provider=metrics.get_meter_provider(),
-        excluded_urls="/health",
+        excluded_urls="/health,/health/live,/health/ready,/livez",
     )
     _instrumented_app_ids.add(app_id)
 

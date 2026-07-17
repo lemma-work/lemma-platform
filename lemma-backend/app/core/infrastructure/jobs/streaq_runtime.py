@@ -25,7 +25,7 @@ from app.core.infrastructure.jobs.streaq_job_queue import (
 from app.modules.identity.infrastructure.supertokens_auth.initialization import (
     initialize_supertokens,
 )
-from app.core.log.log import get_logger, setup_logging
+from app.core.log.log import get_logger, setup_logging, validate_release_identity
 from app.core.observability.telemetry import init_telemetry, instrument_database_engine
 
 logger = get_logger(__name__)
@@ -200,6 +200,18 @@ async def _consumer_group_reconcile_loop() -> None:
         await client.aclose()
 
 
+# Low-rate structured heartbeat for remote absence detection. At 5 min this is
+# <600 records/48h. service.version is attached by the logging context.
+_WORKER_HEARTBEAT_INTERVAL_SECONDS = 300.0
+
+
+async def _worker_heartbeat_loop() -> None:
+    """Emit ``worker.heartbeat`` every 5 min while the worker loop is healthy."""
+    while True:
+        await asyncio.sleep(_WORKER_HEARTBEAT_INTERVAL_SECONDS)
+        logger.info("worker.heartbeat")
+
+
 @asynccontextmanager
 async def worker_lifespan() -> AsyncGenerator[AppWorkerContext]:
     setup_logging(
@@ -208,6 +220,7 @@ async def worker_lifespan() -> AsyncGenerator[AppWorkerContext]:
         json_logs=settings.json_logs_enabled,
         log_level=settings.log_level,
     )
+    validate_release_identity(settings.environment)
     init_telemetry(service_name="lemma-worker")
     instrument_database_engine(get_engine())
     # Size the thread-offload pool before any task runs blocking work off-loop.
@@ -249,6 +262,8 @@ async def worker_lifespan() -> AsyncGenerator[AppWorkerContext]:
         uow_factory=SessionUnitOfWorkFactory(async_session_maker),
     )
     logger.info("Worker starting...")
+    # One stable startup event after initialization succeeds.
+    logger.info("service.started")
     # Imported lazily to avoid an import cycle: the registry imports module
     # `module.py` files whose worker hooks reference AppWorkerContext (defined
     # in this file).
@@ -272,6 +287,11 @@ async def worker_lifespan() -> AsyncGenerator[AppWorkerContext]:
             heartbeat_path=settings.worker_heartbeat_path or None,
         )
     )
+    # Low-rate structured heartbeat for remote absence detection of this
+    # singleton background process. At 5 min this is <600 records/48h. The
+    # worker has no HTTP server, so the heartbeat event + the watchdog's
+    # heartbeat file are its liveness signals.
+    heartbeat_task = asyncio.create_task(_worker_heartbeat_loop())
 
     try:
         # Module-contributed worker lifespans (e.g. agent_surfaces native event
@@ -284,7 +304,7 @@ async def worker_lifespan() -> AsyncGenerator[AppWorkerContext]:
             await enter_worker_lifespans(module_stack, OSS_MODULES, context)
             yield context
     finally:
-        for background_task in (reconcile_task, watchdog_task):
+        for background_task in (reconcile_task, watchdog_task, heartbeat_task):
             if background_task is not None and not background_task.done():
                 background_task.cancel()
                 try:

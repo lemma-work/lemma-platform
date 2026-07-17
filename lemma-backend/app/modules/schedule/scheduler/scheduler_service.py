@@ -13,6 +13,7 @@ from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from apscheduler.jobstores.sqlalchemy import SQLAlchemyJobStore
 from apscheduler.triggers.cron import CronTrigger
 from apscheduler.triggers.date import DateTrigger
+from apscheduler.events import EVENT_JOB_ERROR
 from pytz import utc
 from sqlalchemy.engine import make_url
 
@@ -113,7 +114,22 @@ class SchedulerService:
             # Start scheduler
             self.scheduler.start()
             self._started = True
+            # Stable terminal-failure event for dashboards/alerts. APScheduler
+            # does not expose job duration in its events, so only error_type is
+            # emitted. There is no scheduler-level "cycle error" event in this
+            # version, so per-job errors are the failure signal.
+            self.scheduler.add_listener(self._on_scheduler_event, EVENT_JOB_ERROR)
             logger.info("APScheduler started with event emitter")
+
+    def _on_scheduler_event(self, event) -> None:
+        """Emit one stable failure event per APScheduler job error."""
+        exception = getattr(event, "exception", None)
+        error_type = type(exception).__name__ if exception else "UnknownError"
+        logger.error(
+            "scheduler.job.failed",
+            job_id=getattr(event, "job_id", None),
+            error_type=error_type,
+        )
 
     async def shutdown(self, wait: bool = True):
         """Shutdown the scheduler and event emitter."""

@@ -447,6 +447,16 @@ class Settings(BaseSettings):
         default=True,
         description="Emit structured JSON logs instead of console-formatted logs",
     )
+    release_sha: Optional[str] = Field(
+        default=None,
+        description=(
+            "Full 40-character source Git SHA whose immutable image digest is "
+            "deployed. Emitted as ``service.version`` and ``release.sha`` on every "
+            "log line and added to the OpenTelemetry Resource. Required in "
+            "production: startup rejects an empty or non-hex value. Env: "
+            "``LEMMA_RELEASE_SHA``."
+        ),
+    )
     frontend_url: str = Field(
         default="http://localhost:3711", description="Frontend URL for email links"
     )
@@ -734,6 +744,22 @@ class Settings(BaseSettings):
     observability_metrics_export_interval_millis: int = Field(
         default=15000,
         description="Metric export interval for OTEL periodic readers",
+    )
+    otel_traces_sampler: str = Field(
+        default="parentbased_traceidratio",
+        description=(
+            "OpenTelemetry trace sampler strategy. Defaults to parent-based 5%% "
+            "head sampling so a sampled parent propagates the decision and "
+            "independent roots are sampled at the configured ratio. Env: "
+            "``OTEL_TRACES_SAMPLER``."
+        ),
+    )
+    otel_traces_sampler_arg: float = Field(
+        default=0.05,
+        description=(
+            "Sampling ratio for ratio-based samplers (0.05 = 5%%). Env: "
+            "``OTEL_TRACES_SAMPLER_ARG``."
+        ),
     )
     lemma_llm_caching_enabled: bool = Field(
         default=False,

@@ -10,7 +10,13 @@ restarts it. This watchdog makes a wedged loop *observable* and *actionable*:
 - It writes a heartbeat file (current epoch seconds) each tick. A wedged loop
   can't update it, so an external liveness probe can check the file's freshness
   and restart the process. This is how the worker (which has no HTTP server)
-  gets a liveness signal; the API additionally serves ``/livez``.
+  gets a liveness signal; the API additionally serves ``/health/live``.
+
+Loop-lag telemetry is **stateful**. While degraded, the in-memory maximum lag is
+tracked without emitting a warning on every tick; a single
+``runtime.loop_lag.degraded`` event fires on the transition. Recovery emits a
+single ``runtime.loop_lag.recovered`` event only after a small hysteresis window
+of consecutive healthy checks, so threshold jitter does not alternate events.
 
 Mirrors the background-task shape of ``_consumer_group_reconcile_loop`` in the
 streaq runtime: started in the lifespan, cancelled on shutdown.
@@ -29,9 +35,21 @@ from app.core.log.log import get_logger
 
 logger = get_logger(__name__)
 
-# Most-recent measured event-loop lag (seconds). Module-global so /livez and
-# metrics can read it without holding a reference to the task.
+# Most-recent measured event-loop lag (seconds). Module-global so /health/live
+# and metrics can read it without holding a reference to the task.
 _last_lag_seconds: float = 0.0
+
+# Degraded-state machine for loop-lag telemetry. Module-global so the watchdog
+# task and tests can reset/inspect it without holding a reference to the task.
+_degraded: bool = False
+_degraded_since: float = 0.0  # time.monotonic() at degraded transition
+_max_lag_seconds: float = 0.0  # peak lag observed during the current degraded window
+_healthy_streak: int = 0  # consecutive healthy ticks while waiting to recover
+
+# Consecutive healthy ticks required before emitting recovery. At the default
+# 0.5s interval this is ~2.5s of sustained healthy loop time, enough to absorb
+# threshold jitter without flapping degraded/recovered events.
+_RECOVERY_HYSTERESIS_TICKS = 5
 
 
 def get_loop_lag_seconds() -> float:
@@ -39,8 +57,65 @@ def get_loop_lag_seconds() -> float:
 
 
 def is_loop_healthy() -> bool:
-    """False when measured lag exceeds the unhealthy threshold (for /livez)."""
+    """False when measured lag exceeds the unhealthy threshold (for /health/live)."""
     return _last_lag_seconds < settings.loop_lag_unhealthy_seconds
+
+
+def reset_loop_watchdog_state() -> None:
+    """Reset the degraded-state machine (for tests and process restart)."""
+    global _degraded, _degraded_since, _max_lag_seconds, _healthy_streak, _last_lag_seconds
+    _degraded = False
+    _degraded_since = 0.0
+    _max_lag_seconds = 0.0
+    _healthy_streak = 0
+    _last_lag_seconds = 0.0
+
+
+def _evaluate_lag(
+    lag: float,
+    warn: float,
+    *,
+    service_name: str,
+    now: float | None = None,
+) -> None:
+    """Stateful per-sample loop-lag telemetry.
+
+    Emits ``runtime.loop_lag.degraded`` once on the transition into degraded,
+    tracks the peak lag silently while degraded (no per-tick warning), and emits
+    ``runtime.loop_lag.recovered`` once after ``_RECOVERY_HYSTERESIS_TICKS``
+    consecutive healthy samples. ``now`` defaults to ``time.monotonic()`` and is
+    overridable for tests so degraded-duration is deterministic.
+    """
+    global _degraded, _degraded_since, _max_lag_seconds, _healthy_streak
+    clock = time.monotonic() if now is None else now
+    if lag > warn:
+        _healthy_streak = 0
+        if not _degraded:
+            _degraded = True
+            _degraded_since = clock
+            _max_lag_seconds = lag
+            logger.warning(
+                "runtime.loop_lag.degraded",
+                lag_ms=round(lag * 1000, 1),
+                threshold_ms=round(warn * 1000, 1),
+                service=service_name,
+            )
+        elif lag > _max_lag_seconds:
+            _max_lag_seconds = lag
+    elif _degraded:
+        _healthy_streak += 1
+        if _healthy_streak >= _RECOVERY_HYSTERESIS_TICKS:
+            degraded_duration_ms = round((clock - _degraded_since) * 1000, 1)
+            logger.info(
+                "runtime.loop_lag.recovered",
+                max_lag_ms=round(_max_lag_seconds * 1000, 1),
+                degraded_duration_ms=degraded_duration_ms,
+                service=service_name,
+            )
+            _degraded = False
+            _degraded_since = 0.0
+            _max_lag_seconds = 0.0
+            _healthy_streak = 0
 
 
 def _write_heartbeat(path: str) -> None:
@@ -91,7 +166,8 @@ async def loop_lag_watchdog(
         scheduled_at = time.perf_counter()
         await asyncio.sleep(interval)
         lag = time.perf_counter() - scheduled_at - interval
-        _last_lag_seconds = max(0.0, lag)
+        lag = max(0.0, lag)
+        _last_lag_seconds = lag
 
         if heartbeat_path:
             try:
@@ -103,9 +179,4 @@ async def loop_lag_watchdog(
                     error=str(exc),
                 )
 
-        if lag > warn:
-            logger.warning(
-                "Event loop lag high",
-                lag_seconds=round(lag, 3),
-                service=service_name,
-            )
+        _evaluate_lag(lag, warn, service_name=service_name)
