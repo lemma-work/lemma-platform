@@ -18,6 +18,13 @@ def test_runtime_image_keeps_browser_state_out_of_workspace() -> None:
     assert "/workspace/agent-browser.json" not in dockerfile
 
 
+def test_runtime_image_includes_structured_logging_modules() -> None:
+    dockerfile = (AGENTBOX_ROOT / "Dockerfile.runtime").read_text()
+
+    assert "agentbox/agentbox/event_catalog.py" in dockerfile
+    assert "agentbox/agentbox/observability.py" in dockerfile
+
+
 def test_runtime_start_clears_ephemeral_and_legacy_browser_state() -> None:
     script = (AGENTBOX_ROOT / "scripts" / "start-runtime.sh").read_text()
 
