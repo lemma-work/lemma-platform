@@ -656,7 +656,7 @@ export function WorkspaceSidebar({ podId, podName, podIconUrl, onCollapse }: Wor
                                     }
                                 />
                                 <span className="flex min-w-0 flex-1 flex-col gap-0.5">
-                                    <span className="type-eyebrow text-[var(--text-tertiary)]">
+                                    <span className="whitespace-nowrap text-xs font-medium leading-none text-[var(--text-tertiary)]">
                                         Switch pod
                                     </span>
                                     <span className="block truncate text-sm font-medium leading-4 text-[var(--text-primary)]">
