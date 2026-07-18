@@ -68,7 +68,7 @@ export function PodWorkspaceTabs({
 }) {
     return (
         <nav
-            className="no-scrollbar flex h-8 min-w-0 flex-1 items-center gap-0.5 overflow-x-auto"
+            className="no-scrollbar flex h-8 min-w-0 flex-1 items-center gap-px overflow-x-auto"
             aria-label="Pod workspace tabs"
         >
             {tabs.map((tab) => {
@@ -82,9 +82,9 @@ export function PodWorkspaceTabs({
                         data-state={active ? 'active' : undefined}
                         data-kind={tab.kind}
                         className={cn(
-                            'group relative inline-flex h-8 shrink-0 items-center overflow-hidden rounded-md text-[var(--text-secondary)] transition-colors',
+                            'group relative inline-flex h-8 shrink-0 items-center overflow-hidden rounded-md border border-transparent text-[var(--text-secondary)] transition-colors',
                             'hover:bg-[color:color-mix(in_srgb,var(--surface-2)_62%,transparent)] hover:text-[var(--text-primary)]',
-                            'data-[state=active]:bg-[var(--surface-2)] data-[state=active]:font-medium data-[state=active]:text-[var(--text-primary)]',
+                            'data-[state=active]:border-[var(--border-subtle)] data-[state=active]:bg-[var(--surface-1)] data-[state=active]:font-medium data-[state=active]:text-[var(--text-primary)]',
                             tab.kind === 'home' ? 'min-w-[6.25rem]' : 'min-w-[7.5rem] max-w-[12rem]',
                         )}
                     >

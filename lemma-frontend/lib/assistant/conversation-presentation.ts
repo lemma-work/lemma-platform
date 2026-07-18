@@ -95,6 +95,17 @@ export function buildConversationStandaloneResourceHref(resourceHref: string): s
     return hrefFromLocalUrl(url);
 }
 
+export function buildResourceShareUrl(resourceHref: string, origin: string): string | null {
+    const standaloneHref = buildConversationStandaloneResourceHref(resourceHref);
+    if (!standaloneHref) return null;
+
+    try {
+        return new URL(standaloneHref, origin).toString();
+    } catch {
+        return null;
+    }
+}
+
 export function removeConversationPresentationParam(searchParams: string): string {
     const params = new URLSearchParams(searchParams);
     params.delete(CONVERSATION_PRESENTED_RESOURCE_PARAM);

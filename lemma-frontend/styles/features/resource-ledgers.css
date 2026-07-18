@@ -1,9 +1,14 @@
 .lemma-index-tabs {
   display: flex;
+  min-height: 2.5rem;
   align-items: center;
-  justify-content: space-between;
-  gap: 0.75rem;
-  padding: 0.25rem 0 0.625rem;
+  justify-content: flex-start;
+  gap: 0.125rem;
+  margin-bottom: 0.75rem;
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-lg);
+  background: var(--surface-1);
+  padding: 0 0.25rem;
 }
 
 .lemma-index-tabs.lemma-index-tabs-left {
@@ -11,27 +16,46 @@
 }
 
 .lemma-index-tab {
+  position: relative;
   display: inline-flex;
-  height: 1.75rem;
+  height: 2.375rem;
   align-items: center;
   gap: 0.375rem;
-  border-radius: var(--radius-md);
-  padding-inline: 0.5rem;
+  border-radius: 0;
+  padding-inline: 0.625rem;
   color: var(--text-secondary);
-  font-size: var(--text-sm);
+  font-size: 0.8125rem;
   transition:
-    background-color var(--dur-base) var(--ease-out),
-    color var(--dur-base) var(--ease-out);
+    background-color var(--dur-control) var(--ease-standard),
+    color var(--dur-control) var(--ease-standard);
+}
+
+.lemma-index-tab::after {
+  position: absolute;
+  right: 0.625rem;
+  bottom: -1px;
+  left: 0.625rem;
+  height: 2px;
+  border-radius: var(--radius-full) var(--radius-full) 0 0;
+  background: var(--text-primary);
+  content: "";
+  transform: scaleX(0);
+  transform-origin: center;
+  transition: transform var(--dur-control) var(--ease-emphasized);
 }
 
 .lemma-index-tab:hover {
-  background: var(--surface-2);
+  background: color-mix(in srgb, var(--surface-2) 52%, transparent);
   color: var(--text-primary);
 }
 
 .lemma-index-tab[data-active="true"] {
-  background: var(--chip-bg);
+  background: transparent;
   color: var(--text-primary);
+}
+
+.lemma-index-tab[data-active="true"]::after {
+  transform: scaleX(1);
 }
 
 .lemma-index-tab-count {
@@ -132,15 +156,14 @@
   min-width: 0;
   flex-direction: column;
   justify-content: space-between;
-  border: 1px solid color-mix(in srgb, var(--border-subtle) 30%, transparent);
-  border-radius: var(--radius-xl);
+  border: 1px solid color-mix(in srgb, var(--border-subtle) 74%, transparent);
+  border-radius: var(--radius-lg);
   background: var(--surface-1);
-  box-shadow: var(--shadow-xs);
-  padding: 1rem;
+  box-shadow: none;
+  padding: 0.875rem;
   transition:
-    background-color var(--dur-base) var(--ease-out),
-    border-color var(--dur-base) var(--ease-out),
-    box-shadow var(--dur-base) var(--ease-out);
+    background-color var(--dur-control) var(--ease-standard),
+    border-color var(--dur-control) var(--ease-standard);
 }
 
 .resource-index-card[data-featured="true"] {
@@ -150,8 +173,8 @@
 .resource-index-card:hover,
 .resource-index-card:focus-within {
   border-color: var(--border-default);
-  background: var(--surface-1);
-  box-shadow: var(--shadow-sm);
+  background: color-mix(in srgb, var(--surface-1) 82%, var(--surface-2));
+  box-shadow: none;
 }
 
 .resource-index-grid {
@@ -160,44 +183,44 @@
 }
 
 .resource-index-grid > .resource-index-card {
-  border: 1px solid color-mix(in srgb, var(--border-subtle) 30%, transparent);
-  border-radius: var(--radius-xl);
+  border: 1px solid color-mix(in srgb, var(--border-subtle) 74%, transparent);
+  border-radius: var(--radius-lg);
   background: var(--surface-1);
+  animation: resource-card-reveal var(--dur-control) var(--ease-standard) both;
+}
+
+.resource-index-grid > .resource-index-card:nth-child(2) {
+  animation-delay: 25ms;
+}
+
+.resource-index-grid > .resource-index-card:nth-child(3) {
+  animation-delay: 50ms;
+}
+
+.resource-index-grid > .resource-index-card:nth-child(n + 4) {
+  animation-delay: 75ms;
 }
 
 .resource-index-grid > .resource-index-card:first-child {
-  border-top-color: color-mix(in srgb, var(--border-subtle) 30%, transparent);
+  border-top-color: color-mix(in srgb, var(--border-subtle) 74%, transparent);
 }
 
 .resource-index-grid > .resource-index-card:hover,
 .resource-index-grid > .resource-index-card:focus-within {
   border-color: var(--border-default);
-  background: var(--surface-1);
-  box-shadow: var(--shadow-sm);
+  background: color-mix(in srgb, var(--surface-1) 82%, var(--surface-2));
+  box-shadow: none;
 }
 
 @media (min-width: 768px) {
   .resource-index-grid.resource-index-grid-md-2 > .resource-index-card:nth-child(2) {
-    border-top-color: color-mix(in srgb, var(--border-subtle) 30%, transparent);
-  }
-
-  .resource-index-grid.resource-index-grid-md-2 > .resource-index-card:nth-child(odd) {
-    border-right: 0;
+    border-top-color: color-mix(in srgb, var(--border-subtle) 74%, transparent);
   }
 }
 
 @media (min-width: 1280px) {
   .resource-index-grid.resource-index-grid-xl-3 > .resource-index-card:nth-child(3) {
-    border-top-color: color-mix(in srgb, var(--border-subtle) 30%, transparent);
-  }
-
-  .resource-index-grid.resource-index-grid-xl-3 > .resource-index-card:nth-child(odd) {
-    border-right: 0;
-  }
-
-  .resource-index-grid.resource-index-grid-xl-3 > .resource-index-card:nth-child(3n + 1),
-  .resource-index-grid.resource-index-grid-xl-3 > .resource-index-card:nth-child(3n + 2) {
-    border-right: 0;
+    border-top-color: color-mix(in srgb, var(--border-subtle) 74%, transparent);
   }
 }
 
@@ -218,6 +241,18 @@
   }
 }
 
+@keyframes resource-card-reveal {
+  from {
+    opacity: 0;
+    transform: translateY(2px);
+  }
+
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
 
 /* App cards — a compact accent row. The accent is per-app (see
    lib/app/app-accent.ts) and derives every shade from one semantic token via
@@ -232,18 +267,32 @@
 .app-tile[data-accent="success"] { --app-accent: var(--state-success); }
 .app-tile[data-accent="delight"] { --app-accent: var(--delight); }
 
-/* Accent glow across the whole card, center to outwards, so tiles stay
-   visually distinct without a large cover hero. */
 .resource-index-card.app-tile {
-  background: radial-gradient(
-    ellipse at center,
-    color-mix(in srgb, var(--app-accent) 12%, var(--surface-1)) 0%,
-    var(--surface-1) 100%
-  );
+  background: color-mix(in srgb, var(--app-accent) 3%, var(--surface-1));
+  overflow: hidden;
+}
+
+.resource-index-card.app-tile::before {
+  position: absolute;
+  inset: 0 0.75rem auto;
+  height: 2px;
+  border-radius: 0 0 var(--radius-sm) var(--radius-sm);
+  background: color-mix(in srgb, var(--app-accent) 48%, transparent);
+  content: "";
 }
 
 .app-icon {
-  color: color-mix(in srgb, var(--app-accent) 72%, var(--text-primary));
+  border: 1px solid color-mix(in srgb, var(--app-accent) 26%, var(--border-subtle));
+  background: color-mix(in srgb, var(--app-accent) 13%, var(--surface-1));
+  color: color-mix(in srgb, var(--app-accent) 76%, var(--text-primary));
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .lemma-index-tab::after,
+  .resource-index-grid > .resource-index-card {
+    animation: none;
+    transition: none;
+  }
 }
 
 /* Recipes — accent tiles + preview strips. Accents derive from semantic tokens

@@ -4,6 +4,7 @@ import { useTheme } from 'next-themes';
 import { useSyncExternalStore } from 'react';
 import { cn } from '@/lib/utils';
 import { Moon, Sun } from '@/components/ui/icons';
+import { playSoundFeedback } from '@/lib/feedback/sound-feedback';
 
 interface ThemeToggleProps {
     className?: string;
@@ -19,6 +20,11 @@ export function ThemeToggle({ className, variant = 'pills' }: ThemeToggleProps) 
     );
 
     const isDark = mounted && resolvedTheme === 'dark';
+    const changeTheme = (theme: 'light' | 'dark') => {
+        if (resolvedTheme === theme) return;
+        setTheme(theme);
+        playSoundFeedback('toggle-change');
+    };
 
     if (variant === 'icon') {
         const targetTheme = isDark ? 'light' : 'dark';
@@ -34,7 +40,7 @@ export function ThemeToggle({ className, variant = 'pills' }: ThemeToggleProps) 
                 )}
                 aria-label={title}
                 title={title}
-                onClick={() => setTheme(targetTheme)}
+                onClick={() => changeTheme(targetTheme)}
             >
                 <Icon className="h-4 w-4" />
             </button>
@@ -53,7 +59,7 @@ export function ThemeToggle({ className, variant = 'pills' }: ThemeToggleProps) 
                 )}
                 aria-label="Switch to light mode"
                 title="Switch to light mode"
-                onClick={() => setTheme('light')}
+                onClick={() => changeTheme('light')}
             >
                 Light
             </button>
@@ -67,7 +73,7 @@ export function ThemeToggle({ className, variant = 'pills' }: ThemeToggleProps) 
                 )}
                 aria-label="Switch to dark mode"
                 title="Switch to dark mode"
-                onClick={() => setTheme('dark')}
+                onClick={() => changeTheme('dark')}
             >
                 Dark
             </button>

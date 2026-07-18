@@ -45,6 +45,7 @@ import {
   InlineUserApprovalCall,
   UserApprovalCard,
 } from "./assistant-approval-cards";
+import { playSoundFeedback } from "@/lib/feedback/sound-feedback";
 import type {
   AssistantMessagePart,
   AssistantRenderableMessage,
@@ -711,6 +712,7 @@ export function TextBlockWithCopy({
     try {
       await navigator.clipboard.writeText(text);
       setCopied(true);
+      playSoundFeedback('action-success');
       setTimeout(() => setCopied(false), 2000);
     } catch { /* clipboard access denied */ }
   };

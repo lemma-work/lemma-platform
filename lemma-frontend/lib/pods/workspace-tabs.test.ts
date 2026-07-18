@@ -88,6 +88,40 @@ describe('pod workspace tabs', () => {
         ]);
     });
 
+    it('never persists conversation-stage presentation state in route tabs', () => {
+        expect(routeWorkspaceTab(
+            'data',
+            'Projects',
+            '/pod/pod-1/data?tab=projects&embed=conversation-stage&assistant=docked',
+        )).toEqual({
+            id: 'route:data',
+            kind: 'route',
+            resourceId: 'data',
+            title: 'Projects',
+            href: '/pod/pod-1/data?tab=projects',
+        });
+    });
+
+    it('repairs persisted conversation-stage URLs while restoring workspace tabs', () => {
+        const restored = parseWorkspaceTabs(JSON.stringify({
+            version: 3,
+            tabs: [{
+                kind: 'route',
+                resourceId: 'files',
+                title: 'insta_lemma.jpg',
+                href: '/pod/pod-1/files?folder=%2Fme%2Fsocial&file=%2Fme%2Fsocial%2Finsta_lemma.jpg&embed=conversation-stage',
+            }],
+        }));
+
+        expect(restored[1]).toEqual({
+            id: 'route:files',
+            kind: 'route',
+            resourceId: 'files',
+            title: 'insta_lemma.jpg',
+            href: '/pod/pod-1/files?folder=%2Fme%2Fsocial&file=%2Fme%2Fsocial%2Finsta_lemma.jpg',
+        });
+    });
+
     it('pins every installed app before the working set', () => {
         const conversation = conversationWorkspaceTab('conv-1', { title: 'First', status: 'completed' });
         const staleApp = appWorkspaceTab({ slug: 'old-app', title: 'Old App' });

@@ -41,6 +41,7 @@ import { usePodAccess } from '@/lib/hooks/use-pod-access';
 import { usePodAutomation } from '@/lib/hooks/use-pod-automation';
 import { getLemmaClient } from '@/lib/sdk/lemma-client';
 import { FlowDefinition, Workflow, WorkflowUpdateInput } from '@/lib/types';
+import { playSoundFeedback } from '@/lib/feedback/sound-feedback';
 
 type WorkflowDetailTab = 'runs' | 'triggers' | 'edit';
 type WorkflowEditView = 'steps' | 'flow';
@@ -119,6 +120,7 @@ export default function FlowDetailPage({
                     edges: definition.edges,
                 },
             });
+            playSoundFeedback('action-success');
         } catch (error) {
             console.error('Failed to save workflow:', error);
             toast.error(error instanceof Error ? error.message : 'Failed to save workflow. Please try again.');

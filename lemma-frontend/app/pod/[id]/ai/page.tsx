@@ -141,13 +141,25 @@ export default function AgentsPage({
             <SectionPrimer concept="agent" className="mb-4" />
 
             {isLoading ? (
-                <div className="space-y-4">
-                    <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-4">
-                        {[1, 2, 3, 4].map((item) => (
-                            <div key={`agent-metric-skeleton-${item}`} className="h-28 animate-pulse rounded-lg bg-[var(--surface-2)]" />
+                <div className="space-y-3" role="status" aria-label="Loading agents">
+                    <div className="flex items-center gap-2 py-1">
+                        {[1, 2, 3].map((item) => (
+                            <div key={`agent-metric-skeleton-${item}`} className="lemma-skeleton h-7 w-24 rounded-md" />
                         ))}
                     </div>
-                    <div className="h-80 animate-pulse rounded-lg bg-[var(--surface-2)]" />
+                    <div className="resource-index-grid resource-index-grid-md-2 resource-index-grid-xl-3 sm:grid-cols-2 xl:grid-cols-3">
+                        {[1, 2, 3].map((item) => (
+                            <div key={`agent-card-skeleton-${item}`} className="surface-panel h-48 space-y-4 p-4">
+                                <div className="lemma-skeleton h-11 w-11 rounded-lg" />
+                                <div className="space-y-2">
+                                    <div className="lemma-skeleton h-4 w-32 rounded-md" />
+                                    <div className="lemma-skeleton h-3 w-full rounded-full" />
+                                    <div className="lemma-skeleton h-3 w-4/5 rounded-full" />
+                                </div>
+                                <div className="lemma-skeleton h-3 w-24 rounded-full" />
+                            </div>
+                        ))}
+                    </div>
                 </div>
             ) : agents.length === 0 ? (
                 <EmptyState

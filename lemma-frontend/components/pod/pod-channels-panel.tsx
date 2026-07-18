@@ -53,6 +53,7 @@ import {
 import { usePodMembers } from '@/lib/hooks/use-pod-members';
 import { Textarea } from '@/components/ui/textarea';
 import type { Account, AssistantSurface } from '@/lib/types';
+import { playSoundFeedback } from '@/lib/feedback/sound-feedback';
 import type {
     SurfaceBehaviorConfigInput,
     SurfaceCredentialMode,
@@ -1067,6 +1068,7 @@ function SetupCopyField({ field }: { field: SurfaceSetupActionField }) {
         try {
             await navigator.clipboard.writeText(field.value);
             setCopied(true);
+            playSoundFeedback('action-success');
             setTimeout(() => setCopied(false), 1500);
         } catch {
             toast.error('Could not copy to clipboard');

@@ -20,6 +20,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/components/ui/tooltip';
 import { getLemmaClient } from '@/lib/sdk/lemma-client';
 import { cn } from '@/lib/utils';
+import { playSoundFeedback } from '@/lib/feedback/sound-feedback';
 
 export type ResourceVisibilityValue = 'PERSONAL' | 'POD' | 'RESTRICTED' | 'PUBLIC';
 export type ShareableResourceType =
@@ -408,6 +409,7 @@ export function ResourceShareButton({
         onSuccess: () => {
             setSaveError(null);
             setOpen(false);
+            playSoundFeedback('action-success');
             void queryClient.invalidateQueries({ queryKey: accessQueryKey });
         },
         onError: (error) => {
@@ -491,6 +493,7 @@ export function ResourceShareButton({
         try {
             await navigator.clipboard.writeText(shareUrl);
             setCopied(true);
+            playSoundFeedback('action-success');
             window.setTimeout(() => setCopied(false), 1600);
         } catch {
             setCopied(false);
@@ -503,13 +506,19 @@ export function ResourceShareButton({
 
             <Dialog open={open} onOpenChange={handleOpenChange}>
                 <DialogContent className="w-[calc(100vw-2rem)] max-w-[640px] gap-0 overflow-hidden rounded-lg border border-[var(--border-subtle)] bg-[var(--card-bg)] p-0 shadow-[var(--shadow-lg)] duration-0 data-[state=closed]:animate-none data-[state=open]:animate-none">
-                    <DialogHeader className="border-b border-[var(--border-subtle)] px-6 py-5">
-                        <DialogTitle className="text-2xl font-medium leading-8 text-[var(--text-primary)]">Share</DialogTitle>
-                        {resourceName ? (
-                            <DialogDescription className="mt-1.5 truncate text-base leading-6 text-[var(--text-secondary)]">
-                                {resourceName}
-                            </DialogDescription>
-                        ) : null}
+                    <DialogHeader className="border-b border-[var(--border-subtle)] px-6 py-4">
+                        <DialogTitle className="flex min-w-0 items-baseline gap-2 text-lg font-medium leading-7 text-[var(--text-primary)]">
+                            <span className="shrink-0">Share</span>
+                            {resourceName ? (
+                                <>
+                                    <span aria-hidden className="text-[var(--text-tertiary)]">·</span>
+                                    <span className="truncate text-[var(--text-secondary)]">{resourceName}</span>
+                                </>
+                            ) : null}
+                        </DialogTitle>
+                        <DialogDescription className="sr-only">
+                            {resourceName ? `Sharing settings for ${resourceName}` : 'Sharing settings'}
+                        </DialogDescription>
                     </DialogHeader>
 
                     <div className="space-y-6 px-6 py-5">

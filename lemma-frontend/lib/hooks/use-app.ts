@@ -70,6 +70,7 @@ function appPageRefsFromIndex(items: AppIndexItem[]): AppPageRef[] {
                 slug,
                 title: pageName,
                 appName: pageName,
+                description: typeof item.description === 'string' ? item.description.trim() || null : null,
                 url: normalizeAppUrl(toOptionalString(item.url)),
                 order: index,
                 path: `pages/${slug}.json`,
@@ -161,6 +162,26 @@ export function useDeleteApp() {
     return useMutation({
         mutationFn: ({ podId, name }: { podId: string; name: string }) =>
             getLemmaClient(podId).apps.delete(name),
+        onSuccess: (_, variables) => {
+            queryClient.invalidateQueries({ queryKey: appIndexQueryKey(variables.podId) });
+            queryClient.invalidateQueries({ queryKey: ['app-page', variables.podId] });
+        },
+    });
+}
+
+export function useUpdateAppVisibility() {
+    const queryClient = useQueryClient();
+
+    return useMutation({
+        mutationFn: ({
+            podId,
+            name,
+            visibility,
+        }: {
+            podId: string;
+            name: string;
+            visibility: string;
+        }) => getLemmaClient(podId).apps.update(name, { visibility }),
         onSuccess: (_, variables) => {
             queryClient.invalidateQueries({ queryKey: appIndexQueryKey(variables.podId) });
             queryClient.invalidateQueries({ queryKey: ['app-page', variables.podId] });

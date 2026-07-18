@@ -84,7 +84,7 @@
   bottom: 0;
   z-index: 12;
   border: 0;
-  border-radius: 14px;
+  border-radius: var(--radius-lg);
   background: transparent;
   box-shadow: none;
   padding: 8px;
@@ -93,9 +93,9 @@
 
 .pod-assistant-inputbar {
   border: 1px solid var(--field-border);
-  border-radius: 16px;
+  border-radius: var(--radius-lg);
   background: var(--bg-surface);
-  padding: 0.875rem 1rem;
+  padding: 0.625rem 0.75rem;
   box-shadow: none;
 }
 
@@ -104,13 +104,12 @@
   box-shadow: 0 0 0 2px color-mix(in srgb, var(--field-border-focus) 16%, transparent);
 }
 
-/* Send button — indigo-violet gradient */
 .pod-home-send-button {
-  background: linear-gradient(135deg, #6366f1 0%, #a78bfa 100%) !important;
+  background: var(--action-primary) !important;
 }
 
 .pod-home-send-button:hover:not(:disabled) {
-  background: linear-gradient(135deg, #4f46e5 0%, #8b7cf0 100%) !important;
+  background: var(--action-primary-hover) !important;
 }
 
 .pod-home-send-button:disabled {
@@ -118,20 +117,19 @@
   color: var(--text-tertiary);
 }
 
-/* Primary action button gradient for assistant composer */
 .button-primary-gradient {
-  background: linear-gradient(135deg, #6366f1 0%, #a78bfa 100%) !important;
-  color: #ffffff !important;
+  background: var(--action-primary) !important;
+  color: var(--text-on-brand) !important;
 }
 
 .button-primary-gradient:hover:not(:disabled) {
-  background: linear-gradient(135deg, #4f46e5 0%, #8b7cf0 100%) !important;
+  background: var(--action-primary-hover) !important;
 }
 
 .pod-assistant-composer .lemma-assistant-plan-strip {
   background: var(--bg-surface);
   border-color: color-mix(in srgb, var(--border-default) 88%, transparent);
-  box-shadow: var(--shadow-sm);
+  box-shadow: none;
 }
 
 .pod-assistant-header-maximized {

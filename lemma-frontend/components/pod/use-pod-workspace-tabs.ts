@@ -25,6 +25,7 @@ import type { Conversation } from '@/lib/types';
 import type { AppPageRef } from '@/lib/types/app';
 
 interface UsePodWorkspaceTabsOptions {
+    enabled?: boolean;
     podId: string;
     pathname: string;
     currentHref: string;
@@ -90,6 +91,7 @@ function updatePodWorkspaceTabs(
 }
 
 export function usePodWorkspaceTabs({
+    enabled = true,
     podId,
     pathname,
     currentHref,
@@ -115,6 +117,7 @@ export function usePodWorkspaceTabs({
     // The URL remains canonical. Visiting a route section or conversation opens
     // it in the pod's working set; navigation within a section updates that tab.
     useEffect(() => {
+        if (!enabled) return;
         if (!activeTabId || activeTabId === HOME_WORKSPACE_TAB.id) return;
 
         if (activeTabId === NEW_WORKSPACE_TAB.id) {
@@ -161,12 +164,13 @@ export function usePodWorkspaceTabs({
             }
             return upsertWorkspaceTab(current, nextTab);
         });
-    }, [activeTabId, appSlug, conversations, currentHref, pages, podId, routeTitle]);
+    }, [activeTabId, appSlug, conversations, currentHref, enabled, pages, podId, routeTitle]);
 
     // A new conversation starts without an id. Capture the conversation that was
     // active before entering /new; when a different id appears while that route is
     // still active, the temporary tab can safely become the real tab in place.
     useEffect(() => {
+        if (!enabled) return;
         const isNewConversationRoute = activeTabId === NEW_WORKSPACE_TAB.id;
         if (!isNewConversationRoute) {
             wasNewConversationRouteRef.current = false;
@@ -193,9 +197,10 @@ export function usePodWorkspaceTabs({
                 conversation,
             ));
         }
-    }, [activeTabId, conversations, openedConversationId, podId]);
+    }, [activeTabId, conversations, enabled, openedConversationId, podId]);
 
     useEffect(() => {
+        if (!enabled) return;
         if (!appsLoaded) return;
         updatePodWorkspaceTabs(
             podId,
@@ -204,7 +209,7 @@ export function usePodWorkspaceTabs({
                 conversations,
             ),
         );
-    }, [appsLoaded, conversations, pages, podId]);
+    }, [appsLoaded, conversations, enabled, pages, podId]);
 
     const closeTab = useCallback((tabId: string) => {
         updatePodWorkspaceTabs(podId, (current) => closeWorkspaceTab(current, tabId));

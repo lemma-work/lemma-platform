@@ -30,6 +30,8 @@ import { FileIndexStatusBadge } from '@/components/documents/file-index-status-b
 import { MarkdownAttachmentControl, canAttachDocumentMarkdown } from '@/components/documents/markdown-attachment-control';
 import { useDatastoreFile, useDeleteDatastoreFile } from '@/lib/hooks/use-datastores';
 import { getLemmaClient } from '@/lib/sdk/lemma-client';
+import { buildResourceShareUrl } from '@/lib/assistant/conversation-presentation';
+import { playSoundFeedback } from '@/lib/feedback/sound-feedback';
 import {
     getDocumentPreviewType,
     getOfficePreviewKind,
@@ -536,6 +538,7 @@ export function DocumentViewer({
             });
             setOriginalContent(docContent);
             toast.success('File saved');
+            playSoundFeedback('action-success');
         } catch {
             toast.error('Failed to save file');
         }
@@ -563,6 +566,7 @@ export function DocumentViewer({
             if (isTextEditable) {
                 await navigator.clipboard.writeText(docContent);
                 toast.success('Content copied');
+                playSoundFeedback('action-success');
                 return;
             }
 
@@ -580,6 +584,7 @@ export function DocumentViewer({
                 new ClipboardItem({ [fileBlob.type || 'application/octet-stream']: fileBlob }),
             ]);
             toast.success('Content copied');
+            playSoundFeedback('action-success');
         } catch {
             toast.error('Could not copy content');
         }
@@ -648,7 +653,12 @@ export function DocumentViewer({
                     resourceId={documentPath}
                     resourceLabel="files"
                     resourceName={doc?.name || documentPath}
-                    shareUrl={typeof window === 'undefined' ? undefined : window.location.href}
+                    shareUrl={typeof window === 'undefined'
+                        ? undefined
+                        : buildResourceShareUrl(
+                            `${window.location.pathname}${window.location.search}${window.location.hash}`,
+                            window.location.origin,
+                        ) ?? undefined}
                     onChange={handleShareVisibilityChange}
                     disabled={!doc}
                     trigger={({ openShare, disabled }) => (

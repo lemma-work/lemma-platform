@@ -11,9 +11,9 @@
 
 /* Lemma-branded assistant scope (SDK >= 0.2.27 surface coverage). */
 .pod-assistant-shell {
-  --assistant-radius-shell: 12px;
-  --assistant-radius-item: 9px;
-  --assistant-radius-bubble: 12px;
+  --assistant-radius-shell: 10px;
+  --assistant-radius-item: 8px;
+  --assistant-radius-bubble: 10px;
   --assistant-radius-inline: 7px;
 }
 
@@ -24,20 +24,16 @@
 .pod-assistant-shell .lemma-assistant-tool-details-panel,
 .pod-assistant-shell .lemma-assistant-widget-card-frame {
   border-color: color-mix(in srgb, var(--border-default) 84%, transparent);
-  box-shadow: var(--shadow-sm);
+  box-shadow: none;
 }
 
 .pod-assistant-shell .lemma-assistant-message-user-bubble {
-  background: linear-gradient(
-    135deg,
-    color-mix(in srgb, var(--action-primary) 96%, transparent),
-    color-mix(in srgb, var(--intelligence) 92%, transparent)
-  );
+  background: var(--action-primary);
 }
 
 .pod-assistant-shell .lemma-assistant-conversation-list-item-active {
-  border-color: color-mix(in srgb, var(--delight) 46%, var(--border-default));
-  background: color-mix(in srgb, var(--delight) 10%, var(--surface-1));
+  border-color: var(--border-default);
+  background: var(--surface-1);
 }
 
 .pod-assistant-shell .lemma-assistant-empty-state-suggestion {

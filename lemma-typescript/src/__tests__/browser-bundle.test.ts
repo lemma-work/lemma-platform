@@ -33,6 +33,9 @@ describe("browser bundle globals", () => {
     expect(g.LemmaClient).toBeDefined();
     expect(typeof g.LemmaClient.LemmaClient).toBe("function");
     expect(g.LemmaClient.POD_DEFAULT_AGENT_SELECTOR).toBe("POD_DEFAULT");
+    expect(g.LemmaClient.LEMMA_APP_THEME_MESSAGE_TYPE).toBe("lemma-app-theme");
+    expect(typeof g.LemmaClient.getLemmaHostTheme).toBe("function");
+    expect(typeof g.LemmaClient.subscribeLemmaHostTheme).toBe("function");
     // Back-compat alias for widgets authored against `new Lemma.LemmaClient()`.
     expect(g.Lemma).toBeDefined();
     expect(g.Lemma.LemmaClient).toBe(g.LemmaClient.LemmaClient);

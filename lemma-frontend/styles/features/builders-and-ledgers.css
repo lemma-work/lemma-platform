@@ -468,9 +468,9 @@
 
 .data-table-workbench .data-table-toolbar {
   margin: 0.75rem 0.875rem 0;
-  border: 1px solid color-mix(in srgb, var(--border-subtle) 56%, transparent);
-  border-radius: var(--radius-lg);
-  background: color-mix(in srgb, var(--surface-1) 88%, transparent);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-md);
+  background: var(--surface-1);
   padding: 0.5rem 0.625rem;
 }
 
@@ -480,8 +480,8 @@
 
 .data-table-workbench .data-table-grid-frame {
   overflow: hidden;
-  border: 1px solid color-mix(in srgb, var(--border-subtle) 56%, transparent);
-  border-radius: var(--radius-lg) var(--radius-lg) 0 0;
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-md) var(--radius-md) 0 0;
   background: var(--card-bg);
 }
 
@@ -491,11 +491,11 @@
 }
 
 .data-table-workbench .data-table-head {
-  box-shadow: 0 1px 0 color-mix(in srgb, var(--border-subtle) 52%, transparent);
+  box-shadow: 0 1px 0 var(--border-subtle);
 }
 
 .data-table-workbench .data-table-grid tbody tr {
-  min-height: 2.375rem;
+  min-height: 2.25rem;
 }
 
 .data-table-workbench .data-table-grid tbody tr:hover {
@@ -509,10 +509,10 @@
 
 .data-table-workbench .data-table-footer {
   margin: 0 0.875rem 0.75rem;
-  border: 1px solid color-mix(in srgb, var(--border-subtle) 56%, transparent);
+  border: 1px solid var(--border-subtle);
   border-top: 0;
-  border-radius: 0 0 var(--radius-lg) var(--radius-lg);
-  background: color-mix(in srgb, var(--surface-1) 88%, transparent);
+  border-radius: 0 0 var(--radius-md) var(--radius-md);
+  background: var(--surface-1);
   padding: 0.5rem 0.625rem;
 }
 

@@ -3,7 +3,7 @@
 import { use, useEffect, useState } from 'react';
 import Link from 'next/link';
 import { useRouter, useSearchParams } from 'next/navigation';
-import { ArrowUpRight, ExternalLink, Loader2, PanelsTopLeft, Plus } from '@/components/ui/icons';
+import { ArrowUpRight, ExternalLink, Loader2, PanelsTopLeft, Plus, Share2 } from '@/components/ui/icons';
 import { toast } from 'sonner';
 
 import { useAIAssistant } from '@/components/ai/ai-assistant-context';
@@ -14,11 +14,12 @@ import { ResourceIndexHeader, ResourceIndexShell } from '@/components/pod/resour
 import { DestructiveConfirmationDialog } from '@/components/shared/destructive-confirmation-dialog';
 import { EmptyState } from '@/components/shared/empty-state';
 import { DestructiveResourceActionItem, ResourceActionsMenu } from '@/components/shared/resource-actions-menu';
-import { getResourceVisibilityCopy } from '@/components/shared/resource-visibility';
-import { getAppAccent } from '@/lib/app/app-accent';
+import { ResourceShareButton, ResourceVisibilityBadge, type ResourceVisibilityValue } from '@/components/shared/resource-visibility';
+import { APP_ACCENTS } from '@/lib/app/app-accent';
 import { Button } from '@/components/ui/button';
+import { DropdownMenuItem } from '@/components/ui/dropdown-menu';
 import { resourceAllows } from '@/lib/authz/resource-actions';
-import { useDeleteApp, useAppPages } from '@/lib/hooks/use-app';
+import { useDeleteApp, useAppPages, useUpdateAppVisibility } from '@/lib/hooks/use-app';
 import { usePodAccess } from '@/lib/hooks/use-pod-access';
 import { appRecipes, getRecipeAccent, type Recipe } from '@/lib/recipes/recipes';
 import { renderRecipeIcon } from '@/components/recipes/recipe-icon';
@@ -29,6 +30,15 @@ function formatDisplayName(value: string | null | undefined) {
     const cleaned = (value || '').replace(/[_-]+/g, ' ').replace(/\s+/g, ' ').trim();
     if (!cleaned) return 'Untitled';
     return cleaned.split(' ').map((part) => part.charAt(0).toUpperCase() + part.slice(1)).join(' ');
+}
+
+function formatAppHost(value: string | null | undefined) {
+    if (!value) return 'Ready';
+    try {
+        return new URL(value).hostname.replace(/^www\./, '') || 'Live app';
+    } catch {
+        return 'Live app';
+    }
 }
 
 function RecipeStarterCard({ recipe, onLaunch }: { recipe: Recipe; onLaunch: () => void }) {
@@ -66,9 +76,11 @@ export default function AppPagesRoute({ params }: { params: Promise<{ id: string
     const searchParams = useSearchParams();
     const podAccess = usePodAccess(podId);
     const canCreateApp = podAccess.can('app.create');
+    const canUpdateApp = podAccess.can('app.update');
     const canDeleteApp = podAccess.can('app.delete');
     const { pages, isLoading } = useAppPages(podId);
     const { mutate: deleteApp, isPending: isDeletingApp } = useDeleteApp();
+    const { mutateAsync: updateAppVisibility } = useUpdateAppVisibility();
     const assistant = useAIAssistant();
     const { launchRecipe } = useLaunchRecipe(podId);
     const [appPendingDelete, setAppPendingDelete] = useState<AppPageRef | null>(null);
@@ -202,60 +214,113 @@ export default function AppPagesRoute({ params }: { params: Promise<{ id: string
                 )
             ) : (
                 <section className="apps-grid">
-                    {pages.map((page) => {
+                    {pages.map((page, index) => {
                         const title = formatDisplayName(page.title || page.slug);
                         const viewHref = buildAppViewHref(podId, page.slug, searchParams);
-                        const canManageApp = resourceAllows(page, 'app.delete', canDeleteApp);
-                        const accent = getAppAccent(page.slug);
-                        const visibilityCopy = getResourceVisibilityCopy(page.visibility, 'apps');
-                        const VisibilityIcon = visibilityCopy.icon;
-                        const showVisibility = visibilityCopy.value !== 'POD';
+                        const canShareApp = resourceAllows(page, 'app.update', canUpdateApp);
+                        const canDeleteThisApp = resourceAllows(page, 'app.delete', canDeleteApp);
+                        // The gallery order is stable, so cycling the semantic palette here
+                        // guarantees neighbouring cards remain visually distinct.
+                        const accent = APP_ACCENTS[index % APP_ACCENTS.length];
+                        const appName = page.appName || page.title;
+                        const appHost = formatAppHost(page.url);
+                        const appShareUrl = typeof window === 'undefined'
+                            ? undefined
+                            : `${window.location.origin}${viewHref}`;
+                        const hasMenuActions = canShareApp || Boolean(page.url) || canDeleteThisApp;
 
                         return (
                             <article
                                 key={page.slug}
                                 data-accent={accent}
-                                className="resource-index-card app-tile group relative flex min-h-36 p-4"
+                                className="resource-index-card app-tile group relative flex min-h-28 flex-col p-4"
                             >
-                                <Link
-                                    href={viewHref}
-                                    aria-label={`Open ${title}`}
-                                    className="focus-ring flex flex-1 flex-col items-center justify-center gap-3 rounded-lg text-center"
-                                >
-                                    <span className="app-icon flex h-14 w-14 items-center justify-center rounded-2xl text-lg font-medium">
-                                        {page.icon || title.charAt(0)}
-                                    </span>
-                                    <span className="block w-full truncate text-sm font-medium text-[var(--text-primary)]">
-                                        {title}
-                                    </span>
-                                    {showVisibility ? (
-                                        <span className="inline-flex items-center gap-1.5 text-xs text-[var(--text-tertiary)]">
-                                            <VisibilityIcon className="h-3 w-3 shrink-0" />
-                                            {visibilityCopy.label}
+                                <div className="flex min-w-0 items-start gap-3">
+                                    <Link
+                                        href={viewHref}
+                                        aria-label={`Open ${title}`}
+                                        className="custom-focus-ring flex min-w-0 flex-1 items-start gap-3 rounded-lg"
+                                    >
+                                        <span className="app-icon flex h-11 w-11 shrink-0 items-center justify-center rounded-xl text-base font-medium">
+                                            {page.icon || title.charAt(0)}
                                         </span>
-                                    ) : null}
-                                </Link>
-                                {(page.url || canManageApp) ? (
-                                    <div className="absolute right-2 top-2 flex items-center gap-0.5 opacity-0 transition-gentle group-hover:opacity-100 group-focus-within:opacity-100">
-                                        {page.url ? (
-                                            <Button asChild variant="ghost" size="icon" className="h-7 w-7">
-                                                <a href={page.url} target="_blank" rel="noreferrer" aria-label="Open live app" title="Open live app">
-                                                    <ExternalLink className="h-3.5 w-3.5" />
-                                                </a>
-                                            </Button>
-                                        ) : null}
-                                        {canManageApp ? (
-                                            <ResourceActionsMenu
-                                                ariaLabel={`Open actions for ${title}`}
-                                                triggerClassName="h-7 w-7 rounded-md text-[var(--text-tertiary)] hover:bg-[var(--surface-2)]"
-                                            >
+                                        <span className="min-w-0 flex-1 pt-0.5">
+                                            <span className="block truncate text-base font-semibold text-[var(--text-primary)]">
+                                                {title}
+                                            </span>
+                                            {page.description ? (
+                                                <span className="mt-1 line-clamp-2 text-xs leading-5 text-[var(--text-secondary)]">
+                                                    {page.description}
+                                                </span>
+                                            ) : null}
+                                        </span>
+                                    </Link>
+                                    {hasMenuActions ? (
+                                        <ResourceActionsMenu
+                                            ariaLabel={`Open actions for ${title}`}
+                                            triggerClassName="h-7 w-7 -mr-1 -mt-1 opacity-60 transition-opacity group-hover:opacity-100 group-focus-within:opacity-100"
+                                        >
+                                            {canShareApp ? (
+                                                <ResourceShareButton
+                                                    value={page.visibility}
+                                                    podId={podId}
+                                                    resourceType="app"
+                                                    resourceId={page.id}
+                                                    resourceLabel="apps"
+                                                    resourceName={title}
+                                                    shareUrl={appShareUrl}
+                                                    disabled={!page.id || !appName}
+                                                    onChange={async (visibility: ResourceVisibilityValue) => {
+                                                        await updateAppVisibility({ podId, name: appName, visibility });
+                                                    }}
+                                                    className="contents"
+                                                    trigger={({ openShare, disabled }) => (
+                                                        <DropdownMenuItem
+                                                            disabled={disabled}
+                                                            onSelect={(event) => {
+                                                                event.preventDefault();
+                                                                openShare();
+                                                            }}
+                                                        >
+                                                            <Share2 className="mr-2 h-4 w-4" />
+                                                            Share
+                                                        </DropdownMenuItem>
+                                                    )}
+                                                />
+                                            ) : null}
+                                            {page.url ? (
+                                                <DropdownMenuItem asChild>
+                                                    <a href={page.url} target="_blank" rel="noreferrer">
+                                                        <ExternalLink className="mr-2 h-4 w-4" />
+                                                        Open live app
+                                                    </a>
+                                                </DropdownMenuItem>
+                                            ) : null}
+                                            {canDeleteThisApp ? (
                                                 <DestructiveResourceActionItem onSelect={() => setAppPendingDelete(page)}>
                                                     Delete app
                                                 </DestructiveResourceActionItem>
-                                            </ResourceActionsMenu>
-                                        ) : null}
-                                    </div>
-                                ) : null}
+                                            ) : null}
+                                        </ResourceActionsMenu>
+                                    ) : null}
+                                </div>
+
+                                <Link
+                                    href={viewHref}
+                                    className="custom-focus-ring mt-auto flex items-center justify-between gap-3 rounded-md pt-3 text-xs text-[var(--text-tertiary)]"
+                                >
+                                    <span className="flex min-w-0 items-center gap-2">
+                                        <span className="inline-flex min-w-0 items-center gap-1.5">
+                                            <span className="h-1.5 w-1.5 shrink-0 rounded-full bg-[var(--state-success)]" aria-hidden />
+                                            <span className="truncate">{appHost}</span>
+                                        </span>
+                                        <ResourceVisibilityBadge visibility={page.visibility} resourceLabel="apps" hideWhenDefault />
+                                    </span>
+                                    <span className="ml-auto inline-flex shrink-0 items-center gap-1 font-medium text-[var(--text-secondary)] transition-gentle group-hover:translate-x-0.5">
+                                        Open
+                                        <ArrowUpRight className="h-3.5 w-3.5" />
+                                    </span>
+                                </Link>
                             </article>
                         );
                     })}

@@ -9,6 +9,7 @@ import {
     buildConversationStageEmbedHref,
     buildConversationStandaloneResourceHref,
 } from '@/lib/assistant/conversation-presentation';
+import { playSoundFeedback } from '@/lib/feedback/sound-feedback';
 
 function decodeLabel(value: string | null | undefined): string {
     if (!value) return '';
@@ -93,6 +94,8 @@ export function ConversationPresentationStage({
                         className="absolute inset-0 block h-full min-h-0 w-full border-0 bg-[var(--pod-main-bg)]"
                         allow="clipboard-read; clipboard-write; fullscreen"
                         referrerPolicy="strict-origin-when-cross-origin"
+                        onLoad={() => playSoundFeedback('agent-open')}
+                        onError={() => playSoundFeedback('load-failure')}
                     />
                 </div>
             </section>

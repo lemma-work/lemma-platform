@@ -9,7 +9,7 @@ export const viewport: Viewport = {
   width: "device-width",
   initialScale: 1,
   // Pinch zoom stays enabled: locking scale is a WCAG 1.4.4 violation.
-  themeColor: "rgb(245 244 240)",
+  themeColor: "rgb(244 243 239)",
   colorScheme: "light dark",
 };
 
@@ -104,6 +104,7 @@ export default function RootLayout({
     <html
       lang="en"
       suppressHydrationWarning
+      data-scroll-behavior="smooth"
       className={`${bricolageGrotesque.variable} ${dmMono.variable} ${ibmPlexSans.variable} ${sourceCodePro.variable} ${fraunces.variable} ${inter.variable} ${ibmPlexMono.variable} ${playwriteTz.variable} ${documentSans.variable}`}
     >
       <head>

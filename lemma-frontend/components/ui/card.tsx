@@ -8,7 +8,7 @@ const Card = React.forwardRef<
 	<div
 	  ref={ref}
 	  className={cn(
-	    "surface-panel p-6",
+	    "surface-panel p-5",
 	    interactive && "cursor-pointer hover:border-[color:var(--border-strong)] hover:bg-[var(--card-bg-hover)] hover:shadow-[var(--shadow-sm)]",
 	    className
 	  )}
@@ -23,7 +23,7 @@ const CardHeader = React.forwardRef<
 >(({ className, ...props }, ref) => (
     <div
         ref={ref}
-        className={cn("flex flex-col gap-1.5 pb-4", className)}
+        className={cn("flex flex-col gap-1 pb-3", className)}
         {...props}
     />
 ));
@@ -35,7 +35,7 @@ const CardTitle = React.forwardRef<
 >(({ className, ...props }, ref) => (
 	<h3
 	    ref={ref}
-	    className={cn("font-sans text-lg font-medium leading-tight tracking-normal text-[var(--text-primary)]", className)}
+	    className={cn("font-sans text-base font-medium leading-snug tracking-normal text-[var(--text-primary)]", className)}
 	    {...props}
 	/>
 ));
@@ -47,7 +47,7 @@ const CardDescription = React.forwardRef<
 >(({ className, ...props }, ref) => (
 	<p
 	    ref={ref}
-	    className={cn("text-sm leading-[var(--leading-relaxed)] text-[var(--text-secondary)]", className)}
+	    className={cn("text-sm leading-[var(--leading-normal)] text-[var(--text-secondary)]", className)}
 	    {...props}
 	/>
 ));
@@ -67,7 +67,7 @@ const CardFooter = React.forwardRef<
 >(({ className, ...props }, ref) => (
     <div
         ref={ref}
-        className={cn("flex items-center pt-4", className)}
+        className={cn("flex items-center pt-3", className)}
         {...props}
     />
 ));

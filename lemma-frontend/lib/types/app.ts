@@ -14,6 +14,7 @@ export interface AppPageRef {
     slug: string;
     title: string;
     appName?: string;
+    description?: string | null;
     url?: string;
     icon?: string;
     order: number;

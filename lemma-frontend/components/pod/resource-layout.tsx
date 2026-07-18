@@ -72,14 +72,14 @@ export function ResourceIndexShell({
 }) {
     if (mode === 'workbench') {
         return (
-            <div className={cn('context-shell flex h-full min-h-0 flex-col bg-transparent', className)}>
+            <div className={cn('resource-workbench-shell context-shell flex h-full min-h-0 flex-col bg-transparent', className)}>
                 {children}
             </div>
         );
     }
 
     return (
-        <div className={cn('context-shell min-h-full bg-transparent', className)}>
+        <div className={cn('resource-index-shell context-shell min-h-full bg-transparent', className)}>
             {children}
         </div>
     );
@@ -237,7 +237,7 @@ export function ResourceTabPane({
     return (
         <div
             className={cn(
-                'absolute inset-0 bg-[var(--bg-canvas)] transition-opacity duration-200',
+                'absolute inset-0 bg-[var(--bg-canvas)] transition-opacity duration-[var(--dur-panel)] ease-[var(--ease-standard)]',
                 active ? 'z-10 opacity-100' : 'pointer-events-none z-0 opacity-0',
                 className
             )}
@@ -268,7 +268,7 @@ export function ResourceContentFrame({
 
     return (
         <div className="h-full overflow-y-auto">
-            <div className={cn('mx-auto px-5 py-6', maxWidthClass, className)}>
+            <div className={cn('mx-auto px-5 py-4', maxWidthClass, className)}>
                 {children}
             </div>
         </div>
@@ -361,7 +361,7 @@ export function ResourcePanel({
     className?: string;
 }) {
     return (
-        <section className={cn('rounded-lg border border-[var(--card-border-subtle)] bg-[var(--card-bg)] shadow-[var(--card-shadow)]', className)}>
+        <section className={cn('resource-panel rounded-lg border border-[var(--card-border-subtle)] bg-[var(--card-bg)] shadow-[var(--card-shadow)]', className)}>
             {children}
         </section>
     );
@@ -431,6 +431,7 @@ export function ResourceMetricButton({
             type="button"
             className={cn('resource-metric-button lemma-index-tab', className)}
             data-active={active}
+            aria-pressed={active}
             onClick={onClick}
         >
             <span className="font-medium">{label}</span>

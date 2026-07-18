@@ -52,6 +52,8 @@ import {
 import { flowsQueryOptions, useFlows } from '@/lib/hooks/use-flows';
 import { useAccessiblePods, type AccessiblePodGroup } from '@/lib/hooks/use-pods';
 import { useProfile } from '@/lib/hooks/use-user';
+import { useScopedConversations } from '@/lib/hooks/use-assistants';
+import { mergeSidebarConversations } from '@/lib/assistant/sidebar-conversations';
 import { getAppRecipeExamples } from '@/lib/recipes/recipes';
 import type { DatastoreFile } from '@/lib/types';
 import { getConversationStatusView } from '@/lib/utils/conversations';
@@ -229,16 +231,32 @@ export function WorkspaceSidebar({ podId, podName, podIconUrl, onCollapse }: Wor
     const isConnectorsRoute = isActive(`${basePath}/connectors`);
     const isKitsRoute = isActive(`${basePath}/kits`) || isActive(`${basePath}/recipes`);
     const isSchedulesRoute = isActive(`${basePath}/schedules`);
+    const isConversationRoute = isActive(`${basePath}/conversations`);
     const isPodHome = pathname === basePath || pathname === `${basePath}/`;
     const hasRouteWorktree = isDocsRoute || isAgentsRoute || isWorkflowsRoute || isDataRoute || isAppsRoute || isConnectorsRoute || isKitsRoute || isSchedulesRoute;
     const { data: agentsData } = useAgents(canUseAgents && isAgentsRoute ? podId : undefined);
     const { data: tablesData } = useTables(canUseData && isDataRoute ? podId : undefined);
     const { data: flowsData } = useFlows(canUseWorkflows && isWorkflowsRoute ? podId : undefined);
     const {
-        conversations,
+        conversations: controllerConversations,
         openedConversationId,
         isLoadingConversations,
     } = useAIAssistant();
+    const shouldLoadSidebarHistory = canUseConversations && !isConversationRoute;
+    const {
+        data: sidebarConversationHistory,
+        isLoading: isLoadingSidebarConversationHistory,
+    } = useScopedConversations(
+        { podId },
+        { limit: 20, enabled: shouldLoadSidebarHistory },
+    );
+    const conversations = useMemo(
+        () => mergeSidebarConversations(
+            sidebarConversationHistory?.items || [],
+            controllerConversations,
+        ),
+        [controllerConversations, sidebarConversationHistory?.items],
+    );
 
     const pods = podsData?.items || [];
     const podGroups = podsData?.groups || [];
@@ -249,6 +267,9 @@ export function WorkspaceSidebar({ podId, podName, podIconUrl, onCollapse }: Wor
     const initials = profile?.first_name && profile?.last_name
         ? `${profile.first_name[0]}${profile.last_name[0]}`
         : profile?.email?.[0].toUpperCase() || 'U';
+    const profileDisplayName = profile?.first_name
+        ? `${profile.first_name} ${profile.last_name || ''}`.trim()
+        : profile?.email?.split('@')[0] || 'User';
     const assistantCreationCopy = assistantCreationKind ? ASSISTANT_CREATION_COPY[assistantCreationKind] : null;
 
     const canShowCreateMenu = canWriteConversations || canCreateAgents || canCreateApps || canCreateWorkflows || canCreateSchedules || canCreateTables;
@@ -609,20 +630,20 @@ export function WorkspaceSidebar({ podId, podName, podIconUrl, onCollapse }: Wor
 
     return (
         <aside className="flex h-full w-full shrink-0 flex-col overflow-hidden bg-[var(--pod-shell-bg)] text-[var(--text-secondary)]">
-            <div className="flex h-14 shrink-0 items-center gap-1.5 border-b border-[color:color-mix(in_srgb,var(--border-subtle)_32%,transparent)] px-3">
+            <div className="flex h-12 shrink-0 items-center gap-1 border-b border-[color:color-mix(in_srgb,var(--border-subtle)_42%,transparent)] px-2.5">
                 <div className="min-w-0 flex-1">
                     <DropdownMenu.Root open={podSwitcherOpen} onOpenChange={setPodSwitcherOpen}>
                         <DropdownMenu.Trigger asChild>
                             <button
                                 type="button"
-                                className="workspace-sidebar-trigger-button custom-focus-ring flex w-full min-w-0 items-center gap-2 rounded-md border border-[color:var(--border-subtle)] bg-transparent px-2 py-1.5 text-left text-[var(--text-primary)] transition-colors hover:border-[var(--border-strong)] hover:bg-[var(--surface-2)] data-[state=open]:border-[var(--border-strong)] data-[state=open]:bg-[var(--surface-2)]"
+                                className="workspace-sidebar-trigger-button custom-focus-ring flex w-full min-w-0 items-center gap-2 rounded-md border border-transparent bg-transparent px-1.5 py-1 text-left text-[var(--text-primary)] transition-colors hover:border-[var(--border-subtle)] hover:bg-[var(--surface-2)] data-[state=open]:border-[var(--border-subtle)] data-[state=open]:bg-[var(--surface-2)]"
                                 aria-label={`Switch pod. Current pod: ${podName || 'Current pod'}`}
                             >
                                 <ResourceIcon
                                     iconUrl={podIconUrl}
                                     alt={`${podName || 'Current pod'} icon`}
                                     label={podName || 'Current pod'}
-                                    className="h-7 w-7 shrink-0 rounded-md border-[color:color-mix(in_srgb,var(--border-subtle)_58%,transparent)] bg-transparent text-[var(--text-tertiary)]"
+                                    className="h-6 w-6 shrink-0 rounded-md border-[color:color-mix(in_srgb,var(--border-subtle)_58%,transparent)] bg-transparent text-[var(--text-tertiary)]"
                                     fallback={
                                         <span className="lemma-pod-badge">
                                             {(podName || 'Pod')
@@ -634,12 +655,12 @@ export function WorkspaceSidebar({ podId, podName, podIconUrl, onCollapse }: Wor
                                         </span>
                                     }
                                 />
-                                <span className="min-w-0 flex-1">
-                                    <span className="block truncate text-sm font-medium leading-5 text-[var(--text-primary)]">
-                                        {podName || 'Current pod'}
-                                    </span>
-                                    <span className="block truncate text-xs leading-4 text-[var(--text-tertiary)]">
+                                <span className="flex min-w-0 flex-1 flex-col gap-0.5">
+                                    <span className="type-eyebrow text-[var(--text-tertiary)]">
                                         Switch pod
+                                    </span>
+                                    <span className="block truncate text-sm font-medium leading-4 text-[var(--text-primary)]">
+                                        {podName || 'Current pod'}
                                     </span>
                                 </span>
                                 <ChevronDown className="h-4 w-4 shrink-0 text-[var(--text-secondary)]" />
@@ -659,7 +680,7 @@ export function WorkspaceSidebar({ podId, podName, podIconUrl, onCollapse }: Wor
                 <button
                     type="button"
                     onClick={() => setBundleShareOpen(true)}
-                    className="lemma-shell-icon-button custom-focus-ring h-9 w-9 shrink-0 self-center text-[var(--text-tertiary)] hover:text-[var(--action-primary)]"
+                    className="lemma-shell-icon-button custom-focus-ring h-8 w-8 shrink-0 self-center text-[var(--text-tertiary)] hover:text-[var(--action-primary)]"
                     aria-label="Share pod"
                     title="Share pod"
                 >
@@ -669,7 +690,7 @@ export function WorkspaceSidebar({ podId, podName, podIconUrl, onCollapse }: Wor
                     <button
                         type="button"
                         onClick={onCollapse}
-                        className="lemma-shell-icon-button custom-focus-ring h-9 w-9 shrink-0 self-center text-[var(--text-tertiary)]"
+                        className="lemma-shell-icon-button custom-focus-ring h-8 w-8 shrink-0 self-center text-[var(--text-tertiary)]"
                         aria-label="Collapse sidebar"
                         title="Collapse sidebar"
                     >
@@ -885,7 +906,7 @@ export function WorkspaceSidebar({ podId, podName, podIconUrl, onCollapse }: Wor
                 {routeWorktree}
 
                 <div className={cn('space-y-px pb-3', routeWorktree && 'mt-4 border-t border-[var(--border-subtle)] pt-3')}>
-                    {isLoadingConversations && visibleConversations.length === 0 ? (
+                    {(isLoadingConversations || isLoadingSidebarConversationHistory) && visibleConversations.length === 0 ? (
                         <div className="px-2 py-1.5 text-xs text-[var(--text-tertiary)]">Loading conversations</div>
                     ) : null}
                     {canWriteConversations ? (
@@ -940,22 +961,25 @@ export function WorkspaceSidebar({ podId, podName, podIconUrl, onCollapse }: Wor
                 <Link
                     href="/home"
                     aria-label="Go to Lemma home"
-                    className="workspace-sidebar-trigger-button custom-focus-ring flex h-9 shrink-0 items-center rounded-lg px-2 text-[var(--text-primary)] transition-colors hover:bg-[var(--surface-2)]"
+                    title="Lemma home"
+                    className="workspace-sidebar-trigger-button custom-focus-ring flex h-9 w-9 shrink-0 items-center justify-center rounded-lg text-[var(--text-primary)] transition-colors hover:bg-[var(--surface-2)]"
                 >
-                    <Logo size="xs" variant="mark-wordmark" />
+                    <Logo size="xs" variant="mark-only" />
                 </Link>
                 <DropdownMenu.Root>
                     <DropdownMenu.Trigger asChild>
-                        <button className="workspace-sidebar-trigger-button custom-focus-ring flex h-9 min-w-0 flex-1 items-center gap-2 rounded-lg px-1.5 text-left transition-colors hover:bg-[var(--surface-2)]">
+                        <button
+                            className="workspace-sidebar-trigger-button custom-focus-ring flex h-9 min-w-0 flex-1 items-center gap-2 rounded-lg px-1.5 text-left transition-colors hover:bg-[var(--surface-2)]"
+                            aria-label={`Open account menu for ${profileDisplayName}`}
+                            title={profileDisplayName}
+                        >
                             <Avatar className="h-7 w-7 border border-[var(--border-subtle)]">
                                 <AvatarFallback className="bg-[var(--surface-2)] text-xs text-[var(--text-secondary)]">
                                     {profile ? initials : <User className="h-4 w-4" />}
                                 </AvatarFallback>
                             </Avatar>
                             <span className="min-w-0 flex-1 truncate text-sm font-medium text-[var(--text-primary)]">
-                                {profile?.first_name
-                                    ? `${profile.first_name} ${profile.last_name || ''}`.trim()
-                                    : profile?.email?.split('@')[0] || 'User'}
+                                {profileDisplayName}
                             </span>
                         </button>
                     </DropdownMenu.Trigger>

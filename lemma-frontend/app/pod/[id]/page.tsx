@@ -217,7 +217,7 @@ function PodBlankChatHome({ podId }: { podId: string }) {
             <main
                 aria-hidden={isBlankingHome}
                 className={cn(
-                    "mx-auto flex min-h-screen w-full max-w-6xl flex-1 flex-col items-center px-5 pb-10 pt-[10vh] sm:px-6",
+                    "mx-auto flex min-h-full w-full max-w-6xl flex-1 flex-col items-center px-5 pb-10 pt-10 sm:px-6 md:pt-14",
                     isBlankingHome && "pointer-events-none opacity-0",
                 )}
             >
@@ -284,7 +284,7 @@ function PodBlankChatHome({ podId }: { podId: string }) {
                                 }
                             }}
                             rows={1}
-                            placeholder={canWriteConversations ? "What should this pod do next?" : "You can read this pod, but not start new conversations."}
+                            placeholder={canWriteConversations ? "What should happen next?" : "You can read this pod, but not start new conversations."}
                             disabled={!canWriteConversations}
                             className="inline-edit-field min-h-10 flex-1 resize-none bg-transparent py-3 text-base leading-6 text-[var(--text-primary)] outline-none placeholder:text-[var(--text-tertiary)]"
                         />
@@ -296,6 +296,7 @@ function PodBlankChatHome({ podId }: { podId: string }) {
                             onChange={handleCommandRuntimeChange}
                             disabled={!canWriteConversations}
                             compact
+                            triggerLabelClassName="hidden sm:block"
                             scopeHint="Just for this chat"
                             manageHref={pod?.organization_id ? `/organizations/${pod.organization_id}/settings/agent-runtimes` : undefined}
                         />
@@ -309,7 +310,7 @@ function PodBlankChatHome({ podId }: { podId: string }) {
                         </button>
                     </form>
                 </div>
-                {showHomePanels ? <PodAgentWorkflowKanban podId={podId} /> : null}
+                {showHomePanels ? <PodAgentWorkflowKanban podId={podId} /> : <PodHomePanelsSkeleton />}
             </main>
             {launchAnimation && launchAnimationStyle ? (
                 <div
@@ -331,6 +332,41 @@ function PodBlankChatHome({ podId }: { podId: string }) {
                     </div>
                 </div>
             ) : null}
+        </div>
+    );
+}
+
+function PodHomePanelsSkeleton() {
+    return (
+        <div className="mt-8 w-full space-y-6" role="status" aria-label="Loading pod activity">
+            <div className="space-y-2">
+                <div className="lemma-skeleton h-3 w-20 rounded-md" />
+                <div className="surface-panel flex items-center gap-3 p-3">
+                    <div className="lemma-skeleton h-8 w-8 rounded-md" />
+                    <div className="min-w-0 flex-1 space-y-2">
+                        <div className="lemma-skeleton h-3 w-28 rounded-md" />
+                        <div className="lemma-skeleton h-2.5 w-48 max-w-full rounded-md" />
+                    </div>
+                </div>
+            </div>
+            <div className="space-y-3">
+                <div className="flex items-center justify-between gap-4">
+                    <div className="lemma-skeleton h-4 w-20 rounded-md" />
+                    <div className="lemma-skeleton h-3 w-24 rounded-md" />
+                </div>
+                <div className="pod-home-work-panel">
+                    {[0, 1, 2].map((item) => (
+                        <div key={item} className="pod-home-work-section-row space-y-2">
+                            <div className="lemma-skeleton h-2.5 w-24 rounded-md" />
+                            <div className="flex items-center gap-3 py-1">
+                                <div className="lemma-skeleton h-1.5 w-1.5 rounded-full" />
+                                <div className="lemma-skeleton h-3 w-36 rounded-md" />
+                                <div className="lemma-skeleton ml-auto h-3 w-28 rounded-md" />
+                            </div>
+                        </div>
+                    ))}
+                </div>
+            </div>
         </div>
     );
 }
@@ -521,7 +557,7 @@ function PodAgentWorkflowKanban({ podId }: { podId: string }) {
                     conversationCount={conversations.length}
                 />
             ) : null}
-            <div className="mt-10 w-full space-y-5">
+            <div className="mt-8 w-full space-y-6">
                 <PodJoinRequestsHomePanel podId={podId} />
                 <PodSurfacesHomePanel podId={podId} />
             {isLoading || hasKanbanItems ? (
@@ -622,11 +658,34 @@ function PodSurfacesHomePanel({ podId }: { podId: string }) {
     const { data: surfaces = [], isLoading } = usePodSurfaces(canUse ? podId : undefined);
     const surfacesHref = `/pod/${podId}/surfaces`;
 
-    if (!canUse || isLoading) return null;
+    if (!canUse) return null;
+
+    if (isLoading) {
+        return (
+            <section className="pod-home-surfaces-panel w-full" data-state="loading" role="status" aria-label="Loading surfaces">
+                <div className="flex items-center justify-between gap-3">
+                    <h2 className="text-base font-normal text-[var(--text-secondary)]">Surfaces</h2>
+                    <div className="lemma-skeleton h-3 w-12 rounded-md" />
+                </div>
+                <ul className="mt-2 flex flex-col gap-0.5" aria-hidden="true">
+                    {[0, 1, 2].map((item) => (
+                        <li key={item} className="flex items-center gap-3 px-2 py-2">
+                            <div className="lemma-skeleton h-8 w-8 shrink-0 rounded-lg" />
+                            <div className="min-w-0 flex-1 space-y-2">
+                                <div className="lemma-skeleton h-3 w-40 max-w-full rounded-md" />
+                                <div className="lemma-skeleton h-2.5 w-24 rounded-md" />
+                            </div>
+                            <div className="lemma-skeleton h-3 w-10 rounded-md" />
+                        </li>
+                    ))}
+                </ul>
+            </section>
+        );
+    }
 
     if (surfaces.length === 0) {
         return (
-            <section className="w-full">
+            <section className="pod-home-surfaces-panel w-full" data-state="ready">
                 <h2 className="text-base font-normal text-[var(--text-secondary)]">Surfaces</h2>
                 <div className="mt-2 flex flex-wrap items-center gap-x-3 gap-y-2">
                     <span className="flex items-center gap-1.5">
@@ -659,7 +718,7 @@ function PodSurfacesHomePanel({ podId }: { podId: string }) {
     );
 
     return (
-        <section className="w-full">
+        <section className="pod-home-surfaces-panel w-full" data-state="ready">
             <div className="flex items-center justify-between gap-3">
                 <h2 className="text-base font-normal text-[var(--text-secondary)]">Surfaces</h2>
                 <Link
@@ -669,7 +728,7 @@ function PodSurfacesHomePanel({ podId }: { podId: string }) {
                     Manage
                 </Link>
             </div>
-            <ul className="mt-2 flex flex-col gap-0.5">
+            <ul className="pod-home-surfaces-list mt-2 flex flex-col gap-0.5">
                 {sorted.map((surface) => {
                     const platform = String(surface.platform || '').toUpperCase();
                     const meta = SURFACE_META[platform];

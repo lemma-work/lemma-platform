@@ -2,11 +2,48 @@
 
 ## Direction
 
-Lemma should feel playfully professional: a calm B2B operating workspace with consumer-grade softness and small moments of delight. The substrate stays quiet and trustworthy. Delight appears as tiny signals: icons, active rails, progress marks, chips, focus rings, and short hover states.
+Lemma should feel like a quiet operations room: warm, precise, dense enough for real work, and calm under continuous change. The shell recedes, working surfaces stay crisp, and color appears only when it carries action, state, or data meaning. Motion explains what changed and where it came from.
 
 The working principle is:
 
-> professional substrate, playful signals
+> quiet substrate, legible operations, purposeful motion
+
+## Visual foundation
+
+### Typography
+
+- Product UI uses IBM Plex Sans at 400, 500, and 600. Default body copy is 14px/21px; compact labels are 12–13px; section headings are 16px/22px; page headings are 20px/26px.
+- Bricolage Grotesque is a brand/display face only. Use it for the Lemma identity, a rare empty-state statement, or a major launch moment—not navigation, resource titles, forms, tables, or dialogs.
+- DM Mono is reserved for timestamps, identifiers, live labels, compact operational metadata, and numeric readouts where tabular alignment matters.
+- DM Sans is the long-form document reading face.
+- Product copy uses sentence case. Uppercase is reserved for short mono eyebrows and operational section labels.
+
+### Core palette
+
+Light mode uses `#F4F3EF` canvas, `#EEEDE7` shell, `#F8F7F3` main workspace, and white working surfaces. Text is `#181816`, `#6F6D68`, and `#99968F`; borders are `#E8E7E2`, `#D9D7D1`, and `#BBB8B0`.
+
+Dark mode uses `#11120F` canvas, `#161713` shell, `#1A1B18` main workspace, `#20211E` surfaces, and `#262722` secondary surfaces. Text is `#F0EFEA`, `#AAA9A2`, and `#75766E`; borders are `#2D2F29` and `#45473F`.
+
+Muted indigo (`#5F61D8`) remains the primary product action. Operational data uses coral, amber, green, violet, blue, and neutral grey through `--chart-1`…`--chart-5`; those colors do not decorate navigation or resource categories.
+
+### Shape, density, and elevation
+
+- Radius steps are 4px for tiny controls, 6px for controls and rows, 8px for cards, and 10px for panels. Pills are reserved for state, filters, and avatars.
+- Default shell geometry is a 240px expanded sidebar, 40px collapsed rail, 48px workspace tab bar, and 48px context bar.
+- Standard rows are 28–32px. Buttons use 28px, 32px, 36px, and 40px size steps.
+- Prefer border and surface contrast over shadow. Cards use no shadow at rest or hover; floating overlays use `--shadow-lg`.
+
+### Motion hierarchy
+
+- `--dur-feedback` (90ms): press, toggle, immediate acknowledgement.
+- `--dur-hover` (140ms): hover and focus color changes.
+- `--dur-control` (180ms): tabs, menus, small state transitions.
+- `--dur-route` (210ms): route crossfade with at most 3px travel.
+- `--dur-panel` (260ms): drawers and contextual panels.
+- `--dur-shared` (420ms): shared-detail geometry expansion and return.
+- `--dur-data` (720ms): charts, bars, and numeric reveals.
+
+Use `--ease-standard` for routine changes, `--ease-emphasized` for spatial continuity, and `--ease-exit` for dismissal. Never animate polling by replaying a whole page. Under reduced motion, spatial movement and chart morphs become short crossfades.
 
 ## Token Layers
 
@@ -42,7 +79,7 @@ Semantic tokens explain product meaning:
 
 Color roles:
 
-- Green is action and trust.
+- Green is success and trust.
 - Honey is delight and progress.
 - Coral is attention and human intervention.
 - Sky is intelligence and information.
@@ -66,6 +103,13 @@ Component tokens are what primitives should consume:
 
 New shared primitives should prefer these before reaching for raw color tokens.
 
+### Embedded surfaces
+
+- Conversation widgets receive `lemma-widget-theme` with the public `--lemma-widget-*` token family.
+- Installed app iframes receive `lemma-app-theme` with public `--lemma-app-*` variables, `theme`, and `density`.
+- The browser SDK applies the app variables to the embedded document root, sets `data-lemma-theme`/`data-lemma-density`, and emits `lemma:theme` for framework code that needs to subscribe.
+- Embedded apps retain ownership of their internal navigation and chrome. The host contract supplies palette, typography, radius, motion, and chart semantics; it does not inject or duplicate app headers.
+
 ## Iconography
 
 Lemma uses Phosphor as its single interface glyph family. Product code imports
@@ -81,7 +125,7 @@ Rules:
 1. One concept uses one glyph everywhere. The vocabulary module owns the mapping.
 2. Use `regular` weight by default. Use `fill` for selected state, `bold` for
    very small status marks, and `duotone` only for large explanatory artwork.
-3. Prefer the 12, 16, 20, 24, and 32 pixel size steps.
+3. Prefer 14px for compact rows, 16px for standard controls, 18px for prominent actions, and 24px for large resource identity. Reserve 32px for explanatory artwork.
 4. Navigation and resource-identity icons are monochrome. Inactive navigation
    uses a tertiary `regular` icon; selected navigation uses a secondary-neutral
    `fill` icon while its label becomes primary, and the active rail carries the

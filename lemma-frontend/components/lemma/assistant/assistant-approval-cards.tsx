@@ -4,7 +4,7 @@
 // param/label helpers plus the three approval surfaces (the full card, the composer
 // panel, and the inline call). Consumed by the tool-details panel and the rollup.
 
-import { useCallback, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { isAskUserToolName, userApprovalResolvedDecision } from "lemma-sdk";
 import { Check, CheckCircle2, MessageCircleQuestion, ShieldAlert, XCircle } from "@/components/ui/icons";
 import { cn } from "@/lib/utils";
@@ -24,6 +24,14 @@ import type {
   ToolCardResult,
   UserApprovalDecision,
 } from "./assistant-experience";
+import { playSoundFeedback } from "@/lib/feedback/sound-feedback";
+
+function useApprovalWaitingSound(invocation: AssistantToolInvocation, isResolved: boolean) {
+  useEffect(() => {
+    if (isResolved) return;
+    playSoundFeedback('work-waiting', { onceKey: `approval:${invocation.toolCallId}` });
+  }, [invocation.toolCallId, isResolved]);
+}
 
 export function toolNameFromApprovalMessage(message?: string): string | null {
   if (!message) return null;
@@ -92,6 +100,7 @@ export function UserApprovalCard({
   const [error, setError] = useState<string | null>(null);
   const resolvedDecision = userApprovalResolvedDecision(resultData);
   const isResolved = invocation.state === "result" || !!resolvedDecision;
+  useApprovalWaitingSound(invocation, isResolved);
   const isDenied = resolvedDecision === "DENY";
   const canResolve = !!onResolveUserApproval && !isResolved && !pendingDecision;
 
@@ -201,6 +210,7 @@ export function ComposerApprovalPanel({
   const [error, setError] = useState<string | null>(null);
   const resolvedDecision = userApprovalResolvedDecision(resultData);
   const isResolved = invocation.state === "result" || !!resolvedDecision;
+  useApprovalWaitingSound(invocation, isResolved);
   const canResolve = !!onResolveUserApproval && !isResolved && !pendingDecision;
   const primaryParam = details.params[0];
 
@@ -609,6 +619,7 @@ export function AskUserCard({
 }) {
   const resultData = (invocation.result || {}) as ToolCardResult;
   const isResolved = invocation.state === "result" || askUserAnswers(resultData) !== null;
+  useApprovalWaitingSound(invocation, isResolved);
 
   return (
     <div className="rounded-md border border-[color:color-mix(in_srgb,var(--row-border)_86%,transparent)] bg-[color:color-mix(in_srgb,var(--bg-canvas)_98%,transparent)] p-3.5 shadow-[var(--shadow-sm)]">
@@ -647,6 +658,10 @@ export function ComposerAskUserPanel({
   invocation: AssistantToolInvocation;
   onResolveUserApproval?: (approvalId: string, decision: UserApprovalDecision, response?: Record<string, unknown> | null) => Promise<void>;
 }) {
+  const resultData = (invocation.result || {}) as ToolCardResult;
+  const isResolved = invocation.state === "result" || askUserAnswers(resultData) !== null;
+  useApprovalWaitingSound(invocation, isResolved);
+
   return (
     <div className="lemma-assistant-user-approval-card border border-[color:color-mix(in_srgb,var(--row-border)_86%,transparent)] bg-[color:color-mix(in_srgb,var(--surface-1)_96%,transparent)] p-4 shadow-[var(--shadow-sm)]">
       <AskUserQuestionsForm

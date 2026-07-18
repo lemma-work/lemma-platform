@@ -1330,58 +1330,58 @@
   --noise-opacity: 0.01;
   --noise-blend: multiply;
 
-  /* Backgrounds: cool slate with crisp white surfaces. */
-  --bg-canvas: #f5f4f0;
+  /* Quiet operations: warm canvas, continuous shell, crisp working surfaces. */
+  --bg-canvas: #f4f3ef;
   --bg-surface: #ffffff;
-  --bg-subtle: #f0efec;
-  --bg-muted: #e8e6e2;
+  --bg-subtle: #f6f5f2;
+  --bg-muted: #ebeae5;
   --surface-1: #ffffff;
-  --surface-2: #f2f0ed;
-  --surface-3: #e5e3df;
+  --surface-2: #f6f5f2;
+  --surface-3: #efeee9;
   --surface-overlay: color-mix(in srgb, var(--surface-1) 96%, transparent);
-  --pod-shell-bg: #edecea;
-  --pod-main-bg: #ffffff;
+  --pod-shell-bg: #eeede7;
+  --pod-main-bg: #f8f7f3;
 
   /* Brand and delight accents. Indigo carries action; honey/coral carry warmth and attention. */
-  --brand-primary: #6366f1;
+  --brand-primary: #5f61d8;
   --brand-secondary: #6b6a66;
-  --brand-accent: #d99a32;
-  --brand-warm: #d99a32;
-  --brand-coral: #df6a45;
-  --brand-sky: #6fa9bb;
-  --brand-lilac: #8d82bd;
-  --brand-blue: #527f91;
+  --brand-accent: #e4b52d;
+  --brand-warm: #e4b52d;
+  --brand-coral: #f06b3e;
+  --brand-sky: #6ea5c1;
+  --brand-lilac: #8588e8;
+  --brand-blue: #6ea5c1;
   --brand-blue-soft: #e8f1f3;
   --brand-yellow-soft: #fbf1dc;
-  --brand-green: #16a34a;
+  --brand-green: #32c98a;
   --brand-green-soft: #e6f7ed;
   --brand-cyan: #0891b2;
   --brand-cyan-soft: #e6f7f9;
   --brand-tan: #e7dbc9;
-  --brand-glow: rgba(99, 102, 241, 0.16);
-  --focus-blue: #6366f1;
-  --cta-bg: #6366f1;
+  --brand-glow: rgba(95, 97, 216, 0.14);
+  --focus-blue: #7779e3;
+  --cta-bg: #5f61d8;
   --cta-fg: #ffffff;
-  --interactive-primary: #6366f1;
+  --interactive-primary: #5f61d8;
 
   /* Text hierarchy */
-  --text-primary: #141414;
-  --text-secondary: #6b6b6b;
-  --text-tertiary: #9a9a9a;
-  --text-soft: #b0b0b0;
+  --text-primary: #181816;
+  --text-secondary: #6f6d68;
+  --text-tertiary: #99968f;
+  --text-soft: #b3b0a9;
   --text-inverse: #ffffff;
   --text-on-brand: #ffffff;
 
   /* Borders */
-  --border-subtle: #e5e5e5;
-  --border-default: #d4d4d4;
-  --border-strong: #c0c0c0;
+  --border-subtle: #e8e7e2;
+  --border-default: #d9d7d1;
+  --border-strong: #bbb8b0;
 
   /* State colors */
-  --state-success: #16a34a;
-  --state-warning: #d97706;
-  --state-error: #dc2626;
-  --state-info: #0891b2;
+  --state-success: #32c98a;
+  --state-warning: #e4b52d;
+  --state-error: #dc6155;
+  --state-info: #6ea5c1;
 
   /* Elevation — cards have visible mass, deep shadow for floating layers */
   --shadow-xs:
@@ -1401,8 +1401,8 @@
 
   /* Semantic roles: use these in new product code before raw brand tokens. */
   --action-primary: var(--interactive-primary);
-  --action-primary-hover: #4f46e5;
-  --action-primary-soft: rgba(99, 102, 241, 0.08);
+  --action-primary-hover: #5052c8;
+  --action-primary-soft: #eeeeff;
   --attention: var(--brand-coral);
   --attention-soft: #fdf0ea;
   --delight: var(--brand-accent);
@@ -1416,7 +1416,7 @@
   --button-primary-bg: var(--action-primary);
   --button-primary-bg-hover: var(--action-primary-hover);
   --button-primary-fg: var(--cta-fg);
-  --button-secondary-bg: var(--surface-2);
+  --button-secondary-bg: var(--surface-1);
   --button-secondary-bg-hover: var(--surface-3);
   --button-secondary-border: var(--border-default);
   --button-secondary-fg: var(--text-primary);
@@ -1427,14 +1427,14 @@
   --card-bg-hover: color-mix(in srgb, var(--surface-1) 91%, var(--surface-2));
   --card-border: var(--border-default);
   --card-border-subtle: var(--border-subtle);
-  --card-shadow: var(--shadow-sm);
-  --field-bg: color-mix(in srgb, var(--surface-1) 84%, var(--surface-2));
-  --field-bg-hover: color-mix(in srgb, var(--surface-1) 92%, var(--surface-2));
+  --card-shadow: none;
+  --field-bg: var(--surface-1);
+  --field-bg-hover: color-mix(in srgb, var(--surface-1) 82%, var(--surface-2));
   --field-bg-focus: var(--surface-1);
-  --field-border: color-mix(in srgb, var(--border-default) 42%, transparent);
-  --field-border-hover: color-mix(in srgb, var(--border-default) 58%, transparent);
+  --field-border: var(--border-subtle);
+  --field-border-hover: var(--border-default);
   --field-border-focus: color-mix(in srgb, var(--brand-primary) 42%, transparent);
-  --chip-bg: color-mix(in srgb, var(--surface-2) 76%, var(--surface-1));
+  --chip-bg: var(--surface-1);
   --chip-border: var(--border-default);
   --chip-fg: var(--text-secondary);
   --row-bg: color-mix(in srgb, var(--surface-1) 78%, var(--surface-2));
@@ -1447,12 +1447,13 @@
   --segmented-active-bg: var(--surface-1);
   --segmented-active-fg: var(--text-primary);
   --progress-segment-bg: color-mix(in srgb, var(--delight) 56%, var(--border-default));
-  --sidebar-active-bg: rgba(99, 102, 241, 0.09);
+  --sidebar-active-bg: var(--surface-1);
   --sidebar-active-accent: var(--brand-primary);
 
   /* Typography */
-  --font-display-family: var(--font-bricolage-grotesque, "Bricolage Grotesque"), var(--font-ibm-plex-sans, "IBM Plex Sans"), var(--font-landing-sans, "Inter"), system-ui, sans-serif;
-  --font-body-family: var(--font-bricolage-grotesque, "Bricolage Grotesque"), var(--font-ibm-plex-sans, "IBM Plex Sans"), var(--font-landing-sans, "Inter"), system-ui, sans-serif;
+  --font-display-family: var(--font-bricolage-grotesque, "Bricolage Grotesque"), var(--font-ibm-plex-sans, "IBM Plex Sans"), system-ui, sans-serif;
+  --font-body-family: var(--font-ibm-plex-sans, "IBM Plex Sans"), var(--font-landing-sans, "Inter"), system-ui, sans-serif;
+  --font-document-family: var(--font-document-sans, "DM Sans"), var(--font-body-family);
   --font-mono-family: var(--font-dm-mono, "DM Mono"), var(--font-source-code-pro, "Source Code Pro"), ui-monospace, SFMono-Regular, Menlo, monospace;
 
   /* Type scale */
@@ -1527,19 +1528,29 @@
 
   /* Radius */
   --radius-sm: 4px;
-  --radius-md: 7px;
-  --radius-lg: 10px;
-  --radius-xl: 12px;
-  --radius-2xl: 18px;
+  --radius-md: 6px;
+  --radius-lg: 8px;
+  --radius-xl: 10px;
+  --radius-2xl: 12px;
   --radius-full: 9999px;
 
-  /* Motion — felt, not frantic */
-  --ease-out: cubic-bezier(0.16, 1, 0.3, 1);
-  --ease-in-out: cubic-bezier(0.45, 0, 0.55, 1);
-  --dur-fast: 120ms;
-  --dur-base: 220ms;
-  --dur-slow: 400ms;
-  --dur-slower: 600ms;
+  /* Motion hierarchy: feedback, controls, panels, shared geometry, then data. */
+  --ease-standard: cubic-bezier(0.2, 0, 0, 1);
+  --ease-emphasized: cubic-bezier(0.22, 1, 0.36, 1);
+  --ease-exit: cubic-bezier(0.4, 0, 1, 1);
+  --ease-out: var(--ease-emphasized);
+  --ease-in-out: var(--ease-standard);
+  --dur-feedback: 90ms;
+  --dur-hover: 140ms;
+  --dur-control: 180ms;
+  --dur-route: 210ms;
+  --dur-panel: 260ms;
+  --dur-shared: 420ms;
+  --dur-data: 720ms;
+  --dur-fast: var(--dur-hover);
+  --dur-base: var(--dur-control);
+  --dur-slow: var(--dur-shared);
+  --dur-slower: var(--dur-data);
 
   /* Shadcn/Radix semantic aliases */
   --background: var(--bg-canvas);
@@ -1560,11 +1571,11 @@
   --border: var(--border-subtle);
   --input: var(--border-default);
   --ring: color-mix(in srgb, var(--focus-blue) 45%, transparent);
-  --chart-1: var(--brand-primary);
-  --chart-2: var(--state-info);
+  --chart-1: var(--brand-coral);
+  --chart-2: var(--brand-lilac);
   --chart-3: var(--state-success);
   --chart-4: var(--state-warning);
-  --chart-5: var(--brand-accent);
+  --chart-5: #a6a8a2;
   --sidebar: var(--bg-surface);
   --sidebar-foreground: var(--text-primary);
   --sidebar-primary: var(--cta-bg);
@@ -1585,17 +1596,17 @@
   --noise-blend: overlay;
 
   --bg-canvas: #11120f;
-  --bg-surface: #1a1a1a;
-  --bg-subtle: #222222;
-  --bg-muted: #2a2a2a;
-  --surface-1: #1a1a1a;
-  --surface-2: #222222;
-  --surface-3: #2d2d2d;
+  --bg-surface: #20211e;
+  --bg-subtle: #262722;
+  --bg-muted: #2d2f29;
+  --surface-1: #20211e;
+  --surface-2: #262722;
+  --surface-3: #2d2f29;
   --surface-overlay: color-mix(in srgb, var(--surface-1) 94%, transparent);
-  --pod-shell-bg: #111111;
-  --pod-main-bg: #1a1a1a;
+  --pod-shell-bg: #161713;
+  --pod-main-bg: #1a1b18;
 
-  --brand-primary: #818cf8;
+  --brand-primary: #8588e8;
   --brand-secondary: #9e9e9e;
   --brand-accent: #e0aa55;
   --brand-warm: #e0aa55;
@@ -1611,21 +1622,21 @@
   --brand-cyan-soft: #152a2e;
   --brand-tan: #3a342b;
   --brand-glow: rgba(129, 140, 248, 0.22);
-  --focus-blue: #818cf8;
-  --cta-bg: #818cf8;
+  --focus-blue: #9a9cf0;
+  --cta-bg: #8588e8;
   --cta-fg: #ffffff;
-  --interactive-primary: #818cf8;
+  --interactive-primary: #8588e8;
 
-  --text-primary: #ececec;
-  --text-secondary: #9e9e9e;
-  --text-tertiary: #6e6e6e;
-  --text-soft: #4a4a4a;
+  --text-primary: #f0efea;
+  --text-secondary: #aaa9a2;
+  --text-tertiary: #75766e;
+  --text-soft: #595b54;
   --text-inverse: #141414;
   --text-on-brand: #ffffff;
 
-  --border-subtle: #2a2a2a;
-  --border-default: #3a3a3a;
-  --border-strong: #555555;
+  --border-subtle: #2d2f29;
+  --border-default: #45473f;
+  --border-strong: #62645a;
 
   --state-success: #4ade80;
   --state-warning: #fbbf24;
@@ -1645,8 +1656,8 @@
     0 28px 64px -16px rgba(0, 0, 0, 0.60);
 
   --action-primary: var(--interactive-primary);
-  --action-primary-hover: #a5b4fc;
-  --action-primary-soft: rgba(99, 102, 241, 0.13);
+  --action-primary-hover: #9a9cf0;
+  --action-primary-soft: color-mix(in srgb, var(--brand-primary) 14%, transparent);
   --attention: var(--brand-coral);
   --attention-soft: #331919;
   --delight: var(--brand-accent);
@@ -1659,7 +1670,7 @@
   --button-primary-bg: var(--action-primary);
   --button-primary-bg-hover: var(--action-primary-hover);
   --button-primary-fg: var(--cta-fg);
-  --button-secondary-bg: var(--surface-2);
+  --button-secondary-bg: var(--surface-1);
   --button-secondary-bg-hover: var(--surface-3);
   --button-secondary-border: var(--border-default);
   --button-secondary-fg: var(--text-primary);
@@ -1670,14 +1681,14 @@
   --card-bg-hover: color-mix(in srgb, var(--surface-1) 82%, var(--surface-2));
   --card-border: var(--border-default);
   --card-border-subtle: var(--border-subtle);
-  --card-shadow: var(--shadow-sm);
-  --field-bg: color-mix(in srgb, var(--surface-1) 74%, var(--surface-2));
+  --card-shadow: none;
+  --field-bg: var(--surface-1);
   --field-bg-hover: color-mix(in srgb, var(--surface-1) 64%, var(--surface-2));
   --field-bg-focus: var(--surface-1);
-  --field-border: color-mix(in srgb, var(--border-default) 48%, transparent);
-  --field-border-hover: color-mix(in srgb, var(--border-default) 64%, transparent);
+  --field-border: var(--border-subtle);
+  --field-border-hover: var(--border-default);
   --field-border-focus: color-mix(in srgb, var(--brand-primary) 48%, transparent);
-  --chip-bg: color-mix(in srgb, var(--surface-2) 78%, var(--surface-1));
+  --chip-bg: var(--surface-1);
   --chip-border: var(--border-default);
   --chip-fg: var(--text-secondary);
   --row-bg: color-mix(in srgb, var(--surface-1) 76%, var(--surface-2));
@@ -1690,7 +1701,7 @@
   --segmented-active-bg: var(--surface-1);
   --segmented-active-fg: var(--text-primary);
   --progress-segment-bg: color-mix(in srgb, var(--delight) 62%, var(--border-default));
-  --sidebar-active-bg: rgba(99, 102, 241, 0.11);
+  --sidebar-active-bg: var(--surface-1);
   --sidebar-active-accent: var(--brand-primary);
 
   /* Dark mode primary scale — inverted lightness (indigo) */

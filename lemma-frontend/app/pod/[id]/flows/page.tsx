@@ -14,6 +14,7 @@ import {
     MoreHorizontal,
     Play,
     Plus,
+    Share2,
     Sparkles,
     Trash2,
     UserRound,
@@ -29,6 +30,7 @@ import { ProductIcon } from '@/components/pod/product-icon';
 import { Button } from '@/components/ui/button';
 import { ResourceIndexHeader, ResourceIndexShell, ResourceMetricButton } from '@/components/pod/resource-layout';
 import { DestructiveConfirmationDialog } from '@/components/shared/destructive-confirmation-dialog';
+import { DestructiveResourceActionItem, ResourceActionsMenu } from '@/components/shared/resource-actions-menu';
 import { getFunctionNodeName } from '@/lib/utils/flow-node-config';
 import {
     DropdownMenu,
@@ -37,10 +39,11 @@ import {
     DropdownMenuSeparator,
     DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu';
-import { ResourceVisibilityBadge } from '@/components/shared/resource-visibility';
+import { ResourceShareButton, ResourceVisibilityBadge, type ResourceVisibilityValue } from '@/components/shared/resource-visibility';
 import {
     useDeleteFlow,
     useFlows,
+    useUpdateFlow,
     useWorkflowRunSnapshots,
     useWorkflowRunWaitAssignments,
     type WorkflowRunWaitAssignment,
@@ -49,7 +52,7 @@ import { useFunctions, useDeleteFunction } from '@/lib/hooks/use-functions';
 import { resourceAllows } from '@/lib/authz/resource-actions';
 import { usePodAccess } from '@/lib/hooks/use-pod-access';
 import { useSchedules } from '@/lib/hooks/use-schedules';
-import type { Workflow as WorkflowType, Function as FunctionType, WorkflowRun } from '@/lib/types';
+import type { Workflow as WorkflowType, Function as FunctionType, WorkflowRun, WorkflowUpdateInput } from '@/lib/types';
 import { NodeType } from '@/lib/types';
 import { cn } from '@/lib/utils';
 
@@ -130,6 +133,7 @@ export default function FlowsIndexPage({
     const { data: schedulesData } = useSchedules(podId, { limit: 100 });
     const { data: waitAssignmentsData, isLoading: loadingWaits } = useWorkflowRunWaitAssignments(podId, 20);
     const { mutate: deleteFlow, isPending: isDeletingFlow } = useDeleteFlow();
+    const { mutateAsync: updateWorkflow } = useUpdateFlow();
     const { mutate: deleteFunction, isPending: isDeletingFunction } = useDeleteFunction();
     const [workflowPendingDelete, setWorkflowPendingDelete] = useState<WorkflowType | null>(null);
     const [functionPendingDelete, setFunctionPendingDelete] = useState<FunctionType | null>(null);
@@ -321,21 +325,54 @@ export default function FlowsIndexPage({
 
     if (loadingFlows || loadingFunctions) {
         return (
-            <div className="context-shell min-h-full bg-transparent">
-                <div className="mb-8 space-y-3">
-                    <div className="h-5 w-20 animate-pulse rounded bg-[var(--bg-muted)]" />
-                    <div className="h-10 w-72 animate-pulse rounded bg-[var(--bg-muted)]" />
-                </div>
-                <div className="space-y-5">
-                    <div className="h-28 animate-pulse rounded-xl bg-[var(--bg-subtle)]" />
-                    <div className="h-24 animate-pulse rounded-xl bg-[var(--bg-subtle)]" />
-                    <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
+            <ResourceIndexShell>
+                <ResourceIndexHeader
+                    title="Workflows"
+                    productIconKind="workflows"
+                    meta={<ConceptHint concept="flow" />}
+                    actions={(
+                        <div className="flex items-center gap-2">
+                            {canCreateFunction ? (
+                                <Link href={`/pod/${podId}/functions/new`}>
+                                    <Button variant="outline" className="gap-2" size="sm">
+                                        <Plus className="h-4 w-4" />
+                                        New function
+                                    </Button>
+                                </Link>
+                            ) : null}
+                            {canCreateWorkflow ? (
+                                <Link href={`/pod/${podId}/flows/new`}>
+                                    <Button className="gap-2" size="sm">
+                                        <Plus className="h-4 w-4" />
+                                        New workflow
+                                    </Button>
+                                </Link>
+                            ) : null}
+                        </div>
+                    )}
+                />
+                <SectionPrimer concept="flow" className="mb-4" />
+                <div className="space-y-3" role="status" aria-label="Loading workflows">
+                    <div className="flex items-center gap-2 py-1">
+                        {[1, 2, 3, 4, 5].map((item) => (
+                            <div key={`workflow-metric-skeleton-${item}`} className="lemma-skeleton h-7 w-24 rounded-md" />
+                        ))}
+                    </div>
+                    <div className="resource-index-grid resource-index-grid-md-2 resource-index-grid-xl-3 sm:grid-cols-2 xl:grid-cols-3">
                         {[1, 2, 3].map((i) => (
-                            <div key={i} className="h-28 animate-pulse rounded-xl bg-[var(--bg-subtle)]" />
+                            <div key={i} className="surface-panel h-48 space-y-4 p-4">
+                                <div className="lemma-skeleton h-5 w-5 rounded-md" />
+                                <div className="space-y-2">
+                                    <div className="lemma-skeleton h-4 w-36 rounded-md" />
+                                    <div className="lemma-skeleton h-3 w-full rounded-full" />
+                                    <div className="lemma-skeleton h-3 w-4/5 rounded-full" />
+                                </div>
+                                <div className="lemma-skeleton h-3 w-28 rounded-full" />
+                            </div>
                         ))}
                     </div>
                 </div>
-            </div>
+            </ResourceIndexShell>
         );
     }
 
@@ -465,6 +502,13 @@ export default function FlowsIndexPage({
                                         canExecute={resourceAllows(flow, 'workflow.execute', canExecuteWorkflow)}
                                         canDelete={resourceAllows(flow, 'workflow.delete', canDeleteWorkflow)}
                                         onDelete={setWorkflowPendingDelete}
+                                        onShareVisibilityChange={async (visibility) => {
+                                            await updateWorkflow({
+                                                podId,
+                                                id: flow.name,
+                                                data: { visibility: visibility as WorkflowUpdateInput['visibility'] },
+                                            });
+                                        }}
                                     />
                                 ))
                             )
@@ -675,6 +719,7 @@ function WorkflowCard({
     canExecute,
     canDelete,
     onDelete,
+    onShareVisibilityChange,
 }: {
     flow: WorkflowType;
     podId: string;
@@ -684,6 +729,7 @@ function WorkflowCard({
     canExecute: boolean;
     canDelete: boolean;
     onDelete: (flow: WorkflowType) => void;
+    onShareVisibilityChange: (visibility: ResourceVisibilityValue) => Promise<void>;
 }) {
     const participants = getParticipants(flow);
     const stepCount = flow.node_count ?? flow.nodes?.length ?? 0;
@@ -701,6 +747,9 @@ function WorkflowCard({
         ? `${runs.length} recent run${runs.length === 1 ? '' : 's'}${lastRunTime ? ` · last ${formatRelativeTime(lastRunTime)}` : ''}`
         : 'No runs yet';
     const hasMenuActions = canUpdate || canExecute || canDelete;
+    const workflowShareUrl = typeof window === 'undefined'
+        ? undefined
+        : `${window.location.origin}/pod/${podId}/flows/${encodeURIComponent(flow.name)}`;
 
     return (
         <article className="resource-index-card group relative min-h-40 p-4">
@@ -713,41 +762,58 @@ function WorkflowCard({
                     <ProductIcon kind="workflows" size="lg" />
                 </Link>
                 {hasMenuActions ? (
-                    <DropdownMenu>
-                        <DropdownMenuTrigger asChild>
-                            <button
-                                type="button"
-                                className="flows-index-card-action-button resource-index-card-action"
-                                aria-label="Workflow actions"
-                            >
-                                <MoreHorizontal className="h-4 w-4" />
-                            </button>
-                        </DropdownMenuTrigger>
-                        <DropdownMenuContent align="end">
-                            {canUpdate ? (
-                                <DropdownMenuItem asChild>
-                                    <Link href={`/pod/${podId}/flows/${encodeURIComponent(flow.name)}?mode=edit`}>
-                                        <Edit2 className="mr-2 h-4 w-4" />Edit
-                                    </Link>
-                                </DropdownMenuItem>
-                            ) : null}
-                            {canExecute ? (
-                                <DropdownMenuItem asChild>
-                                    <Link href={`/pod/${podId}/flows/${encodeURIComponent(flow.name)}`}>
-                                        <Play className="mr-2 h-4 w-4" />Run
-                                    </Link>
-                                </DropdownMenuItem>
-                            ) : null}
-                            {canDelete ? (
-                                <>
-                                    {(canUpdate || canExecute) ? <DropdownMenuSeparator /> : null}
-                                    <DropdownMenuItem className="text-[var(--state-error)]" onSelect={(e) => { e.preventDefault(); e.stopPropagation(); onDelete(flow); }}>
-                                        <Trash2 className="mr-2 h-4 w-4" />Delete
+                    <ResourceActionsMenu
+                        ariaLabel={`Open actions for ${flow.name}`}
+                        triggerClassName="flows-index-card-action-button resource-index-card-action"
+                    >
+                        {canUpdate ? (
+                            <ResourceShareButton
+                                value={flow.visibility}
+                                podId={podId}
+                                resourceType="workflow"
+                                resourceId={flow.id}
+                                resourceLabel="workflows"
+                                resourceName={flow.name}
+                                shareUrl={workflowShareUrl}
+                                onChange={onShareVisibilityChange}
+                                className="contents"
+                                trigger={({ openShare, disabled }) => (
+                                    <DropdownMenuItem
+                                        disabled={disabled}
+                                        onSelect={(event) => {
+                                            event.preventDefault();
+                                            openShare();
+                                        }}
+                                    >
+                                        <Share2 className="mr-2 h-4 w-4" />
+                                        Share
                                     </DropdownMenuItem>
-                                </>
-                            ) : null}
-                        </DropdownMenuContent>
-                    </DropdownMenu>
+                                )}
+                            />
+                        ) : null}
+                        {canUpdate ? (
+                            <DropdownMenuItem asChild>
+                                <Link href={`/pod/${podId}/flows/${encodeURIComponent(flow.name)}?mode=edit`}>
+                                    <Edit2 className="mr-2 h-4 w-4" />Edit
+                                </Link>
+                            </DropdownMenuItem>
+                        ) : null}
+                        {canExecute ? (
+                            <DropdownMenuItem asChild>
+                                <Link href={`/pod/${podId}/flows/${encodeURIComponent(flow.name)}`}>
+                                    <Play className="mr-2 h-4 w-4" />Run
+                                </Link>
+                            </DropdownMenuItem>
+                        ) : null}
+                        {canDelete ? (
+                            <>
+                                {(canUpdate || canExecute) ? <DropdownMenuSeparator /> : null}
+                                <DestructiveResourceActionItem onSelect={() => onDelete(flow)}>
+                                    Delete workflow
+                                </DestructiveResourceActionItem>
+                            </>
+                        ) : null}
+                    </ResourceActionsMenu>
                 ) : null}
             </div>
 

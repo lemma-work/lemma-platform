@@ -163,18 +163,20 @@
 
 /* ── Single container with three sections separated by borders ── */
 .pod-home-work-panel {
-  border: 0;
-  background: transparent;
+  overflow: hidden;
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-lg);
+  background: var(--surface-1);
   padding: 0;
   box-shadow: none;
 }
 
 .pod-home-work-section-row {
-  padding: 0.75rem 0;
+  padding: 0.75rem 0.875rem;
 }
 
 .pod-home-work-section-row + .pod-home-work-section-row {
-  border-top: 1px solid color-mix(in srgb, var(--border-subtle) 60%, transparent);
+  border-top: 1px solid var(--border-subtle);
 }
 
 .pod-home-work-section-label {
@@ -371,4 +373,55 @@
 .surface-logo-chip {
   background: #ffffff;
   border: 0.5px solid color-mix(in srgb, var(--border-subtle) 55%, transparent);
+}
+
+.pod-home-surfaces-panel[data-state="ready"] {
+  animation: pod-home-surfaces-reveal var(--dur-panel) var(--ease-emphasized) both;
+}
+
+.pod-home-surfaces-list > li {
+  animation: pod-home-surface-row-reveal var(--dur-panel) var(--ease-emphasized) both;
+}
+
+.pod-home-surfaces-list > li:nth-child(2) {
+  animation-delay: 35ms;
+}
+
+.pod-home-surfaces-list > li:nth-child(3) {
+  animation-delay: 70ms;
+}
+
+.pod-home-surfaces-list > li:nth-child(n + 4) {
+  animation-delay: 105ms;
+}
+
+@keyframes pod-home-surfaces-reveal {
+  from {
+    opacity: 0;
+    transform: translateY(4px);
+  }
+
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+@keyframes pod-home-surface-row-reveal {
+  from {
+    opacity: 0;
+    transform: translateY(3px);
+  }
+
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .pod-home-surfaces-panel[data-state="ready"],
+  .pod-home-surfaces-list > li {
+    animation: none;
+  }
 }

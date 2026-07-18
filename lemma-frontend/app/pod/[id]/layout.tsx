@@ -27,6 +27,7 @@ import { usePodAccess } from "@/lib/hooks/use-pod-access";
 import { clearLastOpenedPodId, writeLastOpenedPodId } from "@/lib/pods/last-opened-pod";
 import { getWorkspaceTabAfterClose, getWorkspaceTabHref } from "@/lib/pods/workspace-tabs";
 import {
+    buildConversationStandaloneResourceHref,
     CONVERSATION_STAGE_EMBED_PARAM,
     CONVERSATION_STAGE_EMBED_VALUE,
 } from "@/lib/assistant/conversation-presentation";
@@ -283,6 +284,7 @@ function PodShell({
     const { pages: appPages, isLoading: appPagesLoading } = useApp();
     const [topbar, setTopbar] = useState<PodTopbarState>({});
     const [isPresentedClosing, setIsPresentedClosing] = useState(false);
+    const [conversationStageFrameContext, setConversationStageFrameContext] = useState<"checking" | "embedded" | "top-level">("checking");
     const handledAssistantMessageRef = useRef<string | null>(null);
     const assistantMessage = searchParams.get("assistantMessage");
     const conversationInstructions = searchParams.get("conversationInstructions");
@@ -325,6 +327,7 @@ function PodShell({
     const sectionLabel = getPodSectionLabel(pod.id, pathname);
     const topbarRouteTitle = typeof topbar.title === "string" ? topbar.title.trim() : "";
     const workspaceTabs = usePodWorkspaceTabs({
+        enabled: !isConversationStageEmbed,
         podId: pod.id,
         pathname,
         currentHref,
@@ -367,7 +370,7 @@ function PodShell({
     const showWorkspaceSidebar = navPresentation === "expanded";
     const showCollapsedRail = navPresentation === "rail";
     const sidebarSlotClassName = showWorkspaceSidebar
-        ? "pod-sidebar-slot hidden h-full w-[18rem] shrink-0 overflow-hidden md:block"
+        ? "pod-sidebar-slot hidden h-full w-60 shrink-0 overflow-hidden md:block"
         : "pod-sidebar-slot hidden h-full w-10 shrink-0 overflow-hidden md:block";
     // On compact viewports the nav is an off-canvas drawer, reached by a single
     // hamburger in the topbar (resource/presented routes render the shell topbar).
@@ -397,6 +400,32 @@ function PodShell({
     useEffect(() => {
         writeLastOpenedPodId(pod.id);
     }, [pod.id]);
+
+    useEffect(() => {
+        if (!isConversationStageEmbed) return;
+
+        let cancelled = false;
+        window.queueMicrotask(() => {
+            if (cancelled) return;
+
+            let isEmbeddedFrame = true;
+            try {
+                isEmbeddedFrame = window.self !== window.top;
+            } catch {
+                // Cross-origin parents are still embedded contexts.
+            }
+
+            setConversationStageFrameContext(isEmbeddedFrame ? "embedded" : "top-level");
+            if (isEmbeddedFrame) return;
+
+            const standaloneHref = buildConversationStandaloneResourceHref(currentHref);
+            router.replace(standaloneHref ?? pathname, { scroll: false });
+        });
+
+        return () => {
+            cancelled = true;
+        };
+    }, [currentHref, isConversationStageEmbed, pathname, router]);
 
     // Selecting an app collapses the workspace nav so the app gets the full
     // surface; landing back on home restores it. Desktop only — compact viewports
@@ -510,7 +539,7 @@ function PodShell({
         );
     }
 
-    if (isConversationStageEmbed) {
+    if (isConversationStageEmbed && conversationStageFrameContext !== "top-level") {
         return (
             <div className="h-screen overflow-hidden bg-[var(--pod-main-bg)] text-[var(--text-primary)]">
                 <PodTopbarProvider value={topbarContextValue}>
@@ -567,7 +596,7 @@ function PodShell({
                     </div>
                 ) : showCollapsedRail ? (
                     <div className="pod-sidebar-collapsed flex h-full w-10 flex-col bg-[var(--pod-shell-bg)]">
-                        <div className="flex h-14 shrink-0 items-center justify-center border-b border-[color:color-mix(in_srgb,var(--border-subtle)_32%,transparent)]">
+                        <div className="flex h-12 shrink-0 items-center justify-center border-b border-[color:color-mix(in_srgb,var(--border-subtle)_32%,transparent)]">
                             <button
                                 type="button"
                                 onClick={openNav}
@@ -593,7 +622,7 @@ function PodShell({
             ) : null}
 
             <main className="pod-workspace-main flex min-w-0 flex-1 flex-col overflow-hidden">
-                <header className="pod-shell-topbar pod-workspace-tabbar flex h-14 shrink-0 items-center justify-between gap-4 bg-[var(--pod-main-bg)] px-4">
+                <header className="pod-shell-topbar pod-workspace-tabbar flex h-12 shrink-0 items-center justify-between gap-4 bg-[var(--pod-main-bg)] px-3">
                         <div className="flex h-8 min-w-0 flex-1 items-center gap-2">
                             {showMobileNavTrigger ? (
                                 <button
@@ -668,7 +697,7 @@ function PodShell({
                                     {backTarget.label}
                                 </Link>
                             ) : null}
-                            <div className="pod-shell-topbar-title min-w-0 truncate font-display text-base font-semibold leading-7 text-[var(--text-primary)]">
+                            <div className="pod-shell-topbar-title min-w-0 truncate text-base font-semibold leading-7 text-[var(--text-primary)]">
                                 {topbar.title || currentScreenLabel || sectionLabel}
                             </div>
                             {topbar.switcher ? <span className="shrink-0">{topbar.switcher}</span> : null}

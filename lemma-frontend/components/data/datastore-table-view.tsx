@@ -31,6 +31,7 @@ import {
 } from '@/lib/hooks/use-datastores';
 import { useTableShortcuts } from '@/lib/hooks/use-table-shortcuts';
 import { getLemmaClient } from '@/lib/sdk/lemma-client';
+import { buildResourceShareUrl } from '@/lib/assistant/conversation-presentation';
 import type { Column, Table } from '@/lib/types';
 import type { FilterRule } from '@/lib/types/app';
 import { getDisplayColumns, sanitizeRecordPayload } from '@/lib/utils/datastore-records';
@@ -335,7 +336,12 @@ export function DatastoreTableView({
                                 resourceId={table.name}
                                 resourceLabel="tables"
                                 resourceName={table.name}
-                                shareUrl={typeof window === 'undefined' ? undefined : window.location.href}
+                                shareUrl={typeof window === 'undefined'
+                                    ? undefined
+                                    : buildResourceShareUrl(
+                                        `${window.location.pathname}${window.location.search}${window.location.hash}`,
+                                        window.location.origin,
+                                    ) ?? undefined}
                                 onChange={async (visibility) => {
                                     await updateTableVisibilityMutation.mutateAsync(visibility);
                                 }}

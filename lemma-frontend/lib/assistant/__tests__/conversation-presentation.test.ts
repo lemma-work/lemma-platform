@@ -4,6 +4,7 @@ import {
     buildConversationPresentationHref,
     buildConversationStageEmbedHref,
     buildConversationStandaloneResourceHref,
+    buildResourceShareUrl,
     normalizeConversationPresentedResourceHref,
     removeConversationPresentationParam,
 } from '../conversation-presentation';
@@ -53,6 +54,13 @@ describe('conversation presentation routes', () => {
         )).toBe(
             '/pod/p1/widgets/view?toolCallId=t1&conversationId=c1&standalone=1',
         );
+    });
+
+    it('builds canonical share URLs without internal presentation state', () => {
+        expect(buildResourceShareUrl(
+            '/pod/p1/data?tab=projects&embed=conversation-stage&assistant=docked&presentation=side',
+            'http://localhost:3000',
+        )).toBe('http://localhost:3000/pod/p1/data?tab=projects');
     });
 
     it('removes only the presentation state when returning to chat', () => {

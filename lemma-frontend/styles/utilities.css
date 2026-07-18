@@ -522,13 +522,11 @@
     display: flex;
     flex-direction: column;
     gap: 1.25rem;
-    border: 1px solid color-mix(in srgb, var(--border-default) 56%, transparent);
+    border: 1px solid var(--border-subtle);
     border-radius: var(--radius-lg);
-    background:
-      linear-gradient(140deg, color-mix(in srgb, var(--surface-1) 72%, transparent), color-mix(in srgb, var(--surface-2) 34%, transparent)),
-      color-mix(in srgb, var(--surface-1) 72%, transparent);
+    background: var(--surface-1);
     padding: 1rem;
-    box-shadow: inset 0 1px 0 var(--row-glint);
+    box-shadow: none;
   }
 
   @media (min-width: 1024px) {
@@ -1057,9 +1055,9 @@
      Reusable workbench containers for inspectors, previews, and empty states. */
   .surface-panel {
     border: 1px solid var(--card-border-subtle);
-    border-radius: var(--radius-lg);
+    border-radius: var(--radius-xl);
     background: var(--card-bg);
-    box-shadow: var(--card-shadow);
+    box-shadow: none;
   }
 
   .surface-panel-quiet {
@@ -1084,7 +1082,8 @@
   .surface-panel-interactive:focus-within {
     border-color: color-mix(in srgb, var(--border-strong) 58%, var(--border-default));
     background: color-mix(in srgb, var(--card-bg-hover) 74%, var(--card-bg));
-    box-shadow: var(--shadow-xs);
+    box-shadow: none;
+    transform: none;
   }
 
   .surface-panel-footer {

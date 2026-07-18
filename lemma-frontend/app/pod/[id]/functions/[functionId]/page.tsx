@@ -19,6 +19,7 @@ import { resourceAllows } from '@/lib/authz/resource-actions';
 import { useFunction, useUpdateFunction } from '@/lib/hooks/use-functions';
 import { usePodAccess } from '@/lib/hooks/use-pod-access';
 import { Function as FunctionType, UpdateFunctionData } from '@/lib/types';
+import { playSoundFeedback } from '@/lib/feedback/sound-feedback';
 
 const SIDEBAR_WIDTH_CLASSES = [
     'w-[35%]', 'w-[36%]', 'w-[37%]', 'w-[38%]', 'w-[39%]', 'w-[40%]', 'w-[41%]', 'w-[42%]',
@@ -134,6 +135,7 @@ export default function FunctionDetailPage({
             lastSavedHashRef.current = payloadHash;
             lastFailedHashRef.current = null;
             setHasUnsavedChanges(false);
+            playSoundFeedback('action-success');
         } catch (error) {
             lastFailedHashRef.current = payloadHash;
             console.error('Failed to save function:', error);

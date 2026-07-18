@@ -1,5 +1,6 @@
 import type { Conversation } from '@/lib/types';
 import type { AppPageRef } from '@/lib/types/app';
+import { buildConversationStandaloneResourceHref } from '@/lib/assistant/conversation-presentation';
 
 const WORKSPACE_TABS_VERSION = 3;
 const MAX_PERSISTED_TABS = 50;
@@ -102,7 +103,8 @@ export function conversationWorkspaceTab(
 }
 
 function safeWorkspaceHref(value: string) {
-    return value.startsWith('/pod/') ? value : '/';
+    if (!value.startsWith('/pod/')) return '/';
+    return buildConversationStandaloneResourceHref(value) ?? '/';
 }
 
 export function routeWorkspaceTab(

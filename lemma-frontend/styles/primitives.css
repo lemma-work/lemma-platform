@@ -113,14 +113,14 @@
   .context-shell {
     width: 100%;
     margin-inline: auto;
-    padding: var(--space-5) var(--space-5) var(--space-10);
+    padding: var(--space-4) var(--space-4) var(--space-8);
   }
 
   .pod-workspace-main > .context-shell,
   .pod-workspace-main > .page-shell {
     width: 100%;
-    padding-inline: var(--space-5);
-    padding-top: var(--space-5);
+    padding-inline: var(--space-4);
+    padding-top: var(--space-4);
   }
 
   .pod-workspace-main > .data-workspace-shell,
@@ -475,18 +475,18 @@
   padding: 0;
 }
 
-/* Pod badge — indigo-violet gradient for sidebar pod avatar fallback */
+/* Pod badge — a compact, solid fallback when a pod has no uploaded identity. */
 .lemma-pod-badge {
-  width: 34px;
-  height: 34px;
-  border-radius: 9px;
-  background: linear-gradient(135deg, #6366f1 0%, #a78bfa 100%);
+  width: 24px;
+  height: 24px;
+  border-radius: var(--radius-md);
+  background: var(--action-primary);
   display: flex;
   align-items: center;
   justify-content: center;
-  font-size: 11px;
-  font-weight: 800;
-  color: #fff;
+  font-size: 9px;
+  font-weight: 600;
+  color: var(--text-on-brand);
   letter-spacing: 0.04em;
   flex-shrink: 0;
 }
@@ -494,24 +494,24 @@
 /* Product shell motion: short, shared transitions for navigation context changes. */
 .pod-sidebar-slot {
   transition:
-    width 220ms cubic-bezier(0.22, 1, 0.36, 1),
-    opacity 180ms var(--ease-out);
+    width var(--dur-panel) var(--ease-emphasized),
+    opacity var(--dur-control) var(--ease-standard);
   will-change: width, opacity;
 }
 
 .pod-assistant-sidebar {
   transition:
-    width 220ms cubic-bezier(0.22, 1, 0.36, 1),
-    opacity 180ms var(--ease-out),
-    box-shadow 200ms var(--ease-out);
+    width var(--dur-panel) var(--ease-emphasized),
+    opacity var(--dur-control) var(--ease-standard),
+    box-shadow var(--dur-route) var(--ease-standard);
   contain: layout paint;
   will-change: width, opacity;
 }
 
 .pod-assistant-sidebar-surface {
   transition:
-    opacity 180ms var(--ease-out),
-    transform 200ms cubic-bezier(0.22, 1, 0.36, 1);
+    opacity var(--dur-control) var(--ease-standard),
+    transform var(--dur-route) var(--ease-emphasized);
 }
 
 .pod-assistant-sidebar[aria-hidden="true"] .pod-assistant-sidebar-surface {
@@ -520,7 +520,7 @@
 }
 
 .pod-sidebar-panel {
-  animation: pod-sidebar-enter 220ms var(--ease-out) both;
+  animation: pod-sidebar-enter var(--dur-panel) var(--ease-emphasized) both;
 }
 
 .pod-sidebar-collapsed {
@@ -543,7 +543,7 @@
 
 .pod-shell-topbar-title-cluster,
 .pod-shell-topbar-actions {
-  animation: pod-topbar-content-enter 180ms var(--ease-out) both;
+  animation: pod-topbar-content-enter var(--dur-route) var(--ease-standard) both;
 }
 
 .pod-shell-topbar-actions {
@@ -552,8 +552,14 @@
 }
 
 .pod-shell-topbar-title {
-  font-family: var(--font-display-family);
+  font-family: var(--font-body-family);
+  font-weight: 600;
   letter-spacing: 0;
+}
+
+.dialog-content-motion {
+  animation-duration: var(--dur-panel);
+  animation-timing-function: var(--ease-emphasized);
 }
 
 .pod-page-scroll {
@@ -590,7 +596,7 @@
      can be far narrower than the window, and viewport media queries would
      otherwise lie about how much room the content actually has. */
   container: pod-surface / inline-size;
-  animation: pod-page-enter 180ms var(--ease-out) both;
+  animation: pod-page-enter var(--dur-route) var(--ease-standard) both;
 }
 
 /* Conversations are viewport workspaces: the transcript and any presented
@@ -602,7 +608,7 @@
 }
 
 .presented-resource-surface {
-  animation: presented-resource-enter 240ms cubic-bezier(0.22, 1, 0.36, 1) both;
+  animation: presented-resource-enter var(--dur-panel) var(--ease-emphasized) both;
 }
 
 /* Detail-page layouts reflow to the *surface* width, not the viewport. When the
@@ -636,7 +642,13 @@
 .apps-grid {
   display: grid;
   gap: 0.75rem;
-  grid-template-columns: repeat(auto-fill, minmax(160px, 1fr));
+  grid-template-columns: repeat(auto-fill, minmax(260px, 320px));
+}
+
+@container pod-surface (max-width: 620px) {
+  .apps-grid {
+    grid-template-columns: minmax(0, 1fr);
+  }
 }
 
 .docs-list-toolbar {
@@ -757,14 +769,15 @@
 }
 
 .lemma-sidebar-row:hover,
-.lemma-sidebar-row:focus-visible,
-.lemma-sidebar-row[data-active="true"] {
-  background: var(--surface-2);
+.lemma-sidebar-row:focus-visible {
+  background: color-mix(in srgb, var(--surface-1) 58%, transparent);
   color: var(--text-primary);
 }
 
 .lemma-sidebar-row[data-active="true"] {
-  box-shadow: 0 1px 0 var(--row-glint) inset;
+  background: var(--sidebar-active-bg);
+  color: var(--text-primary);
+  box-shadow: inset 0 0 0 1px var(--border-subtle);
 }
 
 .lemma-sidebar-row-sm {
@@ -1250,7 +1263,7 @@
 @keyframes pod-page-enter {
   from {
     opacity: 0;
-    transform: translateY(5px);
+    transform: translateY(3px);
   }
 
   to {

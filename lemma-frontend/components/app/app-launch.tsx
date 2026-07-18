@@ -1,7 +1,8 @@
 'use client';
 
-import { useCallback, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { useQueryClient } from '@tanstack/react-query';
+import { useTheme } from 'next-themes';
 import { Copy, ExternalLink, RefreshCw, Share2 } from '@/components/ui/icons';
 import { toast } from 'sonner';
 
@@ -11,6 +12,10 @@ import { Button } from '@/components/ui/button';
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/components/ui/tooltip';
 import { getLemmaClient } from '@/lib/sdk/lemma-client';
 import { appIndexQueryKey } from '@/lib/hooks/use-app';
+import { buildAppThemeMessage } from '@/lib/app/app-theme';
+import { resolveWidgetTheme } from '@/lib/assistant/widget-theme';
+import { buildResourceShareUrl } from '@/lib/assistant/conversation-presentation';
+import { playSoundFeedback } from '@/lib/feedback/sound-feedback';
 
 interface AppFrameProps {
     podId: string;
@@ -32,14 +37,44 @@ export function AppFrame({
     canShare = false,
 }: AppFrameProps) {
     const queryClient = useQueryClient();
+    const { resolvedTheme } = useTheme();
+    const iframeRef = useRef<HTMLIFrameElement | null>(null);
     const [frameKey, setFrameKey] = useState(0);
     const [frameLoaded, setFrameLoaded] = useState(false);
     const [frameFailed, setFrameFailed] = useState(false);
+
+    const postAppTheme = useCallback(() => {
+        const iframe = iframeRef.current;
+        if (!iframe?.contentWindow) return;
+        let targetOrigin: string;
+        try {
+            targetOrigin = new URL(url, window.location.href).origin;
+        } catch {
+            return;
+        }
+        const rootStyles = window.getComputedStyle(document.documentElement);
+        const bodyStyles = window.getComputedStyle(document.body);
+        const theme = resolveWidgetTheme(
+            resolvedTheme,
+            window.matchMedia('(prefers-color-scheme: dark)').matches,
+        );
+        iframe.contentWindow.postMessage(buildAppThemeMessage({
+            theme,
+            readToken: (name) => rootStyles.getPropertyValue(name),
+            fontFamily: bodyStyles.fontFamily,
+        }), targetOrigin);
+    }, [resolvedTheme, url]);
+
+    useEffect(() => {
+        if (!frameLoaded) return;
+        postAppTheme();
+    }, [frameLoaded, postAppTheme]);
 
     const copyLink = async () => {
         try {
             await navigator.clipboard.writeText(url);
             toast.success('App link copied');
+            playSoundFeedback('action-success');
         } catch {
             toast.error('Could not copy the app link');
         }
@@ -94,7 +129,12 @@ export function AppFrame({
                                     resourceId={appId}
                                     resourceLabel="apps"
                                     resourceName={title}
-                                    shareUrl={typeof window === 'undefined' ? undefined : window.location.href}
+                                    shareUrl={typeof window === 'undefined'
+                                        ? undefined
+                                        : buildResourceShareUrl(
+                                            `${window.location.pathname}${window.location.search}${window.location.hash}`,
+                                            window.location.origin,
+                                        ) ?? undefined}
                                     onChange={handleShareVisibilityChange}
                                     disabled={!appId || !appName}
                                     trigger={({ openShare, disabled }) => (
@@ -160,6 +200,7 @@ export function AppFrame({
                 ) : null}
 
                 <iframe
+                    ref={iframeRef}
                     key={`${url}-${frameKey}`}
                     src={url}
                     title={title}
@@ -170,10 +211,12 @@ export function AppFrame({
                     onLoad={() => {
                         setFrameLoaded(true);
                         setFrameFailed(false);
+                        postAppTheme();
                     }}
                     onError={() => {
                         setFrameLoaded(false);
                         setFrameFailed(true);
+                        playSoundFeedback('load-failure');
                     }}
                 />
             </div>

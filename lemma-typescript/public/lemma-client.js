@@ -9094,14 +9094,19 @@ var LemmaClient = (() => {
   __export(browser_exports, {
     ApiError: () => ApiError,
     AuthManager: () => AuthManager,
+    LEMMA_APP_THEME_MESSAGE_TYPE: () => LEMMA_APP_THEME_MESSAGE_TYPE,
+    LEMMA_THEME_EVENT: () => LEMMA_THEME_EVENT,
     LemmaClient: () => LemmaClient,
     POD_DEFAULT_AGENT_SELECTOR: () => POD_DEFAULT_AGENT_SELECTOR,
+    applyLemmaHostTheme: () => applyLemmaHostTheme,
     buildAuthUrl: () => buildAuthUrl,
     buildFederatedLogoutUrl: () => buildFederatedLogoutUrl,
     clearTestingToken: () => clearTestingToken,
+    getLemmaHostTheme: () => getLemmaHostTheme,
     getTestingToken: () => getTestingToken,
     resolveSafeRedirectUri: () => resolveSafeRedirectUri,
-    setTestingToken: () => setTestingToken
+    setTestingToken: () => setTestingToken,
+    subscribeLemmaHostTheme: () => subscribeLemmaHostTheme
   });
 
   // src/config.ts
@@ -16072,6 +16077,50 @@ var LemmaClient = (() => {
     }
   };
 
+  // src/browser-theme.ts
+  var LEMMA_APP_THEME_MESSAGE_TYPE = "lemma-app-theme";
+  var LEMMA_THEME_EVENT = "lemma:theme";
+  var currentHostTheme = null;
+  function isHostThemeMessage(value) {
+    if (!value || typeof value !== "object") return false;
+    const candidate = value;
+    return candidate.type === LEMMA_APP_THEME_MESSAGE_TYPE && (candidate.theme === "light" || candidate.theme === "dark") && Boolean(candidate.tokens && typeof candidate.tokens === "object");
+  }
+  function applyLemmaHostTheme(message) {
+    if (typeof document === "undefined") return;
+    const root = document.documentElement;
+    Object.entries(message.tokens).forEach(([name, value]) => {
+      if (!name.startsWith("--lemma-app-") || typeof value !== "string" || value.length > 512) return;
+      root.style.setProperty(name, value);
+    });
+    root.dataset.lemmaTheme = message.theme;
+    root.dataset.lemmaDensity = message.density || "compact";
+    root.classList.toggle("dark", message.theme === "dark");
+    root.style.colorScheme = message.theme;
+    currentHostTheme = message;
+    if (typeof window !== "undefined" && typeof CustomEvent !== "undefined") {
+      window.dispatchEvent(new CustomEvent(LEMMA_THEME_EVENT, { detail: message }));
+    }
+  }
+  function getLemmaHostTheme() {
+    return currentHostTheme;
+  }
+  function subscribeLemmaHostTheme(listener) {
+    if (typeof window === "undefined") return () => void 0;
+    const handleTheme = (event) => {
+      listener(event.detail);
+    };
+    window.addEventListener(LEMMA_THEME_EVENT, handleTheme);
+    if (currentHostTheme) listener(currentHostTheme);
+    return () => window.removeEventListener(LEMMA_THEME_EVENT, handleTheme);
+  }
+  if (typeof window !== "undefined" && window.parent !== window) {
+    window.addEventListener("message", (event) => {
+      if (event.source !== window.parent || !isHostThemeMessage(event.data)) return;
+      applyLemmaHostTheme(event.data);
+    });
+  }
+
   // src/browser.ts
   if (typeof globalThis !== "undefined") {
     const scope = globalThis;
@@ -16085,7 +16134,12 @@ var LemmaClient = (() => {
       resolveSafeRedirectUri,
       setTestingToken,
       ApiError,
-      POD_DEFAULT_AGENT_SELECTOR
+      POD_DEFAULT_AGENT_SELECTOR,
+      LEMMA_APP_THEME_MESSAGE_TYPE,
+      LEMMA_THEME_EVENT,
+      applyLemmaHostTheme,
+      getLemmaHostTheme,
+      subscribeLemmaHostTheme
     };
     if (!scope.LemmaClient) {
       scope.LemmaClient = surface;

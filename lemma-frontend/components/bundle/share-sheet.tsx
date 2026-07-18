@@ -29,6 +29,7 @@ import {
     type BundleProgressView,
     type PublishStatusResponse,
 } from '@/lib/hooks/use-pod-bundle';
+import { playSoundFeedback } from '@/lib/feedback/sound-feedback';
 
 interface ShareSheetProps {
     podId: string;
@@ -159,6 +160,7 @@ export function ShareSheet({ podId, podName, open, onOpenChange }: ShareSheetPro
         try {
             await navigator.clipboard.writeText(text);
             toast.success(`${label} copied`);
+            playSoundFeedback('action-success');
         } catch {
             toast.error('Could not copy to clipboard');
         }
