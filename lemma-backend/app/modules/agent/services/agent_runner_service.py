@@ -117,16 +117,9 @@ async def _finalize_safely(coro: Awaitable[None], *, agent_run_id: UUID) -> None
     try:
         await coro
     except asyncio.CancelledError:
-        logger.debug(
-            'agent.agent_runner_service.agent_run_finalization_cancelled_run.diagnostic',
-            agent_run_id=agent_run_id,
-        )
+        logger.debug('agent.agent_runner_service.agent_run_finalization_cancelled_run.diagnostic', agent_run_id=agent_run_id)
     except Exception:
-        logger.error(
-            "agent.agent_runner_service.agent_run_finalization_run_s.failed",
-            agent_run_id=agent_run_id,
-            exc_info=True,
-        )
+        logger.error("agent.agent_runner_service.agent_run_finalization_run_s.failed", agent_run_id=agent_run_id, exc_info=True)
 
 
 def _rejected_run_error_message(data: object) -> str:
@@ -286,9 +279,7 @@ class AgentRunnerService:
                     pod_id=conversation.pod_id,
                 )
             except Exception:
-                logger.debug(
-                    'agent.agent_runner_service.build_agent_context_brief_s.diagnostic'
-                )
+                logger.debug('agent.agent_runner_service.build_agent_context_brief_s.diagnostic')
             full_toolsets = await self.tool_assembler.assemble(
                 agent=agent,
                 conversation=conversation,
@@ -383,10 +374,7 @@ class AgentRunnerService:
                             await observer.on_run_started(conversation, ctx)
                             observer_started = True
                         except Exception:
-                            logger.debug(
-                                'agent.agent_runner_service.agent_run_observer_start_run.diagnostic',
-                                agent_run_id=agent_run_id,
-                            )
+                            logger.debug('agent.agent_runner_service.agent_run_observer_start_run.diagnostic', agent_run_id=agent_run_id)
                     try:
                         run_usage_context = usage_context_from_agent_context(
                             ctx,
@@ -410,10 +398,7 @@ class AgentRunnerService:
                                             event, conversation, ctx
                                         )
                                     except Exception:
-                                        logger.debug(
-                                            'agent.agent_runner_service.agent_run_observer_run_s.diagnostic',
-                                            agent_run_id=agent_run_id,
-                                        )
+                                        logger.debug('agent.agent_runner_service.agent_run_observer_run_s.diagnostic', agent_run_id=agent_run_id)
                                 if event.type == AgentEventType.USAGE:
                                     if isinstance(event.data, AgentRunUsage):
                                         usage_data = event.data
@@ -462,10 +447,7 @@ class AgentRunnerService:
                             try:
                                 await observer.on_run_finished(conversation, ctx)
                             except Exception:
-                                logger.debug(
-                                    'agent.agent_runner_service.agent_run_observer_finish_run.diagnostic',
-                                    agent_run_id=agent_run_id,
-                                )
+                                logger.debug('agent.agent_runner_service.agent_run_observer_finish_run.diagnostic', agent_run_id=agent_run_id)
         except BaseException as exc:
             if isinstance(exc, Exception):
                 logger.error(

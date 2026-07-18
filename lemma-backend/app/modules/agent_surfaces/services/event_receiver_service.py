@@ -81,10 +81,7 @@ async def notify_surface_receiver_config_changed(
             {"surface_id": str(surface_id) if surface_id else None},
         )
     except Exception:
-        logger.debug(
-            "agent_surfaces.event_receiver_service.could_not_publish_surface_receiver.observed",
-            exc_info=True,
-        )
+        logger.debug("agent_surfaces.event_receiver_service.could_not_publish_surface_receiver.observed", exc_info=True)
 
 
 class SurfaceEventReceiverService:
@@ -257,10 +254,7 @@ class NativeSurfaceReceiverCoordinator:
         except asyncio.CancelledError:
             raise
         except Exception:
-            logger.debug(
-                'agent_surfaces.event_receiver_service.native_surface_receiver_wakeup_listener.diagnostic',
-                exc_info=True,
-            )
+            logger.debug('agent_surfaces.event_receiver_service.native_surface_receiver_wakeup_listener.diagnostic', exc_info=True)
             self._wakeup.set()
         finally:
             await pubsub.unsubscribe(_RECEIVER_CHANGED_CHANNEL)
@@ -289,10 +283,7 @@ class NativeSurfaceReceiverCoordinator:
         except asyncio.CancelledError:
             raise
         except Exception:
-            logger.debug(
-                'agent_surfaces.event_receiver_service.native_surface_receiver_stopped_platform.diagnostic',
-                exc_info=True,
-            )
+            logger.debug('agent_surfaces.event_receiver_service.native_surface_receiver_stopped_platform.diagnostic', exc_info=True)
         finally:
             for task in (runner_task, heartbeat):
                 task.cancel()
@@ -332,9 +323,7 @@ class TelegramPollingReceiverRunner:
 
     async def run(self) -> None:
         if not self._bot_token:
-            logger.debug(
-                'agent_surfaces.event_receiver_service.telegram_native_receiver_missing_bot.diagnostic'
-            )
+            logger.debug('agent_surfaces.event_receiver_service.telegram_native_receiver_missing_bot.diagnostic')
             return
 
         base_url = normalize_bot_base_url(self._api_base, self._bot_token)
@@ -388,13 +377,8 @@ class TelegramPollingReceiverRunner:
                             update.get("message") or update.get("edited_message") or {}
                         )
                         _chat = _msg.get("chat") or {}
-                        logger.debug(
-                            "agent_surfaces.event_receiver_service.telegram_polling_received_update_id.observed",
-                            update_id=update_id,
-                        )
-                        logger.debug(
-                            "agent_surfaces.event_receiver_service.telegram_raw_update_s.observed"
-                        )
+                        logger.debug("agent_surfaces.event_receiver_service.telegram_polling_received_update_id.observed", update_id=update_id)
+                        logger.debug("agent_surfaces.event_receiver_service.telegram_raw_update_s.observed")
                         if isinstance(update_id, int):
                             offset = update_id + 1
                             if self._candidate.surface_ids:
@@ -414,34 +398,22 @@ class TelegramPollingReceiverRunner:
                         now = asyncio.get_running_loop().time()
                         if conflict_deadline is None:
                             conflict_deadline = now + _TELEGRAM_CONFLICT_GRACE_SECONDS
-                            logger.debug(
-                                'agent_surfaces.event_receiver_service.telegram_polling_hit_409_after.diagnostic'
-                            )
+                            logger.debug('agent_surfaces.event_receiver_service.telegram_polling_hit_409_after.diagnostic')
                         if now < conflict_deadline:
                             await asyncio.sleep(5)
                             continue
-                        logger.debug(
-                            'agent_surfaces.event_receiver_service.telegram_polling_still_gets_409.diagnostic'
-                        )
+                        logger.debug('agent_surfaces.event_receiver_service.telegram_polling_still_gets_409.diagnostic')
                         return
-                    logger.debug(
-                        'agent_surfaces.event_receiver_service.telegram_polling_receiver_s.diagnostic',
-                        exc_info=True,
-                    )
+                    logger.debug('agent_surfaces.event_receiver_service.telegram_polling_receiver_s.diagnostic', exc_info=True)
                     await asyncio.sleep(5)
                 except httpx.ReadTimeout:
                     # Expected during long polling: the 30s long-poll can
                     # occasionally exceed the read timeout due to network
                     # latency. Retry quietly without a noisy traceback.
-                    logger.debug(
-                        "agent_surfaces.event_receiver_service.telegram_polling_getupdates_read_timeout.timeout"
-                    )
+                    logger.debug("agent_surfaces.event_receiver_service.telegram_polling_getupdates_read_timeout.timeout")
                     await asyncio.sleep(1)
                 except Exception:
-                    logger.debug(
-                        'agent_surfaces.event_receiver_service.telegram_polling_receiver_s.diagnostic',
-                        exc_info=True,
-                    )
+                    logger.debug('agent_surfaces.event_receiver_service.telegram_polling_receiver_s.diagnostic', exc_info=True)
                     await asyncio.sleep(5)
 
     async def _telegram_api(
@@ -463,9 +435,7 @@ class SlackSocketReceiverRunner:
     async def run(self) -> None:
         app_token = str(self._candidate.credentials.get("app_token") or "").strip()
         if not app_token:
-            logger.debug(
-                'agent_surfaces.event_receiver_service.slack_native_receiver_missing_app.diagnostic'
-            )
+            logger.debug('agent_surfaces.event_receiver_service.slack_native_receiver_missing_app.diagnostic')
             return
 
         from slack_sdk.socket_mode.aiohttp import SocketModeClient
@@ -512,9 +482,7 @@ async def _receiver_credentials(
     if surface.account_id is None:
         if surface.surface_type is SurfacePlatform.TELEGRAM:
             if not surface_settings.telegram_bot_token:
-                logger.debug(
-                    'agent_surfaces.event_receiver_service.telegram_system_surface_exists_but.diagnostic'
-                )
+                logger.debug('agent_surfaces.event_receiver_service.telegram_system_surface_exists_but.diagnostic')
                 return None
             return {"bot_token": surface_settings.telegram_bot_token}
         return None
@@ -522,10 +490,7 @@ async def _receiver_credentials(
     if surface.account_id not in account_cache:
         account = await account_port.get_account(surface.account_id)
         if account is None:
-            logger.debug(
-                'agent_surfaces.event_receiver_service.native_receiver_skipped_surface_s.diagnostic',
-                account_id=surface.account_id,
-            )
+            logger.debug('agent_surfaces.event_receiver_service.native_receiver_skipped_surface_s.diagnostic', account_id=surface.account_id)
             return None
         account_cache[surface.account_id] = dict(account.credentials or {})
     credentials = dict(account_cache[surface.account_id])
@@ -546,9 +511,7 @@ def _candidate_from_surface(
     if surface.surface_type is SurfacePlatform.TELEGRAM:
         bot_token = str(credentials.get("bot_token") or "").strip()
         if not bot_token:
-            logger.debug(
-                'agent_surfaces.event_receiver_service.telegram_native_receiver_skipped_surface.diagnostic'
-            )
+            logger.debug('agent_surfaces.event_receiver_service.telegram_native_receiver_skipped_surface.diagnostic')
             return None
         credential_label = str(surface.account_id) if surface.account_id else "system"
         return NativeReceiverCandidate(
@@ -562,9 +525,7 @@ def _candidate_from_surface(
     if surface.surface_type is SurfacePlatform.SLACK:
         app_token = str(credentials.get("app_token") or "").strip()
         if not app_token:
-            logger.debug(
-                'agent_surfaces.event_receiver_service.slack_native_receiver_skipped_surface.diagnostic'
-            )
+            logger.debug('agent_surfaces.event_receiver_service.slack_native_receiver_skipped_surface.diagnostic')
             return None
         credential_label = (
             "system"
@@ -609,10 +570,7 @@ async def _load_telegram_offset(key: str) -> int | None:
         raw = await redis.get(_telegram_offset_key(key))
         return int(raw) if raw else None
     except Exception:
-        logger.debug(
-            "agent_surfaces.event_receiver_service.could_not_load_telegram_polling.observed",
-            exc_info=True,
-        )
+        logger.debug("agent_surfaces.event_receiver_service.could_not_load_telegram_polling.observed", exc_info=True)
         return None
     finally:
         await redis.aclose()
@@ -623,10 +581,7 @@ async def _store_telegram_offset(key: str, offset: int) -> None:
     try:
         await redis.set(_telegram_offset_key(key), str(offset))
     except Exception:
-        logger.debug(
-            "agent_surfaces.event_receiver_service.could_not_store_telegram_polling.observed",
-            exc_info=True,
-        )
+        logger.debug("agent_surfaces.event_receiver_service.could_not_store_telegram_polling.observed", exc_info=True)
     finally:
         await redis.aclose()
 

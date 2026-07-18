@@ -136,9 +136,7 @@ class ConnectorService:
             if profile_dict is not None:
                 return profile_dict
         except Exception:
-            logger.debug(
-                'connectors.connector_service.enrich_native_account_profile_s.diagnostic'
-            )
+            logger.debug('connectors.connector_service.enrich_native_account_profile_s.diagnostic')
         return None
 
     async def _load_slack_account_profile(
@@ -176,15 +174,10 @@ class ConnectorService:
                     if user_info:
                         profile["user_info"] = user_info
                 except Exception:
-                    logger.debug(
-                        'connectors.connector_service.enrich_slack_user_profile_s.diagnostic',
-                        user_id=user_id,
-                    )
+                    logger.debug('connectors.connector_service.enrich_slack_user_profile_s.diagnostic', user_id=user_id)
             return profile
         except Exception:
-            logger.debug(
-                'connectors.connector_service.enrich_native_account_profile_s.diagnostic'
-            )
+            logger.debug('connectors.connector_service.enrich_native_account_profile_s.diagnostic')
         return None
 
     def _profile_to_dict(self, profile: object) -> dict | None:
@@ -276,11 +269,7 @@ class ConnectorService:
                     provider=provider,
                 )
             except Exception:
-                logger.debug(
-                    'connectors.connector_service.profile_operation_s_s_s.diagnostic',
-                    operation_name=operation_name,
-                    connector_id=connector_id,
-                )
+                logger.debug('connectors.connector_service.profile_operation_s_s_s.diagnostic', operation_name=operation_name, connector_id=connector_id)
                 continue
             profile = self._profile_to_dict(result)
             # Composio wraps every tool execution result in
@@ -795,11 +784,7 @@ class ConnectorService:
         except DomainError:
             raise
         except Exception as exc:
-            logger.debug(
-                'connectors.connector_service.get_connector_authorization_url.propagated',
-                error_type=type(exc).__name__,
-                exc_info=True,
-            )
+            logger.debug('connectors.connector_service.get_connector_authorization_url.propagated', error_type=type(exc).__name__, exc_info=True)
             raise OAuthWorkflowError(
                 "Unable to initiate the OAuth flow.",
                 details=self._exception_details(exc),
@@ -988,11 +973,7 @@ class ConnectorService:
         except DomainError:
             raise
         except Exception as exc:
-            logger.debug(
-                'connectors.connector_service.exchange_connector_authorization_code.propagated',
-                error_type=type(exc).__name__,
-                exc_info=True,
-            )
+            logger.debug('connectors.connector_service.exchange_connector_authorization_code.propagated', error_type=type(exc).__name__, exc_info=True)
             pending_request.status = ConnectRequestStatus.ERROR
             await self.connect_request_repository.update(pending_request)
             await self.uow.commit()
@@ -1214,11 +1195,7 @@ class ConnectorService:
                         ) from exc
                     if isinstance(exc, DomainError):
                         raise
-                    logger.debug(
-                        'connectors.connector_service.credential_refresh_using_unexpired_stored.diagnostic',
-                        account_id=str(account_id),
-                        error_type=type(exc).__name__,
-                    )
+                    logger.debug('connectors.connector_service.credential_refresh_using_unexpired_stored.diagnostic', account_id=str(account_id), error_type=type(exc).__name__)
                 else:
                     account.credentials = new_credentials
                     # A successful refresh restores a previously-degraded account.
@@ -1297,9 +1274,7 @@ class ConnectorService:
                     user_id=user_id,
                 )
             except Exception:
-                logger.debug(
-                    'connectors.connector_service.revoke_connection.diagnostic'
-                )
+                logger.debug('connectors.connector_service.revoke_connection.diagnostic')
 
         await self.account_repository.delete(account_id)
         # Keep the "exactly one default per (user, auth_config)" invariant: if the
@@ -1354,9 +1329,7 @@ class ConnectorService:
                         user_id=account.user_id,
                     )
                 except Exception:
-                    logger.debug(
-                        'connectors.connector_service.revoke_account_s_while_deleting.diagnostic'
-                    )
+                    logger.debug('connectors.connector_service.revoke_account_s_while_deleting.diagnostic')
             await self.account_repository.delete(account.id)
 
         await self.auth_config_repository.delete(auth_config.id)

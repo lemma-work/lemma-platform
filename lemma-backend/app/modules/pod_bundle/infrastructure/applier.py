@@ -652,16 +652,11 @@ def _grants_from_payload(payload: dict[str, Any]) -> list[_GrantInput]:
         try:
             resource_type = ResourceType(str(raw_type))
         except ValueError:
-            logger.debug(
-                'pod_bundle.applier.skipping_grant_unknown_resource_type.diagnostic',
-                raw_type=raw_type,
-            )
+            logger.debug('pod_bundle.applier.skipping_grant_unknown_resource_type.diagnostic', raw_type=raw_type)
             continue
         resource_name = entry.get("resource_name")
         if not resource_name:
-            logger.debug(
-                'pod_bundle.applier.skipping_grant_without_resource_name.diagnostic'
-            )
+            logger.debug('pod_bundle.applier.skipping_grant_without_resource_name.diagnostic')
             continue
         grants.append(
             _GrantInput(
@@ -699,9 +694,7 @@ def _agent_toolsets(payload: dict[str, Any]) -> list[Any]:
         try:
             toolset = AgentToolset(str(raw))
         except ValueError:
-            logger.debug(
-                'pod_bundle.applier.skipping_unknown_agent_toolset_r.diagnostic'
-            )
+            logger.debug('pod_bundle.applier.skipping_unknown_agent_toolset_r.diagnostic')
             continue
         if toolset is AgentToolset.VIEW_IMAGE:
             continue

@@ -100,9 +100,7 @@ class TeamsPlatformService:
 
         tenant_id = _tenant_id_from_credentials(self.credentials)
         if not tenant_id:
-            logger.debug(
-                'agent_surfaces.service.teams_get_recent_channel_messages.diagnostic'
-            )
+            logger.debug('agent_surfaces.service.teams_get_recent_channel_messages.diagnostic')
             return TeamsGetRecentMessagesResult(
                 success=False,
                 error="Cannot determine Teams tenant_id from account credentials.",
@@ -110,10 +108,7 @@ class TeamsPlatformService:
 
         token = await client.get_graph_token(tenant_id)
         if not token:
-            logger.debug(
-                'agent_surfaces.service.teams_get_recent_channel_messages.diagnostic',
-                tenant_id=tenant_id,
-            )
+            logger.debug('agent_surfaces.service.teams_get_recent_channel_messages.diagnostic', tenant_id=tenant_id)
             return TeamsGetRecentMessagesResult(
                 success=False,
                 error="Could not acquire Graph API token for channel history.",
@@ -177,10 +172,7 @@ class TeamsPlatformService:
                 ) as response:
                     if response.status >= 400:
                         await response.text()
-                        logger.debug(
-                            'agent_surfaces.service.teams_get_recent_channel_messages.diagnostic',
-                            status=response.status,
-                        )
+                        logger.debug('agent_surfaces.service.teams_get_recent_channel_messages.diagnostic', status=response.status)
                         return TeamsGetRecentMessagesResult(
                             success=False,
                             error=f"Graph API returned HTTP {response.status}.",

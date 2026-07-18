@@ -11,12 +11,7 @@ from zipfile import ZIP_DEFLATED, ZipFile
 import structlog
 
 from app.core.api.uploads import upload_source_sha256
-from app.core.authorization.context import (
-    Context,
-    ResourceRef,
-    ResourceType,
-    ResourceVisibility,
-)
+from app.core.authorization.context import Context, ResourceRef, ResourceType, ResourceVisibility
 from app.core.html_document import wrap_html_fragment
 from app.core.ports.widget_content import WidgetArtifact
 from app.core import runtime_config
@@ -54,7 +49,6 @@ from app.modules.pod.contracts import (
 )
 
 logger = structlog.get_logger()
-
 
 class AppService:
     def __init__(
@@ -128,9 +122,7 @@ class AppService:
 
         release = await self.repository.get_release(app.current_release_id)
         if not release:
-            raise AppNotFoundError(
-                f"Current release not found for app '{raise_not_found_name}'"
-            )
+            raise AppNotFoundError(f"Current release not found for app '{raise_not_found_name}'")
         return release
 
     async def _resolve_asset_document(
@@ -143,16 +135,10 @@ class AppService:
     ) -> _AssetReadInputs | AppAssetDocument:
         """DB phase: resolve release + ETag. Returns a not-modified document on a
         304 (no storage needed) or the inputs for the storage read otherwise."""
-        release = await self._get_current_release(
-            app, raise_not_found_name=raise_not_found_name
-        )
+        release = await self._get_current_release(app, raise_not_found_name=raise_not_found_name)
         normalized_asset_path = self._normalize_requested_asset_path(asset_path)
-        app_identity = runtime_config.build_runtime_app_identity(
-            app.name, app.description
-        )
-        entrypoint_request = runtime_config.is_runtime_config_entrypoint(
-            normalized_asset_path
-        )
+        app_identity = runtime_config.build_runtime_app_identity(app.name, app.description)
+        entrypoint_request = runtime_config.is_runtime_config_entrypoint(normalized_asset_path)
         # Entrypoints carry the injected pod context, so a pod/api/auth change
         # must bust the cached HTML — fold the config hash into the ETag.
         etag = (
@@ -247,9 +233,7 @@ class AppService:
         self._normalize_app_visibility(entity)
         created = await self.repository.create(entity)
         if ctx is not None:
-            refreshed = await self.repository.get_by_name(
-                entity.pod_id, entity.name, ctx=ctx
-            )
+            refreshed = await self.repository.get_by_name(entity.pod_id, entity.name, ctx=ctx)
             return refreshed or created
         return created
 
@@ -278,9 +262,7 @@ class AppService:
         embed bridge or conversation padding), and deployed as the app's bundle.
         """
         for issue in lint_app_html(artifact.content):
-            logger.debug(
-                'apps.app_service.app_html_lint.diagnostic', pod_id=str(pod_id)
-            )
+            logger.debug('apps.app_service.app_html_lint.diagnostic', pod_id=str(pod_id))
         document = wrap_html_fragment(artifact.content, title=name, embed=False)
         entity_data: dict = {
             "pod_id": pod_id,
@@ -389,9 +371,7 @@ class AppService:
             )
             app.public_slug = public_slug
         if update_entity.visibility is not None:
-            app.visibility = self._normalize_visibility_value(
-                update_entity.visibility
-            ).value
+            app.visibility = self._normalize_visibility_value(update_entity.visibility).value
 
         updated = await self.repository.update(app)
         if ctx is not None:
@@ -668,10 +648,7 @@ class AppService:
     @staticmethod
     def _normalize_visibility_value(value: str | None) -> ResourceVisibility:
         normalized = str(value or ResourceVisibility.POD.value).strip().upper()
-        if normalized in PERSONAL_VISIBILITY_VALUES or normalized in {
-            "PRIVATE",
-            "OWNER",
-        }:
+        if normalized in PERSONAL_VISIBILITY_VALUES or normalized in {"PRIVATE", "OWNER"}:
             return ResourceVisibility.PERSONAL
         if normalized == "RESTRICTED":
             return ResourceVisibility.RESTRICTED

@@ -150,10 +150,7 @@ class DatastoreRecordRepository(DatastoreRecordRepositoryPort):
             )
 
         statement = text(sql)
-        params_list = [
-            {key: record.get(key) for key in ordered_keys}
-            for record in prepared_records
-        ]
+        params_list = [{key: record.get(key) for key in ordered_keys} for record in prepared_records]
 
         try:
             async with self.schema_manager.session_factory() as session:
@@ -164,10 +161,7 @@ class DatastoreRecordRepository(DatastoreRecordRepositoryPort):
                 await session.commit()
                 return len(prepared_records)
         except DBAPIError as exc:
-            logger.debug(
-                "datastore.record.bulk_write.propagated",
-                exc_info=True,
-            )
+            logger.debug("datastore.record.bulk_write.propagated", exc_info=True)
             raise_record_write_error(exc, operation="bulk write records", ctx=ctx)
 
     async def create_record(
@@ -211,10 +205,7 @@ class DatastoreRecordRepository(DatastoreRecordRepositoryPort):
                 await session.commit()
                 return entity
         except DBAPIError as exc:
-            logger.debug(
-                "datastore.record.create.propagated",
-                exc_info=True,
-            )
+            logger.debug("datastore.record.create.propagated", exc_info=True)
             raise_record_write_error(exc, operation="create record", ctx=ctx)
 
     async def bulk_create_records(
@@ -304,11 +295,7 @@ class DatastoreRecordRepository(DatastoreRecordRepositoryPort):
                 await session.execute(text("SET TRANSACTION READ ONLY"))
                 await session.execute(
                     text("SELECT set_config('statement_timeout', :ms, true)"),
-                    {
-                        "ms": str(
-                            datastore_settings.datastore_query_statement_timeout_ms
-                        )
-                    },
+                    {"ms": str(datastore_settings.datastore_query_statement_timeout_ms)},
                 )
 
                 schema_name = self.schema_manager.get_schema_name(pod_id)
@@ -424,16 +411,7 @@ class DatastoreRecordRepository(DatastoreRecordRepositoryPort):
                         f"Unsupported filter operator '{op}'",
                         details={
                             "operator": op,
-                            "allowed_operators": [
-                                "eq",
-                                "ne",
-                                "gt",
-                                "gte",
-                                "lt",
-                                "lte",
-                                "like",
-                                "ilike",
-                            ],
+                            "allowed_operators": ["eq", "ne", "gt", "gte", "lt", "lte", "like", "ilike"],
                         },
                     )
 
@@ -458,9 +436,7 @@ class DatastoreRecordRepository(DatastoreRecordRepositoryPort):
                 clauses.append(f'"{field}" {order_dir}')
             list_sql += " ORDER BY " + ", ".join(clauses)
         else:
-            default_sort_uses_created_at = any(
-                c.name == "created_at" for c in ctx.columns
-            )
+            default_sort_uses_created_at = any(c.name == "created_at" for c in ctx.columns)
             list_sql += (
                 ' ORDER BY "created_at" DESC'
                 if default_sort_uses_created_at
@@ -489,9 +465,7 @@ class DatastoreRecordRepository(DatastoreRecordRepositoryPort):
                 list_result = await session.execute(text(list_sql), params)
                 rows = list_result.fetchall()
 
-                return [
-                    self._row_to_entity(dict(row._mapping), ctx) for row in rows
-                ], total
+                return [self._row_to_entity(dict(row._mapping), ctx) for row in rows], total
         except DBAPIError as exc:
             logger.debug("datastore.record.list.propagated", exc_info=True)
             raise_record_read_error(
@@ -572,9 +546,7 @@ class DatastoreRecordRepository(DatastoreRecordRepositoryPort):
                 result = await session.execute(text(sql), params)
                 row = result.fetchone()
                 if not row:
-                    raise DatastoreRecordNotFoundError(
-                        "Record not found or update failed"
-                    )
+                    raise DatastoreRecordNotFoundError("Record not found or update failed")
 
                 entity = self._row_to_entity(dict(row._mapping), ctx)
                 if event_factory is not None:

@@ -339,12 +339,7 @@ class BundleExporter:
                         )
                         if grants:
                             payload = _attach_permissions_payload(payload, grants)
-                    payload = _extract_large_text(
-                        payload,
-                        field_name="code",
-                        file_name="code.py",
-                        resource_dir=dir_,
-                    )
+                    payload = _extract_large_text(payload, field_name="code", file_name="code.py", resource_dir=dir_)
                     _write_json(dir_ / f"{function_name}.json", payload)
                 done += 1
                 await on_progress(done, total)
@@ -449,9 +444,7 @@ class BundleExporter:
             # --- apps ---------------------------------------------------------
             if "apps" in selected:
                 app_service = build_app_service(uow)
-                apps, _ = await app_service.list_apps(
-                    pod_id, user_id, 1000, None, ctx=ctx
-                )
+                apps, _ = await app_service.list_apps(pod_id, user_id, 1000, None, ctx=ctx)
                 for summary in sorted(apps, key=lambda a: str(a.name or "")):
                     app_name = str(summary.name or "")
                     app = await app_service.get_app_by_name(
@@ -571,10 +564,7 @@ class BundleExporter:
             service = get_surface_service(uow)
             surfaces, _ = await service.list_surfaces_by_pod(pod_id, limit=100)
         except Exception:  # noqa: BLE001 - surfaces are best-effort
-            logger.debug(
-                'pod_bundle.exporter.skipping_surface_export_pod_s.diagnostic',
-                pod_id=pod_id,
-            )
+            logger.debug('pod_bundle.exporter.skipping_surface_export_pod_s.diagnostic', pod_id=pod_id)
             return
 
         seen_names: set[str] = set()
@@ -604,10 +594,7 @@ class BundleExporter:
                 dir_.mkdir(parents=True, exist_ok=True)
                 _write_json(dir_ / f"{surface_name}.json", payload)
             except Exception:  # noqa: BLE001 - one bad surface is not fatal
-                logger.debug(
-                    'pod_bundle.exporter.skipping_surface_s_pod_s.diagnostic',
-                    pod_id=pod_id,
-                )
+                logger.debug('pod_bundle.exporter.skipping_surface_s_pod_s.diagnostic', pod_id=pod_id)
 
     async def _export_app_assets(
         self,
@@ -689,9 +676,7 @@ class BundleExporter:
             service = build_file_service(uow)
             entities = await self._walk_pod_files(service, pod_id, ctx)
         except Exception:  # noqa: BLE001 - files are best-effort
-            logger.debug(
-                'pod_bundle.exporter.skipping_file_export_pod_s.diagnostic', pod_id=pod_id
-            )
+            logger.debug('pod_bundle.exporter.skipping_file_export_pod_s.diagnostic', pod_id=pod_id)
             return False
 
         pod_entities = [
@@ -821,11 +806,7 @@ async def _resource_grants_payload(
             grantee_id=grantee_id,
         )
     except Exception:  # noqa: BLE001 - grant export is best-effort
-        logger.debug(
-            'pod_bundle.exporter.skipping_grant_export_s_s.diagnostic',
-            grantee_type=grantee_type,
-            grantee_id=grantee_id,
-        )
+        logger.debug('pod_bundle.exporter.skipping_grant_export_s_s.diagnostic', grantee_type=grantee_type, grantee_id=grantee_id)
         return None
     if not grouped:
         return None

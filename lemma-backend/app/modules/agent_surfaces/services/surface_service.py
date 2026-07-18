@@ -98,8 +98,6 @@ def _get_consent_cache() -> RedisJsonCache:
             ttl_seconds=60,
         )
     return _consent_check_cache
-
-
 _EMAIL_TRIGGER_EVENT_TYPES: dict[str, tuple[str, ...]] = {
     "GMAIL": "GMAIL_NEW_GMAIL_MESSAGE",
     "OUTLOOK": "OUTLOOK_MESSAGE_TRIGGER",
@@ -166,9 +164,7 @@ class AgentSurfaceService:
         # distinct names (e.g. different bots → different agents). Distinct bot
         # accounts are still enforced by the credential/account conflict checks
         # below.
-        resolved_name = (name or "").strip() or AgentSurfaceEntity.default_name_for(
-            platform
-        )
+        resolved_name = (name or "").strip() or AgentSurfaceEntity.default_name_for(platform)
         existing = await self.surface_repository.get_by_pod_and_name(
             pod_id=pod_id, name=resolved_name
         )
@@ -216,9 +212,7 @@ class AgentSurfaceService:
                 webhook_url=self._build_public_surface_webhook_url(created.id),
                 webhook_secret=created.webhook_secret or "",
             )
-        synced = await self._sync_email_schedule(
-            created, previous_surface=None, ctx=ctx
-        )
+        synced = await self._sync_email_schedule(created, previous_surface=None, ctx=ctx)
         await notify_surface_receiver_config_changed(synced.id)
         return synced
 
@@ -413,11 +407,7 @@ class AgentSurfaceService:
             if cursor is None:
                 break
         if failure_count:
-            logger.error(
-                "surface.cleanup.failed",
-                pod_id=pod_id,
-                failure_count=failure_count,
-            )
+            logger.error("surface.cleanup.failed", pod_id=pod_id, failure_count=failure_count)
         return deleted
 
     def get_platform_setup_guide(self, platform: str) -> SurfacePlatformSetupGuide:
@@ -518,11 +508,7 @@ class AgentSurfaceService:
                     surface.account_id
                 )
             except Exception:
-                logger.debug(
-                    'agent_surfaces.surface_service.could_not_resolve_whatsapp_verify.diagnostic',
-                    account_id=surface.account_id,
-                    exc_info=True,
-                )
+                logger.debug('agent_surfaces.surface_service.could_not_resolve_whatsapp_verify.diagnostic', account_id=surface.account_id, exc_info=True)
                 return None
             return credentials.get("verify_token")
         return surface_settings.whatsapp_verify_token
@@ -583,13 +569,11 @@ class AgentSurfaceService:
 
     def _build_consent_url(self, surface_id: UUID, tenant_id: str) -> str:
         callback_base = settings.api_url.rstrip("/")
-        params = urlencode(
-            {
-                "client_id": surface_settings.microsoft_bot_app_id or "",
-                "redirect_uri": f"{callback_base}/surfaces/teams/admin-consent/callback",
-                "state": str(surface_id),
-            }
-        )
+        params = urlencode({
+            "client_id": surface_settings.microsoft_bot_app_id or "",
+            "redirect_uri": f"{callback_base}/surfaces/teams/admin-consent/callback",
+            "state": str(surface_id),
+        })
         return f"https://login.microsoftonline.com/{tenant_id}/adminconsent?{params}"
 
     async def _check_admin_consent_granted(self, tenant_id: str) -> bool:
