@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import type { LemmaClient } from "../client.js";
 import { AgentController, selectAgentOutputs } from "../core/agent/index.js";
 
@@ -12,6 +12,14 @@ function sseStream(events: unknown[]): ReadableStream<Uint8Array> {
         controller.enqueue(encoder.encode(`data: ${data}\n\n`));
       }
       controller.close();
+    },
+  });
+}
+
+function droppedStream(): ReadableStream<Uint8Array> {
+  return new ReadableStream<Uint8Array>({
+    start(controller) {
+      controller.error(new Error("stream disconnected"));
     },
   });
 }
@@ -116,6 +124,75 @@ describe("AgentController", () => {
     expect(state.status).toBe("FAILED");
     expect(state.error?.message).toBe("boom");
     expect(state.isStreaming).toBe(false);
+  });
+
+  it("reconnects a dropped stream while the server run is still active", async () => {
+    vi.useFakeTimers();
+    try {
+      const finalMessage = {
+        id: "msg-recovered",
+        role: "assistant",
+        kind: "text",
+        text: "Recovered result",
+        created_at: "2026-07-18T00:00:00.000Z",
+        metadata: { is_final_answer: true },
+      };
+      let markReconciliationStarted: (() => void) | undefined;
+      const reconciliationStarted = new Promise<void>((resolve) => {
+        markReconciliationStarted = resolve;
+      });
+      const get = vi.fn(async (id: string) => {
+        markReconciliationStarted?.();
+        return { id, status: "RUNNING" };
+      });
+      const resumeStream = vi.fn(async () => sseStream([
+        finalMessage,
+        { type: "completed" },
+      ]));
+      const conversations = {
+        create: async () => ({ id: "conv-1", status: "WAITING", pod_id: "pod-1" }),
+        get,
+        list: async () => ({ items: [], limit: 20, next_page_token: null }),
+        messages: {
+          list: async () => ({ items: [], limit: 100, next_page_token: null }),
+        },
+        sendMessageStream: async () => droppedStream(),
+        resumeStream,
+        stopRun: async () => ({ id: "conv-1", status: "WAITING" }),
+      };
+      const client = {
+        podId: "pod-1",
+        withPod() {
+          return this;
+        },
+        conversations,
+      } as unknown as LemmaClient;
+      const controller = new AgentController({
+        client,
+        scope: { podId: "pod-1", agentName: "triage" },
+      });
+
+      await controller.createConversation();
+      const turn = controller.sendMessage("hi");
+      await reconciliationStarted;
+
+      expect(get).toHaveBeenCalledWith("conv-1", { pod_id: "pod-1" });
+      expect(controller.getState().isStreaming).toBe(true);
+
+      await vi.advanceTimersByTimeAsync(1_000);
+      await turn;
+
+      expect(resumeStream).toHaveBeenCalledOnce();
+      expect(controller.getState()).toMatchObject({
+        status: "COMPLETED",
+        isStreaming: false,
+        error: null,
+      });
+      expect(controller.getState().messages).toHaveLength(1);
+      expect(controller.getState().messages[0]).toMatchObject(finalMessage);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("setConversationId resets the session snapshot", async () => {
