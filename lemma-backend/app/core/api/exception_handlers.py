@@ -17,27 +17,15 @@ the status before the response body starts, or (b) a genuine status remap.
 
 from __future__ import annotations
 
-import time
 from collections.abc import Mapping, Sequence
-from typing import Any, Callable
 
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 
 from app.core.domain.errors import DomainError
-from app.core.log.log import get_logger
 from app.core.observability.telemetry import record_exception_on_current_span
 from app.core.redaction import redact_text, redact_value
-
-logger = get_logger(__name__)
-
-# Per-(route template, status code) throttle window. Auth denials and rate-limit
-# responses can be high-volume; the contract wants an aggregate/state-transition
-# signal, not one event per request. Process-local; each replica emits its own
-# bounded aggregate (cardinality is bounded by route template x status code).
-_THROTTLE_WINDOW_SECONDS = 10.0
-_last_throttled_emit: dict[tuple[str, int], float] = {}
 
 
 def _sanitize_validation_payload(value: object) -> object:
@@ -66,101 +54,23 @@ def _error_body(
     }
 
 
-def _route_template(request: Request) -> str:
-    """Normalized route template (e.g. ``/pods/{id}``), never a raw URL/query string."""
-    route = request.scope.get("route")
-    try:
-        if route is not None and hasattr(route, "path_format"):
-            return route.path_format
-    except Exception:  # pragma: no cover - defensive
-        pass
-    return redact_text(request.url.path)
-
-
-def _throttled(
-    log_method: Callable[..., None],
-    event: str,
-    *,
-    request: Request,
-    status_code: int,
-    code: str | None,
-    error_type: str,
-) -> None:
-    """Emit at most one ``event`` per (route, status) per throttle window."""
-    route = _route_template(request)
-    key = (route, status_code)
-    now = time.monotonic()
-    last = _last_throttled_emit.get(key)
-    if last is not None and now - last < _THROTTLE_WINDOW_SECONDS:
-        return
-    _last_throttled_emit[key] = now
-    payload: dict[str, Any] = {
-        "route": route,
-        "method": request.method,
-        "status_code": status_code,
-        "error_type": error_type,
-        "request_id": request.headers.get("x-request-id"),
-    }
-    if code is not None:
-        payload["code"] = code
-    log_method(event, **payload)
-
-
-def _log_request_error(
+def _record_request_failure(
     request: Request,
     *,
-    status_code: int,
-    code: str | None,
+    code: str,
     error_type: str,
+    exception: BaseException | None = None,
 ) -> None:
-    """Severity policy for an HTTP error boundary.
+    """Pass bounded failure metadata to the outer request observer.
 
-    * 5xx -> ``error`` once (the global boundary is the single place a 5xx is logged).
-    * 401/403 (auth denial) -> sampled ``info`` via throttle.
-    * 429 (rate limit) -> rate-limited ``warning`` via throttle.
-    * other 4xx (validation, not-found, conflict, ...) -> ``debug``; no
-      production steady-state event at INFO+.
+    The observer owns the single terminal request log, avoiding duplicate
+    records from exception handlers and middleware.
     """
-    if status_code >= 500:
-        logger.error(
-            "request.error",
-            route=_route_template(request),
-            method=request.method,
-            status_code=status_code,
-            code=code,
-            error_type=error_type,
-            request_id=request.headers.get("x-request-id"),
-        )
-        return
-    if status_code in (401, 403):
-        _throttled(
-            logger.info,
-            "auth.denied",
-            request=request,
-            status_code=status_code,
-            code=code,
-            error_type=error_type,
-        )
-        return
-    if status_code == 429:
-        _throttled(
-            logger.warning,
-            "request.rate_limited",
-            request=request,
-            status_code=status_code,
-            code=code,
-            error_type=error_type,
-        )
-        return
-    logger.debug(
-        "request.error",
-        route=_route_template(request),
-        method=request.method,
-        status_code=status_code,
-        code=code,
-        error_type=error_type,
-        request_id=request.headers.get("x-request-id"),
-    )
+    state = request.scope.setdefault("state", {})
+    state["lemma_error_code"] = code
+    state["lemma_error_type"] = error_type
+    if exception is not None:
+        state["lemma_exception"] = exception
 
 
 def register_exception_handlers(app: FastAPI) -> None:
@@ -177,12 +87,7 @@ def register_exception_handlers(app: FastAPI) -> None:
             },
             mark_span_as_error=exc.status_code >= 500,
         )
-        _log_request_error(
-            request,
-            status_code=exc.status_code,
-            code=exc.code,
-            error_type=type(exc).__name__,
-        )
+        _record_request_failure(request, code=exc.code, error_type=type(exc).__name__)
         return JSONResponse(
             status_code=exc.status_code,
             content=_error_body(request, exc.message, exc.code, exc.details),
@@ -199,11 +104,8 @@ def register_exception_handlers(app: FastAPI) -> None:
             },
             mark_span_as_error=False,
         )
-        _log_request_error(
-            request,
-            status_code=422,
-            code="VALIDATION_ERROR",
-            error_type=type(exc).__name__,
+        _record_request_failure(
+            request, code="VALIDATION_ERROR", error_type=type(exc).__name__
         )
         return JSONResponse(
             status_code=422,
@@ -219,9 +121,8 @@ def register_exception_handlers(app: FastAPI) -> None:
             attributes={"http.response.status_code": exc.status_code},
             mark_span_as_error=exc.status_code >= 500,
         )
-        _log_request_error(
+        _record_request_failure(
             request,
-            status_code=exc.status_code,
             code=f"HTTP_{exc.status_code}",
             error_type=type(exc).__name__,
         )
@@ -242,16 +143,11 @@ def register_exception_handlers(app: FastAPI) -> None:
             },
             mark_span_as_error=True,
         )
-        # The global boundary logs the 5xx exactly once; the traceback renders as
-        # one JSON-escaped ``exception`` string (no physical-line fan-out).
-        logger.exception(
-            "request.error",
-            route=_route_template(request),
-            method=request.method,
-            status_code=500,
+        _record_request_failure(
+            request,
             code="INTERNAL_ERROR",
             error_type=type(exc).__name__,
-            request_id=request.headers.get("x-request-id"),
+            exception=exc,
         )
         return JSONResponse(
             status_code=500,

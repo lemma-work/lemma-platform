@@ -1,7 +1,5 @@
 from __future__ import annotations
 
-import logging
-
 from faststream import Depends, Logger
 from faststream.redis import RedisRouter
 
@@ -21,7 +19,12 @@ from app.core.infrastructure.jobs.streaq_job_queue import (
     SharedStreaqJobQueue,
     get_streaq_job_queue,
 )
-from app.core.infrastructure.jobs.streaq_runtime import AppWorkerContext, streaq_task, streaq_worker
+from app.core.infrastructure.jobs.streaq_runtime import (
+    AppWorkerContext,
+    streaq_task,
+    streaq_worker,
+)
+from app.core.log.log import get_logger
 from app.composition.surface_agent import get_conversation_service
 from app.modules.agent_surfaces.api.dependencies import (
     get_surface_service,
@@ -49,7 +52,7 @@ from app.composition.surface_connectors import get_connector_service
 from app.modules.pod.domain.events import PodDeletedEvent, PodEvents
 from app.modules.schedule.domain.events.schedule import ScheduleEvents, ScheduleFired
 
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 router = RedisRouter()
 
@@ -101,7 +104,6 @@ async def _process_surface_webhook(
     uow_factory: UnitOfWorkFactory,
     job_queue: SharedStreaqJobQueue,
 ) -> None:
-    fs_logger.info(f"Received webhook event for source: {event.source}")
 
     if event.surface_id:
         ingress_request = SurfaceDirectWebhookIngress(
@@ -120,9 +122,6 @@ async def _process_surface_webhook(
     async with uow_factory() as uow:
         handler = build_surface_event_handler(uow)
         if await handler.try_handle_interaction(ingress_request):
-            fs_logger.info(
-                "Handled surface interaction for webhook source=%s", event.source
-            )
             return
 
         context = await handler.prepare_ingress(ingress_request)
@@ -132,11 +131,10 @@ async def _process_surface_webhook(
 
     await job_queue.enqueue(
         "process_surface_message",
-        payload=SurfaceProcessMessageTaskPayload(context=context).model_dump(mode="json"),
+        payload=SurfaceProcessMessageTaskPayload(context=context).model_dump(
+            mode="json"
+        ),
         _job_id=f"surface-event:{event.event_id}",
-    )
-    fs_logger.info(
-        "Enqueued process_surface_message for webhook source=%s", event.source
     )
 
 
@@ -185,12 +183,10 @@ async def _process_surface_schedule_event(
 
     await job_queue.enqueue(
         "process_surface_message",
-        payload=SurfaceProcessMessageTaskPayload(context=context).model_dump(mode="json"),
+        payload=SurfaceProcessMessageTaskPayload(context=context).model_dump(
+            mode="json"
+        ),
         _job_id=f"surface-schedule-event:{event.event_id}",
-    )
-    fs_logger.info(
-        "Enqueued process_surface_message for schedule source=%s",
-        event.schedule_id,
     )
 
 
@@ -212,14 +208,10 @@ async def on_pod_deleted(
 
     async def process() -> None:
         parsed = PodDeletedEvent.model_validate(event)
-        fs_logger.info(
-            "Processing PodDeletedEvent for surface cleanup pod=%s", parsed.pod_id
-        )
         async with uow_factory() as uow:
-            count = await get_surface_service(uow).delete_all_surfaces_for_pod(
+            await get_surface_service(uow).delete_all_surfaces_for_pod(
                 parsed.pod_id
             )
-        fs_logger.info("Removed %s surfaces for deleted pod %s", count, parsed.pod_id)
 
     await inbox.process("agent-surfaces.pod-deletion", event, process)
 
@@ -229,21 +221,10 @@ async def process_surface_message(
     payload: dict,
 ):
     worker_ctx: AppWorkerContext = streaq_worker.context
-    task_ctx = process_surface_message.context
     task_payload = SurfaceProcessMessageTaskPayload.model_validate(payload)
-    logger.info(
-        "Starting process_surface_message job %s for conversation %s",
-        task_ctx.task_id,
-        getattr(task_payload.context, "conversation_id", None),
-    )
     # The service scopes its own short UoWs (credential read + message-write
     # tail) around the long external I/O inside execute_chat — platform API
     # calls, file ingestion, and voice transcription — so no pooled DB
     # connection is held during that I/O.
     service = worker_ctx.build_surface_event_handler_with_factory()
     await service.execute_chat(task_payload.context)
-    logger.info(
-        "Finished process_surface_message job %s for conversation %s",
-        task_ctx.task_id,
-        getattr(task_payload.context, "conversation_id", None),
-    )

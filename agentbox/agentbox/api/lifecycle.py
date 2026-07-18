@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import asyncio
 from contextlib import asynccontextmanager
-import logging
 
 from fastapi import HTTPException
 
@@ -12,7 +11,13 @@ from agentbox.providers import SandboxProvider
 from agentbox.providers.protocol import SandboxReleaseProvider
 from agentbox.state_store.protocol import AsyncStateStore
 
-logger = logging.getLogger(__name__)
+from agentbox.observability import (
+    DependencyIncident,
+    create_inherited_task,
+    get_logger,
+)
+
+logger = get_logger(__name__)
 
 
 @asynccontextmanager
@@ -85,7 +90,7 @@ async def activity_lease(
             },
         )
 
-    renewal = asyncio.create_task(
+    renewal = create_inherited_task(
         _renew_activity_lease(
             store,
             manager,
@@ -119,7 +124,7 @@ async def _renew_activity_lease(
             ttl_seconds=settings.agentbox_activity_lease_ttl_seconds,
         )
         if renewed is None:
-            logger.error("agentbox_activity_lease_lost lease_id=%s", lease_id)
+            logger.error("agentbox.lease.lost", lease_id=lease_id)
             if owner_task is not None:
                 owner_task.cancel()
             return
@@ -139,12 +144,15 @@ async def delete_runtime_session_if_present(
 
 
 async def cleanup_loop(manager: SandboxLifecycleManager) -> None:
+    incident = DependencyIncident("agentbox.cleanup", logger=logger)
     while True:
         await asyncio.sleep(settings.agentbox_cleanup_interval_seconds)
         try:
             await cleanup_once(manager)
-        except Exception:
-            logger.exception("AgentBox cleanup pass failed")
+        except Exception as exc:
+            incident.record_failure(exc)
+        else:
+            incident.record_success()
 
 
 async def cleanup_once(manager: SandboxLifecycleManager) -> None:
@@ -168,12 +176,15 @@ async def provider_lease_renewal_loop(manager: SandboxLifecycleManager) -> None:
     """Renew cloud leases independently from idle/session cleanup."""
 
     interval = min(max(settings.agentbox_cleanup_interval_seconds, 5), 15)
+    incident = DependencyIncident("agentbox.provider_lease", logger=logger)
     while True:
         await asyncio.sleep(interval)
         try:
             await manager.renew_active_provider_leases()
-        except Exception:
-            logger.exception("AgentBox provider lease renewal pass failed")
+        except Exception as exc:
+            incident.record_failure(exc)
+        else:
+            incident.record_success()
 
 
 async def release_sandbox_compute(provider: SandboxProvider, sandbox_id: str) -> bool:

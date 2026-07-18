@@ -109,9 +109,7 @@ async def _load_or_export_archive(
                 uow=uow,
                 on_progress=_noop_progress,
             )
-    state.staging_key = await staging.put_archive(
-        "pod-publishes", publish_id, archive
-    )
+    state.staging_key = await staging.put_archive("pod-publishes", publish_id, archive)
     await store.save_publish(state)
     return pod_name, archive, organization_id
 
@@ -150,10 +148,7 @@ def _operation_runner(
 
 def _persisted_repo(state: PublishState) -> RepoCreateResult | None:
     if not (
-        state.repo_created
-        and state.repo_owner
-        and state.repo_slug
-        and state.repo_url
+        state.repo_created and state.repo_owner and state.repo_slug and state.repo_url
     ):
         return None
     return RepoCreateResult(
@@ -234,9 +229,7 @@ def _initialize_file_progress(
             state.files.append(item)
             progress[path] = item
     state.progress.total = len(progress)
-    state.progress.done = sum(
-        item.status is StepStatus.DONE for item in state.files
-    )
+    state.progress.done = sum(item.status is StepStatus.DONE for item in state.files)
     return progress
 
 
@@ -360,18 +353,21 @@ async def publish_pod_github(context: dict[str, str | None]) -> None:
         await store.save_publish(state)
         await publish_bundle_event(
             publish_id,
-            completed_payload(
-                state.status.value, state.seq, repo_url=repo.html_url
-            ),
+            completed_payload(state.status.value, state.seq, repo_url=repo.html_url),
         )
     except DomainError as exc:
         await _fail_publish(store, state, str(exc))
-        logger.warning("Pod publish %s failed (terminal): %s", publish_id, exc)
-    except Exception as exc:
-        await _fail_publish(
-            store, state, "Publish failed due to a transient error."
+        logger.warning(
+            "pod_bundle.publish_task.pod_publish_s_terminal_s.degraded",
+            publish_id=publish_id,
         )
-        logger.error("Pod publish %s failed (retryable): %s", publish_id, exc)
+    except Exception:
+        await _fail_publish(store, state, "Publish failed due to a transient error.")
+        logger.debug(
+            'pod_bundle.publish_task.pod_publish_s_retryable_s.propagated',
+            publish_id=publish_id,
+        exc_info=True,
+    )
         raise
 
 
@@ -381,12 +377,11 @@ async def _fail_publish(store, state: PublishState, message: str) -> None:
     state.completed_at = _now()
     try:
         await store.save_publish(state)
-        await publish_bundle_event(
-            state.publish_id, error_payload(message, state.seq)
-        )
-    except Exception as exc:
-        logger.warning(
-            "Failed to persist FAILED publish %s: %s", state.publish_id, exc
+        await publish_bundle_event(state.publish_id, error_payload(message, state.seq))
+    except Exception:
+        logger.debug(
+            'pod_bundle.publish_task.persist_publish_s_s.diagnostic',
+            publish_id=state.publish_id,
         )
 
 

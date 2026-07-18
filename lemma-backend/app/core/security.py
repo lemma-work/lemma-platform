@@ -193,7 +193,7 @@ async def verify_auth(connection: HTTPConnection):
         if isinstance(e, HTTPException):
             raise e
 
-        logger.debug(f"Auth dependency error: {e}")
+        logger.debug("security.security.auth_dependency.observed")
         # If we reached here, and authentication failed but didn't raise, we force 401.
         # However, get_session(session_required=True) *should* send a response or raise.
         # SuperTokens often sends a response directly which stops execution?

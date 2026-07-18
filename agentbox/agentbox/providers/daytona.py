@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import asyncio
 from dataclasses import dataclass
-import logging
 from typing import Any
 
 from agentbox.apps import SANDBOX_APPS, SandboxAppSpec
@@ -25,7 +24,9 @@ from .models import (
 )
 
 
-logger = logging.getLogger(__name__)
+from agentbox.observability import get_logger
+
+logger = get_logger(__name__)
 
 
 @dataclass(frozen=True)
@@ -323,12 +324,11 @@ class DaytonaSandboxProvider(LegacyRuntimeProviderMixin):
                 remaining = deadline - self._clock()
                 if remaining <= 0:
                     logger.warning(
-                        "agentbox_daytona_capacity event=admission_timeout "
-                        "sandbox_id=%s active=%s reserved=%s max_active=%s",
-                        sandbox_id,
-                        self._observed_active_count,
-                        len(self._capacity_reservations),
-                        self.config.max_active,
+                        "agentbox.daytona.capacity_exhausted",
+                        sandbox_id=sandbox_id,
+                        observed_active_count=(self._observed_active_count or 0)
+                        + len(self._capacity_reservations),
+                        capacity_limit=self.config.max_active,
                     )
                     raise ProviderError(
                         f"Daytona concurrency limit ({self.config.max_active}) reached",

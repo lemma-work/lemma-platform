@@ -1,8 +1,11 @@
 import asyncio
+import re
+import time
 import uuid
 from collections.abc import Mapping, Sequence
 from contextlib import AsyncExitStack, asynccontextmanager
 from fastapi import Depends, FastAPI
+from opentelemetry import metrics
 from fastapi.responses import JSONResponse
 from fastapi.openapi.utils import get_openapi
 from scalar_fastapi import get_scalar_api_reference
@@ -43,9 +46,16 @@ from app.core.registry.installed import OSS_MODULES
 from app.auth_app import get_auth_app
 from app.mcp_server import get_agent_mcp_app, get_pod_mcp_app
 from app.core.infrastructure.db.session import get_engine
-from app.core.request_context import reset_request_id, set_request_id
+from app.core.request_context import (
+    bind_request_context,
+    create_background_task,
+    create_inherited_task,
+)
 
 logger = get_logger(__name__)
+meter = metrics.get_meter(__name__)
+http_request_count = meter.create_counter("lemma.http.server.requests")
+http_request_duration = meter.create_histogram("lemma.http.server.duration_ms")
 
 OPENAPI_SCHEMA_RENAMES = {
     "fastapi___compat__v2__Body_file__upload": "DatastoreFileUploadRequest",
@@ -106,7 +116,7 @@ def _apply_error_response_schema(schema: dict) -> dict:
             for status_code, response in responses.items():
                 try:
                     code_int = int(status_code)
-                except (TypeError, ValueError):
+                except TypeError, ValueError:
                     continue
                 if code_int < 400 or not isinstance(response, dict):
                     continue
@@ -125,7 +135,6 @@ async def lifespan(app: FastAPI):
             await stack.enter_async_context(pod_mcp_app.lifespan(app))
 
         # Core startup
-        logger.info("Application starting up")
         from app.core.concurrency.offload import configure_thread_pool
         from app.core.observability.loop_watchdog import loop_lag_watchdog
 
@@ -133,17 +142,16 @@ async def lifespan(app: FastAPI):
         watchdog_task = (
             None
             if getattr(app.state, "embedded_worker", False)
-            else asyncio.create_task(loop_lag_watchdog(service_name="lemma-api"))
+            else create_background_task(
+                loop_lag_watchdog(service_name="lemma-api"),
+                name="api-loop-lag-watchdog",
+            )
         )
         initialize_supertokens()
         await channel_service.connect()
         await get_streaq_job_queue().connect()
         await get_message_bus().connect()
-        logger.info("Redis broker started")
-        # One stable startup event after initialization succeeds. service.version
-        # and release.sha are attached by the logging context from LEMMA_RELEASE_SHA.
-        logger.info("service.started")
-
+        started = False
         try:
             # Module-contributed API lifespans (e.g. datastore query-role
             # backfill on enter; surface-dedup + user-cache close on exit).
@@ -154,10 +162,15 @@ async def lifespan(app: FastAPI):
                 # CLOUD_MODULES) is stashed on app.state by create_app.
                 modules = getattr(app.state, "lemma_modules", OSS_MODULES)
                 await enter_api_lifespans(module_stack, modules, app)
+                # Emit only after every core and module lifespan has entered.
+                # service.version and release.sha come from LEMMA_RELEASE_SHA.
+                logger.info("service.started")
+                started = True
                 yield
         finally:
             # Core closers — explicit and last so they tear down after modules.
-            logger.info("Application shutting down")
+            if started:
+                logger.info("service.stopped")
             if watchdog_task is not None and not watchdog_task.done():
                 watchdog_task.cancel()
                 try:
@@ -168,17 +181,20 @@ async def lifespan(app: FastAPI):
             await close_message_bus()
             await close_engine()
             await channel_service.disconnect()
-            from app.modules.datastore.infrastructure.session import close_datastore_engine
+            from app.modules.datastore.infrastructure.session import (
+                close_datastore_engine,
+            )
 
             await close_datastore_engine()
 
 
-class RequestIdMiddleware:
-    """Ensure every request carries an ``x-request-id``: reuse an inbound one or
-    mint a new one, make it visible to downstream handlers (the authz layer reads
-    it), and echo it on the response so clients/agents can quote it in reports."""
+class RequestObserverMiddleware:
+    """Bind HTTP correlation, emit bounded terminal signals, and record metrics."""
 
     HEADER = b"x-request-id"
+    REQUEST_ID_RE = re.compile(r"^[A-Za-z0-9._:-]{1,128}$")
+    SLOW_SECONDS = 2.0
+    QUIET_PATHS = frozenset({"/health", "/health/live", "/health/ready", "/livez"})
 
     def __init__(self, app):
         self.app = app
@@ -188,30 +204,154 @@ class RequestIdMiddleware:
             await self.app(scope, receive, send)
             return
 
-        headers = scope.get("headers") or []
-        existing = next((v for k, v in headers if k == self.HEADER), None)
-        if existing is not None:
-            request_id = existing.decode("latin-1")
+        headers = list(scope.get("headers") or [])
+        existing = next((v for k, v in headers if k.lower() == self.HEADER), None)
+        inbound = existing.decode("latin-1") if existing is not None else ""
+        if self.REQUEST_ID_RE.fullmatch(inbound):
+            request_id = inbound
         else:
             request_id = uuid.uuid4().hex
-            # Inject into request headers so request.headers.get("x-request-id")
-            # (read by the authz layer) sees the minted id.
-            scope = dict(scope)
-            scope["headers"] = [*headers, (self.HEADER, request_id.encode("latin-1"))]
+
+        correlation_id = uuid.uuid7()
+        scope = dict(scope)
+        scope["headers"] = [
+            (key, value) for key, value in headers if key.lower() != self.HEADER
+        ] + [(self.HEADER, request_id.encode("ascii"))]
+        scope.setdefault("state", {})
+
+        started_at = time.perf_counter()
+        response_started_at: float | None = None
+        status_code = 500
+        content_type = ""
 
         async def send_with_request_id(message):
+            nonlocal response_started_at, status_code, content_type
             if message["type"] == "http.response.start":
-                raw_headers = list(message.get("headers") or [])
-                if not any(k.lower() == self.HEADER for k, _ in raw_headers):
-                    raw_headers.append((self.HEADER, request_id.encode("latin-1")))
+                response_started_at = time.perf_counter()
+                status_code = int(message.get("status", 500))
+                raw_headers = [
+                    (key, value)
+                    for key, value in list(message.get("headers") or [])
+                    if key.lower() != self.HEADER
+                ]
+                content_type = next(
+                    (
+                        value.decode("latin-1").lower()
+                        for key, value in raw_headers
+                        if key.lower() == b"content-type"
+                    ),
+                    "",
+                )
+                raw_headers.append((self.HEADER, request_id.encode("ascii")))
                 message = {**message, "headers": raw_headers}
             await send(message)
 
-        token = set_request_id(request_id)
-        try:
-            await self.app(scope, receive, send_with_request_id)
-        finally:
-            reset_request_id(token)
+        caught: Exception | None = None
+        cancelled = False
+        with bind_request_context(request_id=request_id, correlation_id=correlation_id):
+            try:
+                await self.app(scope, receive, send_with_request_id)
+            except asyncio.CancelledError:
+                cancelled = True
+                raise
+            except Exception as exc:
+                caught = exc
+                raise
+            finally:
+                finished_at = time.perf_counter()
+                duration_ms = round((finished_at - started_at) * 1000, 1)
+                route = self._route_template(scope)
+                attributes = {
+                    "http.request.method": str(scope.get("method", "UNKNOWN")),
+                    "http.route": route,
+                    "http.response.status_class": f"{status_code // 100}xx",
+                }
+                http_request_count.add(1, attributes)
+                http_request_duration.record(duration_ms, attributes)
+
+                if str(scope.get("path", "")) in self.QUIET_PATHS:
+                    continue_logging = False
+                else:
+                    continue_logging = True
+                if continue_logging and not cancelled:
+                    state = scope.get("state") or {}
+                    recorded = state.get("lemma_exception")
+                    failure = caught or recorded
+                    fields = {
+                        "method": str(scope.get("method", "UNKNOWN")),
+                        "route": route,
+                        "status_code": status_code,
+                        "duration_ms": duration_ms,
+                    }
+                    if status_code >= 500 or caught is not None:
+                        fields["error_type"] = state.get(
+                            "lemma_error_type",
+                            type(failure).__name__ if failure else "HTTPError",
+                        )
+                        fields["error_code"] = state.get(
+                            "lemma_error_code", "INTERNAL_ERROR"
+                        )
+                        exc_info = (
+                            (type(failure), failure, failure.__traceback__)
+                            if isinstance(failure, BaseException)
+                            else None
+                        )
+                        logger.error(
+                            "http.request.failed",
+                            method=fields["method"],
+                            route=fields["route"],
+                            status_code=fields["status_code"],
+                            duration_ms=fields["duration_ms"],
+                            error_type=fields["error_type"],
+                            error_code=fields["error_code"],
+                            exc_info=exc_info,
+                        )
+                    elif status_code == 429:
+                        logger.warning(
+                            "http.request.rate_limited",
+                            method=fields["method"],
+                            route=fields["route"],
+                            status_code=fields["status_code"],
+                            duration_ms=fields["duration_ms"],
+                        )
+                    else:
+                        streaming = content_type.startswith("text/event-stream")
+                        elapsed = (
+                            (response_started_at - started_at)
+                            if streaming and response_started_at is not None
+                            else (finished_at - started_at)
+                        )
+                        if elapsed >= self.SLOW_SECONDS:
+                            fields["duration_ms"] = round(elapsed * 1000, 1)
+                            fields["latency_kind"] = (
+                                "time_to_first_byte" if streaming else "total"
+                            )
+                            logger.warning(
+                                "http.request.slow",
+                                method=fields["method"],
+                                route=fields["route"],
+                                status_code=fields["status_code"],
+                                duration_ms=fields["duration_ms"],
+                                latency_kind=fields["latency_kind"],
+                            )
+                        else:
+                            logger.debug(
+                                "http.request.completed",
+                                method=fields["method"],
+                                route=fields["route"],
+                                status_code=fields["status_code"],
+                                duration_ms=fields["duration_ms"],
+                            )
+
+    @staticmethod
+    def _route_template(scope: dict) -> str:
+        route = scope.get("route")
+        value = getattr(route, "path_format", None) or getattr(route, "path", None)
+        return value if isinstance(value, str) else "unmatched"
+
+
+# Compatibility name retained for imports and generated SDK tests.
+RequestIdMiddleware = RequestObserverMiddleware
 
 
 class RequestBodyLimitMiddleware:
@@ -440,8 +580,8 @@ def create_app(modules=OSS_MODULES) -> FastAPI:
         # the pair is bounded by the overall gather timeout.
         db_task = redis_task = None
         try:
-            db_task = _asyncio.create_task(_with_timeout(_db_ok(), 1.0))
-            redis_task = _asyncio.create_task(_with_timeout(_redis_ok(), 1.0))
+            db_task = create_inherited_task(_with_timeout(_db_ok(), 1.0))
+            redis_task = create_inherited_task(_with_timeout(_redis_ok(), 1.0))
             db_ok, redis_ok = await _asyncio.wait_for(
                 _asyncio.gather(db_task, redis_task), timeout=2.0
             )
@@ -457,7 +597,10 @@ def create_app(modules=OSS_MODULES) -> FastAPI:
             "redis": "ok" if redis_ok else "down",
         }
         ready = bool(db_ok) and bool(redis_ok)
-        payload = {"status": "ready" if ready else "not_ready", "components": components}
+        payload = {
+            "status": "ready" if ready else "not_ready",
+            "components": components,
+        }
         return JSONResponse(payload, status_code=200 if ready else 503)
 
     # Compatibility alias for /health/live during probe migration.
@@ -526,4 +669,10 @@ app = create_app()
 if __name__ == "__main__":
     import uvicorn
 
-    uvicorn.run("app.app:app", host="0.0.0.0", port=8000, reload=True)
+    uvicorn.run(
+        "app.app:app",
+        host="0.0.0.0",
+        port=8000,
+        reload=True,
+        access_log=False,
+    )

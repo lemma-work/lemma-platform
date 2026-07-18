@@ -57,11 +57,6 @@ async def handle_datastore_event(
 
     async def dispatch_schedules() -> None:
         record_event = DatastoreRecordEvent.model_validate(event)
-        fs_logger.info(
-            "Received DatastoreRecordEvent: %s on %s",
-            record_event.operation.value,
-            record_event.table_name,
-        )
 
         async with uow_factory() as uow:
             handler = DatastoreEventHandler(
@@ -72,9 +67,9 @@ async def handle_datastore_event(
             )
             schedule_ids = await handler.handle_datastore_event(record_event)
         if schedule_ids:
-            fs_logger.info(
-                "Fired %s DATASTORE schedules",
-                len(schedule_ids),
+            logger.debug(
+                "schedule.datastore_consumer.fired_s_datastore_schedules.observed",
+                count=len(schedule_ids),
             )
 
     await inbox.process("schedule-datastore-events", event, dispatch_schedules)

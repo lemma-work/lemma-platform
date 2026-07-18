@@ -1,7 +1,12 @@
 from typing import List, Optional
 from uuid import UUID, uuid4
 
-from app.core.authorization.context import Context, ResourceRef, ResourceType, ResourceVisibility
+from app.core.authorization.context import (
+    Context,
+    ResourceRef,
+    ResourceType,
+    ResourceVisibility,
+)
 from app.core.authorization.permissions import Permissions
 from app.core.helpers.slug import normalize_resource_name
 from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
@@ -49,7 +54,9 @@ class ScheduleService:
         authorization_service: object | None = None,
     ):
         self.uow = uow
-        self.schedule_repository = schedule_repository or ScheduleRepositoryImpl(uow=uow)
+        self.schedule_repository = schedule_repository or ScheduleRepositoryImpl(
+            uow=uow
+        )
         self.scheduler_service = scheduler_service or SchedulerAPIClient()
         if external_schedule_writer is None:
             from app.composition.schedule_connectors import (
@@ -79,7 +86,9 @@ class ScheduleService:
         schedule = await self.get_schedule(schedule_id, ctx=ctx)
         if schedule is None or schedule.pod_id != pod_id:
             return None
-        await ctx.require(Permissions.SCHEDULE_READ, ResourceRef.schedule(pod_id, schedule_id))
+        await ctx.require(
+            Permissions.SCHEDULE_READ, ResourceRef.schedule(pod_id, schedule_id)
+        )
         return await self.run_repository.list_for_schedule(schedule_id, limit=limit)
 
     async def retry_schedule_run(
@@ -134,7 +143,9 @@ class ScheduleService:
         )
         schedule_create = await self._resolve_create_target(schedule_create)
         schedule_create = schedule_create.model_copy(
-            update={"visibility": await self._resolve_create_visibility(schedule_create)}
+            update={
+                "visibility": await self._resolve_create_visibility(schedule_create)
+            }
         )
         await self._validate_name_available(schedule_create)
         await self._validate_target(schedule_create)
@@ -160,7 +171,10 @@ class ScheduleService:
                     if updated:
                         created = updated
             except Exception as exc:
-                logger.error("Failed to create external schedule: %s", exc)
+                logger.debug(
+                    'schedule.schedule_service.create_external_schedule_s.propagated',
+                exc_info=True,
+            )
                 await self.schedule_repository.delete(created.id)
                 raise ScheduleValidationError(
                     f"Failed to create external schedule: {exc}"
@@ -250,10 +264,7 @@ class ScheduleService:
         schedule_update: ScheduleUpdateEntity,
     ) -> dict:
         update_data = schedule_update.model_dump(exclude_none=True)
-        if (
-            existing.schedule_type == ScheduleType.DATASTORE
-            and "config" in update_data
-        ):
+        if existing.schedule_type == ScheduleType.DATASTORE and "config" in update_data:
             try:
                 update_data["config"] = normalize_datastore_schedule_config(
                     update_data["config"]
@@ -329,9 +340,7 @@ class ScheduleService:
     ) -> bool:
         if schedule_create.workflow_id is None:
             return False
-        workflow = await self.target_resolver.get_workflow(
-            schedule_create.workflow_id
-        )
+        workflow = await self.target_resolver.get_workflow(schedule_create.workflow_id)
         return workflow is not None and workflow.is_global_workflow
 
     async def _get_workflow_by_name(self, *, pod_id: UUID, workflow_name: str):
@@ -367,9 +376,7 @@ class ScheduleService:
             raise ScheduleValidationError("pod_id is required for target schedules")
 
         if schedule_create.workflow_id is not None:
-            flow = await self.target_resolver.get_workflow(
-                schedule_create.workflow_id
-            )
+            flow = await self.target_resolver.get_workflow(schedule_create.workflow_id)
             if flow is None or flow.pod_id != schedule_create.pod_id:
                 raise ScheduleValidationError("Workflow target not found in pod")
             if flow.is_global_workflow:
@@ -408,7 +415,9 @@ class ScheduleService:
             or schedule_create.agent_name
             or schedule_create.schedule_type.value.lower()
         )
-        base = normalize_resource_name(f"{target_name}_{schedule_create.schedule_type.value.lower()}_schedule")
+        base = normalize_resource_name(
+            f"{target_name}_{schedule_create.schedule_type.value.lower()}_schedule"
+        )
         return f"{base}_{uuid4().hex[:8]}"
 
     async def _validate_name_available(
@@ -508,8 +517,10 @@ class ScheduleService:
             except ScheduleInfrastructureError:
                 raise
             except Exception as exc:
-                logger.exception(
-                    "Failed to delete external schedule for %s", schedule_id
+                logger.debug(
+                    'schedule.schedule_service.delete_external_schedule_s.propagated',
+                    schedule_id=schedule_id,
+                    exc_info=True,
                 )
                 raise ScheduleInfrastructureError(
                     f"Failed to delete external schedule for {schedule_id}: {exc}"
@@ -532,17 +543,19 @@ class ScheduleService:
                 if await self.delete_schedule(schedule.id):
                     deleted += 1
             except Exception:
-                logger.exception(
-                    "Failed to delete schedule %s during pod %s cleanup",
-                    schedule.id,
-                    pod_id,
+                logger.debug(
+                    "schedule.cleanup.primary_failed",
+                    pod_id=pod_id,
+                    exc_info=True,
                 )
                 try:
                     if await self.schedule_repository.delete(schedule.id):
                         deleted += 1
                 except Exception:
-                    logger.exception(
-                        "Fallback delete failed for schedule %s", schedule.id
+                    logger.error(
+                        "schedule.cleanup.failed",
+                        pod_id=pod_id,
+                        exc_info=True,
                     )
         return deleted
 

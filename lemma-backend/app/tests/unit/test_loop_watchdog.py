@@ -100,28 +100,39 @@ def _events(buf):
 def test_degraded_emits_once_and_no_flood_on_repeated_samples():
     buf, _ = _capture_events()
     warn = 0.3
-    # Transition into degraded.
+    # Three consecutive warning samples transition into degraded.
     loop_watchdog._evaluate_lag(0.4, warn, service_name="test", now=0.0)
-    # Repeated degraded samples must not re-emit.
     loop_watchdog._evaluate_lag(0.5, warn, service_name="test", now=0.1)
     loop_watchdog._evaluate_lag(0.45, warn, service_name="test", now=0.2)
+    # Repeated degraded samples must not re-emit.
+    loop_watchdog._evaluate_lag(0.6, warn, service_name="test", now=0.3)
     events = [e for e in _events(buf) if e["event"] == "runtime.loop_lag.degraded"]
     assert len(events) == 1
     assert events[0]["level"] == "warning"
-    assert loop_watchdog._max_lag_seconds == 0.5  # peak tracked silently
+    assert loop_watchdog._max_lag_seconds == 0.6  # peak tracked silently
+
+
+def test_single_five_second_sample_degrades_immediately(monkeypatch):
+    buf, _ = _capture_events()
+    monkeypatch.setattr(settings, "loop_lag_unhealthy_seconds", 5.0)
+    loop_watchdog._evaluate_lag(5.1, 0.3, service_name="test", now=0.0)
+    degraded = [e for e in _events(buf) if e["event"] == "runtime.loop_lag.degraded"]
+    assert len(degraded) == 1
+    assert degraded[0]["unhealthy"] is True
 
 
 def test_recovery_emits_only_after_hysteresis_window():
     buf, _ = _capture_events()
     warn = 0.3
-    loop_watchdog._evaluate_lag(0.5, warn, service_name="test", now=0.0)
+    for now in (0.0, 0.1, 0.2):
+        loop_watchdog._evaluate_lag(0.5, warn, service_name="test", now=now)
     # A single healthy sample must NOT recover (jitter suppression).
-    loop_watchdog._evaluate_lag(0.1, warn, service_name="test", now=0.1)
+    loop_watchdog._evaluate_lag(0.1, warn, service_name="test", now=1.0)
     recovered = [e for e in _events(buf) if e["event"] == "runtime.loop_lag.recovered"]
     assert recovered == []
-    # Need _RECOVERY_HYSTERESIS_TICKS consecutive healthy samples.
-    for i in range(loop_watchdog._RECOVERY_HYSTERESIS_TICKS):
-        loop_watchdog._evaluate_lag(0.1, warn, service_name="test", now=0.2 + i * 0.1)
+    loop_watchdog._evaluate_lag(0.1, warn, service_name="test", now=30.9)
+    assert not [e for e in _events(buf) if e["event"] == "runtime.loop_lag.recovered"]
+    loop_watchdog._evaluate_lag(0.1, warn, service_name="test", now=31.0)
     recovered = [e for e in _events(buf) if e["event"] == "runtime.loop_lag.recovered"]
     assert len(recovered) == 1
     assert recovered[0]["level"] == "info"
@@ -133,13 +144,30 @@ def test_recovery_emits_only_after_hysteresis_window():
 def test_jitter_does_not_flap_degraded_recovered():
     buf, _ = _capture_events()
     warn = 0.3
-    loop_watchdog._evaluate_lag(0.5, warn, service_name="test", now=0.0)
+    for now in (0.0, 0.1, 0.2):
+        loop_watchdog._evaluate_lag(0.5, warn, service_name="test", now=now)
     # Alternate high/low without enough consecutive healthy samples to recover.
     for i in range(20):
         lag = 0.5 if i % 2 == 0 else 0.1
-        loop_watchdog._evaluate_lag(lag, warn, service_name="test", now=float(i))
+        loop_watchdog._evaluate_lag(lag, warn, service_name="test", now=float(i + 1))
     degraded = [e for e in _events(buf) if e["event"] == "runtime.loop_lag.degraded"]
     recovered = [e for e in _events(buf) if e["event"] == "runtime.loop_lag.recovered"]
     # Exactly one degraded transition, no recovery (jitter never sustained healthy).
     assert len(degraded) == 1
     assert recovered == []
+
+
+def test_incident_pair_has_five_minute_cooldown_even_for_unhealthy_sample(
+    monkeypatch,
+):
+    buf, _ = _capture_events()
+    monkeypatch.setattr(settings, "loop_lag_unhealthy_seconds", 5.0)
+    loop_watchdog._evaluate_lag(5.1, 0.3, service_name="test", now=0.0)
+    loop_watchdog._evaluate_lag(0.1, 0.3, service_name="test", now=1.0)
+    loop_watchdog._evaluate_lag(0.1, 0.3, service_name="test", now=31.0)
+    loop_watchdog._evaluate_lag(5.2, 0.3, service_name="test", now=32.0)
+    degraded = [e for e in _events(buf) if e["event"] == "runtime.loop_lag.degraded"]
+    assert len(degraded) == 1
+    loop_watchdog._evaluate_lag(5.3, 0.3, service_name="test", now=300.0)
+    degraded = [e for e in _events(buf) if e["event"] == "runtime.loop_lag.degraded"]
+    assert len(degraded) == 2

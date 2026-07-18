@@ -60,12 +60,15 @@ class ComposioAuthProvider(AuthProviderInterface):
                             return datetime.now(timezone.utc) + timedelta(
                                 seconds=int(expires_in)
                             )
-                    logger.warning(
-                        f"Failed to fetch token info from Google API: {response.status}"
+                    logger.debug(
+                        'connectors.composio_auth_provider.fetch_token_info_google_api.diagnostic',
+                        status=response.status,
                     )
                     return None
-        except Exception as exc:
-            logger.warning(f"Error fetching Google token expiration: {exc}")
+        except Exception:
+            logger.debug(
+                'connectors.composio_auth_provider.fetching_google_token_expiration.diagnostic'
+            )
             return None
 
     def _is_google_app(self, app: ConnectorEntity) -> bool:
@@ -101,7 +104,9 @@ class ComposioAuthProvider(AuthProviderInterface):
             try:
                 return datetime.fromisoformat(normalized)
             except ValueError:
-                logger.warning("Unable to parse Composio expires_at value: %s", expires_at)
+                logger.debug(
+                    'connectors.composio_auth_provider.parse_composio_expires_value_s.diagnostic'
+                )
 
         expires_in = getattr(value, "expires_in", None)
         if expires_in not in (None, ""):
@@ -109,9 +114,9 @@ class ComposioAuthProvider(AuthProviderInterface):
                 return datetime.now(timezone.utc) + timedelta(
                     seconds=int(float(expires_in))
                 )
-            except (TypeError, ValueError):
-                logger.warning(
-                    "Unable to parse Composio expires_in value: %s", expires_in
+            except TypeError, ValueError:
+                logger.debug(
+                    'connectors.composio_auth_provider.parse_composio_expires_value_s.diagnostic'
                 )
 
         return None
@@ -131,14 +136,14 @@ class ComposioAuthProvider(AuthProviderInterface):
             if google_expiry is not None:
                 return google_expiry
 
-        logger.warning(
-            "Composio expiry missing for %s (%s); defaulting to 5 minutes",
-            connector.id,
-            getattr(connection_account, "id", None),
+        logger.debug(
+            'connectors.composio_auth_provider.composio_expiry_missing_s_s.diagnostic'
         )
         return datetime.now(timezone.utc) + timedelta(minutes=5)
 
-    def _serialize_raw_connection_state(self, connection_account: Any) -> dict[str, Any] | None:
+    def _serialize_raw_connection_state(
+        self, connection_account: Any
+    ) -> dict[str, Any] | None:
         state = getattr(connection_account, "state", None)
         value = getattr(state, "val", None)
         model_dump = getattr(value, "model_dump", None)
@@ -201,11 +206,6 @@ class ComposioAuthProvider(AuthProviderInterface):
         auth_config = composio.auth_configs.create(
             toolkit=self._toolkit_slug(connector),
             options=options,
-        )
-        logger.info(
-            "Created Composio auth config ID: %s for app %s",
-            auth_config.id,
-            connector.id,
         )
         return auth_config.id
 
@@ -278,7 +278,7 @@ class ComposioAuthProvider(AuthProviderInterface):
         user_id: UUID,
         state: Optional[str] = None,
     ) -> OAuthCredentials:
-        composio_app_name = self._toolkit_slug(connector)
+        self._toolkit_slug(connector)
 
         parsed_url = urlparse(redirect_uri)
         query_params = parse_qs(parsed_url.query)
@@ -307,9 +307,7 @@ class ComposioAuthProvider(AuthProviderInterface):
             connector, connection_account
         )
 
-        logger.info(
-            f"Set token expiration to {token_expires_at} for {composio_app_name}"
-        )
+        logger.debug("connectors.composio_auth_provider.set_token_expiration.observed")
 
         return OAuthCredentials(
             access_token=access_token,
@@ -327,7 +325,9 @@ class ComposioAuthProvider(AuthProviderInterface):
         user_id: UUID,
     ) -> OAuthCredentials:
         if not credentials.connection_id:
-            raise ConnectorValidationError("Connection ID required for Composio refresh")
+            raise ConnectorValidationError(
+                "Connection ID required for Composio refresh"
+            )
 
         composio = self._composio_client_factory()
         connection_account = composio.connected_accounts.get(credentials.connection_id)
@@ -358,8 +358,9 @@ class ComposioAuthProvider(AuthProviderInterface):
         user_id: UUID,
     ) -> None:
         if not credentials.connection_id:
-            raise ConnectorValidationError("Connection ID required for Composio revocation")
+            raise ConnectorValidationError(
+                "Connection ID required for Composio revocation"
+            )
 
         composio = self._composio_client_factory()
-        result = composio.connected_accounts.delete(credentials.connection_id)
-        logger.info(f"Composio connected account deleted: {result}")
+        composio.connected_accounts.delete(credentials.connection_id)

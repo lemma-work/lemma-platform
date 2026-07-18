@@ -120,7 +120,7 @@ async def oauth_callback(
 
     redirect_uri = str(request.url)
     state = request.query_params.get("state")
-    logger.info("State", state=state, redirect_uri=redirect_uri)
+    logger.debug("connectors.connect_request_controller.state.observed")
 
     try:
         account = await connector_service.handle_oauth_callback(
@@ -149,7 +149,9 @@ async def oauth_callback(
         return JSONResponse(content=account_response.model_dump(mode="json"))
 
     connector = await connector_service.get_connector(account.connector_id)
-    app_label = connector.title or connector.id.replace("_", " ").replace("-", " ").title()
+    app_label = (
+        connector.title or connector.id.replace("_", " ").replace("-", " ").title()
+    )
     detail_value = account.email or "Account connected"
     return _render_callback_page(
         status="success",

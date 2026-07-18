@@ -24,6 +24,7 @@ from agentbox.endpoint_transport import (
     request_endpoint_http,
 )
 from agentbox.lifecycle_manager import SandboxLifecycleManager
+from agentbox.observability import create_inherited_task
 from agentbox.providers import SandboxProvider
 from agentbox.providers.models import SandboxEndpoint
 from agentbox.sandbox_ids import validate_sandbox_id
@@ -1252,8 +1253,8 @@ async def relay_app_websocket(websocket: WebSocket, upstream) -> None:
             return
 
     tasks = [
-        asyncio.create_task(client_to_upstream()),
-        asyncio.create_task(upstream_to_client()),
+        create_inherited_task(client_to_upstream(), name="app-proxy-client"),
+        create_inherited_task(upstream_to_client(), name="app-proxy-upstream"),
     ]
     done, pending = await asyncio.wait(tasks, return_when=asyncio.FIRST_COMPLETED)
     for task in pending:

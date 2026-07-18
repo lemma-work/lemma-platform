@@ -57,7 +57,15 @@ async def test_workspace_me_returns_sandbox_session_and_browser_app(
     state_store = _FakeStateStore()
 
     class FakeAgentBoxClient:
-        def __init__(self, *, base_url: str, api_key: str, timeout_seconds: float):
+        def __init__(
+            self,
+            *,
+            base_url: str,
+            api_key: str,
+            timeout_seconds: float,
+            context_headers_provider=None,
+        ):
+            assert callable(context_headers_provider)
             calls.append(
                 {
                     "base_url": base_url,

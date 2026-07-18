@@ -65,7 +65,11 @@ def _workspace_tool_failure(
     completed: bool = False,
     process_id: str | None = None,
 ) -> ExecCommandResult:
-    logger.warning("Workspace CLI %s failed: %s", operation, exc, exc_info=True)
+    logger.debug(
+        'agent.workspace_cli.workspace_cli_s_s.diagnostic',
+        operation=operation,
+        exc_info=True,
+    )
     return ExecCommandResult(
         success=False,
         stdout="",
@@ -85,7 +89,11 @@ def _workspace_tool_failure(
 def _python_workspace_tool_failure(
     exc: Exception, *, operation: str
 ) -> PythonExecutionResult:
-    logger.warning("Workspace CLI %s failed: %s", operation, exc, exc_info=True)
+    logger.debug(
+        'agent.workspace_cli.workspace_cli_s_s.diagnostic',
+        operation=operation,
+        exc_info=True,
+    )
     return PythonExecutionResult(
         success=False,
         stdout="",
@@ -295,7 +303,9 @@ async def list_processes_internal(
             processes=[ProcessInfo.model_validate(process) for process in processes],
         )
     except Exception as exc:
-        logger.warning("Workspace CLI list_processes failed: %s", exc, exc_info=True)
+        logger.debug(
+            'agent.workspace_cli.workspace_cli_list_processes_s.diagnostic', exc_info=True
+        )
         return ListProcessesResult(
             success=False,
             processes=[],

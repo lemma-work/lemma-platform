@@ -1,12 +1,13 @@
 import asyncio
 import json
+import logging
 from typing import AsyncIterator
 
 from faststream.redis import RedisBroker
 from faststream.redis.parser import BinaryMessageFormatV1
 
 from app.core.config import settings
-from app.core.log.log import get_logger
+from app.core.log.log import get_dependency_logger, get_logger
 
 logger = get_logger(__name__)
 
@@ -27,7 +28,11 @@ class RedisStreamReader:
             channel_or_stream: Channel name for pub/sub or stream name for Redis streams
         """
         self.channel_or_stream = channel_or_stream
-        self.broker = RedisBroker(settings.redis_url)
+        self.broker = RedisBroker(
+            settings.redis_url,
+            logger=get_dependency_logger("faststream.redis"),
+            log_level=logging.INFO,
+        )
 
     async def __aenter__(self):
         await self.broker.start()
@@ -73,7 +78,7 @@ class RedisStreamReader:
         try:
             # Access the broker's underlying Redis connection
             redis = self.broker._connection
-            logger.info(f"Subscribed to stream: {self.channel_or_stream}")
+            logger.debug("pubsub.subscriber.subscribed_stream.observed")
 
             while True:
                 # Block for 1 second looking for new messages
@@ -126,9 +131,9 @@ class RedisStreamReader:
                                     )
                                     payload["_stream_id"] = stream_id
                                     yield payload
-                                except Exception as parse_error:
-                                    logger.error(
-                                        f"Error parsing FastStream binary message {message_id}: {parse_error}",
+                                except Exception:
+                                    logger.debug(
+                                        "pubsub.message.binary_parse_failed",
                                         exc_info=True,
                                     )
                                     # Fallback: try to decode as UTF-8 if possible
@@ -144,9 +149,10 @@ class RedisStreamReader:
                                         fallback_data["_stream_id"] = stream_id
                                         yield fallback_data
                                     except Exception:
-                                        logger.error(
-                                            f"Failed to decode message {message_id} even with fallback"
-                                        )
+                                        logger.warning(
+                                            "pubsub.message.dropped",
+                                        exc_info=True,
+                                    )
                             else:
                                 # Fallback for non-FastStream format messages
                                 decoded_data = {
@@ -159,18 +165,18 @@ class RedisStreamReader:
                                 }
                                 decoded_data["_stream_id"] = stream_id
                                 yield decoded_data
-                        except Exception as e:
-                            logger.error(
-                                f"Error decoding message {message_id}: {e}",
+                        except Exception:
+                            logger.warning(
+                                "pubsub.message.dropped",
                                 exc_info=True,
                             )
 
                 await asyncio.sleep(0.1)
 
         except asyncio.CancelledError:
-            logger.info(f"Stream subscription cancelled for: {self.channel_or_stream}")
-        except Exception as e:
-            logger.error(f"Error in stream subscription: {e}", exc_info=True)
+            logger.debug("pubsub.subscriber.stream_subscription_cancelled.observed")
+        except Exception:
+            logger.debug('pubsub.subscriber.stream_subscription.propagated', exc_info=True)
             raise
 
     async def subscribe_channel(self) -> AsyncIterator[dict]:
@@ -181,7 +187,7 @@ class RedisStreamReader:
         """
         try:
             async with self.broker.subscriber(self.channel_or_stream) as subscriber:
-                logger.info(f"Subscribed to channel: {self.channel_or_stream}")
+                logger.debug("pubsub.subscriber.subscribed_channel.observed")
                 async for message in subscriber:
                     try:
                         # FastStream handles deserialization
@@ -205,11 +211,12 @@ class RedisStreamReader:
                             )
 
                         yield decoded_data
-                    except Exception as e:
-                        logger.error(
-                            f"Error processing channel message: {e}", exc_info=True
+                    except Exception:
+                        logger.warning(
+                            "pubsub.message.dropped",
+                            exc_info=True,
                         )
 
-        except Exception as e:
-            logger.error(f"Error in channel subscription: {e}", exc_info=True)
+        except Exception:
+            logger.debug('pubsub.subscriber.channel_subscription.propagated', exc_info=True)
             raise

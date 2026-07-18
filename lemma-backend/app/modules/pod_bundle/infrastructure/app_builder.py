@@ -41,20 +41,33 @@ from uuid import UUID
 from app.core.concurrency.offload import run_blocking
 from app.core.config import settings
 from app.core.log.log import get_logger
+from app.core.request_context import create_inherited_task
 from app.modules.pod_bundle.domain.errors import AppBuildFailedError
 
 logger = get_logger(__name__)
 
 # npm install + build for a modest frontend can take a few minutes; give it room
 # but bound it so a hung build fails the step instead of the whole job's timeout.
-_BUILD_TIMEOUT_SECONDS = int(os.getenv("LEMMA_POD_BUNDLE_APP_BUILD_TIMEOUT_SECONDS", "600"))
+_BUILD_TIMEOUT_SECONDS = int(
+    os.getenv("LEMMA_POD_BUNDLE_APP_BUILD_TIMEOUT_SECONDS", "600")
+)
 _IO_TIMEOUT_SECONDS = 120
 # base64 payloads are written to the sandbox in chunks to stay well under ARG_MAX.
 _B64_CHUNK = 60_000
 # Source-tree entries never worth shipping/rebuilding from (mirrors the CLI's
 # _should_exclude_source_path so an export→import round-trips cleanly).
 _SOURCE_EXCLUDE_DIRS = frozenset(
-    {"node_modules", ".git", "dist", "build", ".next", ".turbo", ".cache", "coverage", "__pycache__"}
+    {
+        "node_modules",
+        ".git",
+        "dist",
+        "build",
+        ".next",
+        ".turbo",
+        ".cache",
+        "coverage",
+        "__pycache__",
+    }
 )
 
 
@@ -84,7 +97,9 @@ def zip_dir(source_dir: Path, *, exclude_build_dirs: bool = True) -> bytes:
             if not path.is_file():
                 continue
             rel = path.relative_to(source_dir)
-            if exclude_build_dirs and any(part in _SOURCE_EXCLUDE_DIRS for part in rel.parts):
+            if exclude_build_dirs and any(
+                part in _SOURCE_EXCLUDE_DIRS for part in rel.parts
+            ):
                 continue
             archive.write(path, arcname=rel.as_posix())
     return buffer.getvalue()
@@ -97,7 +112,11 @@ def slug_candidates(preferred: str | None, *, pod_id: UUID, app_name: str) -> li
     minting a second app."""
     from app.core.helpers.slug import normalize_public_slug
 
-    base = normalize_public_slug(preferred or "") or normalize_public_slug(app_name) or "app"
+    base = (
+        normalize_public_slug(preferred or "")
+        or normalize_public_slug(app_name)
+        or "app"
+    )
     digest = hashlib.sha256(f"{pod_id}:{app_name}".encode()).hexdigest()[:6]
     candidates = [base, f"{base}-{digest}"]
     candidates.extend(f"{base}-{digest}{i}" for i in range(2, 8))
@@ -136,10 +155,13 @@ async def _keep_sandbox_alive(session: Any):
             first = False
             try:
                 await heartbeat(sandbox_id)
-            except Exception as exc:  # noqa: BLE001 - best-effort keepalive
-                logger.debug("app-build sandbox heartbeat failed %s: %s", sandbox_id, exc)
+            except Exception:  # noqa: BLE001 - best-effort keepalive
+                logger.debug(
+                    "pod_bundle.app_builder.app_build_sandbox_heartbeat_s.observed",
+                    sandbox_id=sandbox_id,
+                )
 
-    task = asyncio.create_task(_loop())
+    task = create_inherited_task(_loop(), name="pod-app-build-stream")
     try:
         yield
     finally:
@@ -190,7 +212,10 @@ class AppSandboxBuilder:
         src_dir = f"{build_dir}/src"
         async with session:
             async with _keep_sandbox_alive(session):
-                await self._sh(session, f"rm -rf {shlex.quote(build_dir)} && mkdir -p {shlex.quote(src_dir)}")
+                await self._sh(
+                    session,
+                    f"rm -rf {shlex.quote(build_dir)} && mkdir -p {shlex.quote(src_dir)}",
+                )
                 await self._upload(session, source_zip, f"{build_dir}/source.zip")
                 await self._sh(
                     session,
@@ -199,7 +224,8 @@ class AppSandboxBuilder:
                 await self._run_build(session, src_dir)
                 dist_index = f"{src_dir}/dist/index.html"
                 check = await session.exec_command(
-                    cmd=f"test -f {shlex.quote(dist_index)}", timeout=_IO_TIMEOUT_SECONDS
+                    cmd=f"test -f {shlex.quote(dist_index)}",
+                    timeout=_IO_TIMEOUT_SECONDS,
                 )
                 if not check.get("success"):
                     raise AppBuildFailedError(
@@ -238,7 +264,9 @@ class AppSandboxBuilder:
         b64_path = f"{remote_path}.b64"
         await self._sh(session, f": > {shlex.quote(b64_path)}")
         for chunk in _chunks(encoded, _B64_CHUNK):
-            await self._sh(session, f"printf %s {shlex.quote(chunk)} >> {shlex.quote(b64_path)}")
+            await self._sh(
+                session, f"printf %s {shlex.quote(chunk)} >> {shlex.quote(b64_path)}"
+            )
         await self._sh(
             session,
             f"base64 -d {shlex.quote(b64_path)} > {shlex.quote(remote_path)} "
@@ -259,7 +287,11 @@ class AppSandboxBuilder:
 
 
 def _tail(result: dict[str, Any], limit: int = 4000) -> str:
-    text = (result.get("stderr") or "") or (result.get("stdout") or "") or (result.get("error") or "")
+    text = (
+        (result.get("stderr") or "")
+        or (result.get("stdout") or "")
+        or (result.get("error") or "")
+    )
     return text[-limit:]
 
 
@@ -376,7 +408,13 @@ class AppStepRunner:
     # --- phase 2 ---------------------------------------------------------
 
     async def _artifacts(
-        self, resource_dir: Path, name: str, *, app_slug: str, pod_id: UUID, user_id: UUID
+        self,
+        resource_dir: Path,
+        name: str,
+        *,
+        app_slug: str,
+        pod_id: UUID,
+        user_id: UUID,
     ) -> tuple[bytes | None, bytes]:
         """Produce ``(source_bytes, dist_bytes)`` for upload. A Vite source is built
         in the agentbox; a static source is deployed as-is; a bundle carrying only a
@@ -389,7 +427,10 @@ class AppStepRunner:
             tier = classify_source_dir(source_dir)
             if tier == "vite":
                 dist_bytes = await self._sandbox.build(
-                    user_id=user_id, pod_id=pod_id, app_slug=app_slug, source_zip=source_bytes
+                    user_id=user_id,
+                    pod_id=pod_id,
+                    app_slug=app_slug,
+                    source_zip=source_bytes,
                 )
             else:  # static: the source *is* the served site.
                 dist_bytes = source_bytes

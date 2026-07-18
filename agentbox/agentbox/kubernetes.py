@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import asyncio
-import logging
 import time
 
 from fastapi import HTTPException, status
@@ -31,7 +30,9 @@ from agentbox.runtime_proxy import (
     request_runtime_json,
 )
 
-logger = logging.getLogger(__name__)
+from agentbox.observability import get_logger
+
+logger = get_logger(__name__)
 _MAX_RUNTIME_ERROR_BODY_LENGTH = _SHARED_MAX_RUNTIME_ERROR_BODY_LENGTH
 
 
@@ -44,9 +45,9 @@ def _request_runtime_json(*args, **kwargs):  # type: ignore[no-untyped-def]
         detail = exc.detail if isinstance(exc.detail, dict) else {}
         runtime_status = detail.get("runtime_status")
         if runtime_status is not None:
-            logger.warning("Sandbox runtime returned HTTP %s", runtime_status)
+            logger.debug('agentbox.kubernetes.runtime_returned_http_s.diagnostic', runtime_status=runtime_status)
         elif detail.get("error") == "runtime returned malformed JSON":
-            logger.warning("Sandbox runtime returned malformed JSON")
+            logger.debug('agentbox.kubernetes.runtime_returned_malformed_json.diagnostic')
         raise
 
 
@@ -129,12 +130,7 @@ class SandboxKubernetesClient(LegacyRuntimeProviderMixin):
             # Failed/Succeeded/Unknown pod can never become ready again. Recreate
             # it from scratch — `ensure` stays idempotent and self-healing, and
             # the sandbox's persistent record in the state store is left intact.
-            logger.warning(
-                "Recreating sandbox %s: existing pod %s is in terminal phase %s",
-                sandbox_id,
-                pod_name,
-                phase,
-            )
+            logger.debug('agentbox.kubernetes.recreating_sandbox_s_existing_pod.diagnostic', sandbox_id=sandbox_id)
             await self.delete(sandbox_id)
             await self.wait_until_deleted(sandbox_id)
 

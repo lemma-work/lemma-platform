@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import json
-import logging
 import random
 import time
 from collections.abc import Callable
@@ -11,7 +10,9 @@ from urllib import request as urlrequest
 from agentbox.providers.models import TransientGateway
 
 
-logger = logging.getLogger(__name__)
+from agentbox.observability import get_logger
+
+logger = get_logger(__name__)
 
 REQUEST_NOT_DELIVERED_HEADER = "X-Agentbox-Request-Not-Delivered"
 
@@ -165,13 +166,7 @@ def request_endpoint_http(
         # burst of concurrent sandbox starts cannot create a synchronized log
         # storm while still leaving enough breadcrumbs for diagnosis.
         if attempt in _TRANSIENT_GATEWAY_LOG_ATTEMPTS or delay >= remaining:
-            logger.warning(
-                "Sandbox endpoint gateway was temporarily unroutable; "
-                "gateway=%s attempt=%d retry_in_seconds=%.3f",
-                transient_gateway,
-                attempt,
-                delay,
-            )
+            logger.debug('agentbox.endpoint_transport.endpoint_gateway_was_temporarily_unroutable.diagnostic', attempt=attempt)
         sleep(delay)
         retry_delay = min(
             retry_delay * 1.5,

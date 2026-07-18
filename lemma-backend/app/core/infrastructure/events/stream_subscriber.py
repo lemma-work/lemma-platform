@@ -152,23 +152,17 @@ async def ensure_consumer_groups(
             )
             created += 1
             if warn_on_create:
-                logger.warning(
-                    "Recreated missing Redis consumer group",
-                    group=group,
-                    stream=stream,
+                logger.debug(
+                    'infrastructure.stream_subscriber.recreated_missing_redis_consumer_group.diagnostic'
                 )
             else:
                 logger.debug(
-                    "Created Redis consumer group",
-                    group=group,
-                    stream=stream,
+                    "infrastructure.stream_subscriber.created_redis_consumer_group.observed"
                 )
         except Exception as exc:  # BUSYGROUP (already exists) is the happy path
             if "BUSYGROUP" not in str(exc):
-                logger.warning(
-                    "Failed ensuring consumer group",
-                    group=group,
-                    stream=stream,
+                logger.debug(
+                    'infrastructure.stream_subscriber.ensuring_consumer_group.diagnostic',
                     error_type=type(exc).__name__,
                 )
     return created
@@ -193,17 +187,13 @@ async def ensure_named_groups(
             )
             created += 1
             if warn_on_create:
-                logger.warning(
-                    "Recreated missing Redis consumer group",
-                    group=group,
-                    stream=stream,
+                logger.debug(
+                    'infrastructure.stream_subscriber.recreated_missing_redis_consumer_group.diagnostic'
                 )
         except Exception as exc:  # BUSYGROUP (already exists) is the happy path
             if "BUSYGROUP" not in str(exc):
-                logger.warning(
-                    "Failed ensuring consumer group",
-                    group=group,
-                    stream=stream,
+                logger.debug(
+                    'infrastructure.stream_subscriber.ensuring_consumer_group.diagnostic',
                     error_type=type(exc).__name__,
                 )
     return created

@@ -139,7 +139,8 @@ class AgentSurfaceIngressService:
         event_dedup_store: SurfaceEventDedupStorePort | None = None,
         pod_membership_port: SurfacePodMembershipPort | None = None,
         file_ingest_service: SurfaceFileIngestService | None = None,
-        conversation_service_factory: Callable[[Any], ConversationService] | None = None,
+        conversation_service_factory: Callable[[Any], ConversationService]
+        | None = None,
         connector_service_factory: Callable[[Any], ConnectorService] | None = None,
     ):
         # Two modes:
@@ -205,11 +206,9 @@ class AgentSurfaceIngressService:
 
         parsed = await adapter.parse_inbound_event(request.payload, request.headers)
         if parsed is None:
-            logger.info(
-                "Agent surface ignored webhook because payload did not parse "
-                "source=%s payload_type=%s",
-                request.source,
-                (request.payload or {}).get("type"),
+            logger.debug(
+                "agent_surfaces.ingress_service.agent_surface_ignored_webhook_because.observed",
+                source=request.source,
             )
             return None
 
@@ -224,11 +223,6 @@ class AgentSurfaceIngressService:
             allowed_ids = set(request.receiver_surface_ids)
             surfaces = [surface for surface in surfaces if surface.id in allowed_ids]
             if not surfaces:
-                logger.info(
-                    "Agent surface ignored native-receiver webhook: no active "
-                    "surface among receiver ids platform=%s",
-                    platform,
-                )
                 return None
         elif platform in {
             SurfacePlatform.TELEGRAM.value,
@@ -271,18 +265,6 @@ class AgentSurfaceIngressService:
             surface for surface in surfaces if surface.allows_inbound_event(parsed)
         ]
         if not candidates:
-            logger.info(
-                "Agent surface ignored webhook with no matching surface platform=%s "
-                "tenant=%s active_surfaces=%d is_dm=%s mentioned_agent=%s "
-                "is_thread_reply=%s channel=%s",
-                platform,
-                parsed.tenant_id,
-                len(surfaces),
-                parsed.is_dm,
-                parsed.mentioned_agent,
-                bool((parsed.metadata or {}).get("is_thread_reply")),
-                parsed.external_channel_id,
-            )
             return await self._prepare_unrouted_platform_context(
                 platform=platform,
                 surface=self._scoped_fallback_surface(request, surfaces),
@@ -313,11 +295,6 @@ class AgentSurfaceIngressService:
             matched_surface = identity_surface
 
         if matched_surface is None:
-            logger.info(
-                "Agent surface ignored webhook with no matching pod surface platform=%s tenant=%s",
-                platform,
-                parsed.tenant_id,
-            )
             return await self._prepare_unrouted_platform_context(
                 platform=platform,
                 surface=identity_surface,
@@ -339,17 +316,9 @@ class AgentSurfaceIngressService:
     ) -> AgentSurfaceContext | None:
         surface = await self.surface_repository.get(request.surface_id)
         if surface is None:
-            logger.info(
-                "Surface webhook received for unknown surface_id=%s",
-                request.surface_id,
-            )
             return None
 
         if not surface.is_active or not surface.status.accepts_inbound_events():
-            logger.info(
-                "Surface webhook received for inactive surface_id=%s",
-                request.surface_id,
-            )
             return None
 
         adapter = self.adapter_registry.get(surface.surface_type)
@@ -403,16 +372,10 @@ class AgentSurfaceIngressService:
         if adapter is None:
             return
 
-        raw_event_metadata = (
+        (
             parsed_context.message_metadata.event_metadata
             if isinstance(parsed_context, SurfaceChatContext)
             else {}
-        )
-        logger.info(
-            "Agent surface executing chat platform=%s conversation=%s attachments=%d",
-            platform,
-            getattr(parsed_context, "conversation_id", None),
-            len((raw_event_metadata.get("attachments") or [])),
         )
 
         if isinstance(parsed_context, SurfaceReplyContext):
@@ -441,8 +404,10 @@ class AgentSurfaceIngressService:
                     "agent_display_name": context.agent_display_name,
                 },
             )
-        except Exception as exc:
-            logger.warning("Failed adding surface processing indicator: %s", exc)
+        except Exception:
+            logger.debug(
+                'agent_surfaces.ingress_service.adding_surface_processing_indicator_s.diagnostic'
+            )
 
         # Auto-ingest any user-provided files into the pod datastore (/me/{platform})
         # so surface files behave like web uploads; failures never block the run.
@@ -456,8 +421,10 @@ class AgentSurfaceIngressService:
                     parsed=context.event,
                     credentials=credentials,
                 )
-            except Exception as exc:
-                logger.warning("Surface file auto-ingest failed: %s", exc)
+            except Exception:
+                logger.debug(
+                    'agent_surfaces.ingress_service.surface_file_auto_ingest_s.diagnostic'
+                )
 
         metadata = context.message_metadata.as_message_metadata()
         metadata.update(
@@ -558,12 +525,10 @@ class AgentSurfaceIngressService:
                 event=context.event,
                 limit=_CHANNEL_CONTEXT_LIMIT,
             )
-        except Exception as exc:
-            logger.warning(
-                "Surface channel-context fetch failed platform=%s conversation=%s error=%s",
-                context.platform,
-                context.conversation_id,
-                exc,
+        except Exception:
+            logger.debug(
+                'agent_surfaces.ingress_service.surface_channel_context_fetch_platform.diagnostic',
+                conversation_id=context.conversation_id,
             )
             return []
         return [m.model_dump(mode="json") for m in messages][:_CHANNEL_CONTEXT_LIMIT]
@@ -596,8 +561,10 @@ class AgentSurfaceIngressService:
                 from app.composition.surface_agent import get_speech_provider
 
                 provider = get_speech_provider()
-            except Exception as exc:
-                logger.warning("Speech provider unavailable for ingress: %s", exc)
+            except Exception:
+                logger.warning(
+                    "agent_surfaces.ingress_service.speech_provider_unavailable_ingress_s.degraded"
+                )
                 provider = None
 
         async def _one(item: IngestedAttachment) -> tuple[IngestedAttachment, Any]:
@@ -606,11 +573,9 @@ class AgentSurfaceIngressService:
                     item.audio_bytes, mime=item.mime or "audio/ogg"
                 )
                 return item, result
-            except Exception as exc:
-                logger.warning(
-                    "Surface voice transcription failed path=%s error=%s",
-                    item.path,
-                    exc,
+            except Exception:
+                logger.debug(
+                    'agent_surfaces.ingress_service.surface_voice_transcription_path_s.diagnostic'
                 )
                 return item, None
 
@@ -715,11 +680,10 @@ class AgentSurfaceIngressService:
                 response=response,
             )
             return True
-        except Exception as exc:
-            logger.warning(
-                "Surface interaction typed-reply resume failed conversation=%s error=%s",
-                context.conversation_id,
-                exc,
+        except Exception:
+            logger.debug(
+                'agent_surfaces.ingress_service.surface_interaction_typed_reply_resume.diagnostic',
+                conversation_id=context.conversation_id,
             )
             return False
 
@@ -736,45 +700,42 @@ class AgentSurfaceIngressService:
             conversation_id
         )
         if link is None:
-            logger.warning(
-                "Surface egress skipped: no conversation link conversation=%s",
-                conversation_id,
+            logger.debug(
+                'agent_surfaces.ingress_service.surface_egress_skipped_no_conversation.diagnostic',
+                conversation_id=conversation_id,
             )
             return None
 
         surface = await self.surface_repository.get(link.surface_id)
         if surface is None or not surface.is_active:
-            logger.warning(
-                "Surface egress skipped: surface missing or inactive "
-                "conversation=%s surface_id=%s active=%s",
-                conversation_id,
-                link.surface_id,
-                getattr(surface, "is_active", None),
+            logger.debug(
+                'agent_surfaces.ingress_service.surface_egress_skipped_surface_missing.diagnostic',
+                conversation_id=conversation_id,
+                surface_id=link.surface_id,
             )
             return None
 
         adapter = self.adapter_registry.get(surface.surface_type)
         if adapter is None:
-            logger.warning(
-                "Surface egress skipped: no adapter for platform=%s conversation=%s",
-                surface.surface_type,
-                conversation_id,
+            logger.debug(
+                'agent_surfaces.ingress_service.surface_egress_skipped_no_adapter.diagnostic',
+                surface_type=surface.surface_type,
+                conversation_id=conversation_id,
             )
             return None
 
         if not link.last_event:
-            logger.warning(
-                "Surface egress skipped: missing last_event conversation=%s",
-                conversation_id,
+            logger.debug(
+                'agent_surfaces.ingress_service.surface_egress_skipped_missing_last.diagnostic',
+                conversation_id=conversation_id,
             )
             return None
         try:
             parsed_event = ParsedInboundSurfaceEvent.model_validate(link.last_event)
-        except Exception as exc:
-            logger.warning(
-                "Surface egress skipped: invalid last_event conversation=%s error=%s",
-                conversation_id,
-                exc,
+        except Exception:
+            logger.debug(
+                'agent_surfaces.ingress_service.surface_egress_skipped_invalid_last.diagnostic',
+                conversation_id=conversation_id,
             )
             return None
 
@@ -929,53 +890,47 @@ class AgentSurfaceIngressService:
         """
         target = await self._resolve_egress_target(conversation_id)
         if target is None:
-            logger.warning(
-                "Surface ask_user NOT delivered: no egress target (surface/link/"
-                "credentials unresolved) conversation=%s",
-                conversation_id,
+            logger.debug(
+                'agent_surfaces.ingress_service.surface_ask_user_not_delivered.diagnostic',
+                conversation_id=conversation_id,
             )
             return False
         if target.surface.surface_type.is_email:
             # Email is non-interactive: never pause for a tappable/typed answer.
-            logger.info(
-                "ask_user suppressed on email surface conversation=%s",
-                conversation_id,
+            logger.debug(
+                "agent_surfaces.ingress_service.ask_user_suppressed_email_surface.observed",
+                conversation_id=conversation_id,
             )
             return False
         pending = await self.conversation_service.get_pending_ask_user(
             conversation_id=conversation_id
         )
         if not isinstance(pending, dict):
-            logger.warning(
-                "Surface ask_user NOT delivered: no pending ask_user tool call "
-                "found conversation=%s",
-                conversation_id,
+            logger.debug(
+                'agent_surfaces.ingress_service.surface_ask_user_not_delivered.diagnostic',
+                conversation_id=conversation_id,
             )
             return False
         raw_request = _ask_user_request_dict(pending.get("tool_args"))
         if raw_request is None:
-            tool_args = pending.get("tool_args")
-            logger.warning(
-                "Surface ask_user NOT delivered: could not read questions from "
-                "persisted tool args conversation=%s tool_args_keys=%s",
-                conversation_id,
-                sorted(tool_args.keys()) if isinstance(tool_args, dict) else None,
+            pending.get("tool_args")
+            logger.debug(
+                'agent_surfaces.ingress_service.surface_ask_user_not_delivered.diagnostic',
+                conversation_id=conversation_id,
             )
             return False
         try:
             request = AskUserRequest.model_validate(raw_request)
-        except Exception as exc:
-            logger.warning(
-                "Surface ask_user render skipped (bad args) conversation=%s error=%s",
-                conversation_id,
-                exc,
+        except Exception:
+            logger.debug(
+                'agent_surfaces.ingress_service.surface_ask_user_render_skipped.diagnostic',
+                conversation_id=conversation_id,
             )
             return False
         if not request.questions:
-            logger.warning(
-                "Surface ask_user NOT delivered: request has no questions "
-                "conversation=%s",
-                conversation_id,
+            logger.debug(
+                'agent_surfaces.ingress_service.surface_ask_user_not_delivered.diagnostic',
+                conversation_id=conversation_id,
             )
             return False
         plan = build_ask_user_render_plan(
@@ -992,11 +947,10 @@ class AgentSurfaceIngressService:
                 metadata=metadata,
             ):
                 return True
-        except Exception as exc:
-            logger.warning(
-                "Surface ask_user native render failed conversation=%s error=%s",
-                conversation_id,
-                exc,
+        except Exception:
+            logger.debug(
+                'agent_surfaces.ingress_service.surface_ask_user_native_render.diagnostic',
+                conversation_id=conversation_id,
             )
         # Fallback: a well-formatted text message; the user replies in chat and the
         # typed-reply path in start_agent_chat resumes the run with their answer.
@@ -1010,12 +964,10 @@ class AgentSurfaceIngressService:
                 message=render_questions_as_text(plan),
                 metadata=metadata,
             )
-        except Exception as exc:
-            logger.warning(
-                "Surface ask_user text fallback ALSO failed — question delivered "
-                "to nobody conversation=%s error=%s",
-                conversation_id,
-                exc,
+        except Exception:
+            logger.debug(
+                'agent_surfaces.ingress_service.surface_ask_user_text_fallback.diagnostic',
+                conversation_id=conversation_id,
             )
             return False
         return True
@@ -1037,29 +989,27 @@ class AgentSurfaceIngressService:
         """
         target = await self._resolve_egress_target(conversation_id)
         if target is None:
-            logger.warning(
-                "Surface request_approval NOT delivered: no egress target "
-                "conversation=%s",
-                conversation_id,
+            logger.debug(
+                'agent_surfaces.ingress_service.surface_request_approval_not_delivered.diagnostic',
+                conversation_id=conversation_id,
             )
             return False
         if target.surface.surface_type.is_email:
             # Email is non-interactive: never pause for an approve/deny reply.
             # (The tool now fails fast on email before pausing; this stays as a
             # defense-in-depth guard.)
-            logger.info(
-                "request_approval suppressed on email surface conversation=%s",
-                conversation_id,
+            logger.debug(
+                "agent_surfaces.ingress_service.request_approval_suppressed_email_surface.observed",
+                conversation_id=conversation_id,
             )
             return False
         pending = await self.conversation_service.get_pending_user_interaction(
             conversation_id=conversation_id
         )
         if not isinstance(pending, dict) or pending.get("kind") != "request_approval":
-            logger.warning(
-                "Surface request_approval NOT delivered: no pending approval call "
-                "found conversation=%s",
-                conversation_id,
+            logger.debug(
+                'agent_surfaces.ingress_service.surface_request_approval_not_delivered.diagnostic',
+                conversation_id=conversation_id,
             )
             return False
         tool_args = pending.get("tool_args") or {}
@@ -1067,9 +1017,7 @@ class AgentSurfaceIngressService:
         # carries a real permission gate (it lets the exact action skip future
         # prompts); otherwise it is noise.
         permission_ids = tool_args.get("permission_ids")
-        allow_session = bool(
-            isinstance(permission_ids, list) and permission_ids
-        )
+        allow_session = bool(isinstance(permission_ids, list) and permission_ids)
         plan = build_approval_render_plan(
             conversation_id=conversation_id,
             tool_call_id=str(pending.get("tool_call_id") or tool_call_id or ""),
@@ -1087,12 +1035,10 @@ class AgentSurfaceIngressService:
                 metadata=metadata,
             ):
                 return True
-        except Exception as exc:
-            logger.warning(
-                "Surface request_approval native render failed conversation=%s "
-                "error=%s",
-                conversation_id,
-                exc,
+        except Exception:
+            logger.debug(
+                'agent_surfaces.ingress_service.surface_request_approval_native_render.diagnostic',
+                conversation_id=conversation_id,
             )
         # Fallback: a text prompt; the user replies "approve"/"deny" and the
         # typed-reply path resumes the run with their decision. If this ALSO
@@ -1104,12 +1050,10 @@ class AgentSurfaceIngressService:
                 message=plan.to_plain_text(),
                 metadata=metadata,
             )
-        except Exception as exc:
-            logger.warning(
-                "Surface request_approval text fallback ALSO failed — approval "
-                "delivered to nobody conversation=%s error=%s",
-                conversation_id,
-                exc,
+        except Exception:
+            logger.debug(
+                'agent_surfaces.ingress_service.surface_request_approval_text_fallback.diagnostic',
+                conversation_id=conversation_id,
             )
             return False
         return True
@@ -1133,14 +1077,14 @@ class AgentSurfaceIngressService:
         # The caption is model-authored — strip any reasoning before delivery.
         caption = sanitize_user_visible_text(caption) if caption else caption
         try:
-            conversation = (
-                await self.conversation_service.conversation_repository.get_conversation(
-                    conversation_id
-                )
+            conversation = await self.conversation_service.conversation_repository.get_conversation(
+                conversation_id
             )
             if conversation is None:
                 return False
-            auth_ctx = await create_authorization_data_service(self.uow).build_user_context(
+            auth_ctx = await create_authorization_data_service(
+                self.uow
+            ).build_user_context(
                 user_id=conversation.user_id,
                 pod_id=target.surface.pod_id,
             )
@@ -1152,12 +1096,10 @@ class AgentSurfaceIngressService:
                 )
             finally:
                 reset_current_context(token)
-        except Exception as exc:
-            logger.warning(
-                "Surface voice note fetch failed conversation=%s path=%s error=%s",
-                conversation_id,
-                path,
-                exc,
+        except Exception:
+            logger.debug(
+                'agent_surfaces.ingress_service.surface_voice_note_fetch_conversation.diagnostic',
+                conversation_id=conversation_id,
             )
             return False
 
@@ -1172,11 +1114,10 @@ class AgentSurfaceIngressService:
                 caption=caption,
             ):
                 return True
-        except Exception as exc:
-            logger.warning(
-                "Surface voice note send failed conversation=%s error=%s",
-                conversation_id,
-                exc,
+        except Exception:
+            logger.debug(
+                'agent_surfaces.ingress_service.surface_voice_note_send_conversation.diagnostic',
+                conversation_id=conversation_id,
             )
         # Fallback: native file attachment (audio player), then a link card.
         if await self._try_send_file_attachment(
@@ -1206,14 +1147,14 @@ class AgentSurfaceIngressService:
         """
         platform = target.surface.surface_type.value
         try:
-            conversation = (
-                await self.conversation_service.conversation_repository.get_conversation(
-                    conversation_id
-                )
+            conversation = await self.conversation_service.conversation_repository.get_conversation(
+                conversation_id
             )
             if conversation is None:
                 return False
-            auth_ctx = await create_authorization_data_service(self.uow).build_user_context(
+            auth_ctx = await create_authorization_data_service(
+                self.uow
+            ).build_user_context(
                 user_id=conversation.user_id,
                 pod_id=target.surface.pod_id,
             )
@@ -1230,12 +1171,10 @@ class AgentSurfaceIngressService:
                 )
             finally:
                 reset_current_context(token)
-        except Exception as exc:
-            logger.warning(
-                "Surface native file attach skipped conversation=%s path=%s error=%s",
-                conversation_id,
-                path,
-                exc,
+        except Exception:
+            logger.debug(
+                'agent_surfaces.ingress_service.surface_native_file_attach_skipped.diagnostic',
+                conversation_id=conversation_id,
             )
             return False
         return await target.adapter.send_file_attachment(
@@ -1287,21 +1226,18 @@ class AgentSurfaceIngressService:
         try:
             parsed_callback = parse_callback_id(parsed.callback_id)
             if parsed_callback is None:
-                logger.warning(
-                    "Surface interaction dropped: unparseable callback_id=%r "
-                    "platform=%s",
-                    parsed.callback_id,
-                    parsed.platform,
+                logger.debug(
+                    'agent_surfaces.ingress_service.surface_interaction_dropped_unparseable_callback.diagnostic',
+                    callback_id=parsed.callback_id,
                 )
                 return
             conversation_id_raw, tool_call_id = parsed_callback
             try:
                 conversation_id = UUID(conversation_id_raw)
             except ValueError:
-                logger.warning(
-                    "Surface interaction dropped: invalid conversation id in "
-                    "callback=%r",
-                    parsed.callback_id,
+                logger.debug(
+                    'agent_surfaces.ingress_service.surface_interaction_dropped_invalid_conversation.diagnostic',
+                    callback_id=parsed.callback_id,
                 )
                 return
 
@@ -1309,21 +1245,17 @@ class AgentSurfaceIngressService:
                 conversation_id
             )
             if link is None or link.platform != parsed.platform.value:
-                logger.warning(
-                    "Surface interaction dropped: no matching link conversation=%s "
-                    "platform=%s link_found=%s",
-                    conversation_id,
-                    parsed.platform,
-                    link is not None,
+                logger.debug(
+                    'agent_surfaces.ingress_service.surface_interaction_dropped_no_matching.diagnostic',
+                    conversation_id=conversation_id,
                 )
                 return
             surface = await self.surface_repository.get(link.surface_id)
             if surface is None or not surface.is_active:
-                logger.warning(
-                    "Surface interaction dropped: surface missing/inactive "
-                    "conversation=%s surface_id=%s",
-                    conversation_id,
-                    link.surface_id,
+                logger.debug(
+                    'agent_surfaces.ingress_service.surface_interaction_dropped_surface_missing.diagnostic',
+                    conversation_id=conversation_id,
+                    surface_id=link.surface_id,
                 )
                 return
 
@@ -1338,10 +1270,9 @@ class AgentSurfaceIngressService:
             )
             if not claimed:
                 logger.debug(
-                    "Surface interaction ignored (replay/duplicate) conversation=%s "
-                    "dedup_id=%s",
-                    conversation_id,
-                    parsed.dedup_id,
+                    "agent_surfaces.ingress_service.surface_interaction_ignored_replay_duplicate.observed",
+                    conversation_id=conversation_id,
+                    dedup_id=parsed.dedup_id,
                 )
                 return
 
@@ -1352,25 +1283,20 @@ class AgentSurfaceIngressService:
                 and parsed.external_user_id
                 and link.external_user_id != parsed.external_user_id
             ):
-                logger.warning(
-                    "Surface answer submission rejected: submitter=%s != owner=%s "
-                    "conversation=%s",
-                    parsed.external_user_id,
-                    link.external_user_id,
-                    conversation_id,
+                logger.debug(
+                    'agent_surfaces.ingress_service.surface_answer_submission_rejected_submitter.diagnostic',
+                    external_user_id=parsed.external_user_id,
+                    conversation_id=conversation_id,
                 )
                 return
 
-            conversation = (
-                await self.conversation_service.conversation_repository.get_conversation(
-                    conversation_id
-                )
+            conversation = await self.conversation_service.conversation_repository.get_conversation(
+                conversation_id
             )
             if conversation is None:
-                logger.warning(
-                    "Surface interaction dropped: conversation not found "
-                    "conversation=%s",
-                    conversation_id,
+                logger.debug(
+                    'agent_surfaces.ingress_service.surface_interaction_dropped_conversation_not.diagnostic',
+                    conversation_id=conversation_id,
                 )
                 return
 
@@ -1383,7 +1309,9 @@ class AgentSurfaceIngressService:
             else:
                 decision = AgentRunApprovalDecision.APPROVE_ONCE
                 response = {"answers": merge_other_answers(parsed.values)}
-            auth_ctx = await create_authorization_data_service(self.uow).build_user_context(
+            auth_ctx = await create_authorization_data_service(
+                self.uow
+            ).build_user_context(
                 user_id=conversation.user_id,
                 pod_id=conversation.pod_id,
             )
@@ -1399,8 +1327,10 @@ class AgentSurfaceIngressService:
                 )
             finally:
                 reset_current_context(token)
-        except Exception as exc:
-            logger.warning("Surface interaction handling failed: %s", exc)
+        except Exception:
+            logger.debug(
+                'agent_surfaces.ingress_service.surface_interaction_handling_s.diagnostic'
+            )
 
     async def send_processing_indicator_for_conversation(
         self,
@@ -1443,11 +1373,10 @@ class AgentSurfaceIngressService:
                 progress_text=progress_text,
                 progress_handle=progress_handle,
             )
-        except Exception as exc:
-            logger.warning(
-                "Surface progress update failed conversation=%s error=%s",
-                conversation_id,
-                exc,
+        except Exception:
+            logger.debug(
+                'agent_surfaces.ingress_service.surface_progress_update_conversation_s.diagnostic',
+                conversation_id=conversation_id,
             )
             return progress_handle
 
@@ -1469,11 +1398,10 @@ class AgentSurfaceIngressService:
                 event=target.event,
                 progress_handle=progress_handle,
             )
-        except Exception as exc:
-            logger.warning(
-                "Surface progress clear failed conversation=%s error=%s",
-                conversation_id,
-                exc,
+        except Exception:
+            logger.debug(
+                'agent_surfaces.ingress_service.surface_progress_clear_conversation_s.diagnostic',
+                conversation_id=conversation_id,
             )
 
     async def _match_surface_for_user(
@@ -1576,12 +1504,10 @@ class AgentSurfaceIngressService:
                     return member_by_id[default_id]
                 # Stale default: it points at a surface the user is no longer a
                 # member of. Clear it so routing stops silently honoring it.
-                logger.warning(
-                    "Agent surface default for user=%s platform=%s points at "
-                    "surface=%s the user no longer has access to; clearing it.",
-                    user_id,
-                    platform,
-                    default_id,
+                logger.debug(
+                    'agent_surfaces.ingress_service.agent_surface_default_user_s.diagnostic',
+                    user_id=user_id,
+                    default_id=default_id,
                 )
                 clear_default = getattr(
                     self.pod_membership_port, "clear_user_default_surface_id", None
@@ -1589,13 +1515,10 @@ class AgentSurfaceIngressService:
                 if clear_default is not None:
                     try:
                         await clear_default(user_id, platform)
-                    except Exception as exc:
-                        logger.warning(
-                            "Failed to clear stale surface default user=%s "
-                            "platform=%s: %s",
-                            user_id,
-                            platform,
-                            exc,
+                    except Exception:
+                        logger.debug(
+                            'agent_surfaces.ingress_service.clear_stale_surface_default_user.diagnostic',
+                            user_id=user_id,
                         )
 
         # 3. Continuity — reuse the surface this chat already lives on (only when
@@ -1608,14 +1531,6 @@ class AgentSurfaceIngressService:
 
         # 4. Deterministic tiebreak (candidates are ordered by created_at, id).
         # The user can pick a default via GET/PUT /surfaces/me when this happens.
-        logger.info(
-            "Agent surface sender resolves to %d candidate surfaces on shared "
-            "platform=%s with no valid default set; routing to the oldest "
-            "(surface=%s). User can set a default via /surfaces/me.",
-            len(member_candidates),
-            platform,
-            member_candidates[0].id,
-        )
         return member_candidates[0]
 
     async def _telegram_text_mention_enrich(
@@ -1641,6 +1556,7 @@ class AgentSurfaceIngressService:
             from app.modules.agent_surfaces.platforms.telegram.service import (
                 TelegramPlatformService,
             )
+
             credentials = await self._resolve_credentials(surface)
             service = TelegramPlatformService(credentials)
             bot_username = (await service.get_bot_username() or "").lower()
@@ -1656,31 +1572,18 @@ class AgentSurfaceIngressService:
 
             matched = False
             if bot_username and bot_username in mentioned_usernames:
-                logger.info(
-                    "Telegram mention matched bot @%s via entity chat=%s",
-                    bot_username,
-                    parsed.external_channel_id,
-                )
                 matched = True
             elif bot_user_id and bot_user_id in text_mention_user_ids:
-                logger.info(
-                    "Telegram text_mention matched bot id=%s chat=%s",
-                    bot_user_id,
-                    parsed.external_channel_id,
-                )
                 matched = True
             elif bot_username and f"@{bot_username}" in text:
-                logger.info(
-                    "Telegram text-mention fallback: @%s found in message text chat=%s",
-                    bot_username,
-                    parsed.external_channel_id,
-                )
                 matched = True
 
             if matched:
                 return parsed.model_copy(update={"mentioned_agent": True})
-        except Exception as exc:
-            logger.debug("Telegram text-mention enrich failed: %s", exc)
+        except Exception:
+            logger.debug(
+                "agent_surfaces.ingress_service.telegram_text_mention_enrich_s.observed"
+            )
         return parsed
 
     async def _resolve_credentials(
@@ -1771,19 +1674,9 @@ class AgentSurfaceIngressService:
         resolved_user: ResolvedSurfaceUser | None = None,
     ) -> AgentSurfaceContext | None:
         if self._is_self_email_event(surface=surface, parsed=parsed):
-            logger.info(
-                "Agent surface ignored self-sent email surface=%s sender=%s",
-                surface.id,
-                parsed.sender_email,
-            )
             return None
 
         if surface.should_ignore_sender(parsed.sender_external_user_id):
-            logger.info(
-                "Agent surface ignored event from bot sender=%s surface=%s",
-                parsed.sender_external_user_id,
-                surface.id,
-            )
             return None
 
         claimed = await self.event_dedup_store.claim_message(
@@ -1794,11 +1687,10 @@ class AgentSurfaceIngressService:
             external_message_id=parsed.external_message_id,
         )
         if not claimed:
-            logger.info(
-                "Agent surface ignored duplicate external message platform=%s channel=%s message_id=%s",
-                surface.surface_type,
-                parsed.external_channel_id,
-                parsed.external_message_id,
+            logger.debug(
+                "agent_surfaces.ingress_service.agent_surface_ignored_duplicate_external.observed",
+                surface_type=surface.surface_type,
+                external_channel_id=parsed.external_channel_id,
             )
             return None
 
@@ -1812,19 +1704,16 @@ class AgentSurfaceIngressService:
                 event=parsed,
             )
             if enriched is None:
-                logger.info(
-                    "Agent surface dropped event after enrichment platform=%s message_id=%s",
-                    surface.surface_type,
-                    parsed.external_message_id,
+                logger.debug(
+                    "agent_surfaces.ingress_service.agent_surface_dropped_event_after.observed",
+                    surface_type=surface.surface_type,
                 )
                 return None
             parsed = enriched
-        except Exception as exc:
-            logger.warning(
-                "Failed enriching inbound event for %s message_id=%s: %s",
-                surface.surface_type,
-                parsed.external_message_id,
-                exc,
+        except Exception:
+            logger.debug(
+                'agent_surfaces.ingress_service.enriching_inbound_event_s_message.diagnostic',
+                surface_type=surface.surface_type,
             )
 
         # Re-check after enrichment: email triggers (e.g. Outlook) deliver a
@@ -1832,19 +1721,13 @@ class AgentSurfaceIngressService:
         # cannot see it. Without this the surface would process its own
         # outgoing replies and loop, re-sending the signup/agent reply forever.
         if self._is_self_email_event(surface=surface, parsed=parsed):
-            logger.info(
-                "Agent surface ignored self-sent email (post-enrich) surface=%s sender=%s",
-                surface.id,
-                parsed.sender_email,
-            )
             return None
 
         attachment_count = len(parsed.metadata.get("attachments") or [])
-        logger.info(
-            "Agent surface prepared inbound event platform=%s message_id=%s attachments=%d",
-            surface.surface_type,
-            parsed.external_message_id,
-            attachment_count,
+        logger.debug(
+            "agent_surfaces.ingress_service.agent_surface_prepared_inbound_event.observed",
+            surface_type=surface.surface_type,
+            attachment_count=attachment_count,
         )
 
         if resolved_user is None:
@@ -1854,11 +1737,6 @@ class AgentSurfaceIngressService:
                 credentials=credentials,
             )
         if resolved_user.internal_user_id is None:
-            logger.info(
-                "Agent surface could not resolve internal user for platform=%s sender=%s",
-                surface.surface_type,
-                parsed.sender_external_user_id,
-            )
             return unresolved_sender_context(
                 surface=surface,
                 parsed=parsed,
@@ -1880,12 +1758,11 @@ class AgentSurfaceIngressService:
             )
             is None
         ):
-            logger.info(
-                "Agent surface resolved user is not a member of surface pod platform=%s surface=%s user=%s pod=%s",
-                surface.surface_type,
-                surface.id,
-                resolved_user.internal_user_id,
-                surface.pod_id,
+            logger.debug(
+                "agent_surfaces.ingress_service.agent_surface_resolved_user_not.observed",
+                surface_type=surface.surface_type,
+                internal_user_id=resolved_user.internal_user_id,
+                pod_id=surface.pod_id,
             )
             return nonmember_context(
                 surface=surface,
@@ -1893,13 +1770,6 @@ class AgentSurfaceIngressService:
                 agent_display_name=fallback_agent_display_name,
             )
         if not surface.config.identity.allows_email(resolved_user.email):
-            logger.info(
-                "Agent surface identity policy rejected sender platform=%s surface=%s user=%s email=%s",
-                surface.surface_type,
-                surface.id,
-                resolved_user.internal_user_id,
-                resolved_user.email,
-            )
             return surface_setup_context(
                 surface=surface,
                 parsed=parsed,
@@ -1908,12 +1778,6 @@ class AgentSurfaceIngressService:
 
         route = await self._resolve_route(surface=surface, parsed=parsed)
         if route is None:
-            logger.info(
-                "Agent surface ignored event with no matching route platform=%s surface=%s channel=%s",
-                surface.surface_type,
-                surface.id,
-                parsed.external_channel_id,
-            )
             return surface_setup_context(
                 surface=surface,
                 parsed=parsed,
@@ -1968,10 +1832,9 @@ class AgentSurfaceIngressService:
             )
             if agent is not None:
                 return agent.id, agent.name
-            logger.warning(
-                "Surface channel route agent '%s' not found in pod=%s; using surface default",
-                route.agent_name,
-                surface.pod_id,
+            logger.debug(
+                'agent_surfaces.ingress_service.surface_channel_route_agent_s.diagnostic',
+                pod_id=surface.pod_id,
             )
         agent_id = surface.agent_id
         return agent_id, await self._agent_name_for_agent_id(agent_id)
@@ -2016,9 +1879,7 @@ class AgentSurfaceIngressService:
         # surface's default agent. The sender is still resolved + pod-membership
         # checked upstream, so only pod members can invoke it.
         if surface.surface_type is SurfacePlatform.TELEGRAM:
-            if not (
-                parsed.mentioned_agent or parsed.metadata.get("is_thread_reply")
-            ):
+            if not (parsed.mentioned_agent or parsed.metadata.get("is_thread_reply")):
                 return None
             agent_id = surface.agent_id
             agent_name = await self._agent_name_for_agent_id(agent_id)
@@ -2258,11 +2119,9 @@ class AgentSurfaceIngressService:
                 credentials=credentials,
                 event=parsed,
             )
-        except Exception as exc:
-            logger.warning(
-                "Failed fetching sender profile for %s: %s",
-                parsed.platform,
-                exc,
+        except Exception:
+            logger.debug(
+                'agent_surfaces.ingress_service.fetching_sender_profile_s_s.diagnostic'
             )
             sender_profile = None
         resolved = await self.identity_service.resolve(
@@ -2394,7 +2253,18 @@ def _parse_approval_decision(text: str) -> "AgentRunApprovalDecision":
     """
     from app.modules.agent.contracts import AgentRunApprovalDecision
 
-    _APPROVE_WORDS = {"approve", "yes", "y", "ok", "okay", "confirm", "1", "run", "allow", "go"}
+    _APPROVE_WORDS = {
+        "approve",
+        "yes",
+        "y",
+        "ok",
+        "okay",
+        "confirm",
+        "1",
+        "run",
+        "allow",
+        "go",
+    }
     if text.strip().lower() in _APPROVE_WORDS:
         return AgentRunApprovalDecision.APPROVE_ONCE
     return AgentRunApprovalDecision.DENY

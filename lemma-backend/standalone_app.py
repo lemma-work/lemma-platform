@@ -24,4 +24,5 @@ if __name__ == "__main__":
         port=8711,
         reload=False,
         ws="websockets-sansio",
+        access_log=False,
     )

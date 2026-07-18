@@ -434,9 +434,7 @@ class BundleApplier:
         # fields survive — this is what previously dropped account_id,
         # connector_trigger_id, filter_instruction and filter_output_schema.
         fields = {
-            key: value
-            for key, value in payload.items()
-            if key in SCHEDULE_APPLY_FIELDS
+            key: value for key, value in payload.items() if key in SCHEDULE_APPLY_FIELDS
         }
         fields["name"] = step.name
         fields["schedule_type"] = ScheduleType(str(payload.get("schedule_type")))
@@ -522,10 +520,9 @@ class BundleApplier:
         # The surface's pod-unique name (defaults to the lowercased platform);
         # the upsert is keyed by it so several surfaces of the same platform
         # round-trip.
-        resolved_name = (
-            str(payload.get("name") or "").strip()
-            or AgentSurfaceEntity.default_name_for(platform)
-        )
+        resolved_name = str(
+            payload.get("name") or ""
+        ).strip() or AgentSurfaceEntity.default_name_for(platform)
 
         # Only the create-request fields (extra='forbid'); drop export-only keys.
         # account_id has already been substituted from the provided account
@@ -560,7 +557,9 @@ class BundleApplier:
         service = get_surface_service(self._uow)
 
         agent = (
-            await _get_agent(agent_service, self._pod_id, request.default_agent_name, self._ctx)
+            await _get_agent(
+                agent_service, self._pod_id, request.default_agent_name, self._ctx
+            )
             if request.default_agent_name
             else None
         )
@@ -653,11 +652,16 @@ def _grants_from_payload(payload: dict[str, Any]) -> list[_GrantInput]:
         try:
             resource_type = ResourceType(str(raw_type))
         except ValueError:
-            logger.warning("Skipping grant with unknown resource_type %r", raw_type)
+            logger.debug(
+                'pod_bundle.applier.skipping_grant_unknown_resource_type.diagnostic',
+                raw_type=raw_type,
+            )
             continue
         resource_name = entry.get("resource_name")
         if not resource_name:
-            logger.warning("Skipping grant without a resource_name: %r", entry)
+            logger.debug(
+                'pod_bundle.applier.skipping_grant_without_resource_name.diagnostic'
+            )
             continue
         grants.append(
             _GrantInput(
@@ -695,7 +699,9 @@ def _agent_toolsets(payload: dict[str, Any]) -> list[Any]:
         try:
             toolset = AgentToolset(str(raw))
         except ValueError:
-            logger.warning("Skipping unknown agent toolset %r", raw)
+            logger.debug(
+                'pod_bundle.applier.skipping_unknown_agent_toolset_r.diagnostic'
+            )
             continue
         if toolset is AgentToolset.VIEW_IMAGE:
             continue
@@ -716,7 +722,7 @@ def _read_json_file(path: Path) -> dict[str, Any]:
 
     try:
         parsed = json.loads(path.read_text(encoding="utf-8"))
-    except (OSError, ValueError):
+    except OSError, ValueError:
         return {}
     return parsed if isinstance(parsed, dict) else {}
 

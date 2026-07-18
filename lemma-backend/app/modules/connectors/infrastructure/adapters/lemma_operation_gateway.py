@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-import logging
 from typing import Any
 
 from app.modules.connectors.domain.errors import (
@@ -21,7 +20,9 @@ from app.modules.connectors.infrastructure.adapters.lemma_connector_factory impo
     create_lemma_info_client,
     schema_json,
 )
-logger = logging.getLogger(__name__)
+from app.core.log.log import get_logger
+
+logger = get_logger(__name__)
 
 
 @dataclass(slots=True)
@@ -101,8 +102,8 @@ class LemmaOperationGateway(AppOperationGatewayPort):
         fields = getattr(input_model, "model_fields", None)
         if not isinstance(fields, dict):
             logger.debug(
-                "Skipping token autofill for %s because operation metadata is unavailable",
-                operation_name,
+                "connectors.lemma_operation_gateway.skipping_token_autofill_s_because.observed",
+                operation_name=operation_name,
             )
             return prepared
         access_token = (
@@ -125,14 +126,15 @@ class LemmaOperationGateway(AppOperationGatewayPort):
         provider: str | None = None,
     ) -> Any:
         del auth_token, api_url, provider
-        logger.info(
-            "calling %s native operation %s with payload keys=%s",
-            connector_id,
-            operation_name,
-            sorted((payload or {}).keys()),
+        logger.debug(
+            "connectors.lemma_operation_gateway.calling_s_native_operation_s.observed",
+            connector_id=connector_id,
+            operation_name=operation_name,
         )
         try:
-            client = create_lemma_execution_client(connector_id, third_party_credentials)
+            client = create_lemma_execution_client(
+                connector_id, third_party_credentials
+            )
             operation = await client.get_operation(operation_name)
             prepared_payload = self._prepare_payload(
                 operation, operation_name, payload, third_party_credentials

@@ -124,9 +124,22 @@ class InboxConsumer:
                     correlation_id = UUID(str(raw_correlation_id))
                 except TypeError, ValueError:
                     correlation_id = event_id
+                raw_causation_id = payload.get("causation_id")
+                try:
+                    causation_id = UUID(str(raw_causation_id))
+                except TypeError, ValueError:
+                    causation_id = None
                 with event_lineage(
                     correlation_id=correlation_id,
-                    causation_id=event_id,
+                    event_id=event_id,
+                    causation_id=causation_id,
+                    request_id=(
+                        str(payload["request_id"])
+                        if payload.get("request_id")
+                        else None
+                    ),
+                    event_type=event_type,
+                    consumer=consumer,
                 ):
                     await handler()
             except asyncio.CancelledError:
@@ -139,7 +152,7 @@ class InboxConsumer:
                     error_type=type(exc).__name__,
                 )
                 logger.warning(
-                    "Terminal event validation failure",
+                    "infrastructure.inbox.terminal_event_validation.degraded",
                     consumer=consumer,
                     event_id=str(event_id),
                     event_type=event_type,
@@ -234,7 +247,7 @@ class InboxConsumer:
         if terminal:
             dead_letter_counter.add(1, {"consumer": consumer, "event_type": event_type})
             logger.error(
-                "Event delivery dead-lettered",
+                "infrastructure.inbox.event_delivery_dead_lettered.failed",
                 consumer=consumer,
                 event_id=str(event_id),
                 event_type=event_type,

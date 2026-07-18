@@ -91,8 +91,8 @@ async def handle_webhook(
                 else {"data": verification_result.get("raw_payload")}
             )
         except Exception as exc:
-            logger.warning(
-                "Failed to verify Composio webhook",
+            logger.debug(
+                'schedule.webhook_controller.verify_composio_webhook.diagnostic',
                 error_type=type(exc).__name__,
             )
             raise HTTPException(
@@ -107,9 +107,8 @@ async def handle_webhook(
         # until per-account verified webhook routing lands (see plan Part D). This
         # deliberately disables the legacy shared Slack/generic ingress path.
         logger.warning(
-            "Rejecting unauthenticated webhook for source %s; only composio is "
-            "verified on this endpoint.",
-            source,
+            "schedule.webhook_controller.rejecting_unauthenticated_webhook_source_s.degraded",
+            source=source,
         )
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
@@ -133,10 +132,9 @@ async def handle_webhook(
     await EventPublisher.publish(event.stream_name(), event)
 
     # Handle webhook
-    schedule_ids = await webhook_handler.handle_webhook(
+    await webhook_handler.handle_webhook(
         source=source, payload=payload, headers=headers
     )
-    logger.info(f"Matched schedules: {schedule_ids} for {source} webhook")
     return {
         "message": "Webhook received",
     }
@@ -160,7 +158,9 @@ async def verify_webhook(
         challenge = params.get("hub.challenge")
 
         if mode == "subscribe" and challenge:
-            logger.info("Verified WhatsApp webhook")
+            logger.debug(
+                "schedule.webhook_controller.verified_whatsapp_webhook.observed"
+            )
             return Response(content=challenge, media_type="text/plain")
 
     raise HTTPException(

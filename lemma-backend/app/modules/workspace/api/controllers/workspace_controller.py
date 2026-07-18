@@ -9,6 +9,7 @@ from pydantic import BaseModel
 from agentbox_client import AgentBoxClient
 from app.core.api.dependencies import CurrentUser
 from app.core.config import settings
+from app.core.request_context import correlation_headers
 from app.modules.workspace.services.agentbox_manager import agentbox_sandbox_id
 from app.modules.workspace.services.workspace_activity_store import WorkspaceActivity
 from app.modules.workspace.services.workspace_sandbox_service import (
@@ -89,6 +90,7 @@ async def get_workspace_me(user: CurrentUser) -> WorkspaceMeResponse:
         base_url=settings.agentbox_api_url,
         api_key=api_key,
         timeout_seconds=300.0,
+        context_headers_provider=correlation_headers,
     )
     try:
         sandbox = await client.ensure_sandbox(

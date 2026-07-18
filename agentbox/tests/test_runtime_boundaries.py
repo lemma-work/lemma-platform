@@ -285,7 +285,7 @@ def _starlette_request(
 
 
 def test_runtime_http_error_is_logged_and_returned_bounded(monkeypatch, caplog):
-    caplog.set_level(logging.WARNING, logger=kubernetes.__name__)
+    caplog.set_level(logging.DEBUG, logger=kubernetes.__name__)
     oversized_body = {"detail": "x" * 4000}
 
     def fake_urlopen(req, timeout):
@@ -314,7 +314,8 @@ def test_runtime_http_error_is_logged_and_returned_bounded(monkeypatch, caplog):
     assert len(exc_info.value.detail["runtime_body"]["preview"]) <= (
         kubernetes._MAX_RUNTIME_ERROR_BODY_LENGTH + len("... [truncated]")
     )
-    assert "returned HTTP 500" in caplog.text
+    assert "agentbox.kubernetes.runtime_returned_http_s.diagnostic" in caplog.text
+    assert "x" * 100 not in caplog.text
 
 
 def test_sandbox_app_url_base_uses_agentbox_api_url(monkeypatch):
@@ -1908,7 +1909,7 @@ def test_e2b_gateway_retry_exhaustion_raises_typed_pre_routing_signal(
 
 
 def test_malformed_runtime_json_is_logged_and_returned_bounded(monkeypatch, caplog):
-    caplog.set_level(logging.WARNING, logger=kubernetes.__name__)
+    caplog.set_level(logging.DEBUG, logger=kubernetes.__name__)
 
     class _Response:
         def __enter__(self):
@@ -1937,7 +1938,8 @@ def test_malformed_runtime_json_is_logged_and_returned_bounded(monkeypatch, capl
     assert exc_info.value.status_code == 502
     assert exc_info.value.detail["error"] == "runtime returned malformed JSON"
     assert exc_info.value.detail["runtime_body"] == "not json"
-    assert "returned malformed JSON" in caplog.text
+    assert "agentbox.kubernetes.runtime_returned_malformed_json.diagnostic" in caplog.text
+    assert "not json" not in caplog.text
 
 
 def test_runtime_handler_rejects_shell_and_login_exec_fields():
@@ -2007,4 +2009,8 @@ def test_runtime_handler_logs_and_returns_json_500_for_unhandled_exception(
     assert len(body["detail"]["error"]) <= (
         runtime_server.MAX_RUNTIME_RESPONSE_ERROR_LENGTH + len("... [truncated]")
     )
-    assert "Unhandled AgentBox runtime request error" in caplog.text
+    assert (
+        "agentbox.runtime.request_failed"
+        in caplog.text
+    )
+    assert "session exploded" not in caplog.text

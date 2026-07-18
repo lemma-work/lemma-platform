@@ -56,17 +56,7 @@ def _log_pool_utilization(dbapi_conn, connection_record, proxy=None):
         max_conn = pool.size() + pool._max_overflow  # noqa: SLF001
         checked_out = pool.checkedout()
         if max_conn > 0 and checked_out / max_conn >= 0.8:
-            logger.warning(
-                "DB pool utilization high",
-                extra={
-                    "checked_out": checked_out,
-                    "max_connections": max_conn,
-                    "utilization_pct": round(checked_out / max_conn * 100, 1),
-                    "pool_size": pool.size(),
-                    "max_overflow": pool._max_overflow,  # noqa: SLF001
-                    "overflow": pool.overflow(),
-                },
-            )
+            logger.warning("infrastructure.session.db_pool_utilization_high.degraded")
     except Exception:
         pass
 
@@ -111,33 +101,13 @@ def _log_connection_budget() -> None:
     per_process = main_max + datastore_max
     pg_max = settings.postgres_max_connections
 
-    logger.info(
-        "DB connection pool budget",
-        extra={
-            "main_pool_max": main_max,
-            "datastore_pool_max": datastore_max,
-            "per_process_max": per_process,
-            "postgres_max_connections": pg_max,
-        },
-    )
 
     if per_process >= pg_max:
-        logger.warning(
-            "Per-process DB connection ceiling (%d) >= Postgres max_connections (%d). "
-            "Even a single process can exhaust the server. Reduce pool sizes or "
-            "increase Postgres max_connections.",
-            per_process,
-            pg_max,
+        logger.debug(
+            'infrastructure.session.per_process_db_connection_ceiling.diagnostic'
         )
     elif per_process * 2 > pg_max:
-        logger.warning(
-            "Two processes (API + worker) would open up to %d connections "
-            "(%d each), exceeding Postgres max_connections (%d). "
-            "Scale pool sizes down or increase Postgres max_connections.",
-            per_process * 2,
-            per_process,
-            pg_max,
-        )
+        logger.debug('infrastructure.session.two_processes_api_worker_would.diagnostic')
 
 
 def get_session_maker():

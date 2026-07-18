@@ -432,10 +432,11 @@ async def send_message(
             async for chunk in iter_subscription(iterator, result.agent_run_id):
                 yield chunk
         except Exception:
-            logger.exception(
-                "Agent realtime subscription failed",
+            logger.error(
+                "agent.conversation_controller.agent_realtime_subscription.failed",
                 conversation_id=str(conversation_id),
                 agent_run_id=str(result.agent_run_id),
+                exc_info=True,
             )
             yield encode_stream_chunk(
                 event_type="error",

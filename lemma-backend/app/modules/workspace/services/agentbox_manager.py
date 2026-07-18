@@ -7,6 +7,7 @@ from agentbox_client import AgentBoxClient
 from agentbox_client.generated.manager.models import SandboxSummary
 
 from app.core.config import settings
+from app.core.request_context import correlation_headers
 from app.modules.workspace.contracts import SandboxInfo
 from app.modules.workspace.services.interfaces import ISandbox
 
@@ -21,13 +22,12 @@ class AgentBoxSandbox(ISandbox):
     def __init__(self) -> None:
         api_key = settings.agentbox_api_key
         if not api_key:
-            raise RuntimeError(
-                "AGENTBOX_API_KEY is required for workspace sandboxes"
-            )
+            raise RuntimeError("AGENTBOX_API_KEY is required for workspace sandboxes")
         self.client = AgentBoxClient(
             base_url=settings.agentbox_api_url,
             api_key=api_key,
             timeout_seconds=300.0,
+            context_headers_provider=correlation_headers,
         )
 
     async def ensure_sandbox(

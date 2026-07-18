@@ -22,10 +22,12 @@ from app.core.infrastructure.events.inbox import (
 from app.core.infrastructure.events.stream_subscriber import (
     reliable_redis_stream_subscriber,
 )
+from app.core.log.log import get_logger
 from app.modules.pod.domain.events import PodDeletedEvent, PodEvents
 from app.modules.schedule.api.dependencies import get_schedule_service
 
 router = RedisRouter()
+logger = get_logger(__name__)
 
 
 def provide_uow_factory() -> UnitOfWorkFactory:
@@ -54,17 +56,8 @@ async def on_pod_deleted(
 
     async def delete_schedules() -> None:
         parsed = PodDeletedEvent.model_validate(event)
-        fs_logger.info(
-            "Processing PodDeletedEvent for schedule cleanup pod=%s",
-            parsed.pod_id,
-        )
 
         async with uow_factory() as uow:
-            count = await get_schedule_service(uow).delete_all_for_pod(parsed.pod_id)
-        fs_logger.info(
-            "Deleted %s schedules for deleted pod %s",
-            count,
-            parsed.pod_id,
-        )
+            await get_schedule_service(uow).delete_all_for_pod(parsed.pod_id)
 
     await inbox.process("schedule-pod-events", event, delete_schedules)

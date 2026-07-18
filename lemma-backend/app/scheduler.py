@@ -18,6 +18,7 @@ from app.modules.schedule.scheduler.api.scheduler_controller import (
 from app.modules.schedule.scheduler.scheduler_service import get_scheduler_service
 from app.core.config import settings
 from app.core.log.log import setup_logging, get_logger, validate_release_identity
+from app.core.request_context import create_background_task
 from app.core.infrastructure.db.session import get_engine
 from app.core.observability.telemetry import (
     init_telemetry,
@@ -54,10 +55,10 @@ async def lifespan(app: FastAPI):
     validate_release_identity(settings.environment)
     scheduler = get_scheduler_service()
     await scheduler.start()
-    logger.info("Scheduler service started")
-    # One stable startup event after initialization succeeds.
     logger.info("service.started")
-    heartbeat_task = asyncio.create_task(_scheduler_heartbeat_loop())
+    heartbeat_task = create_background_task(
+        _scheduler_heartbeat_loop(), name="scheduler-heartbeat"
+    )
 
     yield
 
@@ -70,7 +71,7 @@ async def lifespan(app: FastAPI):
             pass
     scheduler = get_scheduler_service()
     await scheduler.shutdown()
-    logger.info("Scheduler service stopped")
+    logger.info("service.stopped")
 
 
 # Create FastAPI app for scheduler
@@ -162,4 +163,10 @@ app.include_router(scheduler_router)
 if __name__ == "__main__":
     import uvicorn
 
-    uvicorn.run("app.scheduler:app", host="0.0.0.0", port=8001, reload=True)
+    uvicorn.run(
+        "app.scheduler:app",
+        host="0.0.0.0",
+        port=8001,
+        reload=True,
+        access_log=False,
+    )

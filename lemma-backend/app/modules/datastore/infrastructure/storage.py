@@ -104,11 +104,8 @@ class ObstoreDatastoreStorage:
             return True
         except Exception as exc:
             if self._is_missing_object_error(exc):
-                logger.info(
-                    "Skipping delete for missing datastore object %s", blob_name
-                )
                 return False
-            logger.error("Error deleting datastore file: %s", exc)
+            logger.debug('datastore.storage.deleting_datastore_file_s.propagated', exc_info=True)
             raise DatastoreInfrastructureError("Failed to delete file")
 
     async def delete_prefix(self, prefix: str) -> int:
@@ -126,9 +123,8 @@ class ObstoreDatastoreStorage:
             return len(deleted_paths)
         except Exception as exc:
             if self._is_missing_object_error(exc):
-                logger.info("Skipping delete for missing datastore prefix %s", prefix)
                 return 0
-            logger.error("Error deleting datastore prefix: %s", exc)
+            logger.debug('datastore.storage.deleting_datastore_prefix_s.propagated', exc_info=True)
             raise DatastoreInfrastructureError("Failed to delete folder contents")
 
     def _is_missing_object_error(self, exc: Exception) -> bool:

@@ -187,7 +187,9 @@ class ResolvedAgentRuntime:
             "profile_id": self.profile.id,
             "profile_name": self.profile.name,
             "user_id": str(self.profile.user_id) if self.profile.user_id else None,
-            "daemon_id": str(self.profile.daemon_id) if self.profile.daemon_id else None,
+            "daemon_id": str(self.profile.daemon_id)
+            if self.profile.daemon_id
+            else None,
             "scope": self.profile.scope.value,
             "protocol": self.profile.protocol.value,
             "model_name": self.model.name if self.model else None,
@@ -247,8 +249,13 @@ class AgentRuntimeProfileService:
             raise RuntimeError("Runtime daemon repository is required")
         if harness_kind not in USER_DAEMON_PROFILE_PROTOCOLS:
             raise ValueError("Unsupported user daemon harness kind")
-        if scope not in {RuntimeProfileScope.ORGANIZATION, RuntimeProfileScope.PERSONAL}:
-            raise ValueError("User daemon profile scope must be ORGANIZATION or PERSONAL")
+        if scope not in {
+            RuntimeProfileScope.ORGANIZATION,
+            RuntimeProfileScope.PERSONAL,
+        }:
+            raise ValueError(
+                "User daemon profile scope must be ORGANIZATION or PERSONAL"
+            )
 
         normalized_name = name.strip()
         if not normalized_name:
@@ -518,8 +525,7 @@ def _system_lemma_anthropic_profile() -> AgentRuntimeProfile | None:
     if not api_key:
         return None
     model_names = _csv_setting(
-        os.getenv("LEMMA_ANTHROPIC_MODEL_NAMES")
-        or settings.lemma_anthropic_model_names
+        os.getenv("LEMMA_ANTHROPIC_MODEL_NAMES") or settings.lemma_anthropic_model_names
     )
     default_model_name = (
         os.getenv("LEMMA_ANTHROPIC_DEFAULT_MODEL")
@@ -608,7 +614,9 @@ def _user_daemon_model_catalog(
         if not name or name in seen:
             continue
         seen.add(name)
-        provider_model_name = str(item.get("provider_model_name") or name).strip() or name
+        provider_model_name = (
+            str(item.get("provider_model_name") or name).strip() or name
+        )
         display_name = str(item.get("display_name") or "").strip() or name
         metadata = item.get("metadata")
         entries.append(
@@ -692,9 +700,7 @@ def _select_user_daemon_default_model(
         return "default"
     normalized = requested_model_name.strip()
     if normalized not in model_names:
-        raise ValueError(
-            "default_model_name must be one of the detected model names"
-        )
+        raise ValueError("default_model_name must be one of the detected model names")
     return normalized
 
 
@@ -785,9 +791,7 @@ def _select_provider_default_model(
     normalized = requested_model_name.strip()
     catalog_names = {model.name for model in catalog}
     if normalized not in catalog_names:
-        raise ValueError(
-            "default_model_name must be one of the provider model names"
-        )
+        raise ValueError("default_model_name must be one of the provider model names")
     return normalized
 
 
@@ -965,11 +969,8 @@ def _selected_model(
     # the profile's own default — and then the first catalog entry — rather than
     # hard-failing every run that relies on this profile.
     if requested_model_name:
-        logger.warning(
-            "Requested model %r is not in runtime profile %r; "
-            "falling back to the profile default",
-            requested_model_name,
-            profile.id,
+        logger.debug(
+            'agent.runtime_profile_service.requested_model_r_not_runtime.diagnostic'
         )
         if profile.default_model_name:
             for model in profile.model_catalog:

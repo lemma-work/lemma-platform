@@ -21,6 +21,9 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.infrastructure.events.models import DomainEventOutbox
 from app.core.infrastructure.events.config import event_transport_settings
 from app.core.log.log import get_logger
+from app.core.observability.dependency_incident import DependencyIncident
+from app.core.observability.telemetry import record_exception_on_current_span
+from app.core.request_context import create_background_task, event_lineage
 
 
 logger = get_logger(__name__)
@@ -40,6 +43,9 @@ class ClaimedEvent:
     payload: dict[str, Any]
     attempts: int
     occurred_at: datetime
+    correlation_id: UUID | None = None
+    causation_id: UUID | None = None
+    request_id: str | None = None
 
 
 class OutboxDispatcher:
@@ -61,6 +67,12 @@ class OutboxDispatcher:
         self.lease_seconds = lease_seconds
         self.poll_seconds = poll_seconds
         self.owner = owner or f"{socket.gethostname()}:{os.getpid()}:{uuid4().hex[:8]}"
+        self._dispatch_incident = DependencyIncident(
+            "outbox.database", logger=logger
+        )
+        self._publish_incident = DependencyIncident(
+            "outbox.message_bus", logger=logger
+        )
 
     async def dispatch_once(self) -> int:
         claimed = await self._claim_batch()
@@ -69,7 +81,6 @@ class OutboxDispatcher:
         return len(claimed)
 
     async def run(self) -> None:
-        logger.info("Transactional outbox dispatcher started", owner=self.owner)
         infrastructure_failures = 0
         while True:
             try:
@@ -81,14 +92,12 @@ class OutboxDispatcher:
                 infrastructure_failures += 1
                 delay = min(30.0, 2 ** min(infrastructure_failures - 1, 5))
                 delay *= random.uniform(0.75, 1.25)
-                logger.warning(
-                    "Outbox dispatcher infrastructure failure; retrying",
-                    owner=self.owner,
-                    error_type=type(exc).__name__,
-                    retry_in_seconds=round(delay, 3),
+                self._dispatch_incident.record_failure(
+                    error_type=type(exc).__name__
                 )
                 await asyncio.sleep(delay)
                 continue
+            self._dispatch_incident.record_success()
             if dispatched == 0:
                 await asyncio.sleep(self.poll_seconds)
 
@@ -122,13 +131,26 @@ class OutboxDispatcher:
                     payload=row.payload,
                     attempts=row.attempts,
                     occurred_at=row.occurred_at,
+                    correlation_id=getattr(row, "correlation_id", None),
+                    causation_id=getattr(row, "causation_id", None),
+                    request_id=getattr(row, "request_id", None),
                 )
                 for row in rows
             ]
 
     async def _publish(self, event: ClaimedEvent) -> None:
         started = asyncio.get_running_loop().time()
-        with tracer.start_as_current_span("lemma.outbox.publish") as span:
+        with (
+            event_lineage(
+                correlation_id=event.correlation_id or event.id,
+                event_id=event.id,
+                causation_id=event.causation_id,
+                request_id=event.request_id,
+                event_type=event.event_type,
+                consumer="outbox.publisher",
+            ),
+            tracer.start_as_current_span("lemma.outbox.publish") as span,
+        ):
             span.set_attribute("lemma.event_id", str(event.id))
             span.set_attribute("lemma.event_type", event.event_type)
             span.set_attribute("lemma.event_stream", event.stream)
@@ -143,18 +165,14 @@ class OutboxDispatcher:
             except Exception as exc:  # publication boundary; persisted for retry
                 await self._mark_failed(event, exc)
                 failed_counter.add(1, {"event_type": event.event_type})
-                span.record_exception(exc)
-                logger.warning(
-                    "Outbox publication failed",
-                    event_id=str(event.id),
-                    event_type=event.event_type,
-                    stream=event.stream,
-                    attempt=event.attempts + 1,
-                    error_type=type(exc).__name__,
+                record_exception_on_current_span(exc)
+                self._publish_incident.record_failure(
+                    error_type=type(exc).__name__
                 )
                 return
 
             await self._mark_published(event.id)
+            self._publish_incident.record_success()
             published_counter.add(1, {"event_type": event.event_type})
             publish_latency.record(
                 (asyncio.get_running_loop().time() - started) * 1000,
@@ -234,7 +252,9 @@ async def outbox_dispatcher_lifespan(
     session_maker: Callable[[], AsyncSession], message_bus
 ) -> AsyncIterator[OutboxDispatcher]:
     dispatcher = OutboxDispatcher(session_maker, message_bus)
-    task = asyncio.create_task(dispatcher.run(), name="domain-event-outbox-dispatcher")
+    task = create_background_task(
+        dispatcher.run(), name="domain-event-outbox-dispatcher"
+    )
     try:
         yield dispatcher
     finally:

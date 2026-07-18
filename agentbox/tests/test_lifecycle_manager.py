@@ -584,7 +584,7 @@ async def test_reconcile_defers_legacy_env_upgrade_with_unresolved_allocation(
         )
         assert held is not None
 
-        with caplog.at_level("WARNING"):
+        with caplog.at_level("DEBUG"):
             await manager.reconcile()
 
         record = await store.get_sandbox("legacy-sandbox")
@@ -595,8 +595,20 @@ async def test_reconcile_defers_legacy_env_upgrade_with_unresolved_allocation(
             ("reserved", None)
         ]
         assert provider.create_count == 0
-        assert "sandbox_id=legacy-sandbox" in caplog.text
-        assert "code=provider_create_outcome_unknown" in caplog.text
+        assert (
+            "agentbox.lifecycle_manager."
+            "reconciliation_deferred_retryable_provider_outcome.diagnostic"
+        ) in caplog.text
+        assert any(
+            getattr(record, "lemma_fields", {}).get("sandbox_id")
+            == "legacy-sandbox"
+            for record in caplog.records
+        )
+        assert any(
+            getattr(record, "lemma_fields", {}).get("error_code")
+            == "provider_create_outcome_unknown"
+            for record in caplog.records
+        )
     finally:
         await store.close()
 

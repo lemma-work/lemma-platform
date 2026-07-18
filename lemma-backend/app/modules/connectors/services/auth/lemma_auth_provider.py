@@ -152,21 +152,19 @@ class LemmaAuthProvider(AuthProviderInterface):
             token_data, access_token_path or "access_token", fallback_key="access_token"
         )
         if not access_token:
-            logger.warning(
-                "Access token not found at %s for connector %s",
-                access_token_path,
-                connector.id,
+            logger.debug(
+                'connectors.lemma_auth_provider.access_token_not_found_s.diagnostic'
             )
 
         refresh_token_path = oauth_config.refresh_token_path if oauth_config else None
         refresh_token = self._extract_token_field(
-            token_data, refresh_token_path or "refresh_token", fallback_key="refresh_token"
+            token_data,
+            refresh_token_path or "refresh_token",
+            fallback_key="refresh_token",
         )
         if not refresh_token:
-            logger.warning(
-                "Refresh token not found at %s for connector %s",
-                refresh_token_path,
-                connector.id,
+            logger.debug(
+                'connectors.lemma_auth_provider.refresh_token_not_found_s.diagnostic'
             )
 
         expires_at = None
@@ -202,7 +200,6 @@ class LemmaAuthProvider(AuthProviderInterface):
             user_data = {"tid": tid, "tenant_id": tid, "oid": oid} if tid else None
 
         elif connector.id in ["jira", "confluence"]:
-            logger.info("Getting Atlassian cloud id for connector: %s", connector.id)
             cloud_id = await self._cloud_id_resolver(access_token)
             if "jira" in connector.id:
                 server_url = f"https://api.atlassian.com/ex/jira/{cloud_id}"

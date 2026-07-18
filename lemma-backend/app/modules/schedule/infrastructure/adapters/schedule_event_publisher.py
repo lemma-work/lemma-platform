@@ -36,8 +36,7 @@ class DurableScheduleEventPublisher(ScheduleEventPublisher):
             source_event_id=source_event_id,
         )
         await EventPublisher.publish(event.stream_name(), event)
-        logger.info(
-            "Staged schedule event for schedule %s source=%s",
-            schedule.id,
-            source_event_id,
+        logger.debug(
+            "schedule.schedule_event_publisher.staged_schedule_event_schedule_s.observed",
+            source_event_id=source_event_id,
         )

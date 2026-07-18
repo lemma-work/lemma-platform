@@ -29,12 +29,11 @@ async def cancel_executor_run(client: object, sandbox_id: str, run_id: UUID) -> 
         return
     try:
         await cancel(sandbox_id=sandbox_id, run_id=run_id)
-    except (httpx.HTTPError, json.JSONDecodeError, ValidationError) as exc:
-        logger.warning(
-            "function_executor cancellation failed sandbox=%s run=%s: %s",
-            sandbox_id,
-            run_id,
-            exc,
+    except (httpx.HTTPError, json.JSONDecodeError, ValidationError):
+        logger.debug(
+            'function.function_executor_cancellation.function_executor_cancellation_sandbox_s.diagnostic',
+            sandbox_id=sandbox_id,
+            run_id=run_id,
         )
 
 

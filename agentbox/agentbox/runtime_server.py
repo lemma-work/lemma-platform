@@ -2,13 +2,11 @@ from __future__ import annotations
 
 import contextlib
 import json
-import logging
 import os
 import pty
 import signal
 import subprocess
 import time
-import traceback
 from dataclasses import dataclass, field
 from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -20,7 +18,9 @@ from uuid import uuid4
 
 from agentbox.runtime_kernel import RuntimePythonKernel
 
-logger = logging.getLogger(__name__)
+from agentbox.observability import get_logger
+
+logger = get_logger(__name__)
 MAX_RUNTIME_RESPONSE_ERROR_LENGTH = 2000
 EXEC_COMMAND_FIELDS = {
     "cmd",
@@ -650,12 +650,8 @@ class RuntimeHandler(BaseHTTPRequestHandler):
             super().handle_one_request()
         except Exception as exc:
             logger.error(
-                "Unhandled AgentBox runtime request error: method=%s path=%s "
-                "error=%s traceback=%s",
-                getattr(self, "command", None),
-                getattr(self, "path", None),
-                _truncate_error(f"{type(exc).__name__}: {exc}"),
-                _truncate_error(traceback.format_exc()),
+                "agentbox.runtime.request_failed",
+                exc_info=True,
             )
             with contextlib.suppress(Exception):
                 self._send_json(

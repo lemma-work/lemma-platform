@@ -71,7 +71,10 @@ def native_credentials(platform: str | SurfacePlatform | None) -> dict[str, Any]
 def has_native_credentials(platform: str | SurfacePlatform | None) -> bool:
     normalized = str(platform or "").upper()
     if normalized == SurfacePlatform.WHATSAPP:
-        return bool(surface_settings.whatsapp_access_token and surface_settings.whatsapp_phone_number_id)
+        return bool(
+            surface_settings.whatsapp_access_token
+            and surface_settings.whatsapp_phone_number_id
+        )
     if normalized == SurfacePlatform.TELEGRAM:
         return bool(surface_settings.telegram_bot_token)
     if normalized == SurfacePlatform.RESEND:
@@ -164,11 +167,10 @@ class SurfaceCredentialResolver:
                     if hasattr(refreshed, "model_dump")
                     else {}
                 )
-            except Exception as exc:
-                logger.warning(
-                    "Could not refresh credentials for account %s, falling back to stored: %s",
-                    account_id,
-                    exc,
+            except Exception:
+                logger.debug(
+                    'agent_surfaces.credential_resolver.could_not_refresh_credentials_account.diagnostic',
+                    account_id=account_id,
                 )
                 payload = dict(stored)
 
@@ -191,9 +193,9 @@ class SurfaceCredentialResolver:
             auth_config = await self._connector_service.auth_config_repository.get(
                 auth_config_id
             )
-        except Exception as exc:
-            logger.warning(
-                "Could not resolve provider for account %s: %s", account.id, exc
+        except Exception:
+            logger.debug(
+                'agent_surfaces.credential_resolver.could_not_resolve_provider_account.diagnostic'
             )
             return None
         if auth_config is None:

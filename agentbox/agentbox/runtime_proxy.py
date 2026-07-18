@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import json
-import logging
 import socket
 from urllib import error, request
 
@@ -20,7 +19,9 @@ from agentbox.schemas import (
 )
 from agentbox.to_thread import run_sync
 
-logger = logging.getLogger(__name__)
+from agentbox.observability import get_logger
+
+logger = get_logger(__name__)
 
 _MAX_RUNTIME_ERROR_BODY_LENGTH = 2000
 
@@ -83,12 +84,7 @@ def _invalid_runtime_response(
         f"runtime returned an invalid response: {exc}",
         runtime_body=payload,
     )
-    logger.warning(
-        "Sandbox runtime %s returned invalid response: %s; body=%r",
-        operation,
-        exc,
-        detail.get("runtime_body"),
-    )
+    logger.debug('agentbox.runtime_proxy.runtime_s_returned_invalid_response.diagnostic', operation=operation)
     return HTTPException(status_code=502, detail=detail)
 
 
@@ -111,12 +107,7 @@ def request_runtime_json(
         )
     except (error.URLError, TimeoutError, socket.timeout, OSError) as exc:
         detail = _runtime_failure_detail(operation, str(exc))
-        logger.warning(
-            "Sandbox runtime %s transport failure for %s: %s",
-            operation,
-            req.full_url,
-            exc,
-        )
+        logger.debug('agentbox.runtime_proxy.runtime_s_transport_s_s.diagnostic', operation=operation)
         raise HTTPException(status_code=502, detail=detail) from exc
 
     if status_code >= 400:
@@ -127,13 +118,7 @@ def request_runtime_json(
             runtime_status=status_code,
             runtime_body=runtime_body,
         )
-        logger.warning(
-            "Sandbox runtime %s returned HTTP %s for %s; body=%r",
-            operation,
-            status_code,
-            req.full_url,
-            detail.get("runtime_body"),
-        )
+        logger.debug('agentbox.runtime_proxy.runtime_s_returned_http_s.diagnostic', operation=operation, status_code=status_code)
         raise HTTPException(status_code=502, detail=detail)
 
     try:
@@ -145,13 +130,7 @@ def request_runtime_json(
             "runtime returned malformed JSON",
             runtime_body=runtime_body,
         )
-        logger.warning(
-            "Sandbox runtime %s returned malformed JSON for %s: %s; body=%r",
-            operation,
-            req.full_url,
-            exc,
-            detail.get("runtime_body"),
-        )
+        logger.debug('agentbox.runtime_proxy.runtime_s_returned_malformed_json.diagnostic', operation=operation)
         raise HTTPException(status_code=502, detail=detail) from exc
     if not isinstance(payload, dict):
         detail = _runtime_failure_detail(
@@ -159,12 +138,7 @@ def request_runtime_json(
             "runtime returned a non-object JSON response",
             runtime_body=payload,
         )
-        logger.warning(
-            "Sandbox runtime %s returned non-object JSON for %s; body=%r",
-            operation,
-            req.full_url,
-            detail.get("runtime_body"),
-        )
+        logger.debug('agentbox.runtime_proxy.runtime_s_returned_non_object.diagnostic', operation=operation)
         raise HTTPException(status_code=502, detail=detail)
     return payload
 

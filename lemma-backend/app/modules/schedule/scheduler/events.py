@@ -10,6 +10,7 @@ from app.modules.schedule.domain.schedule import ScheduleType
 from app.modules.schedule.domain.events.schedule import ScheduleFired
 from app.core.infrastructure.events.publisher import EventPublisher
 from app.core.log.log import get_logger
+from app.core.request_context import bind_job_context, event_lineage
 
 logger = get_logger(__name__)
 
@@ -24,13 +25,11 @@ class SchedulerEventEmitter:
         """Start the broker connection."""
         if not self._started:
             self._started = True
-            logger.info("Scheduler event emitter started")
 
     async def stop(self):
         """Stop the broker connection."""
         if self._started:
             self._started = False
-            logger.info("Scheduler event emitter stopped")
 
     async def emit_scheduled_job_event(
         self,
@@ -58,12 +57,26 @@ class SchedulerEventEmitter:
             scheduled_at=scheduled_at,
             source_event_id=source_event_id,
         )
-        await EventPublisher.publish(event.stream_name(), event)
-        logger.info(
-            "Staged scheduled job event",
-            schedule_id=str(schedule_id),
-            source_event_id=source_event_id,
-        )
+        with (
+            bind_job_context(
+                job_id=str(schedule_id),
+                task_name="schedule.fire",
+            ),
+            event_lineage(
+                correlation_id=event.correlation_id or event.event_id,
+                event_id=event.event_id,
+                causation_id=event.causation_id,
+                request_id=event.request_id,
+                event_type=event.event_type,
+                consumer="scheduler.emitter",
+            ),
+        ):
+            await EventPublisher.publish(event.stream_name(), event)
+            logger.debug(
+                "schedule.event.staged",
+                schedule_id=str(schedule_id),
+                source_event_id=source_event_id,
+            )
 
 
 # Global event emitter instance

@@ -15,6 +15,7 @@ from redis.exceptions import RedisError
 from app.core.config import settings
 from app.core.infrastructure.channels.channel_service import get_channel_service
 from app.core.log.log import get_logger
+from app.core.request_context import create_inherited_task
 from app.modules.agent.infrastructure.agent_runtime_redis import (
     close_agent_runtime_redis,
     daemon_command_channel as _daemon_command_channel,
@@ -104,7 +105,7 @@ class AgentRuntimeDaemonHub:
         async with self._lock:
             if self._connections.get(daemon_id) is not connection:
                 return
-            connection.command_task = asyncio.create_task(
+            connection.command_task = create_inherited_task(
                 self._listen_for_daemon_commands(connection)
             )
         with contextlib.suppress(TimeoutError):
@@ -249,7 +250,7 @@ class AgentRuntimeDaemonHub:
             if not await _is_daemon_online(daemon_id=daemon_id, user_id=user_id):
                 raise RuntimeError("User daemon is not connected")
             run_ready = asyncio.Event()
-            task = asyncio.create_task(
+            task = create_inherited_task(
                 self._listen_for_run_events(
                     agent_run_id=agent_run_id,
                     queue=queue,
@@ -285,8 +286,8 @@ class AgentRuntimeDaemonHub:
             # redelivered run.start for an id it's already running, but this
             # would otherwise silently clobber the first queue reference here
             # too (same shape of bug) if some other caller ever double-dispatched.
-            logger.warning(
-                "start_run called for an agent_run_id already registered on this connection",
+            logger.debug(
+                'agent.daemon_hub.start_run_called_agent_run.diagnostic',
                 daemon_id=str(daemon_id),
                 agent_run_id=str(agent_run_id),
             )
@@ -417,12 +418,11 @@ class AgentRuntimeDaemonHub:
                     await self._send(connection, command)
         except asyncio.CancelledError:
             raise
-        except (OSError, RedisError) as exc:
+        except (OSError, RedisError):
             connection.command_ready.set()
             logger.debug(
-                "Daemon command subscriber unavailable",
+                "agent.daemon_hub.daemon_command_subscriber_unavailable.observed",
                 daemon_id=str(connection.daemon_id),
-                error=str(exc),
             )
         finally:
             connection.command_ready.set()

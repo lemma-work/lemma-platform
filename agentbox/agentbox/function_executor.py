@@ -25,6 +25,8 @@ from urllib import request as urlrequest
 from fastapi import FastAPI, Header, HTTPException
 from pydantic import BaseModel, Field
 
+from agentbox.observability import create_inherited_task
+
 
 FUNCTION_FILE_NAME = "function.py"
 MANIFEST_NAME = ".lemma-function-cache.json"
@@ -591,7 +593,9 @@ class FunctionExecutor:
             elif len(self._queued) < self.max_queued:
                 handle.queued = True
                 self._queued.append(handle)
-                handle.expiry_task = asyncio.create_task(self._expire_queued(handle))
+                handle.expiry_task = create_inherited_task(
+                    self._expire_queued(handle), name=f"expire-run-{run_id}"
+                )
             else:
                 self._runs.pop(run_id, None)
                 raise HTTPException(
@@ -662,7 +666,9 @@ class FunctionExecutor:
         if handle.job is not None:
             handle.job.status = "running"
             handle.job.started_at = utc_timestamp()
-        handle.task = asyncio.create_task(self._drive_handle(handle))
+        handle.task = create_inherited_task(
+            self._drive_handle(handle), name=f"drive-run-{handle.run_id}"
+        )
 
     async def _expire_queued(self, handle: _RunHandle) -> None:
         await asyncio.sleep(max(0.0, handle.deadline - time.monotonic()))
@@ -886,7 +892,7 @@ class FunctionExecutor:
         async with lock:
             cache_task = self._cache_tasks.get(code_hash)
             if cache_task is None:
-                cache_task = asyncio.create_task(
+                cache_task = create_inherited_task(
                     asyncio.to_thread(self.ensure_cached, metadata)
                 )
                 self._cache_tasks[code_hash] = cache_task
@@ -936,7 +942,7 @@ class FunctionExecutor:
             handle.process = process
             os.close(write_fd)
             write_fd = -1
-            result_task = asyncio.create_task(
+            result_task = create_inherited_task(
                 asyncio.to_thread(self._read_fd_limited, read_fd, self.max_result_bytes)
             )
             if (
@@ -945,17 +951,19 @@ class FunctionExecutor:
                 or process.stdin is None
             ):
                 raise RuntimeError("Function worker pipes were not created")
-            stdout_task = asyncio.create_task(
+            stdout_task = create_inherited_task(
                 self._read_stream_limited(
                     process.stdout, self.max_stdout_bytes, stream_name="stdout"
                 )
             )
-            stderr_task = asyncio.create_task(
+            stderr_task = create_inherited_task(
                 self._read_stream_limited(
                     process.stderr, self.max_stderr_bytes, stream_name="stderr"
                 )
             )
-            process_task = asyncio.create_task(process.wait())
+            process_task = create_inherited_task(
+                process.wait(), name=f"function-process-{handle.run_id}"
+            )
 
             async def exchange() -> tuple[bytes, bytes, bytes, int]:
                 encoded_payload = json.dumps(

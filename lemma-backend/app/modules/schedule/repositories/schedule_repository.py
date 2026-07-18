@@ -385,19 +385,14 @@ class ScheduleRepository(ScheduleRepositoryInterface):
             entity = model.to_entity()
             try:
                 config = entity.datastore_config
-            except ValueError as exc:
-                logger.warning(
-                    "DATASTORE schedule %s has invalid config, skipping: %s",
-                    entity.id,
-                    exc,
+            except ValueError:
+                logger.debug(
+                    'schedule.schedule_repository.datastore_schedule_s_has_invalid.diagnostic'
                 )
                 continue
             if config is None or not config.operations:
-                logger.warning(
-                    "DATASTORE schedule %s declares no operations; operations are "
-                    "required and the schedule will never fire. Update it with "
-                    "explicit operations (INSERT, UPDATE, DELETE).",
-                    entity.id,
+                logger.debug(
+                    'schedule.schedule_repository.datastore_schedule_s_declares_no.diagnostic'
                 )
                 continue
             if operation_value in config.operations:
@@ -424,9 +419,7 @@ class ScheduleRepository(ScheduleRepositoryInterface):
         }
         if run_id is not None:
             values["last_run_id"] = run_id
-        stmt = (
-            update(Schedule).where(Schedule.id == schedule_id).values(**values)
-        )
+        stmt = update(Schedule).where(Schedule.id == schedule_id).values(**values)
         await self.session.execute(stmt)
         await self.session.flush()
 

@@ -86,12 +86,11 @@ async def deliver_display_resource_to_surface(
                 tool_output=tool_output,
                 metadata=metadata,
             )
-    except Exception as exc:
-        logger.warning(
-            "Surface display resource delivery failed conversation=%s tool_call=%s error=%s",
-            conversation_id,
-            tool_call_id,
-            exc,
+    except Exception:
+        logger.debug(
+            'agent_surfaces.surface_display_delivery.surface_display_resource_delivery_conversation.diagnostic',
+            conversation_id=conversation_id,
+            tool_call_id=tool_call_id,
         )
         return False
 
@@ -113,11 +112,10 @@ async def deliver_surface_message_to_surface(
                 conversation_id=conversation_id,
                 message=message,
             )
-    except Exception as exc:
-        logger.warning(
-            "Surface message delivery failed conversation=%s error=%s",
-            conversation_id,
-            exc,
+    except Exception:
+        logger.debug(
+            'agent_surfaces.surface_display_delivery.surface_message_delivery_conversation_s.diagnostic',
+            conversation_id=conversation_id,
         )
         return False
 
@@ -142,11 +140,9 @@ async def deliver_voice_note_to_surface(
                 path=file_path,
                 caption=caption,
             )
-    except Exception as exc:
-        logger.warning(
-            "Surface voice note delivery failed conversation=%s path=%s error=%s",
-            conversation_id,
-            file_path,
-            exc,
+    except Exception:
+        logger.debug(
+            'agent_surfaces.surface_display_delivery.surface_voice_note_delivery_conversation.diagnostic',
+            conversation_id=conversation_id,
         )
         return False

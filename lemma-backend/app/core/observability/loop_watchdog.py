@@ -14,9 +14,10 @@ restarts it. This watchdog makes a wedged loop *observable* and *actionable*:
 
 Loop-lag telemetry is **stateful**. While degraded, the in-memory maximum lag is
 tracked without emitting a warning on every tick; a single
-``runtime.loop_lag.degraded`` event fires on the transition. Recovery emits a
-single ``runtime.loop_lag.recovered`` event only after a small hysteresis window
-of consecutive healthy checks, so threshold jitter does not alternate events.
+``runtime.loop_lag.degraded`` event fires after three warning samples or one
+five-second unhealthy sample. Recovery emits one
+``runtime.loop_lag.recovered`` event after 30 healthy seconds, so threshold
+jitter does not alternate events.
 
 Mirrors the background-task shape of ``_consumer_group_reconcile_loop`` in the
 streaq runtime: started in the lifespan, cancelled on shutdown.
@@ -44,12 +45,14 @@ _last_lag_seconds: float = 0.0
 _degraded: bool = False
 _degraded_since: float = 0.0  # time.monotonic() at degraded transition
 _max_lag_seconds: float = 0.0  # peak lag observed during the current degraded window
-_healthy_streak: int = 0  # consecutive healthy ticks while waiting to recover
+_warning_streak: int = 0
+_healthy_since: float | None = None
+_breach_count: int = 0
+_last_incident_at: float = -1e9
 
-# Consecutive healthy ticks required before emitting recovery. At the default
-# 0.5s interval this is ~2.5s of sustained healthy loop time, enough to absorb
-# threshold jitter without flapping degraded/recovered events.
-_RECOVERY_HYSTERESIS_TICKS = 5
+_WARN_SAMPLES_TO_DEGRADE = 3
+_RECOVERY_HEALTHY_SECONDS = 30.0
+_INCIDENT_COOLDOWN_SECONDS = 300.0
 
 
 def get_loop_lag_seconds() -> float:
@@ -63,11 +66,15 @@ def is_loop_healthy() -> bool:
 
 def reset_loop_watchdog_state() -> None:
     """Reset the degraded-state machine (for tests and process restart)."""
-    global _degraded, _degraded_since, _max_lag_seconds, _healthy_streak, _last_lag_seconds
+    global _degraded, _degraded_since, _max_lag_seconds, _warning_streak
+    global _healthy_since, _breach_count, _last_incident_at, _last_lag_seconds
     _degraded = False
     _degraded_since = 0.0
     _max_lag_seconds = 0.0
-    _healthy_streak = 0
+    _warning_streak = 0
+    _healthy_since = None
+    _breach_count = 0
+    _last_incident_at = -1e9
     _last_lag_seconds = 0.0
 
 
@@ -82,40 +89,58 @@ def _evaluate_lag(
 
     Emits ``runtime.loop_lag.degraded`` once on the transition into degraded,
     tracks the peak lag silently while degraded (no per-tick warning), and emits
-    ``runtime.loop_lag.recovered`` once after ``_RECOVERY_HYSTERESIS_TICKS``
-    consecutive healthy samples. ``now`` defaults to ``time.monotonic()`` and is
-    overridable for tests so degraded-duration is deterministic.
+    ``runtime.loop_lag.recovered`` once after 30 healthy seconds. ``now`` defaults
+    to ``time.monotonic()`` and is overridable for tests so degraded-duration is
+    deterministic.
     """
-    global _degraded, _degraded_since, _max_lag_seconds, _healthy_streak
+    global _degraded, _degraded_since, _max_lag_seconds, _warning_streak
+    global _healthy_since, _breach_count, _last_incident_at
     clock = time.monotonic() if now is None else now
+    unhealthy = settings.loop_lag_unhealthy_seconds
     if lag > warn:
-        _healthy_streak = 0
-        if not _degraded:
+        _healthy_since = None
+        _warning_streak += 1
+        is_unhealthy = lag >= unhealthy
+        should_enter = is_unhealthy or _warning_streak >= _WARN_SAMPLES_TO_DEGRADE
+        cooldown_elapsed = clock - _last_incident_at >= _INCIDENT_COOLDOWN_SECONDS
+        if not _degraded and should_enter and cooldown_elapsed:
             _degraded = True
             _degraded_since = clock
             _max_lag_seconds = lag
+            _breach_count = _warning_streak
+            _last_incident_at = clock
             logger.warning(
                 "runtime.loop_lag.degraded",
                 lag_ms=round(lag * 1000, 1),
                 threshold_ms=round(warn * 1000, 1),
                 service=service_name,
+                breach_count=_breach_count,
+                unhealthy=is_unhealthy,
             )
-        elif lag > _max_lag_seconds:
-            _max_lag_seconds = lag
+        elif _degraded:
+            _breach_count += 1
+            if lag > _max_lag_seconds:
+                _max_lag_seconds = lag
     elif _degraded:
-        _healthy_streak += 1
-        if _healthy_streak >= _RECOVERY_HYSTERESIS_TICKS:
+        _warning_streak = 0
+        if _healthy_since is None:
+            _healthy_since = clock
+        if clock - _healthy_since >= _RECOVERY_HEALTHY_SECONDS:
             degraded_duration_ms = round((clock - _degraded_since) * 1000, 1)
             logger.info(
                 "runtime.loop_lag.recovered",
                 max_lag_ms=round(_max_lag_seconds * 1000, 1),
                 degraded_duration_ms=degraded_duration_ms,
                 service=service_name,
+                breach_count=_breach_count,
             )
             _degraded = False
             _degraded_since = 0.0
             _max_lag_seconds = 0.0
-            _healthy_streak = 0
+            _healthy_since = None
+            _breach_count = 0
+    else:
+        _warning_streak = 0
 
 
 def _write_heartbeat(path: str) -> None:
@@ -154,14 +179,6 @@ async def loop_lag_watchdog(
     global _last_lag_seconds
     interval = max(0.05, settings.loop_lag_watchdog_interval_seconds)
     warn = settings.loop_lag_warn_seconds
-    logger.info(
-        "Loop-lag watchdog started",
-        interval_seconds=interval,
-        warn_seconds=warn,
-        unhealthy_seconds=settings.loop_lag_unhealthy_seconds,
-        heartbeat_path=heartbeat_path or None,
-        service=service_name,
-    )
     while True:
         scheduled_at = time.perf_counter()
         await asyncio.sleep(interval)
@@ -173,10 +190,10 @@ async def loop_lag_watchdog(
             try:
                 _write_heartbeat(heartbeat_path)
             except OSError as exc:  # pragma: no cover - defensive
-                logger.warning(
-                    "Failed writing loop-watchdog heartbeat",
-                    path=heartbeat_path,
-                    error=str(exc),
+                logger.debug(
+                    "runtime.heartbeat.write_failed",
+                    error_type=type(exc).__name__,
+                    service=service_name,
                 )
 
         _evaluate_lag(lag, warn, service_name=service_name)

@@ -85,7 +85,7 @@ uv run alembic upgrade head           # apply migrations
 uv run uvicorn app.app:app --host 0.0.0.0 --port 8000 --reload
 
 # streaq worker — agent runs, file (re)indexing, surface ingest, datastore cleanup tasks
-uv run streaq run app.events:streaq_worker
+uv run python -m app.worker
 
 # scheduler — cron / time / webhook schedules
 uv run python -m app.scheduler

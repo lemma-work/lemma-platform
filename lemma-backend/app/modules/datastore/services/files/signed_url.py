@@ -160,8 +160,8 @@ class SignedUrlStore:
             # Burn the link so further attempts short-circuit as not-found.
             try:
                 await redis.delete(key)
-            except Exception as exc:  # best-effort cleanup
-                logger.debug("signed-url cleanup failed: %s", exc)
+            except Exception:  # best-effort cleanup
+                logger.debug("datastore.signed_url.signed_url_cleanup_s.observed")
             raise SignedUrlExhausted(code)
 
         return SignedUrlClaims(

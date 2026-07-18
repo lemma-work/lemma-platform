@@ -158,10 +158,6 @@ async def _process_agent_control_event(
         job_id = agent_run_job_id(parsed.agent_run_id)
         task_status = await job_queue.status(job_id)
         if task_status == TaskStatus.RUNNING:
-            fs_logger.info(
-                "Agent run stop requested; runner will stop cooperatively: %s",
-                parsed.agent_run_id,
-            )
             return
 
         # Do not call streaq abort here. A queued task can race into RUNNING
@@ -192,10 +188,6 @@ async def _process_agent_control_event(
         if finish_result is None or not finish_result.updated:
             return
 
-        fs_logger.info(
-            "Agent run stopped before worker execution: %s",
-            parsed.agent_run_id,
-        )
         await publish_conversation_event(
             parsed.conversation_id,
             completed_payload(
@@ -225,9 +217,7 @@ async def enqueue_agent_run(
         _job_id=agent_run_job_id(event.agent_run_id),
     )
     if job is None:
-        fs_logger.info("Skipped duplicate agent run enqueue: %s", event.agent_run_id)
         return False
-    fs_logger.info("Enqueued agent run: %s", event.agent_run_id)
     return True
 
 
@@ -266,7 +256,10 @@ async def process_agent_run(
             ),
         )
     except asyncio.CancelledError:
-        logger.warning("process_agent_run cancelled run=%s", agent_run_id)
+        logger.debug(
+            'agent.handlers.process_agent_run_cancelled_run.diagnostic',
+            agent_run_id=agent_run_id,
+        )
 
 
 @streaq_task(name="generate_conversation_title")
@@ -332,14 +325,16 @@ async def reconcile_orphaned_agent_runs() -> None:
                     finalized.append(
                         (run.conversation_id, run.id, finish_result.status)
                     )
-    except Exception as exc:
-        logger.error("reconcile_orphaned_agent_runs cron failed: %s", exc)
+    except Exception:
+        logger.error("agent.handlers.reconcile_orphaned_agent_runs_cron.failed", exc_info=True)
         return
 
     if not finalized:
         return
 
-    logger.warning("Reconciled %d orphaned agent run(s) to FAILED", len(finalized))
+    logger.debug(
+        'agent.handlers.reconciled_d_orphaned_agent_run.diagnostic', count=len(finalized)
+    )
     # Publish outside the UoW (mirrors handle_agent_control_event's stop path)
     # so SSE clients refresh and workflow waits resume promptly.
     for conversation_id, agent_run_id, status in finalized:
@@ -354,9 +349,9 @@ async def reconcile_orphaned_agent_runs() -> None:
                     data=event_data,
                 ),
             )
-        except Exception as exc:
+        except Exception:
             logger.error(
-                "Failed publishing reconciled-run realtime update run=%s error_type=%s",
-                agent_run_id,
-                type(exc).__name__,
-            )
+                "agent.handlers.publishing_reconciled_run_realtime_update.failed",
+                agent_run_id=agent_run_id,
+            exc_info=True,
+        )

@@ -268,11 +268,7 @@ class WorkflowEngine:
         """
         wait = await self.wait_repo.find_active_by_external_ref(wait_type, external_ref)
         if wait is None:
-            logger.info(
-                "workflow.resume.stale_event",
-                wait_type=wait_type.value,
-                external_ref=external_ref,
-            )
+            logger.debug("workflow.resume.stale_event", wait_type=wait_type.value)
             return None
 
         run = await self.run_repo.get_for_update(wait.run_id)
@@ -280,10 +276,9 @@ class WorkflowEngine:
             WorkflowRunStatus.WAITING,
             WorkflowRunStatus.RUNNING,
         ):
-            logger.info(
+            logger.debug(
                 "workflow.resume.stale_event",
                 wait_type=wait_type.value,
-                external_ref=external_ref,
                 run_status=run.status.value if run else "MISSING",
             )
             return None
@@ -318,11 +313,7 @@ class WorkflowEngine:
         """Fail the run waiting on (wait_type, external_ref)."""
         wait = await self.wait_repo.find_active_by_external_ref(wait_type, external_ref)
         if wait is None:
-            logger.info(
-                "workflow.fail.stale_event",
-                wait_type=wait_type.value,
-                external_ref=external_ref,
-            )
+            logger.debug("workflow.fail.stale_event", wait_type=wait_type.value)
             return None
         run = await self.run_repo.get_for_update(wait.run_id)
         if run is None or run.status not in (
@@ -369,11 +360,10 @@ class WorkflowEngine:
             ):
                 # The underlying work is not stopped; its completion event
                 # will find no ACTIVE wait and be dropped with a log line.
-                logger.info(
+                logger.debug(
                     "workflow.cancel.underlying_work_left_running",
                     run_id=str(run.id),
                     wait_type=wait.wait_type.value,
-                    external_ref=wait.external_ref,
                 )
         try:
             run.cancel()
@@ -381,7 +371,7 @@ class WorkflowEngine:
             raise WorkflowConflictError(str(exc)) from exc
         run = await self.run_repo.update(run)
         await self.uow.commit()
-        logger.info("workflow.run.cancelled", run_id=str(run.id))
+        logger.debug("workflow.run.cancelled", run_id=str(run.id))
         return run
 
     # -- queries -----------------------------------------------------------------

@@ -34,7 +34,7 @@ async def listen(
     try:
         return await listen_internal(ctx.deps, request)
     except Exception as exc:  # pragma: no cover - defensive
-        logger.exception("speech.listen failed: %s", exc)
+        logger.debug("agent.speech.listen_failed", exc_info=True)
         return ListenResponse(success=False, error=str(exc))
 
 
@@ -57,7 +57,7 @@ async def say(ctx: RunContext[BaseAgentContext], request: SayRequest) -> SayResp
     try:
         return await say_internal(ctx.deps, request)
     except Exception as exc:  # pragma: no cover - defensive
-        logger.exception("speech.say failed: %s", exc)
+        logger.debug("agent.speech.say_failed", exc_info=True)
         return SayResponse(success=False, error=str(exc))
 
 

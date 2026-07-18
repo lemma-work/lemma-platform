@@ -22,9 +22,9 @@ from app.modules.datastore.infrastructure.session import (
 from app.core.embeddings.embeddings import Embedder
 from app.modules.datastore.domain.ports import RerankerPort
 from app.modules.datastore.infrastructure.reranker import create_reranker
-import logging
+from app.core.log.log import get_logger
 
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 
 class PostgresSearchService:
@@ -159,12 +159,9 @@ class PostgresSearchService:
                     await conn.execute(
                         text(f'DROP INDEX IF EXISTS "{self.schema_name}".{legacy}')
                     )
-            except Exception as exc:
-                logger.info(
-                    "Could not drop legacy index %s for %s: %s",
-                    legacy,
-                    self.schema_name,
-                    exc,
+            except Exception:
+                logger.debug(
+                    "datastore.postgres_search_service.could_not_drop_legacy_index.observed"
                 )
         try:
             async with self.engine.begin() as conn:
@@ -180,19 +177,13 @@ class PostgresSearchService:
                 )
         except Exception as exc:
             lower_msg = str(exc).lower()
-            if "extension" in lower_msg and (
+            extension_missing = "extension" in lower_msg and (
                 "does not exist" in lower_msg or "not installed" in lower_msg
-            ):
-                logger.info(
-                    "Skipping halfvec vector index for %s: extension not available",
-                    self.schema_name,
-                )
-            else:
-                logger.warning(
-                    "Failed to create halfvec vector index for %s; vector search "
-                    "will use sequential scan: %s",
-                    self.schema_name,
-                    exc,
+            )
+            if not extension_missing:
+                logger.debug(
+                    "datastore.postgres_search_service.create_halfvec_vector_index_s.diagnostic",
+                    error_type=type(exc).__name__,
                 )
 
     async def index_file_chunks(
@@ -206,7 +197,10 @@ class PostgresSearchService:
         schema_seconds = time.perf_counter() - schema_started
 
         if not chunks:
-            logger.warning("No chunks for %s", file_id)
+            logger.debug(
+                'datastore.postgres_search_service.no_chunks_s.diagnostic',
+                file_id=file_id,
+            )
             return IndexingMetrics(
                 chunk_count=0,
                 schema_seconds=schema_seconds,
@@ -235,19 +229,17 @@ class PostgresSearchService:
                 embedding_seconds=embedding_seconds,
                 persistence_seconds=persistence_seconds,
             )
-            logger.info(
-                "Datastore indexing stages file=%s chunks=%d schema=%.3fs "
-                "embed=%.3fs persist=%.3fs throughput=%.2f_chunks_per_second",
-                file_id,
-                len(chunks),
-                schema_seconds,
-                embedding_seconds,
-                persistence_seconds,
-                len(chunks) / max(embedding_seconds, 0.001),
+            logger.debug(
+                "datastore.postgres_search_service.datastore_indexing_stages_file_s.observed",
+                file_id=file_id,
+                count=len(chunks),
+                schema_seconds=schema_seconds,
+                embedding_seconds=embedding_seconds,
+                persistence_seconds=persistence_seconds,
             )
             return metrics
-        except Exception as exc:
-            logger.error("Failed to add file to search: %s", exc)
+        except Exception:
+            logger.debug('datastore.postgres_search_service.add_file_search_s.propagated', exc_info=True)
             raise
 
     async def remove_file(self, file_id: UUID):

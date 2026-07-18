@@ -66,8 +66,10 @@ class PodMemberService:
         if not requester_org_member:
             raise PodAccessDeniedError("Requester is not a member of the organization")
 
-        requester_pod_member = await self.pod_member_repository.get_by_pod_and_org_member(
-            entity.pod_id, requester_org_member.id
+        requester_pod_member = (
+            await self.pod_member_repository.get_by_pod_and_org_member(
+                entity.pod_id, requester_org_member.id
+            )
         )
         target_roles = normalize_role_list(entity.roles)
         if not target_roles:
@@ -103,7 +105,10 @@ class PodMemberService:
             entity.user_email = str(org_member_added.user.email)
             parts = [
                 part
-                for part in [org_member_added.user.first_name, org_member_added.user.last_name]
+                for part in [
+                    org_member_added.user.first_name,
+                    org_member_added.user.last_name,
+                ]
                 if part
             ]
             entity.user_name = " ".join(parts) or None
@@ -116,12 +121,12 @@ class PodMemberService:
                     last_name=org_member_added.user.last_name,
                 )
             else:
-                logger.warning(
-                    "Could not find user details for org member %s to emit event",
-                    entity.organization_member_id,
+                logger.debug(
+                    'pod.pod_member_service.could_not_find_user_details.diagnostic',
+                    organization_member_id=entity.organization_member_id,
                 )
-        except Exception as e:
-            logger.error(f"Failed to prepare PodMemberAddedEvent: {e}")
+        except Exception:
+            logger.debug("pod.member_event.creation_failed", exc_info=True)
 
         created = await self.pod_member_repository.create(entity)
         if created.user_id is None:
@@ -310,8 +315,10 @@ class PodMemberService:
             if org_member_to_remove:
                 removed_user_id = org_member_to_remove.user_id
                 pod_member.mark_removed(user_id=org_member_to_remove.user_id)
-        except Exception as e:
-            logger.warning(f"Failed to fetch user info for event emission: {e}")
+        except Exception:
+            logger.debug(
+                'pod.pod_member_service.fetch_user_info_event_emission.diagnostic'
+            )
 
         deleted = await self.pod_member_repository.delete_entity(pod_member)
         if not deleted:
@@ -380,8 +387,10 @@ class PodMemberService:
                 target_user_id=target_user_id,
             )
         else:
-            requester_pod_member = await self.pod_member_repository.get_by_pod_and_org_member(
-                pod_member.pod_id, requester_org_member.id
+            requester_pod_member = (
+                await self.pod_member_repository.get_by_pod_and_org_member(
+                    pod_member.pod_id, requester_org_member.id
+                )
             )
             if not self._member_has_role(requester_pod_member, PodRole.EDITOR):
                 raise PodAccessDeniedError(

@@ -34,9 +34,10 @@ async def publish_bundle_event(
     try:
         service = channel_service or await get_channel_service()
         await service.publish(bundle_job_channel(job_id), payload)
-    except Exception as exc:
-        logger.warning(
-            "Failed publishing pod-bundle realtime event for job %s: %s", job_id, exc
+    except Exception:
+        logger.debug(
+            'pod_bundle.realtime.publishing_pod_bundle_realtime_event.diagnostic',
+            job_id=job_id,
         )
 
 

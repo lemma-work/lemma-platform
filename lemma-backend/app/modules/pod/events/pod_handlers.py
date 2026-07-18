@@ -17,6 +17,7 @@ from app.core.infrastructure.events.inbox import (
     EventInboxPort,
     provide_domain_event_inbox,
 )
+from app.core.log.log import get_logger
 from app.modules.identity.contracts import IdentityEmailPort
 from app.composition.pod_identity_wiring import (
     create_identity_email_port,
@@ -32,6 +33,7 @@ from app.modules.pod.infrastructure.pod_repositories import (
 )
 
 router = RedisRouter()
+logger = get_logger(__name__)
 
 
 def provide_uow_factory() -> UnitOfWorkFactory:
@@ -78,10 +80,6 @@ async def _process_pod_join_requested(
     uow_factory: UnitOfWorkFactory,
     email_port: IdentityEmailPort,
 ) -> None:
-    fs_logger.info(
-        f"Processing PodJoinRequestedEvent for pod {parsed.pod_id} "
-        f"(request {parsed.join_request_id})"
-    )
 
     async with uow_factory() as uow:
         pod_repository = PodRepository(uow)
@@ -91,17 +89,22 @@ async def _process_pod_join_requested(
 
         pod = await pod_repository.get(parsed.pod_id)
         if not pod:
-            fs_logger.warning(f"Pod {parsed.pod_id} not found; skipping notification")
+            logger.debug(
+                'pod.pod_handlers.pod_not_found_skipping_notification.diagnostic',
+                pod_id=parsed.pod_id,
+            )
             return
 
         requester = await user_repository.get(parsed.requester_user_id)
         if not requester:
-            fs_logger.warning(
-                f"Requester {parsed.requester_user_id} not found; skipping notification"
+            logger.debug(
+                'pod.pod_handlers.requester_not_found_skipping_notification.diagnostic'
             )
             return
         requester_name = (
-            " ".join(part for part in [requester.first_name, requester.last_name] if part)
+            " ".join(
+                part for part in [requester.first_name, requester.last_name] if part
+            )
             or ""
         )
 
@@ -114,12 +117,13 @@ async def _process_pod_join_requested(
         admin_emails = [
             member.user_email
             for member in members
-            if member.user_email
-            and roles_allow_required(member.roles, PodRole.ADMIN)
+            if member.user_email and roles_allow_required(member.roles, PodRole.ADMIN)
         ]
 
     if not admin_emails:
-        fs_logger.info(f"No pod admins to notify for pod {parsed.pod_id}")
+        logger.debug(
+            "pod.pod_handlers.no_pod_admins_notify_pod.observed", pod_id=parsed.pod_id
+        )
         return
 
     for admin_email in admin_emails:
@@ -130,7 +134,3 @@ async def _process_pod_join_requested(
             requester_name=requester_name,
             requester_email=str(requester.email),
         )
-    fs_logger.info(
-        f"Sent pod join request emails to {len(admin_emails)} admin(s) "
-        f"for pod {parsed.pod_id}"
-    )

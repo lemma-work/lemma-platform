@@ -37,7 +37,6 @@ async def handle_llm_filter_task(
         raise ValueError("schedule_id is required")
     if source_event_id is None:
         raise ValueError("source_event_id is required")
-    logger.info(f"Processing LLM filtering for schedule {schedule_id}")
 
     uow_factory = SessionUnitOfWorkFactory(async_session_maker)
 
@@ -45,19 +44,23 @@ async def handle_llm_filter_task(
         schedule = await ScheduleRepository(uow=uow).get(UUID(schedule_id))
 
     if schedule is None:
-        logger.error("Schedule %s not found for LLM filtering", schedule_id)
+        logger.debug(
+            "schedule.filter.not_found",
+            schedule_id=schedule_id,
+        )
         return
 
     if not schedule.filter_instruction:
-        logger.warning("Schedule %s has no filter instruction, skipping", schedule_id)
+        logger.debug(
+            'schedule.schedule_consumer.s_has_no_filter_instruction.diagnostic',
+            schedule_id=schedule_id,
+        )
         return
 
     processor = create_schedule_processor()
-    fired = await processor.process_event(
+    await processor.process_event(
         schedule=schedule,
         payload=payload,
         metadata=metadata,
         source_event_id=source_event_id,
     )
-    if not fired:
-        logger.info("Schedule %s filtered out by LLM, skipping event", schedule_id)

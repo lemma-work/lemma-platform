@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from collections.abc import Callable, Mapping
 from typing import TypeVar
 
 import httpx
@@ -29,6 +30,14 @@ from agentbox_client.timeouts import (
 )
 
 ResponseModelT = TypeVar("ResponseModelT", bound=BaseModel)
+_CONTEXT_HEADER_NAMES = frozenset(
+    {
+        "x-request-id",
+        "x-lemma-correlation-id",
+        "x-lemma-event-id",
+        "x-lemma-job-id",
+    }
+)
 
 
 class AgentBoxClient:
@@ -41,11 +50,13 @@ class AgentBoxClient:
         api_key: str,
         timeout_seconds: float = 120.0,
         client: httpx.AsyncClient | None = None,
+        context_headers_provider: Callable[[], Mapping[str, str]] | None = None,
     ) -> None:
         self.base_url = base_url.rstrip("/")
         self.api_key = api_key
         self.timeout_seconds = timeout_seconds
         self._owns_client = client is None
+        self._context_headers_provider = context_headers_provider
         self.client = client or httpx.AsyncClient(
             base_url=self.base_url,
             timeout=timeout_seconds,
@@ -58,6 +69,20 @@ class AgentBoxClient:
                 "Accept": "application/json",
             },
         )
+
+    def _context_headers(self) -> dict[str, str] | None:
+        if self._context_headers_provider is None:
+            return None
+        try:
+            provided = self._context_headers_provider()
+        except Exception:
+            return None
+        headers = {
+            key: value
+            for key, value in provided.items()
+            if key.lower() in _CONTEXT_HEADER_NAMES
+        }
+        return headers or None
 
     async def __aenter__(self) -> "AgentBoxClient":
         return self
@@ -80,7 +105,9 @@ class AgentBoxClient:
         return response.sandbox
 
     async def get_sandbox(self, sandbox_id: str) -> SandboxSummary | None:
-        response = await self.client.get(f"/sandboxes/{sandbox_id}")
+        response = await self.client.get(
+            f"/sandboxes/{sandbox_id}", headers=self._context_headers()
+        )
         if response.status_code == 404:
             return None
         response.raise_for_status()
@@ -117,7 +144,8 @@ class AgentBoxClient:
 
     async def delete_session(self, sandbox_id: str, session_id: str) -> bool:
         response = await self.client.delete(
-            f"/sandboxes/{sandbox_id}/sessions/{session_id}"
+            f"/sandboxes/{sandbox_id}/sessions/{session_id}",
+            headers=self._context_headers(),
         )
         response.raise_for_status()
         return bool(response.json().get("deleted"))
@@ -140,7 +168,9 @@ class AgentBoxClient:
         runtime session (e.g. JOB functions running through the function_executor
         app). Best-effort: returns the manager's reported active state.
         """
-        response = await self.client.post(f"/sandboxes/{sandbox_id}/heartbeat")
+        response = await self.client.post(
+            f"/sandboxes/{sandbox_id}/heartbeat", headers=self._context_headers()
+        )
         response.raise_for_status()
         return bool(response.json().get("active", False))
 
@@ -300,7 +330,13 @@ class AgentBoxClient:
         timeout: float | None = None,
     ) -> ResponseModelT:
         json_body = body.model_dump(exclude_none=True) if isinstance(body, BaseModel) else body
-        response = await self.client.request(method, path, json=json_body, timeout=timeout)
+        response = await self.client.request(
+            method,
+            path,
+            json=json_body,
+            timeout=timeout,
+            headers=self._context_headers(),
+        )
         response.raise_for_status()
         return model_type.model_validate(response.json())
 

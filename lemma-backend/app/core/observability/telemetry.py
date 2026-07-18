@@ -3,8 +3,11 @@ from __future__ import annotations
 from collections.abc import Callable, Sequence
 from contextlib import contextmanager
 from contextvars import ContextVar
+import hashlib
 import logging
+from pathlib import Path
 import time
+import traceback
 from typing import Any
 
 from fastapi import FastAPI
@@ -186,9 +189,9 @@ def _build_resource(service_name: str) -> Resource:
     # Release identity on the OTLP resource (mirrors the log context fields).
     # Present even when exporters are disabled so Phase 3 trace enablement is a
     # config flip, not a code change.
-    release_sha = (settings.release_sha or "").strip()
-    if release_sha:
-        attributes["service.version"] = release_sha
+    from app.core.log.log import release_sha_for_resource
+
+    attributes["service.version"] = release_sha_for_resource()
     return Resource.create(attributes)
 
 
@@ -199,7 +202,9 @@ def _build_sampler(settings) -> Sampler:
     decision; independent roots are sampled at the configured ratio. Honored by
     the managed Container Apps OTel agent via the same env vars.
     """
-    strategy = (settings.otel_traces_sampler or "parentbased_traceidratio").strip().lower()
+    strategy = (
+        (settings.otel_traces_sampler or "parentbased_traceidratio").strip().lower()
+    )
     ratio = float(settings.otel_traces_sampler_arg)
     if strategy in {"always_on", "alwayson"}:
         return ALWAYS_ON
@@ -354,16 +359,8 @@ def _setup_tracing(service_name: str) -> None:
                 )
             )
         )
-        logger.info(
-            "Starting OTEL trace export",
-            endpoint=traces_endpoint,
-            protocol=_normalize_otlp_protocol(settings.otel_exporter_otlp_protocol),
-        )
 
-    if (
-        settings.llm_otel_enabled
-        and settings.llm_otel_exporter_otlp_endpoint
-    ):
+    if settings.llm_otel_enabled and settings.llm_otel_exporter_otlp_endpoint:
         provider.add_span_processor(
             OpenInferenceSpanProcessor(span_filter=_is_llm_span)
         )
@@ -378,13 +375,6 @@ def _setup_tracing(service_name: str) -> None:
                     _is_llm_span,
                 )
             )
-        )
-        logger.info(
-            "Starting LLM OTEL trace export",
-            endpoint=settings.llm_otel_exporter_otlp_endpoint,
-            protocol=_normalize_otlp_protocol(
-                settings.llm_otel_exporter_otlp_protocol
-            ),
         )
 
     trace.set_tracer_provider(provider)
@@ -405,11 +395,6 @@ def _setup_metrics(service_name: str) -> None:
                 ),
                 export_interval_millis=settings.observability_metrics_export_interval_millis,
             )
-        )
-        logger.info(
-            "Starting OTEL metric export",
-            endpoint=metrics_endpoint,
-            protocol=_normalize_otlp_protocol(settings.otel_exporter_otlp_protocol),
         )
 
     if not readers:
@@ -446,11 +431,6 @@ def _setup_logs(service_name: str) -> None:
         LoggingHandler(level=logging.NOTSET, logger_provider=provider)
     )
     _logs_initialized = True
-    logger.info(
-        "Starting OTEL log export",
-        endpoint=logs_endpoint,
-        protocol=_normalize_otlp_protocol(settings.otel_exporter_otlp_protocol),
-    )
 
 
 def _instrument_libraries() -> None:
@@ -529,7 +509,6 @@ def init_telemetry(service_name: str = "lemma-api") -> None:
 
     settings = _get_settings()
     if not settings.observability_enabled:
-        logger.info("Observability disabled, skipping OTEL setup")
         return
 
     resolved_service_name = _resolve_service_name(service_name)
@@ -540,8 +519,8 @@ def init_telemetry(service_name: str = "lemma-api") -> None:
         _setup_logs(resolved_service_name)
         _instrument_libraries()
     except Exception as exc:
-        logger.warning(
-            "Observability setup failed; continuing without OTEL",
+        logger.debug(
+            'observability.telemetry.observability_setup_continuing_without_otel.diagnostic',
             error_type=type(exc).__name__,
         )
     _telemetry_initialized = True
@@ -622,12 +601,25 @@ def record_exception_on_current_span(
     if not span or not span.is_recording():
         return
 
-    span.record_exception(exc, attributes=attributes)
+    frames = traceback.extract_tb(exc.__traceback__)[-8:] if exc.__traceback__ else []
+    descriptors = [
+        f"{Path(frame.filename).stem}:{frame.name}:{frame.lineno}" for frame in frames
+    ]
+    fingerprint = "|".join([type(exc).__name__, *descriptors])
+    safe_attributes: dict[str, Any] = {
+        "error.type": type(exc).__name__,
+        "error.stack_hash": hashlib.sha256(fingerprint.encode()).hexdigest(),
+    }
+    if descriptors:
+        safe_attributes["error.frames"] = descriptors
+    if attributes:
+        safe_attributes.update(attributes)
+    span.add_event("exception", attributes=safe_attributes)
     if attributes:
         for key, value in attributes.items():
             span.set_attribute(key, value)
     if mark_span_as_error:
-        span.set_status(Status(StatusCode.ERROR, str(exc)))
+        span.set_status(Status(StatusCode.ERROR, type(exc).__name__))
 
 
 def get_current_trace_context() -> dict[str, str]:

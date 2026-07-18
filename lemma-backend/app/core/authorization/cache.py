@@ -114,8 +114,8 @@ async def get_role_snapshot(
     except Exception:
         # Redis unavailable -> miss; the snapshot is re-derived from the DB.
         # Warn so an outage is visible before it turns into DB pressure.
-        logger.warning(
-            "Role-snapshot cache read failed; re-deriving from DB.", exc_info=True
+        logger.debug(
+            'authorization.cache.role_snapshot_cache_read_re.diagnostic', exc_info=True
         )
         return None
     if not payload:
@@ -142,7 +142,9 @@ async def set_role_snapshot(
     except Exception:
         # Redis unavailable -> skip caching (next access re-derives). Warn so
         # an outage is visible before it turns into DB pressure.
-        logger.warning("Role-snapshot cache write failed.", exc_info=True)
+        logger.debug(
+            'authorization.cache.role_snapshot_cache_write.diagnostic', exc_info=True
+        )
 
 
 async def invalidate_role_snapshot_cache(
@@ -175,8 +177,7 @@ async def invalidate_role_snapshot_cache(
         else:
             await cache.clear_prefix()
     except Exception:
-        logger.warning(
-            "Role-snapshot cache invalidation failed; stale snapshots persist "
-            "until the TTL elapses.",
+        logger.debug(
+            'authorization.cache.role_snapshot_cache_invalidation_stale.diagnostic',
             exc_info=True,
         )

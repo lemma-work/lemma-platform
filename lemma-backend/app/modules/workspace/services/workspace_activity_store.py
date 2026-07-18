@@ -36,7 +36,9 @@ class WorkspaceActivityStore:
         redis_url: Optional[str] = None,
         key_prefix: str = "workspace:activity:v1",
     ):
-        self._redis = Redis.from_url(redis_url or settings.redis_url, decode_responses=True)
+        self._redis = Redis.from_url(
+            redis_url or settings.redis_url, decode_responses=True
+        )
         self._key_prefix = key_prefix
 
     def _workspace_key(self, runtime: str, user_id: UUID) -> str:
@@ -100,7 +102,10 @@ class WorkspaceActivityStore:
                 workspace_url=payload.get("workspace_url"),
             )
         except Exception:
-            logger.warning(f"Invalid workspace activity payload for user {user_id}; removing")
+            logger.debug(
+                'workspace.workspace_activity_store.invalid_workspace_activity_payload_user.diagnostic',
+                user_id=user_id,
+            )
             await self.remove(runtime=runtime, user_id=user_id)
             return None
 
@@ -134,8 +139,9 @@ class WorkspaceActivityStore:
                 payload = json.loads(raw)
                 last_used_at = datetime.fromisoformat(payload["last_used_at"])
             except Exception:
-                logger.warning(
-                    f"Invalid workspace activity payload for user {user_id}; removing"
+                logger.debug(
+                    'workspace.workspace_activity_store.invalid_workspace_activity_payload_user.diagnostic',
+                    user_id=user_id,
                 )
                 await self.remove(runtime=runtime, user_id=user_id)
                 continue

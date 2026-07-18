@@ -20,6 +20,7 @@ from app.core.authorization.permissions import Permissions
 from app.core.infrastructure.db.session import async_session_maker
 from app.core.infrastructure.db.uow_factory import SessionUnitOfWorkFactory
 from app.core.log.log import get_logger
+from app.core.request_context import create_inherited_task
 from app.modules.agent.api.schemas import (
     AgentHarnessInfo,
     AgentHarnessListResponse,
@@ -338,7 +339,7 @@ async def daemon_websocket(websocket: WebSocket) -> None:
             }
         )
         last_ping_monotonic = _MutableMonotonic()
-        stale_reaper_task = asyncio.create_task(
+        stale_reaper_task = create_inherited_task(
             _close_if_ping_stale(websocket, last_ping_monotonic, daemon_id=daemon_id)
         )
         while True:
@@ -431,8 +432,8 @@ async def _close_if_ping_stale(
     while True:
         await asyncio.sleep(poll_interval)
         if time.monotonic() - last_ping_monotonic.value > threshold:
-            logger.warning(
-                "Daemon websocket stale (no daemon.ping); closing",
+            logger.debug(
+                'agent.runtime_config_controller.daemon_websocket_stale_no_daemon.diagnostic',
                 daemon_id=str(daemon_id),
                 threshold_seconds=threshold,
             )

@@ -17,10 +17,6 @@ from app.modules.workflow.domain.context import (
     TriggerContext,
     normalize_node_output,
 )
-from app.core.log.log import get_logger
-
-logger = get_logger(__name__)
-
 # Keep stored failure reasons actionable, not full tracebacks. We retain the
 # head (usually the human-readable message) and the tail (usually the root
 # cause line of a chained exception) so both survive truncation.
@@ -235,7 +231,6 @@ class WorkflowRunEntity(AggregateRoot):
         """Every failure path funnels through here so the reason survives to
         the API. failed_node_id is the node being executed when the failure
         happened (None for pre-execution failures)."""
-        logger.error(error)
         failed_node = node_id or self.current_node_id
         if self.step_history:
             last_step = self.step_history[-1]

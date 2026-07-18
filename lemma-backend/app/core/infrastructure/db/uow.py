@@ -80,7 +80,7 @@ class SqlAlchemyUnitOfWork(IUnitOfWork):
             .on_conflict_do_nothing(index_elements=["id"])
         )
         logger.debug(
-            "Staged domain events in transactional outbox",
+            "infrastructure.uow.staged_domain_events_transactional_outbox.observed",
             event_count=len(rows),
         )
 

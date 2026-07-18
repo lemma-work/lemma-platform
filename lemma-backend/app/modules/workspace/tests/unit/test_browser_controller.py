@@ -20,7 +20,15 @@ async def test_workspace_browser_access_returns_manager_app_url(monkeypatch) -> 
     calls: list[dict] = []
 
     class FakeAgentBoxClient:
-        def __init__(self, *, base_url: str, api_key: str, timeout_seconds: float):
+        def __init__(
+            self,
+            *,
+            base_url: str,
+            api_key: str,
+            timeout_seconds: float,
+            context_headers_provider=None,
+        ):
+            assert callable(context_headers_provider)
             calls.append(
                 {
                     "base_url": base_url,

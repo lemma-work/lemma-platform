@@ -11,6 +11,7 @@ import httpx
 
 from agentbox_client import AgentBoxClient
 from app.core.log.log import get_logger
+from app.core.request_context import create_background_task
 from app.modules.workspace.contracts import (
     PythonExecutionResult,
     ShellCommandResult,
@@ -98,12 +99,11 @@ class AgentBoxWorkspaceSession:
         except httpx.HTTPStatusError as exc:
             error = _format_http_status_error(exc)
             retryable = _is_retryable_http_error(exc)
-            logger.warning(
-                "AgentBox execute_code request failed for sandbox=%s session=%s retryable=%s: %s",
-                self.sandbox_id,
-                self.session_id,
-                retryable,
-                error,
+            logger.debug(
+                'workspace.agentbox_session.execute_code_request_sandbox_s.diagnostic',
+                sandbox_id=self.sandbox_id,
+                session_id=self.session_id,
+                retryable=retryable,
             )
             return PythonExecutionResult(
                 success=False,
@@ -129,11 +129,10 @@ class AgentBoxWorkspaceSession:
             OSError,
         ) as exc:
             error = _format_transport_error(exc)
-            logger.warning(
-                "AgentBox execute_code transport failure for sandbox=%s session=%s: %s",
-                self.sandbox_id,
-                self.session_id,
-                error,
+            logger.debug(
+                'workspace.agentbox_session.execute_code_transport_sandbox_s.diagnostic',
+                sandbox_id=self.sandbox_id,
+                session_id=self.session_id,
             )
             return PythonExecutionResult(
                 success=False,
@@ -208,12 +207,11 @@ class AgentBoxWorkspaceSession:
         except httpx.HTTPStatusError as exc:
             error = _format_http_status_error(exc)
             retryable = _is_retryable_http_error(exc)
-            logger.warning(
-                "AgentBox exec_command request failed for sandbox=%s session=%s retryable=%s: %s",
-                self.sandbox_id,
-                self.session_id,
-                retryable,
-                error,
+            logger.debug(
+                'workspace.agentbox_session.exec_command_request_sandbox_s.diagnostic',
+                sandbox_id=self.sandbox_id,
+                session_id=self.session_id,
+                retryable=retryable,
             )
             return _agentbox_command_failure(
                 error=error,
@@ -231,11 +229,10 @@ class AgentBoxWorkspaceSession:
             OSError,
         ) as exc:
             error = _format_transport_error(exc)
-            logger.warning(
-                "AgentBox exec_command transport failure for sandbox=%s session=%s: %s",
-                self.sandbox_id,
-                self.session_id,
-                error,
+            logger.debug(
+                'workspace.agentbox_session.exec_command_transport_sandbox_s.diagnostic',
+                sandbox_id=self.sandbox_id,
+                session_id=self.session_id,
             )
             return _agentbox_command_failure(
                 error=(
@@ -269,14 +266,12 @@ class AgentBoxWorkspaceSession:
         except httpx.HTTPStatusError as exc:
             error = _format_http_status_error(exc)
             retryable = _is_retryable_http_error(exc)
-            logger.warning(
-                "AgentBox write_stdin request failed for sandbox=%s session=%s "
-                "process=%s retryable=%s: %s",
-                self.sandbox_id,
-                self.session_id,
-                process_id,
-                retryable,
-                error,
+            logger.debug(
+                'workspace.agentbox_session.write_stdin_request_sandbox_s.diagnostic',
+                sandbox_id=self.sandbox_id,
+                session_id=self.session_id,
+                process_id=process_id,
+                retryable=retryable,
             )
             return _agentbox_command_failure(
                 error=error,
@@ -295,12 +290,11 @@ class AgentBoxWorkspaceSession:
             OSError,
         ) as exc:
             error = _format_transport_error(exc)
-            logger.warning(
-                "AgentBox write_stdin transport failure for sandbox=%s session=%s process=%s: %s",
-                self.sandbox_id,
-                self.session_id,
-                process_id,
-                error,
+            logger.debug(
+                'workspace.agentbox_session.write_stdin_transport_sandbox_s.diagnostic',
+                sandbox_id=self.sandbox_id,
+                session_id=self.session_id,
+                process_id=process_id,
             )
             return _agentbox_command_failure(
                 error=(
@@ -331,7 +325,9 @@ class AgentBoxWorkspaceSession:
 
     async def set_cwd(self, path: str) -> None:
         resolved_path = await self._resolve_path(path)
-        await self.exec_command(cmd=f"mkdir -p {shlex.quote(resolved_path)}", timeout=30)
+        await self.exec_command(
+            cmd=f"mkdir -p {shlex.quote(resolved_path)}", timeout=30
+        )
         self._cwd = resolved_path
 
     async def get_cwd(self) -> str:
@@ -359,19 +355,20 @@ class AgentBoxWorkspaceSession:
             if self.auto_close and self.session_id:
                 try:
                     await self.client.delete_session(self.sandbox_id, self.session_id)
-                except Exception as exc:
-                    logger.warning(
-                        "Error closing AgentBox session sandbox=%s session=%s: %s",
-                        self.sandbox_id,
-                        self.session_id,
-                        exc,
+                except Exception:
+                    logger.debug(
+                        'workspace.agentbox_session.closing_agentbox_session_sandbox_s.diagnostic',
+                        sandbox_id=self.sandbox_id,
+                        session_id=self.session_id,
                     )
         finally:
             if self._owns_client:
                 try:
                     await self.client.close()
-                except Exception as exc:
-                    logger.warning("Error closing AgentBox client: %s", exc)
+                except Exception:
+                    logger.debug(
+                        'workspace.agentbox_session.closing_agentbox_client_s.diagnostic'
+                    )
 
     async def _heartbeat_loop(self) -> None:
         while True:
@@ -382,7 +379,9 @@ class AgentBoxWorkspaceSession:
     async def __aenter__(self):
         await self._create_session_with_retry()
         if self.heartbeat_interval_seconds > 0:
-            self._heartbeat_task = asyncio.create_task(self._heartbeat_loop())
+            self._heartbeat_task = create_background_task(
+                self._heartbeat_loop(), name="agentbox-session-heartbeat"
+            )
         await self._touch_activity()
         return self
 
@@ -405,19 +404,11 @@ class AgentBoxWorkspaceSession:
                     raise
                 if attempt == _SESSION_CREATE_MAX_ATTEMPTS:
                     raise
-                error = _format_http_status_error(exc)
+                _format_http_status_error(exc)
             except _RETRYABLE_TRANSPORT_ERRORS as exc:
                 if attempt == _SESSION_CREATE_MAX_ATTEMPTS:
                     raise
-                error = _format_transport_error(exc)
+                _format_transport_error(exc)
 
-            logger.info(
-                "AgentBox session create not ready yet sandbox=%s session=%s attempt=%s/%s: %s",
-                self.sandbox_id,
-                self.session_id,
-                attempt,
-                _SESSION_CREATE_MAX_ATTEMPTS,
-                error,
-            )
             await asyncio.sleep(delay)
             delay = min(delay * 1.5, _SESSION_CREATE_MAX_RETRY_DELAY_SECONDS)

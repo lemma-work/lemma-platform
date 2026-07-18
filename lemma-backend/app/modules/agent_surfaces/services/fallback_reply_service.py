@@ -5,6 +5,7 @@ from uuid import UUID
 
 from app.core.config import settings
 from app.core.log.log import get_logger
+from app.core.observability.dependency_incident import DependencyIncident
 from app.modules.agent_surfaces.config import surface_settings
 from app.modules.agent_surfaces.domain.entities import (
     AgentSurfaceEntity,
@@ -23,6 +24,7 @@ from app.modules.agent_surfaces.domain.ports import (
 )
 
 logger = get_logger(__name__)
+_fallback_incident = DependencyIncident("surface_fallback_delivery", logger=logger)
 
 
 def signup_message() -> str:
@@ -136,9 +138,7 @@ def nonmember_context(
         return None
     disclose_pod = _can_disclose_pod_access_link(surface)
     message = (
-        _pod_access_message(surface.pod_id)
-        if disclose_pod
-        else surface_setup_message()
+        _pod_access_message(surface.pod_id) if disclose_pod else surface_setup_message()
     )
     reply_kind: SurfaceReplyKind = "pod_access" if disclose_pod else "surface_setup"
     return _reply_context(
@@ -187,11 +187,9 @@ async def prepare_unrouted_context(
         external_message_id=parsed.external_message_id,
     )
     if not claimed:
-        logger.info(
-            "Agent surface ignored duplicate unrouted message platform=%s channel=%s message_id=%s",
-            platform,
-            parsed.external_channel_id,
-            parsed.external_message_id,
+        logger.debug(
+            "agent_surfaces.fallback_reply_service.agent_surface_ignored_duplicate_unrouted.observed",
+            external_channel_id=parsed.external_channel_id,
         )
         return None
 
@@ -202,11 +200,9 @@ async def prepare_unrouted_context(
         identity_reply=identity_reply,
         confirmation=confirmation,
     )
-    logger.info(
-        "Agent surface prepared unrouted fallback",
-        platform=platform,
+    logger.debug(
+        "agent_surfaces.fallback_reply_service.agent_surface_prepared_unrouted_fallback.observed",
         reply_kind=reply_kind,
-        message_id=parsed.external_message_id,
     )
     return _reply_context(
         platform=platform,
@@ -268,12 +264,8 @@ async def deliver_fallback_reply(
     credentials: dict[str, Any],
 ) -> None:
     if not has_delivery_credentials(context.platform, credentials):
-        logger.error(
-            "Surface fallback delivery unavailable",
-            platform=str(context.platform),
-            reply_kind=context.reply_kind,
-            message_id=context.event.external_message_id,
-            failure_reason="missing_credentials",
+        _fallback_incident.record_failure(
+            error_type="MissingCredentials",
         )
         return
     try:
@@ -287,10 +279,6 @@ async def deliver_fallback_reply(
             },
         )
     except Exception as exc:
-        logger.error(
-            "Surface fallback delivery failed",
-            platform=str(context.platform),
-            reply_kind=context.reply_kind,
-            message_id=context.event.external_message_id,
-            failure_reason=type(exc).__name__,
-        )
+        _fallback_incident.record_failure(error_type=type(exc).__name__)
+    else:
+        _fallback_incident.record_success()

@@ -50,7 +50,10 @@ from app.modules.schedule.domain.errors import (
     ScheduleInfrastructureError,
     ScheduleValidationError,
 )
-from app.modules.schedule.domain.interfaces import ExternalScheduleWriter, WebhookVerifier
+from app.modules.schedule.domain.interfaces import (
+    ExternalScheduleWriter,
+    WebhookVerifier,
+)
 from app.modules.schedule.domain.schedule import ScheduleEntity, ScheduleType
 
 logger = get_logger(__name__)
@@ -84,8 +87,8 @@ class ComposioScheduleManager:
         try:
             response = await asyncio.to_thread(create_trigger)
         except Exception as exc:
-            logger.warning(
-                "Composio trigger creation failed",
+            logger.debug(
+                'runtime.schedule_connectors.composio_trigger_creation.diagnostic',
                 error_type=type(exc).__name__,
             )
             raise ScheduleInfrastructureError(
@@ -98,8 +101,8 @@ class ComposioScheduleManager:
         try:
             await asyncio.to_thread(self._client().triggers.delete, provider_id)
         except Exception as exc:
-            logger.warning(
-                "Composio trigger deletion failed",
+            logger.debug(
+                'runtime.schedule_connectors.composio_trigger_deletion.diagnostic',
                 error_type=type(exc).__name__,
             )
             raise ScheduleInfrastructureError(
@@ -113,8 +116,8 @@ class ComposioScheduleManager:
         try:
             return await asyncio.to_thread(self._client().triggers.get, provider_id)
         except Exception as exc:
-            logger.info(
-                "Composio trigger lookup failed",
+            logger.debug(
+                "runtime.schedule_connectors.composio_trigger_lookup.observed",
                 error_type=type(exc).__name__,
             )
             return None
@@ -154,7 +157,9 @@ class ExternalScheduleWriterAdapter(ExternalScheduleWriter):
         return ConnectorService(
             uow=self.uow,
             connector_repository=connector_repository,
-            auth_config_repository=AuthConfigRepository(self.uow, encryption=encryption),
+            auth_config_repository=AuthConfigRepository(
+                self.uow, encryption=encryption
+            ),
             account_repository=AccountRepository(self.uow, encryption=encryption),
             connect_request_repository=ConnectRequestRepository(self.uow),
             auth_provider_registry=AuthProviderRegistry(

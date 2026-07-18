@@ -1,4 +1,3 @@
-import traceback
 
 from pydantic_ai.tools import RunContext
 from pydantic_ai.toolsets import FunctionToolset
@@ -39,9 +38,7 @@ async def web_search(
     try:
         return await web_search_internal(ctx.deps, request)
     except Exception as e:
-        logger.error(
-            f"Error searching web: {e}, request: {request}, traceback: {traceback.format_exc()}"
-        )
+        logger.debug("agent.web_search.failed", exc_info=True)
         return WebSearchResponse(
             success=False,
             error=f"Web search failed: {e}",

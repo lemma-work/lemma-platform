@@ -59,9 +59,8 @@ def override_thirdparty_functions(
             third_party_user_id=third_party_user_id,
         )
 
-        if (
-            not has_matching_thirdparty_user
-            and has_emailpassword_login_method(users, email)
+        if not has_matching_thirdparty_user and has_emailpassword_login_method(
+            users, email
         ):
             return SignInUpNotAllowed(get_emailpassword_conflict_reason())
 
@@ -79,7 +78,11 @@ def override_thirdparty_functions(
         )
 
         if isinstance(result, SignInUpOkResult):
-            if session is None and result.created_new_recipe_user and len(result.user.login_methods) == 1:
+            if (
+                session is None
+                and result.created_new_recipe_user
+                and len(result.user.login_methods) == 1
+            ):
                 async with async_session_maker() as db_session:
                     uow = SqlAlchemyUnitOfWork(db_session)
                     message_bus = get_message_bus()
@@ -89,7 +92,7 @@ def override_thirdparty_functions(
                             uow, message_bus=message_bus
                         ),
                     )
-                    created_user = await user_service.create_user(
+                    await user_service.create_user(
                         UserEntity(
                             id=result.user.id,
                             email=normalize_identity_email(result.user.emails[0]),
@@ -100,7 +103,6 @@ def override_thirdparty_functions(
                         )
                     )
                     await uow.commit()
-                    logger.info(f"User created successfully: {created_user}")
 
         return result
 

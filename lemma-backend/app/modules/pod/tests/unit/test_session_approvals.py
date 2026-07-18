@@ -82,9 +82,17 @@ async def test_missing_session_or_actor_short_circuits(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_redis_down_degrades_to_unapproved_with_warning(monkeypatch, caplog):
+async def test_redis_down_degrades_to_unapproved_with_one_incident(monkeypatch, caplog):
     monkeypatch.setattr(
         session_approvals, "_get_approval_cache", lambda: _BrokenCache()
+    )
+    monkeypatch.setattr(
+        session_approvals,
+        "_store_incident",
+        session_approvals.DependencyIncident(
+            "session_approval_store",
+            logger=session_approvals.logger,
+        ),
     )
     with caplog.at_level("WARNING"):
         assert not await session_approvals.has_session_approval(
@@ -98,7 +106,20 @@ async def test_redis_down_degrades_to_unapproved_with_warning(monkeypatch, caplo
             permission_id="datastore.table.delete",
             resolved_by_user_id=uuid4(),
         )
-    assert sum("Session-approval store unavailable" in r.message for r in caplog.records) == 2
+        assert not await session_approvals.has_session_approval(
+            session_id=str(uuid4()),
+            workload_actor_id=f"agent:{uuid4()}",
+            permission_id="datastore.table.delete",
+        )
+    incidents = [
+        record.msg
+        for record in caplog.records
+        if isinstance(record.msg, dict)
+        and record.msg.get("event") == "dependency.degraded"
+    ]
+    assert len(incidents) == 1
+    assert incidents[0]["dependency"] == "session_approval_store"
+    assert incidents[0]["failure_count"] == 3
 
 
 @pytest.mark.asyncio

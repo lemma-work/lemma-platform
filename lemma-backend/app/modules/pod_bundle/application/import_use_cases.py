@@ -71,11 +71,14 @@ def _require_import_variables(
         raise BundleConfirmationRequiredError(
             "Required variables are missing.", details={"missing": missing}
         )
+
+
 logger = get_logger(__name__)
 
 
 def import_apply_job_id(import_id: UUID) -> str:
     return f"pod-import:{import_id}"
+
 
 # Local file signatures we accept as bundle archives (zip magic bytes). The deep
 # structural validation is the plan job's responsibility; this is a cheap gate.
@@ -155,7 +158,9 @@ class ImportUseCases:
         if not prefix.startswith(_ZIP_MAGIC):
             raise BundleInvalidError("The uploaded file is not a valid .zip bundle.")
 
-        await self._authorize(pod_id=pod_id, user_id=user_id, action=Permissions.POD_UPDATE)
+        await self._authorize(
+            pod_id=pod_id, user_id=user_id, action=Permissions.POD_UPDATE
+        )
 
         from datetime import datetime, timedelta, timezone
 
@@ -190,7 +195,9 @@ class ImportUseCases:
         ``GITHUB``: parse the repo reference and enqueue ``import_pod_github``.
         The request carries no bytes either way.
         """
-        await self._authorize(pod_id=pod_id, user_id=user_id, action=Permissions.POD_UPDATE)
+        await self._authorize(
+            pod_id=pod_id, user_id=user_id, action=Permissions.POD_UPDATE
+        )
 
         # Abuse guard: count this import against the user's daily cap (separate
         # bucket from exports) once POD_UPDATE is authorized. Staging an upload
@@ -264,7 +271,9 @@ class ImportUseCases:
     async def get_import(
         self, *, pod_id: UUID, import_id: UUID, user_id: UUID
     ) -> ImportState:
-        await self._authorize(pod_id=pod_id, user_id=user_id, action=Permissions.POD_READ)
+        await self._authorize(
+            pod_id=pod_id, user_id=user_id, action=Permissions.POD_READ
+        )
         state = await self._state_store.get_import(import_id)
         if state is None or state.pod_id != pod_id:
             raise BundleJobExpiredError()
@@ -281,7 +290,9 @@ class ImportUseCases:
     ) -> ImportState:
         """Validate the plan is ready + confirmed, persist the resolved variables,
         and enqueue the apply job (dedup id doubles as the concurrency guard)."""
-        await self._authorize(pod_id=pod_id, user_id=user_id, action=Permissions.POD_UPDATE)
+        await self._authorize(
+            pod_id=pod_id, user_id=user_id, action=Permissions.POD_UPDATE
+        )
         state = await self._state_store.get_import(import_id)
         if state is None or state.pod_id != pod_id:
             raise BundleJobExpiredError()
@@ -338,7 +349,9 @@ class ImportUseCases:
     ) -> ImportState:
         """Re-run planning against the still-staged bundle (the resume path after
         Redis state drifts or the pod changed). 410 if the archive was swept."""
-        await self._authorize(pod_id=pod_id, user_id=user_id, action=Permissions.POD_UPDATE)
+        await self._authorize(
+            pod_id=pod_id, user_id=user_id, action=Permissions.POD_UPDATE
+        )
         state = await self._state_store.get_import(import_id)
         if state is None or state.pod_id != pod_id:
             raise BundleJobExpiredError()
@@ -378,7 +391,9 @@ class ImportUseCases:
         self, *, pod_id: UUID, import_id: UUID, user_id: UUID
     ) -> ImportState:
         """Persist a cancellation tombstone and request cooperative worker stop."""
-        await self._authorize(pod_id=pod_id, user_id=user_id, action=Permissions.POD_UPDATE)
+        await self._authorize(
+            pod_id=pod_id, user_id=user_id, action=Permissions.POD_UPDATE
+        )
         state = await self._state_store.get_import(import_id)
         if state is None or state.pod_id != pod_id:
             raise BundleJobExpiredError()
@@ -400,8 +415,8 @@ class ImportUseCases:
             try:
                 await self._staging.delete_archive("pod-imports", import_id)
             except ObjectStoreError:
-                logger.warning(
-                    "Failed to clean staging for idle cancelled import",
+                logger.debug(
+                    'pod_bundle.import_use_cases.clean_staging_idle_cancelled_import.diagnostic',
                     import_id=str(import_id),
                 )
 

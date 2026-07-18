@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+from collections.abc import Callable, Mapping
 import time
 from uuid import UUID
 from urllib.parse import quote
@@ -42,6 +43,14 @@ _EXECUTE_PROXY_OVERHEAD_SECONDS = 30.0
 # The client waits a little longer than the proxy so it receives the proxy's
 # response (including a 504) rather than tripping its own read timeout first.
 _EXECUTE_CLIENT_OVERHEAD_SECONDS = 15.0
+_CONTEXT_HEADER_NAMES = frozenset(
+    {
+        "x-request-id",
+        "x-lemma-correlation-id",
+        "x-lemma-event-id",
+        "x-lemma-job-id",
+    }
+)
 
 
 class FunctionExecutorClient:
@@ -53,11 +62,13 @@ class FunctionExecutorClient:
         lemma_token: str,
         timeout_seconds: float = 120.0,
         client: httpx.AsyncClient | None = None,
+        context_headers_provider: Callable[[], Mapping[str, str]] | None = None,
     ) -> None:
         self.manager_base_url = manager_base_url.rstrip("/")
         self.manager_api_key = manager_api_key
         self.lemma_token = lemma_token
         self._owns_client = client is None
+        self._context_headers_provider = context_headers_provider
         self.client = client or httpx.AsyncClient(
             base_url=self.manager_base_url,
             timeout=timeout_seconds,
@@ -67,6 +78,23 @@ class FunctionExecutorClient:
                 "Accept": "application/json",
             },
         )
+
+    def _context_headers(self, **extra: str) -> dict[str, str] | None:
+        try:
+            provided = (
+                self._context_headers_provider()
+                if self._context_headers_provider is not None
+                else {}
+            )
+        except Exception:
+            provided = {}
+        headers = {
+            key: value
+            for key, value in provided.items()
+            if key.lower() in _CONTEXT_HEADER_NAMES
+        }
+        headers.update(extra)
+        return headers or None
 
     async def execute(
         self,
@@ -86,7 +114,9 @@ class FunctionExecutorClient:
             f"/sandboxes/{sandbox_id}/apps/function_executor/"
             f"pods/{pod_id}/functions/{quote(function_name, safe='')}/execute",
             json=request.model_dump(mode="json"),
-            headers={_UPSTREAM_TIMEOUT_HEADER: str(int(upstream_timeout))},
+            headers=self._context_headers(
+                **{_UPSTREAM_TIMEOUT_HEADER: str(int(upstream_timeout))}
+            ),
             timeout=client_timeout,
         )
         response.raise_for_status()
@@ -102,7 +132,8 @@ class FunctionExecutorClient:
         run_id: UUID,
     ) -> FunctionJobStatusResponse:
         response = await self.client.get(
-            f"/sandboxes/{sandbox_id}/apps/function_executor/runs/{run_id}"
+            f"/sandboxes/{sandbox_id}/apps/function_executor/runs/{run_id}",
+            headers=self._context_headers(),
         )
         response.raise_for_status()
         return FunctionJobStatusResponse.model_validate(response.json())
@@ -114,7 +145,8 @@ class FunctionExecutorClient:
         run_id: UUID,
     ) -> FunctionLogsResponse:
         response = await self.client.get(
-            f"/sandboxes/{sandbox_id}/apps/function_executor/runs/{run_id}/logs"
+            f"/sandboxes/{sandbox_id}/apps/function_executor/runs/{run_id}/logs",
+            headers=self._context_headers(),
         )
         response.raise_for_status()
         return FunctionLogsResponse.model_validate(response.json())
@@ -125,7 +157,8 @@ class FunctionExecutorClient:
         """Idempotently cancel an invocation and return its resulting status."""
 
         response = await self.client.post(
-            f"/sandboxes/{sandbox_id}/apps/function_executor/runs/{run_id}/cancel"
+            f"/sandboxes/{sandbox_id}/apps/function_executor/runs/{run_id}/cancel",
+            headers=self._context_headers(),
         )
         response.raise_for_status()
         return FunctionJobStatusResponse.model_validate(response.json())
@@ -141,7 +174,7 @@ class FunctionExecutorClient:
             f"/sandboxes/{sandbox_id}/apps/function_executor/health",
         ):
             try:
-                response = await self.client.get(path)
+                response = await self.client.get(path, headers=self._context_headers())
             except httpx.HTTPError:
                 return False
             if 200 <= response.status_code < 300:
@@ -176,7 +209,7 @@ class FunctionExecutorClient:
             both_endpoints_missing = True
             for path in (readiness_path, health_path):
                 try:
-                    response = await self.client.get(path)
+                    response = await self.client.get(path, headers=self._context_headers())
                 except httpx.HTTPError as exc:
                     last_detail = f"{type(exc).__name__}: {exc}"
                     both_endpoints_missing = False

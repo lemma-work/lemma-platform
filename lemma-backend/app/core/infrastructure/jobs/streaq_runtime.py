@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import asyncio
+import json
+import logging
 from collections.abc import AsyncGenerator, Awaitable, Callable
 from contextlib import AsyncExitStack, asynccontextmanager
 from dataclasses import dataclass
@@ -12,21 +14,35 @@ from streaq import Worker
 
 from app.core.config import settings
 from app.core.infrastructure.channels.channel_service import channel_service
-from app.core.infrastructure.db.session import async_session_maker, get_engine, close_engine
+from app.core.infrastructure.db.session import (
+    async_session_maker,
+    get_engine,
+    close_engine,
+)
 from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
 from app.core.infrastructure.db.uow_factory import SessionUnitOfWorkFactory
-from app.core.infrastructure.events.message_bus import close_message_bus, get_message_bus
+from app.core.infrastructure.events.message_bus import (
+    close_message_bus,
+    get_message_bus,
+)
 from app.core.infrastructure.events.outbox import outbox_dispatcher_lifespan
 from app.core.infrastructure.jobs.streaq_job_queue import (
     SharedStreaqJobQueue,
     close_streaq_job_queue,
     get_streaq_job_queue,
+    job_context_key,
 )
 from app.modules.identity.infrastructure.supertokens_auth.initialization import (
     initialize_supertokens,
 )
-from app.core.log.log import get_logger, setup_logging, validate_release_identity
+from app.core.log.log import (
+    get_dependency_logger,
+    get_logger,
+    setup_logging,
+    validate_release_identity,
+)
 from app.core.observability.telemetry import init_telemetry, instrument_database_engine
+from app.core.request_context import bind_job_context, create_background_task
 
 logger = get_logger(__name__)
 
@@ -37,7 +53,14 @@ JOB_RESULT_TTL_SECONDS = 60 * 60 * 24
 WORKER_CONCURRENCY = settings.worker_concurrency
 
 
-broker = RedisBroker(settings.redis_url)
+broker = RedisBroker(
+    settings.redis_url,
+    logger=get_dependency_logger("faststream.redis"),
+    # FastStream uses this as the severity for routine startup narration. Keep
+    # it at INFO and let the supplied WARNING logger drop those records while
+    # still forwarding explicitly actionable warning/error calls.
+    log_level=logging.INFO,
+)
 
 
 @dataclass(slots=True)
@@ -64,7 +87,9 @@ class AppWorkerContext:
             FunctionRunRepository,
         )
         from app.modules.function.services.function_service import FunctionService
-        from app.modules.pod.services.authorization_factory import create_authorization_service
+        from app.modules.pod.services.authorization_factory import (
+            create_authorization_service,
+        )
         from app.modules.workspace.services.workspace_tool_runtime import (
             get_function_workspace_runtime,
         )
@@ -135,13 +160,11 @@ class AppWorkerContext:
         )
 
 
-async def _safe_shutdown_step(
-    name: str, fn: Callable[[], Awaitable[None]]
-) -> None:
+async def _safe_shutdown_step(name: str, fn: Callable[[], Awaitable[None]]) -> None:
     try:
         await fn()
-    except Exception as exc:  # pragma: no cover
-        logger.warning("Worker shutdown step failed", step=name, error=str(exc))
+    except Exception:  # pragma: no cover
+        logger.debug('infrastructure.streaq_runtime.worker_shutdown_step.diagnostic')
 
 
 async def _ensure_consumer_groups_once() -> None:
@@ -160,15 +183,12 @@ async def _ensure_consumer_groups_once() -> None:
 
     client = redis.from_url(settings.redis_url, decode_responses=False)
     try:
-        registered = len(registered_stream_groups())
-        created = await ensure_consumer_groups(client, warn_on_create=False)
-        logger.info(
-            "Pre-created Redis consumer groups before broker start",
-            registered=registered,
-            created=created,
+        len(registered_stream_groups())
+        await ensure_consumer_groups(client, warn_on_create=False)
+    except Exception:  # pragma: no cover - defensive
+        logger.debug(
+            'infrastructure.streaq_runtime.initial_consumer_group_ensure.diagnostic'
         )
-    except Exception as exc:  # pragma: no cover - defensive
-        logger.warning("Initial consumer group ensure failed", error=str(exc))
     finally:
         await client.aclose()
 
@@ -193,8 +213,10 @@ async def _consumer_group_reconcile_loop() -> None:
         while True:
             try:
                 await ensure_consumer_groups(client)
-            except Exception as exc:  # pragma: no cover - defensive
-                logger.warning("Consumer group reconcile failed", error=str(exc))
+            except Exception:  # pragma: no cover - defensive
+                logger.debug(
+                    'infrastructure.streaq_runtime.consumer_group_reconcile.diagnostic'
+                )
             await asyncio.sleep(interval)
     finally:
         await client.aclose()
@@ -236,13 +258,7 @@ async def worker_lifespan() -> AsyncGenerator[AppWorkerContext]:
     pool_capacity = settings.db_pool_size + settings.db_max_overflow
     if pool_capacity and settings.worker_concurrency > pool_capacity * 0.8:
         logger.warning(
-            "worker_concurrency exceeds safe DB pool headroom; tasks holding a "
-            "connection can exhaust the pool and stall the worker — lower "
-            "WORKER_CONCURRENCY or raise DB_POOL_SIZE/DB_MAX_OVERFLOW",
-            worker_concurrency=settings.worker_concurrency,
-            db_pool_capacity=pool_capacity,
-            db_pool_size=settings.db_pool_size,
-            db_max_overflow=settings.db_max_overflow,
+            "infrastructure.streaq_runtime.worker_concurrency_exceeds_safe_db.degraded"
         )
     # Pre-create Redis consumer groups BEFORE the broker starts its subscribers.
     # Several subscribers share a stream (e.g. workflow + surface both consume
@@ -261,9 +277,6 @@ async def worker_lifespan() -> AsyncGenerator[AppWorkerContext]:
         job_queue=job_queue,
         uow_factory=SessionUnitOfWorkFactory(async_session_maker),
     )
-    logger.info("Worker starting...")
-    # One stable startup event after initialization succeeds.
-    logger.info("service.started")
     # Imported lazily to avoid an import cycle: the registry imports module
     # `module.py` files whose worker hooks reference AppWorkerContext (defined
     # in this file).
@@ -274,25 +287,31 @@ async def worker_lifespan() -> AsyncGenerator[AppWorkerContext]:
     from app.core.infrastructure.events.config import event_transport_settings
 
     if event_transport_settings.consumer_group_reconcile_interval_seconds > 0:
-        reconcile_task = asyncio.create_task(_consumer_group_reconcile_loop())
+        reconcile_task = create_background_task(
+            _consumer_group_reconcile_loop(), name="consumer-group-reconcile"
+        )
 
     # Loop-lag watchdog: measures event-loop lag and refreshes the liveness
     # heartbeat the k8s probe reads, so a wedged worker gets restarted instead of
     # hanging silently (the worker has no HTTP server for a /livez probe).
     from app.core.observability.loop_watchdog import loop_lag_watchdog
 
-    watchdog_task = asyncio.create_task(
+    watchdog_task = create_background_task(
         loop_lag_watchdog(
             service_name="lemma-worker",
             heartbeat_path=settings.worker_heartbeat_path or None,
-        )
+        ),
+        name="worker-loop-lag-watchdog",
     )
     # Low-rate structured heartbeat for remote absence detection of this
     # singleton background process. At 5 min this is <600 records/48h. The
     # worker has no HTTP server, so the heartbeat event + the watchdog's
     # heartbeat file are its liveness signals.
-    heartbeat_task = asyncio.create_task(_worker_heartbeat_loop())
+    heartbeat_task = create_background_task(
+        _worker_heartbeat_loop(), name="worker-heartbeat"
+    )
 
+    started = False
     try:
         # Module-contributed worker lifespans (e.g. agent_surfaces native event
         # receiver + dedupe-store close; datastore reindex-queue close). Entered
@@ -302,6 +321,9 @@ async def worker_lifespan() -> AsyncGenerator[AppWorkerContext]:
                 outbox_dispatcher_lifespan(async_session_maker, get_message_bus())
             )
             await enter_worker_lifespans(module_stack, OSS_MODULES, context)
+            # Emit only after every core and module lifespan has entered.
+            logger.info("service.started")
+            started = True
             yield context
     finally:
         for background_task in (reconcile_task, watchdog_task, heartbeat_task):
@@ -315,12 +337,15 @@ async def worker_lifespan() -> AsyncGenerator[AppWorkerContext]:
         await _safe_shutdown_step("close_streaq_job_queue", close_streaq_job_queue)
         await _safe_shutdown_step("close_message_bus", close_message_bus)
         await _safe_shutdown_step("close_engine", close_engine)
-        await _safe_shutdown_step("channel_service.disconnect", channel_service.disconnect)
+        await _safe_shutdown_step(
+            "channel_service.disconnect", channel_service.disconnect
+        )
 
         from app.modules.datastore.infrastructure.session import close_datastore_engine
 
         await _safe_shutdown_step("close_datastore_engine", close_datastore_engine)
-        logger.info("Worker shutting down...")
+        if started:
+            logger.info("service.stopped")
 
 
 def create_streaq_worker(*, handle_signals: bool) -> Worker[AppWorkerContext]:
@@ -340,6 +365,63 @@ def create_streaq_worker(*, handle_signals: bool) -> Worker[AppWorkerContext]:
 
 
 streaq_worker = create_streaq_worker(handle_signals=True)
+
+
+async def load_job_observability_context(redis, job_id: str) -> dict[str, str]:
+    """Best-effort read of the rolling-deployment-compatible sidecar."""
+    try:
+        raw = await redis.get(job_context_key(job_id))
+        parsed = json.loads(raw) if raw else {}
+        if not isinstance(parsed, dict):
+            return {}
+        return {
+            str(key): str(value)
+            for key, value in parsed.items()
+            if isinstance(key, str) and isinstance(value, str | int)
+        }
+    except Exception:
+        return {}
+
+
+@streaq_worker.middleware
+def observability_context_middleware(call_next):
+    """Recover correlation stored beside a task without changing its payload."""
+
+    async def run(*args, **kwargs):
+        task = observability_context_middleware.context
+        inherited = await load_job_observability_context(
+            streaq_worker.redis, task.task_id
+        )
+        with bind_job_context(
+            job_id=task.task_id,
+            task_name=task.fn_name,
+            attempt=task.tries,
+            inherited=inherited,
+        ):
+            try:
+                return await call_next(*args, **kwargs)
+            except asyncio.CancelledError:
+                raise
+            except Exception as exc:
+                terminal = task.tries >= JOB_MAX_RETRIES
+                if terminal:
+                    logger.error(
+                        "worker.job.failed",
+                        attempt=task.tries,
+                        retryable=False,
+                        error_type=type(exc).__name__,
+                        exc_info=True,
+                    )
+                else:
+                    logger.debug(
+                        "worker.job.retrying",
+                        attempt=task.tries,
+                        retryable=True,
+                        error_type=type(exc).__name__,
+                    )
+                raise
+
+    return run
 
 
 def streaq_task(*args, **kwargs):

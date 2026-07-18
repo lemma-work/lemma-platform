@@ -25,10 +25,7 @@ async def _report_system_model_pricing(
     catalog = system_lemma_openai_catalog_model_names()
     unpriced = assert_system_pricing_covers_catalog(catalog)
     if unpriced:
-        logger.info(
-            "system:lemma models will be metered without cost until pricing is registered",
-            unpriced_models=unpriced,
-        )
+        logger.debug("agent.module.system_lemma_models_will_be.observed")
     yield
 
 

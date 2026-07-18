@@ -41,8 +41,10 @@ async def polish_readme(readme: str, *, polish_fn: PolishFn | None = None) -> st
         return readme
     try:
         polished = await polish_fn(readme)
-    except Exception as exc:  # noqa: BLE001 - never fail a publish over polish
-        logger.warning("README AI polish failed; using deterministic README: %s", exc)
+    except Exception:  # noqa: BLE001 - never fail a publish over polish
+        logger.debug(
+            'pod_bundle.ai_readme.readme_ai_polish_using_deterministic.diagnostic'
+        )
         return readme
     polished = _strip_code_fence((polished or "").strip())
     # A model that returns nothing or drops the install badge is not trusted.
@@ -92,7 +94,9 @@ def build_system_polish_fn(
         from app.composition.pod_bundle_readme import UsageExecutionContext
 
         resolved = await AgentRuntimeProfileService().resolve(
-            runtime=AgentRuntimeConfig(profile_id=DEFAULT_SYSTEM_AGENT_RUNTIME_PROFILE_ID),
+            runtime=AgentRuntimeConfig(
+                profile_id=DEFAULT_SYSTEM_AGENT_RUNTIME_PROFILE_ID
+            ),
             organization_id=organization_id,
             user_id=user_id,
         )

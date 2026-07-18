@@ -49,7 +49,9 @@ class SlackMessageParser:
 
             channel_id = str(event.get("channel") or "").strip()
             attachments = self.extract_file_attachments(event)
-            raw_text = str(event.get("text") or self._extract_text_from_blocks(event) or "").strip()
+            raw_text = str(
+                event.get("text") or self._extract_text_from_blocks(event) or ""
+            ).strip()
             attachment_text = render_attachment_prompt_block(
                 attachments,
                 platform=self.platform,
@@ -65,7 +67,9 @@ class SlackMessageParser:
             thread_ts = event.get("thread_ts") or assistant_thread_ts
             ts = event.get("ts")
             is_thread_reply = bool(thread_ts and thread_ts != ts)
-            mentioned_user_ids = self._extract_mentioned_user_ids(event, raw_text or text)
+            mentioned_user_ids = self._extract_mentioned_user_ids(
+                event, raw_text or text
+            )
             mentioned_agent = event_type == "app_mention" or bool(mentioned_user_ids)
             external_thread_id = str(thread_ts or ts or "").strip()
             if not external_thread_id:
@@ -91,7 +95,9 @@ class SlackMessageParser:
             return ParsedInboundSurfaceEvent(
                 platform=self.platform,
                 conversation_type=(
-                    ConversationType.EXTERNAL_DM if is_dm else ConversationType.EXTERNAL_GROUP
+                    ConversationType.EXTERNAL_DM
+                    if is_dm
+                    else ConversationType.EXTERNAL_GROUP
                 ),
                 tenant_id=str(payload.get("team_id") or "").strip() or None,
                 external_channel_id=channel_id,
@@ -112,11 +118,16 @@ class SlackMessageParser:
                     "channel": channel_id,
                     "thread_ts": str(thread_ts or ts or "").strip(),
                 },
-                metadata={key: value for key, value in metadata.items() if value is not None},
+                metadata={
+                    key: value for key, value in metadata.items() if value is not None
+                },
                 raw_payload=payload,
             )
-        except Exception as exc:
-            logger.exception("Slack parser failed to normalize inbound event: %s", exc)
+        except Exception:
+            logger.debug(
+                'agent_surfaces.parser.slack_parser_normalize_inbound_event.propagated',
+                exc_info=True,
+            )
             raise
 
     def parse_interaction(
@@ -176,9 +187,9 @@ class SlackMessageParser:
             message_ts = str(
                 container.get("message_ts") or message.get("ts") or ""
             ).strip()
-            thread_ts = str(
-                message.get("thread_ts") or message_ts or ""
-            ).strip() or None
+            thread_ts = (
+                str(message.get("thread_ts") or message_ts or "").strip() or None
+            )
             return ParsedSurfaceInteraction(
                 platform="SLACK",
                 tenant_id=str(team.get("id") or payload.get("team_id") or "") or None,
@@ -192,8 +203,11 @@ class SlackMessageParser:
                 dedup_id=f"{message_ts}:{action.get('action_ts') or ''}",
                 raw_payload=payload,
             )
-        except Exception as exc:
-            logger.exception("Slack parser failed to parse interaction: %s", exc)
+        except Exception:
+            logger.debug(
+                "surface.slack.parse_failed",
+                exc_info=True,
+            )
             return None
 
     def normalize_context_message(
@@ -230,8 +244,11 @@ class SlackMessageParser:
             if not data.get("attachments"):
                 data.pop("attachments", None)
             return data
-        except Exception as exc:
-            logger.exception("Slack parser failed to normalize context message: %s", exc)
+        except Exception:
+            logger.debug(
+                'agent_surfaces.parser.slack_parser_normalize_context_message.propagated',
+                exc_info=True,
+            )
             raise
 
     def extract_file_attachments(
@@ -244,7 +261,9 @@ class SlackMessageParser:
                 continue
             file_id = str(raw.get("id") or "").strip() or None
             download_url = (
-                str(raw.get("url_private_download") or raw.get("url_private") or "").strip()
+                str(
+                    raw.get("url_private_download") or raw.get("url_private") or ""
+                ).strip()
                 or None
             )
             permalink = str(raw.get("permalink") or "").strip() or None
@@ -271,10 +290,16 @@ class SlackMessageParser:
 
     def _unwrap_payload(self, payload: dict[str, Any]) -> dict[str, Any]:
         nested_payload = payload.get("payload")
-        if isinstance(nested_payload, dict) and nested_payload.get("type") == "event_callback":
+        if (
+            isinstance(nested_payload, dict)
+            and nested_payload.get("type") == "event_callback"
+        ):
             return nested_payload
         nested_data = payload.get("data")
-        if isinstance(nested_data, dict) and nested_data.get("type") == "event_callback":
+        if (
+            isinstance(nested_data, dict)
+            and nested_data.get("type") == "event_callback"
+        ):
             return nested_data
         return payload
 

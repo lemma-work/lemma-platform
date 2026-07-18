@@ -25,7 +25,11 @@ from app.core.infrastructure.jobs.streaq_job_queue import (
     SharedStreaqJobQueue,
     get_streaq_job_queue,
 )
-from app.core.infrastructure.jobs.streaq_runtime import AppWorkerContext, streaq_task, streaq_worker
+from app.core.infrastructure.jobs.streaq_runtime import (
+    AppWorkerContext,
+    streaq_task,
+    streaq_worker,
+)
 from app.modules.function.domain.entities import FunctionRunStatus
 from app.modules.function.domain.events import (
     FUNCTION_RUN_EVENTS_STREAM,
@@ -104,7 +108,6 @@ async def _process_function_run_event(
 
     if event_type == FunctionRunExecutionRequestedEvent.get_event_type():
         parsed = FunctionRunExecutionRequestedEvent.model_validate(event)
-        fs_logger.info("Enqueuing function run execution for %s", parsed.run_id)
         job = await job_queue.enqueue(
             "process_function_run",
             run_id=str(parsed.run_id),
@@ -138,9 +141,7 @@ async def _process_function_run_event(
     if event_type == FunctionRunLogsUpdatedEvent.get_event_type():
         parsed = FunctionRunLogsUpdatedEvent.model_validate(event)
         async with uow_factory() as uow:
-            await FunctionRunRepository(uow).update_run(
-                parsed.run_id, logs=parsed.logs
-            )
+            await FunctionRunRepository(uow).update_run(parsed.run_id, logs=parsed.logs)
         return
 
     if event_type == FunctionRunCompletedEvent.get_event_type():
@@ -178,13 +179,7 @@ async def process_function_run(
 ) -> None:
     """Execute one queued function run without holding a DB session open."""
     worker_ctx: AppWorkerContext = streaq_worker.context
-    task_ctx = process_function_run.context
     parsed_run_id = UUID(run_id)
-    logger.info(
-        "Starting process_function_run job %s for run %s",
-        task_ctx.task_id,
-        run_id,
-    )
 
     last_error: Exception | None = None
     function_id: UUID | None = None
@@ -206,16 +201,15 @@ async def process_function_run(
                 parsed_run_id,
                 timeout_seconds=_JOB_FUNCTION_TIMEOUT_SECONDS,
             )
-            logger.info(
-                "Finished process_function_run job %s for run %s",
-                task_ctx.task_id,
-                run_id,
-            )
             return
         except Exception as exc:
             last_error = exc
             if "not found" not in str(exc).lower() or attempt == 9:
-                logger.exception("Function run job failed for run %s", run_id)
+                logger.debug(
+                    'function.handlers.function_run_job_run_s.propagated',
+                    run_id=run_id,
+                    exc_info=True,
+                )
                 if function_id is None:
                     raise
                 # The service-level terminal persist (_persist_terminal_run)

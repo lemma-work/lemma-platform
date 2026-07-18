@@ -74,10 +74,12 @@ class ScheduleStartService:
         if schedule is None or (
             schedule.workflow_id is None and schedule.agent_id is None
         ):
-            logger.info("No target for schedule", schedule_id=schedule_id)
+            logger.debug(
+                "workflow.schedule_start_service.no_target_schedule.observed",
+                schedule_id=schedule_id,
+            )
             return
         if not schedule.is_active:
-            logger.info("Inactive schedule skipped", schedule_id=str(schedule.id))
             return
         if not schedule_event_id:
             raise ValueError("schedule_event_id is required for durable delivery")
@@ -93,11 +95,6 @@ class ScheduleStartService:
             source_occurred_at=source_occurred_at,
         )
         if schedule_run is None:
-            logger.info(
-                "Duplicate or terminal schedule run skipped",
-                schedule_id=str(schedule.id),
-                source_event_id=schedule_event_id,
-            )
             return
 
         trigger = self._build_trigger(
@@ -114,9 +111,7 @@ class ScheduleStartService:
                     trigger=trigger,
                     schedule_event_id=schedule_event_id,
                 )
-                await run_repo.mark_dispatched(
-                    schedule_run.id, target_run_id=run_id
-                )
+                await run_repo.mark_dispatched(schedule_run.id, target_run_id=run_id)
                 await self._record_fire(
                     schedule_repo,
                     run_repo,
@@ -161,10 +156,11 @@ class ScheduleStartService:
                 )
             except Exception as exc:
                 run_status = await run_repo.mark_failed(schedule_run.id, exc)
-                logger.exception(
-                    "Failed to start agent for schedule",
+                logger.debug(
+                    'workflow.schedule_start_service.start_agent_schedule.propagated',
                     agent_id=str(schedule.agent_id),
                     schedule_id=schedule_id,
+                    exc_info=True,
                 )
                 await self._record_fire(
                     schedule_repo,
@@ -211,10 +207,12 @@ class ScheduleStartService:
         # to the run id for timers scheduled before the per-wait-token change (so
         # in-flight waits created by the old code path still wake correctly).
         resume_ref = external_ref or run_id
-        logger.info("Waking workflow run from scheduler", run_id=run_id, wait_ref=resume_ref)
+        logger.debug(
+            "workflow.schedule_start_service.waking_workflow_run_scheduler.observed",
+            run_id=run_id,
+        )
         run = await self._engine.run_repo.get(UUID(run_id))
         if run is None:
-            logger.info("No workflow run found for scheduler wake", run_id=run_id)
             return
         ctx = await self._build_user_context(user_id=run.user_id, pod_id=run.pod_id)
         ctx_token = set_current_context(ctx)
@@ -260,8 +258,8 @@ class ScheduleStartService:
             finally:
                 reset_current_context(ctx_token)
         except WorkflowConflictError:
-            logger.info(
-                "Workflow run already exists for schedule event",
+            logger.debug(
+                "workflow.schedule_start_service.run_already_exists_schedule_event.observed",
                 source_event_id=schedule_event_id,
             )
             return None
@@ -320,9 +318,8 @@ class ScheduleStartService:
 
         # Trip: stop the schedule from firing (all matcher queries filter is_active).
         await schedule_repo.update(schedule.id, is_active=False)
-        logger.warning(
-            "Circuit breaker deactivated schedule",
+        logger.debug(
+            'workflow.schedule_start_service.circuit_breaker_deactivated_schedule.diagnostic',
             schedule_id=str(schedule.id),
-            consecutive_failures=count,
         )
         return count

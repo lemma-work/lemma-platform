@@ -75,12 +75,11 @@ class BundleRateLimiter:
             count = await redis.incr(key)
             if count == 1:
                 await redis.expire(key, _COUNTER_TTL_SECONDS)
-        except Exception as exc:  # noqa: BLE001 — the cap is best-effort
+        except Exception:  # noqa: BLE001 — the cap is best-effort
             logger.warning(
-                "Bundle rate-limit counter unavailable for %s %s (%s); allowing",
-                operation,
-                user_id,
-                exc,
+                "pod_bundle.rate_limiter.bundle_rate_limit_counter_unavailable.degraded",
+                operation=operation,
+                user_id=user_id,
             )
             return
         if count > limit:

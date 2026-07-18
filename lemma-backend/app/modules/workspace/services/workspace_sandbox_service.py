@@ -8,13 +8,19 @@ from urllib.parse import urlparse
 from uuid import UUID, uuid4
 
 from app.core.config import settings
+from app.core.request_context import correlation_headers
 from agentbox_client import AgentBoxClient
 from app.modules.workspace.contracts import SandboxInfo, WorkspaceStatus
 from app.modules.workspace.agentbox_session import AgentBoxWorkspaceSession
 from app.modules.workspace.agentbox_retry import retry_on_transient_agentbox_error
-from app.modules.workspace.services.agentbox_manager import AgentBoxSandbox, agentbox_sandbox_id
+from app.modules.workspace.services.agentbox_manager import (
+    AgentBoxSandbox,
+    agentbox_sandbox_id,
+)
 from app.modules.workspace.services.interfaces import ISandbox, IWorkspaceSession
-from app.modules.workspace.services.workspace_activity_store import WorkspaceActivityStore
+from app.modules.workspace.services.workspace_activity_store import (
+    WorkspaceActivityStore,
+)
 from app.modules.workspace.services.workspace_state_store import WorkspaceStateStore
 from app.core.log.log import get_logger
 
@@ -109,11 +115,10 @@ class WorkspaceSandboxService:
         """
 
         def _log_retry(attempt: int, error: str) -> None:
-            logger.info(
-                "AgentBox ensure_sandbox not ready yet user=%s attempt=%s: %s",
-                user_id,
-                attempt,
-                error,
+            logger.debug(
+                "workspace.workspace_sandbox_service.ensure_sandbox_not_ready_yet.observed",
+                user_id=user_id,
+                attempt=attempt,
             )
 
         return await retry_on_transient_agentbox_error(
@@ -166,7 +171,9 @@ class WorkspaceSandboxService:
             netloc = f"{netloc}:{parsed.port}"
         return f"{scheme}://{netloc}"
 
-    async def _delete_sandbox(self, user_id: UUID, sandbox_info: SandboxInfo | None) -> None:
+    async def _delete_sandbox(
+        self, user_id: UUID, sandbox_info: SandboxInfo | None
+    ) -> None:
         del sandbox_info
         suspend = getattr(self.sandbox, "suspend_sandbox", None)
         if suspend is not None:
@@ -241,11 +248,6 @@ class WorkspaceSandboxService:
                         owner=lock_owner,
                     )
 
-            logger.info(
-                "Workspace sandbox creation in progress for user=%s runtime=%s; waiting",
-                user_id,
-                self.runtime,
-            )
             running = await self._wait_for_creator(user_id, deadline)
             if running is not None:
                 return running
@@ -300,10 +302,10 @@ class WorkspaceSandboxService:
                 and sandbox_info.status in _TERMINAL_SANDBOX_STATUSES
                 and now - last_ensure >= _ENSURE_RETRY_COOLDOWN_SECONDS
             ):
-                logger.info(
-                    "Workspace sandbox for user=%s still %s; re-running ensure to heal",
-                    user_id,
-                    sandbox_info.status,
+                logger.debug(
+                    "workspace.workspace_sandbox_service.workspace_sandbox_user_s_still.observed",
+                    user_id=user_id,
+                    status=sandbox_info.status,
                 )
                 await self._ensure_sandbox_info_with_retry(user_id)
                 last_ensure = now
@@ -377,12 +379,10 @@ class WorkspaceSandboxService:
         # idle window. Best-effort: never block session handout on it.
         try:
             await self.sandbox.heartbeat(user_id)
-        except Exception as exc:
+        except Exception:
             logger.debug(
-                "Sandbox handout heartbeat failed user=%s runtime=%s: %s",
-                user_id,
-                self.runtime,
-                exc,
+                "workspace.workspace_sandbox_service.handout_heartbeat_user_s_runtime.observed",
+                user_id=user_id,
             )
         await self.state_store.mark_running(
             runtime=self.runtime,
@@ -547,6 +547,7 @@ class WorkspaceSandboxService:
             base_url=settings.agentbox_api_url,
             api_key=api_key,
             timeout_seconds=_SANDBOX_MANAGER_HTTP_TIMEOUT_SECONDS,
+            context_headers_provider=correlation_headers,
         )
         WorkspaceSandboxService._shared_manager_client = (key, client)
         return client

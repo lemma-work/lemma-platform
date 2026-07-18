@@ -66,6 +66,7 @@ from app.modules.agent.services.runtime_model_factory import (
 from app.modules.agent.tools.final_answer.final_answer_tool import FinalAgentResult
 from app.modules.agent.tools.tool_errors import AgentInputRequired
 from app.core.log.log import get_logger
+from app.core.request_context import create_inherited_task
 
 logger = get_logger(__name__)
 StopChecker = Callable[[], Awaitable[bool]]
@@ -144,7 +145,11 @@ class PydanticAIHarness:
                 if event.type in {AgentEventType.ERROR, AgentEventType.STOPPED}:
                     terminal_event_seen = True
         except ModelHTTPError as exc:
-            logger.error(f"Model request failed status={exc.status_code} model={exc.model_name}")
+            logger.error(
+                "agent.pydantic_ai.model_request_status_model.failed",
+                status_code=exc.status_code,
+            exc_info=True,
+        )
             yield AgentEvent(
                 type=AgentEventType.ERROR,
                 data=_user_facing_error_message(exc),
@@ -155,7 +160,7 @@ class PydanticAIHarness:
             # Reached only when a tool genuinely failed every retry (default 5) —
             # GracefulToolset turns ordinary execution errors into tool responses,
             # so this is the rare "model kept sending invalid arguments" case.
-            logger.warning("Agent run ended after repeated tool failures")
+            logger.debug('agent.pydantic_ai.agent_run_ended_after_repeated.diagnostic')
             yield AgentEvent(
                 type=AgentEventType.ERROR,
                 data=_user_facing_error_message(exc),
@@ -163,7 +168,7 @@ class PydanticAIHarness:
             )
             return
         except UsageLimitExceeded as exc:
-            logger.warning("Agent run hit a usage limit")
+            logger.warning("agent.pydantic_ai.agent_run_hit_usage_limit.degraded")
             yield AgentEvent(
                 type=AgentEventType.ERROR,
                 data=_user_facing_error_message(exc),
@@ -175,7 +180,10 @@ class PydanticAIHarness:
             # rather than failing. The tool call is already persisted; the runner
             # finishes this run and flips the conversation to WAITING. The user's
             # submission later starts a fresh run that resumes from history.
-            logger.info(f"Agent input required kind={exc.kind} call={exc.tool_call_id}")
+            logger.debug(
+                "agent.pydantic_ai.agent_input_required_kind_call.observed",
+                tool_call_id=exc.tool_call_id,
+            )
             yield AgentEvent(
                 type=AgentEventType.WAITING,
                 data={
@@ -187,7 +195,7 @@ class PydanticAIHarness:
             )
             return
         except Exception as exc:
-            logger.error(f"PydanticAI harness failed type={type(exc).__name__}")
+            logger.error("agent.pydantic_ai.pydanticai_harness_type.failed", exc_info=True)
             yield AgentEvent(
                 type=AgentEventType.ERROR,
                 data=_user_facing_error_message(exc),
@@ -400,7 +408,9 @@ class PydanticAIHarness:
                                 data=AgentRunUsage(
                                     model_name=options.model_name,
                                     usage_kind="llm",
-                                    input_tokens=_usage_value(run_usage, "input_tokens"),
+                                    input_tokens=_usage_value(
+                                        run_usage, "input_tokens"
+                                    ),
                                     output_tokens=_usage_value(
                                         run_usage, "output_tokens"
                                     ),
@@ -434,7 +444,7 @@ class PydanticAIHarness:
             finally:
                 await queue.put(("done", None))
 
-        task = asyncio.create_task(_drive())
+        task = create_inherited_task(_drive(), name="agent-model-stream")
         pending_error: BaseException | None = None
         try:
             while True:
@@ -547,10 +557,9 @@ class PydanticAIHarness:
                 tool_args = _parse_tool_call_args(part.args)
                 if tool_args is None:
                     malformed_tool_call_ids.add(part.tool_call_id)
-                    logger.warning(
-                        "Skipping malformed tool call persistence: %s (%s)",
-                        part.tool_name,
-                        part.tool_call_id,
+                    logger.debug(
+                        'agent.pydantic_ai.skipping_malformed_tool_call_persistence.diagnostic',
+                        tool_call_id=part.tool_call_id,
                     )
                     return None
                 return MessageDraft.of_tool_call(
@@ -815,10 +824,9 @@ class PydanticAIHarness:
                 if isinstance(event, FunctionToolResultEvent):
                     result_part = event.part
                     if result_part.tool_call_id in malformed_tool_call_ids:
-                        logger.warning(
-                            "Skipping tool result for malformed call: %s (%s)",
-                            result_part.tool_name,
-                            result_part.tool_call_id,
+                        logger.debug(
+                            'agent.pydantic_ai.skipping_tool_result_malformed_call.diagnostic',
+                            tool_call_id=result_part.tool_call_id,
                         )
                         continue
                     tool_output = result_part.content
@@ -857,8 +865,8 @@ class PydanticAIHarness:
             return False
         try:
             return await should_stop()
-        except Exception as exc:
-            logger.warning("Agent stop check failed: %s", exc)
+        except Exception:
+            logger.debug('agent.pydantic_ai.agent_stop_check_s.diagnostic')
             return False
 
     def _stopped_event(self, agent_run_id: UUID) -> AgentEvent:
@@ -963,9 +971,8 @@ class PydanticAIHarness:
                 index += 1
                 continue
 
-            logger.warning(
-                "Skipping unknown agent message role: %s",
-                getattr(msg, "role", None),
+            logger.debug(
+                'agent.pydantic_ai.skipping_unknown_agent_message_role.diagnostic'
             )
             index += 1
 
@@ -1023,19 +1030,17 @@ class PydanticAIHarness:
         for msg in call_entries:
             matched = matched_returns.get(getattr(msg, "tool_call_id", None))
             if matched is None:
-                logger.warning(
-                    "Skipping tool call without matching return: %s (%s)",
-                    msg.tool_name,
-                    msg.tool_call_id,
+                logger.debug(
+                    'agent.pydantic_ai.skipping_tool_call_without_matching.diagnostic',
+                    tool_call_id=msg.tool_call_id,
                 )
                 continue
 
             parsed_args = _parse_tool_call_args(getattr(msg, "tool_args", None))
             if parsed_args is None:
-                logger.warning(
-                    "Skipping malformed persisted tool call: %s (%s)",
-                    msg.tool_name,
-                    msg.tool_call_id,
+                logger.debug(
+                    'agent.pydantic_ai.skipping_malformed_persisted_tool_call.diagnostic',
+                    tool_call_id=msg.tool_call_id,
                 )
                 continue
 
@@ -1156,7 +1161,9 @@ class PydanticAIHarness:
 
         if platform:
             try:
-                from app.composition.agent_surface_runtime import email_reply_instruction
+                from app.composition.agent_surface_runtime import (
+                    email_reply_instruction,
+                )
 
                 email_hint = email_reply_instruction(str(platform))
                 if email_hint:
@@ -1260,22 +1267,19 @@ def _parse_tool_call_args(args: object) -> dict[str, object] | None:
         return args
 
     if not isinstance(args, str):
-        logger.warning("Dropping non-object tool args of type %s", type(args).__name__)
+        logger.debug('agent.pydantic_ai.dropping_non_object_tool_args.diagnostic')
         return None
 
     try:
         parsed = pydantic_core.from_json(args)
     except ValueError:
-        logger.warning("Ignoring malformed tool args JSON: %s", _preview(args))
+        logger.debug('agent.pydantic_ai.ignoring_malformed_tool_args_json.diagnostic')
         return None
 
     if isinstance(parsed, dict):
         return parsed
 
-    logger.warning(
-        "Ignoring tool args that did not parse to an object: %s",
-        type(parsed).__name__,
-    )
+    logger.debug('agent.pydantic_ai.ignoring_tool_args_that_did.diagnostic')
     return None
 
 
@@ -1299,5 +1303,5 @@ def _usage_value(usage: object, field: str) -> int:
         return 0
     try:
         return int(value)
-    except (TypeError, ValueError):
+    except TypeError, ValueError:
         return 0

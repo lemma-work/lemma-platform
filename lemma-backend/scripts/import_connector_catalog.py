@@ -218,7 +218,10 @@ LEMMA_APPS_CONFIG_PATH = Path(__file__).parent / "lemma_apps_config.json"
 def _load_lemma_apps_config() -> list[dict]:
     """Load Lemma native apps configuration from JSON file."""
     if not LEMMA_APPS_CONFIG_PATH.exists():
-        logger.warning("Lemma apps config not found at %s", LEMMA_APPS_CONFIG_PATH)
+        logger.warning(
+            "connector_catalog.config.missing",
+            config_name="lemma_apps",
+        )
         return []
     with open(LEMMA_APPS_CONFIG_PATH, encoding="utf-8") as f:
         return json.load(f)
@@ -243,8 +246,8 @@ def _load_connector_profile_operations() -> dict[str, dict[str, list[str]]]:
     """Load the curated connector_id -> {provider: [operation names]} map."""
     if not CONNECTOR_PROFILE_OPERATIONS_PATH.exists():
         logger.warning(
-            "Connector profile operations config not found at %s",
-            CONNECTOR_PROFILE_OPERATIONS_PATH,
+            "connector_catalog.config.missing",
+            config_name="connector_profile_operations",
         )
         return {}
     with open(CONNECTOR_PROFILE_OPERATIONS_PATH, encoding="utf-8") as f:
@@ -787,7 +790,10 @@ async def _deactivate_excluded_composio_connectors(
             existing.model_copy(update={"is_active": False})
         )
         deactivated_count += 1
-        logger.info("Deactivated excluded Composio app: %s", existing.id)
+        logger.debug(
+            "connector_catalog.connector.deactivated",
+            connector_id=existing.id,
+        )
 
     return deactivated_count
 
@@ -807,10 +813,16 @@ async def _upsert_connector(
 ) -> ConnectorEntity:
     existing = await connector_repository.get(entity.id)
     if existing:
-        logger.info("Updating connector %s", entity.id)
+        logger.debug(
+            "connector_catalog.connector.updating",
+            connector_id=entity.id,
+        )
         return await connector_repository.update(entity)
 
-    logger.info("Creating connector %s", entity.id)
+    logger.debug(
+        "connector_catalog.connector.creating",
+        connector_id=entity.id,
+    )
     return await connector_repository.create(entity)
 
 
@@ -979,12 +991,15 @@ def _list_composio_toolkits(
         try:
             items.append(composio.toolkits.get(toolkit_slug))
         except Exception as exc:
-            logger.warning("Skipping unknown Composio toolkit %s: %s", toolkit_slug, exc)
-    logger.info(
-        "Selected %s Composio toolkits for import (%s managed_by): %s",
-        len(items),
-        managed_by,
-        ", ".join(sorted(item.slug for item in items)),
+            logger.debug(
+                "connector_catalog.toolkit.skipped",
+                toolkit_id=toolkit_slug,
+                error_type=type(exc).__name__,
+            )
+    logger.debug(
+        "connector_catalog.toolkits.selected",
+        toolkit_count=len(items),
+        managed_by=managed_by,
     )
     return items
 
@@ -1047,7 +1062,10 @@ async def _sync_native_catalog(
         )
         await _upsert_connector(connector_repository, entity)
         total_apps += 1
-        logger.info("Synced Lemma app config: %s", app_name)
+        logger.debug(
+            "connector_catalog.app.synced",
+            connector_id=app_name,
+        )
 
         # Sync triggers for this app
         for trigger_data in app_config.get("triggers", []):
@@ -1112,9 +1130,9 @@ async def _sync_native_catalog(
                 ]
         except Exception as exc:
             logger.warning(
-                "Lemma package unavailable for %s; keeping native app registration without operations: %s",
-                connector_id,
-                exc,
+                "connector_catalog.native_package.unavailable",
+                connector_id=connector_id,
+                error_type=type(exc).__name__,
             )
 
         entity = ConnectorEntity(
@@ -1213,10 +1231,7 @@ async def _sync_composio_catalog(
 ) -> tuple[int, int, int]:
     api_key = connector_settings.composio_api_key or os.getenv("COMPOSIO_API_KEY")
     if not api_key:
-        logger.info(
-            "Skipping Composio catalog sync — COMPOSIO_API_KEY is not set. "
-            "Only native apps will be imported."
-        )
+        logger.debug("connector_catalog.composio.disabled")
         return 0, 0, 0
 
     composio = Composio(api_key=api_key)
@@ -1440,10 +1455,9 @@ async def _apply_connector_renames(connector_repository, session) -> int:
         new = await connector_repository.get(new_id)
         if new is None:
             logger.warning(
-                "Skipping connector rename %s -> %s: target connector is not "
-                "synced yet (run a native/full import first).",
-                old_id,
-                new_id,
+                "connector_catalog.rename.target_missing",
+                old_connector_id=old_id,
+                new_connector_id=new_id,
             )
             continue
         for table in _CONNECTOR_RENAME_REPOINT_TABLES:
@@ -1454,19 +1468,23 @@ async def _apply_connector_renames(connector_repository, session) -> int:
                 ),
                 {"new": new_id, "old": old_id},
             )
-            logger.info(
-                "Re-pointed %s %s row(s) from %s to %s",
-                getattr(result, "rowcount", "?"),
-                table,
-                old_id,
-                new_id,
+            logger.debug(
+                "connector_catalog.rename.rows_repointed",
+                count=int(getattr(result, "rowcount", 0) or 0),
+                table=table,
+                old_connector_id=old_id,
+                new_connector_id=new_id,
             )
         await session.execute(
             text("DELETE FROM connectors WHERE id = :old"),
             {"old": old_id},
         )
         renamed += 1
-        logger.info("Renamed connector %s -> %s", old_id, new_id)
+        logger.debug(
+            "connector_catalog.connector.renamed",
+            old_connector_id=old_id,
+            new_connector_id=new_id,
+        )
     return renamed
 
 
@@ -1496,7 +1514,10 @@ async def _sync_native_catalog_batched(
     total_apps = total_operations = total_triggers = 0
 
     for app_slug in _list_native_sync_targets(app_filters):
-        logger.info("Importing native app batch: %s", app_slug)
+        logger.debug(
+            "connector_catalog.native_batch.started",
+            connector_id=app_slug,
+        )
         app_count, operation_count, trigger_count = await _run_in_session_batch(
             lambda connector_repository, operation_repository, trigger_repository: _sync_native_catalog(
                 connector_repository,
@@ -1524,10 +1545,7 @@ async def _sync_composio_catalog_batched(
 ) -> tuple[int, int, int]:
     api_key = connector_settings.composio_api_key or os.getenv("COMPOSIO_API_KEY")
     if not api_key:
-        logger.info(
-            "Skipping Composio catalog sync — COMPOSIO_API_KEY is not set. "
-            "Only native apps will be imported."
-        )
+        logger.debug("connector_catalog.composio.disabled")
         return 0, 0, 0
 
     composio = Composio(api_key=api_key)
@@ -1545,7 +1563,10 @@ async def _sync_composio_catalog_batched(
         dry_run=dry_run,
     )
     for toolkit_item in toolkit_items:
-        logger.info("Importing Composio app batch: %s", toolkit_item.slug)
+        logger.debug(
+            "connector_catalog.composio_batch.started",
+            connector_id=toolkit_item.slug,
+        )
         app_count, operation_count, trigger_count = await _run_in_session_batch(
             lambda connector_repository, operation_repository, trigger_repository: _sync_single_composio_toolkit(
                 composio,
@@ -1648,9 +1669,18 @@ async def _generate_skill_doc(
             skill_file = skills_dir / f"{app_id}.md"
         skills_dir.mkdir(parents=True, exist_ok=True)
         skill_file.write_text(result.output, encoding="utf-8")
-        logger.info("Generated skill doc: %s", skill_file.name)
+        logger.debug(
+            "connector_catalog.skill.generated",
+            connector_id=app_id,
+            provider=provider or "default",
+        )
     except Exception as exc:
-        logger.warning("Failed to generate skill for %s (provider=%s): %s", app_id, provider, exc)
+        logger.warning(
+            "connector_catalog.skill.failed",
+            connector_id=app_id,
+            provider=provider or "default",
+            error_type=type(exc).__name__,
+        )
 
 
 def _app_providers(app) -> list[str]:
@@ -1743,15 +1773,25 @@ async def _generate_all_skills(app_filters: set[str] | None = None) -> None:
         if app_filters:
             apps = [a for a in apps if a.id in app_filters]
 
-        logger.info("Generating skill docs for %d apps...", len(apps))
+        logger.debug(
+            "connector_catalog.skills.started",
+            app_count=len(apps),
+        )
 
         batch_size = 5
         for i in range(0, len(apps), batch_size):
             batch = apps[i : i + batch_size]
             await asyncio.gather(*[_generate_app_skills(skill_agent, session, app, SKILLS_DIR) for app in batch])
-            logger.info("Completed batch %d/%d", min(i + batch_size, len(apps)), len(apps))
+            logger.debug(
+                "connector_catalog.skill_batch.completed",
+                count=min(i + batch_size, len(apps)),
+                total_count=len(apps),
+            )
 
-        logger.info("Skill generation complete.")
+        logger.info(
+            "connector_catalog.skills.completed",
+            app_count=len(apps),
+        )
 
 
 async def main() -> None:
@@ -1812,28 +1852,31 @@ async def main() -> None:
     # been synced (idempotent; skips renames whose old connector is already gone).
     renamed_connectors = await _run_connector_id_renames(dry_run=args.dry_run)
     if renamed_connectors:
-        logger.info("Applied %s connector id rename(s).", renamed_connectors)
+        logger.debug(
+            "connector_catalog.renames.applied",
+            count=renamed_connectors,
+        )
 
     if args.dry_run:
         logger.info(
-            "Dry run complete: native=%s apps/%s operations/%s triggers, composio=%s apps/%s operations/%s triggers",
-            native_apps,
-            native_operations,
-            native_triggers,
-            composio_apps,
-            composio_operations,
-            composio_triggers,
+            "connector_catalog.dry_run.completed",
+            native_app_count=native_apps,
+            native_operation_count=native_operations,
+            native_trigger_count=native_triggers,
+            composio_app_count=composio_apps,
+            composio_operation_count=composio_operations,
+            composio_trigger_count=composio_triggers,
         )
         return
 
     logger.info(
-        "Imported native=%s apps/%s operations/%s triggers, composio=%s apps/%s operations/%s triggers",
-        native_apps,
-        native_operations,
-        native_triggers,
-        composio_apps,
-        composio_operations,
-        composio_triggers,
+        "connector_catalog.import.completed",
+        native_app_count=native_apps,
+        native_operation_count=native_operations,
+        native_trigger_count=native_triggers,
+        composio_app_count=composio_apps,
+        composio_operation_count=composio_operations,
+        composio_trigger_count=composio_triggers,
     )
 
     if getattr(args, "generate_skills", False):

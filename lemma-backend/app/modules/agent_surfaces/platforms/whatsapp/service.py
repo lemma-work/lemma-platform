@@ -82,11 +82,7 @@ def _build_whatsapp_interactive(
             "action": {
                 "button": "Choose",
                 "sections": [
-                    {
-                        "rows": [
-                            {"id": rid, "title": title[:24]} for rid, title in rows
-                        ]
-                    }
+                    {"rows": [{"id": rid, "title": title[:24]} for rid, title in rows]}
                 ],
             },
         }
@@ -164,11 +160,10 @@ class WhatsAppPlatformService:
                 return value
         try:
             return await self._client.get_phone_number_field("display_phone_number")
-        except Exception as exc:
+        except Exception:
             logger.debug(
-                "WhatsApp display phone lookup failed phone_number_id=%s: %s",
-                self._phone_number_id,
-                exc,
+                "agent_surfaces.service.whatsapp_display_phone_lookup_phone.observed",
+                phone_number_id=self._phone_number_id,
             )
             return None
 
@@ -183,11 +178,10 @@ class WhatsAppPlatformService:
         )
         sender_wa_id = event.reply_target.get("sender_wa_id") or event.sender_phone
         if not sender_wa_id or not phone_number_id or not self._access_token:
-            logger.warning(
-                "WhatsApp send_message skipped due to missing token/phone/sender "
-                "phone_number_id=%s sender=%s",
-                phone_number_id,
-                sender_wa_id,
+            logger.debug(
+                'agent_surfaces.service.whatsapp_send_message_skipped_due.diagnostic',
+                phone_number_id=phone_number_id,
+                sender_wa_id=sender_wa_id,
             )
             return
 
@@ -223,11 +217,10 @@ class WhatsAppPlatformService:
             # Missing credentials/target — the caller's text fallback hits the same
             # guard in send_message, so log here to make the double-skip diagnosable
             # instead of a silent swallow.
-            logger.warning(
-                "WhatsApp send_questions skipped (missing token/phone/sender) "
-                "phone_number_id=%s sender=%s",
-                phone_number_id,
-                sender_wa_id,
+            logger.debug(
+                'agent_surfaces.service.whatsapp_send_questions_skipped_missing.diagnostic',
+                phone_number_id=phone_number_id,
+                sender_wa_id=sender_wa_id,
             )
             return False
         if any(q.multi_select for q in question_plan.questions):
@@ -289,10 +282,9 @@ class WhatsAppPlatformService:
         )
         sender_wa_id = event.reply_target.get("sender_wa_id") or event.sender_phone
         if not phone_number_id or not sender_wa_id:
-            logger.warning(
-                "WhatsApp send_display_resource skipped: missing phone_number_id or "
-                "recipient wa_id (phone_number_id=%s)",
-                phone_number_id,
+            logger.debug(
+                'agent_surfaces.service.whatsapp_send_display_resource_skipped.diagnostic',
+                phone_number_id=phone_number_id,
             )
             return
         action = render_plan.primary_action
@@ -316,8 +308,8 @@ class WhatsAppPlatformService:
                 ),
             )
         except WhatsAppApiError:
-            logger.info(
-                "WhatsApp display_resource cta_url rejected; falling back to text message"
+            logger.debug(
+                "agent_surfaces.service.whatsapp_display_resource_cta_url.observed"
             )
             await self._client.send_message_payload(
                 phone_number_id=phone_number_id,
@@ -358,14 +350,11 @@ class WhatsAppPlatformService:
                     message_id=message_id,
                 )
                 return
-            except Exception as exc:
+            except Exception:
                 # Best-effort indicator; log at debug so it is diagnosable without
                 # spamming warnings, then fall through to the reaction fallback.
                 logger.debug(
-                    "WhatsApp mark_read_and_typing failed (best-effort) "
-                    "message_id=%s: %s",
-                    message_id,
-                    exc,
+                    "agent_surfaces.service.whatsapp_mark_read_typing_best.observed"
                 )
 
         # Fallback: no inbound id (or read/typing rejected) — post a reaction so
@@ -379,11 +368,9 @@ class WhatsAppPlatformService:
                 message_id=message_id,
                 emoji="\U0001f4ac",
             )
-        except Exception as exc:
+        except Exception:
             logger.debug(
-                "WhatsApp reaction indicator failed (best-effort) message_id=%s: %s",
-                message_id,
-                exc,
+                "agent_surfaces.service.whatsapp_reaction_indicator_best_effort.observed"
             )
 
     async def download_attachment_bytes(
@@ -411,7 +398,9 @@ class WhatsAppPlatformService:
         )
         content = await self._client.download_media(download_url)
         mime_type = (
-            str(attachment.get("mime_type") or media_info.get("mime_type") or "").strip()
+            str(
+                attachment.get("mime_type") or media_info.get("mime_type") or ""
+            ).strip()
             or mimetypes.guess_type(file_name)[0]
             or "application/octet-stream"
         )
@@ -449,14 +438,11 @@ class WhatsAppPlatformService:
             )
         except WhatsAppApiError as exc:
             # Unsupported media / rejected upload — caller falls back to a link.
-            logger.error(
-                "WhatsApp media upload rejected phone_number_id=%s file_name=%s "
-                "mime_type=%s status=%s body=%s",
-                phone_number_id,
-                file_name,
-                mime_type,
-                exc.status_code,
-                exc.body_excerpt,
+            logger.debug(
+                "surface.whatsapp.media_upload_rejected",
+                mime_type=mime_type,
+                status_code=exc.status_code,
+                exc_info=True,
             )
             return False
         if not media_id:

@@ -4,7 +4,6 @@ import asyncio
 from collections.abc import Awaitable, Callable
 from datetime import datetime, timezone
 from email.utils import parsedate_to_datetime
-import logging
 import random
 from dataclasses import dataclass
 from typing import Any
@@ -33,7 +32,9 @@ from .models import (
 )
 
 
-logger = logging.getLogger(__name__)
+from agentbox.observability import get_logger
+
+logger = get_logger(__name__)
 
 
 @dataclass(frozen=True)
@@ -231,13 +232,6 @@ class E2BSandboxProvider(LegacyRuntimeProviderMixin):
                 )
                 jitter = random.uniform(0.0, min(max(base_delay * 0.2, 0.05), 2.0))
                 delay = base_delay + jitter
-                logger.warning(
-                    "agentbox_e2b_rate_limit attempt=%d "
-                    "retry_after_seconds=%.3f provider_retry_after=%s",
-                    attempt + 1,
-                    delay,
-                    provider_delay,
-                )
                 await self._sleep(delay)
                 fallback_delay = min(fallback_delay * 2, 8)
         raise RuntimeError("unreachable")
@@ -529,29 +523,6 @@ class E2BSandboxProvider(LegacyRuntimeProviderMixin):
                 provider_ids.add(normalized.provider_id)
         return provider_ids
 
-    def _log_capacity(
-        self,
-        event: str,
-        *,
-        sandbox_id: str | None = None,
-        level: int = logging.INFO,
-        **values: object,
-    ) -> None:
-        fields = {
-            "event": event,
-            "sandbox_id": sandbox_id,
-            "active": self._observed_active_count,
-            "reserved": len(self._capacity_reservations),
-            "max_active": self.config.max_active,
-            "create_in_flight": self._create_in_flight,
-            **values,
-        }
-        logger.log(
-            level,
-            "agentbox_e2b_capacity %s",
-            " ".join(f"{key}={value}" for key, value in fields.items()),
-        )
-
     async def _initialize_capacity(self) -> None:
         if self._observed_active_count is not None:
             return
@@ -569,7 +540,6 @@ class E2BSandboxProvider(LegacyRuntimeProviderMixin):
                     self._observed_active_count = len(provider_ids)
                     self._capacity_generation += 1
                     self._capacity_condition.notify_all()
-                    self._log_capacity("initialized")
 
     async def _reserve_capacity(self, sandbox_id: str) -> None:
         await self._initialize_capacity()
@@ -580,11 +550,11 @@ class E2BSandboxProvider(LegacyRuntimeProviderMixin):
             ) >= self.config.max_active:
                 remaining = deadline - self._clock()
                 if remaining <= 0:
-                    self._log_capacity(
-                        "admission_timeout",
+                    logger.warning(
+                        "agentbox.e2b.capacity_exhausted",
                         sandbox_id=sandbox_id,
-                        level=logging.WARNING,
-                        waited_seconds=self.config.admission_wait_seconds,
+                        observed_active_count=self._observed_active_count or 0,
+                        capacity_limit=self.config.max_active,
                     )
                     raise ProviderError(
                         f"E2B concurrency limit ({self.config.max_active}) reached",
@@ -595,11 +565,6 @@ class E2BSandboxProvider(LegacyRuntimeProviderMixin):
                             "Retry-After": str(self.config.capacity_retry_after_seconds)
                         },
                     )
-                self._log_capacity(
-                    "admission_wait",
-                    sandbox_id=sandbox_id,
-                    remaining_seconds=round(remaining, 3),
-                )
                 try:
                     await asyncio.wait_for(
                         self._capacity_condition.wait(),
@@ -609,7 +574,6 @@ class E2BSandboxProvider(LegacyRuntimeProviderMixin):
                     continue
             self._capacity_reservations.add(sandbox_id)
             self._capacity_generation += 1
-            self._log_capacity("reserved", sandbox_id=sandbox_id)
 
     async def _finish_reservation(
         self,
@@ -630,10 +594,6 @@ class E2BSandboxProvider(LegacyRuntimeProviderMixin):
                 self._observed_active_count = len(self._counted_provider_ids)
             self._capacity_generation += 1
             self._capacity_condition.notify_all()
-            self._log_capacity(
-                "create_committed" if created else "reservation_released",
-                sandbox_id=sandbox_id,
-            )
 
     async def _mark_reservation_ambiguous(self, sandbox_id: str) -> None:
         """Retain admission until a successful inventory resolves uncertainty."""
@@ -642,31 +602,18 @@ class E2BSandboxProvider(LegacyRuntimeProviderMixin):
             if sandbox_id in self._capacity_reservations:
                 self._ambiguous_capacity_reservations.add(sandbox_id)
                 self._capacity_generation += 1
-                self._log_capacity(
-                    "reservation_ambiguous",
-                    sandbox_id=sandbox_id,
-                    level=logging.WARNING,
-                )
 
     async def _record_capacity_removed(
         self, sandbox_id: str, provider_id: str | None
     ) -> None:
+        del sandbox_id
         async with self._capacity_condition:
-            was_counted = bool(
-                provider_id and provider_id in self._counted_provider_ids
-            )
             if provider_id:
                 self._counted_provider_ids.discard(provider_id)
             if self._observed_active_count is not None:
                 self._observed_active_count = len(self._counted_provider_ids)
             self._capacity_generation += 1
             self._capacity_condition.notify_all()
-            self._log_capacity(
-                "removed",
-                sandbox_id=sandbox_id,
-                provider_id=provider_id,
-                counted=was_counted,
-            )
 
     async def _record_capacity_observed(
         self, sandbox_id: str, provider_id: str | None
@@ -684,9 +631,8 @@ class E2BSandboxProvider(LegacyRuntimeProviderMixin):
             self._observed_active_count = len(self._counted_provider_ids)
             self._capacity_generation += 1
             self._capacity_condition.notify_all()
-            self._log_capacity("observed_existing", provider_id=provider_id)
 
-    async def _refresh_capacity_inventory(self, event: str) -> None:
+    async def _refresh_capacity_inventory(self) -> None:
         known_at_start = dict(self._known_infos)
         sandboxes_at_start = dict(self._sandboxes)
         async with self._capacity_condition:
@@ -721,9 +667,6 @@ class E2BSandboxProvider(LegacyRuntimeProviderMixin):
                 self._counted_provider_ids = provider_ids
                 self._observed_active_count = len(provider_ids)
                 self._capacity_generation += 1
-                self._log_capacity(event)
-            else:
-                self._log_capacity(f"{event}_stale")
             self._capacity_condition.notify_all()
 
     async def _wait_for_create_rate_slot(self) -> None:
@@ -740,7 +683,6 @@ class E2BSandboxProvider(LegacyRuntimeProviderMixin):
         async with self._create_semaphore:
             async with self._capacity_condition:
                 self._create_in_flight += 1
-                self._log_capacity("provider_create_start", sandbox_id=sandbox_id)
             try:
 
                 async def rate_limited_operation():
@@ -752,7 +694,6 @@ class E2BSandboxProvider(LegacyRuntimeProviderMixin):
                 async with self._capacity_condition:
                     self._create_in_flight -= 1
                     self._capacity_condition.notify_all()
-                    self._log_capacity("provider_create_finish", sandbox_id=sandbox_id)
 
     async def bootstrap(
         self,
@@ -943,11 +884,9 @@ class E2BSandboxProvider(LegacyRuntimeProviderMixin):
             ) as exc:
                 last_error = exc
                 if await self._public_runtime_ready(sandbox):
-                    logger.warning(
-                        "agentbox_e2b_timeout_renewal_deferred "
-                        "sandbox_id=%s provider_id=%s",
-                        sandbox_id,
-                        getattr(sandbox, "sandbox_id", None),
+                    logger.debug(
+                        "agentbox.e2b.timeout_renewal_deferred.diagnostic",
+                        sandbox_id=sandbox_id,
                     )
                     return False
                 if self._clock() >= deadline:
@@ -1319,12 +1258,7 @@ class E2BSandboxProvider(LegacyRuntimeProviderMixin):
                     else:
                         current = reconnected
                         self._sandboxes[sandbox_id] = current
-                        logger.info(
-                            "agentbox_e2b_status_reconnected "
-                            "sandbox_id=%s provider_id=%s",
-                            sandbox_id,
-                            info.provider_id,
-                        )
+                        logger.debug('agentbox.e2b.e2b_status_reconnected_sandbox_id.observed', sandbox_id=sandbox_id, provider_id=info.provider_id)
                         running, last_error = await observe(current)
 
             if running is None:
@@ -1421,7 +1355,7 @@ class E2BSandboxProvider(LegacyRuntimeProviderMixin):
         info = await self._find(sandbox_id)
         if info is None:
             self._clear_lease_tracking(sandbox_id)
-            await self._refresh_capacity_inventory("release_not_found")
+            await self._refresh_capacity_inventory()
             return False
         if info.state != "running":
             self._clear_lease_tracking(sandbox_id)
@@ -1440,7 +1374,7 @@ class E2BSandboxProvider(LegacyRuntimeProviderMixin):
         except self._sdk.not_found_error:
             self.invalidate_sandbox_cache(sandbox_id)
             self._clear_lease_tracking(sandbox_id)
-            await self._refresh_capacity_inventory("release_not_found")
+            await self._refresh_capacity_inventory()
             return False
         except self._sdk.sandbox_error as exc:
             raise ProviderError(
@@ -1461,15 +1395,10 @@ class E2BSandboxProvider(LegacyRuntimeProviderMixin):
         self._sandboxes.pop(sandbox_id, None)
         if info is None:
             self._clear_lease_tracking(sandbox_id)
-            await self._refresh_capacity_inventory("delete_not_found")
+            await self._refresh_capacity_inventory()
             return False
         try:
-            logger.warning(
-                "agentbox_e2b_kill_requested reason=logical_delete "
-                "sandbox_id=%s provider_id=%s",
-                sandbox_id,
-                info.provider_id,
-            )
+            logger.debug('agentbox.e2b.e2b_kill_requested_reason_logical.diagnostic', sandbox_id=sandbox_id, provider_id=info.provider_id)
             deleted = bool(
                 await self._with_rate_limit_retry(
                     lambda: self._sdk.sandbox_cls.kill(
@@ -1478,12 +1407,7 @@ class E2BSandboxProvider(LegacyRuntimeProviderMixin):
                 )
             )
             if not deleted:
-                logger.info(
-                    "agentbox_e2b_kill_already_absent reason=logical_delete "
-                    "sandbox_id=%s provider_id=%s",
-                    sandbox_id,
-                    info.provider_id,
-                )
+                logger.debug('agentbox.e2b.e2b_kill_already_absent_reason.observed', sandbox_id=sandbox_id, provider_id=info.provider_id)
             await self._record_capacity_removed(sandbox_id, info.provider_id)
             self._known_infos.pop(sandbox_id, None)
             self._clear_lease_tracking(sandbox_id)
@@ -1491,12 +1415,7 @@ class E2BSandboxProvider(LegacyRuntimeProviderMixin):
             # longer exists. The requested terminal state is already reached.
             return True
         except self._sdk.not_found_error:
-            logger.info(
-                "agentbox_e2b_kill_already_absent reason=logical_delete "
-                "sandbox_id=%s provider_id=%s",
-                sandbox_id,
-                info.provider_id,
-            )
+            logger.debug('agentbox.e2b.e2b_kill_already_absent_reason.observed', sandbox_id=sandbox_id, provider_id=info.provider_id)
             await self._record_capacity_removed(sandbox_id, info.provider_id)
             self._known_infos.pop(sandbox_id, None)
             self._clear_lease_tracking(sandbox_id)
@@ -1514,29 +1433,21 @@ class E2BSandboxProvider(LegacyRuntimeProviderMixin):
         self._clear_lease_tracking(sandbox_id)
         provider_id = provider_id or getattr(cached, "sandbox_id", None)
         if not provider_id:
-            await self._refresh_capacity_inventory("discard_missing_id")
+            await self._refresh_capacity_inventory()
             raise ProviderError(
                 "E2B cleanup outcome is unknown",
                 code="provider_cleanup_outcome_unknown",
                 retryable=True,
             )
         try:
-            logger.warning(
-                "agentbox_e2b_kill_requested reason=failed_create_cleanup "
-                "sandbox_id=%s provider_id=%s",
-                sandbox_id,
-                provider_id,
-            )
+            logger.debug('agentbox.e2b.e2b_kill_requested_reason_create.diagnostic', sandbox_id=sandbox_id, provider_id=provider_id)
             await self._with_rate_limit_retry(
                 lambda: self._sdk.sandbox_cls.kill(provider_id, **self._api_options())
             )
         except self._sdk.not_found_error:
             pass
         except Exception as exc:
-            logger.exception(
-                "Failed to discard unbootstrapped E2B sandbox %s",
-                sandbox_id,
-            )
+            logger.debug('agentbox.e2b.discard_unbootstrapped_e2b_sandbox_s.propagated', sandbox_id=sandbox_id, exc_info=True)
             raise ProviderError(
                 "E2B cleanup outcome is unknown",
                 code="provider_cleanup_outcome_unknown",
@@ -1548,12 +1459,7 @@ class E2BSandboxProvider(LegacyRuntimeProviderMixin):
         """Purge one exact provider generation without targeting a replacement."""
 
         try:
-            logger.warning(
-                "agentbox_e2b_kill_requested reason=orphan_purge "
-                "sandbox_id=%s provider_id=%s",
-                ref.sandbox_id,
-                ref.provider_id,
-            )
+            logger.debug('agentbox.e2b.e2b_kill_requested_reason_orphan.diagnostic', sandbox_id=ref.sandbox_id, provider_id=ref.provider_id)
             deleted = bool(
                 await self._with_rate_limit_retry(
                     lambda: self._sdk.sandbox_cls.kill(
@@ -1562,19 +1468,9 @@ class E2BSandboxProvider(LegacyRuntimeProviderMixin):
                 )
             )
             if not deleted:
-                logger.info(
-                    "agentbox_e2b_kill_already_absent reason=orphan_purge "
-                    "sandbox_id=%s provider_id=%s",
-                    ref.sandbox_id,
-                    ref.provider_id,
-                )
+                logger.debug('agentbox.e2b.e2b_kill_already_absent_reason.observed', sandbox_id=ref.sandbox_id, provider_id=ref.provider_id)
         except self._sdk.not_found_error:
-            logger.info(
-                "agentbox_e2b_kill_already_absent reason=orphan_purge "
-                "sandbox_id=%s provider_id=%s",
-                ref.sandbox_id,
-                ref.provider_id,
-            )
+            logger.debug('agentbox.e2b.e2b_kill_already_absent_reason.observed', sandbox_id=ref.sandbox_id, provider_id=ref.provider_id)
             deleted = False
         except self._sdk.sandbox_error as exc:
             raise ProviderError(
@@ -1666,12 +1562,7 @@ class E2BSandboxProvider(LegacyRuntimeProviderMixin):
                         # gone. Keep its authenticated endpoint and grant the
                         # transport another bounded retry window rather than
                         # converting route flapping into lifecycle churn.
-                        logger.warning(
-                            "agentbox_e2b_endpoint_refresh_control_plane_lag "
-                            "sandbox_id=%s provider_id=%s",
-                            sandbox_id,
-                            instance_id,
-                        )
+                        logger.debug('agentbox.e2b.e2b_endpoint_refresh_control_plane.diagnostic', sandbox_id=sandbox_id, instance_id=instance_id)
                         return self._endpoint_from_sandbox(
                             sandbox_id,
                             cached,

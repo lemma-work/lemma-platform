@@ -124,8 +124,8 @@ def _get_url_cache() -> RedisJsonCache | None:
                     60, datastore_settings.datastore_file_url_expiry_seconds - 60
                 ),
             )
-        except Exception as exc:
-            logger.warning("File-URL cache unavailable: %s", exc)
+        except Exception:
+            logger.warning("datastore.file_url.file_url_cache_unavailable_s.degraded")
             return None
     return _url_cache
 
@@ -150,8 +150,8 @@ async def build_object_url(
             if cached:
                 payload = json.loads(cached)
                 return payload["url"], datetime.fromisoformat(payload["expires_at"])
-        except Exception as exc:
-            logger.debug("File-URL cache read failed: %s", exc)
+        except Exception:
+            logger.debug("datastore.file_url.file_url_cache_read_s.observed")
 
     now = int(time.time())
     expires_at_epoch = now + expires_seconds
@@ -175,8 +175,8 @@ async def build_object_url(
                 cache_key,
                 json.dumps({"url": url, "expires_at": expires_at.isoformat()}),
             )
-        except Exception as exc:
-            logger.debug("File-URL cache write failed: %s", exc)
+        except Exception:
+            logger.debug("datastore.file_url.file_url_cache_write_s.observed")
 
     return url, expires_at
 

@@ -128,9 +128,8 @@ class FileStoragePhase:
                     try:
                         await self.storage.delete_file(move.destination_key)
                     except DatastoreDomainError:
-                        logger.warning(
-                            "Failed rolling back staged move %s",
-                            move.destination_key,
+                        logger.debug(
+                            'datastore.storage_phase.rolling_back_staged_move_s.diagnostic',
                             exc_info=True,
                         )
                 raise DatastoreInfrastructureError(
@@ -150,11 +149,9 @@ class FileStoragePhase:
         ):
             try:
                 await self.storage.delete_file(plan.previous_storage_key)
-            except DatastoreDomainError as exc:
-                logger.warning(
-                    "Failed to delete superseded original %s: %s",
-                    plan.previous_storage_key,
-                    exc,
+            except DatastoreDomainError:
+                logger.debug(
+                    'datastore.storage_phase.delete_superseded_original_s_s.diagnostic'
                 )
 
         await self._delete_move_sources(plan.storage_moves)
@@ -175,11 +172,9 @@ class FileStoragePhase:
         ):
             try:
                 await search_service.remove_file(updated_entity.id)
-            except Exception as exc:
-                logger.warning(
-                    "Failed to remove indexed chunks for unsearchable file %s: %s",
-                    updated_entity.id,
-                    exc,
+            except Exception:
+                logger.debug(
+                    'datastore.storage_phase.remove_indexed_chunks_unsearchable_file.diagnostic'
                 )
             await self.projection.delete_child_artifacts(
                 updated_entity.pod_id,
@@ -196,11 +191,9 @@ class FileStoragePhase:
                             updated_entity.path,
                             self.paths._parent_path(updated_entity.path),
                         )
-                    except Exception as exc:
-                        logger.warning(
-                            "Failed to update indexed path metadata for %s: %s",
-                            updated_entity.id,
-                            exc,
+                    except Exception:
+                        logger.debug(
+                            'datastore.storage_phase.update_indexed_path_metadata_s.diagnostic'
                         )
             await self.projection.delete_child_artifacts(
                 updated_entity.pod_id,
@@ -215,11 +208,9 @@ class FileStoragePhase:
                 continue
             try:
                 await self.storage.delete_file(move.source_key)
-            except DatastoreDomainError as exc:
-                logger.warning(
-                    "Failed to delete moved original %s: %s",
-                    move.source_key,
-                    exc,
+            except DatastoreDomainError:
+                logger.debug(
+                    'datastore.storage_phase.delete_moved_original_s_s.diagnostic'
                 )
 
     async def cleanup_uncommitted_update(self, plan: _UpdatePlan) -> None:
@@ -236,11 +227,9 @@ class FileStoragePhase:
                 await self.storage.delete_file(plan.new_storage_key)
             except DatastoreObjectNotFoundError:
                 return
-            except Exception as exc:
-                logger.warning(
-                    "Failed to clean up uncommitted datastore object %s: %s",
-                    plan.new_storage_key,
-                    exc,
+            except Exception:
+                logger.debug(
+                    'datastore.storage_phase.clean_up_uncommitted_datastore_object.diagnostic'
                 )
         for move in plan.storage_moves:
             if move.destination_key == move.source_key:
@@ -249,11 +238,9 @@ class FileStoragePhase:
                 await self.storage.delete_file(move.destination_key)
             except DatastoreObjectNotFoundError:
                 continue
-            except DatastoreDomainError as exc:
-                logger.warning(
-                    "Failed to clean up staged moved object %s: %s",
-                    move.destination_key,
-                    exc,
+            except DatastoreDomainError:
+                logger.debug(
+                    'datastore.storage_phase.clean_up_staged_moved_object.diagnostic'
                 )
 
     async def cleanup_deleted_paths(
@@ -272,11 +259,9 @@ class FileStoragePhase:
             if folder_prefix:
                 try:
                     await self.storage.delete_prefix(folder_prefix)
-                except DatastoreDomainError as exc:
-                    logger.warning(
-                        "Failed to delete folder contents from storage %s: %s",
-                        folder_prefix,
-                        exc,
+                except DatastoreDomainError:
+                    logger.debug(
+                        'datastore.storage_phase.delete_folder_contents_storage_s.diagnostic'
                     )
             # The folder prefix removes canonical originals and colocated
             # derived children. Exact deletes remain idempotent and cover any
@@ -284,28 +269,26 @@ class FileStoragePhase:
             for item in files:
                 try:
                     await self.storage.delete_file(item["storage_key"])
-                except Exception as exc:
-                    logger.warning("Failed to delete file %s: %s", item["path"], exc)
+                except Exception:
+                    logger.debug('datastore.storage_phase.delete_file_s_s.diagnostic')
                 try:
                     await search_service.remove_file(UUID(item["file_id"]))
-                except Exception as exc:
-                    logger.warning(
-                        "Failed to remove indexed chunks for %s: %s",
-                        item["file_id"],
-                        exc,
+                except Exception:
+                    logger.debug(
+                        'datastore.storage_phase.remove_indexed_chunks_s_s.diagnostic',
+                        file_id=item["file_id"],
                     )
             return
         for item in files:
             try:
                 await self.storage.delete_file(item["storage_key"])
-            except Exception as exc:
-                logger.warning("Failed to delete file %s: %s", item["path"], exc)
+            except Exception:
+                logger.debug('datastore.storage_phase.delete_file_s_s.diagnostic')
             await self.projection.delete_child_artifacts(pod_id, item["path"])
             try:
                 await search_service.remove_file(UUID(item["file_id"]))
-            except Exception as exc:
-                logger.warning(
-                    "Failed to remove indexed chunks for %s: %s",
-                    item["file_id"],
-                    exc,
+            except Exception:
+                logger.debug(
+                    'datastore.storage_phase.remove_indexed_chunks_s_s.diagnostic',
+                    file_id=item["file_id"],
                 )

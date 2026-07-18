@@ -8,6 +8,7 @@ from typing import Any
 from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
 from app.core.infrastructure.db.uow_factory import UnitOfWorkFactory
 from app.core.log.log import get_logger
+from app.core.request_context import create_inherited_task
 from app.modules.agent.contracts import Conversation
 from app.modules.agent.contracts import (
     AgentEvent,
@@ -121,7 +122,7 @@ class SurfaceAgentRunProgressObserver:
         sent = await self._send_indicator(conversation_id=conversation.id)
         if not sent:
             return
-        self._typing_task = asyncio.create_task(
+        self._typing_task = create_inherited_task(
             self._refresh_typing_loop(
                 conversation_id=conversation.id,
                 interval=interval,
@@ -192,13 +193,6 @@ class SurfaceAgentRunProgressObserver:
         if tool_call_id:
             rendered_key = (str(kind), tool_call_id)
             if rendered_key in self._rendered_waiting_tool_calls:
-                logger.info(
-                    "Surface %s render skipped because tool call was already "
-                    "rendered conversation=%s tool_call_id=%s",
-                    kind,
-                    conversation.id,
-                    tool_call_id,
-                )
                 return
             self._rendered_waiting_tool_calls.add(rendered_key)
         await self._clear_progress(conversation.id)
@@ -206,21 +200,16 @@ class SurfaceAgentRunProgressObserver:
         if not self._final_delivered:
             self._final_delivered = True
             if not self._run_errored:
-                message = (
-                    self._final_answer_text or self._buffered_text or ""
-                ).strip()
+                message = (self._final_answer_text or self._buffered_text or "").strip()
                 if message:
                     try:
                         await self._send_agent_message(
                             conversation_id=conversation.id,
                             message=message,
                         )
-                    except Exception as exc:
-                        logger.warning(
-                            "Surface pre-question narration failed "
-                            "conversation=%s error=%s",
-                            conversation.id,
-                            exc,
+                    except Exception:
+                        logger.debug(
+                            'agent_surfaces.progress_observer.surface_pre_question_narration_conversation.diagnostic'
                         )
         async with self.uow_factory() as uow:
             service = self.service_factory(uow)
@@ -243,21 +232,15 @@ class SurfaceAgentRunProgressObserver:
                     # silent (this is the swallow class that hid the ask_user bug).
                     if rendered_key is not None:
                         self._rendered_waiting_tool_calls.discard(rendered_key)
-                    logger.warning(
-                        "Surface %s is WAITING but nothing was delivered to the "
-                        "user conversation=%s tool_call_id=%s — run is stuck",
-                        kind,
-                        conversation.id,
-                        tool_call_id,
+                    logger.debug(
+                        'agent_surfaces.progress_observer.surface_s_waiting_but_nothing.diagnostic',
+                        tool_call_id=tool_call_id,
                     )
-            except Exception as exc:
+            except Exception:
                 if rendered_key is not None:
                     self._rendered_waiting_tool_calls.discard(rendered_key)
-                logger.warning(
-                    "Surface %s render failed conversation=%s error=%s",
-                    kind,
-                    conversation.id,
-                    exc,
+                logger.debug(
+                    'agent_surfaces.progress_observer.surface_s_render_conversation_s.diagnostic'
                 )
 
     async def _maybe_send_text_progress(
@@ -357,11 +340,9 @@ class SurfaceAgentRunProgressObserver:
                 conversation_id=conversation.id,
                 message=message,
             )
-        except Exception as exc:
-            logger.warning(
-                "Surface final answer delivery failed conversation=%s error=%s",
-                conversation.id,
-                exc,
+        except Exception:
+            logger.debug(
+                'agent_surfaces.progress_observer.surface_final_answer_delivery_conversation.diagnostic'
             )
 
     async def _refresh_typing_loop(
@@ -379,11 +360,10 @@ class SurfaceAgentRunProgressObserver:
                     return
         except asyncio.CancelledError:
             raise
-        except Exception as exc:
-            logger.warning(
-                "Surface progress typing loop stopped conversation=%s error=%s",
-                conversation_id,
-                exc,
+        except Exception:
+            logger.debug(
+                'agent_surfaces.progress_observer.surface_progress_typing_loop_stopped.diagnostic',
+                conversation_id=conversation_id,
             )
 
     async def _send_indicator(

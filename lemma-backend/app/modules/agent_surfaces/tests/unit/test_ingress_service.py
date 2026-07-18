@@ -982,9 +982,10 @@ async def test_execute_chat_logs_missing_fallback_credentials(monkeypatch):
     service._resolve_credentials_from_context = AsyncMock(
         return_value={"bot_token": ""}
     )
-    log = Mock()
+    incident = Mock()
     monkeypatch.setattr(
-        "app.modules.agent_surfaces.services.fallback_reply_service.logger", log
+        "app.modules.agent_surfaces.services.fallback_reply_service._fallback_incident",
+        incident,
     )
     context = SurfaceReplyContext(
         platform="TELEGRAM",
@@ -996,13 +997,7 @@ async def test_execute_chat_logs_missing_fallback_credentials(monkeypatch):
     await service.execute_chat(context)
 
     adapter.send_message.assert_not_awaited()
-    log.error.assert_called_once_with(
-        "Surface fallback delivery unavailable",
-        platform="TELEGRAM",
-        reply_kind="signup",
-        message_id="missing-creds",
-        failure_reason="missing_credentials",
-    )
+    incident.record_failure.assert_called_once_with(error_type="MissingCredentials")
 
 
 async def test_execute_chat_logs_delivery_failure_without_secret(monkeypatch):
@@ -1013,9 +1008,10 @@ async def test_execute_chat_logs_delivery_failure_without_secret(monkeypatch):
     service._resolve_credentials_from_context = AsyncMock(
         return_value={"bot_token": "secret-token"}
     )
-    log = Mock()
+    incident = Mock()
     monkeypatch.setattr(
-        "app.modules.agent_surfaces.services.fallback_reply_service.logger", log
+        "app.modules.agent_surfaces.services.fallback_reply_service._fallback_incident",
+        incident,
     )
     context = SurfaceReplyContext(
         platform="TELEGRAM",
@@ -1026,14 +1022,8 @@ async def test_execute_chat_logs_delivery_failure_without_secret(monkeypatch):
 
     await service.execute_chat(context)
 
-    log.error.assert_called_once_with(
-        "Surface fallback delivery failed",
-        platform="TELEGRAM",
-        reply_kind="surface_setup",
-        message_id="failed-delivery",
-        failure_reason="RuntimeError",
-    )
-    assert "secret-token" not in repr(log.error.call_args)
+    incident.record_failure.assert_called_once_with(error_type="RuntimeError")
+    assert "secret-token" not in repr(incident.record_failure.call_args)
 
 
 async def test_execute_chat_starts_agent_run_with_surface_metadata():

@@ -2,11 +2,10 @@
 
 from __future__ import annotations
 
-import logging
-import sys
-import traceback
 from contextvars import ContextVar
 from datetime import datetime, timedelta, timezone
+import sys
+import traceback
 
 from apscheduler.events import (
     EVENT_JOB_ERROR,
@@ -16,6 +15,8 @@ from apscheduler.events import (
 )
 from apscheduler.executors.asyncio import AsyncIOExecutor
 from apscheduler.util import iscoroutinefunction_partial
+
+from app.core.log.log import get_logger
 
 
 _scheduled_run_time: ContextVar[datetime | None] = ContextVar(
@@ -35,7 +36,7 @@ def current_scheduled_run_time() -> datetime:
 async def _run_coroutine_job_with_slot(job, jobstore_alias, run_times, logger_name):
     """APScheduler's coroutine runner with the exact fire slot in a context var."""
     events = []
-    logger = logging.getLogger(logger_name)
+    logger = get_logger(logger_name)
     for run_time in run_times:
         if job.misfire_grace_time is not None:
             difference = datetime.now(timezone.utc) - run_time
@@ -48,15 +49,14 @@ async def _run_coroutine_job_with_slot(job, jobstore_alias, run_times, logger_na
                         run_time,
                     )
                 )
-                logger.warning('Run time of job "%s" was missed by %s', job, difference)
+                logger.debug('schedule.executor.run_time_job_s_was.diagnostic')
                 continue
 
         token = _scheduled_run_time.set(run_time)
         try:
             retval = await job.func(*job.args, **job.kwargs)
         except BaseException as exc:
-            _, _, tb = sys.exc_info()
-            formatted_tb = "".join(traceback.format_tb(tb)) if tb is not None else ""
+            tb = exc.__traceback__
             events.append(
                 JobExecutionEvent(
                     EVENT_JOB_ERROR,
@@ -64,10 +64,9 @@ async def _run_coroutine_job_with_slot(job, jobstore_alias, run_times, logger_na
                     jobstore_alias,
                     run_time,
                     exception=exc,
-                    traceback=formatted_tb,
+                    traceback=None,
                 )
             )
-            logger.exception('Job "%s" raised an exception', job)
             if tb is not None:
                 traceback.clear_frames(tb)
         else:

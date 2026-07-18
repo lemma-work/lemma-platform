@@ -331,11 +331,9 @@ class FileTransactionWriter:
             )
         except DatastoreObjectNotFoundError:
             pass
-        except Exception as exc:
-            logger.warning(
-                "Failed to delete user markdown for %s: %s",
-                entity.path,
-                exc,
+        except Exception:
+            logger.debug(
+                'datastore.transaction_writer.delete_user_markdown_s_s.diagnostic',
                 exc_info=True,
             )
         metadata = dict(entity.metadata or {})

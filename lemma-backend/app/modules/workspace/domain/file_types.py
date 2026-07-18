@@ -119,7 +119,7 @@ def get_content_type(path: str) -> str:
     if mime_type:
         return mime_type
 
-    logger.error(f"Unknown MIME type for {path}. Returning application/octet-stream")
+    logger.debug("workspace.mime_type.unknown")
     return "application/octet-stream"
 
 

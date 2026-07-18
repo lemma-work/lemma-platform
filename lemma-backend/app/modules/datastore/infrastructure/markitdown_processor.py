@@ -75,7 +75,9 @@ class MarkItDownDocumentProcessor(PdfPageRenderingMixin):
             content = await run_blocking(
                 read_file_bytes, content_path, limiter="cpu_bound"
             )
-        markdown = (await anyio.to_thread.run_sync(self._convert_sync, content, filename)).strip()
+        markdown = (
+            await anyio.to_thread.run_sync(self._convert_sync, content, filename)
+        ).strip()
         chunks = (
             await run_blocking(chunk_markdown, markdown, limiter="cpu_bound")
             if markdown
@@ -136,7 +138,10 @@ class MarkItDownDocumentProcessor(PdfPageRenderingMixin):
             tmp.close()
             count = get_pdf_page_count(tmp.name)
         except Exception:
-            logger.debug("markitdown: PDF page-count probe failed", exc_info=True)
+            logger.debug(
+                "datastore.markitdown_processor.markitdown_pdf_page_count_probe.observed",
+                exc_info=True,
+            )
             return []
         finally:
             try:

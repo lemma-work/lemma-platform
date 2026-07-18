@@ -93,9 +93,7 @@ def _export_checkpoints(state: ExportState) -> list[dict]:
             "name": "Export pod bundle",
             "status": status.value,
             "error": state.error,
-            "committed_at": (
-                state.completed_at if status is StepStatus.DONE else None
-            ),
+            "committed_at": (state.completed_at if status is StepStatus.DONE else None),
         }
     ]
 
@@ -223,9 +221,9 @@ class PodBundleStateStore:
         # Rolling-deployment bridge: lazily copy a legacy Redis-only snapshot.
         try:
             legacy = await self._get_cache(kind, job_id, model_type)
-        except (RedisError, ValidationError):
-            logger.warning(
-                "Failed to inspect legacy pod bundle cache",
+        except RedisError, ValidationError:
+            logger.debug(
+                'pod_bundle.state_store.inspect_legacy_pod_bundle_cache.diagnostic',
                 job_kind=kind.value,
                 job_id=str(job_id),
             )
@@ -270,8 +268,8 @@ class PodBundleStateStore:
                 ttl_seconds=ttl_seconds,
             )
         except RedisError:
-            logger.warning(
-                "Failed to refresh pod bundle state cache",
+            logger.debug(
+                'pod_bundle.state_store.refresh_pod_bundle_state_cache.diagnostic',
                 job_kind=kind.value,
                 job_id=str(job_id),
                 status=str(state.status),
@@ -288,9 +286,7 @@ class PodBundleStateStore:
         candidate = state.model_copy(deep=True)
         async with async_session_maker() as session, session.begin():
             model = await session.scalar(
-                select(PodBundleJob)
-                .where(PodBundleJob.id == job_id)
-                .with_for_update()
+                select(PodBundleJob).where(PodBundleJob.id == job_id).with_for_update()
             )
             if model is None:
                 if candidate.version != 0:
@@ -327,9 +323,7 @@ class PodBundleStateStore:
                     version=candidate.version,
                     attempt=candidate.attempt,
                     heartbeat_at=candidate.heartbeat_at,
-                    cancel_requested_at=getattr(
-                        candidate, "cancel_requested_at", None
-                    ),
+                    cancel_requested_at=getattr(candidate, "cancel_requested_at", None),
                     current_step=getattr(candidate, "current_step", None),
                     committed_steps=getattr(candidate, "committed_steps", []),
                     error_type=candidate.error_type,
@@ -561,8 +555,8 @@ class PodBundleStateStore:
             try:
                 await self._save_cache(kind, job_id, state)
             except RedisError:
-                logger.warning(
-                    "Failed to mirror recovered pod bundle job",
+                logger.debug(
+                    'pod_bundle.state_store.mirror_recovered_pod_bundle_job.diagnostic',
                     job_kind=kind.value,
                     job_id=str(job_id),
                 )

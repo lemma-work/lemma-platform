@@ -1,4 +1,4 @@
-from pydantic import Field
+from pydantic import AliasChoices, Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -8,6 +8,17 @@ class Settings(BaseSettings):
         env_file_encoding="utf-8",
         case_sensitive=False,
         extra="ignore",
+    )
+
+    environment: str = Field(
+        default="development",
+        validation_alias=AliasChoices(
+            "LEMMA_ENVIRONMENT", "AGENTBOX_ENVIRONMENT", "ENVIRONMENT"
+        ),
+    )
+    release_sha: str | None = Field(
+        default=None,
+        validation_alias=AliasChoices("LEMMA_RELEASE_SHA", "RELEASE_SHA"),
     )
 
     agentbox_api_key: str

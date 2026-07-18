@@ -310,7 +310,15 @@ async def test_display_resource_returns_browser_access_url(
     calls: list[tuple[str, object]] = []
 
     class FakeAgentBoxClient:
-        def __init__(self, *, base_url: str, api_key: str, timeout_seconds: float):
+        def __init__(
+            self,
+            *,
+            base_url: str,
+            api_key: str,
+            timeout_seconds: float,
+            context_headers_provider=None,
+        ):
+            assert callable(context_headers_provider)
             calls.append(("init", (base_url, api_key, timeout_seconds)))
 
         async def ensure_sandbox(self, sandbox_id: str, *, env: dict[str, str]):

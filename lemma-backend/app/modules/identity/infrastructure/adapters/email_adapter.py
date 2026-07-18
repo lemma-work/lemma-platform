@@ -29,12 +29,14 @@ class SmtpIdentityEmailAdapter(IdentityEmailPort):
 
     def _display_name_from_email(self, email: str) -> str:
         local_part = email.split("@", 1)[0].split("+", 1)[0]
-        name = " ".join(part for part in local_part.replace("_", ".").split(".") if part)
+        name = " ".join(
+            part for part in local_part.replace("_", ".").split(".") if part
+        )
         return name.title() if name else email
 
     def _feature_row(self, icon: str, label: str) -> str:
         return (
-            '<tr>'
+            "<tr>"
             '<td width="42" style="padding:14px 8px 14px 18px;vertical-align:middle;">'
             '<span style="display:inline-block;width:30px;height:30px;border-radius:999px;'
             'background:#f1efe9;color:#24211d;text-align:center;line-height:30px;font-size:14px;">'
@@ -58,7 +60,7 @@ class SmtpIdentityEmailAdapter(IdentityEmailPort):
         row_html = "".join(
             self._feature_row(icon, self._safe(label)) for icon, label in rows
         )
-        row_html = row_html.rsplit('border-bottom:1px solid #e8e4dc;', 1)
+        row_html = row_html.rsplit("border-bottom:1px solid #e8e4dc;", 1)
         if len(row_html) == 2:
             row_html = "border-bottom:0;".join(row_html)
         else:
@@ -80,9 +82,8 @@ class SmtpIdentityEmailAdapter(IdentityEmailPort):
         try:
             sender = EmailSender.from_settings()
         except EmailNotConfiguredError:
-            logger.warning(
-                "Skipping identity email because SMTP is not configured",
-                extra={"to_email": to_email, "subject": subject},
+            logger.debug(
+                'identity.email_adapter.skipping_identity_email_because_smtp.diagnostic'
             )
             return False
 
@@ -118,7 +119,7 @@ class SmtpIdentityEmailAdapter(IdentityEmailPort):
             invitation_label = "Pod invitation"
             heading = f"Use {safe_pod_name}."
             subheading = (
-                f"<strong style=\"color:#24211d;\">{safe_inviter_name}</strong> "
+                f'<strong style="color:#24211d;">{safe_inviter_name}</strong> '
                 f"invited you to access {safe_pod_name} in {safe_organization_name}."
             )
             button_label = f"Open {safe_pod_name}"
@@ -139,7 +140,7 @@ class SmtpIdentityEmailAdapter(IdentityEmailPort):
             invitation_label = "Workspace invitation"
             heading = f"Join {safe_organization_name} on Lemma."
             subheading = (
-                f"<strong style=\"color:#24211d;\">{safe_inviter_name}</strong> "
+                f'<strong style="color:#24211d;">{safe_inviter_name}</strong> '
                 f"invited you to the {safe_organization_name} workspace. Accept the invite "
                 "to start working with the team's agents, data, automations, and apps in one place."
             )
@@ -192,10 +193,7 @@ class SmtpIdentityEmailAdapter(IdentityEmailPort):
             "welcome_email.html",
             first_name_suffix=self._safe(first_name_suffix),
         )
-        text_content = (
-            f"Welcome to Lemma{first_name_suffix}. "
-            "Your account is ready."
-        )
+        text_content = f"Welcome to Lemma{first_name_suffix}. Your account is ready."
         return await self._send(
             to_email=to_email,
             subject="Welcome to Lemma",
@@ -246,7 +244,7 @@ class SmtpIdentityEmailAdapter(IdentityEmailPort):
         preheader = f"{requester_label} asked to join {display_pod_name}."
         heading = f"New request to join {safe_pod_name}."
         subheading = (
-            f"<strong style=\"color:#24211d;\">{safe_requester}</strong> "
+            f'<strong style="color:#24211d;">{safe_requester}</strong> '
             f"requested to join {safe_pod_name} in {safe_organization_name}."
         )
         details_html = self._description_card(

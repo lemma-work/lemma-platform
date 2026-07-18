@@ -20,7 +20,7 @@ async def _preload_local_embeddings(context):
     should_preload = settings.local_embedding_preload and composition.preload_embeddings
     if should_preload:
         timeout = max(1.0, settings.local_embedding_preload_timeout_seconds)
-        logger.info("Preloading local embedding model")
+        logger.debug("datastore.module.preloading_local_embedding_model.observed")
         async with asyncio.timeout(timeout):
             vector = await composition.embedder_provider().embed(
                 "lemma embedding readiness"
@@ -29,7 +29,7 @@ async def _preload_local_embeddings(context):
             raise RuntimeError(
                 "Local embedding preload returned an unexpected vector dimension"
             )
-        logger.info("Local embedding model is ready")
+        logger.debug("datastore.module.local_embedding_model_ready.observed")
     yield
 
 
@@ -77,9 +77,12 @@ async def _backfill_query_role(app):
         from app.modules.datastore.api.dependencies import get_schema_manager
 
         await get_schema_manager().backfill_query_role_grants()
-        logger.info("Datastore query role grants ensured")
+        logger.debug("datastore.module.datastore_query_role_grants_ensured.observed")
     except Exception:  # noqa: BLE001
-        logger.warning("Failed to ensure datastore query role grants", exc_info=True)
+        logger.debug(
+            'datastore.module.ensure_datastore_query_role_grants.diagnostic',
+            exc_info=True,
+        )
     yield
 
 

@@ -8,18 +8,17 @@ from email.mime.multipart import MIMEMultipart
 import json
 from pathlib import Path
 from typing import Optional
-import logging
 from datetime import datetime, timezone
 
 from app.core.config import settings
+from app.core.log.log import get_logger
 
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 
 class EmailNotConfiguredError(Exception):
     """Raised when SMTP email is not properly configured."""
 
-    pass
 
 
 class EmailSender:
@@ -142,7 +141,6 @@ class EmailSender:
                     ),
                     encoding="utf-8",
                 )
-                logger.info(f"Email written to file {email_file}")
                 return True
 
             # Create message
@@ -169,9 +167,8 @@ class EmailSender:
                 await server.login(self.smtp_user, self.smtp_password)
                 await server.send_message(msg)
 
-            logger.info(f"Email sent successfully to {to_email}")
             return True
 
-        except Exception as e:
-            logger.error(f"Failed to send email to {to_email}: {str(e)}")
+        except Exception:
+            logger.error("email.send.failed", exc_info=True)
             return False

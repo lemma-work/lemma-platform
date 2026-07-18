@@ -7,8 +7,11 @@ from pydantic import BaseModel, Field
 from agentbox_client import AgentBoxClient
 from app.core.api.dependencies import CurrentUser
 from app.core.config import settings
+from app.core.request_context import correlation_headers
 from app.modules.workspace.services.agentbox_manager import agentbox_sandbox_id
-from app.modules.workspace.services.workspace_sandbox_service import WorkspaceSandboxService
+from app.modules.workspace.services.workspace_sandbox_service import (
+    WorkspaceSandboxService,
+)
 
 router = APIRouter(prefix="/workspace/apps", tags=["Workspace Apps"])
 
@@ -45,6 +48,7 @@ async def create_workspace_browser_access(
         base_url=settings.agentbox_api_url,
         api_key=api_key,
         timeout_seconds=300.0,
+        context_headers_provider=correlation_headers,
     )
     try:
         await client.ensure_sandbox(

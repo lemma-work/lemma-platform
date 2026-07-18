@@ -18,6 +18,7 @@ from redis.exceptions import RedisError, TimeoutError as RedisTimeoutError
 from app.core.config import settings
 from app.core.domain.realtime import RealtimeChannel, RealtimeSlowConsumerError
 from app.core.log.log import get_logger
+from app.core.request_context import create_background_task
 
 logger = get_logger(__name__)
 meter = metrics.get_meter(__name__)
@@ -158,8 +159,8 @@ class RedisChannelAdapter:
                     await pubsub.subscribe(*new_channels)
                 except (RedisConnectionError, RedisTimeoutError, OSError) as exc:
                     reconnect_counter.add(1)
-                    logger.warning(
-                        "Realtime Pub/Sub subscribe failed; replacing stale lease",
+                    logger.debug(
+                        'infrastructure.channel_service.realtime_pub_sub_subscribe_replacing.diagnostic',
                         error_type=type(exc).__name__,
                     )
                     await self._replace_pubsub()
@@ -216,7 +217,7 @@ class RedisChannelAdapter:
 
     def _ensure_listener(self) -> None:
         if self._listener_task is None or self._listener_task.done():
-            self._listener_task = asyncio.create_task(
+            self._listener_task = create_background_task(
                 self._listen(),
                 name="redis-pubsub-multiplexer",
             )
@@ -247,7 +248,7 @@ class RedisChannelAdapter:
                     return
                 reconnect_counter.add(1)
                 logger.warning(
-                    "Realtime Pub/Sub connection lost; reconnecting",
+                    "infrastructure.channel_service.realtime_pub_sub_connection_lost.degraded",
                     error_type=type(exc).__name__,
                 )
                 await self._reconnect(backoff)
@@ -311,7 +312,9 @@ class RedisChannelAdapter:
         try:
             await pubsub.aclose()
         except RedisError, OSError:
-            logger.warning("Failed to close realtime Pub/Sub connection")
+            logger.debug(
+                'infrastructure.channel_service.close_realtime_pub_sub_connection.diagnostic'
+            )
 
 
 channel_service = RedisChannelAdapter()

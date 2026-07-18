@@ -46,7 +46,9 @@ class WorkspaceStateStore:
         key_prefix: str = "workspace:state:v1",
         lock_prefix: str = "workspace:lock:v1",
     ):
-        self._redis = Redis.from_url(redis_url or settings.redis_url, decode_responses=True)
+        self._redis = Redis.from_url(
+            redis_url or settings.redis_url, decode_responses=True
+        )
         self._key_prefix = key_prefix
         self._lock_prefix = lock_prefix
 
@@ -98,12 +100,10 @@ class WorkspaceStateStore:
         lock_key = self._lock_key(runtime, user_id)
         try:
             await self._redis.eval(_RELEASE_LOCK_SCRIPT, 1, lock_key, owner)
-        except Exception as exc:
-            logger.warning(
-                "Failed to release workspace lock for user=%s runtime=%s: %s",
-                user_id,
-                runtime,
-                exc,
+        except Exception:
+            logger.debug(
+                'workspace.workspace_state_store.release_workspace_lock_user_s.diagnostic',
+                user_id=user_id,
             )
 
     async def get_state(
@@ -131,12 +131,10 @@ class WorkspaceStateStore:
                 workspace_url=payload.get("workspace_url"),
                 error=payload.get("error"),
             )
-        except Exception as exc:
-            logger.warning(
-                "Invalid workspace state payload for user=%s runtime=%s: %s",
-                user_id,
-                runtime,
-                exc,
+        except Exception:
+            logger.debug(
+                'workspace.workspace_state_store.invalid_workspace_state_payload_user.diagnostic',
+                user_id=user_id,
             )
             return None
 

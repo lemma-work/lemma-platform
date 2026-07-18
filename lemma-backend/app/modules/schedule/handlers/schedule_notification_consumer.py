@@ -24,12 +24,14 @@ from app.core.infrastructure.events.inbox import (
     EventInboxPort,
     provide_domain_event_inbox,
 )
+from app.core.log.log import get_logger
 from app.modules.schedule.domain.events.schedule import (
     ScheduleDeactivated,
     ScheduleEvents,
 )
 
 router = RedisRouter()
+logger = get_logger(__name__)
 
 
 def provide_uow_factory() -> UnitOfWorkFactory:
@@ -60,9 +62,9 @@ async def on_schedule_deactivated(
         async with uow_factory() as uow:
             email = await resolve_user_email(uow, parsed.user_id)
         if email is None:
-            fs_logger.warning(
-                "ScheduleDeactivated for %s has no notification destination",
-                parsed.schedule_id,
+            logger.debug(
+                'schedule.schedule_notification_consumer.scheduledeactivated_s_has_no_notification.diagnostic',
+                schedule_id=parsed.schedule_id,
             )
             return
 
@@ -75,10 +77,6 @@ async def on_schedule_deactivated(
                 f"<p>Schedule ID: <code>{parsed.schedule_id}</code></p>"
                 "<p>Re-enable it after addressing the cause.</p>"
             ),
-        )
-        fs_logger.info(
-            "Sent deactivation notice for schedule %s",
-            parsed.schedule_id,
         )
 
     await inbox.process("schedule-notifications", event, send_notification)

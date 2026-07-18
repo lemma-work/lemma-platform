@@ -34,18 +34,22 @@ class ScheduleFilterJobService:
             raise ValueError("schedule_id is required")
         schedule = await self._schedule_repository.get(UUID(schedule_id))
         if schedule is None:
-            logger.error("Schedule %s not found for LLM filtering", schedule_id)
+            logger.debug(
+                "schedule.filter.not_found",
+                schedule_id=schedule_id,
+            )
             return
 
         if not schedule.filter_instruction:
-            logger.warning("Schedule %s has no filter instruction, skipping", schedule_id)
+            logger.debug(
+                'schedule.schedule_filter_job_service.s_has_no_filter_instruction.diagnostic',
+                schedule_id=schedule_id,
+            )
             return
 
-        fired = await self._processor.process_event(
+        await self._processor.process_event(
             schedule=schedule,
             payload=payload,
             metadata=metadata,
             source_event_id=source_event_id,
         )
-        if not fired:
-            logger.info("Schedule %s filtered out by LLM, skipping event", schedule_id)

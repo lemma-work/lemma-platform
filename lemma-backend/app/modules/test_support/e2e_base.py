@@ -111,7 +111,9 @@ def _cleanup_e2e_workspace_containers(*, sandboxes_only: bool = False) -> None:
         subprocess.run(["docker", "network", "rm", *network_ids], check=False)
 
 
-def _configure_local_datastore_runtime(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+def _configure_local_datastore_runtime(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
     from app.core.config import settings
 
     del tmp_path  # see below
@@ -135,7 +137,7 @@ async def _run_cleanup_step(
     try:
         await asyncio.wait_for(cleanup(), timeout=timeout_seconds)
     except TimeoutError:
-        logger.warning("Timed out during E2E cleanup step %s", name)
+        logger.warning("test_support.e2e_base.timed_out_during_e2e_cleanup.timeout")
 
 
 def _shared_context_resource(name: str, factory: Callable[[], Any]) -> Any:
@@ -250,7 +252,9 @@ def e2e_settings(test_database_url, test_redis_url, supertokens_container):
     settings.public_bucket_name = None
     settings.storage_backend = "local"
     settings.embedding_provider = "local"
-    settings.local_object_storage_root = f"/tmp/lemma-object-storage-tests{worker_suffix}"
+    settings.local_object_storage_root = (
+        f"/tmp/lemma-object-storage-tests{worker_suffix}"
+    )
 
     # Pin a stable, session-wide AgentBox manager endpoint. The worker subprocess
     # is session-scoped and captures os.environ once at spawn, while the manager
@@ -350,7 +354,9 @@ def _start_fake_agentbox(port: int) -> None:
     app = create_fake_agentbox_app()
     config = uvicorn.Config(app, host="127.0.0.1", port=port, log_level="warning")
     server = uvicorn.Server(config)
-    thread = threading.Thread(target=server.run, name=f"fake-agentbox-{port}", daemon=True)
+    thread = threading.Thread(
+        target=server.run, name=f"fake-agentbox-{port}", daemon=True
+    )
     thread.start()
     for _ in range(200):
         if server.started:
@@ -401,7 +407,9 @@ async def cleanup_workspace_containers_function():
 
     reset_workspace_tool_runtimes()
     await _run_cleanup_step("reset_workspace_store_state", reset_workspace_store_state)
-    await _run_cleanup_step("close_surface_event_dedup_store", close_surface_event_dedup_store)
+    await _run_cleanup_step(
+        "close_surface_event_dedup_store", close_surface_event_dedup_store
+    )
     await _run_cleanup_step("close_user_cache", close_user_cache)
     await _run_cleanup_step("close_streaq_job_queue", close_streaq_job_queue)
     await _run_cleanup_step("close_message_bus", close_message_bus)
@@ -521,7 +529,9 @@ async def worker(e2e_settings):
                 proc.wait(timeout=10)
             except subprocess.TimeoutExpired:
                 proc.kill()
-            redis_client = redis.from_url(e2e_settings.redis_url, decode_responses=False)
+            redis_client = redis.from_url(
+                e2e_settings.redis_url, decode_responses=False
+            )
             await redis_client.flushdb()
             await redis_client.aclose()
 
@@ -552,6 +562,7 @@ async def db_manager(e2e_settings) -> AsyncGenerator[DatabaseManager, None]:
     from app.modules.pod.infrastructure import models as pod_role_models
     from app.core.infrastructure.events import models as event_models
     from app.modules.pod_bundle.infrastructure import models as pod_bundle_models
+
     _ = (
         event_models,
         user_models,

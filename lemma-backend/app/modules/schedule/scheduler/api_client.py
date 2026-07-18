@@ -18,6 +18,7 @@ from app.modules.schedule.scheduler.api.schemas import (
 )
 from app.core.config import reveal_secret
 from app.core.log.log import get_logger
+from app.core.request_context import correlation_headers
 
 from app.modules.schedule.domain.interfaces import SchedulerService
 from app.modules.schedule.domain.schedule import ScheduleEntity, ScheduleType
@@ -48,7 +49,7 @@ class SchedulerAPIClient(SchedulerService):
         if schedule.schedule_type == ScheduleType.TIME:
             config = schedule.time_config
             if not config:
-                logger.warning(f"Schedule {schedule.id} missing time config")
+                logger.debug('schedule.api_client.missing_time_config.diagnostic')
                 return
 
             payload = dict(schedule.config.get("payload") or {})
@@ -69,12 +70,13 @@ class SchedulerAPIClient(SchedulerService):
                     replace_existing=True,
                 )
             else:
-                logger.warning(
-                    f"Schedule {schedule.id} check failed: no cron or scheduled_at"
+                logger.debug(
+                    'schedule.api_client.check_no_cron_or_scheduled.diagnostic'
                 )
         else:
-            logger.warning(
-                f"Unsupported schedule type for scheduling: {schedule.schedule_type}"
+            logger.debug(
+                'schedule.api_client.unsupported_schedule_type_scheduling.diagnostic',
+                schedule_type=schedule.schedule_type,
             )
 
     async def remove_job(self, schedule_id: UUID) -> None:
@@ -86,7 +88,10 @@ class SchedulerAPIClient(SchedulerService):
             )
         except ClientResponseError as e:
             if e.status == 404:
-                logger.warning(f"Job for schedule {schedule_id} not found to delete")
+                logger.debug(
+                    'schedule.api_client.job_schedule_not_found_delete.diagnostic',
+                    schedule_id=schedule_id,
+                )
             else:
                 raise
 
@@ -119,10 +124,8 @@ class SchedulerAPIClient(SchedulerService):
     def __del__(self):
         """Cleanup on deletion - warn if session wasn't properly closed."""
         if self._session is not None and not self._session.closed:
-            logger.warning(
-                "SchedulerAPIClient session was not properly closed. "
-                "Consider using the client as a context manager: "
-                "'async with SchedulerAPIClient() as client: ...'"
+            logger.debug(
+                'schedule.api_client.schedulerapiclient_session_was_not_properly.diagnostic'
             )
 
     async def _request(
@@ -173,6 +176,7 @@ class SchedulerAPIClient(SchedulerService):
             Response JSON data
         """
         headers: dict[str, str] = {}
+        headers.update(correlation_headers())
         token = reveal_secret(schedule_settings.scheduler_internal_token)
         if token:
             headers["Authorization"] = f"Bearer {token}"
@@ -192,10 +196,10 @@ class SchedulerAPIClient(SchedulerService):
 
                 return await response.json()
         except ClientResponseError as e:
-            logger.error(f"Scheduler API error: {e.status} - {e.message}")
+            logger.debug('schedule.api_client.scheduler_api.propagated', status=e.status, exc_info=True)
             raise
-        except ClientError as e:
-            logger.error(f"Scheduler API request failed: {e}")
+        except ClientError:
+            logger.debug('schedule.api_client.scheduler_api_request.propagated', exc_info=True)
             raise
 
     async def schedule_cron_job(

@@ -3,8 +3,8 @@
 from __future__ import annotations
 
 import asyncio
-import logging
 from collections.abc import Mapping
+import logging
 from typing import Any
 from pydantic import BaseModel
 from faststream.redis import RedisBroker
@@ -12,8 +12,9 @@ from faststream.redis import RedisBroker
 from app.core.config import settings
 from app.core.infrastructure.events.config import event_transport_settings
 from app.core.infrastructure.events.stream_subscriber import ensure_stream_groups
+from app.core.log.log import get_dependency_logger, get_logger
 
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 
 class FastStreamRedisMessageBus:
@@ -30,20 +31,28 @@ class FastStreamRedisMessageBus:
 
         async with self._lock:
             if not self._broker:
-                broker = RedisBroker(self._redis_url)
+                broker = RedisBroker(
+                    self._redis_url,
+                    logger=get_dependency_logger("faststream.redis"),
+                    log_level=logging.INFO,
+                )
                 try:
                     await broker.connect()
                 except asyncio.CancelledError:
                     try:
                         await broker.stop()
                     except Exception:
-                        logger.warning("Failed closing cancelled Redis connection")
+                        logger.debug(
+                            'infrastructure.message_bus.closing_cancelled_redis_connection.diagnostic'
+                        )
                     raise
                 except Exception:
                     try:
                         await broker.stop()
                     except Exception:
-                        logger.warning("Failed closing partial Redis connection")
+                        logger.debug(
+                            'infrastructure.message_bus.closing_partial_redis_connection.diagnostic'
+                        )
                     raise
                 self._broker = broker
         return self._broker
@@ -52,9 +61,7 @@ class FastStreamRedisMessageBus:
         """Eagerly initialize the shared broker connection."""
         return await self._get_broker()
 
-    async def publish(
-        self, stream: str, event: BaseModel | Mapping[str, Any]
-    ) -> None:
+    async def publish(self, stream: str, event: BaseModel | Mapping[str, Any]) -> None:
         broker = await self._get_broker()
         payload = (
             event.model_dump(mode="json")
@@ -82,7 +89,9 @@ class FastStreamRedisMessageBus:
         try:
             await asyncio.wait_for(broker.stop(), timeout=5.0)
         except TimeoutError:
-            logger.warning("Timed out closing FastStream Redis message bus")
+            logger.warning(
+                "infrastructure.message_bus.timed_out_closing_faststream_redis.timeout"
+            )
 
 
 _message_bus: FastStreamRedisMessageBus | None = None

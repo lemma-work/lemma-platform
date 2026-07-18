@@ -20,8 +20,10 @@ from uuid import UUID
 from app.core.config import settings
 from app.core.infrastructure.cache.redis_json_cache import RedisJsonCache
 from app.core.log.log import get_logger
+from app.core.observability.dependency_incident import DependencyIncident
 
 logger = get_logger(__name__)
+_store_incident = DependencyIncident("session_approval_store", logger=logger)
 
 _approval_cache: RedisJsonCache | None = None
 
@@ -86,14 +88,10 @@ async def record_session_approval(
                 "approved_at": datetime.now(timezone.utc).isoformat(),
             },
         )
-    except Exception:
-        logger.warning(
-            "Session-approval store unavailable; approval for %s by workload %s "
-            "will not persist for the session (each use re-prompts).",
-            permission_id,
-            workload_actor_id,
-            exc_info=True,
-        )
+    except Exception as exc:
+        _store_incident.record_failure(error_type=type(exc).__name__)
+    else:
+        _store_incident.record_success()
 
 
 async def has_session_approval(
@@ -112,13 +110,8 @@ async def has_session_approval(
         payload = await cache.get_json(
             _suffix(session_id, workload_actor_id, permission_id)
         )
-    except Exception:
-        logger.warning(
-            "Session-approval store unavailable; treating %s as unapproved for "
-            "workload %s (safe direction).",
-            permission_id,
-            workload_actor_id,
-            exc_info=True,
-        )
+    except Exception as exc:
+        _store_incident.record_failure(error_type=type(exc).__name__)
         return False
+    _store_incident.record_success()
     return payload is not None

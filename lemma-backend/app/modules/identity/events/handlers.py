@@ -10,6 +10,7 @@ from app.core.infrastructure.events.inbox import (
 from app.core.infrastructure.events.stream_subscriber import (
     reliable_redis_stream_subscriber,
 )
+from app.core.log.log import get_logger
 from app.modules.identity.domain.events import (
     IdentityEvents,
     OrganizationInvitationAcceptedEvent,
@@ -23,6 +24,7 @@ from app.modules.identity.infrastructure.adapters.email_adapter import (
 )
 
 router = RedisRouter()
+logger = get_logger(__name__)
 
 
 def provide_identity_email_port() -> IdentityEmailPort:
@@ -42,6 +44,7 @@ async def handle_identity_event(
     inbox: EventInboxPort = Depends(provide_domain_event_inbox),
 ):
     """Dispatch identity events to email adapter."""
+
     async def dispatch() -> None:
         await _dispatch_identity_event(event, fs_logger, email_port)
 
@@ -66,9 +69,6 @@ async def _dispatch_identity_event(
             pod_name=parsed.pod_name,
             pod_description=parsed.pod_description,
         )
-        fs_logger.info(
-            f"Processed invitation email event for invitation {parsed.invitation_id}"
-        )
         return
 
     if event_type == UserSignedUpEvent.get_event_type():
@@ -77,7 +77,6 @@ async def _dispatch_identity_event(
             to_email=parsed.email,
             first_name=parsed.first_name,
         )
-        fs_logger.info(f"Processed welcome email event for user {parsed.user_id}")
         return
 
     if event_type == OrganizationInvitationAcceptedEvent.get_event_type():
@@ -86,7 +85,4 @@ async def _dispatch_identity_event(
             to_email=parsed.accepted_email,
             organization_name=parsed.organization_name,
             role=OrganizationRole(parsed.role),
-        )
-        fs_logger.info(
-            f"Processed invitation accepted email event for invitation {parsed.invitation_id}"
         )

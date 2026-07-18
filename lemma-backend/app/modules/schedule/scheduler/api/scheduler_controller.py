@@ -94,8 +94,8 @@ async def schedule_cron_job(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail=f"Invalid cron expression: {e}",
         )
-    except Exception as e:
-        logger.error(f"Failed to schedule cron job: {e}", exc_info=True)
+    except Exception:
+        logger.debug('schedule.scheduler_controller.cron_job.propagated', exc_info=True)
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="Failed to schedule cron job",
@@ -136,8 +136,8 @@ async def schedule_once_job(
             schedule_id=data.schedule_id,
             next_run_time=next_run_time,
         )
-    except Exception as e:
-        logger.error(f"Failed to schedule one-time job: {e}", exc_info=True)
+    except Exception:
+        logger.debug('schedule.scheduler_controller.one_time_job.propagated', exc_info=True)
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="Failed to schedule one-time job",

@@ -2,6 +2,7 @@ from __future__ import annotations
 from datetime import datetime, timezone
 
 from app.core.config import settings
+from app.core.request_context import correlation_headers
 from agentbox_client import AgentBoxClient
 from pydantic_ai.tools import RunContext
 from pydantic_ai.toolsets import FunctionToolset
@@ -94,6 +95,7 @@ async def display_resource(
             base_url=settings.agentbox_api_url,
             api_key=settings.agentbox_api_key,
             timeout_seconds=300.0,
+            context_headers_provider=correlation_headers,
         )
         try:
             await client.ensure_sandbox(
@@ -333,7 +335,9 @@ async def _run_if_exact_match_already_approved(
         has_session_approval,
     )
 
-    workload_actor_id = f"agent:{getattr(deps, 'workload_id', None) or DEFAULT_POD_AGENT_ID}"
+    workload_actor_id = (
+        f"agent:{getattr(deps, 'workload_id', None) or DEFAULT_POD_AGENT_ID}"
+    )
     approved = await has_session_approval(
         session_id=str(deps.conversation_id),
         workload_actor_id=workload_actor_id,
@@ -349,7 +353,9 @@ async def _run_if_exact_match_already_approved(
 
     executor = ApprovalExecutor(SessionUnitOfWorkFactory(async_session_maker))
     try:
-        result = await executor.execute_as_user(deps=deps, tool_name=tool_name, args=args)
+        result = await executor.execute_as_user(
+            deps=deps, tool_name=tool_name, args=args
+        )
     except Exception as exc:  # noqa: BLE001 - reported to the model, not fatal
         return RequestApprovalResponse(
             success=False,
@@ -398,8 +404,7 @@ async def ask_user(
             return AskUserResponse(
                 success=False,
                 error=(
-                    f"Question {question.header!r} must have between 2 and 4 "
-                    "options."
+                    f"Question {question.header!r} must have between 2 and 4 options."
                 ),
             )
 

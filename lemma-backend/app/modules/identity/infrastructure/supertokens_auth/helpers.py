@@ -37,7 +37,6 @@ async def get_user_token(
         user.login_methods[0].recipe_user_id,
         payload,
     )
-    logger.info("Delegated session created", user_id=str(user_id))
     return session.access_token
 
 

@@ -29,8 +29,11 @@ def build_gmail_surface_toolset(
         """Reply to the current Gmail thread with formatted content and optional pod-file attachments."""
         try:
             return await service.reply_email(ctx=ctx, request=request)
-        except Exception as exc:
-            logger.exception("Gmail tool gmail_reply_email failed: %s", exc)
+        except Exception:
+            logger.debug(
+                "surface.email.reply_failed",
+                exc_info=True,
+            )
             return GmailReplyEmailResult(
                 success=False,
                 error="Gmail reply failed unexpectedly.",

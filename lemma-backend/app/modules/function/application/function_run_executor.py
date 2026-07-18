@@ -38,6 +38,7 @@ from app.core.config import settings
 from app.core.domain.events import DomainEvent
 from app.core.log.log import get_logger
 from app.core.redaction import redact_text
+from app.core.request_context import correlation_headers, create_inherited_task
 from app.modules.function.domain.entities import (
     FunctionEntity,
     FunctionRunEntity,
@@ -245,7 +246,10 @@ class FunctionRunExecutor:
                 run.error = self._user_facing_execution_error(exc)
                 run.completed_at = datetime.now()
                 await self._persist_terminal_run(function, run)
-                logger.exception("Function job run %s failed during execution", run.id)
+                logger.error(
+                    "function.function_run_executor.function_job_run_s_during.failed",
+                    exc_info=True,
+                )
                 return run
 
         try:
@@ -262,7 +266,10 @@ class FunctionRunExecutor:
             # logger.exception below. Preserve any container logs already on the
             # run -- never append a server traceback or raw HTTP body.
             run.error = self._user_facing_execution_error(exc)
-            logger.exception("Function run %s failed during execution", run.id)
+            logger.error(
+                "function.function_run_executor.function_run_s_during_execution.failed",
+                exc_info=True,
+            )
 
         run.completed_at = datetime.now()
         await self._persist_terminal_run(function, run)
@@ -586,13 +593,9 @@ class FunctionRunExecutor:
                 ):
                     raise
                 last_exc = exc
-                logger.warning(
-                    "Function run %s hit a transient sandbox error on attempt "
-                    "%s/%s; reprovisioning the sandbox and retrying: %s",
-                    run.id,
-                    attempt,
-                    _SANDBOX_RECOVERY_MAX_ATTEMPTS,
-                    exc,
+                logger.debug(
+                    'function.function_run_executor.function_run_s_hit_transient.diagnostic',
+                    attempt=attempt,
                 )
                 await asyncio.sleep(
                     min(
@@ -637,12 +640,13 @@ class FunctionRunExecutor:
                 first = False
                 try:
                     await heartbeat(sandbox_id)
-                except Exception as exc:  # best-effort keepalive
+                except Exception:  # best-effort keepalive
                     logger.debug(
-                        "sandbox heartbeat failed sandbox=%s: %s", sandbox_id, exc
+                        "function.function_run_executor.heartbeat_sandbox_s_s.observed",
+                        sandbox_id=sandbox_id,
                     )
 
-        task = asyncio.create_task(_loop())
+        task = create_inherited_task(_loop(), name="function-log-stream")
         try:
             yield
         finally:
@@ -707,21 +711,17 @@ class FunctionRunExecutor:
                     max_attempts=_FUNCTION_EXECUTE_RETRY_MAX_ATTEMPTS,
                     retryable_status_codes=RETRYABLE_HTTP_STATUS_CODES,
                     retryable_transport_errors=RETRYABLE_TRANSPORT_ERRORS,
-                    on_retry=lambda attempt, message: logger.info(
-                        "function_executor execute not ready sandbox=%s run=%s attempt=%s: %s",
-                        sandbox_id,
-                        run.id,
-                        attempt,
-                        message,
+                    on_retry=lambda attempt, message: logger.debug(
+                        "function.function_run_executor.function_executor_execute_not_ready.observed",
+                        sandbox_id=sandbox_id,
+                        attempt=attempt,
                     ),
                 )
             except httpx.HTTPStatusError as exc:
                 if not async_job and exc.response.status_code == 504:
                     logger.warning(
-                        "function_executor sync execute timed out at proxy "
-                        "sandbox=%s run=%s",
-                        sandbox_id,
-                        run.id,
+                        "function.function_run_executor.function_executor_sync_execute_timed.timeout",
+                        sandbox_id=sandbox_id,
                     )
                     await cancel_executor_run(client, sandbox_id, run.id)
                     return FunctionInvokeResponse(
@@ -767,6 +767,7 @@ class FunctionRunExecutor:
             manager_api_key=api_key,
             lemma_token=lemma_token,
             timeout_seconds=300.0,
+            context_headers_provider=correlation_headers,
         )
 
     def _apply_executor_response_to_run(
@@ -929,7 +930,9 @@ class FunctionRunExecutor:
                 try:
                     return json.loads(payload)
                 except json.JSONDecodeError:
-                    logger.warning("Failed to decode marked JSON for marker %s", marker)
+                    logger.debug(
+                        'function.function_run_executor.decode_marked_json_marker_s.diagnostic'
+                    )
                     return None
         return None
 

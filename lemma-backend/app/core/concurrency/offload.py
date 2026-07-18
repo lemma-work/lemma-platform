@@ -94,15 +94,11 @@ def configure_thread_pool() -> None:
     try:
         limiter = anyio.to_thread.current_default_thread_limiter()
         limiter.total_tokens = settings.offload_total_threads
-        logger.info(
-            "Configured offload thread pool",
-            total_threads=settings.offload_total_threads,
-            cpu_bound=settings.offload_cpu_bound_limit,
-            external_http=settings.offload_external_http_limit,
-            crypto=settings.offload_crypto_limit,
+        logger.debug("concurrency.offload.configured_offload_thread_pool.observed")
+    except Exception:  # pragma: no cover - defensive; never block startup
+        logger.debug(
+            'concurrency.offload.could_not_configure_offload_thread.diagnostic'
         )
-    except Exception as exc:  # pragma: no cover - defensive; never block startup
-        logger.warning("Could not configure offload thread pool", error=str(exc))
 
 
 def reset_limiters_for_test() -> None:

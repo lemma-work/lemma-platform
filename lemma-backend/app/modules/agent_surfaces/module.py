@@ -3,6 +3,7 @@
 from contextlib import asynccontextmanager
 
 from app.core.log.log import get_logger
+from app.core.request_context import create_background_task
 from app.core.registry import LemmaModule
 
 logger = get_logger(__name__)
@@ -64,9 +65,11 @@ async def _surface_event_receiver(context):
     )
 
     receiver = SurfaceEventReceiverService(uow_factory=context.uow_factory)
-    task = asyncio.create_task(receiver.run()) if receiver.should_start() else None
-    if task is not None:
-        logger.info("Native surface event receivers enabled for worker startup")
+    task = (
+        create_background_task(receiver.run(), name="surface-event-receiver")
+        if receiver.should_start()
+        else None
+    )
     try:
         yield
     finally:

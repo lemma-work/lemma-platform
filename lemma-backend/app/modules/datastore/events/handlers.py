@@ -95,19 +95,12 @@ async def _enqueue_file_processing(
     if event.event_type == DatastoreFileUpdatedEvent.get_event_type():
         defer_until = _content_update_defer_until(event.occurred_at)
 
-    queued = await get_datastore_reindex_queue().enqueue(
+    await get_datastore_reindex_queue().enqueue(
         file_id=event.file_id,
         pod_id=event.pod_id,
         metadata=event.metadata,
         defer_until=defer_until,
     )
-    if queued:
-        fs_logger.info("Enqueued process_datastore_file_task for %s", event.file_id)
-    else:
-        fs_logger.info(
-            "Skipped enqueue for %s because it was duplicate or not eligible",
-            event.file_id,
-        )
 
 
 @reliable_redis_stream_subscriber(
@@ -160,7 +153,6 @@ async def process_datastore_file_task(
     file_uuid = UUID(file_id)
     pod_uuid = UUID(pod_id)
 
-    logger.info("STARTING process_datastore_file_task for %s", file_uuid)
 
     try:
         async with _get_document_processing_semaphore():
@@ -178,9 +170,8 @@ async def process_datastore_file_task(
                 pod_uuid, uow_factory=uow_factory
             )
             await service.process_file_async(file_uuid, metadata or {})
-        logger.info("FINISHED process_datastore_file_task for %s", file_uuid)
-    except Exception as exc:
-        logger.error("process_datastore_file_task failed for %s: %s", file_uuid, exc)
+    except Exception:
+        logger.debug('datastore.handlers.process_datastore_file_task_s.propagated', exc_info=True)
         raise
 
 
@@ -207,12 +198,6 @@ async def cleanup_deleted_datastore_paths_task(
         else SessionUnitOfWorkFactory(async_session_maker)
     )
     pod_uuid = UUID(pod_id)
-    logger.info(
-        "STARTING cleanup_deleted_datastore_paths for pod %s (is_folder=%s, files=%d)",
-        pod_uuid,
-        is_folder,
-        len(files or []),
-    )
     try:
         async with uow_factory() as uow:
             service = build_file_service(uow)
@@ -222,11 +207,11 @@ async def cleanup_deleted_datastore_paths_task(
                 folder_prefix=folder_prefix,
                 files=files or [],
             )
-        logger.info("FINISHED cleanup_deleted_datastore_paths for pod %s", pod_uuid)
-    except Exception as exc:
-        logger.error(
-            "cleanup_deleted_datastore_paths failed for pod %s: %s", pod_uuid, exc
+        logger.debug(
+            "datastore.handlers.finished_cleanup_deleted_datastore_paths.observed"
         )
+    except Exception:
+        logger.debug('datastore.handlers.cleanup_deleted_datastore_paths_pod.propagated', exc_info=True)
         raise
 
 
@@ -255,29 +240,16 @@ async def recover_stuck_processing_files() -> None:
                 now=datetime.now(timezone.utc)
             )
 
-        logger.info(
-            "Running datastore file recovery (pending_cutoff=%s, processing_cutoff=%s)",
-            summary.pending_cutoff,
-            summary.processing_cutoff,
-        )
 
         if summary.terminal_count:
             logger.warning(
-                "Datastore file recovery terminally failed %d files that exhausted "
-                "their processing-retry budget (status -> FAILED_PERMANENT).",
-                summary.terminal_count,
+                "datastore.handlers.datastore_file_recovery_terminally_d.degraded",
+                terminal_count=summary.terminal_count,
             )
 
         if summary.examined_count == 0:
-            logger.info("No stale datastore files to re-drive.")
+            logger.debug("datastore.handlers.no_stale_datastore_files_re.observed")
             return
 
-        logger.info(
-            "Datastore file recovery examined %d stale files, reset %d PROCESSING files to PENDING, enqueued %d, terminally failed %d.",
-            summary.examined_count,
-            summary.reset_count,
-            summary.enqueued_count,
-            summary.terminal_count,
-        )
-    except Exception as exc:
-        logger.error("Stuck file recovery cron failed: %s", exc)
+    except Exception:
+        logger.error("datastore.handlers.stuck_file_recovery_cron_s.failed", exc_info=True)

@@ -119,7 +119,6 @@ class SchedulerService:
             # emitted. There is no scheduler-level "cycle error" event in this
             # version, so per-job errors are the failure signal.
             self.scheduler.add_listener(self._on_scheduler_event, EVENT_JOB_ERROR)
-            logger.info("APScheduler started with event emitter")
 
     def _on_scheduler_event(self, event) -> None:
         """Emit one stable failure event per APScheduler job error."""
@@ -141,7 +140,7 @@ class SchedulerService:
             emitter = get_event_emitter()
             await emitter.stop()
 
-            logger.info("APScheduler shutdown")
+            logger.debug("schedule.scheduler_service.apscheduler_shutdown.observed")
 
     def add_cron_job(
         self,
@@ -186,8 +185,10 @@ class SchedulerService:
             replace_existing=replace_existing,
         )
 
-        logger.info(
-            f"Added cron job {job_id} for schedule {schedule_id} with schedule: {cron_expression}"
+        logger.debug(
+            "schedule.scheduler_service.added_cron_job_schedule_schedule.observed",
+            job_id=job_id,
+            schedule_id=schedule_id,
         )
 
     def add_once_job(
@@ -225,33 +226,47 @@ class SchedulerService:
             replace_existing=replace_existing,
         )
 
-        logger.info(
-            f"Added one-time job {job_id} for schedule {schedule_id} scheduled for: {run_date}"
+        logger.debug(
+            "schedule.scheduler_service.added_one_time_job_schedule.observed",
+            job_id=job_id,
+            schedule_id=schedule_id,
         )
 
     def remove_job(self, job_id: str) -> None:
         """Remove a job by ID."""
         try:
             self.scheduler.remove_job(job_id)
-            logger.info(f"Removed job {job_id}")
-        except Exception as e:
-            logger.warning(f"Failed to remove job {job_id}: {e}")
+            logger.debug(
+                "schedule.scheduler_service.removed_job.observed", job_id=job_id
+            )
+        except Exception:
+            logger.debug(
+                'schedule.scheduler_service.remove_job.diagnostic', job_id=job_id
+            )
 
     def pause_job(self, job_id: str) -> None:
         """Pause a job."""
         try:
             self.scheduler.pause_job(job_id)
-            logger.info(f"Paused job {job_id}")
-        except Exception as e:
-            logger.warning(f"Failed to pause job {job_id}: {e}")
+            logger.debug(
+                "schedule.scheduler_service.paused_job.observed", job_id=job_id
+            )
+        except Exception:
+            logger.debug(
+                'schedule.scheduler_service.pause_job.diagnostic', job_id=job_id
+            )
 
     def resume_job(self, job_id: str) -> None:
         """Resume a job."""
         try:
             self.scheduler.resume_job(job_id)
-            logger.info(f"Resumed job {job_id}")
-        except Exception as e:
-            logger.warning(f"Failed to resume job {job_id}: {e}")
+            logger.debug(
+                "schedule.scheduler_service.resumed_job.observed", job_id=job_id
+            )
+        except Exception:
+            logger.debug(
+                'schedule.scheduler_service.resume_job.diagnostic', job_id=job_id
+            )
 
     def get_job(self, job_id: str):
         """Get job by ID."""

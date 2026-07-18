@@ -29,10 +29,10 @@ class CustomAuthenticationMiddleware(BaseHTTPMiddleware):
         except TryRefreshTokenError:
             # Let the route handler decide or client handle refresh
             pass
-        except Exception as e:
+        except Exception:
             # Log but allow request to proceed (maybe public route)
             # Controllers enforcing auth will fail if user is missing
-            logger.debug(f"Auth middleware error: {e}")
+            logger.debug("identity.middleware.auth_middleware.observed")
 
         response = await call_next(request)
         return response

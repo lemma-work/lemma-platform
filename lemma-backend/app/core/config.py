@@ -449,6 +449,7 @@ class Settings(BaseSettings):
     )
     release_sha: Optional[str] = Field(
         default=None,
+        validation_alias=AliasChoices("LEMMA_RELEASE_SHA", "RELEASE_SHA"),
         description=(
             "Full 40-character source Git SHA whose immutable image digest is "
             "deployed. Emitted as ``service.version`` and ``release.sha`` on every "

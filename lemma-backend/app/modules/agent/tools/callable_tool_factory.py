@@ -134,10 +134,8 @@ class AgentCallableToolFactory:
                         self._build_function_tool(function, parent_agent=agent)
                     )
                 except Exception:
-                    logger.warning(
-                        "Skipping function tool %s for agent %s: build failed",
-                        function.name,
-                        agent.name,
+                    logger.debug(
+                        'agent.callable_tool_factory.skipping_function_tool_s_agent.diagnostic'
                     )
 
             # agent_<name> tools spawn child conversations, so they only exist on

@@ -35,7 +35,9 @@ from app.composition.surface_connectors import ConnectorService
 logger = get_logger(__name__)
 
 
-def _supported_credential_modes(platform: SurfacePlatform) -> list[SurfaceCredentialMode]:
+def _supported_credential_modes(
+    platform: SurfacePlatform,
+) -> list[SurfaceCredentialMode]:
     """CUSTOM (connect an account) is always possible; SYSTEM (a Lemma-managed bot
     that runs with no account) only when the platform's native credentials are
     actually configured in this environment."""
@@ -63,9 +65,9 @@ async def _connect_descriptor(
     try:
         capability = connector.capability_for(AuthProvider.LEMMA)
     except ValueError:
-        logger.warning(
-            "Surface connector %s has no LEMMA capability; marking unavailable",
-            connector_id,
+        logger.debug(
+            'agent_surfaces.available_surfaces_builder.surface_connector_s_has_no.diagnostic',
+            connector_id=connector_id,
         )
         return None, False, connector.title, connector.description, connector.icon
 
@@ -73,7 +75,9 @@ async def _connect_descriptor(
         auth_scheme=capability.auth_scheme,
         auth_config_schema=capability.auth_config_schema,
         credential_schema=capability.credential_schema,
-        system_oauth_available=bool(getattr(capability, "system_default_available", False)),
+        system_oauth_available=bool(
+            getattr(capability, "system_default_available", False)
+        ),
         supports_org_custom_oauth=bool(
             getattr(capability, "supports_org_custom_oauth", False)
         ),

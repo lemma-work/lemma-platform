@@ -10,8 +10,9 @@ async def test_partially_connected_broker_is_stopped(monkeypatch):
     stopped = False
 
     class _FailingBroker:
-        def __init__(self, redis_url: str) -> None:
+        def __init__(self, redis_url: str, **kwargs) -> None:
             assert redis_url == "redis://message-bus-test"
+            assert kwargs["logger"].name == "faststream.redis"
 
         async def connect(self) -> None:
             raise ConnectionError("redis unavailable")
@@ -35,8 +36,9 @@ async def test_publish_ensures_declared_groups_before_stream_write(monkeypatch):
     order: list[str] = []
 
     class _Broker:
-        def __init__(self, redis_url: str) -> None:
+        def __init__(self, redis_url: str, **kwargs) -> None:
             assert redis_url == "redis://message-bus-test"
+            assert kwargs["logger"].name == "faststream.redis"
             self._connection = object()
 
         async def connect(self) -> None:

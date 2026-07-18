@@ -94,8 +94,10 @@ class TelegramPlatformService:
                 except Exception:
                     pass
                 return info
-        except Exception as exc:
-            logger.debug("getMe failed while resolving bot info: %s", exc)
+        except Exception:
+            logger.debug(
+                "agent_surfaces.service.getme_while_resolving_bot_info.observed"
+            )
         return None
 
     async def get_bot_username(self) -> str | None:
@@ -142,7 +144,9 @@ class TelegramPlatformService:
         reply_to = event.reply_target.get("message_id")
         reply_markup = (metadata or {}).get("reply_markup")
 
-        raw_chunks = chunk_text(message, limit=TELEGRAM_MESSAGE_LIMIT) or [message or ""]
+        raw_chunks = chunk_text(message, limit=TELEGRAM_MESSAGE_LIMIT) or [
+            message or ""
+        ]
         for index, raw_chunk in enumerate(raw_chunks):
             payload: dict[str, Any] = {"chat_id": chat_id}
             if thread_id is not None:
@@ -254,22 +258,20 @@ class TelegramPlatformService:
             await self._call_with_retry("sendMessage", body)
         except TelegramApiError as exc:
             if not (use_markdown and exc.is_parse_entities_error):
-                logger.warning(
-                    "Telegram sendMessage failed chat=%s: %s",
-                    payload.get("chat_id"),
-                    exc.description,
+                logger.debug(
+                    'agent_surfaces.service.telegram_sendmessage_chat_s_s.diagnostic'
                 )
                 raise
-            logger.warning(
-                "Telegram MarkdownV2 parse failed chat=%s, retrying as plain text: %s",
-                payload.get("chat_id"),
-                exc.description,
+            logger.debug(
+                'agent_surfaces.service.telegram_markdownv2_parse_chat_s.diagnostic'
             )
             plain_body = {k: v for k, v in payload.items()}
             plain_body["text"] = raw_text
             await self._call_with_retry("sendMessage", plain_body)
 
-    async def _call_with_retry(self, method: str, payload: dict[str, Any]) -> dict[str, Any]:
+    async def _call_with_retry(
+        self, method: str, payload: dict[str, Any]
+    ) -> dict[str, Any]:
         return await with_retry(
             lambda: self._client.call(method, payload),
             policy=self._retry_policy,
@@ -286,7 +288,7 @@ class TelegramPlatformService:
             return None
         try:
             return int(raw)
-        except (TypeError, ValueError):
+        except TypeError, ValueError:
             return None
 
     async def send_display_resource(
@@ -406,8 +408,10 @@ class TelegramPlatformService:
         # Best-effort: a failed typing indicator must never break the run.
         try:
             await self._client.call("sendChatAction", payload)
-        except Exception as exc:
-            logger.debug("Telegram typing indicator failed (best-effort): %s", exc)
+        except Exception:
+            logger.debug(
+                "agent_surfaces.service.telegram_typing_indicator_best_effort.observed"
+            )
 
     async def stream_progress(
         self,
@@ -455,13 +459,10 @@ class TelegramPlatformService:
             await self._client.call(
                 "deleteMessage", {"chat_id": chat_id, "message_id": message_id}
             )
-        except Exception as exc:
+        except Exception:
             logger.debug(
-                "Telegram progress-message cleanup failed (best-effort) "
-                "chat_id=%s message_id=%s: %s",
-                chat_id,
-                message_id,
-                exc,
+                "agent_surfaces.service.telegram_progress_message_cleanup_best.observed",
+                chat_id=chat_id,
             )
 
     async def download_attachment_bytes(
@@ -475,9 +476,7 @@ class TelegramPlatformService:
         the former ``download_file`` tool but takes a raw attachment dict.
         """
         del event
-        file_id = str(
-            attachment.get("file_id") or attachment.get("id") or ""
-        ).strip()
+        file_id = str(attachment.get("file_id") or attachment.get("id") or "").strip()
         if not self._bot_token or not file_id:
             return None
         async with httpx.AsyncClient(timeout=60.0) as client:
@@ -487,9 +486,7 @@ class TelegramPlatformService:
             )
             metadata_response.raise_for_status()
             file_path = str(
-                ((metadata_response.json() or {}).get("result") or {}).get(
-                    "file_path"
-                )
+                ((metadata_response.json() or {}).get("result") or {}).get("file_path")
                 or ""
             ).strip()
             if not file_path:

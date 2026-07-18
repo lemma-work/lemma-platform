@@ -54,7 +54,6 @@ def build_thirdparty_providers() -> list[ProviderInput]:
     providers: list[ProviderInput] = []
 
     if settings.is_google_oauth_configured():
-        logger.info("initializing google login provider")
         providers.append(
             ProviderInput(
                 config=ProviderConfig(
@@ -70,7 +69,6 @@ def build_thirdparty_providers() -> list[ProviderInput]:
         )
 
     if settings.is_microsoft_oauth_configured():
-        logger.info("initializing microsoft login provider")
         tenant_id = settings.microsoft_tenant_id or "common"
         microsoft_base_url = (
             f"https://login.microsoftonline.com/{tenant_id}/oauth2/v2.0"

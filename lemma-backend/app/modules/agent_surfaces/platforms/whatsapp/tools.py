@@ -31,8 +31,11 @@ def build_whatsapp_surface_toolset(
         """Get the current WhatsApp contact and destination details for this conversation."""
         try:
             return await service.get_current_contact(ctx=ctx, request=request)
-        except Exception as exc:
-            logger.exception("WhatsApp tool whatsapp_get_current_contact failed: %s", exc)
+        except Exception:
+            logger.debug(
+                "surface.whatsapp.history_failed",
+                exc_info=True,
+            )
             return WhatsAppCurrentContactResult(
                 success=False,
                 error="Could not load current WhatsApp contact details.",
