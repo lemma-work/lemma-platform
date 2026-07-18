@@ -10,9 +10,9 @@
  * `settings-*` utility classes (see styles/utilities.css); it adds no new CSS,
  * it just stops each page from re-inventing the structure.
  *
- * The page shells stay area-specific on purpose: pod settings render inside the
- * pod sidebar chrome (PodSettingsShell), org settings render as top-level pages
- * with the home topbar (PlainPageShell). Only the *content* is unified here.
+ * Pod settings and top-level account/organization pages now share the same
+ * left-rail shell language as well as this content kit, so settings no longer
+ * feel like a separate product when users leave a pod.
  */
 
 import type { ReactNode } from 'react';

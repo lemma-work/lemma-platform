@@ -84,7 +84,7 @@ function OrgMembersPageContent() {
         <PlainPageShell
             title="Members"
             icon={<ProductIcon kind="settings" size="sm" />}
-            backHref="/"
+            backHref="/home"
             backLabel="Home"
             meta={organization?.name || 'Organization'}
             tabs={<OrganizationSettingsNav organizationId={orgId} />}
