@@ -927,7 +927,7 @@ export function WorkspaceSidebar({ podId, podName, podIconUrl, onCollapse }: Wor
                                 key={conversation.id}
                                 type="button"
                                 onClick={() => openConversation(conversation.id)}
-                                data-active={openedConversationId === conversation.id ? 'true' : undefined}
+                                data-active={isConversationRoute && openedConversationId === conversation.id ? 'true' : undefined}
                                 className="lemma-sidebar-row lemma-sidebar-row-sm custom-focus-ring font-normal"
                             >
                                 <span className="min-w-0 flex-1 truncate">{conversation.title || 'Untitled conversation'}</span>
