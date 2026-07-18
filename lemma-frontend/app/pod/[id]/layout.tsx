@@ -402,8 +402,6 @@ function PodShell({
     }, [pod.id]);
 
     useEffect(() => {
-        if (!isConversationStageEmbed) return;
-
         let cancelled = false;
         window.queueMicrotask(() => {
             if (cancelled) return;
@@ -416,7 +414,7 @@ function PodShell({
             }
 
             setConversationStageFrameContext(isEmbeddedFrame ? "embedded" : "top-level");
-            if (isEmbeddedFrame) return;
+            if (!isConversationStageEmbed || isEmbeddedFrame) return;
 
             const standaloneHref = buildConversationStandaloneResourceHref(currentHref);
             router.replace(standaloneHref ?? pathname, { scroll: false });
@@ -539,7 +537,10 @@ function PodShell({
         );
     }
 
-    if (isConversationStageEmbed && conversationStageFrameContext !== "top-level") {
+    if (
+        conversationStageFrameContext === "embedded"
+        || (isConversationStageEmbed && conversationStageFrameContext !== "top-level")
+    ) {
         return (
             <div className="h-screen overflow-hidden bg-[var(--pod-main-bg)] text-[var(--text-primary)]">
                 <PodTopbarProvider value={topbarContextValue}>

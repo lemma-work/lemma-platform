@@ -3,10 +3,12 @@ import { describe, expect, it } from 'vitest';
 import {
     buildConversationPresentationHref,
     buildConversationStageEmbedHref,
+    buildConversationStageNavigationMessage,
     buildConversationStandaloneResourceHref,
     buildResourceShareUrl,
     normalizeConversationPresentedResourceHref,
     removeConversationPresentationParam,
+    resolveConversationStageNavigationHref,
 } from '../conversation-presentation';
 
 describe('conversation presentation routes', () => {
@@ -54,6 +56,28 @@ describe('conversation presentation routes', () => {
         )).toBe(
             '/pod/p1/widgets/view?toolCallId=t1&conversationId=c1&standalone=1',
         );
+    });
+
+    it('promotes an embedded conversation navigation into the parent pod workspace', () => {
+        expect(resolveConversationStageNavigationHref(
+            buildConversationStageNavigationMessage(
+                '/pod/p1/conversations/new?agent=researcher&assistantMessage=hello&embed=conversation-stage',
+            ),
+            'p1',
+        )).toBe('/pod/p1/conversations/new?agent=researcher&assistantMessage=hello');
+    });
+
+    it('rejects presentation-stage navigation outside conversations in the current pod', () => {
+        expect(resolveConversationStageNavigationHref(
+            buildConversationStageNavigationMessage('/pod/p1/agents/researcher'),
+            'p1',
+        )).toBeNull();
+        expect(resolveConversationStageNavigationHref(
+            buildConversationStageNavigationMessage('/pod/p2/conversations/new'),
+            'p1',
+        )).toBeNull();
+        expect(resolveConversationStageNavigationHref({ type: 'unknown', href: '/pod/p1/conversations/new' }, 'p1'))
+            .toBeNull();
     });
 
     it('builds canonical share URLs without internal presentation state', () => {

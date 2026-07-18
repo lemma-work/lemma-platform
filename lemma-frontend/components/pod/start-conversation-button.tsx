@@ -4,6 +4,7 @@ import { useRouter } from 'next/navigation';
 import { MessageSquarePlus } from '@/components/ui/icons';
 
 import { Button } from '@/components/ui/button';
+import { requestConversationStageNavigation } from '@/lib/assistant/conversation-presentation';
 import { cn } from '@/lib/utils';
 
 // Opens the pod's new-conversation composer, optionally scoped to a specific
@@ -30,7 +31,8 @@ export function StartConversationButton({
 
     const start = () => {
         const query = agentName ? `?agent=${encodeURIComponent(agentName)}` : '';
-        router.push(`/pod/${podId}/conversations/new${query}`);
+        const href = `/pod/${podId}/conversations/new${query}`;
+        if (!requestConversationStageNavigation(href)) router.push(href);
     };
 
     return (

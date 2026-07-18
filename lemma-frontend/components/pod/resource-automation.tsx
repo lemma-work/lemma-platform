@@ -10,6 +10,7 @@ import { ProductIcon } from '@/components/pod/product-icon';
 import { InlineTriggerForm, type TriggerTarget } from '@/components/pod/inline-trigger-form';
 import { StartConversationButton } from '@/components/pod/start-conversation-button';
 import { buildScopedConversationHref } from '@/lib/assistant/conversation-composer-context';
+import { requestConversationStageNavigation } from '@/lib/assistant/conversation-presentation';
 import { EmptyState } from '@/components/shared/empty-state';
 import { DestructiveConfirmationDialog } from '@/components/shared/destructive-confirmation-dialog';
 import { DestructiveResourceActionItem, ResourceActionsMenu } from '@/components/shared/resource-actions-menu';
@@ -429,14 +430,19 @@ export function RecentConversations({
             <div className="lemma-index-list">
                 {conversations.map((conversation) => {
                     const timestamp = formatRelativeTime(conversation.updated_at ?? conversation.created_at);
+                    const href = buildScopedConversationHref({
+                        podId,
+                        conversationId: conversation.id,
+                        agentName,
+                    });
                     return (
                         <Link
                             key={conversation.id}
-                            href={buildScopedConversationHref({
-                                podId,
-                                conversationId: conversation.id,
-                                agentName,
-                            })}
+                            href={href}
+                            onClick={(event) => {
+                                if (event.button !== 0 || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return;
+                                if (requestConversationStageNavigation(href)) event.preventDefault();
+                            }}
                             className="lemma-index-row group flex items-center gap-2.5"
                         >
                             <MessageCircle className="h-3.5 w-3.5 shrink-0 text-[var(--text-tertiary)]" aria-hidden />

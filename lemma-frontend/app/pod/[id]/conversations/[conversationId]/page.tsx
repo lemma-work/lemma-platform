@@ -305,6 +305,7 @@ export default function PodConversationPage({
     if (presentedResourceHref) {
         return (
             <ConversationPresentationStage
+                podId={podId}
                 resourceHref={presentedResourceHref}
                 onClose={closePresentedResource}
             >
