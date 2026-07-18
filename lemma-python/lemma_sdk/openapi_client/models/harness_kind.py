@@ -6,6 +6,7 @@ class HarnessKind(str, Enum):
     CLAUDE_CODE = "CLAUDE_CODE"
     CODEX = "CODEX"
     CURSOR = "CURSOR"
+    GG_CODER = "GG_CODER"
     LEMMA = "LEMMA"
     OPENCODE = "OPENCODE"
 

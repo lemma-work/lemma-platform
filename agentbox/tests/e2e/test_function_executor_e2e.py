@@ -201,7 +201,6 @@ def test_private_function_executor_installs_declared_python_package(
 # concurrent duplicates collapse to one run, and distinct run_ids each execute.
 
 import concurrent.futures
-from uuid import uuid4
 
 
 def _counter_headers(agentbox_server, sandbox_id, function, lemma_base_url):

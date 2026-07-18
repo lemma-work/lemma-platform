@@ -420,7 +420,12 @@ function LocalAgentsSection({
             setAddingKey(null);
             void onRefresh?.();
         } catch (error) {
-            toast.error(`Couldn't add ${harness.display_name}: ${error instanceof Error ? error.message : 'Unknown error'}`);
+            const message = error instanceof Error ? error.message : 'Unknown error';
+            toast.error(
+                scope === RuntimeProfileScope.ORGANIZATION && message.includes('org.update')
+                    ? 'Workspace connections require editor access. Choose Personal instead.'
+                    : `Couldn't add ${harness.display_name}: ${message}`,
+            );
         } finally {
             setSavingKey(null);
         }
@@ -518,7 +523,7 @@ function AddDaemonForm({
     onSave: (name: string, scope: RuntimeProfileScope) => void;
 }) {
     const [name, setName] = useState(defaultName);
-    const [scope, setScope] = useState<RuntimeProfileScope>(RuntimeProfileScope.ORGANIZATION);
+    const [scope, setScope] = useState<RuntimeProfileScope>(RuntimeProfileScope.PERSONAL);
     return (
         <div className="mt-3 flex flex-col gap-3 border-t border-[var(--border-subtle)] pt-3">
             <Field label="Name" hint="How this daemon shows up in your workspace">

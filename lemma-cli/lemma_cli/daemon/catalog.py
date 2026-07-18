@@ -71,7 +71,10 @@ def discover_harness(harness_kind: str, binary: str) -> dict[str, Any]:
         # Structured entries carry display names, the provider model id we hand
         # to the harness, and metadata (context window, etc.) for the picker.
         "model_catalog": model_catalog,
-        "display_name": harness_kind.replace("_", " ").title(),
+        "display_name": (
+            "GG Coder" if harness_kind == "GG_CODER"
+            else harness_kind.replace("_", " ").title()
+        ),
     }
     if model_discovery_error:
         payload["model_discovery_error"] = model_discovery_error
@@ -122,6 +125,41 @@ def _plain_model_entry(name: str) -> dict[str, Any]:
         "provider_model_name": name,
         "metadata": {},
     }
+
+
+def resolve_gg_coder_selection(model_name: str) -> tuple[str, str]:
+    """Resolve Lemma's model key to GG Coder's required provider and model."""
+    normalized = model_name.strip()
+    if "::" in normalized:
+        provider, model = normalized.split("::", 1)
+        if provider.strip() and model.strip():
+            return provider.strip(), model.strip()
+
+    settings_path = os.path.expanduser(
+        os.getenv("LEMMA_DAEMON_GG_CODER_SETTINGS", "~/.gg/settings.json")
+    )
+    settings: dict[str, Any] = {}
+    try:
+        with open(settings_path, encoding="utf-8") as settings_file:
+            payload = json.load(settings_file)
+        if isinstance(payload, dict):
+            settings = payload
+    except (OSError, json.JSONDecodeError):
+        pass
+
+    provider = (
+        os.getenv("LEMMA_DAEMON_GG_CODER_PROVIDER", "").strip()
+        or str(settings.get("defaultProvider") or "").strip()
+        or "anthropic"
+    )
+    if normalized and normalized != "default":
+        return provider, normalized
+    model = (
+        os.getenv("LEMMA_DAEMON_GG_CODER_MODEL", "").strip()
+        or str(settings.get("defaultModel") or "").strip()
+        or "claude-opus-4-8"
+    )
+    return provider, model
 
 
 def normalize_provider_model_name(harness_kind: str, model_name: str) -> str:

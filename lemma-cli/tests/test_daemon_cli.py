@@ -2401,6 +2401,122 @@ async def test_gg_coder_harness_end_to_end_real_subprocess(tmp_path, monkeypatch
         )
 
 
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "ndjson,expected_kind,expected_payload",
+    [
+        # ``tool_call_update`` is emitted by long-running tools (AgentBox
+        # sandboxes, web crawlers, etc.) and must surface progress to the
+        # chat surface so users see movement before ``tool_call_end``.
+        (
+            '{"type":"tool_call_update","toolCallId":"t1","update":"running step 2/5"}\n'
+            '{"type":"tool_call_end","toolCallId":"t1","name":"bash","isError":false,"result":"ok"}\n'
+            '{"type":"agent_done","totalTurns":1,"totalUsage":{}}\n',
+            "text",
+            {"contains": "running step 2/5"},
+        ),
+        # ``server_tool_call`` + ``server_tool_result`` describe provider-
+        # side tools (Anthropic web_search, OpenAI file_search) which never
+        # arrive as ``tool_call_start`` events. The chat surface needs both
+        # halves so the tool card renders.
+        (
+            '{"type":"server_tool_call","id":"s1","name":"web_search","input":{"query":"ggcoder"}}\n'
+            '{"type":"server_tool_result","toolUseId":"s1","name":"web_search","resultType":"text","data":"docs"}}\n'
+            '{"type":"agent_done","totalTurns":1,"totalUsage":{}}\n',
+            "tool_call",
+            {"tool_name": "web_search", "server_tool": True},
+        ),
+        # ``max_turns`` is fired when ``--max-turns`` is reached. The harness
+        # should surface an info message AND raise so the runner tears down
+        # instead of waiting on a process that already exited.
+        (
+            '{"type":"max_turns","totalTurns":3,"maxTurns":3}\n',
+            "info",
+            {"contains": "max-turns cap"},
+        ),
+    ],
+)
+async def test_gg_coder_harness_translates_new_ndjson_events(
+    tmp_path, monkeypatch, ndjson, expected_kind, expected_payload
+):
+    """Pin the contract for events the harness just learned to translate.
+
+    The upstream ``ggcoder --json`` contract adds three event types beyond
+    what we tested in ``test_gg_coder_harness_end_to_end_real_subprocess``.
+    Without these, long tool calls look frozen, server-side tools vanish,
+    and ``--max-turns`` overruns look like a 6h hang. Each parametrized
+    case feeds one upstream event through the real harness and asserts the
+    chat surface received the matching Lemma event.
+    """
+    from lemma_cli.daemon import runner as runner_module
+    from lemma_cli.daemon.harnesses import gg_coder as gg_coder_module
+
+    ndjson_path = tmp_path / "stream.ndjson"
+    ndjson_path.write_text(ndjson)
+    fake_command = [
+        sys.executable,
+        "-u",
+        "-c",
+        f"import sys; sys.stdout.write(open({str(ndjson_path)!r}).read())",
+    ]
+    monkeypatch.setattr(gg_coder_module, "provider_command", lambda **_k: fake_command)
+    monkeypatch.setattr(gg_coder_module, "provider_command_template", lambda _k: "stub")
+    monkeypatch.setattr(gg_coder_module, "provider_cwd_for_run", lambda _k, _mcp: str(tmp_path))
+    monkeypatch.setattr(gg_coder_module, "provider_environment", lambda **_k: {})
+    monkeypatch.setattr(gg_coder_module, "write_provider_mcp_files", lambda *_a, **_k: None)
+
+    emitted: list[tuple[str, Any]] = []
+
+    async def sink(event_type, data):
+        emitted.append((event_type, data))
+
+    if expected_kind == "info":
+        from lemma_cli.daemon.harnesses.gg_coder import GgCoderMaxTurnsReached
+        with pytest.raises(GgCoderMaxTurnsReached, match="max-turns cap"):
+            await runner_module.run_provider_command(
+                {
+                    "harness_kind": "GG_CODER",
+                    "model_name": "any",
+                    "prompt": {"system_prompt": "s", "user_prompt": "u"},
+                    "mcp": {},
+                },
+                event_sink=sink,
+            )
+    else:
+        await runner_module.run_provider_command(
+            {
+                "harness_kind": "GG_CODER",
+                "model_name": "any",
+                "prompt": {"system_prompt": "s", "user_prompt": "u"},
+                "mcp": {},
+            },
+            event_sink=sink,
+        )
+
+    matched = [
+        data for _, data in emitted
+        if isinstance(data, dict) and data.get("kind") == expected_kind
+    ]
+    assert matched, (
+        f"no {expected_kind!r} event emitted for upstream NDJSON; got: {emitted!r}"
+    )
+    if "contains" in expected_payload:
+        assert any(
+            expected_payload["contains"] in str(m.get("text") or "") for m in matched
+        ), (
+            f"no {expected_kind!r} text contained {expected_payload['contains']!r}: "
+            f"{matched!r}"
+        )
+    if "tool_name" in expected_payload:
+        assert any(
+            m.get("tool_name") == expected_payload["tool_name"] for m in matched
+        ), f"tool_name not surfaced: {matched!r}"
+        if expected_payload.get("server_tool"):
+            assert any(
+                (m.get("metadata") or {}).get("server_tool") is True for m in matched
+            ), f"server_tool flag not surfaced: {matched!r}"
+
+
 def test_read_max_reconnect_attempts_default_is_none():
     """Without ``LEMMA_DAEMON_MAX_RECONNECT_ATTEMPTS`` set, the bound is
     ``None`` (unlimited) -- the production default that keeps held runs
@@ -2559,7 +2675,9 @@ async def test_run_daemon_websocket_rejected_branch_increments_streak(monkeypatc
     monkeypatch.setattr(runner_mod, "device_info", lambda: {})
     monkeypatch.setattr(runner_mod, "daemon_ws_url", lambda _b: "ws://example/daemon")
     monkeypatch.setattr(runner_mod, "reconnect_delay_seconds", lambda _a: 0.0)
-    monkeypatch.setattr(runner_mod, "_startup_health_check", lambda **_k: asyncio.sleep(0))
+    async def _health_ok(**_k):
+        return (True, "HTTP 200")
+    monkeypatch.setattr(runner_mod, "_startup_health_check", _health_ok)
 
     state_calls: list[tuple[str, dict[str, object]]] = []
 
@@ -2729,7 +2847,9 @@ async def test_run_daemon_emits_state_alert_after_sustained_failures(monkeypatch
     monkeypatch.setattr(runner_mod, "device_info", lambda: {})
     monkeypatch.setattr(runner_mod, "daemon_ws_url", lambda _b: "ws://example/daemon")
     monkeypatch.setattr(runner_mod, "reconnect_delay_seconds", lambda _a: 0.0)
-    monkeypatch.setattr(runner_mod, "_startup_health_check", lambda **_k: asyncio.sleep(0))
+    async def _health_ok(**_k):
+        return (True, "HTTP 200")
+    monkeypatch.setattr(runner_mod, "_startup_health_check", _health_ok)
 
     state_calls: list[tuple[str, dict[str, object]]] = []
 

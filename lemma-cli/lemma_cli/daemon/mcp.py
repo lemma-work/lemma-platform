@@ -10,7 +10,7 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import urlsplit, urlunsplit
 
-from .catalog import normalize_provider_model_name
+from .catalog import normalize_provider_model_name, resolve_gg_coder_selection
 
 
 LEMMA_MCP_SERVER_NAME = "lemma_tools"
@@ -55,11 +55,16 @@ DEFAULT_COMMAND_TEMPLATES = {
     # agy has no stream-json: -p runs one prompt (read from stdin) and prints the
     # final response. --dangerously-skip-permissions runs headless.
     "ANTIGRAVITY": "agy -p --model {model} --dangerously-skip-permissions",
-    # ggcoder --json streams the AgentSession as NDJSON; the harness passes the
-    # prompt on stdin and exits at turn end. ``--provider minimax`` matches the
-    # default ggcoder login on this stack; override with
-    # ``LEMMA_DAEMON_GG_CODER_COMMAND`` to target a different provider.
-    "GG_CODER": "ggcoder --json --provider minimax --model {model} --max-turns 25",
+# ggcoder reads the prompt as its positional CLI argument; the harness
+    # substitutes {prompt}. The provider is resolved per-run from the user's
+    # ``~/.gg/settings.json`` (defaultProvider) or
+    # ``LEMMA_DAEMON_GG_CODER_PROVIDER`` so multi-provider setups work without
+    # template edits. ggcoder --json streams the AgentSession as NDJSON; the
+    # harness exits at turn end.
+    "GG_CODER": (
+        "ggcoder --json --provider {provider} --model {model} "
+        "--max-turns 25 {prompt}"
+    ),
 }
 
 DEFAULT_CWD_DIRS = {
@@ -119,11 +124,15 @@ def provider_command(
 ) -> list[str]:
     template = provider_command_template(harness_kind)
     mcp_config_args = provider_mcp_command_args(harness_kind=harness_kind, mcp=mcp)
+    provider_name = ""
+    if harness_kind == "GG_CODER":
+        provider_name, model_name = resolve_gg_coder_selection(model_name)
     # Rewrite bare aliases (e.g. Claude Code's "sonnet") to the standard-context
     # model id before they reach the CLI, so profiles saved with the raw alias
     # don't opt into the paid 1M-context variant.
     model_name = normalize_provider_model_name(harness_kind, model_name)
     values = {
+        "provider": shlex.quote(provider_name),
         "model": shlex.quote(model_name),
         "prompt": shlex.quote(prompt_text),
         "mcp_url": shlex.quote(str(mcp.get("url") or "")),
@@ -183,19 +192,15 @@ def provider_environment(*, harness_kind: str, mcp: dict[str, Any]) -> dict[str,
 def write_provider_mcp_files(harness_kind: str, cwd: Path, mcp: dict[str, Any]) -> None:
     """Write file-based MCP configs into the run cwd for harnesses that read them.
 
-    Cursor reads ``<cwd>/.cursor/mcp.json`` and Antigravity reads
-    ``<cwd>/.agents/mcp_config.json``. Antigravity requires the remote server to
-    use the ``serverUrl`` field (``url``/``httpUrl`` are rejected). GG Coder
-    reads ``<cwd>/.gg/mcp.json`` (KenKaiii/gg-framework ``core/mcp/store.ts``,
-    schema `mcpServers: {<name>: {type?, url?, headers?, command?, args?, env?,
-    timeout?, enabled?}}`). Flag-based (Claude Code) and stdio (Codex/OpenCode)
+Cursor reads ``<cwd>/.cursor/mcp.json``, Antigravity reads
+    ``<cwd>/.agents/mcp_config.json``, and GG Coder reads ``<cwd>/.gg/mcp.json``.
+    Antigravity requires the remote server to use the ``serverUrl`` field
+    (``url``/``httpUrl`` are rejected). GG Coder's project-scoped
+    ``.gg/mcp.json`` is the *only* injection point — there is no CLI flag for
+    MCP config (KenKaiii/gg-framework ``core/mcp/store.ts``, schema
+    ``mcpServers: {<name>: {type?, url?, headers?, command?, args?, env?,
+    timeout?, enabled?}}``). Flag-based (Claude Code) and stdio (Codex/OpenCode)
     harnesses are no-ops here.
-
-    GG Coder's project-scoped ``.gg/mcp.json`` is the *only* injection point —
-    there is no CLI flag for MCP config. We default-on chrome-devtools-mcp (so
-    every GG Coder session can spin up a browser to inspect a running dev server)
-    and respect ``LEMMA_DAEMON_GG_CODER_CHROME_DEVTOOLS=0`` to drop it. Set in
-    CI / headless boxes where launching Chrome would fail.
     """
     cwd_path = Path(cwd)
     if harness_kind == "CURSOR":

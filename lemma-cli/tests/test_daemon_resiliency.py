@@ -145,6 +145,9 @@ async def test_run_daemon_reconnects_after_drop(monkeypatch):
     monkeypatch.setattr(runner, "device_info", lambda: {})
     monkeypatch.setattr(runner, "daemon_ws_url", lambda _b: "ws://example/daemon")
     monkeypatch.setattr(runner, "reconnect_delay_seconds", lambda _a: 0.0)
+    async def _health_ok(**_k):
+        return (True, "HTTP 200")
+    monkeypatch.setattr(runner, "_startup_health_check", _health_ok)
 
     connections: list[_FakeWS] = []
 
@@ -182,6 +185,9 @@ async def test_run_daemon_uses_token_provider_on_each_connect(monkeypatch):
     monkeypatch.setattr(runner, "device_info", lambda: {})
     monkeypatch.setattr(runner, "daemon_ws_url", lambda _b: "ws://example/daemon")
     monkeypatch.setattr(runner, "reconnect_delay_seconds", lambda _a: 0.0)
+    async def _health_ok(**_k):
+        return (True, "HTTP 200")
+    monkeypatch.setattr(runner, "_startup_health_check", _health_ok)
 
     tokens_used: list[str] = []
     counter = {"n": 0}
@@ -960,6 +966,11 @@ async def test_graceful_shutdown_awaits_held_run_cancellation_before_returning(m
         await asyncio.sleep(10)
 
     monkeypatch.setattr(runner, "_serve_connection", _fake_serve_connection)
+
+    async def _health_ok(**_k):
+        return (True, "HTTP 200")
+
+    monkeypatch.setattr(runner, "_startup_health_check", _health_ok)
 
     daemon_task = asyncio.create_task(
         runner.run_daemon(

@@ -34,6 +34,7 @@ from app.modules.agent.domain.value_objects import HarnessKind
 from app.modules.agent.domain.runtime_profiles import (
     AgentRuntimeProfile,
     RuntimeModelCapability,
+    RuntimeProfileScope,
     RuntimeModelCatalogEntry,
 )
 from app.modules.agent.infrastructure.daemon_hub import (
@@ -68,6 +69,24 @@ async def _ensure_org_member(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="User is not a member of this organization",
         )
+
+
+async def _authorize_runtime_profile_create(
+    *,
+    org_id: UUID,
+    data: CreateAgentRuntimeProfileRequest,
+    user: CurrentUser,
+    uow: UoWDep,
+    ctx: OrgContextDep,
+) -> None:
+    """Allow members to save private daemons; protect org-wide configuration."""
+    if (
+        isinstance(data, CreateUserDaemonRuntimeProfileRequest)
+        and data.scope is RuntimeProfileScope.PERSONAL
+    ):
+        await _ensure_org_member(org_id=org_id, user=user, uow=uow)
+        return
+    await ctx.require(Permissions.ORG_UPDATE, ResourceRef.organization(org_id))
 
 
 def _runtime_profile_service(uow: UoWDep) -> AgentRuntimeProfileService:
@@ -183,10 +202,13 @@ async def create_runtime_profile(
     uow: UoWDep,
     ctx: OrgContextDep,
 ) -> AgentRuntimeProfileResponse:
-    # Creating an ORGANIZATION-scoped runtime profile registers an org-wide model
-    # provider (a caller-controlled base_url/api_key) usable by every member's
-    # agent runs, so it must require org editor/owner — not mere membership.
-    await ctx.require(Permissions.ORG_UPDATE, ResourceRef.organization(org_id))
+    # Personal daemon profiles are private to the current user and only point
+    # back to that user's authenticated daemon, so ordinary org membership is
+    # sufficient. Workspace profiles and provider credentials remain org-wide
+    # configuration and require editor/owner access.
+    await _authorize_runtime_profile_create(
+        org_id=org_id, data=data, user=user, uow=uow, ctx=ctx
+    )
     service = _runtime_profile_service(uow)
     try:
         if isinstance(data, CreateUserDaemonRuntimeProfileRequest):

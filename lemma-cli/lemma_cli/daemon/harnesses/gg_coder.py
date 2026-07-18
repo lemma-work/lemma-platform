@@ -30,6 +30,15 @@ from ..process import STREAM_READER_LIMIT, drain_stream, terminate_gracefully
 _MODEL_HINT = re.compile(r"^[A-Za-z0-9_.:/-]{1,80}$")
 
 
+class GgCoderMaxTurnsReached(RuntimeError):
+    """``ggcoder --json`` signalled that it hit the configured ``--max-turns``.
+
+    Distinct from ``TimeoutError`` so the outer ``except TimeoutError`` that
+    guards ``daemon_turn_timeout_seconds()`` doesn't blanket-replace our
+    user-facing message with the generic "provider turn timed out" string.
+    """
+
+
 class GgCoderHarness:
     """GG Coder (``ggcoder --json``) harness.
 
@@ -149,11 +158,7 @@ async def _run_gg_coder_provider(
     if not command:
         raise RuntimeError("No provider command configured for GG_CODER")
     template = provider_command_template("GG_CODER")
-    if "{prompt}" in template:
-        raise RuntimeError(
-            "GG_CODER provider command template must not contain a {prompt} placeholder; "
-            "the harness passes the prompt via stdin.",
-        )
+    prompt_is_argument = "{prompt}" in template
     cwd = provider_cwd_for_run("GG_CODER", mcp)
     write_provider_mcp_files("GG_CODER", cwd, mcp)
     env = provider_environment(harness_kind="GG_CODER", mcp=mcp)
@@ -172,7 +177,7 @@ async def _run_gg_coder_provider(
     )
     process = await asyncio.create_subprocess_exec(
         *command,
-        stdin=asyncio.subprocess.PIPE,
+        stdin=None if prompt_is_argument else asyncio.subprocess.PIPE,
         stdout=asyncio.subprocess.PIPE,
         stderr=asyncio.subprocess.PIPE,
         cwd=str(cwd),
@@ -187,15 +192,16 @@ async def _run_gg_coder_provider(
     state = StreamTextState(harness_kind="GG_CODER", event_sink=event_sink)
     emitted_session_id: str | None = None
     try:
-        assert process.stdin is not None
-        try:
-            process.stdin.write(prompt_text.encode())
-            await process.stdin.drain()
-            process.stdin.close()
-        except (BrokenPipeError, ConnectionResetError):
-            # ggcoder may have already exited (e.g. provider auth failure); we'll
-            # surface the stderr/stdout when we read the process below.
-            pass
+        if not prompt_is_argument:
+            assert process.stdin is not None
+            try:
+                process.stdin.write(prompt_text.encode())
+                await process.stdin.drain()
+                process.stdin.close()
+            except (BrokenPipeError, ConnectionResetError):
+                # ggcoder may have already exited (e.g. provider auth failure); we'll
+                # surface the stderr/stdout when we read the process below.
+                pass
         async with asyncio.timeout(daemon_turn_timeout_seconds()):
             assert process.stdout is not None
             while True:
@@ -232,7 +238,15 @@ async def _run_gg_coder_provider(
                     stdout_parts.append(handled_text)
             await process.wait()
             stderr_text = await stderr_task
-    except TimeoutError:
+    except TimeoutError as exc:
+        if isinstance(exc, GgCoderMaxTurnsReached):
+            # Surface our ``max_turns`` info bubble verbatim -- don't replace
+            # it with the generic provider-turn-timed-out string.
+            await terminate_gracefully(process)
+            stderr_task.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await stderr_task
+            raise
         await terminate_gracefully(process)
         stderr_task.cancel()
         with contextlib.suppress(asyncio.CancelledError):
@@ -289,11 +303,45 @@ async def _handle_gg_coder_event(event: dict[str, Any], state: StreamTextState) 
         # tool activity invisible in the chat bubble.
         await _emit_gg_coder_tool_event(event, state, kind="tool_call")
         return ""
+    if event_type == "tool_call_update":
+        # Long tool calls (e.g. AgentBox sandboxes) emit progress frames;
+        # surface them as inline text so users see movement instead of a
+        # frozen spinner until ``tool_call_end`` arrives.
+        update = event.get("update")
+        if isinstance(update, str) and update:
+            return await state.update_text_snapshot(update)
+        return ""
     if event_type == "tool_call_end":
         # Emit a tool_return message; chat SDK uses this to mark the tool
         # card as completed (success or error).
         await _emit_gg_coder_tool_event(event, state, kind="tool_return")
         return ""
+    if event_type == "server_tool_call":
+        await _emit_gg_coder_server_tool_event(event, state, phase="call")
+        return ""
+    if event_type == "server_tool_result":
+        await _emit_gg_coder_server_tool_event(event, state, phase="result")
+        return ""
+    if event_type == "max_turns":
+        await state.flush(is_final=True)
+        message = (
+            f"ggcoder hit the configured --max-turns cap "
+            f"({event.get('maxTurns', '?')}) and stopped."
+        )
+        if state.event_sink is not None:
+            await state.event_sink(
+                "message",
+                {
+                    "role": "assistant",
+                    "kind": "info",
+                    "text": message,
+                    "metadata": {
+                        "harness_kind": state.harness_kind,
+                        "provider": "ggcoder",
+                    },
+                },
+            )
+        raise GgCoderMaxTurnsReached(message)
     if event_type == "agent_done":
         # Flush accumulated text into a single consolidated MESSAGE event.
         # Final flush: emit a single consolidated MESSAGE event so the
@@ -317,6 +365,69 @@ async def _handle_gg_coder_event(event: dict[str, Any], state: StreamTextState) 
             )
         return message
     return ""
+
+
+async def _emit_gg_coder_server_tool_event(
+    event: dict[str, Any],
+    state: StreamTextState,
+    *,
+    phase: str,
+) -> None:
+    """Surface ``server_tool_call`` / ``server_tool_result`` events to chat.
+
+    GG Coder emits these for provider-side tools (Anthropic ``web_search`` /
+    ``code_execution``, OpenAI ``file_search``, etc.) which never show up as
+    ``tool_call_start`` / ``tool_call_end`` events, so without this bridge the
+    chat surface has no record the server did anything between text deltas.
+    """
+    if phase == "call":
+        tool_call_id = str(event.get("id") or event.get("toolUseId") or "")
+        tool_name = str(event.get("name") or "")
+        if not tool_call_id or not tool_name:
+            return
+        if tool_call_id in state.emitted_tool_call_ids:
+            return
+        state.emitted_tool_call_ids.add(tool_call_id)
+        await state.flush(is_final=False)
+        message = {
+            "role": "assistant",
+            "kind": "tool_call",
+            "tool_name": tool_name,
+            "tool_call_id": tool_call_id,
+            "tool_args": event.get("input") or {},
+            "metadata": {
+                "tool_name": tool_name,
+                "provider": "ggcoder",
+                "server_tool": True,
+            },
+        }
+        state.streamed_tokens = True
+        if state.event_sink is not None:
+            await state.event_sink("token", codex_tool_token(message))
+            await state.event_sink("message", message)
+        return
+    tool_call_id = str(
+        event.get("toolUseId") or event.get("tool_call_id") or ""
+    )
+    if not tool_call_id or tool_call_id in state.emitted_tool_return_ids:
+        return
+    state.emitted_tool_return_ids.add(tool_call_id)
+    if state.event_sink is not None:
+        await state.event_sink(
+            "message",
+            {
+                "role": "tool",
+                "kind": "tool_return",
+                "tool_name": str(event.get("name") or ""),
+                "tool_call_id": tool_call_id,
+                "tool_result": event.get("data"),
+                "metadata": {
+                    "provider": "ggcoder",
+                    "server_tool": True,
+                    "result_type": str(event.get("resultType") or ""),
+                },
+            },
+        )
 
 
 async def _emit_gg_coder_tool_event(

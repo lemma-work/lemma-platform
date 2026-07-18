@@ -45,22 +45,10 @@ _DEFAULT_PONG_MISS_LIMIT = 3
 # connection resets it. ``None`` (the default) means unlimited.
 _MAX_RECONNECT_ATTEMPTS_ENV = "LEMMA_DAEMON_MAX_RECONNECT_ATTEMPTS"
 
-# Reconnect-failure alarm: when ``_CONSECUTIVE_FAILURE_ALARM_THRESHOLD`` failed
-# reconnects happen within ``_CONSECUTIVE_FAILURE_ALARM_WINDOW_SECONDS`` of the
-# first failure, emit one loud ``STATE ALERT`` line so an operator notices the
-# outage even if the daemon is otherwise quiet in the log. The daemon does NOT
-# exit -- the held-runs guarantee still keeps the daemon useful when the network
-# comes back -- but the operator now gets a single grep-able line.
-_CONSECUTIVE_FAILURE_ALARM_THRESHOLD = 5
-_CONSECUTIVE_FAILURE_ALARM_WINDOW_SECONDS = 60.0
-
 # Connection-state markers (logged with the prefix ``STATE`` so they're
 # trivially ``grep``-able). Don't rename these keys without updating any
 # downstream log-parsing tooling that watches for them.
-_STATE_OFFLINE = "offline"
 _STATE_RECONNECTING = "reconnecting"
-_STATE_ONLINE = "online"
-_STATE_ALERT = "alert"
 
 
 def ping_interval_seconds() -> float:
@@ -106,6 +94,117 @@ def max_buffered_events_per_run() -> int:
         return max(1, int(raw))
     except ValueError:
         return _DEFAULT_MAX_BUFFERED_EVENTS
+
+
+# State alarm: when connect attempts keep failing, surface a single STATE
+# ALERT line per failure-streak so operators tailing daemon.log see sustained
+# outages without log spam. Reset on a successful (re)connect. The window
+# bounds how long a stale "first failure" timestamp keeps the alarm alive --
+# beyond it, a fresh failure is treated as the start of a new observation.
+_CONSECUTIVE_FAILURE_ALARM_THRESHOLD = 5
+_CONSECUTIVE_FAILURE_ALARM_WINDOW_SECONDS = 300.0
+
+_STATE_ONLINE = "ONLINE"
+_STATE_ALERT = "ALERT"
+_STATE_OFFLINE = "OFFLINE"
+
+_MAX_RECONNECT_ATTEMPTS_ENV = "LEMMA_DAEMON_MAX_RECONNECT_ATTEMPTS"
+
+
+def _read_max_reconnect_attempts() -> int | None:
+    """Read the ``LEMMA_DAEMON_MAX_RECONNECT_ATTEMPTS`` env var.
+
+    Returns ``None`` (unlimited) if unset, empty, non-numeric, or non-positive.
+    A bound of ``0`` is treated as "no bound" -- same as unset -- so an
+    explicit "0" doesn't accidentally kill the daemon on the first dropped
+    socket.
+    """
+    raw = os.getenv(_MAX_RECONNECT_ATTEMPTS_ENV)
+    if not raw:
+        return None
+    try:
+        value = int(raw)
+    except ValueError:
+        return None
+    if value <= 0:
+        return None
+    return value
+
+
+def _log_state(state: str, payload: dict[str, Any] | None = None) -> None:
+    """Emit a greppable ``STATE <NAME>`` line via the daemon log.
+
+    Operators tailing daemon.log use these as the at-a-glance connection-state
+    marker; the payload is forwarded so ``jq`` can extract structured fields.
+    """
+    daemon_log(f"STATE {state.upper()}", payload or {})
+
+
+def _record_failure(
+    streak: int,
+    first_at: float | None,
+    *,
+    exc_label: str,
+) -> tuple[int, float | None, bool]:
+    """Record one reconnect failure and decide whether to fire the alarm.
+
+    Returns ``(new_streak, new_first_at, alert_fired)``. The alarm fires
+    exactly once when the streak crosses
+    ``_CONSECUTIVE_FAILURE_ALARM_THRESHOLD`` within
+    ``_CONSECUTIVE_FAILURE_ALARM_WINDOW_SECONDS`` of the first failure;
+    subsequent failures in the same window do NOT re-fire. If the gap since
+    ``first_at`` exceeds the window, the helper suppresses the alarm even if
+    the streak itself keeps climbing -- a stale ``first_at`` is treated as
+    "observation lost", not "still in this alarm window".
+    """
+    new_streak = streak + 1
+    now = time.monotonic()
+    if first_at is None:
+        first_at = now
+    within_window = now - first_at <= _CONSECUTIVE_FAILURE_ALARM_WINDOW_SECONDS
+    alert = (
+        new_streak == _CONSECUTIVE_FAILURE_ALARM_THRESHOLD
+        and within_window
+    )
+    return new_streak, first_at, alert
+
+
+async def _startup_health_check(
+    *, base_url: str, token: str, verify_ssl: bool
+) -> tuple[bool, str]:
+    """Probe ``GET {base_url}/users/me`` once per successful websocket connect.
+
+    Confirms the daemon can reach the backend with the bearer token it just
+    used to open the socket. Returns ``(ok, detail)``; detail is operator-
+    readable and surfaces the HTTP status or the exception class. Transient
+    network errors return ``(False, ...)`` rather than raising, so the
+    reconnect loop can keep trying -- a 401, on the other hand, is surfaced
+    verbatim so the caller can decide to tear down the doomed connection.
+    """
+    import urllib.error
+    import urllib.request
+
+    url = base_url.rstrip("/") + "/users/me"
+    req = urllib.request.Request(url, headers={"Authorization": f"Bearer {token}"})
+    ctx = None
+    if not verify_ssl and url.startswith("https://"):
+        import ssl
+
+        ctx = ssl.create_default_context()
+        ctx.check_hostname = False
+        ctx.verify_mode = ssl.CERT_NONE
+    try:
+        resp = await asyncio.to_thread(
+            urllib.request.urlopen, req, timeout=10, context=ctx
+        )
+    except urllib.error.HTTPError as e:
+        return False, f"HTTP {e.code}: {e.msg}"
+    except Exception as e:  # noqa: BLE001 - transport guard
+        return False, f"{type(e).__name__}: {e}"
+    status = getattr(resp, "status", None)
+    if status is None:
+        status = resp.getcode()
+    return True, f"HTTP {status}"
 
 
 class _RunEventSink:
@@ -434,10 +533,44 @@ async def run_daemon(
                 },
             )
             try:
+                # Probe the bearer token against /users/me BEFORE opening the
+                # websocket. The websocket opener is a separate failure mode
+                # (network/TLS) and we don't want to count it twice or strand
+                # an opened websocket on a doomed auth token.
+                health_ok, health_detail = await _startup_health_check(
+                    base_url=base_url,
+                    token=current_token,
+                    verify_ssl=verify_ssl,
+                )
+                if not health_ok and "401" in health_detail:
+                    # Match the InvalidStatus 401 branch: tear down rather
+                    # than spinning pointlessly.
+                    import click
+                    raise click.ClickException(
+                        "Daemon startup health check failed: HTTP 401. "
+                        "Run `lemma auth login` and try again."
+                    )
+                if not health_ok:
+                    daemon_log(
+                        "startup health check failed; will retry",
+                        {"detail": health_detail},
+                    )
+                    # Treat as a transport failure (no websocket opened), so it
+                    # routes through the OSError branch's bookkeeping
+                    # (consecutive_failure_streak, STATE OFFLINE, alarm).
+                    raise OSError(f"startup health check: {health_detail}")
                 async with connect_factory(current_token) as websocket:
-                    backoff_attempt = 0
+                    backoff_attempt = 0  # reset backoff once we're connected
                     consecutive_failure_streak = 0
                     first_failure_at = None
+                    _log_state(
+                        _STATE_ONLINE,
+                        {
+                            "server": base_url,
+                            "health": health_detail,
+                            "reconnects": reconnects,
+                        },
+                    )
                     await _serve_connection(
                         websocket,
                         config=config,
@@ -466,14 +599,15 @@ async def run_daemon(
                     raise click.ClickException(
                         "Daemon websocket authentication failed. Run `lemma auth login` and try again."
                     ) from exc
-                _log_state(
-                    _STATE_OFFLINE,
-                    {"reason": "websocket rejected", "status": status_code},
-                )
+                daemon_log("websocket rejected; will retry", {"status": status_code})
                 consecutive_failure_streak, first_failure_at, alarm_raised = _record_failure(
                     consecutive_failure_streak,
                     first_failure_at,
                     exc_label=f"HTTP {status_code}",
+                )
+                _log_state(
+                    _STATE_OFFLINE,
+                    {"reason": "websocket rejected", "status": status_code},
                 )
                 if alarm_raised:
                     _log_state(
@@ -962,7 +1096,7 @@ async def run_provider_command(
     model_name = str(payload.get("model_name") or "default")
     mcp = payload.get("mcp") if isinstance(payload.get("mcp"), dict) else {}
 
-    # Stream-based harnesses translate NDJSON lines from the provider into
+# Stream-based harnesses translate NDJSON lines from the provider into
     # ``token``/``message`` events for the chat surface. Anything not in this
     # set falls through to a generic one-shot shell, which dumps raw stdout as
     # the assistant's text -- so omitting a harness here breaks the chat.

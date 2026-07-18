@@ -17,18 +17,21 @@ MODEL_ENV = {
     "CODEX": "LEMMA_REAL_DAEMON_CODEX_MODEL",
     "CLAUDE_CODE": "LEMMA_REAL_DAEMON_CLAUDE_MODEL",
     "OPENCODE": "LEMMA_REAL_DAEMON_OPENCODE_MODEL",
+    "GG_CODER": "LEMMA_REAL_DAEMON_GG_CODER_MODEL",
 }
 
 DEFAULT_MODEL = {
     "CODEX": "gpt-5.5",
     "CLAUDE_CODE": "sonnet",
     "OPENCODE": "opencode/deepseek-v4-flash-free",
+    "GG_CODER": "default",
 }
 
 BINARY = {
     "CODEX": "codex",
     "CLAUDE_CODE": "claude",
     "OPENCODE": "opencode",
+    "GG_CODER": "ggcoder",
 }
 
 
@@ -249,7 +252,11 @@ async def create_daemon_profile(
     models: list[str],
 ) -> tuple[str, str]:
     requested_model = os.getenv(MODEL_ENV[harness_kind], DEFAULT_MODEL[harness_kind])
-    model_name = requested_model if requested_model in models else models[0]
+    model_name = (
+        requested_model
+        if requested_model in models
+        else (models[0] if models else "default")
+    )
     response = await authenticated_client.post(
         f"/organizations/{fixed_test_org['id']}/agent-runtime/profiles",
         json={
@@ -457,17 +464,10 @@ async def run_real_daemon_harness_flow(
         if harness_kind == "CODEX":
             assert_sse_includes_tool_stream_events(events)
 
-        # OPENCODE uses the weak free model deepseek-v4-flash-free, which reliably
-        # drives the bridge and calls the MCP tools but flakes on precise
-        # multi-step instruction following (the full marker set / the follow-up
-        # CONTINUATION_OK reply). The point of this test is that the bridge works
-        # and tool calls + outputs are captured -- not the model's instruction
-        # adherence -- so assert the persisted TOOL_CALL/TOOL_RETURN messages and
-        # stop. (We assert the persisted conversation rather than the live SSE
-        # tool-token stream: opencode is polling-based, so the live stream can race
-        # the completion event, but the captured tool messages are the source of
-        # truth.) CODEX and CLAUDE_CODE use capable models and verify the full task.
-        if harness_kind == "OPENCODE":
+        # OPENCODE uses a weak free model and GG Coder's JSON mode is one-shot.
+        # Both still prove the bridge and MCP tool path, but neither is a reliable
+        # continuation test. Assert persisted tool messages and stop after turn one.
+        if harness_kind in {"OPENCODE", "GG_CODER"}:
             await assert_conversation_has_tool_messages(
                 authenticated_client,
                 pod_id=pod_id,

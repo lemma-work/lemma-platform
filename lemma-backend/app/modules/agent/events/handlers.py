@@ -81,6 +81,7 @@ def build_harness_registry() -> HarnessRegistry:
             DaemonHarness(HarnessKind.OPENCODE, reconnect_grace_seconds=reconnect_grace_seconds),
             DaemonHarness(HarnessKind.CURSOR, reconnect_grace_seconds=reconnect_grace_seconds),
             DaemonHarness(HarnessKind.ANTIGRAVITY, reconnect_grace_seconds=reconnect_grace_seconds),
+            DaemonHarness(HarnessKind.GG_CODER, reconnect_grace_seconds=reconnect_grace_seconds),
         ]
     )
 

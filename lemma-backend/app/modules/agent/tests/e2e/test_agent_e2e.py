@@ -3467,6 +3467,7 @@ class TestAgentRuntimeConfigApis:
             ("CODEX_APP_SERVER", HarnessKind.CODEX),
             ("CLAUDE_CODE", HarnessKind.CLAUDE_CODE),
             ("OPENCODE", HarnessKind.OPENCODE),
+            ("GG_CODER", HarnessKind.GG_CODER),
         ],
     )
     async def test_runner_resolves_org_user_daemon_profile_rows(
@@ -3597,6 +3598,7 @@ class TestAgentOpenApi:
             "OPENCODE",
             "CURSOR",
             "ANTIGRAVITY",
+            "GG_CODER",
         ]
         assert "model_name" not in schemas["SendMessageRequest"]["properties"]
         assert "model_name" in schemas["AgentRuntimeConfig"]["properties"]

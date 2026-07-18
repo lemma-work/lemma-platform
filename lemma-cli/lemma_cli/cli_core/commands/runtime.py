@@ -79,7 +79,7 @@ def create_profile(
     harness_kind: str | None = typer.Option(
         None,
         "--harness",
-        help="CODEX, CLAUDE_CODE, or OPENCODE (USER_DAEMON only).",
+        help="CODEX, CLAUDE_CODE, OPENCODE, CURSOR, ANTIGRAVITY, or GG_CODER.",
     ),
     base_url: str | None = typer.Option(
         None, "--base-url", help="Provider base URL (OPENAI_COMPATIBLE)."
