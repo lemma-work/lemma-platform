@@ -46,6 +46,24 @@ class LoggingContractError(ValueError):
     pass
 
 
+def _strict_logging_contract_enabled() -> bool:
+    configured = os.getenv("LEMMA_LOGGING_CONTRACT_STRICT")
+    if configured is None:
+        configured = os.getenv("LOGGING_CONTRACT_STRICT")
+    enabled = (configured or "").strip().lower() in {"1", "true", "yes", "on"}
+    raw_environment = (
+        (
+            os.getenv("LEMMA_ENVIRONMENT")
+            or os.getenv("AGENTBOX_ENVIRONMENT")
+            or os.getenv("ENVIRONMENT")
+            or "development"
+        )
+        .strip()
+        .lower()
+    )
+    return enabled and raw_environment in {"local", "test", "testing"}
+
+
 def _environment() -> str:
     raw = (
         os.getenv("LEMMA_ENVIRONMENT")
@@ -199,7 +217,7 @@ class BoundLogger:
         elif set(fields) - set(specification.fields):
             violation = "unexpected_fields"
         if violation is not None:
-            if _environment() != "production":
+            if _strict_logging_contract_enabled():
                 raise LoggingContractError(violation)
             if _contract_violation_emitted:
                 return
@@ -288,7 +306,9 @@ class JsonFormatter(logging.Formatter):
         data: dict[str, Any] = {
             "timestamp": self.formatTime(record, "%Y-%m-%dT%H:%M:%S%z"),
             "level": record.levelname.lower(),
-            "event": event if _EVENT_RE.fullmatch(event) else "logging.contract.violation",
+            "event": event
+            if _EVENT_RE.fullmatch(event)
+            else "logging.contract.violation",
             "logger": record.name,
             "service.name": "lemma-agentbox",
             "service.version": _release_sha(),

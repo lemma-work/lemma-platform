@@ -10,6 +10,8 @@ from uuid import uuid4
 
 import pytest
 from fastapi import UploadFile
+from opentelemetry import trace
+from opentelemetry.trace import NonRecordingSpan, SpanContext, TraceFlags, TraceState
 from pydantic import BaseModel, ValidationError
 
 from app.app import RequestBodyLimitMiddleware
@@ -37,7 +39,13 @@ from app.core.infrastructure.events.outbox import (
     outbox_dispatcher_lifespan,
     replay_outbox_event,
 )
-from app.core.redaction import REDACTED, _redact_url, redact_text, redact_value
+from app.core.redaction import (
+    REDACTED,
+    REDACTED_URL,
+    _redact_url,
+    redact_text,
+    redact_value,
+)
 
 
 class _TestEvent(DomainEvent):
@@ -196,6 +204,49 @@ async def test_inbox_propagates_event_lineage_to_resulting_events() -> None:
     unrelated = _TestEvent(value="unrelated")
     assert unrelated.correlation_id == unrelated.event_id
     assert unrelated.causation_id is None
+
+
+@pytest.mark.asyncio
+async def test_domain_event_propagates_w3c_trace_context_through_inbox() -> None:
+    trace_id = int("1234567890abcdef1234567890abcdef", 16)
+    span_id = int("1234567890abcdef", 16)
+    span_context = SpanContext(
+        trace_id=trace_id,
+        span_id=span_id,
+        is_remote=False,
+        trace_flags=TraceFlags.SAMPLED,
+        trace_state=TraceState(),
+    )
+
+    with trace.use_span(NonRecordingSpan(span_context)):
+        event = _TestEvent(value="trace-context")
+
+    assert event.traceparent == (
+        "00-1234567890abcdef1234567890abcdef-1234567890abcdef-01"
+    )
+    assert event.model_dump(mode="json")["traceparent"] == event.traceparent
+
+    observed_trace_id: int | None = None
+
+    async def observe_context() -> None:
+        nonlocal observed_trace_id
+        observed_trace_id = trace.get_current_span().get_span_context().trace_id
+
+    await _MemoryInbox().process("consumer", event, observe_context)
+
+    assert observed_trace_id == trace_id
+
+
+def test_domain_event_drops_invalid_or_absent_w3c_trace_context() -> None:
+    invalid = _TestEvent(value="invalid", traceparent="not-a-traceparent")
+    root = _TestEvent(value="root")
+
+    assert invalid.traceparent is None
+    assert invalid.tracestate is None
+    assert "traceparent" not in invalid.model_dump(mode="json")
+    assert "tracestate" not in invalid.model_dump(mode="json")
+    assert "traceparent" not in root.model_dump(mode="json")
+    assert "tracestate" not in root.model_dump(mode="json")
 
 
 class _ValidationProbe(BaseModel):
@@ -635,3 +686,18 @@ def test_redaction_handles_urls_exceptions_sequences_and_binary_values() -> None
     )
     assert _redact_url("not a url") == "not a url"
     assert redact_value(7) == 7
+
+
+@pytest.mark.parametrize(
+    "value",
+    [
+        "https://example.com:bad/path?token=CANARY",
+        "https://[broken/path?token=CANARY",
+        "https://user:secret@example.com:999999/path?code=CANARY",
+    ],
+)
+def test_redaction_of_malformed_urls_is_bounded_and_non_throwing(value: str) -> None:
+    assert _redact_url(value) == REDACTED_URL
+    rendered = redact_text(f"dependency failed at {value}")
+    assert REDACTED_URL in rendered
+    assert "CANARY" not in rendered

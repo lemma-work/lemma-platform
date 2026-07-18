@@ -96,6 +96,19 @@ class LoggingContractError(ValueError):
     """Raised when local code violates the exact structured-log contract."""
 
 
+def _strict_logging_contract_enabled() -> bool:
+    configured = os.getenv("LEMMA_LOGGING_CONTRACT_STRICT")
+    if configured is None:
+        configured = os.getenv("LOGGING_CONTRACT_STRICT")
+    enabled = (configured or "").strip().lower() in {"1", "true", "yes", "on"}
+    raw_environment = (
+        (os.getenv("LEMMA_ENVIRONMENT") or os.getenv("ENVIRONMENT") or "local")
+        .strip()
+        .lower()
+    )
+    return enabled and raw_environment in {"local", "test", "testing"}
+
+
 class Logger(Protocol):
     def debug(self, event: str, **kwargs: Any) -> None: ...
     def info(self, event: str, **kwargs: Any) -> None: ...
@@ -188,9 +201,7 @@ def _add_safe_exception(_: Any, __: str, event_dict: dict[str, Any]) -> dict[str
     return event_dict
 
 
-def _safe_exception_fields(
-    exc_type: type[BaseException], tb: Any
-) -> dict[str, Any]:
+def _safe_exception_fields(exc_type: type[BaseException], tb: Any) -> dict[str, Any]:
     extracted = traceback.extract_tb(tb) if tb is not None else []
     application = [
         frame
@@ -255,8 +266,10 @@ def _bounded_contract(_: Any, __: str, event_dict: dict[str, Any]) -> dict[str, 
             elif event_dict.get("level") != specification.level:
                 violation = "unexpected_severity"
             else:
-                extra_fields = set(event_dict) - _CONTRACT_METADATA_FIELDS - set(
-                    specification.fields
+                extra_fields = (
+                    set(event_dict)
+                    - _CONTRACT_METADATA_FIELDS
+                    - set(specification.fields)
                 )
                 extra_fields = {key for key in extra_fields if not key.startswith("_")}
                 if extra_fields:
@@ -270,7 +283,7 @@ def _bounded_contract(_: Any, __: str, event_dict: dict[str, Any]) -> dict[str, 
                 event_dict.pop(key, None)
 
     if violation is not None:
-        if _logging_context.get("deployment.environment") != "production":
+        if _strict_logging_contract_enabled():
             raise LoggingContractError(violation)
         if _contract_violation_emitted:
             raise structlog.DropEvent
@@ -506,9 +519,7 @@ def get_logger(name: str) -> Logger:
     return structlog.get_logger().bind(logger=name)  # type: ignore[return-value]
 
 
-def get_dependency_logger(
-    name: str, *, level: int = logging.WARNING
-) -> logging.Logger:
+def get_dependency_logger(name: str, *, level: int = logging.WARNING) -> logging.Logger:
     """Return a foreign-library logger routed through Lemma's safe root pipeline.
 
     Some libraries (notably FastStream) create their own stdout handler lazily

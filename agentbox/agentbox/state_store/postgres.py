@@ -71,6 +71,12 @@ class PostgresStateStore:
             ) from None
         return self
 
+    async def healthcheck(self) -> None:
+        if self._pool is None:
+            raise RuntimeError("state store is not open")
+        async with self._pool.connection() as conn:
+            await conn.execute("SELECT 1")
+
     async def _apply_migrations(self) -> None:
         async with self._pool.connection() as conn:
             async with conn.transaction():

@@ -692,8 +692,11 @@ class Settings(BaseSettings):
     # DodoPayments + billing model overrides live in the billing module's
     # config.py (now in lemma-cloud).
     llm_otel_enabled: bool = Field(
-        default=True,
-        description="Enable a separate OTEL exporter for LLM/OpenInference spans",
+        default=False,
+        description=(
+            "Enable the independent LLM/OpenInference trace pipeline. It is "
+            "disabled by default and never exports through the general OTLP pipeline."
+        ),
     )
     llm_otel_exporter_otlp_protocol: str = Field(
         default="grpc",
@@ -707,9 +710,23 @@ class Settings(BaseSettings):
         default=None,
         description="Comma-separated OTLP headers for LLM/OpenInference spans",
     )
+    llm_otel_traces_sampler: str = Field(
+        default="traceidratio",
+        description="Independent sampler used by the LLM trace pipeline",
+    )
+    llm_otel_traces_sampler_arg: float = Field(
+        default=0.01,
+        ge=0.0,
+        le=1.0,
+        description="Independent LLM trace sampling ratio (default 1%%)",
+    )
     observability_enabled: bool = Field(
         default=False,
         description="Enable OpenTelemetry-based observability",
+    )
+    otel_sdk_disabled: bool = Field(
+        default=False,
+        description="Standard OpenTelemetry hard-disable switch",
     )
     otel_service_name: Optional[str] = Field(
         default=None,
@@ -734,17 +751,42 @@ class Settings(BaseSettings):
         default=None,
         description="Comma-separated OTLP headers applied to all signals (e.g. authorization=<key>)",
     )
-    otel_signals: str = Field(
-        default="traces,metrics,logs",
+    otel_exporter_otlp_traces_endpoint: Optional[str] = Field(default=None)
+    otel_exporter_otlp_metrics_endpoint: Optional[str] = Field(default=None)
+    otel_exporter_otlp_logs_endpoint: Optional[str] = Field(default=None)
+    otel_exporter_otlp_traces_protocol: Optional[str] = Field(default=None)
+    otel_exporter_otlp_metrics_protocol: Optional[str] = Field(default=None)
+    otel_exporter_otlp_logs_protocol: Optional[str] = Field(default=None)
+    otel_exporter_otlp_traces_headers: Optional[str] = Field(default=None)
+    otel_exporter_otlp_metrics_headers: Optional[str] = Field(default=None)
+    otel_exporter_otlp_logs_headers: Optional[str] = Field(default=None)
+    otel_traces_exporter: str = Field(
+        default="otlp",
+        description="Standard trace exporter selector: otlp or none",
+    )
+    otel_metrics_exporter: str = Field(
+        default="none",
+        description="Standard metric exporter selector: otlp or none",
+    )
+    otel_logs_exporter: str = Field(
+        default="none",
+        description="Standard log exporter selector: otlp or none",
+    )
+    otel_signals: Optional[str] = Field(
+        default=None,
         description=(
-            "Which OTLP signals to export when an endpoint is set: a comma-separated "
-            "subset of traces,metrics,logs. Defaults to all three; set e.g. 'traces' "
-            "to export only traces."
+            "Deprecated compatibility selector. Standard OTEL_*_EXPORTER variables "
+            "take precedence; missing or empty legacy selection means traces-only."
         ),
     )
     observability_metrics_export_interval_millis: int = Field(
-        default=15000,
-        description="Metric export interval for OTEL periodic readers",
+        default=60000,
+        ge=1000,
+        validation_alias=AliasChoices(
+            "OTEL_METRIC_EXPORT_INTERVAL",
+            "OBSERVABILITY_METRICS_EXPORT_INTERVAL_MILLIS",
+        ),
+        description="Metric export interval in milliseconds",
     )
     otel_traces_sampler: str = Field(
         default="parentbased_traceidratio",
@@ -757,6 +799,8 @@ class Settings(BaseSettings):
     )
     otel_traces_sampler_arg: float = Field(
         default=0.05,
+        ge=0.0,
+        le=1.0,
         description=(
             "Sampling ratio for ratio-based samplers (0.05 = 5%%). Env: "
             "``OTEL_TRACES_SAMPLER_ARG``."

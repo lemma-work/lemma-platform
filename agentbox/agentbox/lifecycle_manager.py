@@ -80,6 +80,24 @@ class SandboxLifecycleManager:
         self.owner = owner
         self._reconcile_lock = asyncio.Lock()
         self._failure_tasks: dict[str, asyncio.Task[None]] = {}
+        self.last_reconcile_succeeded_at: float | None = None
+        self.last_reconcile_failed_at: float | None = None
+
+    def record_reconciliation_success(self) -> None:
+        self.last_reconcile_succeeded_at = time.monotonic()
+
+    def record_reconciliation_failure(self) -> None:
+        self.last_reconcile_failed_at = time.monotonic()
+
+    def reconciliation_is_fresh(self) -> bool:
+        succeeded = self.last_reconcile_succeeded_at
+        if succeeded is None:
+            return False
+        failed = self.last_reconcile_failed_at
+        if failed is not None and failed >= succeeded:
+            return False
+        max_age = max(5.0, settings.agentbox_reconcile_interval_seconds * 2.5)
+        return (time.monotonic() - succeeded) <= max_age
 
     @staticmethod
     def _status_from_record(record: SandboxRecord) -> SandboxInternalStatus:
@@ -1479,7 +1497,10 @@ class SandboxLifecycleManager:
                         current.provider_id,
                     )
                 except (ProviderError, HTTPException):
-                    logger.debug('agentbox.lifecycle_manager.background_provider_lease_renewal_sandbox.diagnostic', sandbox_id=record.sandbox_id)
+                    logger.debug(
+                        "agentbox.lifecycle_manager.background_provider_lease_renewal_sandbox.diagnostic",
+                        sandbox_id=record.sandbox_id,
+                    )
                 finally:
                     await self.store.release_activity_lease(
                         fence.lease_id,
@@ -1858,7 +1879,10 @@ class SandboxLifecycleManager:
                         await self._reconcile_present_generation(record)
                 except ProviderError as exc:
                     if exc.code in {"lifecycle_busy", "sandbox_not_found"}:
-                        logger.debug('agentbox.lifecycle_manager.reconciliation_skipped_busy_lifecycle_sandbox.observed', sandbox_id=record.sandbox_id)
+                        logger.debug(
+                            "agentbox.lifecycle_manager.reconciliation_skipped_busy_lifecycle_sandbox.observed",
+                            sandbox_id=record.sandbox_id,
+                        )
                         continue
                     if exc.retryable or exc.code in _OUTCOME_UNKNOWN_CODES:
                         # One unavailable or unresolved provider generation
@@ -1988,6 +2012,8 @@ async def reconciliation_loop(manager: SandboxLifecycleManager) -> None:
         try:
             await manager.reconcile()
         except Exception as exc:
+            manager.record_reconciliation_failure()
             incident.record_failure(exc)
         else:
+            manager.record_reconciliation_success()
             incident.record_success()

@@ -18,6 +18,7 @@ from agentbox.providers import build_sandbox_provider
 from agentbox.providers.errors import ProviderError
 from agentbox.providers.protocol import SandboxCapabilitiesProvider
 from agentbox.state_store import create_state_store
+from agentbox.telemetry import instrument_app, shutdown_telemetry
 from agentbox.observability import (
     bind_context,
     create_background_task,
@@ -31,6 +32,7 @@ from .sandboxes import router as sandboxes_router
 from .sessions import router as sessions_router
 
 logger = get_logger(__name__)
+_QUIET_HEALTH_PATHS = frozenset({"/health", "/health/live", "/health/ready", "/livez"})
 
 
 class RequestContextMiddleware:
@@ -77,9 +79,7 @@ class RequestContextMiddleware:
         job_id = raw_job_id if self.JOB_ID_RE.fullmatch(raw_job_id) else None
         scope = dict(scope)
         scope["headers"] = [
-            (key, value)
-            for key, value in headers
-            if key.lower() != b"x-request-id"
+            (key, value) for key, value in headers if key.lower() != b"x-request-id"
         ] + [(b"x-request-id", request_id.encode("ascii"))]
 
         started_at = time.perf_counter()
@@ -142,7 +142,10 @@ class RequestContextMiddleware:
                 )
                 await response(scope, receive, send_with_request_id)
             finally:
-                if not cancelled and str(scope.get("path", "")) != "/health":
+                if (
+                    not cancelled
+                    and str(scope.get("path", "")) not in _QUIET_HEALTH_PATHS
+                ):
                     finished_at = time.perf_counter()
                     duration_ms = round((finished_at - started_at) * 1000, 1)
                     route_object = scope.get("route")
@@ -228,6 +231,7 @@ async def lifespan(app: FastAPI):
         # Reconcile before accepting requests so durable reservations and
         # provider inventory agree after a manager revision restart.
         await manager.reconcile()
+        manager.record_reconciliation_success()
         app.state.cleanup_task = create_background_task(
             cleanup_loop(manager), name="agentbox-cleanup"
         )
@@ -237,7 +241,7 @@ async def lifespan(app: FastAPI):
         app.state.provider_lease_renewal_task = create_background_task(
             provider_lease_renewal_loop(manager), name="agentbox-provider-lease-renewal"
         )
-        logger.info('service.started')
+        logger.info("service.started")
         try:
             yield
         finally:
@@ -254,7 +258,8 @@ async def lifespan(app: FastAPI):
                 except asyncio.CancelledError:
                     pass
             await manager.close()
-            logger.info('service.stopped')
+            logger.info("service.stopped")
+            shutdown_telemetry()
     finally:
         await provider.close()
         if store is not None:
@@ -263,6 +268,7 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(title="AgentBox Manager", version="0.1.0", lifespan=lifespan)
 app.add_middleware(RequestContextMiddleware)
+instrument_app(app)
 
 
 @app.exception_handler(ProviderError)
@@ -295,6 +301,60 @@ async def health(request: Request) -> dict[str, str | bool]:
     if isinstance(provider, SandboxCapabilitiesProvider):
         response.update(provider.capabilities.diagnostic())
     return response
+
+
+@app.get("/health/live")
+@app.get("/livez")
+async def health_live() -> dict[str, str]:
+    """Process-only liveness; never performs dependency I/O."""
+    return {"status": "ok"}
+
+
+@app.get("/health/ready")
+async def health_ready(request: Request) -> JSONResponse:
+    """Bounded readiness with generic, non-sensitive component states."""
+    components = {
+        "manager": "ready",
+        "state_store": "ready",
+        "provider": "ready",
+    }
+    app_state = request.app.state
+    manager = getattr(app_state, "lifecycle_manager", None)
+    store = getattr(app_state, "store", None)
+    reconciliation_task = getattr(app_state, "reconciliation_task", None)
+    cleanup_task = getattr(app_state, "cleanup_task", None)
+    lease_task = getattr(app_state, "provider_lease_renewal_task", None)
+
+    if manager is None or any(
+        task is None or task.done()
+        for task in (reconciliation_task, cleanup_task, lease_task)
+    ):
+        components["manager"] = "unavailable"
+
+    if store is None:
+        components["state_store"] = "unavailable"
+    else:
+        try:
+            await asyncio.wait_for(store.healthcheck(), timeout=0.75)
+        except Exception:
+            components["state_store"] = "unavailable"
+
+    if (
+        manager is None
+        or reconciliation_task is None
+        or reconciliation_task.done()
+        or not manager.reconciliation_is_fresh()
+    ):
+        components["provider"] = "unavailable"
+
+    ready = all(value == "ready" for value in components.values())
+    return JSONResponse(
+        status_code=200 if ready else 503,
+        content={
+            "status": "ready" if ready else "not_ready",
+            "components": components,
+        },
+    )
 
 
 app.include_router(sandboxes_router)

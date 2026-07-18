@@ -25,6 +25,8 @@ class AsyncStateStore(Protocol):
     sandbox alive forever.
     """
 
+    async def healthcheck(self) -> None: ...
+
     async def upsert_sandbox(
         self, sandbox_id: str, request: SandboxEnsureRequest
     ) -> SandboxRecord: ...

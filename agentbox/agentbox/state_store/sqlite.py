@@ -62,6 +62,14 @@ class SQLiteStateStore:
             raise RuntimeError("state store is not open")
         return self._legacy
 
+    async def healthcheck(self) -> None:
+        def check() -> None:
+            store = self._store
+            with store._lock:
+                store._conn.execute("SELECT 1").fetchone()
+
+        await self._run(check)
+
     async def _run(self, callback: Callable[..., T], *args: Any, **kwargs: Any) -> T:
         return await asyncio.to_thread(callback, *args, **kwargs)
 

@@ -24,6 +24,7 @@ from app.core.observability.telemetry import (
     init_telemetry,
     instrument_database_engine,
     instrument_fastapi_app,
+    shutdown_telemetry,
 )
 from app.version import API_VERSION
 
@@ -72,6 +73,7 @@ async def lifespan(app: FastAPI):
     scheduler = get_scheduler_service()
     await scheduler.shutdown()
     logger.info("service.stopped")
+    shutdown_telemetry()
 
 
 # Create FastAPI app for scheduler

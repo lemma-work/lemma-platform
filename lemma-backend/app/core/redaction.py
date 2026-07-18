@@ -9,6 +9,7 @@ from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 
 
 REDACTED = "[REDACTED]"
+REDACTED_URL = "[REDACTED_URL]"
 _SENSITIVE_KEY_PARTS = frozenset(
     {
         "authorization",
@@ -47,27 +48,36 @@ def is_sensitive_key(key: object) -> bool:
 def _redact_url(value: str) -> str:
     try:
         parsed = urlsplit(value)
-    except ValueError:
-        return value
-    if not parsed.scheme or not parsed.netloc:
-        return value
+        if not parsed.scheme or not parsed.netloc:
+            return value
 
-    hostname = parsed.hostname or ""
-    if parsed.port:
-        hostname = f"{hostname}:{parsed.port}"
-    netloc = f"{REDACTED}@{hostname}" if parsed.username or parsed.password else hostname
-    query = urlencode(
-        [
-            (
-                key,
-                REDACTED
-                if is_sensitive_key(key) or key.lower() in _SENSITIVE_URL_PARAMS
-                else item,
-            )
-            for key, item in parse_qsl(parsed.query, keep_blank_values=True)
-        ]
-    )
-    return urlunsplit((parsed.scheme, netloc, parsed.path, query, parsed.fragment))
+        # Accessing hostname/port performs additional validation in urllib and
+        # can raise even when urlsplit itself succeeded (for example ``:bad``
+        # ports or malformed IPv6 literals). Keep the whole operation inside
+        # the fail-safe boundary: redaction must never affect application flow.
+        hostname = parsed.hostname or ""
+        port = parsed.port
+        if port is not None:
+            hostname = f"{hostname}:{port}"
+        netloc = (
+            f"{REDACTED}@{hostname}" if parsed.username or parsed.password else hostname
+        )
+        query = urlencode(
+            [
+                (
+                    key,
+                    REDACTED
+                    if is_sensitive_key(key) or key.lower() in _SENSITIVE_URL_PARAMS
+                    else item,
+                )
+                for key, item in parse_qsl(parsed.query, keep_blank_values=True)
+            ]
+        )
+        return urlunsplit((parsed.scheme, netloc, parsed.path, query, parsed.fragment))
+    except Exception:
+        # Never return a malformed URL-like input: it can contain credentials,
+        # query secrets, or parser edge cases that the normal rules did not see.
+        return REDACTED_URL
 
 
 def redact_text(value: str) -> str:
@@ -101,4 +111,23 @@ def redact_value(value: Any, *, key: object | None = None) -> Any:
 
 
 def redact_event_dict(_: Any, __: str, event_dict: dict[str, Any]) -> dict[str, Any]:
-    return redact_value(event_dict)
+    try:
+        redacted = redact_value(event_dict)
+        return redacted if isinstance(redacted, dict) else {}
+    except Exception:
+        # Preserve only processor metadata needed by the downstream logging
+        # contract. Do not expose the value or exception that defeated
+        # redaction, and never allow a log call to change application behavior.
+        safe_keys = {
+            "_lemma_app_owned",
+            "_record",
+            "deployment.environment",
+            "event",
+            "level",
+            "logger",
+            "release.sha",
+            "service.name",
+            "service.version",
+            "timestamp",
+        }
+        return {key: value for key, value in event_dict.items() if key in safe_keys}

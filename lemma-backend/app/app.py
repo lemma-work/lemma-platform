@@ -37,6 +37,7 @@ from app.core.observability.telemetry import (
     init_telemetry,
     instrument_database_engine,
     instrument_fastapi_app,
+    shutdown_telemetry,
 )
 from app.core.infrastructure.channels.channel_service import channel_service
 
@@ -186,6 +187,7 @@ async def lifespan(app: FastAPI):
             )
 
             await close_datastore_engine()
+            shutdown_telemetry()
 
 
 class RequestObserverMiddleware:

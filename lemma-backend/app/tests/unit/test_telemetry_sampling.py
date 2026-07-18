@@ -59,6 +59,40 @@ def test_always_off_strategy(monkeypatch):
     assert sampler._decision == Decision.DROP
 
 
-def test_unrecognized_strategy_falls_back_to_parentbased(monkeypatch):
-    sampler = _sampler_for(monkeypatch, "something-weird", 0.05)
-    assert type(sampler).__name__ == "ParentBased"
+def test_unrecognized_strategy_fails_closed(monkeypatch):
+    import pytest
+
+    with pytest.raises(ValueError, match="unsupported OTEL trace sampler"):
+        _sampler_for(monkeypatch, "something-weird", 0.05)
+
+
+def test_parentbased_sampler_preserves_parent_decision(monkeypatch):
+    from opentelemetry import trace
+    from opentelemetry.sdk.trace.sampling import Decision
+
+    sampler = _sampler_for(monkeypatch, "parentbased_traceidratio", 0.0)
+
+    def decision(flags):
+        parent = trace.NonRecordingSpan(
+            trace.SpanContext(
+                    trace_id=1,
+                    span_id=2,
+                    is_remote=True,
+                    trace_flags=trace.TraceFlags(flags),
+            )
+        )
+        return sampler.should_sample(
+            trace.set_span_in_context(parent),
+            trace_id=3,
+            name="application.operation",
+        ).decision
+
+    assert decision(trace.TraceFlags.SAMPLED) is Decision.RECORD_AND_SAMPLE
+    assert decision(trace.TraceFlags.DEFAULT) is Decision.DROP
+
+
+def test_sampler_ratio_outside_unit_interval_fails_closed(monkeypatch):
+    import pytest
+
+    with pytest.raises(ValueError, match="between 0 and 1"):
+        _sampler_for(monkeypatch, "traceidratio", 1.01)

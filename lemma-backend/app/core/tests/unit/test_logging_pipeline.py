@@ -72,6 +72,15 @@ def test_foreign_record_is_stable_and_drops_raw_message(captured_stdout) -> None
     assert canary not in json.dumps(record)
 
 
+def test_malformed_dependency_url_cannot_break_logging(captured_stdout) -> None:
+    logging.getLogger("some.foreign.lib").warning(
+        "dependency failed at https://example.com:bad/path?token=CANARY"
+    )
+    record = captured_stdout()[0]
+    assert record["event"] == "dependency.reported"
+    assert "CANARY" not in json.dumps(record)
+
+
 def test_exception_contains_only_deterministic_safe_descriptor(captured_stdout) -> None:
     canary = "CANARY-EXCEPTION-SECRET"
     try:
@@ -88,7 +97,11 @@ def test_exception_contains_only_deterministic_safe_descriptor(captured_stdout) 
     assert "exception" not in record
 
 
-def test_unregistered_event_and_field_fail_in_development(captured_stdout) -> None:
+def test_unregistered_event_and_field_fail_in_explicit_local_strict_mode(
+    captured_stdout, monkeypatch
+) -> None:
+    monkeypatch.setenv("LEMMA_ENVIRONMENT", "local")
+    monkeypatch.setenv("LEMMA_LOGGING_CONTRACT_STRICT", "true")
     logger = get_logger("app.demo")
     with pytest.raises(LoggingContractError, match="unregistered_event"):
         logger.info("uncatalogued.event")
@@ -114,6 +127,25 @@ def test_production_emits_one_bounded_contract_violation(monkeypatch) -> None:
     assert len(records) == 1
     assert records[0]["event"] == "logging.contract.violation"
     assert records[0]["contract_violation"] == "unregistered_event"
+    assert "CANARY" not in json.dumps(records[0])
+
+
+def test_deployed_development_contract_violation_is_fail_safe(monkeypatch) -> None:
+    monkeypatch.setenv("LEMMA_ENVIRONMENT", "development")
+    monkeypatch.setenv("LEMMA_LOGGING_CONTRACT_STRICT", "true")
+    monkeypatch.setattr(logmod, "_contract_violation_emitted", False)
+    setup_logging("development", service_name="lemma-test", json_logs=True)
+    buffer = io.StringIO()
+    handler = _processor_formatter_handler()
+    original_stream = handler.stream
+    handler.stream = buffer
+    try:
+        get_logger("app.demo").info("CANARY invalid event", payload="secret")
+    finally:
+        handler.stream = original_stream
+    records = [json.loads(line) for line in buffer.getvalue().splitlines() if line]
+    assert len(records) == 1
+    assert records[0]["event"] == "logging.contract.violation"
     assert "CANARY" not in json.dumps(records[0])
 
 

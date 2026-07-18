@@ -58,9 +58,7 @@ def test_logging_reconciliation_context_and_exception_safety(monkeypatch) -> Non
             try:
                 raise RuntimeError("CANARY secret /private/source.py\nprovider payload")
             except RuntimeError:
-                get_logger("agentbox.test").exception(
-                    "agentbox.runtime.request_failed"
-                )
+                get_logger("agentbox.test").exception("agentbox.runtime.request_failed")
             try:
                 raise ValueError("CANARY foreign secret /private/provider.py")
             except ValueError:
@@ -99,7 +97,8 @@ def test_logging_reconciliation_context_and_exception_safety(monkeypatch) -> Non
 
 
 def test_local_logging_contract_rejects_unregistered_event(monkeypatch) -> None:
-    monkeypatch.setenv("LEMMA_ENVIRONMENT", "development")
+    monkeypatch.setenv("LEMMA_ENVIRONMENT", "local")
+    monkeypatch.setenv("LEMMA_LOGGING_CONTRACT_STRICT", "true")
     with pytest.raises(LoggingContractError, match="unregistered_event"):
         get_logger("agentbox.test").info("agentbox.test.not_registered")
 
@@ -142,4 +141,35 @@ def test_production_contract_violation_is_bounded_and_emitted_once(
     assert len(lines) == 1
     assert lines[0]["event"] == "logging.contract.violation"
     assert lines[0]["contract_violation"] == "invalid_event_name"
+    assert "CANARY" not in output.getvalue()
+
+
+def test_deployed_development_never_raises_for_contract_violation(
+    monkeypatch,
+) -> None:
+    monkeypatch.setenv("LEMMA_ENVIRONMENT", "development")
+    monkeypatch.setenv("LEMMA_LOGGING_CONTRACT_STRICT", "true")
+    monkeypatch.setenv("LEMMA_RELEASE_SHA", "d" * 40)
+    monkeypatch.setattr(observability, "_contract_violation_emitted", False)
+    root = logging.getLogger()
+    original_handlers = list(root.handlers)
+    original_level = root.level
+    output = io.StringIO()
+    root.handlers = []
+    try:
+        setup_logging(level="INFO")
+        owned = next(
+            handler
+            for handler in root.handlers
+            if getattr(handler, "_agentbox_json_console_handler", False)
+        )
+        owned.setStream(output)
+        get_logger("agentbox.test").info("CANARY invalid event")
+    finally:
+        root.handlers = original_handlers
+        root.setLevel(original_level)
+
+    lines = [json.loads(line) for line in output.getvalue().splitlines()]
+    assert len(lines) == 1
+    assert lines[0]["event"] == "logging.contract.violation"
     assert "CANARY" not in output.getvalue()

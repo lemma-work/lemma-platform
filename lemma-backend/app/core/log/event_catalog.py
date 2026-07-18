@@ -499,7 +499,7 @@ EVENT_CATALOG: dict[str, EventSpec] = {
     'web_search.request.failed': EventSpec('debug', frozenset()),
     'worker.context.persist_failed': EventSpec('debug', frozenset({'error_type', 'job_id', 'task_name'})),
     'worker.heartbeat': EventSpec('info', frozenset()),
-    'worker.job.failed': EventSpec('error', frozenset({'attempt', 'error_type', 'retryable'})),
+    'worker.job.failed': EventSpec('error', frozenset({'attempt', 'duration_ms', 'error_type', 'retryable'})),
     'worker.job.retrying': EventSpec('debug', frozenset({'attempt', 'error_type', 'retryable'})),
     'worker.startup.failed': EventSpec('error', frozenset()),
     'workflow.cancel.underlying_work_left_running': EventSpec('debug', frozenset({'run_id', 'wait_type'})),

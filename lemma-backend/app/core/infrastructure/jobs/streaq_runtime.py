@@ -5,11 +5,16 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import time
 from collections.abc import AsyncGenerator, Awaitable, Callable
 from contextlib import AsyncExitStack, asynccontextmanager
 from dataclasses import dataclass
 
 from faststream.redis import RedisBroker
+from opentelemetry import context as otel_context
+from opentelemetry import metrics, trace
+from opentelemetry.propagate import extract
+from opentelemetry.trace import SpanKind
 from streaq import Worker
 
 from app.core.config import settings
@@ -41,10 +46,18 @@ from app.core.log.log import (
     setup_logging,
     validate_release_identity,
 )
-from app.core.observability.telemetry import init_telemetry, instrument_database_engine
+from app.core.observability.telemetry import (
+    init_telemetry,
+    instrument_database_engine,
+    shutdown_telemetry,
+)
 from app.core.request_context import bind_job_context, create_background_task
 
 logger = get_logger(__name__)
+tracer = trace.get_tracer(__name__)
+meter = metrics.get_meter(__name__)
+job_counter = meter.create_counter("lemma.worker.jobs")
+job_duration = meter.create_histogram("lemma.worker.job.duration", unit="ms")
 
 JOB_TIMEOUT_SECONDS = 1800
 JOB_MAX_RETRIES = 3
@@ -164,7 +177,7 @@ async def _safe_shutdown_step(name: str, fn: Callable[[], Awaitable[None]]) -> N
     try:
         await fn()
     except Exception:  # pragma: no cover
-        logger.debug('infrastructure.streaq_runtime.worker_shutdown_step.diagnostic')
+        logger.debug("infrastructure.streaq_runtime.worker_shutdown_step.diagnostic")
 
 
 async def _ensure_consumer_groups_once() -> None:
@@ -187,7 +200,7 @@ async def _ensure_consumer_groups_once() -> None:
         await ensure_consumer_groups(client, warn_on_create=False)
     except Exception:  # pragma: no cover - defensive
         logger.debug(
-            'infrastructure.streaq_runtime.initial_consumer_group_ensure.diagnostic'
+            "infrastructure.streaq_runtime.initial_consumer_group_ensure.diagnostic"
         )
     finally:
         await client.aclose()
@@ -215,7 +228,7 @@ async def _consumer_group_reconcile_loop() -> None:
                 await ensure_consumer_groups(client)
             except Exception:  # pragma: no cover - defensive
                 logger.debug(
-                    'infrastructure.streaq_runtime.consumer_group_reconcile.diagnostic'
+                    "infrastructure.streaq_runtime.consumer_group_reconcile.diagnostic"
                 )
             await asyncio.sleep(interval)
     finally:
@@ -346,6 +359,7 @@ async def worker_lifespan() -> AsyncGenerator[AppWorkerContext]:
         await _safe_shutdown_step("close_datastore_engine", close_datastore_engine)
         if started:
             logger.info("service.stopped")
+        shutdown_telemetry()
 
 
 def create_streaq_worker(*, handle_signals: bool) -> Worker[AppWorkerContext]:
@@ -392,34 +406,63 @@ def observability_context_middleware(call_next):
         inherited = await load_job_observability_context(
             streaq_worker.redis, task.task_id
         )
-        with bind_job_context(
-            job_id=task.task_id,
-            task_name=task.fn_name,
-            attempt=task.tries,
-            inherited=inherited,
-        ):
-            try:
-                return await call_next(*args, **kwargs)
-            except asyncio.CancelledError:
-                raise
-            except Exception as exc:
-                terminal = task.tries >= JOB_MAX_RETRIES
-                if terminal:
-                    logger.error(
-                        "worker.job.failed",
-                        attempt=task.tries,
-                        retryable=False,
-                        error_type=type(exc).__name__,
-                        exc_info=True,
-                    )
-                else:
-                    logger.debug(
-                        "worker.job.retrying",
-                        attempt=task.tries,
-                        retryable=True,
-                        error_type=type(exc).__name__,
-                    )
-                raise
+        token = otel_context.attach(extract(inherited))
+        started_at = time.perf_counter()
+        outcome = "succeeded"
+        try:
+            with tracer.start_as_current_span(
+                "lemma.worker.job",
+                kind=SpanKind.CONSUMER,
+                attributes={
+                    "lemma.job_id": task.task_id,
+                    "lemma.task_name": task.fn_name,
+                    "lemma.attempt": task.tries,
+                },
+            ) as span:
+                with bind_job_context(
+                    job_id=task.task_id,
+                    task_name=task.fn_name,
+                    attempt=task.tries,
+                    inherited=inherited,
+                ):
+                    try:
+                        result = await call_next(*args, **kwargs)
+                        span.set_attribute("lemma.outcome", outcome)
+                        return result
+                    except asyncio.CancelledError:
+                        outcome = "cancelled"
+                        span.set_attribute("lemma.outcome", outcome)
+                        raise
+                    except Exception as exc:
+                        terminal = task.tries >= JOB_MAX_RETRIES
+                        outcome = "failed" if terminal else "retrying"
+                        span.set_attribute("lemma.outcome", outcome)
+                        duration_ms = round(
+                            (time.perf_counter() - started_at) * 1000, 1
+                        )
+                        if terminal:
+                            logger.error(
+                                "worker.job.failed",
+                                attempt=task.tries,
+                                retryable=False,
+                                duration_ms=duration_ms,
+                                error_type=type(exc).__name__,
+                                exc_info=True,
+                            )
+                        else:
+                            logger.debug(
+                                "worker.job.retrying",
+                                attempt=task.tries,
+                                retryable=True,
+                                error_type=type(exc).__name__,
+                            )
+                        raise
+        finally:
+            duration_ms = (time.perf_counter() - started_at) * 1000
+            labels = {"task_name": task.fn_name, "outcome": outcome}
+            job_counter.add(1, labels)
+            job_duration.record(duration_ms, labels)
+            otel_context.detach(token)
 
     return run
 

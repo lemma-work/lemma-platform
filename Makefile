@@ -12,7 +12,8 @@ SHELL := /bin/bash
 #   make coverage      full coverage report (unit + e2e per component)
 # ──────────────────────────────────────────────────────────────────────────────
 
-.PHONY: help init dev stop stop-all logs _ensure-databases _ensure-agentbox-image \
+.PHONY: help init dev stop stop-all logs otel-up otel-down otel-tail otel-smoke \
+        _ensure-databases _ensure-agentbox-image \
         test test-backend test-backend-unit test-backend-e2e \
         test-frontend test-cli test-cli-unit test-cli-e2e test-python \
         coverage coverage-backend coverage-backend-unit coverage-backend-e2e \
@@ -24,6 +25,9 @@ SHELL := /bin/bash
 RELOAD        ?= 0
 E2E_WORKERS   ?= 2
 MODULE        ?=
+OTEL          ?= 0
+OTEL_LOGS     ?= 0
+LLM_OTEL      ?= 0
 
 BACKEND_DIR   := lemma-backend
 FRONTEND_DIR  := lemma-frontend
@@ -63,6 +67,30 @@ DEV_REDIS_URL         := redis://localhost:$(DEV_REDIS_PORT)/0
 DEV_SUPERTOKENS_URL   := http://localhost:$(DEV_SUPERTOKENS_PORT)
 DEV_AGENTBOX_URL      := http://127.0.0.1:$(DEV_AGENTBOX_PORT)
 DEV_AGENTBOX_API_KEY  ?= dev-agentbox-key
+OTEL_DEBUG_GRPC_PORT  ?= 14317
+OTEL_DEBUG_LLM_GRPC_PORT ?= 15317
+OTEL_DEBUG_HEALTH_PORT ?= 14333
+
+OTEL_DEBUG_COMPOSE_ENV := \
+	OTEL_DEBUG_GRPC_PORT=$(OTEL_DEBUG_GRPC_PORT) \
+	OTEL_DEBUG_LLM_GRPC_PORT=$(OTEL_DEBUG_LLM_GRPC_PORT) \
+	OTEL_DEBUG_HEALTH_PORT=$(OTEL_DEBUG_HEALTH_PORT)
+
+OTEL_DEV_ENV := \
+	OBSERVABILITY_ENABLED=$(if $(filter 1,$(OTEL)),true,false) \
+	OTEL_EXPORTER_OTLP_ENDPOINT=http://127.0.0.1:$(OTEL_DEBUG_GRPC_PORT) \
+	OTEL_EXPORTER_OTLP_PROTOCOL=grpc \
+	OTEL_TRACES_EXPORTER=otlp \
+	OTEL_METRICS_EXPORTER=otlp \
+	OTEL_LOGS_EXPORTER=$(if $(filter 1,$(OTEL_LOGS)),otlp,none) \
+	OTEL_TRACES_SAMPLER=always_on \
+	OTEL_METRIC_EXPORT_INTERVAL=5000
+
+LLM_OTEL_DEV_ENV := \
+	LLM_OTEL_ENABLED=$(if $(filter 1,$(LLM_OTEL)),true,false) \
+	LLM_OTEL_EXPORTER_OTLP_ENDPOINT=http://127.0.0.1:$(OTEL_DEBUG_LLM_GRPC_PORT) \
+	LLM_OTEL_EXPORTER_OTLP_PROTOCOL=grpc \
+	LLM_OTEL_TRACES_SAMPLER=always_on
 # ~2.9GB image. docker run auto-pulls a missing image synchronously and
 # uncapped — the first sandbox creation after a fresh clone would otherwise
 # block on this pull with zero progress feedback, which looks exactly like a
@@ -113,6 +141,8 @@ help:
 	@echo "    make stop               stop backend/frontend processes"
 	@echo "    make stop-all           also bring down infra containers"
 	@echo "    make logs               tail backend logs"
+	@echo "    make dev OTEL=1         enable local OTLP traces + metrics"
+	@echo "    make otel-smoke         verify traces, metrics, logs, and LLM isolation"
 	@echo ""
 	@echo "  Tests"
 	@echo "    make test               run all component test suites"
@@ -290,6 +320,7 @@ dev:
 	@$(MAKE) --no-print-directory _wait-infra
 	@$(MAKE) --no-print-directory _ensure-databases
 	@$(MAKE) --no-print-directory migrate
+	@if [ "$(OTEL)" = "1" ]; then $(MAKE) --no-print-directory otel-up; fi
 	@echo ""
 	@echo "  Frontend  →  $(DEV_FRONTEND_URL)"
 	@echo "  Auth UI   →  $(DEV_AUTH_FRONTEND_URL)"
@@ -354,7 +385,7 @@ _run-backend:
 	@echo "  Starting backend ($(DEV_BACKEND_URL))…"
 	@mkdir -p $(BACKEND_DIR)
 	@cd $(BACKEND_DIR) && rm -f $(notdir $(BACKEND_PID_FILE)) && \
-		$(COMMON_DEV_ENV) \
+		$(COMMON_DEV_ENV) $(OTEL_DEV_ENV) $(LLM_OTEL_DEV_ENV) \
 		bash -c "if [ '$(RELOAD)' = '1' ]; then \
 			uv run uvicorn standalone_app:app --host 0.0.0.0 --port $(DEV_BACKEND_PORT) --reload & echo \$$! > $(notdir $(BACKEND_PID_FILE)); \
 		else \
@@ -372,7 +403,7 @@ _run-agentbox:
 	@echo "  Starting agentbox manager ($(DEV_AGENTBOX_URL), provider=docker)…"
 	@mkdir -p $(AGENTBOX_DIR)
 	@cd $(AGENTBOX_DIR) && rm -f $(notdir $(AGENTBOX_PID_FILE)) && \
-		$(AGENTBOX_DEV_ENV) \
+		$(AGENTBOX_DEV_ENV) $(OTEL_DEV_ENV) \
 		bash -c "uv run uvicorn agentbox.server:app --host 127.0.0.1 --port $(DEV_AGENTBOX_PORT) & echo \$$! > $(notdir $(AGENTBOX_PID_FILE)); wait"
 
 _wait-agentbox:
@@ -428,6 +459,35 @@ stop:
 stop-all: stop
 	@echo "→ Stopping infra containers…"
 	@cd $(BACKEND_DIR) && $(COMMON_DEV_ENV) docker compose down
+	@$(MAKE) --no-print-directory otel-down
+
+otel-up:
+	@echo "→ Starting pinned OpenTelemetry debug Collector…"
+	@cd $(BACKEND_DIR) && $(OTEL_DEBUG_COMPOSE_ENV) docker compose -f docker-compose.otel-debug.yml up -d
+	@ready=0; for i in $$(seq 1 30); do \
+		if curl -fsS http://127.0.0.1:$(OTEL_DEBUG_HEALTH_PORT)/ >/dev/null 2>&1; then \
+			echo "  ✓ Collector ready"; ready=1; break; \
+		fi; \
+		sleep 1; \
+	done; [ "$$ready" = "1" ] || { echo "  ✗ Collector did not become ready"; exit 1; }
+
+otel-down:
+	@cd $(BACKEND_DIR) && $(OTEL_DEBUG_COMPOSE_ENV) docker compose -f docker-compose.otel-debug.yml down >/dev/null 2>&1 || true
+
+otel-tail:
+	@cd $(BACKEND_DIR) && $(OTEL_DEBUG_COMPOSE_ENV) docker compose -f docker-compose.otel-debug.yml logs -f otel-collector
+
+otel-smoke: otel-down otel-up
+	@cd $(BACKEND_DIR) && uv run python scripts/otel_smoke.py \
+		--endpoint http://127.0.0.1:$(OTEL_DEBUG_GRPC_PORT) \
+		--llm-endpoint http://127.0.0.1:$(OTEL_DEBUG_LLM_GRPC_PORT)
+	@sleep 3
+	@set -e; logs="$$(cd $(BACKEND_DIR) && $(OTEL_DEBUG_COMPOSE_ENV) docker compose -f docker-compose.otel-debug.yml logs --no-color otel-collector)"; \
+		echo "$$logs" | grep -q "lemma-otel-smoke"; \
+		echo "$$logs" | grep -q "lemma.observability.smoke"; \
+		echo "$$logs" | grep -q "smoke-model"; \
+		if echo "$$logs" | grep -q "CANARY"; then echo "  ✗ unsafe canary reached Collector"; exit 1; fi
+	@echo "  ✓ General traces/metrics/logs and isolated LLM traces reached Collector safely"
 
 logs:
 	@cd $(BACKEND_DIR) && docker compose logs -f
