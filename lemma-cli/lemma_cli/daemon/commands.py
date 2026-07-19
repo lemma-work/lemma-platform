@@ -97,14 +97,19 @@ def start_daemon(
     )
     write_daemon_status(os.getpid(), base_url=resolved_base_url, server=state.server)
     try:
+        use_env = state.server_source == "env"
+
+        def _token_provider() -> str:
+            # Called before each (re)connect. Refreshes the stored session so the
+            # daemon survives token expiry (typically ~24h) without user intervention.
+            _refresh_auth_session(state)
+            return resolve_token(state.token, state.config, use_env=use_env)
+
         asyncio.run(
             run_daemon_with_graceful_shutdown(
                 base_url=resolved_base_url,
-                token=resolve_token(
-                    state.token,
-                    state.config,
-                    use_env=state.server_source == "env",
-                ),
+                token=resolve_token(state.token, state.config, use_env=use_env),
+                token_provider=_token_provider if not state.token else None,
                 verify_ssl=resolve_verify_ssl(state.no_verify_ssl),
                 debug=debug,
             )

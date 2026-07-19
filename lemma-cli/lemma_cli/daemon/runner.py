@@ -591,35 +591,64 @@ async def run_daemon(
             except InvalidStatus as exc:
                 status_code = getattr(getattr(exc, "response", None), "status_code", None)
                 if status_code in {401, 403}:
+                    if token_provider is not None:
+                        # Token expired — the next loop iteration will call
+                        # token_provider() to get a fresh credential. Don't crash.
+                        daemon_log(
+                            "websocket auth failed; will refresh token and retry",
+                            {"status": status_code},
+                        )
+                        consecutive_failure_streak, first_failure_at, alarm_raised = _record_failure(
+                            consecutive_failure_streak,
+                            first_failure_at,
+                            exc_label=f"HTTP {status_code}",
+                        )
+                        _log_state(
+                            _STATE_OFFLINE,
+                            {"reason": "auth rejected; refreshing token", "status": status_code},
+                        )
+                        if alarm_raised:
+                            _log_state(
+                                _STATE_ALERT,
+                                {
+                                    "consecutive_failures": consecutive_failure_streak,
+                                    "window_seconds": _CONSECUTIVE_FAILURE_ALARM_WINDOW_SECONDS,
+                                    "message": (
+                                        "sustained reconnect failures; check backend / network"
+                                    ),
+                                },
+                            )
+                    else:
+                        _log_state(
+                            _STATE_OFFLINE,
+                            {"reason": "auth rejected", "status": status_code},
+                        )
+                        import click
+                        raise click.ClickException(
+                            "Daemon websocket authentication failed. Run `lemma auth login` and try again."
+                        ) from exc
+                else:
+                    daemon_log("websocket rejected; will retry", {"status": status_code})
+                    consecutive_failure_streak, first_failure_at, alarm_raised = _record_failure(
+                        consecutive_failure_streak,
+                        first_failure_at,
+                        exc_label=f"HTTP {status_code}",
+                    )
                     _log_state(
                         _STATE_OFFLINE,
-                        {"reason": "auth rejected", "status": status_code},
+                        {"reason": "websocket rejected", "status": status_code},
                     )
-                    import click
-                    raise click.ClickException(
-                        "Daemon websocket authentication failed. Run `lemma auth login` and try again."
-                    ) from exc
-                daemon_log("websocket rejected; will retry", {"status": status_code})
-                consecutive_failure_streak, first_failure_at, alarm_raised = _record_failure(
-                    consecutive_failure_streak,
-                    first_failure_at,
-                    exc_label=f"HTTP {status_code}",
-                )
-                _log_state(
-                    _STATE_OFFLINE,
-                    {"reason": "websocket rejected", "status": status_code},
-                )
-                if alarm_raised:
-                    _log_state(
-                        _STATE_ALERT,
-                        {
-                            "consecutive_failures": consecutive_failure_streak,
-                            "window_seconds": _CONSECUTIVE_FAILURE_ALARM_WINDOW_SECONDS,
-                            "message": (
-                                "sustained reconnect failures; check backend / network"
-                            ),
-                        },
-                    )
+                    if alarm_raised:
+                        _log_state(
+                            _STATE_ALERT,
+                            {
+                                "consecutive_failures": consecutive_failure_streak,
+                                "window_seconds": _CONSECUTIVE_FAILURE_ALARM_WINDOW_SECONDS,
+                                "message": (
+                                    "sustained reconnect failures; check backend / network"
+                                ),
+                            },
+                        )
             except (OSError, WebSocketException) as exc:
                 _log_state(
                     _STATE_OFFLINE,
