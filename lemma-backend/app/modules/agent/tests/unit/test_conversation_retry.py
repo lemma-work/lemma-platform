@@ -8,7 +8,9 @@ import pytest
 from app.modules.agent.domain.entities import AgentRun, Conversation
 from app.modules.agent.domain.errors import ConversationStateError
 from app.modules.agent.domain.value_objects import AgentRunStatus, AgentRuntimeConfig
-from app.modules.agent.services.conversation_service import ConversationService
+from app.modules.agent.services.conversation_retry_service import (
+    ConversationRetryService,
+)
 
 
 def _run(*, status: AgentRunStatus) -> AgentRun:
@@ -31,7 +33,7 @@ def _service():
         create_agent_run=AsyncMock(),
     )
     uow = SimpleNamespace(collect_events=MagicMock(), commit=AsyncMock())
-    service = ConversationService(
+    service = ConversationRetryService(
         uow=uow,
         conversation_repository=repository,
         agent_repository=SimpleNamespace(),
