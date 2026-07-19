@@ -301,11 +301,20 @@ async def run_daemon(
             except InvalidStatus as exc:
                 status_code = getattr(getattr(exc, "response", None), "status_code", None)
                 if status_code in {401, 403}:
-                    import click
-                    raise click.ClickException(
-                        "Daemon websocket authentication failed. Run `lemma auth login` and try again."
-                    ) from exc
-                daemon_log("websocket rejected; will retry", {"status": status_code})
+                    if token_provider is not None:
+                        # Token expired — the next loop iteration will call
+                        # token_provider() to get a fresh credential. Don't crash.
+                        daemon_log(
+                            "websocket auth failed; will refresh token and retry",
+                            {"status": status_code},
+                        )
+                    else:
+                        import click
+                        raise click.ClickException(
+                            "Daemon websocket authentication failed. Run `lemma auth login` and try again."
+                        ) from exc
+                else:
+                    daemon_log("websocket rejected; will retry", {"status": status_code})
             except (OSError, WebSocketException) as exc:
                 daemon_log("websocket connection error; will retry", {"error": str(exc)})
 
