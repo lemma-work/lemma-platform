@@ -1,8 +1,13 @@
 from __future__ import annotations
 
 from typing import Any
+from unittest.mock import MagicMock
+from uuid import UUID
 
-from lemma_sdk import Lemma, POD_DEFAULT_AGENT_SELECTOR
+from lemma_sdk import POD_DEFAULT_AGENT_SELECTOR, Lemma
+from lemma_sdk.openapi_client.models.agent_run_start_response import (
+    AgentRunStartResponse,
+)
 from lemma_sdk.openapi_client.models.agent_toolset import AgentToolset
 from lemma_sdk.openapi_client.models.approval_decision_response import (
     ApprovalDecisionResponse,
@@ -126,3 +131,41 @@ def test_approval_decision_response_shape():
 
 def test_pod_toolset_enum_includes_pod():
     assert AgentToolset.POD.value == "POD"
+
+
+def test_retry_returns_typed_start_response():
+    pod, transport = _pod()
+    start = AgentRunStartResponse(
+        conversation_id=UUID("33333333-3333-4333-8333-333333333333"),
+        agent_run_id=UUID("44444444-4444-4444-8444-444444444444"),
+        started_new_run=True,
+    )
+    transport.call = MagicMock(return_value=start)
+
+    result = pod.conversations.retry(str(start.conversation_id))
+
+    assert result is start
+    assert transport.call.call_args.args[0].__name__.endswith(
+        ".agent_conversation_retry"
+    )
+
+
+def test_retry_stream_starts_then_streams_the_returned_run():
+    pod, _ = _pod()
+    start = AgentRunStartResponse(
+        conversation_id=UUID("33333333-3333-4333-8333-333333333333"),
+        agent_run_id=UUID("44444444-4444-4444-8444-444444444444"),
+        started_new_run=True,
+    )
+    pod.conversations.retry = MagicMock(return_value=start)
+    response = object()
+    pod.conversations.stream = MagicMock(return_value=response)
+
+    result = pod.conversations.retry_stream(str(start.conversation_id))
+
+    assert result is response
+    pod.conversations.retry.assert_called_once_with(str(start.conversation_id))
+    pod.conversations.stream.assert_called_once_with(
+        str(start.conversation_id),
+        agent_run_id=str(start.agent_run_id),
+    )

@@ -262,6 +262,9 @@ var LemmaUI = (() => {
       const status = (_a = conversationStatus != null ? conversationStatus : extractStatus(payload)) != null ? _a : "COMPLETED";
       return { status };
     }
+    if (eventType === "stopped") {
+      return { status: "STOPPED" };
+    }
     if (eventType === "error" || eventType === "stream_error") {
       return {
         status: "FAILED",

@@ -38,6 +38,7 @@ class ConversationResponse:
         instructions (None | str | Unset):
         last_run_error (None | str | Unset):
         last_run_finished_at (datetime.datetime | None | Unset):
+        last_run_retryable (bool | Unset):  Default: False.
         last_run_status (AgentRunStatus | None | Unset):
         metadata (ConversationResponseMetadataType0 | None | Unset):
         organization_id (None | Unset | UUID):
@@ -58,6 +59,7 @@ class ConversationResponse:
     instructions: None | str | Unset = UNSET
     last_run_error: None | str | Unset = UNSET
     last_run_finished_at: datetime.datetime | None | Unset = UNSET
+    last_run_retryable: bool | Unset = False
     last_run_status: AgentRunStatus | None | Unset = UNSET
     metadata: ConversationResponseMetadataType0 | None | Unset = UNSET
     organization_id: None | Unset | UUID = UNSET
@@ -119,6 +121,8 @@ class ConversationResponse:
             last_run_finished_at = self.last_run_finished_at.isoformat()
         else:
             last_run_finished_at = self.last_run_finished_at
+
+        last_run_retryable = self.last_run_retryable
 
         last_run_status: None | str | Unset
         if isinstance(self.last_run_status, Unset):
@@ -197,6 +201,8 @@ class ConversationResponse:
             field_dict["last_run_error"] = last_run_error
         if last_run_finished_at is not UNSET:
             field_dict["last_run_finished_at"] = last_run_finished_at
+        if last_run_retryable is not UNSET:
+            field_dict["last_run_retryable"] = last_run_retryable
         if last_run_status is not UNSET:
             field_dict["last_run_status"] = last_run_status
         if metadata is not UNSET:
@@ -306,6 +312,8 @@ class ConversationResponse:
         last_run_finished_at = _parse_last_run_finished_at(
             d.pop("last_run_finished_at", UNSET)
         )
+
+        last_run_retryable = d.pop("last_run_retryable", UNSET)
 
         def _parse_last_run_status(data: object) -> AgentRunStatus | None | Unset:
             if data is None:
@@ -430,6 +438,7 @@ class ConversationResponse:
             instructions=instructions,
             last_run_error=last_run_error,
             last_run_finished_at=last_run_finished_at,
+            last_run_retryable=last_run_retryable,
             last_run_status=last_run_status,
             metadata=metadata,
             organization_id=organization_id,

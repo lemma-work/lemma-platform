@@ -608,11 +608,13 @@ export function useAssistantSession(options: UseAssistantSessionOptions): UseAss
     stream,
     controller,
     streamConversationId,
+    agentRunId,
     syncAfterStream,
   }: {
     stream: ReadableStream<Uint8Array>;
     controller: AbortController;
     streamConversationId?: string | null;
+    agentRunId?: string | null;
     syncAfterStream?: boolean;
   }): Promise<void> => {
     setIsStreaming(true);
@@ -719,12 +721,14 @@ export function useAssistantSession(options: UseAssistantSessionOptions): UseAss
               const newStream = await scopedClient.conversations.resumeStream(syncConversationId, {
                 pod_id: scope.podId ?? undefined,
                 signal: controller.signal,
+                agent_run_id: agentRunId,
               });
               streamReconnectCountRef.current = 0;
               return await consumeRef.current({
                 stream: newStream,
                 controller,
                 streamConversationId: syncConversationId,
+                agentRunId,
                 syncAfterStream,
               });
             } catch (reconnectError) {
@@ -732,7 +736,10 @@ export function useAssistantSession(options: UseAssistantSessionOptions): UseAss
               streamFailure = reconnectError;
             }
           }
-        } else if (syncConversationId && (syncAfterStream ?? syncOnTurnEnd)) {
+        } else if (
+          syncConversationId
+          && (sawTerminalStatus || (syncAfterStream ?? syncOnTurnEnd))
+        ) {
           await refreshConversation(syncConversationId);
           await loadMessages({ conversationId: syncConversationId, limit: 100 });
         }
@@ -842,7 +849,7 @@ export function useAssistantSession(options: UseAssistantSessionOptions): UseAss
 
       const scope = normalizeScope(client, defaultScope);
       const scopedClient = applyPodScope(client, scope.podId);
-      const stream = await scopedClient.conversations.retryFailedRunStream(
+      const start = await scopedClient.conversations.retryFailedRun(
         resolvedConversationId,
         {
           pod_id: scope.podId ?? undefined,
@@ -851,10 +858,33 @@ export function useAssistantSession(options: UseAssistantSessionOptions): UseAss
       );
 
       setConversationStatus("RUNNING");
+      let stream: ReadableStream<Uint8Array>;
+      try {
+        stream = await scopedClient.conversations.resumeStream(
+          resolvedConversationId,
+          {
+            pod_id: scope.podId ?? undefined,
+            signal: controller.signal,
+            agent_run_id: start.agent_run_id,
+          },
+        );
+      } catch (attachError) {
+        const latestConversation = await refreshConversation(resolvedConversationId);
+        if (!latestConversation) throw attachError;
+        stream = await scopedClient.conversations.resumeStream(
+          resolvedConversationId,
+          {
+            pod_id: scope.podId ?? undefined,
+            signal: controller.signal,
+            agent_run_id: start.agent_run_id,
+          },
+        );
+      }
       await consume({
         stream,
         controller,
         streamConversationId: resolvedConversationId,
+        agentRunId: start.agent_run_id,
         syncAfterStream: syncOnTurnEnd,
       });
       return resolvedConversation;
@@ -864,7 +894,7 @@ export function useAssistantSession(options: UseAssistantSessionOptions): UseAss
       onErrorRef.current?.(retryError);
       throw normalized;
     }
-  }, [cancel, client, consume, defaultScope, ensureConversation, setConversationStatus, syncOnTurnEnd]);
+  }, [cancel, client, consume, defaultScope, ensureConversation, refreshConversation, setConversationStatus, syncOnTurnEnd]);
 
   const resume = useCallback(async (input?: string | null | ResumeAssistantOptions): Promise<void> => {
     setError(null);

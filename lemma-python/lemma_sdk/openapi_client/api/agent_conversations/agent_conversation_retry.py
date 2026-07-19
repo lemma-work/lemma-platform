@@ -1,5 +1,5 @@
 from http import HTTPStatus
-from typing import Any, cast
+from typing import Any
 from urllib.parse import quote
 from uuid import UUID
 
@@ -7,6 +7,7 @@ import httpx
 
 from ... import errors
 from ...client import AuthenticatedClient, Client
+from ...models.agent_run_start_response import AgentRunStartResponse
 from ...models.error_response import ErrorResponse
 from ...types import Response
 
@@ -29,15 +30,31 @@ def _get_kwargs(
 
 def _parse_response(
     *, client: AuthenticatedClient | Client, response: httpx.Response
-) -> Any | ErrorResponse | None:
+) -> AgentRunStartResponse | ErrorResponse | None:
     if response.status_code == 200:
-        response_200 = cast(Any, None)
+        response_200 = AgentRunStartResponse.from_dict(response.json())
+
         return response_200
+
+    if response.status_code == 404:
+        response_404 = ErrorResponse.from_dict(response.json())
+
+        return response_404
+
+    if response.status_code == 409:
+        response_409 = ErrorResponse.from_dict(response.json())
+
+        return response_409
 
     if response.status_code == 422:
         response_422 = ErrorResponse.from_dict(response.json())
 
         return response_422
+
+    if response.status_code == 429:
+        response_429 = ErrorResponse.from_dict(response.json())
+
+        return response_429
 
     if client.raise_on_unexpected_status:
         raise errors.UnexpectedStatus(response.status_code, response.content)
@@ -47,7 +64,7 @@ def _parse_response(
 
 def _build_response(
     *, client: AuthenticatedClient | Client, response: httpx.Response
-) -> Response[Any | ErrorResponse]:
+) -> Response[AgentRunStartResponse | ErrorResponse]:
     return Response(
         status_code=HTTPStatus(response.status_code),
         content=response.content,
@@ -61,11 +78,12 @@ def sync_detailed(
     conversation_id: UUID,
     *,
     client: AuthenticatedClient | Client,
-) -> Response[Any | ErrorResponse]:
+) -> Response[AgentRunStartResponse | ErrorResponse]:
     """Retry Failed Pod Conversation Run
 
      Start a new run from the latest failed run's persisted conversation history without appending a
-    duplicate user message, and stream runtime events until the retry completes.
+    duplicate user message. Retry is allowed only when the failed run produced no assistant, tool, or
+    system activity. Attach to the returned run with the conversation stream endpoint.
 
     Args:
         pod_id (UUID):
@@ -76,7 +94,7 @@ def sync_detailed(
         httpx.TimeoutException: If the request takes longer than Client.timeout.
 
     Returns:
-        Response[Any | ErrorResponse]
+        Response[AgentRunStartResponse | ErrorResponse]
     """
 
     kwargs = _get_kwargs(
@@ -96,11 +114,12 @@ def sync(
     conversation_id: UUID,
     *,
     client: AuthenticatedClient | Client,
-) -> Any | ErrorResponse | None:
+) -> AgentRunStartResponse | ErrorResponse | None:
     """Retry Failed Pod Conversation Run
 
      Start a new run from the latest failed run's persisted conversation history without appending a
-    duplicate user message, and stream runtime events until the retry completes.
+    duplicate user message. Retry is allowed only when the failed run produced no assistant, tool, or
+    system activity. Attach to the returned run with the conversation stream endpoint.
 
     Args:
         pod_id (UUID):
@@ -111,7 +130,7 @@ def sync(
         httpx.TimeoutException: If the request takes longer than Client.timeout.
 
     Returns:
-        Any | ErrorResponse
+        AgentRunStartResponse | ErrorResponse
     """
 
     return sync_detailed(
@@ -126,11 +145,12 @@ async def asyncio_detailed(
     conversation_id: UUID,
     *,
     client: AuthenticatedClient | Client,
-) -> Response[Any | ErrorResponse]:
+) -> Response[AgentRunStartResponse | ErrorResponse]:
     """Retry Failed Pod Conversation Run
 
      Start a new run from the latest failed run's persisted conversation history without appending a
-    duplicate user message, and stream runtime events until the retry completes.
+    duplicate user message. Retry is allowed only when the failed run produced no assistant, tool, or
+    system activity. Attach to the returned run with the conversation stream endpoint.
 
     Args:
         pod_id (UUID):
@@ -141,7 +161,7 @@ async def asyncio_detailed(
         httpx.TimeoutException: If the request takes longer than Client.timeout.
 
     Returns:
-        Response[Any | ErrorResponse]
+        Response[AgentRunStartResponse | ErrorResponse]
     """
 
     kwargs = _get_kwargs(
@@ -159,11 +179,12 @@ async def asyncio(
     conversation_id: UUID,
     *,
     client: AuthenticatedClient | Client,
-) -> Any | ErrorResponse | None:
+) -> AgentRunStartResponse | ErrorResponse | None:
     """Retry Failed Pod Conversation Run
 
      Start a new run from the latest failed run's persisted conversation history without appending a
-    duplicate user message, and stream runtime events until the retry completes.
+    duplicate user message. Retry is allowed only when the failed run produced no assistant, tool, or
+    system activity. Attach to the returned run with the conversation stream endpoint.
 
     Args:
         pod_id (UUID):
@@ -174,7 +195,7 @@ async def asyncio(
         httpx.TimeoutException: If the request takes longer than Client.timeout.
 
     Returns:
-        Any | ErrorResponse
+        AgentRunStartResponse | ErrorResponse
     """
 
     return (

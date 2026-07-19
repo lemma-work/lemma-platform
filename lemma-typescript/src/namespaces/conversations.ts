@@ -4,6 +4,7 @@ import type { ApprovalDecisionResponse } from "../openapi_client/models/Approval
 import type { AgentRuntimeConfig } from "../openapi_client/models/AgentRuntimeConfig.js";
 import type { AgentRuntimeProfileListResponse } from "../openapi_client/models/AgentRuntimeProfileListResponse.js";
 import type { AgentRuntimeProfileResponse } from "../openapi_client/models/AgentRuntimeProfileResponse.js";
+import type { AgentRunStartResponse } from "../openapi_client/models/AgentRunStartResponse.js";
 import type { ConversationListResponse } from "../openapi_client/models/ConversationListResponse.js";
 import type { ConversationType } from "../openapi_client/models/ConversationType.js";
 import type { CreateConversationRequest } from "../openapi_client/models/CreateConversationRequest.js";
@@ -324,29 +325,32 @@ export class ConversationsNamespace {
     });
   }
 
-  retryFailedRunStream(
+  retryFailedRun(
     conversationId: string,
     options: { pod_id?: string | null; signal?: AbortSignal } = {},
-  ) {
+  ): Promise<AgentRunStartResponse> {
     const podId = this.requirePodId(options.pod_id);
-    return this.http.stream(`/pods/${podId}/conversations/${conversationId}/retry`, {
-      method: "POST",
-      body: {},
-      signal: options.signal,
-      headers: {
-        "Content-Type": "application/json",
-        Accept: "text/event-stream",
+    return this.http.request<AgentRunStartResponse>(
+      "POST",
+      `/pods/${podId}/conversations/${conversationId}/retry`,
+      {
+        signal: options.signal,
       },
-    });
+    );
   }
 
   resumeStream(
     conversationId: string,
-    options: { pod_id?: string | null; signal?: AbortSignal } = {},
+    options: {
+      pod_id?: string | null;
+      signal?: AbortSignal;
+      agent_run_id?: string | null;
+    } = {},
   ) {
     const podId = this.requirePodId(options.pod_id);
     return this.http.stream(`/pods/${podId}/conversations/${conversationId}/stream`, {
       signal: options.signal,
+      params: { agent_run_id: options.agent_run_id },
       headers: {
         Accept: "text/event-stream",
       },

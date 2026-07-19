@@ -1,6 +1,6 @@
 // Keep SDK_VERSION in sync with package.json "version". The CI codegen/drift
 // gate (workstream A) asserts they match so this can't silently drift.
-export const SDK_VERSION = "0.6.2";
+export const SDK_VERSION = "0.6.3";
 
 /** Sent as `X-Lemma-Client` when it will not add an otherwise avoidable browser
  *  preflight, so the backend can log which client + version hit an endpoint. */

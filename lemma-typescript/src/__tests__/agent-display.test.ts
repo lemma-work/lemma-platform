@@ -90,6 +90,14 @@ describe("parseAssistantStreamEvent completed", () => {
     });
     expect(parsed.status).toBe("COMPLETED");
   });
+
+  it("treats a stopped replay as terminal", () => {
+    const parsed = parseAssistantStreamEvent({
+      type: "stopped",
+      data: { status: "STOPPED" },
+    });
+    expect(parsed.status).toBe("STOPPED");
+  });
 });
 
 function tool(id: string, inv: Record<string, unknown>): AssistantRenderableMessage {

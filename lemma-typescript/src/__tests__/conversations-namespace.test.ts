@@ -74,14 +74,26 @@ describe("ConversationsNamespace.list", () => {
     );
   });
 
-  it("starts a failed-run retry without a message body", async () => {
+  it("starts a failed-run retry and returns the run identity", async () => {
+    const { conversations, request } = setup();
+
+    await conversations.retryFailedRun("conversation-1");
+
+    expect(request).toHaveBeenCalledWith(
+      "POST",
+      "/pods/pod-1/conversations/conversation-1/retry",
+      expect.objectContaining({ signal: undefined }),
+    );
+  });
+
+  it("filters a resumed stream to the requested run", async () => {
     const { conversations, stream } = setup();
 
-    await conversations.retryFailedRunStream("conversation-1");
+    await conversations.resumeStream("conversation-1", { agent_run_id: "run-1" });
 
     expect(stream).toHaveBeenCalledWith(
-      "/pods/pod-1/conversations/conversation-1/retry",
-      expect.objectContaining({ method: "POST", body: {} }),
+      "/pods/pod-1/conversations/conversation-1/stream",
+      expect.objectContaining({ params: { agent_run_id: "run-1" } }),
     );
   });
 });

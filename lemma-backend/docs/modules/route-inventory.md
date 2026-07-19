@@ -95,12 +95,6 @@ run `uv run python scripts/generate_route_inventory.py`.
 | POST | `/organizations/{organization_id}/connectors/{auth_config_name}/operations/details` | `connector.operation.details.batch` | Get Connector Operation Details In Batch |
 | POST | `/organizations/{organization_id}/connectors/{auth_config_name}/operations/{operation_name}/execute` | `connector.operation.execute` | Execute Connector Operation |
 
-## core
-
-| Method | Path | Operation ID | Summary |
-| --- | --- | --- | --- |
-| GET | `/health` | `health_check_health_get` | Health Check |
-
 ## datastore
 
 | Method | Path | Operation ID | Summary |

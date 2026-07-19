@@ -39,6 +39,7 @@ _NAME_TO_MODULE = {
     'AgentResourcePermissionRequest': 'agent_resource_permission_request',
     'AgentResourcePermissionResponse': 'agent_resource_permission_response',
     'AgentRunApprovalDecision': 'agent_run_approval_decision',
+    'AgentRunStartResponse': 'agent_run_start_response',
     'AgentRunStatus': 'agent_run_status',
     'AgentRuntimeConfig': 'agent_runtime_config',
     'AgentRuntimeProfileListResponse': 'agent_runtime_profile_list_response',
@@ -495,6 +496,7 @@ if TYPE_CHECKING:
     from .agent_resource_permission_request import AgentResourcePermissionRequest
     from .agent_resource_permission_response import AgentResourcePermissionResponse
     from .agent_run_approval_decision import AgentRunApprovalDecision
+    from .agent_run_start_response import AgentRunStartResponse
     from .agent_run_status import AgentRunStatus
     from .agent_runtime_config import AgentRuntimeConfig
     from .agent_runtime_profile_list_response import AgentRuntimeProfileListResponse
@@ -964,6 +966,7 @@ __all__ = [
     'AgentResourcePermissionRequest',
     'AgentResourcePermissionResponse',
     'AgentRunApprovalDecision',
+    'AgentRunStartResponse',
     'AgentRunStatus',
     'AgentRuntimeConfig',
     'AgentRuntimeProfileListResponse',

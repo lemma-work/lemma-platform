@@ -937,6 +937,31 @@
         "title": "AgentRunApprovalDecision",
         "type": "string"
       },
+      "AgentRunStartResponse": {
+        "properties": {
+          "agent_run_id": {
+            "format": "uuid",
+            "title": "Agent Run Id",
+            "type": "string"
+          },
+          "conversation_id": {
+            "format": "uuid",
+            "title": "Conversation Id",
+            "type": "string"
+          },
+          "started_new_run": {
+            "title": "Started New Run",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "conversation_id",
+          "agent_run_id",
+          "started_new_run"
+        ],
+        "title": "AgentRunStartResponse",
+        "type": "object"
+      },
       "AgentRunStatus": {
         "description": "Internal lifecycle for one harness execution.",
         "enum": [
@@ -2974,6 +2999,11 @@
             ],
             "title": "Last Run Finished At"
           },
+          "last_run_retryable": {
+            "default": false,
+            "title": "Last Run Retryable",
+            "type": "boolean"
+          },
           "last_run_status": {
             "anyOf": [
               {
@@ -4902,6 +4932,17 @@
             "title": "Allowed Actions",
             "type": "array"
           },
+          "content_sha256": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Content Sha256"
+          },
           "created_at": {
             "format": "date-time",
             "title": "Created At",
@@ -4997,6 +5038,11 @@
             "format": "uuid",
             "title": "Pod Id",
             "type": "string"
+          },
+          "processing_attempts": {
+            "default": 0,
+            "title": "Processing Attempts",
+            "type": "integer"
           },
           "search_enabled": {
             "default": true,
@@ -7639,6 +7685,17 @@
           "name": {
             "title": "Name",
             "type": "string"
+          },
+          "slug": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Slug"
           }
         },
         "required": [
@@ -7684,6 +7741,7 @@
         "description": "Organization invitation request schema.",
         "properties": {
           "email": {
+            "format": "email",
             "title": "Email",
             "type": "string"
           },
@@ -7753,6 +7811,7 @@
             "type": "string"
           },
           "email": {
+            "format": "email",
             "title": "Email",
             "type": "string"
           },
@@ -12623,6 +12682,7 @@
             "title": "Date Of Birth"
           },
           "email": {
+            "format": "email",
             "title": "Email",
             "type": "string"
           },
@@ -14654,7 +14714,7 @@
   "info": {
     "description": "Authentication API with JWT, user management, and OAuth support",
     "title": "Lemma Backend",
-    "version": "4.0.1"
+    "version": "0.6.3"
   },
   "openapi": "3.1.0",
   "paths": {
@@ -14971,22 +15031,6 @@
           "result": "entity",
           "verb": "get"
         }
-      }
-    },
-    "/health": {
-      "get": {
-        "operationId": "health_check_health_get",
-        "responses": {
-          "200": {
-            "content": {
-              "application/json": {
-                "schema": {}
-              }
-            },
-            "description": "Successful Response"
-          }
-        },
-        "summary": "Health Check"
       }
     },
     "/icons/upload": {
@@ -20234,7 +20278,7 @@
     },
     "/pods/{pod_id}/conversations/{conversation_id}/retry": {
       "post": {
-        "description": "Start a new run from the latest failed run's persisted conversation history without appending a duplicate user message, and stream runtime events until the retry completes.",
+        "description": "Start a new run from the latest failed run's persisted conversation history without appending a duplicate user message. Retry is allowed only when the failed run produced no assistant, tool, or system activity. Attach to the returned run with the conversation stream endpoint.",
         "operationId": "agent.conversation.retry",
         "parameters": [
           {
@@ -20260,7 +20304,34 @@
         ],
         "responses": {
           "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AgentRunStartResponse"
+                }
+              }
+            },
             "description": "Successful Response"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Conversation was not found or is not visible"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "The latest run is not safely retryable"
           },
           "422": {
             "content": {
@@ -20271,6 +20342,16 @@
               }
             },
             "description": "Validation Error"
+          },
+          "429": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "The account usage limit was exceeded"
           }
         },
         "summary": "Retry Failed Pod Conversation Run",
@@ -20355,7 +20436,7 @@
     },
     "/pods/{pod_id}/conversations/{conversation_id}/stream": {
       "get": {
-        "description": "Subscribe to Server-Sent Events for an existing pod-scoped conversation. The stream closes immediately when the conversation has no active run. Optionally filter to a specific internal run id for reconnects.",
+        "description": "Subscribe to Server-Sent Events for an existing pod-scoped conversation. The stream closes immediately when the conversation has no active run. Optionally filter to a specific internal run id for reconnects; terminal runs replay their persisted terminal event.",
         "operationId": "agent.conversation.stream",
         "parameters": [
           {
@@ -23919,7 +24000,7 @@
             "name": "email",
             "required": true,
             "schema": {
-              "minLength": 3,
+              "format": "email",
               "title": "Email",
               "type": "string"
             }

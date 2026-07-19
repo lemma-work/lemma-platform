@@ -34,11 +34,13 @@ class FileDetailResponse:
         status (str):
         updated_at (datetime.datetime):
         allowed_actions (list[str] | Unset):
+        content_sha256 (None | str | Unset):
         indexed_at (datetime.datetime | None | Unset):
         last_processing_error (None | str | Unset):
         metadata (FileDetailResponseMetadataType0 | None | Unset):
         mime_type (None | str | Unset):
         owner_user_id (None | Unset | UUID):
+        processing_attempts (int | Unset):  Default: 0.
         search_enabled (bool | Unset):  Default: True.
         size_bytes (int | Unset):  Default: 0.
         visibility (str | Unset):  Default: 'PERSONAL'.
@@ -54,11 +56,13 @@ class FileDetailResponse:
     status: str
     updated_at: datetime.datetime
     allowed_actions: list[str] | Unset = UNSET
+    content_sha256: None | str | Unset = UNSET
     indexed_at: datetime.datetime | None | Unset = UNSET
     last_processing_error: None | str | Unset = UNSET
     metadata: FileDetailResponseMetadataType0 | None | Unset = UNSET
     mime_type: None | str | Unset = UNSET
     owner_user_id: None | Unset | UUID = UNSET
+    processing_attempts: int | Unset = 0
     search_enabled: bool | Unset = True
     size_bytes: int | Unset = 0
     visibility: str | Unset = "PERSONAL"
@@ -91,6 +95,12 @@ class FileDetailResponse:
         allowed_actions: list[str] | Unset = UNSET
         if not isinstance(self.allowed_actions, Unset):
             allowed_actions = self.allowed_actions
+
+        content_sha256: None | str | Unset
+        if isinstance(self.content_sha256, Unset):
+            content_sha256 = UNSET
+        else:
+            content_sha256 = self.content_sha256
 
         indexed_at: None | str | Unset
         if isinstance(self.indexed_at, Unset):
@@ -128,6 +138,8 @@ class FileDetailResponse:
         else:
             owner_user_id = self.owner_user_id
 
+        processing_attempts = self.processing_attempts
+
         search_enabled = self.search_enabled
 
         size_bytes = self.size_bytes
@@ -151,6 +163,8 @@ class FileDetailResponse:
         )
         if allowed_actions is not UNSET:
             field_dict["allowed_actions"] = allowed_actions
+        if content_sha256 is not UNSET:
+            field_dict["content_sha256"] = content_sha256
         if indexed_at is not UNSET:
             field_dict["indexed_at"] = indexed_at
         if last_processing_error is not UNSET:
@@ -161,6 +175,8 @@ class FileDetailResponse:
             field_dict["mime_type"] = mime_type
         if owner_user_id is not UNSET:
             field_dict["owner_user_id"] = owner_user_id
+        if processing_attempts is not UNSET:
+            field_dict["processing_attempts"] = processing_attempts
         if search_enabled is not UNSET:
             field_dict["search_enabled"] = search_enabled
         if size_bytes is not UNSET:
@@ -201,6 +217,15 @@ class FileDetailResponse:
         updated_at = isoparse(d.pop("updated_at"))
 
         allowed_actions = cast(list[str], d.pop("allowed_actions", UNSET))
+
+        def _parse_content_sha256(data: object) -> None | str | Unset:
+            if data is None:
+                return data
+            if isinstance(data, Unset):
+                return data
+            return cast(None | str | Unset, data)
+
+        content_sha256 = _parse_content_sha256(d.pop("content_sha256", UNSET))
 
         def _parse_indexed_at(data: object) -> datetime.datetime | None | Unset:
             if data is None:
@@ -275,6 +300,8 @@ class FileDetailResponse:
 
         owner_user_id = _parse_owner_user_id(d.pop("owner_user_id", UNSET))
 
+        processing_attempts = d.pop("processing_attempts", UNSET)
+
         search_enabled = d.pop("search_enabled", UNSET)
 
         size_bytes = d.pop("size_bytes", UNSET)
@@ -292,11 +319,13 @@ class FileDetailResponse:
             status=status,
             updated_at=updated_at,
             allowed_actions=allowed_actions,
+            content_sha256=content_sha256,
             indexed_at=indexed_at,
             last_processing_error=last_processing_error,
             metadata=metadata,
             mime_type=mime_type,
             owner_user_id=owner_user_id,
+            processing_attempts=processing_attempts,
             search_enabled=search_enabled,
             size_bytes=size_bytes,
             visibility=visibility,

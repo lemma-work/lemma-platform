@@ -25,6 +25,7 @@ export type { AgentPermissionsResponse } from './models/AgentPermissionsResponse
 export type { AgentResourcePermissionRequest } from './models/AgentResourcePermissionRequest.js';
 export type { AgentResourcePermissionResponse } from './models/AgentResourcePermissionResponse.js';
 export { AgentRunApprovalDecision } from './models/AgentRunApprovalDecision.js';
+export type { AgentRunStartResponse } from './models/AgentRunStartResponse.js';
 export { AgentRunStatus } from './models/AgentRunStatus.js';
 export type { AgentRuntimeConfig } from './models/AgentRuntimeConfig.js';
 export type { AgentRuntimeProfileListResponse } from './models/AgentRuntimeProfileListResponse.js';
@@ -352,7 +353,6 @@ export { AgentToolsService } from './services/AgentToolsService.js';
 export { AppsService } from './services/AppsService.js';
 export { AuthService } from './services/AuthService.js';
 export { ConnectorsService } from './services/ConnectorsService.js';
-export { DefaultService } from './services/DefaultService.js';
 export { FilesService } from './services/FilesService.js';
 export { FunctionsService } from './services/FunctionsService.js';
 export { IconsService } from './services/IconsService.js';

@@ -646,7 +646,6 @@ export function useAssistantController({
   const [isLoadingMessages, setIsLoadingMessages] = useState(false);
   const [isLoadingOlderMessages, setIsLoadingOlderMessages] = useState(false);
   const [isUploadingFiles, setIsUploadingFiles] = useState(false);
-  const [canRetryFailedMessage, setCanRetryFailedMessage] = useState(false);
   const [pendingFileUploads, setPendingFileUploads] = useState<AssistantPendingFileUpload[]>([]);
   const [olderMessagesCursor, setOlderMessagesCursor] = useState<string | null>(null);
 
@@ -687,7 +686,6 @@ export function useAssistantController({
 
   const handleAssistantSessionError = useCallback((sessionError: unknown) => {
     setLocalError((prev) => prev || (sessionError instanceof Error ? sessionError.message : "Agent session failed"));
-    setCanRetryFailedMessage(Boolean(activeConversationIdRef.current));
   }, []);
 
   const assistantSession = useAssistantSession({
@@ -704,6 +702,7 @@ export function useAssistantController({
   });
 
   const {
+    conversation: sessionConversation,
     conversationId: sessionConversationId,
     loadMessages: sessionLoadMessages,
     sendMessage: sessionSendMessage,
@@ -731,7 +730,21 @@ export function useAssistantController({
     sessionMessages,
   });
 
-  const error = localError;
+  const activeConversation = useMemo(
+    () => conversations.find((conversation) => conversation.id === activeConversationId),
+    [activeConversationId, conversations],
+  );
+  const persistedRunError = (
+    activeConversation?.last_run_status?.toUpperCase() === "FAILED"
+    && typeof activeConversation.last_run_error === "string"
+  )
+    ? activeConversation.last_run_error
+    : null;
+  const error = localError ?? persistedRunError;
+  const canRetryFailedMessage = (
+    activeConversation?.last_run_status?.toUpperCase() === "FAILED"
+    && activeConversation.last_run_retryable === true
+  );
   const isLoading = isStreaming || sessionIsStreaming;
 
   const touchConversation = useCallback((conversationId: string, updates?: Partial<Conversation>) => {
@@ -752,6 +765,22 @@ export function useAssistantController({
       return found ? sortConversationsByUpdatedAt(next) : next;
     });
   }, []);
+
+  const refreshConversationDetail = useCallback(async (
+    conversationId: string,
+  ): Promise<Conversation> => {
+    const knownConversation = conversationsRef.current.find(
+      (conversation) => conversation.id === conversationId,
+    );
+    const detail = await client.conversations.get(conversationId, {
+      pod_id: knownConversation?.pod_id ?? scope.podId ?? undefined,
+    });
+    setConversations((previous) => sortConversationsByUpdatedAt([
+      detail,
+      ...previous.filter((conversation) => conversation.id !== detail.id),
+    ]));
+    return detail;
+  }, [client, scope.podId]);
 
   const setConversationModel = useCallback(async (model: ConversationModel | null, runtime?: AgentRuntimeConfig | null) => {
     const nextRuntime = typeof runtime === "undefined"
@@ -1000,11 +1029,26 @@ export function useAssistantController({
   }, [activeConversationId, runtimeMessages, sessionStreamingText]);
 
   useEffect(() => {
+    if (!sessionConversation || sessionConversation.id !== activeConversationId) return;
+    setConversations((previous) => sortConversationsByUpdatedAt([
+      sessionConversation,
+      ...previous.filter((conversation) => conversation.id !== sessionConversation.id),
+    ]));
+  }, [activeConversationId, sessionConversation]);
+
+  useEffect(() => {
     if (!activeConversationId) return;
     if (!sessionStatus) return;
 
     touchConversation(activeConversationId, {
       status: sessionStatus as Conversation["status"],
+      ...(isConversationRunning(sessionStatus)
+        ? {
+            last_run_status: "RUNNING" as Conversation["last_run_status"],
+            last_run_error: null,
+            last_run_retryable: false,
+          }
+        : {}),
     });
   }, [activeConversationId, sessionStatus, touchConversation]);
 
@@ -1034,7 +1078,6 @@ export function useAssistantController({
       setConversations([]);
       setConversationsCursor(null);
       setLocalError(null);
-      setCanRetryFailedMessage(false);
       setOlderMessagesCursor(null);
       setIsLoadingConversations(false);
       setIsLoadingMoreConversations(false);
@@ -1055,7 +1098,6 @@ export function useAssistantController({
       setConversationsCursor(null);
     }
     setLocalError(null);
-    setCanRetryFailedMessage(false);
     clearRuntimeMessages();
     setOlderMessagesCursor(null);
   }, [clearRuntimeMessages, enabled, historyScopeKey, scopeKey, sessionCancel]);
@@ -1146,10 +1188,25 @@ export function useAssistantController({
     }
 
     const currentConversationId = activeConversationIdRef.current;
+    if (conversationId) {
+      void refreshConversationDetail(conversationId)
+        .then((openedConversation) => {
+          if (activeConversationIdRef.current !== conversationId) return;
+          setConversationModelState(openedConversation.model ?? null);
+          setConversationRuntimeState(openedConversation.agent_runtime ?? null);
+        })
+        .catch((detailError) => {
+          if (activeConversationIdRef.current !== conversationId) return;
+          setLocalError((previous) => previous || (
+            detailError instanceof Error
+              ? detailError.message
+              : "Failed to load conversation"
+          ));
+        });
+    }
     if (conversationId && conversationId === currentConversationId) {
       if (!autoLoadMessages) {
         setLocalError(null);
-        setCanRetryFailedMessage(false);
         setOlderMessagesCursor(null);
         setIsLoadingMessages(false);
         return;
@@ -1164,7 +1221,6 @@ export function useAssistantController({
 
       loadingConversationIdRef.current = conversationId;
       setLocalError(null);
-      setCanRetryFailedMessage(false);
       setOlderMessagesCursor(null);
       setIsLoadingMessages(true);
       void loadConversationMessagesRef.current?.(conversationId)
@@ -1182,7 +1238,6 @@ export function useAssistantController({
     }
 
     setLocalError(null);
-    setCanRetryFailedMessage(false);
     activeConversationIdRef.current = conversationId;
     lastAutoLoadedConversationIdRef.current = null;
     loadingConversationIdRef.current = null;
@@ -1190,20 +1245,7 @@ export function useAssistantController({
     clearRuntimeMessages();
     setIsLoadingMessages(Boolean(conversationId && autoLoadMessages));
     setActiveConversationId(conversationId);
-    if (conversationId && !conversationsRef.current.some((conversation) => conversation.id === conversationId)) {
-      void client.conversations.get(conversationId, {
-        pod_id: scope.podId ?? undefined,
-      }).then((openedConversation) => {
-        if (!openedConversation || activeConversationIdRef.current !== conversationId) return;
-        setConversations((previous) => sortConversationsByUpdatedAt([
-          openedConversation,
-          ...previous.filter((conversation) => conversation.id !== openedConversation.id),
-        ]));
-        setConversationModelState(openedConversation.model ?? null);
-        setConversationRuntimeState(openedConversation.agent_runtime ?? null);
-      }).catch(() => undefined);
-    }
-  }, [autoLoadMessages, clearRuntimeMessages, client, scope.podId, sessionCancel]);
+  }, [autoLoadMessages, clearRuntimeMessages, refreshConversationDetail, sessionCancel]);
 
   const openConversation = useCallback((conversationId: string) => {
     selectConversation(conversationId);
@@ -1222,7 +1264,6 @@ export function useAssistantController({
     skipInitialLoadConversationIdsRef.current.clear();
     setActiveConversationId(null);
     setLocalError(null);
-    setCanRetryFailedMessage(false);
     setOlderMessagesCursor(null);
     setIsLoadingMessages(false);
     if (!keepPendingFiles) {
@@ -1309,7 +1350,6 @@ export function useAssistantController({
     const forceNewConversation = options.forceNewConversation === true;
 
     setLocalError(null);
-    setCanRetryFailedMessage(false);
     if (forceNewConversation) {
       resetConversationState(true);
     }
@@ -1347,7 +1387,12 @@ export function useAssistantController({
       });
 
       setIsStreaming(true);
-      touchConversation(finalConversationId, { status: "running" as Conversation["status"] });
+      touchConversation(finalConversationId, {
+        status: "running" as Conversation["status"],
+        last_run_status: "RUNNING" as Conversation["last_run_status"],
+        last_run_error: null,
+        last_run_retryable: false,
+      });
       await sessionSendMessage(messageContent, {
         conversationId: finalConversationId,
         metadata: uploadedFiles.length > 0
@@ -1368,8 +1413,10 @@ export function useAssistantController({
       if (err instanceof DOMException && err.name === "AbortError") {
         return;
       }
+      if (conversationId) {
+        await refreshConversationDetail(conversationId).catch(() => undefined);
+      }
       setLocalError(err instanceof Error ? err.message : "Failed to send message");
-      setCanRetryFailedMessage(Boolean(conversationId));
     } finally {
       setIsStreaming(false);
     }
@@ -1380,6 +1427,7 @@ export function useAssistantController({
     ensureConversation,
     isStreaming,
     pendingFileUploads,
+    refreshConversationDetail,
     resetConversationState,
     scope.podId,
     sessionIsStreaming,
@@ -1393,8 +1441,13 @@ export function useAssistantController({
     if (!enabled || !conversationId || isStreaming || sessionIsStreaming) return;
 
     setLocalError(null);
-    setCanRetryFailedMessage(false);
     setIsStreaming(true);
+    touchConversation(conversationId, {
+      status: "RUNNING" as Conversation["status"],
+      last_run_status: "RUNNING" as Conversation["last_run_status"],
+      last_run_error: null,
+      last_run_retryable: false,
+    });
     try {
       await sessionRetryFailedRun(conversationId);
       touchConversation(conversationId, { updated_at: new Date().toISOString() });
@@ -1402,12 +1455,12 @@ export function useAssistantController({
       if (err instanceof DOMException && err.name === "AbortError") {
         return;
       }
+      await refreshConversationDetail(conversationId).catch(() => undefined);
       setLocalError(err instanceof Error ? err.message : "Failed to retry message");
-      setCanRetryFailedMessage(true);
     } finally {
       setIsStreaming(false);
     }
-  }, [enabled, isStreaming, sessionIsStreaming, sessionRetryFailedRun, touchConversation]);
+  }, [enabled, isStreaming, refreshConversationDetail, sessionIsStreaming, sessionRetryFailedRun, touchConversation]);
 
   const uploadFiles = useCallback(async (
     files: File[],

@@ -19,6 +19,18 @@ function droppedStream(): ReadableStream<Uint8Array> {
   });
 }
 
+function completedStream(agentRunId: string): ReadableStream<Uint8Array> {
+  const encoder = new TextEncoder();
+  return new ReadableStream<Uint8Array>({
+    start(controller) {
+      controller.enqueue(encoder.encode(
+        `data: {"type":"completed","agent_run_id":"${agentRunId}","data":{"status":"COMPLETED"}}\n\n`,
+      ));
+      controller.close();
+    },
+  });
+}
+
 function captureHookResult<T>() {
   let value: T | null = null;
   return {
@@ -117,5 +129,70 @@ describe("assistant session stream recovery", () => {
       finalOutputText: "Completed in the background",
     });
     expect(session.get().messages).toContainEqual(finalMessage);
+  });
+
+  it("reattaches to the started retry run without issuing another retry", async () => {
+    const agentRunId = "retry-run-1";
+    const retryFailedRun = vi.fn(async () => ({
+      conversation_id: "conv-1",
+      agent_run_id: agentRunId,
+      started_new_run: true,
+    }));
+    const resumeStream = vi.fn()
+      .mockRejectedValueOnce(new Error("attach failed"))
+      .mockResolvedValueOnce(completedStream(agentRunId));
+    const get = vi.fn(async () => ({
+      id: "conv-1",
+      pod_id: "pod-1",
+      status: "COMPLETED",
+      last_run_status: "COMPLETED",
+      last_run_retryable: false,
+    }));
+    const conversations = {
+      create: async () => ({ id: "conv-1", status: "WAITING", pod_id: "pod-1" }),
+      get,
+      list: async () => ({ items: [], limit: 20, next_page_token: null }),
+      messages: {
+        list: async () => ({ items: [], limit: 100, next_page_token: null }),
+      },
+      retryFailedRun,
+      resumeStream,
+      stopRun: async () => ({ id: "conv-1", status: "WAITING" }),
+    };
+    const client = {
+      podId: "pod-1",
+      withPod() {
+        return this;
+      },
+      conversations,
+    } as unknown as LemmaClient;
+    const session = captureHookResult<UseAssistantSessionResult>();
+
+    function Harness() {
+      session.set(useAssistantSession({ client, podId: "pod-1", autoLoad: false }));
+      return null;
+    }
+
+    await render(createElement(Harness));
+    await act(async () => {
+      await session.get().createConversation();
+    });
+    await act(async () => {
+      await session.get().retryFailedRun("conv-1");
+    });
+
+    expect(retryFailedRun).toHaveBeenCalledOnce();
+    expect(resumeStream).toHaveBeenCalledTimes(2);
+    expect(resumeStream).toHaveBeenNthCalledWith(
+      1,
+      "conv-1",
+      expect.objectContaining({ agent_run_id: agentRunId }),
+    );
+    expect(resumeStream).toHaveBeenNthCalledWith(
+      2,
+      "conv-1",
+      expect.objectContaining({ agent_run_id: agentRunId }),
+    );
+    expect(get).toHaveBeenCalled();
   });
 });

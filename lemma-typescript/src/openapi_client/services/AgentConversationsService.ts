@@ -2,6 +2,7 @@
 /* istanbul ignore file */
 /* tslint:disable */
 /* eslint-disable */
+import type { AgentRunStartResponse } from '../models/AgentRunStartResponse.js';
 import type { ApprovalDecisionResponse } from '../models/ApprovalDecisionResponse.js';
 import type { ConversationListResponse } from '../models/ConversationListResponse.js';
 import type { ConversationResponse } from '../models/ConversationResponse.js';
@@ -258,16 +259,16 @@ export class AgentConversationsService {
     }
     /**
      * Retry Failed Pod Conversation Run
-     * Start a new run from the latest failed run's persisted conversation history without appending a duplicate user message, and stream runtime events until the retry completes.
+     * Start a new run from the latest failed run's persisted conversation history without appending a duplicate user message. Retry is allowed only when the failed run produced no assistant, tool, or system activity. Attach to the returned run with the conversation stream endpoint.
      * @param podId
      * @param conversationId
-     * @returns any Successful Response
+     * @returns AgentRunStartResponse Successful Response
      * @throws ApiError
      */
     public static agentConversationRetry(
         podId: string,
         conversationId: string,
-    ): CancelablePromise<any> {
+    ): CancelablePromise<AgentRunStartResponse> {
         return __request(OpenAPI, {
             method: 'POST',
             url: '/pods/{pod_id}/conversations/{conversation_id}/retry',
@@ -276,7 +277,10 @@ export class AgentConversationsService {
                 'conversation_id': conversationId,
             },
             errors: {
+                404: `Conversation was not found or is not visible`,
+                409: `The latest run is not safely retryable`,
                 422: `Validation Error`,
+                429: `The account usage limit was exceeded`,
             },
         });
     }
@@ -306,7 +310,7 @@ export class AgentConversationsService {
     }
     /**
      * Stream Pod Conversation
-     * Subscribe to Server-Sent Events for an existing pod-scoped conversation. The stream closes immediately when the conversation has no active work.
+     * Subscribe to Server-Sent Events for an existing pod-scoped conversation. The stream closes immediately when the conversation has no active run. Optionally filter to a specific internal run id for reconnects; terminal runs replay their persisted terminal event.
      * @param podId
      * @param conversationId
      * @returns any Successful Response

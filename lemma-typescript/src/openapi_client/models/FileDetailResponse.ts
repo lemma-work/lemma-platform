@@ -4,6 +4,7 @@
 /* eslint-disable */
 export type FileDetailResponse = {
     allowed_actions?: Array<string>;
+    content_sha256?: (string | null);
     created_at: string;
     description: (string | null);
     id: string;
@@ -16,6 +17,7 @@ export type FileDetailResponse = {
     owner_user_id?: (string | null);
     path: string;
     pod_id: string;
+    processing_attempts?: number;
     search_enabled?: boolean;
     size_bytes?: number;
     status: string;

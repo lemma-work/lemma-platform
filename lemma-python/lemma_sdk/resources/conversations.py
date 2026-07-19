@@ -14,6 +14,7 @@ from ..openapi_client.api.agent_conversations import (
     agent_conversation_update,
 )
 from ..openapi_client.models.approval_decision_response import ApprovalDecisionResponse
+from ..openapi_client.models.agent_run_start_response import AgentRunStartResponse
 from ..openapi_client.models.conversation_list_response import ConversationListResponse
 from ..openapi_client.models.conversation_response import ConversationResponse
 from ..openapi_client.models.conversation_status import ConversationStatus
@@ -167,18 +168,16 @@ class PodConversations(BoundResource):
             raise self._transport._error_from_response(response.status_code, None, content_bytes)
         return response
 
-    def retry_stream(self, conversation_id: str):
-        kwargs = agent_conversation_retry._get_kwargs(
+    def retry(self, conversation_id: str) -> AgentRunStartResponse:
+        return self._call(
+            agent_conversation_retry,
             self._pod_uuid(),
             as_uuid(conversation_id),
         )
-        httpx_client = self.generated.get_httpx_client()
-        response = httpx_client.send(httpx_client.build_request(**kwargs), stream=True)
-        if response.status_code >= 400:
-            content_bytes = response.read()
-            response.close()
-            raise self._transport._error_from_response(response.status_code, None, content_bytes)
-        return response
+
+    def retry_stream(self, conversation_id: str):
+        result = self.retry(conversation_id)
+        return self.stream(conversation_id, agent_run_id=str(result.agent_run_id))
 
     def stop(self, conversation_id: str) -> ConversationResponse:
         return self._call(agent_conversation_stop, self._pod_uuid(), as_uuid(conversation_id))
