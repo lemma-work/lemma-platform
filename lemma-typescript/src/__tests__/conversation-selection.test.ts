@@ -307,7 +307,7 @@ describe("explicit conversation selection", () => {
       failedConversation,
     ]);
     retryFailedRun.mockImplementationOnce(async () => {
-      failedConversation.status = "RUNNING";
+      failedConversation.status = "RUNNING" as Conversation["status"];
       failedConversation.last_run_status = "RUNNING" as Conversation["last_run_status"];
       failedConversation.last_run_error = null;
       failedConversation.last_run_retryable = false;

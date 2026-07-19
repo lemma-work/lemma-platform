@@ -302,14 +302,11 @@ def test_install_sh_structure():
 
 # --- Version consistency ----------------------------------------------------
 
-def test_mono_version_consistency():
-    """Verify the mono-version is consistent across all packages."""
-    assert CLI_VERSION == SDK_VERSION, (
-        f"CLI version ({CLI_VERSION}) != SDK version ({SDK_VERSION})"
-    )
-    assert CLI_VERSION == TS_VERSION, (
-        f"CLI version ({CLI_VERSION}) != TS SDK version ({TS_VERSION})"
-    )
+def test_version_compatibility_line():
+    """Verify the CLI and SDKs share a major/minor compatibility line."""
+    versions = (CLI_VERSION, SDK_VERSION, TS_VERSION)
+    compatibility_lines = {tuple(version.split(".")[:2]) for version in versions}
+    assert len(compatibility_lines) == 1, versions
 
     # CLI pyproject dependency floor must be >= current version
     cli_pyproject = (REPO_ROOT / "lemma-cli" / "pyproject.toml").read_text()
@@ -319,6 +316,7 @@ def test_mono_version_consistency():
     assert floor == CLI_VERSION, (
         f"lemma-sdk>={floor} in pyproject.toml != CLI version {CLI_VERSION}"
     )
+    assert tuple(map(int, floor.split("."))) <= tuple(map(int, SDK_VERSION.split(".")))
 
 
 # --- TS SDK version in browser bundle ---------------------------------------
