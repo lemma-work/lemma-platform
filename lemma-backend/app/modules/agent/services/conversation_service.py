@@ -280,8 +280,7 @@ class ConversationService:
             pod_id=pod_id,
             agent_name=agent_name,
         )
-        # include_runs so the response carries last_run_status/error — a single
-        # `conversations get` can explain why a run FAILED.
+        # Include run messages so failure diagnostics also carry retry safety.
         conversation = await self.conversation_repository.get_conversation(
             conversation_id,
             include_runs=True,
@@ -302,6 +301,7 @@ class ConversationService:
                 agent_id=conversation.agent_id,
                 action=Permissions.AGENT_READ,
             )
+        conversation.last_run_retryable = bool(conversation.agent_runs and conversation.agent_runs[-1].is_safely_retryable)
         return conversation
 
     async def update_conversation(

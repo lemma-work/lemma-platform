@@ -1,6 +1,7 @@
 import json
 import asyncio
 from contextlib import asynccontextmanager
+from datetime import datetime, timezone
 from functools import partial
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
@@ -15,9 +16,13 @@ from app.modules.agent.api.controllers.conversation_controller import (
     _parse_metadata_filters,
     retry_failed_run,
     send_message,
+    stream_conversation,
 )
+from app.modules.agent.domain.entities import AgentRun
 from app.modules.agent.domain.value_objects import (
     AgentRunStartResult,
+    AgentRunStatus,
+    AgentRuntimeConfig,
     ConversationAgentScope,
 )
 from app.modules.test_support.authz import allow_all_context
@@ -85,6 +90,20 @@ class _ConversationService:
         if self.exc is not None:
             raise self.exc
         return self.result
+
+
+class _StreamConversationService:
+    def __init__(self, agent_run: AgentRun | None) -> None:
+        self.agent_run = agent_run
+        self.conversation_repository = SimpleNamespace(
+            get_agent_run=AsyncMock(return_value=agent_run)
+        )
+
+    async def get_conversation(self, **kwargs):
+        return SimpleNamespace(id=kwargs["conversation_id"])
+
+    async def get_active_agent_run(self, **kwargs):
+        return self.agent_run
 
 
 class _ConversationListService:
@@ -244,7 +263,7 @@ async def test_send_message_starts_run_before_stream_body_is_consumed(
 
 
 @pytest.mark.asyncio
-async def test_retry_failed_run_starts_run_before_stream_body_is_consumed(
+async def test_retry_failed_run_returns_typed_start_response(
     monkeypatch,
 ) -> None:
     result = AgentRunStartResult(
@@ -253,10 +272,11 @@ async def test_retry_failed_run_starts_run_before_stream_body_is_consumed(
         started_new_run=True,
     )
     service = _ConversationService(result)
-    channel_service = _ChannelService(_empty_iterator())
     uow_factory, _ = _make_uow_factory()
     monkeypatch.setattr(
-        conversation_controller, "_build_conversation_service", lambda uow: service
+        conversation_controller,
+        "_build_conversation_retry_service",
+        lambda uow: service,
     )
     monkeypatch.setattr(
         "app.core.authorization.scope.resolve_pod_context",
@@ -267,13 +287,95 @@ async def test_retry_failed_run_starts_run_before_stream_body_is_consumed(
         pod_id=uuid4(),
         conversation_id=result.conversation_id,
         user=SimpleNamespace(id=uuid4()),
-        channel_service=channel_service,
         request=SimpleNamespace(),
         uow_factory=uow_factory,
     )
 
-    assert response.media_type == "text/event-stream"
+    assert response.conversation_id == result.conversation_id
+    assert response.agent_run_id == result.agent_run_id
+    assert response.started_new_run is True
     assert service.called is True
+
+
+def _agent_run(*, status: AgentRunStatus, error: str | None = None) -> AgentRun:
+    return AgentRun(
+        conversation_id=uuid4(),
+        status=status,
+        agent_runtime=AgentRuntimeConfig(profile_id="system:lemma"),
+        started_at=datetime.now(timezone.utc),
+        error=error,
+    )
+
+
+@pytest.mark.asyncio
+async def test_stream_conversation_replays_terminal_failed_run(monkeypatch) -> None:
+    agent_run = _agent_run(status=AgentRunStatus.FAILED, error="provider failed")
+    service = _StreamConversationService(agent_run)
+    channel_service = _ChannelService(_empty_iterator())
+    uow_factory, _ = _make_uow_factory()
+    monkeypatch.setattr(
+        conversation_controller, "_build_conversation_service", lambda uow: service
+    )
+    monkeypatch.setattr(
+        "app.core.authorization.scope.resolve_pod_context",
+        AsyncMock(return_value=allow_all_context()),
+    )
+
+    response = await stream_conversation(
+        pod_id=uuid4(),
+        conversation_id=agent_run.conversation_id,
+        user=SimpleNamespace(id=uuid4()),
+        channel_service=channel_service,
+        request=SimpleNamespace(),
+        uow_factory=uow_factory,
+        agent_run_id=agent_run.id,
+    )
+    chunks = [chunk async for chunk in response.body_iterator]
+    payload = json.loads(chunks[0].removeprefix("data: ").strip())
+
+    assert payload == {
+        "type": "error",
+        "data": "provider failed",
+        "agent_run_id": str(agent_run.id),
+    }
+
+
+@pytest.mark.asyncio
+async def test_stream_conversation_forwards_active_run_events(monkeypatch) -> None:
+    agent_run = _agent_run(status=AgentRunStatus.RUNNING)
+
+    async def iterator():
+        yield {
+            "type": "completed",
+            "agent_run_id": str(agent_run.id),
+            "data": {"status": "COMPLETED"},
+        }
+
+    service = _StreamConversationService(agent_run)
+    channel_service = _ChannelService(iterator())
+    uow_factory, _ = _make_uow_factory()
+    monkeypatch.setattr(
+        conversation_controller, "_build_conversation_service", lambda uow: service
+    )
+    monkeypatch.setattr(
+        "app.core.authorization.scope.resolve_pod_context",
+        AsyncMock(return_value=allow_all_context()),
+    )
+
+    response = await stream_conversation(
+        pod_id=uuid4(),
+        conversation_id=agent_run.conversation_id,
+        user=SimpleNamespace(id=uuid4()),
+        channel_service=channel_service,
+        request=SimpleNamespace(),
+        uow_factory=uow_factory,
+        agent_run_id=agent_run.id,
+    )
+    chunks = [chunk async for chunk in response.body_iterator]
+    payload = json.loads(chunks[0].removeprefix("data: ").strip())
+
+    assert payload["type"] == "completed"
+    assert payload["agent_run_id"] == str(agent_run.id)
 
 
 @pytest.mark.asyncio
@@ -348,7 +450,9 @@ async def test_send_message_raises_usage_limit_before_stream_starts(
 
 
 @pytest.mark.asyncio
-async def test_send_message_cancellation_releases_pubsub_subscription(monkeypatch) -> None:
+async def test_send_message_cancellation_releases_pubsub_subscription(
+    monkeypatch,
+) -> None:
     channel_service = _ChannelService(_empty_iterator())
     service = _ConversationService(exc=asyncio.CancelledError())
     uow_factory, _ = _make_uow_factory()

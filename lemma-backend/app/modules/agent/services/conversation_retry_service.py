@@ -37,6 +37,13 @@ class ConversationRetryService(ConversationService):
             conversation.id
         )
         if active_run is not None:
+            active_metadata = active_run.metadata or {}
+            if active_metadata.get("source") == "manual_retry":
+                return AgentRunStartResult(
+                    conversation_id=conversation.id,
+                    agent_run_id=active_run.id,
+                    started_new_run=False,
+                )
             raise ConversationStateError("Conversation already has an active run")
 
         failed_run = (
@@ -46,6 +53,16 @@ class ConversationRetryService(ConversationService):
         )
         if failed_run is None or failed_run.status != AgentRunStatus.FAILED:
             raise ConversationStateError("The latest conversation run did not fail")
+        runs = (
+            await self.conversation_repository.list_agent_runs_with_messages_by_run_id(
+                failed_run.id
+            )
+        )
+        persisted_failed_run = next(
+            (run for run in runs if run.id == failed_run.id), None
+        )
+        if persisted_failed_run is None or not persisted_failed_run.is_safely_retryable:
+            raise ConversationStateError("The failed run cannot be retried safely")
 
         await self._assert_usage_preflight_allowed(
             organization_id=conversation.organization_id,

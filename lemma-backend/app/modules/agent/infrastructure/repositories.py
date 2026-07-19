@@ -676,7 +676,7 @@ class ConversationRepository:
         if include_messages:
             stmt = stmt.options(selectinload(ConversationModel.messages))
         if include_runs:
-            stmt = stmt.options(selectinload(ConversationModel.agent_runs))
+            stmt = stmt.options(selectinload(ConversationModel.agent_runs).selectinload(AgentRunModel.messages))
         result = await self.session.execute(stmt)
         model = result.scalar_one_or_none()
         return model.to_entity() if model else None

@@ -8,9 +8,12 @@ records the version it was built against (``lemma_sdk._spec_info``), and the
 client/server skew.
 
 Bump this on ANY change to the public OpenAPI schema (new/removed endpoints,
-request/response shape changes). The SDK regeneration script
-(``lemma-python/scripts/generate_openapi_client.sh``) refuses to commit a schema
-change that does not also bump this version, so skew can no longer be
+request/response shape changes). During beta, compatible API changes bump the
+patch and breaking API changes bump the shared API/SDK minor compatibility
+line. SDK-only fixes may bump their package patch independently. After 1.0,
+breaking changes bump the shared major compatibility line. The SDK regeneration
+script (``lemma-python/scripts/generate_openapi_client.sh``) refuses to commit a
+schema change that does not also bump this version, so skew can no longer be
 introduced silently.
 
 Use a normal MAJOR.MINOR.PATCH string.
@@ -18,4 +21,4 @@ Use a normal MAJOR.MINOR.PATCH string.
 
 from __future__ import annotations
 
-API_VERSION = "4.0.1"
+API_VERSION = "0.6.3"

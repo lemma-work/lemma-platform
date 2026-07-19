@@ -133,6 +133,7 @@ class ConversationResponse(BaseModel):
     last_run_status: AgentRunStatus | None = None
     last_run_error: str | None = None
     last_run_finished_at: datetime | None = None
+    last_run_retryable: bool = False
     created_at: datetime
     updated_at: datetime
 
@@ -143,6 +144,14 @@ class ConversationListResponse(BaseModel):
     items: list[ConversationResponse]
     limit: int
     next_page_token: str | None = None
+
+
+class AgentRunStartResponse(BaseModel):
+    conversation_id: UUID
+    agent_run_id: UUID
+    started_new_run: bool
+
+    model_config = ConfigDict(from_attributes=True)
 
 
 class MessageResponse(BaseModel):
