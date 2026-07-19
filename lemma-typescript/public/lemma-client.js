@@ -11179,6 +11179,18 @@ var LemmaClient = (() => {
         }
       });
     }
+    retryFailedRunStream(conversationId, options = {}) {
+      const podId = this.requirePodId(options.pod_id);
+      return this.http.stream(`/pods/${podId}/conversations/${conversationId}/retry`, {
+        method: "POST",
+        body: {},
+        signal: options.signal,
+        headers: {
+          "Content-Type": "application/json",
+          Accept: "text/event-stream"
+        }
+      });
+    }
     resumeStream(conversationId, options = {}) {
       const podId = this.requirePodId(options.pod_id);
       return this.http.stream(`/pods/${podId}/conversations/${conversationId}/stream`, {

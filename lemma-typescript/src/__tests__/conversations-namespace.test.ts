@@ -8,10 +8,12 @@ function setup() {
     limit: 20,
     next_page_token: null,
   }));
-  const http = { request } as unknown as HttpClient;
+  const stream = vi.fn(async () => new ReadableStream<Uint8Array>());
+  const http = { request, stream } as unknown as HttpClient;
   return {
     conversations: new ConversationsNamespace(http, () => "pod-1"),
     request,
+    stream,
   };
 }
 
@@ -69,6 +71,17 @@ describe("ConversationsNamespace.list", () => {
       expect.objectContaining({
         params: expect.objectContaining({ agent_name: "POD_DEFAULT" }),
       }),
+    );
+  });
+
+  it("starts a failed-run retry without a message body", async () => {
+    const { conversations, stream } = setup();
+
+    await conversations.retryFailedRunStream("conversation-1");
+
+    expect(stream).toHaveBeenCalledWith(
+      "/pods/pod-1/conversations/conversation-1/retry",
+      expect.objectContaining({ method: "POST", body: {} }),
     );
   });
 });

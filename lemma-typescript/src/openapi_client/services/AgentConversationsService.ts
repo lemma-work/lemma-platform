@@ -257,6 +257,30 @@ export class AgentConversationsService {
         });
     }
     /**
+     * Retry Failed Pod Conversation Run
+     * Start a new run from the latest failed run's persisted conversation history without appending a duplicate user message, and stream runtime events until the retry completes.
+     * @param podId
+     * @param conversationId
+     * @returns any Successful Response
+     * @throws ApiError
+     */
+    public static agentConversationRetry(
+        podId: string,
+        conversationId: string,
+    ): CancelablePromise<any> {
+        return __request(OpenAPI, {
+            method: 'POST',
+            url: '/pods/{pod_id}/conversations/{conversation_id}/retry',
+            path: {
+                'pod_id': podId,
+                'conversation_id': conversationId,
+            },
+            errors: {
+                422: `Validation Error`,
+            },
+        });
+    }
+    /**
      * Stop Pod Conversation
      * Request cancellation of the active conversation work.
      * @param podId

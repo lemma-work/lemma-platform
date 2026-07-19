@@ -8,6 +8,7 @@ from ..openapi_client.api.agent_conversations import (
     agent_conversation_list,
     agent_conversation_message_list,
     agent_conversation_message_send,
+    agent_conversation_retry,
     agent_conversation_stream,
     agent_conversation_stop,
     agent_conversation_update,
@@ -157,6 +158,19 @@ class PodConversations(BoundResource):
             self._pod_uuid(),
             as_uuid(conversation_id),
             agent_run_id=as_uuid(agent_run_id) if agent_run_id else UNSET,
+        )
+        httpx_client = self.generated.get_httpx_client()
+        response = httpx_client.send(httpx_client.build_request(**kwargs), stream=True)
+        if response.status_code >= 400:
+            content_bytes = response.read()
+            response.close()
+            raise self._transport._error_from_response(response.status_code, None, content_bytes)
+        return response
+
+    def retry_stream(self, conversation_id: str):
+        kwargs = agent_conversation_retry._get_kwargs(
+            self._pod_uuid(),
+            as_uuid(conversation_id),
         )
         httpx_client = self.generated.get_httpx_client()
         response = httpx_client.send(httpx_client.build_request(**kwargs), stream=True)

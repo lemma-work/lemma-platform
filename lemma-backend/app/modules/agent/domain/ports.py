@@ -123,6 +123,11 @@ class ConversationRepository(Protocol):
         conversation_id: UUID,
     ) -> AgentRun | None: ...
 
+    async def get_latest_agent_run_for_conversation(
+        self,
+        conversation_id: UUID,
+    ) -> AgentRun | None: ...
+
     async def append_message(
         self,
         *,

@@ -43,11 +43,13 @@ export interface AssistantControllerView {
   pendingFiles: File[];
   pendingFileUploads?: AssistantPendingFileUpload[];
   error: Error | string | null;
+  canRetryFailedMessage?: boolean;
   pendingActions: AssistantAction[];
   completedActions: AssistantAction[];
   streamingTool?: AssistantStreamingTool | null;
   selectConversation(conversationId: string | null): void;
   sendMessage(content: string, options?: { forceNewConversation?: boolean }): Promise<void>;
+  retryFailedMessage?(): Promise<void>;
   uploadFiles(files: File[], options?: { deferUntilSend?: boolean }): Promise<void>;
   removePendingFile(fileKey: string): void;
   clearPendingFiles(): void;

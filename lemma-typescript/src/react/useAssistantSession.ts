@@ -126,6 +126,7 @@ export interface UseAssistantSessionResult {
     pageToken?: string;
   }) => Promise<CursorPage<ConversationMessage>>;
   sendMessage: (content: string, options?: SendAssistantMessageOptions) => Promise<Conversation>;
+  retryFailedRun: (conversationId?: string | null) => Promise<Conversation>;
   resume: (conversationId?: string | null | ResumeAssistantOptions) => Promise<void>;
   resumeIfRunning: (conversationId?: string | null) => Promise<boolean>;
   stop: (conversationId?: string | null) => Promise<void>;
@@ -827,6 +828,44 @@ export function useAssistantSession(options: UseAssistantSessionOptions): UseAss
     }
   }, [cancel, client, consume, defaultScope, ensureConversation, setConversationStatus]);
 
+  const retryFailedRun = useCallback(async (
+    explicitConversationId?: string | null,
+  ): Promise<Conversation> => {
+    setError(null);
+    try {
+      const resolvedConversation = await ensureConversation(explicitConversationId);
+      const resolvedConversationId = requireConversationId(resolvedConversation.id);
+
+      cancel();
+      const controller = new AbortController();
+      abortRef.current = controller;
+
+      const scope = normalizeScope(client, defaultScope);
+      const scopedClient = applyPodScope(client, scope.podId);
+      const stream = await scopedClient.conversations.retryFailedRunStream(
+        resolvedConversationId,
+        {
+          pod_id: scope.podId ?? undefined,
+          signal: controller.signal,
+        },
+      );
+
+      setConversationStatus("RUNNING");
+      await consume({
+        stream,
+        controller,
+        streamConversationId: resolvedConversationId,
+        syncAfterStream: syncOnTurnEnd,
+      });
+      return resolvedConversation;
+    } catch (retryError) {
+      const normalized = normalizeError(retryError, "Failed to retry agent message.");
+      setError(normalized);
+      onErrorRef.current?.(retryError);
+      throw normalized;
+    }
+  }, [cancel, client, consume, defaultScope, ensureConversation, setConversationStatus, syncOnTurnEnd]);
+
   const resume = useCallback(async (input?: string | null | ResumeAssistantOptions): Promise<void> => {
     setError(null);
     try {
@@ -1015,6 +1054,7 @@ export function useAssistantSession(options: UseAssistantSessionOptions): UseAss
     refreshConversation,
     loadMessages,
     sendMessage,
+    retryFailedRun,
     resume,
     resumeIfRunning,
     stop,

@@ -324,6 +324,22 @@ export class ConversationsNamespace {
     });
   }
 
+  retryFailedRunStream(
+    conversationId: string,
+    options: { pod_id?: string | null; signal?: AbortSignal } = {},
+  ) {
+    const podId = this.requirePodId(options.pod_id);
+    return this.http.stream(`/pods/${podId}/conversations/${conversationId}/retry`, {
+      method: "POST",
+      body: {},
+      signal: options.signal,
+      headers: {
+        "Content-Type": "application/json",
+        Accept: "text/event-stream",
+      },
+    });
+  }
+
   resumeStream(
     conversationId: string,
     options: { pod_id?: string | null; signal?: AbortSignal } = {},

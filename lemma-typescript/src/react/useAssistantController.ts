@@ -101,6 +101,7 @@ export interface UseAssistantControllerResult {
   pendingFiles: File[];
   pendingFileUploads: AssistantPendingFileUpload[];
   error: string | null;
+  canRetryFailedMessage: boolean;
   pendingActions: AssistantAction[];
   completedActions: AssistantAction[];
   streamingTool: AssistantStreamingTool | null;
@@ -109,6 +110,7 @@ export interface UseAssistantControllerResult {
   selectConversation: (conversationId: string | null) => void;
   setConversationModel: (model: ConversationModel | null, runtime?: AgentRuntimeConfig | null) => Promise<void>;
   sendMessage: (content: string, options?: SendAssistantControllerMessageOptions) => Promise<void>;
+  retryFailedMessage: () => Promise<void>;
   uploadFiles: (files: File[], options?: { deferUntilSend?: boolean }) => Promise<void>;
   removePendingFile: (fileKey: string) => void;
   clearPendingFiles: () => void;
@@ -644,6 +646,7 @@ export function useAssistantController({
   const [isLoadingMessages, setIsLoadingMessages] = useState(false);
   const [isLoadingOlderMessages, setIsLoadingOlderMessages] = useState(false);
   const [isUploadingFiles, setIsUploadingFiles] = useState(false);
+  const [canRetryFailedMessage, setCanRetryFailedMessage] = useState(false);
   const [pendingFileUploads, setPendingFileUploads] = useState<AssistantPendingFileUpload[]>([]);
   const [olderMessagesCursor, setOlderMessagesCursor] = useState<string | null>(null);
 
@@ -684,6 +687,7 @@ export function useAssistantController({
 
   const handleAssistantSessionError = useCallback((sessionError: unknown) => {
     setLocalError((prev) => prev || (sessionError instanceof Error ? sessionError.message : "Agent session failed"));
+    setCanRetryFailedMessage(Boolean(activeConversationIdRef.current));
   }, []);
 
   const assistantSession = useAssistantSession({
@@ -703,6 +707,7 @@ export function useAssistantController({
     conversationId: sessionConversationId,
     loadMessages: sessionLoadMessages,
     sendMessage: sessionSendMessage,
+    retryFailedRun: sessionRetryFailedRun,
     createConversation: sessionCreateConversation,
     resumeIfRunning: sessionResumeIfRunning,
     stop: sessionStop,
@@ -1029,6 +1034,7 @@ export function useAssistantController({
       setConversations([]);
       setConversationsCursor(null);
       setLocalError(null);
+      setCanRetryFailedMessage(false);
       setOlderMessagesCursor(null);
       setIsLoadingConversations(false);
       setIsLoadingMoreConversations(false);
@@ -1049,6 +1055,7 @@ export function useAssistantController({
       setConversationsCursor(null);
     }
     setLocalError(null);
+    setCanRetryFailedMessage(false);
     clearRuntimeMessages();
     setOlderMessagesCursor(null);
   }, [clearRuntimeMessages, enabled, historyScopeKey, scopeKey, sessionCancel]);
@@ -1142,6 +1149,7 @@ export function useAssistantController({
     if (conversationId && conversationId === currentConversationId) {
       if (!autoLoadMessages) {
         setLocalError(null);
+        setCanRetryFailedMessage(false);
         setOlderMessagesCursor(null);
         setIsLoadingMessages(false);
         return;
@@ -1156,6 +1164,7 @@ export function useAssistantController({
 
       loadingConversationIdRef.current = conversationId;
       setLocalError(null);
+      setCanRetryFailedMessage(false);
       setOlderMessagesCursor(null);
       setIsLoadingMessages(true);
       void loadConversationMessagesRef.current?.(conversationId)
@@ -1173,6 +1182,7 @@ export function useAssistantController({
     }
 
     setLocalError(null);
+    setCanRetryFailedMessage(false);
     activeConversationIdRef.current = conversationId;
     lastAutoLoadedConversationIdRef.current = null;
     loadingConversationIdRef.current = null;
@@ -1212,6 +1222,7 @@ export function useAssistantController({
     skipInitialLoadConversationIdsRef.current.clear();
     setActiveConversationId(null);
     setLocalError(null);
+    setCanRetryFailedMessage(false);
     setOlderMessagesCursor(null);
     setIsLoadingMessages(false);
     if (!keepPendingFiles) {
@@ -1298,6 +1309,7 @@ export function useAssistantController({
     const forceNewConversation = options.forceNewConversation === true;
 
     setLocalError(null);
+    setCanRetryFailedMessage(false);
     if (forceNewConversation) {
       resetConversationState(true);
     }
@@ -1357,6 +1369,7 @@ export function useAssistantController({
         return;
       }
       setLocalError(err instanceof Error ? err.message : "Failed to send message");
+      setCanRetryFailedMessage(Boolean(conversationId));
     } finally {
       setIsStreaming(false);
     }
@@ -1374,6 +1387,27 @@ export function useAssistantController({
     touchConversation,
     updatePendingFileUpload,
   ]);
+
+  const retryFailedMessage = useCallback(async () => {
+    const conversationId = activeConversationIdRef.current;
+    if (!enabled || !conversationId || isStreaming || sessionIsStreaming) return;
+
+    setLocalError(null);
+    setCanRetryFailedMessage(false);
+    setIsStreaming(true);
+    try {
+      await sessionRetryFailedRun(conversationId);
+      touchConversation(conversationId, { updated_at: new Date().toISOString() });
+    } catch (err) {
+      if (err instanceof DOMException && err.name === "AbortError") {
+        return;
+      }
+      setLocalError(err instanceof Error ? err.message : "Failed to retry message");
+      setCanRetryFailedMessage(true);
+    } finally {
+      setIsStreaming(false);
+    }
+  }, [enabled, isStreaming, sessionIsStreaming, sessionRetryFailedRun, touchConversation]);
 
   const uploadFiles = useCallback(async (
     files: File[],
@@ -1491,6 +1525,7 @@ export function useAssistantController({
     pendingFiles,
     pendingFileUploads,
     error,
+    canRetryFailedMessage,
     pendingActions,
     completedActions,
     streamingTool: sessionStreamingTool,
@@ -1499,6 +1534,7 @@ export function useAssistantController({
     selectConversation,
     setConversationModel,
     sendMessage,
+    retryFailedMessage,
     uploadFiles,
     removePendingFile,
     clearPendingFiles,
@@ -1510,6 +1546,7 @@ export function useAssistantController({
   }), [
     activeConversationId,
     availableModels,
+    canRetryFailedMessage,
     closeConversation,
     clearMessages,
     clearPendingFiles,
@@ -1536,6 +1573,7 @@ export function useAssistantController({
     openConversation,
     removePendingFile,
     resolveUserApproval,
+    retryFailedMessage,
     selectConversation,
     sendMessage,
     sessionStreamingTool,

@@ -161,7 +161,9 @@ interface AIAssistantContextType {
     isLoadingOlderMessages: boolean;
     hasOlderMessages: boolean;
     error: string | null;
+    canRetryFailedMessage: boolean;
     sendMessage: (content: string, options?: SendMessageOptions) => Promise<void>;
+    retryFailedMessage: () => Promise<void>;
     uploadFiles: (files: File[], options?: { deferUntilSend?: boolean }) => Promise<void>;
     isUploadingFiles: boolean;
     pendingFiles: File[];
@@ -781,6 +783,12 @@ export function AIAssistantProvider({
         }
     }, [displayMessages, isProviderEnabled]);
 
+    const retryFailedMessage = useCallback(async () => {
+        markToolInvocationsSeen(seenAutoNavigationToolCallIds.current, displayMessages);
+        allowAutoNavigationRef.current = true;
+        await controllerRef.current.retryFailedMessage();
+    }, [displayMessages]);
+
     const resolveUserApproval = useCallback(async (
         approvalId: string,
         decision: 'APPROVE_ONCE' | 'APPROVE_FOR_SESSION' | 'DENY',
@@ -823,7 +831,9 @@ export function AIAssistantProvider({
         isLoadingOlderMessages: controller.isLoadingOlderMessages,
         hasOlderMessages: controller.hasOlderMessages,
         error: controller.error,
+        canRetryFailedMessage: controller.canRetryFailedMessage,
         sendMessage,
+        retryFailedMessage,
         uploadFiles: controller.uploadFiles,
         isUploadingFiles: controller.isUploadingFiles,
         pendingFiles: controller.pendingFiles,
@@ -847,6 +857,7 @@ export function AIAssistantProvider({
         closeConversation,
         controller.openedConversationId,
         controller.availableModels,
+        controller.canRetryFailedMessage,
         controller.clearPendingFiles,
         controller.conversationModel,
         controller.conversationRuntime,
@@ -878,6 +889,7 @@ export function AIAssistantProvider({
         pendingActions,
         podContext,
         resolveUserApproval,
+        retryFailedMessage,
         selectConversation,
         sendMessage,
         toggleAssistant,

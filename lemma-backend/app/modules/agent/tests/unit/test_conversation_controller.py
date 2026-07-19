@@ -13,6 +13,7 @@ from starlette.datastructures import QueryParams
 from app.modules.agent.api.controllers import conversation_controller
 from app.modules.agent.api.controllers.conversation_controller import (
     _parse_metadata_filters,
+    retry_failed_run,
     send_message,
 )
 from app.modules.agent.domain.value_objects import (
@@ -74,6 +75,12 @@ class _ConversationService:
         self.called = False
 
     async def add_user_message_and_start_run(self, **kwargs):
+        self.called = True
+        if self.exc is not None:
+            raise self.exc
+        return self.result
+
+    async def retry_failed_run(self, **kwargs):
         self.called = True
         if self.exc is not None:
             raise self.exc
@@ -226,6 +233,39 @@ async def test_send_message_starts_run_before_stream_body_is_consumed(
         pod_id=uuid4(),
         conversation_id=result.conversation_id,
         data=SimpleNamespace(content="say ok", metadata=None),
+        user=SimpleNamespace(id=uuid4()),
+        channel_service=channel_service,
+        request=SimpleNamespace(),
+        uow_factory=uow_factory,
+    )
+
+    assert response.media_type == "text/event-stream"
+    assert service.called is True
+
+
+@pytest.mark.asyncio
+async def test_retry_failed_run_starts_run_before_stream_body_is_consumed(
+    monkeypatch,
+) -> None:
+    result = AgentRunStartResult(
+        conversation_id=uuid4(),
+        agent_run_id=uuid4(),
+        started_new_run=True,
+    )
+    service = _ConversationService(result)
+    channel_service = _ChannelService(_empty_iterator())
+    uow_factory, _ = _make_uow_factory()
+    monkeypatch.setattr(
+        conversation_controller, "_build_conversation_service", lambda uow: service
+    )
+    monkeypatch.setattr(
+        "app.core.authorization.scope.resolve_pod_context",
+        AsyncMock(return_value=allow_all_context()),
+    )
+
+    response = await retry_failed_run(
+        pod_id=uuid4(),
+        conversation_id=result.conversation_id,
         user=SimpleNamespace(id=uuid4()),
         channel_service=channel_service,
         request=SimpleNamespace(),

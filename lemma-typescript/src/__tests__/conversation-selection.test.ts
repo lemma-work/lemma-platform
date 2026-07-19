@@ -58,6 +58,12 @@ function fakeClient(items: Conversation[]) {
       controller.close();
     },
   }));
+  const retryFailedRunStream = vi.fn(async () => new ReadableStream<Uint8Array>({
+    start(controller) {
+      controller.enqueue(encoder.encode('data: {"type":"completed"}\n\n'));
+      controller.close();
+    },
+  }));
   const listModels = vi.fn(async () => ({ items: [] }));
 
   const client = {
@@ -74,13 +80,14 @@ function fakeClient(items: Conversation[]) {
         list: vi.fn(async () => ({ items: [], limit: 100, next_page_token: null })),
       },
       sendMessageStream,
+      retryFailedRunStream,
       resumeStream: vi.fn(),
       stopRun: vi.fn(),
       update: vi.fn(),
     },
   } as unknown as LemmaClient;
 
-  return { client, create, get, list, listModels, sendMessageStream };
+  return { client, create, get, list, listModels, retryFailedRunStream, sendMessageStream };
 }
 
 async function render(element: ReturnType<typeof createElement>) {
@@ -282,5 +289,47 @@ describe("explicit conversation selection", () => {
     expect(create).toHaveBeenCalledOnce();
     expect(sendMessageStream).toHaveBeenCalledOnce();
     expect(controller.get().openedConversationId).toBe("created");
+  });
+
+  it("retries a failed run without appending a duplicate user message", async () => {
+    const { client, retryFailedRunStream, sendMessageStream } = fakeClient([
+      conversation("failed", "2026-07-19T12:00:00.000Z"),
+    ]);
+    const encoder = new TextEncoder();
+    sendMessageStream.mockImplementationOnce(async () => new ReadableStream<Uint8Array>({
+      start(streamController) {
+        streamController.enqueue(encoder.encode(
+          'data: {"type":"error","data":{"message":"User daemon is not connected"}}\n\n',
+        ));
+        streamController.close();
+      },
+    }));
+    const controller = captureHookResult<UseAssistantControllerResult>();
+
+    function Harness() {
+      controller.set(useAssistantController({
+        client,
+        podId: "pod-1",
+        autoLoadMessages: false,
+      }));
+      return null;
+    }
+
+    await render(createElement(Harness));
+    await settle();
+    await act(async () => controller.get().openConversation("failed"));
+    await act(async () => controller.get().sendMessage("finish the report"));
+
+    expect(controller.get().error).toBe("User daemon is not connected");
+    expect(controller.get().canRetryFailedMessage).toBe(true);
+    expect(controller.get().messages.filter((message) => message.role === "user")).toHaveLength(1);
+
+    await act(async () => controller.get().retryFailedMessage());
+
+    expect(retryFailedRunStream).toHaveBeenCalledOnce();
+    expect(sendMessageStream).toHaveBeenCalledOnce();
+    expect(controller.get().messages.filter((message) => message.role === "user")).toHaveLength(1);
+    expect(controller.get().canRetryFailedMessage).toBe(false);
+    expect(controller.get().error).toBeNull();
   });
 });

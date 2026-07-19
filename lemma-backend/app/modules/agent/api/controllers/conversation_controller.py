@@ -449,6 +449,77 @@ async def send_message(
     return StreamingResponse(event_generator(), media_type="text/event-stream")
 
 
+@router.post(
+    "/{conversation_id}/retry",
+    response_class=StreamingResponse,
+    operation_id="agent.conversation.retry",
+    summary="Retry Failed Pod Conversation Run",
+    description=(
+        "Start a new run from the latest failed run's persisted conversation "
+        "history without appending a duplicate user message, and stream runtime "
+        "events until the retry completes."
+    ),
+)
+async def retry_failed_run(
+    pod_id: UUID,
+    conversation_id: UUID,
+    user: CurrentUser,
+    channel_service: ChannelServiceDep,
+    request: Request,
+    uow_factory: UnitOfWorkFactory = Depends(get_uow_factory),
+) -> StreamingResponse:
+    async def close_subscription(
+        exc_type=None,
+        exc=None,
+        traceback=None,
+    ) -> None:
+        try:
+            with anyio.CancelScope(shield=True):
+                await subscription.__aexit__(exc_type, exc, traceback)
+        except Exception:
+            return
+
+    subscription = channel_service.subscribe([conversation_channel(conversation_id)])
+    iterator = await subscription.__aenter__()
+    try:
+        async with pod_context_scope(
+            uow_factory, request=request, user_id=user.id, pod_id=pod_id
+        ) as scope:
+            service = _build_conversation_service(scope.uow)
+            result = await service.retry_failed_run(
+                conversation_id=conversation_id,
+                user_id=user.id,
+                pod_id=pod_id,
+            )
+    except (AgentNotFoundError, ConversationNotFoundError) as exc:
+        await close_subscription(type(exc), exc, exc.__traceback__)
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND) from exc
+    except BaseException as exc:
+        await close_subscription(type(exc), exc, exc.__traceback__)
+        raise
+
+    async def event_generator() -> AsyncGenerator[str, None]:
+        try:
+            async for chunk in iter_subscription(iterator, result.agent_run_id):
+                yield chunk
+        except Exception:
+            logger.error(
+                "agent.conversation_controller.agent_realtime_subscription.failed",
+                conversation_id=str(conversation_id),
+                agent_run_id=str(result.agent_run_id),
+                exc_info=True,
+            )
+            yield encode_stream_chunk(
+                event_type="error",
+                data="Realtime stream interrupted. Reconnect to continue.",
+                agent_run_id=result.agent_run_id,
+            )
+        finally:
+            await close_subscription()
+
+    return StreamingResponse(event_generator(), media_type="text/event-stream")
+
+
 @router.get(
     "/{conversation_id}/stream",
     response_class=StreamingResponse,

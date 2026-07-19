@@ -690,6 +690,9 @@ export function AssistantExperienceView({
             showAssistantErrorInTranscript={showAssistantErrorInTranscript}
             assistantErrorTitle={assistantErrorTitle}
             assistantErrorDetails={assistantErrorDetails}
+            onRetryFailedMessage={controller.canRetryFailedMessage && controller.retryFailedMessage
+              ? () => { void controller.retryFailedMessage?.(); }
+              : undefined}
             showScrollToBottom={showScrollToBottom}
             onScrollToBottom={() => scrollToLatest("smooth")}
             isConversationBusy={isConversationBusy}
