@@ -1,7 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { CheckCircle2, MessageCircle, Plus, Settings, Smartphone, User, Volume2 } from "@/components/ui/icons";
 import { useOrganization } from "@/components/dashboard/org-context";
 import { useProfile, useUpdateProfile } from "@/lib/hooks/use-user";
@@ -15,6 +15,7 @@ import { UserSurfacesPanel } from "@/components/settings/user-surfaces-panel";
 import { SettingsChoiceList } from "@/components/settings/settings-kit";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { useSoundFeedbackPreference } from "@/lib/feedback/use-sound-feedback";
+import { buildApiUrl } from "@/components/auth/portal/auth/config";
 import {
     playSoundFeedback,
     setSoundFeedbackPreference,
@@ -31,6 +32,20 @@ export default function ProfilePage() {
     } = useOrganization();
     const updateProfile = useUpdateProfile();
     const soundFeedbackPreference = useSoundFeedbackPreference();
+    const [telegramLoginEnabled, setTelegramLoginEnabled] = useState(false);
+
+    useEffect(() => {
+        let active = true;
+        void fetch(buildApiUrl("/auth/telegram/config"))
+            .then((response) => (response.ok ? response.json() : { enabled: false }))
+            .then((payload: { enabled?: boolean }) => {
+                if (active) setTelegramLoginEnabled(payload.enabled === true);
+            })
+            .catch(() => undefined);
+        return () => {
+            active = false;
+        };
+    }, []);
 
     const [draft, setDraft] = useState<{ firstName: string; lastName: string; mobileNumber: string } | null>(null);
     const firstName = draft?.firstName ?? profile?.first_name ?? "";
@@ -199,6 +214,28 @@ export default function ProfilePage() {
                         <p className={isMobileNumberValid ? "settings-help-text" : "text-xs text-[var(--state-error)]"}>
                             Include country code, digits only, without +.
                         </p>
+                        <div className="flex flex-wrap items-center gap-2">
+                            {profile?.mobile_verified_at ? (
+                                <span className="chip chip-sm chip-pill state-badge-success">
+                                    <CheckCircle2 className="h-3.5 w-3.5" />
+                                    Verified by Telegram
+                                </span>
+                            ) : telegramLoginEnabled ? (
+                                <Button
+                                    type="button"
+                                    variant="outline"
+                                    size="sm"
+                                    onClick={() => {
+                                        const start = new URL(buildApiUrl("/auth/telegram/start"));
+                                        start.searchParams.set("purpose", "verify_mobile");
+                                        start.searchParams.set("return_to", window.location.href);
+                                        window.location.assign(start.toString());
+                                    }}
+                                >
+                                    Verify mobile with Telegram
+                                </Button>
+                            ) : null}
+                        </div>
                     </div>
 
                     <div className="flex min-h-10 items-center justify-between gap-3 pt-1">

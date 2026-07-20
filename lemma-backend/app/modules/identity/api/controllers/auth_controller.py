@@ -1,16 +1,46 @@
 from __future__ import annotations
 
+import hashlib
+import hmac
+import time
+from datetime import datetime, timezone
+from typing import Literal
+from urllib.parse import urlencode
 from uuid import UUID
 
-from fastapi import APIRouter, HTTPException, Request
+from fastapi import APIRouter, HTTPException, Query, Request, Response
+from fastapi.responses import RedirectResponse
 from pydantic import BaseModel, EmailStr, Field
-from app.core.config import settings
+from sqlalchemy import func, select
+from supertokens_python.recipe.session.asyncio import (
+    get_session,
+    revoke_all_sessions_for_user,
+)
+
+from app.core.config import reveal_secret, settings
+from app.core.infrastructure.db.session import async_session_maker
 from app.modules.identity.api.dependencies import PodMembershipDep, UserServiceDep
 from app.modules.identity.domain.user_entities import UserEntity
 from app.modules.identity.infrastructure.supertokens_auth.helpers import (
     create_cli_session_tokens,
+    create_browser_session,
     create_desktop_browser_session,
     refresh_cli_session_tokens,
+)
+from app.modules.identity.domain.email import normalize_identity_email
+from app.modules.identity.infrastructure.models.user_models import User
+from app.modules.identity.infrastructure.user_cache import get_user_cache
+from app.modules.identity.services.auth_abuse import (
+    RateLimitExceeded,
+    client_ip,
+    get_auth_abuse_store,
+)
+from app.modules.identity.services.email_policy import record_email_suppression
+from app.modules.identity.services.telegram_oidc import (
+    TelegramOIDCError,
+    TelegramPurpose,
+    get_telegram_oidc_service,
+    safe_return_to,
 )
 from app.modules.identity.services.desktop_auth_handoff import (
     DesktopAuthCompletionConflict,
@@ -91,6 +121,198 @@ class DesktopAuthSessionResponse(BaseModel):
     status: str = "complete"
     user_id: UUID
     session_handle: str
+
+
+class AltchaChallengeResponse(BaseModel):
+    enabled: bool
+    algorithm: str | None = None
+    challenge: str | None = None
+    maxnumber: int | None = None
+    salt: str | None = None
+    signature: str | None = None
+
+
+class TelegramConfigResponse(BaseModel):
+    enabled: bool
+
+
+class BounceEvent(BaseModel):
+    email: EmailStr
+    event: Literal["hard_bounce", "soft_bounce"]
+    provider_event_id: str | None = Field(default=None, max_length=255)
+    diagnostic: str | None = Field(default=None, max_length=1000)
+
+
+def verify_bounce_signature(
+    *,
+    timestamp: str,
+    signature: str,
+    body: bytes,
+    secret: str,
+    now: int | None = None,
+) -> None:
+    """Validate the provider adapter's timestamped HMAC envelope."""
+    try:
+        timestamp_value = int(timestamp)
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=401, detail="Invalid webhook signature"
+        ) from exc
+    if abs((now if now is not None else int(time.time())) - timestamp_value) > 300:
+        raise HTTPException(status_code=401, detail="Webhook timestamp expired")
+    expected = hmac.new(
+        secret.encode(), f"{timestamp}.".encode() + body, hashlib.sha256
+    ).hexdigest()
+    candidate = signature.removeprefix("sha256=")
+    if not hmac.compare_digest(expected, candidate):
+        raise HTTPException(status_code=401, detail="Invalid webhook signature")
+
+
+async def _enforce_telegram_rate_limit(request: Request) -> None:
+    store = get_auth_abuse_store()
+    ip_hash = store.digest(client_ip(request.scope))
+    try:
+        await store.enforce(
+            f"identity:rate:telegram:ip:{ip_hash}", limit=10, window_seconds=900
+        )
+    except RateLimitExceeded as exc:
+        raise HTTPException(
+            status_code=429,
+            detail="Too many Telegram login requests",
+            headers={"Retry-After": str(exc.retry_after_seconds)},
+        ) from exc
+
+
+def _telegram_error_redirect(return_to: str | None, code: str) -> RedirectResponse:
+    destination = safe_return_to(return_to)
+    separator = "&" if "?" in destination else "?"
+    return RedirectResponse(
+        f"{destination}{separator}{urlencode({'telegram_error': code})}",
+        status_code=303,
+    )
+
+
+@router.get(
+    "/altcha/challenge",
+    include_in_schema=False,
+    response_model=AltchaChallengeResponse,
+)
+async def create_altcha_challenge(
+    purpose: Literal["signup", "verification", "password-reset", "signin-risk"],
+) -> AltchaChallengeResponse:
+    try:
+        challenge = await get_auth_abuse_store().issue_altcha(purpose)
+    except RuntimeError as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
+    return AltchaChallengeResponse.model_validate(challenge)
+
+
+@router.get(
+    "/telegram/config",
+    include_in_schema=False,
+    response_model=TelegramConfigResponse,
+)
+async def telegram_config() -> TelegramConfigResponse:
+    return TelegramConfigResponse(enabled=settings.is_telegram_oidc_configured())
+
+
+@router.get("/telegram/start", include_in_schema=False)
+async def telegram_start(
+    request: Request,
+    purpose: TelegramPurpose = Query(default="signin"),
+    return_to: str | None = Query(default=None, max_length=2048),
+) -> RedirectResponse:
+    await _enforce_telegram_rate_limit(request)
+    user_id: UUID | None = None
+    if purpose == "verify_mobile":
+        session = await get_session(request, session_required=True)
+        if session is None:
+            raise HTTPException(status_code=401, detail="Authentication required")
+        user_id = UUID(session.get_user_id())
+        async with async_session_maker() as db_session:
+            user = await db_session.get(User, user_id)
+        if user is None or not user.is_active or not user.is_verified:
+            raise HTTPException(status_code=403, detail="Verified account required")
+    try:
+        authorization_url = await get_telegram_oidc_service().start(
+            purpose=purpose,
+            return_to=return_to,
+            user_id=user_id,
+        )
+    except TelegramOIDCError as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
+    return RedirectResponse(authorization_url, status_code=303)
+
+
+@router.get("/telegram/callback", include_in_schema=False)
+async def telegram_callback(
+    request: Request,
+    state: str = Query(min_length=20, max_length=256),
+    code: str | None = Query(default=None, min_length=1, max_length=4096),
+    error: str | None = Query(default=None, max_length=255),
+) -> RedirectResponse:
+    await _enforce_telegram_rate_limit(request)
+    service = get_telegram_oidc_service()
+    transaction = None
+    try:
+        transaction = await service.consume(state)
+        if error or not code:
+            raise TelegramOIDCError("Telegram login was cancelled")
+        claims = await service.exchange_and_validate(code=code, transaction=transaction)
+        phone = str(claims["phone_number"])
+        if transaction.purpose == "signin":
+            user = await service.find_signin_user(phone)
+            await create_browser_session(request, user.id, client="telegram-oidc")
+        else:
+            session = await get_session(request, session_required=False)
+            if session is None or session.get_user_id() != transaction.user_id:
+                raise TelegramOIDCError("The Lemma session changed during verification")
+            await service.verify_mobile(UUID(transaction.user_id), phone)  # type: ignore[arg-type]
+        return RedirectResponse(transaction.return_to, status_code=303)
+    except TelegramOIDCError:
+        return _telegram_error_redirect(
+            transaction.return_to if transaction is not None else None,
+            "unable_to_authenticate",
+        )
+
+
+@router.post("/email/bounces", include_in_schema=False, status_code=204)
+async def accept_email_bounce(request: Request, event: BounceEvent) -> Response:
+    secret = reveal_secret(settings.auth_bounce_webhook_secret)
+    if not secret:
+        raise HTTPException(status_code=404, detail="Not found")
+    timestamp = request.headers.get("x-lemma-timestamp", "")
+    signature = request.headers.get("x-lemma-signature", "")
+    body = await request.body()
+    verify_bounce_signature(
+        timestamp=timestamp,
+        signature=signature,
+        body=body,
+        secret=secret,
+    )
+    if event.event == "soft_bounce":
+        return Response(status_code=204)
+
+    email = normalize_identity_email(str(event.email))
+    await record_email_suppression(
+        email,
+        reason="HARD_BOUNCE",
+        evidence_source="provider-webhook",
+        provider_event_id=event.provider_event_id,
+        diagnostic=event.diagnostic,
+    )
+    async with async_session_maker() as db_session:
+        user = await db_session.scalar(
+            select(User).where(func.lower(User.email) == email)
+        )
+        if user is not None:
+            user.is_active = False
+            user.deactivated_at = user.deactivated_at or datetime.now(timezone.utc)
+            user.deactivation_reason = "HARD_BOUNCE"
+            await db_session.commit()
+            await get_user_cache().invalidate(user.id)
+            await revoke_all_sessions_for_user(str(user.id))
+    return Response(status_code=204)
 
 
 @router.get(

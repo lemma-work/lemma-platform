@@ -14,8 +14,23 @@ from app.core.authorization.delegation import (
 from app.core.authorization.delegation_revocation import is_delegation_revoked
 from app.core.log.log import get_logger
 from app.modules.identity.domain.user_entities import AuthUserEntity
+from app.core.infrastructure.db.session import async_session_maker
+from app.modules.identity.infrastructure.models.user_models import User
+from sqlalchemy import select
 
 logger = get_logger(__name__)
+
+
+async def _get_local_auth_state(user_id: UUID):
+    async with async_session_maker() as db_session:
+        return (
+            await db_session.execute(
+                select(User.is_active, User.is_verified, User.is_deleted).where(
+                    User.id == user_id
+                )
+            )
+        ).first()
+
 
 # Define the security scheme for OpenAPI
 # auto_error=False allows us to handle the error manually and support exclusions
@@ -91,6 +106,20 @@ def _is_public_desktop_auth_path(path: str, method: str) -> bool:
     }
 
 
+def _is_public_identity_auth_path(path: str, method: str) -> bool:
+    normalized_method = method.upper()
+    return (
+        normalized_method == "GET"
+        and path
+        in {
+            "/auth/altcha/challenge",
+            "/auth/telegram/config",
+            "/auth/telegram/start",
+            "/auth/telegram/callback",
+        }
+    ) or (normalized_method == "POST" and path == "/auth/email/bounces")
+
+
 async def verify_auth(connection: HTTPConnection):
     """
     Global dependency to enforce authentication on all routes except excluded ones.
@@ -102,6 +131,10 @@ async def verify_auth(connection: HTTPConnection):
         connection.url.path.startswith(EXCLUDED_PATHS)
         or _is_surface_webhook_path(connection.url.path)
         or _is_public_desktop_auth_path(
+            connection.url.path,
+            str(connection.scope.get("method", "GET")),
+        )
+        or _is_public_identity_auth_path(
             connection.url.path,
             str(connection.scope.get("method", "GET")),
         )
@@ -128,6 +161,28 @@ async def verify_auth(connection: HTTPConnection):
             user_id = session.get_user_id()
             parsed_user_id = UUID(user_id)
             payload = session.get_access_token_payload() or {}
+
+            local_state = await _get_local_auth_state(parsed_user_id)
+            if (
+                local_state is None
+                or not local_state.is_active
+                or local_state.is_deleted
+            ):
+                raise HTTPException(
+                    status_code=403,
+                    detail={
+                        "code": "ACCOUNT_INACTIVE",
+                        "message": "This account is inactive.",
+                    },
+                )
+            if not local_state.is_verified:
+                raise HTTPException(
+                    status_code=403,
+                    detail={
+                        "code": "EMAIL_VERIFICATION_REQUIRED",
+                        "message": "Verify your email before continuing.",
+                    },
+                )
 
             connection.state.user = AuthUserEntity(id=parsed_user_id)
             connection.state.session = session

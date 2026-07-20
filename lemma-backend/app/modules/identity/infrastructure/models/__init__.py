@@ -1,4 +1,4 @@
-from .user_models import User
+from .user_models import EmailSuppression, User
 from .organization_models import (
     Organization,
     OrganizationMember,
@@ -7,6 +7,7 @@ from .organization_models import (
 
 __all__ = [
     "User",
+    "EmailSuppression",
     "Organization",
     "OrganizationMember",
     "OrganizationInvitation",

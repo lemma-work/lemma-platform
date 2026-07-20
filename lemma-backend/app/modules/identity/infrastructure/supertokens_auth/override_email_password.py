@@ -1,4 +1,5 @@
 from typing import Any, Dict, Union
+from uuid import UUID
 
 from supertokens_python.recipe.emailpassword.interfaces import (
     RecipeInterface,
@@ -58,13 +59,14 @@ def override_emailpassword_functions(
                 )
                 await user_service.create_user(
                     UserEntity(
-                        id=user_id,
+                        id=UUID(user_id),
                         email=normalize_identity_email(emails[0]),
-                        is_verified=True,
+                        is_verified=False,
                         is_active=True,
                         is_superuser=False,
                         is_deleted=False,
-                    )
+                    ),
+                    send_welcome=False,
                 )
                 await uow.commit()
 

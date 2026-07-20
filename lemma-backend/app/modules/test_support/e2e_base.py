@@ -163,6 +163,9 @@ def _reset_supertokens_testing_state() -> None:
     from supertokens_python.recipe.accountlinking.recipe import AccountLinkingRecipe
     from supertokens_python.recipe.dashboard.recipe import DashboardRecipe
     from supertokens_python.recipe.emailpassword.recipe import EmailPasswordRecipe
+    from supertokens_python.recipe.emailverification.recipe import (
+        EmailVerificationRecipe,
+    )
     from supertokens_python.recipe.jwt.recipe import JWTRecipe
     from supertokens_python.recipe.multitenancy.recipe import MultitenancyRecipe
     from supertokens_python.recipe.oauth2provider.recipe import OAuth2ProviderRecipe
@@ -177,6 +180,7 @@ def _reset_supertokens_testing_state() -> None:
         SessionRecipe,
         AccountLinkingRecipe,
         EmailPasswordRecipe,
+        EmailVerificationRecipe,
         DashboardRecipe,
         ThirdPartyRecipe,
         JWTRecipe,
@@ -186,6 +190,27 @@ def _reset_supertokens_testing_state() -> None:
         OAuth2ProviderRecipe,
     ):
         recipe.reset()
+
+
+async def verify_emailpassword_for_tests(user_id: str, email: str) -> None:
+    """Complete the real SuperTokens verification transition in E2E fixtures."""
+    from supertokens_python.recipe.emailverification.asyncio import (
+        create_email_verification_token,
+        verify_email_using_token,
+    )
+    from supertokens_python.recipe.emailverification.interfaces import (
+        CreateEmailVerificationTokenOkResult,
+    )
+    from supertokens_python.types import RecipeUserId
+
+    created = await create_email_verification_token(
+        "public", RecipeUserId(user_id), email
+    )
+    assert isinstance(created, CreateEmailVerificationTokenOkResult)
+    verified = await verify_email_using_token(
+        "public", created.token, attempt_account_linking=False
+    )
+    assert verified.status == "OK"
 
 
 @pytest.fixture(scope="session")
@@ -240,6 +265,9 @@ def e2e_settings(test_database_url, test_redis_url, supertokens_container):
     settings.google_client_id = "test-google-client-id"
     settings.google_client_secret = "test-google-client-secret"
     settings.email_transport = "filesystem"
+    settings.auth_email_deliverability_checks_enabled = False
+    settings.auth_abuse_protection_enabled = False
+    settings.auth_altcha_enabled = False
     # Namespace local filesystem roots per pytest-xdist worker so parallel
     # workers never share (or rmtree out from under each other) the same dirs.
     # ``PYTEST_XDIST_WORKER`` is e.g. "gw0"/"gw1" under xdist, unset otherwise.
@@ -398,6 +426,8 @@ async def cleanup_workspace_containers_function():
         close_surface_event_dedup_store,
     )
     from app.modules.identity.infrastructure.user_cache import close_user_cache
+    from app.modules.identity.services.auth_abuse import close_auth_abuse_store
+    from app.modules.identity.services.telegram_oidc import close_telegram_oidc_store
     from app.modules.workspace.services.workspace_sandbox_service import (
         reset_workspace_store_state,
     )
@@ -411,6 +441,8 @@ async def cleanup_workspace_containers_function():
         "close_surface_event_dedup_store", close_surface_event_dedup_store
     )
     await _run_cleanup_step("close_user_cache", close_user_cache)
+    await _run_cleanup_step("close_auth_abuse_store", close_auth_abuse_store)
+    await _run_cleanup_step("close_telegram_oidc_store", close_telegram_oidc_store)
     await _run_cleanup_step("close_streaq_job_queue", close_streaq_job_queue)
     await _run_cleanup_step("close_message_bus", close_message_bus)
     await _run_cleanup_step("channel_service.disconnect", channel_service.disconnect)
@@ -692,6 +724,11 @@ async def fixed_test_user(async_client: "AsyncClient"):
         ]
     }
     response = await async_client.post("/st/auth/signup", json=signup_data)
+    data = response.json()
+    assert response.status_code == 200 and data.get("status") == "OK", data
+
+    await verify_emailpassword_for_tests(data["user"]["id"], email)
+    response = await async_client.post("/st/auth/signin", json=signup_data)
     data = response.json()
     assert response.status_code == 200 and data.get("status") == "OK", data
 

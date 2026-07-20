@@ -2,6 +2,7 @@ import SuperTokens from "supertokens-auth-react";
 import EmailPassword from "supertokens-auth-react/recipe/emailpassword";
 import Session from "supertokens-auth-react/recipe/session";
 import ThirdParty, { Google, ActiveDirectory } from "supertokens-auth-react/recipe/thirdparty";
+import EmailVerification from "supertokens-auth-react/recipe/emailverification";
 
 import { authConfig, websiteBasePath } from "@/components/auth/portal/auth/config";
 import {
@@ -11,6 +12,15 @@ import {
 import {
   getStoredDesktopRequestId,
 } from "@/components/auth/portal/auth/desktop";
+import { addAltchaProof } from "@/components/auth/portal/auth/altcha";
+
+export function isTelegramMiniApp(): boolean {
+  if (typeof window === "undefined") return false;
+  const telegramWindow = window as typeof window & {
+    Telegram?: { WebApp?: { initData?: string } };
+  };
+  return Boolean(telegramWindow.Telegram?.WebApp?.initData) || /Telegram/i.test(navigator.userAgent);
+}
 
 let hasInitialised = false;
 
@@ -212,10 +222,38 @@ export function ensureSuperTokensInit(): void {
         sessionTokenFrontendDomain: authConfig.sessionTokenDomain,
         tokenTransferMethod: "cookie",
       }),
-      EmailPassword.init(),
+      EmailPassword.init({
+        preAPIHook: async (context) => {
+          const purpose =
+            context.action === "EMAIL_PASSWORD_SIGN_UP"
+              ? "signup"
+              : context.action === "SEND_RESET_PASSWORD_EMAIL"
+                ? "password-reset"
+                : context.action === "EMAIL_PASSWORD_SIGN_IN"
+                  ? "signin-risk"
+                  : null;
+          if (!purpose) return context;
+          return {
+            ...context,
+            requestInit: await addAltchaProof(context.requestInit, purpose),
+          };
+        },
+      }),
+      EmailVerification.init({
+        mode: "REQUIRED",
+        preAPIHook: async (context) => {
+          if (context.action !== "SEND_VERIFY_EMAIL") return context;
+          return {
+            ...context,
+            requestInit: await addAltchaProof(context.requestInit, "verification"),
+          };
+        },
+      }),
       ThirdParty.init({
         signInAndUpFeature: {
-          providers: [Google.init(), ActiveDirectory.init({name: "Microsoft"})],
+          providers: isTelegramMiniApp()
+            ? []
+            : [Google.init(), ActiveDirectory.init({name: "Microsoft"})],
         },
       }),
     ],

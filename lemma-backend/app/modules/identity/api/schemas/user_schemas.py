@@ -26,9 +26,13 @@ class UserResponse(BaseSchema):
     is_verified: bool
     is_active: bool
     is_superuser: bool
+    email_verified_at: datetime | None = None
+    deactivated_at: datetime | None = None
+    deactivation_reason: str | None = None
     first_name: str | None = None
     last_name: str | None = None
     mobile_number: str | None = None
+    mobile_verified_at: datetime | None = None
     telegram_username: str | None = None
     country: str | None = None
     timezone: str | None = None

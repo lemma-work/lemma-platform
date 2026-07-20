@@ -31,9 +31,15 @@ async def _close_user_cache(app):
         from app.modules.identity.services.desktop_auth_handoff import (
             get_desktop_auth_handoff_store,
         )
+        from app.modules.identity.services.auth_abuse import close_auth_abuse_store
+        from app.modules.identity.services.telegram_oidc import (
+            close_telegram_oidc_store,
+        )
 
         await close_user_cache()
         await get_desktop_auth_handoff_store().close()
+        await close_auth_abuse_store()
+        await close_telegram_oidc_store()
 
 
 module = LemmaModule(

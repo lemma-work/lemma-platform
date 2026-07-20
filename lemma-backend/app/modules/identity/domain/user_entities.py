@@ -1,4 +1,4 @@
-from datetime import date
+from datetime import date, datetime, timezone
 
 from pydantic import EmailStr, field_validator
 
@@ -22,10 +22,14 @@ class UserEntity(AggregateRoot):
     is_active: bool = True
     is_superuser: bool = False
     is_deleted: bool = False
+    email_verified_at: datetime | None = None
+    deactivated_at: datetime | None = None
+    deactivation_reason: str | None = None
 
     first_name: str | None = None
     last_name: str | None = None
     mobile_number: str | None = None
+    mobile_verified_at: datetime | None = None
     telegram_username: str | None = None
     country: str | None = None
     timezone: str | None = None
@@ -62,4 +66,28 @@ class UserEntity(AggregateRoot):
         }
         for field, value in data.items():
             if field in allowed:
+                if field == "mobile_number":
+                    from app.core.helpers.identifiers import normalize_mobile_digits
+
+                    digits = normalize_mobile_digits(str(value or ""))
+                    if digits != normalize_mobile_digits(self.mobile_number):
+                        self.mobile_verified_at = None
+                    elif self.mobile_verified_at is not None and digits:
+                        # A verified number remains in its canonical E.164 form
+                        # even if a profile client submits cosmetic formatting.
+                        value = f"+{digits}"
                 setattr(self, field, value)
+
+    def mark_email_verified(self) -> bool:
+        """Mark the first verified transition and emit the one-time welcome event."""
+        first_transition = not self.is_verified
+        self.is_verified = True
+        self.email_verified_at = self.email_verified_at or datetime.now(timezone.utc)
+        if first_transition:
+            self.mark_signed_up()
+        return first_transition
+
+    def deactivate(self, reason: str) -> None:
+        self.is_active = False
+        self.deactivated_at = self.deactivated_at or datetime.now(timezone.utc)
+        self.deactivation_reason = reason

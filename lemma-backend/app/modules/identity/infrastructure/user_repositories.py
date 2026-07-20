@@ -68,13 +68,17 @@ class UserRepository(UserRepositoryPort):
     async def get_ids_by_mobile_numbers(self, numbers: list[str]) -> list[UUID]:
         if not numbers:
             return []
-        stmt = select(User.id).where(User.mobile_number.in_(numbers))
+        stmt = select(User.id).where(
+            User.mobile_number.in_(numbers),
+            User.mobile_verified_at.isnot(None),
+        )
         return list((await self.session.execute(stmt)).scalars().all())
 
     async def get_id_by_mobile_digits(self, digits: str) -> Optional[UUID]:
         """Owner of this phone number, compared on digits only (index-aligned)."""
         stmt = select(User.id).where(
             User.mobile_number.isnot(None),
+            User.mobile_verified_at.isnot(None),
             func.regexp_replace(User.mobile_number, r"\D", "", "g") == digits,
         )
         return await self.session.scalar(stmt)
@@ -103,7 +107,15 @@ class UserRepository(UserRepositoryPort):
             if hasattr(instance, key):
                 setattr(instance, key, value)
 
-        await self.session.flush()
+        try:
+            await self.session.flush()
+        except IntegrityError as exc:
+            error = str(exc.orig).lower()
+            if "uq_users_verified_mobile_e164" in error:
+                raise UserConflictError(
+                    "This verified mobile number is already in use"
+                ) from exc
+            raise
         self._collect_events(entity)
         return instance.to_entity()
 

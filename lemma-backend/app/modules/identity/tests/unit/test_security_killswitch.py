@@ -57,6 +57,15 @@ def _patch(monkeypatch, *, flag: bool, payload: dict):
     )
     monkeypatch.setattr(
         security,
+        "_get_local_auth_state",
+        AsyncMock(
+            return_value=SimpleNamespace(
+                is_active=True, is_verified=True, is_deleted=False
+            )
+        ),
+    )
+    monkeypatch.setattr(
+        security,
         "get_session",
         AsyncMock(return_value=_FakeSession(str(uuid4()), payload)),
     )
@@ -107,6 +116,46 @@ async def test_plain_user_token_accepted_when_delegation_disabled(monkeypatch):
     assert conn.state.delegation_claims is None
 
 
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("local_state", "code"),
+    [
+        (
+            SimpleNamespace(is_active=False, is_verified=True, is_deleted=False),
+            "ACCOUNT_INACTIVE",
+        ),
+        (
+            SimpleNamespace(is_active=True, is_verified=False, is_deleted=False),
+            "EMAIL_VERIFICATION_REQUIRED",
+        ),
+        (
+            SimpleNamespace(is_active=True, is_verified=True, is_deleted=True),
+            "ACCOUNT_INACTIVE",
+        ),
+    ],
+)
+async def test_local_account_state_blocks_application_access(
+    monkeypatch, local_state, code
+):
+    monkeypatch.setattr(
+        security.settings, "authz_delegated_tokens_enabled", False, raising=False
+    )
+    monkeypatch.setattr(
+        security,
+        "get_session",
+        AsyncMock(return_value=_FakeSession(str(uuid4()), {})),
+    )
+    monkeypatch.setattr(
+        security, "_get_local_auth_state", AsyncMock(return_value=local_state)
+    )
+
+    with pytest.raises(HTTPException) as exc:
+        await security.verify_auth(_connection())
+
+    assert exc.value.status_code == 403
+    assert exc.value.detail["code"] == code
+
+
 def _delegation_payload(*, user_id: str, actor_id: str) -> dict:
     return {
         CLAIM_ACTOR_TYPE: "AGENT",
@@ -136,6 +185,15 @@ async def test_revoked_delegation_token_rejected(monkeypatch):
         ),
     )
     monkeypatch.setattr(security, "is_delegation_revoked", AsyncMock(return_value=True))
+    monkeypatch.setattr(
+        security,
+        "_get_local_auth_state",
+        AsyncMock(
+            return_value=SimpleNamespace(
+                is_active=True, is_verified=True, is_deleted=False
+            )
+        ),
+    )
 
     with pytest.raises(HTTPException) as exc:
         await security.verify_auth(_connection())
@@ -163,6 +221,15 @@ async def test_live_delegation_token_accepted(monkeypatch):
     )
     monkeypatch.setattr(
         security, "is_delegation_revoked", AsyncMock(return_value=False)
+    )
+    monkeypatch.setattr(
+        security,
+        "_get_local_auth_state",
+        AsyncMock(
+            return_value=SimpleNamespace(
+                is_active=True, is_verified=True, is_deleted=False
+            )
+        ),
     )
 
     await security.verify_auth(conn)

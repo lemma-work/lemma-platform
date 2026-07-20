@@ -4,6 +4,7 @@ from uuid import uuid4
 
 from httpx import AsyncClient
 from starlette import status
+from app.modules.test_support.e2e_base import verify_emailpassword_for_tests
 
 
 def auth_headers(user: dict[str, str]) -> dict[str, str]:
@@ -23,10 +24,23 @@ async def signup_user(async_client: AsyncClient, prefix: str) -> dict[str, str]:
     )
     assert response.status_code == status.HTTP_200_OK, response.text
     payload = response.json()
+    assert payload.get("status") == "OK", payload
+    await verify_emailpassword_for_tests(payload["user"]["id"], email)
+    response = await async_client.post(
+        "/st/auth/signin",
+        json={
+            "formFields": [
+                {"id": "email", "value": email},
+                {"id": "password", "value": "TestPassword@123"},
+            ]
+        },
+    )
+    payload = response.json()
+    assert response.status_code == status.HTTP_200_OK, response.text
+    assert payload.get("status") == "OK", payload
     token = response.headers.get("st-access-token") or response.cookies.get(
         "sAccessToken"
     )
-    assert payload.get("status") == "OK", payload
     assert token
     return {"email": email, "token": token, "id": payload["user"]["id"]}
 
@@ -65,7 +79,10 @@ async def add_pod_member(
     role: str,
     roles: list[str] | None = None,
 ) -> dict:
-    payload = {"organization_member_id": organization_member_id, "roles": roles or [role]}
+    payload = {
+        "organization_member_id": organization_member_id,
+        "roles": roles or [role],
+    }
     response = await owner_client.post(f"/pods/{pod_id}/members", json=payload)
     assert response.status_code == status.HTTP_201_CREATED, response.text
     return response.json()

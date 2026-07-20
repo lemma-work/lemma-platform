@@ -4,13 +4,13 @@ from supertokens_python.recipe.emailpassword.interfaces import (
     APIInterface,
     APIOptions,
     EmailAlreadyExistsError,
-    GeneralErrorResponse,
     SignInPostNotAllowedResponse,
     SignInPostOkResult,
     SignUpPostNotAllowedResponse,
     SignUpPostOkResult,
     WrongCredentialsError,
 )
+from supertokens_python.types.response import GeneralErrorResponse
 from supertokens_python.recipe.emailpassword.types import FormField
 from supertokens_python.recipe.session.interfaces import SessionContainer
 
@@ -21,6 +21,14 @@ from app.modules.identity.infrastructure.supertokens_auth.auth_method_conflicts 
     has_emailpassword_login_method,
     list_users_by_email,
 )
+from app.modules.identity.services.email_policy import (
+    EmailPolicyError,
+    record_email_suppression,
+    validate_auth_email,
+)
+from app.core.infrastructure.db.session import async_session_maker
+from app.modules.identity.infrastructure.models.user_models import User
+from sqlalchemy import func, select
 
 
 def override_emailpassword_apis(original_implementation: APIInterface) -> APIInterface:
@@ -41,6 +49,14 @@ def override_emailpassword_apis(original_implementation: APIInterface) -> APIInt
         GeneralErrorResponse,
     ]:
         email = _normalize_form_email(form_fields)
+        async with async_session_maker() as db_session:
+            local_user = await db_session.scalar(
+                select(User).where(func.lower(User.email) == email)
+            )
+        if local_user is not None and not local_user.is_active:
+            return SignInPostNotAllowedResponse(
+                "Unable to sign in with these credentials"
+            )
         users = await list_users_by_email(
             tenant_id=tenant_id,
             email=email,
@@ -48,7 +64,9 @@ def override_emailpassword_apis(original_implementation: APIInterface) -> APIInt
         )
 
         if not has_emailpassword_login_method(users, email):
-            conflicting_thirdparty_id = get_conflicting_thirdparty_id(users, email=email)
+            conflicting_thirdparty_id = get_conflicting_thirdparty_id(
+                users, email=email
+            )
             if conflicting_thirdparty_id is not None:
                 return SignInPostNotAllowedResponse(
                     get_thirdparty_conflict_reason(conflicting_thirdparty_id)
@@ -77,6 +95,24 @@ def override_emailpassword_apis(original_implementation: APIInterface) -> APIInt
         GeneralErrorResponse,
     ]:
         email = _normalize_form_email(form_fields)
+        try:
+            email = await validate_auth_email(email)
+        except EmailPolicyError as exc:
+            evidence = exc.rejection
+            if evidence.reason in {"INVALID_SYNTAX", "INVALID_DOMAIN", "NULL_MX"}:
+                await record_email_suppression(
+                    email,
+                    reason=evidence.reason,
+                    evidence_source=evidence.evidence_source,
+                    permanent=evidence.permanent,
+                )
+            return SignUpPostNotAllowedResponse(
+                "Please use a valid, non-disposable email address"
+            )
+        for field in form_fields:
+            if field.id == "email":
+                field.value = email
+                break
         users = await list_users_by_email(
             tenant_id=tenant_id,
             email=email,
@@ -84,7 +120,9 @@ def override_emailpassword_apis(original_implementation: APIInterface) -> APIInt
         )
 
         if not has_emailpassword_login_method(users, email):
-            conflicting_thirdparty_id = get_conflicting_thirdparty_id(users, email=email)
+            conflicting_thirdparty_id = get_conflicting_thirdparty_id(
+                users, email=email
+            )
             if conflicting_thirdparty_id is not None:
                 return SignUpPostNotAllowedResponse(
                     get_thirdparty_conflict_reason(conflicting_thirdparty_id)

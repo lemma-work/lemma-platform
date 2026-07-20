@@ -32,6 +32,9 @@ from app.core.security import verify_auth
 from app.modules.identity.infrastructure.supertokens_auth.initialization import (
     initialize_supertokens,
 )
+from app.modules.identity.infrastructure.supertokens_auth.abuse_middleware import (
+    AuthAbuseMiddleware,
+)
 from app.core.log.log import setup_logging, get_logger, validate_release_identity
 from app.core.observability.telemetry import (
     init_telemetry,
@@ -479,6 +482,11 @@ def create_app(modules=OSS_MODULES) -> FastAPI:
 
     app.add_middleware(get_middleware())
 
+    # Apply the shared 60/minute/IP auth ceiling to custom /auth routes. The
+    # mounted SuperTokens app applies the same key itself, so non-auth APIs and
+    # /st requests are deliberately skipped here.
+    app.add_middleware(AuthAbuseMiddleware, auth_paths_only=True)
+
     # CORS
     app.add_middleware(
         CORSMiddleware,
@@ -488,7 +496,12 @@ def create_app(modules=OSS_MODULES) -> FastAPI:
         allow_methods=["GET", "PUT", "POST", "DELETE", "OPTIONS", "PATCH"],
         # X-Lemma-Client is sent by the browser SDK on every request; it must be
         # allowed or the browser blocks the (preflighted) call as a CORS error.
-        allow_headers=["Content-Type", "Authorization", "X-Lemma-Client"]
+        allow_headers=[
+            "Content-Type",
+            "Authorization",
+            "X-Lemma-Client",
+            "x-altcha-payload",
+        ]
         + get_all_cors_headers(),
         # Let browser SDK clients read the correlation id off the response.
         # SuperTokens sets `front-token`/`anti-csrf` (and the `st-*` token pair in

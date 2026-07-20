@@ -20,6 +20,9 @@ class EmailNotConfiguredError(Exception):
     """Raised when SMTP email is not properly configured."""
 
 
+class EmailDeliveryError(Exception):
+    """Raised when a security-sensitive email could not be delivered to SMTP."""
+
 
 class EmailSender:
     """Service for sending emails via SMTP."""
@@ -106,6 +109,8 @@ class EmailSender:
         subject: str,
         html_content: str,
         text_content: Optional[str] = None,
+        *,
+        raise_on_failure: bool = False,
     ) -> bool:
         """
         Send an email asynchronously.
@@ -159,16 +164,21 @@ class EmailSender:
             msg.attach(html_part)
 
             # Send email asynchronously
+            implicit_tls = self.use_tls and self.smtp_port == 465
             async with aiosmtplib.SMTP(
                 hostname=self.smtp_host,
                 port=self.smtp_port,
-                use_tls=self.use_tls,
+                use_tls=implicit_tls,
+                start_tls=self.use_tls and not implicit_tls,
+                timeout=15,
             ) as server:
                 await server.login(self.smtp_user, self.smtp_password)
                 await server.send_message(msg)
 
             return True
 
-        except Exception:
+        except Exception as exc:
             logger.error("email.send.failed", exc_info=True)
+            if raise_on_failure:
+                raise EmailDeliveryError("SMTP delivery failed") from exc
             return False

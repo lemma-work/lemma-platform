@@ -1,7 +1,13 @@
 from urllib.parse import urlparse
 
 from supertokens_python import init, InputAppInfo, SupertokensConfig
-from supertokens_python.recipe import emailpassword, session, dashboard
+from supertokens_python.ingredients.emaildelivery.types import EmailDeliveryConfig
+from supertokens_python.recipe import (
+    dashboard,
+    emailpassword,
+    emailverification,
+    session,
+)
 from supertokens_python.recipe.thirdparty.provider import (
     ProviderInput,
     ProviderConfig,
@@ -17,6 +23,14 @@ from app.modules.identity.infrastructure.supertokens_auth.override_email_passwor
 )
 from app.modules.identity.infrastructure.supertokens_auth.override_thirdparty import (
     override_thirdparty_functions,
+)
+from app.modules.identity.infrastructure.supertokens_auth.email_delivery import (
+    LemmaPasswordResetEmailService,
+    LemmaVerificationEmailService,
+)
+from app.modules.identity.infrastructure.supertokens_auth.override_email_verification import (
+    override_email_verification_apis,
+    override_email_verification_functions,
 )
 from app.core.log.log import get_logger
 
@@ -54,6 +68,7 @@ def build_thirdparty_providers() -> list[ProviderInput]:
     providers: list[ProviderInput] = []
 
     if settings.is_google_oauth_configured():
+        assert settings.google_client_id is not None
         providers.append(
             ProviderInput(
                 config=ProviderConfig(
@@ -69,6 +84,7 @@ def build_thirdparty_providers() -> list[ProviderInput]:
         )
 
     if settings.is_microsoft_oauth_configured():
+        assert settings.microsoft_client_id is not None
         tenant_id = settings.microsoft_tenant_id or "common"
         microsoft_base_url = (
             f"https://login.microsoftonline.com/{tenant_id}/oauth2/v2.0"
@@ -112,6 +128,19 @@ def initialize_supertokens():
                 override=emailpassword.InputOverrideConfig(
                     functions=override_emailpassword_functions,
                     apis=override_emailpassword_apis,
+                ),
+                email_delivery=EmailDeliveryConfig(
+                    service=LemmaPasswordResetEmailService()
+                ),
+            ),
+            emailverification.init(
+                mode="REQUIRED",
+                email_delivery=EmailDeliveryConfig(
+                    service=LemmaVerificationEmailService()
+                ),
+                override=emailverification.EmailVerificationOverrideConfig(
+                    functions=override_email_verification_functions,
+                    apis=override_email_verification_apis,
                 ),
             ),
             dashboard.init(),

@@ -435,6 +435,72 @@ class Settings(BaseSettings):
         default="/tmp/lemma-emails",
         description="Directory used by filesystem email transport",
     )
+    auth_email_deliverability_checks_enabled: bool = Field(
+        default=True,
+        description="Validate signup email domains with DNS before creating accounts",
+    )
+    auth_disposable_email_domains_enabled: bool = Field(
+        default=True,
+        description="Reject domains in the bundled OSS disposable-email list",
+    )
+    auth_disposable_email_allowlist: list[str] = Field(
+        default_factory=list,
+        description="Domains that override the bundled disposable-email list",
+    )
+    auth_abuse_protection_enabled: bool = Field(
+        default=True,
+        description="Enable Redis-backed limits on SuperTokens and Telegram auth routes",
+    )
+    auth_altcha_enabled: bool = Field(
+        default=False,
+        description="Require self-hosted ALTCHA proof-of-work on email-generating auth APIs",
+    )
+    auth_altcha_hmac_key: Optional[SecretStr] = Field(
+        default=None,
+        description="HMAC key used to sign self-hosted ALTCHA challenges",
+    )
+    auth_altcha_max_number: int = Field(
+        default=100_000,
+        ge=10_000,
+        le=2_000_000,
+        description="Maximum proof-of-work search space for ALTCHA challenges",
+    )
+    auth_trusted_proxy_ips: list[str] = Field(
+        default_factory=list,
+        description="Immediate proxy IPs allowed to supply Forwarded/X-Forwarded-For",
+    )
+    auth_bounce_webhook_secret: Optional[SecretStr] = Field(
+        default=None,
+        description="HMAC secret for normalized hard-bounce webhook events",
+    )
+    telegram_oidc_client_id: Optional[str] = Field(
+        default=None,
+        description="Telegram Web Login client ID issued by BotFather",
+    )
+    telegram_oidc_client_secret: Optional[SecretStr] = Field(
+        default=None,
+        description="Telegram Web Login client secret issued by BotFather",
+    )
+    telegram_oidc_redirect_uri: Optional[str] = Field(
+        default=None,
+        description="Registered Telegram OIDC callback URL",
+    )
+    telegram_oidc_issuer: str = Field(
+        default="https://oauth.telegram.org",
+        description="Expected Telegram OIDC issuer",
+    )
+    telegram_oidc_authorization_endpoint: str = Field(
+        default="https://oauth.telegram.org/auth",
+        description="Telegram OIDC authorization endpoint",
+    )
+    telegram_oidc_token_endpoint: str = Field(
+        default="https://oauth.telegram.org/token",
+        description="Telegram OIDC token endpoint",
+    )
+    telegram_oidc_jwks_uri: str = Field(
+        default="https://oauth.telegram.org/.well-known/jwks.json",
+        description="Telegram OIDC JSON Web Key Set endpoint",
+    )
 
     # Application Settings
     app_name: str = Field(default="Lemma Backend", description="Application name")
@@ -964,6 +1030,14 @@ class Settings(BaseSettings):
                 self.smtp_password,
                 self.smtp_from_email,
             ]
+        )
+
+    def is_telegram_oidc_configured(self) -> bool:
+        """Return whether the global Telegram Web Login client is usable."""
+        return bool(
+            self.telegram_oidc_client_id
+            and reveal_secret(self.telegram_oidc_client_secret)
+            and self.telegram_oidc_redirect_uri
         )
 
     def resolve_browser_sdk_path(self) -> Optional[Path]:

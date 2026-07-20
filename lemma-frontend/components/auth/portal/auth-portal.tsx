@@ -17,6 +17,8 @@ import Session, {
 } from "supertokens-auth-react/recipe/session";
 import { EmailPasswordPreBuiltUI } from "supertokens-auth-react/recipe/emailpassword/prebuiltui";
 import { ThirdPartyPreBuiltUI } from "supertokens-auth-react/recipe/thirdparty/prebuiltui";
+import { EmailVerificationPreBuiltUI } from "supertokens-auth-react/recipe/emailverification/prebuiltui";
+import EmailVerification from "supertokens-auth-react/recipe/emailverification";
 
 import { authConfig, buildApiUrl, refreshSessionPath } from "@/components/auth/portal/auth/config";
 import {
@@ -42,7 +44,10 @@ import {
   storePendingDesktopAuth,
   type PendingDesktopAuth,
 } from "@/components/auth/portal/auth/desktop";
-import { ensureSuperTokensInit } from "@/components/auth/portal/auth/supertokens";
+import {
+  ensureSuperTokensInit,
+  isTelegramMiniApp,
+} from "@/components/auth/portal/auth/supertokens";
 import {
   getDestinationLabel,
   getRedirectDestinationFallback,
@@ -88,7 +93,44 @@ type CliSessionResponse = {
 
 type AuthMode = "signin" | "signup";
 
-const preBuiltUiList = [EmailPasswordPreBuiltUI, ThirdPartyPreBuiltUI] as const;
+const preBuiltUiList = [
+  EmailPasswordPreBuiltUI,
+  EmailVerificationPreBuiltUI,
+  ThirdPartyPreBuiltUI,
+] as const;
+
+function TelegramLoginButton({ visible }: { visible: boolean }) {
+  const [enabled, setEnabled] = useState(false);
+
+  useEffect(() => {
+    if (!visible) return;
+    let active = true;
+    void fetch(buildApiUrl("/auth/telegram/config"))
+      .then((response) => (response.ok ? response.json() : { enabled: false }))
+      .then((payload: { enabled?: boolean }) => {
+        if (active) setEnabled(payload.enabled === true);
+      });
+    return () => {
+      active = false;
+    };
+  }, [visible]);
+
+  if (!visible || !enabled) return null;
+  return (
+    <button
+      type="button"
+      className="secondary-button auth-portal-session-button"
+      onClick={() => {
+        const start = new URL(buildApiUrl("/auth/telegram/start"));
+        start.searchParams.set("purpose", "signin");
+        start.searchParams.set("return_to", window.location.href);
+        window.location.assign(start.toString());
+      }}
+    >
+      Sign in with Telegram
+    </button>
+  );
+}
 
 function resolveAuthMode(
   pathname: string,
@@ -223,6 +265,9 @@ function AuthLanding() {
     effectiveSearch,
     effectiveHash,
   );
+  const isEmailVerificationRoute = effectivePathname
+    .toLowerCase()
+    .endsWith("/verify-email");
   const authHeroCopy: HeroCopy =
     authMode === "signup"
       ? {
@@ -305,6 +350,43 @@ function AuthLanding() {
   }, [desktopRequestId, doesSessionExist, session.loading]);
 
   useEffect(() => {
+    if (session.loading || !doesSessionExist || !isTelegramMiniApp()) {
+      return;
+    }
+
+    let cancelled = false;
+    let observedUnverified = false;
+    const checkVerification = async () => {
+      if (document.visibilityState === "hidden") return;
+      try {
+        const result = await EmailVerification.isEmailVerified();
+        if (!result.isVerified) {
+          observedUnverified = true;
+          return;
+        }
+        if (observedUnverified && !cancelled) {
+          await Session.attemptRefreshingSession();
+          if (!cancelled) window.location.reload();
+        }
+      } catch {
+        // A transient network failure is retried on the next poll/focus event.
+      }
+    };
+
+    const handleReturn = () => void checkVerification();
+    void checkVerification();
+    const pollId = window.setInterval(handleReturn, 3000);
+    window.addEventListener("focus", handleReturn);
+    document.addEventListener("visibilitychange", handleReturn);
+    return () => {
+      cancelled = true;
+      window.clearInterval(pollId);
+      window.removeEventListener("focus", handleReturn);
+      document.removeEventListener("visibilitychange", handleReturn);
+    };
+  }, [doesSessionExist, session.loading]);
+
+  useEffect(() => {
     if (session.loading || !doesSessionExist || desktopRequestId) {
       return;
     }
@@ -370,6 +452,19 @@ function AuthLanding() {
         message="Checking your session…"
         destination={destination}
       />
+    );
+  }
+
+  if (
+    isEmailVerificationRoute &&
+    canHandleRoute([...preBuiltUiList])
+  ) {
+    return (
+      <AuthScreenLayout destination={destination} heroCopy={authHeroCopy}>
+        <div className="auth-form-stack">
+          {getRoutingComponent([...preBuiltUiList])}
+        </div>
+      </AuthScreenLayout>
     );
   }
 
@@ -473,6 +568,7 @@ function AuthLanding() {
   return (
     <AuthScreenLayout destination={destination} heroCopy={authHeroCopy}>
       <div className="auth-form-stack">
+        <TelegramLoginButton visible={authMode === "signin"} />
         {getRoutingComponent([...preBuiltUiList])}
       </div>
     </AuthScreenLayout>
