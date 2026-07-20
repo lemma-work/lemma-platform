@@ -60,6 +60,7 @@ This fork:
 |---|---|
 | `gogett-token.sh` | Mints a fresh SuperTokens JWT for `d.a.schreuder@gmail.com` so `lemma-cli` can talk to the local stack |
 | `rebuild-frontend.sh` | Rebuilds `lemma-frontend-gogett:local` from source and restarts the frontend container |
+| `gogett-restart.sh` | Wrapper: `lemma-stack restart` + rebuilds the custom frontend so the MCP rewrites survive |
 
 ## Status
 

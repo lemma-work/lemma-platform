@@ -45,6 +45,7 @@ a Cloudflare Tunnel from a single Mac.
 | Lemma stack config | `~/.lemma/local/config.toml` |
 | Stack installer | `uv tool install --from ./gogett-hub/lemma-stack lemma-stack` |
 | Frontend rebuild script | `~/bin/rebuild-frontend.sh` |
+| Stack restart wrapper | `~/bin/gogett-restart.sh` (runs `lemma-stack restart` + rebuilds custom frontend) |
 | Token refresh helper | `~/bin/gogett-token.sh` |
 | Cloudflare daemon | `~/Library/LaunchAgents/com.gogetta.cloudflared-gogett.plist` |
 
@@ -154,6 +155,18 @@ lemma-stack config set API_URL 'https://gogett.webrnds.com'
 lemma-stack config set SESSION_COOKIE_DOMAIN '.gogett.webrnds.com'
 lemma-stack config set SESSION_COOKIE_SECURE 'true'
 lemma-stack config set SESSION_COOKIE_SAME_SITE 'lax'
+
+# AgentBox manager location from inside the backend container. lemma-stack
+# exposes the agentbox service on `lemma-local-net` as `agentbox:8000`. The
+# bare `AGENTBOX_API_KEY` (and corresponding `[agentbox.env]` block) is set
+# automatically by `lemma-stack install` — but without `AGENTBOX_API_URL` the
+# backend container's AgentBoxClient is constructed with `base_url=None` and
+# every workspace tool (`lemma_exec_command`, `lemma_execute_python`,
+# `lemma_pod_write_file`, ...) fails with
+#   ConnectError: All connection attempts failed.
+# before a request even leaves the backend process. This affects MCP-tool
+# callers and the chat UI alike; both round-trip through AgentBox.
+lemma-stack config set AGENTBOX_API_URL 'http://agentbox:8000'
 
 # Model provider (MiniMax example — swap to your own):
 lemma-stack config set LEMMA_DEFAULT_MODEL_TYPE openai_compat
