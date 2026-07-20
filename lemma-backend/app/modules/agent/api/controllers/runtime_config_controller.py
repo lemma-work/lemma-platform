@@ -602,11 +602,17 @@ def _harness_infos_from_daemons(daemons: list[object]) -> list[AgentHarnessInfo]
             # the daemon" hint.
             daemon_alive = daemon_status == "ONLINE"
             user_can_add = available and daemon_alive
+            if not available:
+                availability_status = "NOT_INSTALLED"
+            elif not daemon_alive:
+                availability_status = "DAEMON_OFFLINE"
+            else:
+                availability_status = "READY"
             raw_models = raw_info.get("models") or []
             models = [
                 str(item)
                 for item in raw_models
-if available and str(item).strip()
+                if available and str(item).strip()
             ]
             model_catalog = (
                 _harness_model_catalog(raw_info) if available else []

@@ -41,7 +41,7 @@ class HarnessKind(str, Enum):
             "cursor_agent": cls.CURSOR,
             "antigravity": cls.ANTIGRAVITY,
             "agy": cls.ANTIGRAVITY,
-"gg_coder": cls.GG_CODER,
+            "gg_coder": cls.GG_CODER,
             "ggcoder": cls.GG_CODER,
             "gg-framework": cls.GG_CODER,
         }
