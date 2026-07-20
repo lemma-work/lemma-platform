@@ -608,11 +608,9 @@ def _instrument_libraries() -> None:
         AioHttpClientInstrumentor,
     )
     from opentelemetry.instrumentation.httpx import HTTPXClientInstrumentor
-    from opentelemetry.instrumentation.redis import RedisInstrumentor
 
     AioHttpClientInstrumentor().instrument()
     HTTPXClientInstrumentor().instrument()
-    RedisInstrumentor().instrument()
     _libraries_instrumented = True
 
 

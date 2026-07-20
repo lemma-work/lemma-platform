@@ -37,7 +37,6 @@ dependencies = [
     "opentelemetry-instrumentation-aiohttp-client>=0.60b1",
     "opentelemetry-instrumentation-fastapi>=0.60b1",
     "opentelemetry-instrumentation-httpx>=0.60b1",
-    "opentelemetry-instrumentation-redis>=0.60b1",
     "opentelemetry-instrumentation-sqlalchemy>=0.60b1",
     "pydantic-deep>=0.2.20",
     "authlib>=1.6.6",
