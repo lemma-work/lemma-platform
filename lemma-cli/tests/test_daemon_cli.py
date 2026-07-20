@@ -201,7 +201,7 @@ async def test_daemon_does_not_emit_prompt_echo_from_provider_stdout(monkeypatch
     websocket = _FakeWebSocket()
     monkeypatch.setenv(
         "LEMMA_DAEMON_CLAUDE_CODE_COMMAND",
-        f"{sys.executable} -c \"import sys; print(sys.stdin.read())\"",
+        f'{sys.executable} -c "import sys; print(sys.stdin.read())"',
     )
 
     await _handle_run_start(
@@ -239,7 +239,7 @@ async def test_daemon_strips_prompt_echo_prefix_from_provider_stdout(monkeypatch
     monkeypatch.setenv(
         "LEMMA_DAEMON_CLAUDE_CODE_COMMAND",
         (
-            f"{sys.executable} -c \"import sys; "
+            f'{sys.executable} -c "import sys; '
             "print(sys.stdin.read() + '\\nassistant answer')\""
         ),
     )
@@ -366,8 +366,7 @@ async def test_codex_app_server_tool_events_stream_as_agent_tokens_and_messages(
     text_messages = [
         event["data"]["text"]
         for event in events
-        if event["type"] == "message"
-        and event["data"].get("kind") == "text"
+        if event["type"] == "message" and event["data"].get("kind") == "text"
     ]
     assert not any("context" in message for message in text_messages)
 
@@ -408,7 +407,9 @@ async def test_codex_app_server_pool_allows_parallel_runs(monkeypatch, tmp_path)
         )
 
     try:
-        await asyncio.gather(run(websocket_one, "run-one"), run(websocket_two, "run-two"))
+        await asyncio.gather(
+            run(websocket_one, "run-one"), run(websocket_two, "run-two")
+        )
     finally:
         await daemon._CODEX_APP_SERVER_POOL.close()
 
@@ -480,29 +481,26 @@ async def test_codex_app_server_pool_reuses_worker_with_saved_thread(
     assert len(_FakeCodexJsonRpcProcess.instances) == 1
     instance = _FakeCodexJsonRpcProcess.instances[0]
     thread_starts = [
-        params
-        for method, params in instance.requests
-        if method == "thread/start"
+        params for method, params in instance.requests if method == "thread/start"
     ]
     turn_starts = [
-        params
-        for method, params in instance.requests
-        if method == "turn/start"
+        params for method, params in instance.requests if method == "turn/start"
     ]
     assert thread_starts == [
         {"cwd": str(tmp_path / "conversations" / "conversation-reuse")}
     ]
     assert [params["threadId"] for params in turn_starts] == ["thread-1", "thread-1"]
-    assert [
-        params["input"][0]["text"]
-        for params in turn_starts
-    ] == [
+    assert [params["input"][0]["text"] for params in turn_starts] == [
         "# Instructions\nRemember user facts.\n\n# Conversation\nUSER:\nmy code word is alpha",
         "USER:\nwhat is my code word?",
     ]
     assert instance.closed is True
-    assert [message["event"]["type"] for message in websocket_one.messages][-1] == "completed"
-    assert [message["event"]["type"] for message in websocket_two.messages][-1] == "completed"
+    assert [message["event"]["type"] for message in websocket_one.messages][
+        -1
+    ] == "completed"
+    assert [message["event"]["type"] for message in websocket_two.messages][
+        -1
+    ] == "completed"
 
 
 @pytest.mark.asyncio
@@ -572,7 +570,9 @@ async def test_codex_app_server_worker_closes_after_cancelled_turn(
         "status",
         "stopped",
     ]
-    assert [message["event"]["type"] for message in websocket_two.messages][-1] == "completed"
+    assert [message["event"]["type"] for message in websocket_two.messages][
+        -1
+    ] == "completed"
 
 
 @pytest.mark.asyncio
@@ -748,9 +748,7 @@ async def test_codex_app_server_strips_submitted_prompt_echo_from_stream(
         "completed",
     ]
     emitted_text = "\n".join(
-        str(event["data"])
-        for event in events
-        if event["type"] in {"token", "message"}
+        str(event["data"]) for event in events if event["type"] in {"token", "message"}
     )
     assert "Hidden daemon system prompt" not in emitted_text
     assert "Already saved user message" not in emitted_text
@@ -811,7 +809,9 @@ async def test_codex_app_server_pool_uses_separate_threads_for_separate_conversa
 
 
 @pytest.mark.asyncio
-async def test_codex_app_server_pool_closes_idle_worker_after_ttl(monkeypatch, tmp_path):
+async def test_codex_app_server_pool_closes_idle_worker_after_ttl(
+    monkeypatch, tmp_path
+):
     websocket = _FakeWebSocket()
     monkeypatch.setenv("LEMMA_DAEMON_CODEX_WORKER_TTL_SECONDS", "0.01")
     monkeypatch.setattr(daemon, "provider_cwd", lambda _harness_kind: tmp_path)
@@ -850,15 +850,18 @@ async def test_codex_app_server_pool_closes_idle_worker_after_ttl(monkeypatch, t
 
 
 def test_codex_command_execution_output_delta_is_not_assistant_text():
-    assert daemon._codex_text_delta(
-        {
-            "method": "item/commandExecution/outputDelta",
-            "params": {
-                "itemId": "cmd-1",
-                "delta": '{\n  "context": "default"\n}\n',
-            },
-        }
-    ) is None
+    assert (
+        daemon._codex_text_delta(
+            {
+                "method": "item/commandExecution/outputDelta",
+                "params": {
+                    "itemId": "cmd-1",
+                    "delta": '{\n  "context": "default"\n}\n',
+                },
+            }
+        )
+        is None
+    )
 
 
 def test_codex_command_execution_item_maps_to_tool_messages():
@@ -913,7 +916,9 @@ def test_codex_command_execution_item_maps_to_tool_messages():
 
 
 @pytest.mark.asyncio
-async def test_claude_stream_persists_assistant_text_before_tool_call(monkeypatch, tmp_path):
+async def test_claude_stream_persists_assistant_text_before_tool_call(
+    monkeypatch, tmp_path
+):
     websocket = _FakeWebSocket()
     script_path = tmp_path / "fake_claude_stream.py"
     script_path.write_text(
@@ -1275,7 +1280,7 @@ async def test_daemon_provider_command_runs_in_harness_cwd(monkeypatch, tmp_path
     monkeypatch.setenv("LEMMA_DAEMON_CLAUDE_CODE_CWD", str(cwd))
     monkeypatch.setenv(
         "LEMMA_DAEMON_CLAUDE_CODE_COMMAND",
-        f"{sys.executable} -c \"import pathlib; print(pathlib.Path.cwd())\"",
+        f'{sys.executable} -c "import pathlib; print(pathlib.Path.cwd())"',
     )
 
     result = await daemon.run_provider_command(
@@ -1413,7 +1418,10 @@ def test_claude_mcp_args_disable_native_tools_by_default(monkeypatch):
 
     assert "--tools" not in command
     assert "--allowedTools" in command
-    assert "mcp__lemma_tools__lemma_exec_command" in command[command.index("--allowedTools") + 1]
+    assert (
+        "mcp__lemma_tools__lemma_exec_command"
+        in command[command.index("--allowedTools") + 1]
+    )
     assert "--disallowedTools" in command
     disallowed_tools = command[command.index("--disallowedTools") + 1].split(",")
     assert "Bash" in disallowed_tools
@@ -1466,7 +1474,9 @@ def test_opencode_server_environment_injects_mcp_config(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_opencode_turn_uses_saved_session_without_creating_new_one(monkeypatch, tmp_path):
+async def test_opencode_turn_uses_saved_session_without_creating_new_one(
+    monkeypatch, tmp_path
+):
     calls: list[tuple[str, str, dict[str, object] | None]] = []
     prompt_submitted = {"value": False}
 
@@ -1484,7 +1494,9 @@ async def test_opencode_turn_uses_saved_session_without_creating_new_one(monkeyp
         if path == "/mcp/lemma_tools/connect":
             return {}
         if path == "/session":
-            raise AssertionError("saved OpenCode sessions should not create a new session")
+            raise AssertionError(
+                "saved OpenCode sessions should not create a new session"
+            )
         if path == "/session/opencode-session-1/prompt_async":
             prompt_submitted["value"] = True
             return {}
@@ -1512,7 +1524,9 @@ async def test_opencode_turn_uses_saved_session_without_creating_new_one(monkeyp
         del args, kwargs
 
     monkeypatch.setattr(daemon, "_opencode_request", fake_opencode_request)
-    monkeypatch.setattr(daemon, "_accept_lemma_opencode_permissions", ignore_permissions)
+    monkeypatch.setattr(
+        daemon, "_accept_lemma_opencode_permissions", ignore_permissions
+    )
 
     output = await daemon._run_opencode_turn(
         base_url="http://127.0.0.1:1234",
@@ -1580,7 +1594,9 @@ async def test_opencode_turn_recovers_from_stale_saved_session(monkeypatch, tmp_
         del args, kwargs
 
     monkeypatch.setattr(daemon, "_opencode_request", fake_opencode_request)
-    monkeypatch.setattr(daemon, "_accept_lemma_opencode_permissions", ignore_permissions)
+    monkeypatch.setattr(
+        daemon, "_accept_lemma_opencode_permissions", ignore_permissions
+    )
 
     output = await daemon._run_opencode_turn(
         base_url="http://127.0.0.1:1234",
@@ -1636,7 +1652,9 @@ def test_daemon_log_redaction_scrubs_bearer_tokens_inside_strings():
 def test_daemon_log_compacts_payloads_unless_debug_enabled(monkeypatch):
     output: list[str] = []
     monkeypatch.delenv("LEMMA_DAEMON_DEBUG", raising=False)
-    monkeypatch.setattr(daemon.console, "print", lambda value: output.append(str(value)))
+    monkeypatch.setattr(
+        daemon.console, "print", lambda value: output.append(str(value))
+    )
 
     daemon._set_daemon_debug(False)
     daemon._daemon_log(
@@ -1747,7 +1765,9 @@ def test_discover_harness_catalog_uses_real_cli_model_commands(monkeypatch, tmp_
     assert by_name["sonnet"]["metadata"]["context_window"] == "standard"
     assert by_name["opus"]["provider_model_name"] == "claude-opus-4-8"
     # Other harnesses keep selection name == provider model name.
-    codex_catalog = {entry["name"]: entry for entry in catalog["CODEX"]["model_catalog"]}
+    codex_catalog = {
+        entry["name"]: entry for entry in catalog["CODEX"]["model_catalog"]
+    }
     assert codex_catalog["gpt-5.5"]["provider_model_name"] == "gpt-5.5"
 
 
@@ -1758,6 +1778,60 @@ def test_discover_harness_models_allows_explicit_override(monkeypatch):
         ["gpt-5.5", "gpt-5.4"],
         None,
     )
+
+
+def test_discover_harness_catalog_advertises_gg_coder_when_no_binary_on_path(
+    monkeypatch, tmp_path
+):
+    # GG Coder ships inside the daemon itself — there's no CLI binary to
+    # discover, but the catalog must still report it as available so the
+    # frontend's "GG Coder / Not detected" row flips to detected and the
+    # backend's harness list (``_harness_infos_from_daemons``) emits a row.
+    monkeypatch.setenv("PATH", str(tmp_path))  # empty PATH -> no external CLIs
+
+    catalog = daemon.discover_harness_catalog()
+
+    assert "GG_CODER" in catalog
+    entry = catalog["GG_CODER"]
+    assert entry["available"] is True
+    assert entry["built_in"] is True
+    assert entry["display_name"] == "GG Coder"
+    # Static model list — selection key, provider id, and display name all
+    # carried through so the picker and the ``--model`` handoff agree.
+    assert entry["models"] == ["ggcoder/default", "ggcoder/pro"]
+    by_name = {item["name"]: item for item in entry["model_catalog"]}
+    assert by_name["ggcoder/default"]["display_name"] == "GG Coder (default)"
+    assert by_name["ggcoder/pro"]["display_name"] == "GG Coder Pro"
+    assert by_name["ggcoder/default"]["provider_model_name"] == "ggcoder/default"
+
+
+def test_discover_harness_catalog_gg_coder_respects_models_override(
+    monkeypatch, tmp_path
+):
+    # Operators pin a specific GG Coder lineup via the same env-var hook
+    # other harnesses use; the override must flow through both the flat
+    # ``models`` list and the structured ``model_catalog`` entries.
+    monkeypatch.setenv("PATH", str(tmp_path))
+    monkeypatch.setenv("LEMMA_DAEMON_GG_CODER_MODELS", "ggcoder/custom")
+
+    catalog = daemon.discover_harness_catalog()
+
+    assert catalog["GG_CODER"]["models"] == ["ggcoder/custom"]
+    assert [item["name"] for item in catalog["GG_CODER"]["model_catalog"]] == [
+        "ggcoder/custom"
+    ]
+
+
+def test_normalize_provider_model_name_passes_gg_coder_through():
+    # GG Coder's selection keys already match its provider ids, so
+    # ``default`` and the built-in names round-trip unchanged.
+    assert daemon.normalize_provider_model_name("GG_CODER", "ggcoder/default") == (
+        "ggcoder/default"
+    )
+    assert daemon.normalize_provider_model_name("GG_CODER", "ggcoder/pro") == (
+        "ggcoder/pro"
+    )
+    assert daemon.normalize_provider_model_name("GG_CODER", "unknown") == ("unknown")
 
 
 def test_order_opencode_models_pushes_free_tier_last():
@@ -1786,7 +1860,9 @@ def test_seed_opencode_auth_copies_user_credentials(tmp_path, monkeypatch):
 
     source_home = tmp_path / "user-share"
     (source_home / "opencode").mkdir(parents=True)
-    (source_home / "opencode" / "auth.json").write_text('{"fireworks-ai":"creds"}', encoding="utf-8")
+    (source_home / "opencode" / "auth.json").write_text(
+        '{"fireworks-ai":"creds"}', encoding="utf-8"
+    )
     monkeypatch.setenv("XDG_DATA_HOME", str(source_home))
 
     data_home = tmp_path / "daemon-data"
@@ -1809,10 +1885,19 @@ def test_seed_opencode_auth_noop_without_source(tmp_path, monkeypatch):
 
 def test_normalize_provider_model_name_maps_claude_aliases():
     # Bare aliases resolve to standard-context full ids.
-    assert daemon.normalize_provider_model_name("CLAUDE_CODE", "sonnet") == "claude-sonnet-4-6"
-    assert daemon.normalize_provider_model_name("CLAUDE_CODE", " opus ") == "claude-opus-4-8"
+    assert (
+        daemon.normalize_provider_model_name("CLAUDE_CODE", "sonnet")
+        == "claude-sonnet-4-6"
+    )
+    assert (
+        daemon.normalize_provider_model_name("CLAUDE_CODE", " opus ")
+        == "claude-opus-4-8"
+    )
     # Full ids, "default", and unknown names pass through untouched.
-    assert daemon.normalize_provider_model_name("CLAUDE_CODE", "claude-sonnet-4-6") == "claude-sonnet-4-6"
+    assert (
+        daemon.normalize_provider_model_name("CLAUDE_CODE", "claude-sonnet-4-6")
+        == "claude-sonnet-4-6"
+    )
     assert daemon.normalize_provider_model_name("CLAUDE_CODE", "default") == "default"
     # Aliases only get rewritten for Claude Code, not other harnesses.
     assert daemon.normalize_provider_model_name("OPENCODE", "sonnet") == "sonnet"
@@ -1840,7 +1925,10 @@ def test_cursor_command_uses_stream_json_headless():
     )
     assert command[:2] == ["cursor-agent", "-p"]
     assert command[command.index("--model") + 1] == "auto"
-    assert "--output-format" in command and command[command.index("--output-format") + 1] == "stream-json"
+    assert (
+        "--output-format" in command
+        and command[command.index("--output-format") + 1] == "stream-json"
+    )
     assert {"--trust", "--force", "--approve-mcps"} <= set(command)
 
 
@@ -1993,7 +2081,11 @@ def test_discover_antigravity_model_entries_uses_display_names(tmp_path, monkeyp
     assert "Gemini 3.5 Flash (Low)" in names
     # Antigravity accepts the display name as --model, so all three fields match.
     claude = next(e for e in entries if e["name"].startswith("Claude"))
-    assert claude["display_name"] == claude["provider_model_name"] == "Claude Sonnet 4.6 (Thinking)"
+    assert (
+        claude["display_name"]
+        == claude["provider_model_name"]
+        == "Claude Sonnet 4.6 (Thinking)"
+    )
 
 
 def _write_executable(path, content: str) -> None:
@@ -2090,7 +2182,10 @@ class _SlowFakeCodexJsonRpcProcess(_FakeCodexJsonRpcProcess):
                 {"method": "item/outputText/delta", "params": {"delta": "hi"}}
             )
             self.notifications.put_nowait(
-                {"method": "turn/completed", "params": {"turn": {"status": "completed"}}}
+                {
+                    "method": "turn/completed",
+                    "params": {"turn": {"status": "completed"}},
+                }
             )
             return {"turn": {"id": "turn-slow"}}
         finally:
@@ -2123,7 +2218,10 @@ class _FailingTurnFakeCodexJsonRpcProcess(_FakeCodexJsonRpcProcess):
         *,
         timeout: float = 30.0,
     ) -> dict[str, Any]:
-        if method == "turn/start" and (params or {}).get("threadId") == "thread-expired":
+        if (
+            method == "turn/start"
+            and (params or {}).get("threadId") == "thread-expired"
+        ):
             self.requests.append((method, params))
             self.stderr_lines.append("codex stderr detail")
             raise daemon._JsonRpcRequestError(

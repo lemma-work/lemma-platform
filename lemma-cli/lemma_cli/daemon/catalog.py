@@ -15,6 +15,16 @@ HARNESS_BINARIES = {
     "GG_CODER": "ggcoder",
 }
 
+# GG Coder is the gogett-hub project's default chat runtime and ships
+# inside the daemon itself — there is no external CLI binary to discover on
+# PATH. The catalog entry is therefore always ``available=True`` with a
+# fixed model list (or ``LEMMA_DAEMON_GG_CODER_MODELS`` override). Keep it
+# in the same dict so the rest of the daemon (websocket registration, the
+# backend's catalog merge) sees a uniform shape and never returns an empty
+# ``GG_CODER`` row to the frontend — that's the gap that surfaced "Not
+# detected" even when the user had nothing to install.
+GG_CODER_BINARY = "gg-coder"
+
 # Claude Code's bare ``sonnet``/``opus`` aliases resolve to the *latest* model,
 # which currently defaults to the 1M-context beta variant. That variant requires
 # usage-based billing credits, so a user on a plain Pro/Max plan who picks
@@ -48,19 +58,49 @@ CLAUDE_CODE_STANDARD_MODEL_BY_ALIAS: dict[str, str] = {
     for entry in CLAUDE_CODE_MODEL_CATALOG
 }
 
+# Static catalog for the built-in GG Coder runtime. The friendly ``name`` is
+# the selection key and the value passed to ``gg-coder --model``; the
+# display name is what the picker shows. Mirrors the shape used by Claude
+# Code so the frontend can render the same picker UI.
+GG_CODER_MODEL_CATALOG: tuple[dict[str, Any], ...] = (
+    {
+        "name": "ggcoder/default",
+        "display_name": "GG Coder (default)",
+        "provider_model_name": "ggcoder/default",
+        "metadata": {"built_in": True},
+    },
+    {
+        "name": "ggcoder/pro",
+        "display_name": "GG Coder Pro",
+        "provider_model_name": "ggcoder/pro",
+        "metadata": {"built_in": True},
+    },
+)
+
+GG_CODER_STANDARD_MODEL_BY_NAME: dict[str, str] = {
+    str(entry["name"]): str(entry["provider_model_name"])
+    for entry in GG_CODER_MODEL_CATALOG
+}
+
 
 def discover_harness_catalog() -> dict[str, dict[str, Any]]:
-    return {
+    catalog = {
         harness_kind: discover_harness(harness_kind, binary)
         for harness_kind, binary in HARNESS_BINARIES.items()
     }
+    # GG Coder is always available — overlay it after the binary-discovered
+    # harnesses so its ``available=True`` entry wins regardless of PATH.
+    catalog["GG_CODER"] = discover_gg_coder_catalog()
+    return catalog
 
 
 def discover_harness(harness_kind: str, binary: str) -> dict[str, Any]:
     path = shutil.which(binary)
     if path is None:
         return {"available": False, "binary": binary, "models": []}
-    model_catalog, model_discovery_error = discover_harness_model_entries(harness_kind, binary)
+    model_catalog, model_discovery_error = discover_harness_model_entries(
+        harness_kind, binary
+    )
     payload: dict[str, Any] = {
         "available": True,
         "binary": binary,
@@ -81,6 +121,36 @@ def discover_harness(harness_kind: str, binary: str) -> dict[str, Any]:
     return payload
 
 
+def discover_gg_coder_catalog() -> dict[str, Any]:
+    """Always-available catalog entry for the built-in GG Coder runtime.
+
+    GG Coder ships inside the daemon, so there is no binary on PATH to
+    resolve. The model list is static (or comes from
+    ``LEMMA_DAEMON_GG_CODER_MODELS`` when the operator wants to pin a set),
+    matching the shape returned by ``discover_harness`` for the external
+    harnesses so the websocket catalog payload stays uniform.
+    """
+    model_catalog, model_discovery_error = discover_harness_model_entries(
+        "GG_CODER", GG_CODER_BINARY
+    )
+    payload: dict[str, Any] = {
+        "available": True,
+        "binary": GG_CODER_BINARY,
+        "path": None,
+        "version": None,
+        # Flat list kept for backward compatibility with older readers.
+        "models": [str(entry["name"]) for entry in model_catalog],
+        # Structured entries carry display names, the provider model id we hand
+        # to the harness, and metadata (built-in flag, etc.) for the picker.
+        "model_catalog": model_catalog,
+        "display_name": "GG Coder",
+        "built_in": True,
+    }
+    if model_discovery_error:
+        payload["model_discovery_error"] = model_discovery_error
+    return payload
+
+
 def discover_harness_model_entries(
     harness_kind: str, binary: str
 ) -> tuple[list[dict[str, Any]], str | None]:
@@ -95,10 +165,16 @@ def discover_harness_model_entries(
     if configured is not None:
         return [_plain_model_entry(name) for name in configured], None
     try:
+        if harness_kind == "GG_CODER":
+            return [_copy_model_entry(entry) for entry in GG_CODER_MODEL_CATALOG], None
         if harness_kind == "CODEX":
-            return [_plain_model_entry(name) for name in discover_codex_models(binary)], None
+            return [
+                _plain_model_entry(name) for name in discover_codex_models(binary)
+            ], None
         if harness_kind == "OPENCODE":
-            return [_plain_model_entry(name) for name in discover_opencode_models(binary)], None
+            return [
+                _plain_model_entry(name) for name in discover_opencode_models(binary)
+            ], None
         if harness_kind == "CLAUDE_CODE":
             return discover_claude_code_model_entries(binary), None
         if harness_kind == "CURSOR":
@@ -112,7 +188,9 @@ def discover_harness_model_entries(
     return [], None
 
 
-def discover_harness_models(harness_kind: str, binary: str) -> tuple[list[str], str | None]:
+def discover_harness_models(
+    harness_kind: str, binary: str
+) -> tuple[list[str], str | None]:
     entries, error = discover_harness_model_entries(harness_kind, binary)
     return [str(entry["name"]) for entry in entries], error
 
@@ -168,11 +246,14 @@ def normalize_provider_model_name(harness_kind: str, model_name: str) -> str:
     For Claude Code this maps the bare ``sonnet``/``opus`` aliases to their
     full standard-context model ids, so callers that send the raw alias (e.g.
     profiles saved before this change) don't fall into the paid 1M-context
-    variant. Unknown names (full ids, ``default``, other harnesses) pass
-    through unchanged.
+    variant. GG Coder's selection keys already match its provider ids, so
+    this is a pass-through; unknown names (full ids, ``default``, other
+    harnesses) pass through unchanged.
     """
     if harness_kind == "CLAUDE_CODE":
         return CLAUDE_CODE_STANDARD_MODEL_BY_ALIAS.get(model_name.strip(), model_name)
+    if harness_kind == "GG_CODER":
+        return GG_CODER_STANDARD_MODEL_BY_NAME.get(model_name.strip(), model_name)
     return model_name
 
 
@@ -321,7 +402,9 @@ def discover_antigravity_model_entries(binary: str) -> list[dict[str, Any]]:
         name = line.strip()
         if not name or name in seen:
             continue
-        if name.lower().startswith(("available", "models", "usage", "error", "warning", "no ")):
+        if name.lower().startswith(
+            ("available", "models", "usage", "error", "warning", "no ")
+        ):
             continue
         seen.add(name)
         entries.append(
@@ -345,7 +428,9 @@ def run_catalog_command(command: list[str]) -> subprocess.CompletedProcess[str]:
     )
     if completed.returncode != 0:
         message = (completed.stderr or completed.stdout).strip()
-        raise RuntimeError(message or f"{command[0]} exited with {completed.returncode}")
+        raise RuntimeError(
+            message or f"{command[0]} exited with {completed.returncode}"
+        )
     return completed
 
 
@@ -410,8 +495,7 @@ def _opencode_models_from_json(payload: object) -> list[str]:
 def _opencode_models_from_text(text: str) -> list[str]:
     separators = " \t\n\r,;|"
     tokens = (
-        token.strip(separators + "'\"`")
-        for token in text.replace("\x1b", " ").split()
+        token.strip(separators + "'\"`") for token in text.replace("\x1b", " ").split()
     )
     return _unique_model_names(
         token

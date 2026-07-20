@@ -76,7 +76,7 @@ def build_harness_registry() -> HarnessRegistry:
     return HarnessRegistry(
         [
             PydanticAIHarness(),
-            DaemonHarness(HarnessKind.CODEX, reconnect_grace_seconds=reconnect_grace_seconds),
+DaemonHarness(HarnessKind.CODEX, reconnect_grace_seconds=reconnect_grace_seconds),
             DaemonHarness(HarnessKind.CLAUDE_CODE, reconnect_grace_seconds=reconnect_grace_seconds),
             DaemonHarness(HarnessKind.OPENCODE, reconnect_grace_seconds=reconnect_grace_seconds),
             DaemonHarness(HarnessKind.CURSOR, reconnect_grace_seconds=reconnect_grace_seconds),

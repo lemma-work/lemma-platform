@@ -36,6 +36,7 @@ from app.modules.agent.domain.runtime_profiles import (
     RuntimeModelCapability,
     RuntimeProfileScope,
     RuntimeModelCatalogEntry,
+    RuntimeProfileScope,
 )
 from app.modules.agent.infrastructure.daemon_hub import (
     agent_runtime_daemon_hub,
@@ -99,6 +100,69 @@ def _runtime_profile_service(uow: UoWDep) -> AgentRuntimeProfileService:
     )
 
 
+async def _ensure_user_daemon_default_profile(
+    *,
+    user_id: UUID,
+    daemon: object,
+    harness_catalog: dict[str, object],
+) -> None:
+    """Auto-create a PERSONAL USER_DAEMON profile for each detected harness.
+
+    Called from the ``daemon.ready`` handshake so the chat has a
+    default to pick the first time a user starts their daemon. The
+    gogett-hub project's default chat is GG Coder, so this is what
+    makes the chat "just work" without a separate "Add" click in
+    settings. Idempotent on reconnect: ``ValueError`` from the
+    service (active profile already exists) is swallowed so
+    reconnect stays cheap.
+
+    Organization-scoped profiles are NOT auto-created: that's a
+    workspace decision, not a per-user one. We anchor the PERSONAL
+    profile to any one of the user's orgs so the row has a valid
+    organization_id; PERSONAL scope means it stays private regardless.
+    """
+    # Find one org the user belongs to; bail if they have none.
+    uow_factory = SessionUnitOfWorkFactory(async_session_maker)
+    async with uow_factory() as lookup_uow:
+        from app.modules.identity.infrastructure.organization_repositories import (
+            OrganizationRepository,
+        )
+        user_orgs = await OrganizationRepository(lookup_uow).get_user_organizations(
+            user_id=user_id
+        )
+    # ``get_user_organizations`` returns ``(orgs, next_cursor)``; unpack to the
+    # entity list, not the cursor tuple, before picking the anchor org.
+    user_orgs, _next_cursor = user_orgs
+    if not user_orgs:
+        return
+    organization_id = user_orgs[0].id
+    for harness_kind_value, raw_info in harness_catalog.items():
+        if not isinstance(raw_info, dict) or raw_info.get("available") is False:
+            continue
+        try:
+            harness_kind = HarnessKind(harness_kind_value)
+        except ValueError:
+            continue
+        display_name = (
+            str(getattr(daemon, "display_name", None)) or "Lemma daemon"
+        )
+        try:
+            async with uow_factory() as uow:
+                await _runtime_profile_service(uow).create_user_daemon_profile(
+                    organization_id=organization_id,
+                    user_id=user_id,
+                    daemon_id=daemon.id,  # type: ignore[attr-defined]
+                    harness_kind=harness_kind,
+                    name=f"{display_name} · {harness_kind.value.replace('_', ' ').title()}",
+                    scope=RuntimeProfileScope.PERSONAL,
+                )
+        except (ValueError, RuntimeError):
+            # Already added (unique-name collision) or daemon
+            # transiently unavailable — treat as a no-op so a flaky
+            # reconnect doesn't surface an error to the daemon.
+            continue
+
+
 async def _profile_responses_with_daemon_status(
     profiles: list[AgentRuntimeProfile],
     *,
@@ -147,7 +211,7 @@ async def _daemon_status_payload(
     if profile.scope.value == "PERSONAL" and profile.user_id != user_id:
         availability_status = "UNAVAILABLE_FOR_YOU"
     elif daemon.status != "ONLINE":
-        availability_status = "OFFLINE"
+        availability_status = "DAEMON_OFFLINE"
     elif not harness_available:
         availability_status = "NOT_INSTALLED"
     else:
@@ -326,6 +390,22 @@ async def daemon_websocket(websocket: WebSocket) -> None:
                 harness_catalog=_json_object(payload.get("harness_catalog")),
             )
             daemon_id = daemon.id
+        # Capture the connection's ``connected_at`` so a stale
+        # disconnect after a reconnect race can't clobber the new
+        # live session back to OFFLINE.
+        daemon_connected_at = daemon.connected_at
+        # First-time auto-bootstrap: if the user has no existing
+        # runtime profile for any detected harness, create a
+        # PERSONAL-scoped one so the chat has a default to pick. GG
+        # Coder is the gogett-hub project's default chat; this is
+        # what makes it visible immediately after ``lemma daemon start``,
+        # without a separate "Add" click in settings. Idempotent on
+        # reconnect.
+        await _ensure_user_daemon_default_profile(
+            user_id=user_id,
+            daemon=daemon,
+            harness_catalog=_json_object(payload.get("harness_catalog")),
+        )
         await agent_runtime_daemon_hub.register(
             daemon_id=daemon_id,
             user_id=user_id,
@@ -406,6 +486,7 @@ async def daemon_websocket(websocket: WebSocket) -> None:
                 await AgentRuntimeDaemonRepository(uow).mark_offline(
                     daemon_id=daemon_id,
                     user_id=user_id,
+                    connected_at=daemon_connected_at,
                 )
 
 
@@ -497,8 +578,13 @@ async def _daemon_websocket_session(websocket: WebSocket):
 def _harness_infos_from_daemons(daemons: list[object]) -> list[AgentHarnessInfo]:
     items: list[AgentHarnessInfo] = []
     for daemon in daemons:
-        if getattr(daemon, "status", None) != "ONLINE":
-            continue
+        daemon_status = getattr(daemon, "status", None)
+        # Include OFFLINE daemons too so the UI can tell the operator "harness is
+        # installed, daemon just isn't running" instead of dropping the harness
+        # off the list entirely. Operators hit this when they install GG Coder
+        # locally and forget to run ``lemma daemon start --background``: the
+        # previous code filtered those rows out, surfacing "Not detected"
+        # (which read as "binary missing") even though the binary was on PATH.
         catalog = _json_object(getattr(daemon, "harness_catalog", None))
         for raw_kind, raw_info in catalog.items():
             try:
@@ -508,11 +594,19 @@ def _harness_infos_from_daemons(daemons: list[object]) -> list[AgentHarnessInfo]
             if not isinstance(raw_info, dict):
                 continue
             available = raw_info.get("available") is not False
+            # Daemon-side availability only counts when the daemon is alive:
+            # an OFFLINE daemon can't serve any harness, so the user can't
+            # add a new profile against it (the daemon-side WS would reject
+            # the assignment). We keep the row visible for inspection and
+            # surface ``availability_status`` so the UI can render a "start
+            # the daemon" hint.
+            daemon_alive = daemon_status == "ONLINE"
+            user_can_add = available and daemon_alive
             raw_models = raw_info.get("models") or []
             models = [
                 str(item)
                 for item in raw_models
-                if available and str(item).strip()
+if available and str(item).strip()
             ]
             model_catalog = (
                 _harness_model_catalog(raw_info) if available else []
@@ -526,11 +620,11 @@ def _harness_infos_from_daemons(daemons: list[object]) -> list[AgentHarnessInfo]
                     ),
                     models=models,
                     model_catalog=model_catalog,
-                    available=available,
-                    availability_status="READY" if available else "NOT_INSTALLED",
+                    available=user_can_add,
+                    availability_status=availability_status,
                     daemon_id=daemon.id,
                     daemon_display_name=daemon.display_name,
-                    daemon_status=daemon.status,
+                    daemon_status=daemon_status,
                 )
             )
     return items

@@ -224,8 +224,14 @@ export function isHarnessAvailable(harness: AgentHarnessInfo): boolean {
 }
 
 export function availableHarnessStatusLabel(harness: AgentHarnessInfo): string | null {
-    if (!isHarnessAvailable(harness)) return 'Not installed';
-    if (harness.daemon_status && harness.daemon_status !== 'ONLINE') return harness.daemon_status;
+    // Compute the right label independently from ``isHarnessAvailable``:
+    // ``isHarnessAvailable`` gates the Add button; this function reports
+    // *why* a harness is unavailable, and the answer for DAEMON_OFFLINE is
+    // "Daemon offline" (binary is on PATH, just not running) rather than
+    // "Not installed" (binary missing). Reading from availability_status
+    // directly avoids collapsing the two states.
+    if (harness.availability_status === 'NOT_INSTALLED') return 'Not installed';
+    if (harness.availability_status === 'DAEMON_OFFLINE') return 'Daemon offline';
     return null;
 }
 
@@ -249,6 +255,7 @@ export function runtimeAvailabilityLabel(profile: AgentRuntimeProfileResponse): 
         case 'READY':
             return null;
         case 'OFFLINE':
+        case 'DAEMON_OFFLINE':
             return 'Offline';
         case 'NOT_INSTALLED':
             return 'Not installed';

@@ -304,10 +304,37 @@ class AgentRuntimeDaemonRepository:
         *,
         daemon_id: UUID,
         user_id: UUID,
+        connected_at: datetime | None = None,
     ) -> AgentRuntimeDaemonModel | None:
+        """Mark the daemon OFFLINE, but only if this connection still owns the row.
+
+        A daemon that reconnects re-runs ``upsert_ready`` which bumps
+        ``connected_at`` to "now". If the previous connection's
+        ``finally`` block then runs (e.g. graceful close + reconnect
+        race), an unconditional ``status = OFFLINE`` would clobber the
+        new live session and leave the UI stuck on "Not detected" until
+        the user manually refreshes. Passing ``connected_at`` makes the
+        mark conditional on the row's current owner: a no-op return
+        means a newer connection has already taken over and we should
+        leave the row alone.
+        """
         instance = await self.get_for_user(daemon_id=daemon_id, user_id=user_id)
         if instance is None:
             return None
+        if connected_at is not None and instance.connected_at is not None:
+            # Compare wall-clock times; a microsecond drift between the
+            # upsert and the disconnect is not a real change of
+            # ownership. We only want to mark offline when the row's
+            # ``connected_at`` still matches the connection that just
+            # dropped.
+            stored = instance.connected_at
+            if stored.tzinfo:
+                stored = stored.replace(tzinfo=None)
+            incoming = connected_at
+            if incoming.tzinfo:
+                incoming = incoming.replace(tzinfo=None)
+            if stored != incoming:
+                return instance
         now = datetime.now(timezone.utc)
         instance.status = "OFFLINE"
         instance.last_seen_at = now
