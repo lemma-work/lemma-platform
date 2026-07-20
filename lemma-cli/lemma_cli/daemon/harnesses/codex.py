@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import hashlib
 import json
 import os
 import time
@@ -19,6 +20,7 @@ from .._utils import (
     strip_prompt_echo_from_text,
 )
 from ..mcp import (
+    mcp_authorization,
     mcp_conversation_id,
     provider_command,
     provider_cwd_for_run,
@@ -205,6 +207,7 @@ class CodexWorker:
         self.command: list[str] = []
         self.cwd: Path | None = None
         self.mcp_url: str | None = None
+        self.mcp_auth_fingerprint: str | None = None
         self.last_used_at = time.monotonic()
         self._lock = asyncio.Lock()
 
@@ -252,6 +255,7 @@ class CodexWorker:
             await self.client.close()
             self.client = None
         self.mcp_url = None
+        self.mcp_auth_fingerprint = None
 
     async def _ensure_started(
         self,
@@ -262,11 +266,13 @@ class CodexWorker:
     ) -> None:
         from ..mcp import mcp_url as get_mcp_url
         mcp_url_val = get_mcp_url(mcp)
+        mcp_auth_fingerprint = _mcp_auth_fingerprint(mcp)
         cwd = provider_cwd_for_run("CODEX", mcp)
         if (
             self.client is not None
             and self.client.is_alive()
             and self.mcp_url == mcp_url_val
+            and self.mcp_auth_fingerprint == mcp_auth_fingerprint
             and self.cwd == cwd
         ):
             return
@@ -299,6 +305,13 @@ class CodexWorker:
         self.command = command
         self.cwd = cwd
         self.mcp_url = mcp_url_val
+        self.mcp_auth_fingerprint = mcp_auth_fingerprint
+
+
+def _mcp_auth_fingerprint(mcp: dict[str, Any]) -> str:
+    """Compare rotating MCP credentials without retaining another raw copy."""
+    authorization = mcp_authorization(mcp)
+    return hashlib.sha256(authorization.encode("utf-8")).hexdigest()
 
 
 class CodexWorkerPool:

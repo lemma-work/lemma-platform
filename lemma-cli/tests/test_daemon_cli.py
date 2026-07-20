@@ -505,6 +505,75 @@ async def test_codex_app_server_pool_reuses_worker_with_saved_thread(
 
 
 @pytest.mark.asyncio
+async def test_codex_app_server_restarts_worker_when_mcp_token_rotates(
+    monkeypatch,
+    tmp_path,
+):
+    websocket_one = _FakeWebSocket()
+    websocket_two = _FakeWebSocket()
+    monkeypatch.setattr(daemon, "provider_cwd", lambda _harness_kind: tmp_path)
+    monkeypatch.setattr(daemon, "_CODEX_APP_SERVER_POOL", daemon._CodexAppServerPool())
+    _FakeCodexJsonRpcProcess.instances = []
+    _FakeCodexJsonRpcProcess.next_thread_id = 0
+    monkeypatch.setattr(daemon, "_JsonRpcProcess", _FakeCodexJsonRpcProcess)
+
+    payload = {
+        "harness_kind": "CODEX",
+        "model_name": "default",
+        "prompt": {
+            "system_prompt": "# Instructions\nRemember user facts.",
+            "user_prompt": "USER:\nmy code word is alpha",
+        },
+        "mcp": {
+            "url": "http://localhost/conversation-rotation/mcp",
+            "server_name": "lemma_tools",
+            "conversation_id": "conversation-rotation",
+            "authorization": "Bearer token-one",
+            "token": "token-one",
+        },
+    }
+    try:
+        await _handle_run_start(
+            websocket_one,
+            {"type": "run.start", "agent_run_id": "run-one", "payload": payload},
+        )
+        payload = {
+            **payload,
+            "prompt": {
+                "session_id": "thread-1",
+                "user_prompt": "USER:\nwhat is my code word?",
+            },
+            "mcp": {
+                **payload["mcp"],
+                "authorization": "Bearer token-two",
+                "token": "token-two",
+            },
+        }
+        await _handle_run_start(
+            websocket_two,
+            {"type": "run.start", "agent_run_id": "run-two", "payload": payload},
+        )
+    finally:
+        await daemon._CODEX_APP_SERVER_POOL.close()
+
+    assert len(_FakeCodexJsonRpcProcess.instances) == 2
+    first, second = _FakeCodexJsonRpcProcess.instances
+    assert first.closed is True
+    assert first.env[daemon.LEMMA_MCP_AUTHORIZATION_ENV] == "Bearer token-one"
+    assert second.env[daemon.LEMMA_MCP_AUTHORIZATION_ENV] == "Bearer token-two"
+    assert [
+        params
+        for method, params in second.requests
+        if method == "thread/start"
+    ] == []
+    assert [
+        params["threadId"]
+        for method, params in second.requests
+        if method == "turn/start"
+    ] == ["thread-1"]
+
+
+@pytest.mark.asyncio
 async def test_codex_app_server_worker_closes_after_cancelled_turn(
     monkeypatch,
     tmp_path,
