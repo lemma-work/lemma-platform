@@ -37,6 +37,10 @@ from app.core.log.log import get_logger
 logger = get_logger(__name__)
 
 
+def email_verification_mode():
+    return "REQUIRED" if settings.auth_email_verification_required else "OPTIONAL"
+
+
 def _supertokens_api_domain() -> str:
     parsed_api_url = urlparse(settings.api_url)
     api_path = parsed_api_url.path.rstrip("/")
@@ -134,7 +138,7 @@ def initialize_supertokens():
                 ),
             ),
             emailverification.init(
-                mode="REQUIRED",
+                mode=email_verification_mode(),
                 email_delivery=EmailDeliveryConfig(
                     service=LemmaVerificationEmailService()
                 ),

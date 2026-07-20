@@ -439,6 +439,13 @@ class Settings(BaseSettings):
         default=True,
         description="Validate signup email domains with DNS before creating accounts",
     )
+    auth_email_verification_required: bool = Field(
+        default=True,
+        description=(
+            "Require email/password users to verify their email before accessing "
+            "application APIs"
+        ),
+    )
     auth_disposable_email_domains_enabled: bool = Field(
         default=True,
         description="Reject domains in the bundled OSS disposable-email list",

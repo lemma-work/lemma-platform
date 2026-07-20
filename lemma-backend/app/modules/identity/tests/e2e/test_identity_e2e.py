@@ -92,7 +92,7 @@ async def _wait_for_email(
         if matches:
             return matches[-1]
         await asyncio.sleep(0.1)
-    pytest.fail(f"Timed out waiting for {subject!r} filesystem email")
+    raise AssertionError(f"Timed out waiting for {subject!r} filesystem email")
 
 
 def _email_link_token(message: dict) -> str:

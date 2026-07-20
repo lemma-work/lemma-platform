@@ -240,7 +240,7 @@ export function ensureSuperTokensInit(): void {
         },
       }),
       EmailVerification.init({
-        mode: "REQUIRED",
+        mode: authConfig.emailVerificationRequired ? "REQUIRED" : "OPTIONAL",
         preAPIHook: async (context) => {
           if (context.action !== "SEND_VERIFY_EMAIL") return context;
           return {

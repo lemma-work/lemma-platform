@@ -25,6 +25,16 @@ function getConfigValue(runtimeKey: string, nextValue: string | undefined): stri
   return getRuntimeValue(runtimeKey) || nextValue;
 }
 
+function getBooleanConfigValue(
+  runtimeKey: string,
+  nextValue: string | undefined,
+  fallback: boolean,
+): boolean {
+  const value = getConfigValue(runtimeKey, nextValue)?.toLowerCase();
+  if (!value) return fallback;
+  return !["0", "false", "no", "off"].includes(value);
+}
+
 function getDefaultApiUrl(): string {
   if (
     typeof window !== "undefined" &&
@@ -130,6 +140,11 @@ export const authConfig = {
   apiRequestBaseUrl,
   apiUrl: new URL(apiRequestBaseUrl, getWebsiteUrl()).origin,
   websiteUrl: getWebsiteUrl(),
+  emailVerificationRequired: getBooleanConfigValue(
+    "AUTH_EMAIL_VERIFICATION_REQUIRED",
+    process.env.NEXT_PUBLIC_AUTH_EMAIL_VERIFICATION_REQUIRED,
+    true,
+  ),
   websiteBasePath: normalisePath(
     getConfigValue("WEBSITE_BASE_PATH", process.env.NEXT_PUBLIC_AUTH_WEBSITE_BASE_PATH),
     DEFAULT_WEBSITE_BASE_PATH,

@@ -5,6 +5,7 @@ from app.core.config import settings
 from app.modules.identity.infrastructure.supertokens_auth.initialization import (
     build_supertokens_app_info,
     build_thirdparty_providers,
+    email_verification_mode,
     initialize_supertokens,
 )
 from app.modules.test_support.e2e_base import _reset_supertokens_testing_state
@@ -29,6 +30,14 @@ def test_build_supertokens_app_info_uses_full_urls():
     assert app_info.api_domain == "https://api.lemma.work"
     assert app_info.website_domain == "https://auth.lemma.work"
     assert app_info.website_base_path == "/auth"
+
+
+def test_email_verification_mode_follows_configuration(monkeypatch):
+    monkeypatch.setattr(settings, "auth_email_verification_required", True)
+    assert email_verification_mode() == "REQUIRED"
+
+    monkeypatch.setattr(settings, "auth_email_verification_required", False)
+    assert email_verification_mode() == "OPTIONAL"
 
 
 def test_e2e_reset_allows_repeated_supertokens_initialization(monkeypatch):
@@ -100,8 +109,7 @@ def test_get_allowed_cors_origin_regex_passthrough():
 
     try:
         assert (
-            get_allowed_cors_origin_regex()
-            == r"^https://([a-z0-9-]+\.)*lemma\.work$"
+            get_allowed_cors_origin_regex() == r"^https://([a-z0-9-]+\.)*lemma\.work$"
         )
     finally:
         settings.cors_origin_regex = original_cors_origin_regex
@@ -144,7 +152,10 @@ def test_build_thirdparty_providers_includes_google_and_microsoft_when_configure
         microsoft_provider.token_endpoint
         == "https://login.microsoftonline.com/tenant-123/oauth2/v2.0/token"
     )
-    assert microsoft_provider.user_info_endpoint == "https://graph.microsoft.com/oidc/userinfo"
+    assert (
+        microsoft_provider.user_info_endpoint
+        == "https://graph.microsoft.com/oidc/userinfo"
+    )
 
 
 def test_build_thirdparty_providers_uses_common_tenant_for_microsoft_by_default():

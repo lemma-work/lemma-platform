@@ -104,6 +104,9 @@ def backend_env(doc: TOMLDocument, paths: LocalPaths) -> dict[str, str]:
         "LOCAL_AGENT_RUNTIME_CONFIG_PATH": f"{STATE_MOUNT}/agent-runtime.json",
         "EMAIL_TRANSPORT": "filesystem",
         "EMAIL_OUTPUT_DIR": f"{STATE_MOUNT}/emails",
+        # Local installs do not require SMTP. Keep accounts usable while the
+        # filesystem sender remains available for explicitly testing emails.
+        "AUTH_EMAIL_VERIFICATION_REQUIRED": "false",
         "EMBEDDING_PROVIDER": "local",
         "WEB_SEARCH_PROVIDER": "duckduckgo",
         # local installs have no public URL: receive chat-surface events by
@@ -128,6 +131,7 @@ def frontend_env(doc: TOMLDocument) -> dict[str, str]:
         "NEXT_PUBLIC_SUPERTOKENS_API_GATEWAY_PATH": "/st",
         "NEXT_PUBLIC_AUTH_DEFAULT_REDIRECT_URI": f"{frontend_origin(doc)}/",
         "NEXT_PUBLIC_SESSION_TOKEN_DOMAIN": "",
+        "NEXT_PUBLIC_AUTH_EMAIL_VERIFICATION_REQUIRED": "false",
     }
     env.update(store.env_overrides(doc, "frontend"))
     return env

@@ -265,6 +265,7 @@ def e2e_settings(test_database_url, test_redis_url, supertokens_container):
     settings.google_client_id = "test-google-client-id"
     settings.google_client_secret = "test-google-client-secret"
     settings.email_transport = "filesystem"
+    settings.auth_email_verification_required = True
     settings.auth_email_deliverability_checks_enabled = False
     settings.auth_abuse_protection_enabled = False
     settings.auth_altcha_enabled = False

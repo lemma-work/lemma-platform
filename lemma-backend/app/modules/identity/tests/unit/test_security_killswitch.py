@@ -156,6 +156,35 @@ async def test_local_account_state_blocks_application_access(
     assert exc.value.detail["code"] == code
 
 
+@pytest.mark.asyncio
+async def test_unverified_account_is_allowed_when_verification_is_optional(monkeypatch):
+    conn = _connection()
+    monkeypatch.setattr(
+        security.settings, "authz_delegated_tokens_enabled", False, raising=False
+    )
+    monkeypatch.setattr(
+        security.settings, "auth_email_verification_required", False, raising=False
+    )
+    monkeypatch.setattr(
+        security,
+        "get_session",
+        AsyncMock(return_value=_FakeSession(str(uuid4()), {})),
+    )
+    monkeypatch.setattr(
+        security,
+        "_get_local_auth_state",
+        AsyncMock(
+            return_value=SimpleNamespace(
+                is_active=True, is_verified=False, is_deleted=False
+            )
+        ),
+    )
+
+    await security.verify_auth(conn)
+
+    assert conn.state.user is not None
+
+
 def _delegation_payload(*, user_id: str, actor_id: str) -> dict:
     return {
         CLAIM_ACTOR_TYPE: "AGENT",

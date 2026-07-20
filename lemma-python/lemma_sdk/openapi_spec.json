@@ -12681,10 +12681,45 @@
             ],
             "title": "Date Of Birth"
           },
+          "deactivated_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Deactivated At"
+          },
+          "deactivation_reason": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Deactivation Reason"
+          },
           "email": {
             "format": "email",
             "title": "Email",
             "type": "string"
+          },
+          "email_verified_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Email Verified At"
           },
           "first_name": {
             "anyOf": [
@@ -12735,6 +12770,18 @@
               }
             ],
             "title": "Mobile Number"
+          },
+          "mobile_verified_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Mobile Verified At"
           },
           "telegram_username": {
             "anyOf": [
@@ -14714,7 +14761,7 @@
   "info": {
     "description": "Authentication API with JWT, user management, and OAuth support",
     "title": "Lemma Backend",
-    "version": "0.6.3"
+    "version": "0.6.4"
   },
   "openapi": "3.1.0",
   "paths": {

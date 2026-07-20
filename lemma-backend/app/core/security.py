@@ -175,7 +175,10 @@ async def verify_auth(connection: HTTPConnection):
                         "message": "This account is inactive.",
                     },
                 )
-            if not local_state.is_verified:
+            if (
+                settings.auth_email_verification_required
+                and not local_state.is_verified
+            ):
                 raise HTTPException(
                     status_code=403,
                     detail={

@@ -151,62 +151,67 @@ class TelegramOIDCService:
         except (TypeError, json.JSONDecodeError) as exc:
             raise TelegramOIDCError("Telegram login request is invalid") from exc
 
-    async def exchange_and_validate(
-        self,
+    @staticmethod
+    def _configured_credentials() -> tuple[str, str, str]:
+        client_id = settings.telegram_oidc_client_id
+        client_secret = reveal_secret(settings.telegram_oidc_client_secret)
+        redirect_uri = settings.telegram_oidc_redirect_uri
+        if not client_id or not client_secret or not redirect_uri:
+            raise TelegramOIDCError("Telegram login is not configured")
+        return client_id, client_secret, redirect_uri
+
+    @staticmethod
+    async def _exchange_code(
+        client: httpx.AsyncClient,
         *,
         code: str,
         transaction: TelegramTransaction,
-    ) -> dict[str, Any]:
-        client_id = settings.telegram_oidc_client_id
-        client_secret = reveal_secret(settings.telegram_oidc_client_secret)
-        if (
-            not client_id
-            or not client_secret
-            or not settings.telegram_oidc_redirect_uri
-        ):
-            raise TelegramOIDCError("Telegram login is not configured")
-        try:
-            async with httpx.AsyncClient(timeout=10) as client:
-                token_response = await client.post(
-                    settings.telegram_oidc_token_endpoint,
-                    auth=(client_id, client_secret),
-                    data={
-                        "grant_type": "authorization_code",
-                        "code": code,
-                        "redirect_uri": settings.telegram_oidc_redirect_uri,
-                        "client_id": client_id,
-                        "code_verifier": transaction.code_verifier,
-                    },
-                )
-                if token_response.status_code != 200:
-                    raise TelegramOIDCError("Telegram rejected the login request")
-                id_token = str(token_response.json().get("id_token") or "")
-                if not id_token:
-                    raise TelegramOIDCError("Telegram did not return an identity token")
-                try:
-                    cached_jwks = await self._redis.get("identity:telegram:jwks")
-                except RedisError:
-                    cached_jwks = None
-                if cached_jwks:
-                    jwks = json.loads(cached_jwks)
-                else:
-                    jwks_response = await client.get(settings.telegram_oidc_jwks_uri)
-                    if jwks_response.status_code != 200:
-                        raise TelegramOIDCError(
-                            "Telegram verification keys are unavailable"
-                        )
-                    jwks = jwks_response.json()
-                    try:
-                        await self._redis.set(
-                            "identity:telegram:jwks", json.dumps(jwks), ex=600
-                        )
-                    except RedisError:
-                        pass
-        except (httpx.HTTPError, json.JSONDecodeError, ValueError) as exc:
-            raise TelegramOIDCError(
-                "Telegram login is temporarily unavailable"
-            ) from exc
+        client_id: str,
+        client_secret: str,
+        redirect_uri: str,
+    ) -> str:
+        response = await client.post(
+            settings.telegram_oidc_token_endpoint,
+            auth=(client_id, client_secret),
+            data={
+                "grant_type": "authorization_code",
+                "code": code,
+                "redirect_uri": redirect_uri,
+                "client_id": client_id,
+                "code_verifier": transaction.code_verifier,
+            },
+        )
+        if response.status_code != 200:
+            raise TelegramOIDCError("Telegram rejected the login request")
+        id_token = str(response.json().get("id_token") or "")
+        if not id_token:
+            raise TelegramOIDCError("Telegram did not return an identity token")
+        return id_token
 
+    async def _load_jwks(self, client: httpx.AsyncClient) -> dict[str, Any]:
+        try:
+            cached = await self._redis.get("identity:telegram:jwks")
+        except RedisError:
+            cached = None
+        if cached:
+            return cast(dict[str, Any], json.loads(cached))
+
+        response = await client.get(settings.telegram_oidc_jwks_uri)
+        if response.status_code != 200:
+            raise TelegramOIDCError("Telegram verification keys are unavailable")
+        jwks = cast(dict[str, Any], response.json())
+        try:
+            await self._redis.set("identity:telegram:jwks", json.dumps(jwks), ex=600)
+        except RedisError:
+            # JWKS caching is an optimization; fresh keys already validated this
+            # request, so a cache outage must not turn a valid login into a 5xx.
+            pass
+        return jwks
+
+    @staticmethod
+    def _decode_id_token(
+        id_token: str, jwks: dict[str, Any], client_id: str
+    ) -> dict[str, Any]:
         try:
             header = jwt.get_unverified_header(id_token)
             if header.get("alg") != "RS256":
@@ -217,18 +222,26 @@ class TelegramOIDCService:
                 if key.get("kid") == header.get("kid")
             )
             signing_key = RSAAlgorithm.from_jwk(json.dumps(matching))
-            claims = jwt.decode(
-                id_token,
-                cast(Any, signing_key),
-                algorithms=["RS256"],
-                audience=client_id,
-                issuer=settings.telegram_oidc_issuer,
-                options={"require": ["exp", "iat", "iss", "aud", "sub", "nonce"]},
+            return cast(
+                dict[str, Any],
+                jwt.decode(
+                    id_token,
+                    cast(Any, signing_key),
+                    algorithms=["RS256"],
+                    audience=client_id,
+                    issuer=settings.telegram_oidc_issuer,
+                    options={"require": ["exp", "iat", "iss", "aud", "sub", "nonce"]},
+                ),
             )
         except StopIteration as exc:
             raise TelegramOIDCError("Telegram signing key was not found") from exc
         except jwt.PyJWTError as exc:
             raise TelegramOIDCError("Telegram identity token is invalid") from exc
+
+    @staticmethod
+    def _validate_claims(
+        claims: dict[str, Any], transaction: TelegramTransaction
+    ) -> dict[str, Any]:
         if not secrets.compare_digest(
             str(claims.get("nonce") or ""), transaction.nonce
         ):
@@ -237,6 +250,33 @@ class TelegramOIDCService:
             raise TelegramOIDCError("Telegram did not verify the mobile number")
         claims["phone_number"] = normalize_e164(str(claims.get("phone_number") or ""))
         return claims
+
+    async def exchange_and_validate(
+        self,
+        *,
+        code: str,
+        transaction: TelegramTransaction,
+    ) -> dict[str, Any]:
+        client_id, client_secret, redirect_uri = self._configured_credentials()
+        try:
+            async with httpx.AsyncClient(timeout=10) as client:
+                id_token = await self._exchange_code(
+                    client,
+                    code=code,
+                    transaction=transaction,
+                    client_id=client_id,
+                    client_secret=client_secret,
+                    redirect_uri=redirect_uri,
+                )
+                jwks = await self._load_jwks(client)
+        except TelegramOIDCError:
+            raise
+        except (httpx.HTTPError, json.JSONDecodeError, ValueError) as exc:
+            raise TelegramOIDCError(
+                "Telegram login is temporarily unavailable"
+            ) from exc
+        claims = self._decode_id_token(id_token, jwks, client_id)
+        return self._validate_claims(claims, transaction)
 
     async def find_signin_user(self, phone_number: str) -> User:
         async with async_session_maker() as session:

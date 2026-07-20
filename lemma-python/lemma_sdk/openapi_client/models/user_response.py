@@ -28,9 +28,13 @@ class UserResponse:
         updated_at (datetime.datetime):
         country (None | str | Unset):
         date_of_birth (datetime.date | None | Unset):
+        deactivated_at (datetime.datetime | None | Unset):
+        deactivation_reason (None | str | Unset):
+        email_verified_at (datetime.datetime | None | Unset):
         first_name (None | str | Unset):
         last_name (None | str | Unset):
         mobile_number (None | str | Unset):
+        mobile_verified_at (datetime.datetime | None | Unset):
         telegram_username (None | str | Unset):
         timezone (None | str | Unset):
     """
@@ -44,9 +48,13 @@ class UserResponse:
     updated_at: datetime.datetime
     country: None | str | Unset = UNSET
     date_of_birth: datetime.date | None | Unset = UNSET
+    deactivated_at: datetime.datetime | None | Unset = UNSET
+    deactivation_reason: None | str | Unset = UNSET
+    email_verified_at: datetime.datetime | None | Unset = UNSET
     first_name: None | str | Unset = UNSET
     last_name: None | str | Unset = UNSET
     mobile_number: None | str | Unset = UNSET
+    mobile_verified_at: datetime.datetime | None | Unset = UNSET
     telegram_username: None | str | Unset = UNSET
     timezone: None | str | Unset = UNSET
     additional_properties: dict[str, Any] = _attrs_field(init=False, factory=dict)
@@ -80,6 +88,28 @@ class UserResponse:
         else:
             date_of_birth = self.date_of_birth
 
+        deactivated_at: None | str | Unset
+        if isinstance(self.deactivated_at, Unset):
+            deactivated_at = UNSET
+        elif isinstance(self.deactivated_at, datetime.datetime):
+            deactivated_at = self.deactivated_at.isoformat()
+        else:
+            deactivated_at = self.deactivated_at
+
+        deactivation_reason: None | str | Unset
+        if isinstance(self.deactivation_reason, Unset):
+            deactivation_reason = UNSET
+        else:
+            deactivation_reason = self.deactivation_reason
+
+        email_verified_at: None | str | Unset
+        if isinstance(self.email_verified_at, Unset):
+            email_verified_at = UNSET
+        elif isinstance(self.email_verified_at, datetime.datetime):
+            email_verified_at = self.email_verified_at.isoformat()
+        else:
+            email_verified_at = self.email_verified_at
+
         first_name: None | str | Unset
         if isinstance(self.first_name, Unset):
             first_name = UNSET
@@ -97,6 +127,14 @@ class UserResponse:
             mobile_number = UNSET
         else:
             mobile_number = self.mobile_number
+
+        mobile_verified_at: None | str | Unset
+        if isinstance(self.mobile_verified_at, Unset):
+            mobile_verified_at = UNSET
+        elif isinstance(self.mobile_verified_at, datetime.datetime):
+            mobile_verified_at = self.mobile_verified_at.isoformat()
+        else:
+            mobile_verified_at = self.mobile_verified_at
 
         telegram_username: None | str | Unset
         if isinstance(self.telegram_username, Unset):
@@ -127,12 +165,20 @@ class UserResponse:
             field_dict["country"] = country
         if date_of_birth is not UNSET:
             field_dict["date_of_birth"] = date_of_birth
+        if deactivated_at is not UNSET:
+            field_dict["deactivated_at"] = deactivated_at
+        if deactivation_reason is not UNSET:
+            field_dict["deactivation_reason"] = deactivation_reason
+        if email_verified_at is not UNSET:
+            field_dict["email_verified_at"] = email_verified_at
         if first_name is not UNSET:
             field_dict["first_name"] = first_name
         if last_name is not UNSET:
             field_dict["last_name"] = last_name
         if mobile_number is not UNSET:
             field_dict["mobile_number"] = mobile_number
+        if mobile_verified_at is not UNSET:
+            field_dict["mobile_verified_at"] = mobile_verified_at
         if telegram_username is not UNSET:
             field_dict["telegram_username"] = telegram_username
         if timezone is not UNSET:
@@ -183,6 +229,51 @@ class UserResponse:
 
         date_of_birth = _parse_date_of_birth(d.pop("date_of_birth", UNSET))
 
+        def _parse_deactivated_at(data: object) -> datetime.datetime | None | Unset:
+            if data is None:
+                return data
+            if isinstance(data, Unset):
+                return data
+            try:
+                if not isinstance(data, str):
+                    raise TypeError()
+                deactivated_at_type_0 = isoparse(data)
+
+                return deactivated_at_type_0
+            except (TypeError, ValueError, AttributeError, KeyError):
+                pass
+            return cast(datetime.datetime | None | Unset, data)
+
+        deactivated_at = _parse_deactivated_at(d.pop("deactivated_at", UNSET))
+
+        def _parse_deactivation_reason(data: object) -> None | str | Unset:
+            if data is None:
+                return data
+            if isinstance(data, Unset):
+                return data
+            return cast(None | str | Unset, data)
+
+        deactivation_reason = _parse_deactivation_reason(
+            d.pop("deactivation_reason", UNSET)
+        )
+
+        def _parse_email_verified_at(data: object) -> datetime.datetime | None | Unset:
+            if data is None:
+                return data
+            if isinstance(data, Unset):
+                return data
+            try:
+                if not isinstance(data, str):
+                    raise TypeError()
+                email_verified_at_type_0 = isoparse(data)
+
+                return email_verified_at_type_0
+            except (TypeError, ValueError, AttributeError, KeyError):
+                pass
+            return cast(datetime.datetime | None | Unset, data)
+
+        email_verified_at = _parse_email_verified_at(d.pop("email_verified_at", UNSET))
+
         def _parse_first_name(data: object) -> None | str | Unset:
             if data is None:
                 return data
@@ -209,6 +300,25 @@ class UserResponse:
             return cast(None | str | Unset, data)
 
         mobile_number = _parse_mobile_number(d.pop("mobile_number", UNSET))
+
+        def _parse_mobile_verified_at(data: object) -> datetime.datetime | None | Unset:
+            if data is None:
+                return data
+            if isinstance(data, Unset):
+                return data
+            try:
+                if not isinstance(data, str):
+                    raise TypeError()
+                mobile_verified_at_type_0 = isoparse(data)
+
+                return mobile_verified_at_type_0
+            except (TypeError, ValueError, AttributeError, KeyError):
+                pass
+            return cast(datetime.datetime | None | Unset, data)
+
+        mobile_verified_at = _parse_mobile_verified_at(
+            d.pop("mobile_verified_at", UNSET)
+        )
 
         def _parse_telegram_username(data: object) -> None | str | Unset:
             if data is None:
@@ -238,9 +348,13 @@ class UserResponse:
             updated_at=updated_at,
             country=country,
             date_of_birth=date_of_birth,
+            deactivated_at=deactivated_at,
+            deactivation_reason=deactivation_reason,
+            email_verified_at=email_verified_at,
             first_name=first_name,
             last_name=last_name,
             mobile_number=mobile_number,
+            mobile_verified_at=mobile_verified_at,
             telegram_username=telegram_username,
             timezone=timezone,
         )

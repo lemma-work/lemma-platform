@@ -6,6 +6,7 @@ from supertokens_python.recipe.session.asyncio import (
     create_new_session_without_request_response,
     refresh_session_without_request_response,
 )
+from app.core.config import settings
 from app.core.log.log import get_logger
 from app.core.authorization.delegation import (
     CLAIM_DELEGATION_VERSION,
@@ -33,7 +34,7 @@ async def _assert_local_user_can_authenticate(user_id: UUID) -> None:
         state is None
         or not state.is_active
         or state.is_deleted
-        or not state.is_verified
+        or (settings.auth_email_verification_required and not state.is_verified)
     ):
         raise ValueError("User is not eligible for an authenticated session")
 

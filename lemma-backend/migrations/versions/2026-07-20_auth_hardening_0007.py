@@ -4,16 +4,12 @@ Revision ID: 0007_auth_hardening
 Revises: 0006_conversation_history_index
 """
 
-from collections.abc import Sequence
-
 import sqlalchemy as sa
 from alembic import op
 
 
 revision = "0007_auth_hardening"
 down_revision = "0006_conversation_history_index"
-branch_labels: str | Sequence[str] | None = None
-depends_on: str | Sequence[str] | None = None
 
 
 def upgrade() -> None:

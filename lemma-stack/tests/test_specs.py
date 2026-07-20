@@ -195,6 +195,7 @@ def test_backend_env_golden(config, paths, manifest):
     assert env["STORAGE_BACKEND"] == "local"
     assert env["LOCAL_KREUZBERG_ENABLED"] == "false"
     assert env["EMBEDDING_PROVIDER"] == "local"
+    assert env["AUTH_EMAIL_VERIFICATION_REQUIRED"] == "false"
     assert env["AGENTBOX_API_KEY"] == store.agentbox_api_key(config)
     # chat surfaces default to no-public-URL receive modes
     assert env["ENABLE_TELEGRAM_POLLING_MODE"] == "true"
@@ -212,5 +213,6 @@ def test_custom_ports_flow_into_urls(config, paths, manifest):
     assert backend.env["API_URL"] == "http://127-0-0-1.sslip.io:9000"
     assert frontend.env["NEXT_PUBLIC_API_URL"] == "http://127-0-0-1.sslip.io:9000"
     assert frontend.env["NEXT_PUBLIC_SITE_URL"] == "http://127-0-0-1.sslip.io:4000"
+    assert frontend.env["NEXT_PUBLIC_AUTH_EMAIL_VERIFICATION_REQUIRED"] == "false"
     assert backend.env["APP_BASE_DOMAIN"] == "127-0-0-1.sslip.io:9000"
     assert render.agentbox_app_domain(config) == "127-0-0-1.sslip.io:8721"

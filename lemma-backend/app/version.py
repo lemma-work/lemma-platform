@@ -21,4 +21,4 @@ Use a normal MAJOR.MINOR.PATCH string.
 
 from __future__ import annotations
 
-API_VERSION = "0.6.3"
+API_VERSION = "0.6.4"

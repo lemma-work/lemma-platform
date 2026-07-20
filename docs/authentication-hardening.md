@@ -16,6 +16,7 @@ SMTP_FROM_EMAIL=no-reply@example.com
 SMTP_FROM_NAME=Lemma
 SMTP_USE_TLS=true
 
+AUTH_EMAIL_VERIFICATION_REQUIRED=true
 AUTH_EMAIL_DELIVERABILITY_CHECKS_ENABLED=true
 AUTH_DISPOSABLE_EMAIL_DOMAINS_ENABLED=true
 AUTH_DISPOSABLE_EMAIL_ALLOWLIST=[]
@@ -35,7 +36,7 @@ TELEGRAM_OIDC_CLIENT_SECRET=...
 TELEGRAM_OIDC_REDIRECT_URI=https://api.example.com/auth/telegram/callback
 ```
 
-For `lemma-stack`, each value can be set with `lemma-stack config set KEY value`; backend environment overrides are passed through unchanged.
+For `lemma-stack`, each value can be set with `lemma-stack config set KEY value`; backend environment overrides are passed through unchanged. The local stack explicitly defaults `AUTH_EMAIL_VERIFICATION_REQUIRED` and its frontend counterpart to `false`, because local users normally have no SMTP account. Production keeps the backend and frontend values enabled.
 
 Only list the immediate reverse proxies in `AUTH_TRUSTED_PROXY_IPS`. Requests from every other peer ignore `Forwarded` and `X-Forwarded-For`.
 
