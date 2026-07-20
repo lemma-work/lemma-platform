@@ -109,6 +109,23 @@ class _FakeConn:
         return False
 
 
+class _RejectConn:
+    def __init__(self, status_code: int):
+        from websockets.datastructures import Headers
+        from websockets.exceptions import InvalidStatus
+        from websockets.http11 import Response
+
+        self._error = InvalidStatus(
+            Response(status_code, "Rejected", Headers())
+        )
+
+    async def __aenter__(self):
+        raise self._error
+
+    async def __aexit__(self, *_a):
+        return False
+
+
 @pytest.mark.asyncio
 async def test_send_json_swallows_send_failure():
     ws = _FakeWS()
@@ -204,6 +221,136 @@ async def test_run_daemon_uses_token_provider_on_each_connect(monkeypatch):
     )
 
     assert tokens_used == ["token-1", "token-2"]
+
+
+@pytest.mark.asyncio
+async def test_run_daemon_refreshes_token_after_auth_rejection(monkeypatch):
+    monkeypatch.setattr(
+        runner, "ensure_config", lambda: {"device_key": "k", "display_name": "t"}
+    )
+    monkeypatch.setattr(runner, "discover_harness_catalog", lambda: {})
+    monkeypatch.setattr(runner, "save_config", lambda _c: None)
+    monkeypatch.setattr(runner, "device_info", lambda: {})
+    monkeypatch.setattr(runner, "daemon_ws_url", lambda _b: "ws://example/daemon")
+    monkeypatch.setattr(runner, "reconnect_delay_seconds", lambda _a: 0.0)
+
+    tokens_provided = iter(["expired-token", "fresh-token"])
+    tokens_used: list[str] = []
+
+    def connect_factory(token: str):
+        tokens_used.append(token)
+        if token == "expired-token":
+            return _RejectConn(403)
+        return _FakeConn(_FakeWS(incoming=[]))
+
+    await runner.run_daemon(
+        base_url="http://example",
+        token="unused",
+        verify_ssl=True,
+        token_provider=lambda: next(tokens_provided),
+        connect_factory=connect_factory,
+        max_reconnect_attempts=1,
+    )
+
+    assert tokens_used == ["expired-token", "fresh-token"]
+
+
+@pytest.mark.asyncio
+async def test_run_daemon_fails_after_refreshed_token_is_rejected(monkeypatch):
+    import click
+
+    monkeypatch.setattr(
+        runner, "ensure_config", lambda: {"device_key": "k", "display_name": "t"}
+    )
+    monkeypatch.setattr(runner, "discover_harness_catalog", lambda: {})
+    monkeypatch.setattr(runner, "save_config", lambda _c: None)
+    monkeypatch.setattr(runner, "device_info", lambda: {})
+    monkeypatch.setattr(runner, "daemon_ws_url", lambda _b: "ws://example/daemon")
+    monkeypatch.setattr(runner, "reconnect_delay_seconds", lambda _a: 0.0)
+
+    tokens_used: list[str] = []
+
+    def connect_factory(token: str):
+        tokens_used.append(token)
+        return _RejectConn(403)
+
+    with pytest.raises(click.ClickException, match="after refreshing the session"):
+        await runner.run_daemon(
+            base_url="http://example",
+            token="unused",
+            verify_ssl=True,
+            token_provider=lambda: f"token-{len(tokens_used) + 1}",
+            connect_factory=connect_factory,
+        )
+
+    assert tokens_used == ["token-1", "token-2"]
+
+
+@pytest.mark.asyncio
+async def test_run_daemon_retries_transient_token_refresh_failure(monkeypatch):
+    monkeypatch.setattr(
+        runner, "ensure_config", lambda: {"device_key": "k", "display_name": "t"}
+    )
+    monkeypatch.setattr(runner, "discover_harness_catalog", lambda: {})
+    monkeypatch.setattr(runner, "save_config", lambda _c: None)
+    monkeypatch.setattr(runner, "device_info", lambda: {})
+    monkeypatch.setattr(runner, "daemon_ws_url", lambda _b: "ws://example/daemon")
+    monkeypatch.setattr(runner, "reconnect_delay_seconds", lambda _a: 0.0)
+
+    provider_calls = 0
+    tokens_used: list[str] = []
+
+    def token_provider() -> str:
+        nonlocal provider_calls
+        provider_calls += 1
+        if provider_calls == 1:
+            raise runner.DaemonTokenRefreshError("auth service unavailable")
+        return "fresh-token"
+
+    def connect_factory(token: str):
+        tokens_used.append(token)
+        return _FakeConn(_FakeWS(incoming=[]))
+
+    await runner.run_daemon(
+        base_url="http://example",
+        token="unused",
+        verify_ssl=True,
+        token_provider=token_provider,
+        connect_factory=connect_factory,
+        max_reconnect_attempts=1,
+    )
+
+    assert provider_calls == 2
+    assert tokens_used == ["fresh-token"]
+
+
+def test_daemon_token_provider_refreshes_after_initial_connection(monkeypatch):
+    from types import SimpleNamespace
+
+    from lemma_cli.daemon import commands
+
+    state = SimpleNamespace(
+        token=None,
+        config={"token": "stale-token"},
+        server_source="config",
+    )
+    refresh_calls = 0
+
+    def refresh(current_state) -> None:
+        nonlocal refresh_calls
+        refresh_calls += 1
+        current_state.config["token"] = "fresh-token"
+
+    monkeypatch.setattr(commands, "_refresh_auth_session", refresh)
+    token_provider = commands._daemon_token_provider(
+        state,
+        initial_token="initial-token",
+    )
+
+    assert token_provider() == "initial-token"
+    assert refresh_calls == 0
+    assert token_provider() == "fresh-token"
+    assert refresh_calls == 1
 
 
 class _Resp:

@@ -46,6 +46,40 @@ def _refresh_auth_session(state) -> None:
     refresh_auth_session(state)
 
 
+def _daemon_token_provider(state, *, initial_token: str):
+    """Return the startup token once, then refresh before every reconnect.
+
+    A daemon connection can outlive the access token that authenticated it.
+    Keeping refresh here (where the mutable CLI state and refresh token live)
+    lets ``run_daemon`` ask for a current bearer token without coupling the
+    transport loop to CLI config persistence.
+    """
+    from lemma_sdk.config import resolve_token  # noqa: PLC0415
+
+    from .runner import DaemonTokenRefreshError  # noqa: PLC0415
+
+    first_token: str | None = initial_token
+
+    def provide_token() -> str:
+        nonlocal first_token
+        if first_token is not None:
+            token = first_token
+            first_token = None
+            return token
+
+        try:
+            _refresh_auth_session(state)
+            return resolve_token(
+                state.token,
+                state.config,
+                use_env=state.server_source == "env",
+            )
+        except ValueError as exc:
+            raise DaemonTokenRefreshError(str(exc)) from exc
+
+    return provide_token
+
+
 @app.command("discover")
 def discover_daemon() -> None:
     _console().print_json(data=discover_harness_catalog())
@@ -95,15 +129,20 @@ def start_daemon(
     resolved_base_url = resolve_base_url(
         state.base_url, state.config, use_env=state.server_source == "env",
     )
+    initial_token = resolve_token(
+        state.token,
+        state.config,
+        use_env=state.server_source == "env",
+    )
     write_daemon_status(os.getpid(), base_url=resolved_base_url, server=state.server)
     try:
         asyncio.run(
             run_daemon_with_graceful_shutdown(
                 base_url=resolved_base_url,
-                token=resolve_token(
-                    state.token,
-                    state.config,
-                    use_env=state.server_source == "env",
+                token=initial_token,
+                token_provider=_daemon_token_provider(
+                    state,
+                    initial_token=initial_token,
                 ),
                 verify_ssl=resolve_verify_ssl(state.no_verify_ssl),
                 debug=debug,

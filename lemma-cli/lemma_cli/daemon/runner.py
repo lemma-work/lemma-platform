@@ -28,6 +28,11 @@ from .process import create_subprocess
 # backoff, capped, to avoid hammering the server on a sustained outage.
 _RECONNECT_BASE_DELAY_SECONDS = 1.0
 _RECONNECT_MAX_DELAY_SECONDS = 30.0
+_MAX_CONSECUTIVE_AUTH_FAILURES = 2
+
+
+class DaemonTokenRefreshError(RuntimeError):
+    """A recoverable failure while obtaining the token for a reconnect."""
 
 # App-level heartbeat: sent on its own asyncio task, independent of run-handling
 # tasks, so a busy/slow run can never delay it. This is the primary liveness
@@ -281,12 +286,14 @@ async def run_daemon(
         # reconnect cycles used only to bound the loop in tests.
         backoff_attempt = 0
         reconnects = 0
+        consecutive_auth_failures = 0
         while True:
-            current_token = token_provider() if token_provider is not None else token
             daemon_log("connecting websocket", {"url": ws_url, "attempt": backoff_attempt})
             try:
+                current_token = token_provider() if token_provider is not None else token
                 async with connect_factory(current_token) as websocket:
                     backoff_attempt = 0  # reset backoff once we're connected
+                    consecutive_auth_failures = 0
                     await _serve_connection(
                         websocket,
                         config=config,
@@ -301,13 +308,29 @@ async def run_daemon(
             except InvalidStatus as exc:
                 status_code = getattr(getattr(exc, "response", None), "status_code", None)
                 if status_code in {401, 403}:
-                    import click
-                    raise click.ClickException(
-                        "Daemon websocket authentication failed. Run `lemma auth login` and try again."
-                    ) from exc
-                daemon_log("websocket rejected; will retry", {"status": status_code})
+                    consecutive_auth_failures += 1
+                    if consecutive_auth_failures >= _MAX_CONSECUTIVE_AUTH_FAILURES:
+                        import click
+                        raise click.ClickException(
+                            "Daemon websocket authentication failed after refreshing the session. "
+                            "Run `lemma auth login` and try again."
+                        ) from exc
+                    daemon_log(
+                        "websocket authentication rejected; refreshing and retrying",
+                        {"status": status_code},
+                    )
+                else:
+                    consecutive_auth_failures = 0
+                    daemon_log("websocket rejected; will retry", {"status": status_code})
             except (OSError, WebSocketException) as exc:
+                consecutive_auth_failures = 0
                 daemon_log("websocket connection error; will retry", {"error": str(exc)})
+            except DaemonTokenRefreshError as exc:
+                # Keep the daemon alive through a transient auth service
+                # outage; the next capped-backoff attempt refreshes from disk
+                # again (and observes rotation by another process).
+                consecutive_auth_failures = 0
+                daemon_log("daemon token refresh failed; will retry", {"error": str(exc)})
 
             reconnects += 1
             if max_reconnect_attempts is not None and reconnects > max_reconnect_attempts:
