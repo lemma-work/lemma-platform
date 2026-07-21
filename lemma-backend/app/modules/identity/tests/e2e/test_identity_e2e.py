@@ -27,10 +27,7 @@ from supertokens_python.recipe.thirdparty.types import (
 from app.modules.identity.infrastructure.models.organization_models import (
     OrganizationInvitation,
 )
-from app.modules.identity.infrastructure.models.user_models import (
-    EmailSuppression,
-    User,
-)
+from app.modules.identity.infrastructure.models.user_models import User
 from app.core.infrastructure.events.models import DomainEventOutbox
 from app.core.infrastructure.db.session import async_session_maker
 from app.modules.identity.domain.events import UserSignedUpEvent
@@ -640,20 +637,16 @@ async def test_signed_bounce_events_only_deactivate_on_hard_bounce(
     hard_payload = {
         "email": hard_bounced["email"],
         "event": "hard_bounce",
-        "provider_event_id": f"hard-{uuid4().hex}",
-        "diagnostic": "550 recipient does not exist",
     }
     hard_response = await send_event(hard_payload)
     assert hard_response.status_code == 204
-    # Provider retries are safe and do not create duplicate suppression rows.
+    # Provider retries are idempotent against the already-deactivated user.
     assert (await send_event(hard_payload)).status_code == 204
 
     soft_response = await send_event(
         {
             "email": soft_bounced["email"],
             "event": "soft_bounce",
-            "provider_event_id": f"soft-{uuid4().hex}",
-            "diagnostic": "452 mailbox temporarily full",
         }
     )
     assert soft_response.status_code == 204
@@ -661,21 +654,26 @@ async def test_signed_bounce_events_only_deactivate_on_hard_bounce(
     async with async_session_maker() as session:
         hard_user = await session.get(User, UUID(hard_bounced["id"]))
         soft_user = await session.get(User, UUID(soft_bounced["id"]))
-        suppressions = list(
-            (
-                await session.execute(
-                    select(EmailSuppression).where(
-                        EmailSuppression.normalized_email == hard_bounced["email"]
-                    )
-                )
-            ).scalars()
-        )
     assert hard_user is not None
     assert hard_user.is_active is False
     assert hard_user.deactivation_reason == "HARD_BOUNCE"
-    assert len(suppressions) == 1
-    assert suppressions[0].is_permanent is True
     assert soft_user is not None and soft_user.is_active is True
+
+    # Password-reset remains enumeration-safe but produces no further email
+    # after the account has been deactivated by a confirmed hard bounce.
+    existing_messages = _filesystem_emails(
+        settings.email_output_dir, hard_bounced["email"]
+    )
+    reset_response = await async_client.post(
+        "/st/auth/user/password/reset/token",
+        json={"formFields": [{"id": "email", "value": hard_bounced["email"]}]},
+    )
+    assert reset_response.status_code == 200
+    assert reset_response.json()["status"] == "OK"
+    assert (
+        _filesystem_emails(settings.email_output_dir, hard_bounced["email"])
+        == existing_messages
+    )
 
     revoked_session = await async_client.get(
         "/users/me", headers=_auth_headers(hard_bounced["token"])

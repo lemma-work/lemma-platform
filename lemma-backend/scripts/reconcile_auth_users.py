@@ -29,7 +29,6 @@ from app.modules.identity.infrastructure.supertokens_auth.initialization import 
 )
 from app.modules.identity.services.email_policy import (
     EmailPolicyError,
-    record_email_suppression,
     validate_auth_email,
 )
 
@@ -38,7 +37,6 @@ DEACTIVATION_REASONS = {
     "INVALID_SYNTAX",
     "INVALID_DOMAIN",
     "NULL_MX",
-    "EMAIL_SUPPRESSED",
 }
 
 
@@ -105,12 +103,6 @@ async def reconcile(*, apply: bool) -> dict[str, int]:
                             local_user.deactivation_reason = rejection.reason
                             await session.commit()
                             await get_user_cache().invalidate(user_id)
-                            if rejection.reason != "EMAIL_SUPPRESSED":
-                                await record_email_suppression(
-                                    email,
-                                    reason=rejection.reason,
-                                    evidence_source=rejection.evidence_source,
-                                )
                             await revoke_all_sessions_for_user(str(user_id))
                         continue
 

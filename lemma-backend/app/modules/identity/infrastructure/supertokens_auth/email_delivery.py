@@ -13,7 +13,10 @@ from supertokens_python.recipe.emailverification.types import (
 )
 
 from app.core.email.email_sender import EmailSender
-from app.modules.identity.services.email_policy import validate_auth_email
+from app.modules.identity.services.email_policy import (
+    EmailPolicyError,
+    validate_outbound_email,
+)
 
 
 _TEMPLATES = Path(__file__).resolve().parents[2] / "templates"
@@ -35,7 +38,10 @@ class LemmaVerificationEmailService(
         user_context: dict[str, Any],
     ) -> None:
         del user_context
-        email = await validate_auth_email(template_vars.user.email)
+        try:
+            email = await validate_outbound_email(template_vars.user.email)
+        except EmailPolicyError:
+            return
         await EmailSender.from_settings().send_email(
             email,
             "Verify your Lemma email",
@@ -54,7 +60,12 @@ class LemmaPasswordResetEmailService(
         user_context: dict[str, Any],
     ) -> None:
         del user_context
-        email = await validate_auth_email(template_vars.user.email)
+        try:
+            email = await validate_outbound_email(template_vars.user.email)
+        except EmailPolicyError:
+            # Password-reset responses remain generic to avoid account-state
+            # enumeration, while no email is sent to an inactive account.
+            return
         await EmailSender.from_settings().send_email(
             email,
             "Reset your Lemma password",

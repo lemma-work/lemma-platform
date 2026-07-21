@@ -35,7 +35,6 @@ from app.modules.identity.services.auth_abuse import (
     client_ip,
     get_auth_abuse_store,
 )
-from app.modules.identity.services.email_policy import record_email_suppression
 from app.modules.identity.services.telegram_oidc import (
     TelegramOIDCError,
     TelegramPurpose,
@@ -139,8 +138,6 @@ class TelegramConfigResponse(BaseModel):
 class BounceEvent(BaseModel):
     email: EmailStr
     event: Literal["hard_bounce", "soft_bounce"]
-    provider_event_id: str | None = Field(default=None, max_length=255)
-    diagnostic: str | None = Field(default=None, max_length=1000)
 
 
 def verify_bounce_signature(
@@ -294,18 +291,11 @@ async def accept_email_bounce(request: Request, event: BounceEvent) -> Response:
         return Response(status_code=204)
 
     email = normalize_identity_email(str(event.email))
-    await record_email_suppression(
-        email,
-        reason="HARD_BOUNCE",
-        evidence_source="provider-webhook",
-        provider_event_id=event.provider_event_id,
-        diagnostic=event.diagnostic,
-    )
     async with async_session_maker() as db_session:
         user = await db_session.scalar(
             select(User).where(func.lower(User.email) == email)
         )
-        if user is not None:
+        if user is not None and user.is_active and not user.is_deleted:
             user.is_active = False
             user.deactivated_at = user.deactivated_at or datetime.now(timezone.utc)
             user.deactivation_reason = "HARD_BOUNCE"

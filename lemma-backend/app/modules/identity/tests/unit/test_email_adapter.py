@@ -1,9 +1,40 @@
 import pytest
 
 from app.modules.identity.domain.organization_entities import OrganizationRole
+from app.modules.identity.infrastructure.adapters import email_adapter
 from app.modules.identity.infrastructure.adapters.email_adapter import (
     SmtpIdentityEmailAdapter,
 )
+from app.modules.identity.services.email_policy import (
+    EmailPolicyError,
+    EmailPolicyRejection,
+)
+
+
+@pytest.mark.asyncio
+async def test_email_adapter_refuses_policy_rejected_recipient(monkeypatch):
+    adapter = SmtpIdentityEmailAdapter()
+
+    async def reject(_email):
+        raise EmailPolicyError(
+            EmailPolicyRejection("ACCOUNT_INACTIVE", "local-user-state")
+        )
+
+    monkeypatch.setattr(email_adapter, "validate_outbound_email", reject)
+    monkeypatch.setattr(
+        email_adapter.EmailSender,
+        "from_settings",
+        lambda: pytest.fail("sender must not be created for a rejected recipient"),
+    )
+
+    sent = await adapter._send(
+        to_email="inactive@example.com",
+        subject="Subject",
+        html_content="Body",
+        text_content="Body",
+    )
+
+    assert sent is False
 
 
 @pytest.mark.asyncio

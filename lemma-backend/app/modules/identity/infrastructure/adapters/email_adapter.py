@@ -9,6 +9,10 @@ from app.modules.identity.domain.ports import IdentityEmailPort
 from app.core.email.email_sender import EmailNotConfiguredError, EmailSender
 from app.core.helpers.humanize import humanize_name
 from app.core.log.log import get_logger
+from app.modules.identity.services.email_policy import (
+    EmailPolicyError,
+    validate_outbound_email,
+)
 
 logger = get_logger(__name__)
 
@@ -80,10 +84,14 @@ class SmtpIdentityEmailAdapter(IdentityEmailPort):
         text_content: str,
     ) -> bool:
         try:
+            to_email = await validate_outbound_email(to_email)
+        except EmailPolicyError:
+            return False
+        try:
             sender = EmailSender.from_settings()
         except EmailNotConfiguredError:
             logger.debug(
-                'identity.email_adapter.skipping_identity_email_because_smtp.diagnostic'
+                "identity.email_adapter.skipping_identity_email_because_smtp.diagnostic"
             )
             return False
 

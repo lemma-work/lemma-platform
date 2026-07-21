@@ -57,30 +57,3 @@ class User(UUIDAuditBase):
             name = " ".join(part for part in [self.first_name, self.last_name] if part)
             return f"{name} <{self.email}>"
         return self.email
-
-
-class EmailSuppression(UUIDAuditBase):
-    """Permanent or temporary evidence that an address must not be mailed."""
-
-    __tablename__ = "identity_email_suppressions"
-
-    normalized_email: Mapped[str] = mapped_column(String(255), nullable=False)
-    reason: Mapped[str] = mapped_column(String(64), nullable=False)
-    evidence_source: Mapped[str] = mapped_column(String(64), nullable=False)
-    is_permanent: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
-    provider_event_id: Mapped[str | None] = mapped_column(String(255), nullable=True)
-    diagnostic: Mapped[str | None] = mapped_column(Text, nullable=True)
-
-    __table_args__ = (
-        Index(
-            "uq_identity_email_suppressions_email_lower",
-            func.lower(normalized_email),
-            unique=True,
-        ),
-        Index(
-            "uq_identity_email_suppressions_provider_event",
-            provider_event_id,
-            unique=True,
-            postgresql_where=text("provider_event_id IS NOT NULL"),
-        ),
-    )

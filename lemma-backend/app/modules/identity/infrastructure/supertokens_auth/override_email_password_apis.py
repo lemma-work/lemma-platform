@@ -23,7 +23,6 @@ from app.modules.identity.infrastructure.supertokens_auth.auth_method_conflicts 
 )
 from app.modules.identity.services.email_policy import (
     EmailPolicyError,
-    record_email_suppression,
     validate_auth_email,
 )
 from app.core.infrastructure.db.session import async_session_maker
@@ -97,15 +96,7 @@ def override_emailpassword_apis(original_implementation: APIInterface) -> APIInt
         email = _normalize_form_email(form_fields)
         try:
             email = await validate_auth_email(email)
-        except EmailPolicyError as exc:
-            evidence = exc.rejection
-            if evidence.reason in {"INVALID_SYNTAX", "INVALID_DOMAIN", "NULL_MX"}:
-                await record_email_suppression(
-                    email,
-                    reason=evidence.reason,
-                    evidence_source=evidence.evidence_source,
-                    permanent=evidence.permanent,
-                )
+        except EmailPolicyError:
             return SignUpPostNotAllowedResponse(
                 "Please use a valid, non-disposable email address"
             )

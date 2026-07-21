@@ -57,7 +57,7 @@ Only list the immediate reverse proxies in `AUTH_TRUSTED_PROXY_IPS`. Requests fr
    uv run python scripts/reconcile_auth_users.py --apply
    ```
 
-5. Enable abuse protection and ALTCHA, then monitor SMTP failures, suppression growth, `429` responses, and verification completion.
+5. Enable abuse protection and ALTCHA, then monitor SMTP failures, hard-bounce deactivations, `429` responses, and verification completion.
 6. Register the global Telegram OIDC client in BotFather, configure its exact callback URI, enable the three Telegram settings, and perform iOS/Android device acceptance testing before exposing the button.
 
 The reconciliation command is idempotent and never prints complete addresses. An `email_conflict` or `duplicate_emailpassword_identity` count must be investigated before using `--apply` for those records; conflicted records are skipped.
@@ -69,15 +69,15 @@ POST normalized provider events to `/auth/email/bounces` using this JSON body:
 ```json
 {
   "email": "person@example.com",
-  "event": "hard_bounce",
-  "provider_event_id": "provider-id",
-  "diagnostic": "550 recipient does not exist"
+  "event": "hard_bounce"
 }
 ```
 
-Set `X-Lemma-Timestamp` to the current Unix timestamp and `X-Lemma-Signature` to `sha256=<hex>`, where the hex value is `HMAC-SHA256(secret, timestamp + "." + exact_request_body)`. Timestamps outside five minutes and altered bodies are rejected. `soft_bounce` is accepted but never suppresses or deactivates an account; only `hard_bounce` does.
+Set `X-Lemma-Timestamp` to the current Unix timestamp and `X-Lemma-Signature` to `sha256=<hex>`, where the hex value is `HMAC-SHA256(secret, timestamp + "." + exact_request_body)`. Timestamps outside five minutes and altered bodies are rejected. `soft_bounce` is accepted but never deactivates an account; only `hard_bounce` does.
 
-If the SMTP provider cannot produce authenticated hard-bounce events, leave `AUTH_BOUNCE_WEBHOOK_SECRET` unset. DNS-invalid domains can still be suppressed safely.
+Hard bounces deactivate the unique matching active Lemma user and revoke its sessions. Repeated provider deliveries are idempotent because an inactive user needs no further update. Soft bounces and events for unknown addresses do not deactivate anyone. The user row is the single source of truth for delivery eligibility; there is no separate email-suppression table.
+
+If the SMTP provider cannot produce authenticated hard-bounce events, leave `AUTH_BOUNCE_WEBHOOK_SECRET` unset. Invalid syntax, nonexistent domains, and explicit null MX records are still rejected before a user is created.
 
 ## Disposable-domain snapshot
 

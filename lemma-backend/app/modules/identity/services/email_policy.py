@@ -12,12 +12,11 @@ from email_validator import (
     validate_email,
 )
 from sqlalchemy import func, select
-from sqlalchemy.dialects.postgresql import insert as pg_insert
 
 from app.core.config import settings
 from app.core.infrastructure.db.session import async_session_maker
 from app.modules.identity.domain.email import normalize_identity_email
-from app.modules.identity.infrastructure.models.user_models import EmailSuppression
+from app.modules.identity.infrastructure.models.user_models import User
 
 
 _DISPOSABLE_FILE = (
@@ -36,14 +35,6 @@ class EmailPolicyError(ValueError):
     def __init__(self, rejection: EmailPolicyRejection):
         super().__init__(rejection.reason)
         self.rejection = rejection
-
-
-def normalize_suppression_email(email: str) -> str:
-    """Canonicalize malformed historical addresses for suppression storage."""
-    try:
-        return normalize_identity_email(email)
-    except ValueError:
-        return str(email).strip().lower()
 
 
 @lru_cache(maxsize=1)
@@ -84,7 +75,7 @@ def _dns_rejection(exc: EmailUndeliverableError) -> EmailPolicyRejection | None:
     )
 
 
-async def validate_auth_email(email: str, *, check_suppression: bool = True) -> str:
+async def validate_auth_email(email: str) -> str:
     """Normalize and validate an auth email without probing its SMTP recipient."""
     try:
         syntax_result = validate_email(str(email).strip(), check_deliverability=False)
@@ -111,19 +102,6 @@ async def validate_auth_email(email: str, *, check_suppression: bool = True) -> 
             EmailPolicyRejection("DISPOSABLE_DOMAIN", "oss-domain-list")
         )
 
-    if check_suppression:
-        async with async_session_maker() as session:
-            suppressed = await session.scalar(
-                select(EmailSuppression.id).where(
-                    func.lower(EmailSuppression.normalized_email) == normalized,
-                    EmailSuppression.is_permanent.is_(True),
-                )
-            )
-        if suppressed is not None:
-            raise EmailPolicyError(
-                EmailPolicyRejection("EMAIL_SUPPRESSED", "local-suppression")
-            )
-
     if settings.auth_email_deliverability_checks_enabled:
         try:
             deliverable = await _validate_with_dns(normalized)
@@ -145,35 +123,15 @@ async def validate_auth_email(email: str, *, check_suppression: bool = True) -> 
     return normalized
 
 
-async def record_email_suppression(
-    email: str,
-    *,
-    reason: str,
-    evidence_source: str,
-    permanent: bool = True,
-    provider_event_id: str | None = None,
-    diagnostic: str | None = None,
-) -> None:
-    normalized = normalize_suppression_email(email)
-    stmt = pg_insert(EmailSuppression).values(
-        normalized_email=normalized,
-        reason=reason,
-        evidence_source=evidence_source,
-        is_permanent=permanent,
-        provider_event_id=provider_event_id,
-        diagnostic=diagnostic,
-    )
-    stmt = stmt.on_conflict_do_update(
-        index_elements=[func.lower(EmailSuppression.normalized_email)],
-        set_={
-            "reason": reason,
-            "evidence_source": evidence_source,
-            "is_permanent": permanent,
-            "provider_event_id": provider_event_id,
-            "diagnostic": diagnostic,
-            "updated_at": func.now(),
-        },
-    )
+async def validate_outbound_email(email: str) -> str:
+    """Validate an address and refuse mail to a deactivated local account."""
+    normalized = await validate_auth_email(email)
     async with async_session_maker() as session:
-        await session.execute(stmt)
-        await session.commit()
+        user = await session.scalar(
+            select(User).where(func.lower(User.email) == normalized)
+        )
+    if user is not None and (not user.is_active or user.is_deleted):
+        raise EmailPolicyError(
+            EmailPolicyRejection("ACCOUNT_INACTIVE", "local-user-state")
+        )
+    return normalized

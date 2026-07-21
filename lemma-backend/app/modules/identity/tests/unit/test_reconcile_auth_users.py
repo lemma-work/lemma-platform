@@ -62,7 +62,6 @@ def _install_fakes(monkeypatch, *, local_user, verified=False, rejection=None):
     fake_session = _FakeSession(local_user)
     fake_cache = _FakeCache()
     revoked: list[str] = []
-    suppressions: list[dict] = []
 
     async def list_users(*_args, **_kwargs):
         return _page(local_user.id, local_user.email)
@@ -78,9 +77,6 @@ def _install_fakes(monkeypatch, *, local_user, verified=False, rejection=None):
     async def revoke(user_id):
         revoked.append(user_id)
 
-    async def suppress(email, **kwargs):
-        suppressions.append({"email": email, **kwargs})
-
     monkeypatch.setattr(reconcile_auth_users, "initialize_supertokens", lambda: None)
     monkeypatch.setattr(reconcile_auth_users, "get_users_oldest_first", list_users)
     monkeypatch.setattr(
@@ -89,9 +85,8 @@ def _install_fakes(monkeypatch, *, local_user, verified=False, rejection=None):
     monkeypatch.setattr(reconcile_auth_users, "validate_auth_email", validate)
     monkeypatch.setattr(reconcile_auth_users, "is_email_verified", is_verified)
     monkeypatch.setattr(reconcile_auth_users, "revoke_all_sessions_for_user", revoke)
-    monkeypatch.setattr(reconcile_auth_users, "record_email_suppression", suppress)
     monkeypatch.setattr(reconcile_auth_users, "get_user_cache", lambda: fake_cache)
-    return fake_session, fake_cache, revoked, suppressions
+    return fake_session, fake_cache, revoked
 
 
 @pytest.mark.asyncio
@@ -106,7 +101,7 @@ async def test_reconciliation_dry_run_then_apply_is_state_idempotent(monkeypatch
         deactivated_at=None,
         deactivation_reason=None,
     )
-    session, cache, revoked, _ = _install_fakes(
+    session, cache, revoked = _install_fakes(
         monkeypatch, local_user=local_user, verified=False
     )
 
@@ -137,7 +132,7 @@ async def test_reconciliation_preserves_supertokens_verified_user(monkeypatch):
         deactivated_at=None,
         deactivation_reason=None,
     )
-    session, cache, revoked, _ = _install_fakes(
+    session, cache, revoked = _install_fakes(
         monkeypatch, local_user=local_user, verified=True
     )
 
@@ -162,7 +157,7 @@ async def test_reconciliation_deactivates_only_permanent_invalid_evidence(monkey
         deactivated_at=None,
         deactivation_reason=None,
     )
-    _, _, revoked, suppressions = _install_fakes(
+    _, _, revoked = _install_fakes(
         monkeypatch,
         local_user=local_user,
         rejection=EmailPolicyRejection("INVALID_DOMAIN", "dns"),
@@ -173,4 +168,3 @@ async def test_reconciliation_deactivates_only_permanent_invalid_evidence(monkey
     assert local_user.is_active is False
     assert local_user.deactivation_reason == "INVALID_DOMAIN"
     assert revoked == [str(user_id)]
-    assert suppressions[0]["evidence_source"] == "dns"
