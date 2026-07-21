@@ -35,10 +35,10 @@ class _Store:
         return None
 
 
-def _scope(path="/auth/signup", *, root_path=""):
+def _scope(path="/auth/signup", *, root_path="", method="POST"):
     return {
         "type": "http",
-        "method": "POST",
+        "method": method,
         "path": path,
         "root_path": root_path,
         "client": ("203.0.113.7", 1234),
@@ -166,6 +166,42 @@ async def test_auth_paths_only_applies_global_limit_to_custom_auth_routes(monkey
     await middleware(_scope("/users/me"), _receive(b""), send)
     assert store.enforced == []
     assert called == 2
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("path", "method"),
+    [
+        ("/auth/user/email/verify", "GET"),
+        ("/auth/signout", "POST"),
+    ],
+)
+async def test_session_recovery_paths_bypass_exhausted_global_limit(
+    monkeypatch, path, method
+):
+    store = _Store(reject=True)
+    monkeypatch.setattr(abuse_middleware, "get_auth_abuse_store", lambda: store)
+    called = False
+    messages = []
+
+    async def inner(_scope, _receive, send):
+        nonlocal called
+        called = True
+        await send({"type": "http.response.start", "status": 200, "headers": []})
+        await send({"type": "http.response.body", "body": b"{}", "more_body": False})
+
+    async def send(message):
+        messages.append(message)
+
+    await AuthAbuseMiddleware(inner)(
+        _scope(path, method=method),
+        _receive(b""),
+        send,
+    )
+
+    assert called is True
+    assert store.enforced == []
+    assert messages[0]["status"] == 200
 
 
 @pytest.mark.asyncio

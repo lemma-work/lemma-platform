@@ -18,7 +18,9 @@ import Session, {
 import { EmailPasswordPreBuiltUI } from "supertokens-auth-react/recipe/emailpassword/prebuiltui";
 import { ThirdPartyPreBuiltUI } from "supertokens-auth-react/recipe/thirdparty/prebuiltui";
 import { EmailVerificationPreBuiltUI } from "supertokens-auth-react/recipe/emailverification/prebuiltui";
-import EmailVerification from "supertokens-auth-react/recipe/emailverification";
+import EmailVerification, {
+  EmailVerificationClaim,
+} from "supertokens-auth-react/recipe/emailverification";
 
 import { authConfig, buildApiUrl, refreshSessionPath } from "@/components/auth/portal/auth/config";
 import {
@@ -31,6 +33,10 @@ import {
   readRawRedirectUriFromSearch,
   readRedirectUriFromSearch,
 } from "@/components/auth/portal/auth/redirects";
+import {
+  canCompleteAuthenticatedNavigation,
+  shouldFetchCurrentUser,
+} from "@/components/auth/portal/auth/verification-controller";
 import {
   challengeForDesktopVerifier,
   clearPendingDesktopAuth,
@@ -270,8 +276,21 @@ function AuthLanding() {
   const isEmailVerificationRoute = effectivePathname
     .toLowerCase()
     .endsWith("/verify-email");
+  const invalidClaims = session.loading ? [] : session.invalidClaims;
+  const hasInvalidClaims = invalidClaims.length > 0;
+  const needsEmailVerification = invalidClaims.some(
+    (claim) => claim.id === EmailVerificationClaim.id,
+  );
+  const isVerificationExperience =
+    isEmailVerificationRoute || needsEmailVerification;
+  const canNavigateAsAuthenticated = canCompleteAuthenticatedNavigation({
+    sessionLoading: session.loading,
+    doesSessionExist,
+    hasInvalidClaims,
+    isVerificationExperience,
+  });
   const authHeroCopy: HeroCopy =
-    isEmailVerificationRoute
+    isVerificationExperience
       ? {
           eyebrow: "Account security",
           title: "One quick verification.",
@@ -321,7 +340,15 @@ function AuthLanding() {
   ]);
 
   useEffect(() => {
-    if (session.loading || !doesSessionExist || desktopRequestId) {
+    if (
+      !shouldFetchCurrentUser({
+        sessionLoading: session.loading,
+        doesSessionExist,
+        hasInvalidClaims,
+        desktopRequestId,
+        isVerificationExperience,
+      })
+    ) {
       return;
     }
 
@@ -356,7 +383,13 @@ function AuthLanding() {
     return () => {
       isActive = false;
     };
-  }, [desktopRequestId, doesSessionExist, session.loading]);
+  }, [
+    desktopRequestId,
+    doesSessionExist,
+    hasInvalidClaims,
+    isVerificationExperience,
+    session.loading,
+  ]);
 
   useEffect(() => {
     if (session.loading || !doesSessionExist || !isTelegramMiniApp()) {
@@ -396,7 +429,7 @@ function AuthLanding() {
   }, [doesSessionExist, session.loading]);
 
   useEffect(() => {
-    if (session.loading || !doesSessionExist || desktopRequestId) {
+    if (!canNavigateAsAuthenticated || desktopRequestId) {
       return;
     }
 
@@ -409,14 +442,13 @@ function AuthLanding() {
     window.location.replace(finalRedirectUri);
   }, [
     desktopRequestId,
-    doesSessionExist,
+    canNavigateAsAuthenticated,
     queryRedirectUri,
     redirectUri,
-    session.loading,
   ]);
 
   useEffect(() => {
-    if (session.loading || !doesSessionExist || !desktopRequestId) {
+    if (!canNavigateAsAuthenticated || !desktopRequestId) {
       return;
     }
 
@@ -453,7 +485,7 @@ function AuthLanding() {
     return () => {
       cancelled = true;
     };
-  }, [desktopRequestId, doesSessionExist, session.loading]);
+  }, [canNavigateAsAuthenticated, desktopRequestId]);
 
   if (session.loading) {
     return (
@@ -464,7 +496,7 @@ function AuthLanding() {
     );
   }
 
-  if (isEmailVerificationRoute) {
+  if (isVerificationExperience) {
     return (
       <AuthScreenLayout destination={destination} heroCopy={authHeroCopy}>
         <div className="auth-form-stack">

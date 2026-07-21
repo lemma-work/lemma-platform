@@ -415,7 +415,8 @@ async def test_emailpassword_verification_welcome_and_password_reset_filesystem_
 
     # Signup alone must neither grant application access nor enqueue a welcome.
     blocked = await async_client.get("/users/me", headers=auth_headers)
-    assert blocked.status_code in {401, 403}
+    assert blocked.status_code == 403
+    assert blocked.json()["claimValidationErrors"][0]["id"] == "st-ev"
     assert _filesystem_emails(e2e_settings.email_output_dir, email) == []
 
     send_verification = await async_client.post(

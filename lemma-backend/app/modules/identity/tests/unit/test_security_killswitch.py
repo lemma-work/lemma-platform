@@ -9,6 +9,10 @@ from uuid import uuid4
 
 import pytest
 from fastapi import HTTPException
+from supertokens_python.recipe.session.exceptions import (
+    ClaimValidationError,
+    InvalidClaimsError,
+)
 
 from app.core import security
 from app.core.authorization.delegation import (
@@ -96,6 +100,24 @@ async def test_livez_bypasses_session_authentication(monkeypatch):
     await security.verify_auth(conn)
 
     get_session.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_invalid_session_claims_are_not_rewritten_as_unauthorised(monkeypatch):
+    invalid_claims = InvalidClaimsError(
+        "INVALID_CLAIMS",
+        [ClaimValidationError("st-ev", {"actualValue": False})],
+    )
+    monkeypatch.setattr(
+        security,
+        "get_session",
+        AsyncMock(side_effect=invalid_claims),
+    )
+
+    with pytest.raises(InvalidClaimsError) as exc:
+        await security.verify_auth(_connection())
+
+    assert exc.value is invalid_claims
 
 
 @pytest.mark.asyncio

@@ -16,6 +16,10 @@ import { authConfig } from "@/components/auth/portal/auth/config";
 import {
   runVerificationAttempt,
   runVerificationSend,
+  clearVerificationEmailSent,
+  getVerificationEmailSentAt,
+  isRateLimitError,
+  markVerificationEmailSent,
   refreshVerifiedSession,
   signOutForDifferentAccount,
   verificationCooldownSeconds,
@@ -32,6 +36,7 @@ type VerificationPhase =
   | "verifying"
   | "verified"
   | "invalid"
+  | "rate-limited"
   | "error"
   | "sign-in-required";
 
@@ -52,7 +57,7 @@ function VerificationIcon({ phase }: { phase: VerificationPhase }) {
   const Icon =
     phase === "verified"
       ? CheckCircle2
-      : phase === "invalid" || phase === "error"
+      : phase === "invalid" || phase === "rate-limited" || phase === "error"
         ? AlertCircle
         : phase === "verifying" || phase === "sending"
           ? RefreshCw
@@ -80,10 +85,22 @@ export function VerificationScreen({
   const [now, setNow] = useState(() => Date.now());
   const [resendMessage, setResendMessage] = useState<string | null>(null);
   const initialAttemptStarted = useRef(false);
+  const userIdRef = useRef<string | null>(null);
   const cooldownSeconds = verificationCooldownSeconds(lastSentAt, now);
+
+  const getUserId = useCallback(async () => {
+    if (userIdRef.current) return userIdRef.current;
+    try {
+      userIdRef.current = await Session.getUserId();
+      return userIdRef.current;
+    } catch {
+      return null;
+    }
+  }, []);
 
   const finishVerification = useCallback(async () => {
     await refreshVerifiedSession(() => Session.attemptRefreshingSession());
+    clearVerificationEmailSent(window.localStorage);
     setPhase("verified");
   }, []);
 
@@ -100,16 +117,24 @@ export function VerificationScreen({
       await finishVerification();
       return;
     }
+    if (result === "rate-limited") {
+      setPhase("rate-limited");
+      return;
+    }
     if (result === "error") {
       setPhase("error");
       return;
     }
     const sentAt = Date.now();
+    const userId = await getUserId();
+    if (userId) {
+      markVerificationEmailSent(window.localStorage, userId, sentAt);
+    }
     setLastSentAt(sentAt);
     setNow(sentAt);
     setResendMessage("A fresh verification email is on its way.");
     setPhase("inbox");
-  }, [doesSessionExist, finishVerification]);
+  }, [doesSessionExist, finishVerification, getUserId]);
 
   const verifyToken = useCallback(async () => {
     setPhase("verifying");
@@ -138,10 +163,23 @@ export function VerificationScreen({
           await finishVerification();
           return;
         }
+        const userId = await getUserId();
+        const sentAt = userId
+          ? getVerificationEmailSentAt(window.localStorage, userId)
+          : null;
+        if (sentAt) {
+          setLastSentAt(sentAt);
+          setNow(Date.now());
+          setResendMessage("A verification email has already been sent.");
+          setPhase("inbox");
+          return;
+        }
         await sendEmail();
       })
-      .catch(() => setPhase("error"));
-  }, [doesSessionExist, finishVerification, sendEmail, token, verifyToken]);
+      .catch((error) =>
+        setPhase(isRateLimitError(error) ? "rate-limited" : "error"),
+      );
+  }, [doesSessionExist, finishVerification, getUserId, sendEmail, token, verifyToken]);
 
   useEffect(() => {
     if (cooldownSeconds <= 0) return;
@@ -150,14 +188,52 @@ export function VerificationScreen({
   }, [cooldownSeconds]);
 
   const switchAccount = async () => {
+    setResendMessage(null);
     await signOutForDifferentAccount(
       () => Session.signOut(),
-      clearStoredRedirectUri,
+      () => {
+        clearStoredRedirectUri();
+        clearVerificationEmailSent(window.localStorage);
+      },
     );
     window.location.replace(
       new URL(authConfig.websiteBasePath, authConfig.websiteUrl).toString(),
     );
   };
+
+  if (phase === "rate-limited") {
+    return (
+      <StatusPanel
+        eyebrow="Please wait a moment"
+        title="Too many verification attempts."
+        description="Your account is safe. Wait a few minutes, then try again or use a different account."
+        tone="danger"
+      >
+        <div className="verification-state" role="alert">
+          <VerificationIcon phase={phase} />
+        </div>
+        <div className="button-row">
+          <button
+            type="button"
+            className="primary-button auth-portal-session-button"
+            onClick={() => void (token ? verifyToken() : sendEmail())}
+          >
+            Try again
+          </button>
+          {doesSessionExist ? (
+            <Button
+              type="button"
+              variant="link"
+              className="auth-text-button"
+              onClick={() => void switchAccount()}
+            >
+              Use a different account
+            </Button>
+          ) : null}
+        </div>
+      </StatusPanel>
+    );
+  }
 
   if (phase === "sending" || phase === "verifying") {
     const verifying = phase === "verifying";

@@ -21,6 +21,16 @@ _EMAIL_ENDPOINTS = {
     "/auth/user/password/reset/token": "password-reset",
 }
 
+# These authenticated recovery endpoints must stay available even when an IP has
+# exhausted the broad auth ceiling. Blocking the verification-status refresh
+# leaves SuperTokens retrying the stale ``st-ev`` claim, while blocking sign-out
+# prevents the user from escaping that session. Neither endpoint creates an
+# account, checks credentials, nor sends email.
+_RATE_LIMIT_RECOVERY_ENDPOINTS = {
+    ("GET", "/auth/user/email/verify"),
+    ("POST", "/auth/signout"),
+}
+
 
 def _email_from_body(payload: dict[str, Any]) -> str | None:
     fields = payload.get("formFields")
@@ -243,6 +253,9 @@ class AuthAbuseMiddleware:
             return
         path = _normalised_path(scope)
         if self.auth_paths_only and not path.startswith("/auth/"):
+            await self.app(scope, receive, send)
+            return
+        if (scope.get("method"), path) in _RATE_LIMIT_RECOVERY_ENDPOINTS:
             await self.app(scope, receive, send)
             return
         store = get_auth_abuse_store()

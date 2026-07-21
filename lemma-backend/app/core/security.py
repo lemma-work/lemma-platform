@@ -3,7 +3,10 @@ from fastapi import HTTPException
 from fastapi.security import HTTPBearer
 from starlette.requests import HTTPConnection
 from supertokens_python.recipe.session.asyncio import get_session
-from supertokens_python.recipe.session.exceptions import TryRefreshTokenError
+from supertokens_python.recipe.session.exceptions import (
+    InvalidClaimsError,
+    TryRefreshTokenError,
+)
 from app.core.authorization.current import set_current_context
 from app.core.config import settings
 from app.core.authorization.delegation import (
@@ -236,6 +239,12 @@ async def verify_auth(connection: HTTPConnection):
                     },
                 )
 
+    except InvalidClaimsError:
+        # Keep SuperTokens' invalid-claim contract intact. Its middleware turns
+        # this into a 403 response with ``claimValidationErrors``. Rewriting it
+        # to 401 makes the frontend treat an intentionally unverified session as
+        # expired and repeatedly refresh/retry the same protected request.
+        raise
     except TryRefreshTokenError:
         # This exception is raised when the access token has expired.
         # SuperTokens frontend SDKs handle the refresh flow, but for an API client,
