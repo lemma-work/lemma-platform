@@ -11,8 +11,11 @@ def _routers():
         router as organization,
     )
     from app.modules.identity.api.controllers.auth_controller import router as auth
+    from app.modules.identity.api.controllers.email_bounce_controller import (
+        router as email_bounce,
+    )
 
-    return [user, organization, auth]
+    return [user, organization, auth, email_bounce]
 
 
 def _event_routers():

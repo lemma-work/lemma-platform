@@ -117,7 +117,10 @@ def _is_public_identity_auth_path(path: str, method: str) -> bool:
             "/auth/telegram/start",
             "/auth/telegram/callback",
         }
-    ) or (normalized_method == "POST" and path == "/auth/email/bounces")
+    ) or (
+        normalized_method == "POST"
+        and path in {"/auth/email/bounces", "/auth/email/bounces/resend"}
+    )
 
 
 async def verify_auth(connection: HTTPConnection):

@@ -51,6 +51,17 @@ def test_only_desktop_request_creation_and_exchange_are_public():
     assert not security._is_public_desktop_auth_path("/auth/desktop/requests", "GET")
 
 
+def test_signed_bounce_webhooks_are_public_but_other_auth_posts_are_not():
+    assert security._is_public_identity_auth_path("/auth/email/bounces", "POST")
+    assert security._is_public_identity_auth_path(
+        "/auth/email/bounces/resend", "POST"
+    )
+    assert not security._is_public_identity_auth_path(
+        "/auth/email/bounces/resend", "GET"
+    )
+    assert not security._is_public_identity_auth_path("/auth/verify-token", "POST")
+
+
 def _patch(monkeypatch, *, flag: bool, payload: dict):
     monkeypatch.setattr(
         security.settings, "authz_delegated_tokens_enabled", flag, raising=False
