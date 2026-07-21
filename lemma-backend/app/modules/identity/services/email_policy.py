@@ -106,6 +106,15 @@ async def validate_auth_email(email: str) -> str:
         try:
             deliverable = await _validate_with_dns(normalized)
             normalized = normalize_identity_email(deliverable.normalized)
+            if deliverable.mx_fallback_type is not None:
+                # RFC 5321 still permits falling back to an A/AAAA record when a
+                # domain has no MX record. In practice this is a common source of
+                # avoidable verification-email bounces. Lemma requires an explicit
+                # MX record for new outbound auth mail, but treats this as a policy
+                # rejection rather than deterministic evidence for deactivation.
+                raise EmailPolicyError(
+                    EmailPolicyRejection("MISSING_MX", "dns", permanent=False)
+                )
         except EmailUndeliverableError as exc:
             rejection = _dns_rejection(exc)
             if rejection is not None:
@@ -114,6 +123,8 @@ async def validate_auth_email(email: str) -> str:
             raise EmailPolicyError(
                 EmailPolicyRejection("INVALID_SYNTAX", "email-validator")
             ) from exc
+        except EmailPolicyError:
+            raise
         except EmailNotValidError, TimeoutError, OSError:
             # The library treats resolver timeouts and temporary DNS failures as
             # unknown deliverability. Operational lookup failures are likewise

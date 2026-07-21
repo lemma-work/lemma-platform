@@ -123,6 +123,10 @@ class AltchaChallengeResponse(BaseModel):
     signature: str | None = None
 
 
+class AltchaConfigResponse(BaseModel):
+    enabled: bool
+
+
 class TelegramConfigResponse(BaseModel):
     enabled: bool
 
@@ -149,6 +153,15 @@ def _telegram_error_redirect(return_to: str | None, code: str) -> RedirectRespon
         f"{destination}{separator}{urlencode({'telegram_error': code})}",
         status_code=303,
     )
+
+
+@router.get(
+    "/altcha/config",
+    include_in_schema=False,
+    response_model=AltchaConfigResponse,
+)
+async def altcha_config() -> AltchaConfigResponse:
+    return AltchaConfigResponse(enabled=settings.auth_altcha_enabled)
 
 
 @router.get(

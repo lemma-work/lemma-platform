@@ -94,6 +94,17 @@ Hard bounces deactivate the unique matching active Lemma user and revoke its ses
 
 If the SMTP provider cannot produce authenticated hard-bounce events, leave `AUTH_BOUNCE_WEBHOOK_SECRET` unset. Invalid syntax, nonexistent domains, and explicit null MX records are still rejected before a user is created.
 
+Lemma additionally requires an explicit MX record before creating a new account
+or sending authentication mail. Domains that rely on the legacy SMTP A/AAAA
+fallback are rejected to avoid preventable bounces, but this policy is not
+treated as deterministic evidence for automatically deactivating an existing
+account. DNS timeouts and temporary resolver failures remain retryable.
+
+ALTCHA runs as a private, self-hosted proof-of-work check rather than a visual
+checkbox CAPTCHA. The authentication UI reports when the check is active,
+working, complete, or unavailable; no third-party tracker or paid service is
+loaded.
+
 ## Disposable-domain snapshot
 
 The bundled list at `lemma-backend/app/modules/identity/data/disposable_email_domains.txt` is a reviewed, pinned subset of the MIT-licensed [disposable/disposable-email-domains](https://github.com/disposable/disposable-email-domains) list. Updates must be reviewed and committed; production never fetches a remote list at request time. Add known false positives to `AUTH_DISPOSABLE_EMAIL_ALLOWLIST` before rollout.

@@ -29,6 +29,7 @@ def get_auth_app():
         # SuperTokens sets these as expose headers per-response; list them
         # explicitly so this stays correct regardless of middleware layering.
         expose_headers=[
+            "Retry-After",
             "front-token",
             "anti-csrf",
             "st-access-token",

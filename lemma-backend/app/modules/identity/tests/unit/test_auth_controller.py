@@ -9,6 +9,7 @@ from fastapi import HTTPException
 from app.modules.identity.api.controllers.auth_controller import (
     DesktopAuthRequestCreate,
     DesktopAuthSessionRequest,
+    altcha_config,
     complete_desktop_auth_request,
     create_desktop_auth_request,
     create_desktop_auth_session,
@@ -46,6 +47,17 @@ class _FakePodMembership:
     async def get_pod_organization_id(self, pod_id):
         self.requested_pod_ids.append(pod_id)
         return self.organization_id
+
+
+@pytest.mark.asyncio
+async def test_altcha_config_reports_runtime_setting(monkeypatch):
+    from app.core.config import settings
+
+    monkeypatch.setattr(settings, "auth_altcha_enabled", True)
+    assert (await altcha_config()).enabled is True
+
+    monkeypatch.setattr(settings, "auth_altcha_enabled", False)
+    assert (await altcha_config()).enabled is False
 
 
 @pytest.mark.asyncio

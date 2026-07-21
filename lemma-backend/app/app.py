@@ -511,6 +511,7 @@ def create_app(modules=OSS_MODULES) -> FastAPI:
         # them here or the front-token gets clobbered and the SDK can't read it.
         expose_headers=[
             "X-Request-Id",
+            "Retry-After",
             "front-token",
             "anti-csrf",
             "st-access-token",

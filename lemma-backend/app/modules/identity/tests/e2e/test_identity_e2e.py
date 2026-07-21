@@ -9,6 +9,7 @@ import logging
 import time
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
+from types import SimpleNamespace
 from urllib.parse import parse_qs, urlparse
 from uuid import UUID, uuid4
 
@@ -40,6 +41,7 @@ from app.modules.identity.services.telegram_oidc import (
     TelegramOIDCService,
 )
 from app.modules.identity.services import telegram_oidc
+from app.modules.identity.services import email_policy
 from app.modules.identity.services.auth_abuse import get_auth_abuse_store
 from app.core.config import settings
 from app.modules.test_support.e2e_base import verify_emailpassword_for_tests
@@ -358,6 +360,34 @@ async def test_disposable_email_is_rejected_before_account_creation(
     assert response.status_code == 200
     assert response.json()["status"] == "SIGN_UP_NOT_ALLOWED"
 
+    async with async_session_maker() as session:
+        local_user = await session.scalar(select(User).where(User.email == email))
+    assert local_user is None
+
+
+@pytest.mark.asyncio
+async def test_domain_without_explicit_mx_is_rejected_before_account_creation(
+    async_client: AsyncClient,
+    monkeypatch,
+):
+    email = f"blocked-{uuid4().hex[:10]}@legacy.example"
+    monkeypatch.setattr(settings, "auth_email_deliverability_checks_enabled", True)
+    monkeypatch.setattr(settings, "auth_disposable_email_domains_enabled", False)
+
+    async def a_record_fallback(_email):
+        return SimpleNamespace(normalized=email, mx_fallback_type="A")
+
+    monkeypatch.setattr(email_policy, "_validate_with_dns", a_record_fallback)
+    response = await async_client.post(
+        "/st/auth/signup",
+        json=_emailpassword_payload(email, "TestPassword@123"),
+    )
+
+    assert response.status_code == 200
+    assert response.json() == {
+        "status": "SIGN_UP_NOT_ALLOWED",
+        "reason": "Please use a valid, non-disposable email address",
+    }
     async with async_session_maker() as session:
         local_user = await session.scalar(select(User).where(User.email == email))
     assert local_user is None

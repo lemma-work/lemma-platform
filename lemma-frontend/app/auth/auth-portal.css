@@ -376,6 +376,38 @@
   animation-delay: 160ms;
 }
 
+.auth-protection-notice {
+  display: flex;
+  align-items: center;
+  gap: 0.55rem;
+  padding: 0.7rem 0.8rem;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--surface-soft);
+  color: var(--muted);
+  font-size: 0.78rem;
+  line-height: 1.4;
+}
+
+.auth-protection-notice svg {
+  flex: 0 0 auto;
+  color: var(--accent-strong);
+}
+
+.auth-protection-notice-error {
+  border-color: var(--auth-status-danger-border);
+  background: var(--attention-soft);
+  color: var(--attention);
+}
+
+.auth-protection-notice-error svg {
+  color: var(--attention);
+}
+
+.auth-protection-spinner {
+  animation: spin 1s linear infinite;
+}
+
 .status-panel,
 .session-panel {
   padding: 1.15rem 1.25rem;

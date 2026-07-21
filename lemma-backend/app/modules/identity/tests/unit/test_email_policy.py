@@ -67,6 +67,28 @@ async def test_dns_invalid_is_permanent_but_unexpected_dns_failure_is_retryable(
 
 
 @pytest.mark.asyncio
+async def test_email_policy_requires_explicit_mx_without_deactivation_evidence(
+    monkeypatch,
+):
+    monkeypatch.setattr(settings, "auth_email_deliverability_checks_enabled", True)
+    monkeypatch.setattr(settings, "auth_disposable_email_domains_enabled", False)
+
+    async def a_record_fallback(_email):
+        return SimpleNamespace(
+            normalized="person@legacy.example",
+            mx_fallback_type="A",
+        )
+
+    monkeypatch.setattr(email_policy, "_validate_with_dns", a_record_fallback)
+    with pytest.raises(EmailPolicyError) as exc:
+        await email_policy.validate_auth_email("person@legacy.example")
+
+    assert exc.value.rejection.reason == "MISSING_MX"
+    assert exc.value.rejection.evidence_source == "dns"
+    assert exc.value.rejection.permanent is False
+
+
+@pytest.mark.asyncio
 async def test_only_explicit_null_mx_is_deactivation_safe(monkeypatch):
     monkeypatch.setattr(settings, "auth_email_deliverability_checks_enabled", True)
     monkeypatch.setattr(settings, "auth_disposable_email_domains_enabled", False)

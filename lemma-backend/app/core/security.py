@@ -112,6 +112,7 @@ def _is_public_identity_auth_path(path: str, method: str) -> bool:
         normalized_method == "GET"
         and path
         in {
+            "/auth/altcha/config",
             "/auth/altcha/challenge",
             "/auth/telegram/config",
             "/auth/telegram/start",

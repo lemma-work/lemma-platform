@@ -13,6 +13,7 @@ import {
   getStoredDesktopRequestId,
 } from "@/components/auth/portal/auth/desktop";
 import { addAltchaProof } from "@/components/auth/portal/auth/altcha";
+import { runAuthRequest } from "@/components/auth/portal/auth/auth-errors";
 
 export function isTelegramMiniApp(): boolean {
   if (typeof window === "undefined") return false;
@@ -183,6 +184,19 @@ const authSurfaceStyle = `
   color: var(--action-primary);
   font-weight: 500;
 }
+
+[data-supertokens~="generalError"] {
+  margin: 0 0 0.95rem;
+  padding: 0.8rem 0.9rem;
+  border: 1px solid var(--auth-status-danger-border);
+  border-radius: 8px;
+  background: var(--attention-soft);
+  color: var(--attention);
+  font-size: 0.875rem;
+  font-weight: 550;
+  line-height: 1.45;
+  text-align: left;
+}
 `;
 
 export function ensureSuperTokensInit(): void {
@@ -223,6 +237,31 @@ export function ensureSuperTokensInit(): void {
         tokenTransferMethod: "cookie",
       }),
       EmailPassword.init({
+        override: {
+          functions: (originalImplementation) => ({
+            ...originalImplementation,
+            signIn: (input) =>
+              runAuthRequest("sign-in", () =>
+                originalImplementation.signIn(input),
+              ),
+            signUp: (input) =>
+              runAuthRequest("sign-up", () =>
+                originalImplementation.signUp(input),
+              ),
+            sendPasswordResetEmail: (input) =>
+              runAuthRequest("password-reset", () =>
+                originalImplementation.sendPasswordResetEmail(input),
+              ),
+            submitNewPassword: (input) =>
+              runAuthRequest("password-change", () =>
+                originalImplementation.submitNewPassword(input),
+              ),
+            doesEmailExist: (input) =>
+              runAuthRequest("email-check", () =>
+                originalImplementation.doesEmailExist(input),
+              ),
+          }),
+        },
         preAPIHook: async (context) => {
           const purpose =
             context.action === "EMAIL_PASSWORD_SIGN_UP"

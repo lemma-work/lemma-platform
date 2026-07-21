@@ -49,6 +49,7 @@ import {
   isTelegramMiniApp,
 } from "@/components/auth/portal/auth/supertokens";
 import { VerificationScreen } from "@/components/auth/portal/auth/verification-screen";
+import { AuthProtectionNotice } from "@/components/auth/portal/auth/auth-protection-notice";
 import {
   getDestinationLabel,
   getRedirectDestinationFallback,
@@ -467,6 +468,7 @@ function AuthLanding() {
     return (
       <AuthScreenLayout destination={destination} heroCopy={authHeroCopy}>
         <div className="auth-form-stack">
+          <AuthProtectionNotice />
           <VerificationScreen doesSessionExist={doesSessionExist} />
         </div>
       </AuthScreenLayout>
@@ -574,6 +576,7 @@ function AuthLanding() {
     <AuthScreenLayout destination={destination} heroCopy={authHeroCopy}>
       <div className="auth-form-stack">
         <TelegramLoginButton visible={authMode === "signin"} />
+        <AuthProtectionNotice />
         {getRoutingComponent([...preBuiltUiList])}
       </div>
     </AuthScreenLayout>
