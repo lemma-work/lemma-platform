@@ -1,7 +1,10 @@
 from __future__ import annotations
 
+import pytest
+from pydantic import ValidationError
+
 from app.core.cors import get_allowed_cors_origin_regex, get_allowed_cors_origins
-from app.core.config import settings
+from app.core.config import Settings, settings
 from app.modules.identity.infrastructure.supertokens_auth.initialization import (
     build_supertokens_app_info,
     build_thirdparty_providers,
@@ -30,6 +33,31 @@ def test_build_supertokens_app_info_uses_full_urls():
     assert app_info.api_domain == "https://api.lemma.work"
     assert app_info.website_domain == "https://auth.lemma.work"
     assert app_info.website_base_path == "/auth"
+
+
+def test_auth_website_base_path_defaults_to_auth_and_is_normalised():
+    default_settings = Settings(_env_file=None, environment="testing")
+    explicit_settings = Settings(
+        _env_file=None,
+        environment="testing",
+        auth_website_base_path="auth/",
+    )
+
+    assert default_settings.auth_website_base_path == "/auth"
+    assert explicit_settings.auth_website_base_path == "/auth"
+
+
+@pytest.mark.parametrize(
+    "value",
+    ["https://lemma.work/auth", "/auth?next=/", "/auth#fragment", "/auth/../admin"],
+)
+def test_auth_website_base_path_rejects_non_path_values(value: str):
+    with pytest.raises(ValidationError):
+        Settings(
+            _env_file=None,
+            environment="testing",
+            auth_website_base_path=value,
+        )
 
 
 def test_email_verification_mode_follows_configuration(monkeypatch):

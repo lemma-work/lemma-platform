@@ -427,6 +427,21 @@ class Settings(BaseSettings):
     )
     smtp_from_name: str = Field(default="Lemma", description="From name")
     smtp_use_tls: bool = Field(default=True, description="Use TLS for SMTP")
+    resend_api_key: Optional[SecretStr] = Field(
+        default=None,
+        description=(
+            "Resend API key. When explicit SMTP credentials are absent, this is "
+            "used as the password for Resend's SMTP relay."
+        ),
+    )
+    resend_webhook_secret: Optional[SecretStr] = Field(
+        default=None,
+        description="Resend signing secret for native email event webhooks",
+    )
+    resend_from_email: str = Field(
+        default="local@ops.asur.work",
+        description="Sender address used with the Resend SMTP relay",
+    )
     email_transport: Literal["smtp", "filesystem"] = Field(
         default="smtp",
         description="Email transport backend",
@@ -539,7 +554,7 @@ class Settings(BaseSettings):
         description="Central auth frontend origin used by the SuperTokens UI",
     )
     auth_website_base_path: str = Field(
-        default="/",
+        default="/auth",
         description="Path where the centralized auth UI is rendered",
     )
     api_url: str = Field(
@@ -654,6 +669,17 @@ class Settings(BaseSettings):
         if isinstance(value, str) and not value.strip():
             return None
         return value
+
+    @field_validator("auth_website_base_path", mode="before")
+    @classmethod
+    def _normalise_auth_website_base_path(cls, value: object) -> str:
+        candidate = str(value or "/auth").strip()
+        if "://" in candidate or "?" in candidate or "#" in candidate:
+            raise ValueError("AUTH_WEBSITE_BASE_PATH must be a relative URL path")
+        segments = [segment for segment in candidate.split("/") if segment]
+        if any(segment in {".", ".."} for segment in segments):
+            raise ValueError("AUTH_WEBSITE_BASE_PATH cannot contain dot segments")
+        return "/" + "/".join(segments) if segments else "/"
 
     @model_validator(mode="after")
     def _require_app_base_domain_outside_local(self) -> "Settings":
@@ -1030,7 +1056,7 @@ class Settings(BaseSettings):
 
     def is_email_configured(self) -> bool:
         """Check if email is properly configured."""
-        return all(
+        explicit_smtp = all(
             [
                 self.smtp_host,
                 self.smtp_user,
@@ -1038,6 +1064,7 @@ class Settings(BaseSettings):
                 self.smtp_from_email,
             ]
         )
+        return bool(explicit_smtp or reveal_secret(self.resend_api_key))
 
     def is_telegram_oidc_configured(self) -> bool:
         """Return whether the global Telegram Web Login client is usable."""

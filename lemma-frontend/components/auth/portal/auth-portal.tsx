@@ -48,6 +48,7 @@ import {
   ensureSuperTokensInit,
   isTelegramMiniApp,
 } from "@/components/auth/portal/auth/supertokens";
+import { VerificationScreen } from "@/components/auth/portal/auth/verification-screen";
 import {
   getDestinationLabel,
   getRedirectDestinationFallback,
@@ -269,7 +270,14 @@ function AuthLanding() {
     .toLowerCase()
     .endsWith("/verify-email");
   const authHeroCopy: HeroCopy =
-    authMode === "signup"
+    isEmailVerificationRoute
+      ? {
+          eyebrow: "Account security",
+          title: "One quick verification.",
+          description:
+            "Confirm your email once, then continue securely with your Lemma account.",
+        }
+      : authMode === "signup"
       ? {
           eyebrow: "Create account for",
           title: destinationLabel || "Create your Lemma identity",
@@ -455,14 +463,11 @@ function AuthLanding() {
     );
   }
 
-  if (
-    isEmailVerificationRoute &&
-    canHandleRoute([...preBuiltUiList])
-  ) {
+  if (isEmailVerificationRoute) {
     return (
       <AuthScreenLayout destination={destination} heroCopy={authHeroCopy}>
         <div className="auth-form-stack">
-          {getRoutingComponent([...preBuiltUiList])}
+          <VerificationScreen doesSessionExist={doesSessionExist} />
         </div>
       </AuthScreenLayout>
     );

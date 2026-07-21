@@ -1,23 +1,17 @@
 from __future__ import annotations
 
-import hashlib
-import hmac
-import time
-from datetime import datetime, timezone
 from typing import Literal
 from urllib.parse import urlencode
 from uuid import UUID
 
-from fastapi import APIRouter, HTTPException, Query, Request, Response
+from fastapi import APIRouter, HTTPException, Query, Request
 from fastapi.responses import RedirectResponse
 from pydantic import BaseModel, EmailStr, Field
-from sqlalchemy import func, select
 from supertokens_python.recipe.session.asyncio import (
     get_session,
-    revoke_all_sessions_for_user,
 )
 
-from app.core.config import reveal_secret, settings
+from app.core.config import settings
 from app.core.infrastructure.db.session import async_session_maker
 from app.modules.identity.api.dependencies import PodMembershipDep, UserServiceDep
 from app.modules.identity.domain.user_entities import UserEntity
@@ -27,9 +21,7 @@ from app.modules.identity.infrastructure.supertokens_auth.helpers import (
     create_desktop_browser_session,
     refresh_cli_session_tokens,
 )
-from app.modules.identity.domain.email import normalize_identity_email
 from app.modules.identity.infrastructure.models.user_models import User
-from app.modules.identity.infrastructure.user_cache import get_user_cache
 from app.modules.identity.services.auth_abuse import (
     RateLimitExceeded,
     client_ip,
@@ -133,36 +125,6 @@ class AltchaChallengeResponse(BaseModel):
 
 class TelegramConfigResponse(BaseModel):
     enabled: bool
-
-
-class BounceEvent(BaseModel):
-    email: EmailStr
-    event: Literal["hard_bounce", "soft_bounce"]
-
-
-def verify_bounce_signature(
-    *,
-    timestamp: str,
-    signature: str,
-    body: bytes,
-    secret: str,
-    now: int | None = None,
-) -> None:
-    """Validate the provider adapter's timestamped HMAC envelope."""
-    try:
-        timestamp_value = int(timestamp)
-    except ValueError as exc:
-        raise HTTPException(
-            status_code=401, detail="Invalid webhook signature"
-        ) from exc
-    if abs((now if now is not None else int(time.time())) - timestamp_value) > 300:
-        raise HTTPException(status_code=401, detail="Webhook timestamp expired")
-    expected = hmac.new(
-        secret.encode(), f"{timestamp}.".encode() + body, hashlib.sha256
-    ).hexdigest()
-    candidate = signature.removeprefix("sha256=")
-    if not hmac.compare_digest(expected, candidate):
-        raise HTTPException(status_code=401, detail="Invalid webhook signature")
 
 
 async def _enforce_telegram_rate_limit(request: Request) -> None:
@@ -271,38 +233,6 @@ async def telegram_callback(
             transaction.return_to if transaction is not None else None,
             "unable_to_authenticate",
         )
-
-
-@router.post("/email/bounces", include_in_schema=False, status_code=204)
-async def accept_email_bounce(request: Request, event: BounceEvent) -> Response:
-    secret = reveal_secret(settings.auth_bounce_webhook_secret)
-    if not secret:
-        raise HTTPException(status_code=404, detail="Not found")
-    timestamp = request.headers.get("x-lemma-timestamp", "")
-    signature = request.headers.get("x-lemma-signature", "")
-    body = await request.body()
-    verify_bounce_signature(
-        timestamp=timestamp,
-        signature=signature,
-        body=body,
-        secret=secret,
-    )
-    if event.event == "soft_bounce":
-        return Response(status_code=204)
-
-    email = normalize_identity_email(str(event.email))
-    async with async_session_maker() as db_session:
-        user = await db_session.scalar(
-            select(User).where(func.lower(User.email) == email)
-        )
-        if user is not None and user.is_active and not user.is_deleted:
-            user.is_active = False
-            user.deactivated_at = user.deactivated_at or datetime.now(timezone.utc)
-            user.deactivation_reason = "HARD_BOUNCE"
-            await db_session.commit()
-            await get_user_cache().invalidate(user.id)
-            await revoke_all_sessions_for_user(str(user.id))
-    return Response(status_code=204)
 
 
 @router.get(

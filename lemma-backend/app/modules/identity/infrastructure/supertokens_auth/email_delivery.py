@@ -1,7 +1,5 @@
 from __future__ import annotations
 
-from html import escape
-from pathlib import Path
 from typing import Any
 
 from supertokens_python.ingredients.emaildelivery.types import EmailDeliveryInterface
@@ -13,20 +11,11 @@ from supertokens_python.recipe.emailverification.types import (
 )
 
 from app.core.email.email_sender import EmailSender
+from app.core.email.transactional import EmailAction, render_transactional_email
 from app.modules.identity.services.email_policy import (
     EmailPolicyError,
     validate_outbound_email,
 )
-
-
-_TEMPLATES = Path(__file__).resolve().parents[2] / "templates"
-
-
-def _render(name: str, **values: Any) -> str:
-    body = (_TEMPLATES / name).read_text(encoding="utf-8")
-    return body.format(
-        **{key: escape(str(value), quote=True) for key, value in values.items()}
-    )
 
 
 class LemmaVerificationEmailService(
@@ -42,11 +31,27 @@ class LemmaVerificationEmailService(
             email = await validate_outbound_email(template_vars.user.email)
         except EmailPolicyError:
             return
+        rendered = render_transactional_email(
+            preheader="Verify your email to finish setting up Lemma.",
+            eyebrow="Account security",
+            heading="Verify your email",
+            body=(
+                "Confirm this email address to finish securing your Lemma account.",
+                "This verification link is only for you.",
+            ),
+            action=EmailAction(
+                label="Verify email",
+                url=template_vars.email_verify_link,
+            ),
+            footer=(
+                "If you did not create this account, you can safely ignore this message.",
+            ),
+        )
         await EmailSender.from_settings().send_email(
             email,
             "Verify your Lemma email",
-            _render("verify_email.html", verify_url=template_vars.email_verify_link),
-            f"Verify your Lemma email: {template_vars.email_verify_link}",
+            rendered.html,
+            rendered.text,
             raise_on_failure=True,
         )
 
@@ -66,12 +71,26 @@ class LemmaPasswordResetEmailService(
             # Password-reset responses remain generic to avoid account-state
             # enumeration, while no email is sent to an inactive account.
             return
+        rendered = render_transactional_email(
+            preheader="Reset your Lemma password securely.",
+            eyebrow="Account security",
+            heading="Reset your password",
+            body=(
+                "Use the secure link below to choose a new Lemma password.",
+                "If you did not request a password reset, your password has not changed.",
+            ),
+            action=EmailAction(
+                label="Reset password",
+                url=template_vars.password_reset_link,
+            ),
+            footer=(
+                "If you did not request this, you can safely ignore this message.",
+            ),
+        )
         await EmailSender.from_settings().send_email(
             email,
             "Reset your Lemma password",
-            _render(
-                "password_reset_email.html", reset_url=template_vars.password_reset_link
-            ),
-            f"Reset your Lemma password: {template_vars.password_reset_link}",
+            rendered.html,
+            rendered.text,
             raise_on_failure=True,
         )

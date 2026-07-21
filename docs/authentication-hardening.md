@@ -16,6 +16,13 @@ SMTP_FROM_EMAIL=no-reply@example.com
 SMTP_FROM_NAME=Lemma
 SMTP_USE_TLS=true
 
+# Alternatively, Resend needs only its API key. Lemma derives smtp.resend.com,
+# port 465, username "resend", and implicit TLS automatically.
+# Explicit SMTP_* credentials above take precedence when both are configured.
+RESEND_API_KEY=...
+RESEND_FROM_EMAIL=local@ops.asur.work
+RESEND_WEBHOOK_SECRET=whsec_...
+
 AUTH_EMAIL_VERIFICATION_REQUIRED=true
 AUTH_EMAIL_DELIVERABILITY_CHECKS_ENABLED=true
 AUTH_DISPOSABLE_EMAIL_DOMAINS_ENABLED=true
@@ -63,6 +70,14 @@ Only list the immediate reverse proxies in `AUTH_TRUSTED_PROXY_IPS`. Requests fr
 The reconciliation command is idempotent and never prints complete addresses. An `email_conflict` or `duplicate_emailpassword_identity` count must be investigated before using `--apply` for those records; conflicted records are skipped.
 
 ## Bounce adapter contract
+
+For Resend, configure a webhook for `POST /auth/email/bounces/resend` and select
+the `email.bounced` event. The endpoint verifies the original request body with
+the `svix-id`, `svix-timestamp`, and `svix-signature` headers using
+`RESEND_WEBHOOK_SECRET`. Only a `Permanent` bounce deactivates an account;
+`Temporary` bounces are accepted without deactivation.
+
+For another SMTP provider, use the normalized adapter below.
 
 POST normalized provider events to `/auth/email/bounces` using this JSON body:
 

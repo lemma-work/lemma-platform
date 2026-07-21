@@ -1,7 +1,5 @@
 from __future__ import annotations
 
-import hashlib
-import hmac
 from types import SimpleNamespace
 from uuid import uuid4
 
@@ -14,7 +12,6 @@ from app.modules.identity.api.controllers.auth_controller import (
     complete_desktop_auth_request,
     create_desktop_auth_request,
     create_desktop_auth_session,
-    verify_bounce_signature,
     verify_token,
 )
 from app.modules.identity.domain.user_entities import AuthUserEntity, UserEntity
@@ -49,43 +46,6 @@ class _FakePodMembership:
     async def get_pod_organization_id(self, pod_id):
         self.requested_pod_ids.append(pod_id)
         return self.organization_id
-
-
-def test_bounce_webhook_signature_is_timestamped_and_tamper_evident():
-    body = b'{"email":"person@example.com","event":"hard_bounce"}'
-    timestamp = "1700000000"
-    secret = "bounce-secret"
-    signature = hmac.new(
-        secret.encode(), f"{timestamp}.".encode() + body, hashlib.sha256
-    ).hexdigest()
-
-    verify_bounce_signature(
-        timestamp=timestamp,
-        signature=f"sha256={signature}",
-        body=body,
-        secret=secret,
-        now=1700000100,
-    )
-
-    with pytest.raises(HTTPException) as tampered:
-        verify_bounce_signature(
-            timestamp=timestamp,
-            signature=f"sha256={signature}",
-            body=body + b" ",
-            secret=secret,
-            now=1700000100,
-        )
-    assert tampered.value.status_code == 401
-
-    with pytest.raises(HTTPException) as expired:
-        verify_bounce_signature(
-            timestamp=timestamp,
-            signature=f"sha256={signature}",
-            body=body,
-            secret=secret,
-            now=1700000400,
-        )
-    assert expired.value.detail == "Webhook timestamp expired"
 
 
 @pytest.mark.asyncio
