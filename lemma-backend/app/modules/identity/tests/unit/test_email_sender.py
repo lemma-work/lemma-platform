@@ -4,6 +4,7 @@ import json
 import stat
 
 import pytest
+from pydantic import SecretStr
 
 from app.core.config import settings
 from app.core.email import email_sender
@@ -116,3 +117,38 @@ def test_filesystem_transport_is_rejected_in_production(monkeypatch):
             from_email="no-reply@example.com",
             transport="filesystem",
         )
+
+
+def test_resend_key_configures_documented_smtp_relay(monkeypatch):
+    monkeypatch.setattr(settings, "email_transport", "smtp")
+    monkeypatch.setattr(settings, "smtp_user", None)
+    monkeypatch.setattr(settings, "smtp_password", None)
+    monkeypatch.setattr(settings, "smtp_from_email", None)
+    monkeypatch.setattr(settings, "resend_api_key", SecretStr("re_test_key"))
+    monkeypatch.setattr(settings, "resend_from_email", "local@ops.asur.work")
+
+    sender = EmailSender.from_settings()
+
+    assert sender.smtp_host == "smtp.resend.com"
+    assert sender.smtp_port == 465
+    assert sender.smtp_user == "resend"
+    assert sender.smtp_password == "re_test_key"
+    assert sender.from_email == "local@ops.asur.work"
+    assert sender.use_tls is True
+
+
+def test_explicit_smtp_configuration_takes_precedence_over_resend(monkeypatch):
+    monkeypatch.setattr(settings, "email_transport", "smtp")
+    monkeypatch.setattr(settings, "smtp_host", "smtp.example.com")
+    monkeypatch.setattr(settings, "smtp_port", 587)
+    monkeypatch.setattr(settings, "smtp_user", "explicit-user")
+    monkeypatch.setattr(settings, "smtp_password", "explicit-password")
+    monkeypatch.setattr(settings, "smtp_from_email", "mail@example.com")
+    monkeypatch.setattr(settings, "resend_api_key", SecretStr("re_test_key"))
+
+    sender = EmailSender.from_settings()
+
+    assert sender.smtp_host == "smtp.example.com"
+    assert sender.smtp_port == 587
+    assert sender.smtp_user == "explicit-user"
+    assert sender.from_email == "mail@example.com"

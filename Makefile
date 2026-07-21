@@ -225,6 +225,7 @@ _init-backend-env:
 			echo "API_URL=$(DEV_BACKEND_URL)"; \
 			echo "FRONTEND_URL=$(DEV_FRONTEND_URL)"; \
 			echo "AUTH_FRONTEND_URL=$(DEV_AUTH_FRONTEND_URL)"; \
+			echo "AUTH_WEBSITE_BASE_PATH=/auth"; \
 			echo "SUPERTOKENS_CORE_URL=$(DEV_SUPERTOKENS_URL)"; \
 			echo "DATABASE_URL=$(DEV_DATABASE_URL)"; \
 			echo "REDIS_URL=$(DEV_REDIS_URL)"; \
@@ -250,7 +251,7 @@ _init-backend-env:
 
 _ensure-backend-env-keys:
 	@set -e; missing=""; \
-	for k in API_URL FRONTEND_URL AUTH_FRONTEND_URL SUPERTOKENS_CORE_URL DATABASE_URL REDIS_URL CORS_ORIGINS CORS_ORIGIN_REGEX AGENTBOX_API_URL AGENTBOX_API_KEY; do \
+	for k in API_URL FRONTEND_URL AUTH_FRONTEND_URL AUTH_WEBSITE_BASE_PATH SUPERTOKENS_CORE_URL DATABASE_URL REDIS_URL CORS_ORIGINS CORS_ORIGIN_REGEX AGENTBOX_API_URL AGENTBOX_API_KEY; do \
 		if ! grep -qE "^$$k=" $(BACKEND_DIR)/.env; then missing="$$missing $$k"; fi; \
 	done; \
 	if [ -z "$$missing" ]; then \
@@ -263,6 +264,7 @@ _ensure-backend-env-keys:
 			echo "API_URL=$(DEV_BACKEND_URL)"; \
 			echo "FRONTEND_URL=$(DEV_FRONTEND_URL)"; \
 			echo "AUTH_FRONTEND_URL=$(DEV_AUTH_FRONTEND_URL)"; \
+			echo "AUTH_WEBSITE_BASE_PATH=/auth"; \
 			echo "SUPERTOKENS_CORE_URL=$(DEV_SUPERTOKENS_URL)"; \
 			echo "DATABASE_URL=$(DEV_DATABASE_URL)"; \
 			echo "REDIS_URL=$(DEV_REDIS_URL)"; \

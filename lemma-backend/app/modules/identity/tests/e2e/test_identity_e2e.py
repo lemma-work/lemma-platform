@@ -92,10 +92,15 @@ async def _wait_for_email(
     raise AssertionError(f"Timed out waiting for {subject!r} filesystem email")
 
 
-def _email_link_token(message: dict) -> str:
+def _email_link(message: dict) -> str:
     text = str(message.get("text_content") or "")
     link = next((word for word in text.split() if "token=" in word), "")
-    token = parse_qs(urlparse(link).query).get("token", [])
+    assert link, message
+    return link
+
+
+def _email_link_token(message: dict) -> str:
+    token = parse_qs(urlparse(_email_link(message)).query).get("token", [])
     assert token, message
     return token[0]
 
@@ -395,6 +400,11 @@ async def test_emailpassword_verification_welcome_and_password_reset_filesystem_
         "Verify your Lemma email",
     )
     assert "Verify email" in verification_message["html_content"]
+    verification_link = urlparse(_email_link(verification_message))
+    assert verification_link.path == "/auth/verify-email"
+    assert parse_qs(verification_link.query)["tenantId"] == ["public"]
+    assert "Button not working?" in verification_message["html_content"]
+    assert "Account security" in verification_message["text_content"]
     verification_token = _email_link_token(verification_message)
 
     verify = await async_client.post(
@@ -478,6 +488,11 @@ async def test_emailpassword_verification_welcome_and_password_reset_filesystem_
         "Reset your Lemma password",
     )
     assert "Reset password" in reset_message["html_content"]
+    reset_link = urlparse(_email_link(reset_message))
+    assert reset_link.path == "/auth/reset-password"
+    assert parse_qs(reset_link.query)["tenantId"] == ["public"]
+    assert "Button not working?" in reset_message["html_content"]
+    assert "Account security" in reset_message["text_content"]
     reset_token = _email_link_token(reset_message)
 
     reset = await async_client.post(

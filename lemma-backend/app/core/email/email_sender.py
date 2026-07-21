@@ -11,7 +11,7 @@ from pathlib import Path
 from typing import Optional
 from datetime import datetime, timezone
 
-from app.core.config import settings
+from app.core.config import reveal_secret, settings
 from app.core.log.log import get_logger
 
 logger = get_logger(__name__)
@@ -128,10 +128,32 @@ class EmailSender:
                 output_dir=settings.email_output_dir,
             )
 
+        resend_api_key = reveal_secret(settings.resend_api_key)
+        explicit_smtp = all(
+            (
+                settings.smtp_host,
+                settings.smtp_user,
+                settings.smtp_password,
+                settings.smtp_from_email,
+            )
+        )
+        if not explicit_smtp and resend_api_key:
+            return cls(
+                smtp_host="smtp.resend.com",
+                smtp_port=465,
+                smtp_user="resend",
+                smtp_password=resend_api_key,
+                from_email=settings.resend_from_email,
+                from_name=settings.smtp_from_name,
+                use_tls=True,
+                transport="smtp",
+                output_dir=settings.email_output_dir,
+            )
+
         if not settings.is_email_configured():
             raise EmailNotConfiguredError(
-                "SMTP email is not configured. Please set the following environment variables: "
-                "SMTP_HOST, SMTP_USER, SMTP_PASSWORD, SMTP_FROM_EMAIL"
+                "Email is not configured. Set RESEND_API_KEY, or set SMTP_HOST, "
+                "SMTP_USER, SMTP_PASSWORD, and SMTP_FROM_EMAIL."
             )
 
         return cls(

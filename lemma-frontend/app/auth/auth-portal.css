@@ -389,6 +389,81 @@
   background: var(--attention-soft);
 }
 
+.verification-state {
+  display: flex;
+  align-items: center;
+  gap: 0.8rem;
+}
+
+.verification-icon {
+  display: inline-flex;
+  width: 3.4rem;
+  height: 3.4rem;
+  flex: 0 0 auto;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-xl, 12px);
+  background: var(--surface);
+  color: var(--accent-strong);
+}
+
+.verification-icon svg {
+  width: 1.55rem;
+  height: 1.55rem;
+}
+
+.verification-icon-sending svg,
+.verification-icon-verifying svg {
+  animation: spin 1.15s linear infinite;
+}
+
+.verification-icon-verified {
+  border-color: var(--line);
+  color: var(--state-success);
+}
+
+.verification-icon-invalid,
+.verification-icon-error {
+  border-color: var(--auth-status-danger-border);
+  color: var(--attention);
+}
+
+.verification-message {
+  color: var(--ink) !important;
+  font-size: 0.9rem;
+  font-weight: 500;
+}
+
+.verification-actions {
+  display: grid;
+  gap: 0.85rem;
+}
+
+.auth-text-button {
+  justify-self: start;
+  min-height: auto;
+  padding: 0.25rem 0;
+  border: 0;
+  background: transparent;
+  color: var(--action-primary);
+  cursor: pointer;
+  font-size: 0.9rem;
+  font-weight: 600;
+}
+
+.auth-text-button:hover {
+  text-decoration: underline;
+  text-underline-offset: 0.2em;
+}
+
+.auth-text-button:focus-visible,
+.primary-button:focus-visible,
+.secondary-button:focus-visible {
+  outline: 2px solid var(--action-primary);
+  outline-offset: 3px;
+}
+
 .status-inline {
   display: flex;
   align-items: center;
@@ -469,6 +544,12 @@
   border-color: var(--border-default, var(--line));
 }
 
+.primary-button:disabled,
+.secondary-button:disabled {
+  cursor: not-allowed;
+  opacity: 0.58;
+}
+
 .spinner {
   width: 1.05rem;
   height: 1.05rem;
@@ -545,6 +626,10 @@
   .session-state,
   .status-panel,
   .pending-state {
+    animation: none !important;
+  }
+
+  .verification-icon svg {
     animation: none !important;
   }
 }
