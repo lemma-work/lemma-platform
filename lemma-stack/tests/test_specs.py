@@ -29,10 +29,15 @@ def config(paths):
     return store.load_or_create(paths)
 
 
-def build(config, paths, manifest, provider="podman"):
+def build(config, paths, manifest, provider="podman", *, host_apps=False):
     socket = "/run/user/501/podman/podman.sock" if provider == "podman" else "/var/run/docker.sock"
     return specs_mod.build_specs(
-        config, paths, manifest, provider=provider, host_socket=socket
+        config,
+        paths,
+        manifest,
+        provider=provider,
+        host_socket=socket,
+        host_apps=host_apps,
     )
 
 
@@ -91,6 +96,19 @@ def test_run_args_loopback_only_ports(config, paths, manifest):
     args = run_args(spec, selinux=False)
     port_values = [args[i + 1] for i, a in enumerate(args) if a == "-p"]
     assert port_values == ["127.0.0.1:8711:8000"]
+
+
+def test_host_pack_infra_forwards_are_loopback_only(config, paths, manifest):
+    specs = build(config, paths, manifest, host_apps=True)
+    published = {spec.name: spec.ports for spec in specs}
+
+    assert published["db"] == ((55432, 5432),)
+    assert published["redis"] == ((56379, 6379),)
+    assert published["supertokens"] == ((53567, 3567),)
+    for service in ("db", "redis", "supertokens"):
+        args = run_args(by_name(specs, service), selinux=False)
+        port_values = [args[index + 1] for index, value in enumerate(args) if value == "-p"]
+        assert port_values and all(value.startswith("127.0.0.1:") for value in port_values)
 
 
 def test_selinux_adds_z_to_rw_binds_only(config, paths, manifest):

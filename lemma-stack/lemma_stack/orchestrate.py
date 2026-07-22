@@ -63,6 +63,8 @@ def bring_up(
     provider: str,
     manifest: ReleaseManifest,
     do_register: bool = True,
+    service_names: set[str] | None = None,
+    host_apps: bool = False,
     progress: Progress = _noop,
 ) -> Runtime:
     """Pull images, start every service in order, optionally register the CLI.
@@ -78,13 +80,10 @@ def bring_up(
     release_manifest.pin(paths, manifest)
 
     ctx = AdminContext(paths=paths, config=config)
-    lifecycle.up(
-        runtime,
-        ctx.specs(manifest),
-        manifest,
-        migrate=True,
-        on_progress=progress,
-    )
+    specs = ctx.specs(manifest, host_apps=host_apps)
+    if service_names is not None:
+        specs = [spec for spec in specs if spec.name in service_names]
+    lifecycle.up(runtime, specs, manifest, migrate=True, on_progress=progress)
 
     if do_register:
         register_local_server(

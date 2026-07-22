@@ -62,3 +62,21 @@ def test_supervise_protocol_dry_run():
         assert expected in phase_keys
 
     assert by_event["status"][0]["status"] == "running"
+
+
+def test_supervise_can_prepare_only_private_infrastructure_for_host_packs():
+    events = _drive(
+        [{"cmd": "start", "infra_only": True, "id": "infra"}],
+        settle=3.0,
+    )
+    kinds = [event["event"] for event in events]
+    phase_keys = [event["key"] for event in events if event["event"] == "phase"]
+
+    assert "infra-ready" in kinds
+    assert "ready" not in kinds
+    assert "backend" not in phase_keys
+    assert "frontend" not in phase_keys
+    assert any(
+        event["event"] == "done" and event.get("id") == "infra" and event["ok"]
+        for event in events
+    )

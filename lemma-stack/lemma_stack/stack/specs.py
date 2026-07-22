@@ -156,6 +156,7 @@ def build_specs(
     *,
     provider: str,
     host_socket: str,
+    host_apps: bool = False,
 ) -> list[ServiceSpec]:
     """The installed stack, in start order."""
     socket_mount = PODMAN_SOCKET_MOUNT if provider == "podman" else DOCKER_SOCKET_MOUNT
@@ -170,6 +171,7 @@ def build_specs(
                 "POSTGRES_DB": "lemma",
             },
             volumes=((POSTGRES_VOLUME, "/var/lib/postgresql/data"),),
+            ports=((store.port(doc, "postgres"), 5432),) if host_apps else (),
             binds=((str(paths.postgres_init_dir), "/docker-entrypoint-initdb.d", "ro"),),
             health=HealthCheck(cmd="pg_isready -U postgres -h localhost"),
             wait_healthy=True,
@@ -177,6 +179,7 @@ def build_specs(
         ServiceSpec(
             name="redis",
             image=manifest.infra_image("redis"),
+            ports=((store.port(doc, "redis"), 6379),) if host_apps else (),
             health=HealthCheck(cmd="redis-cli ping"),
         ),
         ServiceSpec(
@@ -185,6 +188,7 @@ def build_specs(
             env={
                 "POSTGRESQL_CONNECTION_URI": "postgresql://postgres:postgres@db:5432/supertokens",
             },
+            ports=((store.port(doc, "supertokens"), 3567),) if host_apps else (),
             health=HealthCheck(
                 cmd=(
                     "bash -c 'exec 3<>/dev/tcp/127.0.0.1/3567 && "

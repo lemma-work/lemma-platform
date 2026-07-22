@@ -22,7 +22,15 @@ SCHEMA_VERSION = 1
 SECRET_KEY_RE = re.compile(r"KEY|TOKEN|SECRET|PASSWORD", re.IGNORECASE)
 ENV_SECTIONS = ("backend", "frontend", "agentbox")
 
-DEFAULT_PORTS = {"frontend": 3711, "backend": 8711}
+DEFAULT_PORTS = {
+    "frontend": 3711,
+    "backend": 8711,
+    # Transitional loopback forwards used only while locald host packs run
+    # against Docker/Podman-managed private infrastructure.
+    "postgres": 55432,
+    "redis": 56379,
+    "supertokens": 53567,
+}
 
 _TEMPLATE = """\
 # Lemma local stack configuration — owned by lemma-stack.
@@ -41,6 +49,9 @@ provider = "podman"
 [ports]
 frontend = 3711
 backend = 8711
+postgres = 55432
+redis = 56379
+supertokens = 53567
 
 [features]
 observability = false

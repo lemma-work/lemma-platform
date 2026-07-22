@@ -6,7 +6,7 @@ the orchestration (and its child processes) writes to fd 1/2 is captured and
 re-emitted as ``log`` events so stdout stays pure JSONL.
 
 Protocol (v1) — byte-compatible with the previous installer-based supervisor:
-  -> {"cmd": "start", "setup": false, "rebuild": false, "id": "..."}
+  -> {"cmd": "start", "setup": false, "rebuild": false, "infra_only": false, "id": "..."}
   -> {"cmd": "stop", "infra": false, "id": "..."}
   -> {"cmd": "restart", "id": "..."}
   -> {"cmd": "status", "id": "..."}
@@ -141,14 +141,20 @@ class Supervisor:
 
     # -- operations ----------------------------------------------------------
 
-    def _op_start(self, *, setup: bool, rebuild: bool) -> None:
+    def _op_start(self, *, setup: bool, rebuild: bool, infra_only: bool = False) -> None:
         self._set_state("starting", ready=False)
         if self.dry_run:
-            for key in ("check", "pull", "infra", "migrations", "workspace", "backend", "frontend", "verify"):
+            phases = ["check", "pull", "infra", "migrations"]
+            if not infra_only:
+                phases.extend(("workspace", "backend", "frontend", "verify"))
+            for key in phases:
                 self._set_phase(key, "dry run")
                 time.sleep(0.4)
             self.emit("provider", provider="docker")
-            self._finish_ready(self._config())
+            if infra_only:
+                self._finish_infra_ready()
+            else:
+                self._finish_ready(self._config())
             return
 
         from lemma_stack import orchestrate
@@ -178,14 +184,19 @@ class Supervisor:
             config,
             provider=provider,
             manifest=manifest,
-            do_register=True,
+            do_register=not infra_only,
+            service_names={"db", "redis", "supertokens"} if infra_only else None,
+            host_apps=infra_only,
             progress=progress,
         )
         self._set_phase("workspace", "installing terminal and skills")
         from lemma_stack.register import install_lemma_cli_and_skills
 
         install_lemma_cli_and_skills(version=manifest.version)
-        self._finish_ready(config)
+        if infra_only:
+            self._finish_infra_ready()
+        else:
+            self._finish_ready(config)
 
     def _resolve_provider(self, config) -> str:
         """Honor an explicit AGENTBOX_PROVIDER from the desktop, else config,
@@ -211,6 +222,12 @@ class Supervisor:
         self._set_phase("ready")
         self._set_state("running", ready=True)
         self.emit("ready", url=self._frontend_url(config), api_url=self._backend_url(config))
+
+    def _finish_infra_ready(self) -> None:
+        self._status = "infra-running"
+        self._ready = False
+        self.emit("state", status=self._status, running=True, ready=False)
+        self.emit("infra-ready")
 
     def _op_stop(self, *, infra: bool) -> None:
         self._set_state("stopping")
@@ -296,7 +313,8 @@ class Supervisor:
             self._emit_status(request_id)
         elif cmd == "start":
             self._run_op("start", request_id, self._op_start,
-                         setup=bool(message.get("setup")), rebuild=bool(message.get("rebuild")))
+                         setup=bool(message.get("setup")), rebuild=bool(message.get("rebuild")),
+                         infra_only=bool(message.get("infra_only")))
         elif cmd == "stop":
             self._run_op("stop", request_id, self._op_stop, infra=bool(message.get("infra")))
         elif cmd == "restart":
