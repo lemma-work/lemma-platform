@@ -36,3 +36,5 @@ __pycache__/
 *.dev-backend.pid
 *.dev-frontend.pid
 *.dev-infra.pid
+.dev-cloudflared-*.pid
+.dev-logs/

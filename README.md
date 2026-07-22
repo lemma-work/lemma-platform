@@ -256,15 +256,23 @@ For contributing to the platform itself — hot-reload from source:
 ```bash
 git clone https://github.com/lemma-work/lemma-platform.git
 cd lemma-platform
-make dev         # run backend, frontend, agentbox with live reload
-make logs        # tail backend logs
-make stop        # stop dev app processes
-make stop-all    # also stop dev infra
+make init        # install dependencies and create persistent local configuration
+make dev         # run backend, frontend, and AgentBox with local debug/request logs
+make dev-public  # add an ephemeral public API URL for webhooks and surfaces
+make logs        # tail infrastructure container logs
+make stop        # stop dev app, AgentBox, and tunnel processes
+make stop-all    # also stop dev infrastructure
 ```
 
 Run `make help` for the full list. The dev stack runs on its own ports
 (frontend 3710, backend 8710) so it never collides with an installed
 `lemma-stack` stack (3711/8711).
+
+`make dev-public` requires `cloudflared` and creates one temporary
+`*.trycloudflare.com` URL for the API. The frontend and auth UI stay on
+`http://localhost:3710`, while the public API URL is injected into the frontend,
+webhook callbacks, and generated API links for that run. The quick-tunnel URL
+changes on every restart and is intended only for development.
 
 Backend-only commands live in `lemma-backend/`:
 
