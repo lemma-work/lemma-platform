@@ -4,6 +4,7 @@ import pytest
 
 from app.core.config import settings
 from app.core.helpers.identifiers import normalize_mobile_e164
+from app.modules.agent_surfaces.config import surface_settings
 from app.modules.identity.services.whatsapp_mobile_verification import (
     WhatsAppMobileVerificationService,
     parse_reserved_verification_message,
@@ -84,22 +85,40 @@ def test_parse_reserved_verification_message_requires_exact_format() -> None:
 
 @pytest.mark.asyncio
 async def test_whatsapp_verification_configuration_fails_closed(monkeypatch) -> None:
-    monkeypatch.setattr(settings, "auth_whatsapp_access_token", "wa-token")
-    monkeypatch.setattr(settings, "auth_whatsapp_phone_number_id", "phone-id")
-    monkeypatch.setattr(settings, "auth_whatsapp_app_secret", "app-secret")
-    monkeypatch.setattr(settings, "auth_whatsapp_verify_token", "verify-token")
-    monkeypatch.setattr(settings, "auth_whatsapp_display_phone_number", "+14155550000")
-    monkeypatch.setattr(settings, "auth_whatsapp_webhook_security_enabled", True)
+    monkeypatch.setattr(surface_settings, "whatsapp_access_token", "wa-token")
+    monkeypatch.setattr(surface_settings, "whatsapp_phone_number_id", "phone-id")
+    monkeypatch.setattr(surface_settings, "whatsapp_app_secret", "app-secret")
+    monkeypatch.setattr(surface_settings, "whatsapp_verify_token", "verify-token")
+    monkeypatch.setattr(
+        surface_settings, "whatsapp_display_phone_number", "+14155550000"
+    )
+    monkeypatch.setattr(surface_settings, "surface_webhook_security_enabled", True)
     service = WhatsAppMobileVerificationService("redis://unused")
 
     monkeypatch.setattr(settings, "auth_whatsapp_mobile_verification_enabled", False)
     assert (await service.config()).available is False
 
     monkeypatch.setattr(settings, "auth_whatsapp_mobile_verification_enabled", True)
-    monkeypatch.setattr(settings, "auth_whatsapp_webhook_security_enabled", False)
+    monkeypatch.setattr(surface_settings, "surface_webhook_security_enabled", False)
     assert (await service.config()).available is False
 
-    monkeypatch.setattr(settings, "auth_whatsapp_webhook_security_enabled", True)
+    monkeypatch.setattr(surface_settings, "surface_webhook_security_enabled", True)
     config = await service.config()
     assert config.available is True
     assert config.display_number == "+14155550000"
+
+
+@pytest.mark.asyncio
+async def test_enable_flag_without_global_surface_config_stays_unavailable(
+    monkeypatch,
+) -> None:
+    monkeypatch.setattr(settings, "auth_whatsapp_mobile_verification_enabled", True)
+    monkeypatch.setattr(surface_settings, "whatsapp_access_token", None)
+    monkeypatch.setattr(surface_settings, "whatsapp_phone_number_id", None)
+    monkeypatch.setattr(surface_settings, "whatsapp_app_secret", None)
+    monkeypatch.setattr(surface_settings, "whatsapp_verify_token", None)
+    monkeypatch.setattr(surface_settings, "surface_webhook_security_enabled", True)
+
+    config = await WhatsAppMobileVerificationService("redis://unused").config()
+
+    assert config.available is False

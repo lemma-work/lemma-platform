@@ -20,7 +20,8 @@ import httpx
 from redis.asyncio import Redis
 from sqlalchemy import func, select
 
-from app.core.config import reveal_secret, settings
+from app.composition.identity_whatsapp import global_whatsapp_configuration
+from app.core.config import settings
 from app.core.helpers.identifiers import normalize_mobile_e164
 from app.core.infrastructure.db.session import async_session_maker
 from app.core.infrastructure.events.publisher import EventPublisher
@@ -105,13 +106,14 @@ class WhatsAppVerificationConfig:
 
 
 def is_whatsapp_verification_configured() -> bool:
+    whatsapp = global_whatsapp_configuration()
     return bool(
         settings.auth_whatsapp_mobile_verification_enabled
-        and reveal_secret(settings.auth_whatsapp_access_token)
-        and settings.auth_whatsapp_phone_number_id
-        and reveal_secret(settings.auth_whatsapp_app_secret)
-        and reveal_secret(settings.auth_whatsapp_verify_token)
-        and settings.auth_whatsapp_webhook_security_enabled
+        and whatsapp.access_token
+        and whatsapp.phone_number_id
+        and whatsapp.app_secret
+        and whatsapp.verify_token
+        and whatsapp.webhook_security_enabled
     )
 
 
@@ -186,7 +188,9 @@ class WhatsAppMobileVerificationService:
         if not is_whatsapp_verification_configured():
             return WhatsAppVerificationConfig(available=False)
         if self._display_number is None:
-            configured = str(settings.auth_whatsapp_display_phone_number or "").strip()
+            configured = str(
+                global_whatsapp_configuration().display_phone_number or ""
+            ).strip()
             if configured:
                 self._display_number = configured
             else:
@@ -196,8 +200,9 @@ class WhatsAppMobileVerificationService:
         )
 
     async def _lookup_display_number(self) -> str | None:
-        access_token = reveal_secret(settings.auth_whatsapp_access_token)
-        phone_number_id = settings.auth_whatsapp_phone_number_id
+        whatsapp = global_whatsapp_configuration()
+        access_token = whatsapp.access_token
+        phone_number_id = whatsapp.phone_number_id
         if not access_token or not phone_number_id:
             return None
         try:
@@ -301,9 +306,10 @@ class WhatsAppMobileVerificationService:
         destination_phone_number_id: str,
         whatsapp_message_id: str,
     ) -> bool:
+        whatsapp = global_whatsapp_configuration()
         if (
             not is_whatsapp_verification_configured()
-            or destination_phone_number_id != settings.auth_whatsapp_phone_number_id
+            or destination_phone_number_id != whatsapp.phone_number_id
         ):
             return False
         try:
