@@ -108,7 +108,6 @@ def backend_env(doc: TOMLDocument, paths: LocalPaths) -> dict[str, str]:
         # filesystem sender remains available for explicitly testing emails.
         "AUTH_EMAIL_VERIFICATION_REQUIRED": "false",
         "AUTH_WHATSAPP_MOBILE_VERIFICATION_ENABLED": "false",
-        "SURFACE_ALLOW_UNVERIFIED_MOBILE_MATCH": "false",
         "EMBEDDING_PROVIDER": "local",
         "WEB_SEARCH_PROVIDER": "duckduckgo",
         # local installs have no public URL: receive chat-surface events by

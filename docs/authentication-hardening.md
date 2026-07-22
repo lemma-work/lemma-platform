@@ -52,18 +52,23 @@ WHATSAPP_DISPLAY_PHONE_NUMBER=+14155550000
 WHATSAPP_APP_SECRET=...
 WHATSAPP_VERIFY_TOKEN=...
 SURFACE_WEBHOOK_SECURITY_ENABLED=true
-
-# Hosted Lemma compatibility only. Self-hosted/local deployments keep this off.
-SURFACE_ALLOW_UNVERIFIED_MOBILE_MATCH=false
 ```
 
 For `lemma-stack`, each value can be set with `lemma-stack config set KEY value`; backend environment overrides are passed through unchanged. The local stack explicitly defaults `AUTH_EMAIL_VERIFICATION_REQUIRED` and its frontend counterpart to `false`, because local users normally have no SMTP account. Production keeps the backend and frontend values enabled.
 
 Only list the immediate reverse proxies in `AUTH_TRUSTED_PROXY_IPS`. Requests from every other peer ignore `Forwarded` and `X-Forwarded-For`.
 
+Profile mobile numbers require an explicit country code and are stored in
+canonical E.164 form. The database enforces uniqueness on normalized digits, so
+formatting differences cannot assign one number to multiple users. Migration
+`0008_mobile_number_unique` keeps a verified legacy owner when present (or the
+oldest owner otherwise), clears duplicate profile numbers, and invalidates any
+surface-resolution cache rows that pointed at the cleared profiles.
+
 ## Deployment sequence
 
-1. Apply migration `0007_auth_hardening` and deploy with ALTCHA and Telegram disabled.
+1. Apply migrations through `0008_mobile_number_unique` and deploy with ALTCHA,
+   Telegram, and WhatsApp mobile verification disabled.
 2. Confirm SMTP TLS, aligned From domain, SPF, DKIM, DMARC, and provider bounce handling. Send verification and password-reset messages to real test mailboxes.
 3. Run the reconciliation dry-run and review count-only output:
 
@@ -82,9 +87,10 @@ Only list the immediate reverse proxies in `AUTH_TRUSTED_PROXY_IPS`. Requests fr
 6. Register the global Telegram OIDC client in BotFather, configure its exact callback URI, enable the three Telegram settings, and perform iOS/Android device acceptance testing before exposing the button.
 7. Validate Meta's webhook challenge and signed message delivery for the global
    Lemma WhatsApp number, then enable `AUTH_WHATSAPP_MOBILE_VERIFICATION_ENABLED`.
-   Only the hosted Lemma deployment may subsequently enable
-   `SURFACE_ALLOW_UNVERIFIED_MOBILE_MATCH`; this fallback is re-evaluated for
-   every inbound message and is never used by Telegram OIDC sign-in.
+   This switch controls only the optional verification flow. Surface routing
+   always prefers a verified mobile owner and otherwise accepts one unique,
+   active, email-verified profile-number match. Telegram OIDC sign-in continues
+   to require a verified mobile number.
 
 The reconciliation command is idempotent and never prints complete addresses. An `email_conflict` or `duplicate_emailpassword_identity` count must be investigated before using `--apply` for those records; conflicted records are skipped.
 

@@ -159,3 +159,21 @@ async def test_update_user_delegates_to_repository(
     assert updated == user
     user_repository_mock.update.assert_awaited_once_with(user)
     user_cache_mock.set.assert_awaited_once_with(user)
+
+
+@pytest.mark.asyncio
+async def test_update_user_rejects_another_profiles_unverified_mobile_number(
+    user_service: UserService,
+    user_repository_mock: AsyncMock,
+):
+    user = UserEntity(
+        email="test+second@example.com",
+        mobile_number="+1 (415) 555-2671",
+    )
+    user_repository_mock.get_id_by_mobile_digits.return_value = uuid4()
+
+    with pytest.raises(UserConflictError, match="mobile number is already in use"):
+        await user_service.update_user(user)
+
+    user_repository_mock.get_id_by_mobile_digits.assert_awaited_once_with("14155552671")
+    user_repository_mock.update.assert_not_awaited()

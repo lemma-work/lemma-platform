@@ -133,13 +133,6 @@ class SurfaceSettings(BaseSettings):
             "temporary public URLs."
         ),
     )
-    surface_allow_unverified_mobile_match: bool = Field(
-        default=False,
-        description=(
-            "Temporarily allow unique unverified profile numbers to resolve "
-            "inbound surface users. Hosted Lemma only; never used for login."
-        ),
-    )
     surface_event_dedupe_ttl_seconds: int = Field(
         default=900,
         description="Short TTL for Redis-based agent surface webhook dedupe keys.",

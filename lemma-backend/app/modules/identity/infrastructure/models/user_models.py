@@ -42,10 +42,13 @@ class User(UUIDAuditBase):
     __table_args__ = (
         Index("uq_users_email_lower", func.lower(email), unique=True),
         Index(
-            "uq_users_verified_mobile_e164",
-            mobile_number,
+            "uq_users_mobile_number_digits",
+            func.regexp_replace(mobile_number, r"\D", "", "g"),
             unique=True,
-            postgresql_where=text("mobile_verified_at IS NOT NULL"),
+            postgresql_where=text(
+                "mobile_number IS NOT NULL AND "
+                "regexp_replace(mobile_number, '\\D', '', 'g') <> ''"
+            ),
         ),
     )
 

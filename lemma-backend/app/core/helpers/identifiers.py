@@ -7,7 +7,7 @@ def normalize_mobile_digits(value: str | None) -> str | None:
     """Reduce a phone number to its digits, matching the DB uniqueness index.
 
     Mirrors ``regexp_replace(mobile_number, '\\D', '', 'g')`` used by
-    ``ux_users_mobile_number_digits``. Returns ``None`` when there are no digits.
+    ``uq_users_mobile_number_digits``. Returns ``None`` when there are no digits.
     """
     if not value:
         return None

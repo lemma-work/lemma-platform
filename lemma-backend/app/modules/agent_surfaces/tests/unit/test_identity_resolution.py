@@ -16,6 +16,7 @@ from app.modules.agent_surfaces.domain.entities import (
 )
 from app.modules.agent_surfaces.services.identity_resolution_service import (
     SurfaceIdentityResolutionService,
+    _phone_lookup_candidates,
 )
 
 pytestmark = pytest.mark.asyncio
@@ -31,6 +32,8 @@ class _FakeExternalRepo:
     async def upsert(self, **kwargs):
         self.calls.append(kwargs)
         resolved = kwargs.get("resolved_user_id", self._cached)
+        if resolved is not None:
+            self._cached = resolved
         return SimpleNamespace(
             resolved_user_id=resolved,
             external_user_id=kwargs.get("external_user_id"),
@@ -156,13 +159,10 @@ async def test_unresolved_sender_returns_none_internal_id():
     assert resolved.external_user_id == "ext-1"
 
 
-async def test_verified_phone_match_has_priority_over_unverified_fallback(monkeypatch):
-    from app.modules.agent_surfaces.config import surface_settings
-
+async def test_verified_phone_match_has_priority_over_unverified_fallback():
     verified_id = uuid4()
     users = _FakeUsers(by_phone_ids=[verified_id], by_unverified_phone_ids=[uuid4()])
     external = _FakeExternalRepo()
-    monkeypatch.setattr(surface_settings, "surface_allow_unverified_mobile_match", True)
 
     resolved = await _service(users, external).resolve(
         event=_event(platform=SurfacePlatform.WHATSAPP, phone="+1 555 0100")
@@ -172,27 +172,28 @@ async def test_verified_phone_match_has_priority_over_unverified_fallback(monkey
     assert external.calls[-1]["resolved_user_id"] == verified_id
 
 
-async def test_unique_unverified_phone_fallback_is_never_persisted(monkeypatch):
-    from app.modules.agent_surfaces.config import surface_settings
-
+async def test_unique_unverified_phone_match_is_cached_for_followup_messages():
     unverified_id = uuid4()
     users = _FakeUsers(by_unverified_phone_ids=[unverified_id])
     external = _FakeExternalRepo()
-    monkeypatch.setattr(surface_settings, "surface_allow_unverified_mobile_match", True)
 
     resolved = await _service(users, external).resolve(
-        event=_event(platform=SurfacePlatform.WHATSAPP, phone="+1 555 0100")
+        event=_event(platform=SurfacePlatform.TELEGRAM, phone="+1 555 0100")
     )
 
     assert resolved.internal_user_id == unverified_id
-    assert all(call.get("resolved_user_id") is None for call in external.calls)
+    assert external.calls[-1]["resolved_user_id"] == unverified_id
+
+    # Telegram exposes the phone only on the contact-share update. The cached
+    # external identity must keep ordinary follow-up messages routed.
+    followup = await _service(users, external).resolve(
+        event=_event(platform=SurfacePlatform.TELEGRAM, phone=None)
+    )
+    assert followup.internal_user_id == unverified_id
 
 
-async def test_unverified_phone_fallback_rejects_ambiguous_matches(monkeypatch):
-    from app.modules.agent_surfaces.config import surface_settings
-
+async def test_unverified_phone_fallback_rejects_ambiguous_matches():
     users = _FakeUsers(by_unverified_phone_ids=[uuid4(), uuid4()])
-    monkeypatch.setattr(surface_settings, "surface_allow_unverified_mobile_match", True)
 
     resolved = await _service(users, _FakeExternalRepo()).resolve(
         event=_event(platform=SurfacePlatform.TELEGRAM, phone="+1 555 0100")
@@ -201,16 +202,12 @@ async def test_unverified_phone_fallback_rejects_ambiguous_matches(monkeypatch):
     assert resolved.internal_user_id is None
 
 
-async def test_unverified_phone_fallback_is_disabled_by_default(monkeypatch):
-    from app.modules.agent_surfaces.config import surface_settings
-
-    users = _FakeUsers(by_unverified_phone_ids=[uuid4()])
-    monkeypatch.setattr(
-        surface_settings, "surface_allow_unverified_mobile_match", False
-    )
-
-    resolved = await _service(users, _FakeExternalRepo()).resolve(
-        event=_event(platform=SurfacePlatform.WHATSAPP, phone="+1 555 0100")
-    )
-
-    assert resolved.internal_user_id is None
+async def test_phone_candidates_handle_provider_and_profile_formatting():
+    assert _phone_lookup_candidates("919876543210") == [
+        "+919876543210",
+        "919876543210",
+    ]
+    assert _phone_lookup_candidates("+91 98765-43210") == [
+        "+919876543210",
+        "919876543210",
+    ]

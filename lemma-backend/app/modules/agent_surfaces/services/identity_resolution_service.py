@@ -15,7 +15,6 @@ from app.modules.agent_surfaces.infrastructure.repositories.external_user_reposi
 )
 from app.composition.surface_identity import UserRepository
 from app.core.log.log import get_logger
-from app.modules.agent_surfaces.config import surface_settings
 
 logger = get_logger(__name__)
 
@@ -173,20 +172,19 @@ class SurfaceIdentityResolutionService:
         candidates = _phone_lookup_candidates(phone)
         if not candidates:
             return _UserMatch(None)
-        # Verified identity is authoritative and cacheable.
+        # Prefer verified ownership. If verification is optional or has not yet
+        # happened, a single eligible profile match still routes the surface.
         ids = await self._users.get_ids_by_mobile_numbers(candidates, verified=True)
         if len(ids) == 1:
             return _UserMatch(ids[0])
-        if len(ids) > 1 or not surface_settings.surface_allow_unverified_mobile_match:
+        if len(ids) > 1:
             return _UserMatch(None)
 
-        # Hosted-only compatibility fallback. It is deliberately never written
-        # to ExternalSurfaceUser, so every inbound message is re-evaluated.
         unverified_ids = await self._users.get_ids_by_mobile_numbers(
             candidates, verified=False
         )
         if len(unverified_ids) == 1:
-            return _UserMatch(unverified_ids[0], cacheable=False)
+            return _UserMatch(unverified_ids[0])
         if len(unverified_ids) > 1:
             logger.info("agent_surfaces.identity.ambiguous_unverified_mobile_match")
         return _UserMatch(None)
@@ -205,11 +203,13 @@ def _normalize_phone_number(phone: str | None) -> str | None:
     raw = str(phone or "").strip()
     if not raw:
         return None
-    has_plus = raw.startswith("+")
     digits = re.sub(r"\D", "", raw)
     if not digits:
         return None
-    return f"+{digits}" if has_plus else digits
+    # Meta wa_id is E.164 without '+'. Telegram contacts may include or omit
+    # it. Store one canonical representation while matching profile data by
+    # digits so legacy formatting remains compatible.
+    return f"+{digits}"
 
 
 def _phone_lookup_candidates(phone: str) -> list[str]:

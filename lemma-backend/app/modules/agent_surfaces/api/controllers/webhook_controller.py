@@ -183,22 +183,21 @@ async def handle_platform_webhook(
     # only when it targets Lemma's configured global phone-number id.
     if platform == "whatsapp":
         verification = parse_reserved_verification_message(payload)
-        if verification is not None:
+        if verification is not None and is_whatsapp_verification_configured():
             code, sender_wa_id, destination_id, message_id = verification
             if destination_id == surface_settings.whatsapp_phone_number_id:
-                if is_whatsapp_verification_configured():
-                    identity_event = WhatsAppMobileVerificationReceivedEvent(
-                        event_id=stable_event_id(
-                            {"whatsapp_mobile_verification_message_id": message_id}
-                        ),
-                        code=code,
-                        sender_wa_id=sender_wa_id,
-                        destination_phone_number_id=destination_id,
-                        whatsapp_message_id=message_id,
-                    )
-                    await EventPublisher.publish(
-                        identity_event.stream_name(), identity_event
-                    )
+                identity_event = WhatsAppMobileVerificationReceivedEvent(
+                    event_id=stable_event_id(
+                        {"whatsapp_mobile_verification_message_id": message_id}
+                    ),
+                    code=code,
+                    sender_wa_id=sender_wa_id,
+                    destination_phone_number_id=destination_id,
+                    whatsapp_message_id=message_id,
+                )
+                await EventPublisher.publish(
+                    identity_event.stream_name(), identity_event
+                )
                 return {"message": "Verification message received"}
 
     source_event_id = _surface_source_event_id(platform, payload, raw_body)

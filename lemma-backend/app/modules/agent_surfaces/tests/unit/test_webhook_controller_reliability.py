@@ -16,6 +16,7 @@ from app.modules.agent_surfaces.api.controllers.webhook_controller import (
     handle_surface_webhook,
 )
 from app.modules.agent_surfaces.domain.entities import SurfacePlatform
+from app.modules.agent_surfaces.domain.events import SurfaceWebhookReceivedEvent
 
 
 def _request(body: bytes, *, content_type: str = "application/json") -> Request:
@@ -43,6 +44,32 @@ def _request(body: bytes, *, content_type: str = "application/json") -> Request:
         },
         receive,
     )
+
+
+def _reserved_whatsapp_message() -> bytes:
+    return json.dumps(
+        {
+            "entry": [
+                {
+                    "changes": [
+                        {
+                            "value": {
+                                "metadata": {"phone_number_id": "global-phone"},
+                                "messages": [
+                                    {
+                                        "id": "wamid.verify-1",
+                                        "from": "14155552671",
+                                        "type": "text",
+                                        "text": {"body": "LEMMA VERIFY 23456789AB"},
+                                    }
+                                ],
+                            }
+                        }
+                    ]
+                }
+            ]
+        }
+    ).encode()
 
 
 @pytest.mark.parametrize(
@@ -120,29 +147,7 @@ async def test_signed_reserved_whatsapp_message_publishes_only_identity_event(
     monkeypatch.setattr(surface_settings, "whatsapp_phone_number_id", "global-phone")
     monkeypatch.setattr(surface_settings, "whatsapp_app_secret", "app-secret")
     monkeypatch.setattr(surface_settings, "whatsapp_verify_token", "verify-token")
-    body = json.dumps(
-        {
-            "entry": [
-                {
-                    "changes": [
-                        {
-                            "value": {
-                                "metadata": {"phone_number_id": "global-phone"},
-                                "messages": [
-                                    {
-                                        "id": "wamid.verify-1",
-                                        "from": "14155552671",
-                                        "type": "text",
-                                        "text": {"body": "LEMMA VERIFY 23456789AB"},
-                                    }
-                                ],
-                            }
-                        }
-                    ]
-                }
-            ]
-        }
-    ).encode()
+    body = _reserved_whatsapp_message()
     security = SimpleNamespace(
         assert_platform_request_allowed=Mock(),
         verify_platform_request=AsyncMock(),
@@ -164,6 +169,38 @@ async def test_signed_reserved_whatsapp_message_publishes_only_identity_event(
     assert isinstance(event, WhatsAppMobileVerificationReceivedEvent)
     assert event.sender_wa_id == "14155552671"
     assert event.whatsapp_message_id == "wamid.verify-1"
+
+
+@pytest.mark.asyncio
+async def test_reserved_whatsapp_text_routes_normally_when_verification_is_disabled(
+    monkeypatch,
+):
+    from app.core.config import settings
+    from app.modules.agent_surfaces.config import surface_settings
+
+    monkeypatch.setattr(settings, "auth_whatsapp_mobile_verification_enabled", False)
+    monkeypatch.setattr(surface_settings, "surface_webhook_security_enabled", True)
+    monkeypatch.setattr(surface_settings, "whatsapp_phone_number_id", "global-phone")
+    security = SimpleNamespace(
+        assert_platform_request_allowed=Mock(),
+        verify_platform_request=AsyncMock(),
+    )
+
+    with patch(
+        "app.modules.agent_surfaces.api.controllers.webhook_controller."
+        "EventPublisher.publish",
+        new=AsyncMock(),
+    ) as publish:
+        result = await handle_platform_webhook(
+            "whatsapp",
+            _request(_reserved_whatsapp_message()),
+            security,
+            SimpleNamespace(),
+        )
+
+    assert result == {"message": "Webhook received"}
+    publish.assert_awaited_once()
+    assert isinstance(publish.await_args.args[1], SurfaceWebhookReceivedEvent)
 
 
 @pytest.mark.asyncio

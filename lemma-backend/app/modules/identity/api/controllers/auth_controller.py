@@ -263,16 +263,15 @@ async def start_whatsapp_mobile_verification(
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     async with async_session_maker() as db_session:
-        verified_owner = await db_session.scalar(
+        owner = await db_session.scalar(
             select(User.id).where(
                 User.mobile_number.isnot(None),
                 func.regexp_replace(User.mobile_number, r"\D", "", "g")
                 == normalized_phone.removeprefix("+"),
-                User.mobile_verified_at.isnot(None),
                 User.id != user.id,
             )
         )
-    if verified_owner is not None:
+    if owner is not None:
         raise HTTPException(
             status_code=409, detail="This mobile number is already in use"
         )

@@ -31,11 +31,6 @@ EXPECTED = [
     ("resend_from_name", "RESEND_FROM_NAME", "Lemma"),
     ("resend_inbound_signing_secret", "RESEND_INBOUND_SIGNING_SECRET", None),
     ("surface_webhook_security_enabled", "SURFACE_WEBHOOK_SECURITY_ENABLED", True),
-    (
-        "surface_allow_unverified_mobile_match",
-        "SURFACE_ALLOW_UNVERIFIED_MOBILE_MATCH",
-        False,
-    ),
     ("surface_event_dedupe_ttl_seconds", "SURFACE_EVENT_DEDUPE_TTL_SECONDS", 900),
     (
         "surface_runtime_history_max_messages",

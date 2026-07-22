@@ -19,6 +19,7 @@ from uuid import UUID
 import httpx
 from redis.asyncio import Redis
 from sqlalchemy import func, select
+from sqlalchemy.exc import IntegrityError
 
 from app.composition.identity_whatsapp import global_whatsapp_configuration
 from app.core.config import settings
@@ -356,7 +357,6 @@ class WhatsAppMobileVerificationService:
                     User.mobile_number.isnot(None),
                     func.regexp_replace(User.mobile_number, r"\D", "", "g")
                     == sender_phone.removeprefix("+"),
-                    User.mobile_verified_at.isnot(None),
                     User.id != user_id,
                 )
             )
@@ -365,7 +365,12 @@ class WhatsAppMobileVerificationService:
                 return False
             user.mobile_number = sender_phone
             user.mobile_verified_at = datetime.now(timezone.utc)
-            await session.commit()
+            try:
+                await session.commit()
+            except IntegrityError:
+                await session.rollback()
+                logger.info("identity.mobile_verification.whatsapp.owner_conflict")
+                return False
 
         await get_user_cache().invalidate(user_id)
         phone_changed = UserMobileChangedEvent(user_id=user_id)

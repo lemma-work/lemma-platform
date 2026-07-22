@@ -45,6 +45,8 @@ class UserRepository(UserRepositoryPort):
             error = str(exc.orig).lower()
             if "uq_users_email_lower" in error or "ix_users_email" in error:
                 raise UserConflictError("User with this email already exists") from exc
+            if "uq_users_mobile_number_digits" in error:
+                raise UserConflictError("This mobile number is already in use") from exc
             raise
         self._collect_events(entity)
         return instance.to_entity()
@@ -96,7 +98,6 @@ class UserRepository(UserRepositoryPort):
         """Owner of this phone number, compared on digits only (index-aligned)."""
         stmt = select(User.id).where(
             User.mobile_number.isnot(None),
-            User.mobile_verified_at.isnot(None),
             func.regexp_replace(User.mobile_number, r"\D", "", "g") == digits,
         )
         return await self.session.scalar(stmt)
@@ -129,10 +130,8 @@ class UserRepository(UserRepositoryPort):
             await self.session.flush()
         except IntegrityError as exc:
             error = str(exc.orig).lower()
-            if "uq_users_verified_mobile_e164" in error:
-                raise UserConflictError(
-                    "This verified mobile number is already in use"
-                ) from exc
+            if "uq_users_mobile_number_digits" in error:
+                raise UserConflictError("This mobile number is already in use") from exc
             raise
         self._collect_events(entity)
         return instance.to_entity()

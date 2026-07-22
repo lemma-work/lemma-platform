@@ -176,7 +176,7 @@ async def test_whatsapp_start_is_rate_limited_and_bound_to_one_active_transactio
         await service.close()
 
 
-async def test_whatsapp_api_rejects_a_number_verified_by_another_user(
+async def test_whatsapp_api_rejects_a_number_claimed_by_another_profile(
     authenticated_client,
     signup_user,
     monkeypatch,
@@ -188,7 +188,7 @@ async def test_whatsapp_api_rejects_a_number_verified_by_another_user(
         owner_model = await session.get(User, UUID(owner["id"]))
         assert owner_model is not None
         owner_model.mobile_number = phone
-        owner_model.mobile_verified_at = func.now()
+        owner_model.mobile_verified_at = None
         await session.commit()
 
     response = await authenticated_client.post(
