@@ -487,6 +487,13 @@ class Settings(BaseSettings):
         le=2_000_000,
         description="Maximum proof-of-work search space for ALTCHA challenges",
     )
+    auth_whatsapp_mobile_verification_enabled: bool = Field(
+        default=False,
+        description=(
+            "Allow signed messages sent to Lemma's global WhatsApp number to "
+            "verify an authenticated user's mobile number"
+        ),
+    )
     auth_trusted_proxy_ips: list[str] = Field(
         default_factory=list,
         description="Immediate proxy IPs allowed to supply Forwarded/X-Forwarded-For",

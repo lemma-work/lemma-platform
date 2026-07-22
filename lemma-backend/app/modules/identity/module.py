@@ -38,11 +38,15 @@ async def _close_user_cache(app):
         from app.modules.identity.services.telegram_oidc import (
             close_telegram_oidc_store,
         )
+        from app.modules.identity.services.whatsapp_mobile_verification import (
+            close_whatsapp_mobile_verification_service,
+        )
 
         await close_user_cache()
         await get_desktop_auth_handoff_store().close()
         await close_auth_abuse_store()
         await close_telegram_oidc_store()
+        await close_whatsapp_mobile_verification_service()
 
 
 module = LemmaModule(
@@ -50,5 +54,8 @@ module = LemmaModule(
     routers=_routers,
     event_routers=_event_routers,
     api_lifespans=(_close_user_cache,),
-    stream_groups=(("identity_events", "identity-email-events"),),
+    stream_groups=(
+        ("identity_events", "identity-email-events"),
+        ("identity_events", "identity-mobile-verification-events"),
+    ),
 )

@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 
-from sqlalchemy import func, select
+from sqlalchemy import func, select, update
 from sqlalchemy.exc import IntegrityError
 
 from app.core.domain.uow import IUnitOfWork
@@ -133,3 +133,12 @@ class ExternalSurfaceUserRepository:
         result = await self.session.execute(stmt)
         instance = result.scalar_one_or_none()
         return instance.to_entity() if instance else None
+
+    async def clear_resolved_user(self, resolved_user_id) -> int:
+        """Clear cached platform identities after a Lemma profile phone change."""
+        result = await self.session.execute(
+            update(AgentSurfaceExternalUser)
+            .where(AgentSurfaceExternalUser.resolved_user_id == resolved_user_id)
+            .values(resolved_user_id=None)
+        )
+        return int(result.rowcount or 0)

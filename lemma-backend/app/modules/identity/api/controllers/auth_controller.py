@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from datetime import datetime
 from typing import Literal
 from urllib.parse import urlencode
 from uuid import UUID
@@ -12,16 +13,20 @@ from supertokens_python.recipe.session.asyncio import (
 )
 
 from app.core.config import settings
+from app.core.helpers.identifiers import normalize_mobile_e164
 from app.core.infrastructure.db.session import async_session_maker
 from app.modules.identity.api.dependencies import PodMembershipDep, UserServiceDep
 from app.modules.identity.domain.user_entities import UserEntity
+from app.modules.identity.infrastructure.mobile_number_claims import (
+    get_other_mobile_number_owner_id,
+)
+from app.modules.identity.infrastructure.models.user_models import User
 from app.modules.identity.infrastructure.supertokens_auth.helpers import (
     create_cli_session_tokens,
     create_browser_session,
     create_desktop_browser_session,
     refresh_cli_session_tokens,
 )
-from app.modules.identity.infrastructure.models.user_models import User
 from app.modules.identity.services.auth_abuse import (
     RateLimitExceeded,
     client_ip,
@@ -32,6 +37,11 @@ from app.modules.identity.services.telegram_oidc import (
     TelegramPurpose,
     get_telegram_oidc_service,
     safe_return_to,
+)
+from app.modules.identity.services.whatsapp_mobile_verification import (
+    WhatsAppVerificationRateLimited,
+    WhatsAppVerificationUnavailable,
+    get_whatsapp_mobile_verification_service,
 )
 from app.modules.identity.services.desktop_auth_handoff import (
     DesktopAuthCompletionConflict,
@@ -131,6 +141,27 @@ class TelegramConfigResponse(BaseModel):
     enabled: bool
 
 
+class WhatsAppMobileVerificationConfigResponse(BaseModel):
+    available: bool
+    display_number: str | None = None
+
+
+class WhatsAppMobileVerificationStartRequest(BaseModel):
+    mobile_number: str = Field(min_length=8, max_length=32)
+
+
+class WhatsAppMobileVerificationStartResponse(BaseModel):
+    transaction_id: str
+    code: str
+    whatsapp_url: str
+    display_number: str
+    expires_at: datetime
+
+
+class WhatsAppMobileVerificationStatusResponse(BaseModel):
+    status: Literal["PENDING", "VERIFIED", "EXPIRED"]
+
+
 async def _enforce_telegram_rate_limit(request: Request) -> None:
     store = get_auth_abuse_store()
     ip_hash = store.digest(client_ip(request.scope))
@@ -186,6 +217,108 @@ async def create_altcha_challenge(
 )
 async def telegram_config() -> TelegramConfigResponse:
     return TelegramConfigResponse(enabled=settings.is_telegram_oidc_configured())
+
+
+async def _verified_auth_user(request: Request) -> User:
+    session = await get_session(request, session_required=False)
+    if session is None:
+        raise HTTPException(status_code=401, detail="Authentication required")
+    try:
+        user_id = UUID(session.get_user_id())
+    except (TypeError, ValueError) as exc:
+        raise HTTPException(status_code=401, detail="Authentication required") from exc
+    async with async_session_maker() as db_session:
+        user = await db_session.get(User, user_id)
+    if user is None or not user.is_active or user.is_deleted or not user.is_verified:
+        raise HTTPException(status_code=403, detail="Verified account required")
+    return user
+
+
+@router.get(
+    "/mobile-verification/whatsapp/config",
+    include_in_schema=False,
+    response_model=WhatsAppMobileVerificationConfigResponse,
+)
+async def whatsapp_mobile_verification_config(
+    request: Request,
+) -> WhatsAppMobileVerificationConfigResponse:
+    await _verified_auth_user(request)
+    config = await get_whatsapp_mobile_verification_service().config()
+    return WhatsAppMobileVerificationConfigResponse(
+        available=config.available,
+        display_number=config.display_number,
+    )
+
+
+@router.post(
+    "/mobile-verification/whatsapp/start",
+    include_in_schema=False,
+    response_model=WhatsAppMobileVerificationStartResponse,
+)
+async def start_whatsapp_mobile_verification(
+    request: Request,
+    data: WhatsAppMobileVerificationStartRequest,
+) -> WhatsAppMobileVerificationStartResponse:
+    user = await _verified_auth_user(request)
+    try:
+        normalized_phone = normalize_mobile_e164(data.mobile_number)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    async with async_session_maker() as db_session:
+        owner = await get_other_mobile_number_owner_id(
+            db_session,
+            digits=normalized_phone.removeprefix("+"),
+            user_id=user.id,
+        )
+    if owner is not None:
+        raise HTTPException(
+            status_code=409, detail="This mobile number is already in use"
+        )
+
+    service = get_whatsapp_mobile_verification_service()
+    try:
+        transaction = await service.start(
+            user_id=user.id,
+            mobile_number=data.mobile_number,
+            client_key=client_ip(request.scope),
+        )
+    except WhatsAppVerificationRateLimited as exc:
+        raise HTTPException(
+            status_code=429,
+            detail="Too many mobile verification attempts",
+            headers={"Retry-After": str(exc.retry_after_seconds)},
+        ) from exc
+    except WhatsAppVerificationUnavailable as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    return WhatsAppMobileVerificationStartResponse(
+        transaction_id=transaction.transaction_id,
+        code=transaction.code,
+        whatsapp_url=transaction.whatsapp_url,
+        display_number=transaction.display_number,
+        expires_at=transaction.expires_at,
+    )
+
+
+@router.get(
+    "/mobile-verification/whatsapp/status/{transaction_id}",
+    include_in_schema=False,
+    response_model=WhatsAppMobileVerificationStatusResponse,
+)
+async def whatsapp_mobile_verification_status(
+    transaction_id: str,
+    request: Request,
+) -> WhatsAppMobileVerificationStatusResponse:
+    if not 20 <= len(transaction_id) <= 128:
+        raise HTTPException(status_code=404, detail="Verification not found")
+    user = await _verified_auth_user(request)
+    status_value = await get_whatsapp_mobile_verification_service().status(
+        transaction_id=transaction_id,
+        user_id=user.id,
+    )
+    return WhatsAppMobileVerificationStatusResponse(status=status_value)
 
 
 @router.get("/telegram/start", include_in_schema=False)

@@ -472,6 +472,66 @@
   gap: 0.85rem;
 }
 
+.auth-owned-form {
+  display: grid;
+  gap: 0.9rem;
+}
+
+.auth-owned-field {
+  display: grid;
+  gap: 0.38rem;
+  color: var(--ink);
+  font-size: 0.82rem;
+  font-weight: 600;
+}
+
+.auth-owned-field input {
+  width: 100%;
+  min-height: 2.75rem;
+  padding: 0.68rem 0.78rem;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-lg, 10px);
+  background: var(--surface);
+  color: var(--ink);
+  outline: none;
+  transition: border-color 150ms ease, box-shadow 150ms ease;
+}
+
+.auth-owned-field input:focus-visible {
+  border-color: var(--action-primary);
+  box-shadow: 0 0 0 3px var(--ring);
+}
+
+.auth-owned-field input::placeholder {
+  color: var(--subtle);
+}
+
+.auth-owned-error {
+  padding: 0.7rem 0.78rem;
+  border: 1px solid var(--auth-status-danger-border);
+  border-radius: var(--radius-lg, 10px);
+  background: var(--attention-soft);
+  color: var(--attention) !important;
+  font-size: 0.82rem;
+  line-height: 1.45;
+}
+
+.password-reset-icon-sending svg,
+.password-reset-icon-submitting svg {
+  animation: spin 1.15s linear infinite;
+}
+
+.password-reset-icon-success {
+  color: var(--state-success);
+}
+
+.password-reset-icon-invalid,
+.password-reset-icon-error,
+.password-reset-icon-rate-limited {
+  border-color: var(--auth-status-danger-border);
+  color: var(--attention);
+}
+
 .auth-text-button {
   justify-self: start;
   min-height: auto;

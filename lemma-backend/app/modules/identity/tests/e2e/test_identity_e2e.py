@@ -1769,7 +1769,7 @@ async def test_invite_with_pod_id_from_different_org_is_rejected(
 
 
 @pytest.mark.asyncio
-async def test_profile_unverified_mobile_and_telegram_uniqueness(
+async def test_profile_mobile_and_telegram_uniqueness(
     async_client: AsyncClient,
     signup_user,
 ):
@@ -1778,21 +1778,40 @@ async def test_profile_unverified_mobile_and_telegram_uniqueness(
     first_headers = _auth_headers(first["token"])
     second_headers = _auth_headers(second["token"])
 
+    for invalid_mobile in (
+        "5551234567",  # No explicit country code.
+        "+1234567",  # Too short for the supported E.164 profile format.
+        "+1234567890123456",  # Longer than E.164's 15-digit maximum.
+        "+1 555 CALL-NOW",  # Non-formatting characters are not accepted.
+    ):
+        invalid = await async_client.post(
+            "/users/me/profile",
+            headers=first_headers,
+            json={"mobile_number": invalid_mobile},
+        )
+        assert invalid.status_code == 422
+        assert invalid.json()["code"] == "VALIDATION_ERROR"
+        assert "Enter a mobile number with its country code" in str(
+            invalid.json()["details"]
+        )
+
     set_first = await async_client.post(
         "/users/me/profile",
         headers=first_headers,
         json={"mobile_number": "+1 555 123 4567", "telegram_username": "AnukulT"},
     )
     assert set_first.status_code == 201
+    assert set_first.json()["mobile_number"] == "+15551234567"
 
-    # User-entered mobile numbers are explicitly unverified, so duplicates are
-    # allowed until Telegram proves ownership and the partial unique index applies.
+    # Formatting differences do not permit two profiles to claim the same
+    # normalized number, even while both numbers are unverified.
     dup_mobile = await async_client.post(
         "/users/me/profile",
         headers=second_headers,
-        json={"mobile_number": "1(555)123-4567"},
+        json={"mobile_number": "+1(555)123-4567"},
     )
-    assert dup_mobile.status_code == 201
+    assert dup_mobile.status_code == 409
+    assert dup_mobile.json()["message"] == "This mobile number is already in use"
 
     async with async_session_maker() as session:
         verified_owner = await session.get(User, UUID(first["id"]))
@@ -1843,6 +1862,49 @@ async def test_profile_unverified_mobile_and_telegram_uniqueness(
         changed_owner = await session.get(User, UUID(first["id"]))
     assert changed_owner is not None
     assert changed_owner.mobile_verified_at is None
+
+
+@pytest.mark.asyncio
+async def test_concurrent_profile_mobile_claims_allow_exactly_one_owner(
+    async_client: AsyncClient,
+    signup_user,
+):
+    first = await signup_user(email=f"claim-first-{uuid4().hex[:8]}@example.com")
+    second = await signup_user(email=f"claim-second-{uuid4().hex[:8]}@example.com")
+    suffix = f"{int(uuid4().hex[:8], 16) % 10_000_000:07d}"
+    canonical = f"+1555{suffix}"
+
+    responses = await asyncio.gather(
+        async_client.post(
+            "/users/me/profile",
+            headers=_auth_headers(first["token"]),
+            json={"mobile_number": canonical},
+        ),
+        async_client.post(
+            "/users/me/profile",
+            headers=_auth_headers(second["token"]),
+            json={"mobile_number": f"+1 (555) {suffix[:3]}-{suffix[3:]}"},
+        ),
+    )
+
+    assert sorted(response.status_code for response in responses) == [201, 409], [
+        response.text for response in responses
+    ]
+    conflict = next(response for response in responses if response.status_code == 409)
+    assert conflict.json()["message"] == "This mobile number is already in use"
+
+    async with async_session_maker() as session:
+        users = list(
+            (
+                await session.execute(
+                    select(User).where(
+                        User.id.in_([UUID(first["id"]), UUID(second["id"])])
+                    )
+                )
+            ).scalars()
+        )
+    assert [user.mobile_number for user in users].count(canonical) == 1
+    assert [user.mobile_number for user in users].count(None) == 1
 
 
 @pytest.mark.asyncio

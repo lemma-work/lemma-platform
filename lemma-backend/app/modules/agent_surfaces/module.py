@@ -89,5 +89,6 @@ module = LemmaModule(
         ("surface_events", "surface-webhook-events"),
         ("schedule_events", "surface-schedule-events"),
         ("pod_events", "surface-pod-deletion-events"),
+        ("identity_events", "surface-identity-events"),
     ),
 )

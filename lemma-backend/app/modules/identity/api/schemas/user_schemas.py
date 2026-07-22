@@ -1,9 +1,10 @@
 from datetime import date, datetime
 from uuid import UUID
 
-from pydantic import EmailStr
+from pydantic import EmailStr, field_validator
 
 from app.core.api.schemas import BaseSchema
+from app.core.helpers.identifiers import normalize_mobile_e164
 
 
 class UserProfileRequest(BaseSchema):
@@ -16,6 +17,14 @@ class UserProfileRequest(BaseSchema):
     country: str | None = None
     timezone: str | None = None
     date_of_birth: date | None = None
+
+    @field_validator("mobile_number", mode="before")
+    @classmethod
+    def normalize_mobile_number(cls, value: object) -> str | None:
+        """Require an explicit country code and persist canonical E.164."""
+        if value is None or not str(value).strip():
+            return None
+        return normalize_mobile_e164(str(value))
 
 
 class UserResponse(BaseSchema):
