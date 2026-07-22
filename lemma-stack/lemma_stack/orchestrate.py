@@ -74,7 +74,7 @@ def bring_up(
     runtime = detect.ensure_ready(provider)
 
     progress("pull", f"fetching Lemma {manifest.version}")
-    images.pull_release(runtime, manifest, kreuzberg=store.feature(config, "kreuzberg"))
+    images.pull_release(runtime, manifest)
     release_manifest.pin(paths, manifest)
 
     ctx = AdminContext(paths=paths, config=config)
@@ -99,5 +99,5 @@ def bring_down(paths: LocalPaths, config: TOMLDocument, *, infra: bool = False) 
     ctx = AdminContext(paths=paths, config=config)
     specs = ctx.specs()
     if not infra:
-        specs = [s for s in specs if s.name in {"agentbox", "backend", "frontend"}]
+        specs = [s for s in specs if s.name in {"backend", "frontend"}]
     lifecycle.down(ctx.runtime, specs)

@@ -1,5 +1,4 @@
-"""Image pulls for a release (includes pre-pulling the sandbox runtime image
-so the first agent workspace doesn't block on a multi-GB download)."""
+"""Image pulls for the two app services, infra, and sandbox runtime image."""
 
 from __future__ import annotations
 
@@ -12,10 +11,9 @@ def pull_release(
     runtime: Runtime,
     manifest: ReleaseManifest,
     *,
-    kreuzberg: bool,
     skip_existing: bool = True,
 ) -> None:
-    for ref in manifest.all_pull_refs(kreuzberg=kreuzberg):
+    for ref in manifest.all_pull_refs():
         if skip_existing and runtime.image_exists(ref):
             info(f"image present: {ref}")
             continue

@@ -13,8 +13,13 @@ all persistent state under `~/.lemma/local`:
 
 - frontend: http://127-0-0-1.sslip.io:3711
 - backend API: http://127-0-0-1.sslip.io:8711 (docs at /scalar)
-- infra (postgres/redis/supertokens/kreuzberg) stays on the private
+- infrastructure (PostgreSQL, Redis, and SuperTokens) stays on the private
   `lemma-local-net` container network — no host ports, no collisions.
+
+The backend image is a single process containing the API, worker, scheduler,
+AgentBox manager, and in-process MarkItDown document conversion. There is no
+separate AgentBox or Kreuzberg service. AgentBox durable state uses the
+`agentbox` database in the same PostgreSQL instance.
 
 Use the `127-0-0-1.sslip.io` host (wildcard DNS that resolves to `127.0.0.1`),
 not `localhost` / `127.0.0.1` directly: sign-in cookies and per-app subdomains

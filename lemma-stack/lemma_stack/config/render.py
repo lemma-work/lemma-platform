@@ -4,12 +4,15 @@ Layering (last wins): packaged defaults -> values derived from config
 (ports, features, runtime) -> the [<service>.env] override section.
 
 Services talk to each other over the lemma-local-net container network using
-DNS aliases (db, redis, supertokens, kreuzberg, agentbox, backend, frontend);
+DNS aliases (db, redis, supertokens, backend, frontend);
 browser-facing URLs use the 127-0-0-1.sslip.io wildcard host + published ports
 (see LOCAL_HOST) so apps and the API share one registrable domain.
 """
 
 from __future__ import annotations
+
+import base64
+import hashlib
 
 from tomlkit import TOMLDocument
 
@@ -53,11 +56,24 @@ def app_base_domain(doc: TOMLDocument) -> str:
 
 
 def agentbox_app_domain(doc: TOMLDocument) -> str:
-    return f"{LOCAL_HOST}:{store.port(doc, 'agentbox')}"
+    return f"workspaces.{LOCAL_HOST}:{store.port(doc, 'backend')}"
 
 
-def backend_env(doc: TOMLDocument, paths: LocalPaths) -> dict[str, str]:
-    kreuzberg_enabled = store.feature(doc, "kreuzberg")
+def _agentbox_endpoint_state_key(doc: TOMLDocument) -> str:
+    """Derive a stable local-only endpoint key from the generated manager key."""
+
+    digest = hashlib.sha256(store.agentbox_api_key(doc).encode("utf-8")).digest()
+    return base64.urlsafe_b64encode(digest).decode("ascii")
+
+
+def backend_env(
+    doc: TOMLDocument,
+    paths: LocalPaths,
+    *,
+    provider: str,
+    runtime_image: str,
+    container_socket: str,
+) -> dict[str, str]:
     env = {
         "ENVIRONMENT": "local",
         "DEBUG": "true",
@@ -70,16 +86,22 @@ def backend_env(doc: TOMLDocument, paths: LocalPaths) -> dict[str, str]:
         "DATASTORE_DATABASE_URL": "postgresql+asyncpg://postgres:postgres@db:5432/lemma_datastore",
         "REDIS_URL": "redis://redis:6379",
         "SUPERTOKENS_CORE_URL": "http://supertokens:3567",
-        "LOCAL_KREUZBERG_ENABLED": "true" if kreuzberg_enabled else "false",
-        "KREUZBERG_URL": "http://kreuzberg:8000" if kreuzberg_enabled else "",
-        # Pick the document-processor adapter to match the running services: the
-        # Kreuzberg REST adapter when its container is up, else the in-process
-        # markitdown adapter (shipped in the backend image) so document
-        # conversion works with one fewer container.
-        "DOCUMENT_PROCESSOR": "kreuzberg" if kreuzberg_enabled else "markitdown",
-        # agentbox manager
-        "AGENTBOX_API_URL": "http://agentbox:8000",
+        "LOCAL_KREUZBERG_ENABLED": "false",
+        "KREUZBERG_URL": "",
+        "DOCUMENT_PROCESSOR": "markitdown",
+        # AgentBox manager is mounted inside this backend process.
+        "AGENTBOX_ENVIRONMENT": "local",
+        "AGENTBOX_API_URL": "http://backend:8000/internal/agentbox",
         "AGENTBOX_API_KEY": store.agentbox_api_key(doc),
+        "AGENTBOX_PROVIDER": provider,
+        "AGENTBOX_RUNTIME_IMAGE": runtime_image,
+        "AGENTBOX_STATE_DATABASE_URL": "postgresql://postgres:postgres@db:5432/agentbox",
+        "AGENTBOX_ENDPOINT_STATE_KEYS": _agentbox_endpoint_state_key(doc),
+        "AGENTBOX_STORAGE_ROOT": WORKSPACES_MOUNT,
+        "AGENTBOX_STORAGE_HOST_ROOT": str(paths.workspaces_dir),
+        "AGENTBOX_APP_DOMAIN": agentbox_app_domain(doc),
+        "AGENTBOX_NETWORK": NETWORK_NAME,
+        "AGENTBOX_ADD_HOST_GATEWAY": "false",
         # sandboxes share the network; no host.docker.internal rewrite
         "WORKSPACE_CALLBACK_API_URL": "http://backend:8000",
         # browser-facing URLs
@@ -115,6 +137,9 @@ def backend_env(doc: TOMLDocument, paths: LocalPaths) -> dict[str, str]:
         "ENABLE_TELEGRAM_POLLING_MODE": "true",
         "ENABLE_SLACK_SOCKET_MODE": "true",
     }
+    if provider == "podman":
+        env["CONTAINER_HOST"] = f"unix://{container_socket}"
+    env.update(store.env_overrides(doc, "agentbox"))
     env.update(store.env_overrides(doc, "backend"))
     return env
 
@@ -135,33 +160,6 @@ def frontend_env(doc: TOMLDocument) -> dict[str, str]:
         "NEXT_PUBLIC_AUTH_EMAIL_VERIFICATION_REQUIRED": "false",
     }
     env.update(store.env_overrides(doc, "frontend"))
-    return env
-
-
-def agentbox_env(
-    doc: TOMLDocument,
-    paths: LocalPaths,
-    *,
-    provider: str,
-    runtime_image: str,
-    container_socket: str,
-) -> dict[str, str]:
-    env = {
-        "AGENTBOX_API_KEY": store.agentbox_api_key(doc),
-        "AGENTBOX_API_URL": "http://agentbox:8000",
-        "AGENTBOX_PROVIDER": provider,
-        "AGENTBOX_RUNTIME_IMAGE": runtime_image,
-        "AGENTBOX_STORAGE_ROOT": WORKSPACES_MOUNT,
-        "AGENTBOX_STORAGE_HOST_ROOT": str(paths.workspaces_dir),
-        "AGENTBOX_STATE_DB_PATH": f"{STATE_MOUNT}/agentbox-manager/state.db",
-        "AGENTBOX_APP_DOMAIN": agentbox_app_domain(doc),
-        # sandboxes join the stack network; reachable by DNS, no host ports
-        "AGENTBOX_NETWORK": NETWORK_NAME,
-        "AGENTBOX_ADD_HOST_GATEWAY": "false",
-    }
-    if provider == "podman":
-        env["CONTAINER_HOST"] = f"unix://{container_socket}"
-    env.update(store.env_overrides(doc, "agentbox"))
     return env
 
 

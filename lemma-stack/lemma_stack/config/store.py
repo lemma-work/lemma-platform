@@ -22,7 +22,7 @@ SCHEMA_VERSION = 1
 SECRET_KEY_RE = re.compile(r"KEY|TOKEN|SECRET|PASSWORD", re.IGNORECASE)
 ENV_SECTIONS = ("backend", "frontend", "agentbox")
 
-DEFAULT_PORTS = {"frontend": 3711, "backend": 8711, "agentbox": 8721}
+DEFAULT_PORTS = {"frontend": 3711, "backend": 8711}
 
 _TEMPLATE = """\
 # Lemma local stack configuration — owned by lemma-stack.
@@ -41,10 +41,8 @@ provider = "podman"
 [ports]
 frontend = 3711
 backend = 8711
-agentbox = 8721
 
 [features]
-kreuzberg = false
 observability = false
 
 # Extra backend settings (UPPER_SNAKE env vars), passed to the backend

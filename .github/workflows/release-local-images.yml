@@ -1,7 +1,8 @@
 name: Release Local Stack Images
 
-# Builds the four images the local-stack installer (lemma-stack) consumes,
-# pushes them to ghcr.io, and attaches a release manifest (lemma-local.json)
+# Builds the three images the current local stack consumes, plus the legacy
+# manager image needed by older installers during their upgrade window. It
+# pushes them to ghcr.io and attaches a release manifest (lemma-local.json)
 # to the GitHub release. lemma-stack resolves:
 #   stable  -> releases/latest/download/lemma-local.json
 #   <X.Y.Z> -> releases/download/v<X.Y.Z>/lemma-local.json
@@ -239,6 +240,7 @@ jobs:
               "images": {
                   "backend": image("lemma-backend"),
                   "frontend": image("lemma-frontend"),
+                  # Legacy compatibility only; current lemma-stack does not pull it.
                   "agentbox": image("lemma-agentbox"),
                   "agentbox_runtime": image("lemma-agentbox-runtime"),
               },
@@ -246,7 +248,6 @@ jobs:
                   "postgres": "docker.io/pgvector/pgvector:0.8.3-pg16",
                   "redis": "docker.io/redis/redis-stack:7.2.0-v19",
                   "supertokens": "docker.io/supertokens/supertokens-postgresql:11.4.5",
-                  "kreuzberg": "ghcr.io/kreuzberg-dev/kreuzberg:4.9.9",
               },
           }
           Path("lemma-local.json").write_text(json.dumps(manifest, indent=2) + "\n")

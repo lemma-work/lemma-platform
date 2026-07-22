@@ -97,7 +97,7 @@ class Runtime:
     def start_container(self, name: str) -> None:
         self.run("start", name)
 
-    # --- runtime socket (mounted into the agentbox manager) -----------------
+    # --- runtime socket (mounted into the unified backend) ------------------
 
     def socket_path(self) -> str:
         if self.cli == "docker":

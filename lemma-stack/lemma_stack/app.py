@@ -149,7 +149,7 @@ def install(
     store.save(paths, config)
 
     # 4. port availability (only host-published ports can collide)
-    for name in ("frontend", "backend", "agentbox"):
+    for name in ("frontend", "backend"):
         port = store.port(config, name)
         if _port_in_use(port):
             warn(
@@ -170,7 +170,7 @@ def install(
         )
     else:
         runtime = detect.ensure_ready(provider)
-        images.pull_release(runtime, manifest, kreuzberg=store.feature(config, "kreuzberg"))
+        images.pull_release(runtime, manifest)
         release_manifest.pin(paths, manifest)
 
     # 7. install the lemma CLI and point it at this stack (server "local")
@@ -211,13 +211,13 @@ def start() -> None:
 
 @app.command()
 def stop(
-    infra: bool = typer.Option(False, "--infra", help="Also stop db/redis/supertokens/kreuzberg."),
+    infra: bool = typer.Option(False, "--infra", help="Also stop db/redis/supertokens."),
 ) -> None:
     """Stop the stack (app services; --infra stops everything)."""
     ctx = _load_context()
     specs = ctx.specs()
     if not infra:
-        specs = [s for s in specs if s.name in {"agentbox", "backend", "frontend"}]
+        specs = [s for s in specs if s.name in {"backend", "frontend"}]
     lifecycle.down(ctx.runtime, specs)
 
 
@@ -267,7 +267,7 @@ def supervise(
 
 @app.command()
 def logs(
-    service: str = typer.Argument(..., help="One of: db, redis, supertokens, kreuzberg, agentbox, backend, frontend."),
+    service: str = typer.Argument(..., help="One of: db, redis, supertokens, backend, frontend."),
     follow: bool = typer.Option(False, "-f", "--follow"),
     lines: int = typer.Option(200, "--lines"),
 ) -> None:
@@ -335,7 +335,7 @@ def doctor(json_output: bool = typer.Option(False, "--json")) -> None:
             overrides.get("LEMMA_OPENAI_API_KEY") or overrides.get("LEMMA_ANTHROPIC_API_KEY")
         )
         check("llm-api-key", has_key, "set" if has_key else "no LLM key configured")
-        for name in ("frontend", "backend", "agentbox"):
+        for name in ("frontend", "backend"):
             port = store.port(config, name)
             running = False
             if state[provider]["running"]:

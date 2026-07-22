@@ -24,14 +24,13 @@ from lemma_stack.paths import LocalPaths
 SCHEMA_VERSION = 1
 DEFAULT_REPO = "lemma-work/lemma-platform"
 MANIFEST_ASSET = "lemma-local.json"
-APP_IMAGE_KEYS = ("backend", "frontend", "agentbox", "agentbox_runtime")
+APP_IMAGE_KEYS = ("backend", "frontend", "agentbox_runtime")
 
 # Fresh installs get pg16; the dev stack stays on pg15 for volume compat.
 DEFAULT_INFRA_IMAGES = {
     "postgres": "docker.io/pgvector/pgvector:0.8.3-pg16",
     "redis": "docker.io/redis/redis-stack:7.2.0-v19",
     "supertokens": "docker.io/supertokens/supertokens-postgresql:11.4.5",
-    "kreuzberg": "ghcr.io/kreuzberg-dev/kreuzberg:4.9.9",
 }
 
 
@@ -62,14 +61,12 @@ class ReleaseManifest:
     def infra_image(self, key: str) -> str:
         return self.infra.get(key) or DEFAULT_INFRA_IMAGES[key]
 
-    def all_pull_refs(self, *, kreuzberg: bool) -> list[str]:
+    def all_pull_refs(self) -> list[str]:
         refs = [self.image(key).pull_ref for key in APP_IMAGE_KEYS]
         refs.extend(
             self.infra_image(key)
             for key in ("postgres", "redis", "supertokens")
         )
-        if kreuzberg:
-            refs.append(self.infra_image("kreuzberg"))
         return refs
 
 

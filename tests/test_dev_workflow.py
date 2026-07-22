@@ -158,6 +158,13 @@ class DevWorkflowTests(unittest.TestCase):
         self.assertIn("_run-frontend", dev_recipe)
         self.assertNotIn("_run-agentbox", dev_recipe)
 
+    def test_infra_start_removes_services_from_the_previous_topology(self):
+        with tempfile.TemporaryDirectory() as raw_tmp:
+            result = self.run_make(Path(raw_tmp), "-n", "_infra-up")
+
+            self.assertIn("--remove-orphans db redis supertokens", result.stdout)
+            self.assertNotIn("kreuzberg", result.stdout.lower())
+
     def test_public_mode_tunnels_only_api_and_keeps_frontend_local(self):
         with tempfile.TemporaryDirectory() as raw_tmp:
             tmp = Path(raw_tmp)

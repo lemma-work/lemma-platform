@@ -559,7 +559,7 @@ _ensure-init:
 
 _infra-up:
 	@echo "  Starting infra (postgres, redis, supertokens)…"
-	@cd $(BACKEND_DIR) && rm -f $(INFRA_PID_FILE) && $(COMMON_DEV_ENV) docker compose up -d --quiet-pull db redis supertokens
+	@cd $(BACKEND_DIR) && rm -f $(INFRA_PID_FILE) && $(COMMON_DEV_ENV) docker compose up -d --quiet-pull --remove-orphans db redis supertokens
 
 _wait-infra:
 	@echo "  Waiting for postgres on localhost:$(DEV_POSTGRES_PORT)…"

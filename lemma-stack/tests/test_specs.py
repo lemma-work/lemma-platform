@@ -18,7 +18,6 @@ def manifest():
             "images": {
                 "backend": "ghcr.io/lemma-work/lemma-backend:v1.0.0",
                 "frontend": "ghcr.io/lemma-work/lemma-frontend:v1.0.0",
-                "agentbox": "ghcr.io/lemma-work/lemma-agentbox:v1.0.0",
                 "agentbox_runtime": "ghcr.io/lemma-work/lemma-agentbox-runtime:v1.0.0",
             },
         }
@@ -44,29 +43,26 @@ def by_name(specs, name):
 def test_start_order_and_host_ports(config, paths, manifest):
     specs = build(config, paths, manifest)
     names = [s.name for s in specs]
-    assert names == ["db", "redis", "supertokens", "agentbox", "backend", "frontend"]
+    assert names == ["db", "redis", "supertokens", "backend", "frontend"]
     published = {s.name: s.ports for s in specs}
-    # only the three app-facing services publish host ports
+    # only the two app-facing services publish host ports
     assert published["db"] == ()
     assert published["redis"] == ()
     assert published["supertokens"] == ()
-    assert published["agentbox"] == ((8721, 8000),)
     assert published["backend"] == ((8711, 8000),)
     assert published["frontend"] == ((3711, 8080),)
 
 
-def test_kreuzberg_included_when_enabled(config, paths, manifest):
+def test_kreuzberg_legacy_flag_cannot_add_a_local_service(config, paths, manifest):
     store.set_value(config, "features.kreuzberg", "true")
     specs = build(config, paths, manifest)
-    assert "kreuzberg" in [s.name for s in specs]
+    assert "kreuzberg" not in [s.name for s in specs]
     backend = by_name(specs, "backend")
-    assert backend.env["KREUZBERG_URL"] == "http://kreuzberg:8000"
-    assert backend.env["DOCUMENT_PROCESSOR"] == "kreuzberg"
+    assert backend.env["KREUZBERG_URL"] == ""
+    assert backend.env["DOCUMENT_PROCESSOR"] == "markitdown"
 
 
-def test_document_processor_defaults_to_markitdown_without_kreuzberg(config, paths, manifest):
-    # Default install (kreuzberg disabled): no container, and the backend uses
-    # the in-process markitdown adapter with no Kreuzberg URL.
+def test_document_processor_is_in_process_markitdown(config, paths, manifest):
     specs = build(config, paths, manifest)
     assert "kreuzberg" not in [s.name for s in specs]
     backend = by_name(specs, "backend")
@@ -98,7 +94,7 @@ def test_run_args_loopback_only_ports(config, paths, manifest):
 
 
 def test_selinux_adds_z_to_rw_binds_only(config, paths, manifest):
-    spec = by_name(build(config, paths, manifest, provider="podman"), "agentbox")
+    spec = by_name(build(config, paths, manifest, provider="podman"), "backend")
     args = run_args(spec, selinux=True)
     mounts = [args[i + 1] for i, a in enumerate(args) if a == "-v"]
     state_mount = next(v for v in mounts if "/app/.local/lemma" in v)
@@ -107,10 +103,13 @@ def test_selinux_adds_z_to_rw_binds_only(config, paths, manifest):
     assert not socket_mount.endswith(":z")  # sockets must not be relabeled
 
 
-def test_agentbox_podman_wiring(config, paths, manifest):
-    spec = by_name(build(config, paths, manifest, provider="podman"), "agentbox")
+def test_embedded_agentbox_podman_wiring(config, paths, manifest):
+    spec = by_name(build(config, paths, manifest, provider="podman"), "backend")
     assert spec.env["AGENTBOX_PROVIDER"] == "podman"
+    assert spec.env["AGENTBOX_API_URL"] == "http://backend:8000/internal/agentbox"
     assert spec.env["CONTAINER_HOST"] == "unix:///run/podman/podman.sock"
+    assert spec.env["AGENTBOX_STATE_DATABASE_URL"].endswith("/agentbox")
+    assert len(spec.env["AGENTBOX_ENDPOINT_STATE_KEYS"]) == 44
     assert spec.env["AGENTBOX_NETWORK"] == "lemma-local-net"
     assert spec.env["AGENTBOX_ADD_HOST_GATEWAY"] == "false"
     assert spec.user == "root"
@@ -118,8 +117,8 @@ def test_agentbox_podman_wiring(config, paths, manifest):
     assert mounts["/run/podman/podman.sock"] == "/run/user/501/podman/podman.sock"
 
 
-def test_agentbox_docker_wiring(config, paths, manifest):
-    spec = by_name(build(config, paths, manifest, provider="docker"), "agentbox")
+def test_embedded_agentbox_docker_wiring(config, paths, manifest):
+    spec = by_name(build(config, paths, manifest, provider="docker"), "backend")
     assert spec.env["AGENTBOX_PROVIDER"] == "docker"
     assert "CONTAINER_HOST" not in spec.env
     mounts = dict((t, s) for s, t, _ in spec.binds)
@@ -151,7 +150,7 @@ def test_agentbox_socket_selinux_guard_matrix(
     monkeypatch.setattr(specs_mod.platform, "system", lambda: host_platform)
     monkeypatch.setattr(specs_mod, "selinux_enforcing", lambda: host_selinux)
 
-    spec = by_name(build(config, paths, manifest, provider=provider), "agentbox")
+    spec = by_name(build(config, paths, manifest, provider=provider), "backend")
 
     assert spec.security_opts == expected
 
@@ -159,9 +158,9 @@ def test_agentbox_socket_selinux_guard_matrix(
 def test_agentbox_security_opts_change_config_hash(config, paths, manifest, monkeypatch):
     monkeypatch.setattr(specs_mod.platform, "system", lambda: "Linux")
     monkeypatch.setattr(specs_mod, "selinux_enforcing", lambda: False)
-    unconfined = by_name(build(config, paths, manifest, provider="podman"), "agentbox")
+    unconfined = by_name(build(config, paths, manifest, provider="podman"), "backend")
     monkeypatch.setattr(specs_mod.platform, "system", lambda: "Darwin")
-    guarded = by_name(build(config, paths, manifest, provider="podman"), "agentbox")
+    guarded = by_name(build(config, paths, manifest, provider="podman"), "backend")
 
     assert unconfined.security_opts == ()
     assert guarded.security_opts == ("label=disable",)
@@ -184,7 +183,7 @@ def test_backend_env_golden(config, paths, manifest):
     assert env["DATABASE_URL"] == "postgresql+asyncpg://postgres:postgres@db:5432/lemma"
     assert env["REDIS_URL"] == "redis://redis:6379"
     assert env["SUPERTOKENS_CORE_URL"] == "http://supertokens:3567"
-    assert env["AGENTBOX_API_URL"] == "http://agentbox:8000"
+    assert env["AGENTBOX_API_URL"] == "http://backend:8000/internal/agentbox"
     assert env["WORKSPACE_CALLBACK_API_URL"] == "http://backend:8000"
     assert env["SCHEDULER_API_URL"] == "http://backend:8000"
     assert env["API_URL"] == "http://127-0-0-1.sslip.io:8711"
@@ -197,6 +196,7 @@ def test_backend_env_golden(config, paths, manifest):
     assert env["EMBEDDING_PROVIDER"] == "local"
     assert env["AUTH_EMAIL_VERIFICATION_REQUIRED"] == "false"
     assert env["AGENTBOX_API_KEY"] == store.agentbox_api_key(config)
+    assert env["AGENTBOX_APP_DOMAIN"] == "workspaces.127-0-0-1.sslip.io:8711"
     # chat surfaces default to no-public-URL receive modes
     assert env["ENABLE_TELEGRAM_POLLING_MODE"] == "true"
     assert env["ENABLE_SLACK_SOCKET_MODE"] == "true"
@@ -215,4 +215,14 @@ def test_custom_ports_flow_into_urls(config, paths, manifest):
     assert frontend.env["NEXT_PUBLIC_SITE_URL"] == "http://127-0-0-1.sslip.io:4000"
     assert frontend.env["NEXT_PUBLIC_AUTH_EMAIL_VERIFICATION_REQUIRED"] == "false"
     assert backend.env["APP_BASE_DOMAIN"] == "127-0-0-1.sslip.io:9000"
-    assert render.agentbox_app_domain(config) == "127-0-0-1.sslip.io:8721"
+    assert render.agentbox_app_domain(config) == "workspaces.127-0-0-1.sslip.io:9000"
+
+
+def test_backend_runs_the_all_in_one_local_entrypoint(config, paths, manifest):
+    backend = by_name(build(config, paths, manifest), "backend")
+
+    assert backend.command[:2] == ("uvicorn", "local_app:app")
+    assert backend.wait_http == (
+        "http://127-0-0-1.sslip.io:8711/internal/agentbox/health/ready"
+    )
+    assert "agentbox" not in [spec.name for spec in build(config, paths, manifest)]

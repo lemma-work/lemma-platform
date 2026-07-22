@@ -1,8 +1,8 @@
 """Declarative service specs for the installed stack, rendered to `run` args.
 
 This replaces compose: one codepath for docker and podman, with explicit
-start ordering and health gating handled by lifecycle.py. Only frontend,
-backend, and agentbox publish host ports (loopback only); infra is reachable
+start ordering and health gating handled by lifecycle.py. Only frontend and
+backend publish host ports (loopback only); infra is reachable
 solely over the lemma-local-net network.
 """
 
@@ -158,7 +158,6 @@ def build_specs(
     host_socket: str,
 ) -> list[ServiceSpec]:
     """The installed stack, in start order."""
-    kreuzberg_enabled = store.feature(doc, "kreuzberg")
     socket_mount = PODMAN_SOCKET_MOUNT if provider == "podman" else DOCKER_SOCKET_MOUNT
 
     specs = [
@@ -199,53 +198,20 @@ def build_specs(
         ),
     ]
 
-    if kreuzberg_enabled:
-        specs.append(
-            ServiceSpec(
-                name="kreuzberg",
-                image=manifest.infra_image("kreuzberg"),
-                health=HealthCheck(
-                    cmd="curl -f http://localhost:8000/health",
-                    interval="30s",
-                    timeout="10s",
-                    retries=5,
-                ),
-            )
-        )
-
     specs.append(
         ServiceSpec(
-            name="agentbox",
-            image=manifest.image("agentbox").pull_ref,
-            env=render.agentbox_env(
+            name="backend",
+            image=manifest.image("backend").pull_ref,
+            env=render.backend_env(
                 doc,
                 paths,
                 provider=provider,
                 runtime_image=manifest.image("agentbox_runtime").pull_ref,
                 container_socket=socket_mount,
             ),
-            ports=((store.port(doc, "agentbox"), 8000),),
-            binds=(
-                (str(paths.state_dir), render.STATE_MOUNT, ""),
-                (str(paths.workspaces_dir), render.WORKSPACES_MOUNT, ""),
-                (host_socket, socket_mount, ""),
-            ),
-            user="root",
-            # the mounted API socket must not be relabeled by SELinux
-            security_opts=("label=disable",)
-            if agentbox_socket_requires_label_disable(provider)
-            else (),
-        )
-    )
-
-    specs.append(
-        ServiceSpec(
-            name="backend",
-            image=manifest.image("backend").pull_ref,
-            env=render.backend_env(doc, paths),
             command=(
                 "uvicorn",
-                "standalone_app:app",
+                "local_app:app",
                 "--host",
                 "0.0.0.0",
                 "--port",
@@ -258,8 +224,14 @@ def build_specs(
                 (str(paths.state_dir), render.STATE_MOUNT, ""),
                 (str(paths.workspaces_dir), render.WORKSPACES_MOUNT, ""),
                 (str(paths.object_storage_dir), render.OBJECT_STORAGE_MOUNT, ""),
+                (host_socket, socket_mount, ""),
             ),
-            wait_http=f"{render.backend_origin(doc)}/health",
+            # The embedded manager needs access to the host runtime socket.
+            user="root",
+            security_opts=("label=disable",)
+            if agentbox_socket_requires_label_disable(provider)
+            else (),
+            wait_http=f"{render.backend_origin(doc)}/internal/agentbox/health/ready",
         )
     )
 

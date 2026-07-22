@@ -68,8 +68,6 @@ _SERVICE_PHASE = {
     "db": "infra",
     "redis": "infra",
     "supertokens": "infra",
-    "kreuzberg": "infra",
-    "agentbox": "workspace",
     "backend": "backend",
     "frontend": "frontend",
 }
@@ -240,12 +238,12 @@ class Supervisor:
             try:
                 provider = store.provider(config)
                 runtime = detect.ensure_ready(provider)
-                for name in ("backend", "frontend", "agentbox"):
+                for name in ("backend", "frontend"):
                     ports[name] = runtime.container_running(f"{CONTAINER_PREFIX}-{name}")
             except Exception:
-                ports = {"backend": False, "frontend": False, "agentbox": False}
+                ports = {"backend": False, "frontend": False}
         else:
-            ports = {"backend": self._ready, "frontend": self._ready, "agentbox": self._ready}
+            ports = {"backend": self._ready, "frontend": self._ready}
         self.emit(
             "status",
             id=request_id,

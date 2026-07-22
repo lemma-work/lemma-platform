@@ -18,6 +18,7 @@ def sample(**overrides) -> dict:
         "images": {
             "backend": {"ref": "ghcr.io/lemma-work/lemma-backend:v1.4.0", "digest": "sha256:aa"},
             "frontend": {"ref": "ghcr.io/lemma-work/lemma-frontend:v1.4.0"},
+            # Retained in published manifests only for old installer versions.
             "agentbox": "ghcr.io/lemma-work/lemma-agentbox:v1.4.0",
             "agentbox_runtime": {"ref": "ghcr.io/lemma-work/lemma-agentbox-runtime:v1.4.0"},
         },
@@ -48,12 +49,12 @@ def test_release_workflow_uses_the_stack_supertokens_version():
     assert match.group(1) == m.DEFAULT_INFRA_IMAGES["supertokens"]
 
 
-def test_kreuzberg_pull_only_when_enabled():
+def test_pull_refs_contain_no_separate_manager_or_document_service():
     manifest = m.parse(sample())
-    refs_without = manifest.all_pull_refs(kreuzberg=False)
-    refs_with = manifest.all_pull_refs(kreuzberg=True)
-    assert not any("kreuzberg" in ref for ref in refs_without)
-    assert any("kreuzberg" in ref for ref in refs_with)
+    refs = manifest.all_pull_refs()
+    assert not any("kreuzberg" in ref for ref in refs)
+    assert not any(ref.endswith("lemma-agentbox:v1.4.0") for ref in refs)
+    assert any("lemma-agentbox-runtime" in ref for ref in refs)
 
 
 def test_missing_image_rejected():
