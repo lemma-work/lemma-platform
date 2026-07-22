@@ -21,6 +21,9 @@ from lemma_stack import __version__
 from lemma_stack.output import AdminError
 from lemma_stack.paths import LocalPaths
 
+# Host packs are an additive field in schema 1. Keeping the public schema
+# stable lets already-installed lemma-stack clients continue consuming new
+# releases while new Desktop builds opt into and verify the native artifact.
 SCHEMA_VERSION = 1
 DEFAULT_REPO = "lemma-work/lemma-platform"
 MANIFEST_ASSET = "lemma-local.json"
@@ -45,11 +48,20 @@ class ImageRef:
 
 
 @dataclass(frozen=True)
+class ArtifactRef:
+    url: str
+    sha256: str
+    size: int
+    format: str = "zip"
+
+
+@dataclass(frozen=True)
 class ReleaseManifest:
     version: str
     min_admin_version: str
     images: dict[str, ImageRef]
     infra: dict[str, str] = field(default_factory=dict)
+    host_packs: dict[str, ArtifactRef] = field(default_factory=dict)
     raw: dict[str, Any] = field(default_factory=dict)
 
     def image(self, key: str) -> ImageRef:
@@ -63,11 +75,29 @@ class ReleaseManifest:
 
     def all_pull_refs(self) -> list[str]:
         refs = [self.image(key).pull_ref for key in APP_IMAGE_KEYS]
-        refs.extend(
+        refs.extend(self.infra_pull_refs())
+        return refs
+
+    def infra_pull_refs(self) -> list[str]:
+        """Images needed before native backend/frontend processes can start.
+
+        The sandbox runtime is intentionally absent: the selected AgentBox
+        provider fetches it on first sandbox creation instead of making every
+        desktop install pay that download cost.
+        """
+
+        return [
             self.infra_image(key)
             for key in ("postgres", "redis", "supertokens")
-        )
-        return refs
+        ]
+
+    def host_pack(self, target: str) -> ArtifactRef:
+        try:
+            return self.host_packs[target]
+        except KeyError as exc:
+            raise AdminError(
+                f"release {self.version} has no native host pack for {target}"
+            ) from exc
 
 
 def parse(data: dict[str, Any]) -> ReleaseManifest:
@@ -90,11 +120,35 @@ def parse(data: dict[str, Any]) -> ReleaseManifest:
     missing = [key for key in APP_IMAGE_KEYS if key not in images]
     if missing:
         raise AdminError(f"release manifest is missing images: {', '.join(missing)}")
+    host_packs: dict[str, ArtifactRef] = {}
+    for target, value in (data.get("host_packs") or {}).items():
+        if not isinstance(value, dict):
+            raise AdminError(f"invalid host pack entry for {target!r}")
+        url = str(value.get("url") or "")
+        sha256 = str(value.get("sha256") or "")
+        size = value.get("size")
+        archive_format = str(value.get("format") or "zip")
+        if (
+            not url.startswith("https://")
+            or len(sha256) != 64
+            or any(character not in "0123456789abcdef" for character in sha256)
+            or not isinstance(size, int)
+            or size <= 0
+            or archive_format != "zip"
+        ):
+            raise AdminError(f"invalid host pack entry for {target!r}")
+        host_packs[str(target)] = ArtifactRef(
+            url=url,
+            sha256=sha256,
+            size=size,
+            format=archive_format,
+        )
     manifest = ReleaseManifest(
         version=version,
         min_admin_version=str(data.get("min_admin_version") or "0"),
         images=images,
         infra={str(k): str(v) for k, v in (data.get("infra") or {}).items()},
+        host_packs=host_packs,
         raw=data,
     )
     check_admin_version(manifest)

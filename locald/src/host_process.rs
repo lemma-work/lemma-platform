@@ -14,13 +14,54 @@ use serde_json::{json, Value};
 
 const MANIFEST_SCHEMA_VERSION: u64 = 1;
 const REQUIRED_SERVICES: [&str; 2] = ["backend", "frontend"];
+const REQUIRED_SETUPS: [&str; 1] = ["migrations"];
+const INHERITED_ENVIRONMENT: [&str; 24] = [
+    "PATH",
+    "HOME",
+    "USERPROFILE",
+    "LOCALAPPDATA",
+    "APPDATA",
+    "PROGRAMDATA",
+    "SystemRoot",
+    "SYSTEMROOT",
+    "WINDIR",
+    "COMSPEC",
+    "PATHEXT",
+    "TEMP",
+    "TMP",
+    "TMPDIR",
+    "LANG",
+    "LC_ALL",
+    "TZ",
+    "SSL_CERT_FILE",
+    "SSL_CERT_DIR",
+    "HTTP_PROXY",
+    "HTTPS_PROXY",
+    "NO_PROXY",
+    "ALL_PROXY",
+    "SSH_AUTH_SOCK",
+];
 
 #[derive(Clone, Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct HostPackManifest {
     pub schema_version: u64,
     pub release: String,
+    pub setup: Vec<HostSetupSpec>,
     pub services: Vec<HostProcessSpec>,
+}
+
+#[derive(Clone, Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct HostSetupSpec {
+    pub id: String,
+    pub command: Vec<String>,
+    #[serde(default)]
+    pub cwd: Option<PathBuf>,
+    #[serde(default)]
+    pub env: HashMap<String, String>,
+    #[serde(default = "default_setup_timeout")]
+    pub timeout_seconds: u64,
 }
 
 #[derive(Clone, Debug, Deserialize)]
@@ -71,6 +112,10 @@ impl Default for RestartSpec {
 
 fn default_health_timeout() -> u64 {
     180
+}
+
+fn default_setup_timeout() -> u64 {
+    300
 }
 
 fn default_max_restarts() -> usize {
@@ -159,8 +204,24 @@ impl HostProcessManager {
         &self.manifest.release
     }
 
+    pub fn desired_running(&self) -> bool {
+        self.desired_running.load(Ordering::Acquire)
+    }
+
     pub fn start_all(&self) -> io::Result<()> {
-        self.desired_running.store(true, Ordering::Release);
+        self.inspect_exits();
+        if self
+            .state
+            .lock()
+            .expect("host process lock poisoned")
+            .children
+            .len()
+            == self.ordered_ids.len()
+        {
+            self.desired_running.store(true, Ordering::Release);
+            return Ok(());
+        }
+        self.desired_running.store(false, Ordering::Release);
         {
             let mut state = self.state.lock().expect("host process lock poisoned");
             state.circuit_open.clear();
@@ -168,8 +229,13 @@ impl HostProcessManager {
             state.restart_not_before.clear();
         }
 
+        self.run_setups()?;
+        self.desired_running.store(true, Ordering::Release);
         for id in &self.ordered_ids {
-            self.spawn_if_missing(id)?;
+            if let Err(error) = self.spawn_if_missing(id) {
+                let _ = self.stop_all();
+                return Err(error);
+            }
             if let Some(health) = &self.by_id[id].health {
                 if let Err(error) = wait_http_health(health) {
                     let _ = self.stop_all();
@@ -177,6 +243,44 @@ impl HostProcessManager {
                         "{id} failed health gate: {error}"
                     )));
                 }
+            }
+        }
+        Ok(())
+    }
+
+    fn run_setups(&self) -> io::Result<()> {
+        for setup in &self.manifest.setup {
+            let mut child = spawn_command(
+                &setup.command,
+                setup.cwd.as_deref(),
+                &setup.env,
+                process_log(&self.log_dir, &setup.id)?,
+            )?;
+            let deadline = Instant::now() + Duration::from_secs(setup.timeout_seconds);
+            loop {
+                if let Some(status) = child.try_wait()? {
+                    if status.success() {
+                        break;
+                    }
+                    return Err(io::Error::other(format!(
+                        "{} setup exited with {status}; see {}",
+                        setup.id,
+                        self.log_dir.join(format!("{}.log", setup.id)).display()
+                    )));
+                }
+                if Instant::now() >= deadline {
+                    let _ = terminate_process_group(&mut child);
+                    return Err(io::Error::new(
+                        io::ErrorKind::TimedOut,
+                        format!(
+                            "{} setup exceeded {} seconds; see {}",
+                            setup.id,
+                            setup.timeout_seconds,
+                            self.log_dir.join(format!("{}.log", setup.id)).display()
+                        ),
+                    ));
+                }
+                thread::sleep(Duration::from_millis(50));
             }
         }
         Ok(())
@@ -233,14 +337,24 @@ impl HostProcessManager {
     pub fn status_event(&self, id: Option<&Value>) -> Value {
         let components = self.status();
         let ready = components.iter().all(|component| component.running);
+        let desired = self.desired_running();
+        let failed = components.iter().any(|component| component.circuit_open);
         let mut event = json!({
             "v": 1,
             "event": "status",
             "mode": "host-packs",
             "release": self.release(),
-            "status": if ready { "running" } else { "stopped" },
+            "status": if ready {
+                "running"
+            } else if failed {
+                "error"
+            } else if desired {
+                "starting"
+            } else {
+                "stopped"
+            },
             "ready": ready,
-            "running": ready,
+            "running": ready || (desired && components.iter().any(|process| process.running)),
             "components": components,
         });
         if let Some(id) = id {
@@ -403,6 +517,33 @@ fn validate_and_order(manifest: &HostPackManifest) -> io::Result<Vec<String>> {
             ));
         }
     }
+    let mut setups = HashSet::new();
+    for setup in &manifest.setup {
+        if !valid_id(&setup.id)
+            || setup.command.is_empty()
+            || setup.command[0].is_empty()
+            || setup.timeout_seconds == 0
+        {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                format!("invalid host setup {}", setup.id),
+            ));
+        }
+        if !setups.insert(setup.id.as_str()) {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                format!("duplicate host setup {}", setup.id),
+            ));
+        }
+    }
+    for required in REQUIRED_SETUPS {
+        if !setups.contains(required) {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                format!("host-pack manifest is missing {required} setup"),
+            ));
+        }
+    }
     for spec in &manifest.services {
         for dependency in &spec.dependencies {
             if !specs.contains_key(dependency.as_str()) {
@@ -457,16 +598,35 @@ fn valid_id(id: &str) -> bool {
 }
 
 fn spawn_process(spec: &HostProcessSpec, log_dir: &Path) -> io::Result<Child> {
-    let stdout = process_log(log_dir, &spec.id)?;
+    spawn_command(
+        &spec.command,
+        spec.cwd.as_deref(),
+        &spec.env,
+        process_log(log_dir, &spec.id)?,
+    )
+}
+
+fn spawn_command(
+    arguments: &[String],
+    cwd: Option<&Path>,
+    environment: &HashMap<String, String>,
+    stdout: File,
+) -> io::Result<Child> {
     let stderr = stdout.try_clone()?;
-    let mut command = Command::new(&spec.command[0]);
+    let mut command = Command::new(&arguments[0]);
     command
-        .args(&spec.command[1..])
-        .envs(&spec.env)
+        .args(&arguments[1..])
+        .env_clear()
         .stdin(Stdio::null())
         .stdout(Stdio::from(stdout))
         .stderr(Stdio::from(stderr));
-    if let Some(cwd) = &spec.cwd {
+    for key in INHERITED_ENVIRONMENT {
+        if let Some(value) = std::env::var_os(key) {
+            command.env(key, value);
+        }
+    }
+    command.envs(environment);
+    if let Some(cwd) = cwd {
         command.current_dir(cwd);
     }
     #[cfg(unix)]
@@ -485,10 +645,14 @@ fn spawn_process(spec: &HostProcessSpec, log_dir: &Path) -> io::Result<Child> {
 }
 
 fn process_log(log_dir: &Path, id: &str) -> io::Result<File> {
-    OpenOptions::new()
-        .create(true)
-        .append(true)
-        .open(log_dir.join(format!("{id}.log")))
+    let mut options = OpenOptions::new();
+    options.create(true).append(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        options.mode(0o600);
+    }
+    options.open(log_dir.join(format!("{id}.log")))
 }
 
 #[cfg(unix)]
@@ -593,7 +757,18 @@ mod tests {
         HostPackManifest {
             schema_version: 1,
             release: "test".into(),
+            setup: vec![setup("migrations")],
             services,
+        }
+    }
+
+    fn setup(id: &str) -> HostSetupSpec {
+        HostSetupSpec {
+            id: id.into(),
+            command: vec!["test-program".into()],
+            cwd: None,
+            env: HashMap::new(),
+            timeout_seconds: 10,
         }
     }
 
@@ -637,6 +812,20 @@ mod tests {
             .contains("cycle"));
     }
 
+    #[test]
+    fn rejects_missing_migration_setup() {
+        let mut value = manifest(vec![
+            service("backend", &[]),
+            service("frontend", &["backend"]),
+        ]);
+        value.setup.clear();
+
+        assert!(validate_and_order(&value)
+            .unwrap_err()
+            .to_string()
+            .contains("migrations setup"));
+    }
+
     #[cfg(unix)]
     #[test]
     fn starts_and_stops_backend_and_frontend_process_groups() {
@@ -650,8 +839,9 @@ mod tests {
         let mut frontend = service("frontend", &["backend"]);
         frontend.command = command;
         let root = tempdir().unwrap();
-        let manager =
-            HostProcessManager::new(manifest(vec![frontend, backend]), root.path().into()).unwrap();
+        let mut value = manifest(vec![frontend, backend]);
+        value.setup[0].command = vec!["/usr/bin/true".into()];
+        let manager = HostProcessManager::new(value, root.path().into()).unwrap();
 
         manager.start_all().unwrap();
         assert!(manager.status().iter().all(|process| process.running));
@@ -676,8 +866,9 @@ mod tests {
             "trap 'exit 0' TERM; while :; do sleep 1; done".into(),
         ];
         let root = tempdir().unwrap();
-        let manager =
-            HostProcessManager::new(manifest(vec![frontend, backend]), root.path().into()).unwrap();
+        let mut value = manifest(vec![frontend, backend]);
+        value.setup[0].command = vec!["/usr/bin/true".into()];
+        let manager = HostProcessManager::new(value, root.path().into()).unwrap();
 
         manager.start_all().unwrap();
         thread::sleep(Duration::from_millis(50));

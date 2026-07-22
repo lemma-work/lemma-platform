@@ -186,10 +186,107 @@ jobs:
           path: /tmp/digests/digests-out/${{ matrix.image }}.json
           retention-days: 1
 
+  host-packs:
+    name: Build native host pack (${{ matrix.target }})
+    runs-on: ${{ matrix.runner }}
+    needs: merge
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: aarch64-apple-darwin
+            runner: macos-14
+          - target: x86_64-pc-windows-msvc
+            runner: windows-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v7
+
+      - name: Resolve version
+        id: version
+        shell: bash
+        run: |
+          if [[ "${GITHUB_REF}" == refs/tags/v* ]]; then
+            version="${GITHUB_REF#refs/tags/v}"
+          else
+            version="${{ inputs.version }}"
+          fi
+          version="${version#v}"
+          echo "version=${version}" >> "$GITHUB_OUTPUT"
+
+      - name: Set up uv
+        uses: astral-sh/setup-uv@v6
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v5
+        with:
+          node-version: 24
+
+      - name: Download merged image digests
+        uses: actions/download-artifact@v8
+        with:
+          pattern: merged-digest-*
+          path: digests
+          merge-multiple: true
+
+      - name: Generate pack release input
+        shell: bash
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+          PREFIX: ${{ env.IMAGE_PREFIX }}
+        run: |
+          python - <<'PY'
+          import json
+          import os
+          from pathlib import Path
+
+          version = os.environ["VERSION"]
+          prefix = os.environ["PREFIX"]
+          digests = {
+              entry["name"]: entry["digest"]
+              for path in Path("digests").glob("*.json")
+              for entry in [json.loads(path.read_text())]
+          }
+
+          def image(name):
+              return {"ref": f"{prefix}/{name}:v{version}", "digest": digests[name]}
+
+          release = {
+              "schema_version": 1,
+              "version": version,
+              "min_admin_version": "0.1.0",
+              "images": {
+                  "backend": image("lemma-backend"),
+                  "frontend": image("lemma-frontend"),
+                  "agentbox_runtime": image("lemma-agentbox-runtime"),
+              },
+          }
+          Path("host-release.json").write_text(json.dumps(release, indent=2) + "\n")
+          PY
+
+      - name: Build relocatable backend and frontend pack
+        shell: bash
+        run: |
+          mkdir -p host-pack-out
+          python scripts/build_local_host_pack.py \
+            --output host-pack-out/local-runtime \
+            --release-manifest host-release.json \
+            --archive "host-pack-out/lemma-host-pack-${{ matrix.target }}.zip"
+
+      - name: Upload host pack
+        uses: actions/upload-artifact@v4
+        with:
+          name: host-pack-${{ matrix.target }}
+          path: |
+            host-pack-out/lemma-host-pack-${{ matrix.target }}.zip
+            host-pack-out/lemma-host-pack-${{ matrix.target }}.zip.json
+          if-no-files-found: error
+          retention-days: 1
+
   manifest:
     name: Publish release manifest
     runs-on: ubuntu-latest
-    needs: merge
+    needs: [merge, host-packs]
     steps:
       - name: Resolve version
         id: version
@@ -210,11 +307,19 @@ jobs:
           path: digests
           merge-multiple: true
 
+      - name: Download native host packs
+        uses: actions/download-artifact@v8
+        with:
+          pattern: host-pack-*
+          path: host-packs
+          merge-multiple: true
+
       - name: Generate lemma-local.json
         shell: bash
         env:
           VERSION: ${{ steps.version.outputs.version }}
           PREFIX: ${{ env.IMAGE_PREFIX }}
+          REPOSITORY: ${{ github.repository }}
         run: |
           python3 - <<'PY'
           import json
@@ -224,6 +329,7 @@ jobs:
 
           version = os.environ["VERSION"]
           prefix = os.environ["PREFIX"]
+          repository = os.environ["REPOSITORY"]
           digests = {}
           for path in Path("digests").glob("*.json"):
               entry = json.loads(path.read_text())
@@ -232,7 +338,24 @@ jobs:
           def image(name: str) -> dict:
               return {"ref": f"{prefix}/{name}:v{version}", "digest": digests[name]}
 
+          host_packs = {}
+          for path in sorted(Path("host-packs").glob("lemma-host-pack-*.zip")):
+              target = path.stem.removeprefix("lemma-host-pack-")
+              import hashlib
+              digest = hashlib.sha256(path.read_bytes()).hexdigest()
+              host_packs[target] = {
+                  "url": (
+                      f"https://github.com/{repository}/releases/download/"
+                      f"v{version}/{path.name}"
+                  ),
+                  "sha256": digest,
+                  "size": path.stat().st_size,
+                  "format": "zip",
+              }
+
           manifest = {
+              # Additive schema-1 field: older lemma-stack clients ignore
+              # host_packs and continue to consume the same release safely.
               "schema_version": 1,
               "version": version,
               "released_at": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
@@ -249,6 +372,7 @@ jobs:
                   "redis": "docker.io/redis/redis-stack:7.2.0-v19",
                   "supertokens": "docker.io/supertokens/supertokens-postgresql:11.4.5",
               },
+              "host_packs": host_packs,
           }
           Path("lemma-local.json").write_text(json.dumps(manifest, indent=2) + "\n")
           print(json.dumps(manifest, indent=2))
@@ -258,7 +382,9 @@ jobs:
         uses: softprops/action-gh-release@v2
         with:
           tag_name: v${{ steps.version.outputs.version }}
-          files: lemma-local.json
+          files: |
+            lemma-local.json
+            host-packs/lemma-host-pack-*.zip
           # Only generate release notes on a real tag push; workflow_dispatch
           # re-runs are used to repair an existing release (backfill the
           # lemma-local.json asset) and must not overwrite the release body.

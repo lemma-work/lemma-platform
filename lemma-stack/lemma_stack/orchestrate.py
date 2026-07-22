@@ -65,6 +65,8 @@ def bring_up(
     do_register: bool = True,
     service_names: set[str] | None = None,
     host_apps: bool = False,
+    pull_infra_only: bool = False,
+    migrate: bool = True,
     progress: Progress = _noop,
 ) -> Runtime:
     """Pull images, start every service in order, optionally register the CLI.
@@ -76,14 +78,14 @@ def bring_up(
     runtime = detect.ensure_ready(provider)
 
     progress("pull", f"fetching Lemma {manifest.version}")
-    images.pull_release(runtime, manifest)
+    images.pull_release(runtime, manifest, infra_only=pull_infra_only)
     release_manifest.pin(paths, manifest)
 
     ctx = AdminContext(paths=paths, config=config)
     specs = ctx.specs(manifest, host_apps=host_apps)
     if service_names is not None:
         specs = [spec for spec in specs if spec.name in service_names]
-    lifecycle.up(runtime, specs, manifest, migrate=True, on_progress=progress)
+    lifecycle.up(runtime, specs, manifest, migrate=migrate, on_progress=progress)
 
     if do_register:
         register_local_server(

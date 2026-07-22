@@ -1,9 +1,9 @@
 name: Release Lemma Desktop
 
-# Builds the Tauri macOS app (arm64) and attaches the DMG to the GitHub
-# release. The DMG contains the thin Rust shell + the compiled lemma-stack
-# supervisor sidecar (PyInstaller). Public releases require Developer ID
-# signing and Apple notarization; missing credentials fail before the build.
+# Builds the signed Tauri macOS and Windows desktop installers and attaches
+# them to the GitHub release. Both installers contain the thin Rust shell,
+# durable local daemon, compatibility supervisor, and native application pack.
+# Missing platform signing credentials fail before public artifacts are built.
 
 on:
   release:
@@ -115,6 +115,47 @@ jobs:
           key: desktop-cargo-${{ runner.os }}-${{ hashFiles('desktop/Cargo.lock') }}
           restore-keys: desktop-cargo-${{ runner.os }}-
 
+      - name: Download and verify native application pack
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          VERSION: ${{ steps.version.outputs.version }}
+          TARGET: aarch64-apple-darwin
+        run: |
+          mkdir -p desktop/runtime/download
+          for attempt in {1..60}; do
+            if gh release download "v${VERSION}" \
+              --pattern lemma-local.json \
+              --pattern "lemma-host-pack-${TARGET}.zip" \
+              --dir desktop/runtime/download \
+              --clobber; then
+              break
+            fi
+            if [[ "${attempt}" == 60 ]]; then
+              echo "Native host pack was not published within 30 minutes" >&2
+              exit 1
+            fi
+            sleep 30
+          done
+          python3 - <<'PY'
+          import hashlib, json, os
+          from pathlib import Path
+          root = Path("desktop/runtime/download")
+          manifest = json.loads((root / "lemma-local.json").read_text())
+          target = os.environ["TARGET"]
+          archive = root / f"lemma-host-pack-{target}.zip"
+          expected = manifest["host_packs"][target]
+          actual = hashlib.sha256(archive.read_bytes()).hexdigest()
+          if actual != expected["sha256"] or archive.stat().st_size != expected["size"]:
+              raise SystemExit("native host pack digest/size mismatch")
+          PY
+          ditto -x -k \
+            "desktop/runtime/download/lemma-host-pack-${TARGET}.zip" \
+            desktop/runtime
+          test -f desktop/runtime/local-runtime/release.json
+          test -x desktop/runtime/local-runtime/backend/python/bin/python3
+          test -x desktop/runtime/local-runtime/frontend/node/bin/node
+
       - name: Bake splash concepts
         run: node desktop/scripts/extract-concepts.mjs
 
@@ -138,11 +179,14 @@ jobs:
         run: |
           set -euo pipefail
           app="desktop/target/release/bundle/macos/Lemma.app"
+          locald="${app}/Contents/MacOS/lemma-locald"
           sidecar="${app}/Contents/MacOS/lemma-supervisor"
           uv="${app}/Contents/MacOS/uv"
 
+          test -x "${locald}"
           test -x "${uv}"
           codesign --verify --deep --strict --verbose=2 "${app}"
+          codesign --verify --strict --verbose=2 "${locald}"
           codesign --verify --strict --verbose=2 "${sidecar}"
           codesign --verify --strict --verbose=2 "${uv}"
           codesign -dvvv "${app}" 2>&1 | grep -F "Authority=Developer ID Application:"
@@ -156,3 +200,263 @@ jobs:
       - name: Remove temporary signing keychain
         if: always() && steps.apple-signing.outcome == 'success'
         run: security delete-keychain "${{ steps.apple-signing.outputs.keychain-path }}"
+
+  build-windows:
+    runs-on: windows-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Require fresh backend protected E2E
+        uses: ./.github/actions/require-backend-protected-e2e
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+          sha: ${{ github.sha }}
+
+      - name: Resolve version
+        id: version
+        shell: bash
+        env:
+          RELEASE_VERSION: ${{ github.event.release.tag_name || inputs.version }}
+        run: |
+          version="${RELEASE_VERSION#v}"
+          if [[ ! "${version}" =~ ^[0-9]+[.][0-9]+[.][0-9]+([-.][0-9A-Za-z.-]+)?$ ]]; then
+            echo "Invalid semver release tag: ${RELEASE_VERSION}" >&2
+            exit 1
+          fi
+          echo "version=${version}" >> "$GITHUB_OUTPUT"
+
+      - name: Set version in Tauri and Cargo manifests
+        shell: python
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          import json, os, pathlib, re
+          version = os.environ["VERSION"]
+          conf = pathlib.Path("desktop/tauri.conf.json")
+          data = json.loads(conf.read_text())
+          data["version"] = version
+          conf.write_text(json.dumps(data, indent=2) + "\n")
+          cargo = pathlib.Path("desktop/Cargo.toml")
+          text, count = re.subn(
+              r'(?m)^version = "[^"]+"', f'version = "{version}"', cargo.read_text(), count=1
+          )
+          if count != 1:
+              raise SystemExit("Could not set version in desktop/Cargo.toml")
+          cargo.write_text(text)
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v5
+        with:
+          node-version: 22
+
+      - name: Set up uv
+        uses: astral-sh/setup-uv@v6
+
+      - name: Set up Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: x86_64-pc-windows-msvc
+
+      - name: Import Windows code-signing certificate
+        id: windows-signing
+        shell: pwsh
+        env:
+          WINDOWS_CERTIFICATE: ${{ secrets.WINDOWS_CERTIFICATE }}
+          WINDOWS_CERTIFICATE_PASSWORD: ${{ secrets.WINDOWS_CERTIFICATE_PASSWORD }}
+          WINDOWS_TIMESTAMP_URL: ${{ secrets.WINDOWS_TIMESTAMP_URL }}
+        run: |
+          if ([string]::IsNullOrWhiteSpace($env:WINDOWS_CERTIFICATE) -or
+              [string]::IsNullOrWhiteSpace($env:WINDOWS_CERTIFICATE_PASSWORD) -or
+              [string]::IsNullOrWhiteSpace($env:WINDOWS_TIMESTAMP_URL)) {
+            throw "WINDOWS_CERTIFICATE, WINDOWS_CERTIFICATE_PASSWORD, and WINDOWS_TIMESTAMP_URL are required for signed Windows releases."
+          }
+          $certificatePath = Join-Path $env:RUNNER_TEMP "lemma-signing.pfx"
+          try {
+            [IO.File]::WriteAllBytes(
+              $certificatePath,
+              [Convert]::FromBase64String($env:WINDOWS_CERTIFICATE)
+            )
+            $password = ConvertTo-SecureString `
+              -String $env:WINDOWS_CERTIFICATE_PASSWORD `
+              -Force `
+              -AsPlainText
+            $certificate = Import-PfxCertificate `
+              -FilePath $certificatePath `
+              -CertStoreLocation Cert:\CurrentUser\My `
+              -Password $password `
+              -Exportable:$false
+            if (-not $certificate.HasPrivateKey) {
+              throw "The imported Windows signing certificate has no private key."
+            }
+            $codeSigningOid = "1.3.6.1.5.5.7.3.3"
+            $usageExtensions = @(
+              $certificate.Extensions | Where-Object {
+                $_ -is [Security.Cryptography.X509Certificates.X509EnhancedKeyUsageExtension]
+              }
+            )
+            $canSignCode = $usageExtensions.EnhancedKeyUsages.Value -contains $codeSigningOid
+            if (-not $canSignCode) {
+              throw "The imported Windows certificate is not valid for code signing."
+            }
+            "thumbprint=$($certificate.Thumbprint)" >> $env:GITHUB_OUTPUT
+          }
+          finally {
+            Remove-Item $certificatePath -Force -ErrorAction SilentlyContinue
+          }
+
+      - name: Configure Tauri Authenticode signing
+        shell: python
+        env:
+          CERTIFICATE_THUMBPRINT: ${{ steps.windows-signing.outputs.thumbprint }}
+          WINDOWS_TIMESTAMP_URL: ${{ secrets.WINDOWS_TIMESTAMP_URL }}
+        run: |
+          import json, os, pathlib
+
+          path = pathlib.Path("desktop/tauri.dist.conf.json")
+          config = json.loads(path.read_text())
+          windows = config.setdefault("bundle", {}).setdefault("windows", {})
+          windows.update({
+              "certificateThumbprint": os.environ["CERTIFICATE_THUMBPRINT"],
+              "digestAlgorithm": "sha256",
+              "timestampUrl": os.environ["WINDOWS_TIMESTAMP_URL"],
+              "tsp": True,
+          })
+          path.write_text(json.dumps(config, indent=2) + "\n")
+
+      - name: Cache cargo
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            desktop/target
+          key: desktop-cargo-${{ runner.os }}-${{ hashFiles('desktop/Cargo.lock') }}
+          restore-keys: desktop-cargo-${{ runner.os }}-
+
+      - name: Download and verify native application pack
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          VERSION: ${{ steps.version.outputs.version }}
+          TARGET: x86_64-pc-windows-msvc
+        run: |
+          New-Item -ItemType Directory -Force desktop/runtime/download | Out-Null
+          $downloaded = $false
+          for ($attempt = 1; $attempt -le 60; $attempt++) {
+            gh release download "v$env:VERSION" `
+              --pattern lemma-local.json `
+              --pattern "lemma-host-pack-$env:TARGET.zip" `
+              --dir desktop/runtime/download `
+              --clobber
+            if ($LASTEXITCODE -eq 0) { $downloaded = $true; break }
+            Start-Sleep -Seconds 30
+          }
+          if (-not $downloaded) { throw "Native host pack was not published within 30 minutes" }
+          @'
+          import hashlib, json, os
+          from pathlib import Path
+          root = Path("desktop/runtime/download")
+          manifest = json.loads((root / "lemma-local.json").read_text())
+          target = os.environ["TARGET"]
+          archive = root / f"lemma-host-pack-{target}.zip"
+          expected = manifest["host_packs"][target]
+          actual = hashlib.sha256(archive.read_bytes()).hexdigest()
+          if actual != expected["sha256"] or archive.stat().st_size != expected["size"]:
+              raise SystemExit("native host pack digest/size mismatch")
+          '@ | python -
+          Expand-Archive `
+            "desktop/runtime/download/lemma-host-pack-$env:TARGET.zip" `
+            desktop/runtime -Force
+          if (-not (Test-Path desktop/runtime/local-runtime/release.json)) {
+            throw "Native host pack is incomplete"
+          }
+          if (-not (Test-Path desktop/runtime/local-runtime/backend/python/python.exe)) {
+            throw "Native backend Python is missing"
+          }
+          if (-not (Test-Path desktop/runtime/local-runtime/frontend/node/node.exe)) {
+            throw "Native frontend Node.js is missing"
+          }
+
+      - name: Bake splash concepts
+        run: node desktop/scripts/extract-concepts.mjs
+
+      - name: Verify baked splash concepts are committed
+        run: git diff --exit-code desktop/ui/concepts.gen.json
+
+      - name: Build Windows sidecars
+        shell: pwsh
+        run: desktop/scripts/build-sidecar.ps1
+
+      - name: Sign bundled native runtime executables
+        shell: pwsh
+        env:
+          CERTIFICATE_THUMBPRINT: ${{ steps.windows-signing.outputs.thumbprint }}
+          WINDOWS_TIMESTAMP_URL: ${{ secrets.WINDOWS_TIMESTAMP_URL }}
+        run: |
+          $signTool = Get-ChildItem `
+            "${env:ProgramFiles(x86)}\Windows Kits\10\bin\*\x64\signtool.exe" `
+            -ErrorAction Stop |
+            Sort-Object FullName -Descending |
+            Select-Object -First 1
+          if (-not $signTool) { throw "Windows SDK signtool.exe was not found" }
+          $runtimeExecutables = @(
+            "desktop/runtime/local-runtime/backend/python/python.exe",
+            "desktop/runtime/local-runtime/frontend/node/node.exe"
+          )
+          foreach ($path in $runtimeExecutables) {
+            if (-not (Test-Path $path)) { throw "Native runtime executable is missing: $path" }
+            & $signTool.FullName sign `
+              /sha1 $env:CERTIFICATE_THUMBPRINT `
+              /fd SHA256 `
+              /tr $env:WINDOWS_TIMESTAMP_URL `
+              /td SHA256 `
+              $path
+            if ($LASTEXITCODE -ne 0) { throw "Could not sign native runtime executable: $path" }
+          }
+
+      - name: Build NSIS installer
+        working-directory: desktop
+        run: npx -y @tauri-apps/cli@2.11.4 build --config tauri.dist.conf.json --bundles nsis
+
+      - name: Verify Authenticode signatures
+        shell: pwsh
+        run: |
+          $paths = @(
+            "desktop/target/release/lemma-desktop.exe",
+            "desktop/binaries/lemma-locald-x86_64-pc-windows-msvc.exe",
+            "desktop/binaries/lemma-supervisor-x86_64-pc-windows-msvc.exe",
+            "desktop/binaries/uv-x86_64-pc-windows-msvc.exe",
+            "desktop/runtime/local-runtime/backend/python/python.exe",
+            "desktop/runtime/local-runtime/frontend/node/node.exe"
+          )
+          $installer = Get-ChildItem `
+            "desktop/target/release/bundle/nsis/Lemma_*_x64-setup.exe" `
+            -ErrorAction Stop
+          $paths += $installer.FullName
+          foreach ($path in $paths) {
+            if (-not (Test-Path $path)) { throw "Signed release binary is missing: $path" }
+            $signature = Get-AuthenticodeSignature $path
+            if ($signature.Status -ne "Valid") {
+              throw "Invalid Authenticode signature for $path`: $($signature.StatusMessage)"
+            }
+          }
+
+      - name: Upload Windows installer to release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: desktop/target/release/bundle/nsis/Lemma_*_x64-setup.exe
+
+      - name: Remove Windows code-signing certificate
+        if: always() && steps.windows-signing.outcome == 'success'
+        shell: pwsh
+        env:
+          CERTIFICATE_THUMBPRINT: ${{ steps.windows-signing.outputs.thumbprint }}
+        run: |
+          if (-not [string]::IsNullOrWhiteSpace($env:CERTIFICATE_THUMBPRINT)) {
+            Remove-Item `
+              "Cert:\CurrentUser\My\$env:CERTIFICATE_THUMBPRINT" `
+              -Force `
+              -ErrorAction SilentlyContinue
+          }

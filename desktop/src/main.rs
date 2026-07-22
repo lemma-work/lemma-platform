@@ -52,6 +52,12 @@ struct Shell {
     locald_connect: Mutex<()>,
 }
 
+struct LocaldConnection {
+    reader: BufReader<RecvHalf>,
+    writer: SendHalf,
+    hello: Value,
+}
+
 impl Shell {
     fn new(mode: String) -> Self {
         let ui = UiState {
@@ -72,7 +78,10 @@ impl Shell {
 }
 
 fn home_dir() -> PathBuf {
-    PathBuf::from(std::env::var("HOME").expect("HOME is not set"))
+    std::env::var_os("HOME")
+        .or_else(|| std::env::var_os("USERPROFILE"))
+        .map(PathBuf::from)
+        .expect("HOME/USERPROFILE is not set")
 }
 
 fn app_support_dir() -> PathBuf {
@@ -209,22 +218,64 @@ fn bundled_locald() -> Option<PathBuf> {
     candidate.exists().then_some(candidate)
 }
 
-fn enriched_path() -> String {
-    let current = std::env::var("PATH").unwrap_or_default();
-    let extras = [
-        "/opt/homebrew/bin",
-        "/usr/local/bin",
-        "/usr/bin",
-        "/bin",
-        "/usr/sbin",
-    ];
-    let mut parts: Vec<&str> = current.split(':').filter(|p| !p.is_empty()).collect();
-    for extra in extras {
-        if !parts.contains(&extra) {
-            parts.push(extra);
+fn bundled_host_pack_root() -> Option<PathBuf> {
+    if let Some(root) = std::env::var_os("LEMMA_DESKTOP_HOST_PACK_ROOT") {
+        let root = PathBuf::from(root);
+        if root.join("release.json").is_file() {
+            return Some(root);
         }
     }
-    parts.join(":")
+    let exe = std::env::current_exe().ok()?;
+    let bin_dir = exe.parent()?;
+    let candidates = if cfg!(target_os = "macos") {
+        vec![
+            bin_dir.join("../Resources/local-runtime"),
+            bin_dir.join("local-runtime"),
+        ]
+    } else {
+        vec![bin_dir.join("local-runtime")]
+    };
+    candidates
+        .into_iter()
+        .find(|root| root.join("release.json").is_file())
+}
+
+fn bundled_host_pack_release() -> Option<String> {
+    let release = bundled_host_pack_root()?.join("release.json");
+    let payload: Value = serde_json::from_slice(&std::fs::read(release).ok()?).ok()?;
+    payload["version"].as_str().map(str::to_owned)
+}
+
+fn locald_matches_host_pack(hello: &Value, required_release: Option<&str>) -> bool {
+    required_release.is_none_or(|required| {
+        hello["mode"].as_str() == Some("host-packs")
+            && hello["host_pack_release"].as_str() == Some(required)
+    })
+}
+
+fn enriched_path() -> String {
+    let mut parts: Vec<PathBuf> = std::env::var_os("PATH")
+        .map(|value| std::env::split_paths(&value).collect())
+        .unwrap_or_default();
+    #[cfg(unix)]
+    {
+        for extra in [
+            "/opt/homebrew/bin",
+            "/usr/local/bin",
+            "/usr/bin",
+            "/bin",
+            "/usr/sbin",
+        ] {
+            let extra = PathBuf::from(extra);
+            if !parts.contains(&extra) {
+                parts.push(extra);
+            }
+        }
+    }
+    std::env::join_paths(parts)
+        .unwrap_or_default()
+        .to_string_lossy()
+        .into_owned()
 }
 
 // ---------------------------------------------------------------------------
@@ -241,19 +292,27 @@ fn ensure_locald(app: &AppHandle) -> Result<(), String> {
         return Ok(());
     }
 
-    if let Ok(connection) = connect_locald() {
-        install_locald_connection(app, connection);
-        return Ok(());
+    let required_release = bundled_host_pack_release();
+    if let Ok(mut connection) = connect_locald() {
+        if locald_matches_host_pack(&connection.hello, required_release.as_deref()) {
+            install_locald_connection(app, connection);
+            return Ok(());
+        }
+        request_locald_replacement(&mut connection)?;
+        wait_for_locald_exit()?;
     }
 
     spawn_locald()?;
     let mut last_error = "daemon did not create its control endpoint".to_string();
     for _ in 0..80 {
         match connect_locald() {
-            Ok(connection) => {
+            Ok(connection)
+                if locald_matches_host_pack(&connection.hello, required_release.as_deref()) =>
+            {
                 install_locald_connection(app, connection);
                 return Ok(());
             }
+            Ok(_) => last_error = "daemon started with the wrong native host pack".into(),
             Err(error) => last_error = error,
         }
         std::thread::sleep(Duration::from_millis(100));
@@ -314,13 +373,16 @@ fn spawn_locald() -> Result<(), String> {
         .stdin(Stdio::null())
         .stdout(Stdio::null())
         .stderr(Stdio::null());
+    if let Some(pack_root) = bundled_host_pack_root() {
+        command.env("LEMMA_LOCALD_HOST_PACK_ROOT", pack_root);
+    }
     command
         .spawn()
         .map(|_| ())
         .map_err(|e| format!("failed to spawn lemma-locald: {e}"))
 }
 
-fn connect_locald() -> Result<(RecvHalf, SendHalf), String> {
+fn connect_locald() -> Result<LocaldConnection, String> {
     let root = locald_root();
     let token = std::fs::read_to_string(root.join("control.token"))
         .map_err(|error| format!("control token unavailable: {error}"))?;
@@ -335,15 +397,57 @@ fn connect_locald() -> Result<(RecvHalf, SendHalf), String> {
     .map_err(|error| format!("daemon authentication failed: {error}"))?;
     send.flush()
         .map_err(|error| format!("daemon authentication failed: {error}"))?;
-    Ok((receive, send))
+    let mut reader = BufReader::new(receive);
+    let mut line = String::new();
+    reader
+        .read_line(&mut line)
+        .map_err(|error| format!("daemon handshake failed: {error}"))?;
+    if line.len() > 1024 * 1024 {
+        return Err("daemon handshake exceeded 1 MiB".into());
+    }
+    let hello: Value = serde_json::from_str(line.trim_end())
+        .map_err(|error| format!("invalid daemon handshake: {error}"))?;
+    if hello["event"].as_str() != Some("hello") || hello["protocol"].as_u64() != Some(1) {
+        return Err("incompatible lemma-locald handshake".into());
+    }
+    Ok(LocaldConnection {
+        reader,
+        writer: send,
+        hello,
+    })
 }
 
-fn install_locald_connection(app: &AppHandle, (receive, send): (RecvHalf, SendHalf)) {
+fn request_locald_replacement(connection: &mut LocaldConnection) -> Result<(), String> {
+    writeln!(
+        connection.writer,
+        "{}",
+        json!({"v": 1, "cmd": "shutdown-daemon", "id": "desktop-upgrade"})
+    )
+    .map_err(|error| format!("could not request daemon replacement: {error}"))?;
+    connection
+        .writer
+        .flush()
+        .map_err(|error| format!("could not request daemon replacement: {error}"))
+}
+
+fn wait_for_locald_exit() -> Result<(), String> {
+    let root = locald_root();
+    let name = locald_socket_name(&root)?;
+    for _ in 0..50 {
+        if LocalSocketStream::connect(name.clone()).is_err() {
+            return Ok(());
+        }
+        std::thread::sleep(Duration::from_millis(100));
+    }
+    Err("the previous local service manager did not stop for the app update".into())
+}
+
+fn install_locald_connection(app: &AppHandle, connection: LocaldConnection) {
     let shell: State<Shell> = app.state();
-    *shell.locald_writer.lock().unwrap() = Some(send);
+    *shell.locald_writer.lock().unwrap() = Some(connection.writer);
     let handle = app.clone();
     std::thread::spawn(move || {
-        for line in BufReader::new(receive).lines().map_while(Result::ok) {
+        for line in connection.reader.lines().map_while(Result::ok) {
             if line.len() > 1024 * 1024 {
                 emit_log(&handle, "locald protocol message exceeded 1 MiB");
                 break;
@@ -475,8 +579,9 @@ fn handle_locald_event(app: &AppHandle, event: &Value) {
         ui.clone()
     };
 
+    let has_error = snapshot.error;
     let _ = app.emit("lemma:state", snapshot);
-    if kind == "error" {
+    if kind == "error" || has_error {
         show_splash(app);
     }
 }
@@ -697,7 +802,13 @@ fn new_window_disposition(url: &tauri::Url, app_base: &str) -> NewWindowDisposit
 }
 
 fn open_external(url: &str) {
-    let _ = Command::new("/usr/bin/open").arg(url).spawn();
+    #[cfg(target_os = "macos")]
+    let mut command = Command::new("/usr/bin/open");
+    #[cfg(target_os = "windows")]
+    let mut command = Command::new("explorer.exe");
+    #[cfg(all(unix, not(target_os = "macos")))]
+    let mut command = Command::new("xdg-open");
+    let _ = command.arg(url).spawn();
 }
 
 fn handle_deep_link(app: &AppHandle, url: &tauri::Url) {
@@ -1023,6 +1134,22 @@ mod tests {
         assert!(same_origin(&same, "https://lemma.work"));
         assert!(!same_origin(&subdomain, "https://lemma.work"));
         assert!(!same_origin(&wrong_port, "http://localhost:3711"));
+    }
+
+    #[test]
+    fn durable_daemon_must_match_the_bundled_host_pack_release() {
+        let current = json!({
+            "event": "hello", "protocol": 1, "mode": "host-packs",
+            "host_pack_release": "1.2.3",
+        });
+        let compatibility = json!({
+            "event": "hello", "protocol": 1, "mode": "compatibility",
+        });
+
+        assert!(locald_matches_host_pack(&current, Some("1.2.3")));
+        assert!(!locald_matches_host_pack(&current, Some("1.2.4")));
+        assert!(!locald_matches_host_pack(&compatibility, Some("1.2.3")));
+        assert!(locald_matches_host_pack(&compatibility, None));
     }
 
     #[test]

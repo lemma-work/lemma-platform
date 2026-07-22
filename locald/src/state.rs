@@ -59,7 +59,7 @@ impl StateSnapshot {
             .and_then(Value::as_str)
             .unwrap_or_default()
         {
-            "state" => {
+            "state" | "status" => {
                 if let Some(status) = event.get("status").and_then(Value::as_str) {
                     self.status = status.into();
                 }
@@ -193,5 +193,24 @@ mod tests {
         assert!(!state.ready);
         assert_eq!(state.status, "error");
         assert_eq!(state.last_error.as_deref(), Some("database unavailable"));
+    }
+
+    #[test]
+    fn supervised_status_updates_persisted_readiness() {
+        let mut state = StateSnapshot {
+            ready: true,
+            running: true,
+            status: "running".into(),
+            ..Default::default()
+        };
+
+        state.observe(&json!({
+            "event": "status", "mode": "host-packs", "status": "error",
+            "ready": false, "running": false,
+        }));
+
+        assert_eq!(state.status, "error");
+        assert!(!state.ready);
+        assert!(!state.running);
     }
 }

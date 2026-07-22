@@ -166,7 +166,17 @@ class Supervisor:
         provider = self._resolve_provider(config)
         self.emit("provider", provider=provider)
 
-        manifest = orchestrate.resolve_manifest(config, self.paths, prefer_pinned=True)
+        if infra_only and self.paths.release_file.is_file():
+            # The bundled host pack pins its matching manifest before locald
+            # starts the compatibility supervisor. Keep infra and sandbox
+            # runtime identity coupled to that pack, including while offline.
+            from lemma_stack.release import manifest as release_manifest
+
+            manifest = release_manifest.load_pinned(self.paths)
+        else:
+            manifest = orchestrate.resolve_manifest(
+                config, self.paths, prefer_pinned=True
+            )
 
         def progress(stage: str, detail: str) -> None:
             if stage == "pull":
@@ -179,6 +189,13 @@ class Supervisor:
             elif stage == "ready":
                 self._set_phase("verify", "verifying services")
 
+        if infra_only:
+            # A durable daemon may be upgrading an installation that still has
+            # the old backend/frontend containers running. Stop only those
+            # stateless app containers before native processes claim the same
+            # loopback ports; PostgreSQL, Redis, and auth stay online.
+            orchestrate.bring_down(self.paths, config, infra=False)
+
         orchestrate.bring_up(
             self.paths,
             config,
@@ -187,15 +204,17 @@ class Supervisor:
             do_register=not infra_only,
             service_names={"db", "redis", "supertokens"} if infra_only else None,
             host_apps=infra_only,
+            pull_infra_only=infra_only,
+            migrate=not infra_only,
             progress=progress,
         )
-        self._set_phase("workspace", "installing terminal and skills")
-        from lemma_stack.register import install_lemma_cli_and_skills
-
-        install_lemma_cli_and_skills(version=manifest.version)
         if infra_only:
             self._finish_infra_ready()
         else:
+            self._set_phase("workspace", "installing terminal and skills")
+            from lemma_stack.register import install_lemma_cli_and_skills
+
+            install_lemma_cli_and_skills(version=manifest.version)
             self._finish_ready(config)
 
     def _resolve_provider(self, config) -> str:

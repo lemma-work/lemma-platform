@@ -57,6 +57,20 @@ def test_pull_refs_contain_no_separate_manager_or_document_service():
     assert any("lemma-agentbox-runtime" in ref for ref in refs)
 
 
+def test_native_host_start_pulls_only_infrastructure():
+    manifest = m.parse(sample())
+    refs = manifest.infra_pull_refs()
+
+    assert refs == [
+        manifest.infra_image("postgres"),
+        manifest.infra_image("redis"),
+        manifest.infra_image("supertokens"),
+    ]
+    assert not any("lemma-backend" in ref for ref in refs)
+    assert not any("lemma-frontend" in ref for ref in refs)
+    assert not any("agentbox-runtime" in ref for ref in refs)
+
+
 def test_missing_image_rejected():
     data = sample()
     del data["images"]["agentbox_runtime"]
@@ -67,6 +81,40 @@ def test_missing_image_rejected():
 def test_wrong_schema_rejected():
     with pytest.raises(AdminError, match="schema_version"):
         m.parse(sample(schema_version=99))
+
+
+def test_schema_one_accepts_additive_native_host_pack():
+    data = sample(
+        host_packs={
+            "aarch64-apple-darwin": {
+                "url": "https://example.test/lemma-host-pack.zip",
+                "sha256": "a" * 64,
+                "size": 1234,
+                "format": "zip",
+            }
+        },
+    )
+
+    pack = m.parse(data).host_pack("aarch64-apple-darwin")
+
+    assert pack.sha256 == "a" * 64
+    assert pack.size == 1234
+
+
+def test_native_host_pack_is_optional_but_must_be_valid_when_present():
+    assert m.parse(sample()).host_packs == {}
+    with pytest.raises(AdminError, match="invalid host pack"):
+        m.parse(
+            sample(
+                host_packs={
+                    "bad": {
+                        "url": "http://insecure.test/pack.zip",
+                        "sha256": "nope",
+                        "size": 0,
+                    }
+                },
+            )
+        )
 
 
 def test_min_admin_version_gate():

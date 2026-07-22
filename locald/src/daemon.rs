@@ -43,8 +43,15 @@ impl Daemon {
         paths.ensure()?;
         let token = load_or_create_token(&paths.token)?;
         let state = StateSnapshot::load(&paths.state);
-        let host_processes = env::var_os("LEMMA_LOCALD_HOST_PACK_MANIFEST")
-            .map(PathBuf::from)
+        let host_manifest = match env::var_os("LEMMA_LOCALD_HOST_PACK_MANIFEST") {
+            Some(path) if !path.is_empty() => Some(PathBuf::from(path)),
+            _ => env::var_os("LEMMA_LOCALD_HOST_PACK_ROOT")
+                .filter(|path| !path.is_empty())
+                .map(PathBuf::from)
+                .map(|pack_root| prepare_host_manifest(&paths, &pack_root))
+                .transpose()?,
+        };
+        let host_processes = host_manifest
             .map(|path| HostProcessManager::load(&path, paths.root.join("logs")))
             .transpose()?;
         Ok(Arc::new(Self {
@@ -64,6 +71,7 @@ impl Daemon {
     pub fn serve(self: Arc<Self>) -> io::Result<()> {
         let listener = create_listener(&self.paths)?;
         self.write_daemon_log("locald listening")?;
+        self.start_host_status_monitor();
 
         for connection in listener.incoming() {
             match connection {
@@ -79,6 +87,29 @@ impl Daemon {
             }
         }
         Ok(())
+    }
+
+    fn start_host_status_monitor(self: &Arc<Self>) {
+        if self.host_processes.is_none() {
+            return;
+        }
+        let daemon = Arc::clone(self);
+        thread::spawn(move || {
+            let mut previous = String::new();
+            loop {
+                let manager = daemon
+                    .host_processes
+                    .as_ref()
+                    .expect("host monitor requires manager");
+                let event = manager.status_event(None);
+                let current = event.to_string();
+                if current != previous {
+                    previous = current;
+                    daemon.broadcast(event);
+                }
+                thread::sleep(std::time::Duration::from_secs(1));
+            }
+        });
     }
 
     fn handle_client(self: &Arc<Self>, stream: LocalSocketStream) -> io::Result<()> {
@@ -123,6 +154,8 @@ impl Daemon {
                 "daemon_version": DAEMON_VERSION,
                 "pid": std::process::id(),
                 "compatibility_supervisor": true,
+                "mode": if self.host_processes.is_some() { "host-packs" } else { "compatibility" },
+                "host_pack_release": self.host_processes.as_ref().map(|manager| manager.release()),
             }),
         );
         self.send_direct(
@@ -167,6 +200,10 @@ impl Daemon {
             .unwrap_or_default()
             .to_owned();
         let id = request.get("id").cloned();
+        if command == "shutdown-daemon" {
+            self.start_daemon_shutdown(id, client.clone());
+            return true;
+        }
         if let Some(manager) = self.host_processes.as_ref() {
             match command.as_str() {
                 "status" => {
@@ -230,6 +267,63 @@ impl Daemon {
             ),
         }
         true
+    }
+
+    fn start_daemon_shutdown(self: &Arc<Self>, id: Option<Value>, client: mpsc::Sender<String>) {
+        if self.host_operation_running.load(Ordering::Acquire) {
+            self.send_direct(
+                &client,
+                error_event(
+                    "busy",
+                    "cannot replace the local daemon during an active operation",
+                    id.as_ref(),
+                ),
+            );
+            return;
+        }
+        self.send_direct(
+            &client,
+            json!({
+                "v": PROTOCOL_VERSION, "event": "ack",
+                "cmd": "shutdown-daemon", "id": id.as_ref(),
+            }),
+        );
+        let daemon = Arc::clone(self);
+        thread::spawn(move || {
+            let mut failure = None;
+            if let Some(manager) = daemon.host_processes.as_ref() {
+                if let Err(error) = manager.stop_all() {
+                    failure = Some(error.to_string());
+                }
+            }
+            if let Some(mut supervisor) = daemon
+                .supervisor
+                .lock()
+                .expect("supervisor lock poisoned")
+                .take()
+            {
+                let _ = supervisor.child.kill();
+                let _ = supervisor.child.wait();
+            }
+            if let Some(message) = failure {
+                daemon.send_direct(
+                    &client,
+                    error_event("shutdown-failed", message, id.as_ref()),
+                );
+                return;
+            }
+            daemon.send_direct(
+                &client,
+                json!({
+                    "v": PROTOCOL_VERSION, "event": "done",
+                    "cmd": "shutdown-daemon", "id": id.as_ref(), "ok": true,
+                }),
+            );
+            // Give the authenticated client writer a moment to flush the
+            // acknowledgement before ending this dedicated daemon process.
+            thread::sleep(std::time::Duration::from_millis(100));
+            std::process::exit(0);
+        });
     }
 
     fn start_host_operation(
@@ -319,6 +413,11 @@ impl Daemon {
 
     fn start_host_packs(self: &Arc<Self>, manager: &HostProcessManager) -> io::Result<()> {
         self.prepare_private_infra()?;
+        self.broadcast(json!({
+            "v": PROTOCOL_VERSION, "event": "phase", "key": "migrations",
+            "label": "Checking workspace data", "progress": 68,
+            "detail": "applying native database migrations",
+        }));
         self.broadcast(json!({
             "v": PROTOCOL_VERSION, "event": "phase", "key": "backend",
             "label": "Preparing backend", "progress": 82, "detail": "starting host pack",
@@ -581,6 +680,12 @@ impl Daemon {
 }
 
 fn supervisor_command() -> io::Result<Command> {
+    let mut command = supervisor_base_command()?;
+    command.arg("supervise");
+    Ok(command)
+}
+
+fn supervisor_base_command() -> io::Result<Command> {
     if let Some(path) = env::var_os("LEMMA_LOCALD_SUPERVISOR_BIN")
         .or_else(|| env::var_os("LEMMA_DESKTOP_SUPERVISOR_BIN"))
         .map(PathBuf::from)
@@ -618,14 +723,49 @@ fn supervisor_command() -> io::Result<Command> {
     }
 
     let mut command = Command::new("uv");
-    command.current_dir(root).args([
-        "run",
-        "--project",
-        "lemma-stack",
-        "lemma-stack",
-        "supervise",
-    ]);
+    command
+        .current_dir(root)
+        .args(["run", "--project", "lemma-stack", "lemma-stack"]);
     Ok(command)
+}
+
+fn prepare_host_manifest(paths: &LocalPaths, pack_root: &std::path::Path) -> io::Result<PathBuf> {
+    let destination = paths.root.join("host-pack.json");
+    let provider = transitional_provider();
+    let mut command = supervisor_base_command()?;
+    command
+        .args(["host-manifest", "--pack-root"])
+        .arg(pack_root)
+        .arg("--output")
+        .arg(&destination)
+        .args(["--provider", &provider])
+        .env("LEMMA_DESKTOP", "1");
+    let output = command.output()?;
+    if !output.status.success() {
+        let detail = String::from_utf8_lossy(&output.stderr);
+        return Err(io::Error::other(format!(
+            "could not prepare native host pack: {}",
+            detail.trim()
+        )));
+    }
+    if !destination.is_file() {
+        return Err(io::Error::new(
+            io::ErrorKind::NotFound,
+            "host manifest renderer did not create its output",
+        ));
+    }
+    Ok(destination)
+}
+
+fn transitional_provider() -> String {
+    match env::var("AGENTBOX_PROVIDER") {
+        Ok(provider) if matches!(provider.as_str(), "docker" | "podman") => provider,
+        _ if Command::new("podman").arg("--version").output().is_ok() => "podman".into(),
+        _ if Command::new("docker").arg("--version").output().is_ok() => "docker".into(),
+        // The compatibility supervisor can install Podman when neither CLI is
+        // present. Render the matching backend profile in advance.
+        _ => "podman".into(),
+    }
 }
 
 fn create_listener(paths: &LocalPaths) -> io::Result<LocalSocketListener> {

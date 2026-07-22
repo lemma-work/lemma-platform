@@ -10,7 +10,7 @@ from typing import Optional
 import typer
 from rich.table import Table
 
-from lemma_stack import __version__, orchestrate
+from lemma_stack import __version__, host_pack, orchestrate
 from lemma_stack.config import render, store
 from lemma_stack.context import AdminContext
 from lemma_stack.output import (
@@ -263,6 +263,39 @@ def supervise(
 ) -> None:
     """Desktop supervisor: JSON-line events on stdout, commands on stdin."""
     raise typer.Exit(run_supervisor(dry_run=dry_run))
+
+
+@app.command("host-manifest", hidden=True)
+def host_manifest(
+    pack_root: Path = typer.Option(..., "--pack-root"),
+    output: Optional[Path] = typer.Option(None, "--output"),
+    provider: Optional[str] = typer.Option(None, "--provider"),
+    manifest_path: Optional[Path] = typer.Option(None, "--release-manifest"),
+) -> None:
+    """Render the private two-process manifest consumed by lemma-locald."""
+
+    paths = LocalPaths()
+    paths.ensure()
+    config = store.load_or_create(paths)
+    bundled_manifest = pack_root / "release.json"
+    if manifest_path is not None or bundled_manifest.is_file():
+        release = release_manifest.load_file(manifest_path or bundled_manifest)
+        release_manifest.pin(paths, release)
+    else:
+        release = release_manifest.load_pinned(paths)
+    selected_provider = provider or store.provider(config)
+    if selected_provider not in {"docker", "podman"}:
+        raise AdminError(f"unsupported transitional host-pack provider: {selected_provider}")
+    destination = output or paths.run_dir / "host-pack.json"
+    manifest = host_pack.build_manifest(
+        pack_root,
+        paths,
+        config,
+        release,
+        provider=selected_provider,
+    )
+    host_pack.write_manifest(destination, manifest)
+    console.print(str(destination))
 
 
 @app.command()

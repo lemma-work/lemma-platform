@@ -157,6 +157,78 @@ def backend_env(
     return env
 
 
+def host_backend_env(
+    doc: TOMLDocument,
+    paths: LocalPaths,
+    *,
+    provider: str,
+    runtime_image: str,
+) -> dict[str, str]:
+    """Render the managed native backend environment.
+
+    Infrastructure retains loopback-only forwards during the transition to the
+    private VZ/WSL guest. Sandbox-visible URLs are explicit configuration; the
+    backend never infers or rewrites hostnames.
+    """
+
+    backend_port = store.port(doc, "backend")
+    frontend_port = store.port(doc, "frontend")
+    env = backend_env(
+        doc,
+        paths,
+        provider=provider,
+        runtime_image=runtime_image,
+        container_socket="",
+    )
+    env.pop("PYTHONPATH", None)
+    env.pop("CONTAINER_HOST", None)
+    env.update(
+        {
+            "DATABASE_URL": (
+                "postgresql+asyncpg://postgres:postgres@127.0.0.1:"
+                f"{store.port(doc, 'postgres')}/lemma"
+            ),
+            "DATASTORE_DATABASE_URL": (
+                "postgresql+asyncpg://postgres:postgres@127.0.0.1:"
+                f"{store.port(doc, 'postgres')}/lemma_datastore"
+            ),
+            "REDIS_URL": f"redis://127.0.0.1:{store.port(doc, 'redis')}",
+            "SUPERTOKENS_CORE_URL": (
+                f"http://127.0.0.1:{store.port(doc, 'supertokens')}"
+            ),
+            "AGENTBOX_API_URL": f"http://127.0.0.1:{backend_port}/internal/agentbox",
+            "AGENTBOX_STATE_DATABASE_URL": (
+                "postgresql://postgres:postgres@127.0.0.1:"
+                f"{store.port(doc, 'postgres')}/agentbox"
+            ),
+            "AGENTBOX_STORAGE_ROOT": str(paths.workspaces_dir),
+            "AGENTBOX_STORAGE_HOST_ROOT": str(paths.workspaces_dir),
+            "AGENTBOX_NETWORK": "",
+            "AGENTBOX_ADD_HOST_GATEWAY": "true",
+            "WORKSPACE_CALLBACK_API_URL": (
+                f"http://host.lemma.internal:{backend_port}"
+            ),
+            "WORKSPACE_CALLBACK_AUTH_URL": (
+                f"http://host.lemma.internal:{frontend_port}/auth"
+            ),
+            "WORKSPACE_CALLBACK_FRONTEND_URL": (
+                f"http://host.lemma.internal:{frontend_port}"
+            ),
+            "SCHEDULER_API_URL": f"http://127.0.0.1:{backend_port}",
+            "LOCAL_OBJECT_STORAGE_ROOT": str(paths.object_storage_dir),
+            "LOCAL_FILE_STORAGE_ROOT": str(paths.files_dir),
+            "LOCAL_AGENT_RUNTIME_CONFIG_PATH": str(
+                paths.state_dir / "agent-runtime.json"
+            ),
+            "EMAIL_OUTPUT_DIR": str(paths.state_dir / "emails"),
+        }
+    )
+    # User settings retain normal last-wins semantics.
+    env.update(store.env_overrides(doc, "agentbox"))
+    env.update(store.env_overrides(doc, "backend"))
+    return env
+
+
 def frontend_env(doc: TOMLDocument) -> dict[str, str]:
     env = {
         "NODE_ENV": "production",
@@ -172,6 +244,18 @@ def frontend_env(doc: TOMLDocument) -> dict[str, str]:
         "NEXT_PUBLIC_SESSION_TOKEN_DOMAIN": "",
         "NEXT_PUBLIC_AUTH_EMAIL_VERIFICATION_REQUIRED": "false",
     }
+    env.update(store.env_overrides(doc, "frontend"))
+    return env
+
+
+def host_frontend_env(doc: TOMLDocument) -> dict[str, str]:
+    env = frontend_env(doc)
+    env.update(
+        {
+            "PORT": str(store.port(doc, "frontend")),
+            "HOSTNAME": "127.0.0.1",
+        }
+    )
     env.update(store.env_overrides(doc, "frontend"))
     return env
 

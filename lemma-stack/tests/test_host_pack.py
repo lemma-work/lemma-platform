@@ -1,0 +1,103 @@
+from __future__ import annotations
+
+import json
+
+import pytest
+
+from lemma_stack.config import store
+from lemma_stack.host_pack import build_manifest, write_manifest
+from lemma_stack.output import AdminError
+from lemma_stack.release.manifest import parse
+
+
+def _release():
+    return parse(
+        {
+            "schema_version": 1,
+            "version": "1.2.3",
+            "min_admin_version": "0",
+            "images": {
+                "backend": "backend:test",
+                "frontend": "frontend:test",
+                "agentbox_runtime": "runtime:test",
+            },
+        }
+    )
+
+
+def _pack(tmp_path):
+    root = tmp_path / "pack"
+    for relative in (
+        "backend/python/bin/python3",
+        "frontend/node/bin/node",
+        "frontend/frontend-launcher.mjs",
+        "frontend/app/server.js",
+        "backend/assets/browser-sdk/lemma-client.js",
+        "backend/assets/browser-sdk/lemma-ui.js",
+    ):
+        path = root / relative
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text("test", encoding="utf-8")
+    (root / "backend/assets/lemma-skills").mkdir(parents=True)
+    return root
+
+
+def test_builds_exact_backend_frontend_native_contract(paths, tmp_path):
+    config = store.new_document()
+    manifest = build_manifest(_pack(tmp_path), paths, config, _release(), provider="docker")
+
+    assert [service["id"] for service in manifest["services"]] == [
+        "backend",
+        "frontend",
+    ]
+    assert [setup["id"] for setup in manifest["setup"]] == ["migrations"]
+    assert manifest["setup"][0]["command"][1:] == [
+        "-m",
+        "alembic",
+        "-c",
+        "alembic.ini",
+        "upgrade",
+        "head",
+    ]
+    assert manifest["setup"][0]["env"]["DATABASE_URL"].endswith(
+        ":55432/lemma"
+    )
+    backend, frontend = manifest["services"]
+    assert backend["command"][1:4] == ["-m", "uvicorn", "local_app:app"]
+    assert backend["env"]["DATABASE_URL"].endswith(":55432/lemma")
+    assert backend["env"]["AGENTBOX_STATE_DATABASE_URL"].endswith(
+        ":55432/agentbox"
+    )
+    assert backend["env"]["WORKSPACE_CALLBACK_API_URL"] == (
+        "http://host.lemma.internal:8711"
+    )
+    assert backend["env"]["AGENTBOX_REQUIRE_CALLBACK"] == "true"
+    assert backend["env"]["BROWSER_SDK_PATH"].endswith("lemma-client.js")
+    assert frontend["dependencies"] == ["backend"]
+    assert frontend["env"]["HOSTNAME"] == "127.0.0.1"
+    assert frontend["env"]["PORT"] == "3711"
+
+
+def test_user_environment_remains_last_wins(paths, tmp_path):
+    config = store.new_document()
+    store.set_value(config, "backend.env.REDIS_URL", "redis://custom:9999")
+    store.set_value(config, "frontend.env.PORT", "4700")
+
+    manifest = build_manifest(_pack(tmp_path), paths, config, _release())
+
+    assert manifest["services"][0]["env"]["REDIS_URL"] == "redis://custom:9999"
+    assert manifest["services"][1]["env"]["PORT"] == "4700"
+
+
+def test_missing_pack_file_is_actionable(paths, tmp_path):
+    with pytest.raises(AdminError, match="backend Python"):
+        build_manifest(tmp_path, paths, store.new_document(), _release())
+
+
+def test_manifest_is_private_and_atomic(paths, tmp_path):
+    destination = tmp_path / "run/host-pack.json"
+    write_manifest(destination, {"secret": "value"})
+
+    assert json.loads(destination.read_text()) == {"secret": "value"}
+    assert destination.stat().st_mode & 0o777 == 0o600
+    assert not list(destination.parent.glob("*.tmp-*"))
