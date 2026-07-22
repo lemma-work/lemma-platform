@@ -1,11 +1,16 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useState } from "react";
+import QRCode from "react-qr-code";
 import { toast } from "sonner";
 
 import { buildApiUrl } from "@/components/auth/portal/auth/config";
 import { Button } from "@/components/ui/button";
 import { Clock, Copy, ExternalLink, MessageCircle } from "@/components/ui/icons";
+import {
+  buildWhatsAppVerificationMessage,
+  WHATSAPP_VERIFICATION_POLL_INTERVAL_MS,
+} from "@/lib/identity/whatsapp-mobile-verification";
 
 type VerificationConfig = {
   available: boolean;
@@ -117,7 +122,10 @@ export function WhatsAppMobileVerification({
       if (poll !== null) window.clearInterval(poll);
       if (document.visibilityState !== "visible") return;
       void check();
-      poll = window.setInterval(() => void check(), 2000);
+      poll = window.setInterval(
+        () => void check(),
+        WHATSAPP_VERIFICATION_POLL_INTERVAL_MS,
+      );
     };
     const visibilityChanged = () => beginPolling();
     beginPolling();
@@ -130,9 +138,18 @@ export function WhatsAppMobileVerification({
   }, [expireTransaction, onVerified, transaction]);
 
   const manualMessage = useMemo(
-    () => (transaction ? `LEMMA VERIFY ${transaction.code}` : ""),
+    () => (transaction ? buildWhatsAppVerificationMessage(transaction.code) : ""),
     [transaction],
   );
+
+  const copyVerificationMessage = async () => {
+    try {
+      await navigator.clipboard.writeText(manualMessage);
+      toast.success("Full verification message copied");
+    } catch {
+      toast.error("Could not copy the message. Select it and copy it manually.");
+    }
+  };
 
   const start = async () => {
     setStarting(true);
@@ -186,7 +203,7 @@ export function WhatsAppMobileVerification({
         <div>
           <p className="type-eyebrow text-[var(--text-tertiary)]">Verify in WhatsApp</p>
           <h3 className="mt-1 text-sm font-semibold text-[var(--text-primary)]">
-            Send this code from the number you’re verifying
+            Send this message from the number you’re verifying
           </h3>
         </div>
         <span className="chip chip-sm chip-pill chip-muted">
@@ -194,26 +211,60 @@ export function WhatsAppMobileVerification({
           {Math.floor(secondsRemaining / 60)}:{String(secondsRemaining % 60).padStart(2, "0")}
         </span>
       </div>
-      <div className="mt-4 flex items-center gap-2 rounded-lg border border-[var(--border-subtle)] bg-[var(--surface-1)] p-2.5">
-        <code className="min-w-0 flex-1 select-all text-center text-base font-semibold tracking-widest text-[var(--text-primary)]">
-          {transaction.code}
-        </code>
-        <Button
-          type="button"
-          variant="ghost"
-          size="icon"
-          aria-label="Copy verification message"
-          onClick={() => {
-            void navigator.clipboard.writeText(manualMessage);
-            toast.success("Verification message copied");
-          }}
-        >
-          <Copy className="h-4 w-4" />
-        </Button>
+      <div className="mt-4 grid gap-4 md:grid-cols-[minmax(0,1fr)_9.5rem]">
+        <div className="space-y-3">
+          <div className="rounded-lg border border-[var(--border-subtle)] bg-[var(--surface-1)] p-3">
+            <p className="type-eyebrow text-[var(--text-tertiary)]">Send to</p>
+            <a
+              href={transaction.whatsapp_url}
+              target="_blank"
+              rel="noreferrer"
+              className="mt-1 block w-fit text-lg font-semibold tabular-nums text-[var(--text-primary)] underline decoration-[var(--border-strong)] underline-offset-4 hover:decoration-[var(--text-primary)]"
+            >
+              {transaction.display_number}
+            </a>
+            <p className="mt-1 text-xs text-[var(--text-tertiary)]">
+              Lemma&apos;s WhatsApp verification number
+            </p>
+          </div>
+
+          <div className="rounded-lg border border-[var(--border-subtle)] bg-[var(--surface-1)] p-3">
+            <p className="type-eyebrow text-[var(--text-tertiary)]">Message to send</p>
+            <code className="mt-2 block select-all break-all text-sm font-semibold tracking-wide text-[var(--text-primary)]">
+              {manualMessage}
+            </code>
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              className="mt-3"
+              onClick={() => void copyVerificationMessage()}
+            >
+              <Copy className="mr-1.5 h-3.5 w-3.5" />
+              Copy full message
+            </Button>
+          </div>
+        </div>
+
+        <div className="flex flex-col items-center justify-center rounded-lg border border-[var(--border-subtle)] bg-[var(--surface-1)] p-3 text-center">
+          <div className="rounded-md bg-[var(--text-inverse)] p-2">
+            <QRCode
+              value={transaction.whatsapp_url}
+              size={112}
+              level="M"
+              bgColor="var(--text-inverse)"
+              fgColor="var(--text-primary)"
+              aria-label="Scan to open the verification message in WhatsApp"
+            />
+          </div>
+          <p className="mt-2 text-xs font-medium text-[var(--text-secondary)]">
+            Scan with your phone
+          </p>
+        </div>
       </div>
       <p className="mt-3 text-xs leading-5 text-[var(--text-secondary)]">
-        Open WhatsApp and send <strong>{manualMessage}</strong> to {transaction.display_number}.
-        The number you send it from must match your profile number.
+        Send the message from the mobile number on your Lemma profile. The QR code opens
+        WhatsApp on another device with the number and message already filled in.
       </p>
       <div className="mt-4 flex flex-wrap gap-2">
         <Button asChild type="button" size="sm">

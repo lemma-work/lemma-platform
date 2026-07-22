@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+from unittest.mock import AsyncMock
 from uuid import UUID, uuid4
 
 import pytest
@@ -46,7 +47,10 @@ async def test_whatsapp_transaction_sender_match_single_use_and_cache_invalidati
     _enable(monkeypatch)
     signed_up = await signup_user(email=f"wa-{uuid4().hex[:8]}@example.com")
     user_id = UUID(signed_up["id"])
-    service = WhatsAppMobileVerificationService(test_redis_url)
+    feedback_sender = AsyncMock(return_value=True)
+    service = WhatsAppMobileVerificationService(
+        test_redis_url, feedback_sender=feedback_sender
+    )
     try:
         transaction = await service.start(
             user_id=user_id,
@@ -62,10 +66,22 @@ async def test_whatsapp_transaction_sender_match_single_use_and_cache_invalidati
         )
 
         assert not await service.consume_message(
+            code="INVALID",
+            sender_wa_id="14155552671",
+            destination_phone_number_id="global-phone",
+            whatsapp_message_id="wamid.invalid-format",
+        )
+        assert not await service.consume_message(
             code=transaction.code,
             sender_wa_id="14155559999",
             destination_phone_number_id="global-phone",
             whatsapp_message_id="wamid.wrong-sender",
+        )
+        assert await service.consume_message(
+            code=transaction.code,
+            sender_wa_id="14155552671",
+            destination_phone_number_id="global-phone",
+            whatsapp_message_id="wamid.valid",
         )
         assert await service.consume_message(
             code=transaction.code,
@@ -92,6 +108,23 @@ async def test_whatsapp_transaction_sender_match_single_use_and_cache_invalidati
             destination_phone_number_id="global-phone",
             whatsapp_message_id="wamid.replay",
         )
+
+        assert feedback_sender.await_count == 5
+        invalid_feedback = feedback_sender.await_args_list[0].kwargs
+        assert invalid_feedback["to"] == "14155552671"
+        assert invalid_feedback["reply_to_message_id"] == "wamid.invalid-format"
+        assert "could not verify" in invalid_feedback["body"]
+        wrong_sender_feedback = feedback_sender.await_args_list[1].kwargs
+        assert wrong_sender_feedback["to"] == "14155559999"
+        assert wrong_sender_feedback["reply_to_message_id"] == "wamid.wrong-sender"
+        assert "could not verify" in wrong_sender_feedback["body"]
+        for index in (2, 3):
+            success_feedback = feedback_sender.await_args_list[index].kwargs
+            assert success_feedback["to"] == "14155552671"
+            assert "verified for Lemma" in success_feedback["body"]
+        replay_feedback = feedback_sender.await_args_list[4].kwargs
+        assert replay_feedback["reply_to_message_id"] == "wamid.replay"
+        assert "could not verify" in replay_feedback["body"]
     finally:
         await service.close()
 
@@ -208,6 +241,11 @@ async def test_authenticated_whatsapp_verification_api_journey(
 ):
     _enable(monkeypatch)
     monkeypatch.setattr(settings, "redis_url", e2e_settings.redis_url)
+    feedback_sender = AsyncMock(return_value=True)
+    monkeypatch.setattr(
+        "app.modules.identity.services.whatsapp_mobile_verification.send_global_whatsapp_text",
+        feedback_sender,
+    )
     await close_whatsapp_mobile_verification_service()
     try:
         config = await authenticated_client.get(
@@ -251,6 +289,10 @@ async def test_authenticated_whatsapp_verification_api_journey(
         assert user is not None
         assert user.mobile_number == "+14155552673"
         assert user.mobile_verified_at is not None
+        feedback_sender.assert_awaited_once()
+        assert feedback_sender.await_args.kwargs["reply_to_message_id"] == (
+            "wamid.api-journey"
+        )
     finally:
         await close_whatsapp_mobile_verification_service()
 

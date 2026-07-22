@@ -23,6 +23,7 @@ from app.modules.agent_surfaces.platforms.whatsapp.service import (
 
 # --- base resolution + envelope parsing -----------------------------------
 
+
 def test_resolve_api_base_prefers_credential_override():
     assert resolve_api_base({"api_base_url": "http://fake/v21.0"}) == "http://fake/v21.0"
     assert resolve_api_base({}) == "https://graph.facebook.com/v21.0"
@@ -62,7 +63,45 @@ def test_classify_whatsapp_error():
     assert classify_whatsapp_error(ValueError("x")) is DeliveryClassification.PERMANENT
 
 
+@pytest.mark.asyncio
+async def test_send_text_can_quote_the_inbound_message(monkeypatch):
+    client = WhatsAppClient(access_token="t", phone_number_id="phone-1")
+    calls: list[dict] = []
+
+    async def _capture(*, phone_number_id, payload):
+        calls.append({"phone_number_id": phone_number_id, "payload": payload})
+        return "wamid.out"
+
+    monkeypatch.setattr(client, "send_message_payload", _capture)
+
+    message_id = await client.send_text(
+        phone_number_id="phone-1",
+        to="14155552671",
+        body="Mobile number verified",
+        reply_to_message_id="wamid.in",
+    )
+
+    assert message_id == "wamid.out"
+    assert calls == [
+        {
+            "phone_number_id": "phone-1",
+            "payload": {
+                "messaging_product": "whatsapp",
+                "recipient_type": "individual",
+                "to": "14155552671",
+                "type": "text",
+                "text": {
+                    "body": "Mobile number verified",
+                    "preview_url": False,
+                },
+                "context": {"message_id": "wamid.in"},
+            },
+        }
+    ]
+
+
 # --- read receipt + typing indicator --------------------------------------
+
 
 def _inbound_event(*, message_id: str | None) -> ParsedInboundSurfaceEvent:
     return ParsedInboundSurfaceEvent(

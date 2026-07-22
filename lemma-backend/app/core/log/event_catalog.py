@@ -358,6 +358,7 @@ EVENT_CATALOG: dict[str, EventSpec] = {
     'identity.email_verification.local_user_missing': EventSpec('warning', frozenset()),
     'identity.middleware.auth_middleware.observed': EventSpec('debug', frozenset()),
     'identity.mobile_verification.whatsapp.ineligible_user': EventSpec('info', frozenset()),
+    'identity.mobile_verification.whatsapp.feedback_send_failed': EventSpec('warning', frozenset({'error_type', 'outcome'})),
     'identity.mobile_verification.whatsapp.invalid_sender': EventSpec('info', frozenset()),
     'identity.mobile_verification.whatsapp.number_lookup_failed': EventSpec('info', frozenset()),
     'identity.mobile_verification.whatsapp.owner_conflict': EventSpec('info', frozenset()),
