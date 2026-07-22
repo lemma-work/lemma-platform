@@ -12,6 +12,7 @@ import { Label } from "@/components/ui/label";
 import { PlainPageShell } from "@/components/dashboard/plain-page-shell";
 import { ProductIcon } from "@/components/pod/product-icon";
 import { UserSurfacesPanel } from "@/components/settings/user-surfaces-panel";
+import { WhatsAppMobileVerification } from "@/components/settings/whatsapp-mobile-verification";
 import { SettingsChoiceList } from "@/components/settings/settings-kit";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { useSoundFeedbackPreference } from "@/lib/feedback/use-sound-feedback";
@@ -23,7 +24,7 @@ import {
 } from "@/lib/feedback/sound-feedback";
 
 export default function ProfilePage() {
-    const { data: profile, isLoading } = useProfile();
+    const { data: profile, isLoading, refetch: refetchProfile } = useProfile();
     const {
         currentOrg,
         setCurrentOrg,
@@ -50,10 +51,10 @@ export default function ProfilePage() {
     const [draft, setDraft] = useState<{ firstName: string; lastName: string; mobileNumber: string } | null>(null);
     const firstName = draft?.firstName ?? profile?.first_name ?? "";
     const lastName = draft?.lastName ?? profile?.last_name ?? "";
-    const storedMobileNumber = normalizeMobileNumber(profile?.mobile_number ?? "");
+    const storedMobileNumber = normalizeStoredMobileNumber(profile?.mobile_number ?? "");
     const mobileNumber = draft?.mobileNumber ?? storedMobileNumber;
     const normalizedMobileNumber = normalizeMobileNumber(mobileNumber);
-    const isMobileNumberValid = !normalizedMobileNumber || /^[1-9]\d{7,14}$/.test(normalizedMobileNumber);
+    const isMobileNumberValid = !normalizedMobileNumber || /^\+[1-9]\d{7,14}$/.test(normalizedMobileNumber);
     const hasChanges =
         firstName !== (profile?.first_name ?? "") ||
         lastName !== (profile?.last_name ?? "") ||
@@ -200,27 +201,28 @@ export default function ProfilePage() {
                             </span>
                         </div>
                         <div className="form-field-control flex h-10 overflow-hidden p-0 focus-within:border-[color:var(--field-border-focus)]">
-                            <span className="settings-input-prefix type-eyebrow">digits</span>
                             <input
                                 id="mobileNumber"
-                                inputMode="numeric"
+                                type="tel"
+                                inputMode="tel"
                                 value={mobileNumber}
                                 onChange={(e) => setDraft({ firstName, lastName, mobileNumber: e.target.value })}
-                                placeholder="14155552671"
+                                placeholder="+14155552671"
                                 className="min-w-0 flex-1 border-0 bg-transparent px-3 text-sm text-[var(--text-primary)] outline-none placeholder:text-[var(--text-soft)]"
                                 aria-invalid={!isMobileNumberValid}
                             />
                         </div>
                         <p className={isMobileNumberValid ? "settings-help-text" : "text-xs text-[var(--state-error)]"}>
-                            Include country code, digits only, without +.
+                            Include the country code, starting with +. We never guess your country.
                         </p>
                         <div className="flex flex-wrap items-center gap-2">
                             {profile?.mobile_verified_at ? (
                                 <span className="chip chip-sm chip-pill state-badge-success">
                                     <CheckCircle2 className="h-3.5 w-3.5" />
-                                    Verified by Telegram
+                                    Verified mobile number
                                 </span>
-                            ) : telegramLoginEnabled ? (
+                            ) : null}
+                            {!profile?.mobile_verified_at && telegramLoginEnabled ? (
                                 <Button
                                     type="button"
                                     variant="outline"
@@ -236,6 +238,12 @@ export default function ProfilePage() {
                                 </Button>
                             ) : null}
                         </div>
+                        <WhatsAppMobileVerification
+                            mobileNumber={normalizedMobileNumber}
+                            mobileNumberValid={isMobileNumberValid}
+                            alreadyVerified={Boolean(profile?.mobile_verified_at)}
+                            onVerified={refetchProfile}
+                        />
                     </div>
 
                     <div className="flex min-h-10 items-center justify-between gap-3 pt-1">
@@ -313,5 +321,13 @@ export default function ProfilePage() {
 }
 
 function normalizeMobileNumber(value: string) {
-    return value.replace(/\D/g, "");
+    const trimmed = value.trim();
+    if (!trimmed) return "";
+    const digits = trimmed.replace(/\D/g, "");
+    return `${trimmed.startsWith("+") ? "+" : ""}${digits}`;
+}
+
+function normalizeStoredMobileNumber(value: string) {
+    const digits = value.replace(/\D/g, "");
+    return digits ? `+${digits}` : "";
 }

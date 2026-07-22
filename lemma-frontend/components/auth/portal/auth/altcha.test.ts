@@ -31,6 +31,19 @@ describe("ALTCHA client state", () => {
     expect(getAltchaProgress()).toEqual({ phase: "idle", enabled: false });
   });
 
+  it("requests a purpose-bound challenge for password reset", async () => {
+    const fetcher = vi.fn<typeof fetch>().mockResolvedValue(
+      new Response(JSON.stringify({ enabled: false }), { status: 200 }),
+    );
+
+    await addAltchaProof({}, "password-reset", fetcher);
+
+    expect(fetcher).toHaveBeenCalledWith(
+      expect.stringContaining("purpose=password-reset"),
+      { credentials: "include" },
+    );
+  });
+
   it("fails closed and reports an unsolved challenge", async () => {
     const fetcher = vi.fn<typeof fetch>().mockResolvedValue(
       new Response(

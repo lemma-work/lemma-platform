@@ -55,6 +55,7 @@ import {
   isTelegramMiniApp,
 } from "@/components/auth/portal/auth/supertokens";
 import { VerificationScreen } from "@/components/auth/portal/auth/verification-screen";
+import { PasswordResetScreen } from "@/components/auth/portal/auth/password-reset-screen";
 import { AuthProtectionNotice } from "@/components/auth/portal/auth/auth-protection-notice";
 import {
   getDestinationLabel,
@@ -276,13 +277,16 @@ function AuthLanding() {
   const isEmailVerificationRoute = effectivePathname
     .toLowerCase()
     .endsWith("/verify-email");
+  const isPasswordResetRoute = effectivePathname
+    .toLowerCase()
+    .endsWith("/reset-password");
   const invalidClaims = session.loading ? [] : session.invalidClaims;
   const hasInvalidClaims = invalidClaims.length > 0;
   const needsEmailVerification = invalidClaims.some(
     (claim) => claim.id === EmailVerificationClaim.id,
   );
   const isVerificationExperience =
-    isEmailVerificationRoute || needsEmailVerification;
+    !isPasswordResetRoute && (isEmailVerificationRoute || needsEmailVerification);
   const canNavigateAsAuthenticated = canCompleteAuthenticatedNavigation({
     sessionLoading: session.loading,
     doesSessionExist,
@@ -290,7 +294,14 @@ function AuthLanding() {
     isVerificationExperience,
   });
   const authHeroCopy: HeroCopy =
-    isVerificationExperience
+    isPasswordResetRoute
+      ? {
+          eyebrow: "Account recovery",
+          title: "A secure way back in.",
+          description:
+            "Reset your password privately, then continue with your Lemma account.",
+        }
+      : isVerificationExperience
       ? {
           eyebrow: "Account security",
           title: "One quick verification.",
@@ -493,6 +504,17 @@ function AuthLanding() {
         message="Checking your session…"
         destination={destination}
       />
+    );
+  }
+
+  if (isPasswordResetRoute) {
+    return (
+      <AuthScreenLayout destination={destination} heroCopy={authHeroCopy}>
+        <div className="auth-form-stack">
+          <AuthProtectionNotice />
+          <PasswordResetScreen />
+        </div>
+      </AuthScreenLayout>
     );
   }
 

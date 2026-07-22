@@ -70,10 +70,10 @@ class UserService:
         """Reject mobile/telegram values already held by another user.
 
         These power identity resolution, so duplicates must be blocked with a
-        clean 409 before the DB partial-unique indexes raise an IntegrityError.
+        clean 409 before the database unique indexes raise an IntegrityError.
         """
         digits = normalize_mobile_digits(entity.mobile_number)
-        if digits and entity.mobile_verified_at is not None:
+        if digits:
             owner_id = await self.user_repository.get_id_by_mobile_digits(digits)
             if owner_id is not None and owner_id != entity.id:
                 raise UserConflictError("This mobile number is already in use")

@@ -18,7 +18,10 @@ from app.core.settings_env import dotenv_path
 
 class SurfaceSettings(BaseSettings):
     model_config = SettingsConfigDict(
-        env_file=dotenv_path(), env_file_encoding="utf-8", case_sensitive=False, extra="ignore"
+        env_file=dotenv_path(),
+        env_file_encoding="utf-8",
+        case_sensitive=False,
+        extra="ignore",
     )
 
     # Microsoft Teams bot (separate from login OAuth)
@@ -87,6 +90,13 @@ class SurfaceSettings(BaseSettings):
     whatsapp_app_secret: Optional[str] = Field(
         default=None,
         description="Meta app secret for verifying WhatsApp webhook signatures",
+    )
+    whatsapp_display_phone_number: Optional[str] = Field(
+        default=None,
+        description=(
+            "Human-messageable global Lemma WhatsApp number. When omitted, the "
+            "number is resolved from Meta using whatsapp_phone_number_id."
+        ),
     )
 
     # Telegram
