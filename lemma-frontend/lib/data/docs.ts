@@ -131,6 +131,7 @@ lemma auth login`,
         language: 'bash',
         code: `git clone https://github.com/lemma-work/lemma-platform.git
 cd lemma-platform
+make init
 make dev
 
 uv tool install --force --editable lemma-cli

@@ -5,6 +5,7 @@ SHELL := /bin/bash
 #
 #   make init          create .env files with local defaults (idempotent)
 #   make dev           start infra + backend + frontend (hot-reload)
+#   make dev-public    same, with an ephemeral public Cloudflare API URL
 #   make dev RELOAD=1  same, with uvicorn --reload on the backend
 #   make stop          stop backend/frontend processes
 #   make stop-all      also stop infra containers
@@ -12,8 +13,9 @@ SHELL := /bin/bash
 #   make coverage      full coverage report (unit + e2e per component)
 # ──────────────────────────────────────────────────────────────────────────────
 
-.PHONY: help init dev stop stop-all logs otel-up otel-down otel-tail otel-smoke \
-        _ensure-databases _ensure-agentbox-image \
+.PHONY: help init dev dev-public stop stop-all logs otel-up otel-down otel-tail otel-smoke \
+        _prepare-dev _start-public-api-tunnel _ensure-databases _ensure-agentbox-image \
+        test-dev-workflow \
         test test-backend test-backend-unit test-backend-e2e \
         test-frontend test-cli test-cli-unit test-cli-e2e test-python \
         coverage coverage-backend coverage-backend-unit coverage-backend-e2e \
@@ -41,6 +43,15 @@ BACKEND_PID_FILE  := $(BACKEND_DIR)/.dev-backend.pid
 FRONTEND_PID_FILE := $(FRONTEND_DIR)/.dev-frontend.pid
 INFRA_PID_FILE    := $(BACKEND_DIR)/.dev-infra.pid
 AGENTBOX_PID_FILE := $(AGENTBOX_DIR)/.dev-agentbox.pid
+CLOUDFLARED_API_PID_FILE := .dev-cloudflared-api.pid
+
+DEV_LOG_DIR                  := .dev-logs
+AGENTBOX_LOG_FILE            := $(abspath $(DEV_LOG_DIR)/agentbox.log)
+CLOUDFLARED_API_LOG_FILE     := $(abspath $(DEV_LOG_DIR)/cloudflared-api.log)
+CLOUDFLARED_CONFIG_FILE      := $(abspath $(DEV_LOG_DIR)/cloudflared-quick-tunnel.yml)
+PUBLIC_API_URL_FILE          := $(abspath $(DEV_LOG_DIR)/public-api-url)
+AGENTBOX_READY_TIMEOUT       ?= 30
+PUBLIC_TUNNEL_READY_TIMEOUT  ?= 30
 
 # ── Canonical dev ports + URLs ───────────────────────────────────────────────
 # These are the SINGLE source of truth for the dev stack. Infra (docker
@@ -52,7 +63,6 @@ AGENTBOX_PID_FILE := $(AGENTBOX_DIR)/.dev-agentbox.pid
 
 DEV_BACKEND_PORT      ?= 8710
 DEV_FRONTEND_PORT     ?= 3710
-DEV_AUTH_FRONTEND_PORT?= 4173
 DEV_POSTGRES_PORT     ?= 5432
 DEV_REDIS_PORT        ?= 6379
 DEV_SUPERTOKENS_PORT  ?= 3567
@@ -61,12 +71,17 @@ DEV_AGENTBOX_PORT     ?= 8721
 
 DEV_BACKEND_URL       := http://localhost:$(DEV_BACKEND_PORT)
 DEV_FRONTEND_URL      := http://localhost:$(DEV_FRONTEND_PORT)
-DEV_AUTH_FRONTEND_URL := http://localhost:$(DEV_AUTH_FRONTEND_PORT)
+DEV_AUTH_FRONTEND_URL := $(DEV_FRONTEND_URL)
 DEV_DATABASE_URL      := postgresql+asyncpg://postgres:postgres@localhost:$(DEV_POSTGRES_PORT)/lemma
+DEV_DATASTORE_DATABASE_URL := postgresql+asyncpg://postgres:postgres@localhost:$(DEV_POSTGRES_PORT)/lemma_datastore
+DEV_AGENTBOX_DATABASE_URL  := postgresql://postgres:postgres@localhost:$(DEV_POSTGRES_PORT)/agentbox
 DEV_REDIS_URL         := redis://localhost:$(DEV_REDIS_PORT)/0
 DEV_SUPERTOKENS_URL   := http://localhost:$(DEV_SUPERTOKENS_PORT)
 DEV_AGENTBOX_URL      := http://127.0.0.1:$(DEV_AGENTBOX_PORT)
 DEV_AGENTBOX_API_KEY  ?= dev-agentbox-key
+DEV_CORS_ORIGIN_REGEX := https?://(localhost|127\.0\.0\.\d+|127\.\d+\.\d+\.\d+|127-0-0-\d+\.sslip\.io|[\w-]+\.nip\.io)(:\d+)?
+DEV_LOG_LEVEL         ?= DEBUG
+DEV_JSON_LOGS_ENABLED ?= true
 OTEL_DEBUG_GRPC_PORT  ?= 14317
 OTEL_DEBUG_LLM_GRPC_PORT ?= 15317
 OTEL_DEBUG_HEALTH_PORT ?= 14333
@@ -106,21 +121,86 @@ COMMON_DEV_ENV := \
 	DEV_SUPERTOKENS_PORT=$(DEV_SUPERTOKENS_PORT) \
 	DEV_KREUZBERG_PORT=$(DEV_KREUZBERG_PORT)
 
+BACKEND_API_URL                 ?= $(DEV_BACKEND_URL)
+BACKEND_FRONTEND_URL            ?= $(DEV_FRONTEND_URL)
+BACKEND_AUTH_FRONTEND_URL       ?= $(DEV_AUTH_FRONTEND_URL)
+BACKEND_CLI_API_URL             ?= $(DEV_BACKEND_URL)
+BACKEND_CLI_AUTH_FRONTEND_URL   ?= $(DEV_AUTH_FRONTEND_URL)
+BACKEND_APP_BASE_DOMAIN         ?=
+BACKEND_SESSION_COOKIE_DOMAIN   ?=
+BACKEND_SESSION_COOKIE_SECURE   ?= false
+BACKEND_SESSION_COOKIE_SAME_SITE?= lax
+BACKEND_CORS_ORIGINS            ?= ["http://localhost:$(DEV_FRONTEND_PORT)","http://127.0.0.1:$(DEV_FRONTEND_PORT)"]
+BACKEND_CORS_ORIGIN_REGEX       ?= $(DEV_CORS_ORIGIN_REGEX)
+BACKEND_TELEGRAM_POLLING        ?= true
+BACKEND_SLACK_SOCKET_MODE       ?= true
+
+BACKEND_DEV_ENV := \
+	ENVIRONMENT=local \
+	DEBUG=true \
+	LOG_LEVEL=$(DEV_LOG_LEVEL) \
+	JSON_LOGS_ENABLED=$(DEV_JSON_LOGS_ENABLED) \
+	API_URL=$(BACKEND_API_URL) \
+	FRONTEND_URL=$(BACKEND_FRONTEND_URL) \
+	AUTH_FRONTEND_URL=$(BACKEND_AUTH_FRONTEND_URL) \
+	CLI_API_URL=$(BACKEND_CLI_API_URL) \
+	CLI_AUTH_FRONTEND_URL=$(BACKEND_CLI_AUTH_FRONTEND_URL) \
+	AUTH_WEBSITE_BASE_PATH=/auth \
+	SUPERTOKENS_API_BASE_PATH=/auth \
+	SUPERTOKENS_API_GATEWAY_PATH=/st \
+	SUPERTOKENS_CORE_URL=$(DEV_SUPERTOKENS_URL) \
+	DATABASE_URL=$(DEV_DATABASE_URL) \
+	DATASTORE_DATABASE_URL=$(DEV_DATASTORE_DATABASE_URL) \
+	REDIS_URL=$(DEV_REDIS_URL) \
+	KREUZBERG_URL=http://localhost:$(DEV_KREUZBERG_PORT) \
+	DOCUMENT_PROCESSOR=kreuzberg \
+	STORAGE_BACKEND=local \
+	LOCAL_OBJECT_STORAGE_ROOT=$(abspath .local/object-storage) \
+	LOCAL_FILE_STORAGE_ROOT=$(abspath .local/files) \
+	EMAIL_TRANSPORT=filesystem \
+	EMAIL_OUTPUT_DIR=$(abspath .local/emails) \
+	AUTH_EMAIL_VERIFICATION_REQUIRED=false \
+	ENABLE_TELEGRAM_POLLING_MODE=$(BACKEND_TELEGRAM_POLLING) \
+	ENABLE_SLACK_SOCKET_MODE=$(BACKEND_SLACK_SOCKET_MODE) \
+	APP_BASE_DOMAIN=$(BACKEND_APP_BASE_DOMAIN) \
+	SESSION_COOKIE_DOMAIN=$(BACKEND_SESSION_COOKIE_DOMAIN) \
+	SESSION_COOKIE_SECURE=$(BACKEND_SESSION_COOKIE_SECURE) \
+	SESSION_COOKIE_SAME_SITE=$(BACKEND_SESSION_COOKIE_SAME_SITE) \
+	CORS_ORIGINS='$(BACKEND_CORS_ORIGINS)' \
+	CORS_ORIGIN_REGEX='$(BACKEND_CORS_ORIGIN_REGEX)'
+
+FRONTEND_API_URL              ?= $(DEV_BACKEND_URL)
+FRONTEND_SITE_URL             ?= $(DEV_FRONTEND_URL)
+FRONTEND_AUTH_URL             ?= $(DEV_AUTH_FRONTEND_URL)
+FRONTEND_SESSION_TOKEN_DOMAIN ?=
+FRONTEND_APPS_DOMAIN_SUFFIX   ?=
+
 FRONTEND_DEV_ENV := \
-	NEXT_PUBLIC_API_URL=$(DEV_BACKEND_URL) \
-	NEXT_PUBLIC_SITE_URL=$(DEV_FRONTEND_URL) \
-	NEXT_PUBLIC_AUTH_URL=$(DEV_FRONTEND_URL)
+	NEXT_PUBLIC_API_URL=$(FRONTEND_API_URL) \
+	NEXT_PUBLIC_SITE_URL=$(FRONTEND_SITE_URL) \
+	NEXT_PUBLIC_AUTH_URL=$(FRONTEND_AUTH_URL) \
+	NEXT_PUBLIC_SESSION_TOKEN_DOMAIN=$(FRONTEND_SESSION_TOKEN_DOMAIN) \
+	NEXT_PUBLIC_APPS_DOMAIN_SUFFIX=$(FRONTEND_APPS_DOMAIN_SUFFIX)
+
+# `make init` owns this ignored file. Reading it as a default keeps route
+# encryption stable across restarts while allowing an exported environment or
+# command-line make override to supply a deliberate key rotation.
+AGENTBOX_ENV_FILE := $(AGENTBOX_DIR)/.env
+AGENTBOX_ENDPOINT_STATE_KEYS ?= $(shell sed -n 's/^AGENTBOX_ENDPOINT_STATE_KEYS=//p' $(AGENTBOX_ENV_FILE) 2>/dev/null | tail -n 1)
 
 # AgentBox manager — the workspace sandbox provider. Runs as its own uvicorn
 # process with the local Docker provider; the backend reaches it over HTTP
 # using AGENTBOX_API_URL + AGENTBOX_API_KEY (written into the backend .env).
 AGENTBOX_DEV_ENV := \
+	AGENTBOX_ENVIRONMENT=local \
+	AGENTBOX_LOG_LEVEL=$(DEV_LOG_LEVEL) \
 	AGENTBOX_PROVIDER=docker \
 	AGENTBOX_API_KEY=$(DEV_AGENTBOX_API_KEY) \
 	AGENTBOX_API_URL=$(DEV_AGENTBOX_URL) \
 	AGENTBOX_RUNTIME_IMAGE=$(AGENTBOX_RUNTIME_IMAGE) \
-	AGENTBOX_STATE_DB_PATH=/tmp/agentbox-state.db \
-	AGENTBOX_STORAGE_ROOT=/tmp/agentbox-workspaces \
+	AGENTBOX_STATE_DATABASE_URL=$(DEV_AGENTBOX_DATABASE_URL) \
+	AGENTBOX_ENDPOINT_STATE_KEYS=$(AGENTBOX_ENDPOINT_STATE_KEYS) \
+	AGENTBOX_STORAGE_ROOT=$(abspath .local/agentbox-workspaces) \
 	AGENTBOX_ENDPOINT_HOST=127.0.0.1 \
 	AGENTBOX_SESSION_IDLE_TIMEOUT_SECONDS=300 \
 	AGENTBOX_SANDBOX_IDLE_TIMEOUT_SECONDS=300 \
@@ -137,14 +217,16 @@ help:
 	@echo ""
 	@echo "  Dev stack"
 	@echo "    make dev                start infra + backend + frontend"
+	@echo "    make dev-public         start with an ephemeral public API tunnel"
 	@echo "    make dev RELOAD=1       same, with uvicorn --reload on the backend"
-	@echo "    make stop               stop backend/frontend processes"
+	@echo "    make stop               stop app, AgentBox, and tunnel processes"
 	@echo "    make stop-all           also bring down infra containers"
-	@echo "    make logs               tail backend logs"
+	@echo "    make logs               tail infrastructure container logs"
 	@echo "    make dev OTEL=1         enable local OTLP traces + metrics"
 	@echo "    make otel-smoke         verify traces, metrics, logs, and LLM isolation"
 	@echo ""
 	@echo "  Tests"
+	@echo "    make test-dev-workflow  test generated dev config and startup diagnostics"
 	@echo "    make test               run all component test suites"
 	@echo "    make test-backend       backend unit + fast e2e"
 	@echo "    make test-backend-unit  backend unit tests only"
@@ -176,16 +258,19 @@ help:
 init:
 	@echo "→ Checking prerequisites…"
 	@command -v uv >/dev/null 2>&1 || (echo "  ✗ uv not found — install from https://docs.astral.sh/uv/"; exit 1)
-	@command -v docker >/dev/null 2>&1 || command -v podman >/dev/null 2>&1 || \
-		(echo "  ✗ Docker or Podman required — install Docker Desktop or Podman"; exit 1)
+	@command -v docker >/dev/null 2>&1 || \
+		(echo "  ✗ Docker with Compose is required — install Docker Desktop"; exit 1)
+	@docker compose version >/dev/null 2>&1 || \
+		(echo "  ✗ Docker Compose v2 is required — install/update Docker Desktop"; exit 1)
 	@command -v node >/dev/null 2>&1 || (echo "  ✗ Node.js not found — install from https://nodejs.org/"; exit 1)
+	@command -v openssl >/dev/null 2>&1 || (echo "  ✗ openssl not found — required to generate the local AgentBox state key"; exit 1)
 	@echo "  ✓ Prerequisites OK"
 	@echo ""
 	@echo "→ Installing dependencies…"
 	@cd $(BACKEND_DIR) && uv sync --quiet
 	@cd $(CLI_DIR) && uv sync --quiet
 	@cd $(PYTHON_DIR) && uv sync --quiet
-	@cd $(AGENTBOX_DIR) && uv sync --quiet
+	@cd $(AGENTBOX_DIR) && uv sync --extra postgres --quiet
 	@cd $(TS_DIR) && npm install --silent
 	@cd $(FRONTEND_DIR) && npm install --silent
 	@echo "  ✓ Dependencies installed"
@@ -201,6 +286,7 @@ init:
 	@echo "→ Creating .env files (skipped if already present)…"
 	@$(MAKE) --no-print-directory _init-backend-env
 	@$(MAKE) --no-print-directory _init-frontend-env
+	@$(MAKE) --no-print-directory _init-agentbox-env
 	@echo ""
 	@$(MAKE) --no-print-directory _ensure-agentbox-image
 	@echo ""
@@ -221,29 +307,50 @@ _init-backend-env:
 		set -e; \
 		{ \
 			echo "# Lemma backend — local dev defaults (generated by make init)"; \
-			echo "# Stack URLs — kept in sync with the canonical ports at the top of the Makefile."; \
+			echo "# Stack-owned values are also injected by make dev so port overrides stay in sync."; \
+			echo "ENVIRONMENT=local"; \
+			echo "DEBUG=true"; \
+			echo "LOG_LEVEL=$(DEV_LOG_LEVEL)"; \
+			echo "JSON_LOGS_ENABLED=$(DEV_JSON_LOGS_ENABLED)"; \
 			echo "API_URL=$(DEV_BACKEND_URL)"; \
 			echo "FRONTEND_URL=$(DEV_FRONTEND_URL)"; \
 			echo "AUTH_FRONTEND_URL=$(DEV_AUTH_FRONTEND_URL)"; \
+			echo "CLI_API_URL=$(DEV_BACKEND_URL)"; \
+			echo "CLI_AUTH_FRONTEND_URL=$(DEV_AUTH_FRONTEND_URL)"; \
 			echo "AUTH_WEBSITE_BASE_PATH=/auth"; \
+			echo "SUPERTOKENS_API_BASE_PATH=/auth"; \
+			echo "SUPERTOKENS_API_GATEWAY_PATH=/st"; \
 			echo "SUPERTOKENS_CORE_URL=$(DEV_SUPERTOKENS_URL)"; \
 			echo "DATABASE_URL=$(DEV_DATABASE_URL)"; \
+			echo "DATASTORE_DATABASE_URL=$(DEV_DATASTORE_DATABASE_URL)"; \
 			echo "REDIS_URL=$(DEV_REDIS_URL)"; \
-			printf 'CORS_ORIGINS=["http://localhost:%s","http://127.0.0.1:%s"]\n' "$(DEV_FRONTEND_PORT)" "$(DEV_FRONTEND_PORT)"; \
-			echo 'CORS_ORIGIN_REGEX=https?://(localhost|127\.0\.0\.\d+|127\.\d+\.\d+\.\d+|127-0-0-\d+\.sslip\.io|[\w-]+\.nip\.io)(:\d+)?'; \
+			echo "KREUZBERG_URL=http://localhost:$(DEV_KREUZBERG_PORT)"; \
+			echo "DOCUMENT_PROCESSOR=kreuzberg"; \
+			echo "STORAGE_BACKEND=local"; \
+			echo "LOCAL_OBJECT_STORAGE_ROOT=$(abspath .local/object-storage)"; \
+			echo "LOCAL_FILE_STORAGE_ROOT=$(abspath .local/files)"; \
+			echo "EMAIL_TRANSPORT=filesystem"; \
+			echo "EMAIL_OUTPUT_DIR=$(abspath .local/emails)"; \
+			echo "AUTH_EMAIL_VERIFICATION_REQUIRED=false"; \
+			echo "ENABLE_TELEGRAM_POLLING_MODE=true"; \
+			echo "ENABLE_SLACK_SOCKET_MODE=true"; \
+			echo 'CORS_ORIGINS=["http://localhost:$(DEV_FRONTEND_PORT)","http://127.0.0.1:$(DEV_FRONTEND_PORT)"]'; \
+			echo 'CORS_ORIGIN_REGEX=$(DEV_CORS_ORIGIN_REGEX)'; \
 			echo "# AgentBox sandbox manager — started by 'make dev' on $(DEV_AGENTBOX_URL)"; \
 			echo "AGENTBOX_API_URL=$(DEV_AGENTBOX_URL)"; \
 			echo "AGENTBOX_API_KEY=$(DEV_AGENTBOX_API_KEY)"; \
-			echo "# Model provider — set at least one of the keys below."; \
+			echo "# Model provider — set a key and the exact model names available to it."; \
 			echo "LEMMA_DEFAULT_MODEL_TYPE=openai_compat"; \
 			echo "LEMMA_OPENAI_API_KEY="; \
 			echo "LEMMA_OPENAI_BASE_URL=https://api.openai.com/v1"; \
-			echo "LEMMA_OPENAI_DEFAULT_MODEL=gpt-4o"; \
-			echo "LEMMA_OPENAI_MODEL_NAMES=gpt-4o,gpt-4o-mini"; \
+			echo "LEMMA_OPENAI_DEFAULT_MODEL="; \
+			echo "LEMMA_OPENAI_MODEL_NAMES="; \
+			echo "LEMMA_OPENAI_VISION_MODEL_NAMES="; \
 			echo "# Uncomment for Anthropic instead:"; \
 			echo "# LEMMA_DEFAULT_MODEL_TYPE=anthropic_compat"; \
 			echo "# LEMMA_ANTHROPIC_API_KEY="; \
-			echo "# LEMMA_ANTHROPIC_DEFAULT_MODEL=claude-sonnet-4-5"; \
+			echo "# LEMMA_ANTHROPIC_DEFAULT_MODEL="; \
+			echo "# LEMMA_ANTHROPIC_MODEL_NAMES="; \
 		} > $(BACKEND_DIR)/.env; \
 	else \
 		$(MAKE) --no-print-directory _ensure-backend-env-keys; \
@@ -251,29 +358,45 @@ _init-backend-env:
 
 _ensure-backend-env-keys:
 	@set -e; missing=""; \
-	for k in API_URL FRONTEND_URL AUTH_FRONTEND_URL AUTH_WEBSITE_BASE_PATH SUPERTOKENS_CORE_URL DATABASE_URL REDIS_URL CORS_ORIGINS CORS_ORIGIN_REGEX AGENTBOX_API_URL AGENTBOX_API_KEY; do \
+	for k in ENVIRONMENT DEBUG LOG_LEVEL JSON_LOGS_ENABLED API_URL FRONTEND_URL AUTH_FRONTEND_URL CLI_API_URL CLI_AUTH_FRONTEND_URL AUTH_WEBSITE_BASE_PATH SUPERTOKENS_API_BASE_PATH SUPERTOKENS_API_GATEWAY_PATH SUPERTOKENS_CORE_URL DATABASE_URL DATASTORE_DATABASE_URL REDIS_URL KREUZBERG_URL DOCUMENT_PROCESSOR STORAGE_BACKEND LOCAL_OBJECT_STORAGE_ROOT LOCAL_FILE_STORAGE_ROOT EMAIL_TRANSPORT EMAIL_OUTPUT_DIR AUTH_EMAIL_VERIFICATION_REQUIRED ENABLE_TELEGRAM_POLLING_MODE ENABLE_SLACK_SOCKET_MODE CORS_ORIGINS CORS_ORIGIN_REGEX AGENTBOX_API_URL AGENTBOX_API_KEY; do \
 		if ! grep -qE "^$$k=" $(BACKEND_DIR)/.env; then missing="$$missing $$k"; fi; \
 	done; \
 	if [ -z "$$missing" ]; then \
 		echo "  $(BACKEND_DIR)/.env already exists with all required keys"; \
 	else \
 		echo "  $(BACKEND_DIR)/.env missing keys ($$missing) — appending…"; \
-		{ \
-			echo ""; \
-			echo "# Added by make init (stack URLs in sync with canonical ports)"; \
-			echo "API_URL=$(DEV_BACKEND_URL)"; \
-			echo "FRONTEND_URL=$(DEV_FRONTEND_URL)"; \
-			echo "AUTH_FRONTEND_URL=$(DEV_AUTH_FRONTEND_URL)"; \
-			echo "AUTH_WEBSITE_BASE_PATH=/auth"; \
-			echo "SUPERTOKENS_CORE_URL=$(DEV_SUPERTOKENS_URL)"; \
-			echo "DATABASE_URL=$(DEV_DATABASE_URL)"; \
-			echo "REDIS_URL=$(DEV_REDIS_URL)"; \
-			printf 'CORS_ORIGINS=["http://localhost:%s","http://127.0.0.1:%s"]\n' "$(DEV_FRONTEND_PORT)" "$(DEV_FRONTEND_PORT)"; \
-			echo 'CORS_ORIGIN_REGEX=https?://(localhost|127\.0\.0\.\d+|127\.\d+\.\d+\.\d+|127-0-0-\d+\.sslip\.io|[\w-]+\.nip\.io)(:\d+)?'; \
-			echo "# Added by make init (AgentBox manager)"; \
-			echo "AGENTBOX_API_URL=$(DEV_AGENTBOX_URL)"; \
-			echo "AGENTBOX_API_KEY=$(DEV_AGENTBOX_API_KEY)"; \
-		} >> $(BACKEND_DIR)/.env; \
+		printf '\n# Added by make init (missing local stack settings only)\n' >> $(BACKEND_DIR)/.env; \
+		append() { key="$$1"; value="$$2"; grep -qE "^$${key}=" $(BACKEND_DIR)/.env || printf '%s=%s\n' "$$key" "$$value" >> $(BACKEND_DIR)/.env; }; \
+		append ENVIRONMENT local; \
+		append DEBUG true; \
+		append LOG_LEVEL $(DEV_LOG_LEVEL); \
+		append JSON_LOGS_ENABLED $(DEV_JSON_LOGS_ENABLED); \
+		append API_URL '$(DEV_BACKEND_URL)'; \
+		append FRONTEND_URL '$(DEV_FRONTEND_URL)'; \
+		append AUTH_FRONTEND_URL '$(DEV_AUTH_FRONTEND_URL)'; \
+		append CLI_API_URL '$(DEV_BACKEND_URL)'; \
+		append CLI_AUTH_FRONTEND_URL '$(DEV_AUTH_FRONTEND_URL)'; \
+		append AUTH_WEBSITE_BASE_PATH /auth; \
+		append SUPERTOKENS_API_BASE_PATH /auth; \
+		append SUPERTOKENS_API_GATEWAY_PATH /st; \
+		append SUPERTOKENS_CORE_URL '$(DEV_SUPERTOKENS_URL)'; \
+		append DATABASE_URL '$(DEV_DATABASE_URL)'; \
+		append DATASTORE_DATABASE_URL '$(DEV_DATASTORE_DATABASE_URL)'; \
+		append REDIS_URL '$(DEV_REDIS_URL)'; \
+		append KREUZBERG_URL 'http://localhost:$(DEV_KREUZBERG_PORT)'; \
+		append DOCUMENT_PROCESSOR kreuzberg; \
+		append STORAGE_BACKEND local; \
+		append LOCAL_OBJECT_STORAGE_ROOT '$(abspath .local/object-storage)'; \
+		append LOCAL_FILE_STORAGE_ROOT '$(abspath .local/files)'; \
+		append EMAIL_TRANSPORT filesystem; \
+		append EMAIL_OUTPUT_DIR '$(abspath .local/emails)'; \
+		append AUTH_EMAIL_VERIFICATION_REQUIRED false; \
+		append ENABLE_TELEGRAM_POLLING_MODE true; \
+		append ENABLE_SLACK_SOCKET_MODE true; \
+		append CORS_ORIGINS '["http://localhost:$(DEV_FRONTEND_PORT)","http://127.0.0.1:$(DEV_FRONTEND_PORT)"]'; \
+		append CORS_ORIGIN_REGEX '$(DEV_CORS_ORIGIN_REGEX)'; \
+		append AGENTBOX_API_URL '$(DEV_AGENTBOX_URL)'; \
+		append AGENTBOX_API_KEY '$(DEV_AGENTBOX_API_KEY)'; \
 	fi
 
 _init-frontend-env:
@@ -285,7 +408,7 @@ _init-frontend-env:
 			echo "# Kept in sync with the canonical ports at the top of the Makefile."; \
 			echo "NEXT_PUBLIC_API_URL=$(DEV_BACKEND_URL)"; \
 			echo "NEXT_PUBLIC_SITE_URL=$(DEV_FRONTEND_URL)"; \
-			echo "NEXT_PUBLIC_AUTH_URL=$(DEV_FRONTEND_URL)"; \
+			echo "NEXT_PUBLIC_AUTH_URL=$(DEV_AUTH_FRONTEND_URL)"; \
 		} > $(FRONTEND_DIR)/.env.local; \
 		cd $(FRONTEND_DIR) && npm run gen:runtime-config --silent; \
 	else \
@@ -301,20 +424,93 @@ _ensure-frontend-env-keys:
 		echo "  $(FRONTEND_DIR)/.env.local already exists with all required keys"; \
 	else \
 		echo "  $(FRONTEND_DIR)/.env.local missing keys ($$missing) — appending…"; \
-		{ \
-			echo ""; \
-			echo "# Added by make init"; \
-			echo "NEXT_PUBLIC_API_URL=$(DEV_BACKEND_URL)"; \
-			echo "NEXT_PUBLIC_SITE_URL=$(DEV_FRONTEND_URL)"; \
-			echo "NEXT_PUBLIC_AUTH_URL=$(DEV_FRONTEND_URL)"; \
-		} >> $(FRONTEND_DIR)/.env.local; \
+		printf '\n# Added by make init (missing local stack settings only)\n' >> $(FRONTEND_DIR)/.env.local; \
+		append() { key="$$1"; value="$$2"; grep -qE "^$${key}=" $(FRONTEND_DIR)/.env.local || printf '%s=%s\n' "$$key" "$$value" >> $(FRONTEND_DIR)/.env.local; }; \
+		append NEXT_PUBLIC_API_URL '$(DEV_BACKEND_URL)'; \
+		append NEXT_PUBLIC_SITE_URL '$(DEV_FRONTEND_URL)'; \
+		append NEXT_PUBLIC_AUTH_URL '$(DEV_AUTH_FRONTEND_URL)'; \
 		cd $(FRONTEND_DIR) && npm run gen:runtime-config --silent; \
+	fi
+
+_init-agentbox-env:
+	@if [ -f $(AGENTBOX_ENV_FILE) ] && grep -qE '^AGENTBOX_ENDPOINT_STATE_KEYS=.+$$' $(AGENTBOX_ENV_FILE); then \
+		echo "  $(AGENTBOX_ENV_FILE) already has a persistent endpoint-state key"; \
+	else \
+		key=$$(openssl rand -base64 32 | tr '+/' '-_' | tr -d '\n'); \
+		test -n "$$key" || { echo "  ✗ Failed to generate AgentBox endpoint-state key"; exit 1; }; \
+		if [ ! -f $(AGENTBOX_ENV_FILE) ]; then \
+			{ \
+				echo "# AgentBox local secrets (generated by make init; gitignored)"; \
+				echo "AGENTBOX_ENDPOINT_STATE_KEYS=$$key"; \
+			} > $(AGENTBOX_ENV_FILE); \
+		else \
+			tmp="$(AGENTBOX_ENV_FILE).tmp"; \
+			awk -v key="$$key" 'BEGIN { done=0 } /^AGENTBOX_ENDPOINT_STATE_KEYS=/ { if (!done) print "AGENTBOX_ENDPOINT_STATE_KEYS=" key; done=1; next } { print } END { if (!done) print "AGENTBOX_ENDPOINT_STATE_KEYS=" key }' $(AGENTBOX_ENV_FILE) > "$$tmp" && mv "$$tmp" $(AGENTBOX_ENV_FILE); \
+		fi; \
+		echo "  Generated persistent AgentBox endpoint-state key in $(AGENTBOX_ENV_FILE)"; \
 	fi
 
 # ── Dev stack ─────────────────────────────────────────────────────────────────
 
 dev:
 	@echo "→ Starting Lemma dev stack…"
+	@$(MAKE) --no-print-directory _prepare-dev
+	@echo ""
+	@echo "  Frontend  →  $(DEV_FRONTEND_URL)"
+	@echo "  Auth UI   →  $(DEV_AUTH_FRONTEND_URL)/auth"
+	@echo "  API       →  $(DEV_BACKEND_URL)"
+	@echo "  API docs  →  $(DEV_BACKEND_URL)/scalar"
+	@echo "  AgentBox  →  $(DEV_AGENTBOX_URL)"
+	@echo ""
+	@echo "  Debug and safe request-access logs are enabled."
+	@echo "  Press Ctrl-C or run 'make stop' to stop."
+	@echo ""
+	@# Start the app servers immediately; AgentBox readiness is checked alongside
+	@# them so a slow manager cannot impose an otherwise idle startup delay.
+	@trap '$(MAKE) --no-print-directory stop; exit 0' INT TERM; \
+		$(MAKE) --no-print-directory _run-agentbox & \
+		$(MAKE) --no-print-directory _run-backend & \
+		$(MAKE) --no-print-directory _run-frontend & \
+		$(MAKE) --no-print-directory _wait-agentbox || { \
+			status=$$?; $(MAKE) --no-print-directory stop; wait 2>/dev/null || true; exit $$status; \
+		}; \
+		wait
+
+dev-public:
+	@echo "→ Starting Lemma dev stack with a public Cloudflare API URL…"
+	@$(MAKE) --no-print-directory _prepare-dev
+	@$(MAKE) --no-print-directory _start-public-api-tunnel || { $(MAKE) --no-print-directory stop; exit 1; }
+	@public_api_url=$$(cat $(PUBLIC_API_URL_FILE)); \
+	echo ""; \
+	echo "  Frontend        →  $(DEV_FRONTEND_URL)"; \
+	echo "  Auth UI         →  $(DEV_AUTH_FRONTEND_URL)/auth"; \
+	echo "  Public API      →  $$public_api_url"; \
+	echo "  Public API docs →  $$public_api_url/scalar"; \
+	echo "  AgentBox        →  $(DEV_AGENTBOX_URL)"; \
+	echo ""; \
+	echo "  Webhook callbacks and generated links use the public API URL."; \
+	echo "  Public URLs are ephemeral and change each time this command starts."; \
+	echo "  Debug and safe request-access logs are enabled."; \
+	echo "  Press Ctrl-C or run 'make stop' to stop."; \
+	echo ""; \
+	trap '$(MAKE) --no-print-directory stop; exit 0' INT TERM; \
+	$(MAKE) --no-print-directory _run-agentbox & \
+	$(MAKE) --no-print-directory _run-backend \
+		BACKEND_API_URL="$$public_api_url" \
+		BACKEND_SESSION_COOKIE_DOMAIN= \
+		BACKEND_SESSION_COOKIE_SECURE=true \
+		BACKEND_SESSION_COOKIE_SAME_SITE=none \
+		BACKEND_TELEGRAM_POLLING=false \
+		BACKEND_SLACK_SOCKET_MODE=false & \
+	$(MAKE) --no-print-directory _run-frontend \
+		FRONTEND_API_URL="$$public_api_url" \
+		FRONTEND_SESSION_TOKEN_DOMAIN= & \
+	$(MAKE) --no-print-directory _wait-agentbox || { \
+		status=$$?; $(MAKE) --no-print-directory stop; wait 2>/dev/null || true; exit $$status; \
+	}; \
+	wait
+
+_prepare-dev:
 	@$(MAKE) --no-print-directory stop 2>/dev/null || true
 	@$(MAKE) --no-print-directory _ensure-init
 	@$(MAKE) --no-print-directory _ensure-agentbox-image
@@ -323,52 +519,72 @@ dev:
 	@$(MAKE) --no-print-directory _ensure-databases
 	@$(MAKE) --no-print-directory migrate
 	@if [ "$(OTEL)" = "1" ]; then $(MAKE) --no-print-directory otel-up; fi
-	@echo ""
-	@echo "  Frontend  →  $(DEV_FRONTEND_URL)"
-	@echo "  Auth UI   →  $(DEV_AUTH_FRONTEND_URL)"
-	@echo "  API       →  $(DEV_BACKEND_URL)"
-	@echo "  API docs  →  $(DEV_BACKEND_URL)/scalar"
-	@echo "  AgentBox  →  $(DEV_AGENTBOX_URL)"
-	@echo ""
-	@echo "  Tail backend logs : make logs"
-	@echo "  Press Ctrl-C or run 'make stop' to stop."
-	@echo ""
-	@# Launch all three dev servers and wait in ONE shell. Make runs each recipe
-	@# line in its own shell, so backgrounding with `&` on separate lines orphans
-	@# the jobs and a `wait` on the next line returns immediately (make dev would
-	@# exit while the servers kept running detached). Keeping the launches + wait
-	@# in a single backslash-joined line fixes that; the trap turns Ctrl-C into a
-	@# clean `make stop` of every server and port.
-	@trap '$(MAKE) --no-print-directory stop; exit 0' INT TERM; \
-		$(MAKE) --no-print-directory _run-agentbox & \
-		$(MAKE) --no-print-directory _wait-agentbox; \
-		$(MAKE) --no-print-directory _run-backend & \
-		$(MAKE) --no-print-directory _run-frontend & \
-		wait
+
+_start-public-api-tunnel:
+	@command -v cloudflared >/dev/null 2>&1 || { \
+		echo "  ✗ cloudflared is required for make dev-public"; \
+		echo "    Install it from https://developers.cloudflare.com/cloudflare-one/connections/connect-networks/downloads/"; \
+		exit 1; \
+	}
+	@mkdir -p $(DEV_LOG_DIR)
+	@printf '{}\n' > $(CLOUDFLARED_CONFIG_FILE)
+	@rm -f $(PUBLIC_API_URL_FILE) $(CLOUDFLARED_API_PID_FILE)
+	@echo "  Starting ephemeral Cloudflare API tunnel…"
+	@cloudflared tunnel --config $(CLOUDFLARED_CONFIG_FILE) --no-autoupdate --loglevel info --url http://127.0.0.1:$(DEV_BACKEND_PORT) > $(CLOUDFLARED_API_LOG_FILE) 2>&1 & echo $$! > $(CLOUDFLARED_API_PID_FILE)
+	@ready=0; \
+	for i in $$(seq 1 $(PUBLIC_TUNNEL_READY_TIMEOUT)); do \
+		api_url=$$(grep -Eo 'https://[a-z0-9-]+\.trycloudflare\.com' $(CLOUDFLARED_API_LOG_FILE) 2>/dev/null | grep -v '^https://api\.trycloudflare\.com$$' | tail -n 1); \
+		api_pid=$$(cat $(CLOUDFLARED_API_PID_FILE) 2>/dev/null || true); \
+		if [ -z "$$api_pid" ] || ! kill -0 "$$api_pid" 2>/dev/null; then \
+			echo "  ✗ Cloudflare API tunnel exited before publishing a URL"; \
+			echo "    Log: $(CLOUDFLARED_API_LOG_FILE)"; \
+			tail -n 20 $(CLOUDFLARED_API_LOG_FILE) 2>/dev/null || true; exit 1; \
+		fi; \
+		if [ -n "$$api_url" ] && grep -q 'Registered tunnel connection' $(CLOUDFLARED_API_LOG_FILE); then \
+			printf '%s\n' "$$api_url" > $(PUBLIC_API_URL_FILE); \
+			ready=1; break; \
+		fi; \
+		sleep 1; \
+	done; \
+	if [ "$$ready" != "1" ]; then \
+		echo "  ✗ Cloudflare API tunnel did not publish a URL within $(PUBLIC_TUNNEL_READY_TIMEOUT)s"; \
+		echo "    Log: $(CLOUDFLARED_API_LOG_FILE)"; \
+		exit 1; \
+	fi; \
+	echo "  ✓ Cloudflare API tunnel ready"
 
 _ensure-init:
 	@test -f $(BACKEND_DIR)/.env  || { echo "  ! $(BACKEND_DIR)/.env missing — run 'make init'"; exit 1; }
 	@test -f $(FRONTEND_DIR)/.env.local || { echo "  ! $(FRONTEND_DIR)/.env.local missing — run 'make init'"; exit 1; }
+	@test -f $(AGENTBOX_ENV_FILE) || { echo "  ! $(AGENTBOX_ENV_FILE) missing — run 'make init'"; exit 1; }
+	@test -n "$(strip $(AGENTBOX_ENDPOINT_STATE_KEYS))" || { echo "  ! $(AGENTBOX_ENV_FILE) has no AgentBox endpoint-state key — run 'make init'"; exit 1; }
 	@test -f $(TS_DIR)/dist/index.js || { echo "  ! $(TS_DIR)/dist missing — run 'make init' (or cd $(TS_DIR) && npm run build)"; exit 1; }
 	@$(MAKE) --no-print-directory _ensure-backend-env-keys
-	@echo "  Using $(BACKEND_DIR)/.env + $(FRONTEND_DIR)/.env.local"
+	@$(MAKE) --no-print-directory _ensure-frontend-env-keys
+	@cd $(AGENTBOX_DIR) && uv run --extra postgres python -c 'import psycopg, psycopg_pool' >/dev/null || { echo "  ! AgentBox Postgres dependencies missing — run 'make init'"; exit 1; }
+	@echo "  Using $(BACKEND_DIR)/.env + $(FRONTEND_DIR)/.env.local + $(AGENTBOX_ENV_FILE)"
 
 _infra-up:
 	@echo "  Starting infra (postgres, redis, supertokens, kreuzberg)…"
-	@cd $(BACKEND_DIR) && rm -f $(INFRA_PID_FILE) && $(COMMON_DEV_ENV) docker compose up -d --quiet-pull 2>&1 | grep -v "^$$" || true
+	@cd $(BACKEND_DIR) && rm -f $(INFRA_PID_FILE) && $(COMMON_DEV_ENV) docker compose up -d --quiet-pull
 
 _wait-infra:
 	@echo "  Waiting for postgres on localhost:$(DEV_POSTGRES_PORT)…"
-	@cd $(BACKEND_DIR) && \
+	@cd $(BACKEND_DIR) && ready=0; \
 		for i in $$(seq 1 30); do \
-			pg_isready -h localhost -p $(DEV_POSTGRES_PORT) -q 2>/dev/null && echo "  ✓ Postgres ready" && break; \
+			if docker compose exec -T db pg_isready -U postgres -q >/dev/null 2>&1; then ready=1; break; fi; \
 			sleep 1; \
-		done
+		done; \
+		if [ "$$ready" != "1" ]; then \
+			echo "  ✗ Postgres did not become ready within 30s"; \
+			docker compose ps; docker compose logs --tail=30 db; exit 1; \
+		fi; \
+		echo "  ✓ Postgres ready"
 
 _ensure-databases:
-	@echo "  Ensuring extra databases (supertokens, lemma_datastore) exist…"
+	@echo "  Ensuring extra databases (supertokens, lemma_datastore, agentbox) exist…"
 	@cd $(BACKEND_DIR) && \
-		for db in supertokens lemma_datastore; do \
+		for db in supertokens lemma_datastore agentbox; do \
 			exists=$$(docker compose exec -T db psql -U postgres -tAc "SELECT 1 FROM pg_database WHERE datname = '$$db'" 2>/dev/null | tr -d '[:space:]'); \
 			if [ "$$exists" != "1" ]; then \
 				echo "    Creating database $$db…"; \
@@ -384,10 +600,10 @@ _ensure-databases:
 	@echo "  ✓ Databases ready"
 
 _run-backend:
-	@echo "  Starting backend ($(DEV_BACKEND_URL))…"
+	@echo "  Starting backend ($(BACKEND_API_URL))…"
 	@mkdir -p $(BACKEND_DIR)
 	@cd $(BACKEND_DIR) && rm -f $(notdir $(BACKEND_PID_FILE)) && \
-		$(COMMON_DEV_ENV) $(OTEL_DEV_ENV) $(LLM_OTEL_DEV_ENV) \
+		$(COMMON_DEV_ENV) $(BACKEND_DEV_ENV) $(OTEL_DEV_ENV) $(LLM_OTEL_DEV_ENV) \
 		bash -c "if [ '$(RELOAD)' = '1' ]; then \
 			uv run uvicorn standalone_app:app --host 0.0.0.0 --port $(DEV_BACKEND_PORT) --reload & echo \$$! > $(notdir $(BACKEND_PID_FILE)); \
 		else \
@@ -395,29 +611,48 @@ _run-backend:
 		fi; wait"
 
 _run-frontend:
-	@echo "  Starting frontend ($(DEV_FRONTEND_URL))…"
+	@echo "  Starting frontend ($(FRONTEND_SITE_URL))…"
 	@mkdir -p $(FRONTEND_DIR)
 	@cd $(FRONTEND_DIR) && rm -f $(notdir $(FRONTEND_PID_FILE)) && \
 		$(COMMON_DEV_ENV) $(FRONTEND_DEV_ENV) \
 		bash -c "npm run dev -- --port $(DEV_FRONTEND_PORT) & echo \$$! > $(notdir $(FRONTEND_PID_FILE)); wait"
 
 _run-agentbox:
-	@echo "  Starting agentbox manager ($(DEV_AGENTBOX_URL), provider=docker)…"
-	@mkdir -p $(AGENTBOX_DIR)
+	@echo "  Starting agentbox manager ($(DEV_AGENTBOX_URL), provider=docker, state=postgres)…"
+	@mkdir -p $(AGENTBOX_DIR) $(DEV_LOG_DIR) $(abspath .local/agentbox-workspaces)
 	@cd $(AGENTBOX_DIR) && rm -f $(notdir $(AGENTBOX_PID_FILE)) && \
 		$(AGENTBOX_DEV_ENV) $(OTEL_DEV_ENV) \
-		bash -c "uv run uvicorn agentbox.server:app --host 127.0.0.1 --port $(DEV_AGENTBOX_PORT) & echo \$$! > $(notdir $(AGENTBOX_PID_FILE)); wait"
+		bash -c "uv run --extra postgres uvicorn agentbox.server:app --host 127.0.0.1 --port $(DEV_AGENTBOX_PORT) > >(tee '$(AGENTBOX_LOG_FILE)') 2>&1 & echo \$$! > $(notdir $(AGENTBOX_PID_FILE)); wait"
 
 _wait-agentbox:
 	@echo "  Waiting for agentbox manager on $(DEV_AGENTBOX_URL)…"
-	@for i in $$(seq 1 30); do \
-		curl -fsS $(DEV_AGENTBOX_URL)/health >/dev/null 2>&1 && echo "  ✓ AgentBox ready" && break; \
+	@ready=0; \
+	for i in $$(seq 1 $(AGENTBOX_READY_TIMEOUT)); do \
+		if curl -fsS $(DEV_AGENTBOX_URL)/health/ready >/dev/null 2>&1; then ready=1; break; fi; \
+		if [ -f $(AGENTBOX_PID_FILE) ]; then \
+			pid=$$(cat $(AGENTBOX_PID_FILE)); \
+			if [ -n "$$pid" ] && ! kill -0 "$$pid" 2>/dev/null; then \
+				echo "  ✗ AgentBox exited before becoming ready (PID $$pid)"; \
+				echo "    Log: $(AGENTBOX_LOG_FILE)"; \
+				tail -n 30 $(AGENTBOX_LOG_FILE) 2>/dev/null || true; \
+				exit 1; \
+			fi; \
+		fi; \
 		sleep 1; \
-	done
+	done; \
+	if [ "$$ready" != "1" ]; then \
+		pid=$$(cat $(AGENTBOX_PID_FILE) 2>/dev/null || true); \
+		if [ -n "$$pid" ] && kill -0 "$$pid" 2>/dev/null; then state="PID $$pid is still running"; else state="process is not running"; fi; \
+		echo "  ✗ AgentBox did not become ready within $(AGENTBOX_READY_TIMEOUT)s ($$state)"; \
+		echo "    Log: $(AGENTBOX_LOG_FILE)"; \
+		tail -n 30 $(AGENTBOX_LOG_FILE) 2>/dev/null || true; \
+		exit 1; \
+	fi; \
+	echo "  ✓ AgentBox ready"
 
 stop:
 	@echo "→ Stopping dev processes…"
-	@for p in $(FRONTEND_PID_FILE) $(BACKEND_PID_FILE) $(AGENTBOX_PID_FILE); do \
+	@for p in $(FRONTEND_PID_FILE) $(BACKEND_PID_FILE) $(AGENTBOX_PID_FILE) $(CLOUDFLARED_API_PID_FILE); do \
 		if [ -f $$p ]; then \
 			pid=$$(cat $$p); \
 			children=$$(pgrep -P $$pid 2>/dev/null || true); \
@@ -457,6 +692,7 @@ stop:
 	@for port in $(DEV_FRONTEND_PORT) $(DEV_BACKEND_PORT) $(DEV_AGENTBOX_PORT); do \
 		lsof -ti tcp:$$port 2>/dev/null | xargs -r kill 2>/dev/null && echo "  Killed leftovers on port $$port" || true; \
 	done
+	@rm -f $(PUBLIC_API_URL_FILE)
 
 stop-all: stop
 	@echo "→ Stopping infra containers…"
@@ -496,9 +732,13 @@ logs:
 
 # ── Tests ─────────────────────────────────────────────────────────────────────
 
-test: test-backend-unit test-backend-e2e test-cli test-python test-frontend
+test: test-dev-workflow test-backend-unit test-backend-e2e test-cli test-python test-frontend
 	@echo ""
 	@echo "✓ All test suites complete."
+
+test-dev-workflow:
+	@echo "→ Dev workflow tests…"
+	@python3 -m unittest tests.test_dev_workflow -v
 
 test-backend:
 	$(MAKE) test-backend-unit test-backend-e2e
