@@ -89,7 +89,7 @@
     "@types/react": "^19",
     "@types/react-dom": "^19",
     "@types/three": "^0.184.1",
-    "eslint": "^9",
+    "eslint": "^10",
     "eslint-config-next": "^16.2.9",
     "tailwindcss": "^4",
     "typescript": "5.9.3",
