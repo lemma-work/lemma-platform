@@ -1,18 +1,16 @@
 # Lemma Desktop (Tauri)
 
-The Lemma macOS desktop app — a thin Tauri (Rust) shell around the Python
-supervisor.
+The Lemma desktop app — a thin Tauri (Rust) client for the durable Rust local
+daemon.
 
 ## Architecture
 
-Thin Rust shell + Python supervisor. The shell owns native chrome (window,
-splash, tray, menu, navigation policy) and the supervisor process lifecycle.
-All orchestration intelligence lives in the supervisor
-(`lemma-stack supervise`), which boots the local stack and reports structured
-progress over a JSONL stdio protocol (documented in
-`lemma-stack/lemma_stack/supervise.py`). The supervisor drives the same
-`lemma-stack` install/start used everywhere else, so the desktop and the CLI
-installer can never skew.
+The shell owns native chrome (window, splash, tray, menu, navigation policy)
+and connects to `lemma-locald` over an authenticated OS-local socket/Windows
+named pipe. The daemon survives desktop restarts, persists state and events,
+and is the one lifecycle authority shared with `lemma-stack`. During migration
+it adapts the existing `lemma-stack supervise` engine as a child; managed host
+packs and VM providers replace that child without changing the desktop API.
 
 - `src/main.rs` — the entire shell (~715 lines)
 - `ui/index.html` — splash screen with a small Tauri adapter for its preload
@@ -60,8 +58,8 @@ lemma-stack supervise --dry-run   # then type: {"cmd":"start"}
 
 ## Distribution pieces
 
-- `scripts/build-sidecar.sh` — compiles `lemma-stack` into a self-contained
-  binary (`lemma-supervisor`) via PyInstaller from
+- `scripts/build-sidecar.sh` — builds `lemma-locald` plus the self-contained
+  compatibility `lemma-supervisor` via PyInstaller from
   `lemma-stack/lemma_stack/sidecar_main.py`. The sidecar runs `lemma-stack
   supervise`, which pulls the released container images itself — no runtime
   checkout or tarball download is involved. Distribution builds also bundle
@@ -74,7 +72,7 @@ lemma-stack supervise --dry-run   # then type: {"cmd":"start"}
   Podman runtime (krunkit entitlements in `krunkit-entitlements.plist`).
 
 A distribution build runs the sidecar build then bundles with
-`tauri.dist.conf.json` (adds the supervisor and uv as external binaries):
+`tauri.dist.conf.json` (adds locald, the compatibility supervisor, and uv):
 
 ```sh
 node desktop/scripts/extract-concepts.mjs
@@ -102,9 +100,10 @@ requires `APPLE_ID`, `APPLE_PASSWORD` (an app-specific password), and
 `APPLE_TEAM_ID` for notarization. It verifies the Developer ID signature and
 notarization staple before uploading the DMG.
 
-Supervisor resolution order in the shell: `LEMMA_DESKTOP_SUPERVISOR_BIN` →
-bundled sidecar next to the app executable → `uv run --project lemma-stack
-lemma-stack supervise` from a checkout (dev fallback).
+Daemon resolution order in the shell: `LEMMA_DESKTOP_LOCALD_BIN` → bundled
+daemon next to the app executable → `locald/target/debug/lemma-locald` →
+`cargo run --manifest-path locald/Cargo.toml` (development fallback). The
+daemon resolves its temporary compatibility supervisor independently.
 
 ## Status / still to do
 

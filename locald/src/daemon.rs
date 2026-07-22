@@ -135,7 +135,9 @@ impl Daemon {
                     continue;
                 }
             };
-            self.dispatch(request, &sender);
+            if !self.dispatch(request, &sender) {
+                break;
+            }
         }
 
         self.subscribers
@@ -145,7 +147,7 @@ impl Daemon {
         Ok(())
     }
 
-    fn dispatch(self: &Arc<Self>, request: Value, client: &mpsc::Sender<String>) {
+    fn dispatch(self: &Arc<Self>, request: Value, client: &mpsc::Sender<String>) -> bool {
         let command = request
             .get("cmd")
             .and_then(Value::as_str)
@@ -181,6 +183,13 @@ impl Daemon {
                     id.as_ref(),
                 ),
             ),
+            "disconnect" => {
+                self.send_direct(
+                    client,
+                    json!({"v": PROTOCOL_VERSION, "event": "bye", "id": id.as_ref()}),
+                );
+                return false;
+            }
             _ => self.send_direct(
                 client,
                 error_event(
@@ -190,6 +199,7 @@ impl Daemon {
                 ),
             ),
         }
+        true
     }
 
     fn send_direct(&self, client: &mpsc::Sender<String>, event: Value) {

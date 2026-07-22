@@ -1,8 +1,7 @@
-// Lemma desktop shell: thin Tauri wrapper around the Python supervisor.
+// Lemma desktop shell: thin Tauri client for the durable local daemon.
 //
-// The shell owns native chrome (window, tray, menus) and the supervisor
-// process lifecycle. All orchestration intelligence lives in
-// `lemma-stack supervise`, which speaks JSON lines over stdio.
+// The shell owns native chrome (window, tray, menus); lemma-locald owns service
+// lifecycle and currently adapts the legacy lemma-stack supervisor protocol.
 
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
@@ -10,13 +9,20 @@ use serde::Serialize;
 use serde_json::{json, Value};
 use std::io::{BufRead, BufReader, Write};
 use std::path::PathBuf;
-use std::process::{Child, Command, Stdio};
+use std::process::{Command, Stdio};
 use std::sync::Mutex;
+use std::time::Duration;
 use tauri::menu::{CheckMenuItem, Menu, MenuItem, PredefinedMenuItem};
 use tauri::tray::TrayIconBuilder;
 use tauri::webview::NewWindowResponse;
 use tauri::{AppHandle, Emitter, Manager, State, WebviewUrl, WebviewWindowBuilder};
 use tauri_plugin_autostart::ManagerExt as _;
+
+#[cfg(unix)]
+use interprocess::local_socket::GenericFilePath;
+#[cfg(windows)]
+use interprocess::local_socket::GenericNamespaced;
+use interprocess::local_socket::{prelude::*, Name, RecvHalf, SendHalf};
 
 const DEFAULT_HOSTED_URL: &str = "https://lemma.work";
 const DEFAULT_LOCAL_URL: &str = "http://app.lemma.localhost:3711";
@@ -42,8 +48,8 @@ struct UiState {
 
 struct Shell {
     ui: Mutex<UiState>,
-    supervisor: Mutex<Option<Child>>,
-    supervisor_stdin: Mutex<Option<std::process::ChildStdin>>,
+    locald_writer: Mutex<Option<SendHalf>>,
+    locald_connect: Mutex<()>,
 }
 
 impl Shell {
@@ -59,8 +65,8 @@ impl Shell {
         };
         Shell {
             ui: Mutex::new(ui),
-            supervisor: Mutex::new(None),
-            supervisor_stdin: Mutex::new(None),
+            locald_writer: Mutex::new(None),
+            locald_connect: Mutex::new(()),
         }
     }
 }
@@ -70,7 +76,59 @@ fn home_dir() -> PathBuf {
 }
 
 fn app_support_dir() -> PathBuf {
-    home_dir().join("Library/Application Support/Lemma")
+    if let Some(path) = std::env::var_os("LEMMA_DESKTOP_APP_SUPPORT_DIR") {
+        return PathBuf::from(path);
+    }
+    #[cfg(target_os = "macos")]
+    {
+        home_dir().join("Library/Application Support/Lemma")
+    }
+    #[cfg(target_os = "windows")]
+    {
+        std::env::var_os("LOCALAPPDATA")
+            .map(PathBuf::from)
+            .unwrap_or_else(home_dir)
+            .join("Lemma")
+    }
+    #[cfg(all(unix, not(target_os = "macos")))]
+    {
+        std::env::var_os("XDG_STATE_HOME")
+            .map(PathBuf::from)
+            .unwrap_or_else(|| home_dir().join(".local/state"))
+            .join("lemma")
+    }
+}
+
+fn locald_root() -> PathBuf {
+    std::env::var_os("LEMMA_LOCALD_ROOT")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| app_support_dir().join("locald"))
+}
+
+fn locald_socket_name(root: &std::path::Path) -> Result<Name<'_>, String> {
+    #[cfg(unix)]
+    {
+        root.join("control.sock")
+            .to_fs_name::<GenericFilePath>()
+            .map_err(|error| error.to_string())
+    }
+    #[cfg(windows)]
+    {
+        let pipe_name = format!(r"LOCAL\work.lemma.locald.{:016x}", stable_hash(root));
+        pipe_name
+            .to_ns_name::<GenericNamespaced>()
+            .map(Name::into_owned)
+            .map_err(|error| error.to_string())
+    }
+}
+
+#[cfg(windows)]
+fn stable_hash(path: &std::path::Path) -> u64 {
+    path.to_string_lossy()
+        .bytes()
+        .fold(0xcbf29ce484222325, |hash, byte| {
+            (hash ^ u64::from(byte)).wrapping_mul(0x100000001b3)
+        })
 }
 
 fn config_path() -> PathBuf {
@@ -123,8 +181,8 @@ fn local_url() -> String {
     std::env::var("LEMMA_DESKTOP_LOCAL_URL").unwrap_or_else(|_| DEFAULT_LOCAL_URL.into())
 }
 
-/// Where the lemma-stack checkout lives, used only for the dev fallback (when
-/// no bundled sidecar is present). Dev default: this repo. Packaged builds set
+/// Where the monorepo checkout lives, used only for development fallbacks.
+/// Dev default: this repo. Packaged builds set
 /// LEMMA_DESKTOP_RUNTIME_ROOT (or persist runtimeRoot in desktop config).
 fn runtime_root() -> PathBuf {
     if let Ok(root) = std::env::var("LEMMA_DESKTOP_RUNTIME_ROOT") {
@@ -140,11 +198,14 @@ fn runtime_root() -> PathBuf {
         .to_path_buf()
 }
 
-/// The compiled supervisor sidecar shipped next to the app executable
-/// (Contents/MacOS/lemma-supervisor in a bundle).
-fn bundled_supervisor() -> Option<PathBuf> {
+/// The durable local daemon shipped next to the app executable.
+fn bundled_locald() -> Option<PathBuf> {
     let exe = std::env::current_exe().ok()?;
-    let candidate = exe.parent()?.join("lemma-supervisor");
+    let candidate = exe.parent()?.join(if cfg!(windows) {
+        "lemma-locald.exe"
+    } else {
+        "lemma-locald"
+    });
     candidate.exists().then_some(candidate)
 }
 
@@ -167,53 +228,73 @@ fn enriched_path() -> String {
 }
 
 // ---------------------------------------------------------------------------
-// Supervisor lifecycle
+// Durable local daemon lifecycle
 // ---------------------------------------------------------------------------
 
-fn ensure_supervisor(app: &AppHandle) -> Result<(), String> {
+fn ensure_locald(app: &AppHandle) -> Result<(), String> {
     let shell: State<Shell> = app.state();
-    {
-        let mut guard = shell.supervisor.lock().unwrap();
-        if let Some(child) = guard.as_mut() {
-            if child.try_wait().map_err(|e| e.to_string())?.is_none() {
-                return Ok(()); // already running
-            }
-            *guard = None;
-            *shell.supervisor_stdin.lock().unwrap() = None;
-        }
+    if shell.locald_writer.lock().unwrap().is_some() {
+        return Ok(());
+    }
+    let _connect_guard = shell.locald_connect.lock().unwrap();
+    if shell.locald_writer.lock().unwrap().is_some() {
+        return Ok(());
     }
 
-    let root = runtime_root();
-    let have_checkout = root.join("lemma-stack/pyproject.toml").exists();
+    if let Ok(connection) = connect_locald() {
+        install_locald_connection(app, connection);
+        return Ok(());
+    }
 
-    // Resolution order: explicit binary → bundled sidecar → lemma-stack from a
-    // checkout. The bundled sidecar is self-contained: it runs `lemma-stack
-    // supervise`, which pulls the released images itself — no checkout or
-    // runtime download required.
-    let supervisor_bin = std::env::var("LEMMA_DESKTOP_SUPERVISOR_BIN")
+    spawn_locald()?;
+    let mut last_error = "daemon did not create its control endpoint".to_string();
+    for _ in 0..80 {
+        match connect_locald() {
+            Ok(connection) => {
+                install_locald_connection(app, connection);
+                return Ok(());
+            }
+            Err(error) => last_error = error,
+        }
+        std::thread::sleep(Duration::from_millis(100));
+    }
+    Err(format!("could not connect to lemma-locald: {last_error}"))
+}
+
+fn spawn_locald() -> Result<(), String> {
+    let root = runtime_root();
+    let have_checkout = root.join("locald/Cargo.toml").exists();
+    let locald_bin = std::env::var("LEMMA_DESKTOP_LOCALD_BIN")
         .ok()
         .map(PathBuf::from)
         .filter(|p| p.exists())
-        .or_else(bundled_supervisor);
+        .or_else(bundled_locald)
+        .or_else(|| {
+            let candidate = root.join(if cfg!(windows) {
+                "locald/target/debug/lemma-locald.exe"
+            } else {
+                "locald/target/debug/lemma-locald"
+            });
+            candidate.exists().then_some(candidate)
+        });
 
-    let mut command = match &supervisor_bin {
+    let mut command = match &locald_bin {
         Some(bin) => Command::new(bin),
         None => {
             if !have_checkout {
                 return Err(format!(
-                    "runtime not found: {} has no lemma-stack checkout and no \
-                     bundled supervisor is available",
+                    "runtime not found: {} has no locald checkout and no bundled daemon",
                     root.display()
                 ));
             }
-            // Dev fallback: run lemma-stack from the checkout.
-            let mut fallback = Command::new("uv");
+            let mut fallback = Command::new("cargo");
             fallback.args([
                 "run",
-                "--project",
-                "lemma-stack",
-                "lemma-stack",
-                "supervise",
+                "--quiet",
+                "--manifest-path",
+                "locald/Cargo.toml",
+                "--",
+                "serve",
             ]);
             fallback
         }
@@ -224,64 +305,75 @@ fn ensure_supervisor(app: &AppHandle) -> Result<(), String> {
     command
         .env("PATH", enriched_path())
         .env("LEMMA_DESKTOP", "1")
+        .env("LEMMA_LOCALD_ROOT", locald_root())
+        .env("LEMMA_DESKTOP_RUNTIME_ROOT", &root)
         .env(
             "AGENTBOX_PROVIDER",
             std::env::var("AGENTBOX_PROVIDER").unwrap_or_else(|_| "auto".into()),
         )
-        .stdin(Stdio::piped())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped());
-
-    let mut child = command
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null());
+    command
         .spawn()
-        .map_err(|e| format!("failed to spawn supervisor: {e}"))?;
+        .map(|_| ())
+        .map_err(|e| format!("failed to spawn lemma-locald: {e}"))
+}
 
-    let stdout = child.stdout.take().expect("piped stdout");
-    let stderr = child.stderr.take().expect("piped stderr");
-    let stdin = child.stdin.take().expect("piped stdin");
+fn connect_locald() -> Result<(RecvHalf, SendHalf), String> {
+    let root = locald_root();
+    let token = std::fs::read_to_string(root.join("control.token"))
+        .map_err(|error| format!("control token unavailable: {error}"))?;
+    let stream = LocalSocketStream::connect(locald_socket_name(&root)?)
+        .map_err(|error| format!("control endpoint unavailable: {error}"))?;
+    let (receive, mut send) = stream.split();
+    writeln!(
+        send,
+        "{}",
+        json!({"v": 1, "cmd": "hello", "token": token.trim()})
+    )
+    .map_err(|error| format!("daemon authentication failed: {error}"))?;
+    send.flush()
+        .map_err(|error| format!("daemon authentication failed: {error}"))?;
+    Ok((receive, send))
+}
 
-    *shell.supervisor_stdin.lock().unwrap() = Some(stdin);
-    *shell.supervisor.lock().unwrap() = Some(child);
-
+fn install_locald_connection(app: &AppHandle, (receive, send): (RecvHalf, SendHalf)) {
+    let shell: State<Shell> = app.state();
+    *shell.locald_writer.lock().unwrap() = Some(send);
     let handle = app.clone();
     std::thread::spawn(move || {
-        for line in BufReader::new(stdout).lines().map_while(Result::ok) {
+        for line in BufReader::new(receive).lines().map_while(Result::ok) {
+            if line.len() > 1024 * 1024 {
+                emit_log(&handle, "locald protocol message exceeded 1 MiB");
+                break;
+            }
             match serde_json::from_str::<Value>(&line) {
-                Ok(event) => handle_supervisor_event(&handle, &event),
+                Ok(event) => handle_locald_event(&handle, &event),
                 Err(_) => emit_log(&handle, &line),
             }
         }
-        supervisor_gone(&handle);
+        locald_gone(&handle);
     });
-
-    let handle = app.clone();
-    std::thread::spawn(move || {
-        for line in BufReader::new(stderr).lines().map_while(Result::ok) {
-            emit_log(&handle, &line);
-        }
-    });
-
-    Ok(())
 }
 
-fn send_to_supervisor(app: &AppHandle, message: Value) -> Result<(), String> {
+fn send_to_locald(app: &AppHandle, message: Value) -> Result<(), String> {
     let shell: State<Shell> = app.state();
-    let mut guard = shell.supervisor_stdin.lock().unwrap();
-    let stdin = guard.as_mut().ok_or("supervisor is not running")?;
-    writeln!(stdin, "{message}").map_err(|e| format!("supervisor write failed: {e}"))?;
-    stdin
+    let mut guard = shell.locald_writer.lock().unwrap();
+    let writer = guard.as_mut().ok_or("lemma-locald is not connected")?;
+    writeln!(writer, "{message}").map_err(|e| format!("locald write failed: {e}"))?;
+    writer
         .flush()
-        .map_err(|e| format!("supervisor flush failed: {e}"))
+        .map_err(|e| format!("locald flush failed: {e}"))
 }
 
-fn supervisor_gone(app: &AppHandle) {
+fn locald_gone(app: &AppHandle) {
     let shell: State<Shell> = app.state();
-    *shell.supervisor.lock().unwrap() = None;
-    *shell.supervisor_stdin.lock().unwrap() = None;
+    *shell.locald_writer.lock().unwrap() = None;
     let snapshot = {
         let mut ui = shell.ui.lock().unwrap();
         if ui.running {
-            ui.status = "Supervisor exited unexpectedly".into();
+            ui.status = "Local service manager disconnected".into();
             ui.error = true;
             ui.running = false;
         }
@@ -299,9 +391,9 @@ fn emit_log(app: &AppHandle, line: &str) {
     }
 }
 
-fn handle_supervisor_event(app: &AppHandle, event: &Value) {
+fn handle_locald_event(app: &AppHandle, event: &Value) {
     if std::env::var("LEMMA_DESKTOP_DEBUG").as_deref() == Ok("1") {
-        eprintln!("[supervisor] {event}");
+        eprintln!("[locald] {event}");
     }
     let shell: State<Shell> = app.state();
     let kind = event["event"].as_str().unwrap_or_default();
@@ -333,14 +425,42 @@ fn handle_supervisor_event(app: &AppHandle, event: &Value) {
                 ui.ready = event["ready"].as_bool().unwrap_or(false);
                 ui.error = event["status"].as_str() == Some("error");
             }
+            "status" => {
+                ui.running = event["running"].as_bool().unwrap_or(ui.running);
+                ui.ready = event["ready"].as_bool().unwrap_or(ui.ready);
+                ui.error = event["status"].as_str() == Some("error");
+                if let Some(url) = event["url"].as_str() {
+                    ui.url = url.to_string();
+                }
+                if let Some(phase) = event.get("phase").and_then(Value::as_object) {
+                    ui.phase = phase
+                        .get("label")
+                        .and_then(Value::as_str)
+                        .unwrap_or(&ui.phase)
+                        .to_string();
+                    ui.phase_key = phase
+                        .get("key")
+                        .and_then(Value::as_str)
+                        .unwrap_or(&ui.phase_key)
+                        .to_string();
+                    ui.progress = phase
+                        .get("progress")
+                        .and_then(Value::as_u64)
+                        .unwrap_or(ui.progress);
+                    let detail = phase.get("detail").and_then(Value::as_str).unwrap_or("");
+                    ui.status = if detail.is_empty() {
+                        ui.phase.clone()
+                    } else {
+                        format!("{}: {detail}", ui.phase)
+                    };
+                }
+            }
             "ready" => {
                 ui.ready = true;
                 ui.running = true;
                 ui.error = false;
-                // Use the stack's sslip.io origin in local mode so the app,
-                // browser-auth page, API, and pod subdomains share the same
-                // cookie boundary. The frontend supplies a SHA-256 fallback
-                // for WebKit, where Web Crypto is unavailable over plain HTTP.
+                // Main, API, built-app, and workspace-app hosts all live below
+                // the reserved lemma.localhost loopback cookie boundary.
                 if let Some(url) = event["url"].as_str() {
                     ui.url = url.to_string();
                 }
@@ -395,9 +515,9 @@ fn start(app: AppHandle) -> Result<(), String> {
     if mode == "hosted" {
         return open_app_window(&app, &hosted_url());
     }
-    ensure_supervisor(&app)?;
+    ensure_locald(&app)?;
     let setup = std::env::var("LEMMA_DESKTOP_START_SETUP").as_deref() == Ok("1");
-    send_to_supervisor(
+    send_to_locald(
         &app,
         json!({"cmd": "start", "setup": setup, "id": "shell-start"}),
     )
@@ -409,7 +529,8 @@ fn stop(app: AppHandle, include_infra: Option<bool>) -> Result<(), String> {
         return Err("local services are not active in Lemma Cloud mode".into());
     }
     show_splash(&app);
-    send_to_supervisor(
+    ensure_locald(&app)?;
+    send_to_locald(
         &app,
         json!({"cmd": "stop", "infra": include_infra.unwrap_or(false), "id": "shell-stop"}),
     )
@@ -421,8 +542,8 @@ fn restart(app: AppHandle) -> Result<(), String> {
         return Err("local services are not active in Lemma Cloud mode".into());
     }
     show_splash(&app);
-    ensure_supervisor(&app)?;
-    send_to_supervisor(&app, json!({"cmd": "restart", "id": "shell-restart"}))
+    ensure_locald(&app)?;
+    send_to_locald(&app, json!({"cmd": "restart", "id": "shell-restart"}))
 }
 
 #[tauri::command]
@@ -433,11 +554,17 @@ fn open_app(app: AppHandle) -> Result<(), String> {
 
 #[tauri::command]
 fn open_logs(_app: AppHandle) -> Result<(), String> {
-    let logs = runtime_root().join(".local/lemma/logs");
-    Command::new("/usr/bin/open")
-        .arg(logs)
+    let logs = locald_root();
+    #[cfg(target_os = "macos")]
+    let opener = "/usr/bin/open";
+    #[cfg(target_os = "windows")]
+    let opener = "explorer.exe";
+    #[cfg(all(unix, not(target_os = "macos")))]
+    let opener = "xdg-open";
+    Command::new(opener)
+        .arg(&logs)
         .spawn()
-        .map_err(|e| e.to_string())?;
+        .map_err(|e| format!("could not open {}: {e}", logs.display()))?;
     Ok(())
 }
 
@@ -450,9 +577,9 @@ fn set_connection_mode(app: AppHandle, mode: String) -> Result<(), String> {
     if mode == "hosted" {
         return open_app_window(&app, &hosted_url());
     }
-    ensure_supervisor(&app)?;
+    ensure_locald(&app)?;
     let setup = std::env::var("LEMMA_DESKTOP_START_SETUP").as_deref() == Ok("1");
-    send_to_supervisor(
+    send_to_locald(
         &app,
         json!({"cmd": "start", "setup": setup, "id": "shell-start"}),
     )
@@ -741,7 +868,7 @@ fn build_tray(app: &AppHandle) -> tauri::Result<()> {
                     let _ = open_logs(app);
                 }
                 "quit" => {
-                    shutdown_supervisor(&app);
+                    disconnect_locald(&app);
                     app.exit(0);
                 }
                 _ => {}
@@ -751,21 +878,12 @@ fn build_tray(app: &AppHandle) -> tauri::Result<()> {
     Ok(())
 }
 
-fn shutdown_supervisor(app: &AppHandle) {
-    // Leave services running (hide-to-tray semantics survive shell restarts);
-    // the supervisor exits when it sees the shutdown command or stdin EOF.
-    let _ = send_to_supervisor(app, json!({"cmd": "shutdown", "stop_services": false}));
-    let taken = {
-        let shell: State<Shell> = app.state();
-        let mut guard = shell.supervisor.lock().unwrap();
-        guard.take()
-    };
-    if let Some(mut child) = taken {
-        std::thread::spawn(move || {
-            std::thread::sleep(std::time::Duration::from_secs(3));
-            let _ = child.kill();
-        });
-    }
+fn disconnect_locald(app: &AppHandle) {
+    // Disconnect only this desktop client. The daemon and desired service
+    // state survive shell exit, upgrades, and crashes.
+    let _ = send_to_locald(app, json!({"cmd": "disconnect", "id": "shell-exit"}));
+    let shell: State<Shell> = app.state();
+    *shell.locald_writer.lock().unwrap() = None;
 }
 
 fn main() {
@@ -847,10 +965,10 @@ fn main() {
 
             build_tray(&handle)?;
 
-            // Local mode: bring the supervisor up immediately so the splash
+            // Local mode: connect to the durable daemon immediately so splash
             // has a live event stream the moment it loads.
             if connection_mode() == "local" {
-                if let Err(error) = ensure_supervisor(&handle) {
+                if let Err(error) = ensure_locald(&handle) {
                     let shell: State<Shell> = handle.state();
                     let snapshot = {
                         let mut ui = shell.ui.lock().unwrap();
@@ -886,7 +1004,7 @@ fn main() {
                 }
             }
             tauri::RunEvent::Exit => {
-                shutdown_supervisor(app);
+                disconnect_locald(app);
             }
             _ => {}
         });
