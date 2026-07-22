@@ -42,11 +42,11 @@ PID_FILE      := .dev-pids
 BACKEND_PID_FILE  := $(BACKEND_DIR)/.dev-backend.pid
 FRONTEND_PID_FILE := $(FRONTEND_DIR)/.dev-frontend.pid
 INFRA_PID_FILE    := $(BACKEND_DIR)/.dev-infra.pid
-AGENTBOX_PID_FILE := $(AGENTBOX_DIR)/.dev-agentbox.pid
+# Kept only so `make stop` can clean up a manager left by an older checkout.
+LEGACY_AGENTBOX_PID_FILE := $(AGENTBOX_DIR)/.dev-agentbox.pid
 CLOUDFLARED_API_PID_FILE := .dev-cloudflared-api.pid
 
 DEV_LOG_DIR                  := .dev-logs
-AGENTBOX_LOG_FILE            := $(abspath $(DEV_LOG_DIR)/agentbox.log)
 CLOUDFLARED_API_LOG_FILE     := $(abspath $(DEV_LOG_DIR)/cloudflared-api.log)
 CLOUDFLARED_CONFIG_FILE      := $(abspath $(DEV_LOG_DIR)/cloudflared-quick-tunnel.yml)
 PUBLIC_API_URL_FILE          := $(abspath $(DEV_LOG_DIR)/public-api-url)
@@ -66,8 +66,6 @@ DEV_FRONTEND_PORT     ?= 3710
 DEV_POSTGRES_PORT     ?= 5432
 DEV_REDIS_PORT        ?= 6379
 DEV_SUPERTOKENS_PORT  ?= 3567
-DEV_KREUZBERG_PORT    ?= 8002
-DEV_AGENTBOX_PORT     ?= 8721
 
 DEV_BACKEND_URL       := http://localhost:$(DEV_BACKEND_PORT)
 DEV_FRONTEND_URL      := http://localhost:$(DEV_FRONTEND_PORT)
@@ -77,7 +75,7 @@ DEV_DATASTORE_DATABASE_URL := postgresql+asyncpg://postgres:postgres@localhost:$
 DEV_AGENTBOX_DATABASE_URL  := postgresql://postgres:postgres@localhost:$(DEV_POSTGRES_PORT)/agentbox
 DEV_REDIS_URL         := redis://localhost:$(DEV_REDIS_PORT)/0
 DEV_SUPERTOKENS_URL   := http://localhost:$(DEV_SUPERTOKENS_PORT)
-DEV_AGENTBOX_URL      := http://127.0.0.1:$(DEV_AGENTBOX_PORT)
+DEV_AGENTBOX_URL      := http://127.0.0.1:$(DEV_BACKEND_PORT)/internal/agentbox
 DEV_AGENTBOX_API_KEY  ?= dev-agentbox-key
 DEV_CORS_ORIGIN_REGEX := https?://(localhost|127\.0\.0\.\d+|127\.\d+\.\d+\.\d+|127-0-0-\d+\.sslip\.io|[\w-]+\.nip\.io)(:\d+)?
 DEV_LOG_LEVEL         ?= DEBUG
@@ -118,8 +116,7 @@ COMMON_DEV_ENV := \
 	DEV_POSTGRES_PORT=$(DEV_POSTGRES_PORT) \
 	DEV_REDIS_PORT=$(DEV_REDIS_PORT) \
 	DEV_REDIS_UI_PORT=8001 \
-	DEV_SUPERTOKENS_PORT=$(DEV_SUPERTOKENS_PORT) \
-	DEV_KREUZBERG_PORT=$(DEV_KREUZBERG_PORT)
+	DEV_SUPERTOKENS_PORT=$(DEV_SUPERTOKENS_PORT)
 
 BACKEND_API_URL                 ?= $(DEV_BACKEND_URL)
 BACKEND_FRONTEND_URL            ?= $(DEV_FRONTEND_URL)
@@ -152,8 +149,8 @@ BACKEND_DEV_ENV := \
 	DATABASE_URL=$(DEV_DATABASE_URL) \
 	DATASTORE_DATABASE_URL=$(DEV_DATASTORE_DATABASE_URL) \
 	REDIS_URL=$(DEV_REDIS_URL) \
-	KREUZBERG_URL=http://localhost:$(DEV_KREUZBERG_PORT) \
-	DOCUMENT_PROCESSOR=kreuzberg \
+	KREUZBERG_URL= \
+	DOCUMENT_PROCESSOR=markitdown \
 	STORAGE_BACKEND=local \
 	LOCAL_OBJECT_STORAGE_ROOT=$(abspath .local/object-storage) \
 	LOCAL_FILE_STORAGE_ROOT=$(abspath .local/files) \
@@ -188,9 +185,9 @@ FRONTEND_DEV_ENV := \
 AGENTBOX_ENV_FILE := $(AGENTBOX_DIR)/.env
 AGENTBOX_ENDPOINT_STATE_KEYS ?= $(shell sed -n 's/^AGENTBOX_ENDPOINT_STATE_KEYS=//p' $(AGENTBOX_ENV_FILE) 2>/dev/null | tail -n 1)
 
-# AgentBox manager — the workspace sandbox provider. Runs as its own uvicorn
-# process with the local Docker provider; the backend reaches it over HTTP
-# using AGENTBOX_API_URL + AGENTBOX_API_KEY (written into the backend .env).
+# AgentBox manager — embedded in the all-in-one local backend and mounted at
+# /internal/agentbox. The Docker provider remains the transitional developer
+# sandbox runtime while desktop-native providers are introduced.
 AGENTBOX_DEV_ENV := \
 	AGENTBOX_ENVIRONMENT=local \
 	AGENTBOX_LOG_LEVEL=$(DEV_LOG_LEVEL) \
@@ -219,7 +216,7 @@ help:
 	@echo "    make dev                start infra + backend + frontend"
 	@echo "    make dev-public         start with an ephemeral public API tunnel"
 	@echo "    make dev RELOAD=1       same, with uvicorn --reload on the backend"
-	@echo "    make stop               stop app, AgentBox, and tunnel processes"
+	@echo "    make stop               stop app and tunnel processes"
 	@echo "    make stop-all           also bring down infra containers"
 	@echo "    make logs               tail infrastructure container logs"
 	@echo "    make dev OTEL=1         enable local OTLP traces + metrics"
@@ -267,10 +264,9 @@ init:
 	@echo "  ✓ Prerequisites OK"
 	@echo ""
 	@echo "→ Installing dependencies…"
-	@cd $(BACKEND_DIR) && uv sync --quiet
+	@cd $(BACKEND_DIR) && uv sync --extra local --quiet
 	@cd $(CLI_DIR) && uv sync --quiet
 	@cd $(PYTHON_DIR) && uv sync --quiet
-	@cd $(AGENTBOX_DIR) && uv sync --extra postgres --quiet
 	@cd $(TS_DIR) && npm install --silent
 	@cd $(FRONTEND_DIR) && npm install --silent
 	@echo "  ✓ Dependencies installed"
@@ -324,8 +320,8 @@ _init-backend-env:
 			echo "DATABASE_URL=$(DEV_DATABASE_URL)"; \
 			echo "DATASTORE_DATABASE_URL=$(DEV_DATASTORE_DATABASE_URL)"; \
 			echo "REDIS_URL=$(DEV_REDIS_URL)"; \
-			echo "KREUZBERG_URL=http://localhost:$(DEV_KREUZBERG_PORT)"; \
-			echo "DOCUMENT_PROCESSOR=kreuzberg"; \
+			echo "KREUZBERG_URL="; \
+			echo "DOCUMENT_PROCESSOR=markitdown"; \
 			echo "STORAGE_BACKEND=local"; \
 			echo "LOCAL_OBJECT_STORAGE_ROOT=$(abspath .local/object-storage)"; \
 			echo "LOCAL_FILE_STORAGE_ROOT=$(abspath .local/files)"; \
@@ -336,7 +332,7 @@ _init-backend-env:
 			echo "ENABLE_SLACK_SOCKET_MODE=true"; \
 			echo 'CORS_ORIGINS=["http://localhost:$(DEV_FRONTEND_PORT)","http://127.0.0.1:$(DEV_FRONTEND_PORT)"]'; \
 			echo 'CORS_ORIGIN_REGEX=$(DEV_CORS_ORIGIN_REGEX)'; \
-			echo "# AgentBox sandbox manager — started by 'make dev' on $(DEV_AGENTBOX_URL)"; \
+			echo "# AgentBox sandbox manager — embedded in the local backend"; \
 			echo "AGENTBOX_API_URL=$(DEV_AGENTBOX_URL)"; \
 			echo "AGENTBOX_API_KEY=$(DEV_AGENTBOX_API_KEY)"; \
 			echo "# Model provider — set a key and the exact model names available to it."; \
@@ -358,7 +354,7 @@ _init-backend-env:
 
 _ensure-backend-env-keys:
 	@set -e; missing=""; \
-	for k in ENVIRONMENT DEBUG LOG_LEVEL JSON_LOGS_ENABLED API_URL FRONTEND_URL AUTH_FRONTEND_URL CLI_API_URL CLI_AUTH_FRONTEND_URL AUTH_WEBSITE_BASE_PATH SUPERTOKENS_API_BASE_PATH SUPERTOKENS_API_GATEWAY_PATH SUPERTOKENS_CORE_URL DATABASE_URL DATASTORE_DATABASE_URL REDIS_URL KREUZBERG_URL DOCUMENT_PROCESSOR STORAGE_BACKEND LOCAL_OBJECT_STORAGE_ROOT LOCAL_FILE_STORAGE_ROOT EMAIL_TRANSPORT EMAIL_OUTPUT_DIR AUTH_EMAIL_VERIFICATION_REQUIRED ENABLE_TELEGRAM_POLLING_MODE ENABLE_SLACK_SOCKET_MODE CORS_ORIGINS CORS_ORIGIN_REGEX AGENTBOX_API_URL AGENTBOX_API_KEY; do \
+	for k in ENVIRONMENT DEBUG LOG_LEVEL JSON_LOGS_ENABLED API_URL FRONTEND_URL AUTH_FRONTEND_URL CLI_API_URL CLI_AUTH_FRONTEND_URL AUTH_WEBSITE_BASE_PATH SUPERTOKENS_API_BASE_PATH SUPERTOKENS_API_GATEWAY_PATH SUPERTOKENS_CORE_URL DATABASE_URL DATASTORE_DATABASE_URL REDIS_URL DOCUMENT_PROCESSOR STORAGE_BACKEND LOCAL_OBJECT_STORAGE_ROOT LOCAL_FILE_STORAGE_ROOT EMAIL_TRANSPORT EMAIL_OUTPUT_DIR AUTH_EMAIL_VERIFICATION_REQUIRED ENABLE_TELEGRAM_POLLING_MODE ENABLE_SLACK_SOCKET_MODE CORS_ORIGINS CORS_ORIGIN_REGEX AGENTBOX_API_URL AGENTBOX_API_KEY; do \
 		if ! grep -qE "^$$k=" $(BACKEND_DIR)/.env; then missing="$$missing $$k"; fi; \
 	done; \
 	if [ -z "$$missing" ]; then \
@@ -383,8 +379,7 @@ _ensure-backend-env-keys:
 		append DATABASE_URL '$(DEV_DATABASE_URL)'; \
 		append DATASTORE_DATABASE_URL '$(DEV_DATASTORE_DATABASE_URL)'; \
 		append REDIS_URL '$(DEV_REDIS_URL)'; \
-		append KREUZBERG_URL 'http://localhost:$(DEV_KREUZBERG_PORT)'; \
-		append DOCUMENT_PROCESSOR kreuzberg; \
+		append DOCUMENT_PROCESSOR markitdown; \
 		append STORAGE_BACKEND local; \
 		append LOCAL_OBJECT_STORAGE_ROOT '$(abspath .local/object-storage)'; \
 		append LOCAL_FILE_STORAGE_ROOT '$(abspath .local/files)'; \
@@ -465,10 +460,9 @@ dev:
 	@echo "  Debug and safe request-access logs are enabled."
 	@echo "  Press Ctrl-C or run 'make stop' to stop."
 	@echo ""
-	@# Start the app servers immediately; AgentBox readiness is checked alongside
-	@# them so a slow manager cannot impose an otherwise idle startup delay.
+	@# AgentBox is mounted inside the backend; its readiness check therefore also
+	@# verifies that the unified application completed startup.
 	@trap '$(MAKE) --no-print-directory stop; exit 0' INT TERM; \
-		$(MAKE) --no-print-directory _run-agentbox & \
 		$(MAKE) --no-print-directory _run-backend & \
 		$(MAKE) --no-print-directory _run-frontend & \
 		$(MAKE) --no-print-directory _wait-agentbox || { \
@@ -494,7 +488,6 @@ dev-public:
 	echo "  Press Ctrl-C or run 'make stop' to stop."; \
 	echo ""; \
 	trap '$(MAKE) --no-print-directory stop; exit 0' INT TERM; \
-	$(MAKE) --no-print-directory _run-agentbox & \
 	$(MAKE) --no-print-directory _run-backend \
 		BACKEND_API_URL="$$public_api_url" \
 		BACKEND_SESSION_COOKIE_DOMAIN= \
@@ -561,12 +554,12 @@ _ensure-init:
 	@test -f $(TS_DIR)/dist/index.js || { echo "  ! $(TS_DIR)/dist missing — run 'make init' (or cd $(TS_DIR) && npm run build)"; exit 1; }
 	@$(MAKE) --no-print-directory _ensure-backend-env-keys
 	@$(MAKE) --no-print-directory _ensure-frontend-env-keys
-	@cd $(AGENTBOX_DIR) && uv run --extra postgres python -c 'import psycopg, psycopg_pool' >/dev/null || { echo "  ! AgentBox Postgres dependencies missing — run 'make init'"; exit 1; }
+	@cd $(BACKEND_DIR) && uv run --extra local python -c 'import agentbox, markitdown, psycopg, psycopg_pool' >/dev/null || { echo "  ! Local backend dependencies missing — run 'make init'"; exit 1; }
 	@echo "  Using $(BACKEND_DIR)/.env + $(FRONTEND_DIR)/.env.local + $(AGENTBOX_ENV_FILE)"
 
 _infra-up:
-	@echo "  Starting infra (postgres, redis, supertokens, kreuzberg)…"
-	@cd $(BACKEND_DIR) && rm -f $(INFRA_PID_FILE) && $(COMMON_DEV_ENV) docker compose up -d --quiet-pull
+	@echo "  Starting infra (postgres, redis, supertokens)…"
+	@cd $(BACKEND_DIR) && rm -f $(INFRA_PID_FILE) && $(COMMON_DEV_ENV) docker compose up -d --quiet-pull db redis supertokens
 
 _wait-infra:
 	@echo "  Waiting for postgres on localhost:$(DEV_POSTGRES_PORT)…"
@@ -600,14 +593,14 @@ _ensure-databases:
 	@echo "  ✓ Databases ready"
 
 _run-backend:
-	@echo "  Starting backend ($(BACKEND_API_URL))…"
+	@echo "  Starting unified backend ($(BACKEND_API_URL), AgentBox=$(DEV_AGENTBOX_URL))…"
 	@mkdir -p $(BACKEND_DIR)
 	@cd $(BACKEND_DIR) && rm -f $(notdir $(BACKEND_PID_FILE)) && \
-		$(COMMON_DEV_ENV) $(BACKEND_DEV_ENV) $(OTEL_DEV_ENV) $(LLM_OTEL_DEV_ENV) \
+		$(COMMON_DEV_ENV) $(BACKEND_DEV_ENV) $(AGENTBOX_DEV_ENV) $(OTEL_DEV_ENV) $(LLM_OTEL_DEV_ENV) \
 		bash -c "if [ '$(RELOAD)' = '1' ]; then \
-			uv run uvicorn standalone_app:app --host 0.0.0.0 --port $(DEV_BACKEND_PORT) --reload & echo \$$! > $(notdir $(BACKEND_PID_FILE)); \
+			uv run --extra local uvicorn local_app:app --host 0.0.0.0 --port $(DEV_BACKEND_PORT) --reload & echo \$$! > $(notdir $(BACKEND_PID_FILE)); \
 		else \
-			uv run uvicorn standalone_app:app --host 0.0.0.0 --port $(DEV_BACKEND_PORT) & echo \$$! > $(notdir $(BACKEND_PID_FILE)); \
+			uv run --extra local uvicorn local_app:app --host 0.0.0.0 --port $(DEV_BACKEND_PORT) & echo \$$! > $(notdir $(BACKEND_PID_FILE)); \
 		fi; wait"
 
 _run-frontend:
@@ -617,42 +610,31 @@ _run-frontend:
 		$(COMMON_DEV_ENV) $(FRONTEND_DEV_ENV) \
 		bash -c "npm run dev -- --port $(DEV_FRONTEND_PORT) & echo \$$! > $(notdir $(FRONTEND_PID_FILE)); wait"
 
-_run-agentbox:
-	@echo "  Starting agentbox manager ($(DEV_AGENTBOX_URL), provider=docker, state=postgres)…"
-	@mkdir -p $(AGENTBOX_DIR) $(DEV_LOG_DIR) $(abspath .local/agentbox-workspaces)
-	@cd $(AGENTBOX_DIR) && rm -f $(notdir $(AGENTBOX_PID_FILE)) && \
-		$(AGENTBOX_DEV_ENV) $(OTEL_DEV_ENV) \
-		bash -c "uv run --extra postgres uvicorn agentbox.server:app --host 127.0.0.1 --port $(DEV_AGENTBOX_PORT) > >(tee '$(AGENTBOX_LOG_FILE)') 2>&1 & echo \$$! > $(notdir $(AGENTBOX_PID_FILE)); wait"
-
 _wait-agentbox:
-	@echo "  Waiting for agentbox manager on $(DEV_AGENTBOX_URL)…"
+	@echo "  Waiting for embedded AgentBox on $(DEV_AGENTBOX_URL)…"
 	@ready=0; \
 	for i in $$(seq 1 $(AGENTBOX_READY_TIMEOUT)); do \
 		if curl -fsS $(DEV_AGENTBOX_URL)/health/ready >/dev/null 2>&1; then ready=1; break; fi; \
-		if [ -f $(AGENTBOX_PID_FILE) ]; then \
-			pid=$$(cat $(AGENTBOX_PID_FILE)); \
+		if [ -f $(BACKEND_PID_FILE) ]; then \
+			pid=$$(cat $(BACKEND_PID_FILE)); \
 			if [ -n "$$pid" ] && ! kill -0 "$$pid" 2>/dev/null; then \
-				echo "  ✗ AgentBox exited before becoming ready (PID $$pid)"; \
-				echo "    Log: $(AGENTBOX_LOG_FILE)"; \
-				tail -n 30 $(AGENTBOX_LOG_FILE) 2>/dev/null || true; \
+				echo "  ✗ Unified backend exited before embedded AgentBox became ready (PID $$pid)"; \
 				exit 1; \
 			fi; \
 		fi; \
 		sleep 1; \
 	done; \
 	if [ "$$ready" != "1" ]; then \
-		pid=$$(cat $(AGENTBOX_PID_FILE) 2>/dev/null || true); \
+		pid=$$(cat $(BACKEND_PID_FILE) 2>/dev/null || true); \
 		if [ -n "$$pid" ] && kill -0 "$$pid" 2>/dev/null; then state="PID $$pid is still running"; else state="process is not running"; fi; \
-		echo "  ✗ AgentBox did not become ready within $(AGENTBOX_READY_TIMEOUT)s ($$state)"; \
-		echo "    Log: $(AGENTBOX_LOG_FILE)"; \
-		tail -n 30 $(AGENTBOX_LOG_FILE) 2>/dev/null || true; \
+		echo "  ✗ Embedded AgentBox did not become ready within $(AGENTBOX_READY_TIMEOUT)s (unified backend $$state)"; \
 		exit 1; \
 	fi; \
-	echo "  ✓ AgentBox ready"
+	echo "  ✓ Embedded AgentBox ready"
 
 stop:
 	@echo "→ Stopping dev processes…"
-	@for p in $(FRONTEND_PID_FILE) $(BACKEND_PID_FILE) $(AGENTBOX_PID_FILE) $(CLOUDFLARED_API_PID_FILE); do \
+	@for p in $(FRONTEND_PID_FILE) $(BACKEND_PID_FILE) $(LEGACY_AGENTBOX_PID_FILE) $(CLOUDFLARED_API_PID_FILE); do \
 		if [ -f $$p ]; then \
 			pid=$$(cat $$p); \
 			children=$$(pgrep -P $$pid 2>/dev/null || true); \
@@ -679,7 +661,7 @@ stop:
 	@# A previous graceful shutdown could have closed its listening socket but
 	@# remained stuck in the embedded worker, after its pidfile was removed. Such
 	@# an orphan still consumes Redis jobs and writes the worker heartbeat.
-	@stale=$$(pgrep -f '$(abspath $(BACKEND_DIR))/.venv/bin/python .*uvicorn standalone_app:app .*--port $(DEV_BACKEND_PORT)' 2>/dev/null || true); \
+	@stale=$$(pgrep -f '$(abspath $(BACKEND_DIR))/.venv/bin/python .*uvicorn \(standalone_app\|local_app\):app .*--port $(DEV_BACKEND_PORT)' 2>/dev/null || true); \
 	if [ -n "$$stale" ]; then \
 		kill $$stale 2>/dev/null || true; \
 		sleep 1; \
@@ -689,7 +671,7 @@ stop:
 		echo "  Removed stale backend workers: $$stale"; \
 	fi
 	@# belt + braces: anything still listening on the dev ports
-	@for port in $(DEV_FRONTEND_PORT) $(DEV_BACKEND_PORT) $(DEV_AGENTBOX_PORT); do \
+	@for port in $(DEV_FRONTEND_PORT) $(DEV_BACKEND_PORT); do \
 		lsof -ti tcp:$$port 2>/dev/null | xargs -r kill 2>/dev/null && echo "  Killed leftovers on port $$port" || true; \
 	done
 	@rm -f $(PUBLIC_API_URL_FILE)

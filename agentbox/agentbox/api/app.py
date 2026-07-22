@@ -259,19 +259,14 @@ async def lifespan(app: FastAPI):
                     pass
             await manager.close()
             logger.info("service.stopped")
-            shutdown_telemetry()
+            if getattr(app.state, "shutdown_process_telemetry", True):
+                shutdown_telemetry()
     finally:
         await provider.close()
         if store is not None:
             await store.close()
 
 
-app = FastAPI(title="AgentBox Manager", version="0.1.0", lifespan=lifespan)
-app.add_middleware(RequestContextMiddleware)
-instrument_app(app)
-
-
-@app.exception_handler(ProviderError)
 async def provider_exception_handler(
     request: Request, exc: ProviderError
 ) -> JSONResponse:
@@ -291,7 +286,6 @@ async def provider_exception_handler(
     )
 
 
-@app.get("/health")
 async def health(request: Request) -> dict[str, str | bool]:
     provider = request.app.state.sandbox_provider
     response: dict[str, str | bool] = {
@@ -303,14 +297,11 @@ async def health(request: Request) -> dict[str, str | bool]:
     return response
 
 
-@app.get("/health/live")
-@app.get("/livez")
 async def health_live() -> dict[str, str]:
     """Process-only liveness; never performs dependency I/O."""
     return {"status": "ok"}
 
 
-@app.get("/health/ready")
 async def health_ready(request: Request) -> JSONResponse:
     """Bounded readiness with generic, non-sensitive component states."""
     components = {
@@ -357,6 +348,31 @@ async def health_ready(request: Request) -> JSONResponse:
     )
 
 
-app.include_router(sandboxes_router)
-app.include_router(sessions_router)
-app.include_router(apps_router)
+def create_app(*, shutdown_process_telemetry: bool = True) -> FastAPI:
+    """Build an AgentBox ASGI app.
+
+    The standalone manager owns process telemetry and shuts it down with its
+    lifespan. Embedded compositions share telemetry with their parent process,
+    so they opt out of that process-global shutdown.
+    """
+
+    manager_app = FastAPI(
+        title="AgentBox Manager",
+        version="0.1.0",
+        lifespan=lifespan,
+    )
+    manager_app.state.shutdown_process_telemetry = shutdown_process_telemetry
+    manager_app.add_middleware(RequestContextMiddleware)
+    instrument_app(manager_app)
+    manager_app.add_exception_handler(ProviderError, provider_exception_handler)
+    manager_app.add_api_route("/health", health, methods=["GET"])
+    manager_app.add_api_route("/health/live", health_live, methods=["GET"])
+    manager_app.add_api_route("/livez", health_live, methods=["GET"])
+    manager_app.add_api_route("/health/ready", health_ready, methods=["GET"])
+    manager_app.include_router(sandboxes_router)
+    manager_app.include_router(sessions_router)
+    manager_app.include_router(apps_router)
+    return manager_app
+
+
+app = create_app()

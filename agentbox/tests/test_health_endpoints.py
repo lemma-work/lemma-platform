@@ -7,7 +7,12 @@ from unittest.mock import AsyncMock, Mock
 import pytest
 
 import agentbox.api.app as app_module
-from agentbox.api.app import RequestContextMiddleware, health_live, health_ready
+from agentbox.api.app import (
+    RequestContextMiddleware,
+    create_app,
+    health_live,
+    health_ready,
+)
 
 
 def _request(*, store, manager, task_done: bool = False):
@@ -25,6 +30,16 @@ def _request(*, store, manager, task_done: bool = False):
 @pytest.mark.asyncio
 async def test_liveness_is_process_only() -> None:
     assert await health_live() == {"status": "ok"}
+
+
+def test_app_factory_can_preserve_parent_process_telemetry() -> None:
+    standalone = create_app()
+    embedded = create_app(shutdown_process_telemetry=False)
+
+    assert standalone.state.shutdown_process_telemetry is True
+    assert embedded.state.shutdown_process_telemetry is False
+    paths = {route.path for route in embedded.routes}
+    assert {"/health", "/health/live", "/health/ready", "/livez"} <= paths
 
 
 @pytest.mark.asyncio

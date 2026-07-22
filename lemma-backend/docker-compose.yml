@@ -48,58 +48,5 @@ services:
       timeout: 5s
       retries: 10
 
-  kreuzberg:
-    # Document-extraction service (REST API: /health, /extract, /chunk). The
-    # project moved orgs (kreuzberg-dev → xberg-io), so the old
-    # ghcr.io/kreuzberg-dev/kreuzberg:4.9.9 path now denies pulls — a fresh
-    # `docker compose up` failed with "error from registry: denied" and took the
-    # whole stack down with it. This is the same 4.9.9 on the current public
-    # namespace. The -core image is smaller (~580MB) and downloads OCR models on
-    # first use into the kreuzberg_cache volume. Overridable via DEV_KREUZBERG_IMAGE.
-    image: ${DEV_KREUZBERG_IMAGE:-ghcr.io/xberg-io/kreuzberg:4.9.9-core}
-    # Warm only the no-OCR layout/table path before the HTTP port opens. The
-    # broader `cache warm` command also downloads PaddleOCR models we do not use.
-    # If concurrent first requests trigger lazy downloads, one can lose the Hugging
-    # Face file lock and silently continue without layout detection.
-    entrypoint: ["sh", "-c"]
-    command:
-      - >-
-        kreuzberg extract /opt/lemma/prewarm.pdf --disable-ocr true
-        --layout true --layout-table-model tatr --extract-pages true
-        --content-format markdown --extract-images true --target-dpi 150
-        >/dev/null && exec kreuzberg serve --host 0.0.0.0 --port 8000
-    ports:
-      - "${DEV_KREUZBERG_PORT:-8002}:8000"
-    restart: unless-stopped
-    # Rich layout/table extraction is both CPU- and memory-heavy. Pair the
-    # 4-CPU local target with an 8GB ceiling: raising CPU alone increases
-    # overlapping page-model work and previously OOM-killed a 4GB container.
-    # Both values remain overridable for constrained Docker Desktop VMs.
-    mem_limit: ${DEV_KREUZBERG_MEM_LIMIT:-8g}
-    cpus: ${DEV_KREUZBERG_CPUS:-4}
-    environment:
-      # Reject oversized uploads at the edge (backend also guards before sending);
-      # the request-body cap sits just above it for multipart overhead.
-      KREUZBERG_MAX_UPLOAD_SIZE_MB: "${DEV_KREUZBERG_MAX_UPLOAD_SIZE_MB:-25}"
-      KREUZBERG_MAX_REQUEST_BODY_BYTES: "${DEV_KREUZBERG_MAX_REQUEST_BODY_BYTES:-31457280}"
-      # Persist the ONNX/Hugging Face model + extraction-result cache across
-      # restarts so the service never re-downloads or re-warms models on boot.
-      KREUZBERG_CACHE_DIR: /app/.kreuzberg
-      HF_HOME: /app/.kreuzberg/huggingface
-      RUST_LOG: "${DEV_KREUZBERG_LOG_LEVEL:-info}"
-    volumes:
-      - kreuzberg_cache:/app/.kreuzberg
-      - ./app/modules/datastore/tests/fixtures/arxiv/seq2seq.pdf:/opt/lemma/prewarm.pdf:ro
-    stop_grace_period: 30s
-    healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
-      interval: 30s
-      timeout: 10s
-      retries: 5
-      # A cold cache can take several minutes on a slow registry connection.
-      # A successful probe still marks the container healthy immediately.
-      start_period: 15m
-
 volumes:
   postgres_data:
-  kreuzberg_cache:

@@ -151,7 +151,7 @@ jobs:
         with:
           enable-cache: true
       - name: Sync deps
-        run: uv sync
+        run: uv sync --extra local
       - name: Unit tests with coverage
         run: make coverage-backend-unit
         env:
@@ -190,7 +190,7 @@ jobs:
         with:
           enable-cache: true
       - name: Sync deps
-        run: uv sync
+        run: uv sync --extra local
       - name: Ruff handwritten backend
         run: make lint
       - name: Async-safety lint

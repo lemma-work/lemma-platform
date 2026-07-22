@@ -57,6 +57,13 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
+# Managed/local composition: embeds the AgentBox manager and document
+# conversion into the single backend process. Cloud/split deployments do not
+# need to install this extra.
+local = [
+    "agentbox[postgres]",
+    "markitdown[docx,pptx,xlsx,xls,pdf,outlook]>=0.1.0",
+]
 # Cloud key backends for app/core/crypto. Optional so OSS/local stays lean; the
 # imports are lazy (only loaded when secret_key_provider selects them).
 gcp-kms = [
@@ -101,6 +108,7 @@ packages = ["app"]
 
 [tool.hatch.build.targets.wheel.force-include]
 "standalone_app.py" = "standalone_app.py"
+"local_app.py" = "local_app.py"
 
 [tool.hatch.metadata]
 allow-direct-references = true
@@ -108,6 +116,7 @@ allow-direct-references = true
 [tool.uv.sources]
 lemma-connectors = { path = "lemma-connectors", editable = true }
 agentbox-client = { path = "../agentbox-client", editable = true }
+agentbox = { path = "../agentbox", editable = true }
 lemma-pod-bundle = { path = "../lemma-pod-bundle", editable = true }
 
 # Ruff config. The full default ruleset is not yet enforced repo-wide (generated

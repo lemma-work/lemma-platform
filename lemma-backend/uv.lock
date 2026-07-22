@@ -7,6 +7,56 @@ resolution-markers = [
 ]
 
 [[package]]
+name = "agentbox"
+version = "0.1.0"
+source = { editable = "../agentbox" }
+dependencies = [
+    { name = "cryptography" },
+    { name = "fastapi", extra = ["standard"] },
+    { name = "httpx" },
+    { name = "kubernetes" },
+    { name = "opentelemetry-exporter-otlp" },
+    { name = "opentelemetry-instrumentation-fastapi" },
+    { name = "opentelemetry-instrumentation-httpx" },
+    { name = "pydantic" },
+    { name = "pydantic-settings" },
+    { name = "uvicorn", extra = ["standard"] },
+]
+
+[package.optional-dependencies]
+postgres = [
+    { name = "psycopg", extra = ["binary"] },
+    { name = "psycopg-pool" },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "cryptography", specifier = ">=49.0.0,<50.0.0" },
+    { name = "daytona", marker = "extra == 'daytona'", specifier = ">=0.196.0,<0.198.0" },
+    { name = "e2b", marker = "extra == 'e2b'", specifier = "==2.32.1" },
+    { name = "fastapi", extras = ["standard"], specifier = ">=0.128.0" },
+    { name = "httpx", specifier = ">=0.28.1" },
+    { name = "kubernetes", specifier = ">=34.1.0" },
+    { name = "opentelemetry-exporter-otlp", specifier = ">=1.42.0" },
+    { name = "opentelemetry-instrumentation-fastapi", specifier = ">=0.63b0" },
+    { name = "opentelemetry-instrumentation-httpx", specifier = ">=0.63b0" },
+    { name = "psycopg", extras = ["binary"], marker = "extra == 'postgres'", specifier = ">=3.2.0" },
+    { name = "psycopg-pool", marker = "extra == 'postgres'", specifier = ">=3.2.0" },
+    { name = "pydantic", specifier = ">=2.11.0" },
+    { name = "pydantic-settings", specifier = ">=2.14.2" },
+    { name = "uvicorn", extras = ["standard"], specifier = ">=0.42.0" },
+]
+provides-extras = ["daytona", "e2b", "postgres"]
+
+[package.metadata.requires-dev]
+dev = [
+    { name = "agentbox-client", editable = "../agentbox-client" },
+    { name = "pytest", specifier = ">=8.4.0" },
+    { name = "pytest-asyncio", specifier = ">=1.2.0" },
+    { name = "ruff", specifier = ">=0.15.0,<0.16.0" },
+]
+
+[[package]]
 name = "agentbox-client"
 version = "0.1.0"
 source = { editable = "../agentbox-client" }
@@ -1758,6 +1808,10 @@ gcp-kms = [
 keychain = [
     { name = "keyring" },
 ]
+local = [
+    { name = "agentbox", extra = ["postgres"] },
+    { name = "markitdown", extra = ["docx", "outlook", "pdf", "pptx", "xls", "xlsx"] },
+]
 markitdown = [
     { name = "markitdown", extra = ["docx", "outlook", "pdf", "pptx", "xls", "xlsx"] },
 ]
@@ -1779,6 +1833,7 @@ dev = [
 
 [package.metadata]
 requires-dist = [
+    { name = "agentbox", extras = ["postgres"], marker = "extra == 'local'", editable = "../agentbox" },
     { name = "agentbox-client", editable = "../agentbox-client" },
     { name = "aiofiles", specifier = ">=25.1.0" },
     { name = "aiohttp", specifier = ">=3.13.0" },
@@ -1804,6 +1859,7 @@ requires-dist = [
     { name = "lemma-connectors", editable = "lemma-connectors" },
     { name = "lemma-pod-bundle", editable = "../lemma-pod-bundle" },
     { name = "markdown", specifier = ">=3.8.2" },
+    { name = "markitdown", extras = ["docx", "pptx", "xlsx", "xls", "pdf", "outlook"], marker = "extra == 'local'", specifier = ">=0.1.0" },
     { name = "markitdown", extras = ["docx", "pptx", "xlsx", "xls", "pdf", "outlook"], marker = "extra == 'markitdown'", specifier = ">=0.1.0" },
     { name = "obstore", specifier = ">=0.8.2" },
     { name = "openinference-instrumentation-pydantic-ai", specifier = ">=0.1.12" },
@@ -1833,7 +1889,7 @@ requires-dist = [
     { name = "uvicorn", extras = ["standard"], specifier = ">=0.42.0" },
     { name = "websockets", specifier = ">=16.0" },
 ]
-provides-extras = ["gcp-kms", "keychain", "markitdown"]
+provides-extras = ["local", "gcp-kms", "keychain", "markitdown"]
 
 [package.metadata.requires-dev]
 dev = [
