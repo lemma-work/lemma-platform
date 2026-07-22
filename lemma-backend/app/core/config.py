@@ -494,6 +494,49 @@ class Settings(BaseSettings):
             "verify an authenticated user's mobile number"
         ),
     )
+    auth_whatsapp_access_token: Optional[SecretStr] = Field(
+        default=None,
+        validation_alias=AliasChoices(
+            "WHATSAPP_ACCESS_TOKEN", "AUTH_WHATSAPP_ACCESS_TOKEN"
+        ),
+        description="Meta access token for the global Lemma WhatsApp number",
+    )
+    auth_whatsapp_phone_number_id: Optional[str] = Field(
+        default=None,
+        validation_alias=AliasChoices(
+            "WHATSAPP_PHONE_NUMBER_ID", "AUTH_WHATSAPP_PHONE_NUMBER_ID"
+        ),
+        description="Meta phone-number ID for the global Lemma WhatsApp number",
+    )
+    auth_whatsapp_display_phone_number: Optional[str] = Field(
+        default=None,
+        validation_alias=AliasChoices(
+            "WHATSAPP_DISPLAY_PHONE_NUMBER", "AUTH_WHATSAPP_DISPLAY_PHONE_NUMBER"
+        ),
+        description="Human-messageable global Lemma WhatsApp number",
+    )
+    auth_whatsapp_app_secret: Optional[SecretStr] = Field(
+        default=None,
+        validation_alias=AliasChoices(
+            "WHATSAPP_APP_SECRET", "AUTH_WHATSAPP_APP_SECRET"
+        ),
+        description="Meta app secret used by signed global WhatsApp webhooks",
+    )
+    auth_whatsapp_verify_token: Optional[SecretStr] = Field(
+        default=None,
+        validation_alias=AliasChoices(
+            "WHATSAPP_VERIFY_TOKEN", "AUTH_WHATSAPP_VERIFY_TOKEN"
+        ),
+        description="Meta webhook verification token for the global number",
+    )
+    auth_whatsapp_webhook_security_enabled: bool = Field(
+        default=True,
+        validation_alias=AliasChoices(
+            "SURFACE_WEBHOOK_SECURITY_ENABLED",
+            "AUTH_WHATSAPP_WEBHOOK_SECURITY_ENABLED",
+        ),
+        description="Require signature validation for WhatsApp mobile verification",
+    )
     auth_trusted_proxy_ips: list[str] = Field(
         default_factory=list,
         description="Immediate proxy IPs allowed to supply Forwarded/X-Forwarded-For",

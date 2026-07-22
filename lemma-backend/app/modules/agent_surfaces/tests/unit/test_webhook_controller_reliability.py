@@ -115,6 +115,11 @@ async def test_signed_reserved_whatsapp_message_publishes_only_identity_event(
     )
 
     monkeypatch.setattr(settings, "auth_whatsapp_mobile_verification_enabled", True)
+    monkeypatch.setattr(settings, "auth_whatsapp_access_token", "wa-token")
+    monkeypatch.setattr(settings, "auth_whatsapp_phone_number_id", "global-phone")
+    monkeypatch.setattr(settings, "auth_whatsapp_app_secret", "app-secret")
+    monkeypatch.setattr(settings, "auth_whatsapp_verify_token", "verify-token")
+    monkeypatch.setattr(settings, "auth_whatsapp_webhook_security_enabled", True)
     monkeypatch.setattr(surface_settings, "surface_webhook_security_enabled", True)
     monkeypatch.setattr(surface_settings, "whatsapp_access_token", "wa-token")
     monkeypatch.setattr(surface_settings, "whatsapp_phone_number_id", "global-phone")

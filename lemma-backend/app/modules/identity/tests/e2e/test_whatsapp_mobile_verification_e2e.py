@@ -28,6 +28,12 @@ pytestmark = [pytest.mark.e2e, pytest.mark.asyncio]
 
 def _enable(monkeypatch) -> None:
     monkeypatch.setattr(settings, "auth_whatsapp_mobile_verification_enabled", True)
+    monkeypatch.setattr(settings, "auth_whatsapp_access_token", "wa-token")
+    monkeypatch.setattr(settings, "auth_whatsapp_phone_number_id", "global-phone")
+    monkeypatch.setattr(settings, "auth_whatsapp_app_secret", "app-secret")
+    monkeypatch.setattr(settings, "auth_whatsapp_verify_token", "verify-token")
+    monkeypatch.setattr(settings, "auth_whatsapp_webhook_security_enabled", True)
+    monkeypatch.setattr(settings, "auth_whatsapp_display_phone_number", "+14155550000")
     monkeypatch.setattr(surface_settings, "surface_webhook_security_enabled", True)
     monkeypatch.setattr(surface_settings, "whatsapp_access_token", "wa-token")
     monkeypatch.setattr(surface_settings, "whatsapp_phone_number_id", "global-phone")

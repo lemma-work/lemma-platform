@@ -16,18 +16,15 @@ from typing import Literal
 from urllib.parse import quote
 from uuid import UUID
 
+import httpx
 from redis.asyncio import Redis
 from sqlalchemy import func, select
 
-from app.core.config import settings
+from app.core.config import reveal_secret, settings
 from app.core.helpers.identifiers import normalize_mobile_e164
 from app.core.infrastructure.db.session import async_session_maker
 from app.core.infrastructure.events.publisher import EventPublisher
 from app.core.log.log import get_logger
-from app.modules.agent_surfaces.config import surface_settings
-from app.modules.agent_surfaces.platforms.whatsapp.service import (
-    WhatsAppPlatformService,
-)
 from app.modules.identity.domain.events import UserMobileChangedEvent
 from app.modules.identity.infrastructure.models.user_models import User
 from app.modules.identity.infrastructure.user_cache import get_user_cache
@@ -41,6 +38,7 @@ _TTL_SECONDS = 10 * 60
 _STATUS_TTL_SECONDS = 2 * 60
 _CODE_ALPHABET = "23456789ABCDEFGHJKMNPQRSTUVWXYZ"
 _MESSAGE_PREFIX = "LEMMA VERIFY "
+_META_GRAPH_API_BASE = "https://graph.facebook.com/v21.0"
 
 _CLAIM_LUA = """
 local transaction_id = redis.call('GET', KEYS[1])
@@ -109,11 +107,11 @@ class WhatsAppVerificationConfig:
 def is_whatsapp_verification_configured() -> bool:
     return bool(
         settings.auth_whatsapp_mobile_verification_enabled
-        and surface_settings.whatsapp_access_token
-        and surface_settings.whatsapp_phone_number_id
-        and surface_settings.whatsapp_app_secret
-        and surface_settings.whatsapp_verify_token
-        and surface_settings.surface_webhook_security_enabled
+        and reveal_secret(settings.auth_whatsapp_access_token)
+        and settings.auth_whatsapp_phone_number_id
+        and reveal_secret(settings.auth_whatsapp_app_secret)
+        and reveal_secret(settings.auth_whatsapp_verify_token)
+        and settings.auth_whatsapp_webhook_security_enabled
     )
 
 
@@ -188,21 +186,33 @@ class WhatsAppMobileVerificationService:
         if not is_whatsapp_verification_configured():
             return WhatsAppVerificationConfig(available=False)
         if self._display_number is None:
-            configured = str(
-                surface_settings.whatsapp_display_phone_number or ""
-            ).strip()
+            configured = str(settings.auth_whatsapp_display_phone_number or "").strip()
             if configured:
                 self._display_number = configured
             else:
-                self._display_number = await WhatsAppPlatformService(
-                    {
-                        "access_token": surface_settings.whatsapp_access_token,
-                        "phone_number_id": surface_settings.whatsapp_phone_number_id,
-                    }
-                ).get_display_phone_number()
+                self._display_number = await self._lookup_display_number()
         return WhatsAppVerificationConfig(
             available=bool(self._display_number), display_number=self._display_number
         )
+
+    async def _lookup_display_number(self) -> str | None:
+        access_token = reveal_secret(settings.auth_whatsapp_access_token)
+        phone_number_id = settings.auth_whatsapp_phone_number_id
+        if not access_token or not phone_number_id:
+            return None
+        try:
+            async with httpx.AsyncClient(timeout=10.0) as client:
+                response = await client.get(
+                    f"{_META_GRAPH_API_BASE}/{phone_number_id}",
+                    params={"fields": "display_phone_number"},
+                    headers={"Authorization": f"Bearer {access_token}"},
+                )
+                response.raise_for_status()
+            value = str(response.json().get("display_phone_number") or "").strip()
+            return value or None
+        except httpx.HTTPError, TypeError, ValueError:
+            logger.info("identity.mobile_verification.whatsapp.number_lookup_failed")
+            return None
 
     async def _enforce_start_limit(self, client_key: str) -> None:
         redis = await self._get_redis()
@@ -293,7 +303,7 @@ class WhatsAppMobileVerificationService:
     ) -> bool:
         if (
             not is_whatsapp_verification_configured()
-            or destination_phone_number_id != surface_settings.whatsapp_phone_number_id
+            or destination_phone_number_id != settings.auth_whatsapp_phone_number_id
         ):
             return False
         try:
