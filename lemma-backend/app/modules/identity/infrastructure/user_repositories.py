@@ -13,6 +13,10 @@ from app.modules.identity.domain.errors import UserConflictError, UserNotFoundEr
 from app.modules.identity.domain.ports import UserRepositoryPort
 from app.modules.identity.domain.user_entities import UserEntity
 from app.modules.identity.domain.user_preferences import UserPreferences
+from app.modules.identity.infrastructure.mobile_number_claims import (
+    acquire_mobile_number_claim_lock,
+    get_other_mobile_number_owner_id,
+)
 from app.modules.identity.infrastructure.models import User
 from app.core.helpers.identifiers import normalize_mobile_digits
 
@@ -37,6 +41,14 @@ class UserRepository(UserRepositoryPort):
                 self.uow.collect_events(events)
 
     async def create(self, entity: UserEntity) -> UserEntity:
+        digits = normalize_mobile_digits(entity.mobile_number)
+        if digits:
+            await acquire_mobile_number_claim_lock(self.session, digits)
+            owner_id = await get_other_mobile_number_owner_id(
+                self.session, digits=digits, user_id=entity.id
+            )
+            if owner_id is not None:
+                raise UserConflictError("This mobile number is already in use")
         instance = User(**entity.model_dump())
         self.session.add(instance)
         try:
@@ -45,7 +57,7 @@ class UserRepository(UserRepositoryPort):
             error = str(exc.orig).lower()
             if "uq_users_email_lower" in error or "ix_users_email" in error:
                 raise UserConflictError("User with this email already exists") from exc
-            if "uq_users_mobile_number_digits" in error:
+            if "uq_users_verified_mobile_e164" in error:
                 raise UserConflictError("This mobile number is already in use") from exc
             raise
         self._collect_events(entity)
@@ -110,6 +122,15 @@ class UserRepository(UserRepositoryPort):
         return await self.session.scalar(stmt)
 
     async def update(self, entity: UserEntity) -> UserEntity:
+        digits = normalize_mobile_digits(entity.mobile_number)
+        if digits:
+            await acquire_mobile_number_claim_lock(self.session, digits)
+            owner_id = await get_other_mobile_number_owner_id(
+                self.session, digits=digits, user_id=entity.id
+            )
+            if owner_id is not None:
+                raise UserConflictError("This mobile number is already in use")
+
         stmt = select(User).where(User.id == entity.id)
         result = await self.session.execute(stmt)
         instance = result.scalars().first()
@@ -130,7 +151,7 @@ class UserRepository(UserRepositoryPort):
             await self.session.flush()
         except IntegrityError as exc:
             error = str(exc.orig).lower()
-            if "uq_users_mobile_number_digits" in error:
+            if "uq_users_verified_mobile_e164" in error:
                 raise UserConflictError("This mobile number is already in use") from exc
             raise
         self._collect_events(entity)

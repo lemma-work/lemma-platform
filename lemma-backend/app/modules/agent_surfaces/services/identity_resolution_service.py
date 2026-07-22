@@ -178,6 +178,11 @@ class SurfaceIdentityResolutionService:
         if len(ids) == 1:
             return _UserMatch(ids[0])
         if len(ids) > 1:
+            logger.error(
+                "agent_surfaces.identity.ambiguous_mobile_match",
+                verification_state="verified",
+                candidate_count=len(ids),
+            )
             return _UserMatch(None)
 
         unverified_ids = await self._users.get_ids_by_mobile_numbers(
@@ -186,7 +191,11 @@ class SurfaceIdentityResolutionService:
         if len(unverified_ids) == 1:
             return _UserMatch(unverified_ids[0])
         if len(unverified_ids) > 1:
-            logger.info("agent_surfaces.identity.ambiguous_unverified_mobile_match")
+            logger.error(
+                "agent_surfaces.identity.ambiguous_mobile_match",
+                verification_state="unverified",
+                candidate_count=len(unverified_ids),
+            )
         return _UserMatch(None)
 
 

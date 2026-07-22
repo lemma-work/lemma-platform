@@ -18,7 +18,6 @@ from uuid import UUID
 
 import httpx
 from redis.asyncio import Redis
-from sqlalchemy import func, select
 from sqlalchemy.exc import IntegrityError
 
 from app.composition.identity_whatsapp import global_whatsapp_configuration
@@ -28,6 +27,10 @@ from app.core.infrastructure.db.session import async_session_maker
 from app.core.infrastructure.events.publisher import EventPublisher
 from app.core.log.log import get_logger
 from app.modules.identity.domain.events import UserMobileChangedEvent
+from app.modules.identity.infrastructure.mobile_number_claims import (
+    acquire_mobile_number_claim_lock,
+    get_other_mobile_number_owner_id,
+)
 from app.modules.identity.infrastructure.models.user_models import User
 from app.modules.identity.infrastructure.user_cache import get_user_cache
 
@@ -343,6 +346,9 @@ class WhatsAppMobileVerificationService:
         transaction_id = str(result[1])
         user_id = UUID(str(result[2]))
         async with async_session_maker() as session:
+            await acquire_mobile_number_claim_lock(
+                session, sender_phone.removeprefix("+")
+            )
             user = await session.get(User, user_id)
             if (
                 user is None
@@ -352,13 +358,10 @@ class WhatsAppMobileVerificationService:
             ):
                 logger.info("identity.mobile_verification.whatsapp.ineligible_user")
                 return False
-            owner = await session.scalar(
-                select(User.id).where(
-                    User.mobile_number.isnot(None),
-                    func.regexp_replace(User.mobile_number, r"\D", "", "g")
-                    == sender_phone.removeprefix("+"),
-                    User.id != user_id,
-                )
+            owner = await get_other_mobile_number_owner_id(
+                session,
+                digits=sender_phone.removeprefix("+"),
+                user_id=user_id,
             )
             if owner is not None:
                 logger.info("identity.mobile_verification.whatsapp.owner_conflict")

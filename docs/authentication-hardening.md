@@ -59,16 +59,16 @@ For `lemma-stack`, each value can be set with `lemma-stack config set KEY value`
 Only list the immediate reverse proxies in `AUTH_TRUSTED_PROXY_IPS`. Requests from every other peer ignore `Forwarded` and `X-Forwarded-For`.
 
 Profile mobile numbers require an explicit country code and are stored in
-canonical E.164 form. The database enforces uniqueness on normalized digits, so
-formatting differences cannot assign one number to multiple users. Migration
-`0008_mobile_number_unique` keeps a verified legacy owner when present (or the
-oldest owner otherwise), clears duplicate profile numbers, and invalidates any
-surface-resolution cache rows that pointed at the cleared profiles.
+canonical E.164 form. Profile and verification writes serialize normalized
+number claims with a transaction-scoped advisory lock and reject numbers held
+by any other profile. PostgreSQL additionally enforces uniqueness for verified
+canonical numbers. If legacy duplicates are encountered during surface
+resolution, routing fails closed and emits a redacted invariant-error event.
 
 ## Deployment sequence
 
-1. Apply migrations through `0008_mobile_number_unique` and deploy with ALTCHA,
-   Telegram, and WhatsApp mobile verification disabled.
+1. Apply migration `0007_auth_hardening` and deploy with ALTCHA, Telegram, and
+   WhatsApp mobile verification disabled.
 2. Confirm SMTP TLS, aligned From domain, SPF, DKIM, DMARC, and provider bounce handling. Send verification and password-reset messages to real test mailboxes.
 3. Run the reconciliation dry-run and review count-only output:
 

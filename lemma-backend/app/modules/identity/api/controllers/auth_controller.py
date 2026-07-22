@@ -8,7 +8,6 @@ from uuid import UUID
 from fastapi import APIRouter, HTTPException, Query, Request
 from fastapi.responses import RedirectResponse
 from pydantic import BaseModel, EmailStr, Field
-from sqlalchemy import func, select
 from supertokens_python.recipe.session.asyncio import (
     get_session,
 )
@@ -18,13 +17,16 @@ from app.core.helpers.identifiers import normalize_mobile_e164
 from app.core.infrastructure.db.session import async_session_maker
 from app.modules.identity.api.dependencies import PodMembershipDep, UserServiceDep
 from app.modules.identity.domain.user_entities import UserEntity
+from app.modules.identity.infrastructure.mobile_number_claims import (
+    get_other_mobile_number_owner_id,
+)
+from app.modules.identity.infrastructure.models.user_models import User
 from app.modules.identity.infrastructure.supertokens_auth.helpers import (
     create_cli_session_tokens,
     create_browser_session,
     create_desktop_browser_session,
     refresh_cli_session_tokens,
 )
-from app.modules.identity.infrastructure.models.user_models import User
 from app.modules.identity.services.auth_abuse import (
     RateLimitExceeded,
     client_ip,
@@ -263,13 +265,10 @@ async def start_whatsapp_mobile_verification(
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     async with async_session_maker() as db_session:
-        owner = await db_session.scalar(
-            select(User.id).where(
-                User.mobile_number.isnot(None),
-                func.regexp_replace(User.mobile_number, r"\D", "", "g")
-                == normalized_phone.removeprefix("+"),
-                User.id != user.id,
-            )
+        owner = await get_other_mobile_number_owner_id(
+            db_session,
+            digits=normalized_phone.removeprefix("+"),
+            user_id=user.id,
         )
     if owner is not None:
         raise HTTPException(

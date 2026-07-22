@@ -1865,6 +1865,49 @@ async def test_profile_mobile_and_telegram_uniqueness(
 
 
 @pytest.mark.asyncio
+async def test_concurrent_profile_mobile_claims_allow_exactly_one_owner(
+    async_client: AsyncClient,
+    signup_user,
+):
+    first = await signup_user(email=f"claim-first-{uuid4().hex[:8]}@example.com")
+    second = await signup_user(email=f"claim-second-{uuid4().hex[:8]}@example.com")
+    suffix = f"{int(uuid4().hex[:8], 16) % 10_000_000:07d}"
+    canonical = f"+1555{suffix}"
+
+    responses = await asyncio.gather(
+        async_client.post(
+            "/users/me/profile",
+            headers=_auth_headers(first["token"]),
+            json={"mobile_number": canonical},
+        ),
+        async_client.post(
+            "/users/me/profile",
+            headers=_auth_headers(second["token"]),
+            json={"mobile_number": f"+1 (555) {suffix[:3]}-{suffix[3:]}"},
+        ),
+    )
+
+    assert sorted(response.status_code for response in responses) == [201, 409], [
+        response.text for response in responses
+    ]
+    conflict = next(response for response in responses if response.status_code == 409)
+    assert conflict.json()["message"] == "This mobile number is already in use"
+
+    async with async_session_maker() as session:
+        users = list(
+            (
+                await session.execute(
+                    select(User).where(
+                        User.id.in_([UUID(first["id"]), UUID(second["id"])])
+                    )
+                )
+            ).scalars()
+        )
+    assert [user.mobile_number for user in users].count(canonical) == 1
+    assert [user.mobile_number for user in users].count(None) == 1
+
+
+@pytest.mark.asyncio
 async def test_org_public_join_and_policy_update(
     async_client: AsyncClient,
     signup_user,

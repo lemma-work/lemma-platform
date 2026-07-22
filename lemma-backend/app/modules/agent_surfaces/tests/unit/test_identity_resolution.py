@@ -5,6 +5,7 @@ phone, with no dedicated coverage before this."""
 from __future__ import annotations
 
 from types import SimpleNamespace
+from unittest.mock import patch
 from uuid import uuid4
 
 import pytest
@@ -195,11 +196,37 @@ async def test_unique_unverified_phone_match_is_cached_for_followup_messages():
 async def test_unverified_phone_fallback_rejects_ambiguous_matches():
     users = _FakeUsers(by_unverified_phone_ids=[uuid4(), uuid4()])
 
-    resolved = await _service(users, _FakeExternalRepo()).resolve(
-        event=_event(platform=SurfacePlatform.TELEGRAM, phone="+1 555 0100")
-    )
+    with patch(
+        "app.modules.agent_surfaces.services.identity_resolution_service.logger"
+    ) as logger:
+        resolved = await _service(users, _FakeExternalRepo()).resolve(
+            event=_event(platform=SurfacePlatform.TELEGRAM, phone="+1 555 0100")
+        )
 
     assert resolved.internal_user_id is None
+    logger.error.assert_called_once_with(
+        "agent_surfaces.identity.ambiguous_mobile_match",
+        verification_state="unverified",
+        candidate_count=2,
+    )
+
+
+async def test_verified_phone_match_rejects_and_logs_ambiguous_legacy_data():
+    users = _FakeUsers(by_phone_ids=[uuid4(), uuid4()])
+
+    with patch(
+        "app.modules.agent_surfaces.services.identity_resolution_service.logger"
+    ) as logger:
+        resolved = await _service(users, _FakeExternalRepo()).resolve(
+            event=_event(platform=SurfacePlatform.WHATSAPP, phone="+1 555 0100")
+        )
+
+    assert resolved.internal_user_id is None
+    logger.error.assert_called_once_with(
+        "agent_surfaces.identity.ambiguous_mobile_match",
+        verification_state="verified",
+        candidate_count=2,
+    )
 
 
 async def test_phone_candidates_handle_provider_and_profile_formatting():
