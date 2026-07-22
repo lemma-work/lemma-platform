@@ -36,7 +36,7 @@ Connection modes (persisted in `~/Library/Application Support/Lemma/desktop-conf
 - **local**: spawns the supervisor, shows the splash with live
   startup phases, refreshes Stable-channel images, installs the matching
   `lemma-terminal` release and its curated agent skills, then navigates to
-  `http://localhost:3711` when ready. Explicit version channels stay pinned.
+  `http://app.lemma.localhost:3711` when ready. Explicit version channels stay pinned.
 - **hosted**: loads the hosted app directly, no local services
 
 ## Development

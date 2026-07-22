@@ -658,7 +658,7 @@
         progress: Math.round(((i + 1) / seq.length) * 100),
         etaSeconds: (seq.length - i) * 7, setup: true,
         error: false, ready: key === "ready", running: true,
-        mode: "local", url: "http://localhost:3711",
+        mode: "local", url: "http://app.lemma.localhost:3711",
       });
       listeners.log.forEach((cb) => cb(`[demo] phase: ${key}`));
       if (i < seq.length - 1) { i += 1; timer = setTimeout(step, 7000); }

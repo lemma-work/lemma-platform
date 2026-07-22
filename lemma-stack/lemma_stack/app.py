@@ -189,8 +189,8 @@ def install(
         info(f"  api:      {render.backend_origin(config)}")
         info(f"  api docs: {render.backend_origin(config)}/scalar")
         info(
-            "  [dim]open the 127-0-0-1.sslip.io host above (it resolves to 127.0.0.1); "
-            "sign-in is scoped to it, so localhost / 127.0.0.1 won't authenticate[/dim]"
+            "  [dim]the lemma.localhost domain is reserved for loopback; sign-in and "
+            "host-routed apps are scoped to it, so use the URLs shown above[/dim]"
         )
 
     _print_next_steps(config)

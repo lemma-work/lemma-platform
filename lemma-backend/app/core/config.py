@@ -704,9 +704,9 @@ class Settings(BaseSettings):
         return self
 
     # App serving: apps are served by host, at `<public_slug>.<app_base_domain>`.
-    # Locally the stack sets this to a sslip.io wildcard (e.g.
-    # 127-0-0-1.sslip.io:8711) that resolves to loopback; in cloud it is the real
-    # apps domain behind the ingress. There is intentionally NO cloud default: an
+    # Locally the stack sets this to a reserved loopback domain (e.g.
+    # apps.lemma.localhost:8711); in cloud it is the real apps domain behind the
+    # ingress. There is intentionally NO cloud default: an
     # empty value disables host-based app routing, and it is REQUIRED outside
     # local/testing (see _require_app_base_domain_outside_local).
     app_base_domain: str = Field(
@@ -714,7 +714,7 @@ class Settings(BaseSettings):
         description=(
             "Base domain under which public apps are served, as "
             "`<public_slug>.<app_base_domain>`. The local stack sets this to the "
-            "sslip.io wildcard host (e.g. 127-0-0-1.sslip.io:8711); in cloud it is "
+            "loopback apps domain (e.g. apps.lemma.localhost:8711); in cloud it is "
             "the real apps domain behind the ingress. Empty disables host-based "
             "app routing and is rejected at startup in development/production."
         ),

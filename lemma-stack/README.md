@@ -11,8 +11,10 @@ curl -fsSL https://raw.githubusercontent.com/lemma-work/lemma-platform/main/inst
 recommended runtime), pulls the released images, and starts everything with
 all persistent state under `~/.lemma/local`:
 
-- frontend: http://127-0-0-1.sslip.io:3711
-- backend API: http://127-0-0-1.sslip.io:8711 (docs at /scalar)
+- frontend: http://app.lemma.localhost:3711
+- backend API: http://api.lemma.localhost:8711 (docs at /scalar)
+- built pod apps: `http://<slug>.apps.lemma.localhost:8711`
+- live workspace apps: `http://<sandbox>-<app>.workspaces.lemma.localhost:8711`
 - infrastructure (PostgreSQL, Redis, and SuperTokens) stays on the private
   `lemma-local-net` container network — no host ports, no collisions.
 
@@ -21,9 +23,10 @@ AgentBox manager, and in-process MarkItDown document conversion. There is no
 separate AgentBox or Kreuzberg service. AgentBox durable state uses the
 `agentbox` database in the same PostgreSQL instance.
 
-Use the `127-0-0-1.sslip.io` host (wildcard DNS that resolves to `127.0.0.1`),
-not `localhost` / `127.0.0.1` directly: sign-in cookies and per-app subdomains
-are scoped to it, so the app only authenticates on this host.
+Use the `*.lemma.localhost` URLs above rather than bare `localhost` or
+`127.0.0.1`: authentication cookies and host-routed apps are scoped to the
+local Lemma domain. The reserved `.localhost` namespace resolves to loopback;
+it does not use public DNS or send traffic off the machine.
 
 ## Commands
 

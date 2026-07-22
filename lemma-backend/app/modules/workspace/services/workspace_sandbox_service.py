@@ -147,12 +147,13 @@ class WorkspaceSandboxService:
     def _is_loopback_host(hostname: str | None) -> bool:
         if not hostname:
             return False
-        if hostname in {"localhost", "127.0.0.1", "0.0.0.0"}:
+        if hostname in {"localhost", "127.0.0.1", "0.0.0.0"} or hostname.endswith(
+            ".localhost"
+        ):
             return True
-        # The local dev stack addresses the host via the sslip.io dashed-IP
-        # loopback alias (e.g. 127-0-0-1.sslip.io -> 127.0.0.1). From inside a
-        # container that still points at the container itself, so it must be
-        # rewritten to host.docker.internal like any other loopback host.
+        # Older local installs address the host via the sslip.io dashed-IP
+        # loopback alias (e.g. 127-0-0-1.sslip.io -> 127.0.0.1). Keep it
+        # recognized while upgrades move to the reserved `.localhost` domain.
         if hostname.endswith(".sslip.io"):
             candidate = hostname.split(".", 1)[0].replace("-", ".")
             return candidate.startswith("127.") or candidate == "0.0.0.0"

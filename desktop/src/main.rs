@@ -19,7 +19,7 @@ use tauri::{AppHandle, Emitter, Manager, State, WebviewUrl, WebviewWindowBuilder
 use tauri_plugin_autostart::ManagerExt as _;
 
 const DEFAULT_HOSTED_URL: &str = "https://lemma.work";
-const DEFAULT_LOCAL_URL: &str = "http://localhost:3711";
+const DEFAULT_LOCAL_URL: &str = "http://app.lemma.localhost:3711";
 // Legacy development builds persisted a mode before the released chooser
 // contract was stable. Require that chooser once, then retain the new choice.
 const CONNECTION_MODE_PROMPT_REVISION: u64 = 1;
@@ -912,7 +912,7 @@ mod tests {
         let urls = [
             "https://sales.apps.lemma.work/",
             "https://api.lemma.work/widgets/serve/conversation/tool",
-            "http://sales.127-0-0-1.sslip.io:8711/",
+            "http://sales.apps.lemma.localhost:8711/",
             "https://widgets.example.com/report",
         ];
 
@@ -997,7 +997,7 @@ mod tests {
         let plist = include_str!("../Info.plist");
 
         assert!(plist.contains("NSAllowsLocalNetworking"));
-        assert!(plist.contains("127-0-0-1.sslip.io"));
+        assert!(plist.contains("lemma.localhost"));
         assert!(plist.contains("NSIncludesSubdomains"));
         assert!(!plist.contains("NSAllowsArbitraryLoads"));
         assert!(!plist.contains("NSAllowsArbitraryLoadsInWebContent"));
@@ -1025,8 +1025,8 @@ mod tests {
             "https://lemma.work/auth/desktop?mode=signup"
         );
         assert_eq!(
-            desktop_auth_url("http://localhost:3711/", "signin"),
-            "http://localhost:3711/auth/desktop?mode=signin"
+            desktop_auth_url("http://app.lemma.localhost:3711/", "signin"),
+            "http://app.lemma.localhost:3711/auth/desktop?mode=signin"
         );
     }
 }

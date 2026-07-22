@@ -2,9 +2,8 @@
 
 A function/agent running inside a Docker AgentBox container reaches the host
 backend via ``host.docker.internal``. The resolver must rewrite every host that
-actually points at the host loopback — including the local dev stack's
-``sslip.io`` dashed-IP alias (``127-0-0-1.sslip.io``) — while leaving real
-public hosts untouched.
+actually points at the host loopback — including reserved ``*.localhost`` names
+and the legacy ``sslip.io`` alias — while leaving real public hosts untouched.
 """
 
 import pytest
@@ -22,7 +21,9 @@ _rewrite = WorkspaceSandboxService.resolve_workspace_host_url_for_runtime
         ("http://localhost:8710", "http://host.docker.internal:8710"),
         ("http://127.0.0.1:8710", "http://host.docker.internal:8710"),
         ("http://0.0.0.0:8710", "http://host.docker.internal:8710"),
-        # sslip.io dashed-IP loopback alias used by the local dev stack.
+        ("http://api.lemma.localhost:8710", "http://host.docker.internal:8710"),
+        ("http://deep.api.lemma.localhost:8710", "http://host.docker.internal:8710"),
+        # Legacy sslip.io dashed-IP loopback alias.
         ("http://127-0-0-1.sslip.io:8710", "http://host.docker.internal:8710"),
         ("https://127-0-0-1.sslip.io", "https://host.docker.internal"),
     ],

@@ -47,7 +47,7 @@ def test_workspace_app_hosts_dispatch_to_embedded_agentbox(monkeypatch) -> None:
     monkeypatch.setattr(
         agentbox_apps.settings,
         "agentbox_app_domain",
-        "workspaces.127-0-0-1.sslip.io:8711",
+        "workspaces.lemma.localhost:8711",
     )
 
     parent = FastAPI()
@@ -70,12 +70,12 @@ def test_workspace_app_hosts_dispatch_to_embedded_agentbox(monkeypatch) -> None:
     workspace = client.get(
         "/dashboard",
         headers={
-            "host": "sandbox-1-browser.workspaces.127-0-0-1.sslip.io:8711"
+            "host": "sandbox-1-browser.workspaces.lemma.localhost:8711"
         },
     )
     built_app = client.get(
         "/dashboard",
-        headers={"host": "sales.apps.127-0-0-1.sslip.io:8711"},
+        headers={"host": "sales.apps.lemma.localhost:8711"},
     )
 
     assert workspace.json() == {"app": "agentbox", "path": "dashboard"}

@@ -259,8 +259,8 @@ async def test_get_or_create_sandbox_passes_container_app_env(monkeypatch):
 async def test_get_or_create_sandbox_prefers_cli_api_url_for_local_https(monkeypatch):
     user_id = uuid4()
     sandbox = _FakeSandbox({user_id: _sandbox_info(user_id, status="CREATING")})
-    monkeypatch.setattr(settings, "api_url", "https://127-0-0-1.sslip.io:8743")
-    monkeypatch.setattr(settings, "cli_api_url", "http://127-0-0-1.sslip.io:8710")
+    monkeypatch.setattr(settings, "api_url", "https://api.lemma.localhost:8743")
+    monkeypatch.setattr(settings, "cli_api_url", "http://api.lemma.localhost:8710")
     service = WorkspaceSandboxService(
         runtime="docker",
         sandbox=sandbox,  # type: ignore[arg-type]

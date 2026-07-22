@@ -20,12 +20,12 @@ def test_app_subdomain_regex_matches_slug_and_base(monkeypatch):
 
 
 def test_local_app_domain_with_port(monkeypatch):
-    monkeypatch.setattr(cors.settings, "app_base_domain", "127-0-0-1.sslip.io:8711")
+    monkeypatch.setattr(cors.settings, "app_base_domain", "apps.lemma.localhost:8711")
     monkeypatch.setattr(cors.settings, "cors_origin_regex", None)
 
     pattern = cors.get_allowed_cors_origin_regex()
-    assert re.fullmatch(pattern, "http://home-x.127-0-0-1.sslip.io:8711")
-    assert re.fullmatch(pattern, "http://127-0-0-1.sslip.io:8711")
+    assert re.fullmatch(pattern, "http://home-x.apps.lemma.localhost:8711")
+    assert re.fullmatch(pattern, "http://apps.lemma.localhost:8711")
 
 
 def test_combines_with_configured_regex(monkeypatch):

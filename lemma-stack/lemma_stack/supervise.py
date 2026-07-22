@@ -19,7 +19,7 @@ Protocol (v1) — byte-compatible with the previous installer-based supervisor:
   <- {"v":1,"event":"log","line":"..."}
   <- {"v":1,"event":"state","status":"starting|running|stopping|stopped|error","running":bool}
   <- {"v":1,"event":"provider","provider":"docker"}
-  <- {"v":1,"event":"ready","url":"http://127-0-0-1.sslip.io:3711","api_url":"http://127-0-0-1.sslip.io:8711"}
+  <- {"v":1,"event":"ready","url":"http://app.lemma.localhost:3711","api_url":"http://api.lemma.localhost:8711"}
   <- {"v":1,"event":"done","cmd":"start","id":"...","ok":true}
   <- {"v":1,"event":"error","message":"...","id":"..."}
   <- {"v":1,"event":"status","running":bool,"ready":bool,...}

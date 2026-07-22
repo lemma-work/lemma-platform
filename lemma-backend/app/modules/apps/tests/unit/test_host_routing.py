@@ -11,18 +11,18 @@ pytestmark = pytest.mark.unit
 
 @pytest.fixture(autouse=True)
 def _base_domain(monkeypatch):
-    monkeypatch.setattr(settings, "app_base_domain", "127-0-0-1.sslip.io:8711")
+    monkeypatch.setattr(settings, "app_base_domain", "apps.lemma.localhost:8711")
 
 
 @pytest.mark.parametrize(
     "host,expected",
     [
-        ("my-app.127-0-0-1.sslip.io:8711", "my-app"),
-        ("my-app.127-0-0-1.sslip.io", "my-app"),  # port optional
-        ("MY-APP.127-0-0-1.SSLIP.IO:8711", "my-app"),  # case-insensitive
-        ("127-0-0-1.sslip.io:8711", None),  # bare base domain = main API host
-        ("127-0-0-1.sslip.io", None),
-        ("a.b.127-0-0-1.sslip.io:8711", None),  # multi-level is not an app
+        ("my-app.apps.lemma.localhost:8711", "my-app"),
+        ("my-app.apps.lemma.localhost", "my-app"),  # port optional
+        ("MY-APP.APPS.LEMMA.LOCALHOST:8711", "my-app"),  # case-insensitive
+        ("apps.lemma.localhost:8711", None),  # bare base domain is not an app
+        ("apps.lemma.localhost", None),
+        ("a.b.apps.lemma.localhost:8711", None),  # multi-level is not an app
         ("example.com", None),  # unrelated host
         ("", None),
     ],
@@ -33,7 +33,7 @@ def test_app_slug_from_host(host, expected):
 
 def test_no_base_domain_disables_routing(monkeypatch):
     monkeypatch.setattr(settings, "app_base_domain", "")
-    assert app_slug_from_host("my-app.127-0-0-1.sslip.io:8711") is None
+    assert app_slug_from_host("my-app.apps.lemma.localhost:8711") is None
 
 
 async def _drive(path):
@@ -48,7 +48,7 @@ async def _drive(path):
         "type": "http",
         "path": path,
         "raw_path": path.encode("latin-1"),
-        "headers": [(b"host", b"my-app.127-0-0-1.sslip.io:8711")],
+        "headers": [(b"host", b"my-app.apps.lemma.localhost:8711")],
     }
 
     async def receive():

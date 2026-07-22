@@ -5,8 +5,8 @@ Layering (last wins): packaged defaults -> values derived from config
 
 Services talk to each other over the lemma-local-net container network using
 DNS aliases (db, redis, supertokens, backend, frontend);
-browser-facing URLs use the 127-0-0-1.sslip.io wildcard host + published ports
-(see LOCAL_HOST) so apps and the API share one registrable domain.
+browser-facing URLs use purpose-specific subdomains below ``lemma.localhost``
+and published ports so local routing mirrors the production domain model.
 """
 
 from __future__ import annotations
@@ -23,16 +23,25 @@ NETWORK_NAME = "lemma-local-net"
 CONTAINER_PREFIX = "lemma-local"
 POSTGRES_VOLUME = "lemma-local-postgres-data"
 
-# Browser-facing host. `127-0-0-1.sslip.io` is wildcard DNS that resolves itself
-# and every subdomain to 127.0.0.1, so the backend, frontend, and per-app
-# subdomains all share one registrable domain. That makes app subdomains
-# same-site with the API, so the session cookie (scoped to LOCAL_COOKIE_DOMAIN)
-# flows to apps with SameSite=Lax over plain HTTP — no proxy, hosts file, or
-# certs. The dash form keeps the IP in a single DNS label (TLS-friendly).
-LOCAL_HOST = "127-0-0-1.sslip.io"
-LOCAL_COOKIE_DOMAIN = f".{LOCAL_HOST}"
-# Allow the apex (API/frontend) and any app subdomain, on any published port.
-LOCAL_CORS_ORIGIN_REGEX = r"^https?://([a-z0-9-]+\.)?127-0-0-1\.sslip\.io(:\d+)?$"
+# ``.localhost`` and its subdomains are reserved loopback names. Separate
+# frontend/API/app hosts make local behavior match production:
+#
+#   app.lemma.localhost
+#   api.lemma.localhost
+#   <slug>.apps.lemma.localhost
+#   <sandbox>-<app>.workspaces.lemma.localhost
+#
+# They remain same-site, so a cookie scoped to ``lemma.localhost`` reaches the
+# API and built apps with SameSite=Lax over plain HTTP. No public DNS, hosts-file
+# edits, proxy, or development certificate is required.
+LOCAL_ROOT_DOMAIN = "lemma.localhost"
+LOCAL_FRONTEND_HOST = f"app.{LOCAL_ROOT_DOMAIN}"
+LOCAL_BACKEND_HOST = f"api.{LOCAL_ROOT_DOMAIN}"
+LOCAL_APPS_DOMAIN = f"apps.{LOCAL_ROOT_DOMAIN}"
+LOCAL_WORKSPACES_DOMAIN = f"workspaces.{LOCAL_ROOT_DOMAIN}"
+LOCAL_COOKIE_DOMAIN = f".{LOCAL_ROOT_DOMAIN}"
+# Allow every Lemma-local host depth, on any published port.
+LOCAL_CORS_ORIGIN_REGEX = r"^https?://([a-z0-9-]+\.)*lemma\.localhost(:\d+)?$"
 
 # Container-side mount points under /app/.local (match the backend/agentbox
 # image defaults so app config keeps working).
@@ -43,20 +52,20 @@ FILES_MOUNT = "/app/.local/files"
 
 
 def frontend_origin(doc: TOMLDocument) -> str:
-    return f"http://{LOCAL_HOST}:{store.port(doc, 'frontend')}"
+    return f"http://{LOCAL_FRONTEND_HOST}:{store.port(doc, 'frontend')}"
 
 
 def backend_origin(doc: TOMLDocument) -> str:
-    return f"http://{LOCAL_HOST}:{store.port(doc, 'backend')}"
+    return f"http://{LOCAL_BACKEND_HOST}:{store.port(doc, 'backend')}"
 
 
 def app_base_domain(doc: TOMLDocument) -> str:
     # Apps are served by the backend, at <slug>.<this>.
-    return f"{LOCAL_HOST}:{store.port(doc, 'backend')}"
+    return f"{LOCAL_APPS_DOMAIN}:{store.port(doc, 'backend')}"
 
 
 def agentbox_app_domain(doc: TOMLDocument) -> str:
-    return f"workspaces.{LOCAL_HOST}:{store.port(doc, 'backend')}"
+    return f"{LOCAL_WORKSPACES_DOMAIN}:{store.port(doc, 'backend')}"
 
 
 def _agentbox_endpoint_state_key(doc: TOMLDocument) -> str:
