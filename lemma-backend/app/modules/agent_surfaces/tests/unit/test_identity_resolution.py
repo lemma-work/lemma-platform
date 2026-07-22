@@ -41,10 +41,18 @@ class _FakeExternalRepo:
 
 
 class _FakeUsers:
-    def __init__(self, *, by_email=None, by_telegram=None, by_phone_ids=None):
+    def __init__(
+        self,
+        *,
+        by_email=None,
+        by_telegram=None,
+        by_phone_ids=None,
+        by_unverified_phone_ids=None,
+    ):
         self._by_email = by_email
         self._by_telegram = by_telegram
         self._by_phone_ids = by_phone_ids or []
+        self._by_unverified_phone_ids = by_unverified_phone_ids or []
         self.telegram_lookups: list[str] = []
 
     async def get_id_by_email_insensitive(self, email):
@@ -54,8 +62,8 @@ class _FakeUsers:
         self.telegram_lookups.append(username)
         return self._by_telegram
 
-    async def get_ids_by_mobile_numbers(self, candidates):
-        return list(self._by_phone_ids)
+    async def get_ids_by_mobile_numbers(self, candidates, *, verified=True):
+        return list(self._by_phone_ids if verified else self._by_unverified_phone_ids)
 
 
 def _service(users: _FakeUsers, external: _FakeExternalRepo):
@@ -103,9 +111,7 @@ async def test_resolves_by_telegram_username():
     user_id = uuid4()
     users = _FakeUsers(by_telegram=user_id)
     external = _FakeExternalRepo()
-    resolved = await _service(users, external).resolve(
-        event=_event(username="@Asha")
-    )
+    resolved = await _service(users, external).resolve(event=_event(username="@Asha"))
     assert resolved.internal_user_id == user_id
     # Username is normalized (stripped @, lowercased) before lookup.
     assert users.telegram_lookups == ["asha"]
@@ -148,3 +154,63 @@ async def test_unresolved_sender_returns_none_internal_id():
     )
     assert resolved.internal_user_id is None
     assert resolved.external_user_id == "ext-1"
+
+
+async def test_verified_phone_match_has_priority_over_unverified_fallback(monkeypatch):
+    from app.modules.agent_surfaces.config import surface_settings
+
+    verified_id = uuid4()
+    users = _FakeUsers(by_phone_ids=[verified_id], by_unverified_phone_ids=[uuid4()])
+    external = _FakeExternalRepo()
+    monkeypatch.setattr(surface_settings, "surface_allow_unverified_mobile_match", True)
+
+    resolved = await _service(users, external).resolve(
+        event=_event(platform=SurfacePlatform.WHATSAPP, phone="+1 555 0100")
+    )
+
+    assert resolved.internal_user_id == verified_id
+    assert external.calls[-1]["resolved_user_id"] == verified_id
+
+
+async def test_unique_unverified_phone_fallback_is_never_persisted(monkeypatch):
+    from app.modules.agent_surfaces.config import surface_settings
+
+    unverified_id = uuid4()
+    users = _FakeUsers(by_unverified_phone_ids=[unverified_id])
+    external = _FakeExternalRepo()
+    monkeypatch.setattr(surface_settings, "surface_allow_unverified_mobile_match", True)
+
+    resolved = await _service(users, external).resolve(
+        event=_event(platform=SurfacePlatform.WHATSAPP, phone="+1 555 0100")
+    )
+
+    assert resolved.internal_user_id == unverified_id
+    assert all(call.get("resolved_user_id") is None for call in external.calls)
+
+
+async def test_unverified_phone_fallback_rejects_ambiguous_matches(monkeypatch):
+    from app.modules.agent_surfaces.config import surface_settings
+
+    users = _FakeUsers(by_unverified_phone_ids=[uuid4(), uuid4()])
+    monkeypatch.setattr(surface_settings, "surface_allow_unverified_mobile_match", True)
+
+    resolved = await _service(users, _FakeExternalRepo()).resolve(
+        event=_event(platform=SurfacePlatform.TELEGRAM, phone="+1 555 0100")
+    )
+
+    assert resolved.internal_user_id is None
+
+
+async def test_unverified_phone_fallback_is_disabled_by_default(monkeypatch):
+    from app.modules.agent_surfaces.config import surface_settings
+
+    users = _FakeUsers(by_unverified_phone_ids=[uuid4()])
+    monkeypatch.setattr(
+        surface_settings, "surface_allow_unverified_mobile_match", False
+    )
+
+    resolved = await _service(users, _FakeExternalRepo()).resolve(
+        event=_event(platform=SurfacePlatform.WHATSAPP, phone="+1 555 0100")
+    )
+
+    assert resolved.internal_user_id is None

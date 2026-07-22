@@ -16,11 +16,15 @@ from app.modules.identity.domain.events import (
     OrganizationInvitationAcceptedEvent,
     OrganizationInvitationCreatedEvent,
     UserSignedUpEvent,
+    WhatsAppMobileVerificationReceivedEvent,
 )
 from app.modules.identity.domain.organization_entities import OrganizationRole
 from app.modules.identity.domain.ports import IdentityEmailPort
 from app.modules.identity.infrastructure.adapters.email_adapter import (
     SmtpIdentityEmailAdapter,
+)
+from app.modules.identity.services.whatsapp_mobile_verification import (
+    get_whatsapp_mobile_verification_service,
 )
 
 router = RedisRouter()
@@ -86,3 +90,31 @@ async def _dispatch_identity_event(
             organization_name=parsed.organization_name,
             role=OrganizationRole(parsed.role),
         )
+
+
+@reliable_redis_stream_subscriber(
+    router,
+    IdentityEvents.STREAM,
+    group="identity-mobile-verification-events",
+    consumer="identity-mobile-verification-events-consumer",
+)
+async def handle_mobile_verification_event(
+    event: dict,
+    inbox: EventInboxPort = Depends(provide_domain_event_inbox),
+) -> None:
+    if (
+        event.get("event_type")
+        != WhatsAppMobileVerificationReceivedEvent.get_event_type()
+    ):
+        return
+
+    async def dispatch() -> None:
+        parsed = WhatsAppMobileVerificationReceivedEvent.model_validate(event)
+        await get_whatsapp_mobile_verification_service().consume_message(
+            code=parsed.code,
+            sender_wa_id=parsed.sender_wa_id,
+            destination_phone_number_id=parsed.destination_phone_number_id,
+            whatsapp_message_id=parsed.whatsapp_message_id,
+        )
+
+    await inbox.process("identity-mobile-verification-events", event, dispatch)

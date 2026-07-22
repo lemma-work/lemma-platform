@@ -53,5 +53,30 @@ class OrganizationInvitationAcceptedEvent(DomainEvent):
         return IDENTITY_EVENTS_STREAM
 
 
+class WhatsAppMobileVerificationReceivedEvent(DomainEvent):
+    """A reserved, signed message received by Lemma's global WhatsApp number."""
+
+    event_type: str = "identity.mobile_verification.whatsapp.received"
+    code: str
+    sender_wa_id: str
+    destination_phone_number_id: str
+    whatsapp_message_id: str
+
+    @classmethod
+    def stream_name(cls) -> str:
+        return IDENTITY_EVENTS_STREAM
+
+
+class UserMobileChangedEvent(DomainEvent):
+    """Invalidate external identity caches after a profile phone change."""
+
+    event_type: str = "identity.user.mobile.changed"
+    user_id: UUID
+
+    @classmethod
+    def stream_name(cls) -> str:
+        return IDENTITY_EVENTS_STREAM
+
+
 class IdentityEvents:
     STREAM = IDENTITY_EVENTS_STREAM

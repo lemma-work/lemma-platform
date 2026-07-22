@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from datetime import datetime, timezone
 from uuid import uuid4
 from unittest.mock import AsyncMock
 
@@ -8,6 +9,22 @@ import pytest
 from app.modules.identity.domain.errors import UserConflictError, UserNotFoundError
 from app.modules.identity.domain.user_entities import UserEntity
 from app.modules.identity.services.user_service import UserService
+
+
+def test_changing_mobile_clears_verification_and_emits_cache_invalidation_event():
+    user = UserEntity(
+        email="test+mobile@example.com",
+        mobile_number="+14155552671",
+        mobile_verified_at=datetime.now(timezone.utc),
+    )
+
+    user.update_profile(mobile_number="+14155552672")
+
+    assert user.mobile_verified_at is None
+    events = user.collect_events()
+    assert len(events) == 1
+    assert events[0].event_type == "identity.user.mobile.changed"
+    assert events[0].user_id == user.id
 
 
 @pytest.mark.asyncio
@@ -54,7 +71,9 @@ async def test_create_user_raises_conflict_when_email_exists(
     user_service: UserService,
     user_repository_mock: AsyncMock,
 ):
-    user_repository_mock.get_by_email.return_value = UserEntity(email="test+user@example.com")
+    user_repository_mock.get_by_email.return_value = UserEntity(
+        email="test+user@example.com"
+    )
 
     with pytest.raises(UserConflictError):
         await user_service.create_user(UserEntity(email="test+user@example.com"))

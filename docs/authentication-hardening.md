@@ -41,6 +41,19 @@ AUTH_BOUNCE_WEBHOOK_SECRET=...
 TELEGRAM_OIDC_CLIENT_ID=...
 TELEGRAM_OIDC_CLIENT_SECRET=...
 TELEGRAM_OIDC_REDIRECT_URI=https://api.example.com/auth/telegram/callback
+
+# Global Lemma WhatsApp mobile verification. Keep both feature flags off until
+# Meta is delivering signed webhooks to /surfaces/webhooks/whatsapp.
+AUTH_WHATSAPP_MOBILE_VERIFICATION_ENABLED=false
+WHATSAPP_ACCESS_TOKEN=...
+WHATSAPP_PHONE_NUMBER_ID=...
+WHATSAPP_DISPLAY_PHONE_NUMBER=+14155550000
+WHATSAPP_APP_SECRET=...
+WHATSAPP_VERIFY_TOKEN=...
+SURFACE_WEBHOOK_SECURITY_ENABLED=true
+
+# Hosted Lemma compatibility only. Self-hosted/local deployments keep this off.
+SURFACE_ALLOW_UNVERIFIED_MOBILE_MATCH=false
 ```
 
 For `lemma-stack`, each value can be set with `lemma-stack config set KEY value`; backend environment overrides are passed through unchanged. The local stack explicitly defaults `AUTH_EMAIL_VERIFICATION_REQUIRED` and its frontend counterpart to `false`, because local users normally have no SMTP account. Production keeps the backend and frontend values enabled.
@@ -66,6 +79,11 @@ Only list the immediate reverse proxies in `AUTH_TRUSTED_PROXY_IPS`. Requests fr
 
 5. Enable abuse protection and ALTCHA, then monitor SMTP failures, hard-bounce deactivations, `429` responses, and verification completion.
 6. Register the global Telegram OIDC client in BotFather, configure its exact callback URI, enable the three Telegram settings, and perform iOS/Android device acceptance testing before exposing the button.
+7. Validate Meta's webhook challenge and signed message delivery for the global
+   Lemma WhatsApp number, then enable `AUTH_WHATSAPP_MOBILE_VERIFICATION_ENABLED`.
+   Only the hosted Lemma deployment may subsequently enable
+   `SURFACE_ALLOW_UNVERIFIED_MOBILE_MATCH`; this fallback is re-evaluated for
+   every inbound message and is never used by Telegram OIDC sign-in.
 
 The reconciliation command is idempotent and never prints complete addresses. An `email_conflict` or `duplicate_emailpassword_identity` count must be investigated before using `--apply` for those records; conflicted records are skipped.
 

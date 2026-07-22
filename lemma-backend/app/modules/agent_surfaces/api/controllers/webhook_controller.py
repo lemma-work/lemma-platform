@@ -15,6 +15,11 @@ from app.modules.agent_surfaces.api.dependencies import (
     get_surface_service,
 )
 from app.modules.agent_surfaces.domain.events import SurfaceWebhookReceivedEvent
+from app.modules.identity.domain.events import WhatsAppMobileVerificationReceivedEvent
+from app.modules.identity.services.whatsapp_mobile_verification import (
+    is_whatsapp_verification_configured,
+    parse_reserved_verification_message,
+)
 from app.modules.agent_surfaces.services.surface_service import (
     AgentSurfaceService,
 )
@@ -96,9 +101,7 @@ def _normalize_resend_inbound(payload: dict) -> dict:
     elif isinstance(raw_headers, dict):
         header_map = {str(k).lower(): str(v) for k, v in raw_headers.items()}
 
-    references_raw = (
-        data.get("references") or header_map.get("references") or ""
-    )
+    references_raw = data.get("references") or header_map.get("references") or ""
     if isinstance(references_raw, str):
         references = [r for r in references_raw.split() if r]
     else:
@@ -175,6 +178,29 @@ async def handle_platform_webhook(
         raw_body=raw_body,
     )
 
+    # Verification commands are identity traffic, not agent messages. The
+    # request is intercepted only after Meta's raw-body signature succeeds and
+    # only when it targets Lemma's configured global phone-number id.
+    if platform == "whatsapp":
+        verification = parse_reserved_verification_message(payload)
+        if verification is not None:
+            code, sender_wa_id, destination_id, message_id = verification
+            if destination_id == surface_settings.whatsapp_phone_number_id:
+                if is_whatsapp_verification_configured():
+                    identity_event = WhatsAppMobileVerificationReceivedEvent(
+                        event_id=stable_event_id(
+                            {"whatsapp_mobile_verification_message_id": message_id}
+                        ),
+                        code=code,
+                        sender_wa_id=sender_wa_id,
+                        destination_phone_number_id=destination_id,
+                        whatsapp_message_id=message_id,
+                    )
+                    await EventPublisher.publish(
+                        identity_event.stream_name(), identity_event
+                    )
+                return {"message": "Verification message received"}
+
     source_event_id = _surface_source_event_id(platform, payload, raw_body)
     event = SurfaceWebhookReceivedEvent(
         event_id=stable_event_id({"event_id": source_event_id}),
@@ -239,8 +265,10 @@ def _webhook_verification_response(
         verify_token = params.get("hub.verify_token")
 
         security_enabled = bool(surface_settings.surface_webhook_security_enabled)
-        if mode == "subscribe" and challenge and (
-            not security_enabled or verify_token == whatsapp_verify_token
+        if (
+            mode == "subscribe"
+            and challenge
+            and (not security_enabled or verify_token == whatsapp_verify_token)
         ):
             return Response(content=challenge, media_type="text/plain")
 
@@ -315,7 +343,7 @@ async def teams_admin_consent_callback(
         html = f"""
         <html><body style="font-family:sans-serif;padding:2rem">
         <h2>&#10060; Admin consent failed</h2>
-        <p><strong>{error}</strong>: {error_description or ''}</p>
+        <p><strong>{error}</strong>: {error_description or ""}</p>
         <p>Please contact your administrator or try again.</p>
         </body></html>
         """
@@ -335,9 +363,14 @@ async def teams_admin_consent_callback(
 
         surface_id = UUID(state)
     except ValueError:
-        return HTMLResponse(content="<html><body>Invalid state parameter.</body></html>", status_code=400)
+        return HTMLResponse(
+            content="<html><body>Invalid state parameter.</body></html>",
+            status_code=400,
+        )
 
-    surface = await service.activate_after_consent(surface_id=surface_id, tenant_id=tenant)
+    surface = await service.activate_after_consent(
+        surface_id=surface_id, tenant_id=tenant
+    )
 
     if surface is None:
         html = """

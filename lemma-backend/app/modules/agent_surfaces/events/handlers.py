@@ -45,12 +45,16 @@ from app.modules.agent_surfaces.infrastructure.adapters.routing_resolution_adapt
 from app.modules.agent_surfaces.infrastructure.repositories.surface_repository import (
     SurfaceConversationLinkRepository,
 )
+from app.modules.agent_surfaces.infrastructure.repositories.external_user_repository import (
+    ExternalSurfaceUserRepository,
+)
 from app.modules.agent_surfaces.services.ingress_service import (
     AgentSurfaceIngressService,
 )
 from app.composition.surface_connectors import get_connector_service
 from app.modules.pod.domain.events import PodDeletedEvent, PodEvents
 from app.modules.schedule.domain.events.schedule import ScheduleEvents, ScheduleFired
+from app.modules.identity.domain.events import IdentityEvents, UserMobileChangedEvent
 
 logger = get_logger(__name__)
 
@@ -209,11 +213,31 @@ async def on_pod_deleted(
     async def process() -> None:
         parsed = PodDeletedEvent.model_validate(event)
         async with uow_factory() as uow:
-            await get_surface_service(uow).delete_all_surfaces_for_pod(
-                parsed.pod_id
-            )
+            await get_surface_service(uow).delete_all_surfaces_for_pod(parsed.pod_id)
 
     await inbox.process("agent-surfaces.pod-deletion", event, process)
+
+
+@reliable_redis_stream_subscriber(
+    router,
+    IdentityEvents.STREAM,
+    group="surface-identity-events",
+    consumer="surface-identity-events-consumer",
+)
+async def on_identity_event(
+    event: dict,
+    uow_factory: UnitOfWorkFactory = Depends(provide_uow_factory),
+    inbox: EventInboxPort = Depends(provide_domain_event_inbox),
+) -> None:
+    if event.get("event_type") != UserMobileChangedEvent.get_event_type():
+        return
+
+    async def process() -> None:
+        parsed = UserMobileChangedEvent.model_validate(event)
+        async with uow_factory() as uow:
+            await ExternalSurfaceUserRepository(uow).clear_resolved_user(parsed.user_id)
+
+    await inbox.process("agent-surfaces.identity", event, process)
 
 
 @streaq_task(name="process_surface_message")

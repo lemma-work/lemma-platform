@@ -72,6 +72,11 @@ class UserEntity(AggregateRoot):
                     digits = normalize_mobile_digits(str(value or ""))
                     if digits != normalize_mobile_digits(self.mobile_number):
                         self.mobile_verified_at = None
+                        from app.modules.identity.domain.events import (
+                            UserMobileChangedEvent,
+                        )
+
+                        self.add_event(UserMobileChangedEvent(user_id=self.id))
                     elif self.mobile_verified_at is not None and digits:
                         # A verified number remains in its canonical E.164 form
                         # even if a profile client submits cosmetic formatting.

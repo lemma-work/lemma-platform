@@ -15,12 +15,15 @@ import jwt
 from jwt.algorithms import RSAAlgorithm
 from redis.asyncio import Redis
 from redis.exceptions import RedisError
-from sqlalchemy import select
+from sqlalchemy import func, select
 
 from app.core.config import reveal_secret, settings
 from app.core.infrastructure.db.session import async_session_maker
+from app.core.infrastructure.events.publisher import EventPublisher
+from app.core.helpers.identifiers import normalize_mobile_e164
 from app.modules.identity.infrastructure.models.user_models import User
 from app.modules.identity.infrastructure.user_cache import get_user_cache
+from app.modules.identity.domain.events import UserMobileChangedEvent
 
 
 TelegramPurpose = Literal["signin", "verify_mobile"]
@@ -41,10 +44,12 @@ class TelegramTransaction:
 
 
 def normalize_e164(value: str) -> str:
-    digits = "".join(character for character in value if character.isdigit())
-    if not 8 <= len(digits) <= 15 or digits.startswith("0"):
-        raise TelegramOIDCError("Telegram did not return a valid mobile number")
-    return f"+{digits}"
+    try:
+        return normalize_mobile_e164(value)
+    except ValueError as exc:
+        raise TelegramOIDCError(
+            "Telegram did not return a valid mobile number"
+        ) from exc
 
 
 def safe_return_to(value: str | None) -> str:
@@ -285,7 +290,9 @@ class TelegramOIDCService:
                     await session.execute(
                         select(User)
                         .where(
-                            User.mobile_number == phone_number,
+                            User.mobile_number.isnot(None),
+                            func.regexp_replace(User.mobile_number, r"\D", "", "g")
+                            == phone_number.removeprefix("+"),
                             User.mobile_verified_at.isnot(None),
                             User.is_active.is_(True),
                             User.is_deleted.is_(False),
@@ -308,7 +315,9 @@ class TelegramOIDCService:
                 raise TelegramOIDCError("A verified Lemma session is required")
             owner = await session.scalar(
                 select(User.id).where(
-                    User.mobile_number == phone_number,
+                    User.mobile_number.isnot(None),
+                    func.regexp_replace(User.mobile_number, r"\D", "", "g")
+                    == phone_number.removeprefix("+"),
                     User.mobile_verified_at.isnot(None),
                     User.id != user_id,
                 )
@@ -319,6 +328,8 @@ class TelegramOIDCService:
             user.mobile_verified_at = datetime.now(timezone.utc)
             await session.commit()
         await get_user_cache().invalidate(user_id)
+        phone_changed = UserMobileChangedEvent(user_id=user_id)
+        await EventPublisher.publish(phone_changed.stream_name(), phone_changed)
 
     async def close(self) -> None:
         await self._redis.aclose()

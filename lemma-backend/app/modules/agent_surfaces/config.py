@@ -18,7 +18,10 @@ from app.core.settings_env import dotenv_path
 
 class SurfaceSettings(BaseSettings):
     model_config = SettingsConfigDict(
-        env_file=dotenv_path(), env_file_encoding="utf-8", case_sensitive=False, extra="ignore"
+        env_file=dotenv_path(),
+        env_file_encoding="utf-8",
+        case_sensitive=False,
+        extra="ignore",
     )
 
     # Microsoft Teams bot (separate from login OAuth)
@@ -88,6 +91,13 @@ class SurfaceSettings(BaseSettings):
         default=None,
         description="Meta app secret for verifying WhatsApp webhook signatures",
     )
+    whatsapp_display_phone_number: Optional[str] = Field(
+        default=None,
+        description=(
+            "Human-messageable global Lemma WhatsApp number. When omitted, the "
+            "number is resolved from Meta using whatsapp_phone_number_id."
+        ),
+    )
 
     # Telegram
     telegram_bot_token: Optional[str] = Field(
@@ -121,6 +131,13 @@ class SurfaceSettings(BaseSettings):
             "Enable signature, token, and JWT verification for agent-surface "
             "webhook ingress. Disable only for local development when testing with "
             "temporary public URLs."
+        ),
+    )
+    surface_allow_unverified_mobile_match: bool = Field(
+        default=False,
+        description=(
+            "Temporarily allow unique unverified profile numbers to resolve "
+            "inbound surface users. Hosted Lemma only; never used for login."
         ),
     )
     surface_event_dedupe_ttl_seconds: int = Field(

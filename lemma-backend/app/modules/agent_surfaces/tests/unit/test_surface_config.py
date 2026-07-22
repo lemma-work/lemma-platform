@@ -23,6 +23,7 @@ EXPECTED = [
     ("whatsapp_waba_id", "WHATSAPP_WABA_ID", None),
     ("whatsapp_verify_token", "WHATSAPP_VERIFY_TOKEN", None),
     ("whatsapp_app_secret", "WHATSAPP_APP_SECRET", None),
+    ("whatsapp_display_phone_number", "WHATSAPP_DISPLAY_PHONE_NUMBER", None),
     ("telegram_bot_token", "TELEGRAM_BOT_TOKEN", None),
     ("telegram_webhook_secret", "TELEGRAM_WEBHOOK_SECRET", None),
     ("resend_api_key", "RESEND_API_KEY", None),
@@ -30,9 +31,22 @@ EXPECTED = [
     ("resend_from_name", "RESEND_FROM_NAME", "Lemma"),
     ("resend_inbound_signing_secret", "RESEND_INBOUND_SIGNING_SECRET", None),
     ("surface_webhook_security_enabled", "SURFACE_WEBHOOK_SECURITY_ENABLED", True),
+    (
+        "surface_allow_unverified_mobile_match",
+        "SURFACE_ALLOW_UNVERIFIED_MOBILE_MATCH",
+        False,
+    ),
     ("surface_event_dedupe_ttl_seconds", "SURFACE_EVENT_DEDUPE_TTL_SECONDS", 900),
-    ("surface_runtime_history_max_messages", "SURFACE_RUNTIME_HISTORY_MAX_MESSAGES", 40),
-    ("surface_runtime_history_window_hours", "SURFACE_RUNTIME_HISTORY_WINDOW_HOURS", 24),
+    (
+        "surface_runtime_history_max_messages",
+        "SURFACE_RUNTIME_HISTORY_MAX_MESSAGES",
+        40,
+    ),
+    (
+        "surface_runtime_history_window_hours",
+        "SURFACE_RUNTIME_HISTORY_WINDOW_HOURS",
+        24,
+    ),
     ("enable_telegram_polling_mode", "ENABLE_TELEGRAM_POLLING_MODE", False),
     ("enable_slack_socket_mode", "ENABLE_SLACK_SOCKET_MODE", False),
 ]

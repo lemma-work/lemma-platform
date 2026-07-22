@@ -14,6 +14,7 @@ from app.modules.identity.domain.ports import UserRepositoryPort
 from app.modules.identity.domain.user_entities import UserEntity
 from app.modules.identity.domain.user_preferences import UserPreferences
 from app.modules.identity.infrastructure.models import User
+from app.core.helpers.identifiers import normalize_mobile_digits
 
 
 class UserRepository(UserRepositoryPort):
@@ -65,12 +66,29 @@ class UserRepository(UserRepositoryPort):
         stmt = select(User.id).where(func.lower(User.email) == email.lower())
         return await self.session.scalar(stmt)
 
-    async def get_ids_by_mobile_numbers(self, numbers: list[str]) -> list[UUID]:
-        if not numbers:
+    async def get_ids_by_mobile_numbers(
+        self, numbers: list[str], *, verified: bool = True
+    ) -> list[UUID]:
+        digits = sorted(
+            {
+                normalized
+                for number in numbers
+                if (normalized := normalize_mobile_digits(number)) is not None
+            }
+        )
+        if not digits:
             return []
         stmt = select(User.id).where(
-            User.mobile_number.in_(numbers),
-            User.mobile_verified_at.isnot(None),
+            User.mobile_number.isnot(None),
+            func.regexp_replace(User.mobile_number, r"\D", "", "g").in_(digits),
+            User.is_active.is_(True),
+            User.is_deleted.is_(False),
+            User.is_verified.is_(True),
+        )
+        stmt = stmt.where(
+            User.mobile_verified_at.isnot(None)
+            if verified
+            else User.mobile_verified_at.is_(None)
         )
         return list((await self.session.execute(stmt)).scalars().all())
 

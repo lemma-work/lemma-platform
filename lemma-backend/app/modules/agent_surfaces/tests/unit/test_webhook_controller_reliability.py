@@ -105,11 +105,71 @@ async def test_platform_webhook_verifies_and_publishes_versioned_event():
 
 
 @pytest.mark.asyncio
+async def test_signed_reserved_whatsapp_message_publishes_only_identity_event(
+    monkeypatch,
+):
+    from app.core.config import settings
+    from app.modules.agent_surfaces.config import surface_settings
+    from app.modules.identity.domain.events import (
+        WhatsAppMobileVerificationReceivedEvent,
+    )
+
+    monkeypatch.setattr(settings, "auth_whatsapp_mobile_verification_enabled", True)
+    monkeypatch.setattr(surface_settings, "surface_webhook_security_enabled", True)
+    monkeypatch.setattr(surface_settings, "whatsapp_access_token", "wa-token")
+    monkeypatch.setattr(surface_settings, "whatsapp_phone_number_id", "global-phone")
+    monkeypatch.setattr(surface_settings, "whatsapp_app_secret", "app-secret")
+    monkeypatch.setattr(surface_settings, "whatsapp_verify_token", "verify-token")
+    body = json.dumps(
+        {
+            "entry": [
+                {
+                    "changes": [
+                        {
+                            "value": {
+                                "metadata": {"phone_number_id": "global-phone"},
+                                "messages": [
+                                    {
+                                        "id": "wamid.verify-1",
+                                        "from": "14155552671",
+                                        "type": "text",
+                                        "text": {"body": "LEMMA VERIFY 23456789AB"},
+                                    }
+                                ],
+                            }
+                        }
+                    ]
+                }
+            ]
+        }
+    ).encode()
+    security = SimpleNamespace(
+        assert_platform_request_allowed=Mock(),
+        verify_platform_request=AsyncMock(),
+    )
+
+    with patch(
+        "app.modules.agent_surfaces.api.controllers.webhook_controller."
+        "EventPublisher.publish",
+        new=AsyncMock(),
+    ) as publish:
+        result = await handle_platform_webhook(
+            "whatsapp", _request(body), security, SimpleNamespace()
+        )
+
+    assert result == {"message": "Verification message received"}
+    security.verify_platform_request.assert_awaited_once()
+    publish.assert_awaited_once()
+    event = publish.await_args.args[1]
+    assert isinstance(event, WhatsAppMobileVerificationReceivedEvent)
+    assert event.sender_wa_id == "14155552671"
+    assert event.whatsapp_message_id == "wamid.verify-1"
+
+
+@pytest.mark.asyncio
 async def test_resend_webhook_resolves_surface_before_publishing():
     surface = SimpleNamespace(id=uuid4())
-    repository = SimpleNamespace(
-        get_active_by_address=AsyncMock(return_value=surface)
-    )
+    repository = SimpleNamespace(get_active_by_address=AsyncMock(return_value=surface))
     service = SimpleNamespace(surface_repository=repository)
     security = SimpleNamespace(verify_resend_request=AsyncMock())
     body = json.dumps(
