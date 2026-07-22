@@ -454,8 +454,8 @@ function SetupAssistant({
           name: podName,
           description:
             audienceForPod === "personal"
-              ? "Personal pod created during onboarding. Add recipes, agents, apps, and automations here."
-              : `${teamName || "Team"} pod created during onboarding. Add recipes, agents, apps, and automations here.`,
+              ? "A private workspace for apps, channel agents, knowledge, and operating loops."
+              : `${teamName || "Team"}'s shared workspace for apps, channel agents, knowledge, and operating loops.`,
           organization_id: organization.id,
         });
         setBasePod(pod);
