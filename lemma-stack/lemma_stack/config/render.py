@@ -111,8 +111,12 @@ def backend_env(
         "AGENTBOX_APP_DOMAIN": agentbox_app_domain(doc),
         "AGENTBOX_NETWORK": NETWORK_NAME,
         "AGENTBOX_ADD_HOST_GATEWAY": "false",
+        "AGENTBOX_HOST_ALIAS": "host.lemma.internal",
+        "AGENTBOX_REQUIRE_CALLBACK": "true",
         # sandboxes share the network; no host.docker.internal rewrite
         "WORKSPACE_CALLBACK_API_URL": "http://backend:8000",
+        "WORKSPACE_CALLBACK_AUTH_URL": "http://frontend:8080/auth",
+        "WORKSPACE_CALLBACK_FRONTEND_URL": "http://frontend:8080",
         # browser-facing URLs
         "API_URL": backend_origin(doc),
         "FRONTEND_URL": frontend_origin(doc),

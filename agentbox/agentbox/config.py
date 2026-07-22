@@ -99,6 +99,16 @@ class Settings(BaseSettings):
     # publishing host ports; the manager reaches them by container-name DNS.
     agentbox_network: str | None = None
     agentbox_add_host_gateway: bool = True
+    # Stable, Lemma-owned name for callbacks from a sandbox to the host API.
+    # Each local provider maps this name to its private host gateway.
+    agentbox_host_alias: str = "host.lemma.internal"
+    # Local desktop profiles enable this. A sandbox is not published ready
+    # until it proves that its injected LEMMA_BASE_URL can reach the API.
+    agentbox_require_callback: bool = False
+    agentbox_callback_health_path: str = "/health/live"
+    agentbox_callback_ready_timeout_seconds: float = Field(
+        default=30.0, ge=1.0, le=300.0
+    )
     agentbox_platform: str | None = None
     agentbox_memory_limit: str | None = None
     agentbox_cpu_limit: str | None = None

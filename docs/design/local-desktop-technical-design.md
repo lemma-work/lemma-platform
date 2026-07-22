@@ -282,6 +282,35 @@ http://localhost:<port>/apps/<slug>/
 
 Do not fall back to a public wildcard-DNS service. The single-origin path mode is acceptable as a repair surface for the main frontend/API only. It is not a safe substitute for arbitrary user-authored app origins; if private wildcard localhost behavior fails on a supported client, local built-app readiness remains blocked until a private per-origin alternative is implemented.
 
+#### 5.5.2 Sandbox-to-API callback contract
+
+Code sandboxes must call the local API because agents and functions run
+`lemma-cli` inside the sandbox. Runtime topology is therefore explicit launch
+configuration, never backend URL inference:
+
+- `lemma-locald` renders `WORKSPACE_CALLBACK_API_URL`,
+  `WORKSPACE_CALLBACK_AUTH_URL`, and `WORKSPACE_CALLBACK_FRONTEND_URL` for the
+  backend pack;
+- the backend passes these values through exactly and does not rewrite
+  `localhost`, `.localhost`, or any other hostname based on a runtime label;
+- local providers map the sandbox-private name `host.lemma.internal` to their
+  authenticated host bridge. Docker/Podman use their host gateway, the VZ guest
+  uses a vsock-backed forward, and WSL uses the private host/guest forward;
+- the bridge exposes only the required gateway/API ports to the managed guest
+  network. It never creates a LAN listener;
+- `LEMMA_BASE_URL` is mandatory in the local AgentBox profile. Before publishing
+  a sandbox as ready, the provider makes an HTTP request from inside that exact
+  sandbox to `<LEMMA_BASE_URL>/health/live`. Missing configuration, DNS failure,
+  bridge failure, or an unreachable API keeps the sandbox unready with a scoped
+  diagnostic;
+- the semantic release test then runs a real authenticated `lemma-cli`
+  read/write/read round trip from a fresh sandbox, proving more than liveness.
+
+The provider retains compatibility aliases only at its network boundary; they
+must not leak back into backend application logic. Callback URL changes are part
+of the sandbox desired generation so retained sandboxes are replaced or
+revalidated rather than silently keeping a stale route.
+
 ### 5.6 Host process packs
 
 #### Backend pack

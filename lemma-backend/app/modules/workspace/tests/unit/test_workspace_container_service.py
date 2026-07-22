@@ -251,7 +251,7 @@ async def test_get_or_create_sandbox_passes_container_app_env(monkeypatch):
     await service.get_or_create_sandbox(user_id)
 
     assert sandbox.ensure_envs == [
-        {"LEMMA_BASE_URL": "http://host.docker.internal:8711"}
+        {"LEMMA_BASE_URL": "http://localhost:8711"}
     ]
 
 
@@ -271,7 +271,7 @@ async def test_get_or_create_sandbox_prefers_cli_api_url_for_local_https(monkeyp
     await service.get_or_create_sandbox(user_id)
 
     assert sandbox.ensure_envs == [
-        {"LEMMA_BASE_URL": "http://host.docker.internal:8710"}
+        {"LEMMA_BASE_URL": "http://api.lemma.localhost:8710"}
     ]
 
 
@@ -437,6 +437,17 @@ async def test_get_env_vars_includes_delegation_claims(monkeypatch):
     monkeypatch.setattr(settings, "api_url", "http://localhost:8711")
     monkeypatch.setattr(settings, "auth_frontend_url", "http://localhost:4173")
     monkeypatch.setattr(settings, "frontend_url", "http://localhost:3711")
+    monkeypatch.setattr(
+        settings, "workspace_callback_api_url", "http://host.lemma.internal:8711"
+    )
+    monkeypatch.setattr(
+        settings, "workspace_callback_auth_url", "http://host.lemma.internal:4173"
+    )
+    monkeypatch.setattr(
+        settings,
+        "workspace_callback_frontend_url",
+        "http://host.lemma.internal:3711",
+    )
 
     service = WorkspaceSandboxService(
         runtime="docker",
@@ -459,9 +470,9 @@ async def test_get_env_vars_includes_delegation_claims(monkeypatch):
     assert env["LEMMA_USER_ID"] == str(user_id)
     assert env["LEMMA_POD_ID"] == str(pod_id)
     assert env["LEMMA_ORG_ID"] == str(org_id)
-    assert env["LEMMA_BASE_URL"] == "http://host.docker.internal:8711"
-    assert env["LEMMA_AUTH_URL"] == "http://host.docker.internal:4173"
-    assert env["LEMMA_HOST_ORIGIN"] == "http://host.docker.internal:3711"
+    assert env["LEMMA_BASE_URL"] == "http://host.lemma.internal:8711"
+    assert env["LEMMA_AUTH_URL"] == "http://host.lemma.internal:4173"
+    assert env["LEMMA_HOST_ORIGIN"] == "http://host.lemma.internal:3711"
     assert claims[CLAIM_ACTOR_TYPE] == "function"
     assert claims[CLAIM_ACTOR_ID] == str(workload_id)
     assert claims[CLAIM_ACTOR_NAME] == "table_sync"

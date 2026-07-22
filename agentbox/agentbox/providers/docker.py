@@ -6,7 +6,7 @@ import shutil
 import subprocess
 import time
 from pathlib import Path
-from urllib import error, request
+from urllib import error, parse, request
 
 from fastapi import HTTPException
 
@@ -79,6 +79,9 @@ class DockerSandboxProvider(LegacyRuntimeProviderMixin):
     def _add_host_gateway_config(self) -> bool:
         return settings.agentbox_add_host_gateway
 
+    def _host_alias_config(self) -> str:
+        return settings.agentbox_host_alias
+
     def _selinux_enabled(self) -> bool:
         return Path("/sys/fs/selinux/enforce").exists()
 
@@ -100,6 +103,7 @@ class DockerSandboxProvider(LegacyRuntimeProviderMixin):
         request_obj: SandboxEnsureRequest,
     ) -> SandboxInternalStatus:
         validate_sandbox_id(sandbox_id)
+        self._validate_callback_request(request_obj)
         existing = await self._inspect_sandbox(sandbox_id)
         if existing is not None:
             if not existing.ready:
@@ -108,6 +112,7 @@ class DockerSandboxProvider(LegacyRuntimeProviderMixin):
             if not status_obj.ready:
                 await self._wait_until_runtime_ready(sandbox_id)
                 status_obj = await self.get_status(sandbox_id)
+            await self._wait_until_callback_ready(sandbox_id, request_obj)
             return status_obj
 
         image = settings.agentbox_runtime_image
@@ -138,6 +143,11 @@ class DockerSandboxProvider(LegacyRuntimeProviderMixin):
             for app in SANDBOX_APPS.values():
                 run_args.extend(["-p", f"127.0.0.1::{app.port}"])
         if self._add_host_gateway_config():
+            run_args.extend(
+                ["--add-host", f"{self._host_alias_config()}:host-gateway"]
+            )
+            # Keep the Docker-owned spelling during migration for retained
+            # sandboxes and third-party tools that still reference it.
             run_args.extend(["--add-host", "host.docker.internal:host-gateway"])
         for name, value in sorted(request_obj.env.items()):
             run_args.extend(["-e", f"{name}={value}"])
@@ -151,6 +161,7 @@ class DockerSandboxProvider(LegacyRuntimeProviderMixin):
 
         await self._run_docker(*run_args)
         await self._wait_until_runtime_ready(sandbox_id)
+        await self._wait_until_callback_ready(sandbox_id, request_obj)
         return await self.get_status(sandbox_id)
 
     async def get_status(self, sandbox_id: str) -> SandboxInternalStatus:
@@ -384,6 +395,85 @@ class DockerSandboxProvider(LegacyRuntimeProviderMixin):
         raise HTTPException(
             status_code=504,
             detail=f"Sandbox did not become ready before timeout{detail}",
+        )
+
+    async def _wait_until_callback_ready(
+        self,
+        sandbox_id: str,
+        request_obj: SandboxEnsureRequest,
+    ) -> None:
+        """Prove the sandbox can call the Lemma API before publishing ready.
+
+        The check executes inside the sandbox, so it covers DNS, the provider's
+        host bridge, the host listener, and HTTP—not merely environment injection.
+        It is mandatory in local desktop profiles and deliberately disabled by
+        default for generic AgentBox deployments whose LEMMA_BASE_URL may name a
+        non-Lemma workload endpoint.
+        """
+
+        if not settings.agentbox_require_callback:
+            return
+        self._validate_callback_request(request_obj)
+        base_url = request_obj.env["LEMMA_BASE_URL"].strip()
+        probe_url = self._callback_probe_url(base_url)
+        deadline = time.monotonic() + settings.agentbox_callback_ready_timeout_seconds
+        last_error: Exception | None = None
+        script = (
+            "import sys,urllib.request; "
+            "response=urllib.request.urlopen(sys.argv[1], timeout=2); "
+            "raise SystemExit(0 if 200 <= response.status < 300 else 1)"
+        )
+        while time.monotonic() < deadline:
+            try:
+                await self._run_docker(
+                    "exec",
+                    self.container_name(sandbox_id),
+                    "python",
+                    "-c",
+                    script,
+                    probe_url,
+                )
+                return
+            except RuntimeError as exc:
+                last_error = exc
+            await asyncio.sleep(0.25)
+        detail = f": {last_error}" if last_error else ""
+        raise HTTPException(
+            status_code=504,
+            detail=f"Sandbox cannot reach the Lemma API callback{detail}",
+        )
+
+    def _validate_callback_request(self, request_obj: SandboxEnsureRequest) -> None:
+        if not settings.agentbox_require_callback:
+            return
+        base_url = request_obj.env.get("LEMMA_BASE_URL", "").strip()
+        if not base_url:
+            raise HTTPException(
+                status_code=422,
+                detail="Local sandbox requires LEMMA_BASE_URL",
+            )
+        self._callback_probe_url(base_url)
+
+    @staticmethod
+    def _callback_probe_url(base_url: str) -> str:
+        parsed = parse.urlsplit(base_url)
+        if parsed.scheme not in {"http", "https"} or not parsed.hostname:
+            raise HTTPException(
+                status_code=422,
+                detail="LEMMA_BASE_URL must be an HTTP(S) URL",
+            )
+        health_path = settings.agentbox_callback_health_path.strip()
+        if not health_path.startswith("/"):
+            health_path = f"/{health_path}"
+        base_path = parsed.path.rstrip("/")
+        return parse.urlunsplit(
+            (
+                parsed.scheme,
+                parsed.netloc,
+                f"{base_path}{health_path}",
+                "",
+                "",
+            )
         )
 
     def _check_eager_apps_health(self, status_obj: SandboxInternalStatus) -> bool:

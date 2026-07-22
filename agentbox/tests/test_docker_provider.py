@@ -5,6 +5,9 @@ import shutil
 import sys
 from pathlib import Path
 
+import pytest
+from fastapi import HTTPException
+
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from agentbox.config import settings  # noqa: E402
@@ -279,6 +282,63 @@ def test_docker_provider_network_mode_joins_network_without_published_ports(
     assert not any(arg.startswith("127.0.0.1::") for arg in run_args)
     assert "--add-host" in run_args
     assert "host.docker.internal:host-gateway" in run_args
+    assert "host.lemma.internal:host-gateway" in run_args
+
+
+def test_docker_provider_proves_required_lemma_callback_from_inside_sandbox(
+    monkeypatch,
+    tmp_path,
+):
+    monkeypatch.setattr("shutil.which", lambda _name: "/usr/bin/docker")
+    monkeypatch.setattr(settings, "agentbox_storage_root", str(tmp_path))
+    monkeypatch.setattr(settings, "agentbox_storage_host_root", None)
+    monkeypatch.setattr(settings, "agentbox_require_callback", True)
+    monkeypatch.setattr(settings, "agentbox_callback_health_path", "/health/live")
+    provider = DockerSandboxProvider()
+    commands: list[tuple[str, ...]] = []
+
+    async def fake_run_docker(*args: str) -> str:
+        commands.append(args)
+        return ""
+
+    monkeypatch.setattr(provider, "_run_docker", fake_run_docker)
+
+    asyncio.run(
+        provider._wait_until_callback_ready(
+            "sandbox-1",
+            SandboxEnsureRequest(
+                env={"LEMMA_BASE_URL": "http://host.lemma.internal:8711/api"}
+            ),
+        )
+    )
+
+    assert commands[0][:4] == (
+        "exec",
+        "agentbox-sandbox-1",
+        "python",
+        "-c",
+    )
+    assert commands[0][-1] == "http://host.lemma.internal:8711/api/health/live"
+
+
+def test_docker_provider_rejects_missing_required_lemma_callback(
+    monkeypatch,
+    tmp_path,
+):
+    monkeypatch.setattr("shutil.which", lambda _name: "/usr/bin/docker")
+    monkeypatch.setattr(settings, "agentbox_storage_root", str(tmp_path))
+    monkeypatch.setattr(settings, "agentbox_storage_host_root", None)
+    monkeypatch.setattr(settings, "agentbox_require_callback", True)
+    provider = DockerSandboxProvider()
+
+    with pytest.raises(HTTPException) as exc_info:
+        asyncio.run(
+            provider._wait_until_callback_ready(
+                "sandbox-1", SandboxEnsureRequest()
+            )
+        )
+
+    assert exc_info.value.status_code == 422
 
 
 def test_docker_status_network_mode_uses_container_dns(monkeypatch, tmp_path):

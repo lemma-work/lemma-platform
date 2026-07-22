@@ -130,6 +130,7 @@ def test_embedded_agentbox_podman_wiring(config, paths, manifest):
     assert len(spec.env["AGENTBOX_ENDPOINT_STATE_KEYS"]) == 44
     assert spec.env["AGENTBOX_NETWORK"] == "lemma-local-net"
     assert spec.env["AGENTBOX_ADD_HOST_GATEWAY"] == "false"
+    assert spec.env["AGENTBOX_REQUIRE_CALLBACK"] == "true"
     assert spec.user == "root"
     mounts = dict((t, s) for s, t, _ in spec.binds)
     assert mounts["/run/podman/podman.sock"] == "/run/user/501/podman/podman.sock"
@@ -142,6 +143,8 @@ def test_embedded_agentbox_docker_wiring(config, paths, manifest):
     # sandbox reaches the all-in-one API through the backend DNS alias.
     assert spec.env["AGENTBOX_NETWORK"] == "lemma-local-net"
     assert spec.env["WORKSPACE_CALLBACK_API_URL"] == "http://backend:8000"
+    assert spec.env["WORKSPACE_CALLBACK_AUTH_URL"] == "http://frontend:8080/auth"
+    assert spec.env["WORKSPACE_CALLBACK_FRONTEND_URL"] == "http://frontend:8080"
     assert "CONTAINER_HOST" not in spec.env
     mounts = dict((t, s) for s, t, _ in spec.binds)
     assert mounts["/var/run/docker.sock"] == "/var/run/docker.sock"

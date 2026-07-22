@@ -784,8 +784,22 @@ class Settings(BaseSettings):
         default=None,
         description=(
             "URL workspace sandboxes use to reach this API (e.g. http://backend:8000 "
-            "when sandboxes share a container network); overrides the "
-            "localhost->host.docker.internal rewrite"
+            "when sandboxes share a container network). No hostname inference "
+            "or rewriting is performed when absent."
+        ),
+    )
+    workspace_callback_auth_url: Optional[str] = Field(
+        default=None,
+        description=(
+            "Explicit auth frontend URL reachable from workspace sandboxes; "
+            "no hostname rewriting is performed when absent."
+        ),
+    )
+    workspace_callback_frontend_url: Optional[str] = Field(
+        default=None,
+        description=(
+            "Explicit frontend origin reachable from workspace sandboxes; "
+            "no hostname rewriting is performed when absent."
         ),
     )
     # Composio + connector runtime config moved to app/modules/connectors/config.py

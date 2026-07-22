@@ -412,6 +412,9 @@ No tunnel is enabled silently. The Overview page shows a prominent “Public ing
 ### 14.3 Idle behavior
 
 - Sandbox containers stop after 10 minutes without active sessions by default.
+- A sandbox is not shown as ready until it has reached the local API from inside
+  its isolation boundary; the release qualification flow also executes a real
+  authenticated `lemma-cli` operation from a fresh sandbox.
 - The Linux runtime enters warm idle after no containers need compute.
 - On macOS it balloons memory down and can stop fully after the configured delay.
 - On Windows it terminates the private WSL distribution when Lemma is the only active consumer and no work remains; Lemma never shuts down unrelated WSL distributions.
