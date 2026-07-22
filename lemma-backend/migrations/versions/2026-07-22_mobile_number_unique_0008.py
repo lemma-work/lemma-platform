@@ -4,16 +4,12 @@ Revision ID: 0008_mobile_number_unique
 Revises: 0007_auth_hardening
 """
 
-from collections.abc import Sequence
-
 import sqlalchemy as sa
 from alembic import op
 
 
 revision = "0008_mobile_number_unique"
 down_revision = "0007_auth_hardening"
-branch_labels: str | Sequence[str] | None = None
-depends_on: str | Sequence[str] | None = None
 
 _DIGITS_SQL = "regexp_replace(mobile_number, '\\D', '', 'g')"
 _NONEMPTY_MOBILE_SQL = f"mobile_number IS NOT NULL AND {_DIGITS_SQL} <> ''"
