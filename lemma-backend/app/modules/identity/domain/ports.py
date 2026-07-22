@@ -33,9 +33,12 @@ class UserRepositoryPort(Protocol):
 
     async def get_ids_by_mobile_numbers(
         self, numbers: list[str], *, verified: bool = True
-    ) -> list[UUID]: ...
+    ) -> list[UUID]:
+        raise NotImplementedError
 
-    async def get_id_by_telegram_lower(self, username_lower: str) -> Optional[UUID]: ...
+    async def get_id_by_telegram_lower(
+        self, username_lower: str
+    ) -> Optional[UUID]: ...
 
 
 class UserCachePort(Protocol):
