@@ -140,13 +140,6 @@ class WorkspaceSandboxService:
             return settings.workspace_callback_api_url
         return settings.cli_api_url or settings.api_url
 
-    @staticmethod
-    def resolve_workspace_host_url_for_runtime(runtime: str, url: str) -> str:
-        """Compatibility shim; runtime topology must come from explicit config."""
-
-        del runtime
-        return url
-
     async def _delete_sandbox(
         self, user_id: UUID, sandbox_info: SandboxInfo | None
     ) -> None:
