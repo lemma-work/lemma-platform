@@ -10,6 +10,7 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import secrets
+from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Literal
@@ -20,7 +21,11 @@ import httpx
 from redis.asyncio import Redis
 from sqlalchemy.exc import IntegrityError
 
-from app.composition.identity_whatsapp import global_whatsapp_configuration
+from app.composition.identity_whatsapp import (
+    GlobalWhatsAppDeliveryError,
+    global_whatsapp_configuration,
+    send_global_whatsapp_text,
+)
 from app.core.config import settings
 from app.core.helpers.identifiers import normalize_mobile_e164
 from app.core.infrastructure.db.session import async_session_maker
@@ -44,6 +49,15 @@ _STATUS_TTL_SECONDS = 2 * 60
 _CODE_ALPHABET = "23456789ABCDEFGHJKMNPQRSTUVWXYZ"
 _MESSAGE_PREFIX = "LEMMA VERIFY "
 _META_GRAPH_API_BASE = "https://graph.facebook.com/v21.0"
+_SUCCESS_FEEDBACK = (
+    "Your mobile number is verified for Lemma. You can return to Lemma now."
+)
+_FAILURE_FEEDBACK = (
+    "We could not verify this mobile number. Return to Lemma, request a new code, "
+    "and send the full message from the mobile number on your profile."
+)
+
+WhatsAppFeedbackSender = Callable[..., Awaitable[bool]]
 
 _CLAIM_LUA = """
 local transaction_id = redis.call('GET', KEYS[1])
@@ -53,11 +67,14 @@ if redis.call('EXISTS', transaction_key) == 0 then return {'missing'} end
 local expected_phone = redis.call('HGET', transaction_key, 'phone')
 local user_id = redis.call('HGET', transaction_key, 'user_id')
 if expected_phone ~= ARGV[2] then return {'sender_mismatch'} end
-if redis.call('GET', ARGV[3] .. user_id) ~= transaction_id then return {'superseded'} end
-if redis.call('GET', ARGV[4] .. ARGV[5]) ~= transaction_id then return {'superseded'} end
 local status = redis.call('HGET', transaction_key, 'status')
 local processing_message = redis.call('HGET', transaction_key, 'message_id')
-if status == 'verified' then return {'replayed'} end
+if status == 'verified' then
+  if processing_message == ARGV[6] then return {'verified'} end
+  return {'replayed'}
+end
+if redis.call('GET', ARGV[3] .. user_id) ~= transaction_id then return {'superseded'} end
+if redis.call('GET', ARGV[4] .. ARGV[5]) ~= transaction_id then return {'superseded'} end
 if status == 'processing' and processing_message ~= ARGV[6] then return {'replayed'} end
 redis.call('HSET', transaction_key, 'status', 'processing', 'message_id', ARGV[6])
 return {'claimed', transaction_id, user_id, expected_phone}
@@ -109,6 +126,12 @@ class WhatsAppVerificationConfig:
     display_number: str | None = None
 
 
+@dataclass(frozen=True)
+class _ClaimedVerification:
+    transaction_id: str
+    user_id: UUID
+
+
 def is_whatsapp_verification_configured() -> bool:
     whatsapp = global_whatsapp_configuration()
     return bool(
@@ -135,12 +158,8 @@ def parse_reserved_verification_message(
         if not body.startswith(_MESSAGE_PREFIX):
             return None
         code = body.removeprefix(_MESSAGE_PREFIX)
-        if (
-            body != f"{_MESSAGE_PREFIX}{code}"
-            or len(code) != 10
-            or any(character not in _CODE_ALPHABET for character in code)
-        ):
-            return None
+        if len(code) > 64:
+            code = ""
         sender = str(message.get("from") or "")
         message_id = str(message.get("id") or "")
         if not sender or not destination or not message_id:
@@ -152,13 +171,45 @@ def parse_reserved_verification_message(
 
 class WhatsAppMobileVerificationService:
     def __init__(
-        self, redis_url: str | None = None, *, ttl_seconds: int = _TTL_SECONDS
+        self,
+        redis_url: str | None = None,
+        *,
+        ttl_seconds: int = _TTL_SECONDS,
+        feedback_sender: WhatsAppFeedbackSender | None = None,
     ):
         self._redis_url = redis_url or settings.redis_url
         self._ttl_seconds = ttl_seconds
         self._redis: Redis | None = None
         self._lock = asyncio.Lock()
         self._display_number: str | None = None
+        self._feedback_sender = feedback_sender or send_global_whatsapp_text
+
+    async def _send_feedback(
+        self,
+        *,
+        sender_wa_id: str,
+        whatsapp_message_id: str,
+        succeeded: bool,
+    ) -> None:
+        try:
+            sent = await self._feedback_sender(
+                to=sender_wa_id,
+                body=_SUCCESS_FEEDBACK if succeeded else _FAILURE_FEEDBACK,
+                reply_to_message_id=whatsapp_message_id,
+            )
+        except GlobalWhatsAppDeliveryError as exc:
+            logger.warning(
+                "identity.mobile_verification.whatsapp.feedback_send_failed",
+                outcome="success" if succeeded else "failure",
+                error_type=type(exc).__name__,
+            )
+            return
+        if not sent:
+            logger.warning(
+                "identity.mobile_verification.whatsapp.feedback_send_failed",
+                outcome="success" if succeeded else "failure",
+                error_type="Unavailable",
+            )
 
     async def _get_redis(self) -> Redis:
         if self._redis is not None:
@@ -302,6 +353,87 @@ class WhatsAppMobileVerificationService:
             return "EXPIRED"
         return "PENDING"
 
+    async def _claim_message(
+        self,
+        *,
+        redis: Redis,
+        code: str,
+        sender_phone: str,
+        whatsapp_message_id: str,
+    ) -> tuple[str, _ClaimedVerification | None]:
+        phone_hash = self._digest(sender_phone)
+        result = await redis.eval(
+            _CLAIM_LUA,
+            1,
+            self._code_key(code),
+            f"{_PREFIX}:transaction:",
+            sender_phone,
+            f"{_PREFIX}:user:",
+            f"{_PREFIX}:phone:",
+            phone_hash,
+            whatsapp_message_id,
+        )
+        state = str(result[0]) if result else "missing"
+        if state != "claimed":
+            return state, None
+        return state, _ClaimedVerification(
+            transaction_id=str(result[1]),
+            user_id=UUID(str(result[2])),
+        )
+
+    async def _persist_claim(
+        self, *, claim: _ClaimedVerification, sender_phone: str
+    ) -> bool:
+        async with async_session_maker() as session:
+            await acquire_mobile_number_claim_lock(
+                session, sender_phone.removeprefix("+")
+            )
+            user = await session.get(User, claim.user_id)
+            if (
+                user is None
+                or not user.is_active
+                or user.is_deleted
+                or not user.is_verified
+            ):
+                logger.info("identity.mobile_verification.whatsapp.ineligible_user")
+                return False
+            owner = await get_other_mobile_number_owner_id(
+                session,
+                digits=sender_phone.removeprefix("+"),
+                user_id=claim.user_id,
+            )
+            if owner is not None:
+                logger.info("identity.mobile_verification.whatsapp.owner_conflict")
+                return False
+            user.mobile_number = sender_phone
+            user.mobile_verified_at = datetime.now(timezone.utc)
+            try:
+                await session.commit()
+            except IntegrityError:
+                await session.rollback()
+                logger.info("identity.mobile_verification.whatsapp.owner_conflict")
+                return False
+        return True
+
+    async def _complete_claim(
+        self, *, redis: Redis, claim: _ClaimedVerification
+    ) -> None:
+        await get_user_cache().invalidate(claim.user_id)
+        phone_changed = UserMobileChangedEvent(user_id=claim.user_id)
+        await EventPublisher.publish(phone_changed.stream_name(), phone_changed)
+        await redis.eval(
+            _COMPLETE_LUA,
+            1,
+            self._transaction_key(claim.transaction_id),
+            f"{_PREFIX}:user:",
+            f"{_PREFIX}:phone:",
+            _STATUS_TTL_SECONDS,
+        )
+        logger.info(
+            "identity.mobile_verification.whatsapp.succeeded",
+            user_id=str(claim.user_id),
+        )
+
     async def consume_message(
         self,
         *,
@@ -322,72 +454,59 @@ class WhatsAppMobileVerificationService:
             logger.info("identity.mobile_verification.whatsapp.invalid_sender")
             return False
 
+        if len(code) != 10 or any(
+            character not in _CODE_ALPHABET for character in code
+        ):
+            logger.info(
+                "identity.mobile_verification.whatsapp.rejected",
+                reason="invalid_format",
+            )
+            await self._send_feedback(
+                sender_wa_id=sender_wa_id,
+                whatsapp_message_id=whatsapp_message_id,
+                succeeded=False,
+            )
+            return False
+
         redis = await self._get_redis()
-        phone_hash = self._digest(sender_phone)
-        result = await redis.eval(
-            _CLAIM_LUA,
-            1,
-            self._code_key(code),
-            f"{_PREFIX}:transaction:",
-            sender_phone,
-            f"{_PREFIX}:user:",
-            f"{_PREFIX}:phone:",
-            phone_hash,
-            whatsapp_message_id,
+        state, claim = await self._claim_message(
+            redis=redis,
+            code=code,
+            sender_phone=sender_phone,
+            whatsapp_message_id=whatsapp_message_id,
         )
-        state = str(result[0]) if result else "missing"
-        if state != "claimed":
+        if state == "verified":
+            await self._send_feedback(
+                sender_wa_id=sender_wa_id,
+                whatsapp_message_id=whatsapp_message_id,
+                succeeded=True,
+            )
+            return True
+        if claim is None:
             logger.info(
                 "identity.mobile_verification.whatsapp.rejected",
                 reason=state,
             )
+            await self._send_feedback(
+                sender_wa_id=sender_wa_id,
+                whatsapp_message_id=whatsapp_message_id,
+                succeeded=False,
+            )
             return False
 
-        transaction_id = str(result[1])
-        user_id = UUID(str(result[2]))
-        async with async_session_maker() as session:
-            await acquire_mobile_number_claim_lock(
-                session, sender_phone.removeprefix("+")
+        if not await self._persist_claim(claim=claim, sender_phone=sender_phone):
+            await self._send_feedback(
+                sender_wa_id=sender_wa_id,
+                whatsapp_message_id=whatsapp_message_id,
+                succeeded=False,
             )
-            user = await session.get(User, user_id)
-            if (
-                user is None
-                or not user.is_active
-                or user.is_deleted
-                or not user.is_verified
-            ):
-                logger.info("identity.mobile_verification.whatsapp.ineligible_user")
-                return False
-            owner = await get_other_mobile_number_owner_id(
-                session,
-                digits=sender_phone.removeprefix("+"),
-                user_id=user_id,
-            )
-            if owner is not None:
-                logger.info("identity.mobile_verification.whatsapp.owner_conflict")
-                return False
-            user.mobile_number = sender_phone
-            user.mobile_verified_at = datetime.now(timezone.utc)
-            try:
-                await session.commit()
-            except IntegrityError:
-                await session.rollback()
-                logger.info("identity.mobile_verification.whatsapp.owner_conflict")
-                return False
+            return False
 
-        await get_user_cache().invalidate(user_id)
-        phone_changed = UserMobileChangedEvent(user_id=user_id)
-        await EventPublisher.publish(phone_changed.stream_name(), phone_changed)
-        await redis.eval(
-            _COMPLETE_LUA,
-            1,
-            self._transaction_key(transaction_id),
-            f"{_PREFIX}:user:",
-            f"{_PREFIX}:phone:",
-            _STATUS_TTL_SECONDS,
-        )
-        logger.info(
-            "identity.mobile_verification.whatsapp.succeeded", user_id=str(user_id)
+        await self._complete_claim(redis=redis, claim=claim)
+        await self._send_feedback(
+            sender_wa_id=sender_wa_id,
+            whatsapp_message_id=whatsapp_message_id,
+            succeeded=True,
         )
         return True
 

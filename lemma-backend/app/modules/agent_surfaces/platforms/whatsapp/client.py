@@ -111,6 +111,7 @@ class WhatsAppClient:
         to: str,
         body: str,
         preview_url: bool = False,
+        reply_to_message_id: str | None = None,
     ) -> str | None:
         """Send a plain-text message; return the outbound message id if any."""
         payload = {
@@ -120,6 +121,8 @@ class WhatsAppClient:
             "type": "text",
             "text": {"body": body, "preview_url": preview_url},
         }
+        if reply_to_message_id:
+            payload["context"] = {"message_id": reply_to_message_id}
         return await self.send_message_payload(
             phone_number_id=phone_number_id, payload=payload
         )

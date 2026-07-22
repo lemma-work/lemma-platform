@@ -1,7 +1,10 @@
 from __future__ import annotations
 
+from unittest.mock import AsyncMock, patch
+
 import pytest
 
+from app.composition.identity_whatsapp import GlobalWhatsAppDeliveryError
 from app.core.config import settings
 from app.core.helpers.identifiers import normalize_mobile_e164
 from app.modules.agent_surfaces.config import surface_settings
@@ -60,7 +63,7 @@ def test_normalize_mobile_e164_requires_explicit_country_code() -> None:
             raise AssertionError(f"expected {invalid!r} to be rejected")
 
 
-def test_parse_reserved_verification_message_requires_exact_format() -> None:
+def test_parse_reserved_verification_message_intercepts_reserved_attempts() -> None:
     assert parse_reserved_verification_message(_payload()) == (
         "23456789AB",
         "14155552671",
@@ -72,14 +75,25 @@ def test_parse_reserved_verification_message_requires_exact_format() -> None:
         parse_reserved_verification_message(_payload(body="lemma verify 23456789AB"))
         is None
     )
-    assert (
-        parse_reserved_verification_message(_payload(body="LEMMA VERIFY 23456789AB "))
-        is None
+    assert parse_reserved_verification_message(
+        _payload(body="LEMMA VERIFY 23456789AB ")
+    ) == (
+        "23456789AB ",
+        "14155552671",
+        "phone-id",
+        "wamid.123",
     )
-    assert (
-        parse_reserved_verification_message(_payload(body="LEMMA VERIFY 1111111111"))
-        is None
+    assert parse_reserved_verification_message(
+        _payload(body="LEMMA VERIFY 1111111111")
+    ) == (
+        "1111111111",
+        "14155552671",
+        "phone-id",
+        "wamid.123",
     )
+    assert parse_reserved_verification_message(
+        _payload(body=f"LEMMA VERIFY {'A' * 65}")
+    ) == ("", "14155552671", "phone-id", "wamid.123")
     assert parse_reserved_verification_message({}) is None
 
 
@@ -122,3 +136,28 @@ async def test_enable_flag_without_global_surface_config_stays_unavailable(
     config = await WhatsAppMobileVerificationService("redis://unused").config()
 
     assert config.available is False
+
+
+@pytest.mark.asyncio
+async def test_whatsapp_feedback_failure_never_reverts_verification() -> None:
+    feedback_sender = AsyncMock(
+        side_effect=GlobalWhatsAppDeliveryError("Meta is unavailable")
+    )
+    service = WhatsAppMobileVerificationService(
+        "redis://unused", feedback_sender=feedback_sender
+    )
+
+    with patch(
+        "app.modules.identity.services.whatsapp_mobile_verification.logger"
+    ) as logger:
+        await service._send_feedback(
+            sender_wa_id="14155552671",
+            whatsapp_message_id="wamid.in",
+            succeeded=True,
+        )
+
+    logger.warning.assert_called_once_with(
+        "identity.mobile_verification.whatsapp.feedback_send_failed",
+        outcome="success",
+        error_type="GlobalWhatsAppDeliveryError",
+    )
