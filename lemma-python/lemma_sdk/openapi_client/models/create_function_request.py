@@ -138,7 +138,7 @@ class CreateFunctionRequest:
                 config_type_0 = CreateFunctionRequestConfigType0.from_dict(data)
 
                 return config_type_0
-            except (TypeError, ValueError, AttributeError, KeyError):
+            except TypeError, ValueError, AttributeError, KeyError:
                 pass
             return cast(CreateFunctionRequestConfigType0 | None | Unset, data)
 

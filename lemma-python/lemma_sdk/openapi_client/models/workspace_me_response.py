@@ -89,7 +89,7 @@ class WorkspaceMeResponse:
                 active_session_type_0 = WorkspaceMeSession.from_dict(data)
 
                 return active_session_type_0
-            except (TypeError, ValueError, AttributeError, KeyError):
+            except TypeError, ValueError, AttributeError, KeyError:
                 pass
             return cast(None | Unset | WorkspaceMeSession, data)
 

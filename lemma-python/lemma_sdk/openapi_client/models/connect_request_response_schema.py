@@ -117,7 +117,7 @@ class ConnectRequestResponseSchema:
                 )
 
                 return attributes_type_0
-            except (TypeError, ValueError, AttributeError, KeyError):
+            except TypeError, ValueError, AttributeError, KeyError:
                 pass
             return cast(ConnectRequestResponseSchemaAttributesType0 | None, data)
 

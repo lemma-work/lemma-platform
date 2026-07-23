@@ -122,7 +122,7 @@ class ComposioProviderCapabilityResponseSchema:
                 )
 
                 return auth_config_schema_type_0
-            except (TypeError, ValueError, AttributeError, KeyError):
+            except TypeError, ValueError, AttributeError, KeyError:
                 pass
             return cast(
                 ComposioProviderCapabilityResponseSchemaAuthConfigSchemaType0

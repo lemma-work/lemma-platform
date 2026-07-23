@@ -40,7 +40,7 @@ def _parse_response(
                 response_200_type_0 = PodJoinRequestCreateResponse.from_dict(data)
 
                 return response_200_type_0
-            except (TypeError, ValueError, AttributeError, KeyError):
+            except TypeError, ValueError, AttributeError, KeyError:
                 pass
             return cast(None | PodJoinRequestCreateResponse, data)
 

@@ -56,7 +56,7 @@ class OperationDetailsBatchRequest:
                 operation_names_type_0 = cast(list[str], data)
 
                 return operation_names_type_0
-            except (TypeError, ValueError, AttributeError, KeyError):
+            except TypeError, ValueError, AttributeError, KeyError:
                 pass
             return cast(list[str] | None | Unset, data)
 

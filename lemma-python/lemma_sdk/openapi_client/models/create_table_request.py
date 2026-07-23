@@ -123,7 +123,7 @@ class CreateTableRequest:
                 config_type_0 = CreateTableRequestConfigType0.from_dict(data)
 
                 return config_type_0
-            except (TypeError, ValueError, AttributeError, KeyError):
+            except TypeError, ValueError, AttributeError, KeyError:
                 pass
             return cast(CreateTableRequestConfigType0 | None | Unset, data)
 

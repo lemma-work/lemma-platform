@@ -61,7 +61,7 @@ class FunctionNodeConfigInputMapping:
                     additional_property_type_0 = ExpressionInputBinding.from_dict(data)
 
                     return additional_property_type_0
-                except (TypeError, ValueError, AttributeError, KeyError):
+                except TypeError, ValueError, AttributeError, KeyError:
                     pass
                 if not isinstance(data, dict):
                     raise TypeError()

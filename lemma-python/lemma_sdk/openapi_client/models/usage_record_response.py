@@ -252,7 +252,7 @@ class UsageRecordResponse:
                 agent_id_type_0 = UUID(data)
 
                 return agent_id_type_0
-            except (TypeError, ValueError, AttributeError, KeyError):
+            except TypeError, ValueError, AttributeError, KeyError:
                 pass
             return cast(None | Unset | UUID, data)
 
@@ -269,7 +269,7 @@ class UsageRecordResponse:
                 agent_run_id_type_0 = UUID(data)
 
                 return agent_run_id_type_0
-            except (TypeError, ValueError, AttributeError, KeyError):
+            except TypeError, ValueError, AttributeError, KeyError:
                 pass
             return cast(None | Unset | UUID, data)
 
@@ -286,7 +286,7 @@ class UsageRecordResponse:
                 conversation_id_type_0 = UUID(data)
 
                 return conversation_id_type_0
-            except (TypeError, ValueError, AttributeError, KeyError):
+            except TypeError, ValueError, AttributeError, KeyError:
                 pass
             return cast(None | Unset | UUID, data)
 
@@ -312,7 +312,7 @@ class UsageRecordResponse:
                 organization_id_type_0 = UUID(data)
 
                 return organization_id_type_0
-            except (TypeError, ValueError, AttributeError, KeyError):
+            except TypeError, ValueError, AttributeError, KeyError:
                 pass
             return cast(None | Unset | UUID, data)
 
@@ -329,7 +329,7 @@ class UsageRecordResponse:
                 parent_agent_run_id_type_0 = UUID(data)
 
                 return parent_agent_run_id_type_0
-            except (TypeError, ValueError, AttributeError, KeyError):
+            except TypeError, ValueError, AttributeError, KeyError:
                 pass
             return cast(None | Unset | UUID, data)
 
@@ -348,7 +348,7 @@ class UsageRecordResponse:
                 pod_id_type_0 = UUID(data)
 
                 return pod_id_type_0
-            except (TypeError, ValueError, AttributeError, KeyError):
+            except TypeError, ValueError, AttributeError, KeyError:
                 pass
             return cast(None | Unset | UUID, data)
 

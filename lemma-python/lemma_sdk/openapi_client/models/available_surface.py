@@ -144,7 +144,7 @@ class AvailableSurface:
                 connect_type_0 = SurfaceConnectDescriptor.from_dict(data)
 
                 return connect_type_0
-            except (TypeError, ValueError, AttributeError, KeyError):
+            except TypeError, ValueError, AttributeError, KeyError:
                 pass
             return cast(None | SurfaceConnectDescriptor | Unset, data)
 

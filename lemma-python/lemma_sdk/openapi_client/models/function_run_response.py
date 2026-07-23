@@ -213,7 +213,7 @@ class FunctionRunResponse:
                 input_data_type_0 = FunctionRunResponseInputDataType0.from_dict(data)
 
                 return input_data_type_0
-            except (TypeError, ValueError, AttributeError, KeyError):
+            except TypeError, ValueError, AttributeError, KeyError:
                 pass
             return cast(FunctionRunResponseInputDataType0 | None | Unset, data)
 
@@ -250,7 +250,7 @@ class FunctionRunResponse:
                 output_data_type_0 = FunctionRunResponseOutputDataType0.from_dict(data)
 
                 return output_data_type_0
-            except (TypeError, ValueError, AttributeError, KeyError):
+            except TypeError, ValueError, AttributeError, KeyError:
                 pass
             return cast(FunctionRunResponseOutputDataType0 | None | Unset, data)
 

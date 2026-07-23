@@ -84,7 +84,7 @@ class OrganizationUpdateRequest:
                 join_policy_type_0 = OrganizationJoinPolicy(data)
 
                 return join_policy_type_0
-            except (TypeError, ValueError, AttributeError, KeyError):
+            except TypeError, ValueError, AttributeError, KeyError:
                 pass
             return cast(None | OrganizationJoinPolicy | Unset, data)
 

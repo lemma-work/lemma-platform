@@ -187,7 +187,7 @@ class AgentSummaryResponse:
                 metadata_type_0 = AgentSummaryResponseMetadataType0.from_dict(data)
 
                 return metadata_type_0
-            except (TypeError, ValueError, AttributeError, KeyError):
+            except TypeError, ValueError, AttributeError, KeyError:
                 pass
             return cast(AgentSummaryResponseMetadataType0 | None | Unset, data)
 

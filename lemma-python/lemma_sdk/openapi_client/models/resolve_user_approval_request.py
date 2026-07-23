@@ -81,7 +81,7 @@ class ResolveUserApprovalRequest:
                 )
 
                 return response_type_0
-            except (TypeError, ValueError, AttributeError, KeyError):
+            except TypeError, ValueError, AttributeError, KeyError:
                 pass
             return cast(None | ResolveUserApprovalRequestResponseType0 | Unset, data)
 

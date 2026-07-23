@@ -155,7 +155,7 @@ class ImportStatusResponse:
                 cancel_requested_at_type_0 = isoparse(data)
 
                 return cancel_requested_at_type_0
-            except (TypeError, ValueError, AttributeError, KeyError):
+            except TypeError, ValueError, AttributeError, KeyError:
                 pass
             return cast(datetime.datetime | None | Unset, data)
 
@@ -194,7 +194,7 @@ class ImportStatusResponse:
                 plan_type_0 = ImportPlanResponse.from_dict(data)
 
                 return plan_type_0
-            except (TypeError, ValueError, AttributeError, KeyError):
+            except TypeError, ValueError, AttributeError, KeyError:
                 pass
             return cast(ImportPlanResponse | None | Unset, data)
 

@@ -164,7 +164,7 @@ class AuthConfigResponseSchema:
                 )
 
                 return credential_config_type_0
-            except (TypeError, ValueError, AttributeError, KeyError):
+            except TypeError, ValueError, AttributeError, KeyError:
                 pass
             return cast(
                 AuthConfigResponseSchemaCredentialConfigType0 | None | Unset, data
@@ -185,7 +185,7 @@ class AuthConfigResponseSchema:
                 metadata_type_0 = AuthConfigResponseSchemaMetadataType0.from_dict(data)
 
                 return metadata_type_0
-            except (TypeError, ValueError, AttributeError, KeyError):
+            except TypeError, ValueError, AttributeError, KeyError:
                 pass
             return cast(AuthConfigResponseSchemaMetadataType0 | None | Unset, data)
 

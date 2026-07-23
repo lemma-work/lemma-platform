@@ -105,7 +105,7 @@ class PodConfig:
                 default_runtime_type_0 = AgentRuntimeConfig.from_dict(data)
 
                 return default_runtime_type_0
-            except (TypeError, ValueError, AttributeError, KeyError):
+            except TypeError, ValueError, AttributeError, KeyError:
                 pass
             return cast(AgentRuntimeConfig | None | Unset, data)
 
