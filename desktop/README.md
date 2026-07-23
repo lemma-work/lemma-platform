@@ -155,6 +155,10 @@ mode it:
 - uploads `lemma-local-test-<commit>` for 14 days;
 - does not create or modify a GitHub Release.
 
+Branch-test Windows host packs are intentionally unsigned because pull requests
+cannot access release signing credentials. Published Windows runtimes still
+require Authenticode signing and timestamp verification.
+
 For the current `0.6.2` desktop:
 
 ```sh

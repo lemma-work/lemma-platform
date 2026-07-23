@@ -412,7 +412,9 @@ jobs:
           node-version: 24
 
       - name: Import Windows host-pack signing certificate
-        if: matrix.target == 'x86_64-pc-windows-msvc'
+        if: >-
+          matrix.target == 'x86_64-pc-windows-msvc' &&
+          (github.event_name == 'push' || inputs.publish)
         id: windows-signing
         uses: ./.github/actions/setup-windows-signing
         with:
@@ -494,7 +496,9 @@ jobs:
             --release-manifest host-release.json
 
       - name: Sign downloadable Windows host runtime
-        if: matrix.target == 'x86_64-pc-windows-msvc'
+        if: >-
+          matrix.target == 'x86_64-pc-windows-msvc' &&
+          (github.event_name == 'push' || inputs.publish)
         shell: pwsh
         env:
           CERTIFICATE_THUMBPRINT: ${{ steps.windows-signing.outputs.thumbprint }}
