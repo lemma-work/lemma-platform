@@ -1,24 +1,35 @@
 # lemma-locald
 
-`lemma-locald` is the durable, per-user control plane for managed Lemma Local.
-Desktop and `lemma-stack` connect over an authenticated OS-local transport:
+`lemma-locald` is the durable per-user control plane shared by Lemma Desktop
+and `lemma-stack`. It remains operable when the frontend, backend, managed
+guest, or network is unhealthy.
 
-- macOS/Linux: a mode-`0600` Unix-domain socket in the local state directory;
-- Windows: a login-session-scoped `LOCAL\\...` named pipe.
+- macOS/Linux uses a private mode-`0600` Unix-domain socket and capability
+  token;
+- Windows uses a login-session-scoped `LOCAL\\...` named pipe;
+- operations are serialized and publish resumable state/event snapshots;
+- host backend/frontend processes and the managed guest are reconciled as one
+  release;
+- configuration secrets live in the OS credential vault and never appear in
+  status payloads or persisted JSON;
+- applying operator configuration restarts and health-gates only the backend,
+  with transactional configuration/vault rollback on failure.
 
-The daemon owns operation serialization, state snapshots, a bounded event
-journal, and service lifecycle. During the migration phase it runs the existing
-`lemma-stack supervise` protocol as a compatibility child. That child is later
-replaced by native host-pack and managed-runtime reconcilers without changing
-the desktop/CLI protocol.
+The managed host pack runs one all-in-one backend and one frontend. The private
+guest controller starts PostgreSQL, Redis, compatibility auth when enabled,
+and on-demand AgentBox sandboxes through a narrow authenticated protocol. It
+does not expose Docker/Podman/containerd sockets to the backend.
 
 ```bash
 cargo run --manifest-path locald/Cargo.toml -- serve
 cargo run --manifest-path locald/Cargo.toml -- status
 cargo run --manifest-path locald/Cargo.toml -- send '{"cmd":"start","id":"manual"}'
+cargo run --manifest-path locald/Cargo.toml -- send '{"cmd":"control.snapshot","id":"manual"}'
 ```
 
-`LEMMA_LOCALD_ROOT` selects an isolated state root for tests. The daemon finds
-the compatibility supervisor through `LEMMA_LOCALD_SUPERVISOR_BIN`, a sibling
-`lemma-supervisor` binary, or the monorepo development fallback.
-
+`LEMMA_LOCALD_ROOT` selects an isolated state root. Packaged launchers provide
+`LEMMA_LOCALD_HOST_PACK_ROOT`,
+`LEMMA_LOCALD_MANAGED_RUNTIME_ARTIFACT_ROOT`, and the relevant
+`LEMMA_LOCALD_RUNTIME_BRIDGE_BIN`/`LEMMA_LOCALD_VZ_BIN` helper explicitly. The
+monorepo path remains a development fallback; managed mode has no Python
+supervisor dependency.

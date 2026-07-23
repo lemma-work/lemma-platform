@@ -1,8 +1,17 @@
 # Lemma Local Desktop: Product Specification
 
-**Status:** Proposed · **Audience:** Product, design, desktop, platform, backend, frontend, AgentBox, release engineering
+**Status:** Accepted; implementation in progress · **Audience:** Product, design, desktop, platform, backend, frontend, AgentBox, release engineering
 
 **Scope:** `desktop`, `lemma-stack`, and the local-only runtime contract they own · **Last updated:** 2026-07-22
+
+**Implementation baseline:** The current branch includes the all-in-one backend,
+two-process host pack, PostgreSQL-backed embedded AgentBox, in-process document
+conversion, durable local daemon, managed VZ/WSL guest providers, narrow guest
+runtime API, production-parity local app routing, explicit sandbox callback
+configuration and reachability gates, privileged Control Center, OS-vault
+secrets, and signed online/offline packaging. Backup/update/uninstall policy,
+resource UX, local-auth replacement, and the full supported-client acceptance
+matrix remain release gates rather than implied completed work.
 
 ## 1. Executive summary
 

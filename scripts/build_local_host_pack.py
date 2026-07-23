@@ -277,12 +277,36 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--python", default="3.14.2")
     parser.add_argument("--node-root", type=Path)
     parser.add_argument("--archive", type=Path)
+    parser.add_argument(
+        "--archive-existing",
+        action="store_true",
+        help="archive an already-built output directory after platform signing",
+    )
     return parser.parse_args()
 
 
 def main() -> None:
     args = parse_args()
     output = args.output.resolve()
+    if args.archive_existing:
+        if not args.archive:
+            raise SystemExit("--archive-existing requires --archive")
+        metadata_path = output / "pack.json"
+        if not metadata_path.is_file() or not (output / "release.json").is_file():
+            raise SystemExit(f"existing host pack is incomplete: {output}")
+        metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
+        archive_pack(output, args.archive)
+        archive_metadata = {
+            **metadata,
+            "archive": str(args.archive),
+            "sha256": sha256(args.archive),
+            "size": args.archive.stat().st_size,
+        }
+        args.archive.with_suffix(f"{args.archive.suffix}.json").write_text(
+            json.dumps(archive_metadata, indent=2) + "\n", encoding="utf-8"
+        )
+        print(json.dumps(archive_metadata))
+        return
     if output.exists() and any(output.iterdir()):
         raise SystemExit(f"output directory must be empty: {output}")
     output.mkdir(parents=True, exist_ok=True)

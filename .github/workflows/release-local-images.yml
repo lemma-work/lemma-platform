@@ -360,6 +360,15 @@ jobs:
         with:
           node-version: 24
 
+      - name: Import Windows host-pack signing certificate
+        if: matrix.target == 'x86_64-pc-windows-msvc'
+        id: windows-signing
+        uses: ./.github/actions/setup-windows-signing
+        with:
+          certificate: ${{ secrets.WINDOWS_CERTIFICATE }}
+          certificate-password: ${{ secrets.WINDOWS_CERTIFICATE_PASSWORD }}
+          timestamp-url: ${{ secrets.WINDOWS_TIMESTAMP_URL }}
+
       - name: Download merged image digests
         uses: actions/download-artifact@v8
         with:
@@ -428,8 +437,46 @@ jobs:
           mkdir -p host-pack-out
           python scripts/build_local_host_pack.py \
             --output host-pack-out/local-runtime \
+            --release-manifest host-release.json
+
+      - name: Sign downloadable Windows host runtime
+        if: matrix.target == 'x86_64-pc-windows-msvc'
+        shell: pwsh
+        env:
+          CERTIFICATE_THUMBPRINT: ${{ steps.windows-signing.outputs.thumbprint }}
+          WINDOWS_TIMESTAMP_URL: ${{ secrets.WINDOWS_TIMESTAMP_URL }}
+        run: |
+          $signTool = Get-ChildItem `
+            "${env:ProgramFiles(x86)}\Windows Kits\10\bin\*\x64\signtool.exe" `
+            -ErrorAction Stop |
+            Sort-Object FullName -Descending |
+            Select-Object -First 1
+          if (-not $signTool) { throw "Windows SDK signtool.exe was not found" }
+          foreach ($path in @(
+            "host-pack-out/local-runtime/backend/python/python.exe",
+            "host-pack-out/local-runtime/frontend/node/node.exe"
+          )) {
+            if (-not (Test-Path $path)) { throw "Host runtime executable is missing: $path" }
+            & $signTool.FullName sign `
+              /sha1 $env:CERTIFICATE_THUMBPRINT `
+              /fd SHA256 `
+              /tr $env:WINDOWS_TIMESTAMP_URL `
+              /td SHA256 `
+              $path
+            if ($LASTEXITCODE -ne 0) { throw "Could not sign host runtime executable: $path" }
+            if ((Get-AuthenticodeSignature $path).Status -ne "Valid") {
+              throw "Host runtime signature verification failed: $path"
+            }
+          }
+
+      - name: Archive native host pack
+        shell: bash
+        run: |
+          python scripts/build_local_host_pack.py \
+            --output host-pack-out/local-runtime \
             --release-manifest host-release.json \
-            --archive "host-pack-out/lemma-host-pack-${{ matrix.target }}.zip"
+            --archive "host-pack-out/lemma-host-pack-${{ matrix.target }}.zip" \
+            --archive-existing
 
       - name: Upload host pack
         uses: actions/upload-artifact@v4
@@ -440,6 +487,19 @@ jobs:
             host-pack-out/lemma-host-pack-${{ matrix.target }}.zip.json
           if-no-files-found: error
           retention-days: 1
+
+      - name: Remove Windows host-pack signing certificate
+        if: always() && matrix.target == 'x86_64-pc-windows-msvc' && steps.windows-signing.outcome == 'success'
+        shell: pwsh
+        env:
+          CERTIFICATE_THUMBPRINT: ${{ steps.windows-signing.outputs.thumbprint }}
+        run: |
+          if (-not [string]::IsNullOrWhiteSpace($env:CERTIFICATE_THUMBPRINT)) {
+            Remove-Item `
+              "Cert:\CurrentUser\My\$env:CERTIFICATE_THUMBPRINT" `
+              -Force `
+              -ErrorAction SilentlyContinue
+          }
 
   manifest:
     name: Publish release manifest

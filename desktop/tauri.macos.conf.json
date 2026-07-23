@@ -3,9 +3,7 @@
     "externalBin": [
       "binaries/lemma-locald",
       "binaries/lemma-runtime",
-      "binaries/lemma-vz",
-      "binaries/lemma-supervisor",
-      "binaries/uv"
+      "binaries/lemma-vz"
     ]
   }
 }

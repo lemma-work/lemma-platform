@@ -1,7 +1,9 @@
 // Lemma desktop shell: thin Tauri client for the durable local daemon.
 //
 // The shell owns native chrome (window, tray, menus); lemma-locald owns service
-// lifecycle and currently adapts the legacy lemma-stack supervisor protocol.
+// lifecycle. Managed releases use native host packs and private runtime
+// providers; the daemon retains an unbundled compatibility adapter only for
+// development and existing external-runtime installations.
 
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
@@ -17,6 +19,8 @@ use tauri::tray::TrayIconBuilder;
 use tauri::webview::NewWindowResponse;
 use tauri::{AppHandle, Emitter, Manager, State, WebviewUrl, WebviewWindow, WebviewWindowBuilder};
 use tauri_plugin_autostart::ManagerExt as _;
+
+mod artifact_install;
 
 #[cfg(unix)]
 use interprocess::local_socket::GenericFilePath;
@@ -114,6 +118,10 @@ fn locald_root() -> PathBuf {
         .unwrap_or_else(|| app_support_dir().join("locald"))
 }
 
+fn runtime_install_root() -> PathBuf {
+    app_support_dir().join("runtime")
+}
+
 fn locald_socket_name(root: &std::path::Path) -> Result<Name<'_>, String> {
     #[cfg(unix)]
     {
@@ -151,14 +159,15 @@ fn read_config() -> Value {
         .unwrap_or_else(|| json!({}))
 }
 
-fn write_config(update: impl FnOnce(&mut Value)) {
+fn write_config(update: impl FnOnce(&mut Value)) -> Result<(), String> {
     let mut config = read_config();
     update(&mut config);
-    let _ = std::fs::create_dir_all(app_support_dir());
-    let _ = std::fs::write(
-        config_path(),
-        serde_json::to_string_pretty(&config).unwrap_or_default(),
-    );
+    std::fs::create_dir_all(app_support_dir())
+        .map_err(|error| format!("could not create desktop config directory: {error}"))?;
+    let serialized = serde_json::to_vec_pretty(&config)
+        .map_err(|error| format!("could not encode desktop config: {error}"))?;
+    std::fs::write(config_path(), serialized)
+        .map_err(|error| format!("could not save desktop config: {error}"))
 }
 
 fn connection_mode() -> String {
@@ -240,6 +249,19 @@ fn bundled_host_pack_root() -> Option<PathBuf> {
         .find(|root| root.join("release.json").is_file())
 }
 
+fn installed_runtime() -> Option<artifact_install::InstalledRuntime> {
+    let config = read_config();
+    let installed = config.get("installedRuntime")?;
+    let release = installed.get("release")?.as_str()?;
+    let root = PathBuf::from(installed.get("root")?.as_str()?);
+    let runtime = artifact_install::installed_runtime(&root, release);
+    runtime.is_complete().then_some(runtime)
+}
+
+fn host_pack_root() -> Option<PathBuf> {
+    bundled_host_pack_root().or_else(|| installed_runtime().map(|runtime| runtime.host_pack_root))
+}
+
 fn bundled_managed_runtime_root() -> Option<PathBuf> {
     if let Some(root) = std::env::var_os("LEMMA_DESKTOP_MANAGED_RUNTIME_ROOT") {
         let root = PathBuf::from(root);
@@ -262,6 +284,35 @@ fn bundled_managed_runtime_root() -> Option<PathBuf> {
         .find(|root| managed_runtime_marker(root).is_file())
 }
 
+fn managed_runtime_root() -> Option<PathBuf> {
+    bundled_managed_runtime_root()
+        .or_else(|| installed_runtime().map(|runtime| runtime.managed_runtime_root))
+}
+
+fn bundled_release_manifest() -> Option<PathBuf> {
+    if let Some(path) = std::env::var_os("LEMMA_DESKTOP_RELEASE_MANIFEST") {
+        let path = PathBuf::from(path);
+        if path.is_file() {
+            return Some(path);
+        }
+    }
+    let executable = std::env::current_exe().ok()?;
+    let bin_dir = executable.parent()?;
+    let candidates = if cfg!(target_os = "macos") {
+        vec![
+            bin_dir.join("../Resources/lemma-local.json"),
+            bin_dir.join("../Resources/runtime/lemma-local.json"),
+            bin_dir.join("lemma-local.json"),
+        ]
+    } else {
+        vec![
+            bin_dir.join("lemma-local.json"),
+            bin_dir.join("runtime/lemma-local.json"),
+        ]
+    };
+    candidates.into_iter().find(|path| path.is_file())
+}
+
 fn managed_runtime_marker(root: &std::path::Path) -> PathBuf {
     root.join(if cfg!(target_os = "macos") {
         "macos-aarch64/runtime.json"
@@ -278,7 +329,7 @@ fn bundled_sibling(name: &str) -> Option<PathBuf> {
 }
 
 fn bundled_host_pack_release() -> Option<String> {
-    let release = bundled_host_pack_root()?.join("release.json");
+    let release = host_pack_root()?.join("release.json");
     let payload: Value = serde_json::from_slice(&std::fs::read(release).ok()?).ok()?;
     payload["version"].as_str().map(str::to_owned)
 }
@@ -329,6 +380,8 @@ fn ensure_locald(app: &AppHandle) -> Result<(), String> {
         return Ok(());
     }
 
+    ensure_runtime_artifacts(app)?;
+
     let required_release = bundled_host_pack_release();
     if let Ok(mut connection) = connect_locald() {
         if locald_matches_host_pack(&connection.hello, required_release.as_deref()) {
@@ -355,6 +408,75 @@ fn ensure_locald(app: &AppHandle) -> Result<(), String> {
         std::thread::sleep(Duration::from_millis(100));
     }
     Err(format!("could not connect to lemma-locald: {last_error}"))
+}
+
+fn ensure_runtime_artifacts(app: &AppHandle) -> Result<(), String> {
+    if host_pack_root().is_some() && managed_runtime_root().is_some() {
+        return Ok(());
+    }
+    if runtime_root().join("locald/Cargo.toml").is_file() {
+        return Ok(());
+    }
+    let manifest = bundled_release_manifest().ok_or_else(|| {
+        "this online installer is missing its signed local release manifest".to_string()
+    })?;
+    emit_runtime_install_progress(app, "Preparing local runtime", 1, None);
+    let installed = artifact_install::install_from_manifest(
+        &manifest,
+        &runtime_install_root(),
+        env!("CARGO_PKG_VERSION"),
+        &mut |progress| {
+            let percent = if progress.total == 0 {
+                1
+            } else {
+                2 + progress.downloaded.saturating_mul(88) / progress.total
+            };
+            emit_runtime_install_progress(
+                app,
+                progress.label,
+                percent.min(90),
+                (progress.downloaded < progress.total)
+                    .then_some(progress.total - progress.downloaded),
+            );
+        },
+    )
+    .map_err(|error| format!("could not install the local runtime: {error}"))?;
+    let root = installed
+        .host_pack_root
+        .parent()
+        .ok_or("installed runtime has no release root")?
+        .to_string_lossy()
+        .into_owned();
+    write_config(|config| {
+        config["installedRuntime"] = json!({
+            "release": installed.release,
+            "root": root,
+        });
+    })?;
+    emit_runtime_install_progress(app, "Local runtime installed", 92, None);
+    Ok(())
+}
+
+fn emit_runtime_install_progress(
+    app: &AppHandle,
+    label: &str,
+    progress: u64,
+    remaining_bytes: Option<u64>,
+) {
+    let shell: State<Shell> = app.state();
+    let snapshot = {
+        let mut ui = shell.ui.lock().unwrap();
+        ui.setup = true;
+        ui.phase = label.to_owned();
+        ui.phase_key = "runtime-install".into();
+        ui.progress = progress;
+        ui.status = match remaining_bytes {
+            Some(bytes) => format!("{label}: {} MB remaining", bytes.div_ceil(1024 * 1024)),
+            None => label.to_owned(),
+        };
+        ui.clone()
+    };
+    let _ = app.emit("lemma:state", snapshot);
 }
 
 fn spawn_locald() -> Result<(), String> {
@@ -410,10 +532,10 @@ fn spawn_locald() -> Result<(), String> {
         .stdin(Stdio::null())
         .stdout(Stdio::null())
         .stderr(Stdio::null());
-    if let Some(pack_root) = bundled_host_pack_root() {
+    if let Some(pack_root) = host_pack_root() {
         command.env("LEMMA_LOCALD_HOST_PACK_ROOT", pack_root);
     }
-    if let Some(runtime_root) = bundled_managed_runtime_root() {
+    if let Some(runtime_root) = managed_runtime_root() {
         let bridge =
             bundled_sibling("lemma-runtime").ok_or("bundled lemma-runtime bridge is missing")?;
         command
@@ -792,7 +914,7 @@ fn set_connection_mode(app: AppHandle, mode: String) -> Result<(), String> {
     if mode != "local" && mode != "hosted" {
         return Err(format!("unknown mode {mode:?}"));
     }
-    set_mode(&app, &mode);
+    set_mode(&app, &mode)?;
     if mode == "hosted" {
         return open_app_window(&app, &hosted_url());
     }
@@ -817,7 +939,7 @@ fn choose_connection_mode(app: AppHandle) -> Result<String, String> {
     } else {
         "local"
     };
-    set_mode(&app, new_mode);
+    set_mode(&app, new_mode)?;
     if new_mode == "hosted" {
         open_app_window(&app, &hosted_url())?;
     } else {
@@ -841,15 +963,16 @@ fn current_mode(app: &AppHandle) -> String {
     ui.mode.clone()
 }
 
-fn set_mode(app: &AppHandle, mode: &str) {
+fn set_mode(app: &AppHandle, mode: &str) -> Result<(), String> {
+    write_config(|config| {
+        config["connectionMode"] = json!(mode);
+        config["connectionModePromptRevision"] = json!(CONNECTION_MODE_PROMPT_REVISION);
+    })?;
     {
         let shell: State<Shell> = app.state();
         shell.ui.lock().unwrap().mode = mode.to_string();
     }
-    write_config(|config| {
-        config["connectionMode"] = json!(mode);
-        config["connectionModePromptRevision"] = json!(CONNECTION_MODE_PROMPT_REVISION);
-    });
+    Ok(())
 }
 
 // ---------------------------------------------------------------------------

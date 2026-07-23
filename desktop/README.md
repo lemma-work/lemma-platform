@@ -1,133 +1,116 @@
-# Lemma Desktop (Tauri)
+# Lemma Desktop
 
-The Lemma desktop app — a thin Tauri (Rust) client for the durable Rust local
-daemon.
+Lemma Desktop is the signed Tauri shell for Lemma Local. It offers either a
+hosted connection or a zero-toolchain local install; users do not install
+Docker, Podman, Homebrew, Python, Node.js, or a general-purpose VM manager.
 
-## Architecture
+## Runtime architecture
 
-The shell owns native chrome (window, splash, tray, menu, navigation policy)
-and connects to `lemma-locald` over an authenticated OS-local socket/Windows
-named pipe. The daemon survives desktop restarts, persists state and events,
-and is the one lifecycle authority shared with `lemma-stack`. During migration
-it adapts the existing `lemma-stack supervise` engine as a child; managed host
-packs and VM providers replace that child without changing the desktop API.
+The desktop shell owns native windows, connection-mode selection, navigation,
+and the privileged Control Center. It connects to the durable Rust
+`lemma-locald` daemon through a mode-`0600` Unix socket on macOS or a
+login-session-scoped named pipe on Windows. Remote application pages never
+receive Tauri IPC capability.
 
-- `src/main.rs` — the entire shell (~715 lines)
-- `ui/index.html` — splash screen with a small Tauri adapter for its preload
-  API (`window.lemmaDesktop`)
-- `capabilities/main.json` — IPC permissions for the splash window only;
-  remote pages (the app itself) get no IPC access
+Managed local mode has two long-lived Lemma application processes:
 
-The shell injects a read-only `window.__LEMMA_DESKTOP__` marker into the main
-webview so the shared frontend can choose desktop-safe behavior without gaining
-native IPC privileges. Same-origin new-window requests stay in Lemma; external
-URLs open in the system browser.
+- one all-in-one Python backend containing API, worker, scheduler, AgentBox
+  manager, surface receivers, and in-process document conversion;
+- one Next.js frontend process, including local serving for built React apps.
 
-Desktop login uses a short-lived PKCE-style handoff. The webview keeps a private
-verifier, the system browser completes the normal Lemma login, and the webview
-exchanges the verifier for a fresh cookie session. The `lemma://auth/complete`
-deep link only focuses the app; no access or refresh token is placed in a URL.
+Infrastructure is private to Lemma. macOS uses a lightweight
+Virtualization.framework guest; Windows uses a private WSL2 distribution.
+PostgreSQL and Redis are always-on guest services, SuperTokens is retained only
+for the current compatibility mode, and sandbox containers are created on
+demand. PostgreSQL also owns the separate `agentbox` database. There is no
+Kreuzberg service and no Python/PyInstaller supervisor.
 
-Connection modes (persisted in `~/Library/Application Support/Lemma/desktop-config.json`):
-- **undecided** (first launch): asks whether to connect to Lemma Cloud or run
-  Lemma locally; local setup requires a second confirmation before installation
-- **local**: spawns the supervisor, shows the splash with live
-  startup phases, refreshes Stable-channel images, installs the matching
-  `lemma-terminal` release and its curated agent skills, then navigates to
-  `http://app.lemma.localhost:3711` when ready. Explicit version channels stay pinned.
-- **hosted**: loads the hosted app directly, no local services
+The local gateway exposes stable loopback-only origins:
+
+- `http://app.lemma.localhost:3711` — workspace frontend;
+- `http://api.lemma.localhost:8711` — API and auth;
+- `http://<slug>.apps.lemma.localhost:8711` — built pod apps;
+- `http://<sandbox>-<app>.workspaces.lemma.localhost:8711` — live sandbox apps.
+
+Sandbox callbacks are explicit configuration. The backend passes
+`WORKSPACE_CALLBACK_*` values through unchanged and never infers or rewrites
+`localhost` to `host.docker.internal`. Managed launch configuration sets the
+sandbox-reachable `host.lemma.internal` bridge and every fresh sandbox must
+reach the API health endpoint before it becomes ready.
+
+## Control Center
+
+The Control Center is a separate privileged local window with Overview, AI,
+Integrations, Surfaces, Services, and Diagnostics sections. It can configure
+OpenAI-compatible and Anthropic-compatible providers, discover models from a
+provider's real `/models` endpoint, select a default model, and configure OAuth
+applications and messaging surfaces.
+
+Secrets are stored in the operating-system credential vault and are injected
+only into the backend process. Snapshots and events expose presence flags, not
+secret values. Configuration activation restarts only the backend, health
+checks the new process, and rolls both configuration and vault state back if
+activation fails; the frontend remains running.
+
+## Online and offline installation
+
+Every release publishes two signed and notarized packages per platform:
+
+- **online** — the Tauri shell, `lemma-locald`, native runtime bridges, and a
+  release manifest embedded in the signed app;
+- **offline** — the same components plus the complete host and managed-guest
+  runtime payloads.
+
+On first local launch, the online build downloads the exact host and guest ZIPs
+named in its embedded manifest through the system proxy. Downloads are
+resumable, HTTPS-only, bounded, and verified by exact size and SHA-256 before
+safe staged extraction. The manifest release must equal the desktop release.
+Activation occurs only after host markers, guest target markers, native
+entrypoints, and archive layout pass validation. Incomplete downloads remain
+available for Retry. The offline build starts from its bundled payload without
+network access (cloud models and OAuth still require their own network access).
+
+Release artifacts are named `*-online.*` and `*-offline.*`. Windows host
+runtime entrypoints are Authenticode-signed before the downloadable archive is
+hashed. macOS apps and DMGs are Developer ID signed, notarized, and stapled.
+The app ships only the virtualization entitlement required by the managed Mac
+runtime; legacy JIT, unsigned-executable-memory, and disabled-library-validation
+exceptions are absent.
 
 ## Development
 
 ```sh
-cd desktop
-cargo build
-./target/debug/lemma-desktop                      # local mode against this checkout
-LEMMA_SUPERVISE_DRY_RUN=1 ./target/debug/lemma-desktop   # splash demo, no services
-LEMMA_DESKTOP_CONNECTION_MODE=hosted ./target/debug/lemma-desktop
-```
-
-Useful env overrides: `LEMMA_DESKTOP_RUNTIME_ROOT`,
-`LEMMA_DESKTOP_HOSTED_URL`, `LEMMA_DESKTOP_LOCAL_URL`, `AGENTBOX_PROVIDER`.
-
-The supervisor can be driven without the shell:
-
-```sh
-lemma-stack supervise --dry-run   # then type: {"cmd":"start"}
-```
-
-## Distribution pieces
-
-- `scripts/build-sidecar.sh` — builds `lemma-locald` plus the self-contained
-  compatibility `lemma-supervisor` via PyInstaller from
-  `lemma-stack/lemma_stack/sidecar_main.py`. The sidecar runs `lemma-stack
-  supervise`, which pulls the released container images itself — no runtime
-  checkout or tarball download is involved. Distribution builds also bundle
-  the signed `uv` executable used to install or upgrade `lemma-terminal` when
-  the app was launched from Finder without a shell `PATH`.
-- `scripts/extract-concepts.mjs` — bakes the in-app education concept registry
-  (`lemma-frontend/lib/education/concepts.ts`) into `ui/concepts.gen.json` for
-  the splash tour.
-- `scripts/stage-podman-runtime.mjs` — stages and ad-hoc-signs the macOS arm64
-  Podman runtime (krunkit entitlements in `krunkit-entitlements.plist`).
-
-A distribution build runs the sidecar build then bundles with
-`tauri.dist.conf.json` (adds locald, the compatibility supervisor, and uv):
-
-```sh
 node desktop/scripts/extract-concepts.mjs
 desktop/scripts/build-sidecar.sh
-cd desktop && npx -y @tauri-apps/cli@2.11.4 build --config tauri.dist.conf.json
+cd desktop
+cargo test --all-targets
+cargo clippy --all-targets -- -D warnings
+cargo run
 ```
 
-## CI and code signing
+Useful development overrides:
 
-The main CI workflow builds the supervisor sidecar and DMG, then verifies the
-application and bundled sidecar signatures. Pull requests use Tauri's ad-hoc
-signing identity (`-`) so untrusted code never receives Apple credentials.
-Trusted runs from `main` import a Developer ID Application certificate into an
-ephemeral keychain and verify that the resulting app has a Developer ID
-authority.
+- `LEMMA_DESKTOP_CONNECTION_MODE=hosted|local`
+- `LEMMA_DESKTOP_RUNTIME_ROOT=/path/to/lemma-platform`
+- `LEMMA_DESKTOP_HOST_PACK_ROOT=/path/to/local-runtime`
+- `LEMMA_DESKTOP_MANAGED_RUNTIME_ROOT=/path/to/managed-runtime`
+- `LEMMA_DESKTOP_RELEASE_MANIFEST=/path/to/lemma-local.json`
+- `LEMMA_DESKTOP_LOCALD_BIN=/path/to/lemma-locald`
+- `LEMMA_DESKTOP_HOSTED_URL=...` and `LEMMA_DESKTOP_LOCAL_URL=...`
 
-Developer ID signing requires these Actions secrets:
+The manifest and runtime-root overrides are explicit development/enterprise
+controls; no backend hostname mutation is tied to them.
 
-- `APPLE_CERTIFICATE` — base64-encoded `.p12` export containing the certificate
-  and private key
-- `APPLE_CERTIFICATE_PASSWORD` — password used when exporting the `.p12`
+Build a small online package with `tauri.online.conf.json`, or a complete
+offline package after staging `runtime/local-runtime` and
+`runtime/managed-runtime` with `tauri.dist.conf.json`:
 
-The release workflow uses the same certificate import path and additionally
-requires `APPLE_ID`, `APPLE_PASSWORD` (an app-specific password), and
-`APPLE_TEAM_ID` for notarization. It verifies the Developer ID signature and
-notarization staple before uploading the DMG.
+```sh
+cd desktop
+npx -y @tauri-apps/cli@2.11.4 build --config tauri.online.conf.json
+npx -y @tauri-apps/cli@2.11.4 build --config tauri.dist.conf.json
+```
 
-Daemon resolution order in the shell: `LEMMA_DESKTOP_LOCALD_BIN` → bundled
-daemon next to the app executable → `locald/target/debug/lemma-locald` →
-`cargo run --manifest-path locald/Cargo.toml` (development fallback). The
-daemon resolves its temporary compatibility supervisor independently.
-
-## Status / still to do
-
-- [x] Supervisor protocol (start/stop/restart/status, phases, provider auto-detection)
-- [x] Shell: splash, event relay, tray, hide-to-tray, navigation allowlist, modes
-- [x] First-run setup auto-detection (content hash over dep manifests/lockfiles,
-      marker in `.local/lemma/setup-signature`; start auto-upgrades to setup)
-- [x] Runtime payload download-on-demand (manifest URL → download, sha256
-      verify, stage under Application Support, run from staged runtime)
-- [x] Supervisor as compiled sidecar binary (PyInstaller bootstrap)
-- [x] Single-instance enforcement, start-at-login tray toggle
-- [x] Log In tray item (opens `<base>/auth/desktop`)
-- [x] System-browser auth with one-time desktop session handoff and deep-link return
-- [x] Desktop-aware same-origin/new-window navigation policy
-- [x] Podman bundle as downloadable artifact (sidecar downloads it when no
-      Docker is found)
-- [x] Dependency bootstrap: supervisor installs uv/Node (nvm) user-locally
-      during setup on machines without dev tools
-- [x] Hardened-runtime entitlements wired in `tauri.dist.conf.json`; dist
-      builds bake the artifacts URL via `LEMMA_DEFAULT_RUNTIME_MANIFEST_URL`
-- [x] Signing + notarization: dist build signs, notarizes, and staples when
-      `APPLE_SIGNING_IDENTITY`, `APPLE_ID`, `APPLE_PASSWORD`
-      (app-specific password), and `APPLE_TEAM_ID` are set in the environment
-- [ ] tauri-plugin-updater
-- [ ] WKWebView compatibility pass over lemma-frontend (click-through started
-      on a real local run; track issues as found)
-- [ ] Dogfood, then cut a public release
+The release workflow requires Apple Developer ID/notarization credentials or a
+Windows code-signing PFX plus RFC 3161 timestamp URL. Missing credentials stop
+the build before public artifacts are uploaded.

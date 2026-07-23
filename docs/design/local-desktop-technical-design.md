@@ -1,6 +1,6 @@
 # Lemma Local Desktop: Technical Design
 
-**Status:** Proposed · **Companion:** [Local Desktop Product Specification](local-desktop-product-spec.md)
+**Status:** Accepted; implementation in progress · **Companion:** [Local Desktop Product Specification](local-desktop-product-spec.md)
 
 **Scope:** `desktop`, `lemma-stack`, local release packaging, AgentBox local provider · **Last updated:** 2026-07-22
 
@@ -909,6 +909,25 @@ Public ingress is outbound-tunnel-only in the managed path. It exposes only regi
 
 ## 14. Artifact and release model
 
+### 14.0 Shipping transition format
+
+The first managed-runtime release deliberately keeps the additive schema-1
+`lemma-local.json` used by current `lemma-stack` releases. It adds
+`host_packs[target]` and `guest_runtimes[target]` entries containing an HTTPS
+URL, exact byte size, SHA-256 digest, and `zip` format. The online desktop embeds
+that manifest inside the platform-signed application, requires its release to
+equal the desktop version, and safely stages both archives under Application
+Support. The offline installer bundles the same extracted payloads.
+
+Downloads use system proxy settings, bounded redirects/timeouts, resumable
+range requests, exact `Content-Range` validation, archive and expanded-size
+ceilings, entry-count limits, traversal/symlink/overlap rejection, and immutable
+release directories. Windows Python and Node entrypoints are Authenticode
+signed before their archive digest is published. macOS application bundles and
+both DMGs are Developer ID signed, notarized, and stapled. The schema-2 format
+below remains the update/rollback target; it is not required to bootstrap the
+first managed release.
+
 ### 14.1 Release manifest v2
 
 ```json
@@ -1353,7 +1372,7 @@ Compare the managed provider with current Podman on representative minimum hardw
 
 ## 25. Delivery plan and code boundaries
 
-### 25.1 Phase A: daemon facade over current stack
+### 25.1 Phase A: daemon facade over current stack — implemented
 
 Add a `locald/` Rust workspace and make it call the current `lemma-stack` orchestration as a compatibility adapter. Desktop switches from stdio supervisor ownership to daemon API. This establishes IPC, operation/event models, Control Center, config schema, and process independence without immediately changing runtime topology.
 
@@ -1364,11 +1383,11 @@ Expected changes:
 - `lemma-stack`: daemon client/compatibility adapter and schema v2 migration;
 - new `locald/`: core service, API, state journal, downloader, health graph.
 
-### 25.2 Phase B: host packs
+### 25.2 Phase B: host packs — implemented for managed local
 
 First refactor AgentBox's lifecycle into an embeddable component and extend `build_standalone_app` (or add `build_local_app`) to start it with the API, worker, and scheduler. Configure AgentBox PostgreSQL state in the existing `agentbox` database and make MarkItDown mandatory for this composition. Add CI packaging for exactly one backend pack and one frontend pack. Extend manifest v2 and the locald host-process supervisor. Initially continue using Docker/Podman for PostgreSQL, Redis, SuperTokens, and sandbox compute to isolate composition/host-pack bugs from managed-runtime bugs.
 
-### 25.3 Phase C: guest protocol and managed providers
+### 25.3 Phase C: guest protocol and managed providers — core implemented
 
 Add:
 
@@ -1380,17 +1399,26 @@ Add:
 - resource/idle controller;
 - managed data backup/restore.
 
-### 25.4 Phase D: AgentBox provider
+The guest daemon, authenticated protocol, platform launchers, VZ disk/runtime,
+private WSL distribution, and service reconciliation are implemented. Adaptive
+resource policy and user-facing backup/restore remain open release work.
+
+### 25.4 Phase D: AgentBox provider — implemented
 
 Implement `LemmaLocalProvider`, sandbox routes, approved mounts, lifecycle recovery, and remove general runtime-socket access from the embedded backend/AgentBox component on managed installs.
 
-### 25.5 Phase E: default switch and cleanup
+### 25.5 Phase E: default switch and cleanup — in progress
 
 - managed provider becomes default on supported platforms;
 - external runtimes move to Advanced;
 - `supervise` is deprecated then removed after two compatibility releases;
 - current release manifest v1 remains readable for migration but cannot describe new installs;
 - Podman runtime staging is removed from the desktop bundle after migration coverage is stable.
+
+Managed providers are now the packaged desktop default, and the PyInstaller
+supervisor, bundled `uv`, and Podman runtime are absent from new online/offline
+artifacts. The compatibility adapter remains in source for existing external
+runtime installs and development until migration coverage permits removal.
 
 ### 25.6 Phase F: local-auth optimization
 
