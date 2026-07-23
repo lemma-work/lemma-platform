@@ -397,7 +397,7 @@ def test_podman_provider_uses_shared_container_config(monkeypatch, tmp_path):
         },
     )
 
-    assert seen_cli_names == ["podman"]
+    assert seen_cli_names == ["docker"]
     assert provider.storage_root == tmp_path / "podman"
     assert status.status == "RUNNING"
     assert status.runtime_url == "http://127.0.0.1:50100"

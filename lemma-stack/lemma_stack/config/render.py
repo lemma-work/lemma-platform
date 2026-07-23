@@ -12,7 +12,7 @@ and published ports so local routing mirrors the production domain model.
 from __future__ import annotations
 
 import base64
-import hashlib
+import hmac
 import os
 
 from tomlkit import TOMLDocument
@@ -72,7 +72,11 @@ def agentbox_app_domain(doc: TOMLDocument) -> str:
 def _agentbox_endpoint_state_key(doc: TOMLDocument) -> str:
     """Derive a stable local-only endpoint key from the generated manager key."""
 
-    digest = hashlib.sha256(store.agentbox_api_key(doc).encode("utf-8")).digest()
+    digest = hmac.digest(
+        store.agentbox_api_key(doc).encode("utf-8"),
+        b"lemma-agentbox-endpoint-state-v1",
+        "sha256",
+    )
     return base64.urlsafe_b64encode(digest).decode("ascii")
 
 
@@ -161,7 +165,9 @@ def backend_env(
         "ENABLE_SLACK_SOCKET_MODE": "true",
     }
     if provider == "podman":
-        env["CONTAINER_HOST"] = f"unix://{container_socket}"
+        socket_url = f"unix://{container_socket}"
+        env["CONTAINER_HOST"] = socket_url
+        env["DOCKER_HOST"] = socket_url
     env.update(store.env_overrides(doc, "agentbox"))
     env.update(store.env_overrides(doc, "backend"))
     return env

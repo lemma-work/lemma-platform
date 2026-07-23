@@ -1,6 +1,6 @@
 # syntax=docker/dockerfile:1
 
-FROM docker:28.5.2-cli AS docker_cli
+FROM docker:29.6.2-cli AS docker_cli
 
 # Stage 1: Build stage with uv
 FROM ghcr.io/astral-sh/uv:python3.14-bookworm-slim AS builder
@@ -47,21 +47,10 @@ FROM python:3.14-slim-bookworm
 # Set working directory
 WORKDIR /app
 
-# The embedded AgentBox manager drives the selected local runtime through its
-# mounted API socket. Ship only the clients; the daemon remains host-owned.
-RUN apt-get update \
-    && apt-get install -y --no-install-recommends ca-certificates curl \
-    && rm -rf /var/lib/apt/lists/*
-
+# The embedded AgentBox manager drives Docker or Podman's Docker-compatible
+# API through the mounted socket. Ship one patched client; the daemon remains
+# host-owned.
 COPY --from=docker_cli /usr/local/bin/docker /usr/local/bin/docker
-
-ARG PODMAN_REMOTE_VERSION=5.5.2
-ARG TARGETARCH
-RUN arch="${TARGETARCH:-$(dpkg --print-architecture)}" \
-    && curl -fsSL "https://github.com/containers/podman/releases/download/v${PODMAN_REMOTE_VERSION}/podman-remote-static-linux_${arch}.tar.gz" \
-        | tar -xz -C /tmp \
-    && install -m 0755 "/tmp/bin/podman-remote-static-linux_${arch}" /usr/local/bin/podman \
-    && rm -rf /tmp/bin
 
 # Create non-root user for security
 # -d /home/appuser: explicitly set home directory
