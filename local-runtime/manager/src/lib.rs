@@ -133,6 +133,13 @@ impl ManagedRuntime {
                 "guest response exceeded 4 MiB",
             ));
         }
+        if output.stdout.is_empty() {
+            let detail = first_diagnostic(&output.stderr, "private guest did not respond");
+            return Err(io::Error::new(
+                io::ErrorKind::ConnectionRefused,
+                format!("could not reach Lemma's private runtime: {detail}"),
+            ));
+        }
         let response: Value = serde_json::from_slice(&output.stdout).map_err(|error| {
             let detail = String::from_utf8_lossy(&output.stderr);
             io::Error::new(
@@ -156,6 +163,37 @@ impl ManagedRuntime {
             .get("result")
             .cloned()
             .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidData, "guest omitted result"))
+    }
+
+    /// Verify both the platform runtime process and the guest control plane.
+    ///
+    /// This is intentionally stronger than checking whether the last start
+    /// succeeded: the VM or WSL distribution may disappear while the native
+    /// backend and frontend processes remain alive.
+    pub fn health(&self) -> io::Result<ManagedRuntimeStatus> {
+        #[cfg(target_os = "macos")]
+        if let Some(error) = self.macos_exit_error()? {
+            return Err(error);
+        }
+        let result = match self.request("health", json!({})) {
+            Ok(result) => result,
+            Err(error) => {
+                // A torn containerd cache is disposable, but it must be reset
+                // while the guest is offline. The guest persists a reset
+                // marker; a clean stop lets the next boot repair only that
+                // cache while preserving named volumes and workspaces.
+                if cache_repair_required(&error) {
+                    let _ = self.stop();
+                }
+                return Err(error);
+            }
+        };
+        serde_json::from_value(result).map_err(|error| {
+            io::Error::new(
+                io::ErrorKind::InvalidData,
+                format!("invalid guest health response: {error}"),
+            )
+        })
     }
 
     pub fn stop(&self) -> io::Result<()> {
@@ -231,15 +269,12 @@ impl ManagedRuntime {
         let deadline = Instant::now() + Duration::from_secs(120);
         let mut last_error = None;
         while Instant::now() < deadline {
-            match self.request("health", json!({})) {
-                Ok(result) => {
-                    return serde_json::from_value(result).map_err(|error| {
-                        io::Error::new(
-                            io::ErrorKind::InvalidData,
-                            format!("invalid guest health response: {error}"),
-                        )
-                    })
-                }
+            #[cfg(target_os = "macos")]
+            if let Some(error) = self.macos_exit_error()? {
+                return Err(error);
+            }
+            match self.health() {
+                Ok(status) => return Ok(status),
                 Err(error) => last_error = Some(error),
             }
             thread::sleep(Duration::from_millis(250));
@@ -276,6 +311,7 @@ impl ManagedRuntime {
         refresh_macos_release(&source, &runtime)?;
         create_private_sparse_file(&runtime.join("data.raw"), DATA_DISK_BYTES)?;
         let _ = fs::remove_file(&self.control_socket);
+        let log_path = self.config.local_root.join("logs/vz.log");
         let child = Command::new(&self.config.vz_executable)
             .arg("serve")
             .arg("--runtime")
@@ -290,12 +326,27 @@ impl ManagedRuntime {
             )
             .stdin(Stdio::null())
             .stdout(Stdio::null())
-            .stderr(Stdio::from(private_log(
-                &self.config.local_root.join("logs/vz.log"),
-            )?))
+            .stderr(Stdio::from(private_truncating_log(&log_path)?))
             .spawn()?;
         *guard = Some(child);
         Ok(())
+    }
+
+    #[cfg(target_os = "macos")]
+    fn macos_exit_error(&self) -> io::Result<Option<io::Error>> {
+        let mut guard = self.vm.lock().expect("VM lock poisoned");
+        let Some(child) = guard.as_mut() else {
+            return Ok(None);
+        };
+        let Some(status) = child.try_wait()? else {
+            return Ok(None);
+        };
+        *guard = None;
+        let log = fs::read(self.config.local_root.join("logs/vz.log")).unwrap_or_default();
+        let detail = first_diagnostic(&log, "VM helper exited without a diagnostic");
+        Ok(Some(io::Error::other(format!(
+            "Lemma's private runtime exited ({status}): {detail}"
+        ))))
     }
 
     #[cfg(windows)]
@@ -474,6 +525,12 @@ impl ManagedRuntime {
     }
 }
 
+fn cache_repair_required(error: &io::Error) -> bool {
+    error
+        .to_string()
+        .contains("container cache repair required")
+}
+
 #[cfg(target_os = "macos")]
 fn refresh_macos_release(source: &Path, destination: &Path) -> io::Result<()> {
     let source_marker = source.join("runtime.json");
@@ -592,15 +649,27 @@ fn ensure_private_file(path: &Path) -> io::Result<()> {
 }
 
 #[cfg(target_os = "macos")]
-fn private_log(path: &Path) -> io::Result<std::fs::File> {
-    let parent = path
-        .parent()
-        .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidInput, "log has no parent"))?;
-    fs::create_dir_all(parent)?;
+fn private_truncating_log(path: &Path) -> io::Result<std::fs::File> {
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent)?;
+    }
     let mut options = OpenOptions::new();
-    options.create(true).append(true);
+    options.create(true).write(true).truncate(true);
     use std::os::unix::fs::OpenOptionsExt;
     options.mode(0o600).open(path)
+}
+
+fn first_diagnostic(value: &[u8], fallback: &str) -> String {
+    let value = String::from_utf8_lossy(value);
+    let diagnostic = value
+        .lines()
+        .map(str::trim)
+        .find(|line| !line.is_empty())
+        .unwrap_or(fallback);
+    diagnostic
+        .strip_prefix("lemma-runtime: ")
+        .unwrap_or(diagnostic)
+        .to_owned()
 }
 
 #[cfg(windows)]
@@ -727,6 +796,16 @@ mod tests {
 
         assert_eq!(state, "state");
         ensure_private_file(&disk).unwrap();
+    }
+
+    #[test]
+    fn cache_repair_signal_is_exact_and_does_not_match_generic_failures() {
+        assert!(cache_repair_required(&io::Error::other(
+            "container cache repair required"
+        )));
+        assert!(!cache_repair_required(&io::Error::other(
+            "container engine unavailable"
+        )));
     }
 
     #[cfg(target_os = "macos")]

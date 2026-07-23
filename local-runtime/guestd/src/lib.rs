@@ -19,6 +19,7 @@ const CONTAINER_PREFIX: &str = "agentbox-";
 const MANAGED_LABEL: &str = "app.kubernetes.io/name=agentbox-sandbox";
 const ENGINE_COMMAND_TIMEOUT: Duration = Duration::from_secs(120);
 const ENGINE_PULL_TIMEOUT: Duration = Duration::from_secs(300);
+const CACHE_REPAIR_RESPONSE_GRACE: Duration = Duration::from_secs(10);
 
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -364,12 +365,9 @@ impl<E: Engine> GuestService<E> {
             }
         }
         match request.operation.as_str() {
-            "health" => Ok(json!({
-                "status": "ready", "engine": "containerd",
-                "endpoint_host": self.endpoint_host,
-                "host_gateway": self.host_gateway,
-            })),
+            "health" => self.health(),
             "diagnostics.network" => Ok(network_diagnostics()),
+            "diagnostics.sandbox" => self.sandbox_diagnostics(request.parameters),
             "system.shutdown" => self.shutdown(),
             "core.ensure" => self.ensure_core(request.parameters),
             "core.status" => self.core_status(),
@@ -503,6 +501,33 @@ impl<E: Engine> GuestService<E> {
         self.core_status()
     }
 
+    fn health(&self) -> Result<Value, GuestError> {
+        self.health_at(SystemTime::now())
+    }
+
+    fn health_at(&self, now: SystemTime) -> Result<Value, GuestError> {
+        let marker = self.cache_reset_marker();
+        let repair_due = marker
+            .metadata()
+            .and_then(|metadata| metadata.modified())
+            .ok()
+            .and_then(|modified| now.duration_since(modified).ok())
+            .is_some_and(|age| age >= CACHE_REPAIR_RESPONSE_GRACE);
+        if repair_due {
+            return Err(GuestError {
+                code: "guest_cache_repair_required".into(),
+                message: "container cache repair required".into(),
+                retryable: true,
+                status_code: 503,
+            });
+        }
+        Ok(json!({
+            "status": "ready", "engine": "containerd",
+            "endpoint_host": self.endpoint_host,
+            "host_gateway": self.host_gateway,
+        }))
+    }
+
     fn core_status(&self) -> Result<Value, GuestError> {
         let mut components = serde_json::Map::new();
         let mut ready = true;
@@ -595,7 +620,21 @@ impl<E: Engine> GuestService<E> {
             .run(&["volume".into(), "inspect".into(), name.into()])
             .map_err(GuestError::engine)?;
         if !inspect.status.success() {
-            self.run_checked(&["volume".into(), "create".into(), name.into()])?;
+            let create = self
+                .engine
+                .run(&["volume".into(), "create".into(), name.into()])
+                .map_err(GuestError::engine)?;
+            if !create.status.success() {
+                let stderr = String::from_utf8_lossy(&create.stderr);
+                // A disposable container-cache repair intentionally preserves
+                // named-volume data while replacing containerd's metadata.
+                // nerdctl then rediscovers the on-disk volume and reports this
+                // warning with a non-zero exit status. It is the desired
+                // outcome: the existing user data must be reused.
+                if !stderr.contains("already exists and will be returned as-is") {
+                    return Err(GuestError::engine(redact_engine_error(&stderr)));
+                }
+            }
         }
         Ok(())
     }
@@ -648,9 +687,15 @@ impl<E: Engine> GuestService<E> {
                 .and_then(Value::as_bool)
                 .unwrap_or(false);
             if !running {
-                self.run_checked(&["start".into(), name.into()])?;
+                if self.restart_or_remove_stale(name)? {
+                    return Ok(());
+                }
+                // A guest OS refresh can invalidate containerd's ephemeral
+                // resolv.conf or mount paths. Recreate the stopped container
+                // below while retaining its named data volume.
+            } else {
+                return Ok(());
             }
-            return Ok(());
         }
         let env_file = self.write_env_file(name, environment)?;
         let mut arguments = vec![
@@ -678,6 +723,19 @@ impl<E: Engine> GuestService<E> {
         let result = self.run_checked(&arguments);
         let _ = fs::remove_file(env_file);
         result.map(|_| ())
+    }
+
+    fn restart_or_remove_stale(&self, name: &str) -> Result<bool, GuestError> {
+        let started = self
+            .engine
+            .run(&["start".into(), name.into()])
+            .map(|output| output.status.success())
+            .unwrap_or(false);
+        if started {
+            return Ok(true);
+        }
+        self.run_checked(&["rm".into(), "--force".into(), name.into()])?;
+        Ok(false)
     }
 
     fn inspect_raw(&self, name: &str) -> Result<Option<Value>, GuestError> {
@@ -710,11 +768,21 @@ impl<E: Engine> GuestService<E> {
     }
 
     fn wait_engine_command(&self, arguments: &[String], timeout: u64) -> Result<(), GuestError> {
+        self.wait_engine_output(arguments, timeout).map(|_| ())
+    }
+
+    fn wait_engine_output(&self, arguments: &[String], timeout: u64) -> Result<String, GuestError> {
         let deadline = Instant::now() + Duration::from_secs(timeout);
         let mut last_error = None;
         while Instant::now() < deadline {
             match self.engine.run(arguments) {
-                Ok(output) if output.status.success() => return Ok(()),
+                Ok(output) if output.status.success() => {
+                    return String::from_utf8(output.stdout)
+                        .map(|value| value.trim().to_owned())
+                        .map_err(|_| {
+                            GuestError::engine("container engine returned non-UTF8 output")
+                        })
+                }
                 Ok(output) => {
                     last_error = Some(redact_engine_error(&String::from_utf8_lossy(
                         &output.stderr,
@@ -731,28 +799,69 @@ impl<E: Engine> GuestService<E> {
 
     fn ensure_databases(&self) -> Result<(), GuestError> {
         for database in ["lemma", "lemma_datastore", "agentbox", "supertokens"] {
-            let query = format!("SELECT 1 FROM pg_database WHERE datname = '{database}'");
-            let output = self.run_checked(&[
-                "exec".into(),
-                "lemma-core-postgres".into(),
-                "psql".into(),
-                "-U".into(),
-                "postgres".into(),
-                "-tAc".into(),
-                query,
-            ])?;
-            if output.trim() != "1" {
-                self.run_checked(&[
-                    "exec".into(),
-                    "lemma-core-postgres".into(),
-                    "createdb".into(),
-                    "-U".into(),
-                    "postgres".into(),
-                    database.into(),
-                ])?;
-            }
+            self.ensure_database(database, 120)?;
         }
         Ok(())
+    }
+
+    fn ensure_database(&self, database: &str, timeout: u64) -> Result<(), GuestError> {
+        let deadline = Instant::now() + Duration::from_secs(timeout);
+        let query = format!("SELECT 1 FROM pg_database WHERE datname = '{database}'");
+        let query_arguments = [
+            "exec".into(),
+            "lemma-core-postgres".into(),
+            "psql".into(),
+            "-U".into(),
+            "postgres".into(),
+            "-tAc".into(),
+            query,
+        ];
+        let create_arguments = [
+            "exec".into(),
+            "lemma-core-postgres".into(),
+            "createdb".into(),
+            "-U".into(),
+            "postgres".into(),
+            database.into(),
+        ];
+        let mut last_error = None;
+
+        // The official image starts a temporary server for initialization and
+        // then restarts it. A CREATE DATABASE transaction can commit just as
+        // that connection is closed, leaving `createdb` with exit 1 even
+        // though the database now exists. Always use the existence query as
+        // the source of truth instead of retrying a potentially committed
+        // `createdb` command until it only reports "already exists".
+        while Instant::now() < deadline {
+            match self.engine.run(&query_arguments) {
+                Ok(output) if output.status.success() => {
+                    if String::from_utf8_lossy(&output.stdout).trim() == "1" {
+                        return Ok(());
+                    }
+                    match self.engine.run(&create_arguments) {
+                        Ok(output) if output.status.success() => {}
+                        Ok(output) => {
+                            last_error = Some(redact_engine_error(&String::from_utf8_lossy(
+                                &output.stderr,
+                            )))
+                        }
+                        Err(error) => last_error = Some(error),
+                    }
+                }
+                Ok(output) => {
+                    last_error = Some(redact_engine_error(&String::from_utf8_lossy(
+                        &output.stderr,
+                    )))
+                }
+                Err(error) => last_error = Some(error),
+            }
+            thread::sleep(Duration::from_millis(250));
+        }
+
+        Err(GuestError::engine(format!(
+            "database {database} provisioning timed out: {}",
+            last_error.unwrap_or_else(|| "Postgres did not accept the provisioning query".into())
+        )))
     }
 
     fn wait_tcp(&self, port: u16, timeout: u64) -> Result<(), GuestError> {
@@ -812,12 +921,15 @@ impl<E: Engine> GuestService<E> {
         validate_apps(&parameters.apps)?;
         validate_environment(&parameters.env)?;
 
-        if let Some(snapshot) = self.snapshot_optional(&parameters.sandbox_id, &parameters.apps)? {
-            if snapshot["status"]["status"] != "RUNNING" {
-                self.run_checked(&["start".into(), container_name(&parameters.sandbox_id)])?;
-            }
-        } else {
-            self.ensure_image(&parameters.image)?;
+        let container = container_name(&parameters.sandbox_id);
+        let should_create =
+            match self.snapshot_optional(&parameters.sandbox_id, &parameters.apps)? {
+                Some(snapshot) if snapshot["status"]["status"] == "RUNNING" => false,
+                Some(_) => !self.restart_or_remove_stale(&container)?,
+                None => true,
+            };
+        if should_create {
+            self.ensure_sandbox_image(&parameters.image)?;
             let workspace = self.workspace(&parameters.sandbox_id)?;
             let env_file = self.write_env_file(&parameters.sandbox_id, &parameters.env)?;
             let arguments =
@@ -829,6 +941,7 @@ impl<E: Engine> GuestService<E> {
 
         let deadline = Instant::now() + Duration::from_secs(180);
         let mut last_snapshot = None;
+        let mut applications_healthy = false;
         while Instant::now() < deadline {
             match self.snapshot_optional(&parameters.sandbox_id, &parameters.apps)? {
                 Some(snapshot)
@@ -836,18 +949,71 @@ impl<E: Engine> GuestService<E> {
                         && eager_apps_healthy(&snapshot, &parameters.apps) =>
                 {
                     last_snapshot = Some(snapshot);
+                    applications_healthy = true;
                     break;
+                }
+                Some(snapshot)
+                    if matches!(
+                        snapshot["status"]["status"].as_str(),
+                        Some("STOPPED" | "ERROR")
+                    ) =>
+                {
+                    return Err(self.sandbox_startup_error(
+                        &container,
+                        "sandbox runtime stopped before becoming ready",
+                    ));
                 }
                 snapshot => last_snapshot = snapshot,
             }
             thread::sleep(Duration::from_millis(250));
         }
         let snapshot = last_snapshot.ok_or_else(GuestError::not_found)?;
-        if snapshot["status"]["ready"] != true {
-            return Err(GuestError::engine("sandbox runtime did not become ready"));
+        if snapshot["status"]["ready"] != true || !applications_healthy {
+            return Err(
+                self.sandbox_startup_error(&container, "sandbox applications did not become ready")
+            );
         }
         self.wait_callback(&parameters)?;
         Ok(snapshot)
+    }
+
+    fn sandbox_startup_error(&self, container: &str, summary: &str) -> GuestError {
+        let mut diagnostics = Vec::new();
+        if let Ok(Some(inspect)) = self.inspect_raw(container) {
+            if let Some(state) = inspect.get("State").and_then(Value::as_object) {
+                if state
+                    .get("OOMKilled")
+                    .and_then(Value::as_bool)
+                    .unwrap_or(false)
+                {
+                    diagnostics.push("container exceeded its memory limit".to_owned());
+                }
+                if let Some(error) = state
+                    .get("Error")
+                    .and_then(Value::as_str)
+                    .filter(|value| !value.trim().is_empty())
+                {
+                    diagnostics.push(redact_engine_error(error));
+                }
+                if let Some(exit_code) = state
+                    .get("ExitCode")
+                    .and_then(Value::as_i64)
+                    .filter(|value| *value != 0)
+                {
+                    diagnostics.push(format!("container exited with code {exit_code}"));
+                }
+            }
+        }
+        if let Some(log) = self.container_log_summary(container) {
+            if !diagnostics.iter().any(|value| value == &log) {
+                diagnostics.push(log);
+            }
+        }
+        if diagnostics.is_empty() {
+            GuestError::engine(summary)
+        } else {
+            GuestError::engine(format!("{summary}: {}", diagnostics.join("; ")))
+        }
     }
 
     fn status(&self, value: Value) -> Result<Value, GuestError> {
@@ -856,6 +1022,53 @@ impl<E: Engine> GuestService<E> {
         let apps = default_apps();
         self.snapshot_optional(&sandbox_id, &apps)?
             .ok_or_else(GuestError::not_found)
+    }
+
+    fn sandbox_diagnostics(&self, value: Value) -> Result<Value, GuestError> {
+        let sandbox_id = required_string(&value, "sandbox_id")?;
+        validate_sandbox_id(&sandbox_id)?;
+        let container = container_name(&sandbox_id);
+        let inspect = self
+            .inspect_raw(&container)?
+            .ok_or_else(GuestError::not_found)?;
+        let state = inspect.get("State").and_then(Value::as_object);
+        let config = inspect.get("Config").and_then(Value::as_object);
+        let text = |name: &str| {
+            state
+                .and_then(|value| value.get(name))
+                .and_then(Value::as_str)
+                .filter(|value| !value.trim().is_empty())
+                .map(redact_engine_error)
+        };
+        Ok(json!({
+            "sandbox_id": sandbox_id,
+            "process": {
+                "path": inspect.get("Path").and_then(Value::as_str),
+                "args": inspect.get("Args").and_then(Value::as_array),
+                "entrypoint": config
+                    .and_then(|value| value.get("Entrypoint"))
+                    .and_then(Value::as_array),
+                "cmd": config
+                    .and_then(|value| value.get("Cmd"))
+                    .and_then(Value::as_array),
+            },
+            "state": {
+                "status": text("Status"),
+                "running": state
+                    .and_then(|value| value.get("Running"))
+                    .and_then(Value::as_bool),
+                "exit_code": state
+                    .and_then(|value| value.get("ExitCode"))
+                    .and_then(Value::as_i64),
+                "oom_killed": state
+                    .and_then(|value| value.get("OOMKilled"))
+                    .and_then(Value::as_bool),
+                "error": text("Error"),
+                "started_at": text("StartedAt"),
+                "finished_at": text("FinishedAt"),
+            },
+            "last_log": self.container_log_summary(&container),
+        }))
     }
 
     fn list(&self) -> Result<Value, GuestError> {
@@ -985,11 +1198,79 @@ impl<E: Engine> GuestService<E> {
         if inspect.status.success() {
             return Ok(());
         }
+        self.pull_image(image)
+    }
+
+    fn ensure_sandbox_image(&self, image: &str) -> Result<(), GuestError> {
+        self.ensure_image(image)?;
+        if self.sandbox_image_marker_is_ready(image) {
+            return Ok(());
+        }
+        // An interrupted VM shutdown can leave containerd's image metadata
+        // present while its unpacked snapshot is incomplete. `image inspect`
+        // still succeeds in that state. Stopped sandbox containers are
+        // disposable compute; pruning them preserves bind-mounted workspaces
+        // while releasing the broken snapshot. Never remove a running
+        // container as part of automatic repair.
+        self.run_checked(&["container".into(), "prune".into(), "--force".into()])?;
+        self.run_checked(&["rmi".into(), "--force".into(), image.into()])?;
+        self.pull_image(image)?;
+        if self.sandbox_image_marker_is_ready(image) {
+            Ok(())
+        } else {
+            self.schedule_cache_reset()?;
+            Err(GuestError {
+                code: "guest_cache_repair_required".into(),
+                message: "container cache repair required; automatic restart scheduled".into(),
+                retryable: true,
+                status_code: 503,
+            })
+        }
+    }
+
+    fn cache_reset_marker(&self) -> PathBuf {
+        self.state_root.join("container-cache-reset-required")
+    }
+
+    fn schedule_cache_reset(&self) -> Result<(), GuestError> {
+        let marker = self.cache_reset_marker();
+        let mut file = OpenOptions::new()
+            .create(true)
+            .truncate(true)
+            .write(true)
+            .mode(0o600)
+            .open(&marker)
+            .map_err(|error| GuestError::engine(error.to_string()))?;
+        file.write_all(b"1\n")
+            .map_err(|error| GuestError::engine(error.to_string()))?;
+        file.sync_all()
+            .map_err(|error| GuestError::engine(error.to_string()))
+    }
+
+    fn sandbox_image_marker_is_ready(&self, image: &str) -> bool {
+        self.engine
+            .run(&[
+                "run".into(),
+                "--rm".into(),
+                "--network".into(),
+                "none".into(),
+                "--platform".into(),
+                guest_platform().into(),
+                image.into(),
+                "/usr/bin/test".into(),
+                "-s".into(),
+                "/usr/local/bin/start-runtime".into(),
+            ])
+            .is_ok_and(|output| output.status.success())
+    }
+
+    fn pull_image(&self, image: &str) -> Result<(), GuestError> {
         let output = self
             .engine
             .run(&[
                 "pull".into(),
                 "--quiet".into(),
+                "--unpack=true".into(),
                 "--platform".into(),
                 guest_platform().into(),
                 image.into(),
@@ -1318,7 +1599,7 @@ fn validate_apps(apps: &[AppSpec]) -> Result<(), GuestError> {
         ));
     }
     for app in apps {
-        if !valid_identifier(&app.name)
+        if !valid_app_name(&app.name)
             || !valid_identifier(&app.public_slug)
             || app.port == 0
             || !app.health_path.starts_with('/')
@@ -1430,6 +1711,14 @@ fn validate_sandbox_id(value: &str) -> Result<(), GuestError> {
     Ok(())
 }
 
+fn valid_app_name(value: &str) -> bool {
+    !value.is_empty()
+        && value.len() <= 63
+        && value.bytes().all(|byte| {
+            byte.is_ascii_lowercase() || byte.is_ascii_digit() || byte == b'-' || byte == b'_'
+        })
+}
+
 fn valid_identifier(value: &str) -> bool {
     !value.is_empty()
         && value.len() <= 63
@@ -1519,11 +1808,21 @@ fn load_capability() -> Result<Option<String>, GuestError> {
 }
 
 fn redact_engine_error(value: &str) -> String {
-    let line = value
+    let lines = value
         .lines()
-        .next()
-        .unwrap_or("container engine failed")
-        .trim();
+        .map(str::trim)
+        .filter(|line| !line.is_empty())
+        .collect::<Vec<_>>();
+    // Container CLIs often emit one or more warnings before the actionable
+    // fatal diagnostic. Returning the first line made a preserved-volume
+    // warning look like the reason a later container creation failed.
+    let line = lines
+        .iter()
+        .rev()
+        .copied()
+        .find(|line| line.contains("level=fatal") || line.contains("level=error"))
+        .or_else(|| lines.last().copied())
+        .unwrap_or("container engine failed");
     if line.len() > 512 {
         format!("{}…", &line[..512])
     } else {
@@ -1539,7 +1838,13 @@ pub fn handle_reader<R: Read, W: Write, E: Engine>(
     let mut bounded = BufReader::new(reader).take(MAX_REQUEST_BYTES + 1);
     let mut line = String::new();
     bounded.read_line(&mut line)?;
-    let response = if line.len() as u64 > MAX_REQUEST_BYTES {
+    let response = response_for_line(&line, service);
+    write_response(&mut writer, &response)?;
+    Ok(response.ok)
+}
+
+fn response_for_line<E: Engine>(line: &str, service: &GuestService<E>) -> GuestResponse {
+    if line.len() as u64 > MAX_REQUEST_BYTES {
         GuestResponse::failure(GuestError::invalid("request exceeded 1 MiB"))
     } else {
         match serde_json::from_str::<GuestRequest>(line.trim_end()) {
@@ -1548,7 +1853,10 @@ pub fn handle_reader<R: Read, W: Write, E: Engine>(
                 "invalid request JSON: {error}"
             ))),
         }
-    };
+    }
+}
+
+fn write_response<W: Write>(writer: &mut W, response: &GuestResponse) -> io::Result<()> {
     let encoded = serde_json::to_vec(&response)?;
     if encoded.len() > MAX_RESPONSE_BYTES {
         return Err(io::Error::new(
@@ -1559,7 +1867,27 @@ pub fn handle_reader<R: Read, W: Write, E: Engine>(
     writer.write_all(&encoded)?;
     writer.write_all(b"\n")?;
     writer.flush()?;
-    Ok(response.ok)
+    Ok(())
+}
+
+#[cfg(any(target_os = "linux", test))]
+fn handle_stream<R: Read, W: Write, E: Engine>(
+    reader: R,
+    mut writer: W,
+    service: &GuestService<E>,
+) -> io::Result<()> {
+    let mut reader = BufReader::new(reader);
+    loop {
+        let mut line = String::new();
+        let count = (&mut reader)
+            .take(MAX_REQUEST_BYTES + 1)
+            .read_line(&mut line)?;
+        if count == 0 {
+            return Ok(());
+        }
+        let response = response_for_line(&line, service);
+        write_response(&mut writer, &response)?;
+    }
 }
 
 #[cfg(target_os = "linux")]
@@ -1607,7 +1935,7 @@ pub fn serve_vsock<E: Engine>(service: &GuestService<E>) -> io::Result<()> {
             let connection = OwnedFd::from_raw_fd(accepted);
             let reader = std::fs::File::from(connection.try_clone()?);
             let writer = std::fs::File::from(connection);
-            let _ = handle_reader(reader, writer, service);
+            let _ = handle_stream(reader, writer, service);
         }
         #[allow(unreachable_code)]
         drop(_listener);
@@ -1802,6 +2130,129 @@ mod tests {
     }
 
     #[test]
+    fn ensure_volume_reuses_data_preserved_across_container_cache_repair() {
+        let root = tempdir().unwrap();
+        let warning = Output {
+            status: std::process::ExitStatus::from_raw(1),
+            stdout: vec![],
+            stderr: b"time=\"2026-07-23T11:33:36Z\" level=warning msg=\"volume \\\"lemma-postgres-data\\\" already exists and will be returned as-is\""
+                .to_vec(),
+        };
+        let service = GuestService::new(
+            FakeEngine::new(vec![output(false, ""), warning]),
+            root.path().into(),
+            "192.168.64.2".into(),
+            "192.168.64.1".into(),
+            None,
+        )
+        .unwrap();
+
+        service.ensure_volume("lemma-postgres-data").unwrap();
+
+        assert_eq!(
+            service.engine.commands.lock().unwrap().as_slice(),
+            [
+                vec![
+                    "volume".to_owned(),
+                    "inspect".to_owned(),
+                    "lemma-postgres-data".to_owned(),
+                ],
+                vec![
+                    "volume".to_owned(),
+                    "create".to_owned(),
+                    "lemma-postgres-data".to_owned(),
+                ],
+            ]
+        );
+    }
+
+    #[test]
+    fn ensure_volume_rejects_unrelated_creation_failures() {
+        let root = tempdir().unwrap();
+        let service = GuestService::new(
+            FakeEngine::new(vec![output(false, ""), output(false, "")]),
+            root.path().into(),
+            "192.168.64.2".into(),
+            "192.168.64.1".into(),
+            None,
+        )
+        .unwrap();
+
+        let error = service.ensure_volume("lemma-postgres-data").unwrap_err();
+
+        assert_eq!(error.code, "guest_engine_failed");
+        assert_eq!(error.message, "not found");
+    }
+
+    #[test]
+    fn database_command_retries_through_postgres_initialization_restart() {
+        let root = tempdir().unwrap();
+        let shutting_down = Output {
+            status: std::process::ExitStatus::from_raw(2),
+            stdout: vec![],
+            stderr: b"psql: error: FATAL: the database system is shutting down".to_vec(),
+        };
+        let service = GuestService::new(
+            FakeEngine::new(vec![shutting_down, output(true, "1\n")]),
+            root.path().into(),
+            "192.168.64.2".into(),
+            "192.168.64.1".into(),
+            None,
+        )
+        .unwrap();
+
+        let value = service
+            .wait_engine_output(&["exec".into(), "lemma-core-postgres".into()], 1)
+            .unwrap();
+
+        assert_eq!(value, "1");
+        assert_eq!(service.engine.commands.lock().unwrap().len(), 2);
+    }
+
+    #[test]
+    fn database_provisioning_accepts_an_ambiguous_committed_create() {
+        let root = tempdir().unwrap();
+        let disconnected_after_commit = Output {
+            status: std::process::ExitStatus::from_raw(1),
+            stdout: vec![],
+            stderr: b"time=now level=fatal msg=\"exec failed with exit code 1\"".to_vec(),
+        };
+        let service = GuestService::new(
+            FakeEngine::new(vec![
+                output(true, ""),
+                disconnected_after_commit,
+                output(true, "1\n"),
+            ]),
+            root.path().into(),
+            "192.168.64.2".into(),
+            "192.168.64.1".into(),
+            None,
+        )
+        .unwrap();
+
+        service.ensure_database("agentbox", 1).unwrap();
+
+        let commands = service.engine.commands.lock().unwrap();
+        assert_eq!(commands.len(), 3);
+        assert_eq!(commands[0][2], "psql");
+        assert_eq!(commands[1][2], "createdb");
+        assert_eq!(commands[2][2], "psql");
+    }
+
+    #[test]
+    fn engine_error_prefers_actionable_failure_after_warnings() {
+        let diagnostic = concat!(
+            "time=now level=warning msg=\"volume already exists\"\n",
+            "time=now level=fatal msg=\"failed to create task: missing snapshot\"\n",
+        );
+
+        assert_eq!(
+            redact_engine_error(diagnostic),
+            "time=now level=fatal msg=\"failed to create task: missing snapshot\""
+        );
+    }
+
+    #[test]
     fn snapshot_uses_guest_ip_and_exact_container_generation() {
         let parsed: Value = serde_json::from_str(&inspect()).unwrap();
         let snapshot = snapshot_from_inspect(
@@ -1848,6 +2299,266 @@ mod tests {
         assert!(joined.contains("0.0.0.0::4848"));
         assert!(joined.contains("0.0.0.0::8090"));
         assert!(joined.ends_with("ghcr.io/lemma/runtime@sha256:abc"));
+    }
+
+    #[test]
+    fn canonical_function_executor_name_is_valid_but_public_slugs_remain_dns_safe() {
+        assert!(validate_apps(&default_apps()).is_ok());
+        assert!(valid_app_name("function_executor"));
+        assert!(!valid_identifier("function_executor"));
+    }
+
+    #[test]
+    fn sandbox_startup_error_includes_the_last_container_diagnostic() {
+        let root = tempdir().unwrap();
+        let service = GuestService::new(
+            FakeEngine::new(vec![
+                output(
+                    true,
+                    &json!([{
+                        "State": {
+                            "Error": "OCI runtime failed",
+                            "ExitCode": 126,
+                            "OOMKilled": false,
+                        }
+                    }])
+                    .to_string(),
+                ),
+                output(true, "starting\nfatal: runtime bootstrap failed\n"),
+            ]),
+            root.path().into(),
+            "192.168.64.2".into(),
+            "192.168.64.1".into(),
+            None,
+        )
+        .unwrap();
+
+        let error = service.sandbox_startup_error(
+            "agentbox-box-1",
+            "sandbox runtime stopped before becoming ready",
+        );
+
+        assert_eq!(error.code, "guest_engine_failed");
+        assert_eq!(
+            error.message,
+            "sandbox runtime stopped before becoming ready: OCI runtime failed; container exited with code 126; fatal: runtime bootstrap failed"
+        );
+        assert_eq!(
+            service.engine.commands.lock().unwrap().as_slice(),
+            [
+                vec!["inspect".to_owned(), "agentbox-box-1".to_owned()],
+                vec![
+                    "logs".to_owned(),
+                    "--tail".to_owned(),
+                    "20".to_owned(),
+                    "agentbox-box-1".to_owned(),
+                ],
+            ]
+        );
+    }
+
+    #[test]
+    fn sandbox_diagnostics_exposes_only_sanitized_runtime_state() {
+        let root = tempdir().unwrap();
+        let service = GuestService::new(
+            FakeEngine::new(vec![
+                output(
+                    true,
+                    &json!([{
+                        "Path": "tini",
+                        "Args": ["--", "start-runtime"],
+                        "Config": {
+                            "Env": ["PRIVATE_TOKEN=never-return-this"],
+                            "Entrypoint": null,
+                            "Cmd": ["tini", "--", "start-runtime"],
+                        },
+                        "State": {
+                            "Status": "exited",
+                            "Running": false,
+                            "ExitCode": 0,
+                            "OOMKilled": false,
+                            "Error": "",
+                            "StartedAt": "2026-07-23T10:00:00Z",
+                            "FinishedAt": "2026-07-23T10:00:02Z",
+                        }
+                    }])
+                    .to_string(),
+                ),
+                output(true, "runtime stopped\n"),
+            ]),
+            root.path().into(),
+            "192.168.64.2".into(),
+            "192.168.64.1".into(),
+            None,
+        )
+        .unwrap();
+
+        let diagnostics = service
+            .sandbox_diagnostics(json!({"sandbox_id": "box-1"}))
+            .unwrap();
+
+        assert_eq!(diagnostics["state"]["status"], "exited");
+        assert_eq!(diagnostics["state"]["exit_code"], 0);
+        assert_eq!(diagnostics["process"]["path"], "tini");
+        assert_eq!(
+            diagnostics["process"]["cmd"],
+            json!(["tini", "--", "start-runtime"])
+        );
+        assert_eq!(diagnostics["last_log"], "runtime stopped");
+        assert!(!diagnostics.to_string().contains("PRIVATE_TOKEN"));
+    }
+
+    #[test]
+    fn sandbox_image_marker_probe_is_offline_and_checks_the_runtime_entrypoint() {
+        let root = tempdir().unwrap();
+        let service = GuestService::new(
+            FakeEngine::new(vec![output(true, "")]),
+            root.path().into(),
+            "192.168.64.2".into(),
+            "192.168.64.1".into(),
+            None,
+        )
+        .unwrap();
+
+        assert!(service.sandbox_image_marker_is_ready("ghcr.io/lemma/runtime@sha256:abc"));
+        assert_eq!(
+            service.engine.commands.lock().unwrap()[0],
+            vec![
+                "run",
+                "--rm",
+                "--network",
+                "none",
+                "--platform",
+                guest_platform(),
+                "ghcr.io/lemma/runtime@sha256:abc",
+                "/usr/bin/test",
+                "-s",
+                "/usr/local/bin/start-runtime",
+            ]
+        );
+    }
+
+    #[test]
+    fn image_repair_pull_explicitly_unpacks_the_selected_platform() {
+        let root = tempdir().unwrap();
+        let service = GuestService::new(
+            FakeEngine::new(vec![output(true, "")]),
+            root.path().into(),
+            "192.168.64.2".into(),
+            "192.168.64.1".into(),
+            None,
+        )
+        .unwrap();
+
+        service
+            .pull_image("ghcr.io/lemma/runtime@sha256:abc")
+            .unwrap();
+        assert_eq!(
+            service.engine.commands.lock().unwrap()[0],
+            vec![
+                "pull",
+                "--quiet",
+                "--unpack=true",
+                "--platform",
+                guest_platform(),
+                "ghcr.io/lemma/runtime@sha256:abc",
+            ]
+        );
+    }
+
+    #[test]
+    fn incomplete_sandbox_image_reference_is_replaced_before_repull() {
+        let root = tempdir().unwrap();
+        let service = GuestService::new(
+            FakeEngine::new(vec![
+                output(true, "{}"),
+                output(false, ""),
+                output(true, ""),
+                output(true, ""),
+                output(true, ""),
+                output(true, ""),
+            ]),
+            root.path().into(),
+            "192.168.64.2".into(),
+            "192.168.64.1".into(),
+            None,
+        )
+        .unwrap();
+
+        service
+            .ensure_sandbox_image("ghcr.io/lemma/runtime@sha256:abc")
+            .unwrap();
+        let commands = service.engine.commands.lock().unwrap();
+        assert_eq!(commands[2], vec!["container", "prune", "--force"]);
+        assert_eq!(
+            commands[3],
+            vec!["rmi", "--force", "ghcr.io/lemma/runtime@sha256:abc"]
+        );
+        assert_eq!(commands[4][0], "pull");
+    }
+
+    #[test]
+    fn unrecoverable_image_cache_persists_a_health_gated_reset_marker() {
+        let root = tempdir().unwrap();
+        let service = GuestService::new(
+            FakeEngine::new(vec![
+                output(true, "{}"),
+                output(false, ""),
+                output(true, ""),
+                output(true, ""),
+                output(true, ""),
+                output(false, ""),
+            ]),
+            root.path().into(),
+            "192.168.64.2".into(),
+            "192.168.64.1".into(),
+            None,
+        )
+        .unwrap();
+
+        let error = service
+            .ensure_sandbox_image("ghcr.io/lemma/runtime@sha256:abc")
+            .unwrap_err();
+
+        assert_eq!(error.code, "guest_cache_repair_required");
+        let marker = service.cache_reset_marker();
+        assert!(marker.is_file());
+        assert_eq!(service.health().unwrap()["status"], "ready");
+        let repair_due = marker.metadata().unwrap().modified().unwrap()
+            + CACHE_REPAIR_RESPONSE_GRACE
+            + Duration::from_secs(1);
+        assert_eq!(
+            service.health_at(repair_due).unwrap_err().code,
+            "guest_cache_repair_required"
+        );
+    }
+
+    #[test]
+    fn stale_stopped_container_is_removed_for_safe_recreation() {
+        let root = tempdir().unwrap();
+        let service = GuestService::new(
+            FakeEngine::new(vec![output(false, ""), output(true, "")]),
+            root.path().into(),
+            "192.168.64.2".into(),
+            "192.168.64.1".into(),
+            None,
+        )
+        .unwrap();
+
+        assert!(!service
+            .restart_or_remove_stale("lemma-core-postgres")
+            .unwrap());
+        assert_eq!(
+            service.engine.commands.lock().unwrap().as_slice(),
+            [
+                vec!["start".to_owned(), "lemma-core-postgres".to_owned()],
+                vec![
+                    "rm".to_owned(),
+                    "--force".to_owned(),
+                    "lemma-core-postgres".to_owned(),
+                ],
+            ]
+        );
     }
 
     #[test]
@@ -1935,6 +2646,33 @@ mod tests {
         assert!(ok);
         let response: Value = serde_json::from_slice(&output).unwrap();
         assert_eq!(response["result"]["engine"], "containerd");
+    }
+
+    #[test]
+    fn persistent_transport_handles_multiple_requests_on_one_connection() {
+        let root = tempdir().unwrap();
+        let service = GuestService::new(
+            FakeEngine::new(vec![]),
+            root.path().into(),
+            "192.168.64.2".into(),
+            "192.168.64.1".into(),
+            None,
+        )
+        .unwrap();
+        let request = concat!(
+            "{\"version\":1,\"operation\":\"health\",\"parameters\":{}}\n",
+            "{\"version\":1,\"operation\":\"health\",\"parameters\":{}}\n",
+        );
+        let mut output = Vec::new();
+
+        handle_stream(request.as_bytes(), &mut output, &service).unwrap();
+
+        let responses = String::from_utf8(output).unwrap();
+        assert_eq!(responses.lines().count(), 2);
+        for line in responses.lines() {
+            let response: Value = serde_json::from_str(line).unwrap();
+            assert_eq!(response["result"]["engine"], "containerd");
+        }
     }
 
     #[test]

@@ -78,8 +78,12 @@ private func configuration(
     let processors = ProcessInfo.processInfo.activeProcessorCount
     configuration.cpuCount = min(4, max(2, processors / 2))
     let physical = ProcessInfo.processInfo.physicalMemory
-    let adaptiveMemory = max(UInt64(2 * 1_024 * 1_024 * 1_024), physical / 3)
-    configuration.memorySize = min(UInt64(4 * 1_024 * 1_024 * 1_024), adaptiveMemory)
+    // VZ allocates guest memory on demand, so expose enough headroom for the
+    // core services and one bounded AgentBox without asking users to manage a
+    // Podman-style reservation. Keep at least half of an 8 GiB Mac for macOS,
+    // then scale automatically on larger machines.
+    let adaptiveMemory = max(UInt64(4 * 1_024 * 1_024 * 1_024), physical / 3)
+    configuration.memorySize = min(UInt64(8 * 1_024 * 1_024 * 1_024), adaptiveMemory)
 
     let platform = VZGenericPlatformConfiguration()
     platform.machineIdentifier = try machineIdentifier(at: paths.machineIdentifier)
@@ -142,11 +146,13 @@ private func configuration(
 private final class VirtualMachineDelegate: NSObject, VZVirtualMachineDelegate {
     func guestDidStop(_ virtualMachine: VZVirtualMachine) {
         fputs("lemma-vz: guest stopped\n", stderr)
+        fflush(stderr)
         exit(EXIT_SUCCESS)
     }
 
     func virtualMachine(_ virtualMachine: VZVirtualMachine, didStopWithError error: Error) {
         fputs("lemma-vz: guest stopped with error: \(error.localizedDescription)\n", stderr)
+        fflush(stderr)
         exit(EXIT_FAILURE)
     }
 }
@@ -162,6 +168,8 @@ private final class StopCoordinator {
     func request() {
         guard !requested else { return }
         requested = true
+        fputs("lemma-vz: graceful stop requested\n", stderr)
+        fflush(stderr)
         if virtualMachine.canRequestStop {
             do {
                 try virtualMachine.requestStop()
@@ -259,6 +267,13 @@ private func unixListener(path: String) throws -> Int32 {
 private final class GuestBridge {
     private let socketDevice: VZVirtioSocketDevice
     private let listener: Int32
+    // Virtualization.framework's virtio-vsock transport is designed for a
+    // long-lived RPC channel. Reconnecting for every readiness poll caused
+    // connection churn severe enough to corrupt multiple Linux kernel lines.
+    // Keep one guest connection and serialize the small control-plane calls.
+    private var guestConnection: VZVirtioSocketConnection?
+    private var pendingClients: [Int32] = []
+    private var requestActive = false
 
     init(socketDevice: VZVirtioSocketDevice, socketPath: String) throws {
         self.socketDevice = socketDevice
@@ -275,37 +290,96 @@ private final class GuestBridge {
                     continue
                 }
                 _ = fcntl(client, F_SETFD, FD_CLOEXEC)
-                // Virtualization framework objects are main-queue confined.
-                // Accepting clients and copying bounded payloads stays off-main.
-                DispatchQueue.main.async { [socketDevice] in
-                    socketDevice.connect(toPort: guestPort) { result in
-                        switch result {
-                        case .failure(let error):
-                            let payload = "{\"ok\":false,\"error\":{\"code\":\"guest_unavailable\",\"message\":\"\(error.localizedDescription)\",\"retryable\":true,\"status_code\":503}}\n"
-                            _ = try? writeAll(client, Data(payload.utf8))
-                            close(client)
-                        case .success(let connection):
-                            DispatchQueue.global(qos: .userInitiated).async {
-                                defer {
-                                    connection.close()
-                                    close(client)
-                                }
-                                do {
-                                    let request = try readLine(client, limit: maxRequestBytes)
-                                    try writeAll(connection.fileDescriptor, request)
-                                    let response = try readLine(
-                                        connection.fileDescriptor,
-                                        limit: maxResponseBytes
-                                    )
-                                    try writeAll(client, response)
-                                } catch {
-                                    fputs("lemma-vz: bridge error: \(error.localizedDescription)\n", stderr)
-                                }
-                            }
-                        }
-                    }
+                DispatchQueue.main.async { [self] in
+                    pendingClients.append(client)
+                    processNext()
                 }
             }
+        }
+    }
+
+    private func processNext() {
+        dispatchPrecondition(condition: .onQueue(.main))
+        guard !requestActive, !pendingClients.isEmpty else { return }
+        requestActive = true
+        let client = pendingClients.removeFirst()
+        if let connection = guestConnection {
+            transfer(client: client, connection: connection)
+            return
+        }
+        socketDevice.connect(toPort: guestPort) { [self] result in
+            switch result {
+            case .failure(let error):
+                fputs("lemma-vz: guest connect failed: \(error.localizedDescription)\n", stderr)
+                fail(client: client)
+            case .success(let connection):
+                guestConnection = connection
+                transfer(client: client, connection: connection)
+            }
+        }
+    }
+
+    private func transfer(client: Int32, connection: VZVirtioSocketConnection) {
+        DispatchQueue.global(qos: .userInitiated).async { [self] in
+            let request: Data
+            do {
+                request = try readLine(client, limit: maxRequestBytes)
+            } catch {
+                fputs("lemma-vz: client read failed: \(error.localizedDescription)\n", stderr)
+                close(client)
+                finishRequest(keepGuestConnection: true)
+                return
+            }
+            guard !request.isEmpty else {
+                close(client)
+                finishRequest(keepGuestConnection: true)
+                return
+            }
+            do {
+                try writeAll(connection.fileDescriptor, request)
+                let response = try readLine(
+                    connection.fileDescriptor,
+                    limit: maxResponseBytes
+                )
+                guard !response.isEmpty else {
+                    throw RuntimeError.invalid("Guest control channel closed")
+                }
+                do {
+                    try writeAll(client, response)
+                } catch {
+                    // A timed-out bridge caller may close its Unix socket while
+                    // the guest operation finishes. The persistent guest
+                    // channel remains valid and must not be discarded.
+                    fputs("lemma-vz: client write failed: \(error.localizedDescription)\n", stderr)
+                }
+                close(client)
+                finishRequest(keepGuestConnection: true)
+            } catch {
+                fputs("lemma-vz: guest bridge failed: \(error.localizedDescription)\n", stderr)
+                let payload = "{\"ok\":false,\"error\":{\"code\":\"guest_unavailable\",\"message\":\"Guest control channel is unavailable\",\"retryable\":true,\"status_code\":503}}\n"
+                _ = try? writeAll(client, Data(payload.utf8))
+                close(client)
+                finishRequest(keepGuestConnection: false)
+            }
+        }
+    }
+
+    private func fail(client: Int32) {
+        let payload = "{\"ok\":false,\"error\":{\"code\":\"guest_unavailable\",\"message\":\"Private guest is unavailable\",\"retryable\":true,\"status_code\":503}}\n"
+        _ = try? writeAll(client, Data(payload.utf8))
+        close(client)
+        requestActive = false
+        processNext()
+    }
+
+    private func finishRequest(keepGuestConnection: Bool) {
+        DispatchQueue.main.async { [self] in
+            if !keepGuestConnection {
+                guestConnection?.close()
+                guestConnection = nil
+            }
+            requestActive = false
+            processNext()
         }
     }
 }
@@ -380,6 +454,11 @@ private func serve(arguments: [String]) throws -> Never {
 }
 
 private func main() throws {
+    // Runtime bridge clients have their own bounded request timeouts. A late
+    // guest response must close only that client connection; the default
+    // SIGPIPE disposition would otherwise terminate the VM helper and take
+    // PostgreSQL, Redis, auth, and every other sandbox down with it.
+    signal(SIGPIPE, SIG_IGN)
     let arguments = Array(CommandLine.arguments.dropFirst())
     switch arguments.first {
     case "serve":

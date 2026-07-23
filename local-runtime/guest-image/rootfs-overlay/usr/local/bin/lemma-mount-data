@@ -3,6 +3,10 @@ set -eu
 
 device=/dev/vdb
 data_root=/var/lib/lemma-data
+# Bump this only when persisted container metadata is no longer compatible
+# with a refreshed guest OS. Images and container definitions are disposable;
+# nerdctl volumes and Lemma workspaces are user data and remain intact.
+container_metadata_generation=2
 
 if ! /usr/sbin/blkid -p -s TYPE -o value "$device" | grep -qx ext4; then
   /usr/sbin/mkfs.ext4 -F -L lemma-data "$device"
@@ -13,16 +17,49 @@ if ! /usr/bin/mountpoint -q "$data_root"; then
   /usr/bin/mount -t ext4 -o noatime "$device" "$data_root"
 fi
 
+metadata_generation_file="$data_root/container-metadata-generation"
+cache_reset_marker="$data_root/lemma/container-cache-reset-required"
+installed_metadata_generation=""
+if [ -f "$metadata_generation_file" ]; then
+  installed_metadata_generation="$(cat "$metadata_generation_file")"
+fi
+if [ "$installed_metadata_generation" != "$container_metadata_generation" ] || [ -f "$cache_reset_marker" ]; then
+  rm -rf "$data_root/containerd"
+  # nerdctl keeps disposable container plumbing alongside durable named
+  # volumes. Clear the former without touching `volumes` or Lemma workspaces.
+  # The name store must be removed with the container definitions; otherwise
+  # a replacement container is rejected because its old ID is still reserved.
+  for nerdctl_root in "$data_root"/nerdctl/*; do
+    if [ -d "$nerdctl_root" ]; then
+      rm -rf \
+        "$nerdctl_root/containers" \
+        "$nerdctl_root/names" \
+        "$nerdctl_root/etchosts"
+    fi
+  done
+  rm -f "$cache_reset_marker"
+fi
+
 mkdir -p \
   "$data_root/containerd" \
+  "$data_root/nerdctl" \
   "$data_root/lemma/run" \
   "$data_root/lemma/workspaces" \
   /var/lib/containerd \
+  /var/lib/nerdctl \
   /var/lib/lemma
 chmod 0700 "$data_root/lemma" "$data_root/lemma/run" "$data_root/lemma/workspaces"
 
+generation_tmp="$metadata_generation_file.tmp"
+printf '%s\n' "$container_metadata_generation" > "$generation_tmp"
+chmod 0600 "$generation_tmp"
+mv "$generation_tmp" "$metadata_generation_file"
+
 if ! /usr/bin/mountpoint -q /var/lib/containerd; then
   /usr/bin/mount --bind "$data_root/containerd" /var/lib/containerd
+fi
+if ! /usr/bin/mountpoint -q /var/lib/nerdctl; then
+  /usr/bin/mount --bind "$data_root/nerdctl" /var/lib/nerdctl
 fi
 if ! /usr/bin/mountpoint -q /var/lib/lemma; then
   /usr/bin/mount --bind "$data_root/lemma" /var/lib/lemma

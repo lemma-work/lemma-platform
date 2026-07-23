@@ -6,6 +6,10 @@ repo_root="$(cd "$(dirname "$0")/.." && pwd)"
 target=""
 output=""
 guestd=""
+kata_version="3.17.0"
+kata_kernel_version="6.12.28-153"
+kata_archive_sha256="647c7612e6edf789d5e14698c48c99d8bac15ad139ffaa1c8bb7d229f748d181"
+kata_archive_url="https://github.com/kata-containers/kata-containers/releases/download/${kata_version}/kata-static-${kata_version}-arm64.tar.xz"
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -50,21 +54,42 @@ docker buildx build \
   "$context"
 
 if [[ "$target" == "macos-aarch64" ]]; then
-  # Extract a host-side copy only to package the direct-boot kernel and initrd.
-  # The ext4 filesystem itself is assembled as root in Linux below so numeric
-  # ownership from the OCI filesystem is preserved even when this runs on macOS.
+  # Extract a host-side copy only to package the direct-boot initrd. The ext4
+  # filesystem itself is assembled as root in Linux below so numeric ownership
+  # from the OCI filesystem is preserved even when this runs on macOS.
   tar -xf "$rootfs_tar" -C "$rootfs"
-  kernel="$(find "$rootfs/boot" -maxdepth 1 -type f -name 'vmlinuz-*' | sort | tail -1)"
   initrd="$(find "$rootfs/boot" -maxdepth 1 -type f -name 'initrd.img-*' | sort | tail -1)"
-  if [[ -z "$kernel" || -z "$initrd" ]]; then
-    echo "guest image did not contain an Ubuntu kernel and initramfs" >&2
+  if [[ -z "$initrd" ]]; then
+    echo "guest image did not contain an Ubuntu initramfs" >&2
     exit 1
   fi
-  # Apple Virtualization's direct boot path needs an uncompressed ARM64 Image.
-  # Ubuntu publishes raw, gzip, and zstd zboot variants across kernel lines.
-  python3 "$repo_root/scripts/extract_arm64_kernel.py" \
-    --input "$kernel" \
-    --output "$artifact/vmlinuz"
+
+  # Apple Containerization pins Kata's container-optimized kernel for its own
+  # Virtualization.framework runtime. Keep the archive and exact kernel version
+  # immutable: distro kernel metapackages have regressed both virtio-vsock and
+  # cgroup/runc workloads in clean Lemma appliance boots.
+  kata_archive="$work_dir/kata-static-${kata_version}-arm64.tar.xz"
+  kata_root="$work_dir/kata"
+  mkdir -p "$kata_root"
+  if [[ -n "${LEMMA_KATA_KERNEL_ARCHIVE:-}" ]]; then
+    cp "$LEMMA_KATA_KERNEL_ARCHIVE" "$kata_archive"
+  else
+    curl -fsSLo "$kata_archive" "$kata_archive_url"
+  fi
+  python3 - "$kata_archive" "$kata_archive_sha256" <<'PY'
+import hashlib
+import pathlib
+import sys
+
+path = pathlib.Path(sys.argv[1])
+actual = hashlib.sha256(path.read_bytes()).hexdigest()
+if actual != sys.argv[2]:
+    raise SystemExit(f"Kata kernel archive checksum mismatch: {actual}")
+PY
+  tar -xJf "$kata_archive" -C "$kata_root" \
+    "./opt/kata/share/kata-containers/vmlinux-${kata_kernel_version}"
+  cp "$kata_root/opt/kata/share/kata-containers/vmlinux-${kata_kernel_version}" \
+    "$artifact/vmlinuz"
   cp "$initrd" "$artifact/initrd"
   truncate -s 2G "$artifact/disk.raw"
   docker run --rm --platform linux/amd64 \
@@ -84,7 +109,7 @@ else
   mv "$rootfs_tar" "$artifact/rootfs.tar"
 fi
 
-python3 - "$artifact/runtime.json" "$target" "$rootfs_tar" "$artifact" <<'PY'
+python3 - "$artifact/runtime.json" "$target" "$rootfs_tar" "$artifact" "$kata_kernel_version" "$kata_archive_url" "$kata_archive_sha256" <<'PY'
 import hashlib
 import json
 import pathlib
@@ -101,7 +126,7 @@ def sha256(file):
             digest.update(chunk)
     return digest.hexdigest()
 
-path.write_text(json.dumps({
+metadata = {
     "schema_version": 1,
     "target": sys.argv[2],
     "guest_protocol": 1,
@@ -110,7 +135,14 @@ path.write_text(json.dumps({
     "rootfs_sha256": sha256(rootfs_tar),
     "kernel_sha256": sha256(artifact / "vmlinuz") if (artifact / "vmlinuz").is_file() else None,
     "initrd_sha256": sha256(artifact / "initrd") if (artifact / "initrd").is_file() else None,
-}, indent=2) + "\n")
+}
+if sys.argv[2] == "macos-aarch64":
+    metadata.update({
+        "kernel_track": f"kata-{sys.argv[5]}",
+        "kernel_source": sys.argv[6],
+        "kernel_source_archive_sha256": sys.argv[7],
+    })
+path.write_text(json.dumps(metadata, indent=2) + "\n")
 PY
 
 (cd "$work_dir/artifact" && zip -9 -r "$output" "$target")

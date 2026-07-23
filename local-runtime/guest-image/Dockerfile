@@ -5,6 +5,10 @@ ARG TARGETARCH
 ARG NERDCTL_VERSION=2.3.4
 
 ENV DEBIAN_FRONTEND=noninteractive
+# Lemma is a versioned appliance, not a general-purpose Ubuntu host. The GA
+# package supplies a distro-compatible initramfs and userspace module tree; the
+# macOS direct-boot kernel is replaced by the hash-pinned Kata container kernel
+# in build_local_guest_runtime.sh.
 RUN apt-get update \
     && apt-get install -y --no-install-recommends \
         ca-certificates \
@@ -17,13 +21,15 @@ RUN apt-get update \
         iptables \
         initramfs-tools \
         kmod \
-        linux-image-virtual-hwe-24.04 \
+        linux-image-virtual \
         runc \
         systemd \
         systemd-resolved \
         systemd-sysv \
         systemd-timesyncd \
         util-linux \
+    && update-alternatives --set iptables /usr/sbin/iptables-legacy \
+    && update-alternatives --set ip6tables /usr/sbin/ip6tables-legacy \
     && rm -rf /var/lib/apt/lists/*
 
 RUN set -eux; \
