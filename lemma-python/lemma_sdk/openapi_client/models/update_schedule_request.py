@@ -164,7 +164,7 @@ class UpdateScheduleRequest:
                 config_type_0 = UpdateScheduleRequestConfigType0.from_dict(data)
 
                 return config_type_0
-            except (TypeError, ValueError, AttributeError, KeyError):
+            except TypeError, ValueError, AttributeError, KeyError:
                 pass
             return cast(None | Unset | UpdateScheduleRequestConfigType0, data)
 
@@ -196,7 +196,7 @@ class UpdateScheduleRequest:
                 )
 
                 return filter_output_schema_type_0
-            except (TypeError, ValueError, AttributeError, KeyError):
+            except TypeError, ValueError, AttributeError, KeyError:
                 pass
             return cast(
                 None | Unset | UpdateScheduleRequestFilterOutputSchemaType0, data

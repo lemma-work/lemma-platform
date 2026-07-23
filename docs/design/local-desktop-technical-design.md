@@ -2,7 +2,7 @@
 
 **Status:** Accepted; implementation in progress · **Companion:** [Local Desktop Product Specification](local-desktop-product-spec.md)
 
-**Scope:** `desktop`, `lemma-stack`, local release packaging, AgentBox local provider · **Last updated:** 2026-07-22
+**Scope:** `desktop`, `lemma-stack`, local release packaging, AgentBox local provider · **Last updated:** 2026-07-23
 
 ## 1. Summary of the decision
 
@@ -17,7 +17,10 @@ Refactor Lemma Local into a native host control plane plus an app-owned Linux da
 - macOS uses an app-owned lightweight VM based on Apple Virtualization.framework. Windows imports a private WSL2 distribution. Docker and Podman remain optional expert providers, never auto-selected.
 - A loopback **local gateway** owns `*.lemma.localhost`, routing, stable origins, port collision handling, and request hardening. Privileged daemon control stays on a Unix socket or Windows named pipe.
 - Secrets are stored in Keychain/Credential Manager. TOML contains opaque secret references, not secret values.
-- Releases are split into independently signed core, backend, frontend, guest, infra-image, and sandbox artifacts. Download is resumable; activation is atomic; migrations are snapshot-backed.
+- Releases are split into independently signed core, backend, frontend, guest,
+  infra-image, AgentBox workspace-profile, and AgentBox function-profile
+  artifacts. Download is resumable; activation is atomic; migrations are
+  snapshot-backed.
 
 `lemma-locald`, the gateway, VM helper, and `lemma-guestd` are orchestration/runtime helpers, not additional Lemma application services. The user-visible and application-level topology is therefore backend + frontend, with background infrastructure. A follow-on local-auth provider may remove the SuperTokens service only after compatibility, security, migration, and rollback gates pass.
 
@@ -482,19 +485,24 @@ The development topology improves this by running AgentBox on the host, but stil
 
 ### 7.2 New provider contract
 
-Add `LemmaLocalProvider` to AgentBox. The AgentBox component embedded in the backend calls a narrow daemon API using a provider credential delivered through an inherited OS-local channel.
+Add a `lemma_local` adapter to AgentBox's provider-neutral sandbox fabric. The
+AgentBox component embedded in the backend retains the fabric's typed
+lifecycle, process, PTY, Python-session, filesystem, port-access, persistence,
+and reconciliation contracts. Only provider lifecycle and inventory cross the
+capability-authenticated `lemma-runtime request` bridge; workspace data-plane
+operations use the same authenticated workspace-runtime protocol as the Docker
+adapter.
 
 Required operations:
 
 ```text
-ensure_sandbox(logical_id, image_digest, env_non_secret, mounts, limits)
-start_sandbox(logical_id)
+ensure_sandbox(logical_id, workload_kind, profile_digest, metadata, limits)
 inspect_sandbox(logical_id)
-suspend_sandbox(logical_id)
-delete_sandbox(logical_id)
-exec_runtime_probe(logical_id, probe_id)
-resolve_routes(logical_id)
-stream_events(after_sequence)
+list_managed(metadata)
+release_allocation(logical_id)
+destroy_allocation(logical_id)
+destroy_workspace_storage(logical_id)
+resolve_port_target(logical_id, port, protocol)
 ```
 
 The daemon translates these into guest operations. AgentBox never receives:
@@ -506,6 +514,14 @@ The daemon translates these into guest operations. AgentBox never receives:
 - runtime-global list/delete operations.
 
 Managed local installs set `AGENTBOX_STATE_DATABASE_URL` to a dedicated `agentbox` database on the same PostgreSQL server used by Lemma. Use a unique least-privilege role for that database; sharing an instance does not mean sharing schemas, ownership, or migration history. AgentBox migrations run before its component reports ready and use the existing PostgreSQL advisory-lock protection.
+
+The release publishes two immutable sandbox images. A workspace profile runs
+the resident runtime on port 8080, browser surface on 4848, a persistent
+workspace volume, and a per-sandbox signed bootstrap token. A function profile
+runs the resident function runtime on 8090 with a read-only root and ephemeral
+execution/cache mounts. Release quiesces a workspace runtime before stopping
+its allocation. Function allocations are stateless and never receive a
+workspace token or volume.
 
 ### 7.3 Mount and token policy
 
@@ -864,7 +880,11 @@ Use release-pinned OCI digests. Internal service ports stay on a private guest n
 
 ### 12.3 Credentials
 
-Generate unique per-install PostgreSQL roles/passwords, Redis auth, SuperTokens API key where supported, AgentBox provider capability, endpoint-state keyring, session/crypto roots, and internal gateway tokens. The embedded AgentBox manager does not need a network API key for in-process calls; its private HTTP compatibility route still requires an internal credential. Development defaults never ship.
+Generate unique per-install PostgreSQL roles/passwords, Redis auth, SuperTokens
+API key where supported, AgentBox provider capability, stable workspace-runtime
+credential-signing key, session/crypto roots, and internal gateway tokens. The
+embedded AgentBox manager's private mounted HTTP route still requires an
+internal credential. Development defaults never ship.
 
 Rotate internal credentials through a coordinated config revision. Database password rotation creates the new role/credential, updates clients, verifies, then removes the old credential.
 
@@ -1007,7 +1027,8 @@ that action.
     "postgres": "registry/ref@sha256:...",
     "redis": "registry/ref@sha256:...",
     "supertokens": {"ref": "registry/ref@sha256:...", "required_when": "auth.provider == 'supertokens_compat'"},
-    "agentbox-runtime": "registry/ref@sha256:..."
+    "agentbox-workspace": "registry/ref@sha256:...",
+    "agentbox-function": "registry/ref@sha256:..."
   },
   "optional_packs": {
     "workspace": {"size": 0, "artifacts": []}

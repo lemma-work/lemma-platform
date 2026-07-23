@@ -128,6 +128,8 @@ struct ResourceSpec {
 struct CallbackSpec {
     #[serde(default)]
     required: bool,
+    #[serde(default)]
+    url: Option<String>,
     #[serde(default = "default_health_path")]
     health_path: String,
     #[serde(default = "default_callback_timeout")]
@@ -142,19 +144,32 @@ impl Default for CallbackSpec {
     fn default() -> Self {
         Self {
             required: false,
+            url: None,
             health_path: default_health_path(),
             timeout_seconds: default_callback_timeout(),
         }
     }
 }
 
+#[derive(Clone, Copy, Debug, Deserialize, PartialEq)]
+#[serde(rename_all = "snake_case")]
+enum WorkloadKind {
+    Workspace,
+    Function,
+}
+
 #[derive(Clone, Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct EnsureParameters {
     sandbox_id: String,
+    workload_kind: WorkloadKind,
     image: String,
     #[serde(default)]
     env: BTreeMap<String, String>,
+    #[serde(default)]
+    metadata: BTreeMap<String, String>,
+    #[serde(default)]
+    runtime_token: Option<String>,
     apps: Vec<AppSpec>,
     #[serde(default)]
     resources: ResourceSpec,
@@ -920,20 +935,65 @@ impl<E: Engine> GuestService<E> {
         validate_image(&parameters.image)?;
         validate_apps(&parameters.apps)?;
         validate_environment(&parameters.env)?;
+        validate_metadata(&parameters.metadata)?;
+        if parameters.workload_kind == WorkloadKind::Workspace
+            && parameters
+                .runtime_token
+                .as_deref()
+                .is_none_or(|value| value.is_empty())
+        {
+            return Err(GuestError::invalid(
+                "workspace runtime token must be configured",
+            ));
+        }
+        if parameters.workload_kind == WorkloadKind::Function && parameters.runtime_token.is_some()
+        {
+            return Err(GuestError::invalid(
+                "function sandboxes cannot receive a workspace runtime token",
+            ));
+        }
 
         let container = container_name(&parameters.sandbox_id);
-        let should_create =
-            match self.snapshot_optional(&parameters.sandbox_id, &parameters.apps)? {
-                Some(snapshot) if snapshot["status"]["status"] == "RUNNING" => false,
-                Some(_) => !self.restart_or_remove_stale(&container)?,
-                None => true,
-            };
+        let should_create = match self.snapshot_optional(&parameters.sandbox_id)? {
+            Some(snapshot)
+                if snapshot["status"]["status"] == "RUNNING"
+                    && snapshot["metadata"] == json!(parameters.metadata)
+                    && snapshot["image"] == parameters.image =>
+            {
+                false
+            }
+            Some(snapshot) if snapshot["status"]["status"] == "RUNNING" => {
+                return Err(GuestError {
+                    code: "generation_conflict".into(),
+                    message: "Sandbox generation changed while it is running".into(),
+                    retryable: false,
+                    status_code: 409,
+                });
+            }
+            Some(_) => {
+                self.run_checked(&["rm".into(), "--force".into(), container.clone()])?;
+                true
+            }
+            None => true,
+        };
         if should_create {
-            self.ensure_sandbox_image(&parameters.image)?;
-            let workspace = self.workspace(&parameters.sandbox_id)?;
+            self.ensure_sandbox_image(&parameters.image, parameters.workload_kind)?;
+            let workspace = match parameters.workload_kind {
+                WorkloadKind::Workspace => Some(self.workspace(&parameters.sandbox_id)?),
+                WorkloadKind::Function => None,
+            };
+            let runtime_token = match parameters.runtime_token.as_deref() {
+                Some(token) => Some(self.write_runtime_token(&parameters.sandbox_id, token)?),
+                None => None,
+            };
             let env_file = self.write_env_file(&parameters.sandbox_id, &parameters.env)?;
-            let arguments =
-                build_run_arguments(&parameters, &workspace, &env_file, &self.host_gateway);
+            let arguments = build_run_arguments(
+                &parameters,
+                workspace.as_deref(),
+                runtime_token.as_deref(),
+                &env_file,
+                &self.host_gateway,
+            );
             let result = self.run_checked(&arguments);
             let _ = fs::remove_file(&env_file);
             result?;
@@ -943,7 +1003,7 @@ impl<E: Engine> GuestService<E> {
         let mut last_snapshot = None;
         let mut applications_healthy = false;
         while Instant::now() < deadline {
-            match self.snapshot_optional(&parameters.sandbox_id, &parameters.apps)? {
+            match self.snapshot_optional(&parameters.sandbox_id)? {
                 Some(snapshot)
                     if snapshot["status"]["ready"] == true
                         && eager_apps_healthy(&snapshot, &parameters.apps) =>
@@ -1019,8 +1079,7 @@ impl<E: Engine> GuestService<E> {
     fn status(&self, value: Value) -> Result<Value, GuestError> {
         let sandbox_id = required_string(&value, "sandbox_id")?;
         validate_sandbox_id(&sandbox_id)?;
-        let apps = default_apps();
-        self.snapshot_optional(&sandbox_id, &apps)?
+        self.snapshot_optional(&sandbox_id)?
             .ok_or_else(GuestError::not_found)
     }
 
@@ -1080,7 +1139,6 @@ impl<E: Engine> GuestService<E> {
             "--format".into(),
             "{{.Names}}".into(),
         ])?;
-        let apps = default_apps();
         let mut sandboxes = Vec::new();
         for name in output
             .lines()
@@ -1088,7 +1146,7 @@ impl<E: Engine> GuestService<E> {
         {
             let sandbox_id = name.trim().trim_start_matches(CONTAINER_PREFIX);
             if validate_sandbox_id(sandbox_id).is_ok() {
-                if let Some(snapshot) = self.snapshot_optional(sandbox_id, &apps)? {
+                if let Some(snapshot) = self.snapshot_optional(sandbox_id)? {
                     sandboxes.push(snapshot);
                 }
             }
@@ -1099,7 +1157,7 @@ impl<E: Engine> GuestService<E> {
     fn mutate(&self, value: Value, mutation: Mutation) -> Result<Value, GuestError> {
         let sandbox_id = required_string(&value, "sandbox_id")?;
         validate_sandbox_id(&sandbox_id)?;
-        let existing = self.snapshot_optional(&sandbox_id, &default_apps())?;
+        let existing = self.snapshot_optional(&sandbox_id)?;
         if mutation == Mutation::PurgeExact {
             let expected = required_string(&value, "provider_id")?;
             if let Some(snapshot) = &existing {
@@ -1126,6 +1184,7 @@ impl<E: Engine> GuestService<E> {
                     return Err(GuestError::not_found());
                 }
                 self.run_checked(&["rm".into(), "--force".into(), container_name(&sandbox_id)])?;
+                self.remove_runtime_token(&sandbox_id)?;
                 Ok(json!({"deleted": true}))
             }
             Mutation::PurgeStorage => {
@@ -1141,16 +1200,13 @@ impl<E: Engine> GuestService<E> {
                     ])?;
                 }
                 self.purge_workspace(&sandbox_id)?;
+                self.remove_runtime_token(&sandbox_id)?;
                 Ok(json!({"purged": existing.is_some()}))
             }
         }
     }
 
-    fn snapshot_optional(
-        &self,
-        sandbox_id: &str,
-        apps: &[AppSpec],
-    ) -> Result<Option<Value>, GuestError> {
+    fn snapshot_optional(&self, sandbox_id: &str) -> Result<Option<Value>, GuestError> {
         let output = self
             .engine
             .run(&["inspect".into(), container_name(sandbox_id)])
@@ -1168,7 +1224,6 @@ impl<E: Engine> GuestService<E> {
         Ok(Some(snapshot_from_inspect(
             sandbox_id,
             inspect,
-            apps,
             &self.endpoint_host,
         )?))
     }
@@ -1201,9 +1256,13 @@ impl<E: Engine> GuestService<E> {
         self.pull_image(image)
     }
 
-    fn ensure_sandbox_image(&self, image: &str) -> Result<(), GuestError> {
+    fn ensure_sandbox_image(
+        &self,
+        image: &str,
+        workload_kind: WorkloadKind,
+    ) -> Result<(), GuestError> {
         self.ensure_image(image)?;
-        if self.sandbox_image_marker_is_ready(image) {
+        if self.sandbox_image_marker_is_ready(image, workload_kind) {
             return Ok(());
         }
         // An interrupted VM shutdown can leave containerd's image metadata
@@ -1215,7 +1274,7 @@ impl<E: Engine> GuestService<E> {
         self.run_checked(&["container".into(), "prune".into(), "--force".into()])?;
         self.run_checked(&["rmi".into(), "--force".into(), image.into()])?;
         self.pull_image(image)?;
-        if self.sandbox_image_marker_is_ready(image) {
+        if self.sandbox_image_marker_is_ready(image, workload_kind) {
             Ok(())
         } else {
             self.schedule_cache_reset()?;
@@ -1247,7 +1306,11 @@ impl<E: Engine> GuestService<E> {
             .map_err(|error| GuestError::engine(error.to_string()))
     }
 
-    fn sandbox_image_marker_is_ready(&self, image: &str) -> bool {
+    fn sandbox_image_marker_is_ready(&self, image: &str, workload_kind: WorkloadKind) -> bool {
+        let marker = match workload_kind {
+            WorkloadKind::Workspace => "/usr/local/bin/start-workspace-runtime",
+            WorkloadKind::Function => "/usr/local/bin/lemma-function-runtime",
+        };
         self.engine
             .run(&[
                 "run".into(),
@@ -1259,7 +1322,7 @@ impl<E: Engine> GuestService<E> {
                 image.into(),
                 "/usr/bin/test".into(),
                 "-s".into(),
-                "/usr/local/bin/start-runtime".into(),
+                marker.into(),
             ])
             .is_ok_and(|output| output.status.success())
     }
@@ -1350,14 +1413,61 @@ impl<E: Engine> GuestService<E> {
         Ok(path)
     }
 
+    fn runtime_token_path(&self, sandbox_id: &str) -> Result<PathBuf, GuestError> {
+        let root = self.state_root.join("run");
+        let path = root.join(format!("runtime-token-{sandbox_id}"));
+        if path.parent() != Some(root.as_path()) {
+            return Err(GuestError::invalid("runtime token escaped managed root"));
+        }
+        Ok(path)
+    }
+
+    fn write_runtime_token(&self, sandbox_id: &str, token: &str) -> Result<PathBuf, GuestError> {
+        if token.is_empty() || token.len() > 4096 || token.contains('\0') {
+            return Err(GuestError::invalid("workspace runtime token is invalid"));
+        }
+        let path = self.runtime_token_path(sandbox_id)?;
+        let mut file = OpenOptions::new()
+            .write(true)
+            .create(true)
+            .truncate(true)
+            .mode(0o600)
+            .open(&path)
+            .map_err(|error| GuestError::engine(error.to_string()))?;
+        file.write_all(token.as_bytes())
+            .map_err(|error| GuestError::engine(error.to_string()))?;
+        file.sync_all()
+            .map_err(|error| GuestError::engine(error.to_string()))?;
+        let path_bytes = std::ffi::CString::new(path.as_os_str().as_encoded_bytes())
+            .map_err(|_| GuestError::invalid("runtime token path contains NUL"))?;
+        let result = unsafe { libc::chown(path_bytes.as_ptr(), 10_001, 10_001) };
+        if result != 0 {
+            return Err(GuestError::engine(io::Error::last_os_error().to_string()));
+        }
+        Ok(path)
+    }
+
+    fn remove_runtime_token(&self, sandbox_id: &str) -> Result<(), GuestError> {
+        let path = self.runtime_token_path(sandbox_id)?;
+        match fs::remove_file(path) {
+            Ok(()) => Ok(()),
+            Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(()),
+            Err(error) => Err(GuestError::engine(error.to_string())),
+        }
+    }
+
     fn wait_callback(&self, parameters: &EnsureParameters) -> Result<(), GuestError> {
         if !parameters.callback.required {
             return Ok(());
         }
         let base = parameters
-            .env
-            .get("LEMMA_BASE_URL")
-            .ok_or_else(|| GuestError::invalid("Local sandbox requires LEMMA_BASE_URL"))?;
+            .callback
+            .url
+            .as_deref()
+            .or_else(|| parameters.env.get("LEMMA_BASE_URL").map(String::as_str))
+            .ok_or_else(|| {
+                GuestError::invalid("Local sandbox requires an explicit callback URL")
+            })?;
         let probe_url = callback_probe_url(base, &parameters.callback.health_path)?;
         let deadline = Instant::now()
             + Duration::from_secs_f64(parameters.callback.timeout_seconds.clamp(1.0, 300.0));
@@ -1404,10 +1514,13 @@ enum Mutation {
 
 fn build_run_arguments(
     parameters: &EnsureParameters,
-    workspace: &Path,
+    workspace: Option<&Path>,
+    runtime_token: Option<&Path>,
     env_file: &Path,
     host_gateway: &str,
 ) -> Vec<String> {
+    let metadata = serde_json::to_string(&parameters.metadata)
+        .expect("validated sandbox metadata must serialize");
     let mut arguments = vec![
         "run".into(),
         "--detach".into(),
@@ -1421,13 +1534,55 @@ fn build_run_arguments(
         format!("agentbox.work/sandbox-id={}", parameters.sandbox_id),
         "--label".into(),
         "agentbox.work/provider=lemma_local".into(),
-        "--mount".into(),
-        format!("type=bind,src={},dst=/workspace", workspace.display()),
+        "--label".into(),
+        format!(
+            "agentbox.work/workload-kind={}",
+            match parameters.workload_kind {
+                WorkloadKind::Workspace => "workspace",
+                WorkloadKind::Function => "function",
+            }
+        ),
+        "--label".into(),
+        format!("agentbox.work/image-ref={}", parameters.image),
+        "--label".into(),
+        format!("agentbox.work/metadata={metadata}"),
         "--env-file".into(),
         env_file.display().to_string(),
         "--add-host".into(),
         format!("host.lemma.internal:{host_gateway}"),
     ];
+    match parameters.workload_kind {
+        WorkloadKind::Workspace => {
+            let workspace = workspace.expect("workspace workload must have storage");
+            let runtime_token =
+                runtime_token.expect("workspace workload must have a runtime token");
+            arguments.extend([
+                "--mount".into(),
+                format!("type=bind,src={},dst=/workspace", workspace.display()),
+                "--mount".into(),
+                format!(
+                    "type=bind,src={},dst=/run/agentbox-bootstrap/token,readonly",
+                    runtime_token.display()
+                ),
+                "--workdir".into(),
+                "/workspace".into(),
+            ]);
+        }
+        WorkloadKind::Function => {
+            arguments.extend([
+                "--read-only".into(),
+                "--tmpfs".into(),
+                "/tmp:rw,noexec,nosuid,size=512m,uid=10001,gid=10001".into(),
+                "--tmpfs".into(),
+                "/run/lemma-function-cache:rw,exec,nosuid,nodev,size=512m,mode=0700,uid=10001,gid=10001"
+                    .into(),
+                "--env".into(),
+                "LEMMA_FUNCTION_CACHE_ROOT=/run/lemma-function-cache".into(),
+                "--workdir".into(),
+                "/tmp".into(),
+            ]);
+        }
+    }
     for app in &parameters.apps {
         arguments.extend(["--publish".into(), format!("0.0.0.0::{}", app.port)]);
     }
@@ -1464,7 +1619,6 @@ fn guest_platform() -> &'static str {
 fn snapshot_from_inspect(
     sandbox_id: &str,
     inspect: &serde_json::Map<String, Value>,
-    apps: &[AppSpec],
     endpoint_host: &str,
 ) -> Result<Value, GuestError> {
     let provider_id = inspect
@@ -1490,13 +1644,39 @@ fn snapshot_from_inspect(
     } else {
         "ERROR"
     };
+    let labels = inspect
+        .get("Config")
+        .and_then(Value::as_object)
+        .and_then(|config| config.get("Labels"))
+        .and_then(Value::as_object);
+    let workload_kind = labels
+        .and_then(|value| value.get("agentbox.work/workload-kind"))
+        .and_then(Value::as_str)
+        .ok_or_else(|| GuestError::engine("sandbox workload label is missing"))?;
+    let apps = match workload_kind {
+        "workspace" => workspace_apps(),
+        "function" => function_apps(),
+        _ => return Err(GuestError::engine("sandbox workload label is invalid")),
+    };
+    let image = labels
+        .and_then(|value| value.get("agentbox.work/image-ref"))
+        .and_then(Value::as_str)
+        .ok_or_else(|| GuestError::engine("sandbox image label is missing"))?;
+    let metadata = labels
+        .and_then(|value| value.get("agentbox.work/metadata"))
+        .and_then(Value::as_str)
+        .ok_or_else(|| GuestError::engine("sandbox metadata label is missing"))
+        .and_then(|encoded| {
+            serde_json::from_str::<BTreeMap<String, String>>(encoded)
+                .map_err(|_| GuestError::engine("sandbox metadata label is invalid"))
+        })?;
     let ports = inspect
         .get("NetworkSettings")
         .and_then(Value::as_object)
         .and_then(|network| network.get("Ports"))
         .and_then(Value::as_object);
     let mut statuses = serde_json::Map::new();
-    for app in apps {
+    for app in &apps {
         let host_port = ports.and_then(|value| mapped_port(value, app.port));
         statuses.insert(
             app.name.clone(),
@@ -1521,7 +1701,8 @@ fn snapshot_from_inspect(
             .all(|app| statuses[&app.name]["ready"] == true);
     Ok(json!({
         "provider_id": provider_id,
-        "metadata": {"engine": "containerd", "provider": "lemma_local"},
+        "image": image,
+        "metadata": metadata,
         "status": {
             "id": sandbox_id,
             "ready": ready,
@@ -1560,7 +1741,7 @@ fn eager_apps_healthy(snapshot: &Value, apps: &[AppSpec]) -> bool {
     })
 }
 
-fn default_apps() -> Vec<AppSpec> {
+fn workspace_apps() -> Vec<AppSpec> {
     vec![
         AppSpec {
             name: "runtime".into(),
@@ -1580,16 +1761,34 @@ fn default_apps() -> Vec<AppSpec> {
             exposure: "workspace_user".into(),
             auth_mode: "workspace_access_token".into(),
         },
-        AppSpec {
-            name: "function_executor".into(),
-            public_slug: "function".into(),
-            port: 8090,
-            health_path: "/health".into(),
-            startup: "eager".into(),
-            exposure: "private".into(),
-            auth_mode: "manager_api_key".into(),
-        },
     ]
+}
+
+fn function_apps() -> Vec<AppSpec> {
+    vec![AppSpec {
+        name: "function".into(),
+        public_slug: "function".into(),
+        port: 8090,
+        health_path: "/healthz".into(),
+        startup: "eager".into(),
+        exposure: "private".into(),
+        auth_mode: "manager_api_key".into(),
+    }]
+}
+
+fn validate_metadata(metadata: &BTreeMap<String, String>) -> Result<(), GuestError> {
+    if metadata.len() > 32 {
+        return Err(GuestError::invalid(
+            "sandbox metadata cannot contain more than 32 entries",
+        ));
+    }
+    for (name, value) in metadata {
+        if !valid_identifier(name) || name.len() > 128 || value.len() > 4096 || value.contains('\0')
+        {
+            return Err(GuestError::invalid("sandbox metadata is invalid"));
+        }
+    }
+    Ok(())
 }
 
 fn validate_apps(apps: &[AppSpec]) -> Result<(), GuestError> {
@@ -2120,10 +2319,14 @@ mod tests {
         json!([{
             "Id": "sha256:exact-generation",
             "State": {"Running": true, "Status": "running"},
+            "Config": {"Labels": {
+                "agentbox.work/workload-kind": "workspace",
+                "agentbox.work/image-ref": "ghcr.io/lemma/workspace@sha256:abc",
+                "agentbox.work/metadata": "{\"managed-by\":\"agentbox\"}"
+            }},
             "NetworkSettings": {"Ports": {
                 "8080/tcp": [{"HostIp": "0.0.0.0", "HostPort": "49152"}],
-                "4848/tcp": [{"HostIp": "0.0.0.0", "HostPort": "49153"}],
-                "8090/tcp": [{"HostIp": "0.0.0.0", "HostPort": "49154"}]
+                "4848/tcp": [{"HostIp": "0.0.0.0", "HostPort": "49153"}]
             }}
         }])
         .to_string()
@@ -2255,13 +2458,8 @@ mod tests {
     #[test]
     fn snapshot_uses_guest_ip_and_exact_container_generation() {
         let parsed: Value = serde_json::from_str(&inspect()).unwrap();
-        let snapshot = snapshot_from_inspect(
-            "box-1",
-            parsed[0].as_object().unwrap(),
-            &default_apps(),
-            "192.168.64.2",
-        )
-        .unwrap();
+        let snapshot =
+            snapshot_from_inspect("box-1", parsed[0].as_object().unwrap(), "192.168.64.2").unwrap();
 
         assert_eq!(snapshot["provider_id"], "sha256:exact-generation");
         assert_eq!(
@@ -2275,9 +2473,12 @@ mod tests {
     fn run_contract_uses_digest_env_file_private_gateway_and_all_app_ports() {
         let parameters = EnsureParameters {
             sandbox_id: "box-1".into(),
-            image: "ghcr.io/lemma/runtime@sha256:abc".into(),
+            workload_kind: WorkloadKind::Workspace,
+            image: "ghcr.io/lemma/workspace@sha256:abc".into(),
             env: BTreeMap::from([("LEMMA_TOKEN".into(), "secret".into())]),
-            apps: default_apps(),
+            metadata: BTreeMap::from([("managed-by".into(), "agentbox".into())]),
+            runtime_token: Some("runtime-secret".into()),
+            apps: workspace_apps(),
             resources: ResourceSpec {
                 memory: Some("2Gi".into()),
                 cpus: Some("1".into()),
@@ -2286,7 +2487,8 @@ mod tests {
         };
         let arguments = build_run_arguments(
             &parameters,
-            Path::new("/var/lib/lemma/workspaces/box-1"),
+            Some(Path::new("/var/lib/lemma/workspaces/box-1")),
+            Some(Path::new("/var/lib/lemma/run/runtime-token-box-1")),
             Path::new("/var/lib/lemma/run/private-env"),
             "192.168.64.1",
         );
@@ -2297,15 +2499,42 @@ mod tests {
         assert!(joined.contains("host.lemma.internal:192.168.64.1"));
         assert!(joined.contains("0.0.0.0::8080"));
         assert!(joined.contains("0.0.0.0::4848"));
-        assert!(joined.contains("0.0.0.0::8090"));
-        assert!(joined.ends_with("ghcr.io/lemma/runtime@sha256:abc"));
+        assert!(!joined.contains("0.0.0.0::8090"));
+        assert!(joined.contains(
+            "/var/lib/lemma/run/runtime-token-box-1,dst=/run/agentbox-bootstrap/token,readonly"
+        ));
+        assert!(joined.ends_with("ghcr.io/lemma/workspace@sha256:abc"));
     }
 
     #[test]
-    fn canonical_function_executor_name_is_valid_but_public_slugs_remain_dns_safe() {
-        assert!(validate_apps(&default_apps()).is_ok());
-        assert!(valid_app_name("function_executor"));
-        assert!(!valid_identifier("function_executor"));
+    fn function_contract_is_read_only_ephemeral_and_exposes_only_its_runtime() {
+        let parameters = EnsureParameters {
+            sandbox_id: "function-1".into(),
+            workload_kind: WorkloadKind::Function,
+            image: "ghcr.io/lemma/function@sha256:def".into(),
+            env: BTreeMap::new(),
+            metadata: BTreeMap::new(),
+            runtime_token: None,
+            apps: function_apps(),
+            resources: ResourceSpec::default(),
+            callback: CallbackSpec::default(),
+        };
+        let arguments = build_run_arguments(
+            &parameters,
+            None,
+            None,
+            Path::new("/var/lib/lemma/run/private-env"),
+            "192.168.64.1",
+        );
+        let joined = arguments.join(" ");
+
+        assert!(validate_apps(&workspace_apps()).is_ok());
+        assert!(validate_apps(&function_apps()).is_ok());
+        assert!(joined.contains("--read-only"));
+        assert!(joined.contains("/tmp:rw,noexec,nosuid"));
+        assert!(joined.contains("/run/lemma-function-cache:rw,exec"));
+        assert!(joined.contains("0.0.0.0::8090"));
+        assert!(!joined.contains("dst=/workspace"));
     }
 
     #[test]
@@ -2420,7 +2649,10 @@ mod tests {
         )
         .unwrap();
 
-        assert!(service.sandbox_image_marker_is_ready("ghcr.io/lemma/runtime@sha256:abc"));
+        assert!(service.sandbox_image_marker_is_ready(
+            "ghcr.io/lemma/workspace@sha256:abc",
+            WorkloadKind::Workspace,
+        ));
         assert_eq!(
             service.engine.commands.lock().unwrap()[0],
             vec![
@@ -2430,10 +2662,10 @@ mod tests {
                 "none",
                 "--platform",
                 guest_platform(),
-                "ghcr.io/lemma/runtime@sha256:abc",
+                "ghcr.io/lemma/workspace@sha256:abc",
                 "/usr/bin/test",
                 "-s",
-                "/usr/local/bin/start-runtime",
+                "/usr/local/bin/start-workspace-runtime",
             ]
         );
     }
@@ -2486,7 +2718,7 @@ mod tests {
         .unwrap();
 
         service
-            .ensure_sandbox_image("ghcr.io/lemma/runtime@sha256:abc")
+            .ensure_sandbox_image("ghcr.io/lemma/runtime@sha256:abc", WorkloadKind::Workspace)
             .unwrap();
         let commands = service.engine.commands.lock().unwrap();
         assert_eq!(commands[2], vec!["container", "prune", "--force"]);
@@ -2517,7 +2749,7 @@ mod tests {
         .unwrap();
 
         let error = service
-            .ensure_sandbox_image("ghcr.io/lemma/runtime@sha256:abc")
+            .ensure_sandbox_image("ghcr.io/lemma/runtime@sha256:abc", WorkloadKind::Workspace)
             .unwrap_err();
 
         assert_eq!(error.code, "guest_cache_repair_required");

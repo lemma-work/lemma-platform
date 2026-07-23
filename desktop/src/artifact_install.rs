@@ -62,13 +62,20 @@ pub struct InstallProgress<'a> {
     pub total: u64,
 }
 
+#[derive(Clone, Copy, Debug)]
+struct ProgressSpan {
+    completed_before: u64,
+    total: u64,
+}
+
 pub fn install_from_manifest(
     manifest_path: &Path,
     install_root: &Path,
     required_release: &str,
     progress: &mut dyn FnMut(InstallProgress<'_>),
 ) -> io::Result<InstalledRuntime> {
-    let manifest = load_manifest(manifest_path)?;
+    let allow_local_artifacts = local_artifacts_enabled(manifest_path);
+    let manifest = load_manifest_with_policy(manifest_path, allow_local_artifacts)?;
     if manifest.version != required_release {
         return Err(invalid(format!(
             "signed runtime release {} does not match desktop release {required_release}",
@@ -100,8 +107,11 @@ pub fn install_from_manifest(
         host,
         &downloads.join("host-pack.zip"),
         "Downloading application runtime",
-        0,
-        total,
+        ProgressSpan {
+            completed_before: 0,
+            total,
+        },
+        allow_local_artifacts,
         progress,
     )?;
     let guest_archive = download_artifact(
@@ -109,8 +119,11 @@ pub fn install_from_manifest(
         guest,
         &downloads.join("guest-runtime.zip"),
         "Downloading private runtime",
-        host.size,
-        total,
+        ProgressSpan {
+            completed_before: host.size,
+            total,
+        },
+        allow_local_artifacts,
         progress,
     )?;
 
@@ -217,6 +230,13 @@ impl InstalledRuntime {
 }
 
 fn load_manifest(path: &Path) -> io::Result<ReleaseManifest> {
+    load_manifest_with_policy(path, local_artifacts_enabled(path))
+}
+
+fn load_manifest_with_policy(
+    path: &Path,
+    allow_local_artifacts: bool,
+) -> io::Result<ReleaseManifest> {
     let raw = fs::read(path)?;
     if raw.len() > 1024 * 1024 {
         return Err(invalid("release manifest exceeds 1 MiB"));
@@ -242,7 +262,7 @@ fn load_manifest(path: &Path) -> io::Result<ReleaseManifest> {
         .values()
         .chain(manifest.guest_runtimes.values())
     {
-        validate_artifact(artifact)?;
+        validate_artifact(artifact, allow_local_artifacts)?;
     }
     Ok(manifest)
 }
@@ -260,10 +280,16 @@ fn artifact_for<'a>(
     })
 }
 
-fn validate_artifact(artifact: &ArtifactRef) -> io::Result<()> {
+fn validate_artifact(artifact: &ArtifactRef, allow_local_artifacts: bool) -> io::Result<()> {
     let url = reqwest::Url::parse(&artifact.url)
         .map_err(|error| invalid(format!("invalid artifact URL: {error}")))?;
-    if url.scheme() != "https"
+    let safe_https = url.scheme() == "https";
+    let safe_local = allow_local_artifacts
+        && url.scheme() == "file"
+        && url.host_str().is_none()
+        && url.query().is_none()
+        && url.to_file_path().is_ok();
+    if (!safe_https && !safe_local)
         || !url.username().is_empty()
         || url.password().is_some()
         || url.fragment().is_some()
@@ -279,6 +305,17 @@ fn validate_artifact(artifact: &ArtifactRef) -> io::Result<()> {
         return Err(invalid("invalid or unsafe release artifact metadata"));
     }
     Ok(())
+}
+
+fn local_artifacts_enabled(manifest_path: &Path) -> bool {
+    if std::env::var("LEMMA_DESKTOP_ALLOW_LOCAL_ARTIFACTS").as_deref() != Ok("1") {
+        return false;
+    }
+    let Some(configured) = std::env::var_os("LEMMA_DESKTOP_RELEASE_MANIFEST") else {
+        return false;
+    };
+    let configured = PathBuf::from(configured);
+    configured.canonicalize().ok() == manifest_path.canonicalize().ok()
 }
 
 fn download_client() -> io::Result<Client> {
@@ -303,16 +340,21 @@ fn download_artifact(
     artifact: &ArtifactRef,
     destination: &Path,
     label: &str,
-    completed_before: u64,
-    total: u64,
+    progress_span: ProgressSpan,
+    allow_local_artifacts: bool,
     progress: &mut dyn FnMut(InstallProgress<'_>),
 ) -> io::Result<PathBuf> {
-    validate_artifact(artifact)?;
+    validate_artifact(artifact, allow_local_artifacts)?;
+    let url = reqwest::Url::parse(&artifact.url)
+        .map_err(|error| invalid(format!("invalid artifact URL: {error}")))?;
+    if url.scheme() == "file" {
+        return copy_local_artifact(&url, artifact, destination, label, progress_span, progress);
+    }
     if archive_matches(destination, artifact)? {
         progress(InstallProgress {
             label,
-            downloaded: completed_before + artifact.size,
-            total,
+            downloaded: progress_span.completed_before + artifact.size,
+            total: progress_span.total,
         });
         return Ok(destination.to_owned());
     }
@@ -321,8 +363,8 @@ fn download_artifact(
         replace_archive(&partial, destination)?;
         progress(InstallProgress {
             label,
-            downloaded: completed_before + artifact.size,
-            total,
+            downloaded: progress_span.completed_before + artifact.size,
+            total: progress_span.total,
         });
         return Ok(destination.to_owned());
     }
@@ -395,8 +437,8 @@ fn download_artifact(
         {
             progress(InstallProgress {
                 label,
-                downloaded: completed_before + downloaded,
-                total,
+                downloaded: progress_span.completed_before + downloaded,
+                total: progress_span.total,
             });
             last_reported = downloaded;
         }
@@ -413,6 +455,83 @@ fn download_artifact(
         return Err(io::Error::new(
             io::ErrorKind::InvalidData,
             "artifact size or SHA-256 did not match the signed manifest",
+        ));
+    }
+    replace_archive(&partial, destination)?;
+    Ok(destination.to_owned())
+}
+
+fn copy_local_artifact(
+    url: &reqwest::Url,
+    artifact: &ArtifactRef,
+    destination: &Path,
+    label: &str,
+    progress_span: ProgressSpan,
+    progress: &mut dyn FnMut(InstallProgress<'_>),
+) -> io::Result<PathBuf> {
+    let source = url
+        .to_file_path()
+        .map_err(|_| invalid("local artifact URL is not an absolute file path"))?
+        .canonicalize()
+        .map_err(|error| {
+            io::Error::new(
+                error.kind(),
+                format!("local artifact is unavailable: {error}"),
+            )
+        })?;
+    let metadata = source.metadata()?;
+    if !metadata.is_file() || metadata.len() != artifact.size {
+        return Err(invalid(
+            "local artifact size did not match the test manifest",
+        ));
+    }
+    if archive_matches(destination, artifact)? {
+        progress(InstallProgress {
+            label,
+            downloaded: progress_span.completed_before + artifact.size,
+            total: progress_span.total,
+        });
+        return Ok(destination.to_owned());
+    }
+    let partial = destination.with_extension("zip.part");
+    let _ = fs::remove_file(&partial);
+    let mut input = File::open(source)?;
+    let mut options = OpenOptions::new();
+    options.write(true).create_new(true);
+    let mut output = options.open(&partial)?;
+    let mut downloaded = 0_u64;
+    let mut last_reported = 0_u64;
+    let mut buffer = [0_u8; 128 * 1024];
+    loop {
+        let count = input.read(&mut buffer)?;
+        if count == 0 {
+            break;
+        }
+        downloaded = downloaded
+            .checked_add(count as u64)
+            .ok_or_else(|| invalid("local artifact byte count overflow"))?;
+        if downloaded > artifact.size {
+            return Err(invalid(
+                "local artifact exceeded the size in the test manifest",
+            ));
+        }
+        output.write_all(&buffer[..count])?;
+        if downloaded == artifact.size
+            || downloaded.saturating_sub(last_reported) >= 4 * 1024 * 1024
+        {
+            progress(InstallProgress {
+                label,
+                downloaded: progress_span.completed_before + downloaded,
+                total: progress_span.total,
+            });
+            last_reported = downloaded;
+        }
+    }
+    output.sync_all()?;
+    if !archive_matches(&partial, artifact)? {
+        let _ = fs::remove_file(&partial);
+        return Err(invalid(
+            "local artifact SHA-256 did not match the test manifest",
         ));
     }
     replace_archive(&partial, destination)?;
@@ -845,6 +964,60 @@ mod tests {
             .replace("1.2.3", "../escape");
         fs::write(&path, unsafe_manifest).unwrap();
         assert!(load_manifest(&path).is_err());
+    }
+
+    #[test]
+    fn local_file_artifacts_are_explicitly_gated_and_still_digest_verified() {
+        let root = tempfile::tempdir().unwrap();
+        let source = root.path().join("runtime.zip");
+        fs::write(&source, b"locally-built-runtime").unwrap();
+        let artifact = ArtifactRef {
+            url: reqwest::Url::from_file_path(&source).unwrap().to_string(),
+            sha256: file_sha256(&source).unwrap(),
+            size: source.metadata().unwrap().len(),
+            format: "zip".into(),
+        };
+
+        assert!(validate_artifact(&artifact, false).is_err());
+        validate_artifact(&artifact, true).unwrap();
+
+        let destination = root.path().join("downloads/runtime.zip");
+        fs::create_dir_all(destination.parent().unwrap()).unwrap();
+        let mut reports = Vec::new();
+        let copied = download_artifact(
+            &download_client().unwrap(),
+            &artifact,
+            &destination,
+            "Local runtime",
+            ProgressSpan {
+                completed_before: 0,
+                total: artifact.size,
+            },
+            true,
+            &mut |progress| reports.push((progress.downloaded, progress.total)),
+        )
+        .unwrap();
+
+        assert_eq!(fs::read(copied).unwrap(), b"locally-built-runtime");
+        assert_eq!(reports.last(), Some(&(artifact.size, artifact.size)));
+
+        let changed = ArtifactRef {
+            sha256: "0".repeat(64),
+            ..artifact
+        };
+        assert!(download_artifact(
+            &download_client().unwrap(),
+            &changed,
+            &root.path().join("changed.zip"),
+            "Local runtime",
+            ProgressSpan {
+                completed_before: 0,
+                total: changed.size,
+            },
+            true,
+            &mut |_| {},
+        )
+        .is_err());
     }
 
     #[test]

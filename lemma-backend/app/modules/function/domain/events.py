@@ -6,6 +6,7 @@ from datetime import datetime
 from uuid import UUID
 
 from app.core.domain.events import DomainEvent
+from app.modules.function.domain.types import JsonObject
 
 FUNCTION_EVENTS_STREAM = "function.events"
 FUNCTION_RUN_EVENTS_STREAM = "function_run_events"
@@ -41,24 +42,12 @@ class FunctionDeletedEvent(DomainEvent):
         return FUNCTION_EVENTS_STREAM
 
 
-class FunctionRunExecutionRequestedEvent(DomainEvent):
-    event_type: str = "function.run.execution_requested"
-    run_id: UUID
-    function_id: UUID
-
-    @classmethod
-    def stream_name(cls) -> str:
-        return FUNCTION_RUN_EVENTS_STREAM
-
-
 class FunctionRunStartedEvent(DomainEvent):
     event_type: str = "function.run.started"
     run_id: UUID
     function_id: UUID
     started_at: datetime
     user_email: str | None = None
-    workspace_session_id: str | None = None
-    workspace_process_id: str | None = None
 
     @classmethod
     def stream_name(cls) -> str:
@@ -80,11 +69,9 @@ class FunctionRunCompletedEvent(DomainEvent):
     event_type: str = "function.run.completed"
     run_id: UUID
     function_id: UUID
-    output_data: dict | None = None
+    output_data: JsonObject | None = None
     logs: str | None = None
     completed_at: datetime
-    workspace_session_id: str | None = None
-    workspace_process_id: str | None = None
 
     @classmethod
     def stream_name(cls) -> str:
@@ -98,8 +85,6 @@ class FunctionRunFailedEvent(DomainEvent):
     error: str | None = None
     logs: str | None = None
     completed_at: datetime
-    workspace_session_id: str | None = None
-    workspace_process_id: str | None = None
 
     @classmethod
     def stream_name(cls) -> str:

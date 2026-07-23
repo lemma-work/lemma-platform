@@ -28,7 +28,6 @@ STACK_LABEL = "work.lemma.stack"
 SERVICE_LABEL = "work.lemma.service"
 HASH_LABEL = "work.lemma.config-hash"
 
-PODMAN_SOCKET_MOUNT = "/run/podman/podman.sock"
 DOCKER_SOCKET_MOUNT = "/var/run/docker.sock"
 
 
@@ -159,7 +158,9 @@ def build_specs(
     host_apps: bool = False,
 ) -> list[ServiceSpec]:
     """The installed stack, in start order."""
-    socket_mount = PODMAN_SOCKET_MOUNT if provider == "podman" else DOCKER_SOCKET_MOUNT
+    # Both Docker Engine and Podman's Docker-compatible API are exposed to the
+    # embedded manager at the one canonical socket path.
+    socket_mount = DOCKER_SOCKET_MOUNT
 
     specs = [
         ServiceSpec(
@@ -210,7 +211,8 @@ def build_specs(
                 doc,
                 paths,
                 provider=provider,
-                runtime_image=manifest.image("agentbox_runtime").pull_ref,
+                workspace_image=manifest.image("agentbox_workspace").pull_ref,
+                function_image=manifest.image("agentbox_function").pull_ref,
                 container_socket=socket_mount,
             ),
             command=(

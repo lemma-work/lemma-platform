@@ -2,13 +2,14 @@
 
 from datetime import datetime
 from enum import Enum
-from typing import ClassVar
+from typing import ClassVar, Literal
 from uuid import UUID
 
 from pydantic import BaseModel, Field, PrivateAttr
 
 from app.core.authorization.context import ResourceType
 from app.core.domain.events import DomainEvent
+from app.modules.function.domain.types import JsonObject
 
 
 class FunctionStatus(str, Enum):
@@ -37,6 +38,86 @@ class FunctionType(str, Enum):
     JOB = "JOB"
 
 
+class FunctionDispatchMode(str, Enum):
+    """How the backend waits for one already-persisted function run."""
+
+    SYNCHRONOUS = "SYNCHRONOUS"
+    ASYNCHRONOUS = "ASYNCHRONOUS"
+
+
+class FunctionArtifact(BaseModel):
+    revision_hash: str = Field(pattern=r"^sha256:[0-9a-f]{64}$")
+
+    model_config = {"frozen": True}
+
+
+class FunctionArtifactManifest(BaseModel):
+    """Typed, hashed metadata embedded in every immutable function artifact."""
+
+    format_version: Literal[1] = 1
+    runtime_abi: str
+    builder_digest: str
+    dependency_lock: tuple[str, ...] = ()
+    source_path: str = "function.py"
+    input_model: str
+    output_model: str
+    entrypoint: str
+    config_model: str | None = None
+    dependency_path: str | None = None
+
+    model_config = {"extra": "forbid", "frozen": True}
+
+
+class FunctionSchemaSet(BaseModel):
+    """Schemas extracted from one compiled function source."""
+
+    input: JsonObject
+    output: JsonObject
+    config: JsonObject | None = None
+
+    model_config = {"extra": "forbid", "frozen": True}
+
+
+class FunctionExecutionDispatch(BaseModel):
+    run_id: UUID
+    pod_id: UUID
+    function_id: UUID
+    function_name: str
+    user_id: UUID
+    mode: FunctionDispatchMode
+    deadline_at: datetime
+    revision_hash: str = Field(pattern=r"^sha256:[0-9a-f]{64}$")
+    input_data: JsonObject
+
+    model_config = {"from_attributes": True}
+
+
+class FunctionSessionPrincipal(BaseModel):
+    """Authenticated delegated function identity on a runtime claim."""
+
+    user_id: UUID
+    pod_id: UUID
+    function_id: UUID
+    session_id: str
+
+    model_config = {"frozen": True}
+
+
+class FunctionRunRuntimeContext(BaseModel):
+    run_id: UUID
+    deadline_at: datetime
+    revision_hash: str = Field(pattern=r"^sha256:[0-9a-f]{64}$")
+    artifact_path: str
+    input_data: JsonObject
+    config: JsonObject | None
+    user_id: UUID
+    user_email: str | None
+    pod_id: UUID
+    function_id: UUID
+    function_name: str
+    model_config = {"from_attributes": True}
+
+
 class FunctionEntity(BaseModel):
     """Function entity representing a programmatic task."""
 
@@ -48,19 +129,19 @@ class FunctionEntity(BaseModel):
     name: str
     description: str | None = None
     icon_url: str | None = None
-    input_schema: dict = Field(default_factory=dict)
-    output_schema: dict = Field(default_factory=dict)
-    config_schema: dict | None = None
+    input_schema: JsonObject = Field(default_factory=dict)
+    output_schema: JsonObject = Field(default_factory=dict)
+    config_schema: JsonObject | None = None
     code_path: str | None = None
-    code_hash: str | None = None
+    revision_hash: str | None = Field(default=None, pattern=r"^sha256:[0-9a-f]{64}$")
     code: str | None = None
-    config: dict | None = None
+    config: JsonObject | None = None
     type: FunctionType = FunctionType.API
     status: FunctionStatus = FunctionStatus.DRAFT
     visibility: str = "POD"
-    # pip dependencies declared in the code's `#python_packages:` header; the
-    # agentbox function executor installs these before running the function.
-    python_packages: list[str] = Field(default_factory=list)
+    pending_artifact: FunctionArtifact | None = Field(
+        default=None, exclude=True, repr=False
+    )
     allowed_actions: list[str] = Field(default_factory=list)
     # Timestamps
     created_at: datetime | None = None
@@ -75,11 +156,10 @@ class FunctionUpdateEntity(BaseModel):
     description: str | None = None
     icon_url: str | None = None
     code: str | None = None
-    config: dict | None = None
+    config: JsonObject | None = None
     type: FunctionType | None = None
     visibility: str | None = None
     model_config = {"from_attributes": True}
-
 
 
 class RunAsWorkload(BaseModel):
@@ -97,14 +177,14 @@ class FunctionRunEntity(BaseModel):
 
     id: UUID | None = None
     function_id: UUID
+    revision_hash: str | None = Field(default=None, pattern=r"^sha256:[0-9a-f]{64}$")
     user_id: UUID
-    input_data: dict | None = None
-    output_data: dict | None = None
+    input_data: JsonObject | None = None
+    output_data: JsonObject | None = None
     status: FunctionRunStatus = FunctionRunStatus.PENDING
     user_email: str | None = None
     job_id: str | None = None
-    workspace_session_id: str | None = None
-    workspace_process_id: str | None = None
+    deadline_at: datetime | None = None
     error: str | None = None
     logs: str | None = None
     started_at: datetime | None = None

@@ -12,6 +12,7 @@ build/
 
 # Local runtime data (object storage, generated files, model caches)
 /.local/
+/.benchmark-results/
 
 # Coverage reports
 .coverage

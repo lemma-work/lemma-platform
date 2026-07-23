@@ -106,7 +106,6 @@ class Runtime:
         path = (proc.stdout or "").strip()
         if proc.returncode != 0 or not path:
             raise AdminError(
-                "could not discover the podman API socket; "
-                "is the podman machine/service running?"
+                "could not discover the podman API socket; is the podman machine/service running?"
             )
         return path.removeprefix("unix://")

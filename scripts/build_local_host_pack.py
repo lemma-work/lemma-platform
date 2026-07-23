@@ -177,11 +177,20 @@ def install_python(
         {
             "AGENTBOX_API_KEY": "host-pack-smoke",
             "AGENTBOX_API_URL": "http://127.0.0.1:8711/internal/agentbox",
-            "AGENTBOX_ENDPOINT_STATE_KEYS": "",
+            "AGENTBOX_PUBLIC_URL": "http://127.0.0.1:8711/internal/agentbox",
             "AGENTBOX_PROVIDER": "lemma_local",
-            # Provider construction validates that the managed-runtime bridge
+            "AGENTBOX_RUNTIME_CREDENTIAL_KEY": "host-pack-smoke-runtime-key-000000",
+            "AGENTBOX_WORKSPACE_IMAGE": (
+                "ghcr.io/lemma-work/lemma-agentbox-workspace@sha256:"
+                + "1" * 64
+            ),
+            "AGENTBOX_FUNCTION_IMAGE": (
+                "ghcr.io/lemma-work/lemma-agentbox-function@sha256:"
+                + "2" * 64
+            ),
+            # Adapter construction validates that the managed-runtime bridge
             # exists. The private Python executable is a harmless stand-in for
-            # this build-only smoke test; no bridge request is made.
+            # this build-only import smoke test; no bridge request is made.
             "AGENTBOX_LOCAL_RUNTIME_CLI": str(executable),
         }
     )
@@ -190,10 +199,9 @@ def install_python(
         "-c",
         (
             "from fastmcp import FastMCP; "
-            "from agentbox.providers import build_sandbox_provider; "
+            "from agentbox.adapters.lemma_local import LemmaLocalSandboxAdapter; "
             "import local_app, markitdown, uvicorn; "
-            "provider = build_sandbox_provider(); "
-            "assert provider.provider_name == 'lemma_local'; "
+            "assert LemmaLocalSandboxAdapter.name == 'lemma_local'; "
             "print('backend pack: import ok')"
         ),
         env=smoke_environment,
@@ -352,8 +360,15 @@ def main() -> None:
     output.mkdir(parents=True, exist_ok=True)
     release_manifest = args.release_manifest.resolve()
     release = json.loads(release_manifest.read_text(encoding="utf-8"))
-    if not release.get("version") or not release.get("images", {}).get("agentbox_runtime"):
-        raise SystemExit("release manifest lacks version or agentbox_runtime")
+    images = release.get("images", {})
+    if (
+        not release.get("version")
+        or not images.get("agentbox_workspace")
+        or not images.get("agentbox_function")
+    ):
+        raise SystemExit(
+            "release manifest lacks version, agentbox_workspace, or agentbox_function"
+        )
 
     with tempfile.TemporaryDirectory(prefix="lemma-host-wheels-") as wheel_dir:
         install_python(output, args.python, Path(wheel_dir), args.python_root)

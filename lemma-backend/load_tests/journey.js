@@ -6,7 +6,7 @@
  * against mocks so no external service is needed:
  *   - LLM: deterministic in-process FunctionModel (E2E_LLM_MODE=mock).
  *   - Sandbox/AgentBox: the in-process fake AgentBox service (E2E_SANDBOX_MODE=
- *     fake, AGENTBOX_API_URL -> fake-agentbox) — so function create + execute run
+ *     Docker, AGENTBOX_API_URL -> agentbox) — so function create + execute run
  *     without a real Docker sandbox (functions echo their input).
  *
  * Per VU:

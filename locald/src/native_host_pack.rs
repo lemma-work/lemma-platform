@@ -112,14 +112,20 @@ fn build(
             "native host pack marker does not match its release",
         ));
     }
-    let runtime_image = pull_ref(
-        release.pointer("/images/agentbox_runtime"),
-        "agentbox runtime image",
+    let workspace_image = pull_ref(
+        release.pointer("/images/agentbox_workspace"),
+        "AgentBox workspace image",
+    )?;
+    let function_image = pull_ref(
+        release.pointer("/images/agentbox_function"),
+        "AgentBox function image",
     )?;
     let postgres_image = pull_ref(release.pointer("/infra/postgres"), "Postgres image")?;
     let redis_image = pull_ref(release.pointer("/infra/redis"), "Redis image")?;
     let supertokens_image = pull_ref(release.pointer("/infra/supertokens"), "SuperTokens image")?;
     for (label, image) in [
+        ("AgentBox workspace", &workspace_image),
+        ("AgentBox function", &function_image),
         ("Postgres", &postgres_image),
         ("Redis", &redis_image),
         ("SuperTokens", &supertokens_image),
@@ -147,7 +153,13 @@ fn build(
     }
 
     let secrets = load_or_create_host_secrets(&paths.root.join("host.secrets.json"))?;
-    let endpoint_key = URL_SAFE.encode(Sha256::digest(secrets.agentbox_api_key.as_bytes()));
+    let runtime_key = URL_SAFE.encode(Sha256::digest(
+        [
+            secrets.agentbox_api_key.as_bytes(),
+            b"lemma-agentbox-runtime-credential-v1",
+        ]
+        .concat(),
+    ));
     let frontend_origin = format!("http://{LOCAL_FRONTEND_HOST}:{FRONTEND_PORT}");
     let backend_origin = format!("http://{LOCAL_BACKEND_HOST}:{BACKEND_PORT}");
     let mut backend_env = BTreeMap::from([
@@ -189,9 +201,15 @@ fn build(
             "AGENTBOX_API_URL",
             format!("http://127.0.0.1:{BACKEND_PORT}/internal/agentbox"),
         ),
+        (
+            "AGENTBOX_PUBLIC_URL",
+            format!("{backend_origin}/internal/agentbox"),
+        ),
         ("AGENTBOX_API_KEY", secrets.agentbox_api_key),
         ("AGENTBOX_PROVIDER", "lemma_local".to_owned()),
-        ("AGENTBOX_RUNTIME_IMAGE", runtime_image),
+        ("AGENTBOX_RUNTIME_CREDENTIAL_KEY", runtime_key),
+        ("AGENTBOX_WORKSPACE_IMAGE", workspace_image),
+        ("AGENTBOX_FUNCTION_IMAGE", function_image),
         (
             "AGENTBOX_STATE_DATABASE_URL",
             format!(
@@ -199,26 +217,20 @@ fn build(
                 material.postgres_password
             ),
         ),
-        ("AGENTBOX_ENDPOINT_STATE_KEYS", endpoint_key),
-        ("AGENTBOX_STORAGE_ROOT", path_text(&workspaces)?),
-        ("AGENTBOX_STORAGE_HOST_ROOT", path_text(&workspaces)?),
-        (
-            "AGENTBOX_APP_DOMAIN",
-            format!("workspaces.lemma.localhost:{BACKEND_PORT}"),
-        ),
-        ("AGENTBOX_NETWORK", String::new()),
+        ("AGENTBOX_AUTO_CREATE_SCHEMA", "true".to_owned()),
         ("AGENTBOX_ADD_HOST_GATEWAY", "false".to_owned()),
         ("AGENTBOX_HOST_ALIAS", "host.lemma.internal".to_owned()),
-        ("AGENTBOX_REQUIRE_CALLBACK", "true".to_owned()),
-        // Keep one sandbox from consuming the private VM's core-service
-        // headroom. The VZ guest itself is sized automatically from host RAM.
-        ("AGENTBOX_MEMORY_LIMIT", "2g".to_owned()),
-        ("AGENTBOX_CPU_LIMIT", "2".to_owned()),
-        ("AGENTBOX_LOCAL_RUNTIME_TIMEOUT_SECONDS", "600".to_owned()),
+        ("AGENTBOX_LOCAL_SCOPE", "lemma-local:managed".to_owned()),
+        ("AGENTBOX_LOCAL_WORKSPACE_MEMORY", "2g".to_owned()),
+        ("AGENTBOX_LOCAL_WORKSPACE_CPUS", "2".to_owned()),
+        ("AGENTBOX_LOCAL_FUNCTION_MEMORY", "2g".to_owned()),
+        ("AGENTBOX_LOCAL_FUNCTION_CPUS", "4".to_owned()),
+        ("AGENTBOX_LOCAL_CALLBACK_REQUIRED", "true".to_owned()),
         (
-            "AGENTBOX_DEFER_INITIAL_RECONCILIATION_UNTIL_SERVING",
-            "true".to_owned(),
+            "AGENTBOX_LOCAL_CALLBACK_URL",
+            format!("http://host.lemma.internal:{BACKEND_PORT}"),
         ),
+        ("AGENTBOX_LOCAL_RUNTIME_TIMEOUT_SECONDS", "600".to_owned()),
         (
             "AGENTBOX_LOCAL_RUNTIME_CLI",
             path_text(&material.bridge_executable)?,
@@ -522,7 +534,16 @@ mod tests {
             br#"{
               "schema_version": 1,
               "version": "6.2.0",
-              "images": {"agentbox_runtime": {"ref": "runtime", "digest": "sha256:runtime"}},
+              "images": {
+                "agentbox_workspace": {
+                  "ref": "workspace",
+                  "digest": "sha256:workspace"
+                },
+                "agentbox_function": {
+                  "ref": "function",
+                  "digest": "sha256:function"
+                }
+              },
               "infra": {
                 "postgres": {"ref": "postgres", "digest": "sha256:postgres"},
                 "redis": "redis@sha256:redis",
@@ -580,17 +601,32 @@ mod tests {
             "0"
         );
         assert_eq!(
-            manifest["services"][0]["env"]["AGENTBOX_MEMORY_LIMIT"],
+            manifest["services"][0]["env"]["AGENTBOX_LOCAL_WORKSPACE_MEMORY"],
             "2g"
         );
-        assert_eq!(manifest["services"][0]["env"]["AGENTBOX_CPU_LIMIT"], "2");
+        assert_eq!(
+            manifest["services"][0]["env"]["AGENTBOX_LOCAL_WORKSPACE_CPUS"],
+            "2"
+        );
+        assert_eq!(
+            manifest["services"][0]["env"]["AGENTBOX_LOCAL_FUNCTION_CPUS"],
+            "4"
+        );
         assert_eq!(
             manifest["services"][0]["env"]["AGENTBOX_LOCAL_RUNTIME_TIMEOUT_SECONDS"],
             "600"
         );
         assert_eq!(
-            manifest["services"][0]["env"]["AGENTBOX_DEFER_INITIAL_RECONCILIATION_UNTIL_SERVING"],
-            "true"
+            manifest["services"][0]["env"]["AGENTBOX_LOCAL_CALLBACK_URL"],
+            "http://host.lemma.internal:8711"
+        );
+        assert_eq!(
+            manifest["services"][0]["env"]["AGENTBOX_WORKSPACE_IMAGE"],
+            "workspace@sha256:workspace"
+        );
+        assert_eq!(
+            manifest["services"][0]["env"]["AGENTBOX_FUNCTION_IMAGE"],
+            "function@sha256:function"
         );
         assert_eq!(
             manifest["managed_runtime"]["images"]["postgres"],

@@ -3,15 +3,23 @@
 from __future__ import annotations
 
 import asyncio
+from datetime import datetime, timedelta, timezone
 from typing import Optional
 from uuid import UUID, uuid4
 
 from app.core.config import settings
 from app.core.request_context import correlation_headers
-from agentbox_client import AgentBoxClient
-from app.modules.workspace.contracts import SandboxInfo, WorkspaceStatus
-from app.modules.workspace.agentbox_session import AgentBoxWorkspaceSession
-from app.modules.workspace.agentbox_retry import retry_on_transient_agentbox_error
+from agentbox_client import (
+    AgentBoxClient,
+    PortAccessGrant,
+    PortProtocol,
+    WorkloadKind,
+)
+from app.modules.workspace.contracts import SandboxInfo
+from app.modules.workspace.agentbox_session import (
+    AgentBoxWorkspaceSession,
+    canonical_workspace_cwd,
+)
 from app.modules.workspace.services.agentbox_manager import (
     AgentBoxSandbox,
     agentbox_sandbox_id,
@@ -21,20 +29,9 @@ from app.modules.workspace.services.workspace_activity_store import (
     WorkspaceActivityStore,
 )
 from app.modules.workspace.services.workspace_state_store import WorkspaceStateStore
-from app.core.log.log import get_logger
-
-logger = get_logger(__name__)
-
 _activity_store: WorkspaceActivityStore | None = None
 _state_store: WorkspaceStateStore | None = None
-_CREATE_LOCK_TTL_SECONDS = 180
-_CREATE_WAIT_TIMEOUT_SECONDS = 180
-_CREATE_WAIT_POLL_SECONDS = 1
-# When the pod we own settles in a terminal state, re-trigger the self-healing
-# ensure at most this often (ensure is idempotent and recreates dead pods).
-_ENSURE_RETRY_COOLDOWN_SECONDS = 10
 _SANDBOX_MANAGER_HTTP_TIMEOUT_SECONDS = 300.0
-_TERMINAL_SANDBOX_STATUSES = frozenset({"ERROR", "STOPPED"})
 
 
 def get_workspace_activity_store() -> WorkspaceActivityStore:
@@ -95,6 +92,13 @@ class WorkspaceSandboxService:
         if close is not None:
             await close()
 
+    @classmethod
+    async def close_shared_manager_client(cls) -> None:
+        cached = cls._shared_manager_client
+        cls._shared_manager_client = None
+        if cached is not None:
+            await cached[1].close()
+
     async def _get_sandbox_info(self, user_id: UUID) -> SandboxInfo | None:
         return await self.sandbox.get_sandbox(user_id)
 
@@ -102,27 +106,6 @@ class WorkspaceSandboxService:
         return await self.sandbox.ensure_sandbox(
             user_id,
             env=self._get_sandbox_app_env(),
-        )
-
-    async def _ensure_sandbox_info_with_retry(self, user_id: UUID) -> SandboxInfo:
-        """Ensure the sandbox, retrying only transient manager errors.
-
-        The manager proxy can briefly return retryable 5xx / connection errors
-        while it is bringing the sandbox up. Those are retried with backoff;
-        genuine 4xx and non-transport errors propagate immediately so real
-        failures surface at once.
-        """
-
-        def _log_retry(attempt: int, error: str) -> None:
-            logger.debug(
-                "workspace.workspace_sandbox_service.ensure_sandbox_not_ready_yet.observed",
-                user_id=user_id,
-                attempt=attempt,
-            )
-
-        return await retry_on_transient_agentbox_error(
-            lambda: self._ensure_sandbox_info(user_id),
-            on_retry=_log_retry,
         )
 
     def _get_sandbox_app_env(self) -> dict[str, str]:
@@ -170,78 +153,11 @@ class WorkspaceSandboxService:
             workspace_url=sandbox_info.endpoint if sandbox_info else None,
         )
 
-    async def get_or_create_sandbox(self, user_id: UUID) -> dict:
-        """Return a RUNNING sandbox for the user, creating/healing as needed.
-
-        This is the single funnel every workspace session goes through. It is
-        resilient to:
-        - cold starts (sandbox not yet created),
-        - terminal pods (crashed/OOM/stopped) — healed via the idempotent
-          ensure, never by deleting the persistent sandbox entry,
-        - concurrent callers — a single creator holds the creation lock and the
-          others wait for the sandbox to come up instead of failing on a
-          transient terminal status they observe mid-heal.
-        """
-        sandbox_info = await self._get_sandbox_info(user_id)
-        if sandbox_info and sandbox_info.status == "RUNNING":
-            return await self._build_running_sandbox_response(user_id, sandbox_info)
-
-        sandbox_info = await self._ensure_running_sandbox(user_id)
-        return await self._build_running_sandbox_response(user_id, sandbox_info)
-
-    async def _ensure_running_sandbox(self, user_id: UUID) -> SandboxInfo:
-        """Drive the sandbox to RUNNING, coordinating concurrent callers.
-
-        Exactly one caller holds the creation lock and runs ensure+wait; the
-        rest wait for it. If the lock holder genuinely fails it records the error
-        and the waiters surface it; if the lock holder simply vanishes (process
-        died, lock expired) a waiter takes over. Everything is bounded by
-        ``_CREATE_WAIT_TIMEOUT_SECONDS``.
-        """
-        deadline = asyncio.get_running_loop().time() + _CREATE_WAIT_TIMEOUT_SECONDS
-        while asyncio.get_running_loop().time() < deadline:
-            lock_owner = str(uuid4())
-            has_create_lock = await self.state_store.acquire_creation_lock(
-                runtime=self.runtime,
-                user_id=user_id,
-                owner=lock_owner,
-                timeout_seconds=_CREATE_LOCK_TTL_SECONDS,
-            )
-            if has_create_lock:
-                try:
-                    return await self._create_running_sandbox(user_id, deadline)
-                finally:
-                    await self.state_store.release_creation_lock(
-                        runtime=self.runtime,
-                        user_id=user_id,
-                        owner=lock_owner,
-                    )
-
-            running = await self._wait_for_creator(user_id, deadline)
-            if running is not None:
-                return running
-            # Creator vanished without reaching RUNNING; loop to take over.
-
-        raise TimeoutError(
-            f"Workspace sandbox for user {user_id} did not reach Running state in "
-            f"{_CREATE_WAIT_TIMEOUT_SECONDS}s"
-        )
-
-    async def _create_running_sandbox(
-        self,
-        user_id: UUID,
-        deadline: float,
-    ) -> SandboxInfo:
-        """Lock-holder path: ensure the sandbox and wait until it is RUNNING."""
+    async def get_or_create_sandbox(self, user_id: UUID) -> SandboxInfo:
+        """Ensure a ready sandbox; AgentBox owns allocation concurrency."""
         await self.state_store.mark_creating(runtime=self.runtime, user_id=user_id)
         try:
-            # ensure_sandbox is idempotent and self-healing in AgentBox: it
-            # recreates a pod stuck in a terminal state rather than returning a
-            # dead one, so we ensure then wait for RUNNING.
-            sandbox_info = await self._ensure_sandbox_info_with_retry(user_id)
-            if sandbox_info.status != "RUNNING":
-                sandbox_info = await self._poll_until_running(user_id, deadline)
-            return sandbox_info
+            sandbox_info = await self._ensure_sandbox_info(user_id)
         except Exception as exc:
             await self.state_store.mark_error(
                 runtime=self.runtime,
@@ -249,110 +165,6 @@ class WorkspaceSandboxService:
                 error=str(exc),
             )
             raise
-
-    async def _poll_until_running(self, user_id: UUID, deadline: float) -> SandboxInfo:
-        """Wait for the sandbox we own to report RUNNING.
-
-        A pod can briefly report a terminal status right after ensure triggers a
-        delete+recreate (the old, dead pod is still observable until the new one
-        appears). We therefore treat terminal statuses as transient and keep
-        waiting, periodically re-running the self-healing ensure rather than
-        giving up on the first terminal reading.
-        """
-        last_ensure = asyncio.get_running_loop().time()
-        while asyncio.get_running_loop().time() < deadline:
-            sandbox_info = await self._get_sandbox_info(user_id)
-            if sandbox_info and sandbox_info.status == "RUNNING":
-                return sandbox_info
-
-            now = asyncio.get_running_loop().time()
-            if (
-                sandbox_info
-                and sandbox_info.status in _TERMINAL_SANDBOX_STATUSES
-                and now - last_ensure >= _ENSURE_RETRY_COOLDOWN_SECONDS
-            ):
-                logger.debug(
-                    "workspace.workspace_sandbox_service.workspace_sandbox_user_s_still.observed",
-                    user_id=user_id,
-                    status=sandbox_info.status,
-                )
-                await self._ensure_sandbox_info_with_retry(user_id)
-                last_ensure = now
-
-            await asyncio.sleep(_CREATE_WAIT_POLL_SECONDS)
-
-        raise TimeoutError(
-            f"Workspace sandbox for user {user_id} did not reach Running state in "
-            f"{_CREATE_WAIT_TIMEOUT_SECONDS}s"
-        )
-
-    async def _wait_for_creator(
-        self,
-        user_id: UUID,
-        deadline: float,
-    ) -> SandboxInfo | None:
-        """Waiter path: wait for the lock holder to bring the sandbox up.
-
-        Returns the RUNNING ``SandboxInfo`` on success, or ``None`` when the
-        creator released the lock without reaching RUNNING and without recording
-        an error (so the caller can take over). Raises if the creator recorded a
-        genuine creation failure, or on timeout. Crucially, a transient terminal
-        *pod* status is ignored while creation is in progress — only a recorded
-        state-store error counts as a real failure.
-        """
-        while asyncio.get_running_loop().time() < deadline:
-            sandbox_info = await self._get_sandbox_info(user_id)
-            if sandbox_info and sandbox_info.status == "RUNNING":
-                return sandbox_info
-
-            state = await self.state_store.get_state(
-                runtime=self.runtime,
-                user_id=user_id,
-            )
-            if state and state.status == WorkspaceStatus.ERROR:
-                raise RuntimeError(
-                    state.error
-                    or f"Workspace sandbox creation failed for user {user_id} on runtime {self.runtime}"
-                )
-
-            if not await self.state_store.is_creation_in_progress(
-                runtime=self.runtime,
-                user_id=user_id,
-            ):
-                # Lock gone but no error recorded and not RUNNING: re-check the
-                # pod once (covers the create-success → lock-release race) then
-                # hand back to the caller to take over creation.
-                sandbox_info = await self._get_sandbox_info(user_id)
-                if sandbox_info and sandbox_info.status == "RUNNING":
-                    return sandbox_info
-                return None
-
-            await asyncio.sleep(_CREATE_WAIT_POLL_SECONDS)
-
-        raise TimeoutError(
-            f"Workspace sandbox for user {user_id} did not reach Running state in "
-            f"{_CREATE_WAIT_TIMEOUT_SECONDS}s"
-        )
-
-    async def _build_running_sandbox_response(
-        self,
-        user_id: UUID,
-        sandbox_info: SandboxInfo,
-    ) -> dict:
-        # Reset the manager's idle clock at handout. The fast path returns a
-        # RUNNING sandbox without re-running ensure, so a sandbox that was
-        # already near its idle deadline (idle_since_at close to the timeout)
-        # would otherwise be reaped seconds into the run -- before a sessionless
-        # workload (function run) ever creates a session or its keepalive
-        # heartbeat first fires. Marking it active here gives the caller a fresh
-        # idle window. Best-effort: never block session handout on it.
-        try:
-            await self.sandbox.heartbeat(user_id)
-        except Exception:
-            logger.debug(
-                "workspace.workspace_sandbox_service.handout_heartbeat_user_s_runtime.observed",
-                user_id=user_id,
-            )
         await self.state_store.mark_running(
             runtime=self.runtime,
             user_id=user_id,
@@ -365,19 +177,30 @@ class WorkspaceSandboxService:
             user_id=user_id,
             sandbox_info=sandbox_info,
         )
-        return {
-            "sandbox_id": sandbox_info.sandbox_id,
-            "name": sandbox_info.sandbox_id,
-            "status": sandbox_info.status,
-            "workspace_url": sandbox_info.endpoint,
-            "container_name": sandbox_info.sandbox_id,
-        }
+        return sandbox_info
 
     async def stop_sandbox(self, user_id: UUID) -> None:
         sandbox_info = await self._get_sandbox_info(user_id)
         await self._delete_sandbox(user_id, sandbox_info)
         await self.activity_store.remove(runtime=self.runtime, user_id=user_id)
         await self.state_store.mark_stopped(runtime=self.runtime, user_id=user_id)
+
+    async def create_browser_access(
+        self,
+        user_id: UUID,
+        *,
+        ttl_seconds: int,
+        ensure_sandbox: bool = True,
+    ) -> PortAccessGrant:
+        if ensure_sandbox:
+            await self.get_or_create_sandbox(user_id)
+        return await self._get_manager_client().create_port_access(
+            WorkloadKind.WORKSPACE,
+            agentbox_sandbox_id(user_id),
+            4848,
+            protocol=PortProtocol.HTTP,
+            expires_at=datetime.now(timezone.utc) + timedelta(seconds=ttl_seconds),
+        )
 
     async def get_env_vars(
         self,
@@ -454,15 +277,12 @@ class WorkspaceSandboxService:
         scope: list[str] | None = None,
         env_vars: dict[str, str] | None = None,
     ) -> IWorkspaceSession:
-        sandbox_response = await self.get_or_create_sandbox(user_id)
-        sandbox_info = SandboxInfo(
-            sandbox_id=str(sandbox_response["sandbox_id"]),
-            name=str(sandbox_response["name"]),
-            namespace=None,
-            status=str(sandbox_response["status"]),
-            image="",
-            created_at=None,
-            endpoint=str(sandbox_response["workspace_url"]),
+        sandbox_info = await self.get_or_create_sandbox(user_id)
+        resolved_cwd = canonical_workspace_cwd(initial_cwd)
+        await self._get_manager_client().create_directory(
+            agentbox_sandbox_id(user_id),
+            resolved_cwd,
+            deadline_at=datetime.now(timezone.utc) + timedelta(seconds=30),
         )
 
         if env_vars is None:
@@ -488,10 +308,10 @@ class WorkspaceSandboxService:
 
         return AgentBoxWorkspaceSession(
             client=self._get_manager_client(),
-            sandbox_id=agentbox_sandbox_id(user_id),
+            sandbox_id=str(agentbox_sandbox_id(user_id)),
             session_id=session_id,
             env_vars=env_vars,
-            initial_cwd=initial_cwd,
+            initial_cwd=resolved_cwd,
             auto_close=close_on_exit,
             activity_callback=_activity_callback,
             owns_client=False,

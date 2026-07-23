@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import base64
 import os
 from pathlib import Path
 import subprocess
@@ -25,7 +24,7 @@ class DevWorkflowTests(unittest.TestCase):
         return subprocess.run(
             command,
             cwd=cwd,
-            env={**os.environ, "AGENTBOX_ENDPOINT_STATE_KEYS": ""},
+            env=os.environ.copy(),
             text=True,
             capture_output=True,
             check=check,
@@ -40,7 +39,7 @@ class DevWorkflowTests(unittest.TestCase):
                 values[key] = value
         return values
 
-    def test_init_generates_complete_local_config_and_stable_agentbox_key(self):
+    def test_init_generates_complete_local_config_and_agentbox_override_file(self):
         with tempfile.TemporaryDirectory() as raw_tmp:
             tmp = Path(raw_tmp)
             backend = tmp / "backend"
@@ -63,24 +62,17 @@ class DevWorkflowTests(unittest.TestCase):
             self.assertEqual(backend_env["ENVIRONMENT"], "local")
             self.assertEqual(backend_env["LOG_LEVEL"], "DEBUG")
             self.assertTrue(backend_env["DATASTORE_DATABASE_URL"].endswith("/lemma_datastore"))
-            self.assertEqual(backend_env["DOCUMENT_PROCESSOR"], "markitdown")
-            self.assertEqual(backend_env["KREUZBERG_URL"], "")
+            self.assertEqual(backend_env["DOCUMENT_PROCESSOR"], "kreuzberg")
             self.assertEqual(backend_env["EMAIL_TRANSPORT"], "filesystem")
             self.assertEqual(backend_env["AUTH_EMAIL_VERIFICATION_REQUIRED"], "false")
             self.assertEqual(backend_env["API_URL"], "http://localhost:8710")
             self.assertEqual(backend_env["FRONTEND_URL"], "http://localhost:3710")
 
-            key_before = self.env_values(agentbox / ".env")[
-                "AGENTBOX_ENDPOINT_STATE_KEYS"
-            ]
-            decoded = base64.urlsafe_b64decode(key_before)
-            self.assertEqual(len(decoded), 32)
+            agentbox_text = (agentbox / ".env").read_text()
+            self.assertIn("AgentBox local overrides", agentbox_text)
 
             self.run_make(tmp, "_init-agentbox-env", variables=variables)
-            key_after = self.env_values(agentbox / ".env")[
-                "AGENTBOX_ENDPOINT_STATE_KEYS"
-            ]
-            self.assertEqual(key_after, key_before)
+            self.assertEqual((agentbox / ".env").read_text(), agentbox_text)
 
     def test_ensure_backend_env_appends_only_missing_values(self):
         with tempfile.TemporaryDirectory() as raw_tmp:
@@ -107,19 +99,24 @@ class DevWorkflowTests(unittest.TestCase):
                 sum(line.startswith("AGENTBOX_API_KEY=") for line in lines), 1
             )
 
-    def test_wait_agentbox_reports_exited_unified_backend(self):
+    def test_wait_agentbox_reports_exited_pid_and_log_path(self):
         with tempfile.TemporaryDirectory() as raw_tmp:
             tmp = Path(raw_tmp)
-            backend = tmp / "backend"
-            backend.mkdir()
-            (backend / ".dev-backend.pid").write_text("99999999\n")
+            agentbox = tmp / "agentbox"
+            logs = tmp / "logs"
+            agentbox.mkdir()
+            logs.mkdir()
+            (agentbox / ".dev-agentbox.pid").write_text("99999999\n")
+            log_file = logs / "agentbox.log"
+            log_file.write_text("startup failed\n")
 
             result = self.run_make(
                 tmp,
                 "_wait-agentbox",
                 variables={
-                    "BACKEND_DIR": str(backend),
-                    "DEV_BACKEND_PORT": "1",
+                    "AGENTBOX_DIR": str(agentbox),
+                    "DEV_LOG_DIR": str(logs),
+                    "DEV_AGENTBOX_PORT": "1",
                     "AGENTBOX_READY_TIMEOUT": "1",
                 },
                 check=False,
@@ -127,43 +124,26 @@ class DevWorkflowTests(unittest.TestCase):
 
             self.assertNotEqual(result.returncode, 0)
             output = result.stdout + result.stderr
-            self.assertIn(
-                "Unified backend exited before embedded AgentBox became ready", output
-            )
+            self.assertIn("AgentBox exited before becoming ready", output)
+            self.assertIn(str(log_file), output)
+            self.assertIn("startup failed", output)
 
-    def test_unified_backend_embeds_agentbox_with_postgres_state(self):
+    def test_agentbox_launch_uses_postgres_and_canonical_images(self):
         with tempfile.TemporaryDirectory() as raw_tmp:
             tmp = Path(raw_tmp)
             result = self.run_make(
                 tmp,
                 "-n",
-                "_run-backend",
+                "_run-agentbox",
                 variables={
-                    "AGENTBOX_ENDPOINT_STATE_KEYS": "test-key",
+                    "DEV_LOG_DIR": str(tmp / "logs"),
                 },
             )
 
             self.assertIn("AGENTBOX_STATE_DATABASE_URL=postgresql://", result.stdout)
-            self.assertIn("AGENTBOX_ENDPOINT_STATE_KEYS=test-key", result.stdout)
-            self.assertIn("AGENTBOX_API_URL=http://127.0.0.1:8710/internal/agentbox", result.stdout)
-            self.assertIn("DOCUMENT_PROCESSOR=markitdown", result.stdout)
-            self.assertIn("uv run --extra local uvicorn local_app:app", result.stdout)
-
-    def test_dev_starts_only_backend_and_frontend_app_processes(self):
-        dev_recipe = MAKEFILE.read_text().split("\ndev:\n", 1)[1].split(
-            "\ndev-public:\n", 1
-        )[0]
-
-        self.assertIn("_run-backend", dev_recipe)
-        self.assertIn("_run-frontend", dev_recipe)
-        self.assertNotIn("_run-agentbox", dev_recipe)
-
-    def test_infra_start_removes_services_from_the_previous_topology(self):
-        with tempfile.TemporaryDirectory() as raw_tmp:
-            result = self.run_make(Path(raw_tmp), "-n", "_infra-up")
-
-            self.assertIn("--remove-orphans db redis supertokens", result.stdout)
-            self.assertNotIn("kreuzberg", result.stdout.lower())
+            self.assertIn("AGENTBOX_WORKSPACE_IMAGE=agentbox-workspace:dev", result.stdout)
+            self.assertIn("AGENTBOX_FUNCTION_IMAGE=agentbox-function:dev", result.stdout)
+            self.assertIn("uv run --extra postgres uvicorn", result.stdout)
 
     def test_public_mode_tunnels_only_api_and_keeps_frontend_local(self):
         with tempfile.TemporaryDirectory() as raw_tmp:

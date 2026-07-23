@@ -3,11 +3,13 @@ from __future__ import annotations
 import asyncio
 import json
 from typing import Any, Generic, TypeVar
+from weakref import WeakSet
 
 from redis.asyncio import Redis
 
 
 T = TypeVar("T")
+_live_caches: WeakSet["RedisJsonCache[Any]"] = WeakSet()
 
 
 class RedisJsonCache(Generic[T]):
@@ -17,6 +19,7 @@ class RedisJsonCache(Generic[T]):
         self._ttl_seconds = ttl_seconds
         self._redis: Redis | None = None
         self._lock = asyncio.Lock()
+        _live_caches.add(self)
 
     async def _get_redis(self) -> Redis:
         if self._redis is not None:
@@ -83,11 +86,24 @@ class RedisJsonCache(Generic[T]):
         await self.delete_prefix("")
 
     async def close(self) -> None:
-        if self._redis is None:
+        async with self._lock:
+            redis = self._redis
+            self._redis = None
+        if redis is None:
             return
-        redis = self._redis
-        self._redis = None
         if hasattr(redis, "aclose"):
             await redis.aclose()
         else:
             await redis.close()
+
+
+async def close_redis_json_caches() -> None:
+    """Close every live process-local cache client during service teardown."""
+
+    results = await asyncio.gather(
+        *(cache.close() for cache in tuple(_live_caches)),
+        return_exceptions=True,
+    )
+    failures = [result for result in results if isinstance(result, BaseException)]
+    if failures:
+        raise failures[0]

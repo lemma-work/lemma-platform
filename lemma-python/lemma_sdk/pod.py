@@ -3,6 +3,7 @@ from __future__ import annotations
 from functools import cached_property
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
+from uuid import UUID
 
 from .errors import LemmaConfigError
 from .settings import load_settings
@@ -160,6 +161,35 @@ class Pod:
         server: str | None = None,
         config_path: Path | None = None,
     ) -> "Pod":
+        # Function invocations use task/thread-local runtime context so
+        # concurrent users never race through process-global environment
+        # credentials. Outside the runtime this remains the CLI/env constructor.
+        from .runtime import current_function_invocation
+
+        invocation = current_function_invocation()
+        if invocation is not None:
+            selected_pod = (
+                UUID(str(pod_id)) if pod_id is not None else invocation.pod_id
+            )
+            if selected_pod != invocation.pod_id:
+                raise LemmaConfigError(
+                    "pod_id cannot override the active function invocation pod"
+                )
+            return invocation.register(
+                cls(
+                    pod_id=str(invocation.pod_id),
+                    org_id=(
+                        org_id
+                        or (
+                            str(invocation.organization_id)
+                            if invocation.organization_id is not None
+                            else None
+                        )
+                    ),
+                    base_url=invocation.base_url,
+                    token=invocation.token,
+                )
+            )
         settings = load_settings(
             org_id=org_id,
             pod_id=pod_id,
@@ -167,7 +197,9 @@ class Pod:
             config_path=config_path,
         )
         if not settings.pod_id:
-            raise LemmaConfigError("pod_id is required. Pass pod_id or set LEMMA_POD_ID.")
+            raise LemmaConfigError(
+                "pod_id is required. Pass pod_id or set LEMMA_POD_ID."
+            )
         return cls(
             pod_id=settings.pod_id,
             org_id=settings.org_id,

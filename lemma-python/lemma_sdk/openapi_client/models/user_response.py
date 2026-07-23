@@ -223,7 +223,7 @@ class UserResponse:
                 date_of_birth_type_0 = isoparse(data).date()
 
                 return date_of_birth_type_0
-            except (TypeError, ValueError, AttributeError, KeyError):
+            except TypeError, ValueError, AttributeError, KeyError:
                 pass
             return cast(datetime.date | None | Unset, data)
 
@@ -240,7 +240,7 @@ class UserResponse:
                 deactivated_at_type_0 = isoparse(data)
 
                 return deactivated_at_type_0
-            except (TypeError, ValueError, AttributeError, KeyError):
+            except TypeError, ValueError, AttributeError, KeyError:
                 pass
             return cast(datetime.datetime | None | Unset, data)
 
@@ -268,7 +268,7 @@ class UserResponse:
                 email_verified_at_type_0 = isoparse(data)
 
                 return email_verified_at_type_0
-            except (TypeError, ValueError, AttributeError, KeyError):
+            except TypeError, ValueError, AttributeError, KeyError:
                 pass
             return cast(datetime.datetime | None | Unset, data)
 
@@ -312,7 +312,7 @@ class UserResponse:
                 mobile_verified_at_type_0 = isoparse(data)
 
                 return mobile_verified_at_type_0
-            except (TypeError, ValueError, AttributeError, KeyError):
+            except TypeError, ValueError, AttributeError, KeyError:
                 pass
             return cast(datetime.datetime | None | Unset, data)
 

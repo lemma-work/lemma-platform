@@ -202,7 +202,7 @@ class ScheduleRunResponse:
                 completed_at_type_0 = isoparse(data)
 
                 return completed_at_type_0
-            except (TypeError, ValueError, AttributeError, KeyError):
+            except TypeError, ValueError, AttributeError, KeyError:
                 pass
             return cast(datetime.datetime | None | Unset, data)
 
@@ -237,7 +237,7 @@ class ScheduleRunResponse:
                 source_occurred_at_type_0 = isoparse(data)
 
                 return source_occurred_at_type_0
-            except (TypeError, ValueError, AttributeError, KeyError):
+            except TypeError, ValueError, AttributeError, KeyError:
                 pass
             return cast(datetime.datetime | None | Unset, data)
 
@@ -256,7 +256,7 @@ class ScheduleRunResponse:
                 started_at_type_0 = isoparse(data)
 
                 return started_at_type_0
-            except (TypeError, ValueError, AttributeError, KeyError):
+            except TypeError, ValueError, AttributeError, KeyError:
                 pass
             return cast(datetime.datetime | None | Unset, data)
 

@@ -285,7 +285,7 @@ class AgentRuntimeProfileResponse:
                 daemon_id_type_0 = UUID(data)
 
                 return daemon_id_type_0
-            except (TypeError, ValueError, AttributeError, KeyError):
+            except TypeError, ValueError, AttributeError, KeyError:
                 pass
             return cast(None | Unset | UUID, data)
 
@@ -351,7 +351,7 @@ class AgentRuntimeProfileResponse:
                 organization_id_type_0 = UUID(data)
 
                 return organization_id_type_0
-            except (TypeError, ValueError, AttributeError, KeyError):
+            except TypeError, ValueError, AttributeError, KeyError:
                 pass
             return cast(None | Unset | UUID, data)
 
@@ -368,7 +368,7 @@ class AgentRuntimeProfileResponse:
                 user_id_type_0 = UUID(data)
 
                 return user_id_type_0
-            except (TypeError, ValueError, AttributeError, KeyError):
+            except TypeError, ValueError, AttributeError, KeyError:
                 pass
             return cast(None | Unset | UUID, data)
 

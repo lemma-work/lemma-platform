@@ -251,7 +251,7 @@ class ConversationResponse:
                 agent_id_type_0 = UUID(data)
 
                 return agent_id_type_0
-            except (TypeError, ValueError, AttributeError, KeyError):
+            except TypeError, ValueError, AttributeError, KeyError:
                 pass
             return cast(None | Unset | UUID, data)
 
@@ -268,7 +268,7 @@ class ConversationResponse:
                 agent_runtime_type_0 = AgentRuntimeConfig.from_dict(data)
 
                 return agent_runtime_type_0
-            except (TypeError, ValueError, AttributeError, KeyError):
+            except TypeError, ValueError, AttributeError, KeyError:
                 pass
             return cast(AgentRuntimeConfig | None | Unset, data)
 
@@ -305,7 +305,7 @@ class ConversationResponse:
                 last_run_finished_at_type_0 = isoparse(data)
 
                 return last_run_finished_at_type_0
-            except (TypeError, ValueError, AttributeError, KeyError):
+            except TypeError, ValueError, AttributeError, KeyError:
                 pass
             return cast(datetime.datetime | None | Unset, data)
 
@@ -326,7 +326,7 @@ class ConversationResponse:
                 last_run_status_type_0 = AgentRunStatus(data)
 
                 return last_run_status_type_0
-            except (TypeError, ValueError, AttributeError, KeyError):
+            except TypeError, ValueError, AttributeError, KeyError:
                 pass
             return cast(AgentRunStatus | None | Unset, data)
 
@@ -345,7 +345,7 @@ class ConversationResponse:
                 metadata_type_0 = ConversationResponseMetadataType0.from_dict(data)
 
                 return metadata_type_0
-            except (TypeError, ValueError, AttributeError, KeyError):
+            except TypeError, ValueError, AttributeError, KeyError:
                 pass
             return cast(ConversationResponseMetadataType0 | None | Unset, data)
 
@@ -362,7 +362,7 @@ class ConversationResponse:
                 organization_id_type_0 = UUID(data)
 
                 return organization_id_type_0
-            except (TypeError, ValueError, AttributeError, KeyError):
+            except TypeError, ValueError, AttributeError, KeyError:
                 pass
             return cast(None | Unset | UUID, data)
 
@@ -388,7 +388,7 @@ class ConversationResponse:
                 parent_id_type_0 = UUID(data)
 
                 return parent_id_type_0
-            except (TypeError, ValueError, AttributeError, KeyError):
+            except TypeError, ValueError, AttributeError, KeyError:
                 pass
             return cast(None | Unset | UUID, data)
 
@@ -405,7 +405,7 @@ class ConversationResponse:
                 status_type_0 = ConversationStatus(data)
 
                 return status_type_0
-            except (TypeError, ValueError, AttributeError, KeyError):
+            except TypeError, ValueError, AttributeError, KeyError:
                 pass
             return cast(ConversationStatus | None | Unset, data)
 

@@ -65,16 +65,12 @@ def app_base_domain(doc: TOMLDocument) -> str:
     return f"{LOCAL_APPS_DOMAIN}:{store.port(doc, 'backend')}"
 
 
-def agentbox_app_domain(doc: TOMLDocument) -> str:
-    return f"{LOCAL_WORKSPACES_DOMAIN}:{store.port(doc, 'backend')}"
-
-
-def _agentbox_endpoint_state_key(doc: TOMLDocument) -> str:
-    """Derive a stable local-only endpoint key from the generated manager key."""
+def _agentbox_runtime_key(doc: TOMLDocument) -> str:
+    """Derive a stable local-only runtime credential key."""
 
     digest = hmac.digest(
         store.agentbox_api_key(doc).encode("utf-8"),
-        b"lemma-agentbox-endpoint-state-v1",
+        b"lemma-agentbox-runtime-credential-v1",
         "sha256",
     )
     return base64.urlsafe_b64encode(digest).decode("ascii")
@@ -85,9 +81,11 @@ def backend_env(
     paths: LocalPaths,
     *,
     provider: str,
-    runtime_image: str,
+    workspace_image: str,
+    function_image: str,
     container_socket: str,
 ) -> dict[str, str]:
+    adapter_provider = "lemma_local" if provider == "lemma_local" else "docker"
     env = {
         "ENVIRONMENT": "local",
         "DEBUG": "true",
@@ -106,22 +104,23 @@ def backend_env(
         # AgentBox manager is mounted inside this backend process.
         "AGENTBOX_ENVIRONMENT": "local",
         "AGENTBOX_API_URL": "http://backend:8000/internal/agentbox",
+        "AGENTBOX_PUBLIC_URL": f"{backend_origin(doc)}/internal/agentbox",
         "AGENTBOX_API_KEY": store.agentbox_api_key(doc),
-        "AGENTBOX_PROVIDER": provider,
-        "AGENTBOX_RUNTIME_IMAGE": runtime_image,
+        "AGENTBOX_PROVIDER": adapter_provider,
+        "AGENTBOX_RUNTIME_CREDENTIAL_KEY": _agentbox_runtime_key(doc),
+        "AGENTBOX_WORKSPACE_IMAGE": workspace_image,
+        "AGENTBOX_FUNCTION_IMAGE": function_image,
         "AGENTBOX_STATE_DATABASE_URL": "postgresql://postgres:postgres@db:5432/agentbox",
-        "AGENTBOX_ENDPOINT_STATE_KEYS": _agentbox_endpoint_state_key(doc),
-        "AGENTBOX_STORAGE_ROOT": WORKSPACES_MOUNT,
-        "AGENTBOX_STORAGE_HOST_ROOT": str(paths.workspaces_dir),
-        "AGENTBOX_APP_DOMAIN": agentbox_app_domain(doc),
-        "AGENTBOX_NETWORK": NETWORK_NAME,
+        "AGENTBOX_AUTO_CREATE_SCHEMA": "true",
+        "AGENTBOX_DOCKER_SOCKET_PATH": container_socket,
+        "AGENTBOX_DOCKER_SCOPE": f"{provider}:local",
+        "AGENTBOX_DOCKER_ALLOW_MUTABLE_IMAGES": "false",
+        "AGENTBOX_DOCKER_PRIVATE_NETWORK": (
+            "" if provider == "lemma_local" else NETWORK_NAME
+        ),
         "AGENTBOX_ADD_HOST_GATEWAY": "false",
         "AGENTBOX_HOST_ALIAS": "host.lemma.internal",
-        "AGENTBOX_REQUIRE_CALLBACK": "true",
-        "AGENTBOX_MEMORY_LIMIT": "2g",
-        "AGENTBOX_CPU_LIMIT": "2",
         "AGENTBOX_LOCAL_RUNTIME_TIMEOUT_SECONDS": "600",
-        "AGENTBOX_DEFER_INITIAL_RECONCILIATION_UNTIL_SERVING": "true",
         # sandboxes share the network; no host.docker.internal rewrite
         "WORKSPACE_CALLBACK_API_URL": "http://backend:8000",
         "WORKSPACE_CALLBACK_AUTH_URL": "http://frontend:8080/auth",
@@ -164,10 +163,6 @@ def backend_env(
         "ENABLE_TELEGRAM_POLLING_MODE": "true",
         "ENABLE_SLACK_SOCKET_MODE": "true",
     }
-    if provider == "podman":
-        socket_url = f"unix://{container_socket}"
-        env["CONTAINER_HOST"] = socket_url
-        env["DOCKER_HOST"] = socket_url
     env.update(store.env_overrides(doc, "agentbox"))
     env.update(store.env_overrides(doc, "backend"))
     return env
@@ -178,7 +173,8 @@ def host_backend_env(
     paths: LocalPaths,
     *,
     provider: str,
-    runtime_image: str,
+    workspace_image: str,
+    function_image: str,
 ) -> dict[str, str]:
     """Render the managed native backend environment.
 
@@ -193,11 +189,11 @@ def host_backend_env(
         doc,
         paths,
         provider=provider,
-        runtime_image=runtime_image,
+        workspace_image=workspace_image,
+        function_image=function_image,
         container_socket="",
     )
     env.pop("PYTHONPATH", None)
-    env.pop("CONTAINER_HOST", None)
     postgres_password = "postgres"
     redis_url = f"redis://127.0.0.1:{store.port(doc, 'redis')}"
     managed_runtime_cli = ""
@@ -222,13 +218,14 @@ def host_backend_env(
             "REDIS_URL": redis_url,
             "SUPERTOKENS_CORE_URL": (f"http://127.0.0.1:{store.port(doc, 'supertokens')}"),
             "AGENTBOX_API_URL": f"http://127.0.0.1:{backend_port}/internal/agentbox",
+            "AGENTBOX_PUBLIC_URL": (
+                f"{backend_origin(doc)}/internal/agentbox"
+            ),
             "AGENTBOX_STATE_DATABASE_URL": (
                 f"postgresql://postgres:{postgres_password}@127.0.0.1:"
                 f"{store.port(doc, 'postgres')}/agentbox"
             ),
-            "AGENTBOX_STORAGE_ROOT": str(paths.workspaces_dir),
-            "AGENTBOX_STORAGE_HOST_ROOT": str(paths.workspaces_dir),
-            "AGENTBOX_NETWORK": "",
+            "AGENTBOX_DOCKER_PRIVATE_NETWORK": "",
             "AGENTBOX_ADD_HOST_GATEWAY": "true",
             "WORKSPACE_CALLBACK_API_URL": (f"http://host.lemma.internal:{backend_port}"),
             "WORKSPACE_CALLBACK_AUTH_URL": (f"http://host.lemma.internal:{frontend_port}/auth"),
@@ -244,7 +241,12 @@ def host_backend_env(
         env.update(
             {
                 "AGENTBOX_LOCAL_RUNTIME_CLI": managed_runtime_cli,
+                "AGENTBOX_LOCAL_SCOPE": "lemma-local:managed",
                 "AGENTBOX_ADD_HOST_GATEWAY": "false",
+                "AGENTBOX_LOCAL_CALLBACK_REQUIRED": "true",
+                "AGENTBOX_LOCAL_CALLBACK_URL": (
+                    f"http://host.lemma.internal:{backend_port}"
+                ),
             }
         )
     # User settings retain normal last-wins semantics.

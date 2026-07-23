@@ -1,9 +1,10 @@
 name: Release Local Stack Images
 
-# Builds the three images the current local stack consumes, plus the legacy
-# manager image needed by older installers during their upgrade window. It
-# pushes them to ghcr.io and attaches a release manifest (lemma-local.json)
-# to the GitHub release. lemma-stack resolves:
+# Builds the backend, frontend, AgentBox manager compatibility image, and the
+# provider-neutral workspace/function images. It also assembles the native host
+# packs and private guest runtimes consumed by Lemma Desktop. Published runs
+# attach them to the GitHub release; branch-test runs retain them in Actions.
+# lemma-stack resolves:
 #   stable  -> releases/latest/download/lemma-local.json
 #   <X.Y.Z> -> releases/download/v<X.Y.Z>/lemma-local.json
 #
@@ -22,6 +23,11 @@ on:
         description: "Release version (e.g. 0.1.0). Uses tag v<version>."
         required: true
         type: string
+      publish:
+        description: "Publish/repair the GitHub Release. Disable for a branch test artifact."
+        required: true
+        default: true
+        type: boolean
 
 env:
   REGISTRY: ghcr.io
@@ -43,6 +49,24 @@ jobs:
     steps:
       - name: Checkout code
         uses: actions/checkout@v7
+      - name: Verify branch-test Desktop version
+        if: github.event_name == 'workflow_dispatch' && !inputs.publish
+        shell: bash
+        env:
+          VERSION: ${{ inputs.version }}
+        run: |
+          python3 - <<'PY'
+          import json
+          import os
+          from pathlib import Path
+
+          requested = os.environ["VERSION"].removeprefix("v")
+          desktop = json.loads(Path("desktop/tauri.conf.json").read_text())["version"]
+          if requested != desktop:
+              raise SystemExit(
+                  f"branch-test runtime {requested} does not match Desktop {desktop}"
+              )
+          PY
       - name: Verify protected evidence
         uses: ./.github/actions/require-backend-protected-e2e
         with:
@@ -64,11 +88,14 @@ jobs:
             context: .
             dockerfile: lemma-frontend/Dockerfile
           - name: lemma-agentbox
-            context: agentbox
-            dockerfile: agentbox/Dockerfile
-          - name: lemma-agentbox-runtime
             context: .
-            dockerfile: agentbox/Dockerfile.runtime
+            dockerfile: agentbox/Dockerfile
+          - name: lemma-agentbox-workspace
+            context: .
+            dockerfile: agentbox/Dockerfile.workspace
+          - name: lemma-agentbox-function
+            context: .
+            dockerfile: agentbox/Dockerfile.function
         platform:
           - arch: amd64
             runner: ubuntu-latest
@@ -129,11 +156,14 @@ jobs:
           - lemma-backend
           - lemma-frontend
           - lemma-agentbox
-          - lemma-agentbox-runtime
+          - lemma-agentbox-workspace
+          - lemma-agentbox-function
     steps:
       - name: Resolve version
         id: version
         shell: bash
+        env:
+          PUBLISH: ${{ github.event_name == 'push' || inputs.publish }}
         run: |
           if [[ "${GITHUB_REF}" == refs/tags/v* ]]; then
             version="${GITHUB_REF#refs/tags/v}"
@@ -141,7 +171,13 @@ jobs:
             version="${{ inputs.version }}"
           fi
           version="${version#v}"
+          if [[ "${PUBLISH}" == "true" ]]; then
+            image_tag="v${version}"
+          else
+            image_tag="test-${GITHUB_SHA:0:12}"
+          fi
           echo "version=${version}" >> "$GITHUB_OUTPUT"
+          echo "image_tag=${image_tag}" >> "$GITHUB_OUTPUT"
 
       - name: Download digests
         uses: actions/download-artifact@v8
@@ -162,10 +198,17 @@ jobs:
 
       - name: Create and push manifest list
         working-directory: /tmp/digests
+        env:
+          PUBLISH: ${{ github.event_name == 'push' || inputs.publish }}
         run: |
+          tags=(
+            -t ${{ env.IMAGE_PREFIX }}/${{ matrix.image }}:${{ steps.version.outputs.image_tag }}
+          )
+          if [[ "${PUBLISH}" == "true" ]]; then
+            tags+=(-t ${{ env.IMAGE_PREFIX }}/${{ matrix.image }}:latest)
+          fi
           docker buildx imagetools create \
-            -t ${{ env.IMAGE_PREFIX }}/${{ matrix.image }}:v${{ steps.version.outputs.version }} \
-            -t ${{ env.IMAGE_PREFIX }}/${{ matrix.image }}:latest \
+            "${tags[@]}" \
             $(printf '${{ env.IMAGE_PREFIX }}/${{ matrix.image }}@sha256:%s ' *)
 
       - name: Record merged digest
@@ -174,7 +217,7 @@ jobs:
         working-directory: /tmp/digests
         run: |
           mkdir -p digests-out
-          IMAGE="${{ env.IMAGE_PREFIX }}/${{ matrix.image }}:v${{ steps.version.outputs.version }}" \
+          IMAGE="${{ env.IMAGE_PREFIX }}/${{ matrix.image }}:${{ steps.version.outputs.image_tag }}" \
           NAME="${{ matrix.image }}" \
           python3 - <<'PY'
           import json
@@ -343,6 +386,8 @@ jobs:
       - name: Resolve version
         id: version
         shell: bash
+        env:
+          PUBLISH: ${{ github.event_name == 'push' || inputs.publish }}
         run: |
           if [[ "${GITHUB_REF}" == refs/tags/v* ]]; then
             version="${GITHUB_REF#refs/tags/v}"
@@ -350,7 +395,13 @@ jobs:
             version="${{ inputs.version }}"
           fi
           version="${version#v}"
+          if [[ "${PUBLISH}" == "true" ]]; then
+            image_tag="v${version}"
+          else
+            image_tag="test-${GITHUB_SHA:0:12}"
+          fi
           echo "version=${version}" >> "$GITHUB_OUTPUT"
+          echo "image_tag=${image_tag}" >> "$GITHUB_OUTPUT"
 
       - name: Set up uv
         uses: astral-sh/setup-uv@v6
@@ -386,6 +437,7 @@ jobs:
         shell: bash
         env:
           VERSION: ${{ steps.version.outputs.version }}
+          IMAGE_TAG: ${{ steps.version.outputs.image_tag }}
           PREFIX: ${{ env.IMAGE_PREFIX }}
           TARGET: ${{ matrix.target }}
         run: |
@@ -395,6 +447,7 @@ jobs:
           from pathlib import Path
 
           version = os.environ["VERSION"]
+          image_tag = os.environ["IMAGE_TAG"]
           prefix = os.environ["PREFIX"]
           platform = {
               "aarch64-apple-darwin": "linux/arm64",
@@ -408,7 +461,7 @@ jobs:
 
           def image(name):
               return {
-                  "ref": f"{prefix}/{name}:v{version}",
+                  "ref": f"{prefix}/{name}:{image_tag}",
                   "digest": digests[name]["platforms"][platform],
               }
 
@@ -424,7 +477,8 @@ jobs:
               "images": {
                   "backend": image("lemma-backend"),
                   "frontend": image("lemma-frontend"),
-                  "agentbox_runtime": image("lemma-agentbox-runtime"),
+                  "agentbox_workspace": image("lemma-agentbox-workspace"),
+                  "agentbox_function": image("lemma-agentbox-function"),
               },
               "infra": infra,
           }
@@ -509,6 +563,8 @@ jobs:
       - name: Resolve version
         id: version
         shell: bash
+        env:
+          PUBLISH: ${{ github.event_name == 'push' || inputs.publish }}
         run: |
           if [[ "${GITHUB_REF}" == refs/tags/v* ]]; then
             version="${GITHUB_REF#refs/tags/v}"
@@ -516,7 +572,13 @@ jobs:
             version="${{ inputs.version }}"
           fi
           version="${version#v}"
+          if [[ "${PUBLISH}" == "true" ]]; then
+            image_tag="v${version}"
+          else
+            image_tag="test-${GITHUB_SHA:0:12}"
+          fi
           echo "version=${version}" >> "$GITHUB_OUTPUT"
+          echo "image_tag=${image_tag}" >> "$GITHUB_OUTPUT"
 
       - name: Download merged digests
         uses: actions/download-artifact@v8
@@ -549,6 +611,7 @@ jobs:
         shell: bash
         env:
           VERSION: ${{ steps.version.outputs.version }}
+          IMAGE_TAG: ${{ steps.version.outputs.image_tag }}
           PREFIX: ${{ env.IMAGE_PREFIX }}
           REPOSITORY: ${{ github.repository }}
         run: |
@@ -559,6 +622,7 @@ jobs:
           from pathlib import Path
 
           version = os.environ["VERSION"]
+          image_tag = os.environ["IMAGE_TAG"]
           prefix = os.environ["PREFIX"]
           repository = os.environ["REPOSITORY"]
           digests = {}
@@ -568,7 +632,7 @@ jobs:
                   digests[entry["name"]] = entry["digest"]
 
           def image(name: str) -> dict:
-              return {"ref": f"{prefix}/{name}:v{version}", "digest": digests[name]}
+              return {"ref": f"{prefix}/{name}:{image_tag}", "digest": digests[name]}
 
           host_packs = {}
           for path in sorted(Path("host-packs").glob("lemma-host-pack-*.zip")):
@@ -612,7 +676,8 @@ jobs:
                   "frontend": image("lemma-frontend"),
                   # Legacy compatibility only; current lemma-stack does not pull it.
                   "agentbox": image("lemma-agentbox"),
-                  "agentbox_runtime": image("lemma-agentbox-runtime"),
+                  "agentbox_workspace": image("lemma-agentbox-workspace"),
+                  "agentbox_function": image("lemma-agentbox-function"),
               },
               # Keep schema-1 compatibility for older lemma-stack clients:
               # public infra entries remain strings, now pinned to the
@@ -632,6 +697,7 @@ jobs:
           PY
 
       - name: Attach manifest to release
+        if: github.event_name == 'push' || inputs.publish
         uses: softprops/action-gh-release@v2
         with:
           tag_name: v${{ steps.version.outputs.version }}
@@ -643,3 +709,15 @@ jobs:
           # re-runs are used to repair an existing release (backfill the
           # lemma-local.json asset) and must not overwrite the release body.
           generate_release_notes: ${{ github.event_name == 'push' }}
+
+      - name: Upload branch-test runtime bundle
+        if: github.event_name == 'workflow_dispatch' && !inputs.publish
+        uses: actions/upload-artifact@v4
+        with:
+          name: lemma-local-test-${{ github.sha }}
+          path: |
+            lemma-local.json
+            host-packs/lemma-host-pack-*.zip
+            guest-runtimes/lemma-guest-runtime-*.zip
+          if-no-files-found: error
+          retention-days: 14

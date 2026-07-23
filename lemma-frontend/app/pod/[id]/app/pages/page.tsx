@@ -11,6 +11,7 @@ import { StepLoader } from '@/components/brand/loader';
 import { ConceptHint } from '@/components/education/concept-hint';
 import { SectionPrimer } from '@/components/education/section-primer';
 import { ResourceIndexHeader, ResourceIndexShell } from '@/components/pod/resource-layout';
+import { RecipeCard } from '@/components/recipes/recipe-card';
 import { DestructiveConfirmationDialog } from '@/components/shared/destructive-confirmation-dialog';
 import { EmptyState } from '@/components/shared/empty-state';
 import { DestructiveResourceActionItem, ResourceActionsMenu } from '@/components/shared/resource-actions-menu';
@@ -21,8 +22,7 @@ import { DropdownMenuItem } from '@/components/ui/dropdown-menu';
 import { resourceAllows } from '@/lib/authz/resource-actions';
 import { useDeleteApp, useAppPages, useUpdateAppVisibility } from '@/lib/hooks/use-app';
 import { usePodAccess } from '@/lib/hooks/use-pod-access';
-import { appRecipes, getRecipeAccent, type Recipe } from '@/lib/recipes/recipes';
-import { renderRecipeIcon } from '@/components/recipes/recipe-icon';
+import { appRecipes } from '@/lib/recipes/recipes';
 import { useLaunchRecipe } from '@/lib/recipes/use-launch-recipe';
 import type { AppPageRef } from '@/lib/types/app';
 
@@ -39,28 +39,6 @@ function formatAppHost(value: string | null | undefined) {
     } catch {
         return 'Live app';
     }
-}
-
-function RecipeStarterCard({ recipe, onLaunch }: { recipe: Recipe; onLaunch: () => void }) {
-    return (
-        <button
-            type="button"
-            onClick={onLaunch}
-            className="resource-index-card custom-focus-ring group flex min-h-[7.5rem] flex-col items-start gap-2 rounded-lg p-4 text-left transition-colors hover:border-[var(--border-strong)]"
-        >
-            <div className="flex w-full items-start justify-between gap-2">
-                <span className="recipe-icon-tile h-9 w-9 rounded-lg" data-accent={getRecipeAccent(recipe)}>
-                    {renderRecipeIcon(recipe, { className: 'h-[18px] w-[18px]', strokeWidth: 1.8 })}
-                </span>
-                <span className="inline-flex items-center gap-1 text-xs text-[var(--text-tertiary)] opacity-0 transition-opacity group-hover:opacity-100">
-                    Build
-                    <ArrowUpRight className="h-3.5 w-3.5" />
-                </span>
-            </div>
-            <span className="text-sm font-medium text-[var(--text-primary)]">{recipe.name}</span>
-            <span className="line-clamp-2 text-xs leading-5 text-[var(--text-tertiary)]">{recipe.blurb}</span>
-        </button>
-    );
 }
 
 function buildAppViewHref(podId: string, page: string, searchParams: { toString(): string }) {
@@ -171,15 +149,16 @@ export default function AppPagesRoute({ params }: { params: Promise<{ id: string
                 canCreateApp ? (
                     <div className="grid gap-5">
                         <div className="max-w-2xl">
-                            <h2 className="text-lg font-medium text-[var(--text-primary)]">Start from a recipe</h2>
+                            <h2 className="text-lg font-medium text-[var(--text-primary)]">Choose an app shape</h2>
                             <p className="mt-1 text-sm leading-6 text-[var(--text-secondary)]">
-                                Pick a starting point and the assistant builds it into a working app — a screen where your team works with this pod’s agents. Or describe your own.
+                                Start from a recognizable product shape. Lemma builds the app, its data, and the agents or workflows that make it useful.
                             </p>
                         </div>
                         <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-3">
                             {appRecipes.slice(0, 5).map((recipe) => (
-                                <RecipeStarterCard
+                                <RecipeCard
                                     key={recipe.id}
+                                    podId={podId}
                                     recipe={recipe}
                                     onLaunch={() => launchRecipe(recipe)}
                                 />
@@ -200,7 +179,7 @@ export default function AppPagesRoute({ params }: { params: Promise<{ id: string
                             href={`/pod/${podId}/recipes`}
                             className="custom-focus-ring inline-flex w-fit items-center gap-1.5 text-sm font-medium text-[var(--text-secondary)] transition-colors hover:text-[var(--text-primary)]"
                         >
-                            Browse all recipes — bots, creator tools, and more
+                            Add a channel agent or automate a loop
                             <ArrowUpRight className="h-4 w-4" />
                         </Link>
                     </div>

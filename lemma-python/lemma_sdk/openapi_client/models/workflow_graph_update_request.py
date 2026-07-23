@@ -173,7 +173,7 @@ class WorkflowGraphUpdateRequest:
                     nodes_item_type_0 = FormNode.from_dict(data)
 
                     return nodes_item_type_0
-                except (TypeError, ValueError, AttributeError, KeyError):
+                except TypeError, ValueError, AttributeError, KeyError:
                     pass
                 try:
                     if not isinstance(data, dict):
@@ -181,7 +181,7 @@ class WorkflowGraphUpdateRequest:
                     nodes_item_type_1 = AgentNode.from_dict(data)
 
                     return nodes_item_type_1
-                except (TypeError, ValueError, AttributeError, KeyError):
+                except TypeError, ValueError, AttributeError, KeyError:
                     pass
                 try:
                     if not isinstance(data, dict):
@@ -189,7 +189,7 @@ class WorkflowGraphUpdateRequest:
                     nodes_item_type_2 = FunctionNode.from_dict(data)
 
                     return nodes_item_type_2
-                except (TypeError, ValueError, AttributeError, KeyError):
+                except TypeError, ValueError, AttributeError, KeyError:
                     pass
                 try:
                     if not isinstance(data, dict):
@@ -197,7 +197,7 @@ class WorkflowGraphUpdateRequest:
                     nodes_item_type_3 = DecisionNode.from_dict(data)
 
                     return nodes_item_type_3
-                except (TypeError, ValueError, AttributeError, KeyError):
+                except TypeError, ValueError, AttributeError, KeyError:
                     pass
                 try:
                     if not isinstance(data, dict):
@@ -205,7 +205,7 @@ class WorkflowGraphUpdateRequest:
                     nodes_item_type_4 = LoopNode.from_dict(data)
 
                     return nodes_item_type_4
-                except (TypeError, ValueError, AttributeError, KeyError):
+                except TypeError, ValueError, AttributeError, KeyError:
                     pass
                 try:
                     if not isinstance(data, dict):
@@ -213,7 +213,7 @@ class WorkflowGraphUpdateRequest:
                     nodes_item_type_5 = WaitUntilNode.from_dict(data)
 
                     return nodes_item_type_5
-                except (TypeError, ValueError, AttributeError, KeyError):
+                except TypeError, ValueError, AttributeError, KeyError:
                     pass
                 if not isinstance(data, dict):
                     raise TypeError()
@@ -245,7 +245,7 @@ class WorkflowGraphUpdateRequest:
                 start_type_0_type_0 = ManualWorkflowStartInput.from_dict(data)
 
                 return start_type_0_type_0
-            except (TypeError, ValueError, AttributeError, KeyError):
+            except TypeError, ValueError, AttributeError, KeyError:
                 pass
             try:
                 if not isinstance(data, dict):
@@ -253,7 +253,7 @@ class WorkflowGraphUpdateRequest:
                 start_type_0_type_1 = ScheduledWorkflowStartInput.from_dict(data)
 
                 return start_type_0_type_1
-            except (TypeError, ValueError, AttributeError, KeyError):
+            except TypeError, ValueError, AttributeError, KeyError:
                 pass
             try:
                 if not isinstance(data, dict):
@@ -261,7 +261,7 @@ class WorkflowGraphUpdateRequest:
                 start_type_0_type_2 = EventWorkflowStartInput.from_dict(data)
 
                 return start_type_0_type_2
-            except (TypeError, ValueError, AttributeError, KeyError):
+            except TypeError, ValueError, AttributeError, KeyError:
                 pass
             try:
                 if not isinstance(data, dict):
@@ -269,7 +269,7 @@ class WorkflowGraphUpdateRequest:
                 start_type_0_type_3 = DataStoreWorkflowStartInput.from_dict(data)
 
                 return start_type_0_type_3
-            except (TypeError, ValueError, AttributeError, KeyError):
+            except TypeError, ValueError, AttributeError, KeyError:
                 pass
             return cast(
                 DataStoreWorkflowStartInput

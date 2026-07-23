@@ -1,154 +1,75 @@
 # AgentBox
 
-AgentBox gives Lemma one authenticated sandbox API across Docker, Podman,
-Kubernetes, E2B, and Daytona. Provider adapters own compute lifecycle and
-endpoint discovery; the AgentBox runtime owns Python sessions, shell/TTY
-processes, function execution, and browser/app proxying.
+AgentBox is Lemma's provider-neutral sandbox fabric for Docker, Kubernetes, and E2B.
 
-See [the architecture and operations guide](docs/architecture.md) for provider
-capabilities, state backends, suspension semantics, networking, and production
-configuration.
+**Status:** Implemented and verified for Docker and E2B; Kubernetes deferred
 
-## Install
+The canonical AgentBox design is maintained in:
 
-The core package includes Docker, Podman, and Kubernetes support. Install cloud
-and durable-state adapters explicitly:
+- [AgentBox overview](../docs/design/agentbox/README.md)
+- [Sandbox protocol](../docs/design/agentbox/sandbox-protocol.md)
+- [Provider adapters](../docs/design/agentbox/provider-adapters.md)
+- [Function execution](../docs/design/agentbox/function-execution.md)
+- [Testing strategy](../docs/design/agentbox/testing-strategy.md)
+- [Verification and rollout](../docs/design/agentbox/verification-and-rollout.md)
 
-```bash
-uv sync --all-extras
-# or: uv pip install -e '.[e2b,daytona,postgres]'
-```
+Those documents are the source of truth for the architecture and remaining acceptance
+gates. The canonical implementation is the typed `/api` fabric in `agentbox/api/fabric.py`,
+the SQLAlchemy state package, and the adapters under `agentbox/adapters/`.
 
-## Local quick start
+## Runtime standards
 
-Build the runtime image, then start the manager with SQLite state and Docker:
+- Python projects are locked and installed with `uv`. Runtime images do not invoke
+  `pip`, and function invocation never resolves or installs dependencies.
+- Node projects are locked and installed with `pnpm`. `npm` and `npx` are not part of
+  the supported workspace toolchain.
+- The workspace profile pins Python 3.14, Node 24 LTS, `uv` 0.11.31, and `pnpm`
+  11.15.1 on every provider. The E2B template points its managed Code Interpreter
+  service at the profile-owned Python 3.14 kernel, retains the base image's system
+  Node for provider services, and exposes the pinned Node 24 runtime to agent login
+  shells.
+- The function profile contains a locked Python environment and no Node runtime,
+  browser, package manager, or invocation-time installer.
 
-```bash
-cd agentbox
-make build
-export AGENTBOX_ENDPOINT_STATE_KEYS="$(openssl rand -base64 32 | tr '+/' '-_')"
+## Required manager secrets
 
-AGENTBOX_PROVIDER=docker \
-AGENTBOX_API_KEY=dev-agentbox-key \
-AGENTBOX_API_URL=http://127.0.0.1:8711 \
-AGENTBOX_RUNTIME_IMAGE=ghcr.io/lemma-work/lemma-agentbox-runtime:latest \
-AGENTBOX_STATE_DB_PATH=/tmp/agentbox-state.db \
-uv run uvicorn agentbox.server:app --host 127.0.0.1 --port 8711
-```
+`AGENTBOX_API_KEY` authenticates backend calls. A separate
+`AGENTBOX_RUNTIME_CREDENTIAL_KEY` of at least 32 bytes derives private,
+per-allocation workspace-runtime credentials. The runtime key must be independently
+generated and stable across AgentBox replicas and restarts; AgentBox does not derive
+it from the API key or silently generate an ephemeral replacement.
 
-`AGENTBOX_ENDPOINT_STATE_KEYS` is a comma-separated newest-first keyring of
-URL-safe base64-encoded 32-byte AES keys. Use a dedicated secret; do not reuse
-`AGENTBOX_API_KEY`.
-
-Use the same `AGENTBOX_API_URL` and `AGENTBOX_API_KEY` in lemma-backend.
-
-All manager endpoints except `/health` require
-`X-API-Key: <AGENTBOX_API_KEY>`. The `Authorization` header is reserved for a
-delegated Lemma bearer token on function-executor requests.
-
-## API walkthrough
-
-Ensure the logical user sandbox. Only durable, non-secret environment values
-belong here:
-
-```bash
-curl -X PUT http://127.0.0.1:8711/sandboxes/user-123 \
-  -H "X-API-Key: $AGENTBOX_API_KEY" \
-  -H "Content-Type: application/json" \
-  -d '{"env":{"LEMMA_BASE_URL":"https://api.lemma.work"}}'
-```
-
-Create a runtime session. Delegated tokens and other dynamic credentials belong
-in session environment, not sandbox state:
-
-```bash
-curl -X PUT http://127.0.0.1:8711/sandboxes/user-123/sessions/task-a \
-  -H "X-API-Key: $AGENTBOX_API_KEY" \
-  -H "Content-Type: application/json" \
-  -d '{
-    "cwd":"/workspace/c/2026-07-15/example",
-    "env":{"LEMMA_TOKEN":"...","LEMMA_POD_ID":"..."}
-  }'
-```
-
-Run stateful Python in that session:
-
-```bash
-curl -X POST http://127.0.0.1:8711/sandboxes/user-123/sessions/task-a/python \
-  -H "X-API-Key: $AGENTBOX_API_KEY" \
-  -H "Content-Type: application/json" \
-  -d '{"code":"x = 41\nx + 1","timeout_seconds":60}'
-```
-
-Start or poll a shell/TTY process:
-
-```bash
-curl -X POST http://127.0.0.1:8711/sandboxes/user-123/sessions/task-a/exec-command \
-  -H "X-API-Key: $AGENTBOX_API_KEY" \
-  -H "Content-Type: application/json" \
-  -d '{"cmd":"python -m http.server 3000","yield_time_ms":1000,"timeout":300}'
-```
-
-Release idle compute while retaining the logical sandbox mapping:
-
-```bash
-curl -X POST http://127.0.0.1:8711/sandboxes/user-123/suspend \
-  -H "X-API-Key: $AGENTBOX_API_KEY"
-```
-
-Permanent deletion is deliberately separate:
-
-```bash
-curl -X DELETE http://127.0.0.1:8711/sandboxes/user-123 \
-  -H "X-API-Key: $AGENTBOX_API_KEY"
-```
-
-## Runtime image
-
-`lemma-agentbox-runtime` includes Python, Node/npm/pnpm, Chromium, Agent Browser,
-frontend tooling, the Lemma SDK/CLI, the runtime server, and the in-sandbox
-function-executor service. Build and publish immutable tags from this directory:
-
-```bash
-make print-images
-make build
-make push TAG=<immutable-release-tag>
-```
-
-Set `AGENTBOX_RUNTIME_IMAGE` to that immutable image in Docker/Kubernetes. E2B
-uses `E2B_SANDBOX_TEMPLATE`; Daytona uses exactly one of
-`DAYTONA_SANDBOX_SNAPSHOT` or `DAYTONA_SANDBOX_IMAGE`.
-
-`/workspace` is reserved for user projects and function working data. Browser
-profiles, cookies, saved sessions, locks, and caches are compute-ephemeral under
-`/tmp`; runtime startup also removes legacy browser state from `/workspace`.
+The repository development and load-test launchers provide explicit non-production
+values. Deployed environments must provide their own secret values.
 
 ## Verification
 
-The default suite is hermetic and does not contact a sandbox provider:
+Ordinary tests do not spend provider resources:
 
 ```bash
-uv run pytest -m "not e2e"
+cd agentbox
+.venv/bin/pytest -q
 ```
 
-The real local-provider contract builds the current checkout for both Docker
-and Podman, then verifies runtime sessions, concurrent API/JOB functions,
-browser proxying, `/workspace/c/{date}/{slug}` continuity, suspend/resume, and
-permanent deletion:
+Real Docker conformance is opt-in:
 
 ```bash
-uv run pytest tests/e2e/test_local_providers_real_e2e.py -m e2e
+AGENTBOX_RUN_DOCKER_TESTS=1 \
+  .venv/bin/pytest -q tests/adapters/test_docker_real.py
 ```
 
-The E2B contract requires credentials and a template containing the current
-runtime code. Supply secrets through the environment, never command arguments:
+Real E2B conformance requires the API key plus exact immutable template and build IDs.
+The suite creates uniquely scoped sandboxes and cleans up only exact provider IDs:
 
 ```bash
-E2B_API_KEY=... \
-E2B_SANDBOX_TEMPLATE=... \
-uv run pytest tests/e2e/test_e2b_real_e2e.py -m e2e
+AGENTBOX_RUN_E2B_TESTS=1 \
+AGENTBOX_E2B_WORKSPACE_TEMPLATE=<template-id> \
+AGENTBOX_E2B_WORKSPACE_BUILD_ID=<build-id> \
+AGENTBOX_E2B_FUNCTION_TEMPLATE=<template-id> \
+AGENTBOX_E2B_FUNCTION_BUILD_ID=<build-id> \
+  .venv/bin/pytest -q tests/adapters/test_e2b_real.py
 ```
 
-Real-provider tests create billable resources. Every resource receives a
-test-specific logical ID and is permanently deleted in fixture cleanup, with a
-provider-scoped E2B sweep as a failure backstop.
+The backend-owned full-path API/JOB table benchmark and its scheduled quality gates
+are documented in the
+[function execution benchmark runbook](../docs/operators/agentbox-function-benchmark.md).

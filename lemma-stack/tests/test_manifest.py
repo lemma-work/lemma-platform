@@ -19,7 +19,8 @@ def sample(**overrides) -> dict:
             "frontend": {"ref": "ghcr.io/lemma-work/lemma-frontend:v1.4.0"},
             # Retained in published manifests only for old installer versions.
             "agentbox": "ghcr.io/lemma-work/lemma-agentbox:v1.4.0",
-            "agentbox_runtime": {"ref": "ghcr.io/lemma-work/lemma-agentbox-runtime:v1.4.0"},
+            "agentbox_workspace": {"ref": "ghcr.io/lemma-work/lemma-agentbox-workspace:v1.4.0"},
+            "agentbox_function": {"ref": "ghcr.io/lemma-work/lemma-agentbox-function:v1.4.0"},
         },
         "infra": {"postgres": "docker.io/pgvector/pgvector:0.8.0-pg16"},
     }
@@ -64,7 +65,8 @@ def test_pull_refs_contain_no_separate_manager_or_document_service():
     refs = manifest.all_pull_refs()
     assert not any("kreuzberg" in ref for ref in refs)
     assert not any(ref.endswith("lemma-agentbox:v1.4.0") for ref in refs)
-    assert any("lemma-agentbox-runtime" in ref for ref in refs)
+    assert any("lemma-agentbox-workspace" in ref for ref in refs)
+    assert any("lemma-agentbox-function" in ref for ref in refs)
 
 
 def test_native_host_start_pulls_only_infrastructure():
@@ -83,8 +85,8 @@ def test_native_host_start_pulls_only_infrastructure():
 
 def test_missing_image_rejected():
     data = sample()
-    del data["images"]["agentbox_runtime"]
-    with pytest.raises(AdminError, match="agentbox_runtime"):
+    del data["images"]["agentbox_function"]
+    with pytest.raises(AdminError, match="agentbox_function"):
         m.parse(data)
 
 

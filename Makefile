@@ -14,7 +14,7 @@ SHELL := /bin/bash
 # ──────────────────────────────────────────────────────────────────────────────
 
 .PHONY: help init dev dev-public stop stop-all logs otel-up otel-down otel-tail otel-smoke \
-        _prepare-dev _start-public-api-tunnel _ensure-databases _ensure-agentbox-image \
+        _prepare-dev _start-public-api-tunnel _ensure-databases _ensure-agentbox-images \
         test-dev-workflow \
         test test-backend test-backend-unit test-backend-e2e \
         test-frontend test-cli test-cli-unit test-cli-e2e test-python \
@@ -79,6 +79,7 @@ DEV_AGENTBOX_URL      := http://127.0.0.1:$(DEV_BACKEND_PORT)/internal/agentbox
 DEV_SANDBOX_BACKEND_URL := http://host.lemma.internal:$(DEV_BACKEND_PORT)
 DEV_SANDBOX_FRONTEND_URL := http://host.lemma.internal:$(DEV_FRONTEND_PORT)
 DEV_AGENTBOX_API_KEY  ?= dev-agentbox-key
+DEV_AGENTBOX_RUNTIME_CREDENTIAL_KEY ?= dev-agentbox-runtime-credential-key-0001
 DEV_CORS_ORIGIN_REGEX := https?://(localhost|127\.0\.0\.\d+|127\.\d+\.\d+\.\d+|127-0-0-\d+\.sslip\.io|[\w-]+\.nip\.io)(:\d+)?
 DEV_LOG_LEVEL         ?= DEBUG
 DEV_JSON_LOGS_ENABLED ?= true
@@ -106,13 +107,9 @@ LLM_OTEL_DEV_ENV := \
 	LLM_OTEL_EXPORTER_OTLP_ENDPOINT=http://127.0.0.1:$(OTEL_DEBUG_LLM_GRPC_PORT) \
 	LLM_OTEL_EXPORTER_OTLP_PROTOCOL=grpc \
 	LLM_OTEL_TRACES_SAMPLER=always_on
-# ~2.9GB image. docker run auto-pulls a missing image synchronously and
-# uncapped — the first sandbox creation after a fresh clone would otherwise
-# block on this pull with zero progress feedback, which looks exactly like a
-# hung agent ("stuck at exec command, no sandbox created"). Pre-pulling in
-# `make init`/`make dev` turns that invisible stall into a visible, one-time
-# download.
-AGENTBOX_RUNTIME_IMAGE := ghcr.io/lemma-work/lemma-agentbox-runtime:latest
+# Immutable-profile inputs used by the local Docker provider.
+AGENTBOX_WORKSPACE_IMAGE ?= agentbox-workspace:dev
+AGENTBOX_FUNCTION_IMAGE ?= agentbox-function:dev
 
 COMMON_DEV_ENV := \
 	DEV_POSTGRES_PORT=$(DEV_POSTGRES_PORT) \
@@ -187,11 +184,7 @@ FRONTEND_DEV_ENV := \
 	NEXT_PUBLIC_SESSION_TOKEN_DOMAIN=$(FRONTEND_SESSION_TOKEN_DOMAIN) \
 	NEXT_PUBLIC_APPS_DOMAIN_SUFFIX=$(FRONTEND_APPS_DOMAIN_SUFFIX)
 
-# `make init` owns this ignored file. Reading it as a default keeps route
-# encryption stable across restarts while allowing an exported environment or
-# command-line make override to supply a deliberate key rotation.
 AGENTBOX_ENV_FILE := $(AGENTBOX_DIR)/.env
-AGENTBOX_ENDPOINT_STATE_KEYS ?= $(shell sed -n 's/^AGENTBOX_ENDPOINT_STATE_KEYS=//p' $(AGENTBOX_ENV_FILE) 2>/dev/null | tail -n 1)
 
 # AgentBox manager — embedded in the all-in-one local backend and mounted at
 # /internal/agentbox. The Docker provider remains the transitional developer
@@ -201,16 +194,21 @@ AGENTBOX_DEV_ENV := \
 	AGENTBOX_LOG_LEVEL=$(DEV_LOG_LEVEL) \
 	AGENTBOX_PROVIDER=docker \
 	AGENTBOX_API_KEY=$(DEV_AGENTBOX_API_KEY) \
+	AGENTBOX_RUNTIME_CREDENTIAL_KEY=$(DEV_AGENTBOX_RUNTIME_CREDENTIAL_KEY) \
 	AGENTBOX_API_URL=$(DEV_AGENTBOX_URL) \
-	AGENTBOX_RUNTIME_IMAGE=$(AGENTBOX_RUNTIME_IMAGE) \
+	AGENTBOX_PUBLIC_URL=$(DEV_AGENTBOX_URL) \
+	AGENTBOX_WORKSPACE_IMAGE=$(AGENTBOX_WORKSPACE_IMAGE) \
+	AGENTBOX_FUNCTION_IMAGE=$(AGENTBOX_FUNCTION_IMAGE) \
 	AGENTBOX_STATE_DATABASE_URL=$(DEV_AGENTBOX_DATABASE_URL) \
-	AGENTBOX_ENDPOINT_STATE_KEYS=$(AGENTBOX_ENDPOINT_STATE_KEYS) \
-	AGENTBOX_STORAGE_ROOT=$(abspath .local/agentbox-workspaces) \
-	AGENTBOX_ENDPOINT_HOST=127.0.0.1 \
+	AGENTBOX_AUTO_CREATE_SCHEMA=true \
+	AGENTBOX_DOCKER_SOCKET_PATH=/var/run/docker.sock \
+	AGENTBOX_DOCKER_SCOPE=docker:development \
+	AGENTBOX_DOCKER_ALLOW_MUTABLE_IMAGES=true \
+	AGENTBOX_DOCKER_PRIVATE_NETWORK= \
+	AGENTBOX_ADD_HOST_GATEWAY=true \
 	AGENTBOX_HOST_ALIAS=host.lemma.internal \
-	AGENTBOX_REQUIRE_CALLBACK=true \
-	AGENTBOX_SESSION_IDLE_TIMEOUT_SECONDS=300 \
-	AGENTBOX_SANDBOX_IDLE_TIMEOUT_SECONDS=300 \
+	AGENTBOX_WORKSPACE_IDLE_SECONDS=300 \
+	AGENTBOX_FUNCTION_IDLE_SECONDS=300 \
 	AGENTBOX_CLEANUP_INTERVAL_SECONDS=30
 
 # ── Help ──────────────────────────────────────────────────────────────────────
@@ -294,17 +292,19 @@ init:
 	@$(MAKE) --no-print-directory _init-frontend-env
 	@$(MAKE) --no-print-directory _init-agentbox-env
 	@echo ""
-	@$(MAKE) --no-print-directory _ensure-agentbox-image
+	@$(MAKE) --no-print-directory _ensure-agentbox-images
 	@echo ""
 	@echo "Done. Run 'make dev' to start the stack."
 
-_ensure-agentbox-image:
-	@if docker image inspect "$(AGENTBOX_RUNTIME_IMAGE)" >/dev/null 2>&1; then \
-		echo "  ✓ AgentBox runtime image already present: $(AGENTBOX_RUNTIME_IMAGE)"; \
+_ensure-agentbox-images:
+	@if docker image inspect "$(AGENTBOX_WORKSPACE_IMAGE)" >/dev/null 2>&1 \
+		&& docker image inspect "$(AGENTBOX_FUNCTION_IMAGE)" >/dev/null 2>&1; then \
+		echo "  ✓ AgentBox workspace/function images already present"; \
 	else \
-		echo "→ Pulling AgentBox runtime image (one-time, ~2.9GB): $(AGENTBOX_RUNTIME_IMAGE)…"; \
-		docker pull "$(AGENTBOX_RUNTIME_IMAGE)" && \
-		echo "  ✓ AgentBox runtime image ready"; \
+		echo "→ Building canonical AgentBox workspace/function images…"; \
+		$(MAKE) -C agentbox build-test-images \
+			TEST_WORKSPACE_IMAGE="$(AGENTBOX_WORKSPACE_IMAGE)" \
+			TEST_FUNCTION_IMAGE="$(AGENTBOX_FUNCTION_IMAGE)"; \
 	fi
 
 _init-backend-env:
@@ -438,21 +438,11 @@ _ensure-frontend-env-keys:
 	fi
 
 _init-agentbox-env:
-	@if [ -f $(AGENTBOX_ENV_FILE) ] && grep -qE '^AGENTBOX_ENDPOINT_STATE_KEYS=.+$$' $(AGENTBOX_ENV_FILE); then \
-		echo "  $(AGENTBOX_ENV_FILE) already has a persistent endpoint-state key"; \
+	@if [ -f $(AGENTBOX_ENV_FILE) ]; then \
+		echo "  $(AGENTBOX_ENV_FILE) already exists"; \
 	else \
-		key=$$(openssl rand -base64 32 | tr '+/' '-_' | tr -d '\n'); \
-		test -n "$$key" || { echo "  ✗ Failed to generate AgentBox endpoint-state key"; exit 1; }; \
-		if [ ! -f $(AGENTBOX_ENV_FILE) ]; then \
-			{ \
-				echo "# AgentBox local secrets (generated by make init; gitignored)"; \
-				echo "AGENTBOX_ENDPOINT_STATE_KEYS=$$key"; \
-			} > $(AGENTBOX_ENV_FILE); \
-		else \
-			tmp="$(AGENTBOX_ENV_FILE).tmp"; \
-			awk -v key="$$key" 'BEGIN { done=0 } /^AGENTBOX_ENDPOINT_STATE_KEYS=/ { if (!done) print "AGENTBOX_ENDPOINT_STATE_KEYS=" key; done=1; next } { print } END { if (!done) print "AGENTBOX_ENDPOINT_STATE_KEYS=" key }' $(AGENTBOX_ENV_FILE) > "$$tmp" && mv "$$tmp" $(AGENTBOX_ENV_FILE); \
-		fi; \
-		echo "  Generated persistent AgentBox endpoint-state key in $(AGENTBOX_ENV_FILE)"; \
+		echo "# AgentBox local overrides (generated by make init; gitignored)" > $(AGENTBOX_ENV_FILE); \
+		echo "  Created $(AGENTBOX_ENV_FILE)"; \
 	fi
 
 # ── Dev stack ─────────────────────────────────────────────────────────────────
@@ -516,7 +506,7 @@ dev-public:
 _prepare-dev:
 	@$(MAKE) --no-print-directory stop 2>/dev/null || true
 	@$(MAKE) --no-print-directory _ensure-init
-	@$(MAKE) --no-print-directory _ensure-agentbox-image
+	@$(MAKE) --no-print-directory _ensure-agentbox-images
 	@$(MAKE) --no-print-directory _infra-up
 	@$(MAKE) --no-print-directory _wait-infra
 	@$(MAKE) --no-print-directory _ensure-databases
@@ -560,7 +550,6 @@ _ensure-init:
 	@test -f $(BACKEND_DIR)/.env  || { echo "  ! $(BACKEND_DIR)/.env missing — run 'make init'"; exit 1; }
 	@test -f $(FRONTEND_DIR)/.env.local || { echo "  ! $(FRONTEND_DIR)/.env.local missing — run 'make init'"; exit 1; }
 	@test -f $(AGENTBOX_ENV_FILE) || { echo "  ! $(AGENTBOX_ENV_FILE) missing — run 'make init'"; exit 1; }
-	@test -n "$(strip $(AGENTBOX_ENDPOINT_STATE_KEYS))" || { echo "  ! $(AGENTBOX_ENV_FILE) has no AgentBox endpoint-state key — run 'make init'"; exit 1; }
 	@test -f $(TS_DIR)/dist/index.js || { echo "  ! $(TS_DIR)/dist missing — run 'make init' (or cd $(TS_DIR) && npm run build)"; exit 1; }
 	@$(MAKE) --no-print-directory _ensure-backend-env-keys
 	@$(MAKE) --no-print-directory _ensure-frontend-env-keys

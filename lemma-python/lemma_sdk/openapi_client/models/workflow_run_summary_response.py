@@ -182,7 +182,7 @@ class WorkflowRunSummaryResponse:
                 completed_at_type_0 = isoparse(data)
 
                 return completed_at_type_0
-            except (TypeError, ValueError, AttributeError, KeyError):
+            except TypeError, ValueError, AttributeError, KeyError:
                 pass
             return cast(datetime.datetime | None | Unset, data)
 
@@ -199,7 +199,7 @@ class WorkflowRunSummaryResponse:
                 created_at_type_0 = isoparse(data)
 
                 return created_at_type_0
-            except (TypeError, ValueError, AttributeError, KeyError):
+            except TypeError, ValueError, AttributeError, KeyError:
                 pass
             return cast(datetime.datetime | None | Unset, data)
 
@@ -254,7 +254,7 @@ class WorkflowRunSummaryResponse:
                 started_at_type_0 = isoparse(data)
 
                 return started_at_type_0
-            except (TypeError, ValueError, AttributeError, KeyError):
+            except TypeError, ValueError, AttributeError, KeyError:
                 pass
             return cast(datetime.datetime | None | Unset, data)
 
@@ -278,7 +278,7 @@ class WorkflowRunSummaryResponse:
                 updated_at_type_0 = isoparse(data)
 
                 return updated_at_type_0
-            except (TypeError, ValueError, AttributeError, KeyError):
+            except TypeError, ValueError, AttributeError, KeyError:
                 pass
             return cast(datetime.datetime | None | Unset, data)
 

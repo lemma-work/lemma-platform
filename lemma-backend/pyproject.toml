@@ -3,7 +3,7 @@ name = "lemma-backend"
 version = "0.1.0"
 description = "Add your description here"
 readme = "README.md"
-requires-python = ">=3.14"
+requires-python = ">=3.14,<3.15"
 dependencies = [
     "pydantic>=2.11.9",
     "email-validator>=2.1.0",
@@ -84,6 +84,7 @@ markitdown = [
 
 [dependency-groups]
 dev = [
+    "agentbox",
     "basedpyright>=1.39.9",
     "diff-cover>=9.7.1",
     "kubernetes>=34.1.0",
@@ -134,6 +135,7 @@ lemma-pod-bundle = { path = "../lemma-pod-bundle", editable = true }
 [tool.basedpyright]
 pythonVersion = "3.14"
 typeCheckingMode = "standard"
+extraPaths = ["../agentbox-client"]
 exclude = [
     "app/**/tests/**",
     "app/modules/test_support/**",

@@ -50,6 +50,12 @@ folder.
 The release DMG and nested runtime helpers are Developer ID signed, notarized,
 and stapled. Normal setup does not ask for administrator access.
 
+Pull-request DMGs produced by CI are ad-hoc signed and are for maintainers
+only. They are paired with a short-lived Actions runtime bundle rather than
+durable GitHub Release assets. Follow
+[the Desktop branch-test procedure](../desktop/README.md#test-an-unreleased-branch-end-to-end);
+do not treat that developer path as an end-user installation channel.
+
 ## Install on Windows
 
 1. Open the [latest Lemma release](https://github.com/lemma-work/lemma-platform/releases/latest).

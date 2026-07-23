@@ -322,8 +322,11 @@ async def _set_function_run_terminal(
     error: str | None = None,
 ) -> None:
     async with create_uow_from_session_maker(async_session_maker) as uow:
-        await FunctionRunRepository(uow).update_run(
-            UUID(function_run_id),
+        repository = FunctionRunRepository(uow)
+        run = await repository.get_run(UUID(function_run_id))
+        assert run is not None
+        await repository.update_run_and_collect(
+            run,
             status=status,
             output_data=output_data,
             error=error,
@@ -376,7 +379,9 @@ async def _drive_agent_event(conversation_id: str, *, status: AgentRunStatus) ->
     """Drive the REAL workflow agent event handler. The handler only enqueues a
     resume when an active AGENT wait exists, so a late/stale event is a no-op."""
     async with create_uow_from_session_maker(async_session_maker) as uow:
-        agent_run = await ConversationRepository(uow).get_latest_agent_run_for_conversation(
+        agent_run = await ConversationRepository(
+            uow
+        ).get_latest_agent_run_for_conversation(
             UUID(conversation_id),
         )
         assert agent_run is not None

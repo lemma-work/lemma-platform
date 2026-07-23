@@ -74,7 +74,8 @@ def build_manifest(
         config,
         paths,
         provider=selected_provider,
-        runtime_image=release.image("agentbox_runtime").pull_ref,
+        workspace_image=release.image("agentbox_workspace").pull_ref,
+        function_image=release.image("agentbox_function").pull_ref,
     )
     browser_sdk = backend_dir / "assets/browser-sdk/lemma-client.js"
     browser_ui = backend_dir / "assets/browser-sdk/lemma-ui.js"

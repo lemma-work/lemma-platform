@@ -199,7 +199,7 @@ class UsageSummaryResponse:
                 agent_id_type_0 = UUID(data)
 
                 return agent_id_type_0
-            except (TypeError, ValueError, AttributeError, KeyError):
+            except TypeError, ValueError, AttributeError, KeyError:
                 pass
             return cast(None | Unset | UUID, data)
 
@@ -216,7 +216,7 @@ class UsageSummaryResponse:
                 organization_id_type_0 = UUID(data)
 
                 return organization_id_type_0
-            except (TypeError, ValueError, AttributeError, KeyError):
+            except TypeError, ValueError, AttributeError, KeyError:
                 pass
             return cast(None | Unset | UUID, data)
 
@@ -233,7 +233,7 @@ class UsageSummaryResponse:
                 pod_id_type_0 = UUID(data)
 
                 return pod_id_type_0
-            except (TypeError, ValueError, AttributeError, KeyError):
+            except TypeError, ValueError, AttributeError, KeyError:
                 pass
             return cast(None | Unset | UUID, data)
 
@@ -250,7 +250,7 @@ class UsageSummaryResponse:
                 user_id_type_0 = UUID(data)
 
                 return user_id_type_0
-            except (TypeError, ValueError, AttributeError, KeyError):
+            except TypeError, ValueError, AttributeError, KeyError:
                 pass
             return cast(None | Unset | UUID, data)
 

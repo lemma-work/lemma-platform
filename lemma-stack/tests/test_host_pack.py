@@ -19,7 +19,8 @@ def _release():
             "images": {
                 "backend": "backend:test",
                 "frontend": "frontend:test",
-                "agentbox_runtime": "runtime:test",
+                "agentbox_workspace": "workspace:test",
+                "agentbox_function": "function:test",
             },
         }
     )
@@ -65,14 +66,9 @@ def test_builds_exact_backend_frontend_native_contract(paths, tmp_path):
     assert backend["env"]["DATABASE_URL"].endswith(":55432/lemma")
     assert backend["env"]["AGENTBOX_STATE_DATABASE_URL"].endswith(":55432/agentbox")
     assert backend["env"]["WORKSPACE_CALLBACK_API_URL"] == ("http://host.lemma.internal:8711")
-    assert backend["env"]["AGENTBOX_REQUIRE_CALLBACK"] == "true"
-    assert backend["env"]["AGENTBOX_MEMORY_LIMIT"] == "2g"
-    assert backend["env"]["AGENTBOX_CPU_LIMIT"] == "2"
+    assert backend["env"]["AGENTBOX_WORKSPACE_IMAGE"] == "workspace:test"
+    assert backend["env"]["AGENTBOX_FUNCTION_IMAGE"] == "function:test"
     assert backend["env"]["AGENTBOX_LOCAL_RUNTIME_TIMEOUT_SECONDS"] == "600"
-    assert (
-        backend["env"]["AGENTBOX_DEFER_INITIAL_RECONCILIATION_UNTIL_SERVING"]
-        == "true"
-    )
     assert backend["env"]["BROWSER_SDK_PATH"].endswith("lemma-client.js")
     assert frontend["dependencies"] == ["backend"]
     assert frontend["env"]["HOSTNAME"] == "127.0.0.1"
@@ -99,7 +95,8 @@ def test_managed_runtime_contract_is_explicit(paths, tmp_path, monkeypatch):
             "images": {
                 "backend": "backend:test",
                 "frontend": "frontend:test",
-                "agentbox_runtime": "runtime@sha256:agentbox",
+                "agentbox_workspace": "workspace@sha256:agentbox",
+                "agentbox_function": "function@sha256:agentbox",
             },
             "infra": {
                 "postgres": "postgres@sha256:postgres",
@@ -128,6 +125,16 @@ def test_managed_runtime_contract_is_explicit(paths, tmp_path, monkeypatch):
     backend = manifest["services"][0]
     assert backend["env"]["AGENTBOX_PROVIDER"] == "lemma_local"
     assert backend["env"]["AGENTBOX_LOCAL_RUNTIME_CLI"] == "/signed/lemma-runtime"
+    assert backend["env"]["AGENTBOX_LOCAL_CALLBACK_REQUIRED"] == "true"
+    assert backend["env"]["AGENTBOX_LOCAL_CALLBACK_URL"] == (
+        "http://host.lemma.internal:8711"
+    )
+    assert backend["env"]["AGENTBOX_WORKSPACE_IMAGE"] == (
+        "workspace@sha256:agentbox"
+    )
+    assert backend["env"]["AGENTBOX_FUNCTION_IMAGE"] == (
+        "function@sha256:agentbox"
+    )
     assert backend["env"]["AGENTBOX_ADD_HOST_GATEWAY"] == "false"
     assert backend["env"]["DATABASE_URL"].startswith("postgresql+asyncpg://postgres:" + "a" * 64)
     assert backend["env"]["REDIS_URL"].startswith("redis://:" + "b" * 64)

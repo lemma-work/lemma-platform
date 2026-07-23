@@ -264,7 +264,7 @@ class WorkflowDetailResponse:
                 created_at_type_0 = isoparse(data)
 
                 return created_at_type_0
-            except (TypeError, ValueError, AttributeError, KeyError):
+            except TypeError, ValueError, AttributeError, KeyError:
                 pass
             return cast(datetime.datetime | None | Unset, data)
 
@@ -340,7 +340,7 @@ class WorkflowDetailResponse:
                         nodes_item_type_0 = FormNodeResponse.from_dict(data)
 
                         return nodes_item_type_0
-                    except (TypeError, ValueError, AttributeError, KeyError):
+                    except TypeError, ValueError, AttributeError, KeyError:
                         pass
                     try:
                         if not isinstance(data, dict):
@@ -348,7 +348,7 @@ class WorkflowDetailResponse:
                         nodes_item_type_1 = AgentNodeResponse.from_dict(data)
 
                         return nodes_item_type_1
-                    except (TypeError, ValueError, AttributeError, KeyError):
+                    except TypeError, ValueError, AttributeError, KeyError:
                         pass
                     try:
                         if not isinstance(data, dict):
@@ -356,7 +356,7 @@ class WorkflowDetailResponse:
                         nodes_item_type_2 = FunctionNodeResponse.from_dict(data)
 
                         return nodes_item_type_2
-                    except (TypeError, ValueError, AttributeError, KeyError):
+                    except TypeError, ValueError, AttributeError, KeyError:
                         pass
                     try:
                         if not isinstance(data, dict):
@@ -364,7 +364,7 @@ class WorkflowDetailResponse:
                         nodes_item_type_3 = DecisionNodeResponse.from_dict(data)
 
                         return nodes_item_type_3
-                    except (TypeError, ValueError, AttributeError, KeyError):
+                    except TypeError, ValueError, AttributeError, KeyError:
                         pass
                     try:
                         if not isinstance(data, dict):
@@ -372,7 +372,7 @@ class WorkflowDetailResponse:
                         nodes_item_type_4 = LoopNodeResponse.from_dict(data)
 
                         return nodes_item_type_4
-                    except (TypeError, ValueError, AttributeError, KeyError):
+                    except TypeError, ValueError, AttributeError, KeyError:
                         pass
                     try:
                         if not isinstance(data, dict):
@@ -380,7 +380,7 @@ class WorkflowDetailResponse:
                         nodes_item_type_5 = WaitUntilNodeResponse.from_dict(data)
 
                         return nodes_item_type_5
-                    except (TypeError, ValueError, AttributeError, KeyError):
+                    except TypeError, ValueError, AttributeError, KeyError:
                         pass
                     if not isinstance(data, dict):
                         raise TypeError()
@@ -412,7 +412,7 @@ class WorkflowDetailResponse:
                 start_type_0_type_0 = ManualWorkflowStartOutput.from_dict(data)
 
                 return start_type_0_type_0
-            except (TypeError, ValueError, AttributeError, KeyError):
+            except TypeError, ValueError, AttributeError, KeyError:
                 pass
             try:
                 if not isinstance(data, dict):
@@ -420,7 +420,7 @@ class WorkflowDetailResponse:
                 start_type_0_type_1 = ScheduledWorkflowStartOutput.from_dict(data)
 
                 return start_type_0_type_1
-            except (TypeError, ValueError, AttributeError, KeyError):
+            except TypeError, ValueError, AttributeError, KeyError:
                 pass
             try:
                 if not isinstance(data, dict):
@@ -428,7 +428,7 @@ class WorkflowDetailResponse:
                 start_type_0_type_2 = EventWorkflowStartOutput.from_dict(data)
 
                 return start_type_0_type_2
-            except (TypeError, ValueError, AttributeError, KeyError):
+            except TypeError, ValueError, AttributeError, KeyError:
                 pass
             try:
                 if not isinstance(data, dict):
@@ -436,7 +436,7 @@ class WorkflowDetailResponse:
                 start_type_0_type_3 = DataStoreWorkflowStartOutput.from_dict(data)
 
                 return start_type_0_type_3
-            except (TypeError, ValueError, AttributeError, KeyError):
+            except TypeError, ValueError, AttributeError, KeyError:
                 pass
             return cast(
                 DataStoreWorkflowStartOutput
@@ -461,7 +461,7 @@ class WorkflowDetailResponse:
                 updated_at_type_0 = isoparse(data)
 
                 return updated_at_type_0
-            except (TypeError, ValueError, AttributeError, KeyError):
+            except TypeError, ValueError, AttributeError, KeyError:
                 pass
             return cast(datetime.datetime | None | Unset, data)
 

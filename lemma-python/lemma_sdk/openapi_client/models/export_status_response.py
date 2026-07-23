@@ -154,7 +154,7 @@ class ExportStatusResponse:
                 expires_at_type_0 = isoparse(data)
 
                 return expires_at_type_0
-            except (TypeError, ValueError, AttributeError, KeyError):
+            except TypeError, ValueError, AttributeError, KeyError:
                 pass
             return cast(datetime.datetime | None | Unset, data)
 

@@ -9,6 +9,7 @@ from app.modules.test_support.e2e import fixtures as e2e_fixtures
 from app.modules.test_support.e2e.runtime import (
     backend_server,
     configure_workspace_api_url,
+    function_image,
     full_stack,
     local_agentbox_server,
     scheduler_api_server,
@@ -55,6 +56,7 @@ __all__ = [
     "fixed_test_user",
     "full_stack",
     "local_agentbox_server",
+    "function_image",
     "postgres_container",
     "redis_container",
     "sample_pod_entity",

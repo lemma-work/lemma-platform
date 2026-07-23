@@ -6,7 +6,7 @@ import asyncio
 import os
 import random
 import socket
-from collections.abc import AsyncIterator, Callable
+from collections.abc import AsyncIterator, Callable, Iterable
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
@@ -76,8 +76,21 @@ class OutboxDispatcher:
 
     async def dispatch_once(self) -> int:
         claimed = await self._claim_batch()
+        published: list[UUID] = []
+        failed: list[tuple[ClaimedEvent, Exception]] = []
         for event in claimed:
-            await self._publish(event)
+            error = await self._publish_to_bus(event)
+            if error is None:
+                published.append(event.id)
+            else:
+                failed.append((event, error))
+        # Preserve publish order within each Redis stream while acknowledging the
+        # common successful case in one PostgreSQL transaction. The old
+        # per-event acknowledgement transaction allowed a large record batch to
+        # monopolize the database for thousands of round trips.
+        await self._mark_published_many(published)
+        for event, error in failed:
+            await self._mark_failed(event, error)
         return len(claimed)
 
     async def run(self) -> None:
@@ -139,6 +152,15 @@ class OutboxDispatcher:
             ]
 
     async def _publish(self, event: ClaimedEvent) -> None:
+        """Publish and persist one outcome (used by focused replay/tests)."""
+
+        error = await self._publish_to_bus(event)
+        if error is None:
+            await self._mark_published(event.id)
+        else:
+            await self._mark_failed(event, error)
+
+    async def _publish_to_bus(self, event: ClaimedEvent) -> Exception | None:
         started = asyncio.get_running_loop().time()
         with (
             event_lineage(
@@ -163,29 +185,34 @@ class OutboxDispatcher:
             except asyncio.CancelledError:
                 raise
             except Exception as exc:  # publication boundary; persisted for retry
-                await self._mark_failed(event, exc)
                 failed_counter.add(1, {"event_type": event.event_type})
                 record_exception_on_current_span(exc)
                 self._publish_incident.record_failure(
                     error_type=type(exc).__name__
                 )
-                return
+                return exc
 
-            await self._mark_published(event.id)
             self._publish_incident.record_success()
             published_counter.add(1, {"event_type": event.event_type})
             publish_latency.record(
                 (asyncio.get_running_loop().time() - started) * 1000,
                 {"event_type": event.event_type},
             )
+            return None
 
     async def _mark_published(self, event_id: UUID) -> None:
+        await self._mark_published_many((event_id,))
+
+    async def _mark_published_many(self, event_ids: Iterable[UUID]) -> None:
+        selected = tuple(event_ids)
+        if not selected:
+            return
         now = datetime.now(timezone.utc)
         async with self._session_maker() as session, session.begin():
             await session.execute(
                 update(DomainEventOutbox)
                 .where(
-                    DomainEventOutbox.id == event_id,
+                    DomainEventOutbox.id.in_(selected),
                     DomainEventOutbox.lease_owner == self.owner,
                 )
                 .values(

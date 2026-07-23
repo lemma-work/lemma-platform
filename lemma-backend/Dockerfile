@@ -1,7 +1,5 @@
 # syntax=docker/dockerfile:1
 
-FROM docker:29.6.2-cli AS docker_cli
-
 # Stage 1: Build stage with uv
 FROM ghcr.io/astral-sh/uv:python3.14-bookworm-slim AS builder
 
@@ -47,10 +45,10 @@ FROM python:3.14-slim-bookworm
 # Set working directory
 WORKDIR /app
 
-# The embedded AgentBox manager drives Docker or Podman's Docker-compatible
-# API through the mounted socket. Ship one patched client; the daemon remains
-# host-owned.
-COPY --from=docker_cli /usr/local/bin/docker /usr/local/bin/docker
+# Function dependency resolution happens before a revision becomes READY. The
+# runtime image keeps the same pinned uv binary as the build stage; invocation
+# sandboxes never contain a package manager.
+COPY --from=builder /usr/local/bin/uv /usr/local/bin/uv
 
 # Create non-root user for security
 # -d /home/appuser: explicitly set home directory

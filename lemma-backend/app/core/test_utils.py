@@ -144,7 +144,11 @@ def _env_int(name: str, default: int) -> int:
 
 def _prune_e2e_containers() -> None:
     """Best-effort cleanup for stale E2E containers."""
-    if os.getenv("TESTCONTAINERS_PRUNE_ENABLED", "").lower() not in {"1", "true", "yes"}:
+    if os.getenv("TESTCONTAINERS_PRUNE_ENABLED", "").lower() not in {
+        "1",
+        "true",
+        "yes",
+    }:
         return
 
     container_ids = []
@@ -161,10 +165,14 @@ def _prune_e2e_containers() -> None:
     if not container_ids:
         return
 
-    subprocess.run(["docker", "rm", "-f", *container_ids], check=False, capture_output=True)
+    subprocess.run(
+        ["docker", "rm", "-f", *container_ids], check=False, capture_output=True
+    )
 
 
-def _wait_for_tcp(container: LemmaDockerContainer, port: int, timeout_seconds: int) -> None:
+def _wait_for_tcp(
+    container: LemmaDockerContainer, port: int, timeout_seconds: int
+) -> None:
     deadline = time.monotonic() + timeout_seconds
     host = container.get_container_host_ip()
     exposed_port = int(container.get_exposed_port(port))
@@ -268,6 +276,10 @@ def get_supertokens_container() -> Generator[LemmaDockerContainer, None, None]:
                 with urllib.request.urlopen(health_url, timeout=2) as response:
                     if response.status == 200:
                         break
+            except urllib.error.HTTPError as exc:
+                # ``HTTPError`` is also a file-like response. Close it even
+                # though ``urlopen`` raised before the context manager entered.
+                exc.close()
             except (
                 urllib.error.URLError,
                 ConnectionRefusedError,
@@ -332,6 +344,8 @@ def _wait_for_kreuzberg_ready(container: LemmaDockerContainer) -> None:
             with urllib.request.urlopen(health_url, timeout=5) as response:
                 if response.status == 200:
                     return
+        except urllib.error.HTTPError as exc:
+            exc.close()
         except (
             urllib.error.URLError,
             ConnectionRefusedError,

@@ -103,7 +103,7 @@ class FormNodeConfig:
                 assignee_pod_member_id_type_0 = UUID(data)
 
                 return assignee_pod_member_id_type_0
-            except (TypeError, ValueError, AttributeError, KeyError):
+            except TypeError, ValueError, AttributeError, KeyError:
                 pass
             return cast(None | Unset | UUID, data)
 
@@ -137,7 +137,7 @@ class FormNodeConfig:
                 ui_schema_type_0 = FormNodeConfigUiSchemaType0.from_dict(data)
 
                 return ui_schema_type_0
-            except (TypeError, ValueError, AttributeError, KeyError):
+            except TypeError, ValueError, AttributeError, KeyError:
                 pass
             return cast(FormNodeConfigUiSchemaType0 | None | Unset, data)
 

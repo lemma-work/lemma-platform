@@ -353,6 +353,11 @@ async def test_display_resource_returns_browser_access_url(
         lambda: "docker",
     )
     monkeypatch.setattr(
+        user_interaction_adapter.WorkspaceSandboxService,
+        "resolve_workspace_host_url_for_runtime",
+        lambda runtime, api_url: f"{runtime}:{api_url}",
+    )
+    monkeypatch.setattr(
         user_interaction_adapter.settings, "agentbox_api_url", "https://agentbox.test"
     )
     monkeypatch.setattr(
@@ -360,11 +365,6 @@ async def test_display_resource_returns_browser_access_url(
     )
     monkeypatch.setattr(
         user_interaction_adapter.settings, "api_url", "https://api.test"
-    )
-    monkeypatch.setattr(
-        user_interaction_adapter.settings,
-        "workspace_callback_api_url",
-        "http://host.lemma.internal:8711",
     )
 
     ctx = SimpleNamespace(deps=SimpleNamespace(user_id=user_id))
@@ -384,11 +384,11 @@ async def test_display_resource_returns_browser_access_url(
         (
             "ensure_sandbox",
             (
-                user_id.hex,
-                {"LEMMA_BASE_URL": "http://host.lemma.internal:8711"},
+                user_id,
+                {"LEMMA_BASE_URL": "docker:https://api.test"},
             ),
         ),
-        ("get_app_access_url", (user_id.hex, "browser", 1800)),
+        ("get_app_access_url", (user_id, "browser", 1800)),
         ("close", None),
     ]
 
@@ -1471,7 +1471,9 @@ def test_surface_history_window_drops_runs_older_than_window(monkeypatch):
     recent = _run_with_age(run_index=1, hours_ago=1)
     runner = AgentRunnerService(uow_factory=object(), harness_registry=object())
 
-    selected = runner._select_runtime_history(runs=[old, recent], conversation=_surface_conversation())
+    selected = runner._select_runtime_history(
+        runs=[old, recent], conversation=_surface_conversation()
+    )
     grouped = _messages_by_run(selected)
 
     # The 48h-old run is outside the 24h window; only the recent run remains.

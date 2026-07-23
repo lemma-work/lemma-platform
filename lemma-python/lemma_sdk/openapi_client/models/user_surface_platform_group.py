@@ -95,7 +95,7 @@ class UserSurfacePlatformGroup:
                 default_surface_id_type_0 = UUID(data)
 
                 return default_surface_id_type_0
-            except (TypeError, ValueError, AttributeError, KeyError):
+            except TypeError, ValueError, AttributeError, KeyError:
                 pass
             return cast(None | Unset | UUID, data)
 

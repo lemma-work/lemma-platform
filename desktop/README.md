@@ -131,11 +131,66 @@ Useful development overrides:
 - `LEMMA_DESKTOP_HOST_PACK_ROOT=/path/to/local-runtime`
 - `LEMMA_DESKTOP_MANAGED_RUNTIME_ROOT=/path/to/managed-runtime`
 - `LEMMA_DESKTOP_RELEASE_MANIFEST=/path/to/lemma-local.json`
+- `LEMMA_DESKTOP_ALLOW_LOCAL_ARTIFACTS=1` — permits `file://` ZIPs only when
+  `LEMMA_DESKTOP_RELEASE_MANIFEST` points to that exact developer manifest
 - `LEMMA_DESKTOP_LOCALD_BIN=/path/to/lemma-locald`
 - `LEMMA_DESKTOP_HOSTED_URL=...` and `LEMMA_DESKTOP_LOCAL_URL=...`
 
 The manifest and runtime-root overrides are explicit development/enterprise
 controls; no backend hostname mutation is tied to them.
+
+### Test an unreleased branch end to end
+
+The normal CI workflow uploads an ad-hoc-signed macOS online DMG named
+`lemma-desktop-macos-<commit>`. The Release Local Stack Images workflow can
+also be manually dispatched on the same branch with `publish=false`. In that
+mode it:
+
+- pushes workspace/function and application images under
+  `test-<12-character-commit>` rather than changing release or `latest` tags;
+- builds both native host packs and managed guest runtimes;
+- uploads `lemma-local-test-<commit>` for 14 days;
+- does not create or modify a GitHub Release.
+
+For the current `0.6.2` desktop:
+
+```sh
+branch=codex/local-desktop-redesign
+sha="$(git rev-parse HEAD)"
+
+gh workflow run release-local-images.yml \
+  --ref "${branch}" \
+  -f version=0.6.2 \
+  -f publish=false
+
+# After the two workflows are green, substitute their run IDs.
+gh run download <runtime-run-id> \
+  -n "lemma-local-test-${sha}" \
+  -D /tmp/lemma-pr/runtime
+gh run download <ci-run-id> \
+  -n "lemma-desktop-macos-${sha}" \
+  -D /tmp/lemma-pr/desktop
+
+python scripts/prepare_desktop_test_runtime.py \
+  --artifacts-dir /tmp/lemma-pr/runtime
+```
+
+Open the downloaded DMG, copy Lemma to Applications, quit any older Lemma
+process, and launch its executable with the localized manifest:
+
+```sh
+LEMMA_DESKTOP_CONNECTION_MODE=local \
+LEMMA_DESKTOP_RELEASE_MANIFEST=/tmp/lemma-pr/runtime/lemma-local.local.json \
+LEMMA_DESKTOP_ALLOW_LOCAL_ARTIFACTS=1 \
+/Applications/Lemma.app/Contents/MacOS/lemma-desktop
+```
+
+The file override does not weaken normal packages: it requires both explicit
+environment variables, accepts only absolute hostless `file://` URLs, and
+still enforces the workflow-recorded size, SHA-256, ZIP layout, extracted-size,
+and release-version checks. For a source-built runtime, the direct
+`LEMMA_DESKTOP_HOST_PACK_ROOT` and `LEMMA_DESKTOP_MANAGED_RUNTIME_ROOT`
+overrides remain faster.
 
 Build a small online package with `tauri.online.conf.json`, or a complete
 offline package after staging `runtime/local-runtime` and

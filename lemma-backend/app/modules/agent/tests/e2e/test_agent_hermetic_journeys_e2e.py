@@ -6,7 +6,6 @@ import asyncio
 import json
 from uuid import uuid4
 
-import httpx
 import pytest
 from fastapi import status
 
@@ -1123,13 +1122,6 @@ async def {function_name}(
     assert created_function.status_code == status.HTTP_201_CREATED, (
         created_function.text
     )
-    async with httpx.AsyncClient(base_url=e2e_settings.agentbox_api_url) as client:
-        configured = await client.post(
-            "/__test__/function-executor/configure",
-            json={"modes": ["success"], "log_message": "dynamic function completed"},
-        )
-    assert configured.status_code == status.HTTP_200_OK, configured.text
-
     child_name = f"child_{uuid4().hex[:8]}"
     child = await authenticated_client.post(
         f"/pods/{pod_id}/agents",

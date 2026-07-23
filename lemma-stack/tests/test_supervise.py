@@ -99,7 +99,8 @@ def test_real_infra_only_start_uses_pin_and_never_runs_app_images_or_migrations(
             "images": {
                 "backend": "backend:test",
                 "frontend": "frontend:test",
-                "agentbox_runtime": "runtime:test",
+                "agentbox_workspace": "workspace:test",
+                "agentbox_function": "function:test",
             },
         }
     )

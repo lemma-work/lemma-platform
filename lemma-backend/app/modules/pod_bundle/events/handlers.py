@@ -534,6 +534,9 @@ async def apply_pod_import(context: dict[str, str | None]) -> None:
         return
 
     from app.modules.pod_bundle.infrastructure.app_builder import AppStepRunner
+    from app.modules.pod_bundle.infrastructure.function_builder import (
+        FunctionStepRunner,
+    )
     from app.modules.pod_bundle.infrastructure.applier import (
         BundleApplier,
         StepNotApplicableError,
@@ -559,6 +562,7 @@ async def apply_pod_import(context: dict[str, str | None]) -> None:
         # APP steps build in the agentbox and must not hold a pooled DB connection,
         # so they run through a self-scoped runner instead of the per-step uow_scope.
         app_runner = AppStepRunner(uow_factory=worker_ctx.uow_factory)
+        function_runner = None
 
         with tempfile.TemporaryDirectory(prefix="lemma-pod-apply-") as tmp:
             from lemma_pod_bundle import extract_bundle
@@ -578,12 +582,20 @@ async def apply_pod_import(context: dict[str, str | None]) -> None:
                 state.current_step = step.index
                 await store.save_import(state)
                 try:
-                    if step.kind is StepKind.APP:
+                    if step.kind in {StepKind.APP, StepKind.FUNCTION}:
                         # Self-scoped: creates the app, builds it in the agentbox
                         # (no connection held), then deploys — managing its own short
                         # UoWs. Idempotent-by-name + dist sha256 dedup, so a replay
                         # after a crash converges.
-                        await app_runner.run(
+                        if step.kind is StepKind.APP:
+                            runner = app_runner
+                        else:
+                            if function_runner is None:
+                                function_runner = FunctionStepRunner(
+                                    uow_factory=worker_ctx.uow_factory
+                                )
+                            runner = function_runner
+                        await runner.run(
                             step,
                             pod_id=pod_id,
                             user_id=user_id,

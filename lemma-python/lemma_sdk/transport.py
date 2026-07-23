@@ -34,7 +34,7 @@ def _client_header() -> str:
             ver = version("lemma-sdk")
         except PackageNotFoundError:
             ver = "unknown"
-    except Exception:  # pragma: no cover - importlib always present on 3.11+
+    except Exception:  # pragma: no cover - importlib always present on Python 3.14
         ver = "unknown"
     return f"lemma-sdk-py/{ver}"
 
@@ -86,7 +86,9 @@ class LemmaTransport:
             except httpx.TimeoutException as exc:
                 raise LemmaTimeoutError(str(exc) or "Request timed out") from exc
             except httpx.TransportError as exc:
-                raise LemmaConnectionError(str(exc) or "Network request failed") from exc
+                raise LemmaConnectionError(
+                    str(exc) or "Network request failed"
+                ) from exc
 
             status_code = int(response.status_code)
             headers = getattr(response, "headers", {}) or {}
@@ -171,7 +173,9 @@ class LemmaTransport:
             except httpx.TimeoutException as exc:
                 raise LemmaTimeoutError(str(exc) or "Request timed out") from exc
             except httpx.TransportError as exc:
-                raise LemmaConnectionError(str(exc) or "Network request failed") from exc
+                raise LemmaConnectionError(
+                    str(exc) or "Network request failed"
+                ) from exc
 
             status_code = response.status_code
             if status_code in _RETRYABLE_STATUS and attempt < self._max_retries:
@@ -194,11 +198,11 @@ def _retry_after_seconds(value: Any) -> float | None:
         return None
     try:
         return max(0.0, float(value))
-    except (TypeError, ValueError):
+    except TypeError, ValueError:
         pass
     try:
         parsed = email.utils.parsedate_to_datetime(str(value))
-    except (TypeError, ValueError):
+    except TypeError, ValueError:
         return None
     if parsed is None:
         return None
@@ -230,7 +234,11 @@ def _to_plain(value: Any) -> Any:
 def _parse_content(content: bytes | bytearray | str | None) -> Any | None:
     if content is None:
         return None
-    raw = content.decode("utf-8", errors="replace") if isinstance(content, (bytes, bytearray)) else str(content)
+    raw = (
+        content.decode("utf-8", errors="replace")
+        if isinstance(content, (bytes, bytearray))
+        else str(content)
+    )
     raw = raw.strip()
     if not raw:
         return None

@@ -1,27 +1,26 @@
 [project]
 name = "agentbox"
 version = "0.1.0"
-description = "AgentBox sandbox manager and Python client"
-requires-python = ">=3.12"
+description = "Provider-neutral sandbox fabric for Lemma workspaces and functions"
+requires-python = ">=3.14,<3.15"
 dependencies = [
-    "cryptography>=49.0.0,<50.0.0",
+    "aiosqlite>=0.21.0,<0.22.0",
+    "alembic>=1.16.0,<2.0.0",
     "fastapi[standard]>=0.128.0",
     "httpx>=0.28.1",
-    "kubernetes>=34.1.0",
     "opentelemetry-exporter-otlp>=1.42.0",
     "opentelemetry-instrumentation-fastapi>=0.63b0",
     "opentelemetry-instrumentation-httpx>=0.63b0",
     "pydantic>=2.11.0",
     "pydantic-settings>=2.14.2",
+    "sqlalchemy[asyncio]>=2.0.41,<2.1.0",
     "uvicorn[standard]>=0.42.0",
 ]
 
 [project.optional-dependencies]
-daytona = [
-    "daytona>=0.196.0,<0.198.0",
-]
 e2b = [
-    "e2b==2.32.1",
+    "e2b==2.34.0",
+    "e2b-code-interpreter==2.8.1",
 ]
 postgres = [
     "psycopg[binary]>=3.2.0",
@@ -31,10 +30,19 @@ postgres = [
 [dependency-groups]
 dev = [
     "agentbox-client",
+    "lemma-sdk",
     "pytest>=8.4.0",
     "pytest-asyncio>=1.2.0",
     "ruff>=0.15.0,<0.16.0",
 ]
 
+[build-system]
+requires = ["setuptools>=83.0.0"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+include = ["agentbox*"]
+
 [tool.uv.sources]
 agentbox-client = { path = "../agentbox-client", editable = true }
+lemma-sdk = { path = "../lemma-python", editable = true }

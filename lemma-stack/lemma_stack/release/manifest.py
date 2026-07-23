@@ -27,7 +27,12 @@ from lemma_stack.paths import LocalPaths
 SCHEMA_VERSION = 1
 DEFAULT_REPO = "lemma-work/lemma-platform"
 MANIFEST_ASSET = "lemma-local.json"
-APP_IMAGE_KEYS = ("backend", "frontend", "agentbox_runtime")
+APP_IMAGE_KEYS = (
+    "backend",
+    "frontend",
+    "agentbox_workspace",
+    "agentbox_function",
+)
 
 # Fresh installs get pg16; the dev stack stays on pg15 for volume compat.
 DEFAULT_INFRA_IMAGES = {
@@ -243,7 +248,7 @@ def pin(paths: LocalPaths, manifest: ReleaseManifest) -> None:
             (paths.releases_dir / f"lemma-{prev_version}.json").write_text(
                 json.dumps(previous, indent=2), encoding="utf-8"
             )
-        except (OSError, json.JSONDecodeError):
+        except OSError, json.JSONDecodeError:
             pass
     paths.release_file.write_text(json.dumps(manifest.raw, indent=2), encoding="utf-8")
 

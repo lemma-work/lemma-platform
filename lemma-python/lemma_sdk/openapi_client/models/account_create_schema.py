@@ -138,7 +138,7 @@ class AccountCreateSchema:
                 allowed_scopes_type_0 = cast(list[str], data)
 
                 return allowed_scopes_type_0
-            except (TypeError, ValueError, AttributeError, KeyError):
+            except TypeError, ValueError, AttributeError, KeyError:
                 pass
             return cast(list[str] | None | Unset, data)
 
@@ -155,7 +155,7 @@ class AccountCreateSchema:
                 auth_config_id_type_0 = UUID(data)
 
                 return auth_config_id_type_0
-            except (TypeError, ValueError, AttributeError, KeyError):
+            except TypeError, ValueError, AttributeError, KeyError:
                 pass
             return cast(None | Unset | UUID, data)
 
@@ -199,7 +199,7 @@ class AccountCreateSchema:
                 preferences_type_0 = AccountCreateSchemaPreferencesType0.from_dict(data)
 
                 return preferences_type_0
-            except (TypeError, ValueError, AttributeError, KeyError):
+            except TypeError, ValueError, AttributeError, KeyError:
                 pass
             return cast(AccountCreateSchemaPreferencesType0 | None | Unset, data)
 
