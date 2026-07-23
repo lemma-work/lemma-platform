@@ -72,9 +72,7 @@ class AgentBoxSandbox(ISandbox):
 
     async def get_sandbox(self, user_id: UUID) -> Optional[SandboxInfo]:
         sandbox_id = agentbox_sandbox_id(user_id)
-        sandbox = await self.client.inspect_sandbox(
-            WorkloadKind.WORKSPACE, sandbox_id
-        )
+        sandbox = await self.client.inspect_sandbox(WorkloadKind.WORKSPACE, sandbox_id)
         if sandbox is None:
             return None
         return self._to_container_info(str(sandbox_id), sandbox)
@@ -96,9 +94,6 @@ class AgentBoxSandbox(ISandbox):
     async def is_sandbox_running(self, user_id: UUID) -> bool:
         info = await self.get_sandbox(user_id)
         return info is not None and info.status == "RUNNING"
-
-    async def heartbeat(self, user_id: UUID) -> None:
-        del user_id
 
     async def close(self) -> None:
         await self.client.close()

@@ -81,10 +81,8 @@ class AgentBoxWorkspaceSession:
         initial_cwd: str = "/workspace",
         auto_close: bool = True,
         activity_callback=None,
-        heartbeat_interval_seconds: float = 0,
         owns_client: bool = True,
     ) -> None:
-        del heartbeat_interval_seconds
         self.client = client
         self.logical_id = UUID(str(sandbox_id))
         self.sandbox_id = str(self.logical_id)
