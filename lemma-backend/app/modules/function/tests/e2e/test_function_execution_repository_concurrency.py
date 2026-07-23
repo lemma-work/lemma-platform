@@ -167,3 +167,66 @@ async def test_claim_refreshes_request_loaded_before_a_competing_commit(
     assert attempt_count == 1
     assert request is not None
     assert request.next_fence == 2
+
+
+async def test_expired_dispatcher_lease_reclaims_same_fenced_attempt(
+    db_manager,
+    test_pod,
+    fixed_test_user,
+) -> None:
+    pod_id = UUID(test_pod["id"])
+    user_id = UUID(fixed_test_user["id"])
+    async with db_manager.session_factory() as setup_session:
+        run_id = await _seed_queued_run(
+            setup_session,
+            pod_id=pod_id,
+            user_id=user_id,
+        )
+
+    signer = FunctionAttemptCredentialSigner("restart-recovery-secret-32-bytes!!")
+    factory = SessionUnitOfWorkFactory(db_manager.session_factory)
+    claimed_at = datetime.now(timezone.utc)
+    async with factory() as first_uow:
+        first = await FunctionExecutionRepository(first_uow, signer).claim_run(
+            run_id,
+            worker_id="worker-before-restart",
+            total_units=8,
+            api_reserved_units=2,
+            lease_seconds=10,
+            now=claimed_at,
+        )
+    assert first is not None
+
+    async with factory() as restarted_uow:
+        reclaimed = await FunctionExecutionRepository(restarted_uow, signer).claim_run(
+            run_id,
+            worker_id="worker-after-restart",
+            total_units=8,
+            api_reserved_units=2,
+            lease_seconds=10,
+            now=claimed_at + timedelta(seconds=11),
+        )
+    assert reclaimed is not None
+    assert reclaimed.attempt_id == first.attempt_id
+    assert reclaimed.operation_id == first.operation_id
+    assert reclaimed.fence == first.fence
+    assert reclaimed.ticket == first.ticket
+    assert reclaimed.runtime_token == first.runtime_token
+
+    async with db_manager.session_factory() as verification_session:
+        attempts = (
+            await verification_session.scalars(
+                select(FunctionExecutionAttemptModel).where(
+                    FunctionExecutionAttemptModel.run_id == run_id
+                )
+            )
+        ).all()
+        request = await verification_session.scalar(
+            select(FunctionExecutionRequestModel).where(
+                FunctionExecutionRequestModel.run_id == run_id
+            )
+        )
+    assert len(attempts) == 1
+    assert request is not None
+    assert request.next_fence == 2
+    assert request.lease_owner == "worker-after-restart"

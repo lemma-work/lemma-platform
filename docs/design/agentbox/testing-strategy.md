@@ -41,6 +41,7 @@ As of 2026-07-23, the following has been executed from the implementation branch
 | Real Docker adapter suite | 5 passed | Workspace lifecycle/volume, shell, PTY, Python, files, browser/port access, private-network manager topology, function process, lost terminal response recovery, and duplicate-safe callback |
 | Real E2B adapter suite | 2 passed against fresh candidate builds | Immutable create, Node/pnpm/uv/LiteParse, shell/stdin, PTY/resize, native files, Code Interpreter state, headful browser, pause/auto-resume, function process/cancel, exact deletion |
 | Backend API/JOB benchmark | Passed on Docker and the prior E2B release | Ticket claim, immutable artifact verification, real runner/gateway/database execution, 1,000-row table reads/writes at concurrency five |
+| Backend durability/chaos contracts | PostgreSQL lease suite 2 passed; focused dispatcher/gateway suite 3 passed | One-attempt restart takeover, lost/duplicate callback recovery, stale-fence rejection, sandbox-death termination, unknown-outcome fencing, no replay, and no DB lease across external I/O |
 
 This is development evidence, not final release acceptance. The fresh E2B candidate
 builds still require the complete API/JOB benchmark before promotion. Remaining

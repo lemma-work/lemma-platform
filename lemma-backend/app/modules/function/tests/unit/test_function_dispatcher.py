@@ -7,8 +7,13 @@ from uuid import uuid4
 import httpx
 import pytest
 
-from agentbox_client import ProcessRef, ProcessState, SandboxHandle
-from agentbox_client.models import ProcessOutputSnapshot, ProfileRef, WorkloadKind
+from agentbox_client import AgentBoxApiError, ProcessRef, ProcessState, SandboxHandle
+from agentbox_client.models import (
+    AgentBoxErrorResponse,
+    ProcessOutputSnapshot,
+    ProfileRef,
+    WorkloadKind,
+)
 
 from app.modules.function.application.function_attempt_credentials import (
     FunctionAttemptCredentialSigner,
@@ -110,7 +115,9 @@ async def test_dispatcher_uses_exact_process_operation_and_no_db_during_io(
                 workload_kind=kind,
                 logical_id=logical_id,
                 desired_state="present",
-                profile=ProfileRef(name="function-python-v1", digest=f"sha256:{'2' * 64}"),
+                profile=ProfileRef(
+                    name="function-python-v1", digest=f"sha256:{'2' * 64}"
+                ),
                 allocation_state="active",
                 allocation_id=uuid4(),
                 allocation_epoch=1,
@@ -141,7 +148,9 @@ async def test_dispatcher_uses_exact_process_operation_and_no_db_during_io(
                 exit_code=None,
             )
 
-        async def send_process_input(self, kind, logical_id, operation_id, data, **_kwargs):
+        async def send_process_input(
+            self, kind, logical_id, operation_id, data, **_kwargs
+        ):
             nonlocal callback_completed
             assert tracker.active == 0
             assert (kind, logical_id, operation_id) == (
@@ -174,4 +183,162 @@ async def test_dispatcher_uses_exact_process_operation_and_no_db_during_io(
 
     assert result.status == FunctionRunStatus.COMPLETED
     assert start_operations == [claim.operation_id, claim.operation_id]
+    assert tracker.active == 0
+
+
+@pytest.mark.asyncio
+async def test_sandbox_death_is_unknown_terminated_and_never_replayed(
+    monkeypatch,
+) -> None:
+    tracker = _UowTracker()
+    deadline = datetime.now(timezone.utc) + timedelta(seconds=30)
+    claim = FunctionExecutionClaim(
+        run_id=uuid4(),
+        attempt_id=uuid4(),
+        operation_id=uuid4(),
+        fence=3,
+        pod_id=uuid4(),
+        function_id=uuid4(),
+        revision_id=uuid4(),
+        function_type=FunctionType.JOB,
+        deadline_at=deadline,
+        ticket="fat_" + "a" * 43,
+        runtime_token="far_" + "b" * 43,
+    )
+    pending = FunctionRunEntity(
+        id=claim.run_id,
+        function_id=claim.function_id,
+        revision_id=claim.revision_id,
+        user_id=uuid4(),
+        status=FunctionRunStatus.PENDING,
+        deadline_at=deadline,
+    )
+    failed = pending.model_copy(
+        update={
+            "status": FunctionRunStatus.FAILED,
+            "error": "Function execution outcome is unknown",
+        }
+    )
+    fail_calls: list[tuple[bool, str]] = []
+
+    class _ExecutionRepository:
+        def __init__(self, _uow, _signer):
+            pass
+
+        async def claim_run(self, *_args, **_kwargs):
+            return claim
+
+        async def mark_process_started(self, *_args, **_kwargs):
+            return None
+
+        async def fail_dispatch(self, _claim, *, error, unknown):
+            fail_calls.append((unknown, error))
+            return failed
+
+    class _RunRepository:
+        def __init__(self, _uow):
+            pass
+
+        async def get_run(self, _run_id):
+            return pending
+
+    monkeypatch.setattr(
+        "app.modules.function.application.function_dispatcher."
+        "FunctionExecutionRepository",
+        _ExecutionRepository,
+    )
+    monkeypatch.setattr(
+        "app.modules.function.application.function_dispatcher.FunctionRunRepository",
+        _RunRepository,
+    )
+    monkeypatch.setattr(
+        "app.modules.function.application.function_dispatcher.settings."
+        "function_runtime_gateway_url",
+        "https://gateway.lemma.test",
+    )
+
+    calls = {"start": 0, "ticket": 0, "inspect": 0, "terminate": 0}
+
+    class _Client:
+        async def ensure_sandbox(self, kind, logical_id, **_kwargs):
+            assert tracker.active == 0
+            return SandboxHandle(
+                workload_kind=kind,
+                logical_id=logical_id,
+                desired_state="present",
+                profile=ProfileRef(
+                    name="function-python-v1",
+                    digest=f"sha256:{'2' * 64}",
+                ),
+                allocation_state="active",
+                allocation_id=uuid4(),
+                allocation_epoch=1,
+                ready=True,
+                operation_id=None,
+                retry_after_ms=None,
+            )
+
+        async def start_process(self, *_args, **_kwargs):
+            assert tracker.active == 0
+            calls["start"] += 1
+            return ProcessRef(
+                operation_id=claim.operation_id,
+                allocation_id=uuid4(),
+                allocation_epoch=1,
+                state=ProcessState.RUNNING,
+                cwd="/tmp",
+                tty=False,
+                output_limit_bytes=8 * 1024 * 1024,
+                deadline_at=deadline,
+                started_at=datetime.now(timezone.utc),
+                completed_at=None,
+                exit_code=None,
+            )
+
+        async def send_process_input(self, *_args, **_kwargs):
+            assert tracker.active == 0
+            calls["ticket"] += 1
+
+        async def read_process_output(self, *_args, **_kwargs):
+            assert tracker.active == 0
+            calls["inspect"] += 1
+            request = httpx.Request("GET", "https://agentbox.test/processes/output")
+            response = httpx.Response(
+                410,
+                request=request,
+                json={
+                    "error": {
+                        "code": "ALLOCATION_CHANGED",
+                        "message": "sandbox allocation died",
+                        "retry": "do_not_retry",
+                        "retry_after_ms": None,
+                        "context": None,
+                    }
+                },
+            )
+            raise AgentBoxApiError(
+                response,
+                AgentBoxErrorResponse.model_validate(response.json()),
+            )
+
+        async def terminate_process(self, *_args, **_kwargs):
+            assert tracker.active == 0
+            calls["terminate"] += 1
+
+        async def close(self):
+            assert tracker.active == 0
+
+    dispatcher = FunctionDispatcher(
+        uow_factory=tracker.factory,
+        credential_signer=FunctionAttemptCredentialSigner("e" * 32),
+        agentbox_client_factory=_Client,
+        worker_id="replacement-worker",
+    )
+    result = await dispatcher.execute(claim.run_id)
+
+    assert result.status == FunctionRunStatus.FAILED
+    assert calls == {"start": 1, "ticket": 1, "inspect": 1, "terminate": 1}
+    assert len(fail_calls) == 1
+    assert fail_calls[0][0] is True
+    assert "not replayed" in fail_calls[0][1]
     assert tracker.active == 0

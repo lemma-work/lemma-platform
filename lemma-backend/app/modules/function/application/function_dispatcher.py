@@ -105,6 +105,8 @@ class FunctionDispatcher:
                 await self._best_effort_terminate(client, claim)
                 raise
             unknown = self._is_unknown_outcome(exc)
+            if unknown:
+                await self._best_effort_terminate(client, claim)
             message = self._execution_error(exc, unknown=unknown)
             async with self._uow_factory() as uow:
                 failed = await FunctionExecutionRepository(
@@ -132,9 +134,7 @@ class FunctionDispatcher:
         finally:
             await client.close()
         async with self._uow_factory() as uow:
-            run = await FunctionExecutionRepository(
-                uow, self._signer
-            ).fail_dispatch(
+            run = await FunctionExecutionRepository(uow, self._signer).fail_dispatch(
                 claim,
                 error="Function execution was cancelled",
                 unknown=False,
@@ -152,15 +152,11 @@ class FunctionDispatcher:
                 if run.status in _TERMINAL_RUN_STATES:
                     return run
                 deadline_at = run.deadline_at
-                claim = await FunctionExecutionRepository(
-                    uow, self._signer
-                ).claim_run(
+                claim = await FunctionExecutionRepository(uow, self._signer).claim_run(
                     run_id,
                     worker_id=self._worker_id,
                     total_units=settings.function_execution_units_per_pod,
-                    api_reserved_units=(
-                        settings.function_execution_api_reserved_units
-                    ),
+                    api_reserved_units=(settings.function_execution_api_reserved_units),
                     lease_seconds=settings.function_execution_claim_lease_seconds,
                 )
             if claim is not None:
@@ -177,9 +173,7 @@ class FunctionDispatcher:
 
     async def _active_claim(self, run_id: UUID) -> FunctionExecutionClaim | None:
         async with self._uow_factory() as uow:
-            return await FunctionExecutionRepository(
-                uow, self._signer
-            ).claim_run(
+            return await FunctionExecutionRepository(uow, self._signer).claim_run(
                 run_id,
                 worker_id=self._worker_id,
                 total_units=settings.function_execution_units_per_pod,
@@ -358,9 +352,7 @@ class FunctionDispatcher:
         return run
 
     @staticmethod
-    async def _wait_retry(
-        retry_after_ms: int | None, deadline_at: datetime
-    ) -> None:
+    async def _wait_retry(retry_after_ms: int | None, deadline_at: datetime) -> None:
         remaining = (deadline_at - FunctionDispatcher._now()).total_seconds()
         if remaining <= 0:
             return
@@ -397,9 +389,7 @@ class FunctionDispatcher:
     @staticmethod
     def _execution_error(exc: BaseException, *, unknown: bool) -> str:
         if unknown:
-            return (
-                "Function execution outcome is unknown; the attempt was not replayed"
-            )
+            return "Function execution outcome is unknown; the attempt was not replayed"
         if isinstance(exc, TimeoutError):
             return "Function execution deadline exceeded"
         if isinstance(exc, AgentBoxApiError):
