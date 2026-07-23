@@ -138,7 +138,11 @@ async def cancellable_worker(e2e_settings):
                 pytest.fail(
                     f"worker exited before startup (code={proc.returncode}).\n{_logs()}"
                 )
-            if "Worker starting..." in _logs():
+            logs = _logs()
+            if (
+                '"logger": "app.core.infrastructure.jobs.streaq_runtime"' in logs
+                and '"event": "service.started"' in logs
+            ):
                 startup_ok = True
                 break
             await asyncio.sleep(0.1)

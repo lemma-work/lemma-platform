@@ -142,7 +142,9 @@ controls; no backend hostname mutation is tied to them.
 ### Test an unreleased branch end to end
 
 The normal CI workflow uploads an ad-hoc-signed macOS online DMG named
-`lemma-desktop-macos-<commit>`. The Release Local Stack Images workflow can
+`lemma-desktop-macos-<github.sha>`. On a pull request, `github.sha` is the
+temporary PR merge commit rather than the branch head, so download the DMG by
+artifact pattern as shown below. The Release Local Stack Images workflow can
 also be manually dispatched on the same branch with `publish=false`. In that
 mode it:
 
@@ -168,7 +170,7 @@ gh run download <runtime-run-id> \
   -n "lemma-local-test-${sha}" \
   -D /tmp/lemma-pr/runtime
 gh run download <ci-run-id> \
-  -n "lemma-desktop-macos-${sha}" \
+  --pattern "lemma-desktop-macos-*" \
   -D /tmp/lemma-pr/desktop
 
 python scripts/prepare_desktop_test_runtime.py \

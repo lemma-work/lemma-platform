@@ -622,6 +622,7 @@ async def local_agentbox_server(
         "AGENTBOX_STATE_DB_PATH": str(state_path),
         "AGENTBOX_AUTO_CREATE_SCHEMA": "true",
         "AGENTBOX_ADD_HOST_GATEWAY": "true",
+        "AGENTBOX_HOST_ALIAS": "host.docker.internal",
         "AGENTBOX_WORKSPACE_IDLE_SECONDS": "300",
         "AGENTBOX_FUNCTION_IDLE_SECONDS": "300",
         "AGENTBOX_CLEANUP_INTERVAL_SECONDS": "30",
@@ -678,6 +679,7 @@ async def local_agentbox_server(
             agentbox_config.settings.agentbox_auto_create_schema
         ),
         "agentbox_add_host_gateway": agentbox_config.settings.agentbox_add_host_gateway,
+        "agentbox_host_alias": agentbox_config.settings.agentbox_host_alias,
         "agentbox_workspace_idle_seconds": (
             agentbox_config.settings.agentbox_workspace_idle_seconds
         ),
@@ -717,6 +719,7 @@ async def local_agentbox_server(
     agentbox_config.settings.agentbox_state_db_path = str(state_path)
     agentbox_config.settings.agentbox_auto_create_schema = True
     agentbox_config.settings.agentbox_add_host_gateway = True
+    agentbox_config.settings.agentbox_host_alias = "host.docker.internal"
     agentbox_config.settings.agentbox_workspace_idle_seconds = 300
     agentbox_config.settings.agentbox_function_idle_seconds = 300
     agentbox_config.settings.agentbox_cleanup_interval_seconds = 30
