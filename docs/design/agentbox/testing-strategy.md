@@ -18,7 +18,7 @@ The initial mandatory provider matrix is:
 
 | Provider | Workspace Python/shell/files | Workspace browser/apps | API functions | JOB functions | Release status |
 | --- | ---: | ---: | ---: | ---: | --- |
-| Docker | Required | Required | Required | Required | Blocking on protected CI |
+| Docker | Required | Required | Required | Required | Passed on current PR head |
 | E2B | Required | Required | Required | Required | Blocking on trusted merge/release CI |
 | Kubernetes | Designed, not initially required | Designed, not initially required | Designed, not initially required | Designed, not initially required | Deferred until dedicated cluster program |
 
@@ -42,11 +42,12 @@ As of 2026-07-23, the following has been executed from the implementation branch
 | Real E2B adapter suite | 2 passed against fresh candidate builds | Immutable create, Node/pnpm/uv/LiteParse, shell/stdin, PTY/resize, native files, Code Interpreter state, headful browser, pause/auto-resume, function process/cancel, exact deletion |
 | Backend API/JOB benchmark | Passed on Docker and the prior E2B release | Ticket claim, immutable artifact verification, real runner/gateway/database execution, 1,000-row table reads/writes at concurrency five |
 | Backend durability/chaos contracts | PostgreSQL lease suite 2 passed; focused dispatcher/gateway suite 3 passed | One-attempt restart takeover, lost/duplicate callback recovery, stale-fence rejection, sandbox-death termination, unknown-outcome fencing, no replay, and no DB lease across external I/O |
+| Current-head repository CI | Passed | Linux AgentBox/PostgreSQL and real Docker conformance, backend unit/migrations/quality, install experience, frontend/SDKs, macOS/Windows packaging, dependency/image scans, Gitleaks, CodeQL, and language analyzers |
 
 This is development evidence, not final release acceptance. The fresh E2B candidate
 builds still require the complete API/JOB benchmark before promotion. Remaining
-chaos/performance gates and protected-CI publication stay blocking. Kubernetes
-remains deferred.
+case-manifest, chaos, and performance gates stay blocking. Kubernetes remains
+deferred.
 
 ## 2. Testing principles
 
