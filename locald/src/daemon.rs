@@ -181,7 +181,7 @@ impl Daemon {
                 "protocol": PROTOCOL_VERSION,
                 "daemon_version": DAEMON_VERSION,
                 "pid": std::process::id(),
-                "compatibility_supervisor": true,
+                "compatibility_supervisor": self.managed_runtime.is_none(),
                 "mode": if self.managed_runtime.is_some() {
                     "managed-local"
                 } else if self.host_processes.is_some() {

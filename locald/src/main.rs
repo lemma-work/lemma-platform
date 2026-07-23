@@ -84,11 +84,7 @@ fn client_request(request: Value) -> io::Result<()> {
             .get("event")
             .and_then(Value::as_str)
             .unwrap_or_default();
-        let finished = match command {
-            "status" => kind == "status" || kind == "error",
-            "ping" => kind == "pong" || kind == "error",
-            _ => kind == "done" || kind == "error",
-        };
+        let finished = client_event_finishes(command, kind);
         if finished {
             return Ok(());
         }
@@ -97,4 +93,36 @@ fn client_request(request: Value) -> io::Result<()> {
         io::ErrorKind::UnexpectedEof,
         "daemon disconnected before completing the request",
     ))
+}
+
+fn client_event_finishes(command: &str, event: &str) -> bool {
+    if event == "error" {
+        return true;
+    }
+    match command {
+        "status" => event == "status",
+        "ping" => event == "pong",
+        "control.snapshot" => event == "control.snapshot",
+        "config.apply" => event == "config.applied",
+        _ => event == "done",
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn one_shot_client_commands_stop_at_their_terminal_event() {
+        assert!(client_event_finishes("status", "status"));
+        assert!(client_event_finishes("ping", "pong"));
+        assert!(client_event_finishes(
+            "control.snapshot",
+            "control.snapshot"
+        ));
+        assert!(client_event_finishes("config.apply", "config.applied"));
+        assert!(client_event_finishes("start", "done"));
+        assert!(client_event_finishes("anything", "error"));
+        assert!(!client_event_finishes("control.snapshot", "state"));
+    }
 }

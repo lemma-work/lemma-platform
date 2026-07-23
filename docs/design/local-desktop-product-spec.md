@@ -9,9 +9,10 @@ two-process host pack, PostgreSQL-backed embedded AgentBox, in-process document
 conversion, durable local daemon, managed VZ/WSL guest providers, narrow guest
 runtime API, production-parity local app routing, explicit sandbox callback
 configuration and reachability gates, privileged Control Center, OS-vault
-secrets, and signed online/offline packaging. Backup/update/uninstall policy,
-resource UX, local-auth replacement, and the full supported-client acceptance
-matrix remain release gates rather than implied completed work.
+secrets, shared managed lifecycle/configuration commands in `lemma-stack`, and
+signed online/offline packaging. Backup/update/uninstall policy, resource UX,
+local-auth replacement, and the full supported-client acceptance matrix remain
+release gates rather than implied completed work.
 
 ## 1. Executive summary
 

@@ -13,6 +13,7 @@ from rich.table import Table
 from lemma_stack import __version__, host_pack, orchestrate
 from lemma_stack.config import render, store
 from lemma_stack.context import AdminContext
+from lemma_stack.locald_client import LocaldClient, LocaldError
 from lemma_stack.output import (
     AdminError,
     confirm,
@@ -49,6 +50,80 @@ app.add_typer(self_app, name="self")
 
 def _load_context() -> AdminContext:
     return AdminContext.load()
+
+
+def _managed_locald() -> LocaldClient | None:
+    """Prefer the installed managed runtime unless an expert opts out."""
+
+    import os
+
+    if os.environ.get("LEMMA_STACK_FORCE_EXTERNAL_RUNTIME") == "1":
+        return None
+    return LocaldClient.discover()
+
+
+def _managed_request(client: LocaldClient, command: str, **payload):
+    try:
+        return client.request(command, **payload)
+    except LocaldError as error:
+        raise AdminError(str(error)) from error
+
+
+def _managed_operator(client: LocaldClient) -> dict:
+    return _managed_request(client, "control.snapshot").get("operator") or {}
+
+
+def _flatten_json(value, prefix: str = "") -> dict[str, object]:
+    flattened: dict[str, object] = {}
+    if isinstance(value, dict):
+        for key, child in value.items():
+            child_prefix = f"{prefix}.{key}" if prefix else str(key)
+            flattened.update(_flatten_json(child, child_prefix))
+    else:
+        flattened[prefix] = value
+    return flattened
+
+
+def _json_value(root: dict, key: str):
+    current = root
+    for part in key.split("."):
+        if not isinstance(current, dict) or part not in current:
+            raise AdminError(f"unknown managed configuration key: {key}")
+        current = current[part]
+    return current
+
+
+def _set_managed_value(config: dict, key: str, raw: str) -> None:
+    if key in {
+        "schema_version",
+        "install_id",
+        "revision",
+        "ai.models",
+        "ai.last_validated_at_unix_ms",
+    }:
+        raise AdminError(f"managed configuration key is read-only: {key}")
+    parts = key.split(".")
+    parent = config
+    for part in parts[:-1]:
+        child = parent.get(part)
+        if not isinstance(child, dict):
+            raise AdminError(f"unknown managed configuration key: {key}")
+        parent = child
+    leaf = parts[-1]
+    if leaf not in parent:
+        raise AdminError(f"unknown managed configuration key: {key}")
+    current = parent[leaf]
+    if isinstance(current, bool):
+        normalized = raw.strip().lower()
+        if normalized not in {"true", "false", "1", "0", "yes", "no"}:
+            raise AdminError(f"{key} expects true or false")
+        parent[leaf] = normalized in {"true", "1", "yes"}
+    elif isinstance(current, list):
+        parent[leaf] = [item.strip() for item in raw.split(",") if item.strip()]
+    elif isinstance(current, str):
+        parent[leaf] = raw
+    else:
+        raise AdminError(f"managed configuration key is not editable: {key}")
 
 
 def _port_in_use(port: int) -> bool:
@@ -208,6 +283,11 @@ def install(
 @app.command()
 def start() -> None:
     """Start (or reconcile) the installed stack."""
+    if client := _managed_locald():
+        _managed_request(client, "start")
+        state = _managed_request(client, "status")
+        info(f"app: {state.get('url') or 'http://app.lemma.localhost:3711'}")
+        return
     ctx = _load_context()
     lifecycle.up(ctx.runtime, ctx.specs(), ctx.manifest, migrate=False)
     info(f"app: {render.frontend_origin(ctx.config)}")
@@ -218,6 +298,9 @@ def stop(
     infra: bool = typer.Option(False, "--infra", help="Also stop db/redis/supertokens."),
 ) -> None:
     """Stop the stack (app services; --infra stops everything)."""
+    if client := _managed_locald():
+        _managed_request(client, "stop", infra=infra)
+        return
     ctx = _load_context()
     specs = ctx.specs()
     if not infra:
@@ -228,6 +311,11 @@ def stop(
 @app.command()
 def restart() -> None:
     """Restart the stack, re-rendering config (apply config.toml changes)."""
+    if client := _managed_locald():
+        _managed_request(client, "restart")
+        state = _managed_request(client, "status")
+        info(f"app: {state.get('url') or 'http://app.lemma.localhost:3711'}")
+        return
     ctx = _load_context()
     specs = ctx.specs()
     lifecycle.down(ctx.runtime, specs)
@@ -236,7 +324,47 @@ def restart() -> None:
 
 @app.command()
 def status(json_output: bool = typer.Option(False, "--json")) -> None:
-    """Show the state of every stack container."""
+    """Show the state of every managed service or external-runtime container."""
+    if client := _managed_locald():
+        event = _managed_request(client, "status")
+        payload = {
+            "version": event.get("release"),
+            "provider": "managed-local",
+            "root": str(client.root),
+            "status": event.get("status"),
+            "ready": event.get("ready", False),
+            "services": event.get("components", []),
+            "managed_runtime": event.get("managed_runtime"),
+            "url": event.get("url"),
+            "api_url": event.get("api_url"),
+        }
+        if json_output:
+            print_json(payload)
+            return
+        state = "[green]ready[/green]" if payload["ready"] else "[yellow]not ready[/yellow]"
+        info(f"Lemma {payload['version'] or '-'} (managed-local) — {client.root} — {state}")
+        table = Table()
+        for column in ("service", "status", "pid", "restarts"):
+            table.add_column(column)
+        for service in payload["services"]:
+            running = bool(service.get("running"))
+            service_state = "[green]running[/green]" if running else "[red]stopped[/red]"
+            if service.get("circuit_open"):
+                service_state = "[red]failed[/red]"
+            table.add_row(
+                str(service.get("id", "-")),
+                service_state,
+                str(service.get("pid") or "-"),
+                str(service.get("restart_count", 0)),
+            )
+        console.print(table)
+        managed = payload.get("managed_runtime") or {}
+        if managed:
+            info(
+                "private runtime: "
+                f"{managed.get('engine', '-')} via {managed.get('endpoint_host', '-')}"
+            )
+        return
     ctx = _load_context()
     rows = lifecycle.status(ctx.runtime, ctx.specs())
     payload = {
@@ -310,12 +438,57 @@ def logs(
     follow: bool = typer.Option(False, "-f", "--follow"),
     lines: int = typer.Option(200, "--lines"),
 ) -> None:
-    """Tail logs of one stack service."""
+    """Tail logs of one managed host service or external-runtime container."""
+    if client := _managed_locald():
+        managed_logs = {
+            "locald": client.root / "locald.log",
+            "backend": client.root / "logs/backend.log",
+            "frontend": client.root / "logs/frontend.log",
+        }
+        if service not in managed_logs:
+            raise AdminError(
+                "managed logs supports locald, backend, or frontend; "
+                "private infrastructure diagnostics are available in Control Center"
+            )
+        _tail_file(managed_logs[service], lines=max(0, min(lines, 10_000)), follow=follow)
+        return
     ctx = _load_context()
     args = ["logs", "--tail", str(lines)]
     if follow:
         args.append("-f")
     raise typer.Exit(ctx.runtime.stream(*args, f"{CONTAINER_PREFIX}-{service}"))
+
+
+def _tail_file(path: Path, *, lines: int, follow: bool) -> None:
+    import time
+
+    if not path.is_file():
+        raise AdminError(f"log is not available yet: {path}")
+    with path.open("r", encoding="utf-8", errors="replace") as handle:
+        handle.seek(0, 2)
+        position = handle.tell()
+        block = 8192
+        chunks: list[str] = []
+        while position > 0 and sum(chunk.count("\n") for chunk in chunks) <= lines:
+            read_size = min(block, position)
+            position -= read_size
+            handle.seek(position)
+            chunks.append(handle.read(read_size))
+        recent = "".join(reversed(chunks)).splitlines()[-lines:] if lines else []
+        for line in recent:
+            console.print(line, markup=False)
+        if not follow:
+            return
+        handle.seek(0, 2)
+        try:
+            while True:
+                line = handle.readline()
+                if line:
+                    console.print(line.rstrip("\r\n"), markup=False)
+                else:
+                    time.sleep(0.2)
+        except KeyboardInterrupt:
+            return
 
 
 @app.command()
@@ -357,6 +530,46 @@ def doctor(json_output: bool = typer.Option(False, "--json")) -> None:
 
     def check(name: str, passed: bool, detail: str) -> None:
         checks.append({"name": name, "ok": passed, "detail": detail})
+
+    if client := _managed_locald():
+        snapshot = _managed_request(client, "control.snapshot")
+        services = snapshot.get("services") or []
+        runtime = snapshot.get("managed_runtime") or {}
+        readiness = (snapshot.get("operator") or {}).get("readiness") or {}
+        check("locald", True, str(client.root))
+        check(
+            "managed-runtime",
+            bool(runtime.get("engine")),
+            str(runtime.get("engine") or "not started"),
+        )
+        for service in services:
+            running = bool(service.get("running")) and not bool(service.get("circuit_open"))
+            detail = (
+                "running"
+                if running
+                else ("restart circuit open" if service.get("circuit_open") else "stopped")
+            )
+            check(f"service:{service.get('id', 'unknown')}", running, detail)
+        ai_ready = readiness.get("ai") == "ready"
+        check(
+            "ai-provider",
+            ai_ready,
+            "validated" if ai_ready else "needs setup in Lemma Control Center",
+        )
+        payload = {
+            "provider": "managed-local",
+            "checks": checks,
+            "ok": all(c["ok"] for c in checks),
+        }
+        if json_output:
+            print_json(payload)
+            return
+        for item in checks:
+            marker = "[green]ok[/green]" if item["ok"] else "[red]fail[/red]"
+            console.print(f"{marker} {item['name']}: {item['detail']}")
+        if not payload["ok"]:
+            raise typer.Exit(1)
+        return
 
     state = detect.detect()
     for cli, flags in state.items():
@@ -416,6 +629,19 @@ def config_list(
     show_secrets: bool = typer.Option(False, "--show-secrets"),
 ) -> None:
     """List all configuration values."""
+    if client := _managed_locald():
+        if show_secrets:
+            raise AdminError("managed secrets are write-only and cannot be displayed")
+        operator = _managed_operator(client)
+        flat = _flatten_json(operator.get("config") or {})
+        for name, present in (operator.get("secrets") or {}).items():
+            flat[name] = "<configured>" if present else "<not configured>"
+        if json_output:
+            print_json(flat)
+            return
+        for key, value in flat.items():
+            console.print(f"{key} = {value!r}")
+        return
     paths = LocalPaths()
     doc = store.load(paths)
     flat = store.flatten(doc)
@@ -430,6 +656,14 @@ def config_list(
 
 @config_app.command("get")
 def config_get(key: str) -> None:
+    if client := _managed_locald():
+        operator = _managed_operator(client)
+        secrets = operator.get("secrets") or {}
+        if key in secrets:
+            console.print("<configured>" if secrets[key] else "<not configured>")
+            return
+        console.print(_json_value(operator.get("config") or {}, key))
+        return
     doc = store.load(LocalPaths())
     console.print(store.get_value(doc, key))
 
@@ -439,6 +673,25 @@ def config_set(
     pairs: list[str] = typer.Argument(..., help="KEY=VALUE pairs (or: KEY VALUE for one key)."),
 ) -> None:
     """Set config values; bare UPPER_SNAKE keys go to [backend.env]."""
+    if client := _managed_locald():
+        operator = _managed_operator(client)
+        config = operator.get("config") or {}
+        known_secrets = operator.get("secrets") or {}
+        changes: dict[str, str | None] = {}
+        if len(pairs) == 2 and "=" not in pairs[0]:
+            pairs = [f"{pairs[0]}={pairs[1]}"]
+        for pair in pairs:
+            if "=" not in pair:
+                raise AdminError(f"expected KEY=VALUE, got {pair!r}")
+            key, _, value = pair.partition("=")
+            key = key.strip()
+            if key in known_secrets:
+                changes[key] = value
+            else:
+                _set_managed_value(config, key, value)
+            ok(f"set {key}")
+        _managed_request(client, "config.apply", payload={"config": config, "secrets": changes})
+        return
     paths = LocalPaths()
     doc = store.load(paths)
     if len(pairs) == 2 and "=" not in pairs[0]:
@@ -455,6 +708,35 @@ def config_set(
 
 @config_app.command("unset")
 def config_unset(key: str) -> None:
+    if client := _managed_locald():
+        operator = _managed_operator(client)
+        config = operator.get("config") or {}
+        known_secrets = operator.get("secrets") or {}
+        changes: dict[str, str | None] = {}
+        if key in known_secrets:
+            changes[key] = None
+        elif key == "ai.protocol":
+            config["ai"].update(
+                {
+                    "protocol": "unconfigured",
+                    "base_url": "",
+                    "default_model": "",
+                    "models": [],
+                    "vision_models": [],
+                    "last_validated_at_unix_ms": None,
+                }
+            )
+        else:
+            current = _json_value(config, key)
+            if isinstance(current, bool):
+                _set_managed_value(config, key, "false")
+            elif isinstance(current, (str, list)):
+                _set_managed_value(config, key, "")
+            else:
+                raise AdminError(f"managed configuration key is not editable: {key}")
+        _managed_request(client, "config.apply", payload={"config": config, "secrets": changes})
+        ok(f"unset {key}")
+        return
     paths = LocalPaths()
     doc = store.load(paths)
     store.unset_value(doc, key)
@@ -470,6 +752,11 @@ def config_edit() -> None:
 
     import tomlkit
 
+    if _managed_locald():
+        raise AdminError(
+            "managed configuration is transactional and secrets are stored in the OS vault; "
+            "use `lemma-stack config set` or Lemma Control Center"
+        )
     paths = LocalPaths()
     store.load(paths)  # ensure it exists
     editor = os.environ.get("EDITOR", "vi")
@@ -483,6 +770,10 @@ def config_edit() -> None:
 
 @config_app.command("path")
 def config_path() -> None:
+    if client := _managed_locald():
+        console.print(str(client.root / "operator-config.json"))
+        info("secret values are stored separately in the OS credential vault")
+        return
     console.print(str(LocalPaths().config_file))
 
 
@@ -546,11 +837,17 @@ def self_version() -> None:
 @self_app.command("info")
 def self_info(json_output: bool = typer.Option(False, "--json")) -> None:
     paths = LocalPaths()
+    managed = _managed_locald()
     payload = {
         "admin_version": __version__,
         "root": str(paths.root),
         "config": str(paths.config_file),
         "stack_version": None,
+        "managed_local": {
+            "installed": managed is not None,
+            "root": str(managed.root) if managed else None,
+            "binary": str(managed.binary) if managed else None,
+        },
         "runtimes": detect.detect(),
     }
     if paths.release_file.exists():
