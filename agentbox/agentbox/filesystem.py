@@ -16,7 +16,9 @@ from agentbox.ports import ProviderAllocationRef, ProviderFilesystemPort
 
 
 class FilesystemService:
-    def __init__(self, database: StateDatabase, provider: ProviderFilesystemPort) -> None:
+    def __init__(
+        self, database: StateDatabase, provider: ProviderFilesystemPort
+    ) -> None:
         self._database = database
         self._provider = provider
 

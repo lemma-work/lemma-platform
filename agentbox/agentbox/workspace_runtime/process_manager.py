@@ -15,8 +15,13 @@ import termios
 from uuid import UUID
 
 from agentbox.domain import ProcessState, StartProcessRequest
+from agentbox.observability import create_inherited_task
 
 from .models import OutputChannel, RuntimeProcessResponse
+
+
+_OUTPUT_DRAIN_GRACE_SECONDS = 0.25
+_PROCESS_EXIT_POLL_SECONDS = 0.01
 
 
 @dataclass(frozen=True, slots=True)
@@ -75,6 +80,10 @@ class OutputBuffer:
                 truncated_before_sequence=self._truncated_before_sequence,
             )
 
+    async def notify_waiters(self) -> None:
+        async with self._condition:
+            self._condition.notify_all()
+
     @property
     def next_sequence(self) -> int:
         return self._next_sequence
@@ -105,6 +114,7 @@ class ManagedProcess:
         self.exit_code: int | None = None
         self.state = ProcessState.RUNNING
         self._termination_requested = False
+        self._residual_process_group = False
         self._tasks: tuple[asyncio.Task[None], ...] = ()
         self._done = asyncio.Event()
 
@@ -138,21 +148,32 @@ class ManagedProcess:
         )
 
     async def terminate(self, grace_seconds: float) -> None:
-        if self.process.returncode is not None:
+        direct_process_running = self.process.returncode is None
+        if not direct_process_running and not self._residual_process_group:
             return
-        self._termination_requested = True
+        if direct_process_running:
+            self._termination_requested = True
         try:
             os.killpg(self.process.pid, signal.SIGTERM)
         except ProcessLookupError:
+            self._residual_process_group = False
             return
         try:
-            await asyncio.wait_for(self.process.wait(), timeout=grace_seconds)
+            if direct_process_running:
+                await asyncio.wait_for(
+                    self._wait_for_direct_exit(), timeout=grace_seconds
+                )
+            else:
+                await self._wait_for_process_group_exit(grace_seconds)
         except TimeoutError:
             try:
                 os.killpg(self.process.pid, signal.SIGKILL)
             except ProcessLookupError:
                 pass
-            await self.process.wait()
+            if direct_process_running:
+                await self._wait_for_direct_exit()
+        finally:
+            self._residual_process_group = False
 
     def response(self) -> RuntimeProcessResponse:
         return RuntimeProcessResponse(
@@ -166,8 +187,17 @@ class ManagedProcess:
         )
 
     async def watch(self) -> None:
-        exit_code = await self.process.wait()
-        await asyncio.gather(*self._tasks, return_exceptions=True)
+        exit_code = await self._wait_for_direct_exit()
+        _done, pending = await asyncio.wait(
+            self._tasks,
+            timeout=_OUTPUT_DRAIN_GRACE_SECONDS,
+        )
+        self._residual_process_group = bool(pending)
+        for task in pending:
+            task.cancel()
+        if pending:
+            self._close_output_transports()
+            await asyncio.gather(*pending, return_exceptions=True)
         self.exit_code = exit_code
         self.completed_at = datetime.now(timezone.utc)
         self.state = (
@@ -178,6 +208,39 @@ class ManagedProcess:
             else ProcessState.FAILED
         )
         self._done.set()
+        await self.output.notify_waiters()
+
+    async def _wait_for_direct_exit(self) -> int:
+        # asyncio.Process.wait() does not complete until inherited stdout/stderr
+        # pipes close. A daemonized descendant may intentionally keep those pipes
+        # open after the direct child exits, so terminal state must be fenced on
+        # returncode instead.
+        while self.process.returncode is None:
+            await asyncio.sleep(_PROCESS_EXIT_POLL_SECONDS)
+        return self.process.returncode
+
+    async def _wait_for_process_group_exit(self, grace_seconds: float) -> None:
+        deadline = asyncio.get_running_loop().time() + grace_seconds
+        while asyncio.get_running_loop().time() < deadline:
+            try:
+                os.killpg(self.process.pid, 0)
+            except ProcessLookupError:
+                return
+            await asyncio.sleep(_PROCESS_EXIT_POLL_SECONDS)
+        raise TimeoutError
+
+    def _close_output_transports(self) -> None:
+        # StreamReader intentionally exposes no public close method. Closing its
+        # asyncio transport after the direct process exits prevents a detached
+        # descendant from leaking a read descriptor in the long-lived runtime.
+        for stream in (self.process.stdout, self.process.stderr):
+            transport = getattr(stream, "_transport", None)
+            if transport is not None:
+                transport.close()
+
+    @property
+    def needs_quiesce(self) -> bool:
+        return self.state == ProcessState.RUNNING or self._residual_process_group
 
 
 class ProcessManager:
@@ -206,9 +269,7 @@ class ProcessManager:
 
     async def quiesce(self) -> int:
         processes = await self.list()
-        running = tuple(
-            item for item in processes if item.state == ProcessState.RUNNING
-        )
+        running = tuple(item for item in processes if item.needs_quiesce)
         await asyncio.gather(
             *(item.terminate(2) for item in running), return_exceptions=True
         )
@@ -263,7 +324,7 @@ class ProcessManager:
                         raise
 
             loop.add_reader(master_fd, read_pty)
-            pty_task = asyncio.create_task(
+            pty_task = create_inherited_task(
                 self._pump_pty(master_fd, queue, output),
                 name=f"workspace-pty-{request.operation_id}",
             )
@@ -284,11 +345,11 @@ class ProcessManager:
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE,
             )
-            stdout_task = asyncio.create_task(
+            stdout_task = create_inherited_task(
                 self._pump_stream(process.stdout, OutputChannel.STDOUT, output),
                 name=f"workspace-stdout-{request.operation_id}",
             )
-            stderr_task = asyncio.create_task(
+            stderr_task = create_inherited_task(
                 self._pump_stream(process.stderr, OutputChannel.STDERR, output),
                 name=f"workspace-stderr-{request.operation_id}",
             )
@@ -301,7 +362,7 @@ class ProcessManager:
                 started_at=datetime.now(timezone.utc),
             )
             managed.bind_tasks((stdout_task, stderr_task))
-        asyncio.create_task(
+        create_inherited_task(
             managed.watch(), name=f"workspace-process-{request.operation_id}"
         )
         return managed

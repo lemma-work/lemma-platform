@@ -178,9 +178,7 @@ class DockerSandboxAdapter:
             {}
             if self._config.private_network
             else {
-                f"{port}/tcp": (
-                    DockerPortBinding(host_ip="127.0.0.1", host_port=""),
-                )
+                f"{port}/tcp": (DockerPortBinding(host_ip="127.0.0.1", host_port=""),)
                 for port in artifact.published_ports
             }
         )

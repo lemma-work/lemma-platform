@@ -33,9 +33,7 @@ def start_body(
         "environment": [],
         "tty": tty,
         "output_limit_bytes": 65536,
-        "deadline_at": (
-            datetime.now(timezone.utc) + timedelta(seconds=30)
-        ).isoformat(),
+        "deadline_at": (datetime.now(timezone.utc) + timedelta(seconds=30)).isoformat(),
     }
 
 
@@ -54,9 +52,7 @@ async def wait_for_terminal(
     client: httpx.AsyncClient, operation_id: str
 ) -> dict[str, object]:
     for _ in range(100):
-        response = await client.get(
-            f"/processes/{operation_id}", headers=HEADERS
-        )
+        response = await client.get(f"/processes/{operation_id}", headers=HEADERS)
         payload = response.json()
         if payload["state"] != "running":
             return payload
@@ -103,7 +99,7 @@ async def test_pty_input_and_resize(tmp_path: Path):
     ) as client:
         body = start_body(
             tmp_path,
-            "read line; size=$(stty size); printf 'got:%s size:%s\\n' \"$line\" \"$size\"",
+            'read line; size=$(stty size); printf \'got:%s size:%s\\n\' "$line" "$size"',
             tty={"cols": 80, "rows": 24},
         )
         started = await client.post("/processes", headers=HEADERS, json=body)
@@ -149,9 +145,7 @@ async def test_terminate_kills_process_group_and_requires_auth(tmp_path: Path):
                 f"/processes/{operation_id}/output?after_seq=0&wait_seconds=0.1",
                 headers=HEADERS,
             )
-            combined = b"".join(
-                frame[2] for frame in decode_output(output.content)
-            )
+            combined = b"".join(frame[2] for frame in decode_output(output.content))
             if b"child:" in combined:
                 break
             await asyncio.sleep(0.01)
@@ -175,3 +169,50 @@ async def test_terminate_kills_process_group_and_requires_auth(tmp_path: Path):
         await asyncio.sleep(0.01)
     else:
         raise AssertionError("descendant process survived group termination")
+
+
+async def test_direct_exit_is_terminal_when_descendant_holds_output_pipe(
+    tmp_path: Path,
+):
+    app = create_app(token=TOKEN, allowed_roots=(str(tmp_path),))
+    transport = httpx.ASGITransport(app=app)
+    child_pid = None
+    async with httpx.AsyncClient(
+        transport=transport, base_url="http://runtime.test"
+    ) as client:
+        started = await client.post(
+            "/processes",
+            headers=HEADERS,
+            json=start_body(
+                tmp_path,
+                (
+                    'python -c "import os,time; pid=os.fork(); '
+                    "print(f'child:{pid}', flush=True) if pid else time.sleep(60)\""
+                ),
+            ),
+        )
+        operation_id = started.json()["operation_id"]
+        terminal = await wait_for_terminal(client, operation_id)
+        output = await client.get(
+            f"/processes/{operation_id}/output?after_seq=0", headers=HEADERS
+        )
+        combined = b"".join(frame[2] for frame in decode_output(output.content))
+        child_pid = int(combined.split(b"child:", 1)[1].splitlines()[0])
+        terminated = await client.request(
+            "DELETE",
+            f"/processes/{operation_id}",
+            headers=HEADERS,
+            json={"grace_seconds": 0.1},
+        )
+
+    assert terminal["state"] == "succeeded"
+    assert terminated.json()["state"] == "succeeded"
+    assert child_pid is not None
+    for _ in range(100):
+        try:
+            os.kill(child_pid, 0)
+        except ProcessLookupError:
+            break
+        await asyncio.sleep(0.01)
+    else:
+        raise AssertionError("detached descendant survived exact process termination")

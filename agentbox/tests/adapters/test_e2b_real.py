@@ -56,9 +56,7 @@ pytestmark = [
 
 def _workspace_profile() -> SandboxProfile:
     return SandboxProfile(
-        ref=SandboxProfileRef(
-            name="workspace-python-v1", digest=f"sha256:{'e' * 64}"
-        ),
+        ref=SandboxProfileRef(name="workspace-python-v1", digest=f"sha256:{'e' * 64}"),
         workload_kind=WorkloadKind.WORKSPACE,
         runtime_abi="lemma-workspace-python-1-node-24",
         capabilities=frozenset(
@@ -82,9 +80,7 @@ def _workspace_profile() -> SandboxProfile:
 
 def _function_profile() -> SandboxProfile:
     return SandboxProfile(
-        ref=SandboxProfileRef(
-            name="function-python-v1", digest=f"sha256:{'f' * 64}"
-        ),
+        ref=SandboxProfileRef(name="function-python-v1", digest=f"sha256:{'f' * 64}"),
         workload_kind=WorkloadKind.FUNCTION,
         runtime_abi="lemma-function-python-1",
         capabilities=frozenset({SandboxCapability.PROCESS}),
@@ -217,7 +213,7 @@ async def test_real_e2b_workspace_full_conformance(tmp_path: Path) -> None:
             StartProcessRequest(
                 operation_id=shell_id,
                 shell_command=(
-                    "read value; printf 'stdout:%s:%s\\n' \"$value\" \"$TOKEN\"; "
+                    'read value; printf \'stdout:%s:%s\\n\' "$value" "$TOKEN"; '
                     "printf 'stderr-ok\\n' >&2"
                 ),
                 argv=None,
@@ -228,9 +224,7 @@ async def test_real_e2b_workspace_full_conformance(tmp_path: Path) -> None:
                 deadline_at=deadline,
             ),
         )
-        await processes.send_input(
-            key, shell_id, b"hello\n", deadline_at=deadline
-        )
+        await processes.send_input(key, shell_id, b"hello\n", deadline_at=deadline)
         shell_result, shell_output = await _read_terminal(
             processes, key, shell_id, deadline_at=deadline
         )
@@ -245,7 +239,7 @@ async def test_real_e2b_workspace_full_conformance(tmp_path: Path) -> None:
                 operation_id=pty_id,
                 shell_command=(
                     "read value; size=$(stty size); "
-                    "printf 'pty:%s:%s\\n' \"$value\" \"$size\""
+                    'printf \'pty:%s:%s\\n\' "$value" "$size"'
                 ),
                 argv=None,
                 cwd="/workspace",
@@ -454,9 +448,9 @@ async def test_real_e2b_function_process_and_exact_destroy(tmp_path: Path) -> No
             StartProcessRequest(
                 operation_id=execution_id,
                 shell_command=(
-                    "read ticket; python -c \"import lemma_sdk, pydantic; "
+                    'read ticket; python -c "import lemma_sdk, pydantic; '
                     "print('runtime-imports-ok')\"; "
-                    "printf 'ticket:%s:%s\\n' \"$ticket\" \"$SECRET\""
+                    'printf \'ticket:%s:%s\\n\' "$ticket" "$SECRET"'
                 ),
                 argv=None,
                 cwd="/tmp",

@@ -393,9 +393,7 @@ async def write_file(
     logical_id: UUID,
     path: str = Query(min_length=1, max_length=4096, pattern=r"^/"),
     deadline_at: datetime = Query(),
-    expected_sha256: str | None = Query(
-        default=None, pattern=r"^sha256:[0-9a-f]{64}$"
-    ),
+    expected_sha256: str | None = Query(default=None, pattern=r"^sha256:[0-9a-f]{64}$"),
     data: bytes = Body(media_type="application/octet-stream"),
     service: FilesystemService = Depends(filesystem),
 ) -> FileStatResponse:
@@ -409,9 +407,7 @@ async def write_file(
     return FileStatResponse.from_domain(stat)
 
 
-@router.post(
-    "/sandboxes/{workload_kind}/{logical_id}/files:move", status_code=204
-)
+@router.post("/sandboxes/{workload_kind}/{logical_id}/files:move", status_code=204)
 async def move_file(
     workload_kind: WorkloadKind,
     logical_id: UUID,
@@ -427,9 +423,7 @@ async def move_file(
     return Response(status_code=204)
 
 
-@router.delete(
-    "/sandboxes/{workload_kind}/{logical_id}/files", status_code=204
-)
+@router.delete("/sandboxes/{workload_kind}/{logical_id}/files", status_code=204)
 async def delete_file(
     workload_kind: WorkloadKind,
     logical_id: UUID,

@@ -522,12 +522,10 @@ class SandboxLifecycleService:
     ) -> bool:
         self._check_deadline(deadline_at)
         async with self._database.uow() as uow:
-            claim, _logical, allocation, storage = (
-                await uow.repository.begin_destroy(
-                    key,
-                    claimed_until=deadline_at,
-                    claim=_claim,
-                )
+            claim, _logical, allocation, storage = await uow.repository.begin_destroy(
+                key,
+                claimed_until=deadline_at,
+                claim=_claim,
             )
             await uow.commit()
         try:

@@ -238,7 +238,9 @@ class CreatePythonSessionModel(StrictApiModel):
     def validate_environment_and_deadline(self) -> CreatePythonSessionModel:
         if self.deadline_at.tzinfo is None or self.deadline_at.utcoffset() is None:
             raise ValueError("deadline_at must include a timezone")
-        if any(not name or "=" in name or "\x00" in name for name in self.environment_keys):
+        if any(
+            not name or "=" in name or "\x00" in name for name in self.environment_keys
+        ):
             raise ValueError("environment variable name is invalid")
         if len(self.environment_keys) != len(set(self.environment_keys)):
             raise ValueError("environment variable names must be unique")

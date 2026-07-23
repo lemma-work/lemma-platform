@@ -231,9 +231,7 @@ async def test_unknown_execution_is_never_replayed(database: StateDatabase) -> N
 
     with pytest.raises(AgentBoxError) as raised:
         await service.execute(key, session_request.session_id, request)
-    existing, created = await service.execute(
-        key, session_request.session_id, request
-    )
+    existing, created = await service.execute(key, session_request.session_id, request)
 
     assert raised.value.code == ErrorCode.UNKNOWN_DISPATCH
     assert existing.state == PythonExecutionState.UNKNOWN

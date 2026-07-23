@@ -233,6 +233,14 @@ def function_template():
         )
         .copy("agentbox/agentbox/__init__.py", "/app/agentbox/__init__.py")
         .copy(
+            "agentbox/agentbox/event_catalog.py",
+            "/app/agentbox/event_catalog.py",
+        )
+        .copy(
+            "agentbox/agentbox/observability.py",
+            "/app/agentbox/observability.py",
+        )
+        .copy(
             "agentbox/agentbox/function_runtime",
             "/app/agentbox/function_runtime",
         )

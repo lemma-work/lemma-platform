@@ -384,11 +384,11 @@ async def test_display_resource_returns_browser_access_url(
         (
             "ensure_sandbox",
             (
-                user_id.hex,
+                user_id,
                 {"LEMMA_BASE_URL": "docker:https://api.test"},
             ),
         ),
-        ("get_app_access_url", (user_id.hex, "browser", 1800)),
+        ("get_app_access_url", (user_id, "browser", 1800)),
         ("close", None),
     ]
 
@@ -1471,7 +1471,9 @@ def test_surface_history_window_drops_runs_older_than_window(monkeypatch):
     recent = _run_with_age(run_index=1, hours_ago=1)
     runner = AgentRunnerService(uow_factory=object(), harness_registry=object())
 
-    selected = runner._select_runtime_history(runs=[old, recent], conversation=_surface_conversation())
+    selected = runner._select_runtime_history(
+        runs=[old, recent], conversation=_surface_conversation()
+    )
     grouped = _messages_by_run(selected)
 
     # The 48h-old run is outside the 24h window; only the recent run remains.

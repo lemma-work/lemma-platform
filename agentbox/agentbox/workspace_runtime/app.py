@@ -344,9 +344,7 @@ def create_app(
         data: bytes = Body(media_type="application/octet-stream"),
         _auth: None = Depends(authenticate),
     ) -> RuntimeFileStatResponse:
-        stat = await filesystem.write(
-            path, data, expected_sha256=expected_sha256
-        )
+        stat = await filesystem.write(path, data, expected_sha256=expected_sha256)
         return RuntimeFileStatResponse.from_domain(stat)
 
     @app.post("/files:move", status_code=204)

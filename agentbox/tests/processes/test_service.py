@@ -176,9 +176,7 @@ async def test_process_start_is_durable_deduplicated_and_outside_uow(
         key,
         replace(
             original,
-            environment=(
-                EnvironmentVariable("ATTEMPT_TICKET", "rotated-secret"),
-            ),
+            environment=(EnvironmentVariable("ATTEMPT_TICKET", "rotated-secret"),),
         ),
     )
 

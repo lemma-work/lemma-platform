@@ -253,9 +253,7 @@ class WorkspaceRuntimeClient:
             "POST",
             "/files:move",
             deadline_at=deadline_at,
-            json_body=RuntimeMoveFileRequest(
-                source=source, destination=destination
-            ),
+            json_body=RuntimeMoveFileRequest(source=source, destination=destination),
         )
 
     async def delete_file(
@@ -335,9 +333,7 @@ class WorkspaceRuntimeClient:
         )
 
     async def quiesce(self, *, deadline_at: datetime) -> RuntimeQuiesceResponse:
-        response = await self._request(
-            "POST", "/quiesce", deadline_at=deadline_at
-        )
+        response = await self._request("POST", "/quiesce", deadline_at=deadline_at)
         return RuntimeQuiesceResponse.model_validate(response.json())
 
     async def _request(

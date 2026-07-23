@@ -111,7 +111,7 @@ def test_docker_linux_lemma_cli_install():
     """
     result = run_in_container(
         "python:3.12-slim",
-        """
+        f"""
 set -e
 pip install --quiet uv
 cd /repo/lemma-cli

@@ -17,6 +17,7 @@ from agentbox.function_runtime.process_protocol import (
     ProcessStateRecord,
     SupervisorState,
 )
+from agentbox.observability import create_inherited_task
 
 
 _ROOT = Path("/tmp/.agentbox/processes")
@@ -71,9 +72,9 @@ class ProcessSupervisor:
         self._remove_manifest()
         await self._write_state(SupervisorState.RUNNING)
 
-        stdout_task = asyncio.create_task(self._drain(self._child.stdout, "stdout"))
-        stderr_task = asyncio.create_task(self._drain(self._child.stderr, "stderr"))
-        input_task = asyncio.create_task(self._forward_input())
+        stdout_task = create_inherited_task(self._drain(self._child.stdout, "stdout"))
+        stderr_task = create_inherited_task(self._drain(self._child.stderr, "stderr"))
+        input_task = create_inherited_task(self._forward_input())
         terminal_state = SupervisorState.FAILED
         try:
             terminal_state = await self._wait_for_terminal_request()

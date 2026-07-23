@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import asyncio
 from datetime import datetime, timedelta, timezone
-from pathlib import Path
 import posixpath
 import shlex
 import time
@@ -15,6 +14,7 @@ from agentbox_client import (
     AgentBoxApiError,
     AgentBoxClient,
     EnvironmentVariable,
+    FileStat,
     TerminalSize,
     WorkloadKind,
 )
@@ -24,6 +24,7 @@ from app.modules.workspace.contracts import PythonExecutionResult, ShellCommandR
 
 
 logger = get_logger(__name__)
+_RUNTIME_FILESYSTEM_ROOTS = ("/workspace", "/tmp")
 _TERMINAL_PROCESS_STATES = {
     ProcessState.SUCCEEDED,
     ProcessState.FAILED,
@@ -32,15 +33,22 @@ _TERMINAL_PROCESS_STATES = {
 }
 
 
-def _canonical_workspace_cwd(value: str) -> str:
+def _canonical_runtime_path(value: str, *, base: str = "/workspace") -> str:
     if not value:
-        raise ValueError("workspace cwd must not be empty")
-    if value.startswith("/"):
-        return posixpath.normpath(value)
-    normalized = posixpath.normpath(f"/workspace/{value}")
-    if normalized != "/workspace" and not normalized.startswith("/workspace/"):
-        raise ValueError("relative workspace cwd must remain under /workspace")
-    return normalized
+        raise ValueError("workspace path must not be empty")
+    normalized = posixpath.normpath(
+        value if value.startswith("/") else posixpath.join(base, value)
+    )
+    if any(
+        normalized == root or normalized.startswith(f"{root}/")
+        for root in _RUNTIME_FILESYSTEM_ROOTS
+    ):
+        return normalized
+    raise ValueError("workspace path must remain under /workspace or /tmp")
+
+
+def _canonical_workspace_cwd(value: str) -> str:
+    return _canonical_runtime_path(value)
 
 
 def _agentbox_command_failure(
@@ -276,6 +284,86 @@ class AgentBoxWorkspaceSession:
             for process in processes
         ]
 
+    async def stat_file(self, path: str, *, timeout: int = 30) -> FileStat:
+        await self._touch_activity()
+        return await self.client.stat_file(
+            self.logical_id,
+            await self._resolve_path(path),
+            deadline_at=self._deadline(timeout),
+        )
+
+    async def list_files(self, path: str, *, timeout: int = 30) -> tuple[FileStat, ...]:
+        await self._touch_activity()
+        return await self.client.list_files(
+            self.logical_id,
+            await self._resolve_path(path),
+            deadline_at=self._deadline(timeout),
+        )
+
+    async def read_file(
+        self,
+        path: str,
+        *,
+        offset: int = 0,
+        length: int | None = None,
+        timeout: int = 60,
+    ) -> bytes:
+        await self._touch_activity()
+        return await self.client.read_file(
+            self.logical_id,
+            await self._resolve_path(path),
+            offset=offset,
+            length=length,
+            deadline_at=self._deadline(timeout),
+        )
+
+    async def write_file(
+        self,
+        path: str,
+        data: bytes,
+        *,
+        expected_sha256: str | None = None,
+        timeout: int = 60,
+    ) -> FileStat:
+        await self._touch_activity()
+        return await self.client.write_file(
+            self.logical_id,
+            await self._resolve_path(path),
+            data,
+            expected_sha256=expected_sha256,
+            deadline_at=self._deadline(timeout),
+        )
+
+    async def move_file(
+        self,
+        source: str,
+        destination: str,
+        *,
+        timeout: int = 30,
+    ) -> None:
+        await self._touch_activity()
+        await self.client.move_file(
+            self.logical_id,
+            await self._resolve_path(source),
+            await self._resolve_path(destination),
+            deadline_at=self._deadline(timeout),
+        )
+
+    async def delete_file(
+        self,
+        path: str,
+        *,
+        recursive: bool = False,
+        timeout: int = 30,
+    ) -> None:
+        await self._touch_activity()
+        await self.client.delete_file(
+            self.logical_id,
+            await self._resolve_path(path),
+            recursive=recursive,
+            deadline_at=self._deadline(timeout),
+        )
+
     async def set_cwd(self, path: str) -> None:
         resolved = await self._resolve_path(path)
         await self.exec_command(cmd=f"mkdir -p {shlex.quote(resolved)}", timeout=30)
@@ -288,7 +376,7 @@ class AgentBoxWorkspaceSession:
         return self._cwd
 
     async def _resolve_path(self, path: str) -> str:
-        return path if path.startswith("/") else str(Path(self._cwd) / path)
+        return _canonical_runtime_path(path, base=self._cwd)
 
     async def wait_for_ready(self, timeout: int = 180) -> None:
         del timeout
@@ -391,7 +479,9 @@ class AgentBoxWorkspaceSession:
             "exit_code": exit_code,
             "completed": completed,
             "process_id": None if completed else str(operation_id),
-            "error": None if state in {ProcessState.RUNNING, ProcessState.SUCCEEDED} else state.value,
+            "error": None
+            if state in {ProcessState.RUNNING, ProcessState.SUCCEEDED}
+            else state.value,
         }
 
     @staticmethod

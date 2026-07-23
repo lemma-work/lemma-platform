@@ -73,6 +73,7 @@ from agentbox.ports import (
     ProviderReadyResult,
     ProviderStorageResult,
 )
+from agentbox.observability import create_inherited_task
 from agentbox.profiles import ProfileRegistry
 
 
@@ -142,9 +143,7 @@ class E2BAdapterConfig:
                 try:
                     ipaddress.ip_network(destination, strict=False)
                 except ValueError as exc:
-                    raise ValueError(
-                        "E2B function egress CIDR is invalid"
-                    ) from exc
+                    raise ValueError("E2B function egress CIDR is invalid") from exc
 
 
 @dataclass(slots=True)
@@ -676,6 +675,10 @@ class E2BSandboxAdapter:
     ) -> FileStat:
         sandbox = await self._connect(allocation, deadline_at=deadline_at)
         safe_path = self._safe_path(allocation.key.workload_kind, path)
+        await sandbox.files.make_dir(
+            posixpath.dirname(safe_path),
+            request_timeout=self._request_timeout(deadline_at),
+        )
         if expected_sha256 is not None:
             existing = await sandbox.files.read(
                 safe_path,
@@ -1031,8 +1034,8 @@ class E2BSandboxAdapter:
         deadline_at: datetime,
     ) -> None:
         buffer.handle = handle
-        buffer.watcher = asyncio.create_task(self._watch_process(buffer, handle))
-        buffer.deadline_task = asyncio.create_task(
+        buffer.watcher = create_inherited_task(self._watch_process(buffer, handle))
+        buffer.deadline_task = create_inherited_task(
             self._enforce_process_deadline(provider_id, process_id, buffer, deadline_at)
         )
         async with self._process_lock:

@@ -102,6 +102,31 @@ def function_profile() -> SandboxProfile:
     )
 
 
+async def _read_terminal(
+    processes: ProcessExecutionService,
+    key: SandboxKey,
+    operation_id,
+    *,
+    deadline_at: datetime,
+    wait_seconds: float = 10,
+):
+    chunks = []
+    after_sequence = 0
+    while datetime.now(timezone.utc) < deadline_at:
+        snapshot = await processes.read_output(
+            key,
+            operation_id,
+            after_sequence=after_sequence,
+            wait_seconds=wait_seconds,
+            deadline_at=deadline_at,
+        )
+        chunks.extend(snapshot.chunks)
+        after_sequence = snapshot.next_sequence - 1
+        if snapshot.state != ProcessState.RUNNING:
+            return snapshot, b"".join(chunk.data for chunk in chunks)
+    raise AssertionError(f"process {operation_id} did not reach a terminal state")
+
+
 async def test_real_docker_create_profile_replace_and_volume_persistence(
     tmp_path: Path,
 ):
@@ -229,8 +254,8 @@ async def test_real_docker_runtime_process_pty_input_resize_and_reconnect(
         DockerAdapterConfig(
             scope="docker:runtime-test",
             allow_mutable_images=True,
-            memory_bytes=1024 * 1024 * 1024,
-            nano_cpus=500_000_000,
+            memory_bytes=2 * 1024 * 1024 * 1024,
+            nano_cpus=1_000_000_000,
             pids_limit=512,
         ),
         runtime_credentials=RuntimeCredentialSigner(b"r" * 32),
@@ -248,7 +273,10 @@ async def test_real_docker_runtime_process_pty_input_resize_and_reconnect(
         public_base_url="http://agentbox.test",
     )
     key = SandboxKey(WorkloadKind.WORKSPACE, uuid4())
-    deadline = datetime.now(timezone.utc) + timedelta(seconds=60)
+    # A clean linux/amd64 image on an emulated arm64 development host can spend
+    # well over a minute starting Chromium. This deadline covers the complete
+    # multi-capability scenario; individual long polls remain bounded to 20s.
+    deadline = datetime.now(timezone.utc) + timedelta(seconds=180)
     provider_id: str | None = None
     volume_name: str | None = None
 
@@ -432,17 +460,13 @@ async def test_real_docker_runtime_process_pty_input_resize_and_reconnect(
                 deadline_at=deadline,
             ),
         )
-        browser_started = await processes.read_output(
+        browser_started, browser_start_output = await _read_terminal(
+            processes,
             key,
             browser_start_id,
-            after_sequence=0,
-            wait_seconds=20,
             deadline_at=deadline,
         )
-        assert browser_started.state in {
-            ProcessState.RUNNING,
-            ProcessState.SUCCEEDED,
-        }, b"".join(chunk.data for chunk in browser_started.chunks)
+        assert browser_started.state == ProcessState.SUCCEEDED, browser_start_output
 
         snapshot_id = uuid4()
         await processes.start(
@@ -458,26 +482,12 @@ async def test_real_docker_runtime_process_pty_input_resize_and_reconnect(
                 deadline_at=deadline,
             ),
         )
-        snapshot = await processes.read_output(
+        snapshot, snapshot_output = await _read_terminal(
+            processes,
             key,
             snapshot_id,
-            after_sequence=0,
-            wait_seconds=20,
             deadline_at=deadline,
         )
-        snapshot_output = b"".join(chunk.data for chunk in snapshot.chunks)
-        if snapshot.state == ProcessState.RUNNING:
-            snapshot_terminal = await processes.read_output(
-                key,
-                snapshot_id,
-                after_sequence=snapshot.next_sequence,
-                wait_seconds=20,
-                deadline_at=deadline,
-            )
-            snapshot_output += b"".join(
-                chunk.data for chunk in snapshot_terminal.chunks
-            )
-            snapshot = snapshot_terminal
         assert snapshot.state == ProcessState.SUCCEEDED, snapshot_output
         assert b"browser-ready" in snapshot_output
 

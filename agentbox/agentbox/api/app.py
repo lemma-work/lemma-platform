@@ -348,9 +348,7 @@ async def lifespan(app: FastAPI):
                 api_key=settings.agentbox_e2b_api_key,
                 scope=settings.agentbox_e2b_scope,
                 request_timeout_seconds=(settings.agentbox_e2b_request_timeout_seconds),
-                function_allow_out=(
-                    settings.agentbox_e2b_function_allow_out_hosts
-                ),
+                function_allow_out=(settings.agentbox_e2b_function_allow_out_hosts),
             ),
         )
     else:

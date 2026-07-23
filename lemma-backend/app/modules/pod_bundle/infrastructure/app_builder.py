@@ -27,7 +27,6 @@ workspace session and a fake app service.
 
 from __future__ import annotations
 
-import base64
 import contextlib
 import hashlib
 import io
@@ -51,8 +50,6 @@ _BUILD_TIMEOUT_SECONDS = int(
     os.getenv("LEMMA_POD_BUNDLE_APP_BUILD_TIMEOUT_SECONDS", "600")
 )
 _IO_TIMEOUT_SECONDS = 120
-# base64 payloads are written to the sandbox in chunks to stay well under ARG_MAX.
-_B64_CHUNK = 60_000
 # Source-tree entries never worth shipping/rebuilding from (mirrors the CLI's
 # _should_exclude_source_path so an export→import round-trips cleanly).
 _SOURCE_EXCLUDE_DIRS = frozenset(
@@ -120,11 +117,6 @@ def slug_candidates(preferred: str | None, *, pod_id: UUID, app_name: str) -> li
     candidates = [base, f"{base}-{digest}"]
     candidates.extend(f"{base}-{digest}{i}" for i in range(2, 8))
     return candidates
-
-
-def _chunks(text: str, size: int):
-    for start in range(0, len(text), size):
-        yield text[start : start + size]
 
 
 # --- agentbox build (no DB connection) ---------------------------------------
@@ -219,31 +211,10 @@ class AppSandboxBuilder:
             )
 
     async def _upload(self, session: Any, data: bytes, remote_path: str) -> None:
-        """Write bytes to a sandbox path via chunked base64 (no ARG_MAX blowups)."""
-        encoded = base64.b64encode(data).decode("ascii")
-        b64_path = f"{remote_path}.b64"
-        await self._sh(session, f": > {shlex.quote(b64_path)}")
-        for chunk in _chunks(encoded, _B64_CHUNK):
-            await self._sh(
-                session, f"printf %s {shlex.quote(chunk)} >> {shlex.quote(b64_path)}"
-            )
-        await self._sh(
-            session,
-            f"base64 -d {shlex.quote(b64_path)} > {shlex.quote(remote_path)} "
-            f"&& rm -f {shlex.quote(b64_path)}",
-        )
+        await session.write_file(remote_path, data, timeout=_IO_TIMEOUT_SECONDS)
 
     async def _download(self, session: Any, remote_path: str) -> bytes:
-        # `base64 <file> | tr -d '\n'` encodes portably (GNU + BSD).
-        result = await session.exec_command(
-            cmd=f"base64 {shlex.quote(remote_path)} | tr -d '\\n'",
-            timeout=_IO_TIMEOUT_SECONDS,
-        )
-        if not result.get("success"):
-            raise AppBuildFailedError(
-                "Could not read the built app dist.", details={"log": _tail(result)}
-            )
-        return base64.b64decode(result.get("stdout") or "")
+        return await session.read_file(remote_path, timeout=_IO_TIMEOUT_SECONDS)
 
 
 def _tail(result: dict[str, Any], limit: int = 4000) -> str:

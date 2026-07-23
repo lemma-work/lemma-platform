@@ -10,6 +10,7 @@ from fastapi.responses import JSONResponse, StreamingResponse
 import websockets
 
 from agentbox.domain import AgentBoxError
+from agentbox.observability import create_inherited_task
 from agentbox.port_access import PortAccessService
 
 from .deps import port_access
@@ -29,9 +30,7 @@ _HOP_BY_HOP = frozenset(
         "upgrade",
     }
 )
-_PRIVATE_REQUEST_HEADERS = frozenset(
-    {"host", "x-api-key", "content-length"}
-)
+_PRIVATE_REQUEST_HEADERS = frozenset({"host", "x-api-key", "content-length"})
 
 
 @access_router.api_route(
@@ -78,14 +77,21 @@ async def proxy_http_port(
         await client.aclose()
         return JSONResponse(
             status_code=502,
-            content={"error": {"code": "PROVIDER_UNAVAILABLE", "message": "sandbox port is unavailable", "retry": "wait", "retry_after_ms": 500, "context": None}},
+            content={
+                "error": {
+                    "code": "PROVIDER_UNAVAILABLE",
+                    "message": "sandbox port is unavailable",
+                    "retry": "wait",
+                    "retry_after_ms": 500,
+                    "context": None,
+                }
+            },
         )
 
     response_headers = {
         name: value
         for name, value in upstream.headers.multi_items()
-        if name.lower() not in _HOP_BY_HOP
-        and name.lower() != "content-length"
+        if name.lower() not in _HOP_BY_HOP and name.lower() != "content-length"
     }
     location = response_headers.get("location")
     if location and location.startswith(target.base_url):
@@ -126,12 +132,15 @@ async def proxy_websocket_port(
     http_url = _upstream_url(target.base_url, path, websocket.url.query)
     parts = urlsplit(http_url)
     upstream_url = urlunsplit(
-        ("wss" if parts.scheme == "https" else "ws", parts.netloc, parts.path, parts.query, "")
+        (
+            "wss" if parts.scheme == "https" else "ws",
+            parts.netloc,
+            parts.path,
+            parts.query,
+            "",
+        )
     )
-    headers = {
-        item.name: item.value
-        for item in target.headers
-    }
+    headers = {item.name: item.value for item in target.headers}
     subprotocols = [
         item.strip()
         for item in websocket.headers.get("sec-websocket-protocol", "").split(",")
@@ -168,8 +177,8 @@ async def proxy_websocket_port(
                         await websocket.send_text(message)
 
             tasks = {
-                asyncio.create_task(client_to_upstream()),
-                asyncio.create_task(upstream_to_client()),
+                create_inherited_task(client_to_upstream()),
+                create_inherited_task(upstream_to_client()),
             }
             _done, pending = await asyncio.wait(
                 tasks, return_when=asyncio.FIRST_COMPLETED

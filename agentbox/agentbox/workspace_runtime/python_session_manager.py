@@ -46,8 +46,7 @@ class PythonSessionManager:
             if existing is not None:
                 if (
                     existing.request.cwd != request.cwd
-                    or existing.response_environment_keys()
-                    != request.environment_keys
+                    or existing.response_environment_keys() != request.environment_keys
                 ):
                     raise ValueError("Python session configuration conflicts")
                 return existing, False
@@ -80,21 +79,26 @@ class PythonSessionManager:
                 raise RuntimeError("Python session worker exited")
             assert session.process.stdin is not None
             assert session.process.stdout is not None
-            payload = json.dumps(
-                {
-                    "operation_id": str(request.operation_id),
-                    "code": request.code,
-                    "environment": [
-                        {"name": item.name, "value": item.value}
-                        for item in request.environment
-                    ],
-                    "output_limit_bytes": request.output_limit_bytes,
-                },
-                separators=(",", ":"),
-            ).encode() + b"\n"
+            payload = (
+                json.dumps(
+                    {
+                        "operation_id": str(request.operation_id),
+                        "code": request.code,
+                        "environment": [
+                            {"name": item.name, "value": item.value}
+                            for item in request.environment
+                        ],
+                        "output_limit_bytes": request.output_limit_bytes,
+                    },
+                    separators=(",", ":"),
+                ).encode()
+                + b"\n"
+            )
             session.process.stdin.write(payload)
             await session.process.stdin.drain()
-            remaining = (request.deadline_at - datetime.now(timezone.utc)).total_seconds()
+            remaining = (
+                request.deadline_at - datetime.now(timezone.utc)
+            ).total_seconds()
             if remaining <= 0:
                 await self._terminate(session.process)
                 result = self._timeout_result(request.operation_id)

@@ -15,6 +15,8 @@ import zipfile
 
 import httpx
 
+from agentbox.observability import create_inherited_task
+
 from .runtime_models import (
     AttemptClaim,
     FunctionArtifactManifest,
@@ -218,8 +220,8 @@ async def _execute(claim: AttemptClaim, root: Path) -> TerminalReport:
     await process.stdin.drain()
     process.stdin.close()
     await process.stdin.wait_closed()
-    stdout_task = asyncio.create_task(_bounded(process.stdout))
-    stderr_task = asyncio.create_task(_bounded(process.stderr))
+    stdout_task = create_inherited_task(_bounded(process.stdout))
+    stderr_task = create_inherited_task(_bounded(process.stderr))
     try:
         remaining = claim.deadline_at.timestamp() - time.time()
         await asyncio.wait_for(process.wait(), timeout=max(0.01, remaining))

@@ -78,6 +78,40 @@ async def test_binary_file_crud_range_digest_and_listing(tmp_path: Path) -> None
     assert not (tmp_path / "moved.bin").exists()
 
 
+async def test_write_and_move_create_missing_destination_directories(
+    tmp_path: Path,
+) -> None:
+    app = create_app(token=TOKEN, allowed_roots=(str(tmp_path),))
+    transport = httpx.ASGITransport(app=app)
+    source = str(tmp_path / "nested" / "source.bin")
+    destination = str(tmp_path / "other" / "deep" / "destination.bin")
+
+    async with httpx.AsyncClient(
+        transport=transport, base_url="http://runtime.test"
+    ) as client:
+        written = await client.put(
+            "/files:content",
+            headers={**HEADERS, "Content-Type": "application/octet-stream"},
+            params={"path": source},
+            content=b"nested",
+        )
+        moved = await client.post(
+            "/files:move",
+            headers=HEADERS,
+            json={"source": source, "destination": destination},
+        )
+        content = await client.get(
+            "/files:content",
+            headers=HEADERS,
+            params={"path": destination},
+        )
+
+    assert written.status_code == 200
+    assert moved.status_code == 204
+    assert content.content == b"nested"
+    assert not (tmp_path / "nested" / "source.bin").exists()
+
+
 async def test_filesystem_rejects_relative_and_symlink_escape(tmp_path: Path) -> None:
     root = tmp_path / "root"
     outside = tmp_path / "outside"
@@ -86,6 +120,7 @@ async def test_filesystem_rejects_relative_and_symlink_escape(tmp_path: Path) ->
     secret = outside / "secret"
     secret.write_bytes(b"outside")
     (root / "escape").symlink_to(secret)
+    (root / "escape-parent").symlink_to(outside, target_is_directory=True)
     app = create_app(token=TOKEN, allowed_roots=(str(root),))
     transport = httpx.ASGITransport(app=app)
 
@@ -105,8 +140,16 @@ async def test_filesystem_rejects_relative_and_symlink_escape(tmp_path: Path) ->
             headers=HEADERS,
             params={"path": str(root / "escape")},
         )
+        write_through_symlink = await client.put(
+            "/files:content",
+            headers={**HEADERS, "Content-Type": "application/octet-stream"},
+            params={"path": str(root / "escape-parent" / "stolen")},
+            content=b"must-not-escape",
+        )
 
     assert relative.status_code == 422
     assert escaped.status_code == 422
     assert symlink_stat.status_code == 200
     assert symlink_stat.json()["kind"] == "symlink"
+    assert write_through_symlink.status_code == 422
+    assert not (outside / "stolen").exists()

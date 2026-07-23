@@ -170,7 +170,7 @@ class DockerEngineClient:
         api_version: str = "v1.44",
         socket_path: str | None = None,
         transport: httpx.AsyncBaseTransport | None = None,
-        request_timeout_seconds: float = 10.0,
+        request_timeout_seconds: float = 30.0,
     ) -> None:
         if transport is None:
             if socket_path is None:

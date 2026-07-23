@@ -46,9 +46,7 @@ class FilesystemManager:
     ) -> FileStat:
         if len(data) > self._max_write_bytes:
             raise ValueError("file write exceeds configured limit")
-        return await asyncio.to_thread(
-            self._write_sync, path, data, expected_sha256
-        )
+        return await asyncio.to_thread(self._write_sync, path, data, expected_sha256)
 
     async def move(self, source: str, destination: str) -> None:
         await asyncio.to_thread(self._move_sync, source, destination)
@@ -175,7 +173,15 @@ class FilesystemManager:
         candidate = Path(path)
         if not candidate.is_absolute():
             raise ValueError("filesystem path must be absolute")
-        parent = candidate.parent.resolve(strict=True)
+        parent = candidate.parent
+        ancestor = parent
+        while not ancestor.exists():
+            if ancestor == ancestor.parent:
+                raise ValueError("filesystem path has no allowed existing ancestor")
+            ancestor = ancestor.parent
+        self._require_allowed(ancestor.resolve(strict=True))
+        parent.mkdir(parents=True, exist_ok=True)
+        parent = parent.resolve(strict=True)
         self._require_allowed(parent)
         return parent / candidate.name
 

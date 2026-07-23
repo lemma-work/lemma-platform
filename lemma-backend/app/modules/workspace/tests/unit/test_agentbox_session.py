@@ -109,7 +109,9 @@ def _session(client: _CanonicalClient) -> AgentBoxWorkspaceSession:
 
 
 @pytest.mark.asyncio
-async def test_shell_process_uses_typed_environment_and_collects_both_channels() -> None:
+async def test_shell_process_uses_typed_environment_and_collects_both_channels() -> (
+    None
+):
     client = _CanonicalClient()
     session = _session(client)
 
@@ -155,7 +157,9 @@ async def test_python_session_declares_keys_but_sends_values_per_execution() -> 
         "LEMMA_BASE_URL",
         "LEMMA_TOKEN",
     )
-    assert {item.name: item.value for item in client.python_executes[0]["environment"]} == {
+    assert {
+        item.name: item.value for item in client.python_executes[0]["environment"]
+    } == {
         "LEMMA_BASE_URL": "https://api",
         "LEMMA_TOKEN": "dynamic",
     }
@@ -178,7 +182,23 @@ async def test_relative_initial_cwd_is_canonicalized_under_workspace() -> None:
 
 
 @pytest.mark.asyncio
-async def test_transport_failure_returns_operation_identity_without_blind_replay() -> None:
+async def test_workspace_paths_cannot_escape_runtime_roots() -> None:
+    client = _CanonicalClient()
+    session = _session(client)
+
+    with pytest.raises(ValueError, match="must remain under"):
+        await session._resolve_path("../../etc/passwd")
+    with pytest.raises(ValueError, match="must remain under"):
+        await session._resolve_path("/etc/passwd")
+
+    assert await session._resolve_path("../tmp/result") == "/tmp/result"
+    assert await session._resolve_path("/tmp/result") == "/tmp/result"
+
+
+@pytest.mark.asyncio
+async def test_transport_failure_returns_operation_identity_without_blind_replay() -> (
+    None
+):
     session = _session(_TransportFailureClient())
 
     result = await session.exec_command(cmd="non-idempotent-command")

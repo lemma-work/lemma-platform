@@ -177,9 +177,7 @@ class PythonSessionService:
             await uow.commit()
         return result, created
 
-    async def inspect(
-        self, key: SandboxKey, session_id: UUID
-    ) -> PythonSessionRef:
+    async def inspect(self, key: SandboxKey, session_id: UUID) -> PythonSessionRef:
         async with self._database.uow() as uow:
             session = await uow.repository.get_python_session(key, session_id)
             await uow.commit()
@@ -292,9 +290,7 @@ class PythonSessionService:
         )
 
     @staticmethod
-    def _execution_hash(
-        session_id: UUID, request: ExecutePythonRequest
-    ) -> str:
+    def _execution_hash(session_id: UUID, request: ExecutePythonRequest) -> str:
         canonical = "\x1f".join(
             (
                 str(session_id),

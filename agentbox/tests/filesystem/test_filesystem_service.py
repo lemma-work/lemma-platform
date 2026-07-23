@@ -110,8 +110,10 @@ class Provider:
     ) -> bytes:
         del allocation, path, deadline_at
         self._outside_transaction("read")
-        end = None if byte_range.length is None else byte_range.offset + byte_range.length
-        return self.data[byte_range.offset:end]
+        end = (
+            None if byte_range.length is None else byte_range.offset + byte_range.length
+        )
+        return self.data[byte_range.offset : end]
 
     async def write_file(
         self,
@@ -179,9 +181,10 @@ async def test_all_filesystem_provider_io_occurs_after_uow_closes(
 
     assert (await service.stat(key, "/tmp/payload", deadline_at=deadline)).path
     assert await service.list(key, "/tmp", deadline_at=deadline)
-    assert await service.read(
-        key, "/tmp/payload", ByteRange(1, 4), deadline_at=deadline
-    ) == b"inar"
+    assert (
+        await service.read(key, "/tmp/payload", ByteRange(1, 4), deadline_at=deadline)
+        == b"inar"
+    )
     await service.write(
         key,
         "/tmp/payload",
@@ -189,9 +192,7 @@ async def test_all_filesystem_provider_io_occurs_after_uow_closes(
         expected_sha256=None,
         deadline_at=deadline,
     )
-    await service.move(
-        key, "/tmp/payload", "/tmp/moved", deadline_at=deadline
-    )
+    await service.move(key, "/tmp/payload", "/tmp/moved", deadline_at=deadline)
     assert await service.delete(
         key, "/tmp/moved", recursive=False, deadline_at=deadline
     )

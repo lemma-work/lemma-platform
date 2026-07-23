@@ -119,9 +119,7 @@ async def api(tmp_path: Path):
     app.include_router(router)
 
     @app.exception_handler(AgentBoxError)
-    async def handle_agentbox_error(
-        _request: Request, error: AgentBoxError
-    ):
+    async def handle_agentbox_error(_request: Request, error: AgentBoxError):
         return agentbox_error_response(error)
 
     transport = httpx.ASGITransport(app=app)
@@ -139,9 +137,7 @@ def ensure_body(*, extra: bool = False) -> dict[str, object]:
             "digest": f"sha256:{'a' * 64}",
         },
         "admission_class": "interactive",
-        "deadline_at": (
-            datetime.now(timezone.utc) + timedelta(seconds=30)
-        ).isoformat(),
+        "deadline_at": (datetime.now(timezone.utc) + timedelta(seconds=30)).isoformat(),
     }
     if extra:
         body["retry_count"] = 3
@@ -158,9 +154,7 @@ async def test_ensure_and_inspect_use_typed_canonical_routes(api):
         headers=headers,
         json=ensure_body(),
     )
-    inspected = await client.get(
-        f"/sandboxes/workspace/{logical_id}", headers=headers
-    )
+    inspected = await client.get(f"/sandboxes/workspace/{logical_id}", headers=headers)
 
     assert ensured.status_code == 200
     assert inspected.status_code == 200
@@ -207,9 +201,7 @@ async def test_ambiguous_create_returns_typed_error_and_is_not_replayed(
     app.include_router(router)
 
     @app.exception_handler(AgentBoxError)
-    async def handle_agentbox_error(
-        _request: Request, error: AgentBoxError
-    ):
+    async def handle_agentbox_error(_request: Request, error: AgentBoxError):
         return agentbox_error_response(error)
 
     transport = httpx.ASGITransport(app=app)

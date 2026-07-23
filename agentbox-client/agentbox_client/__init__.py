@@ -2,6 +2,8 @@ from agentbox_client.client import AgentBoxApiError, AgentBoxClient
 from agentbox_client.models import (
     AdmissionClass,
     EnvironmentVariable,
+    FileKind,
+    FileStat,
     PortAccessGrant,
     PortProtocol,
     ProcessOutputSnapshot,
@@ -21,6 +23,8 @@ __all__ = [
     "AgentBoxApiError",
     "AgentBoxClient",
     "EnvironmentVariable",
+    "FileKind",
+    "FileStat",
     "PortAccessGrant",
     "PortProtocol",
     "ProcessOutputSnapshot",

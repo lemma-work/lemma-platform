@@ -127,6 +127,11 @@ class FakePty:
 class FakeFiles:
     def __init__(self) -> None:
         self.data: dict[str, bytes] = {}
+        self.directories: set[str] = set()
+
+    async def make_dir(self, path: str, **_kwargs) -> bool:
+        self.directories.add(path)
+        return True
 
     async def exists(self, path: str, **_kwargs) -> bool:
         prefix = path.rstrip("/") + "/"

@@ -390,7 +390,6 @@ EVENT_CATALOG: dict[str, EventSpec] = {
     'pod.pod_member_service.could_not_find_user_details.diagnostic': EventSpec('debug', frozenset({'organization_member_id'})),
     'pod.pod_member_service.fetch_user_info_event_emission.diagnostic': EventSpec('debug', frozenset()),
     'pod_bundle.ai_readme.readme_ai_polish_using_deterministic.diagnostic': EventSpec('debug', frozenset()),
-    'pod_bundle.app_builder.app_build_sandbox_heartbeat_s.observed': EventSpec('debug', frozenset({'sandbox_id'})),
     'pod_bundle.applier.skipping_grant_unknown_resource_type.diagnostic': EventSpec('debug', frozenset({'raw_type'})),
     'pod_bundle.applier.skipping_grant_without_resource_name.diagnostic': EventSpec('debug', frozenset()),
     'pod_bundle.applier.skipping_unknown_agent_toolset_r.diagnostic': EventSpec('debug', frozenset()),

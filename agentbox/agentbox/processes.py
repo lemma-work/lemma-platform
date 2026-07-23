@@ -123,9 +123,7 @@ class ProcessExecutionService:
                 "process does not exist",
                 retry=RetryDisposition.DO_NOT_RETRY,
                 status_code=404,
-                context=ProcessErrorContext(
-                    kind="process", operation_id=operation_id
-                ),
+                context=ProcessErrorContext(kind="process", operation_id=operation_id),
             )
         return self._ref(intent)
 
@@ -271,9 +269,7 @@ class ProcessExecutionService:
                 "process or its allocation does not exist",
                 retry=RetryDisposition.DO_NOT_RETRY,
                 status_code=404,
-                context=ProcessErrorContext(
-                    kind="process", operation_id=operation_id
-                ),
+                context=ProcessErrorContext(kind="process", operation_id=operation_id),
             )
         if (
             logical.current_allocation_id != intent.allocation_id

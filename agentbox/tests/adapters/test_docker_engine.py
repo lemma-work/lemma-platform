@@ -77,8 +77,7 @@ async def test_container_inspect_parses_private_network_attachment():
     )
 
     assert (
-        inspected.network_settings.networks["lemma-private"].ip_address
-        == "172.28.0.7"
+        inspected.network_settings.networks["lemma-private"].ip_address == "172.28.0.7"
     )
 
 

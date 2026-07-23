@@ -37,7 +37,10 @@ def _execute(
     state = "succeeded"
     previous_environment = {name: os.environ.get(name) for name in environment}
     os.environ.update(environment)
-    with tempfile.TemporaryFile() as stdout_file, tempfile.TemporaryFile() as stderr_file:
+    with (
+        tempfile.TemporaryFile() as stdout_file,
+        tempfile.TemporaryFile() as stderr_file,
+    ):
         try:
             sys.stdout.flush()
             sys.stderr.flush()
@@ -78,7 +81,9 @@ def _execute(
 
         stdout_file.seek(0)
         stdout_bytes = stdout_file.read(output_limit_bytes + 1)
-        remaining = max(0, output_limit_bytes - min(len(stdout_bytes), output_limit_bytes))
+        remaining = max(
+            0, output_limit_bytes - min(len(stdout_bytes), output_limit_bytes)
+        )
         stderr_file.seek(0)
         stderr_bytes = stderr_file.read(remaining + 1)
     truncated = len(stdout_bytes) > output_limit_bytes or len(stderr_bytes) > remaining

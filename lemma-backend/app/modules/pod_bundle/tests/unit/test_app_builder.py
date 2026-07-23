@@ -3,7 +3,6 @@ the runner's artifact selection by tier — all without a DB or a real sandbox."
 
 from __future__ import annotations
 
-import base64
 import io
 import zipfile
 from uuid import uuid4
@@ -76,11 +75,10 @@ def test_clean_slug_drops_placeholder_and_empty():
 
 class _FakeSession:
     def __init__(self, *, build_ok: bool = True, dist: bytes = b"DIST"):
-        self.sandbox_id = None  # heartbeat no-ops
-        self.client = None
         self.commands: list[str] = []
+        self.files: dict[str, bytes] = {}
         self._build_ok = build_ok
-        self._dist_b64 = base64.b64encode(dist).decode()
+        self._dist = dist
 
     async def __aenter__(self):
         return self
@@ -90,13 +88,20 @@ class _FakeSession:
 
     async def exec_command(self, *, cmd: str, timeout=None):
         self.commands.append(cmd)
-        if "run build" in cmd or "yarn build" in cmd:
+        if "run build" in cmd:
             return {"success": self._build_ok, "stdout": "", "stderr": "boom"}
         if cmd.startswith("test -f"):
             return {"success": self._build_ok}
-        if cmd.startswith("base64 ") and "dist.zip" in cmd:
-            return {"success": True, "stdout": self._dist_b64}
         return {"success": True, "stdout": ""}
+
+    async def write_file(self, path: str, data: bytes, *, timeout: int):
+        del timeout
+        self.files[path] = data
+
+    async def read_file(self, path: str, *, timeout: int):
+        del timeout
+        assert path.endswith("/dist.zip")
+        return self._dist
 
 
 class _FakeWorkspace:

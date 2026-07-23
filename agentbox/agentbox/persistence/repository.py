@@ -1002,8 +1002,7 @@ class AgentBoxRepository:
         timestamp = now or utc_now()
         active_process = exists(
             select(ProcessIntentRow.operation_id).where(
-                ProcessIntentRow.workload_kind
-                == LogicalSandboxRow.workload_kind,
+                ProcessIntentRow.workload_kind == LogicalSandboxRow.workload_kind,
                 ProcessIntentRow.logical_id == LogicalSandboxRow.logical_id,
                 ProcessIntentRow.state.in_(NONTERMINAL_PROCESS_STATES),
             )
@@ -1140,9 +1139,7 @@ class AgentBoxRepository:
         retention_seconds: float,
         claim: SandboxMaintenanceClaim | None = None,
         now: datetime | None = None,
-    ) -> tuple[
-        SandboxMaintenanceClaim, LogicalSandbox, PhysicalAllocation | None
-    ]:
+    ) -> tuple[SandboxMaintenanceClaim, LogicalSandbox, PhysicalAllocation | None]:
         timestamp = now or utc_now()
         logical = await self._select_logical(key, for_update=True)
         if logical is None:

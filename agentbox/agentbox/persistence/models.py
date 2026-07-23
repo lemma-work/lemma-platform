@@ -88,9 +88,7 @@ class LogicalSandboxRow(TimestampMixin, Base):
     delete_after: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True), nullable=True
     )
-    maintenance_action: Mapped[str | None] = mapped_column(
-        String(16), nullable=True
-    )
+    maintenance_action: Mapped[str | None] = mapped_column(String(16), nullable=True)
     maintenance_token: Mapped[UUID | None] = mapped_column(
         Uuid(as_uuid=True), nullable=True, unique=True
     )

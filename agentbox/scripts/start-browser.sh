@@ -62,7 +62,21 @@ if ! pgrep -f "socat.*TCP-LISTEN:${DASHBOARD_PORT}" >/dev/null 2>&1; then
 fi
 
 if [ "$#" -gt 0 ]; then
-  exec agent-browser open "$@"
+  open_log="/tmp/agent-browser-open.log"
+  if agent-browser open "$@" >"$open_log" 2>&1; then
+    open_status=0
+  else
+    open_status=$?
+  fi
+  cat "$open_log"
+  exit "$open_status"
 fi
 
-exec agent-browser open
+open_log="/tmp/agent-browser-open.log"
+if agent-browser open >"$open_log" 2>&1; then
+  open_status=0
+else
+  open_status=$?
+fi
+cat "$open_log"
+exit "$open_status"

@@ -42,9 +42,7 @@ def execute_body(
         "operation_id": str(operation_id or uuid4()),
         "code": code,
         "environment": (
-            [{"name": "SESSION_MARKER", "value": marker}]
-            if marker is not None
-            else []
+            [{"name": "SESSION_MARKER", "value": marker}] if marker is not None else []
         ),
         "output_limit_bytes": 65536,
         "deadline_at": deadline(seconds),
@@ -174,9 +172,7 @@ async def test_python_timeout_resets_only_that_worker_and_delete_kills_descendan
             ),
         )
         child_pid = int(child.json()["result"])
-        deleted = await client.delete(
-            f"/python-sessions/{session_id}", headers=HEADERS
-        )
+        deleted = await client.delete(f"/python-sessions/{session_id}", headers=HEADERS)
 
     assert timed_out.status_code == 200
     assert timed_out.json()["state"] == "timed_out"
