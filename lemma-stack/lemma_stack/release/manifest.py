@@ -70,10 +70,7 @@ class ReleaseManifest:
 
     def all_pull_refs(self, *, kreuzberg: bool) -> list[str]:
         refs = [self.image(key).pull_ref for key in APP_IMAGE_KEYS]
-        refs.extend(
-            self.infra_image(key)
-            for key in ("postgres", "redis", "supertokens")
-        )
+        refs.extend(self.infra_image(key) for key in ("postgres", "redis", "supertokens"))
         if kreuzberg:
             refs.append(self.infra_image("kreuzberg"))
         return refs
@@ -174,7 +171,7 @@ def pin(paths: LocalPaths, manifest: ReleaseManifest) -> None:
             (paths.releases_dir / f"lemma-{prev_version}.json").write_text(
                 json.dumps(previous, indent=2), encoding="utf-8"
             )
-        except (OSError, json.JSONDecodeError):
+        except OSError, json.JSONDecodeError:
             pass
     paths.release_file.write_text(json.dumps(manifest.raw, indent=2), encoding="utf-8")
 

@@ -105,19 +105,29 @@ def workspace_template():
             "/build/agentbox/templates/workspace-python",
         )
         .run_cmd(
+            "UV_PYTHON_INSTALL_DIR=/opt/python uv python install 3.14 && "
+            "UV_PYTHON_INSTALL_DIR=/opt/python "
             "UV_PROJECT_ENVIRONMENT=/opt/agentbox-python "
             "UV_COMPILE_BYTECODE=1 UV_LINK_MODE=copy "
             "uv sync --project /build/agentbox/templates/workspace-python "
-            "--python /usr/local/bin/python3.13 "
+            "--python 3.14 "
             "--locked --no-dev --no-editable && "
             "test -x /opt/agentbox-python/bin/python && "
-            "system_site=$(/usr/local/bin/python3.13 -c "
-            '"import site; print(site.getsitepackages()[0])") && '
-            "printf '%s\\n' \"import sys; "
-            "sys.path.insert(0, '/opt/agentbox-python/lib/python3.13/site-packages')\" "
-            '> "$system_site/agentbox-workspace.pth" && '
-            "/usr/local/bin/python3.13 -c "
-            '"import lemma_sdk, pydantic" && '
+            'test "$(/opt/agentbox-python/bin/python -c '
+            "'import sys; print(f\"{sys.version_info.major}.{sys.version_info.minor}\")'"
+            ')" = "3.14" && '
+            "/opt/agentbox-python/bin/python -c "
+            '"import ipykernel, lemma_sdk, pydantic" && '
+            "test -x /opt/agentbox-python/bin/lemma && "
+            "ln -sf /opt/agentbox-python/bin/lemma /usr/local/bin/lemma && "
+            "/usr/local/bin/lemma --version && "
+            "mkdir -p /root/.local/share/jupyter/kernels/python3 && "
+            "printf '%s\\n' "
+            '\'{"argv":["/opt/agentbox-python/bin/python","-m",'
+            '"ipykernel_launcher","-f","{connection_file}"],'
+            '"display_name":"Python 3.14","language":"python",'
+            '"metadata":{"debugger":true}}\' '
+            "> /root/.local/share/jupyter/kernels/python3/kernel.json && "
             "uv cache clean && "
             "rm -rf /build/lemma-python /build/lemma-pod-bundle "
             "/build/lemma-cli /build/agentbox",
@@ -208,7 +218,7 @@ def workspace_template():
                 "AGENTBOX_NODE_BINARY": "/opt/node24/bin/node",
                 "NODE_PATH": "/opt/agentbox-node/node_modules",
                 "PNPM_HOME": "/home/user/.local/share/pnpm",
-                "PYTHONPATH": ("/opt/agentbox-python/lib/python3.13/site-packages"),
+                "PYTHONPATH": ("/opt/agentbox-python/lib/python3.14/site-packages"),
                 "PATH": (
                     "/opt/agentbox-python/bin:/opt/node24/bin:"
                     "/usr/local/bin:/usr/bin:/bin"
@@ -280,7 +290,11 @@ def function_template():
     )
 
 
-def build(*, target: str) -> dict[str, dict[str, str]]:
+def build(
+    *,
+    target: str,
+    name_suffix: str = "",
+) -> dict[str, dict[str, str]]:
     if not os.environ.get("E2B_API_KEY"):
         raise RuntimeError("E2B_API_KEY is required")
     selected = {
@@ -293,7 +307,8 @@ def build(*, target: str) -> dict[str, dict[str, str]]:
     names = tuple(selected) if target == "all" else (target,)
     result: dict[str, dict[str, str]] = {}
     for name in names:
-        factory, template_name, cpu_count, memory_mb = selected[name]
+        factory, base_template_name, cpu_count, memory_mb = selected[name]
+        template_name = f"{base_template_name}{name_suffix}"
         built = Template.build(
             factory(),
             template_name,
@@ -314,8 +329,22 @@ def main() -> None:
     parser.add_argument(
         "--target", choices=("workspace", "function", "all"), default="all"
     )
+    parser.add_argument(
+        "--name-suffix",
+        default="",
+        help=(
+            "Optional suffix for isolated candidate builds; production builds "
+            "leave this empty."
+        ),
+    )
     args = parser.parse_args()
-    print(json.dumps(build(target=args.target), indent=2, sort_keys=True))
+    print(
+        json.dumps(
+            build(target=args.target, name_suffix=args.name_suffix),
+            indent=2,
+            sort_keys=True,
+        )
+    )
 
 
 if __name__ == "__main__":

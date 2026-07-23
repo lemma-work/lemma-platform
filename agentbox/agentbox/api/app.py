@@ -254,9 +254,8 @@ def _profiles() -> ProfileRegistry:
             settings.agentbox_workspace_profile_digest,
         ),
         workload_kind=WorkloadKind.WORKSPACE,
-        # The portable ABI is semantic rather than a false interpreter pin:
-        # Docker currently uses Python 3.14 while E2B Code Interpreter owns a
-        # managed Python 3.13 kernel. The locked workspace packages support both.
+        # The portable ABI is semantic; every provider runs the profile-owned
+        # Python 3.14 environment behind its native session implementation.
         runtime_abi="lemma-workspace-python-1-node-24",
         capabilities=frozenset(
             {

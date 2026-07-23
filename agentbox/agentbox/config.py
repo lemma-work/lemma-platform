@@ -95,16 +95,32 @@ class Settings(BaseSettings):
     agentbox_e2b_scope: str = "e2b:default"
     agentbox_e2b_workspace_template: str | None = Field(
         default=None,
-        validation_alias=AliasChoices("E2B_WORKSPACE_TEMPLATE", "E2B_SANDBOX_TEMPLATE"),
+        validation_alias=AliasChoices(
+            "E2B_WORKSPACE_TEMPLATE",
+            "AGENTBOX_E2B_WORKSPACE_TEMPLATE",
+            "E2B_SANDBOX_TEMPLATE",
+        ),
     )
     agentbox_e2b_workspace_build_id: str | None = Field(
-        default=None, validation_alias="E2B_WORKSPACE_TEMPLATE_BUILD_ID"
+        default=None,
+        validation_alias=AliasChoices(
+            "E2B_WORKSPACE_TEMPLATE_BUILD_ID",
+            "AGENTBOX_E2B_WORKSPACE_BUILD_ID",
+        ),
     )
     agentbox_e2b_function_template: str | None = Field(
-        default=None, validation_alias="E2B_FUNCTION_TEMPLATE"
+        default=None,
+        validation_alias=AliasChoices(
+            "E2B_FUNCTION_TEMPLATE",
+            "AGENTBOX_E2B_FUNCTION_TEMPLATE",
+        ),
     )
     agentbox_e2b_function_build_id: str | None = Field(
-        default=None, validation_alias="E2B_FUNCTION_TEMPLATE_BUILD_ID"
+        default=None,
+        validation_alias=AliasChoices(
+            "E2B_FUNCTION_TEMPLATE_BUILD_ID",
+            "AGENTBOX_E2B_FUNCTION_BUILD_ID",
+        ),
     )
     agentbox_e2b_function_allow_out: str = Field(
         default="",

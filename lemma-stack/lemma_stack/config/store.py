@@ -68,9 +68,7 @@ def new_document() -> TOMLDocument:
 
 def load(paths: LocalPaths) -> TOMLDocument:
     if not paths.config_file.exists():
-        raise AdminError(
-            f"no config found at {paths.config_file}; run `lemma-stack install` first"
-        )
+        raise AdminError(f"no config found at {paths.config_file}; run `lemma-stack install` first")
     return tomlkit.parse(paths.config_file.read_text(encoding="utf-8"))
 
 

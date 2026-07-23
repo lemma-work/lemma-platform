@@ -2,6 +2,9 @@ from __future__ import annotations
 
 import asyncio
 from contextlib import AsyncExitStack, asynccontextmanager
+import hashlib
+import json
+import shlex
 import statistics
 import time
 from uuid import UUID, uuid4
@@ -17,6 +20,15 @@ from app.core.infrastructure.db.session import async_session_maker
 from app.core.infrastructure.db.uow_factory import create_uow_from_session_maker
 from app.modules.agent.domain.value_objects import AgentRuntimeConfig
 from app.modules.agent.infrastructure.repositories import ConversationRepository
+from app.modules.agent.tests.e2e.system_lemma_helpers import (
+    SYSTEM_LEMMA_SKIP_REASON,
+    e2e_real_llm,
+    system_lemma_available,
+)
+from app.modules.agent.tests.e2e.test_agent_e2e import (
+    _assert_completed_without_error,
+    _post_sse,
+)
 from app.modules.agent.tools.context import BaseAgentContext
 from app.modules.agent.tools.workspace_cli.models import (
     ExecCommandRequest,
@@ -36,6 +48,7 @@ from app.modules.workspace.services.workspace_sandbox_service import (
     WorkspaceSandboxService,
     reset_workspace_store_state,
 )
+from app.modules.test_support.e2e.worker_process import production_worker_process
 import app.modules.workspace.services.workspace_tool_runtime as workspace_runtime
 
 
@@ -43,6 +56,221 @@ pytestmark = [
     pytest.mark.e2e,
     pytest.mark.workspace,
 ]
+
+_AGENTBOX_ACCEPTANCE_MODEL = "accounts/fireworks/models/minimax-m3"
+
+
+async def test_fresh_workspace_token_authenticates_over_backend_http(
+    authenticated_client,
+    fixed_test_org,
+    fixed_test_user,
+    backend_server,
+    configure_workspace_api_url,
+):
+    """A workspace token must survive both HTTP and AgentBox process boundaries."""
+
+    service = WorkspaceSandboxService()
+    try:
+        env_vars = await service.get_env_vars(
+            UUID(fixed_test_user["id"]),
+            None,
+            organization_id=UUID(fixed_test_org["id"]),
+            workload_type="agent",
+            workload_id=uuid4(),
+            workload_name="agentbox_token_preflight",
+            scope=["pod.read"],
+            session_id=str(uuid4()),
+        )
+
+        headers = {"Authorization": f"Bearer {env_vars['LEMMA_TOKEN']}"}
+        in_process = await authenticated_client.get(
+            "/users/me/profile", headers=headers
+        )
+        assert in_process.status_code == status.HTTP_200_OK, in_process.text
+
+        async with httpx.AsyncClient(
+            base_url=backend_server["host_base_url"],
+            headers=headers,
+        ) as client:
+            over_http = await client.get("/users/me/profile")
+        assert over_http.status_code == status.HTTP_200_OK, over_http.text
+        assert over_http.json()["email"] == fixed_test_user["email"]
+
+        expected_token_hash = hashlib.sha256(
+            env_vars["LEMMA_TOKEN"].encode()
+        ).hexdigest()[:16]
+        session = await service.get_session(
+            UUID(fixed_test_user["id"]),
+            None,
+            session_id=str(uuid4()),
+            env_vars=env_vars,
+        )
+        token_probe = await session.exec_command(
+            cmd=(
+                "python -c 'import hashlib, os; "
+                'print(hashlib.sha256(os.environ["LEMMA_TOKEN"].encode()).hexdigest()[:16])\''
+            )
+        )
+        assert token_probe["exit_code"] == 0, token_probe
+        assert token_probe["stdout"].strip() == expected_token_hash, token_probe
+
+        direct_http_script = (
+            "import httpx, os; "
+            "response = httpx.get("
+            "os.environ['LEMMA_BASE_URL'] + '/users/me/profile', "
+            "headers={'Authorization': 'Bearer ' + os.environ['LEMMA_TOKEN']}"
+            "); "
+            "print(response.status_code); "
+            "print(response.text)"
+        )
+        direct_http_probe = await session.exec_command(
+            cmd=f"python -c {shlex.quote(direct_http_script)}"
+        )
+        assert direct_http_probe["exit_code"] == 0, direct_http_probe
+        assert direct_http_probe["stdout"].splitlines()[0] == "200", direct_http_probe
+        assert fixed_test_user["email"] in direct_http_probe["stdout"], (
+            direct_http_probe
+        )
+
+        cli_probe = await session.exec_command(cmd="lemma --output json profile get")
+        assert cli_probe["exit_code"] == 0, cli_probe
+        assert fixed_test_user["email"] in cli_probe["stdout"], cli_probe
+    finally:
+        await service.close()
+
+
+@pytest.mark.slow
+@pytest.mark.provider
+@pytest.mark.real_llm
+@pytest.mark.real_sandbox
+@pytest.mark.skipif(
+    not e2e_real_llm(),
+    reason="set E2E_LLM_MODE=real to run the live AgentBox agent acceptance test",
+)
+@pytest.mark.skipif(not system_lemma_available(), reason=SYSTEM_LEMMA_SKIP_REASON)
+async def test_agent_uses_lemma_cli_through_selected_agentbox_provider(
+    authenticated_client,
+    fixed_test_org,
+    fixed_test_user,
+    configure_workspace_api_url,
+    db_manager,
+    e2e_settings,
+):
+    """A real agent must choose the workspace tool and authenticate the real CLI."""
+
+    del db_manager
+    await workspace_runtime.close_workspace_tool_runtimes()
+    provider = configure_workspace_api_url["provider"]
+
+    pod_response = await authenticated_client.post(
+        "/pods",
+        json={
+            "name": f"AgentBox Lemma CLI Agent Pod {uuid4().hex[:8]}",
+            "type": "ASSISTANT",
+            "organization_id": fixed_test_org["id"],
+        },
+    )
+    assert pod_response.status_code == status.HTTP_201_CREATED, pod_response.text
+    pod = pod_response.json()
+
+    create_agent = await authenticated_client.post(
+        f"/pods/{pod['id']}/agents",
+        json={
+            "name": f"AgentBox CLI Acceptance Agent {uuid4().hex[:8]}",
+            "instruction": (
+                "You verify the installed Lemma CLI. When asked, you must call "
+                "exec_command through the WORKSPACE_CLI toolset and use the exact "
+                "command supplied by the user. Never invent or infer the command "
+                "output. After the tool succeeds, report the returned profile email "
+                "and the exact marker LEMMA_CLI_AGENTBOX_OK."
+            ),
+            "toolsets": ["WORKSPACE_CLI"],
+            "agent_runtime": {
+                "profile_id": "system:lemma",
+                "model_name": _AGENTBOX_ACCEPTANCE_MODEL,
+            },
+        },
+    )
+    assert create_agent.status_code == status.HTTP_201_CREATED, create_agent.text
+    agent = create_agent.json()
+
+    create_conversation = await authenticated_client.post(
+        f"/pods/{pod['id']}/conversations",
+        json={
+            "agent_name": agent["name"],
+            "title": f"AgentBox {provider} Lemma CLI acceptance",
+            "type": "CHAT",
+        },
+    )
+    assert create_conversation.status_code == status.HTTP_201_CREATED, (
+        create_conversation.text
+    )
+    conversation_id = create_conversation.json()["id"]
+
+    async with production_worker_process(
+        e2e_settings,
+        log_prefix=f"agentbox_{provider}_lemma_cli_agent",
+    ) as acceptance_worker:
+        events = await _post_sse(
+            authenticated_client,
+            f"/pods/{pod['id']}/conversations/{conversation_id}/messages",
+            {
+                "content": (
+                    "Use exec_command now to run exactly: "
+                    "`lemma --output json profile get`. "
+                    "Do not answer from memory. After it succeeds, reply with the "
+                    "profile email and LEMMA_CLI_AGENTBOX_OK."
+                )
+            },
+        )
+        if any(event.get("type") == "error" for event in events):
+            pytest.fail(
+                "Agent acceptance run failed.\nWorker log:\n"
+                + acceptance_worker.read_log_tail()
+            )
+    _assert_completed_without_error(events)
+
+    messages = await authenticated_client.get(
+        f"/pods/{pod['id']}/conversations/{conversation_id}/messages"
+    )
+    assert messages.status_code == status.HTTP_200_OK, messages.text
+    items = messages.json()["items"]
+
+    cli_calls = [
+        item
+        for item in items
+        if item["kind"] == "TOOL_CALL"
+        and item["tool_name"] == "exec_command"
+        and "lemma --output json profile get"
+        in ((item.get("tool_args") or {}).get("cmd") or "")
+    ]
+    assert cli_calls, items
+
+    cli_call_ids = {item["tool_call_id"] for item in cli_calls}
+    cli_returns = [
+        item
+        for item in items
+        if item["kind"] == "TOOL_RETURN"
+        and item["tool_name"] == "exec_command"
+        and item["tool_call_id"] in cli_call_ids
+    ]
+    assert cli_returns, items
+    serialized_returns = json.dumps(
+        [item.get("tool_result") for item in cli_returns],
+        sort_keys=True,
+    )
+    assert fixed_test_user["email"] in serialized_returns, serialized_returns
+    assert any(
+        (item.get("tool_result") or {}).get("success") is True for item in cli_returns
+    ), cli_returns
+
+    assistant_text = " ".join(
+        item.get("text") or ""
+        for item in items
+        if item["role"] == "assistant" and item["kind"] == "TEXT"
+    )
+    assert "LEMMA_CLI_AGENTBOX_OK" in assistant_text.upper(), assistant_text
+    assert fixed_test_user["email"] in assistant_text, assistant_text
 
 
 async def test_agent_workspace_cli_tools_execute_through_real_agentbox(
@@ -99,7 +327,7 @@ async def test_agent_workspace_cli_tools_execute_through_real_agentbox(
             comment="verify shell env and Lemma CLI through AgentBox",
             cmd=(
                 "pwd; "
-                "printf 'pod=%s user=%s\\n' \"$LEMMA_POD_ID\" \"$LEMMA_USER_ID\"; "
+                'printf \'pod=%s user=%s\\n\' "$LEMMA_POD_ID" "$LEMMA_USER_ID"; '
                 "lemma --output json profile get"
             ),
         ),
@@ -143,7 +371,7 @@ async def test_agent_workspace_cli_tools_execute_through_real_agentbox(
             comment="verify real tty allocation",
             cmd=(
                 "python -c 'import sys; "
-                "print(f\"stdin={sys.stdin.isatty()} stdout={sys.stdout.isatty()}\")'"
+                'print(f"stdin={sys.stdin.isatty()} stdout={sys.stdout.isatty()}")\''
             ),
             tty=True,
             yield_time_ms=1000,
@@ -312,11 +540,10 @@ async def test_workspace_cli_tools_execute_over_real_mcp_with_latency_summary(
         await workspace_service.close()
 
     try:
-        async with _mcp_client_session(
-            mcp_url, token
-        ) as shell_session, _mcp_client_session(
-            mcp_url, token
-        ) as python_session:
+        async with (
+            _mcp_client_session(mcp_url, token) as shell_session,
+            _mcp_client_session(mcp_url, token) as python_session,
+        ):
             tools = await shell_session.list_tools()
             tool_names = {tool.name for tool in tools.tools}
             assert {"lemma_exec_command", "lemma_execute_python"} <= tool_names

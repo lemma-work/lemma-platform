@@ -33,9 +33,7 @@ def config(paths):
 
 def build(config, paths, manifest, provider="podman"):
     socket = "/run/user/501/podman/podman.sock" if provider == "podman" else "/var/run/docker.sock"
-    return specs_mod.build_specs(
-        config, paths, manifest, provider=provider, host_socket=socket
-    )
+    return specs_mod.build_specs(config, paths, manifest, provider=provider, host_socket=socket)
 
 
 def by_name(specs, name):

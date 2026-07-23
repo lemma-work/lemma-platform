@@ -196,6 +196,10 @@ async def test_real_e2b_workspace_full_conformance(tmp_path: Path) -> None:
                     "printf 'node:%s\\n' \"$(node --version)\"; "
                     "printf 'pnpm:%s\\n' \"$(pnpm --version)\"; "
                     "printf 'uv:%s\\n' \"$(uv --version)\"; "
+                    "printf 'python:%s\\n' "
+                    '"$(python -c \'import sys; '
+                    'print("%d.%d" % sys.version_info[:2])\')"; '
+                    "printf 'lemma:%s\\n' \"$(lemma --version)\"; "
                     "lit --help >/dev/null"
                 ),
                 argv=None,
@@ -213,6 +217,8 @@ async def test_real_e2b_workspace_full_conformance(tmp_path: Path) -> None:
         assert b"node:v24.18.0" in versions_output
         assert b"pnpm:11.15.1" in versions_output
         assert b"uv:uv 0.11.31" in versions_output
+        assert b"python:3.14" in versions_output
+        assert b"lemma:lemma " in versions_output
 
         shell_id = uuid4()
         await processes.start(
@@ -322,9 +328,10 @@ async def test_real_e2b_workspace_full_conformance(tmp_path: Path) -> None:
             ExecutePythonRequest(
                 operation_id=uuid4(),
                 code=(
-                    "import os\n"
+                    "import os, sys\n"
                     "print('native-python')\n"
-                    "(value + 2, os.environ['PYTHON_MARK'])"
+                    "(value + 2, os.environ['PYTHON_MARK'], "
+                    "sys.version_info[:2])"
                 ),
                 environment=(EnvironmentVariable("PYTHON_MARK", "e2b"),),
                 output_limit_bytes=65536,
@@ -336,7 +343,7 @@ async def test_real_e2b_workspace_full_conformance(tmp_path: Path) -> None:
         assert first_python.state == PythonExecutionState.SUCCEEDED
         assert second_python.state == PythonExecutionState.SUCCEEDED
         assert second_python.stdout == "native-python\n"
-        assert second_python.result == "(42, 'e2b')"
+        assert second_python.result == "(42, 'e2b', (3, 14))"
 
         await filesystem.write(
             key,

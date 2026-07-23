@@ -247,7 +247,7 @@ jobs:
       - uses: actions/checkout@v7
       - uses: actions/setup-python@v6
         with:
-          python-version: "3.12"
+          python-version: "3.14"
       - name: Install SDK + CLI
         run: |
           python -m pip install --upgrade pip
@@ -309,7 +309,7 @@ jobs:
       - uses: actions/checkout@v7
       - uses: actions/setup-python@v6
         with:
-          python-version: "3.12"
+          python-version: "3.14"
       - uses: actions/setup-node@v5
         with:
           node-version: 24
@@ -413,7 +413,7 @@ jobs:
       - uses: actions/checkout@v7
       - uses: actions/setup-python@v6
         with:
-          python-version: "3.12"
+          python-version: "3.14"
       - name: Install uv
         run: pip install uv
       - name: Install lemma-cli from local checkout

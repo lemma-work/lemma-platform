@@ -349,7 +349,7 @@ def profile() -> SandboxProfile:
     return SandboxProfile(
         ref=ref,
         workload_kind=WorkloadKind.WORKSPACE,
-        runtime_abi="python-3.12",
+        runtime_abi="python-3.14",
         capabilities=frozenset(
             {
                 SandboxCapability.PROCESS,

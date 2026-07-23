@@ -1,9 +1,10 @@
 [project]
 name = "agentbox-workspace-environment"
 version = "1.0.0"
-requires-python = ">=3.13,<3.15"
+requires-python = ">=3.14,<3.15"
 dependencies = [
     "fastapi[standard]>=0.128.0",
+    "ipykernel>=6.31.0",
     "lemma-terminal",
     "lemma-pod-bundle",
     "lemma-sdk",

@@ -3,7 +3,7 @@ name = "lemma-backend"
 version = "0.1.0"
 description = "Add your description here"
 readme = "README.md"
-requires-python = ">=3.14"
+requires-python = ">=3.14,<3.15"
 dependencies = [
     "pydantic>=2.11.9",
     "email-validator>=2.1.0",

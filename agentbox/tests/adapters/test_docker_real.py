@@ -81,7 +81,7 @@ def profile(name: str, fill: str) -> SandboxProfile:
     return SandboxProfile(
         ref=SandboxProfileRef(name=name, digest=f"sha256:{fill * 64}"),
         workload_kind=WorkloadKind.WORKSPACE,
-        runtime_abi="python-3.12",
+        runtime_abi="python-3.14",
         capabilities=frozenset(
             {SandboxCapability.PROCESS, SandboxCapability.FILESYSTEM}
         ),
@@ -512,7 +512,7 @@ async def test_real_docker_runtime_process_pty_input_resize_and_reconnect(
     workspace_profile = SandboxProfile(
         ref=SandboxProfileRef(name="workspace-python-v1", digest=f"sha256:{'c' * 64}"),
         workload_kind=WorkloadKind.WORKSPACE,
-        runtime_abi="python-3.12",
+        runtime_abi="python-3.14",
         capabilities=frozenset(
             {
                 SandboxCapability.PROCESS,
@@ -771,9 +771,10 @@ async def test_real_docker_runtime_process_pty_input_resize_and_reconnect(
             ExecutePythonRequest(
                 operation_id=uuid4(),
                 code=(
-                    "import os\n"
+                    "import os, sys\n"
                     "os.write(1, b'native-python\\n')\n"
-                    "(value + 2, os.environ['PYTHON_MARK'])"
+                    "(value + 2, os.environ['PYTHON_MARK'], "
+                    "sys.version_info[:2])"
                 ),
                 environment=(EnvironmentVariable("PYTHON_MARK", "docker"),),
                 output_limit_bytes=65536,
@@ -786,7 +787,7 @@ async def test_real_docker_runtime_process_pty_input_resize_and_reconnect(
         assert python_created is True
         assert python_result.state == PythonExecutionState.SUCCEEDED
         assert python_result.stdout == "native-python\n"
-        assert python_result.result == "(42, 'docker')"
+        assert python_result.result == "(42, 'docker', (3, 14))"
 
         await filesystem.write(
             key,

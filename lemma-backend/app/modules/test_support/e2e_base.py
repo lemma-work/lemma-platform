@@ -350,9 +350,7 @@ def e2e_settings(test_database_url, test_redis_url, supertokens_container):
     settings.function_runtime_secret = SecretStr("e2e-function-runtime-secret-32-bytes")
     os.environ["AGENTBOX_API_URL"] = agentbox_url
     os.environ["AGENTBOX_API_KEY"] = agentbox_key
-    os.environ["FUNCTION_RUNTIME_SECRET"] = (
-        "e2e-function-runtime-secret-32-bytes"
-    )
+    os.environ["FUNCTION_RUNTIME_SECRET"] = "e2e-function-runtime-secret-32-bytes"
 
     # E2E execution mode: default to the fast mocked level (no real model, no
     # Docker) so CI and local runs are fast and deterministic. ``E2E_REAL=1``
@@ -506,9 +504,8 @@ async def worker(e2e_settings):
         )
 
         readiness_markers = (
-            "Worker starting...",
-            "`HandleAgentRunEvent` waiting for messages",
-            "`HandleScheduleEvents` waiting for messages",
+            '"logger": "app.core.infrastructure.jobs.streaq_runtime"',
+            '"event": "service.started"',
         )
         startup_ok = False
         for _ in range(200):

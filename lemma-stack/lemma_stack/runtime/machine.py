@@ -79,7 +79,9 @@ def _init_machine() -> None:
         if "already exists" in err:
             _start_machine()
             return
-        raise AdminError(f"podman machine init '{MACHINE_NAME}' failed: {(proc.stderr or '').strip()}")
+        raise AdminError(
+            f"podman machine init '{MACHINE_NAME}' failed: {(proc.stderr or '').strip()}"
+        )
 
 
 def _start_machine() -> bool:

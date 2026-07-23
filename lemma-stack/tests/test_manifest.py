@@ -40,8 +40,7 @@ def test_parse_and_pull_refs():
 
 def test_release_workflow_uses_the_stack_supertokens_version():
     workflow = (
-        Path(__file__).resolve().parents[2]
-        / ".github/workflows/release-local-images.yml"
+        Path(__file__).resolve().parents[2] / ".github/workflows/release-local-images.yml"
     ).read_text(encoding="utf-8")
     match = re.search(r'"supertokens": "([^"]+)"', workflow)
 

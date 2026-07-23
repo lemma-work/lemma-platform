@@ -23,11 +23,11 @@ the SQLAlchemy state package, and the adapters under `agentbox/adapters/`.
   `pip`, and function invocation never resolves or installs dependencies.
 - Node projects are locked and installed with `pnpm`. `npm` and `npx` are not part of
   the supported workspace toolchain.
-- The workspace profile pins Node 24 LTS, `uv` 0.11.31, and `pnpm` 11.15.1.
-  Docker uses Python 3.14; E2B's managed Code Interpreter kernel uses Python 3.13.
-  The locked portable workspace dependency set supports both interpreters. E2B
-  retains its base image's system Node for Code Interpreter services and exposes
-  the pinned Node 24 runtime to agent login shells.
+- The workspace profile pins Python 3.14, Node 24 LTS, `uv` 0.11.31, and `pnpm`
+  11.15.1 on every provider. The E2B template points its managed Code Interpreter
+  service at the profile-owned Python 3.14 kernel, retains the base image's system
+  Node for provider services, and exposes the pinned Node 24 runtime to agent login
+  shells.
 - The function profile contains a locked Python environment and no Node runtime,
   browser, package manager, or invocation-time installer.
 
