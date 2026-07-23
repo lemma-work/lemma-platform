@@ -27,7 +27,7 @@ build: build-manager build-workspace build-function
 build-manager:
 	docker build \
 		--platform $(PLATFORM) \
-		-f agentbox/Dockerfile \
+		-f Dockerfile \
 		--build-arg PYTHON_IMAGE=$(PYTHON_IMAGE) \
 		-t $(MANAGER_IMAGE):$(TAG) \
 		..
@@ -54,7 +54,7 @@ build-function:
 build-test-images:
 	docker build \
 		--platform $(PLATFORM) \
-		-f agentbox/Dockerfile \
+		-f Dockerfile \
 		--build-arg PYTHON_IMAGE=$(PYTHON_IMAGE) \
 		-t $(TEST_MANAGER_IMAGE) \
 		..
@@ -78,7 +78,7 @@ push: push-manager push-workspace push-function
 push-manager:
 	docker buildx build \
 		--platform $(PLATFORMS) \
-		-f agentbox/Dockerfile \
+		-f Dockerfile \
 		--build-arg PYTHON_IMAGE=$(PYTHON_IMAGE) \
 		-t $(MANAGER_IMAGE):$(TAG) \
 		--push \
