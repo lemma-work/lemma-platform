@@ -15,7 +15,7 @@ use std::time::Duration;
 use tauri::menu::{CheckMenuItem, Menu, MenuItem, PredefinedMenuItem};
 use tauri::tray::TrayIconBuilder;
 use tauri::webview::NewWindowResponse;
-use tauri::{AppHandle, Emitter, Manager, State, WebviewUrl, WebviewWindowBuilder};
+use tauri::{AppHandle, Emitter, Manager, State, WebviewUrl, WebviewWindow, WebviewWindowBuilder};
 use tauri_plugin_autostart::ManagerExt as _;
 
 #[cfg(unix)]
@@ -550,6 +550,7 @@ fn handle_locald_event(app: &AppHandle, event: &Value) {
     }
     let shell: State<Shell> = app.state();
     let kind = event["event"].as_str().unwrap_or_default();
+    let _ = app.emit_to("control", "lemma:locald-event", event.clone());
 
     let snapshot = {
         let mut ui = shell.ui.lock().unwrap();
@@ -656,6 +657,31 @@ fn show_splash(app: &AppHandle) {
     let _ = open_app_window(app, "tauri://localhost/index.html");
 }
 
+fn show_control_center(app: &AppHandle) -> Result<(), String> {
+    if let Some(window) = app.get_webview_window("control") {
+        window.show().map_err(|error| error.to_string())?;
+        window.set_focus().map_err(|error| error.to_string())?;
+        return Ok(());
+    }
+    let window = WebviewWindowBuilder::new(app, "control", WebviewUrl::App("control.html".into()))
+        .title("Lemma Control Center")
+        .inner_size(1180.0, 780.0)
+        .min_inner_size(900.0, 640.0)
+        .initialization_script(desktop_context_script(&current_mode(app)))
+        .on_navigation(|url| url.scheme() == "tauri")
+        .on_new_window(move |url, _features| {
+            if matches!(url.scheme(), "http" | "https") {
+                open_external(url.as_str());
+            }
+            NewWindowResponse::Deny
+        })
+        .build()
+        .map_err(|error| error.to_string())?;
+    window.show().map_err(|error| error.to_string())?;
+    window.set_focus().map_err(|error| error.to_string())?;
+    Ok(())
+}
+
 // ---------------------------------------------------------------------------
 // Commands (same verbs as the Electron IPC surface)
 // ---------------------------------------------------------------------------
@@ -723,6 +749,45 @@ fn open_logs(_app: AppHandle) -> Result<(), String> {
 }
 
 #[tauri::command]
+fn open_control_center(app: AppHandle) -> Result<(), String> {
+    show_control_center(&app)
+}
+
+fn is_control_window_label(label: &str) -> bool {
+    label == "control"
+}
+
+fn require_control_window(window: &WebviewWindow) -> Result<(), String> {
+    if is_control_window_label(window.label()) {
+        Ok(())
+    } else {
+        Err("this operation is available only in the privileged Control Center".into())
+    }
+}
+
+#[tauri::command]
+fn control_snapshot(window: WebviewWindow, app: AppHandle, id: String) -> Result<(), String> {
+    require_control_window(&window)?;
+    ensure_locald(&app)?;
+    send_to_locald(&app, json!({"cmd":"control.snapshot", "id": id}))
+}
+
+#[tauri::command]
+fn apply_operator_config(
+    window: WebviewWindow,
+    app: AppHandle,
+    id: String,
+    payload: Value,
+) -> Result<(), String> {
+    require_control_window(&window)?;
+    ensure_locald(&app)?;
+    send_to_locald(
+        &app,
+        json!({"cmd":"config.apply", "id": id, "payload": payload}),
+    )
+}
+
+#[tauri::command]
 fn set_connection_mode(app: AppHandle, mode: String) -> Result<(), String> {
     if mode != "local" && mode != "hosted" {
         return Err(format!("unknown mode {mode:?}"));
@@ -736,7 +801,8 @@ fn set_connection_mode(app: AppHandle, mode: String) -> Result<(), String> {
     send_to_locald(
         &app,
         json!({"cmd": "start", "setup": setup, "id": "shell-start"}),
-    )
+    )?;
+    show_control_center(&app)
 }
 
 #[tauri::command]
@@ -949,6 +1015,8 @@ fn build_tray(app: &AppHandle) -> tauri::Result<()> {
         None::<&str>,
     )?;
     let logs_item = MenuItem::with_id(app, "logs", "Open Logs", true, None::<&str>)?;
+    let control_item =
+        MenuItem::with_id(app, "control", "Local Control Center…", true, None::<&str>)?;
     let quit_item = MenuItem::with_id(app, "quit", "Quit Lemma", true, None::<&str>)?;
     let menu = Menu::with_items(
         app,
@@ -966,6 +1034,7 @@ fn build_tray(app: &AppHandle) -> tauri::Result<()> {
             &PredefinedMenuItem::separator(app)?,
             &mode_item,
             &autostart_item,
+            &control_item,
             &logs_item,
             &PredefinedMenuItem::separator(app)?,
             &quit_item,
@@ -1024,6 +1093,9 @@ fn build_tray(app: &AppHandle) -> tauri::Result<()> {
                         let _ = autolaunch.enable();
                     }
                 }
+                "control" => {
+                    let _ = show_control_center(&app);
+                }
                 "logs" => {
                     let _ = open_logs(app);
                 }
@@ -1076,7 +1148,10 @@ fn main() {
             choose_connection_mode,
             set_connection_mode,
             get_state,
-            login
+            login,
+            open_control_center,
+            control_snapshot,
+            apply_operator_config
         ])
         .setup(move |app| {
             let handle = app.handle().clone();
@@ -1173,6 +1248,13 @@ fn main() {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn privileged_configuration_commands_are_control_window_only() {
+        assert!(is_control_window_label("control"));
+        assert!(!is_control_window_label("main"));
+        assert!(!is_control_window_label("sales.apps.lemma.localhost"));
+    }
 
     #[test]
     fn configured_origins_are_exact() {
