@@ -68,6 +68,7 @@ def test_builds_exact_backend_frontend_native_contract(paths, tmp_path):
         "postgresql+asyncpg://"
     )
     assert backend["env"]["AGENTBOX_STATE_DATABASE_URL"].endswith(":55432/agentbox")
+    assert len(backend["env"]["FUNCTION_RUNTIME_SECRET"]) >= 32
     assert backend["env"]["WORKSPACE_CALLBACK_API_URL"] == ("http://host.lemma.internal:8711")
     assert backend["env"]["FUNCTION_RUNTIME_GATEWAY_URL"] == (
         "http://host.lemma.internal:8711"

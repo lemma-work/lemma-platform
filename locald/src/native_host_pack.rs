@@ -172,6 +172,13 @@ fn build(
         ]
         .concat(),
     ));
+    let function_runtime_secret = URL_SAFE.encode(Sha256::digest(
+        [
+            secrets.agentbox_api_key.as_bytes(),
+            b"lemma-function-runtime-secret-v1",
+        ]
+        .concat(),
+    ));
     let frontend_origin = format!("http://{LOCAL_FRONTEND_HOST}:{FRONTEND_PORT}");
     let backend_origin = format!("http://{LOCAL_BACKEND_HOST}:{BACKEND_PORT}");
     let mut backend_env = BTreeMap::from([
@@ -231,6 +238,7 @@ fn build(
         ("AGENTBOX_API_KEY", secrets.agentbox_api_key),
         ("AGENTBOX_PROVIDER", "lemma_local".to_owned()),
         ("AGENTBOX_RUNTIME_CREDENTIAL_KEY", runtime_key),
+        ("FUNCTION_RUNTIME_SECRET", function_runtime_secret),
         ("AGENTBOX_WORKSPACE_IMAGE", workspace_image),
         ("AGENTBOX_FUNCTION_IMAGE", function_image),
         (
@@ -612,6 +620,13 @@ mod tests {
                 .as_str()
                 .unwrap()
                 .starts_with("postgresql+asyncpg://")
+        );
+        assert!(
+            manifest["services"][0]["env"]["FUNCTION_RUNTIME_SECRET"]
+                .as_str()
+                .unwrap()
+                .len()
+                >= 32
         );
         assert_eq!(
             manifest["services"][0]["env"]["DOCUMENT_PROCESSOR"],
