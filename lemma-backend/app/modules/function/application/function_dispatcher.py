@@ -519,6 +519,8 @@ class FunctionDispatcher:
             return "Function execution timed out (deadline exceeded)"
         if isinstance(exc, AgentBoxApiError):
             code = str(getattr(exc, "code", "PROVIDER_UNAVAILABLE"))
+            if code.upper() == "DEADLINE_EXCEEDED":
+                return "Function execution timed out (deadline exceeded)"
             return f"Function sandbox error ({redact_text(code)})"
         return "Function execution failed"
 

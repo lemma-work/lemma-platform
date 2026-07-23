@@ -7,8 +7,19 @@ from uuid import uuid4
 import httpx
 import pytest
 
-from agentbox_client import PortAccessGrant, SandboxHandle
-from agentbox_client.models import PortProtocol, ProfileRef, WorkloadKind
+from agentbox_client import (
+    AgentBoxApiError,
+    PortAccessGrant,
+    RetryDisposition,
+    SandboxHandle,
+)
+from agentbox_client.models import (
+    AgentBoxErrorBody,
+    AgentBoxErrorResponse,
+    PortProtocol,
+    ProfileRef,
+    WorkloadKind,
+)
 
 from app.modules.function.application.function_callback_credentials import (
     FunctionCallbackCredentialSigner,
@@ -132,6 +143,27 @@ def _dispatcher(
         token_cache=FunctionSessionTokenCache(),
         endpoint_cache=FunctionRuntimeEndpointCache(),
         delegated_tokens_enabled=True,
+    )
+
+
+def test_agentbox_deadline_error_keeps_stable_timeout_message() -> None:
+    response = httpx.Response(
+        408,
+        request=httpx.Request("POST", "https://agentbox.test/processes"),
+    )
+    error = AgentBoxApiError(
+        response,
+        AgentBoxErrorResponse(
+            error=AgentBoxErrorBody(
+                code="DEADLINE_EXCEEDED",
+                message="process deadline has elapsed",
+                retry=RetryDisposition.DO_NOT_RETRY,
+            )
+        ),
+    )
+
+    assert FunctionDispatcher._execution_error(error) == (
+        "Function execution timed out (deadline exceeded)"
     )
 
 
