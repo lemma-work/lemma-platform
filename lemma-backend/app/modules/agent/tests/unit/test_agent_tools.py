@@ -353,9 +353,9 @@ async def test_display_resource_returns_browser_access_url(
         lambda: "docker",
     )
     monkeypatch.setattr(
-        user_interaction_adapter.WorkspaceSandboxService,
-        "resolve_workspace_host_url_for_runtime",
-        lambda runtime, api_url: f"{runtime}:{api_url}",
+        user_interaction_adapter.settings,
+        "workspace_callback_api_url",
+        "http://host.lemma.internal:8711",
     )
     monkeypatch.setattr(
         user_interaction_adapter.settings, "agentbox_api_url", "https://agentbox.test"
@@ -385,7 +385,7 @@ async def test_display_resource_returns_browser_access_url(
             "ensure_sandbox",
             (
                 user_id,
-                {"LEMMA_BASE_URL": "docker:https://api.test"},
+                {"LEMMA_BASE_URL": "http://host.lemma.internal:8711"},
             ),
         ),
         ("get_app_access_url", (user_id, "browser", 1800)),
