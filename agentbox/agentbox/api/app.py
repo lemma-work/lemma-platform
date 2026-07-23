@@ -3,7 +3,6 @@ from __future__ import annotations
 import asyncio
 from contextlib import asynccontextmanager
 from datetime import datetime, timedelta, timezone
-import hashlib
 import hmac
 import re
 import time
@@ -304,9 +303,12 @@ def _profiles() -> ProfileRegistry:
 
 def _runtime_key() -> bytes:
     configured = (settings.agentbox_runtime_credential_key or "").encode()
-    if len(configured) >= 32:
-        return configured
-    return hashlib.sha256(settings.agentbox_api_key.encode()).digest()
+    if len(configured) < 32:
+        raise RuntimeError(
+            "AGENTBOX_RUNTIME_CREDENTIAL_KEY must be configured with at least "
+            "32 bytes; it must be stable across replicas and restarts"
+        )
+    return configured
 
 
 @asynccontextmanager
@@ -325,6 +327,7 @@ async def lifespan(app: FastAPI):
                 allow_mutable_images=settings.agentbox_docker_allow_mutable_images,
                 add_host_gateway=settings.agentbox_add_host_gateway,
                 private_network=settings.agentbox_docker_private_network,
+                max_file_transfer_bytes=settings.agentbox_max_file_transfer_bytes,
             ),
             runtime_credentials=RuntimeCredentialSigner(_runtime_key()),
         )
@@ -349,6 +352,7 @@ async def lifespan(app: FastAPI):
                 scope=settings.agentbox_e2b_scope,
                 request_timeout_seconds=(settings.agentbox_e2b_request_timeout_seconds),
                 function_allow_out=(settings.agentbox_e2b_function_allow_out_hosts),
+                max_file_transfer_bytes=settings.agentbox_max_file_transfer_bytes,
             ),
         )
     else:
@@ -374,7 +378,11 @@ async def lifespan(app: FastAPI):
     )
     app.state.sandbox_lifecycle = lifecycle
     app.state.process_execution = ProcessExecutionService(database, provider)
-    app.state.filesystem = FilesystemService(database, provider)
+    app.state.filesystem = FilesystemService(
+        database,
+        provider,
+        max_transfer_bytes=settings.agentbox_max_file_transfer_bytes,
+    )
     app.state.python_sessions = PythonSessionService(database, provider)
     app.state.port_access = PortAccessService(
         database,

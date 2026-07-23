@@ -112,6 +112,61 @@ async def test_write_and_move_create_missing_destination_directories(
     assert not (tmp_path / "nested" / "source.bin").exists()
 
 
+async def test_streaming_transfer_is_bounded_and_failed_upload_is_atomic(
+    tmp_path: Path,
+) -> None:
+    transfer_limit = 2 * 1024 * 1024
+    app = create_app(
+        token=TOKEN,
+        allowed_roots=(str(tmp_path),),
+        max_file_transfer_bytes=transfer_limit,
+    )
+    transport = httpx.ASGITransport(app=app)
+    target = tmp_path / "large.bin"
+    chunk = b"x" * (128 * 1024)
+
+    async def exact_payload():
+        for _ in range(16):
+            yield chunk
+
+    async def oversized_payload():
+        for _ in range(16):
+            yield chunk
+        yield b"overflow"
+
+    async with httpx.AsyncClient(
+        transport=transport, base_url="http://runtime.test"
+    ) as client:
+        written = await client.put(
+            "/files:content",
+            headers={**HEADERS, "Content-Type": "application/octet-stream"},
+            params={"path": str(target)},
+            content=exact_payload(),
+        )
+        oversized = await client.put(
+            "/files:content",
+            headers={**HEADERS, "Content-Type": "application/octet-stream"},
+            params={"path": str(target)},
+            content=oversized_payload(),
+        )
+        async with client.stream(
+            "GET",
+            "/files:content",
+            headers=HEADERS,
+            params={"path": str(target)},
+        ) as response:
+            downloaded = 0
+            async for response_chunk in response.aiter_bytes():
+                downloaded += len(response_chunk)
+
+    assert written.status_code == 200
+    assert written.json()["size_bytes"] == transfer_limit
+    assert oversized.status_code == 413
+    assert downloaded == transfer_limit
+    assert target.stat().st_size == transfer_limit
+    assert list(tmp_path.glob(".*.agentbox-*")) == []
+
+
 async def test_filesystem_rejects_relative_and_symlink_escape(tmp_path: Path) -> None:
     root = tmp_path / "root"
     outside = tmp_path / "outside"

@@ -5,9 +5,9 @@ from uuid import UUID
 from datetime import datetime
 import struct
 
-from fastapi import APIRouter, Body, Depends, Query, Response
+from fastapi import APIRouter, Body, Depends, Query, Request, Response
 from fastapi.encoders import jsonable_encoder
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, StreamingResponse
 
 from agentbox.auth import require_api_key
 from agentbox.domain import (
@@ -18,7 +18,7 @@ from agentbox.domain import (
     SandboxKey,
     WorkloadKind,
 )
-from agentbox.filesystem import FilesystemService
+from agentbox.filesystem import FilesystemService, MAX_FILE_TRANSFER_BYTES
 from agentbox.lifecycle import SandboxLifecycleService
 from agentbox.processes import ProcessExecutionService
 from agentbox.port_access import PortAccessService
@@ -371,17 +371,17 @@ async def read_file(
     logical_id: UUID,
     path: str = Query(min_length=1, max_length=4096, pattern=r"^/"),
     offset: int = Query(default=0, ge=0),
-    length: int | None = Query(default=None, ge=0, le=64 * 1024 * 1024),
+    length: int | None = Query(default=None, ge=0, le=MAX_FILE_TRANSFER_BYTES),
     deadline_at: datetime = Query(),
     service: FilesystemService = Depends(filesystem),
-) -> Response:
-    data = await service.read(
+) -> StreamingResponse:
+    stream = await service.open_read(
         SandboxKey(workload_kind=workload_kind, logical_id=logical_id),
         path,
         ByteRange(offset=offset, length=length),
         deadline_at=deadline_at,
     )
-    return Response(content=data, media_type="application/octet-stream")
+    return StreamingResponse(stream, media_type="application/octet-stream")
 
 
 @router.put(
@@ -389,18 +389,18 @@ async def read_file(
     response_model=FileStatResponse,
 )
 async def write_file(
+    request: Request,
     workload_kind: WorkloadKind,
     logical_id: UUID,
     path: str = Query(min_length=1, max_length=4096, pattern=r"^/"),
     deadline_at: datetime = Query(),
     expected_sha256: str | None = Query(default=None, pattern=r"^sha256:[0-9a-f]{64}$"),
-    data: bytes = Body(media_type="application/octet-stream"),
     service: FilesystemService = Depends(filesystem),
 ) -> FileStatResponse:
-    stat = await service.write(
+    stat = await service.write_stream(
         SandboxKey(workload_kind=workload_kind, logical_id=logical_id),
         path,
-        data,
+        request.stream(),
         expected_sha256=expected_sha256,
         deadline_at=deadline_at,
     )

@@ -31,6 +31,17 @@ the SQLAlchemy state package, and the adapters under `agentbox/adapters/`.
 - The function profile contains a locked Python environment and no Node runtime,
   browser, package manager, or invocation-time installer.
 
+## Required manager secrets
+
+`AGENTBOX_API_KEY` authenticates backend calls. A separate
+`AGENTBOX_RUNTIME_CREDENTIAL_KEY` of at least 32 bytes derives private,
+per-allocation workspace-runtime credentials. The runtime key must be independently
+generated and stable across AgentBox replicas and restarts; AgentBox does not derive
+it from the API key or silently generate an ephemeral replacement.
+
+The repository development and load-test launchers provide explicit non-production
+values. Deployed environments must provide their own secret values.
+
 ## Verification
 
 Ordinary tests do not spend provider resources:

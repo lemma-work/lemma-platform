@@ -390,6 +390,46 @@ async def test_real_docker_runtime_process_pty_input_resize_and_reconnect(
         assert moved.sha256 is None
         assert deleted is True
 
+        large_chunk = b"s" * (1024 * 1024)
+        large_chunk_count = 65
+
+        async def large_chunks():
+            for _ in range(large_chunk_count):
+                yield large_chunk
+
+        large_written = await filesystem.write_stream(
+            key,
+            "/workspace/streamed-large.bin",
+            large_chunks(),
+            expected_sha256=None,
+            deadline_at=deadline,
+        )
+        large_stream = await filesystem.open_read(
+            key,
+            "/workspace/streamed-large.bin",
+            ByteRange(offset=0, length=None),
+            deadline_at=deadline,
+        )
+        large_size = 0
+        large_digest = hashlib.sha256()
+        async for chunk in large_stream:
+            large_size += len(chunk)
+            large_digest.update(chunk)
+
+        expected_large_digest = hashlib.sha256()
+        for _ in range(large_chunk_count):
+            expected_large_digest.update(large_chunk)
+        assert large_written.size_bytes == large_chunk_count * len(large_chunk)
+        assert large_written.sha256 == f"sha256:{expected_large_digest.hexdigest()}"
+        assert large_size == large_written.size_bytes
+        assert large_digest.hexdigest() == expected_large_digest.hexdigest()
+        assert await filesystem.delete(
+            key,
+            "/workspace/streamed-large.bin",
+            recursive=False,
+            deadline_at=deadline,
+        )
+
         session_id = uuid4()
         python_session_request = CreatePythonSessionRequest(
             session_id=session_id,

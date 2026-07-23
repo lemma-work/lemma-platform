@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from collections.abc import Awaitable
+from collections.abc import AsyncIterable, AsyncIterator, Awaitable
 from datetime import datetime, timezone
 from typing import TypeVar
 
@@ -25,14 +25,29 @@ from agentbox.ports import (
 
 
 ResultT = TypeVar("ResultT")
+DEFAULT_MAX_FILE_TRANSFER_BYTES = 256 * 1024 * 1024
+MAX_FILE_TRANSFER_BYTES = 2 * 1024 * 1024 * 1024
+_PROVIDER_FILESYSTEM_ERRORS = (
+    ProviderFilesystemNotFound,
+    ProviderFilesystemConflict,
+    ProviderFilesystemRejected,
+    ProviderFilesystemUnavailable,
+)
 
 
 class FilesystemService:
     def __init__(
-        self, database: StateDatabase, provider: ProviderFilesystemPort
+        self,
+        database: StateDatabase,
+        provider: ProviderFilesystemPort,
+        *,
+        max_transfer_bytes: int = DEFAULT_MAX_FILE_TRANSFER_BYTES,
     ) -> None:
+        if max_transfer_bytes < 1:
+            raise ValueError("filesystem transfer limit must be positive")
         self._database = database
         self._provider = provider
+        self._max_transfer_bytes = max_transfer_bytes
 
     async def stat(
         self, key: SandboxKey, path: str, *, deadline_at: datetime
@@ -50,6 +65,25 @@ class FilesystemService:
             self._provider.list_files(allocation, path=path, deadline_at=deadline_at)
         )
 
+    async def open_read(
+        self,
+        key: SandboxKey,
+        path: str,
+        byte_range: ByteRange,
+        *,
+        deadline_at: datetime,
+    ) -> AsyncIterator[bytes]:
+        allocation = await self._current_allocation(key, deadline_at)
+        stream = await self._provider_call(
+            self._provider.open_file(
+                allocation,
+                path=path,
+                byte_range=byte_range,
+                deadline_at=deadline_at,
+            )
+        )
+        return self._guard_download(stream, deadline_at=deadline_at)
+
     async def read(
         self,
         key: SandboxKey,
@@ -58,15 +92,13 @@ class FilesystemService:
         *,
         deadline_at: datetime,
     ) -> bytes:
-        allocation = await self._current_allocation(key, deadline_at)
-        return await self._provider_call(
-            self._provider.read_file(
-                allocation,
-                path=path,
-                byte_range=byte_range,
-                deadline_at=deadline_at,
-            )
+        stream = await self.open_read(
+            key,
+            path,
+            byte_range,
+            deadline_at=deadline_at,
         )
+        return b"".join([chunk async for chunk in stream])
 
     async def write(
         self,
@@ -77,12 +109,32 @@ class FilesystemService:
         expected_sha256: str | None,
         deadline_at: datetime,
     ) -> FileStat:
+        async def one_chunk() -> AsyncIterator[bytes]:
+            yield data
+
+        return await self.write_stream(
+            key,
+            path,
+            one_chunk(),
+            expected_sha256=expected_sha256,
+            deadline_at=deadline_at,
+        )
+
+    async def write_stream(
+        self,
+        key: SandboxKey,
+        path: str,
+        data: AsyncIterable[bytes],
+        *,
+        expected_sha256: str | None,
+        deadline_at: datetime,
+    ) -> FileStat:
         allocation = await self._current_allocation(key, deadline_at)
         return await self._provider_call(
             self._provider.write_file(
                 allocation,
                 path=path,
-                data=data,
+                data=self._guard_upload(data, deadline_at=deadline_at),
                 expected_sha256=expected_sha256,
                 deadline_at=deadline_at,
             )
@@ -128,35 +180,87 @@ class FilesystemService:
     async def _provider_call(operation: Awaitable[ResultT]) -> ResultT:
         try:
             return await operation
-        except ProviderFilesystemNotFound as exc:
-            raise AgentBoxError(
+        except _PROVIDER_FILESYSTEM_ERRORS as exc:
+            raise FilesystemService._public_error(exc) from exc
+
+    async def _guard_upload(
+        self, stream: AsyncIterable[bytes], *, deadline_at: datetime
+    ) -> AsyncIterator[bytes]:
+        transferred = 0
+        async for chunk in stream:
+            self._check_deadline(deadline_at)
+            if not chunk:
+                continue
+            transferred += len(chunk)
+            if transferred > self._max_transfer_bytes:
+                raise AgentBoxError(
+                    ErrorCode.INVALID_REQUEST,
+                    "filesystem upload exceeds configured limit",
+                    retry=RetryDisposition.DO_NOT_RETRY,
+                    status_code=413,
+                )
+            yield bytes(chunk)
+
+    async def _guard_download(
+        self, stream: AsyncIterator[bytes], *, deadline_at: datetime
+    ) -> AsyncIterator[bytes]:
+        transferred = 0
+        try:
+            async for chunk in stream:
+                self._check_deadline(deadline_at)
+                if not chunk:
+                    continue
+                transferred += len(chunk)
+                if transferred > self._max_transfer_bytes:
+                    raise AgentBoxError(
+                        ErrorCode.INVALID_REQUEST,
+                        "filesystem download exceeds configured limit",
+                        retry=RetryDisposition.DO_NOT_RETRY,
+                        status_code=413,
+                    )
+                yield bytes(chunk)
+        except _PROVIDER_FILESYSTEM_ERRORS as exc:
+            raise self._public_error(exc) from exc
+        finally:
+            close = getattr(stream, "aclose", None)
+            if close is not None:
+                await close()
+
+    @staticmethod
+    def _public_error(
+        error: ProviderFilesystemNotFound
+        | ProviderFilesystemConflict
+        | ProviderFilesystemRejected
+        | ProviderFilesystemUnavailable,
+    ) -> AgentBoxError:
+        if isinstance(error, ProviderFilesystemNotFound):
+            return AgentBoxError(
                 ErrorCode.FILE_NOT_FOUND,
                 "filesystem path does not exist",
                 retry=RetryDisposition.DO_NOT_RETRY,
                 status_code=404,
-            ) from exc
-        except ProviderFilesystemConflict as exc:
-            raise AgentBoxError(
+            )
+        if isinstance(error, ProviderFilesystemConflict):
+            return AgentBoxError(
                 ErrorCode.FILE_CONFLICT,
                 "filesystem operation precondition was not satisfied",
                 retry=RetryDisposition.DO_NOT_RETRY,
                 status_code=409,
-            ) from exc
-        except ProviderFilesystemRejected as exc:
-            raise AgentBoxError(
+            )
+        if isinstance(error, ProviderFilesystemRejected):
+            return AgentBoxError(
                 ErrorCode.INVALID_REQUEST,
                 "filesystem operation was rejected",
                 retry=RetryDisposition.DO_NOT_RETRY,
-                status_code=exc.status_code,
-            ) from exc
-        except ProviderFilesystemUnavailable as exc:
-            raise AgentBoxError(
-                ErrorCode.PROVIDER_UNAVAILABLE,
-                "filesystem provider is unavailable",
-                retry=RetryDisposition.WAIT,
-                status_code=503,
-                retry_after_ms=exc.retry_after_ms,
-            ) from exc
+                status_code=error.status_code,
+            )
+        return AgentBoxError(
+            ErrorCode.PROVIDER_UNAVAILABLE,
+            "filesystem provider is unavailable",
+            retry=RetryDisposition.WAIT,
+            status_code=503,
+            retry_after_ms=error.retry_after_ms,
+        )
 
     async def _current_allocation(
         self, key: SandboxKey, deadline_at: datetime

@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import base64
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterable, AsyncIterator
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
@@ -103,6 +103,11 @@ class DockerAdapterConfig:
     add_host_gateway: bool = False
     private_network: str | None = None
     process_start_observation_seconds: float = 10.0
+    max_file_transfer_bytes: int = 256 * 1024 * 1024
+
+    def __post_init__(self) -> None:
+        if self.max_file_transfer_bytes < 1:
+            raise ValueError("Docker filesystem transfer limit must be positive")
 
 
 @dataclass(frozen=True, slots=True)
@@ -220,6 +225,9 @@ class DockerSandboxAdapter:
             exposed_ports=exposed_ports,
             host_config=host_config,
             working_dir="/workspace" if not is_function else "/tmp",
+            env=(
+                f"AGENTBOX_MAX_FILE_TRANSFER_BYTES={self._config.max_file_transfer_bytes}",
+            ),
         )
         try:
             created = await self._engine.create_container(
@@ -465,25 +473,56 @@ class DockerSandboxAdapter:
         ) as client:
             return await client.list_files(path, deadline_at=deadline_at)
 
-    async def read_file(
+    async def open_file(
         self,
         allocation: ProviderAllocationRef,
         *,
         path: str,
         byte_range: ByteRange,
         deadline_at: datetime,
-    ) -> bytes:
-        async with self._filesystem_client(
-            allocation.provider_id, deadline_at=deadline_at
-        ) as client:
-            return await client.read_file(path, byte_range, deadline_at=deadline_at)
+    ) -> AsyncIterator[bytes]:
+        client: WorkspaceRuntimeClient | None = None
+        try:
+            client = await self._runtime_client(
+                allocation.provider_id, deadline_at=deadline_at
+            )
+            stream = await client.open_file(path, byte_range, deadline_at=deadline_at)
+        except WorkspaceRuntimeFileNotFound as exc:
+            if client is not None:
+                await client.close()
+            raise ProviderFilesystemNotFound(str(exc)) from exc
+        except WorkspaceRuntimeFileConflict as exc:
+            if client is not None:
+                await client.close()
+            raise ProviderFilesystemConflict(str(exc)) from exc
+        except WorkspaceRuntimeFileRejected as exc:
+            if client is not None:
+                await client.close()
+            raise ProviderFilesystemRejected(
+                str(exc), status_code=exc.status_code
+            ) from exc
+        except (WorkspaceRuntimeError, DockerEngineError) as exc:
+            if client is not None:
+                await client.close()
+            raise ProviderFilesystemUnavailable(str(exc)) from exc
+
+        async def chunks() -> AsyncIterator[bytes]:
+            try:
+                async for chunk in stream:
+                    yield chunk
+            except WorkspaceRuntimeError as exc:
+                raise ProviderFilesystemUnavailable(str(exc)) from exc
+            finally:
+                await client.close()
+
+        return chunks()
 
     async def write_file(
         self,
         allocation: ProviderAllocationRef,
         *,
         path: str,
-        data: bytes,
+        data: AsyncIterable[bytes],
         expected_sha256: str | None,
         deadline_at: datetime,
     ) -> FileStat:

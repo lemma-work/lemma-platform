@@ -149,6 +149,7 @@ class FakeFiles:
     def __init__(self) -> None:
         self.data: dict[str, bytes] = {}
         self.directories: set[str] = set()
+        self.stream_read_calls = 0
 
     async def make_dir(self, path: str, **_kwargs) -> bool:
         self.directories.add(path)
@@ -161,11 +162,13 @@ class FakeFiles:
     async def read(self, path: str, format: str = "text", **_kwargs):
         value = self.data[path]
         if format == "stream":
+            self.stream_read_calls += 1
             return FakeFileStream(value)
         return bytearray(value) if format == "bytes" else value.decode()
 
-    async def write(self, path: str, data: bytes, **_kwargs):
-        self.data[path] = bytes(data)
+    async def write(self, path: str, data, **_kwargs):
+        payload = data.read() if hasattr(data, "read") else data
+        self.data[path] = bytes(payload)
         return self._info(path)
 
     async def get_info(self, path: str, **_kwargs):
@@ -444,6 +447,7 @@ async def test_workspace_uses_exact_pause_resume_identity_and_native_storage(
 ) -> None:
     provider, lifecycle, key, deadline, created = await provision(database)
     provider_id = next(iter(FakeSandbox.instances))
+    sandbox = FakeSandbox.instances[provider_id]
 
     await FilesystemService(database, provider).write(
         key,
@@ -484,9 +488,8 @@ async def test_workspace_uses_exact_pause_resume_identity_and_native_storage(
     await lifecycle.destroy(key, deadline_at=deadline)
     assert provider_id not in FakeSandbox.instances
     assert FakeSandbox.kill_calls == [provider_id]
-    assert stat.sha256 == (
-        "sha256:75b07bb3ffb3b8ad63e79b983fbef8fd0ee8e7292144b4e7d3b57bd682074087"
-    )
+    assert stat.sha256 is None
+    assert sandbox.files.stream_read_calls == 1
 
 
 async def test_rate_limit_reuses_same_allocation_token_without_hot_loop(

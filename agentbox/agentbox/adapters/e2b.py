@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import asyncio
 from collections import deque
-from collections.abc import Iterator, Mapping
+from collections.abc import AsyncIterable, AsyncIterator, Iterator, Mapping
 from contextlib import contextmanager
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
@@ -10,6 +10,7 @@ import hashlib
 import ipaddress
 import posixpath
 import shlex
+from tempfile import SpooledTemporaryFile
 from typing import Any, Protocol
 from uuid import UUID
 
@@ -130,6 +131,7 @@ class E2BAdapterConfig:
     rate_limit_retry_after_ms: int = 5_000
     workspace_allow_internet_access: bool = True
     function_allow_out: tuple[str, ...] = ()
+    max_file_transfer_bytes: int = 256 * 1024 * 1024
 
     def __post_init__(self) -> None:
         if not self.api_key:
@@ -142,6 +144,8 @@ class E2BAdapterConfig:
             raise ValueError("E2B sandbox timeouts must be at least 60 seconds")
         if self.rate_limit_retry_after_ms < 1:
             raise ValueError("E2B rate limit retry delay must be positive")
+        if self.max_file_transfer_bytes < 1:
+            raise ValueError("E2B filesystem transfer limit must be positive")
         for destination in self.function_allow_out:
             if not destination or "://" in destination:
                 raise ValueError(
@@ -627,20 +631,7 @@ class E2BSandboxAdapter:
             info = await sandbox.files.get_info(
                 safe_path, request_timeout=self._request_timeout(deadline_at)
             )
-            digest = None
-            if info.type == FileType.FILE:
-                hasher = hashlib.sha256()
-                stream = await sandbox.files.read(
-                    safe_path,
-                    format="stream",
-                    request_timeout=self._request_timeout(deadline_at),
-                    stream_idle_timeout=self._request_timeout(deadline_at),
-                )
-                async with stream:
-                    async for chunk in stream:
-                        hasher.update(chunk)
-                digest = f"sha256:{hasher.hexdigest()}"
-            return self._file_stat(info, sha256=digest)
+            return self._file_stat(info, sha256=None)
 
     async def list_files(
         self,
@@ -658,36 +649,70 @@ class E2BSandboxAdapter:
             )
             return tuple(self._file_stat(entry, sha256=None) for entry in entries)
 
-    async def read_file(
+    async def open_file(
         self,
         allocation: ProviderAllocationRef,
         *,
         path: str,
         byte_range: ByteRange,
         deadline_at: datetime,
-    ) -> bytes:
+    ) -> AsyncIterator[bytes]:
         with self._translate_filesystem_errors():
             sandbox = await self._connect(allocation, deadline_at=deadline_at)
-            data = bytes(
-                await sandbox.files.read(
-                    self._safe_path(allocation.key.workload_kind, path),
-                    format="bytes",
-                    request_timeout=self._request_timeout(deadline_at),
-                )
+            safe_path = self._safe_path(allocation.key.workload_kind, path)
+            info = await sandbox.files.get_info(
+                safe_path,
+                request_timeout=self._request_timeout(deadline_at),
             )
-            end = (
-                None
+            if info.type != FileType.FILE:
+                raise ProviderFilesystemRejected("file read path is not a regular file")
+            available = max(0, info.size - byte_range.offset)
+            requested = (
+                available
                 if byte_range.length is None
-                else byte_range.offset + byte_range.length
+                else min(available, byte_range.length)
             )
-            return data[byte_range.offset : end]
+            if requested > self._config.max_file_transfer_bytes:
+                raise ProviderFilesystemRejected(
+                    "file read exceeds configured limit",
+                    status_code=413,
+                )
+            stream = await sandbox.files.read(
+                safe_path,
+                format="stream",
+                request_timeout=self._request_timeout(deadline_at),
+                stream_idle_timeout=self._request_timeout(deadline_at),
+            )
+
+        async def chunks() -> AsyncIterator[bytes]:
+            skip = byte_range.offset
+            remaining = requested
+            with self._translate_filesystem_errors():
+                async with stream:
+                    async for raw_chunk in stream:
+                        if remaining == 0:
+                            break
+                        chunk = bytes(raw_chunk)
+                        if skip:
+                            if skip >= len(chunk):
+                                skip -= len(chunk)
+                                continue
+                            chunk = chunk[skip:]
+                            skip = 0
+                        if len(chunk) > remaining:
+                            chunk = chunk[:remaining]
+                        remaining -= len(chunk)
+                        if chunk:
+                            yield chunk
+
+        return chunks()
 
     async def write_file(
         self,
         allocation: ProviderAllocationRef,
         *,
         path: str,
-        data: bytes,
+        data: AsyncIterable[bytes],
         expected_sha256: str | None,
         deadline_at: datetime,
     ) -> FileStat:
@@ -699,35 +724,55 @@ class E2BSandboxAdapter:
                 request_timeout=self._request_timeout(deadline_at),
             )
             if expected_sha256 is not None:
-                existing = await sandbox.files.read(
+                actual = await self._file_digest(
+                    sandbox,
                     safe_path,
-                    format="bytes",
-                    request_timeout=self._request_timeout(deadline_at),
+                    deadline_at=deadline_at,
                 )
-                actual = f"sha256:{hashlib.sha256(bytes(existing)).hexdigest()}"
                 if actual != expected_sha256:
                     raise ProviderFilesystemConflict("file digest precondition failed")
             temporary = f"{safe_path}.agentbox-{allocation.allocation_token.hex}.tmp"
-            await sandbox.files.write(
-                temporary,
-                data,
-                request_timeout=self._request_timeout(deadline_at),
-                use_octet_stream=True,
-            )
+            spool = SpooledTemporaryFile(max_size=8 * 1024 * 1024, mode="w+b")
             try:
-                info = await sandbox.files.rename(
+                digest = hashlib.sha256()
+                size = 0
+                async for chunk in data:
+                    if not chunk:
+                        continue
+                    size += len(chunk)
+                    if size > self._config.max_file_transfer_bytes:
+                        raise ProviderFilesystemRejected(
+                            "file write exceeds configured limit",
+                            status_code=413,
+                        )
+                    payload = bytes(chunk)
+                    digest.update(payload)
+                    await asyncio.to_thread(spool.write, payload)
+                await asyncio.to_thread(spool.seek, 0)
+                await sandbox.files.write(
                     temporary,
-                    safe_path,
+                    spool,
                     request_timeout=self._request_timeout(deadline_at),
+                    use_octet_stream=True,
                 )
-            except Exception:
                 try:
-                    await sandbox.files.remove(temporary)
+                    info = await sandbox.files.rename(
+                        temporary,
+                        safe_path,
+                        request_timeout=self._request_timeout(deadline_at),
+                    )
                 except Exception:
-                    pass
-                raise
-            digest = f"sha256:{hashlib.sha256(data).hexdigest()}"
-            return self._file_stat(info, sha256=digest)
+                    try:
+                        await sandbox.files.remove(temporary)
+                    except Exception:
+                        pass
+                    raise
+                return self._file_stat(
+                    info,
+                    sha256=f"sha256:{digest.hexdigest()}",
+                )
+            finally:
+                await asyncio.to_thread(spool.close)
 
     async def move_file(
         self,
@@ -1258,6 +1303,25 @@ class E2BSandboxAdapter:
             mode=info.mode,
             sha256=sha256,
         )
+
+    async def _file_digest(
+        self,
+        sandbox: E2BSandboxType,
+        path: str,
+        *,
+        deadline_at: datetime,
+    ) -> str:
+        digest = hashlib.sha256()
+        stream = await sandbox.files.read(
+            path,
+            format="stream",
+            request_timeout=self._request_timeout(deadline_at),
+            stream_idle_timeout=self._request_timeout(deadline_at),
+        )
+        async with stream:
+            async for chunk in stream:
+                digest.update(chunk)
+        return f"sha256:{digest.hexdigest()}"
 
     @contextmanager
     def _translate_filesystem_errors(self) -> Iterator[None]:

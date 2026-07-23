@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from collections.abc import AsyncIterable, AsyncIterator
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from uuid import uuid4
@@ -107,33 +108,39 @@ class Provider:
         self._outside_transaction("list")
         return (self._stat(f"{path}/payload"),)
 
-    async def read_file(
+    async def open_file(
         self,
         allocation: ProviderAllocationRef,
         *,
         path: str,
         byte_range: ByteRange,
         deadline_at: datetime,
-    ) -> bytes:
+    ) -> AsyncIterator[bytes]:
         del allocation, path, deadline_at
         self._outside_transaction("read")
         end = (
             None if byte_range.length is None else byte_range.offset + byte_range.length
         )
-        return self.data[byte_range.offset : end]
+        payload = self.data[byte_range.offset : end]
+
+        async def chunks() -> AsyncIterator[bytes]:
+            for offset in range(0, len(payload), 3):
+                yield payload[offset : offset + 3]
+
+        return chunks()
 
     async def write_file(
         self,
         allocation: ProviderAllocationRef,
         *,
         path: str,
-        data: bytes,
+        data: AsyncIterable[bytes],
         expected_sha256: str | None,
         deadline_at: datetime,
     ) -> FileStat:
         del allocation, expected_sha256, deadline_at
         self._outside_transaction("write")
-        self.data = data
+        self.data = b"".join([chunk async for chunk in data])
         return self._stat(path)
 
     async def move_file(
@@ -283,4 +290,37 @@ async def test_filesystem_provider_failures_have_typed_public_semantics(
     assert raised.value.status_code == status_code
     assert raised.value.retry == retry
     assert raised.value.retry_after_ms == retry_after_ms
+    assert database.active_units_of_work == 0
+
+
+async def test_streaming_upload_limit_is_enforced_before_provider_commit(
+    database: StateDatabase,
+) -> None:
+    provider = Provider(database)
+    key = SandboxKey(WorkloadKind.FUNCTION, uuid4())
+    deadline = datetime.now(timezone.utc) + timedelta(seconds=30)
+    await SandboxLifecycleService(database, provider).ensure(
+        key,
+        SandboxProfileRef("function-python-v1", f"sha256:{'a' * 64}"),
+        admission_class=AdmissionClass.LATENCY,
+        deadline_at=deadline,
+    )
+    original = provider.data
+
+    async def chunks() -> AsyncIterator[bytes]:
+        yield b"abc"
+        yield b"def"
+
+    with pytest.raises(AgentBoxError) as raised:
+        await FilesystemService(database, provider, max_transfer_bytes=5).write_stream(
+            key,
+            "/tmp/too-large",
+            chunks(),
+            expected_sha256=None,
+            deadline_at=deadline,
+        )
+
+    assert raised.value.code == ErrorCode.INVALID_REQUEST
+    assert raised.value.status_code == 413
+    assert provider.data == original
     assert database.active_units_of_work == 0

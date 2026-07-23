@@ -80,6 +80,7 @@ services:
     container_name: lemma-load-agentbox
     environment:
       AGENTBOX_API_KEY: "load-test-agentbox-key"
+      AGENTBOX_RUNTIME_CREDENTIAL_KEY: "load-test-agentbox-runtime-credential-key"
       AGENTBOX_API_URL: "http://agentbox:8000"
       AGENTBOX_PROVIDER: "docker"
       AGENTBOX_DOCKER_SOCKET_PATH: "/var/run/docker.sock"

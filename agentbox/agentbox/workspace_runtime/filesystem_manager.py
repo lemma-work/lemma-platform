@@ -1,12 +1,15 @@
 from __future__ import annotations
 
 import asyncio
+from collections.abc import AsyncIterable, AsyncIterator
+from dataclasses import replace
 from datetime import datetime, timezone
 import hashlib
 import os
 from pathlib import Path
 import shutil
 import stat as stat_module
+from typing import BinaryIO
 from uuid import uuid4
 
 from agentbox.domain import ByteRange, FileKind, FileStat
@@ -16,13 +19,17 @@ class FileConflictError(RuntimeError):
     pass
 
 
+class FileTooLargeError(RuntimeError):
+    pass
+
+
 class FilesystemManager:
     def __init__(
         self,
         allowed_roots: tuple[str, ...],
         *,
-        max_read_bytes: int = 64 * 1024 * 1024,
-        max_write_bytes: int = 64 * 1024 * 1024,
+        max_read_bytes: int = 256 * 1024 * 1024,
+        max_write_bytes: int = 256 * 1024 * 1024,
     ) -> None:
         self._roots = tuple(Path(root).resolve() for root in allowed_roots)
         self._max_read_bytes = max_read_bytes
@@ -34,8 +41,30 @@ class FilesystemManager:
     async def list(self, path: str) -> tuple[FileStat, ...]:
         return await asyncio.to_thread(self._list_sync, path)
 
+    async def open_read(self, path: str, byte_range: ByteRange) -> AsyncIterator[bytes]:
+        handle, remaining = await asyncio.to_thread(
+            self._prepare_read_sync, path, byte_range
+        )
+
+        async def chunks() -> AsyncIterator[bytes]:
+            unread = remaining
+            try:
+                while unread:
+                    chunk = await asyncio.to_thread(
+                        handle.read, min(unread, 1024 * 1024)
+                    )
+                    if not chunk:
+                        break
+                    unread -= len(chunk)
+                    yield chunk
+            finally:
+                await asyncio.to_thread(handle.close)
+
+        return chunks()
+
     async def read(self, path: str, byte_range: ByteRange) -> bytes:
-        return await asyncio.to_thread(self._read_sync, path, byte_range)
+        stream = await self.open_read(path, byte_range)
+        return b"".join([chunk async for chunk in stream])
 
     async def write(
         self,
@@ -44,9 +73,54 @@ class FilesystemManager:
         *,
         expected_sha256: str | None,
     ) -> FileStat:
-        if len(data) > self._max_write_bytes:
-            raise ValueError("file write exceeds configured limit")
-        return await asyncio.to_thread(self._write_sync, path, data, expected_sha256)
+        async def one_chunk() -> AsyncIterator[bytes]:
+            yield data
+
+        return await self.write_stream(
+            path,
+            one_chunk(),
+            expected_sha256=expected_sha256,
+        )
+
+    async def write_stream(
+        self,
+        path: str,
+        data: AsyncIterable[bytes],
+        *,
+        expected_sha256: str | None,
+    ) -> FileStat:
+        candidate, temporary, handle = await asyncio.to_thread(
+            self._prepare_write_sync, path, expected_sha256
+        )
+        digest = hashlib.sha256()
+        size = 0
+        committed = False
+        try:
+            async for chunk in data:
+                if not chunk:
+                    continue
+                size += len(chunk)
+                if size > self._max_write_bytes:
+                    raise FileTooLargeError("file write exceeds configured limit")
+                payload = bytes(chunk)
+                digest.update(payload)
+                await asyncio.to_thread(handle.write, payload)
+            await asyncio.to_thread(
+                self._commit_write_sync,
+                handle,
+                temporary,
+                candidate,
+            )
+            committed = True
+        finally:
+            if not committed:
+                await asyncio.to_thread(
+                    self._abort_write_sync,
+                    handle,
+                    temporary,
+                )
+        result = await asyncio.to_thread(self._stat_sync, str(candidate), False)
+        return replace(result, sha256=f"sha256:{digest.hexdigest()}")
 
     async def move(self, source: str, destination: str) -> None:
         await asyncio.to_thread(self._move_sync, source, destination)
@@ -89,25 +163,28 @@ class FilesystemManager:
             for child in sorted(directory.iterdir(), key=lambda item: item.name)
         )
 
-    def _read_sync(self, path: str, byte_range: ByteRange) -> bytes:
+    def _prepare_read_sync(
+        self, path: str, byte_range: ByteRange
+    ) -> tuple[BinaryIO, int]:
         candidate = self._existing_path(path, follow_symlinks=True)
         if not candidate.is_file():
             raise ValueError("file read path is not a regular file")
         size = candidate.stat().st_size
+        available = max(0, size - byte_range.offset)
         requested = (
-            max(0, size - byte_range.offset)
+            available
             if byte_range.length is None
-            else byte_range.length
+            else min(available, byte_range.length)
         )
         if requested > self._max_read_bytes:
-            raise ValueError("file read exceeds configured limit")
-        with candidate.open("rb") as handle:
-            handle.seek(byte_range.offset)
-            return handle.read(requested)
+            raise FileTooLargeError("file read exceeds configured limit")
+        handle = candidate.open("rb")
+        handle.seek(byte_range.offset)
+        return handle, requested
 
-    def _write_sync(
-        self, path: str, data: bytes, expected_sha256: str | None
-    ) -> FileStat:
+    def _prepare_write_sync(
+        self, path: str, expected_sha256: str | None
+    ) -> tuple[Path, Path, BinaryIO]:
         candidate = self._new_path(path)
         if expected_sha256 is not None:
             if (
@@ -119,21 +196,30 @@ class FilesystemManager:
             ):
                 raise FileConflictError("file content digest does not match")
         temporary = candidate.with_name(f".{candidate.name}.agentbox-{uuid4().hex}")
+        return candidate, temporary, temporary.open("xb")
+
+    @staticmethod
+    def _commit_write_sync(
+        handle: BinaryIO,
+        temporary: Path,
+        candidate: Path,
+    ) -> None:
+        handle.flush()
+        os.fsync(handle.fileno())
+        handle.close()
+        os.replace(temporary, candidate)
+        directory_fd = os.open(candidate.parent, os.O_RDONLY)
         try:
-            with temporary.open("xb") as handle:
-                handle.write(data)
-                handle.flush()
-                os.fsync(handle.fileno())
-            os.replace(temporary, candidate)
-            directory_fd = os.open(candidate.parent, os.O_RDONLY)
-            try:
-                os.fsync(directory_fd)
-            finally:
-                os.close(directory_fd)
+            os.fsync(directory_fd)
         finally:
-            if temporary.exists():
-                temporary.unlink()
-        return self._stat_sync(str(candidate), True)
+            os.close(directory_fd)
+
+    @staticmethod
+    def _abort_write_sync(handle: BinaryIO, temporary: Path) -> None:
+        if not handle.closed:
+            handle.close()
+        if temporary.exists():
+            temporary.unlink()
 
     def _move_sync(self, source: str, destination: str) -> None:
         source_path = self._existing_path(source, follow_symlinks=False)

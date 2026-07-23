@@ -60,13 +60,18 @@ class Settings(BaseSettings):
     agentbox_provider_create_burst: int = Field(default=4, ge=1, le=1000)
     agentbox_provider_interactive_capacity_reserve: int = Field(default=4, ge=0)
     agentbox_provider_latency_capacity_reserve: int = Field(default=4, ge=0)
+    agentbox_max_file_transfer_bytes: int = Field(
+        default=256 * 1024 * 1024,
+        ge=1,
+        le=2 * 1024 * 1024 * 1024,
+    )
     agentbox_workspace_profile_name: str = "workspace-python-v1"
     agentbox_workspace_profile_digest: str = f"sha256:{'1' * 64}"
     agentbox_workspace_image: str = "agentbox-workspace:dev"
     agentbox_function_profile_name: str = "function-python-v1"
     agentbox_function_profile_digest: str = f"sha256:{'2' * 64}"
     agentbox_function_image: str = "agentbox-function:dev"
-    agentbox_runtime_credential_key: str | None = None
+    agentbox_runtime_credential_key: str | None = Field(default=None, min_length=32)
     agentbox_e2b_api_key: str | None = Field(
         default=None,
         validation_alias=AliasChoices("E2B_API_KEY", "AGENTBOX_E2B_API_KEY"),

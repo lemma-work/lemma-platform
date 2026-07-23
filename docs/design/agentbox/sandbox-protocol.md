@@ -312,8 +312,12 @@ session response returns environment key names, never values.
 class FilesystemPort(Protocol):
     async def stat(self, key: SandboxKey, path: str) -> FileStat: ...
     async def list(self, key: SandboxKey, path: str) -> list[FileStat]: ...
-    async def read(self, key: SandboxKey, path: str, byte_range: ByteRange) -> bytes: ...
-    async def write(self, key: SandboxKey, request: WriteFileRequest) -> FileStat: ...
+    async def open_read(
+        self, key: SandboxKey, path: str, byte_range: ByteRange
+    ) -> AsyncIterator[bytes]: ...
+    async def write_stream(
+        self, key: SandboxKey, path: str, data: AsyncIterable[bytes]
+    ) -> FileStat: ...
     async def move(self, key: SandboxKey, source: str, destination: str) -> None: ...
     async def delete(self, key: SandboxKey, path: str, recursive: bool) -> bool: ...
 ```
@@ -324,8 +328,12 @@ ephemeral cache root. Symlink resolution is checked at the adapter boundary.
 
 Writes use a temporary sibling file, fsync when supported, and atomic rename. The
 API streams binary bytes and never base64-encodes through a shell command. Range
-reads and a configured maximum request size support large files without buffering
-them entirely in AgentBox memory.
+reads and a configured maximum transfer size support large files without buffering
+them entirely in AgentBox memory. The default transfer bound is 256 MiB and may be
+configured up to 2 GiB. Docker streams through the private workspace runtime. E2B
+downloads through its native async reader and uploads through a bounded spooled
+file because the E2B SDK accepts file-like upload bodies. A failed or oversized
+upload never replaces the destination.
 
 ### 4.5 `PortAccessPort`
 
@@ -423,16 +431,17 @@ Session IDs are DNS-safe, bounded strings. They are not authorization tokens.
 
 ```text
 GET    .../files:stat?path=/workspace/a.txt
-GET    .../files:list?path=/workspace
-GET    .../files:read?path=/workspace/a.txt
-PUT    .../files:write?path=/workspace/a.txt
+GET    .../files?path=/workspace
+GET    .../files:content?path=/workspace/a.txt
+PUT    .../files:content?path=/workspace/a.txt
 POST   .../files:move
 DELETE .../files?path=/workspace/a.txt&recursive=false
 ```
 
 Read/write bodies use `application/octet-stream`. Metadata is carried in response
 headers and typed JSON for `stat`/`list`. Conditional writes accept an optional
-expected content digest.
+expected content digest. Upload and download bodies are consumed incrementally;
+disconnects close the upstream stream and incomplete upload temporaries are removed.
 
 ### 5.5 Port-access route
 

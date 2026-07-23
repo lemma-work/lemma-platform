@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import asyncio
+from collections.abc import AsyncIterable, AsyncIterator
+from contextlib import asynccontextmanager
 from datetime import datetime, timedelta, timezone
 import posixpath
 import shlex
@@ -317,6 +319,25 @@ class AgentBoxWorkspaceSession:
             deadline_at=self._deadline(timeout),
         )
 
+    @asynccontextmanager
+    async def stream_file(
+        self,
+        path: str,
+        *,
+        offset: int = 0,
+        length: int | None = None,
+        timeout: int = 60,
+    ) -> AsyncIterator[AsyncIterator[bytes]]:
+        await self._touch_activity()
+        async with self.client.stream_file(
+            self.logical_id,
+            await self._resolve_path(path),
+            offset=offset,
+            length=length,
+            deadline_at=self._deadline(timeout),
+        ) as stream:
+            yield stream
+
     async def write_file(
         self,
         path: str,
@@ -327,6 +348,23 @@ class AgentBoxWorkspaceSession:
     ) -> FileStat:
         await self._touch_activity()
         return await self.client.write_file(
+            self.logical_id,
+            await self._resolve_path(path),
+            data,
+            expected_sha256=expected_sha256,
+            deadline_at=self._deadline(timeout),
+        )
+
+    async def write_file_stream(
+        self,
+        path: str,
+        data: AsyncIterable[bytes],
+        *,
+        expected_sha256: str | None = None,
+        timeout: int = 60,
+    ) -> FileStat:
+        await self._touch_activity()
+        return await self.client.write_file_stream(
             self.logical_id,
             await self._resolve_path(path),
             data,

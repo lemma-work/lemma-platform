@@ -1,6 +1,7 @@
 from __future__ import annotations
 
-from collections.abc import Callable, Mapping
+from collections.abc import AsyncIterable, AsyncIterator, Callable, Mapping
+from contextlib import asynccontextmanager
 from datetime import datetime
 import struct
 from typing import Any, TypeVar
@@ -421,6 +422,25 @@ class AgentBoxClient:
         offset: int = 0,
         length: int | None = None,
     ) -> bytes:
+        async with self.stream_file(
+            logical_id,
+            path,
+            deadline_at=deadline_at,
+            offset=offset,
+            length=length,
+        ) as stream:
+            return b"".join([chunk async for chunk in stream])
+
+    @asynccontextmanager
+    async def stream_file(
+        self,
+        logical_id: UUID,
+        path: str,
+        *,
+        deadline_at: datetime,
+        offset: int = 0,
+        length: int | None = None,
+    ) -> AsyncIterator[AsyncIterator[bytes]]:
         params = {
             "path": path,
             "offset": str(offset),
@@ -428,19 +448,42 @@ class AgentBoxClient:
         }
         if length is not None:
             params["length"] = str(length)
-        response = await self._request(
+        async with self._client.stream(
             "GET",
             f"{self._sandbox_path(WorkloadKind.WORKSPACE, logical_id)}/files:content",
             params=params,
-        )
-        self._raise_for_error(response)
-        return response.content
+            headers=self._context_headers() or None,
+        ) as response:
+            if response.status_code < 200 or response.status_code >= 300:
+                await response.aread()
+                self._raise_for_error(response)
+            yield response.aiter_bytes(chunk_size=1024 * 1024)
 
     async def write_file(
         self,
         logical_id: UUID,
         path: str,
         data: bytes,
+        *,
+        deadline_at: datetime,
+        expected_sha256: str | None = None,
+    ) -> FileStat:
+        async def one_chunk() -> AsyncIterator[bytes]:
+            yield data
+
+        return await self.write_file_stream(
+            logical_id,
+            path,
+            one_chunk(),
+            deadline_at=deadline_at,
+            expected_sha256=expected_sha256,
+        )
+
+    async def write_file_stream(
+        self,
+        logical_id: UUID,
+        path: str,
+        data: AsyncIterable[bytes],
         *,
         deadline_at: datetime,
         expected_sha256: str | None = None,
@@ -507,7 +550,7 @@ class AgentBoxClient:
         *,
         json_body: dict[str, Any] | None = None,
         params: dict[str, str] | None = None,
-        content: bytes | None = None,
+        content: bytes | AsyncIterable[bytes] | None = None,
         headers: dict[str, str] | None = None,
     ) -> ModelT:
         response = await self._request(
@@ -528,7 +571,7 @@ class AgentBoxClient:
         *,
         json_body: dict[str, Any] | None = None,
         params: dict[str, str] | None = None,
-        content: bytes | None = None,
+        content: bytes | AsyncIterable[bytes] | None = None,
         headers: dict[str, str] | None = None,
     ) -> httpx.Response:
         merged_headers = self._context_headers()

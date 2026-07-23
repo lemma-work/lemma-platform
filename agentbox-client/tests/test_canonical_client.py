@@ -58,9 +58,7 @@ async def test_client_uses_typed_workload_route_and_absolute_deadline() -> None:
     result = await client.ensure_sandbox(
         WorkloadKind.WORKSPACE,
         logical_id,
-        profile=ProfileRef(
-            name="workspace-python-v1", digest=f"sha256:{'a' * 64}"
-        ),
+        profile=ProfileRef(name="workspace-python-v1", digest=f"sha256:{'a' * 64}"),
         admission_class=AdmissionClass.INTERACTIVE,
         deadline_at=deadline(),
     )
@@ -136,9 +134,7 @@ async def test_typed_error_exposes_retry_disposition() -> None:
     )
 
     with pytest.raises(AgentBoxApiError) as raised:
-        await client.inspect_process(
-            WorkloadKind.FUNCTION, uuid4(), uuid4()
-        )
+        await client.inspect_process(WorkloadKind.FUNCTION, uuid4(), uuid4())
 
     assert raised.value.code == "RATE_LIMITED"
     assert raised.value.retry.value == "wait"
@@ -183,4 +179,56 @@ async def test_typed_indeterminate_error_is_not_treated_as_successful_202() -> N
 
     assert raised.value.code == "UNKNOWN_DISPATCH"
     assert raised.value.retry.value == "wait"
+    await http.aclose()
+
+
+async def test_file_upload_and_download_use_async_streams() -> None:
+    logical_id = uuid4()
+    payload = b"a" * 1024 + b"b" * 1024
+    uploaded = bytearray()
+
+    async def handler(request: httpx.Request) -> httpx.Response:
+        if request.method == "PUT":
+            async for chunk in request.stream:
+                uploaded.extend(chunk)
+            return httpx.Response(
+                200,
+                json={
+                    "path": "/workspace/large.bin",
+                    "kind": "file",
+                    "size_bytes": len(uploaded),
+                    "modified_at": datetime.now(timezone.utc).isoformat(),
+                    "mode": 0o600,
+                    "sha256": None,
+                },
+            )
+        return httpx.Response(200, content=payload)
+
+    async def upload_chunks():
+        yield payload[:1024]
+        yield payload[1024:]
+
+    http = httpx.AsyncClient(
+        base_url="http://agentbox.test", transport=httpx.MockTransport(handler)
+    )
+    client = AgentBoxClient(
+        base_url="http://agentbox.test", api_key="secret", client=http
+    )
+
+    written = await client.write_file_stream(
+        logical_id,
+        "/workspace/large.bin",
+        upload_chunks(),
+        deadline_at=deadline(),
+    )
+    async with client.stream_file(
+        logical_id,
+        "/workspace/large.bin",
+        deadline_at=deadline(),
+    ) as stream:
+        downloaded = b"".join([chunk async for chunk in stream])
+
+    assert bytes(uploaded) == payload
+    assert written.size_bytes == len(payload)
+    assert downloaded == payload
     await http.aclose()

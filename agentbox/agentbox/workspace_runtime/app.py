@@ -19,7 +19,7 @@ from fastapi import (
     WebSocket,
 )
 from fastapi.encoders import jsonable_encoder
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, StreamingResponse
 
 from agentbox.domain import ByteRange, ProcessState
 
@@ -40,7 +40,11 @@ from .models import (
     RuntimeStartProcessRequest,
     RuntimeTerminateRequest,
 )
-from .filesystem_manager import FileConflictError, FilesystemManager
+from .filesystem_manager import (
+    FileConflictError,
+    FilesystemManager,
+    FileTooLargeError,
+)
 from .process_manager import ManagedProcess, OutputChunk, ProcessManager
 from .python_session_manager import PythonSessionManager
 from .quiescer import WorkspaceQuiescer
@@ -79,10 +83,22 @@ def create_app(
     *,
     token: str | None = None,
     allowed_roots: tuple[str, ...] = ("/workspace", "/tmp"),
+    max_file_transfer_bytes: int | None = None,
 ) -> FastAPI:
     runtime_token = _load_token(token)
+    transfer_limit = (
+        int(os.getenv("AGENTBOX_MAX_FILE_TRANSFER_BYTES", str(256 * 1024 * 1024)))
+        if max_file_transfer_bytes is None
+        else max_file_transfer_bytes
+    )
+    if transfer_limit < 1:
+        raise ValueError("filesystem transfer limit must be positive")
     manager = ProcessManager(allowed_roots=allowed_roots)
-    filesystem = FilesystemManager(allowed_roots=allowed_roots)
+    filesystem = FilesystemManager(
+        allowed_roots=allowed_roots,
+        max_read_bytes=transfer_limit,
+        max_write_bytes=transfer_limit,
+    )
     python_sessions = PythonSessionManager(allowed_roots=allowed_roots)
     quiescer = WorkspaceQuiescer()
     app = FastAPI(title="AgentBox Workspace Runtime")
@@ -112,6 +128,12 @@ def create_app(
         _request: Request, error: FileConflictError
     ) -> JSONResponse:
         return JSONResponse(status_code=409, content={"detail": str(error)})
+
+    @app.exception_handler(FileTooLargeError)
+    async def file_too_large_handler(
+        _request: Request, error: FileTooLargeError
+    ) -> JSONResponse:
+        return JSONResponse(status_code=413, content={"detail": str(error)})
 
     @app.exception_handler(KeyError)
     async def key_error_handler(_request: Request, error: KeyError) -> JSONResponse:
@@ -329,22 +351,28 @@ def create_app(
     async def read_file(
         path: str = Query(min_length=1, max_length=4096, pattern=r"^/"),
         offset: int = Query(default=0, ge=0),
-        length: int | None = Query(default=None, ge=0, le=64 * 1024 * 1024),
+        length: int | None = Query(default=None, ge=0, le=2 * 1024 * 1024 * 1024),
         _auth: None = Depends(authenticate),
-    ) -> Response:
-        data = await filesystem.read(path, ByteRange(offset=offset, length=length))
-        return Response(content=data, media_type="application/octet-stream")
+    ) -> StreamingResponse:
+        stream = await filesystem.open_read(
+            path, ByteRange(offset=offset, length=length)
+        )
+        return StreamingResponse(stream, media_type="application/octet-stream")
 
     @app.put("/files:content", response_model=RuntimeFileStatResponse)
     async def write_file(
+        request: Request,
         path: str = Query(min_length=1, max_length=4096, pattern=r"^/"),
         expected_sha256: str | None = Query(
             default=None, pattern=r"^sha256:[0-9a-f]{64}$"
         ),
-        data: bytes = Body(media_type="application/octet-stream"),
         _auth: None = Depends(authenticate),
     ) -> RuntimeFileStatResponse:
-        stat = await filesystem.write(path, data, expected_sha256=expected_sha256)
+        stat = await filesystem.write_stream(
+            path,
+            request.stream(),
+            expected_sha256=expected_sha256,
+        )
         return RuntimeFileStatResponse.from_domain(stat)
 
     @app.post("/files:move", status_code=204)

@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from collections.abc import Mapping
+from collections.abc import AsyncIterable, AsyncIterator, Mapping
 from datetime import datetime, timezone
 import struct
 
@@ -242,29 +242,27 @@ class WorkspaceRuntimeClient:
         body = RuntimeFileListResponse.model_validate(response.json())
         return tuple(item.to_domain() for item in body.entries)
 
-    async def read_file(
+    async def open_file(
         self,
         path: str,
         byte_range: ByteRange,
         *,
         deadline_at: datetime,
-    ) -> bytes:
+    ) -> AsyncIterator[bytes]:
         params = {"path": path, "offset": str(byte_range.offset)}
         if byte_range.length is not None:
             params["length"] = str(byte_range.length)
-        response = await self._request(
-            "GET",
+        return await self._stream_response(
             "/files:content",
-            deadline_at=deadline_at,
             params=params,
+            deadline_at=deadline_at,
             status_errors=_FILESYSTEM_STATUS_ERRORS,
         )
-        return response.content
 
     async def write_file(
         self,
         path: str,
-        data: bytes,
+        data: AsyncIterable[bytes],
         *,
         expected_sha256: str | None,
         deadline_at: datetime,
@@ -388,7 +386,7 @@ class WorkspaceRuntimeClient:
         | RuntimeCreatePythonSessionRequest
         | RuntimeExecutePythonRequest
         | None = None,
-        content: bytes | None = None,
+        content: bytes | AsyncIterable[bytes] | None = None,
         content_type: str | None = None,
         params: dict[str, str] | None = None,
         ambiguous_error: type[WorkspaceRuntimeError] | None = None,
@@ -418,13 +416,59 @@ class WorkspaceRuntimeClient:
                 f"workspace runtime transport failed: {type(exc).__name__}"
             ) from exc
         if response.status_code < 200 or response.status_code >= 300:
-            error_type = (status_errors or {}).get(
-                response.status_code, WorkspaceRuntimeError
-            )
-            if error_type is WorkspaceRuntimeFileRejected:
-                raise WorkspaceRuntimeFileRejected(
-                    f"workspace runtime returned HTTP {response.status_code}",
-                    status_code=response.status_code,
-                )
-            raise error_type(f"workspace runtime returned HTTP {response.status_code}")
+            raise self._status_error(response.status_code, status_errors)
         return response
+
+    async def _stream_response(
+        self,
+        path: str,
+        *,
+        params: dict[str, str],
+        deadline_at: datetime,
+        status_errors: Mapping[int, type[WorkspaceRuntimeError]],
+    ) -> AsyncIterator[bytes]:
+        remaining = (deadline_at - datetime.now(timezone.utc)).total_seconds()
+        if remaining <= 0:
+            raise WorkspaceRuntimeError("runtime operation deadline has elapsed")
+        stream_context = self._client.stream(
+            "GET",
+            path,
+            params=params,
+            timeout=min(remaining, self._request_timeout_seconds),
+        )
+        try:
+            response = await stream_context.__aenter__()
+        except httpx.TransportError as exc:
+            raise WorkspaceRuntimeError(
+                f"workspace runtime transport failed: {type(exc).__name__}"
+            ) from exc
+        if response.status_code < 200 or response.status_code >= 300:
+            try:
+                await response.aread()
+            finally:
+                await stream_context.__aexit__(None, None, None)
+            raise self._status_error(response.status_code, status_errors)
+
+        async def chunks() -> AsyncIterator[bytes]:
+            try:
+                async for chunk in response.aiter_bytes(chunk_size=1024 * 1024):
+                    yield chunk
+            except httpx.TransportError as exc:
+                raise WorkspaceRuntimeError(
+                    f"workspace runtime stream failed: {type(exc).__name__}"
+                ) from exc
+            finally:
+                await stream_context.__aexit__(None, None, None)
+
+        return chunks()
+
+    @staticmethod
+    def _status_error(
+        status_code: int,
+        status_errors: Mapping[int, type[WorkspaceRuntimeError]] | None,
+    ) -> WorkspaceRuntimeError:
+        error_type = (status_errors or {}).get(status_code, WorkspaceRuntimeError)
+        message = f"workspace runtime returned HTTP {status_code}"
+        if error_type is WorkspaceRuntimeFileRejected:
+            return WorkspaceRuntimeFileRejected(message, status_code=status_code)
+        return error_type(message)

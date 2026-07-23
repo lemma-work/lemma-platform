@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from collections.abc import AsyncIterable, AsyncIterator
 from dataclasses import dataclass
 from datetime import datetime
 from typing import Protocol
@@ -266,21 +267,21 @@ class ProviderFilesystemPort(Protocol):
         deadline_at: datetime,
     ) -> tuple[FileStat, ...]: ...
 
-    async def read_file(
+    async def open_file(
         self,
         allocation: ProviderAllocationRef,
         *,
         path: str,
         byte_range: ByteRange,
         deadline_at: datetime,
-    ) -> bytes: ...
+    ) -> AsyncIterator[bytes]: ...
 
     async def write_file(
         self,
         allocation: ProviderAllocationRef,
         *,
         path: str,
-        data: bytes,
+        data: AsyncIterable[bytes],
         expected_sha256: str | None,
         deadline_at: datetime,
     ) -> FileStat: ...
