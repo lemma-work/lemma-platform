@@ -352,6 +352,25 @@ def e2e_settings(test_database_url, test_redis_url, supertokens_container):
     os.environ["AGENTBOX_API_KEY"] = agentbox_key
     os.environ["FUNCTION_RUNTIME_SECRET"] = "e2e-function-runtime-secret-32-bytes"
 
+    # Pin the callback server to one session-wide port for the same reason as
+    # AgentBox above. Queued functions are dispatched by the session-scoped
+    # worker, whose settings are loaded once when its subprocess starts. The
+    # function-scoped backend server rebinds this port for each test, so both
+    # API- and worker-driven sandboxes receive the same explicit, reachable URL.
+    # Production code intentionally performs no localhost/container rewriting.
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
+        sock.bind(("127.0.0.1", 0))
+        callback_port = int(sock.getsockname()[1])
+    callback_url = os.getenv(
+        "WORKSPACE_E2E_DOCKER_API_URL",
+        f"http://host.docker.internal:{callback_port}",
+    )
+    settings.workspace_callback_api_url = callback_url
+    settings.function_runtime_gateway_url = callback_url
+    os.environ["WORKSPACE_E2E_BACKEND_PORT"] = str(callback_port)
+    os.environ["WORKSPACE_CALLBACK_API_URL"] = callback_url
+    os.environ["FUNCTION_RUNTIME_GATEWAY_URL"] = callback_url
+
     # E2E execution mode: default to the fast mocked level (no real model, no
     # Docker) so CI and local runs are fast and deterministic. ``E2E_REAL=1``
     # (or the per-axis E2E_LLM_MODE / E2E_SANDBOX_MODE) opts into the real model
@@ -480,6 +499,12 @@ async def worker(e2e_settings):
                 "DATASTORE_DATABASE_URL": e2e_settings.datastore_database_url,
                 "REDIS_URL": e2e_settings.redis_url,
                 "API_URL": os.environ.get("API_URL", e2e_settings.api_url),
+                "WORKSPACE_CALLBACK_API_URL": (
+                    e2e_settings.workspace_callback_api_url
+                ),
+                "FUNCTION_RUNTIME_GATEWAY_URL": (
+                    e2e_settings.function_runtime_gateway_url
+                ),
                 # The manager rebinds to this stable port each test; keep the
                 # worker pointed at it so worker-driven function jobs reach it.
                 "AGENTBOX_API_URL": e2e_settings.agentbox_api_url,

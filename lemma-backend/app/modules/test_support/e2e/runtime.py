@@ -515,7 +515,11 @@ def function_image(e2e_settings) -> Generator[str, None, None]:
 async def backend_server(test_app) -> AsyncGenerator[dict[str, str], None]:
     """Run a real backend HTTP server for Docker workspace callbacks."""
 
-    port = _available_port()
+    # The production worker used by queued-function E2E is session-scoped and
+    # captures its explicitly configured callback URL at startup. Rebind the
+    # function-scoped backend to that stable port instead of silently relying on
+    # localhost/container hostname rewriting.
+    port = int(os.getenv("WORKSPACE_E2E_BACKEND_PORT") or _available_port())
     config = uvicorn.Config(
         app=test_app,
         host="0.0.0.0",
