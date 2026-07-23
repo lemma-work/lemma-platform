@@ -503,31 +503,87 @@ jobs:
       - name: Verify baked splash concepts are committed
         run: git diff --exit-code desktop/ui/concepts.gen.json
 
-      - name: Build supervisor sidecar
+      - name: Build native local sidecars
         run: desktop/scripts/build-sidecar.sh
 
       - name: Run desktop tests
         working-directory: desktop
         run: cargo test --locked
 
-      - name: Build and codesign DMG
+      - name: Stage CI online runtime manifest
+        shell: bash
+        run: |
+          set -euo pipefail
+          version="$(node -p "require('./desktop/tauri.conf.json').version")"
+          mkdir -p desktop/runtime
+          jq -n \
+            --arg version "${version}" \
+            '{
+              schema_version: 1,
+              version: $version,
+              host_packs: {
+                "aarch64-apple-darwin": {
+                  url: "https://downloads.example.invalid/lemma-host-pack.zip",
+                  sha256: ("0" * 64),
+                  size: 1,
+                  format: "zip"
+                }
+              },
+              guest_runtimes: {
+                "macos-aarch64": {
+                  url: "https://downloads.example.invalid/lemma-guest-runtime.zip",
+                  sha256: ("0" * 64),
+                  size: 1,
+                  format: "zip"
+                }
+              }
+            }' > desktop/runtime/lemma-local.json
+
+      - name: Sign virtualization helper
+        shell: bash
+        run: |
+          set -euo pipefail
+          helper="desktop/binaries/lemma-vz-aarch64-apple-darwin"
+          args=(
+            --force
+            --options runtime
+            --entitlements desktop/entitlements.plist
+            --sign "${APPLE_SIGNING_IDENTITY}"
+          )
+          if [[ "${APPLE_SIGNING_IDENTITY}" != "-" ]]; then
+            args+=(--timestamp)
+          fi
+          codesign "${args[@]}" "${helper}"
+          codesign --verify --strict --verbose=2 "${helper}"
+          codesign -d --entitlements :- "${helper}" 2>&1 \
+            | grep -F "com.apple.security.virtualization"
+
+      - name: Build and codesign online DMG
         working-directory: desktop
-        run: npx -y @tauri-apps/cli@2.11.4 build --config tauri.dist.conf.json
+        run: npx -y @tauri-apps/cli@2.11.4 build --config tauri.online.conf.json
 
       - name: Verify application signature
         shell: bash
         run: |
           set -euo pipefail
           app="desktop/target/release/bundle/macos/Lemma.app"
-          sidecar="${app}/Contents/MacOS/lemma-supervisor"
-          uv="${app}/Contents/MacOS/uv"
+          locald="${app}/Contents/MacOS/lemma-locald"
+          runtime_bridge="${app}/Contents/MacOS/lemma-runtime"
+          vz="${app}/Contents/Resources/lemma-vz"
 
           test -d "${app}"
-          test -x "${sidecar}"
-          test -x "${uv}"
+          test -x "${locald}"
+          test -x "${runtime_bridge}"
+          test -x "${vz}"
+          test -f "${app}/Contents/Resources/lemma-local.json"
+          test ! -e "${app}/Contents/MacOS/lemma-supervisor"
+          test ! -e "${app}/Contents/MacOS/uv"
           codesign --verify --deep --strict --verbose=2 "${app}"
-          codesign --verify --strict --verbose=2 "${sidecar}"
-          codesign --verify --strict --verbose=2 "${uv}"
+          codesign --verify --strict --verbose=2 "${locald}"
+          codesign --verify --strict --verbose=2 "${runtime_bridge}"
+          codesign --verify --strict --verbose=2 "${vz}"
+          codesign -d --entitlements :- "${vz}" 2>/dev/null \
+            | grep -F "com.apple.security.virtualization"
 
           signature_info="$(codesign -dvvv "${app}" 2>&1)"
           printf '%s\n' "${signature_info}"
