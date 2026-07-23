@@ -1,8 +1,8 @@
 {
   "bundle": {
-    "externalBin": ["binaries/lemma-locald", "binaries/lemma-supervisor", "binaries/uv"],
     "resources": {
-      "runtime/local-runtime/": "local-runtime/"
+      "runtime/local-runtime/": "local-runtime/",
+      "runtime/managed-runtime/": "managed-runtime/"
     },
     "macOS": {
       "hardenedRuntime": true,

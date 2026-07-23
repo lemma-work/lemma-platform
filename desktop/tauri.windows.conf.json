@@ -1,0 +1,10 @@
+{
+  "bundle": {
+    "externalBin": [
+      "binaries/lemma-locald",
+      "binaries/lemma-runtime",
+      "binaries/lemma-supervisor",
+      "binaries/uv"
+    ]
+  }
+}

@@ -11,6 +11,8 @@ New-Item -ItemType Directory -Force -Path $OutDir, $WorkDir | Out-Null
 try {
     cargo build --manifest-path locald/Cargo.toml --release --target $Triple
     Copy-Item "locald/target/$Triple/release/lemma-locald.exe" "$OutDir/lemma-locald-$Triple.exe"
+    cargo build --manifest-path local-runtime/hostctl/Cargo.toml --release --target $Triple
+    Copy-Item "local-runtime/hostctl/target/$Triple/release/lemma-runtime.exe" "$OutDir/lemma-runtime-$Triple.exe"
 
     uv run --project lemma-stack --with pyinstaller pyinstaller `
         --onefile --noconfirm `
@@ -27,6 +29,7 @@ try {
 
     & "$OutDir/lemma-supervisor-$Triple.exe" --help | Out-Null
     & "$OutDir/lemma-locald-$Triple.exe" --version | Out-Null
+    & "$OutDir/lemma-runtime-$Triple.exe" --version | Out-Null
     & "$OutDir/uv-$Triple.exe" --version | Out-Null
     Write-Host "Windows sidecars: smoke ok"
 }

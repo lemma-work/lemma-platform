@@ -240,6 +240,43 @@ fn bundled_host_pack_root() -> Option<PathBuf> {
         .find(|root| root.join("release.json").is_file())
 }
 
+fn bundled_managed_runtime_root() -> Option<PathBuf> {
+    if let Some(root) = std::env::var_os("LEMMA_DESKTOP_MANAGED_RUNTIME_ROOT") {
+        let root = PathBuf::from(root);
+        if managed_runtime_marker(&root).is_file() {
+            return Some(root);
+        }
+    }
+    let exe = std::env::current_exe().ok()?;
+    let bin_dir = exe.parent()?;
+    let candidates = if cfg!(target_os = "macos") {
+        vec![
+            bin_dir.join("../Resources/managed-runtime"),
+            bin_dir.join("managed-runtime"),
+        ]
+    } else {
+        vec![bin_dir.join("managed-runtime")]
+    };
+    candidates
+        .into_iter()
+        .find(|root| managed_runtime_marker(root).is_file())
+}
+
+fn managed_runtime_marker(root: &std::path::Path) -> PathBuf {
+    root.join(if cfg!(target_os = "macos") {
+        "macos-aarch64/runtime.json"
+    } else {
+        "windows-x86_64/runtime.json"
+    })
+}
+
+fn bundled_sibling(name: &str) -> Option<PathBuf> {
+    let executable = std::env::current_exe().ok()?;
+    let suffix = if cfg!(windows) { ".exe" } else { "" };
+    let candidate = executable.parent()?.join(format!("{name}{suffix}"));
+    candidate.is_file().then_some(candidate)
+}
+
 fn bundled_host_pack_release() -> Option<String> {
     let release = bundled_host_pack_root()?.join("release.json");
     let payload: Value = serde_json::from_slice(&std::fs::read(release).ok()?).ok()?;
@@ -248,7 +285,7 @@ fn bundled_host_pack_release() -> Option<String> {
 
 fn locald_matches_host_pack(hello: &Value, required_release: Option<&str>) -> bool {
     required_release.is_none_or(|required| {
-        hello["mode"].as_str() == Some("host-packs")
+        matches!(hello["mode"].as_str(), Some("host-packs" | "managed-local"))
             && hello["host_pack_release"].as_str() == Some(required)
     })
 }
@@ -375,6 +412,18 @@ fn spawn_locald() -> Result<(), String> {
         .stderr(Stdio::null());
     if let Some(pack_root) = bundled_host_pack_root() {
         command.env("LEMMA_LOCALD_HOST_PACK_ROOT", pack_root);
+    }
+    if let Some(runtime_root) = bundled_managed_runtime_root() {
+        let bridge =
+            bundled_sibling("lemma-runtime").ok_or("bundled lemma-runtime bridge is missing")?;
+        command
+            .env("LEMMA_LOCALD_MANAGED_RUNTIME_ARTIFACT_ROOT", runtime_root)
+            .env("LEMMA_LOCALD_RUNTIME_BRIDGE_BIN", bridge);
+        #[cfg(target_os = "macos")]
+        command.env(
+            "LEMMA_LOCALD_VZ_BIN",
+            bundled_sibling("lemma-vz").ok_or("bundled lemma-vz helper is missing")?,
+        );
     }
     command
         .spawn()

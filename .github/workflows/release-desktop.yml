@@ -121,12 +121,14 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           VERSION: ${{ steps.version.outputs.version }}
           TARGET: aarch64-apple-darwin
+          GUEST_TARGET: macos-aarch64
         run: |
           mkdir -p desktop/runtime/download
           for attempt in {1..60}; do
             if gh release download "v${VERSION}" \
               --pattern lemma-local.json \
               --pattern "lemma-host-pack-${TARGET}.zip" \
+              --pattern "lemma-guest-runtime-${GUEST_TARGET}.zip" \
               --dir desktop/runtime/download \
               --clobber; then
               break
@@ -143,18 +145,32 @@ jobs:
           root = Path("desktop/runtime/download")
           manifest = json.loads((root / "lemma-local.json").read_text())
           target = os.environ["TARGET"]
+          guest_target = os.environ["GUEST_TARGET"]
           archive = root / f"lemma-host-pack-{target}.zip"
           expected = manifest["host_packs"][target]
           actual = hashlib.sha256(archive.read_bytes()).hexdigest()
           if actual != expected["sha256"] or archive.stat().st_size != expected["size"]:
               raise SystemExit("native host pack digest/size mismatch")
+          guest = root / f"lemma-guest-runtime-{guest_target}.zip"
+          expected_guest = manifest["guest_runtimes"][guest_target]
+          actual_guest = hashlib.sha256(guest.read_bytes()).hexdigest()
+          if actual_guest != expected_guest["sha256"] or guest.stat().st_size != expected_guest["size"]:
+              raise SystemExit("managed guest runtime digest/size mismatch")
           PY
           ditto -x -k \
             "desktop/runtime/download/lemma-host-pack-${TARGET}.zip" \
             desktop/runtime
+          mkdir -p desktop/runtime/managed-runtime
+          ditto -x -k \
+            "desktop/runtime/download/lemma-guest-runtime-${GUEST_TARGET}.zip" \
+            desktop/runtime/managed-runtime
           test -f desktop/runtime/local-runtime/release.json
           test -x desktop/runtime/local-runtime/backend/python/bin/python3
           test -x desktop/runtime/local-runtime/frontend/node/bin/node
+          test -f desktop/runtime/managed-runtime/macos-aarch64/runtime.json
+          test -f desktop/runtime/managed-runtime/macos-aarch64/vmlinuz
+          test -f desktop/runtime/managed-runtime/macos-aarch64/initrd
+          test -f desktop/runtime/managed-runtime/macos-aarch64/disk.raw
 
       - name: Bake splash concepts
         run: node desktop/scripts/extract-concepts.mjs
@@ -180,16 +196,23 @@ jobs:
           set -euo pipefail
           app="desktop/target/release/bundle/macos/Lemma.app"
           locald="${app}/Contents/MacOS/lemma-locald"
+          runtime_bridge="${app}/Contents/MacOS/lemma-runtime"
+          vz="${app}/Contents/MacOS/lemma-vz"
           sidecar="${app}/Contents/MacOS/lemma-supervisor"
           uv="${app}/Contents/MacOS/uv"
 
           test -x "${locald}"
+          test -x "${runtime_bridge}"
+          test -x "${vz}"
           test -x "${uv}"
           codesign --verify --deep --strict --verbose=2 "${app}"
           codesign --verify --strict --verbose=2 "${locald}"
+          codesign --verify --strict --verbose=2 "${runtime_bridge}"
+          codesign --verify --strict --verbose=2 "${vz}"
           codesign --verify --strict --verbose=2 "${sidecar}"
           codesign --verify --strict --verbose=2 "${uv}"
           codesign -dvvv "${app}" 2>&1 | grep -F "Authority=Developer ID Application:"
+          codesign -d --entitlements :- "${vz}" 2>/dev/null | grep -F "com.apple.security.virtualization"
           xcrun stapler validate "${app}"
 
       - name: Upload DMG to release
@@ -341,6 +364,7 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           VERSION: ${{ steps.version.outputs.version }}
           TARGET: x86_64-pc-windows-msvc
+          GUEST_TARGET: windows-x86_64
         run: |
           New-Item -ItemType Directory -Force desktop/runtime/download | Out-Null
           $downloaded = $false
@@ -348,6 +372,7 @@ jobs:
             gh release download "v$env:VERSION" `
               --pattern lemma-local.json `
               --pattern "lemma-host-pack-$env:TARGET.zip" `
+              --pattern "lemma-guest-runtime-$env:GUEST_TARGET.zip" `
               --dir desktop/runtime/download `
               --clobber
             if ($LASTEXITCODE -eq 0) { $downloaded = $true; break }
@@ -360,15 +385,25 @@ jobs:
           root = Path("desktop/runtime/download")
           manifest = json.loads((root / "lemma-local.json").read_text())
           target = os.environ["TARGET"]
+          guest_target = os.environ["GUEST_TARGET"]
           archive = root / f"lemma-host-pack-{target}.zip"
           expected = manifest["host_packs"][target]
           actual = hashlib.sha256(archive.read_bytes()).hexdigest()
           if actual != expected["sha256"] or archive.stat().st_size != expected["size"]:
               raise SystemExit("native host pack digest/size mismatch")
+          guest = root / f"lemma-guest-runtime-{guest_target}.zip"
+          expected_guest = manifest["guest_runtimes"][guest_target]
+          actual_guest = hashlib.sha256(guest.read_bytes()).hexdigest()
+          if actual_guest != expected_guest["sha256"] or guest.stat().st_size != expected_guest["size"]:
+              raise SystemExit("managed guest runtime digest/size mismatch")
           '@ | python -
           Expand-Archive `
             "desktop/runtime/download/lemma-host-pack-$env:TARGET.zip" `
             desktop/runtime -Force
+          New-Item -ItemType Directory -Force desktop/runtime/managed-runtime | Out-Null
+          Expand-Archive `
+            "desktop/runtime/download/lemma-guest-runtime-$env:GUEST_TARGET.zip" `
+            desktop/runtime/managed-runtime -Force
           if (-not (Test-Path desktop/runtime/local-runtime/release.json)) {
             throw "Native host pack is incomplete"
           }
@@ -377,6 +412,9 @@ jobs:
           }
           if (-not (Test-Path desktop/runtime/local-runtime/frontend/node/node.exe)) {
             throw "Native frontend Node.js is missing"
+          }
+          if (-not (Test-Path desktop/runtime/managed-runtime/windows-x86_64/rootfs.tar)) {
+            throw "Managed WSL guest rootfs is missing"
           }
 
       - name: Bake splash concepts
@@ -403,7 +441,8 @@ jobs:
           if (-not $signTool) { throw "Windows SDK signtool.exe was not found" }
           $runtimeExecutables = @(
             "desktop/runtime/local-runtime/backend/python/python.exe",
-            "desktop/runtime/local-runtime/frontend/node/node.exe"
+            "desktop/runtime/local-runtime/frontend/node/node.exe",
+            "desktop/binaries/lemma-runtime-x86_64-pc-windows-msvc.exe"
           )
           foreach ($path in $runtimeExecutables) {
             if (-not (Test-Path $path)) { throw "Native runtime executable is missing: $path" }
@@ -426,6 +465,7 @@ jobs:
           $paths = @(
             "desktop/target/release/lemma-desktop.exe",
             "desktop/binaries/lemma-locald-x86_64-pc-windows-msvc.exe",
+            "desktop/binaries/lemma-runtime-x86_64-pc-windows-msvc.exe",
             "desktop/binaries/lemma-supervisor-x86_64-pc-windows-msvc.exe",
             "desktop/binaries/uv-x86_64-pc-windows-msvc.exe",
             "desktop/runtime/local-runtime/backend/python/python.exe",
