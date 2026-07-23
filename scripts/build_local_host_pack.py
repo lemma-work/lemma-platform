@@ -43,6 +43,11 @@ def run(*args: str | Path, cwd: Path = REPO_ROOT, env: dict[str, str] | None = N
     subprocess.run(command, cwd=cwd, env=env, check=True)
 
 
+def npm_executable(platform_name: str | None = None) -> str:
+    platform_name = os.name if platform_name is None else platform_name
+    return "npm.cmd" if platform_name == "nt" else "npm"
+
+
 def one_child(directory: Path, label: str, *, preferred: str | None = None) -> Path:
     # uv also creates a version alias, lock metadata, and a .temp directory in
     # a managed Python install root. The relocatable distribution is the one
@@ -268,10 +273,11 @@ def standalone_server(root: Path) -> Path:
 
 
 def build_frontend(output: Path, explicit_node_root: Path | None) -> None:
-    run("npm", "ci", cwd=REPO_ROOT / "lemma-typescript")
-    run("npm", "run", "build", cwd=REPO_ROOT / "lemma-typescript")
-    run("npm", "ci", cwd=REPO_ROOT / "lemma-frontend")
-    run("npm", "run", "build", cwd=REPO_ROOT / "lemma-frontend")
+    npm = npm_executable()
+    run(npm, "ci", cwd=REPO_ROOT / "lemma-typescript")
+    run(npm, "run", "build", cwd=REPO_ROOT / "lemma-typescript")
+    run(npm, "ci", cwd=REPO_ROOT / "lemma-frontend")
+    run(npm, "run", "build", cwd=REPO_ROOT / "lemma-frontend")
 
     frontend = output / "frontend"
     copy_node_runtime(frontend, explicit_node_root)
