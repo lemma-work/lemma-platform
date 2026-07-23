@@ -314,7 +314,10 @@ async def test_sigterm_midrun_shuts_down_cleanly_and_finalizes_run(
     for marker in _CANCEL_SCOPE_CRASH_MARKERS:
         assert marker not in logs, f"worker crashed on cancel scope: {marker!r}\n{logs[-3000:]}"
     # 2) Clean shutdown path ran.
-    assert "Worker shutting down..." in logs, f"worker did not shut down cleanly\n{logs[-3000:]}"
+    assert (
+        '"logger": "app.core.infrastructure.jobs.streaq_runtime"' in logs
+        and '"event": "service.stopped"' in logs
+    ), f"worker did not shut down cleanly\n{logs[-3000:]}"
 
     # 3) The interrupted run is finalized (not stuck RUNNING) — the grace_period
     #    lets the shielded finalization commit before engine disposal.

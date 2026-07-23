@@ -817,6 +817,10 @@ async def configure_workspace_api_url(
 
     original_callback_url = settings.workspace_callback_api_url
     original_callback_url_env = os.environ.get("WORKSPACE_CALLBACK_API_URL")
+    original_function_gateway_url = settings.function_runtime_gateway_url
+    original_function_gateway_url_env = os.environ.get(
+        "FUNCTION_RUNTIME_GATEWAY_URL"
+    )
     original_manager_url = settings.agentbox_api_url
     original_manager_url_env = os.environ.get("AGENTBOX_API_URL")
     original_manager_key = settings.agentbox_api_key
@@ -835,9 +839,11 @@ async def configure_workspace_api_url(
             else backend_server["docker_base_url"]
         )
         settings.workspace_callback_api_url = workspace_callback_url
+        settings.function_runtime_gateway_url = workspace_callback_url
         settings.agentbox_api_url = local_agentbox_server["manager_base_url"]
         settings.agentbox_api_key = local_agentbox_server["api_key"]
         os.environ["WORKSPACE_CALLBACK_API_URL"] = workspace_callback_url
+        os.environ["FUNCTION_RUNTIME_GATEWAY_URL"] = workspace_callback_url
         os.environ["AGENTBOX_API_URL"] = local_agentbox_server["manager_base_url"]
         os.environ["AGENTBOX_API_KEY"] = local_agentbox_server["api_key"]
         try:
@@ -849,12 +855,19 @@ async def configure_workspace_api_url(
         finally:
             await close_workspace_tool_runtimes()
             settings.workspace_callback_api_url = original_callback_url
+            settings.function_runtime_gateway_url = original_function_gateway_url
             settings.agentbox_api_url = original_manager_url
             settings.agentbox_api_key = original_manager_key
             if original_callback_url_env is None:
                 os.environ.pop("WORKSPACE_CALLBACK_API_URL", None)
             else:
                 os.environ["WORKSPACE_CALLBACK_API_URL"] = original_callback_url_env
+            if original_function_gateway_url_env is None:
+                os.environ.pop("FUNCTION_RUNTIME_GATEWAY_URL", None)
+            else:
+                os.environ["FUNCTION_RUNTIME_GATEWAY_URL"] = (
+                    original_function_gateway_url_env
+                )
             if original_manager_url_env is None:
                 os.environ.pop("AGENTBOX_API_URL", None)
             else:

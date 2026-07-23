@@ -176,7 +176,7 @@ async def test_dispatcher_invokes_run_once_and_holds_no_db_during_io(
     monkeypatch.setattr(
         "app.modules.function.application.function_dispatcher.settings."
         "function_runtime_gateway_url",
-        "https://gateway.lemma.test",
+        "http://127.0.0.1:8711",
     )
     requests: list[tuple[str, dict]] = []
 
@@ -225,6 +225,7 @@ async def test_dispatcher_invokes_run_once_and_holds_no_db_during_io(
     assert request["json"] == {"input": dispatch.input_data}
     assert request["headers"]["Authorization"] == "Bearer delegated-function-token"
     assert request["headers"]["If-Match"] == f'"{dispatch.revision_hash}"'
+    assert request["headers"]["X-Lemma-Gateway-Url"] == "http://127.0.0.1:8711"
     assert request["headers"]["X-Lemma-Run-Token"] == signer.derive(
         dispatch.run_id
     )

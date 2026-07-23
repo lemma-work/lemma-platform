@@ -7,7 +7,7 @@ from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 import time
-from urllib.parse import urljoin, urlparse
+from urllib.parse import urljoin
 from uuid import UUID
 
 import httpx
@@ -491,13 +491,7 @@ class FunctionDispatcher:
     @staticmethod
     def _runtime_gateway_url() -> str:
         configured = settings.function_runtime_gateway_url or settings.api_url
-        parsed = urlparse(configured)
-        if parsed.hostname not in {"localhost", "127.0.0.1", "::1"}:
-            return configured.rstrip("/")
-        host = "host.docker.internal"
-        if parsed.port:
-            host = f"{host}:{parsed.port}"
-        return f"{parsed.scheme or 'http'}://{host}"
+        return configured.rstrip("/")
 
     @staticmethod
     def _control_deadline(execution_deadline: datetime) -> datetime:
@@ -522,7 +516,7 @@ class FunctionDispatcher:
         if isinstance(exc, InvocationOutcomeUnconfirmed):
             return "Function execution failed because the runtime response was not confirmed"
         if isinstance(exc, TimeoutError):
-            return "Function execution deadline exceeded"
+            return "Function execution timed out (deadline exceeded)"
         if isinstance(exc, AgentBoxApiError):
             code = str(getattr(exc, "code", "PROVIDER_UNAVAILABLE"))
             return f"Function sandbox error ({redact_text(code)})"

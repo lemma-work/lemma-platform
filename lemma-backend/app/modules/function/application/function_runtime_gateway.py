@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import hashlib
 from typing import Awaitable, Callable
-from urllib.parse import urlparse
 from uuid import UUID
 
 from app.core.infrastructure.db.uow_factory import UnitOfWorkFactory
@@ -61,7 +60,7 @@ class FunctionRuntimeGateway:
         self._storage_factory = storage_factory
         self._signer = credential_signer
         self._organization_resolver = organization_resolver
-        self._lemma_base_url = self._docker_reachable_url(lemma_base_url)
+        self._lemma_base_url = lemma_base_url.rstrip("/")
         self._delegated_tokens_enabled = delegated_tokens_enabled
 
     async def claim(
@@ -182,14 +181,3 @@ class FunctionRuntimeGateway:
         if not sections:
             return None
         return redact_text("\n".join(sections))[: 4 * 1024 * 1024]
-
-    @staticmethod
-    def _docker_reachable_url(url: str) -> str:
-        parsed = urlparse(url)
-        if parsed.hostname not in {"localhost", "127.0.0.1", "::1"}:
-            return url.rstrip("/")
-        scheme = parsed.scheme or "http"
-        host = "host.docker.internal"
-        if parsed.port:
-            host = f"{host}:{parsed.port}"
-        return f"{scheme}://{host}"
