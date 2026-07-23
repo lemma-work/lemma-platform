@@ -14,6 +14,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::json;
 
 use crate::host_process::ManagedRuntimeSpec;
+use crate::native_host_pack::ManagedManifestMaterial;
 use crate::paths::LocalPaths;
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -87,14 +88,12 @@ impl ManagedRuntimeBootstrap {
         }
     }
 
-    pub fn apply_manifest_environment(&self, command: &mut Command) {
-        command
-            .env(
-                "LEMMA_MANAGED_POSTGRES_PASSWORD",
-                &self.secrets.postgres_password,
-            )
-            .env("LEMMA_MANAGED_REDIS_PASSWORD", &self.secrets.redis_password)
-            .env("LEMMA_MANAGED_RUNTIME_CLI", &self.bridge_executable);
+    pub(crate) fn manifest_material(&self) -> ManagedManifestMaterial {
+        ManagedManifestMaterial {
+            postgres_password: self.secrets.postgres_password.clone(),
+            redis_password: self.secrets.redis_password.clone(),
+            bridge_executable: self.bridge_executable.clone(),
+        }
     }
 
     pub fn controller(

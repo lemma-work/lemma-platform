@@ -12,6 +12,7 @@ use serde_json::{json, Value};
 
 use crate::host_process::HostProcessManager;
 use crate::managed_runtime::{ManagedRuntimeBootstrap, ManagedRuntimeController};
+use crate::native_host_pack;
 use crate::operator_config::{ApplyOperatorConfig, OperatorConfigStore};
 use crate::paths::LocalPaths;
 use crate::protocol::{
@@ -54,8 +55,11 @@ impl Daemon {
             _ => env::var_os("LEMMA_LOCALD_HOST_PACK_ROOT")
                 .filter(|path| !path.is_empty())
                 .map(PathBuf::from)
-                .map(|pack_root| {
-                    prepare_host_manifest(&paths, &pack_root, managed_bootstrap.as_ref())
+                .map(|pack_root| match managed_bootstrap.as_ref() {
+                    Some(runtime) => {
+                        native_host_pack::prepare(&paths, &pack_root, runtime.manifest_material())
+                    }
+                    None => prepare_compatibility_host_manifest(&paths, &pack_root),
                 })
                 .transpose()?,
         };
@@ -1016,13 +1020,12 @@ fn supervisor_base_command() -> io::Result<Command> {
     Ok(command)
 }
 
-fn prepare_host_manifest(
+fn prepare_compatibility_host_manifest(
     paths: &LocalPaths,
     pack_root: &std::path::Path,
-    managed_runtime: Option<&ManagedRuntimeBootstrap>,
 ) -> io::Result<PathBuf> {
     let destination = paths.root.join("host-pack.json");
-    let provider = transitional_provider(managed_runtime.is_some());
+    let provider = transitional_provider(false);
     let mut command = supervisor_base_command()?;
     command
         .args(["host-manifest", "--pack-root"])
@@ -1031,9 +1034,6 @@ fn prepare_host_manifest(
         .arg(&destination)
         .args(["--provider", &provider])
         .env("LEMMA_DESKTOP", "1");
-    if let Some(runtime) = managed_runtime {
-        runtime.apply_manifest_environment(&mut command);
-    }
     let output = command.output()?;
     if !output.status.success() {
         let detail = String::from_utf8_lossy(&output.stderr);

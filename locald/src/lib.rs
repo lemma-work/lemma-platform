@@ -1,6 +1,7 @@
 pub mod daemon;
 pub mod host_process;
 pub mod managed_runtime;
+pub mod native_host_pack;
 pub mod operator_config;
 pub mod paths;
 pub mod protocol;
