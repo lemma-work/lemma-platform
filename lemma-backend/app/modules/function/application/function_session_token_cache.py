@@ -1,0 +1,124 @@
+from __future__ import annotations
+
+import asyncio
+from collections import OrderedDict
+from collections.abc import Awaitable, Callable
+from dataclasses import dataclass
+import hashlib
+import time
+from uuid import UUID
+
+from app.core.request_context import create_inherited_task
+
+
+FunctionTokenMinter = Callable[..., Awaitable[str]]
+
+
+@dataclass(frozen=True, slots=True)
+class FunctionSessionTokenKey:
+    user_id: UUID
+    pod_id: UUID
+    function_id: UUID
+    revision_hash: str
+    workload_name: str
+    scope: tuple[str, ...]
+    delegated_tokens_enabled: bool
+
+    @property
+    def session_id(self) -> str:
+        material = "\0".join(
+            (
+                str(self.user_id),
+                str(self.pod_id),
+                str(self.function_id),
+                self.revision_hash,
+                self.workload_name,
+                ",".join(self.scope),
+                str(self.delegated_tokens_enabled),
+            )
+        )
+        digest = hashlib.sha256(material.encode()).hexdigest()
+        return f"function-session:{digest}"
+
+
+@dataclass(frozen=True, slots=True)
+class _CachedToken:
+    value: str
+    expires_at: float
+
+
+class FunctionSessionTokenCache:
+    """Short-lived, single-flight cache for delegated function sessions."""
+
+    def __init__(
+        self,
+        *,
+        ttl_seconds: float = 300,
+        max_entries: int = 4096,
+        clock: Callable[[], float] = time.monotonic,
+    ) -> None:
+        if ttl_seconds <= 0:
+            raise ValueError("function session token TTL must be positive")
+        if max_entries < 1:
+            raise ValueError("function session token cache must retain an entry")
+        self._ttl_seconds = ttl_seconds
+        self._max_entries = max_entries
+        self._clock = clock
+        self._entries: OrderedDict[FunctionSessionTokenKey, _CachedToken] = (
+            OrderedDict()
+        )
+        self._inflight: dict[FunctionSessionTokenKey, asyncio.Task[str]] = {}
+        self._lock = asyncio.Lock()
+
+    async def get(
+        self,
+        key: FunctionSessionTokenKey,
+        *,
+        minter: FunctionTokenMinter,
+    ) -> str:
+        now = self._clock()
+        async with self._lock:
+            cached = self._entries.get(key)
+            if cached is not None and cached.expires_at > now:
+                self._entries.move_to_end(key)
+                return cached.value
+            if cached is not None:
+                self._entries.pop(key, None)
+            task = self._inflight.get(key)
+            if task is None:
+                task = create_inherited_task(self._mint(key, minter=minter))
+                self._inflight[key] = task
+
+        try:
+            return await asyncio.shield(task)
+        finally:
+            if task.done():
+                async with self._lock:
+                    if self._inflight.get(key) is task:
+                        self._inflight.pop(key, None)
+
+    async def _mint(
+        self,
+        key: FunctionSessionTokenKey,
+        *,
+        minter: FunctionTokenMinter,
+    ) -> str:
+        value = await minter(
+            user_id=key.user_id,
+            workload_type="function",
+            workload_id=key.function_id,
+            pod_id=key.pod_id,
+            session_id=key.session_id,
+            workload_name=key.workload_name,
+            scope=list(key.scope) or None,
+            delegated_tokens_enabled=key.delegated_tokens_enabled,
+        )
+        async with self._lock:
+            self._entries[key] = _CachedToken(
+                value=value,
+                expires_at=self._clock() + self._ttl_seconds,
+            )
+            self._entries.move_to_end(key)
+            while len(self._entries) > self._max_entries:
+                self._entries.popitem(last=False)
+        return value

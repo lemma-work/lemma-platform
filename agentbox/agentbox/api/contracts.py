@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import base64
 from datetime import datetime
 from typing import Annotated, Literal
 from uuid import UUID
@@ -121,6 +122,10 @@ class StartProcessModel(StrictApiModel):
     tty: TerminalSizeModel | None = None
     output_limit_bytes: int = Field(default=1048576, ge=1, le=67108864)
     deadline_at: datetime
+    initial_input_base64: str | None = Field(
+        default=None,
+        max_length=1_398_104,
+    )
 
     @model_validator(mode="after")
     def validate_command_and_deadline(self) -> StartProcessModel:
@@ -135,6 +140,15 @@ class StartProcessModel(StrictApiModel):
         names = tuple(item.name for item in self.environment)
         if len(names) != len(set(names)):
             raise ValueError("environment variable names must be unique")
+        if self.initial_input_base64 is not None:
+            try:
+                initial_input = base64.b64decode(
+                    self.initial_input_base64, validate=True
+                )
+            except ValueError as exc:
+                raise ValueError("initial_input_base64 must be valid base64") from exc
+            if len(initial_input) > 1024 * 1024:
+                raise ValueError("initial process input exceeds 1048576 bytes")
         return self
 
     def to_domain(self) -> StartProcessRequest:
@@ -147,6 +161,11 @@ class StartProcessModel(StrictApiModel):
             tty=self.tty.to_domain() if self.tty is not None else None,
             output_limit_bytes=self.output_limit_bytes,
             deadline_at=self.deadline_at,
+            initial_input=(
+                base64.b64decode(self.initial_input_base64, validate=True)
+                if self.initial_input_base64 is not None
+                else None
+            ),
         )
 
 

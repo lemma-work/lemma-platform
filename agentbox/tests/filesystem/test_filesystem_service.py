@@ -63,6 +63,16 @@ class Provider:
         assert self._database.active_units_of_work == 0
         self.calls.append(name)
 
+    async def create_directory(
+        self,
+        allocation: ProviderAllocationRef,
+        *,
+        path: str,
+        deadline_at: datetime,
+    ) -> None:
+        del allocation, path, deadline_at
+        self._outside_transaction("mkdir")
+
     async def create(self, request: ProviderCreateRequest) -> ProviderCreateResult:
         self._outside_transaction("create")
         return ProviderCreateResult(
@@ -193,6 +203,7 @@ async def test_all_filesystem_provider_io_occurs_after_uow_closes(
     )
     service = FilesystemService(database, provider)
 
+    await service.create_directory(key, "/tmp/nested", deadline_at=deadline)
     assert (await service.stat(key, "/tmp/payload", deadline_at=deadline)).path
     assert await service.list(key, "/tmp", deadline_at=deadline)
     assert (
@@ -214,6 +225,7 @@ async def test_all_filesystem_provider_io_occurs_after_uow_closes(
     assert provider.calls == [
         "create",
         "ready",
+        "mkdir",
         "stat",
         "list",
         "read",

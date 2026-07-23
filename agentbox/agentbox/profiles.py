@@ -23,8 +23,10 @@ class DockerProfileArtifact:
     def __post_init__(self) -> None:
         if not self.image:
             raise ValueError("Docker profile image cannot be empty")
-        if not self.readiness_argv:
-            raise ValueError("Docker readiness command cannot be empty")
+        if self.runtime_port is None and not self.readiness_argv:
+            raise ValueError(
+                "Docker profiles without a runtime port need a readiness command"
+            )
         if any(port < 1 or port > 65535 for port in self.published_ports):
             raise ValueError("Docker published ports must be in 1..65535")
         if (

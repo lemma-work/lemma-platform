@@ -1,20 +1,25 @@
 from __future__ import annotations
 
+import asyncio
 from datetime import datetime, timedelta, timezone
 import os
 from pathlib import Path
 from uuid import uuid4
 
 from e2b_code_interpreter import AsyncSandbox
+from fastapi import FastAPI
+import httpx
 import pytest
 
 from agentbox.adapters.e2b import E2BAdapterConfig, E2BSandboxAdapter
+from agentbox.api.port_proxy import access_router, create_port_proxy_http_client
 from agentbox.domain import (
     AdmissionClass,
     ByteRange,
     CreatePythonSessionRequest,
     EnvironmentVariable,
     ExecutePythonRequest,
+    PortProtocol,
     ProcessState,
     PythonExecutionState,
     PythonSessionState,
@@ -28,6 +33,8 @@ from agentbox.domain import (
 from agentbox.filesystem import FilesystemService
 from agentbox.lifecycle import SandboxLifecycleService
 from agentbox.persistence.uow import StateDatabase
+from agentbox.port_access import PortAccessService, PortAccessSigner
+from agentbox.ports import ProviderAllocationRef
 from agentbox.processes import ProcessExecutionService
 from agentbox.profiles import E2BProfileArtifact, ProfileRegistry, SandboxProfile
 from agentbox.python_sessions import PythonSessionService
@@ -82,8 +89,8 @@ def _function_profile() -> SandboxProfile:
     return SandboxProfile(
         ref=SandboxProfileRef(name="function-python-v1", digest=f"sha256:{'f' * 64}"),
         workload_kind=WorkloadKind.FUNCTION,
-        runtime_abi="lemma-function-python-1",
-        capabilities=frozenset({SandboxCapability.PROCESS}),
+        runtime_abi="lemma-function-python-3.14-linux-x86_64-1",
+        capabilities=frozenset({SandboxCapability.PORT_ACCESS}),
         allowed_roots=("/tmp",),
         docker=None,
         e2b=E2BProfileArtifact(
@@ -419,14 +426,21 @@ async def test_real_e2b_workspace_full_conformance(tmp_path: Path) -> None:
         await database.dispose()
 
 
-async def test_real_e2b_function_process_and_exact_destroy(tmp_path: Path) -> None:
+async def test_real_e2b_function_runtime_port_and_exact_destroy(
+    tmp_path: Path,
+) -> None:
     profile = _function_profile()
     registry = ProfileRegistry((profile,))
     adapter = _adapter(registry, scope=f"e2b:function-test:{uuid4()}")
     database = StateDatabase(f"sqlite+aiosqlite:///{tmp_path / 'state.db'}")
     await database.create_schema_for_test()
     lifecycle = SandboxLifecycleService(database, adapter)
-    processes = ProcessExecutionService(database, adapter)
+    port_access = PortAccessService(
+        database,
+        adapter,
+        PortAccessSigner(b"e2b-function-conformance-key-0001"),
+        public_base_url="http://agentbox.test",
+    )
     key = SandboxKey(WorkloadKind.FUNCTION, uuid4())
     deadline = datetime.now(timezone.utc) + timedelta(minutes=5)
     provider_id: str | None = None
@@ -438,68 +452,63 @@ async def test_real_e2b_function_process_and_exact_destroy(tmp_path: Path) -> No
             admission_class=AdmissionClass.LATENCY,
             deadline_at=deadline,
         )
-        provider_id = await _provider_id(database, key)
         assert handle.ready is True
-        assert provider_id is not None
+        async with database.uow() as uow:
+            allocation = await uow.repository.current_allocation(key)
+        assert allocation is not None
+        assert allocation.provider_id is not None
+        provider_id = allocation.provider_id
 
-        execution_id = uuid4()
-        await processes.start(
-            key,
-            StartProcessRequest(
-                operation_id=execution_id,
-                shell_command=(
-                    'read ticket; python -c "import lemma_sdk, pydantic; '
-                    "print('runtime-imports-ok')\"; "
-                    'printf \'ticket:%s:%s\\n\' "$ticket" "$SECRET"'
-                ),
-                argv=None,
-                cwd="/tmp",
-                environment=(EnvironmentVariable("SECRET", "ephemeral"),),
-                tty=None,
-                output_limit_bytes=65536,
-                deadline_at=deadline,
+        target = await adapter.resolve_port_target(
+            ProviderAllocationRef(
+                provider_id=allocation.provider_id,
+                provider_instance_id=allocation.provider_instance_id,
+                allocation_id=allocation.allocation_id,
+                allocation_token=allocation.allocation_token,
+                key=key,
             ),
-        )
-        await processes.send_input(
-            key, execution_id, b"single-use-ticket\n", deadline_at=deadline
-        )
-        execution, output = await _read_terminal(
-            processes, key, execution_id, deadline_at=deadline
-        )
-        assert execution.state == ProcessState.SUCCEEDED, output
-        assert b"runtime-imports-ok" in output
-        assert b"ticket:single-use-ticket:ephemeral" in output
-
-        cancellation_id = uuid4()
-        await processes.start(
-            key,
-            StartProcessRequest(
-                operation_id=cancellation_id,
-                shell_command="sleep 60",
-                argv=None,
-                cwd="/tmp",
-                environment=(),
-                tty=None,
-                output_limit_bytes=65536,
-                deadline_at=deadline,
-            ),
-        )
-        await processes.terminate(
-            key,
-            cancellation_id,
-            grace_seconds=0.1,
+            port=8090,
+            protocol=PortProtocol.HTTP,
             deadline_at=deadline,
         )
-        cancelled = await processes.read_output(
+        async with httpx.AsyncClient(timeout=20) as client:
+            response = await client.get(
+                f"{target.base_url}/healthz",
+                headers={header.name: header.value for header in target.headers},
+            )
+        assert response.status_code == 200
+        assert response.json() == {
+            "ready": True,
+            "runtime_abi": "lemma-function-python-3.14-linux-x86_64-1",
+        }
+
+        grant = await port_access.create(
             key,
-            cancellation_id,
-            after_sequence=0,
-            wait_seconds=0,
-            deadline_at=deadline,
+            port=8090,
+            protocol=PortProtocol.HTTP,
+            expires_at=datetime.now(timezone.utc) + timedelta(minutes=2),
         )
-        assert cancelled.state == ProcessState.CANCELLED
+        token = grant.url.split("/port-access/", 1)[1].rstrip("/")
+        proxy_app = FastAPI()
+        proxy_app.state.port_access = port_access
+        proxy_app.state.port_proxy_http_client = create_port_proxy_http_client()
+        proxy_app.include_router(access_router)
+        try:
+            async with httpx.AsyncClient(
+                transport=httpx.ASGITransport(app=proxy_app),
+                base_url="http://agentbox.test",
+            ) as proxy_client:
+                responses = await asyncio.gather(
+                    *(
+                        proxy_client.get(f"/port-access/{token}/healthz")
+                        for _ in range(10)
+                    )
+                )
+        finally:
+            await proxy_app.state.port_proxy_http_client.aclose()
+        assert all(item.status_code == 200 for item in responses)
+        assert all(item.json()["ready"] is True for item in responses)
         assert database.active_units_of_work == 0
-
         assert await lifecycle.destroy(key, deadline_at=deadline)
     finally:
         provider_id = provider_id or await _provider_id(database, key)

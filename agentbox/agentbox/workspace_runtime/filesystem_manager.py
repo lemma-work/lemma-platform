@@ -38,6 +38,9 @@ class FilesystemManager:
     async def stat(self, path: str) -> FileStat:
         return await asyncio.to_thread(self._stat_sync, path, False)
 
+    async def create_directory(self, path: str) -> None:
+        await asyncio.to_thread(self._create_directory_sync, path)
+
     async def list(self, path: str) -> tuple[FileStat, ...]:
         return await asyncio.to_thread(self._list_sync, path)
 
@@ -154,6 +157,12 @@ class FilesystemManager:
             sha256=digest,
         )
 
+    def _create_directory_sync(self, path: str) -> None:
+        candidate = self._new_path(path)
+        if candidate.exists() and not candidate.is_dir():
+            raise ValueError("directory path conflicts with a non-directory")
+        candidate.mkdir(parents=True, exist_ok=True)
+
     def _list_sync(self, path: str) -> tuple[FileStat, ...]:
         directory = self._existing_path(path, follow_symlinks=True)
         if not directory.is_dir():
@@ -259,6 +268,11 @@ class FilesystemManager:
         candidate = Path(path)
         if not candidate.is_absolute():
             raise ValueError("filesystem path must be absolute")
+        # Creating an allowed root is an idempotent operation. Requiring its
+        # parent to be allowed would incorrectly reject "/workspace" because
+        # "/" is intentionally outside the runtime's filesystem capability.
+        if candidate in self._roots:
+            return candidate
         parent = candidate.parent
         ancestor = parent
         while not ancestor.exists():

@@ -52,10 +52,11 @@ jobs:
         env:
           AGENTBOX_RUN_DOCKER_TESTS: "1"
         run: cd ../agentbox && .venv/bin/pytest -q tests/adapters/test_docker_real.py
-      - name: Run Docker benchmark and latency gates
+      - name: Run Docker benchmark at concurrency 5
         env:
           WORKSPACE_E2E_IMAGE: agentbox-workspace:dev
           FUNCTION_E2E_IMAGE: agentbox-function:dev
+          FUNCTION_BENCH_CONCURRENCY: "5"
         run: make benchmark-functions-docker
       - name: Publish Docker benchmark evidence
         if: always()
@@ -109,9 +110,13 @@ jobs:
           set +a
           cd ../agentbox
           AGENTBOX_RUN_E2B_TESTS=1 .venv/bin/pytest -q tests/adapters/test_e2b_real.py
-      - name: Run E2B benchmark and latency gates
+      - name: Run E2B benchmark at concurrency 5
         env:
           E2B_API_KEY: ${{ secrets.E2B_API_KEY }}
+          FUNCTION_BENCH_CONCURRENCY: "5"
+          # The protected lane has no ngrok account dependency. Local acceptance
+          # may select ngrok to distinguish tunnel failures from executor failures.
+          FUNCTION_BENCH_TUNNEL: cloudflared
         run: make benchmark-functions-e2b
       - name: Publish E2B benchmark evidence
         if: always()

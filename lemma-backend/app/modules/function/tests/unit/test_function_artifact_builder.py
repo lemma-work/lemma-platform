@@ -11,7 +11,6 @@ from app.modules.function.application.function_artifact_builder import (
     FunctionArtifactBuilder,
     parse_runtime_header,
 )
-from app.modules.function.domain.entities import FunctionRevisionStatus
 from app.modules.function.domain.errors import FunctionValidationError
 
 
@@ -49,26 +48,26 @@ async def test_builder_writes_deterministic_typed_artifact_before_ready() -> Non
 
     first = await builder.build(
         function_id=function_id,
-        revision_number=1,
         code=source(),
         python_packages=(),
     )
     second = await builder.build(
         function_id=function_id,
-        revision_number=2,
         code=source(),
         python_packages=(),
     )
 
-    assert first.status == FunctionRevisionStatus.READY
-    assert first.artifact_sha256 == second.artifact_sha256
-    assert first.artifact_path == second.artifact_path
-    artifact = storage.values[first.artifact_path]
+    assert first.revision_hash == second.revision_hash
+    path = f"artifacts/{first.revision_hash.removeprefix('sha256:')}.zip"
+    artifact = storage.values[path]
     with zipfile.ZipFile(BytesIO(artifact)) as archive:
         assert set(archive.namelist()) == {"function.py", "manifest.json"}
         manifest = json.loads(archive.read("manifest.json"))
         assert manifest["entrypoint"] == "increment"
-        assert manifest["runtime_abi"] == "lemma-function-python-1"
+        assert (
+            manifest["runtime_abi"]
+            == "lemma-function-python-3.14-linux-x86_64-1"
+        )
         assert manifest["dependency_lock"] == []
         assert archive.read("function.py").decode() == source()
 

@@ -1,6 +1,6 @@
 # Build context is the monorepo root:
 #   docker build -f agentbox/Dockerfile.function -t agentbox-function:dev .
-ARG PYTHON_IMAGE=python:3.14-slim
+ARG PYTHON_IMAGE=python:3.14.6-slim
 ARG UV_VERSION=0.11.31
 
 FROM ghcr.io/astral-sh/uv:${UV_VERSION} AS uv-runtime
@@ -49,4 +49,4 @@ RUN chmod 0755 /usr/local/bin/lemma-function-runtime \
 WORKDIR /tmp
 USER 10001:10001
 ENTRYPOINT ["tini", "--"]
-CMD ["sleep", "infinity"]
+CMD ["lemma-function-runtime", "serve", "--host", "0.0.0.0", "--port", "8090"]

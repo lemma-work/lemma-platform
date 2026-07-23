@@ -57,6 +57,18 @@ class FilesystemService:
             self._provider.stat_file(allocation, path=path, deadline_at=deadline_at)
         )
 
+    async def create_directory(
+        self, key: SandboxKey, path: str, *, deadline_at: datetime
+    ) -> None:
+        allocation = await self._current_allocation(key, deadline_at)
+        await self._provider_call(
+            self._provider.create_directory(
+                allocation,
+                path=path,
+                deadline_at=deadline_at,
+            )
+        )
+
     async def list(
         self, key: SandboxKey, path: str, *, deadline_at: datetime
     ) -> tuple[FileStat, ...]:

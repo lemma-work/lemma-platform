@@ -810,14 +810,36 @@ class Settings(BaseSettings):
     )
     function_runtime_secret: Optional[SecretStr] = Field(
         default=None,
-        description="HMAC key deriving restart-stable one-use attempt credentials",
+        description="HMAC key deriving restart-stable run callback credentials",
     )
-    function_execution_units_per_pod: int = Field(default=8, ge=2, le=128)
-    function_execution_api_reserved_units: int = Field(default=2, ge=0, le=128)
-    function_execution_standard_units: int = Field(default=2, ge=1, le=128)
-    function_execution_claim_lease_seconds: int = Field(default=60, ge=10, le=600)
+    function_execution_diagnostics: bool = False
+    function_session_token_cache_ttl_seconds: int = Field(
+        default=300,
+        ge=30,
+        le=3600,
+    )
+    function_session_token_cache_max_entries: int = Field(
+        default=4096,
+        ge=1,
+        le=100_000,
+    )
+    function_runtime_endpoint_cache_ttl_seconds: int = Field(
+        default=30,
+        ge=5,
+        le=120,
+        description=(
+            "Seconds to reuse a ready function runtime endpoint before an "
+            "AgentBox ensure/access refresh. Must remain below function sandbox "
+            "idle retention."
+        ),
+    )
+    function_runtime_endpoint_cache_max_entries: int = Field(
+        default=4096,
+        ge=1,
+        le=100_000,
+    )
     function_api_deadline_seconds: int = Field(default=120, ge=1, le=3600)
-    function_job_deadline_seconds: int = Field(default=600, ge=1, le=86_400)
+    function_job_deadline_seconds: int = Field(default=600, ge=1, le=82_800)
     function_runtime_gateway_url: Optional[str] = Field(
         default=None,
         description="Backend URL reachable from function sandboxes",

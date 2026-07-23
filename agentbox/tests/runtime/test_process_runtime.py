@@ -1,10 +1,13 @@
 from __future__ import annotations
 
 import asyncio
+import base64
 from datetime import datetime, timedelta, timezone
 import os
 from pathlib import Path
+import shlex
 import struct
+import sys
 from uuid import uuid4
 
 import httpx
@@ -24,6 +27,7 @@ def start_body(
     *,
     operation_id=None,
     tty: dict[str, int] | None = None,
+    initial_input: bytes | None = None,
 ) -> dict[str, object]:
     return {
         "operation_id": str(operation_id or uuid4()),
@@ -34,6 +38,11 @@ def start_body(
         "tty": tty,
         "output_limit_bytes": 65536,
         "deadline_at": (datetime.now(timezone.utc) + timedelta(seconds=30)).isoformat(),
+        "initial_input_base64": (
+            base64.b64encode(initial_input).decode()
+            if initial_input is not None
+            else None
+        ),
     }
 
 
@@ -90,6 +99,33 @@ async def test_shell_output_is_binary_framed_and_reconnectable(tmp_path: Path):
     assert b"alpha" in b"".join(frame[2] for frame in frames if frame[1] == 1)
     assert b"beta" in b"".join(frame[2] for frame in frames if frame[1] == 2)
     assert reconnected.content == b""
+
+
+async def test_initial_input_is_delivered_as_part_of_process_start(tmp_path: Path):
+    app = create_app(token=TOKEN, allowed_roots=(str(tmp_path),))
+    transport = httpx.ASGITransport(app=app)
+    async with httpx.AsyncClient(
+        transport=transport, base_url="http://runtime.test"
+    ) as client:
+        started = await client.post(
+            "/processes",
+            headers=HEADERS,
+            json=start_body(
+                tmp_path,
+                "IFS= read -r ticket; printf 'ticket:%s' \"$ticket\"",
+                initial_input=b"single-use-ticket\n",
+            ),
+        )
+        assert started.status_code == 201
+        operation_id = started.json()["operation_id"]
+        terminal = await wait_for_terminal(client, operation_id)
+        output = await client.get(
+            f"/processes/{operation_id}/output?after_seq=0", headers=HEADERS
+        )
+        combined = b"".join(frame[2] for frame in decode_output(output.content))
+
+    assert terminal["state"] == "succeeded"
+    assert combined.endswith(b"ticket:single-use-ticket")
 
 
 async def test_pty_input_and_resize(tmp_path: Path):
@@ -187,8 +223,12 @@ async def test_direct_exit_is_terminal_when_descendant_holds_output_pipe(
             json=start_body(
                 tmp_path,
                 (
-                    'python -c "import os,time; pid=os.fork(); '
-                    "print(f'child:{pid}', flush=True) if pid else time.sleep(60)\""
+                    f"{shlex.quote(sys.executable)} -c "
+                    + shlex.quote(
+                        "import os,time; pid=os.fork(); "
+                        "print(f'child:{pid}', flush=True) "
+                        "if pid else time.sleep(60)"
+                    )
                 ),
             ),
         )
@@ -198,6 +238,7 @@ async def test_direct_exit_is_terminal_when_descendant_holds_output_pipe(
             f"/processes/{operation_id}/output?after_seq=0", headers=HEADERS
         )
         combined = b"".join(frame[2] for frame in decode_output(output.content))
+        assert b"child:" in combined, (combined, terminal)
         child_pid = int(combined.split(b"child:", 1)[1].splitlines()[0])
         terminated = await client.request(
             "DELETE",

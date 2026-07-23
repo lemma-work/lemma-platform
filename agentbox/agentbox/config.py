@@ -55,6 +55,22 @@ class Settings(BaseSettings):
     agentbox_docker_scope: str = "docker:default"
     agentbox_docker_allow_mutable_images: bool = True
     agentbox_docker_private_network: str | None = None
+    agentbox_docker_workspace_memory_bytes: int = Field(
+        default=2 * 1024 * 1024 * 1024,
+        ge=256 * 1024 * 1024,
+    )
+    agentbox_docker_workspace_nano_cpus: int = Field(
+        default=1_000_000_000,
+        ge=100_000_000,
+    )
+    agentbox_docker_function_memory_bytes: int = Field(
+        default=2 * 1024 * 1024 * 1024,
+        ge=256 * 1024 * 1024,
+    )
+    agentbox_docker_function_nano_cpus: int = Field(
+        default=4_000_000_000,
+        ge=100_000_000,
+    )
     agentbox_provider_max_active: int = Field(default=32, ge=1, le=10000)
     agentbox_provider_create_rate_per_second: float = Field(default=2.0, gt=0, le=1000)
     agentbox_provider_create_burst: int = Field(default=4, ge=1, le=1000)

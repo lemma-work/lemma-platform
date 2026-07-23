@@ -251,6 +251,14 @@ class ProviderProcessPort(Protocol):
 
 
 class ProviderFilesystemPort(Protocol):
+    async def create_directory(
+        self,
+        allocation: ProviderAllocationRef,
+        *,
+        path: str,
+        deadline_at: datetime,
+    ) -> None: ...
+
     async def stat_file(
         self,
         allocation: ProviderAllocationRef,
@@ -371,4 +379,5 @@ class ProviderPortAccessPort(Protocol):
         port: int,
         protocol: PortProtocol,
         deadline_at: datetime,
+        activity_until: datetime | None = None,
     ) -> ProviderPortTarget: ...

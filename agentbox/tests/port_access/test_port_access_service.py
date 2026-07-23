@@ -43,14 +43,18 @@ class Provider:
 
     async def create(self, request: ProviderCreateRequest) -> ProviderCreateResult:
         assert self.database.active_units_of_work == 0
-        assert request.workspace_storage is not None
+        storage = request.workspace_storage
         return ProviderCreateResult(
             provider_id=f"sandbox-{request.allocation_id}",
             provider_instance_id=None,
             provider_request_id=None,
-            workspace_storage=ProviderStorageResult(
-                provider_storage_id=f"volume-{request.workspace_storage.storage_token}",
-                bound_to_allocation=False,
+            workspace_storage=(
+                ProviderStorageResult(
+                    provider_storage_id=f"volume-{storage.storage_token}",
+                    bound_to_allocation=False,
+                )
+                if storage is not None
+                else None
             ),
         )
 
@@ -68,8 +72,9 @@ class Provider:
         port: int,
         protocol: PortProtocol,
         deadline_at: datetime,
+        activity_until: datetime | None = None,
     ) -> ProviderPortTarget:
-        del deadline_at
+        del deadline_at, activity_until
         assert self.database.active_units_of_work == 0
         self.resolved.append((allocation.provider_id, port, protocol))
         return ProviderPortTarget(base_url=f"{protocol.value}://127.0.0.1:{port}")
@@ -163,3 +168,96 @@ async def test_tampered_and_stale_grants_fail_closed(database: StateDatabase) ->
     assert tampered.value.status_code == 403
     assert stale.value.status_code == 410
     assert provider.resolved == []
+
+
+async def test_function_port_grant_protects_long_invocation_from_idle_destroy(
+    database: StateDatabase,
+) -> None:
+    provider = Provider(database)
+    key = SandboxKey(WorkloadKind.FUNCTION, uuid4())
+    now = datetime.now(timezone.utc)
+    lifecycle = SandboxLifecycleService(database, provider)
+    await lifecycle.ensure(
+        key,
+        SandboxProfileRef("function-python-v1", f"sha256:{'b' * 64}"),
+        admission_class=AdmissionClass.LATENCY,
+        deadline_at=now + timedelta(seconds=30),
+    )
+    service = PortAccessService(
+        database,
+        provider,
+        PortAccessSigner(b"r" * 32),
+        public_base_url="https://agentbox.example",
+    )
+    protected_until = now + timedelta(minutes=10)
+    with pytest.raises(AgentBoxError) as unsupported:
+        await service.create(
+            key,
+            port=8080,
+            protocol=PortProtocol.HTTP,
+            expires_at=protected_until,
+        )
+    assert unsupported.value.code.value == "UNSUPPORTED_CAPABILITY"
+    await service.create(
+        key,
+        port=8090,
+        protocol=PortProtocol.HTTP,
+        expires_at=protected_until,
+    )
+
+    async with database.uow() as uow:
+        logical = await uow.repository.get_logical(key)
+        protected_claims = await uow.repository.claim_due_maintenance(
+            workspace_idle_before=now + timedelta(minutes=1),
+            function_idle_before=now + timedelta(minutes=1),
+            claimed_until=now + timedelta(minutes=7),
+            now=now + timedelta(minutes=6),
+        )
+        await uow.commit()
+
+    assert logical is not None
+    assert logical.protected_until == protected_until
+    assert protected_claims == ()
+
+
+async def test_function_runtime_grant_allows_long_job_but_workspace_does_not(
+    database: StateDatabase,
+) -> None:
+    provider = Provider(database)
+    now = datetime.now(timezone.utc)
+    lifecycle = SandboxLifecycleService(database, provider)
+    service = PortAccessService(
+        database,
+        provider,
+        PortAccessSigner(b"s" * 32),
+        public_base_url="https://agentbox.example",
+    )
+    function_key = SandboxKey(WorkloadKind.FUNCTION, uuid4())
+    await lifecycle.ensure(
+        function_key,
+        SandboxProfileRef("function-python-v1", f"sha256:{'c' * 64}"),
+        admission_class=AdmissionClass.BATCH,
+        deadline_at=now + timedelta(seconds=30),
+    )
+    grant = await service.create(
+        function_key,
+        port=8090,
+        protocol=PortProtocol.HTTP,
+        expires_at=now + timedelta(hours=23),
+    )
+    assert grant.expires_at == now + timedelta(hours=23)
+
+    workspace_key = SandboxKey(WorkloadKind.WORKSPACE, uuid4())
+    await lifecycle.ensure(
+        workspace_key,
+        SandboxProfileRef("workspace-python-v1", f"sha256:{'d' * 64}"),
+        admission_class=AdmissionClass.INTERACTIVE,
+        deadline_at=now + timedelta(seconds=30),
+    )
+    with pytest.raises(AgentBoxError, match="cannot exceed one hour"):
+        await service.create(
+            workspace_key,
+            port=4848,
+            protocol=PortProtocol.HTTP,
+            expires_at=now + timedelta(hours=2),
+        )

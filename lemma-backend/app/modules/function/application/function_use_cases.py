@@ -14,8 +14,7 @@ ctx).
 
 from __future__ import annotations
 
-import hashlib
-from typing import Any, Callable
+from collections.abc import Callable
 from uuid import UUID
 
 from fastapi import Request
@@ -24,10 +23,12 @@ from app.core.authorization.scope import context_scope, pod_context_scope, uow_s
 from app.core.authorization.service import AuthorizationDataService
 from app.core.helpers.slug import slugify
 from app.core.infrastructure.db.uow_factory import UnitOfWorkFactory
+from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
 from app.modules.function.application.function_definition_compiler import (
     FunctionDefinitionCompiler,
 )
 from app.modules.function.domain.entities import (
+    FunctionDispatchMode,
     FunctionEntity,
     FunctionRunEntity,
     FunctionStatus,
@@ -35,11 +36,18 @@ from app.modules.function.domain.entities import (
     FunctionUpdateEntity,
     RunAsWorkload,
 )
+from app.modules.function.domain.errors import FunctionRunQueueUnavailable
 from app.modules.function.domain.ports import FunctionExecutionPort
+from app.modules.function.domain.ports import FunctionRunQueuePort
+from app.modules.function.domain.types import JsonObject
 from app.modules.function.services.function_service import (
     FunctionService,
     parse_python_packages,
 )
+from app.core.log.log import get_logger
+
+
+logger = get_logger(__name__)
 
 
 class FunctionUseCases:
@@ -49,14 +57,16 @@ class FunctionUseCases:
     def __init__(
         self,
         uow_factory: UnitOfWorkFactory,
-        service_builder: Callable[[Any], FunctionService],
+        service_builder: Callable[[SqlAlchemyUnitOfWork], FunctionService],
         compiler: FunctionDefinitionCompiler,
         dispatcher: FunctionExecutionPort,
+        run_queue: FunctionRunQueuePort,
     ):
         self._uow_factory = uow_factory
         self._build = service_builder
         self._compiler = compiler
         self._dispatcher = dispatcher
+        self._run_queue = run_queue
 
     # -- Code-bearing create/update assembly (sandbox, no connection) ---------
 
@@ -64,30 +74,37 @@ class FunctionUseCases:
         self,
         function: FunctionEntity,
         code: str,
-        code_path: str,
+        display_path: str,
         user_id: UUID,
-        *,
-        revision_number: int,
     ) -> None:
-        """Write the code, parse packages (fail-fast), extract schemas in the
-        sandbox, and stamp the results onto the entity. Holds NO DB connection."""
-        await self._compiler.write_code(function.id, code_path, code)
+        """Build and stage one immutable executable revision with no DB connection."""
+        if function.id is None:
+            raise ValueError("function must be persisted before code is compiled")
         # Fail fast on a bad dependency spec before the heavier schema extraction.
-        function.python_packages = parse_python_packages(code)
-        input_schema, output_schema, config_schema = await self._compiler.extract_schemas(
-            user_id, code, code_path, function.pod_id, function.id
+        python_packages = tuple(parse_python_packages(code))
+        (
+            input_schema,
+            output_schema,
+            config_schema,
+        ) = await self._compiler.extract_schemas(
+            user_id, code, display_path, function.pod_id, function.id
         )
         function.input_schema = input_schema
         function.output_schema = output_schema
         function.config_schema = config_schema
-        function.pending_revision = await self._compiler.build_revision(
+        function.pending_artifact = await self._compiler.build_artifact(
             function,
             code,
-            revision_number=revision_number,
+            python_packages=python_packages,
         )
-        function.active_revision_id = function.pending_revision.id
-        function.code_path = code_path
-        function.code_hash = hashlib.sha256(code.encode("utf-8")).hexdigest()
+        function.revision_hash = function.pending_artifact.revision_hash
+        function.code_path = (
+            f"revisions/{function.revision_hash.removeprefix('sha256:')}/function.py"
+        )
+        # Source activation is content-addressed. A failed update can leave an
+        # unreferenced artifact/source, but it cannot overwrite the code belonging
+        # to the still-active database revision.
+        await self._compiler.write_code(function.id, function.code_path, code)
         function.status = FunctionStatus.READY
 
     # -- API-path operations (request ctx) ------------------------------------
@@ -116,7 +133,6 @@ class FunctionUseCases:
             code,
             f"{slugify(created.name)}.py",
             user_id,
-            revision_number=1,
         )
 
         async with pod_context_scope(
@@ -152,13 +168,11 @@ class FunctionUseCases:
 
         # Sandbox phase — no connection held.
         if plan.code is not None:
-            assert plan.revision_number is not None
             await self._apply_code(
                 plan.function,
                 plan.code,
-                plan.code_path,
+                f"{slugify(plan.function.name)}.py",
                 user_id,
-                revision_number=plan.revision_number,
             )
 
         async with pod_context_scope(
@@ -189,9 +203,9 @@ class FunctionUseCases:
 
         pod_id = entity.pod_id
         async with uow_scope(self._uow_factory) as uow:
-            auth_ctx = await AuthorizationDataService(
-                uow.session
-            ).build_user_context(user_id=user_id, pod_id=pod_id)
+            auth_ctx = await AuthorizationDataService(uow.session).build_user_context(
+                user_id=user_id, pod_id=pod_id
+            )
             async with context_scope(auth_ctx):
                 service = self._build(uow)
                 existing = await service.get_function_by_name(
@@ -209,19 +223,10 @@ class FunctionUseCases:
                     operation = "create"
                     plan = None
                 else:
-                    effective_update = update_entity
-                    if (
-                        code is not None
-                        and existing.code_hash
-                        == hashlib.sha256(code.encode("utf-8")).hexdigest()
-                    ):
-                        effective_update = update_entity.model_copy(
-                            update={"code": None}
-                        )
                     plan = await service.resolve_update(
                         pod_id,
                         entity.name,
-                        effective_update,
+                        update_entity,
                         user_id,
                         ctx=auth_ctx,
                     )
@@ -237,25 +242,21 @@ class FunctionUseCases:
                 code,
                 f"{slugify(created.name)}.py",
                 user_id,
-                revision_number=1,
             )
         else:
             assert plan is not None
             if plan.code is not None:
-                assert plan.code_path is not None
-                assert plan.revision_number is not None
                 await self._apply_code(
                     plan.function,
                     plan.code,
-                    plan.code_path,
+                    f"{slugify(plan.function.name)}.py",
                     user_id,
-                    revision_number=plan.revision_number,
                 )
 
         async with uow_scope(self._uow_factory) as uow:
-            auth_ctx = await AuthorizationDataService(
-                uow.session
-            ).build_user_context(user_id=user_id, pod_id=pod_id)
+            auth_ctx = await AuthorizationDataService(uow.session).build_user_context(
+                user_id=user_id, pod_id=pod_id
+            )
             async with context_scope(auth_ctx):
                 service = self._build(uow)
                 if operation == "create":
@@ -291,7 +292,9 @@ class FunctionUseCases:
             self._uow_factory, request=request, user_id=user_id, pod_id=pod_id
         ) as scope:
             service = self._build(scope.uow)
-            function = await service.resolve_delete(pod_id, name, user_id, ctx=scope.ctx)
+            function = await service.resolve_delete(
+                pod_id, name, user_id, ctx=scope.ctx
+            )
         # Icon cleanup is a storage call — no connection held.
         await service.delete_icon(function.icon_url)
 
@@ -300,7 +303,7 @@ class FunctionUseCases:
         *,
         pod_id: UUID,
         name: str,
-        input_data: dict,
+        input_data: JsonObject,
         user_id: UUID,
         user_email: str | None,
         request: Request,
@@ -319,7 +322,10 @@ class FunctionUseCases:
     # -- Worker path (no ctx) -------------------------------------------------
 
     async def execute_run_by_id(self, run_id: UUID) -> FunctionRunEntity:
-        return await self._dispatcher.execute(run_id)
+        return await self._dispatcher.execute(
+            run_id,
+            mode=FunctionDispatchMode.ASYNCHRONOUS,
+        )
 
     # -- Agent-as-tool path (delegated workload ctx) --------------------------
 
@@ -328,7 +334,7 @@ class FunctionUseCases:
         *,
         pod_id: UUID,
         name: str,
-        input_data: dict,
+        input_data: JsonObject,
         user_id: UUID,
         principal_type: str,
         principal_id: UUID,
@@ -364,7 +370,7 @@ class FunctionUseCases:
         *,
         pod_id: UUID,
         name: str,
-        input_data: dict,
+        input_data: JsonObject,
         user_id: UUID,
     ) -> FunctionRunEntity:
         async with uow_scope(self._uow_factory) as uow:
@@ -383,12 +389,13 @@ class FunctionUseCases:
         *,
         pod_id: UUID,
         name: str,
-        input_data: dict,
+        input_data: JsonObject,
         user_id: UUID,
     ) -> FunctionRunEntity:
         """Create + dispatch a function run for a workflow node WITHOUT running it
         inline. Works for API and JOB functions alike: the run is enqueued to the
-        worker (force_dispatch) and returned PENDING, so the workflow engine
+        worker with an explicit asynchronous dispatch mode and returned PENDING,
+        so the workflow engine
         suspends on the run id and releases its run-row lock instead of pinning it
         across the sandbox round-trip. The FunctionRunCompleted event resumes the
         workflow."""
@@ -405,9 +412,9 @@ class FunctionUseCases:
                     user_id,
                     None,
                     ctx=auth_ctx,
-                    force_dispatch=True,
+                    dispatch_mode=FunctionDispatchMode.ASYNCHRONOUS,
                 )
-        return resolved.run
+        return await self._enqueue_run(resolved.run)
 
     # -- Shared dispatch ------------------------------------------------------
 
@@ -419,9 +426,36 @@ class FunctionUseCases:
         run_as_workload: RunAsWorkload | None = None,
     ) -> FunctionRunEntity:
         function, run = resolved.function, resolved.run
-        # JOB runs are dispatched to the worker via the FunctionRunExecutionRequested
-        # event committed in resolve_execute; return the PENDING run immediately.
+        # JOB runs use the one backend queue. Publication happens only after the
+        # run transaction above has committed and released its connection.
         if function.type == FunctionType.JOB:
-            return run
+            return await self._enqueue_run(run)
         del function, user_email, run_as_workload
-        return await self._dispatcher.execute(run.id)
+        return await self._dispatcher.execute(
+            run.id,
+            mode=FunctionDispatchMode.SYNCHRONOUS,
+        )
+
+    async def _enqueue_run(self, run: FunctionRunEntity) -> FunctionRunEntity:
+        """Best-effort fast publish backed by durable pending-run reconciliation.
+
+        The run and its deterministic ``job_id`` dispatch intent are already
+        committed when this method is called. If publication has an ambiguous
+        outcome, the reconciler safely republishes the same task identity and
+        the run claim prevents a second execution.
+        """
+
+        if run.id is None:
+            raise ValueError("function run must be persisted before enqueue")
+        try:
+            job_id = await self._run_queue.enqueue(run.id)
+        except FunctionRunQueueUnavailable as exc:
+            logger.warning(
+                "function.use_cases.run_enqueue_deferred.degraded",
+                run_id=str(run.id),
+                error_type=type(exc).__name__,
+            )
+            return run
+        if run.job_id != job_id:
+            raise RuntimeError("function run queue returned an unexpected job identity")
+        return run

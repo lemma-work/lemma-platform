@@ -155,6 +155,30 @@ class AgentBoxRepository:
         row = await self._select_logical(key, for_update=for_update)
         return self._logical(row) if row is not None else None
 
+    async def protect_port_access(
+        self,
+        key: SandboxKey,
+        *,
+        until: datetime,
+        now: datetime | None = None,
+    ) -> LogicalSandbox:
+        timestamp = now or utc_now()
+        row = await self._select_logical(key, for_update=True)
+        if row is None:
+            raise AgentBoxError(
+                ErrorCode.SANDBOX_NOT_FOUND,
+                "sandbox does not exist",
+                retry=RetryDisposition.DO_NOT_RETRY,
+                status_code=404,
+            )
+        current = _aware(row.protected_until)
+        if current is None or until > current:
+            row.protected_until = until
+        row.last_used_at = timestamp
+        row.updated_at = timestamp
+        await self._session.flush()
+        return self._logical(row)
+
     async def _select_logical(
         self, key: SandboxKey, *, for_update: bool
     ) -> LogicalSandboxRow | None:
@@ -1019,6 +1043,10 @@ class AgentBoxRepository:
             LogicalSandboxRow.desired_state == SandboxDesiredState.PRESENT.value,
             LogicalSandboxRow.current_allocation_id.is_not(None),
             LogicalSandboxRow.last_used_at <= workspace_idle_before,
+            or_(
+                LogicalSandboxRow.protected_until.is_(None),
+                LogicalSandboxRow.protected_until <= timestamp,
+            ),
             ~active_process,
         )
         idle_function = and_(
@@ -1026,6 +1054,10 @@ class AgentBoxRepository:
             LogicalSandboxRow.desired_state == SandboxDesiredState.PRESENT.value,
             LogicalSandboxRow.current_allocation_id.is_not(None),
             LogicalSandboxRow.last_used_at <= function_idle_before,
+            or_(
+                LogicalSandboxRow.protected_until.is_(None),
+                LogicalSandboxRow.protected_until <= timestamp,
+            ),
             ~active_process,
         )
         expired_workspace = and_(
@@ -2054,6 +2086,7 @@ class AgentBoxRepository:
             current_allocation_id=row.current_allocation_id,
             allocation_epoch=row.allocation_epoch,
             last_used_at=_aware(row.last_used_at) or utc_now(),
+            protected_until=_aware(row.protected_until),
             released_at=_aware(row.released_at),
             delete_after=_aware(row.delete_after),
         )

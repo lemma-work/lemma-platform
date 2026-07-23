@@ -17,33 +17,29 @@ from app.core.authorization.context import (
 from app.core.authorization.delegation_revocation import revoke_delegation
 from app.core.authorization.permissions import Permissions
 from app.core.config import settings
-from app.core.helpers.slug import slugify
-from app.core.domain.job_queue import JobQueuePort
 from app.modules.icon.contracts import IconCleanupPort
 from app.modules.function.domain.entities import (
+    FunctionDispatchMode,
     FunctionEntity,
-    FunctionRevisionEntity,
-    FunctionRevisionStatus,
     FunctionRunEntity,
     FunctionRunStatus,
     FunctionStatus,
     FunctionType,
     FunctionUpdateEntity,
 )
+from app.modules.function.domain.identities import function_run_job_id
 from app.modules.function.domain.errors import (
     FunctionConflictError,
     FunctionNotFoundError,
     FunctionRunNotFoundError,
     FunctionValidationError,
 )
-from app.modules.function.domain.events import (
-    FunctionRunExecutionRequestedEvent,
-)
 from app.modules.function.domain.ports import (
     FunctionStorageFactoryPort,
     FunctionRepositoryPort,
     FunctionRunRepositoryPort,
 )
+from app.modules.function.domain.types import JsonObject
 
 from app.modules.pod.contracts import PodRole
 from app.core.log.log import get_logger
@@ -55,8 +51,8 @@ logger = get_logger(__name__)
 _MAX_PYTHON_PACKAGES = 30
 _MAX_PACKAGE_SPEC_LENGTH = 128
 _PYTHON_PACKAGE_SPEC_RE = re.compile(
-    r"^[A-Za-z0-9][A-Za-z0-9._-]*"          # distribution name
-    r"(\[[A-Za-z0-9._,-]+\])?"               # optional extras
+    r"^[A-Za-z0-9][A-Za-z0-9._-]*"  # distribution name
+    r"(\[[A-Za-z0-9._,-]+\])?"  # optional extras
     r"([<>=!~]=?[A-Za-z0-9._*+!,<>=~-]*)?$"  # optional version specifier(s)
 )
 
@@ -126,7 +122,6 @@ class ResolvedExecution:
 
     function: FunctionEntity
     run: FunctionRunEntity
-    revision: FunctionRevisionEntity | None = None
 
 
 @dataclass(slots=True)
@@ -138,8 +133,6 @@ class FunctionUpdatePlan:
     function: FunctionEntity
     old_icon_url: str | None
     code: str | None
-    code_path: str | None
-    revision_number: int | None = None
 
 
 class FunctionService:
@@ -150,7 +143,6 @@ class FunctionService:
         function_repository: FunctionRepositoryPort,
         run_repository: FunctionRunRepositoryPort,
         storage_factory: FunctionStorageFactoryPort,
-        job_queue: JobQueuePort | None = None,
         icon_service: IconCleanupPort | None = None,
     ):
         # Bound mode only: real repositories + authorization. The use-case layer
@@ -159,7 +151,6 @@ class FunctionService:
         self.repository = function_repository
         self.run_repository = run_repository
         self.storage_factory = storage_factory
-        self.job_queue = job_queue
         self.icon_service = icon_service
 
     async def _require_pod_permission(
@@ -337,6 +328,10 @@ class FunctionService:
             return function.code
         if not function.code_path:
             raise FunctionValidationError(f"Function {function.name} has no code")
+        if function.id is None:
+            raise FunctionValidationError(
+                "Function must be persisted before reading code"
+            )
         storage = self.storage_factory(function.id)
         code = await storage.read_file(function.code_path)
         if isinstance(code, bytes):
@@ -395,18 +390,20 @@ class FunctionService:
         )
 
         if update_entity.visibility is not None:
-            function.visibility = _normalize_function_visibility(update_entity.visibility)
+            function.visibility = _normalize_function_visibility(
+                update_entity.visibility
+            )
 
         code = update_entity.code or None
-        code_path = function.code_path
-        if code and not code_path:
-            code_path = f"{slugify(function.name)}.py"
 
         if update_entity.description is not None:
             function.description = update_entity.description
         if "icon_url" in update_entity.model_fields_set:
             function.icon_url = update_entity.icon_url
-        if "config" in update_entity.model_fields_set and update_entity.config is not None:
+        if (
+            "config" in update_entity.model_fields_set
+            and update_entity.config is not None
+        ):
             function.config = update_entity.config
         if update_entity.type is not None:
             function.type = update_entity.type
@@ -415,12 +412,6 @@ class FunctionService:
             function=function,
             old_icon_url=old_icon_url,
             code=code,
-            code_path=code_path if code else None,
-            revision_number=(
-                await self.repository.next_revision_number(function.id)
-                if code
-                else None
-            ),
         )
 
     async def persist_update(
@@ -464,22 +455,18 @@ class FunctionService:
         self,
         pod_id: UUID,
         name: str,
-        input_data: dict,
+        input_data: JsonObject,
         user_id: UUID,
         user_email: str | None,
         *,
         ctx: Context,
-        force_dispatch: bool = False,
+        dispatch_mode: FunctionDispatchMode | None = None,
     ) -> ResolvedExecution:
-        """Authorize FUNCTION_EXECUTE + create the PENDING run (+ JOB enqueue
-        event on the same UoW). DB only. The function is loaded directly (execute
-        needs only FUNCTION_EXECUTE, not FUNCTION_READ).
+        """Authorize FUNCTION_EXECUTE and persist its one PENDING run. DB only.
 
-        ``force_dispatch`` enqueues the run to the worker even for API functions
-        (which normally run inline). The workflow engine uses this so it can
-        suspend on the run id and release its run-row lock/connection instead of
-        holding them across the function's sandbox round-trip; the worker executes
-        the run and its FunctionRunCompleted event resumes the workflow."""
+        Queue publication is deliberately owned by ``FunctionUseCases`` after
+        this transaction commits and releases its connection.
+        """
         function = await self._load_function_by_name(pod_id, name, ctx=ctx)
         if function is None:
             raise FunctionNotFoundError(f"Function {name} not found")
@@ -493,16 +480,13 @@ class FunctionService:
             ),
         )
 
-        if function.status != FunctionStatus.READY or function.active_revision_id is None:
+        if function.status != FunctionStatus.READY or function.revision_hash is None:
             raise FunctionValidationError("Function has no ready executable revision")
-        revision = await self.repository.get_revision(function.active_revision_id)
-        if revision is None or revision.status != FunctionRevisionStatus.READY:
-            raise FunctionValidationError("Function executable revision is unavailable")
 
         run_entity = FunctionRunEntity(
             id=uuid7(),
             function_id=function.id,
-            revision_id=revision.id,
+            revision_hash=function.revision_hash,
             user_id=user_id,
             user_email=user_email,
             input_data=input_data,
@@ -516,16 +500,16 @@ class FunctionService:
                 )
             ),
         )
-        if function.type == FunctionType.JOB or force_dispatch:
-            run_entity.job_id = self._run_job_id(run_entity.id)
-        run_entity.add_event(
-            FunctionRunExecutionRequestedEvent(
-                run_id=run_entity.id,
-                function_id=function.id,
-            )
+        assert run_entity.id is not None
+        effective_mode = dispatch_mode or (
+            FunctionDispatchMode.ASYNCHRONOUS
+            if function.type == FunctionType.JOB
+            else FunctionDispatchMode.SYNCHRONOUS
         )
+        if effective_mode == FunctionDispatchMode.ASYNCHRONOUS:
+            run_entity.job_id = function_run_job_id(run_entity.id)
         run = await self._create_run(run_entity)
-        return ResolvedExecution(function=function, revision=revision, run=run)
+        return ResolvedExecution(function=function, run=run)
 
     async def load_run_and_function(
         self, run_id: UUID
@@ -552,9 +536,6 @@ class FunctionService:
         """Best-effort icon cleanup (storage only, no DB) after a delete."""
         if self.icon_service and icon_url:
             await self.icon_service.delete_by_url(icon_url)
-
-    def _run_job_id(self, run_id: UUID) -> str:
-        return f"function:{run_id}"
 
     async def list_runs(
         self,

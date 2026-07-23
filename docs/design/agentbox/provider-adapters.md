@@ -1,6 +1,6 @@
 # AgentBox Provider Adapters
 
-**Status:** Proposed design; Docker and E2B implemented, Kubernetes deferred
+**Status:** Docker and E2B implemented and verified; Kubernetes deferred
 
 **Parent:** [AgentBox](README.md)
 
@@ -93,12 +93,13 @@ The full UUIDs remain in metadata. Names are never used as proof of ownership.
 Readiness is profile-specific:
 
 - workspace: generic execution, Python context, and filesystem access work;
-- function: a native exec can start the immutable function launcher;
+- function: the immutable resident runtime answers `/healthz` on its private port
+  with the expected runtime ABI;
 - port access is validated lazily when requested and does not block sandbox
   publication.
 
-No adapter probes a workload-specific HTTP execution port. No adapter treats provider object state
-alone as proof that required data-plane operations are ready.
+No adapter treats provider object state alone as proof that required data-plane
+operations are ready.
 
 ### 3.4 Runtime artifacts
 
@@ -207,18 +208,27 @@ confirmed absent. Volume deletion never uses a broad name prefix.
 
 - Create an ephemeral container from the function image digest.
 - Mount only tmpfs/ephemeral writable paths; do not create or attach a named volume.
-- Disable published ports.
-- Start with an idle entrypoint that keeps the allocation ready for Engine exec but
-  contains no workload-specific HTTP server.
-- Launch `lemma-function-runtime execute` with an Engine exec instance.
-- The trusted launcher detaches the invocation child, records its internal attempt
-  reference, and returns an acknowledgment before the Engine exec stream closes.
-- Inspect/cancel use `lemma-function-runtime inspect|cancel --operation-id ...`
-  through exact exec operations when the original Engine exec handle is unavailable.
+- Keep general `/tmp` mounted `noexec`. Mount a separate private executable tmpfs
+  at `/run/lemma-function-cache` for digest-verified artifacts, because native
+  wheels must map executable shared-library segments.
+- Start `lemma-function-runtime serve` as PID 1 behind `tini`.
+- Publish port 8090 only to the AgentBox manager: over the private Docker network in
+  the installed topology, or through a loopback-bound random host port in standalone
+  development.
+- Probe `/healthz` before marking the allocation active.
+- Proxy authenticated invocation and cancellation requests through AgentBox's
+  short-lived signed port grant; never return the container address or host binding
+  to the backend.
+- Keep revision worker processes inside the resident runtime. A worker imports one
+  immutable revision once, handles one invocation at a time, and is reused only for
+  that exact `(function_id, artifact_sha256)`.
+- Bound total workers and cached revision pools. Least-recently-used idle revision
+  pools are terminated before their cache budget can grow without bound.
 - Remove the container after five idle minutes or profile drain.
 
-The operation ID is stored in AgentBox before exec create. Docker exec IDs and the
-runtime's attempt reference are persisted after acknowledgment.
+The backend owns the public `function_run_id` and run transition. AgentBox owns
+only the function allocation and signed access grant; it does not create a generic
+AgentBox process row for each function invocation.
 
 ### 5.4 Files and port access
 
@@ -312,16 +322,11 @@ The function Pod differs deliberately:
 - direct egress only to the Lemma runtime gateway and controlled egress gateway;
   the egress gateway enforces revision-declared public HTTPS destinations.
 
-The Pod remains alive waiting for native exec. The adapter starts a short launcher
-using the Kubernetes exec WebSocket transport. The launcher validates the operation
-ID, detaches `lemma-function-runtime execute`, writes attempt status under a private
-ephemeral runtime directory, and exits only after acknowledgment. Execution then
-continues independently of the exec connection and reports through the runtime
-gateway.
-
-Inspect/cancel run trusted `lemma-function-runtime inspect|cancel` commands via
-Kubernetes exec. The runtime targets the exact attempt process group. AgentBox does
-not depend on Kubernetes exec reconnect for result delivery.
+The container runs `lemma-function-runtime serve` continuously on port 8090.
+AgentBox reaches the Pod IP over the cluster network, validates `/healthz`, and
+proxies short-lived signed invocation/cancellation requests. No Kubernetes Service
+or Ingress is needed. Revision workers, exact-operation cancellation, artifact
+verification, and callbacks use the same runtime protocol as Docker and E2B.
 
 The Pod is deleted after five idle minutes, when drained, or after an unrecoverable
 sandbox failure. A later run creates a fresh Pod and downloads exact artifacts again.
@@ -331,7 +336,7 @@ sandbox failure. A later run creates a fresh Pod and downloads exact artifacts a
 Pod phase alone is insufficient. The adapter waits for:
 
 - scheduled Pod and running container;
-- readiness condition for workspace runtime or function launcher capability;
+- readiness condition for the workspace runtime or function resident runtime;
 - matching Pod UID and allocation labels;
 - no terminating timestamp;
 - PVC bound/mounted for workspace profiles.
@@ -380,7 +385,9 @@ The documented create request supports secured access, lifecycle, outbound netwo
 and public-traffic controls; see the
 [E2B create-sandbox API](https://e2b.dev/docs/api-reference/sandboxes/create-sandbox).
 
-No AgentBox runtime or workload-specific execution HTTP port is exposed through E2B.
+The workspace template exposes no AgentBox control runtime. The function template
+starts the private resident function runtime on port 8090 and proves it ready during
+the template build.
 
 ### 7.2 Workspace lifecycle
 
@@ -489,34 +496,46 @@ lifecycle={
 }
 ```
 
-On allocation readiness, use one native command smoke test of the immutable launcher.
-For each attempt:
+The immutable template starts `lemma-function-runtime serve` on port 8090 and waits
+for that port during build. On allocation readiness AgentBox connects by exact
+sandbox ID and validates the runtime health endpoint.
 
-1. set the sandbox timeout to at least `attempt deadline + termination grace`;
-2. start the native E2B process with separate command/arguments, `background=true`,
-   `tag=operation_id`, and `stdin=true`;
-3. send the single-use ticket through stdin and close stdin;
-4. persist PID/tag after acknowledgment;
-5. rely on runtime callbacks for normal completion;
-6. use exact PID/tag inspection for reconcile/cancel;
-7. after the final attempt, set the idle timeout to five minutes;
-8. kill exact sandbox after five idle minutes.
+For each invocation:
 
-No heartbeat extends the timeout. A single timeout update protects a long JOB. No
-function result is polled through an E2B public route.
+1. AgentBox resolves `sandbox.get_host(8090)` and obtains the sandbox's
+   `traffic_access_token`;
+2. the provider hop always uses `https://<host>` and
+   `E2B-Traffic-Access-Token`, even though the caller-facing grant describes an HTTP
+   application port;
+3. AgentBox extends the sandbox timeout once, coalesced across a burst, to at least
+   `run deadline + idle grace`;
+4. the backend sends its cached delegated function-session bearer, exact revision
+   hash, run ID, gateway URL, run control capability, and typed input through the
+   signed AgentBox port proxy;
+5. the resident runtime claims the run, uses/downloads the verified artifact,
+   leases an exact revision worker, and reports started/terminal callbacks;
+6. cancellation authenticates the run control capability and kills
+   only the leased worker process group;
+7. AgentBox kills the exact sandbox after five idle minutes.
+
+No heartbeat or provider process polling is used. The invocation response and
+durable callbacks are guarded by the backend run state. Neither AgentBox nor the
+backend replays an invocation after an ambiguous response.
 
 ### 7.6 Network and ports
 
 Workspace public app traffic uses E2B secured access and short-lived AgentBox grants.
-Raw traffic tokens are encrypted in AgentBox state only when a grant must survive a
-manager restart and are never returned to backend callers.
+Raw traffic tokens are resolved from the connected E2B handle, kept only in adapter
+memory for the upstream request, and never persisted or returned to backend callers.
 
-Function sandboxes set public traffic false. Their provider network permits direct
-connections only to the Lemma runtime gateway, the controlled egress gateway, and
-the required controlled resolver. The egress gateway enforces the attempt's
-revision-declared public HTTPS destinations. If the selected E2B template/account
-cannot enforce this upstream restriction, the function profile is rejected rather
-than weakened.
+Function sandboxes set `allow_public_traffic=false`; E2B's authenticated TLS traffic
+gateway remains reachable with the per-sandbox traffic token. For the initial
+release their outbound network allowlist contains only the exact Lemma runtime
+gateway host needed for claim, artifact, SDK, and callback traffic. DNS needed to
+resolve that host is provider-controlled. If the selected E2B template/account
+cannot enforce this restriction, the function profile is rejected rather than
+weakened. Revision-declared third-party egress is a later gateway feature, not an
+unrestricted direct-internet fallback.
 
 ### 7.7 Create ambiguity, capacity, and events
 

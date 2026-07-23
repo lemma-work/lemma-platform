@@ -2,7 +2,7 @@
 
 AgentBox is Lemma's provider-neutral sandbox fabric for Docker, Kubernetes, and E2B.
 
-**Status:** Design proposed; Docker and E2B implementation in progress
+**Status:** Implemented and verified for Docker and E2B; Kubernetes deferred
 
 The canonical AgentBox design is maintained in:
 

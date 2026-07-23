@@ -140,6 +140,53 @@ async def _run_cleanup_step(
         logger.warning("test_support.e2e_base.timed_out_during_e2e_cleanup.timeout")
 
 
+async def _close_e2e_process_clients() -> None:
+    """Close process-local clients opened by HTTPX ASGI test requests.
+
+    ``httpx.ASGITransport`` intentionally does not run the application's
+    lifespan. E2E requests can therefore initialize the same lazy singletons as
+    production without invoking their production shutdown hooks. Keep this
+    cleanup on the pytest async loop and call it from the canonical client
+    fixture after all dependent request fixtures have unwound.
+    """
+
+    from app.core.infrastructure.cache.redis_json_cache import close_redis_json_caches
+    from app.core.infrastructure.channels.channel_service import channel_service
+    from app.core.infrastructure.db.session import close_engine
+    from app.core.infrastructure.events.message_bus import close_message_bus
+    from app.core.infrastructure.jobs.streaq_job_queue import close_streaq_job_queue
+    from app.modules.agent_surfaces.infrastructure.adapters.redis_event_dedup_store import (
+        close_surface_event_dedup_store,
+    )
+    from app.modules.datastore.infrastructure.session import close_datastore_engine
+    from app.modules.identity.infrastructure.user_cache import close_user_cache
+    from app.modules.identity.services.auth_abuse import close_auth_abuse_store
+    from app.modules.identity.services.telegram_oidc import close_telegram_oidc_store
+    from app.modules.workspace.services.workspace_sandbox_service import (
+        reset_workspace_store_state,
+    )
+    from app.modules.workspace.services.workspace_tool_runtime import (
+        close_workspace_tool_runtimes,
+    )
+
+    await _run_cleanup_step(
+        "close_workspace_tool_runtimes", close_workspace_tool_runtimes
+    )
+    await _run_cleanup_step("reset_workspace_store_state", reset_workspace_store_state)
+    await _run_cleanup_step(
+        "close_surface_event_dedup_store", close_surface_event_dedup_store
+    )
+    await _run_cleanup_step("close_user_cache", close_user_cache)
+    await _run_cleanup_step("close_auth_abuse_store", close_auth_abuse_store)
+    await _run_cleanup_step("close_telegram_oidc_store", close_telegram_oidc_store)
+    await _run_cleanup_step("close_streaq_job_queue", close_streaq_job_queue)
+    await _run_cleanup_step("close_message_bus", close_message_bus)
+    await _run_cleanup_step("close_redis_json_caches", close_redis_json_caches)
+    await _run_cleanup_step("channel_service.disconnect", channel_service.disconnect)
+    await _run_cleanup_step("close_datastore_engine", close_datastore_engine)
+    await _run_cleanup_step("close_engine", close_engine)
+
+
 def _shared_context_resource(name: str, factory: Callable[[], Any]) -> Any:
     """Reuse expensive session-scoped container resources across module conftests."""
 
@@ -386,37 +433,7 @@ async def cleanup_workspace_containers_function():
     # containers here would kill the shared session testcontainers and break every
     # subsequent test.
     _cleanup_e2e_workspace_containers(sandboxes_only=True)
-    from app.core.infrastructure.channels.channel_service import channel_service
-    from app.core.infrastructure.db.session import close_engine
-    from app.core.infrastructure.events.message_bus import close_message_bus
-    from app.core.infrastructure.jobs.streaq_job_queue import close_streaq_job_queue
-    from app.modules.datastore.infrastructure.session import close_datastore_engine
-    from app.modules.agent_surfaces.infrastructure.adapters.redis_event_dedup_store import (
-        close_surface_event_dedup_store,
-    )
-    from app.modules.identity.infrastructure.user_cache import close_user_cache
-    from app.modules.identity.services.auth_abuse import close_auth_abuse_store
-    from app.modules.identity.services.telegram_oidc import close_telegram_oidc_store
-    from app.modules.workspace.services.workspace_sandbox_service import (
-        reset_workspace_store_state,
-    )
-    from app.modules.workspace.services.workspace_tool_runtime import (
-        reset_workspace_tool_runtimes,
-    )
-
-    reset_workspace_tool_runtimes()
-    await _run_cleanup_step("reset_workspace_store_state", reset_workspace_store_state)
-    await _run_cleanup_step(
-        "close_surface_event_dedup_store", close_surface_event_dedup_store
-    )
-    await _run_cleanup_step("close_user_cache", close_user_cache)
-    await _run_cleanup_step("close_auth_abuse_store", close_auth_abuse_store)
-    await _run_cleanup_step("close_telegram_oidc_store", close_telegram_oidc_store)
-    await _run_cleanup_step("close_streaq_job_queue", close_streaq_job_queue)
-    await _run_cleanup_step("close_message_bus", close_message_bus)
-    await _run_cleanup_step("channel_service.disconnect", channel_service.disconnect)
-    await _run_cleanup_step("close_datastore_engine", close_datastore_engine)
-    await _run_cleanup_step("close_engine", close_engine)
+    await _close_e2e_process_clients()
 
 
 @pytest_asyncio.fixture(scope="session")
@@ -678,7 +695,10 @@ async def async_client(test_app) -> AsyncGenerator["AsyncClient", None]:
         transport=ASGITransport(app=test_app),
         base_url="http://testserver",
     ) as client:
-        yield client
+        try:
+            yield client
+        finally:
+            await _close_e2e_process_clients()
 
 
 @pytest_asyncio.fixture(scope="function")

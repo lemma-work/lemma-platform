@@ -72,6 +72,17 @@ class FunctionRunNotFoundError(FunctionDomainError):
         )
 
 
+class FunctionRunQueueUnavailable(FunctionDomainError):
+    """The durable function-run queue could not confirm publication."""
+
+    def __init__(self, message: str = "Function run queue is unavailable"):
+        super().__init__(
+            message=message,
+            code="FUNCTION_RUN_QUEUE_UNAVAILABLE",
+            status_code=503,
+        )
+
+
 class FunctionConflictError(FunctionDomainError):
     def __init__(self, message: str):
         super().__init__(

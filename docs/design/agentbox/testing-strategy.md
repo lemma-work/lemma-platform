@@ -1,6 +1,6 @@
 # AgentBox Testing Strategy
 
-**Status:** Implementation specification; Docker/E2B release verification in progress
+**Status:** Implemented and verified for Docker and E2B; Kubernetes deferred
 
 **Parent:** [AgentBox](README.md)
 
@@ -18,18 +18,18 @@ The initial mandatory provider matrix is:
 
 | Provider | Workspace Python/shell/files | Workspace browser/apps | API functions | JOB functions | Release status |
 | --- | ---: | ---: | ---: | ---: | --- |
-| Docker | Required | Required | Required | Required | Passed on current PR head |
-| E2B | Required | Required | Required | Required | Blocking on trusted merge/release CI |
+| Docker | Required | Required | Required | Required | Passed |
+| E2B | Required | Required | Required | Required | Passed |
 | Kubernetes | Designed, not initially required | Designed, not initially required | Designed, not initially required | Designed, not initially required | Deferred until dedicated cluster program |
 
-A Docker-only pass cannot promote an E2B profile. An AgentBox-only process test
-cannot promote the backend function plane. An E2B workspace pass cannot stand in for
-an E2B function pass. All four required columns must have evidence for the exact
-release SHA and profile digests.
+A Docker-only pass cannot validate an E2B profile. An AgentBox-only process test
+cannot validate the backend function plane. An E2B workspace pass cannot stand in
+for an E2B function pass. All four required columns require evidence from the exact
+source and immutable profile builds under test.
 
 This document owns suite topology, harness behavior, case catalog, and CI execution.
 [Verification and rollout](verification-and-rollout.md) owns performance thresholds,
-security launch requirements, migration, and promotion decisions.
+security launch requirements, migration, and provider enablement decisions.
 
 ### 1.1 Current implementation evidence
 
@@ -37,17 +37,20 @@ As of 2026-07-23, the following has been executed from the implementation branch
 
 | Suite | Result | What it proves |
 | --- | ---: | --- |
-| AgentBox unit/contract suite | 93 passed, 7 provider-gated skips | Typed SQLAlchemy state, API, adapters, runtimes, streaming files, fenced callback recovery, fault paths, exact cleanup reconciliation |
-| Real Docker adapter suite | 5 passed | Workspace lifecycle/volume, shell, PTY, Python, files, browser/port access, private-network manager topology, function process, lost terminal response recovery, and duplicate-safe callback |
-| Real E2B adapter suite | 2 passed against fresh candidate builds | Immutable create, Node/pnpm/uv/LiteParse, shell/stdin, PTY/resize, native files, Code Interpreter state, headful browser, pause/auto-resume, function process/cancel, exact deletion |
-| Backend API/JOB benchmark | Passed on Docker and the prior E2B release | Ticket claim, immutable artifact verification, real runner/gateway/database execution, 1,000-row table reads/writes at concurrency five |
-| Backend durability/chaos contracts | PostgreSQL lease suite 2 passed; focused dispatcher/gateway suite 3 passed | One-attempt restart takeover, lost/duplicate callback recovery, stale-fence rejection, sandbox-death termination, unknown-outcome fencing, no replay, and no DB lease across external I/O |
-| Current-head repository CI | Passed | Linux AgentBox/PostgreSQL and real Docker conformance, backend unit/migrations/quality, install experience, frontend/SDKs, macOS/Windows packaging, dependency/image scans, Gitleaks, CodeQL, and language analyzers |
+| AgentBox hermetic unit/contract suite | 115 passed, 6 skipped | Typed SQLAlchemy state, API, adapters, workspace runtime, resident function runtime, streaming files, fault paths, and exact cleanup reconciliation |
+| Real Docker adapter suite | 4 passed | Workspace lifecycle/volume, shell, PTY, Python, files, browser/port access, resident runtime health, exact destruction, and private-network manager topology |
+| Real E2B adapter suite | 2 passed | Immutable create, Node/pnpm/uv/LiteParse, shell/stdin, PTY/resize, native files, Code Interpreter state, headful browser, pause/auto-resume, resident runtime TLS port access, ten concurrent proxied runtime requests, and exact deletion |
+| Focused backend execution suite | 111 passed | Direct API dispatch, durable JOB dispatch, run claim/callback authorization, token cache, revision artifacts, repository concurrency, workspace integration, cancellation, and no automatic invocation replay |
+| Full backend unit suite | 2,513 passed, 1 skipped | The replacement preserves the wider backend contract; the sole skip is the existing optional MarkItDown test when that package is not installed |
+| Generated AgentBox client | 6 passed | The checked-in OpenAPI document and typed client are in sync with the server contract |
+| Lemma Python SDK compatibility | 2 passed | Invocation-local SDK context preserves `Pod.from_env()` behavior without leaking state between runs |
+| Docker benchmark | Passed at concurrency one and five | API/JOB no-op and 1,000-row read/write cases passed correctness and latency gates |
+| E2B benchmark through temporary ngrok | Passed at concurrency one and five | At concurrency five all 25 invocations succeeded; API no-op/read/write platform p95 was 1.47/1.63/1.59 s and JOB read/write was 1.77/1.40 s |
 
-This is development evidence, not final release acceptance. The fresh E2B candidate
-builds still require the complete API/JOB benchmark before promotion. Remaining
-case-manifest, chaos, and performance gates stay blocking. Kubernetes remains
-deferred.
+The E2B benchmark uses a temporary ngrok endpoint only for the local synthetic
+backend. It does not update E2B templates, aliases, account settings, or deployed
+builds. Any source change to an image/runtime requires a fresh immutable test build
+plus the relevant real-provider suite and benchmark. Kubernetes remains deferred.
 
 ## 2. Testing principles
 
@@ -56,11 +59,14 @@ deferred.
 2. **The real public boundary matters.** Provider conformance enters through the
    canonical AgentBox API/client. Full-stack cases enter through Lemma workspace tools or
    public function-run APIs. Tests do not invoke a provider adapter as a shortcut.
-3. **Functions are tested where API/JOB semantics live.** The backend dispatcher,
-   queue, attempts, tickets, runtime gateway, callbacks, and outbox are part of every
-   full-stack function test. AgentBox remains a generic sandbox/process service.
-4. **No in-sandbox function server is accepted.** Port 8080/8090 health or an
-   AgentBox-local result registry is never evidence for function correctness.
+3. **Functions are tested where API/JOB semantics live.** Direct API dispatch,
+   durable JOB queueing, function sessions, run claims, callbacks, and outbox
+   are part of the full-stack matrix. AgentBox remains a generic sandbox/lifecycle
+   service and does not own function semantics.
+4. **Health is necessary, never sufficient.** The profile-owned resident runtime
+   must pass its private port-8090 health probe, but acceptance additionally requires
+   real authenticated API/JOB invocation, worker reuse, cancellation, callback, and
+   result behavior. No sandbox-local durable queue/result registry is accepted.
 5. **No test-body retries.** Mandatory correctness/conformance cases run once. A
    failed assertion remains a failure; rerunning the whole CI job is not an
    automatic flake policy.
@@ -70,7 +76,8 @@ deferred.
    from an exact resource ledger. Diagnostics are redacted and attached before
    cleanup.
 8. **Unknown outcomes are asserted, not hidden.** Fault injection must prove call
-   counts, fences, terminal state, and absence of duplicated side effects.
+   counts, durable run state, no backend invocation replay, and documented
+   client-owned retry semantics.
 9. **Performance is distributional.** Correctness tests avoid fragile single-sample
    wall-clock assertions. Dedicated benchmark lanes enforce p95/p99 gates.
 10. **A skip is not a pass.** In required Docker/E2B CI lanes, missing daemon,
@@ -86,7 +93,7 @@ Proposed structure:
 agentbox/tests/
   unit/                    domain policies, errors, deadlines, admission
   state/                   SQLAlchemy repositories, UoW, Alembic, concurrency
-  runtime/                 private workspace runtime and function launcher contract
+  runtime/                 private workspace runtime and resident function runtime
   contract/                portable lifecycle/process/Python/files/ports cases
   providers/docker/        real Docker-only behavior and cleanup
   providers/e2b/           real E2B-only behavior and cleanup
@@ -108,7 +115,7 @@ lemma-backend/app/modules/workspace/tests/agentbox/
   full_stack/              tools, browser, files through real AgentBox
 
 lemma-backend/app/modules/function/tests/agentbox/
-  domain/                  queue, attempts, capacity, tickets, fences
+  domain/                  direct API dispatch, JOB queue, sessions, runs
   full_stack/              API and JOB through real AgentBox/provider
   chaos/                   callback loss, restarts, ambiguous execution
 ```
@@ -202,7 +209,7 @@ creation timestamp.
 - Run the runtime gateway, controlled egress gateway, and artifact fixture behind
   ephemeral publicly reachable TLS test endpoints because an E2B sandbox cannot
   call CI localhost. Endpoints are uniquely namespaced to the run, accept only
-  attempt-bound capabilities, expose no AgentBox management API, and are removed
+  run-bound capabilities, expose no AgentBox management API, and are removed
   after the suite.
 - Add unique `managed-by`, environment, run-scope, allocation-token, and case-ID
   metadata to every sandbox.
@@ -230,7 +237,7 @@ The content-addressed bundle contains:
 - binary and large-file fixtures with expected digests;
 - prebuilt no-op, echo, datastore/file, controlled-egress, timeout-tree,
   non-idempotent-side-effect, and deterministic-failure function artifacts;
-- gateway endpoints that count ticket claims, starts, logs, callbacks, outbox
+- gateway endpoints that count run claims, starts, logs, callbacks, outbox
   events, and externally visible test side effects.
 
 No invocation performs `pip install`. A dependency-bearing fixture is built before
@@ -258,7 +265,7 @@ PostgreSQL-only concurrency cases prove:
 - admission cannot over-reserve across manager replicas;
 - `SKIP LOCKED` cleanup/reconciliation claims do not duplicate work;
 - allocation/process unique keys resolve races deterministically;
-- stale epoch/fence compare-and-set updates affect zero rows;
+- stale allocation-epoch and run-state compare-and-set updates affect zero rows;
 - deadlock/serialization failures map to bounded typed retry at the transaction
   boundary, never to provider create/start replay.
 
@@ -392,38 +399,47 @@ Every full-stack case is mandatory with `FUNCTION/pod_id` on both Docker and E2B
 | ID | Scenario | Required assertions |
 | --- | --- | --- |
 | `FN-API-001` | Cold no-op | Public API waits for durable terminal success and returns exact output |
-| `FN-API-002` | Warm reuse | Same pod reuses allocation/cache without sharing attempt temp state |
-| `FN-API-003` | Four-way overlap | Four standard invocations consume eight units and overlap safely |
+| `FN-API-002` | Warm reuse | Same pod reuses allocation, artifact and revision worker without sharing request context |
+| `FN-API-003` | Concurrent overlap | Five full-stack invocations overlap without a backend worker queue; higher-count runtime stress proves the pool has no four-slot admission limit |
 | `FN-API-004` | Backend resources | Scoped datastore/file/connector operations traverse runtime gateway correctly |
 | `FN-API-005` | Errors/schema/logs | User exception, invalid input/output, bounded logs and redaction are stable |
-| `FN-API-006` | Timeout/cancel | Absolute deadline/cancel kills descendants before fenced terminal state |
-| `FN-API-007` | Egress | Declared HTTPS succeeds; undeclared/private/direct/proxy-bypass fails |
+| `FN-API-006` | Timeout/cancel | Absolute deadline/cancel kills descendants before durable terminal state |
+| `FN-API-007` | Egress | Lemma gateway succeeds; arbitrary public, private, metadata, and provider-control destinations fail |
 | `FN-API-008` | Pod isolation | Different pod uses different allocation/cache/process/files/capability |
 
 ### 8.3 JOB functions
 
 | ID | Scenario | Required assertions |
 | --- | --- | --- |
-| `FN-JOB-001` | Submission | Public call returns `PENDING`; durable queue/attempt survive requester exit |
+| `FN-JOB-001` | Submission | Public call returns `PENDING`; durable run and queue delivery survive requester exit |
 | `FN-JOB-002` | Completion | Worker dispatch, callback, run terminal state and one outbox event agree |
 | `FN-JOB-003` | Long run | Run survives beyond workspace/function idle observations without heartbeat |
-| `FN-JOB-004` | Worker restart | Lease expiry/reclaim resumes orchestration without duplicate claimed execution |
-| `FN-JOB-005` | Three-way saturation | Three standard JOBs consume six units; fourth remains queued |
-| `FN-JOB-006` | API reserve | A standard API attempt starts within gate while JOB capacity is saturated |
+| `FN-JOB-004` | Worker restart | Delivery before claim can be redelivered; delivery after claim never invokes user code again |
+| `FN-JOB-005` | Concurrent jobs | Concurrent jobs use the resident worker pool without a four-slot admission limit |
+| `FN-JOB-006` | Direct API lane | API dispatch goes directly to the runtime and never waits for the backend JOB worker |
 | `FN-JOB-007` | Cancel | Queued cancellation starts no code; running cancellation targets exact process tree |
 | `FN-JOB-008` | Failure | Deterministic user/platform failure persists stable public status/log/error |
 
 ### 8.4 Shared API/JOB correctness
 
-- API is always selected before queued JOB at the same pod; running JOBs are never
-  force-preempted.
-- Both kinds use the same backend queue, attempt/fence model, runtime gateway, and
-  per-pod sandbox. No sandbox-local queue/result registry exists.
-- The single-use ticket is sent through stdin, can be claimed once, is hashed at
-  rest, and cannot authorize another attempt/pod/revision.
+- API never enters the worker queue. JOB priority applies only within the durable
+  JOB lane; running JOBs are never force-preempted.
+- Both kinds use the same run model, runtime gateway, resident invocation
+  endpoint, and per-pod sandbox. No sandbox-local durable queue/result registry
+  exists.
+- The delegated function-session token is the only invocation bearer and the same
+  value is bound to the Lemma SDK invocation context. It is cached for up to five
+  minutes by user, pod,
+  function, revision hash, workload and scope; a concurrent miss mints once
+  per backend replica and no database connection remains open during minting.
+- A bearer cannot create arbitrary work by itself: the gateway must atomically
+  claim the backend-created run whose user/pod/function/revision/session identity
+  matches it. The post-claim callback capability is internal and run-scoped.
+- The same revision worker may serve multiple users sequentially, while per-request
+  identity/token/config are supplied only through the invocation `ContextVar`.
 - argv, environment, writable files, provider inspection, and diagnostics contain
   no reusable human/provider/object-store credential.
-- Function allocation is destroyed after five idle minutes; the next cold attempt
+- Function allocation is destroyed after five idle minutes; the next cold run
   succeeds with no required state from the old allocation.
 
 ## 9. Fault, restart, and ambiguity matrix
@@ -439,14 +455,14 @@ Mandatory cases on Docker and E2B:
 | --- | --- | --- |
 | `CH-CREATE-001` | Create accepted, response lost | One provider create; allocation `UNKNOWN` then exact reconciliation |
 | `CH-CREATE-002` | Provider 429/retry-after | Distributed scope waits; no adapter-local retry storm |
-| `CH-START-001` | Process started, acknowledgment lost | One operation start; tag/runtime record reconciles same process |
-| `CH-TICKET-001` | Claim succeeds, started callback lost | No non-idempotent replay; inspection/reconciliation determines outcome |
-| `CH-CALLBACK-001` | Terminal callback duplicated | One terminal transition, unit release, and outbox event |
-| `CH-CALLBACK-002` | Terminal callback lost | Reconcile exact attempt; non-idempotent unresolved becomes `INDETERMINATE` |
-| `CH-RESTART-001` | AgentBox exits after intent commit | Restart dispatches/reconciles according to recorded dispatch state, never blindly creates |
-| `CH-RESTART-002` | Backend worker exits after ticket claim | No unsafe replay; lease/fence and runtime inspection converge |
-| `CH-DEATH-001` | Sandbox dies during run | Exact attempt terminal/indeterminate policy; capacity repaired; later allocation is fresh |
-| `CH-FENCE-001` | Old callback after new fence | Stale callback changes no public/domain state |
+| `CH-INVOKE-001` | Invocation accepted, HTTP response lost | Backend checks the same durable run and never sends the invocation again |
+| `CH-CLAIM-001` | Run claim succeeds, invocation response lost | No automatic replay; callback may finish the same run, otherwise deadline reconciliation fails it |
+| `CH-CALLBACK-001` | Terminal callback duplicated | One terminal transition and one outbox event |
+| `CH-CALLBACK-002` | Terminal callback lost | Deadline reconciliation marks the same unfinished run failed without replay |
+| `CH-RESTART-001` | AgentBox exits after allocation intent commit | Restart reconciles the same allocation token and never blindly creates |
+| `CH-RESTART-002` | Backend worker exits after run claim | A redelivery observes `RUNNING` and never invokes user code again |
+| `CH-DEATH-001` | Sandbox dies during run | The same run fails at deadline; later client-created run receives a fresh allocation if required |
+| `CH-STATE-001` | Late callback after terminal state | Late callback changes no public/domain state |
 
 The non-idempotent fixture performs a visible gateway-counted side effect. Every
 ambiguity test asserts the side-effect count is at most one, not merely that one
@@ -463,7 +479,7 @@ both real providers. Docker proves configuration and control boundaries but rema
 explicitly unsuitable as hostile multi-tenant isolation.
 
 Performance lanes collect stage spans rather than parsing logs. Correctness cases
-emit samples but do not fail on one slow call. Promotion benchmarks use sufficient
+emit samples but do not fail on one slow call. Release benchmarks use sufficient
 warm/cold/resume samples to enforce the documented p95 gates with provider, region,
 quota, profile digest, and sample count attached.
 
@@ -471,7 +487,7 @@ The executable mixed API/JOB table workload, commands, report schema, current
 regression budgets, and initial Docker/E2B parity evidence are maintained in the
 [function execution benchmark runbook](../../operators/agentbox-function-benchmark.md).
 Its five-sample p95 gate is an early regression detector; it does not replace the
-larger promotion distributions required by this design.
+larger release distributions required by this design.
 
 Nightly soak scenarios:
 
@@ -485,7 +501,7 @@ Nightly soak scenarios:
 Soak counts are configurable for cost, but the release report records actual counts
 and duration. A shorter run cannot be labeled as the required soak gate.
 
-## 11. CI and promotion lanes
+## 11. CI and release lanes
 
 | Lane | Trigger | Contents | Blocking |
 | --- | --- | --- | ---: |
@@ -510,7 +526,7 @@ preflight configuration is absent.
 Quarantine is not allowed for a mandatory case. A case may move out of the blocking
 suite only with a documented design change proving the behavior is no longer
 required. Infrastructure outages may be classified separately, but they do not
-publish conformance or permit provider-profile promotion.
+publish conformance or permit provider-profile enablement.
 
 ## 12. Kubernetes deferred program
 

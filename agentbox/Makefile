@@ -2,8 +2,11 @@ REGISTRY ?= ghcr.io/lemma-work
 TAG ?= dev
 PLATFORM ?= linux/amd64
 PLATFORMS ?= linux/amd64,linux/arm64
-PYTHON_IMAGE ?= python:3.14-slim
-NODE_IMAGE ?= node:24-slim
+# Function artifacts currently target the canonical x86-64 runtime ABI. Do not
+# publish an arm64 runtime image until the artifact builder emits an arm64 ABI.
+FUNCTION_PLATFORMS ?= linux/amd64
+PYTHON_IMAGE ?= python:3.14.6-slim
+NODE_IMAGE ?= node:24.18.0-slim
 
 MANAGER_IMAGE := $(REGISTRY)/lemma-agentbox
 WORKSPACE_IMAGE := $(REGISTRY)/lemma-agentbox-workspace
@@ -96,7 +99,7 @@ push-workspace:
 
 push-function:
 	docker buildx build \
-		--platform $(PLATFORMS) \
+		--platform $(FUNCTION_PLATFORMS) \
 		-f Dockerfile.function \
 		--build-arg PYTHON_IMAGE=$(PYTHON_IMAGE) \
 		-t $(FUNCTION_IMAGE):$(TAG) \

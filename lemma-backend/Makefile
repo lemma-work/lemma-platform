@@ -33,21 +33,28 @@ BACKEND_COVERAGE_FILE ?= $(CURDIR)/.coverage.backend
 BACKEND_COVERAGE_RUN_ENV = COVERAGE_PROCESS_START=$(CURDIR)/.coveragerc COVERAGE_FILE=$(BACKEND_COVERAGE_FILE)
 BACKEND_COVERAGE_DATA_ENV = COVERAGE_FILE=$(BACKEND_COVERAGE_FILE)
 
-# Full-path function quality benchmark. E2B identifiers are immutable builds
-# that passed the Docker/E2B parity run; update them only with new promotion
-# evidence. The E2B API key is read from lemma-backend/.env or the environment.
+# Full-path function quality benchmark. E2B identifiers are exact immutable
+# test inputs; this target never changes templates, aliases, or account state
+# beyond creating and exactly deleting its own tracked sandboxes. The E2B API
+# key is read from lemma-backend/.env or the environment.
 FUNCTION_BENCH_CONCURRENCY ?= 5
 FUNCTION_BENCH_INVOCATIONS ?= 5
 FUNCTION_BENCH_SOURCE_ROWS ?= 1000
 FUNCTION_BENCH_WRITE_ROWS ?= 1000
+FUNCTION_BENCH_POLL_INTERVAL_SECONDS ?= 0.5
 FUNCTION_BENCH_TERMINAL_TIMEOUT_SECONDS ?= 300
+FUNCTION_BENCH_TUNNEL ?= ngrok
 include ../agentbox/templates/e2b/promoted-builds.env
 FUNCTION_BENCH_ENV = \
 	E2E_REAL=1 \
+	DEBUG=false \
+	LOG_LEVEL=WARNING \
+	FUNCTION_EXECUTION_DIAGNOSTICS=true \
 	FUNCTION_BENCH_CONCURRENCY=$(FUNCTION_BENCH_CONCURRENCY) \
 	FUNCTION_BENCH_INVOCATIONS=$(FUNCTION_BENCH_INVOCATIONS) \
 	FUNCTION_BENCH_SOURCE_ROWS=$(FUNCTION_BENCH_SOURCE_ROWS) \
 	FUNCTION_BENCH_WRITE_ROWS=$(FUNCTION_BENCH_WRITE_ROWS) \
+	FUNCTION_BENCH_POLL_INTERVAL_SECONDS=$(FUNCTION_BENCH_POLL_INTERVAL_SECONDS) \
 	FUNCTION_BENCH_TERMINAL_TIMEOUT_SECONDS=$(FUNCTION_BENCH_TERMINAL_TIMEOUT_SECONDS)
 FUNCTION_BENCH_TEST = app/modules/function/tests/perf/test_function_execution_benchmark.py
 
@@ -269,6 +276,7 @@ benchmark-functions-docker:
 benchmark-functions-e2b:
 	$(FUNCTION_BENCH_ENV) \
 		FUNCTION_BENCH_PROVIDER=e2b \
+		FUNCTION_BENCH_TUNNEL=$(FUNCTION_BENCH_TUNNEL) \
 		AGENTBOX_E2B_WORKSPACE_TEMPLATE=$(AGENTBOX_E2B_WORKSPACE_TEMPLATE) \
 		AGENTBOX_E2B_WORKSPACE_BUILD_ID=$(AGENTBOX_E2B_WORKSPACE_BUILD_ID) \
 		AGENTBOX_E2B_FUNCTION_TEMPLATE=$(AGENTBOX_E2B_FUNCTION_TEMPLATE) \

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import base64
 from collections.abc import AsyncIterable, AsyncIterator, Callable, Mapping
 from contextlib import asynccontextmanager
 from datetime import datetime
@@ -173,6 +174,7 @@ class AgentBoxClient:
         environment: tuple[EnvironmentVariable, ...] = (),
         tty: TerminalSize | None = None,
         output_limit_bytes: int = 1024 * 1024,
+        initial_input: bytes | None = None,
     ) -> ProcessRef:
         return await self._model_request(
             "POST",
@@ -187,6 +189,11 @@ class AgentBoxClient:
                 "tty": tty.model_dump() if tty is not None else None,
                 "output_limit_bytes": output_limit_bytes,
                 "deadline_at": deadline_at.isoformat(),
+                "initial_input_base64": (
+                    base64.b64encode(initial_input).decode()
+                    if initial_input is not None
+                    else None
+                ),
             },
         )
 
@@ -402,6 +409,16 @@ class AgentBoxClient:
             params={"path": path, "deadline_at": deadline_at.isoformat()},
         )
 
+    async def create_directory(
+        self, logical_id: UUID, path: str, *, deadline_at: datetime
+    ) -> None:
+        response = await self._request(
+            "PUT",
+            f"{self._sandbox_path(WorkloadKind.WORKSPACE, logical_id)}/directories",
+            params={"path": path, "deadline_at": deadline_at.isoformat()},
+        )
+        self._raise_for_error(response)
+
     async def list_files(
         self, logical_id: UUID, path: str, *, deadline_at: datetime
     ) -> tuple[FileStat, ...]:
@@ -588,9 +605,9 @@ class AgentBoxClient:
 
     @staticmethod
     def _raise_for_error(response: httpx.Response) -> None:
-        # Indeterminate operations can be represented as an accepted (202)
-        # typed error. Inspect the envelope before treating every 2xx response
-        # as a success resource.
+        # A process whose exact dispatch is still being reconciled can return an
+        # accepted (202) typed error. Inspect the envelope before treating every
+        # 2xx response as a success resource.
         payload: Any | None = None
         try:
             payload = response.json()

@@ -91,7 +91,7 @@ class PythonSessionService:
                 await uow.commit()
             raise AgentBoxError(
                 ErrorCode.PROVIDER_UNAVAILABLE,
-                "provider rejected Python session creation",
+                f"provider rejected Python session creation: {exc}",
                 retry=RetryDisposition.SAFE_SAME_OPERATION,
                 status_code=503,
             ) from exc

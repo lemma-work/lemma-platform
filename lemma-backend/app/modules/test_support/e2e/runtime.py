@@ -176,19 +176,27 @@ def workspace_image(e2e_settings) -> Generator[str, None, None]:
 
 @pytest.fixture(scope="module")
 def function_image(e2e_settings) -> Generator[str, None, None]:
-    """Build the slim stateless function runner image used by AgentBox."""
+    """Build the slim stateless function runner image used by AgentBox.
+
+    Function artifacts currently declare the x86_64 runtime ABI, including for
+    native wheels. Build the E2E runtime for that exact platform even on arm64
+    developer machines; a native arm image would accept the profile but could
+    not load the artifact's compiled extensions.
+    """
 
     del e2e_settings
     repo_root = Path(__file__).resolve().parents[5]
     configured_image = os.getenv("FUNCTION_E2E_IMAGE")
+    platform = os.getenv("FUNCTION_E2E_PLATFORM", "linux/amd64")
     if configured_image:
         image = configured_image
     else:
         fingerprint = _agentbox_image_fingerprint(repo_root)
+        platform_tag = platform.rsplit("/", 1)[-1].replace("_", "-")
         image = (
-            f"agentbox-function:e2e-{fingerprint}"
+            f"agentbox-function:e2e-{platform_tag}-{fingerprint}"
             if fingerprint
-            else "agentbox-function:e2e"
+            else f"agentbox-function:e2e-{platform_tag}"
         )
     inspect = subprocess.run(
         ["docker", "image", "inspect", image],
@@ -201,6 +209,8 @@ def function_image(e2e_settings) -> Generator[str, None, None]:
             [
                 "docker",
                 "build",
+                "--platform",
+                platform,
                 "-f",
                 str(repo_root / "agentbox" / "Dockerfile.function"),
                 "-t",
@@ -296,6 +306,7 @@ async def local_agentbox_server(
         "AGENTBOX_API_KEY": api_key,
         "AGENTBOX_API_URL": manager_url,
         "AGENTBOX_PUBLIC_URL": manager_url,
+        "AGENTBOX_RUNTIME_CREDENTIAL_KEY": "test-runtime-credential-key-32-bytes",
         "AGENTBOX_WORKSPACE_IMAGE": workspace_image,
         "AGENTBOX_FUNCTION_IMAGE": function_image,
         "AGENTBOX_STATE_DB_PATH": str(state_path),
@@ -317,6 +328,9 @@ async def local_agentbox_server(
         "agentbox_api_key": agentbox_config.settings.agentbox_api_key,
         "agentbox_api_url": agentbox_config.settings.agentbox_api_url,
         "agentbox_public_url": agentbox_config.settings.agentbox_public_url,
+        "agentbox_runtime_credential_key": (
+            agentbox_config.settings.agentbox_runtime_credential_key
+        ),
         "agentbox_workspace_image": agentbox_config.settings.agentbox_workspace_image,
         "agentbox_function_image": agentbox_config.settings.agentbox_function_image,
         "agentbox_state_db_path": agentbox_config.settings.agentbox_state_db_path,
@@ -338,6 +352,9 @@ async def local_agentbox_server(
     agentbox_config.settings.agentbox_api_key = api_key
     agentbox_config.settings.agentbox_api_url = manager_url
     agentbox_config.settings.agentbox_public_url = manager_url
+    agentbox_config.settings.agentbox_runtime_credential_key = (
+        "test-runtime-credential-key-32-bytes"
+    )
     agentbox_config.settings.agentbox_workspace_image = workspace_image
     agentbox_config.settings.agentbox_function_image = function_image
     agentbox_config.settings.agentbox_state_db_path = str(state_path)
@@ -415,7 +432,7 @@ async def configure_workspace_api_url(
     """Route workspace SDK calls to the per-test backend and local AgentBox manager."""
 
     from app.modules.workspace.services.workspace_tool_runtime import (
-        reset_workspace_tool_runtimes,
+        close_workspace_tool_runtimes,
     )
 
     original_api_url = settings.api_url
@@ -425,7 +442,7 @@ async def configure_workspace_api_url(
     original_manager_key = settings.agentbox_api_key
     original_manager_key_env = os.environ.get("AGENTBOX_API_KEY")
 
-    reset_workspace_tool_runtimes()
+    await close_workspace_tool_runtimes()
     settings.api_url = backend_server["host_base_url"]
     settings.agentbox_api_url = local_agentbox_server["manager_base_url"]
     settings.agentbox_api_key = local_agentbox_server["api_key"]
@@ -435,7 +452,7 @@ async def configure_workspace_api_url(
     try:
         yield {**backend_server, **local_agentbox_server}
     finally:
-        reset_workspace_tool_runtimes()
+        await close_workspace_tool_runtimes()
         settings.api_url = original_api_url
         settings.agentbox_api_url = original_manager_url
         settings.agentbox_api_key = original_manager_key

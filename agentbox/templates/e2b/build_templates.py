@@ -5,12 +5,32 @@ import json
 import os
 from pathlib import Path
 
-from e2b import Template, default_build_logger
+from e2b import Template, default_build_logger, wait_for_port
 
 
 REPOSITORY_ROOT = Path(__file__).resolve().parents[3]
 UV_VERSION = "0.11.31"
+UV_LINUX_X64_SHA256 = "8cc1cd82d434ec565376f98bd938d4b715b5791a80ff2d3aa78821cf85091b4b"
+NODE_VERSION = "24.18.0"
+NODE_LINUX_X64_SHA256 = (
+    "55aa7153f9d88f28d765fcdad5ae6945b5c0f98a36881703817e4c450fa76742"
+)
 PNPM_VERSION = "11.15.1"
+
+
+def _install_uv_command() -> str:
+    archive = f"uv-x86_64-unknown-linux-gnu-{UV_VERSION}.tar.gz"
+    directory = "uv-x86_64-unknown-linux-gnu"
+    return (
+        f"curl -fsSL https://github.com/astral-sh/uv/releases/download/"
+        f"{UV_VERSION}/uv-x86_64-unknown-linux-gnu.tar.gz "
+        f"-o /tmp/{archive} && "
+        f"echo '{UV_LINUX_X64_SHA256}  /tmp/{archive}' | sha256sum -c - && "
+        f"tar -xzf /tmp/{archive} -C /tmp && "
+        f"install -m 0755 /tmp/{directory}/uv /usr/local/bin/uv && "
+        f"install -m 0755 /tmp/{directory}/uvx /usr/local/bin/uvx && "
+        f"rm -rf /tmp/{archive} /tmp/{directory}"
+    )
 
 
 def workspace_template():
@@ -64,19 +84,17 @@ def workspace_template():
         .run_cmd(
             "mkdir -p /opt/node24 && "
             "curl -fsSL "
-            "https://nodejs.org/dist/v24.18.0/"
-            "node-v24.18.0-linux-x64.tar.xz -o /tmp/node24.tar.xz && "
+            f"https://nodejs.org/dist/v{NODE_VERSION}/"
+            f"node-v{NODE_VERSION}-linux-x64.tar.xz "
+            "-o /tmp/node24.tar.xz && "
+            f"echo '{NODE_LINUX_X64_SHA256}  /tmp/node24.tar.xz' "
+            "| sha256sum -c - && "
             "tar -xJf /tmp/node24.tar.xz --strip-components=1 "
             "-C /opt/node24 && rm /tmp/node24.tar.xz && "
             "/opt/node24/bin/corepack enable pnpm && "
             f"/opt/node24/bin/corepack prepare pnpm@{PNPM_VERSION} "
             "--activate && "
-            f"curl -LsSf https://astral.sh/uv/{UV_VERSION}/install.sh | "
-            "env UV_NO_MODIFY_PATH=1 sh && "
-            "install -m 0755 /root/.local/bin/uv /usr/local/bin/uv && "
-            "install -m 0755 /root/.local/bin/uvx /usr/local/bin/uvx && "
-            "rm -rf /root/.local/bin/uv /root/.local/bin/uvx "
-            "/root/.cache/uv",
+            f"{_install_uv_command()}",
             user="root",
         )
         .copy("lemma-python", "/build/lemma-python")
@@ -94,12 +112,12 @@ def workspace_template():
             "--locked --no-dev --no-editable && "
             "test -x /opt/agentbox-python/bin/python && "
             "system_site=$(/usr/local/bin/python3.13 -c "
-            "\"import site; print(site.getsitepackages()[0])\") && "
+            '"import site; print(site.getsitepackages()[0])") && '
             "printf '%s\\n' \"import sys; "
             "sys.path.insert(0, '/opt/agentbox-python/lib/python3.13/site-packages')\" "
-            "> \"$system_site/agentbox-workspace.pth\" && "
+            '> "$system_site/agentbox-workspace.pth" && '
             "/usr/local/bin/python3.13 -c "
-            "\"import lemma_sdk, pydantic\" && "
+            '"import lemma_sdk, pydantic" && '
             "uv cache clean && "
             "rm -rf /build/lemma-python /build/lemma-pod-bundle "
             "/build/lemma-cli /build/agentbox",
@@ -115,11 +133,11 @@ def workspace_template():
             "pnpm install --prod --frozen-lockfile && "
             "browser_bin_dir=$(find node_modules/.pnpm -type d "
             "-path '*/node_modules/agent-browser/bin' -print -quit) && "
-            "test -n \"$browser_bin_dir\" && "
-            "find \"$browser_bin_dir\" -maxdepth 1 -type f "
+            'test -n "$browser_bin_dir" && '
+            'find "$browser_bin_dir" -maxdepth 1 -type f '
             "-name 'agent-browser-*' ! -name agent-browser-linux-x64 "
             "-delete && "
-            "chmod 0755 \"$browser_bin_dir/agent-browser-linux-x64\" && "
+            'chmod 0755 "$browser_bin_dir/agent-browser-linux-x64" && '
             "pnpm store prune",
             user="root",
         )
@@ -190,9 +208,7 @@ def workspace_template():
                 "AGENTBOX_NODE_BINARY": "/opt/node24/bin/node",
                 "NODE_PATH": "/opt/agentbox-node/node_modules",
                 "PNPM_HOME": "/home/user/.local/share/pnpm",
-                "PYTHONPATH": (
-                    "/opt/agentbox-python/lib/python3.13/site-packages"
-                ),
+                "PYTHONPATH": ("/opt/agentbox-python/lib/python3.13/site-packages"),
                 "PATH": (
                     "/opt/agentbox-python/bin:/opt/node24/bin:"
                     "/usr/local/bin:/usr/bin:/bin"
@@ -219,16 +235,13 @@ def function_template():
             "/build/agentbox/templates/function-python",
         )
         .run_cmd(
-            f"curl -LsSf https://astral.sh/uv/{UV_VERSION}/install.sh | "
-            "env UV_NO_MODIFY_PATH=1 sh && "
-            "install -m 0755 /root/.local/bin/uv /usr/local/bin/uv && "
+            f"{_install_uv_command()} && "
             "UV_PROJECT_ENVIRONMENT=/opt/agentbox-function "
             "UV_COMPILE_BYTECODE=1 UV_LINK_MODE=copy "
             "uv sync --project /build/agentbox/templates/function-python "
             "--locked --no-dev --no-editable && "
             "uv cache clean && "
-            "rm -rf /root/.local/bin/uv /root/.local/bin/uvx "
-            "/build/lemma-python /build/agentbox",
+            "rm -rf /build/lemma-python /build/agentbox",
             user="root",
         )
         .copy("agentbox/agentbox/__init__.py", "/app/agentbox/__init__.py")
@@ -255,14 +268,15 @@ def function_template():
                 "PYTHONUNBUFFERED": "1",
                 "PYTHONDONTWRITEBYTECODE": "1",
                 "PYTHONPATH": "/app",
-                "PATH": (
-                    "/opt/agentbox-function/bin:/usr/local/bin:"
-                    "/usr/bin:/bin"
-                ),
+                "PATH": ("/opt/agentbox-function/bin:/usr/local/bin:/usr/bin:/bin"),
             }
         )
         .set_workdir("/tmp")
         .set_user("user")
+        .set_start_cmd(
+            "lemma-function-runtime serve --host 0.0.0.0 --port 8090",
+            wait_for_port(8090),
+        )
     )
 
 
@@ -271,7 +285,10 @@ def build(*, target: str) -> dict[str, dict[str, str]]:
         raise RuntimeError("E2B_API_KEY is required")
     selected = {
         "workspace": (workspace_template, "lemma-agentbox-workspace", 2, 2048),
-        "function": (function_template, "lemma-agentbox-function", 2, 1024),
+        # The resident runtime imports each immutable revision once and adds
+        # workers as concurrent invocations arrive. This is a safety envelope,
+        # not an advertised four-request admission limit.
+        "function": (function_template, "lemma-agentbox-function", 4, 2048),
     }
     names = tuple(selected) if target == "all" else (target,)
     result: dict[str, dict[str, str]] = {}

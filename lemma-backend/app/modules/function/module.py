@@ -16,6 +16,7 @@ def _routers():
 
 
 def _event_routers():
+    # Importing this module registers the function Streaq task and reconciler.
     from app.modules.function.events.handlers import router
 
     return [router]
@@ -25,5 +26,4 @@ module = LemmaModule(
     name="function",
     routers=_routers,
     event_routers=_event_routers,
-    stream_groups=(("function_run_events", "function-run-events"),),
 )

@@ -344,6 +344,25 @@ async def stat_file(
     return FileStatResponse.from_domain(stat)
 
 
+@router.put(
+    "/sandboxes/{workload_kind}/{logical_id}/directories",
+    status_code=204,
+)
+async def create_directory(
+    workload_kind: WorkloadKind,
+    logical_id: UUID,
+    path: str = Query(min_length=1, max_length=4096, pattern=r"^/"),
+    deadline_at: datetime = Query(),
+    service: FilesystemService = Depends(filesystem),
+) -> Response:
+    await service.create_directory(
+        SandboxKey(workload_kind=workload_kind, logical_id=logical_id),
+        path,
+        deadline_at=deadline_at,
+    )
+    return Response(status_code=204)
+
+
 @router.get(
     "/sandboxes/{workload_kind}/{logical_id}/files",
     response_model=FileListResponse,

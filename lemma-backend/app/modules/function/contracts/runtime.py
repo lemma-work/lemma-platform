@@ -3,10 +3,12 @@
 from __future__ import annotations
 
 from datetime import datetime
-from typing import Any, Literal
+from typing import Literal
 from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
+
+from app.modules.function.domain.types import JsonObject
 
 
 class RuntimeContract(BaseModel):
@@ -14,7 +16,8 @@ class RuntimeContract(BaseModel):
 
 
 class RuntimeClaimRequest(RuntimeContract):
-    runtime_abi: str = Field(min_length=1, max_length=128)
+    revision_hash: str = Field(pattern=r"^sha256:[0-9a-f]{64}$")
+    input_data: JsonObject
 
 
 class RuntimeIdentity(RuntimeContract):
@@ -27,21 +30,21 @@ class RuntimeIdentity(RuntimeContract):
 
 
 class RuntimeClaimResponse(RuntimeContract):
-    attempt_id: UUID
-    fence: int = Field(ge=1)
-    runtime_token: str = Field(min_length=32)
+    run_id: UUID
+    callback_token: str = Field(min_length=32)
     artifact_url: str
-    artifact_sha256: str = Field(pattern=r"^sha256:[0-9a-f]{64}$")
-    input_data: dict[str, Any]
-    config: dict[str, Any] | None = None
+    revision_hash: str = Field(pattern=r"^sha256:[0-9a-f]{64}$")
+    input_data: JsonObject
+    config: JsonObject | None = None
     identity: RuntimeIdentity
     lemma_token: str
     lemma_base_url: str
     deadline_at: datetime
 
 
-class RuntimeStartedRequest(RuntimeContract):
-    fence: int = Field(ge=1)
+class RuntimeAcceptedResponse(RuntimeContract):
+    accepted: Literal[True] = True
+    run_id: UUID
 
 
 class RuntimeFailure(RuntimeContract):
@@ -50,14 +53,23 @@ class RuntimeFailure(RuntimeContract):
     traceback: tuple[str, ...] = Field(default=(), max_length=256)
 
 
+class RuntimeTimings(RuntimeContract):
+    total_ms: float = Field(default=0, ge=0)
+    claim_ms: float = Field(default=0, ge=0)
+    artifact_ms: float = Field(default=0, ge=0)
+    worker_ms: float = Field(default=0, ge=0)
+    user_code_ms: float = Field(default=0, ge=0)
+    artifact_cache_hit: bool = False
+
+
 class RuntimeTerminalRequest(RuntimeContract):
-    fence: int = Field(ge=1)
     status: Literal["completed", "failed"]
-    output_data: dict[str, Any] | None = None
+    output_data: JsonObject | None = None
     error: RuntimeFailure | None = None
     stdout: str = Field(max_length=4 * 1024 * 1024)
     stderr: str = Field(max_length=4 * 1024 * 1024)
     output_truncated: bool = False
+    timings: RuntimeTimings = Field(default_factory=RuntimeTimings)
 
     @model_validator(mode="after")
     def validate_terminal_shape(self) -> RuntimeTerminalRequest:

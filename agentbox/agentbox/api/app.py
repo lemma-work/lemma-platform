@@ -44,7 +44,7 @@ from agentbox.observability import create_background_task
 from agentbox.reconciliation import AgentBoxReconciler, reconciliation_loop
 
 from .fabric import agentbox_error_response, router
-from .port_proxy import access_router
+from .port_proxy import access_router, create_port_proxy_http_client
 
 
 logger = get_logger(__name__)
@@ -207,24 +207,29 @@ class RequestContextMiddleware:
                             if streaming and response_started_at is not None
                             else finished_at - started_at
                         )
-                        log = (
-                            logger.warning
-                            if elapsed >= self.SLOW_SECONDS
-                            else logger.debug
-                        )
-                        fields = {
-                            "method": str(scope.get("method", "UNKNOWN")),
-                            "route": str(route),
-                            "status_code": status_code,
-                            "duration_ms": round(elapsed * 1000, 1),
-                        }
+                        method = str(scope.get("method", "UNKNOWN"))
+                        route_name = str(route)
+                        elapsed_ms = round(elapsed * 1000, 1)
                         if elapsed >= self.SLOW_SECONDS:
-                            fields["latency_kind"] = (
+                            latency_kind = (
                                 "time_to_first_byte" if streaming else "total"
                             )
-                            log("http.request.slow", **fields)
+                            logger.warning(
+                                "http.request.slow",
+                                method=method,
+                                route=route_name,
+                                status_code=status_code,
+                                duration_ms=elapsed_ms,
+                                latency_kind=latency_kind,
+                            )
                         else:
-                            log("http.request.completed", **fields)
+                            logger.debug(
+                                "http.request.completed",
+                                method=method,
+                                route=route_name,
+                                status_code=status_code,
+                                duration_ms=elapsed_ms,
+                            )
 
 
 def _database_url() -> str:
@@ -267,7 +272,7 @@ def _profiles() -> ProfileRegistry:
         docker=DockerProfileArtifact(
             image=settings.agentbox_workspace_image,
             command=(),
-            readiness_argv=("python", "-c", "pass"),
+            readiness_argv=(),
             published_ports=(8080, 4848),
             runtime_port=8080,
         ),
@@ -288,13 +293,22 @@ def _profiles() -> ProfileRegistry:
             settings.agentbox_function_profile_digest,
         ),
         workload_kind=WorkloadKind.FUNCTION,
-        runtime_abi="lemma-function-python-1",
-        capabilities=frozenset({SandboxCapability.PROCESS}),
+        runtime_abi="lemma-function-python-3.14-linux-x86_64-1",
+        capabilities=frozenset({SandboxCapability.PORT_ACCESS}),
         allowed_roots=("/tmp",),
         docker=DockerProfileArtifact(
             image=settings.agentbox_function_image,
-            command=("sleep", "infinity"),
-            readiness_argv=("python", "-c", "pass"),
+            command=(
+                "lemma-function-runtime",
+                "serve",
+                "--host",
+                "0.0.0.0",
+                "--port",
+                "8090",
+            ),
+            readiness_argv=(),
+            published_ports=(8090,),
+            runtime_port=8090,
         ),
         e2b=function_e2b,
     )
@@ -327,6 +341,10 @@ async def lifespan(app: FastAPI):
                 allow_mutable_images=settings.agentbox_docker_allow_mutable_images,
                 add_host_gateway=settings.agentbox_add_host_gateway,
                 private_network=settings.agentbox_docker_private_network,
+                memory_bytes=settings.agentbox_docker_workspace_memory_bytes,
+                nano_cpus=settings.agentbox_docker_workspace_nano_cpus,
+                function_memory_bytes=(settings.agentbox_docker_function_memory_bytes),
+                function_nano_cpus=settings.agentbox_docker_function_nano_cpus,
                 max_file_transfer_bytes=settings.agentbox_max_file_transfer_bytes,
             ),
             runtime_credentials=RuntimeCredentialSigner(_runtime_key()),
@@ -390,6 +408,7 @@ async def lifespan(app: FastAPI):
         PortAccessSigner(_runtime_key()),
         public_base_url=(settings.agentbox_public_url or settings.agentbox_api_url),
     )
+    app.state.port_proxy_http_client = create_port_proxy_http_client()
     reconciler = AgentBoxReconciler(
         database,
         provider,
@@ -441,6 +460,7 @@ async def lifespan(app: FastAPI):
             app.state.maintenance_task,
             return_exceptions=True,
         )
+        await app.state.port_proxy_http_client.aclose()
         await provider.close()
         await database.dispose()
 

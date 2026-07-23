@@ -79,6 +79,7 @@ def upgrade() -> None:
         sa.Column("current_allocation_id", sa.Uuid(), nullable=True),
         sa.Column("allocation_epoch", sa.BigInteger(), nullable=False),
         sa.Column("last_used_at", sa.DateTime(timezone=True), nullable=False),
+        sa.Column("protected_until", sa.DateTime(timezone=True), nullable=True),
         sa.Column("released_at", sa.DateTime(timezone=True), nullable=True),
         sa.Column("delete_after", sa.DateTime(timezone=True), nullable=True),
         sa.Column("maintenance_action", sa.String(length=16), nullable=True),

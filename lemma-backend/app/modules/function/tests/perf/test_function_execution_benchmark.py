@@ -24,20 +24,9 @@ pytestmark = [
 ]
 
 
-_DEFAULT_TERMINAL_P95_SECONDS = {
-    "docker": {
-        "api_read": 45.0,
-        "api_write": 90.0,
-        "job_read": 45.0,
-        "job_write": 90.0,
-    },
-    "e2b": {
-        "api_read": 15.0,
-        "api_write": 45.0,
-        "job_read": 20.0,
-        "job_write": 55.0,
-    },
-}
+_DEFAULT_PLATFORM_OVERHEAD_P95_SECONDS = 2.0
+_DEFAULT_WARM_NOOP_P95_SECONDS = 2.0
+_DEFAULT_COLD_NOOP_SECONDS = 8.0
 
 
 def _positive_int(name: str, default: int) -> int:
@@ -55,19 +44,36 @@ def _positive_float(name: str, default: float) -> float:
 
 
 def _latency_budgets(provider: str) -> tuple[LatencyBudget, ...]:
-    defaults = _DEFAULT_TERMINAL_P95_SECONDS[provider]
+    del provider
     budgets: list[LatencyBudget] = []
-    for case, terminal_default in defaults.items():
+    for case in ("api_noop", "api_read", "api_write", "job_read", "job_write"):
         prefix = f"FUNCTION_BENCH_{case.upper()}"
         budgets.append(
             LatencyBudget(
                 case=case,
-                terminal_p95_seconds=_positive_float(
-                    f"{prefix}_TERMINAL_P95_SECONDS", terminal_default
+                terminal_p95_seconds=(
+                    _positive_float(
+                        f"{prefix}_TERMINAL_P95_SECONDS",
+                        _DEFAULT_WARM_NOOP_P95_SECONDS,
+                    )
+                    if case == "api_noop"
+                    else None
                 ),
                 submit_p95_seconds=(
                     _positive_float(f"{prefix}_SUBMIT_P95_SECONDS", 2.0)
                     if case.startswith("job_")
+                    else None
+                ),
+                platform_overhead_p95_seconds=_positive_float(
+                    f"{prefix}_PLATFORM_OVERHEAD_P95_SECONDS",
+                    _DEFAULT_PLATFORM_OVERHEAD_P95_SECONDS,
+                ),
+                cold_terminal_seconds=(
+                    _positive_float(
+                        f"{prefix}_COLD_TERMINAL_SECONDS",
+                        _DEFAULT_COLD_NOOP_SECONDS,
+                    )
+                    if case == "api_noop"
                     else None
                 ),
             )
@@ -110,9 +116,14 @@ async def test_function_execution_quality_benchmark(
         invocations=_positive_int("FUNCTION_BENCH_INVOCATIONS", 5),
         source_rows_per_table=_positive_int("FUNCTION_BENCH_SOURCE_ROWS", 1_000),
         rows_per_write=_positive_int("FUNCTION_BENCH_WRITE_ROWS", 1_000),
+        poll_interval_seconds=_positive_float(
+            "FUNCTION_BENCH_POLL_INTERVAL_SECONDS",
+            0.5,
+        ),
         terminal_timeout_seconds=float(
             os.getenv("FUNCTION_BENCH_TERMINAL_TIMEOUT_SECONDS", "240")
         ),
+        pool_fill_hold_ms=_positive_int("FUNCTION_BENCH_POOL_FILL_HOLD_MS", 750),
         latency_budgets=_latency_budgets(provider),
     )
     report = await FunctionExecutionBenchmark(
@@ -134,6 +145,9 @@ async def test_function_execution_quality_benchmark(
                         "success_rate": case.success_rate,
                         "terminal_p95_seconds": case.terminal.p95_seconds,
                         "submit_p95_seconds": case.submit.p95_seconds,
+                        "platform_overhead_p95_seconds": (
+                            case.platform_overhead.p95_seconds
+                        ),
                         "wall_seconds": case.wall_seconds,
                     }
                     for case in report.cases

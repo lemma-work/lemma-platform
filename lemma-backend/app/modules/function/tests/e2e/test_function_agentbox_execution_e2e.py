@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 from datetime import datetime, timedelta, timezone
 from uuid import UUID, uuid7
 
@@ -11,25 +12,29 @@ from agentbox_client import AgentBoxClient, WorkloadKind
 
 from app.core.config import reveal_secret, settings
 from app.core.infrastructure.db.uow_factory import SessionUnitOfWorkFactory
+from app.composition.workspace_identity import mint_workspace_token
 from app.modules.function.api.dependencies import get_function_storage_factory
 from app.modules.function.application.function_artifact_builder import (
     FunctionArtifactBuilder,
 )
-from app.modules.function.application.function_attempt_credentials import (
-    FunctionAttemptCredentialSigner,
+from app.modules.function.application.function_callback_credentials import (
+    FunctionCallbackCredentialSigner,
 )
 from app.modules.function.application.function_dispatcher import FunctionDispatcher
+from app.modules.function.application.function_runtime_endpoint_cache import (
+    FunctionRuntimeEndpointCache,
+)
+from app.modules.function.application.function_session_token_cache import (
+    FunctionSessionTokenCache,
+)
 from app.modules.function.domain.entities import (
-    FunctionExecutionStatus,
-    FunctionRevisionStatus,
+    FunctionDispatchMode,
     FunctionRunStatus,
     FunctionStatus,
     FunctionType,
 )
 from app.modules.function.infrastructure.models import (
-    FunctionExecutionRequestModel,
     FunctionModel,
-    FunctionRevisionModel,
     FunctionRunModel,
 )
 
@@ -53,6 +58,25 @@ async def execute(context, data: Input) -> Output:
     return Output(result=data.value * 2)
 """
 
+_COMPILED_DEPENDENCY_CODE = """# input_type_name: Input
+# output_type_name: Output
+# function_name: execute
+# python_packages: orjson>=3.11,<4
+import orjson
+from pydantic import BaseModel
+
+class Input(BaseModel):
+    value: int
+
+class Output(BaseModel):
+    result: int
+
+async def execute(context, data: Input) -> Output:
+    encoded = orjson.dumps({"value": data.value})
+    decoded = orjson.loads(encoded)
+    return Output(result=decoded["value"] * 3)
+"""
+
 
 async def _create_run(
     session,
@@ -61,78 +85,64 @@ async def _create_run(
     user_id: UUID,
     kind: FunctionType,
     value: int,
+    code: str = _CODE,
+    python_packages: tuple[str, ...] = (),
 ) -> UUID:
     function_id = uuid7()
+    artifact = await FunctionArtifactBuilder(
+        get_function_storage_factory()
+    ).build(
+        function_id=function_id,
+        code=code,
+        python_packages=python_packages,
+    )
     function = FunctionModel(
         id=function_id,
         pod_id=pod_id,
         user_id=user_id,
-        name=f"docker-{kind.value.lower()}-{function_id.hex[:8]}",
+        # UUIDv7 values created in one millisecond share their leading bytes.
+        # Use the random suffix so multiple same-kind functions never collide.
+        name=f"docker-{kind.value.lower()}-{function_id.hex[-12:]}",
         input_schema={},
         output_schema={},
         type=kind,
         status=FunctionStatus.READY,
         visibility="POD",
-        python_packages=[],
+        revision_hash=artifact.revision_hash,
     )
     session.add(function)
     await session.flush()
 
-    revision = await FunctionArtifactBuilder(get_function_storage_factory()).build(
-        function_id=function_id,
-        revision_number=1,
-        code=_CODE,
-        python_packages=(),
-    )
-    session.add(
-        FunctionRevisionModel(
-            id=revision.id,
-            function_id=function_id,
-            revision_number=1,
-            status=FunctionRevisionStatus.READY,
-            code_sha256=revision.code_sha256,
-            artifact_sha256=revision.artifact_sha256,
-            artifact_path=revision.artifact_path,
-            runtime_abi=revision.runtime_abi,
-            builder_digest=revision.builder_digest,
-            dependency_lock=list(revision.dependency_lock),
-            manifest=revision.manifest,
-            idempotent=False,
-        )
-    )
-    function.active_revision_id = revision.id
     run_id = uuid7()
     deadline = datetime.now(timezone.utc) + timedelta(seconds=45)
     session.add(
         FunctionRunModel(
             id=run_id,
             function_id=function_id,
-            revision_id=revision.id,
+            revision_hash=artifact.revision_hash,
             user_id=user_id,
             input_data={"value": value},
             status=FunctionRunStatus.PENDING,
-            execution_fence=0,
-            deadline_at=deadline,
-        )
-    )
-    await session.flush()
-    session.add(
-        FunctionExecutionRequestModel(
-            run_id=run_id,
-            pod_id=pod_id,
-            function_id=function_id,
-            revision_id=revision.id,
-            kind=kind.value,
-            status=FunctionExecutionStatus.QUEUED.value,
-            priority=0 if kind == FunctionType.API else 10,
-            units=2,
-            next_fence=1,
-            available_at=datetime.now(timezone.utc),
             deadline_at=deadline,
         )
     )
     await session.commit()
     return run_id
+
+
+async def _wait_for_terminal(db_manager, run_id: UUID) -> FunctionRunModel:
+    deadline = asyncio.get_running_loop().time() + 45
+    while asyncio.get_running_loop().time() < deadline:
+        async with db_manager.session_factory() as session:
+            run = await session.get(FunctionRunModel, run_id)
+            if run is not None and run.status in {
+                FunctionRunStatus.COMPLETED,
+                FunctionRunStatus.FAILED,
+                FunctionRunStatus.CANCELLED,
+            }:
+                return run
+        await asyncio.sleep(0.05)
+    raise AssertionError(f"function run {run_id} did not become terminal")
 
 
 @pytest.mark.asyncio
@@ -177,21 +187,53 @@ async def test_api_and_job_execute_through_one_per_pod_docker_sandbox(
 
         dispatcher = FunctionDispatcher(
             uow_factory=SessionUnitOfWorkFactory(db_manager.session_factory),
-            credential_signer=FunctionAttemptCredentialSigner(secret),
+            credential_signer=FunctionCallbackCredentialSigner(secret),
             agentbox_client_factory=client_factory,
-            worker_id="docker-e2e-dispatcher",
+            token_minter=mint_workspace_token,
+            token_cache=FunctionSessionTokenCache(),
+            endpoint_cache=FunctionRuntimeEndpointCache(),
+            delegated_tokens_enabled=settings.authz_delegated_tokens_enabled,
         )
 
-        api_result = await dispatcher.execute(api_run_id)
+        api_result = await dispatcher.execute(
+            api_run_id,
+            mode=FunctionDispatchMode.SYNCHRONOUS,
+        )
         assert api_result.status == FunctionRunStatus.COMPLETED, api_result.error
         assert api_result.output_data == {"result": 40}
         async with client_factory() as client:
             first = await client.inspect_sandbox(WorkloadKind.FUNCTION, pod_id)
         assert first is not None and first.ready
 
-        job_result = await dispatcher.execute(job_run_id)
+        job_accepted = await dispatcher.execute(
+            job_run_id,
+            mode=FunctionDispatchMode.ASYNCHRONOUS,
+        )
+        assert job_accepted.status in {
+            FunctionRunStatus.RUNNING,
+            FunctionRunStatus.COMPLETED,
+        }
+        job_result = (await _wait_for_terminal(db_manager, job_run_id)).to_entity()
         assert job_result.status == FunctionRunStatus.COMPLETED, job_result.error
         assert job_result.output_data == {"result": 42}
+
+        compiled_run_id = await _create_run(
+            db_session,
+            pod_id=pod_id,
+            user_id=user_id,
+            kind=FunctionType.API,
+            value=14,
+            code=_COMPILED_DEPENDENCY_CODE,
+            python_packages=("orjson>=3.11,<4",),
+        )
+        compiled_result = await dispatcher.execute(
+            compiled_run_id,
+            mode=FunctionDispatchMode.SYNCHRONOUS,
+        )
+        assert compiled_result.status == FunctionRunStatus.COMPLETED, (
+            compiled_result.error
+        )
+        assert compiled_result.output_data == {"result": 42}
         async with client_factory() as client:
             second = await client.inspect_sandbox(WorkloadKind.FUNCTION, pod_id)
             assert second is not None and second.ready

@@ -1,7 +1,7 @@
 # Build context is the monorepo root:
 #   docker build -f agentbox/Dockerfile.workspace -t agentbox-workspace:dev .
-ARG PYTHON_IMAGE=python:3.14-slim
-ARG NODE_IMAGE=node:24-slim
+ARG PYTHON_IMAGE=python:3.14.6-slim
+ARG NODE_IMAGE=node:24.18.0-slim
 ARG UV_VERSION=0.11.31
 ARG PNPM_VERSION=11.15.1
 

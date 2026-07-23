@@ -52,7 +52,7 @@ async def test_agent_workspace_cli_tools_execute_through_real_agentbox(
     configure_workspace_api_url,
 ):
     del configure_workspace_api_url
-    workspace_runtime.reset_workspace_tool_runtimes()
+    await workspace_runtime.close_workspace_tool_runtimes()
 
     pod_response = await authenticated_client.post(
         "/pods",
@@ -104,7 +104,7 @@ async def test_agent_workspace_cli_tools_execute_through_real_agentbox(
             ),
         ),
     )
-    assert shell.success is True, shell
+    assert shell.success is True, shell.stdout or shell
     assert shell.completed is True
     assert f"/workspace/conversations/{ctx.conversation_id}" in (shell.stdout or "")
     assert f"pod={pod['id']}" in (shell.stdout or "")
@@ -246,7 +246,7 @@ async def test_workspace_cli_tools_execute_over_real_mcp_with_latency_summary(
     record_property,
 ):
     del configure_workspace_api_url
-    workspace_runtime.reset_workspace_tool_runtimes()
+    await workspace_runtime.close_workspace_tool_runtimes()
 
     pod_response = await authenticated_client.post(
         "/pods",
@@ -324,7 +324,10 @@ async def test_workspace_cli_tools_execute_over_real_mcp_with_latency_summary(
             startup_shell, startup_python = await asyncio.gather(
                 shell_session.call_tool(
                     "lemma_exec_command",
-                    {"cmd": "printf 'MCP_STARTUP\\n'", "yield_time_ms": 50},
+                    {
+                        "cmd": "printf 'MCP_STARTUP\\n'",
+                        "timeout_seconds": 10,
+                    },
                 ),
                 python_session.call_tool(
                     "lemma_execute_python",
@@ -348,7 +351,7 @@ async def test_workspace_cli_tools_execute_over_real_mcp_with_latency_summary(
                     "lemma_exec_command",
                     {
                         "cmd": f"printf 'SHELL_MCP_{index}\\n'",
-                        "yield_time_ms": 50,
+                        "timeout_seconds": 10,
                     },
                 )
                 shell_latencies.append(time.perf_counter() - started)

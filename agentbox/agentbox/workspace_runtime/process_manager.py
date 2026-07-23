@@ -362,6 +362,8 @@ class ProcessManager:
                 started_at=datetime.now(timezone.utc),
             )
             managed.bind_tasks((stdout_task, stderr_task))
+        if request.initial_input is not None:
+            await managed.send_input(request.initial_input)
         create_inherited_task(
             managed.watch(), name=f"workspace-process-{request.operation_id}"
         )

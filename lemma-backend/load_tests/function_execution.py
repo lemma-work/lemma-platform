@@ -3,9 +3,9 @@
 The benchmark provisions four isolated pod tables and four immutable functions,
 warms the per-pod sandbox once, then drives each function with bounded client
 concurrency. It intentionally uses only public Lemma HTTP APIs so the measured
-path includes authorization, durable runs/attempts, AgentBox allocation,
-sandbox process execution, runtime callbacks, delegated SDK table access, and
-terminal result persistence.
+path includes authorization, durable runs, AgentBox allocation, resident runtime
+dispatch, runtime callbacks, delegated SDK table access, and terminal result
+persistence.
 """
 
 from __future__ import annotations
@@ -34,23 +34,38 @@ class FunctionKind(StrEnum):
 
 
 class OperationKind(StrEnum):
+    NOOP = "noop"
     READ = "read"
     WRITE = "write"
+
+
+class BenchmarkPhase(StrEnum):
+    COLD = "cold"
+    POOL_FILL = "pool_fill"
+    STEADY = "steady"
 
 
 @dataclass(frozen=True, slots=True)
 class LatencyBudget:
     case: str
-    terminal_p95_seconds: float
+    terminal_p95_seconds: float | None = None
     submit_p95_seconds: float | None = None
+    platform_overhead_p95_seconds: float | None = None
+    cold_terminal_seconds: float | None = None
 
     def __post_init__(self) -> None:
         if not self.case:
             raise ValueError("latency budget case is required")
-        if self.terminal_p95_seconds <= 0:
-            raise ValueError("terminal p95 budget must be positive")
-        if self.submit_p95_seconds is not None and self.submit_p95_seconds <= 0:
-            raise ValueError("submit p95 budget must be positive")
+        configured = (
+            self.terminal_p95_seconds,
+            self.submit_p95_seconds,
+            self.platform_overhead_p95_seconds,
+            self.cold_terminal_seconds,
+        )
+        if not any(value is not None for value in configured):
+            raise ValueError("latency budget must configure at least one limit")
+        if any(value is not None and value <= 0 for value in configured):
+            raise ValueError("latency budget limits must be positive")
 
 
 @dataclass(frozen=True, slots=True)
@@ -60,8 +75,12 @@ class BenchmarkConfig:
     invocations: int = 5
     source_rows_per_table: int = 1_000
     rows_per_write: int = 1_000
-    poll_interval_seconds: float = 0.1
+    # JOB completion is observed out of band. Poll slowly enough that the
+    # observer does not become the workload under test, especially at higher
+    # invocation concurrency.
+    poll_interval_seconds: float = 0.5
     terminal_timeout_seconds: float = 180.0
+    pool_fill_hold_ms: int = 750
     cleanup: bool = True
     latency_budgets: tuple[LatencyBudget, ...] = ()
 
@@ -76,6 +95,8 @@ class BenchmarkConfig:
             raise ValueError("rows per write must be in 2..1000")
         if self.poll_interval_seconds <= 0 or self.terminal_timeout_seconds <= 0:
             raise ValueError("poll interval and terminal timeout must be positive")
+        if self.pool_fill_hold_ms < 0 or self.pool_fill_hold_ms > 10_000:
+            raise ValueError("pool fill hold must be in 0..10000 milliseconds")
         budget_cases = [budget.case for budget in self.latency_budgets]
         if len(budget_cases) != len(set(budget_cases)):
             raise ValueError("latency budget cases must be unique")
@@ -92,6 +113,7 @@ class BenchmarkResources:
 @dataclass(frozen=True, slots=True)
 class InvocationSample:
     case: str
+    phase: str
     index: int
     run_id: str | None
     status: str
@@ -99,6 +121,8 @@ class InvocationSample:
     terminal_seconds: float
     queue_seconds: float | None
     execution_seconds: float | None
+    function_call_seconds: float | None
+    platform_overhead_seconds: float | None
     output_data: dict[str, Any] | None
     error: str | None
 
@@ -116,6 +140,7 @@ class CaseSummary:
     case: str
     function_kind: str
     operation: str
+    concurrency: int
     completed: int
     failed: int
     success_rate: float
@@ -125,6 +150,8 @@ class CaseSummary:
     terminal: TimingSummary
     queue: TimingSummary
     execution: TimingSummary
+    function_call: TimingSummary
+    platform_overhead: TimingSummary
 
 
 @dataclass(frozen=True, slots=True)
@@ -135,7 +162,8 @@ class BenchmarkReport:
     finished_at: str
     config: dict[str, Any]
     resources: dict[str, Any]
-    warmup: tuple[InvocationSample, ...]
+    cold: tuple[InvocationSample, ...]
+    pool_fill: tuple[InvocationSample, ...]
     cases: tuple[CaseSummary, ...]
     samples: tuple[InvocationSample, ...]
     verified_sink_rows: dict[str, int]
@@ -180,6 +208,7 @@ def summarize_case(
     operation: OperationKind,
     samples: list[InvocationSample],
     *,
+    concurrency: int,
     wall_seconds: float,
 ) -> CaseSummary:
     completed = sum(sample.status == "COMPLETED" for sample in samples)
@@ -187,6 +216,7 @@ def summarize_case(
         case=case,
         function_kind=function_kind.value,
         operation=operation.value,
+        concurrency=concurrency,
         completed=completed,
         failed=len(samples) - completed,
         success_rate=completed / len(samples) if samples else 0.0,
@@ -196,40 +226,69 @@ def summarize_case(
         terminal=_timings([sample.terminal_seconds for sample in samples]),
         queue=_timings([sample.queue_seconds for sample in samples]),
         execution=_timings([sample.execution_seconds for sample in samples]),
+        function_call=_timings([sample.function_call_seconds for sample in samples]),
+        platform_overhead=_timings(
+            [sample.platform_overhead_seconds for sample in samples]
+        ),
     )
 
 
 def evaluate_latency_budgets(
     cases: tuple[CaseSummary, ...] | list[CaseSummary],
     budgets: tuple[LatencyBudget, ...],
+    *,
+    cold: tuple[InvocationSample, ...] | list[InvocationSample] = (),
 ) -> tuple[str, ...]:
     """Return stable quality-gate failures for a benchmark report."""
 
     summaries = {summary.case: summary for summary in cases}
+    cold_by_case = {sample.case: sample for sample in cold}
     failures: list[str] = []
     for budget in budgets:
         summary = summaries.get(budget.case)
         if summary is None:
             failures.append(f"latency budget references missing case {budget.case}")
             continue
-        terminal_p95 = summary.terminal.p95_seconds
-        if terminal_p95 is None:
-            failures.append(f"{budget.case} terminal p95 has no samples")
-        elif terminal_p95 > budget.terminal_p95_seconds:
-            failures.append(
-                f"{budget.case} terminal p95 {terminal_p95:.3f}s exceeds "
-                f"{budget.terminal_p95_seconds:.3f}s"
-            )
-        if budget.submit_p95_seconds is None:
-            continue
-        submit_p95 = summary.submit.p95_seconds
-        if submit_p95 is None:
-            failures.append(f"{budget.case} submit p95 has no samples")
-        elif submit_p95 > budget.submit_p95_seconds:
-            failures.append(
-                f"{budget.case} submit p95 {submit_p95:.3f}s exceeds "
-                f"{budget.submit_p95_seconds:.3f}s"
-            )
+        if budget.terminal_p95_seconds is not None:
+            terminal_p95 = summary.terminal.p95_seconds
+            if terminal_p95 is None:
+                failures.append(f"{budget.case} terminal p95 has no samples")
+            elif terminal_p95 > budget.terminal_p95_seconds:
+                failures.append(
+                    f"{budget.case} terminal p95 {terminal_p95:.3f}s exceeds "
+                    f"{budget.terminal_p95_seconds:.3f}s"
+                )
+        if budget.submit_p95_seconds is not None:
+            submit_p95 = summary.submit.p95_seconds
+            if submit_p95 is None:
+                failures.append(f"{budget.case} submit p95 has no samples")
+            elif submit_p95 > budget.submit_p95_seconds:
+                failures.append(
+                    f"{budget.case} submit p95 {submit_p95:.3f}s exceeds "
+                    f"{budget.submit_p95_seconds:.3f}s"
+                )
+        if budget.platform_overhead_p95_seconds is not None:
+            overhead_p95 = summary.platform_overhead.p95_seconds
+            if overhead_p95 is None:
+                failures.append(
+                    f"{budget.case} platform overhead p95 has no samples"
+                )
+            elif overhead_p95 > budget.platform_overhead_p95_seconds:
+                failures.append(
+                    f"{budget.case} platform overhead p95 "
+                    f"{overhead_p95:.3f}s exceeds "
+                    f"{budget.platform_overhead_p95_seconds:.3f}s"
+                )
+        if budget.cold_terminal_seconds is not None:
+            cold_sample = cold_by_case.get(budget.case)
+            if cold_sample is None:
+                failures.append(f"{budget.case} cold execution has no sample")
+            elif cold_sample.terminal_seconds > budget.cold_terminal_seconds:
+                failures.append(
+                    f"{budget.case} cold terminal "
+                    f"{cold_sample.terminal_seconds:.3f}s exceeds "
+                    f"{budget.cold_terminal_seconds:.3f}s"
+                )
     return tuple(failures)
 
 
@@ -243,22 +302,34 @@ def _read_function_source(name: str, first_table: str, second_table: str) -> str
 #output_type_name: ReadResult
 #function_name: {name}
 
+import asyncio
+import time
+
 from pydantic import BaseModel, Field
 from lemma_sdk import FunctionContext, Pod
 
 class ReadInput(BaseModel):
     limit: int = Field(ge=1, le=1000)
+    hold_ms: int = Field(default=0, ge=0, le=10000)
 
 class ReadResult(BaseModel):
     rows_read: int
     checksum: int
     first_total: int
     second_total: int
+    first_call_ms: float
+    second_call_ms: float
 
 async def {name}(ctx: FunctionContext, data: ReadInput) -> ReadResult:
+    if data.hold_ms:
+        await asyncio.sleep(data.hold_ms / 1000)
     pod = Pod.from_env()
+    first_started = time.perf_counter()
     first = pod.table("{first_table}").list(limit=data.limit)
+    first_call_ms = (time.perf_counter() - first_started) * 1000
+    second_started = time.perf_counter()
     second = pod.table("{second_table}").list(limit=data.limit)
+    second_call_ms = (time.perf_counter() - second_started) * 1000
     first_rows = list(first.items)
     second_rows = list(second.items)
     return ReadResult(
@@ -266,6 +337,8 @@ async def {name}(ctx: FunctionContext, data: ReadInput) -> ReadResult:
         checksum=sum(int(row["ordinal"]) for row in first_rows + second_rows),
         first_total=int(first.total),
         second_total=int(second.total),
+        first_call_ms=first_call_ms,
+        second_call_ms=second_call_ms,
     )
 '''
 
@@ -275,19 +348,27 @@ def _write_function_source(name: str, first_table: str, second_table: str) -> st
 #output_type_name: WriteResult
 #function_name: {name}
 
+import asyncio
+import time
+
 from pydantic import BaseModel, Field
 from lemma_sdk import FunctionContext, Pod
 
 class WriteInput(BaseModel):
     run_key: str
     rows: int = Field(ge=2, le=1000)
+    hold_ms: int = Field(default=0, ge=0, le=10000)
 
 class WriteResult(BaseModel):
     rows_written: int
     first_count: int
     second_count: int
+    first_call_ms: float
+    second_call_ms: float
 
 async def {name}(ctx: FunctionContext, data: WriteInput) -> WriteResult:
+    if data.hold_ms:
+        await asyncio.sleep(data.hold_ms / 1000)
     pod = Pod.from_env()
     first_size = data.rows // 2
     second_size = data.rows - first_size
@@ -299,13 +380,44 @@ async def {name}(ctx: FunctionContext, data: WriteInput) -> WriteResult:
         {{"run_key": data.run_key, "ordinal": index, "payload": "b" * 64}}
         for index in range(second_size)
     ]
+    first_started = time.perf_counter()
     first_count = pod.records.bulk_create("{first_table}", first)
+    first_call_ms = (time.perf_counter() - first_started) * 1000
+    second_started = time.perf_counter()
     second_count = pod.records.bulk_create("{second_table}", second)
+    second_call_ms = (time.perf_counter() - second_started) * 1000
     return WriteResult(
         rows_written=first_count + second_count,
         first_count=first_count,
         second_count=second_count,
+        first_call_ms=first_call_ms,
+        second_call_ms=second_call_ms,
     )
+'''
+
+
+def _noop_function_source(name: str) -> str:
+    return f'''#input_type_name: NoopInput
+#output_type_name: NoopResult
+#function_name: {name}
+
+import asyncio
+
+from pydantic import BaseModel, Field
+from lemma_sdk import FunctionContext
+
+class NoopInput(BaseModel):
+    value: int = 1
+    hold_ms: int = Field(default=0, ge=0, le=10000)
+
+class NoopResult(BaseModel):
+    value: int
+
+async def {name}(ctx: FunctionContext, data: NoopInput) -> NoopResult:
+    del ctx
+    if data.hold_ms:
+        await asyncio.sleep(data.hold_ms / 1000)
+    return NoopResult(value=data.value)
 '''
 
 
@@ -325,7 +437,8 @@ class FunctionExecutionBenchmark:
     async def run(self) -> BenchmarkReport:
         started = datetime.now(UTC)
         errors: list[str] = []
-        warmup: list[InvocationSample] = []
+        cold: list[InvocationSample] = []
+        pool_fill: list[InvocationSample] = []
         samples: list[InvocationSample] = []
         summaries: list[CaseSummary] = []
         verified_sink_rows: dict[str, int] = {}
@@ -333,25 +446,36 @@ class FunctionExecutionBenchmark:
         try:
             resources = await self.provision()
             cases = (
+                ("api_noop", FunctionKind.API, OperationKind.NOOP),
                 ("api_read", FunctionKind.API, OperationKind.READ),
                 ("api_write", FunctionKind.API, OperationKind.WRITE),
                 ("job_read", FunctionKind.JOB, OperationKind.READ),
                 ("job_write", FunctionKind.JOB, OperationKind.WRITE),
             )
             for case, function_kind, operation in cases:
-                warmup.append(
+                cold.append(
                     await self._invoke(
                         case,
                         resources.functions[case],
                         0,
                         operation,
-                        warmup=True,
+                        phase=BenchmarkPhase.COLD,
                     )
                 )
+                fill_samples, _fill_wall = await self._run_case(
+                    case,
+                    resources.functions[case],
+                    operation,
+                    phase=BenchmarkPhase.POOL_FILL,
+                    invocations=self._config.concurrency,
+                )
+                pool_fill.extend(fill_samples)
                 case_samples, wall_seconds = await self._run_case(
                     case,
                     resources.functions[case],
                     operation,
+                    phase=BenchmarkPhase.STEADY,
+                    invocations=self._config.invocations,
                 )
                 samples.extend(case_samples)
                 summaries.append(
@@ -360,13 +484,16 @@ class FunctionExecutionBenchmark:
                         function_kind,
                         operation,
                         case_samples,
+                        concurrency=self._config.concurrency,
                         wall_seconds=wall_seconds,
                     )
                 )
 
             verified_sink_rows = await self._verify_sink_rows(resources)
             expected_total = (
-                self._config.invocations * self._config.rows_per_write * 2 + 4
+                self._config.invocations * self._config.rows_per_write * 2
+                + self._config.concurrency * 4
+                + 4
             )
             actual_total = sum(verified_sink_rows.values())
             if actual_total != expected_total:
@@ -374,14 +501,18 @@ class FunctionExecutionBenchmark:
                     f"sink row verification failed: expected {expected_total}, "
                     f"found {actual_total}"
                 )
-            for sample in (*warmup, *samples):
+            for sample in (*cold, *pool_fill, *samples):
                 if sample.status != "COMPLETED":
                     errors.append(
                         f"{sample.case}[{sample.index}] {sample.status}: "
                         f"{sample.error or 'unknown failure'}"
                     )
             errors.extend(
-                evaluate_latency_budgets(summaries, self._config.latency_budgets)
+                evaluate_latency_budgets(
+                    summaries,
+                    self._config.latency_budgets,
+                    cold=cold,
+                )
             )
         finally:
             cleanup_resources = resources or self._resources
@@ -392,13 +523,14 @@ class FunctionExecutionBenchmark:
             raise RuntimeError("benchmark provisioning completed without resources")
 
         return BenchmarkReport(
-            schema_version=1,
+            schema_version=2,
             provider=self._config.provider,
             started_at=started.isoformat(),
             finished_at=datetime.now(UTC).isoformat(),
             config=asdict(self._config),
             resources=asdict(resources),
-            warmup=tuple(warmup),
+            cold=tuple(cold),
+            pool_fill=tuple(pool_fill),
             cases=tuple(summaries),
             samples=tuple(samples),
             verified_sink_rows=verified_sink_rows,
@@ -412,6 +544,7 @@ class FunctionExecutionBenchmark:
             source_tables=(f"fn_bench_src_a_{suffix}", f"fn_bench_src_b_{suffix}"),
             sink_tables=(f"fn_bench_sink_a_{suffix}", f"fn_bench_sink_b_{suffix}"),
             functions={
+                "api_noop": f"fn_bench_api_noop_{suffix}",
                 "api_read": f"fn_bench_api_read_{suffix}",
                 "api_write": f"fn_bench_api_write_{suffix}",
                 "job_read": f"fn_bench_job_read_{suffix}",
@@ -452,6 +585,11 @@ class FunctionExecutionBenchmark:
                 raise AssertionError(f"source seed count mismatch for {table}")
 
         definitions = (
+            (
+                "api_noop",
+                FunctionKind.API,
+                _noop_function_source(resources.functions["api_noop"]),
+            ),
             (
                 "api_read",
                 FunctionKind.API,
@@ -495,9 +633,13 @@ class FunctionExecutionBenchmark:
                 expected=201,
             )
             tables = (
-                resources.source_tables
-                if case.endswith("read")
-                else resources.sink_tables
+                ()
+                if case.endswith("noop")
+                else (
+                    resources.source_tables
+                    if case.endswith("read")
+                    else resources.sink_tables
+                )
             )
             permission_ids = ["datastore.table.read", "datastore.record.read"]
             if case.endswith("write"):
@@ -531,18 +673,25 @@ class FunctionExecutionBenchmark:
         case: str,
         function_name: str,
         operation: OperationKind,
+        *,
+        phase: BenchmarkPhase,
+        invocations: int,
     ) -> tuple[list[InvocationSample], float]:
         semaphore = asyncio.Semaphore(self._config.concurrency)
 
         async def invoke(index: int) -> InvocationSample:
             async with semaphore:
                 return await self._invoke(
-                    case, function_name, index, operation, warmup=False
+                    case,
+                    function_name,
+                    index,
+                    operation,
+                    phase=phase,
                 )
 
         wall_started = time.perf_counter()
         results = await asyncio.gather(
-            *(invoke(index) for index in range(1, self._config.invocations + 1))
+            *(invoke(index) for index in range(1, invocations + 1))
         )
         return list(results), time.perf_counter() - wall_started
 
@@ -553,19 +702,33 @@ class FunctionExecutionBenchmark:
         index: int,
         operation: OperationKind,
         *,
-        warmup: bool,
+        phase: BenchmarkPhase,
     ) -> InvocationSample:
-        input_data = (
-            {"limit": self._config.source_rows_per_table}
-            if operation == OperationKind.READ
-            else {
+        hold_ms = (
+            self._config.pool_fill_hold_ms
+            if phase == BenchmarkPhase.POOL_FILL
+            else 0
+        )
+        if operation == OperationKind.NOOP:
+            input_data = {"value": index, "hold_ms": hold_ms}
+        elif operation == OperationKind.READ:
+            input_data = {
+                "limit": self._config.source_rows_per_table,
+                "hold_ms": hold_ms,
+            }
+        else:
+            input_data = {
                 "run_key": (
                     f"{self._config.provider}-{case}-"
-                    f"{'warmup' if warmup else index}-{uuid4().hex[:8]}"
+                    f"{phase.value}-{index}-{uuid4().hex[:8]}"
                 ),
-                "rows": 2 if warmup else self._config.rows_per_write,
+                "rows": (
+                    2
+                    if phase != BenchmarkPhase.STEADY
+                    else self._config.rows_per_write
+                ),
+                "hold_ms": hold_ms,
             }
-        )
         started = time.perf_counter()
         run_id: str | None = None
         try:
@@ -586,10 +749,19 @@ class FunctionExecutionBenchmark:
             error = run.get("error")
             status = str(run.get("status"))
             if status == "COMPLETED":
-                self._validate_output(operation, output, warmup=warmup)
+                self._validate_output(operation, output, phase=phase)
             queue_seconds, execution_seconds = self._server_timings(run)
+            function_call_seconds = self._function_call_seconds(operation, output)
+            platform_overhead_seconds = self._platform_overhead_seconds(
+                case=case,
+                terminal_seconds=terminal_seconds,
+                queue_seconds=queue_seconds,
+                execution_seconds=execution_seconds,
+                function_call_seconds=function_call_seconds,
+            )
             return InvocationSample(
                 case=case,
+                phase=phase.value,
                 index=index,
                 run_id=run_id,
                 status=status,
@@ -597,12 +769,15 @@ class FunctionExecutionBenchmark:
                 terminal_seconds=terminal_seconds,
                 queue_seconds=queue_seconds,
                 execution_seconds=execution_seconds,
+                function_call_seconds=function_call_seconds,
+                platform_overhead_seconds=platform_overhead_seconds,
                 output_data=output,
                 error=error,
             )
         except Exception as exc:
             return InvocationSample(
                 case=case,
+                phase=phase.value,
                 index=index,
                 run_id=run_id,
                 status="CLIENT_ERROR",
@@ -610,6 +785,8 @@ class FunctionExecutionBenchmark:
                 terminal_seconds=time.perf_counter() - started,
                 queue_seconds=None,
                 execution_seconds=None,
+                function_call_seconds=None,
+                platform_overhead_seconds=None,
                 output_data=None,
                 error=f"{type(exc).__name__}: {exc}",
             )
@@ -618,6 +795,9 @@ class FunctionExecutionBenchmark:
         self, function_name: str, run_id: str
     ) -> dict[str, Any]:
         deadline = time.monotonic() + self._config.terminal_timeout_seconds
+        # JOB submit returns PENDING by design. Do not immediately issue a read
+        # that races the dispatcher and amplifies into a status-request herd.
+        await asyncio.sleep(self._config.poll_interval_seconds)
         while time.monotonic() < deadline:
             run = await self._request(
                 "GET",
@@ -628,16 +808,46 @@ class FunctionExecutionBenchmark:
             await asyncio.sleep(self._config.poll_interval_seconds)
         raise TimeoutError(f"function run {run_id} did not become terminal")
 
+    @staticmethod
+    def _platform_overhead_seconds(
+        *,
+        case: str,
+        terminal_seconds: float,
+        queue_seconds: float | None,
+        execution_seconds: float | None,
+        function_call_seconds: float | None,
+    ) -> float | None:
+        if function_call_seconds is None:
+            return None
+        if (
+            case.startswith("job_")
+            and queue_seconds is not None
+            and execution_seconds is not None
+        ):
+            # A JOB caller learns completion by polling, so client-observation
+            # delay is not execution-platform overhead. Durable run timestamps
+            # cover exactly creation -> claim -> terminal callback.
+            return max(
+                0.0,
+                queue_seconds + execution_seconds - function_call_seconds,
+            )
+        # API execution is synchronous, so caller-observed terminal latency is
+        # the contract and must include every backend/runtime round trip.
+        return max(0.0, terminal_seconds - function_call_seconds)
+
     def _validate_output(
         self,
         operation: OperationKind,
         output: dict[str, Any] | None,
         *,
-        warmup: bool,
+        phase: BenchmarkPhase,
     ) -> None:
         if output is None:
             raise AssertionError("completed run has no output")
-        if operation == OperationKind.READ:
+        if operation == OperationKind.NOOP:
+            if "value" not in output:
+                raise AssertionError("no-op function returned the wrong output")
+        elif operation == OperationKind.READ:
             expected_rows = self._config.source_rows_per_table * 2
             expected_checksum = self._config.source_rows_per_table * (
                 self._config.source_rows_per_table - 1
@@ -647,7 +857,11 @@ class FunctionExecutionBenchmark:
             if int(output.get("checksum", -1)) != expected_checksum:
                 raise AssertionError("read function returned the wrong checksum")
         else:
-            expected_rows = 2 if warmup else self._config.rows_per_write
+            expected_rows = (
+                self._config.rows_per_write
+                if phase == BenchmarkPhase.STEADY
+                else 2
+            )
             if int(output.get("rows_written", -1)) != expected_rows:
                 raise AssertionError("write function returned the wrong row count")
 
@@ -687,6 +901,23 @@ class FunctionExecutionBenchmark:
                 response.raise_for_status()
         except Exception:
             return
+
+    @staticmethod
+    def _function_call_seconds(
+        operation: OperationKind,
+        output: dict[str, Any] | None,
+    ) -> float | None:
+        if output is None:
+            return None
+        if operation == OperationKind.NOOP:
+            return 0.0
+        try:
+            milliseconds = float(output["first_call_ms"]) + float(
+                output["second_call_ms"]
+            )
+        except KeyError, TypeError, ValueError:
+            return None
+        return max(0.0, milliseconds / 1000)
 
     @staticmethod
     def _server_timings(run: dict[str, Any]) -> tuple[float | None, float | None]:

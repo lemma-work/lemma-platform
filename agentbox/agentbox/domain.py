@@ -272,6 +272,7 @@ class LogicalSandbox:
     current_allocation_id: UUID | None
     allocation_epoch: int
     last_used_at: datetime
+    protected_until: datetime | None
     released_at: datetime | None
     delete_after: datetime | None
 
@@ -444,6 +445,7 @@ class StartProcessRequest:
     tty: TerminalSize | None
     output_limit_bytes: int
     deadline_at: datetime
+    initial_input: bytes | None = None
 
     def __post_init__(self) -> None:
         if (self.shell_command is None) == (self.argv is None):
@@ -458,6 +460,8 @@ class StartProcessRequest:
             raise ValueError("process cwd must be absolute")
         if not 1 <= self.output_limit_bytes <= 64 * 1024 * 1024:
             raise ValueError("output_limit_bytes must be in 1..67108864")
+        if self.initial_input is not None and len(self.initial_input) > 1024 * 1024:
+            raise ValueError("initial process input exceeds 1048576 bytes")
         names = tuple(item.name for item in self.environment)
         if len(names) != len(set(names)):
             raise ValueError("environment variable names must be unique")

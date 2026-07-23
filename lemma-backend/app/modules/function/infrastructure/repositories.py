@@ -2,9 +2,10 @@
 
 from __future__ import annotations
 
+from datetime import datetime
 from uuid import UUID
 
-from sqlalchemy import delete, func, select
+from sqlalchemy import delete, select
 from sqlalchemy.orm import load_only
 
 from app.core.authorization.context import Context, ResourceType, ResourceVisibility
@@ -22,10 +23,10 @@ from app.core.domain.message_bus import MessageBus
 from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
 from app.modules.function.domain.entities import (
     FunctionEntity,
-    FunctionExecutionStatus,
     FunctionRunEntity,
-    FunctionType,
+    FunctionRunStatus,
 )
+from app.modules.function.domain.events import FunctionRunFailedEvent
 from app.modules.function.domain.errors import (
     FunctionNotFoundError,
     FunctionRunNotFoundError,
@@ -35,9 +36,7 @@ from app.modules.function.domain.ports import (
     FunctionRunRepositoryPort,
 )
 from app.modules.function.infrastructure.models import (
-    FunctionExecutionRequestModel,
     FunctionModel,
-    FunctionRevisionModel,
     FunctionRunModel,
 )
 
@@ -53,18 +52,11 @@ class FunctionRepository(FunctionRepositoryPort):
         if message_bus is not None:
             self.uow.set_message_bus(message_bus)
 
-    def _collect_events(self, entity: FunctionEntity | FunctionRunEntity) -> None:
-        if hasattr(entity, "collect_events"):
-            events = entity.collect_events()
-            if events:
-                self.uow.collect_events(events)
-
     async def create(self, entity: FunctionEntity) -> FunctionEntity:
         payload = entity.model_dump(exclude_unset=True, exclude={"allowed_actions"})
         model = FunctionModel(**payload)
         self.session.add(model)
         await self.session.flush()
-        self._collect_events(entity)
         return model.to_entity()
 
     def _to_entity_with_allowed_actions(
@@ -95,10 +87,6 @@ class FunctionRepository(FunctionRepositoryPort):
         result = await self.session.execute(stmt)
         row = result.one_or_none()
         return self._to_entity_with_allowed_actions(row[0], row[1]) if row else None
-
-    async def get_revision(self, revision_id: UUID):
-        model = await self.session.get(FunctionRevisionModel, revision_id)
-        return model.to_entity() if model is not None else None
 
     async def get_by_name(
         self,
@@ -180,6 +168,8 @@ class FunctionRepository(FunctionRepositoryPort):
         ], next_cursor
 
     async def update(self, function: FunctionEntity) -> FunctionEntity:
+        if function.id is None:
+            raise FunctionNotFoundError("Cannot update a function without an id")
         model = await self.session.get(FunctionModel, function.id)
         if not model:
             raise FunctionNotFoundError(f"Function {function.id} not found")
@@ -190,7 +180,7 @@ class FunctionRepository(FunctionRepositoryPort):
         model.output_schema = function.output_schema
         model.config_schema = function.config_schema
         model.code_path = function.code_path
-        model.code_hash = function.code_hash
+        model.revision_hash = function.revision_hash
         model.config = function.config
         model.user_id = function.user_id
         model.pod_id = function.pod_id
@@ -208,23 +198,8 @@ class FunctionRepository(FunctionRepositoryPort):
             )
         model.status = function.status
         model.type = function.type
-        model.python_packages = function.python_packages
-        if function.pending_revision is not None:
-            revision = function.pending_revision
-            existing_revision = await self.session.get(
-                FunctionRevisionModel, revision.id
-            )
-            if existing_revision is None:
-                self.session.add(
-                    FunctionRevisionModel(
-                        **revision.model_dump(exclude={"created_at"})
-                    )
-                )
-            model.active_revision_id = revision.id
-            function.active_revision_id = revision.id
 
         await self.session.flush()
-        self._collect_events(function)
         return model.to_entity()
 
     async def delete(self, id: UUID) -> bool:
@@ -246,17 +221,13 @@ class FunctionRepository(FunctionRepositoryPort):
                 grantee_type="FUNCTION",
                 grantee_id=id,
             )
-        stmt = delete(FunctionModel).where(FunctionModel.id == id)
-        result = await self.session.execute(stmt)
-        return result.rowcount > 0
-
-    async def next_revision_number(self, function_id: UUID) -> int:
-        latest = await self.session.scalar(
-            select(func.max(FunctionRevisionModel.revision_number)).where(
-                FunctionRevisionModel.function_id == function_id
-            )
+        stmt = (
+            delete(FunctionModel)
+            .where(FunctionModel.id == id)
+            .returning(FunctionModel.id)
         )
-        return int(latest or 0) + 1
+        deleted_id = (await self.session.execute(stmt)).scalar_one_or_none()
+        return deleted_id is not None
 
 
 class FunctionRunRepository(FunctionRunRepositoryPort):
@@ -264,61 +235,23 @@ class FunctionRunRepository(FunctionRunRepositoryPort):
         self,
         uow: SqlAlchemyUnitOfWork,
         message_bus: MessageBus | None = None,
-        execution_units: int = 2,
     ):
         self.uow = uow
         self.session = uow.session
         if message_bus is not None:
             self.uow.set_message_bus(message_bus)
-        self._execution_units = execution_units
 
-    def _collect_events(self, entity: FunctionEntity | FunctionRunEntity) -> None:
-        if hasattr(entity, "collect_events"):
-            events = entity.collect_events()
-            if events:
-                self.uow.collect_events(events)
+    def _collect_events(self, entity: FunctionRunEntity) -> None:
+        events = entity.collect_events()
+        if events:
+            self.uow.collect_events(events)
 
     async def create_run(self, entity: FunctionRunEntity) -> FunctionRunEntity:
         payload = entity.model_dump(exclude_unset=True)
         model = FunctionRunModel(**payload)
         self.session.add(model)
         await self.session.flush()
-        if entity.revision_id is not None and entity.deadline_at is not None:
-            function = await self.session.get(FunctionModel, entity.function_id)
-            if function is None:
-                raise FunctionNotFoundError(
-                    f"Function {entity.function_id} not found"
-                )
-            function_type = FunctionType(function.type)
-            self.session.add(
-                FunctionExecutionRequestModel(
-                    run_id=model.id,
-                    pod_id=function.pod_id,
-                    function_id=function.id,
-                    revision_id=entity.revision_id,
-                    kind=function_type.value,
-                    status=FunctionExecutionStatus.QUEUED.value,
-                    priority=0 if function_type == FunctionType.API else 10,
-                    units=self._execution_units,
-                    next_fence=1,
-                    available_at=model.created_at,
-                    deadline_at=entity.deadline_at,
-                )
-            )
-            await self.session.flush()
         self._collect_events(entity)
-        return model.to_entity()
-
-    async def update_run(self, run_id: UUID, **kwargs) -> FunctionRunEntity:
-        model = await self.session.get(FunctionRunModel, run_id)
-        if not model:
-            raise FunctionRunNotFoundError(f"Run {run_id} not found")
-
-        for key, value in kwargs.items():
-            if hasattr(model, key):
-                setattr(model, key, value)
-
-        await self.session.flush()
         return model.to_entity()
 
     async def update_run_and_collect(
@@ -351,6 +284,73 @@ class FunctionRunRepository(FunctionRunRepositoryPort):
         result = await self.session.execute(stmt)
         model = result.scalar_one_or_none()
         return model.to_entity() if model else None
+
+    async def fail_expired(
+        self,
+        *,
+        now: datetime,
+        limit: int = 100,
+    ) -> int:
+        """Terminalize runs whose one allowed execution window has elapsed."""
+
+        statement = (
+            select(FunctionRunModel)
+            .where(
+                FunctionRunModel.status.in_(
+                    (FunctionRunStatus.PENDING, FunctionRunStatus.RUNNING)
+                ),
+                FunctionRunModel.deadline_at.is_not(None),
+                FunctionRunModel.deadline_at <= now,
+            )
+            .order_by(FunctionRunModel.deadline_at, FunctionRunModel.id)
+            .limit(limit)
+            .with_for_update(skip_locked=True)
+        )
+        runs = list((await self.session.scalars(statement)).all())
+        for run in runs:
+            run.status = FunctionRunStatus.FAILED
+            run.error = "Function execution deadline exceeded"
+            run.completed_at = now
+            self.uow.collect_events(
+                [
+                    FunctionRunFailedEvent(
+                        run_id=run.id,
+                        function_id=run.function_id,
+                        error=run.error,
+                        logs=run.logs,
+                        completed_at=now,
+                    )
+                ]
+            )
+        if runs:
+            await self.session.flush()
+        return len(runs)
+
+    async def list_pending_async_runs(
+        self,
+        *,
+        now: datetime,
+        limit: int = 100,
+    ) -> list[UUID]:
+        """Return asynchronous runs still waiting for their one execution.
+
+        ``job_id`` is the durable asynchronous-dispatch intent. Queue publication
+        happens after this UoW closes; republishing a queued run is safe because
+        Streaq atomically deduplicates the deterministic task identity.
+        """
+
+        statement = (
+            select(FunctionRunModel.id)
+            .where(
+                FunctionRunModel.status == FunctionRunStatus.PENDING,
+                FunctionRunModel.job_id.is_not(None),
+                FunctionRunModel.deadline_at.is_not(None),
+                FunctionRunModel.deadline_at > now,
+            )
+            .order_by(FunctionRunModel.created_at, FunctionRunModel.id)
+            .limit(limit)
+        )
+        return list((await self.session.scalars(statement)).all())
 
     async def list_runs_by_function(
         self, function_id: UUID, limit: int = 100, cursor: str | None = None

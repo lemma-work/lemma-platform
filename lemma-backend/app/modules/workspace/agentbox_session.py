@@ -49,7 +49,7 @@ def _canonical_runtime_path(value: str, *, base: str = "/workspace") -> str:
     raise ValueError("workspace path must remain under /workspace or /tmp")
 
 
-def _canonical_workspace_cwd(value: str) -> str:
+def canonical_workspace_cwd(value: str) -> str:
     return _canonical_runtime_path(value)
 
 
@@ -96,7 +96,7 @@ class AgentBoxWorkspaceSession:
             EnvironmentVariable(name=name, value=value)
             for name, value in sorted(self.env_vars.items())
         )
-        self._cwd = _canonical_workspace_cwd(initial_cwd)
+        self._cwd = canonical_workspace_cwd(initial_cwd)
         self.auto_close = auto_close
         self._owns_client = owns_client
         self._activity_callback = activity_callback
@@ -444,6 +444,7 @@ class AgentBoxWorkspaceSession:
         await self.close()
 
     async def _ensure_python_session(self, deadline: datetime) -> None:
+        last_error: AgentBoxApiError | None = None
         while datetime.now(timezone.utc) < deadline:
             try:
                 await self.client.create_python_session(
@@ -456,6 +457,7 @@ class AgentBoxWorkspaceSession:
                 self._python_session_observed = True
                 return
             except AgentBoxApiError as exc:
+                last_error = exc
                 if exc.retry.value == "do_not_retry":
                     raise
                 remaining = (deadline - datetime.now(timezone.utc)).total_seconds()
@@ -463,7 +465,14 @@ class AgentBoxWorkspaceSession:
                     break
                 delay = max(0.05, (exc.retry_after_ms or 250) / 1000)
                 await asyncio.sleep(min(delay, remaining))
-        raise TimeoutError("Python session did not become ready before its deadline")
+        detail = (
+            f"; last AgentBox error was {last_error.code}: {last_error}"
+            if last_error is not None
+            else ""
+        )
+        raise TimeoutError(
+            f"Python session did not become ready before its deadline{detail}"
+        ) from last_error
 
     async def _collect_process(
         self,

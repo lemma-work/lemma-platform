@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import asyncio
-from collections.abc import AsyncGenerator, AsyncIterator
+from collections.abc import AsyncGenerator, AsyncIterator, Generator
 from contextlib import asynccontextmanager
 from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
@@ -12,13 +12,14 @@ import socket
 from urllib.parse import urlparse
 from uuid import UUID, uuid4
 
-from agentbox_client import AgentBoxClient, WorkloadKind
+from agentbox_client import AgentBoxApiError, AgentBoxClient, WorkloadKind
 from dotenv import dotenv_values
 import httpx
 import pytest
 import pytest_asyncio
 
 from app.core.config import settings
+from app.modules.test_support import e2e_base
 from app.modules.test_support.e2e import fixtures as e2e_fixtures
 from app.modules.test_support.e2e.runtime import (
     backend_server,
@@ -38,7 +39,6 @@ test_database_url = e2e_fixtures.test_database_url
 test_redis_url = e2e_fixtures.test_redis_url
 e2e_settings = e2e_fixtures.e2e_settings
 db_manager = e2e_fixtures.db_manager
-test_app = e2e_fixtures.test_app
 db_session = e2e_fixtures.db_session
 async_client = e2e_fixtures.async_client
 fixed_test_user = e2e_fixtures.fixed_test_user
@@ -47,7 +47,48 @@ fixed_test_org = e2e_fixtures.fixed_test_org
 
 
 _TUNNEL_URL = re.compile(r"https://[a-z0-9-]+\.trycloudflare\.com")
+_NGROK_URL = re.compile(r"https://[a-z0-9-]+\.(?:ngrok-free\.app|ngrok\.app)")
 _BACKEND_ENV = dotenv_values(Path(__file__).resolve().parents[5] / ".env")
+
+
+@pytest.fixture(scope="function")
+def test_app(
+    e2e_settings,
+    db_manager,
+    monkeypatch,
+    tmp_path,
+) -> Generator:
+    """Build the latency harness with the same pooled DB behavior as production.
+
+    The shared correctness-test app deliberately selects ``NullPool`` so tests
+    spanning event loops cannot reuse connections. That behavior creates a new
+    Postgres connection for every JOB status read and is not a valid latency
+    environment. This fixture retains the isolated E2E databases while enabling
+    the normal bounded application and datastore pools.
+    """
+
+    del e2e_settings, db_manager
+    e2e_base._ensure_repo_root_on_path()
+    e2e_base._configure_local_datastore_runtime(monkeypatch, tmp_path)
+    e2e_base._reset_supertokens_testing_state()
+    from app.core.infrastructure.db.session import get_engine
+    from app.modules.datastore.infrastructure.session import get_datastore_engine
+
+    # Pool selection happens once, when each lazy engine is constructed. Keep
+    # every other testing-mode behavior (notably deterministic test crypto and
+    # auth) while using the production engine topology for this latency suite.
+    original_environment = settings.environment
+    settings.environment = "development"
+    try:
+        get_engine()
+        get_datastore_engine()
+    finally:
+        settings.environment = original_environment
+    from app.app import create_app
+
+    yield create_app()
+
+
 def _benchmark_environment(name: str) -> str | None:
     configured = os.getenv(name)
     if configured:
@@ -180,6 +221,98 @@ async def _cloudflared_quick_tunnel(
         await asyncio.gather(output_task, return_exceptions=True)
 
 
+@asynccontextmanager
+async def _ngrok_tunnel(backend_url: str) -> AsyncIterator[str]:
+    """Publish the benchmark backend through a temporary ngrok endpoint."""
+
+    try:
+        process = await asyncio.create_subprocess_exec(
+            "ngrok",
+            "http",
+            backend_url,
+            "--log",
+            "stdout",
+            "--log-format",
+            "json",
+            "--log-level",
+            "info",
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.STDOUT,
+        )
+    except FileNotFoundError as exc:
+        raise RuntimeError("ngrok is required when FUNCTION_BENCH_TUNNEL=ngrok") from exc
+    assert process.stdout is not None
+    recent: list[str] = []
+
+    async def consume_output(published: asyncio.Future[str]) -> None:
+        while line := await process.stdout.readline():
+            text = line.decode(errors="replace")
+            recent.append(text)
+            if len(recent) > 100:
+                del recent[:-100]
+            if not published.done() and (match := _NGROK_URL.search(text)):
+                published.set_result(match.group(0))
+        if not published.done():
+            published.set_exception(
+                RuntimeError(
+                    "ngrok exited before publishing a tunnel: "
+                    + "".join(recent[-20:])
+                )
+            )
+
+    loop = asyncio.get_running_loop()
+    published: asyncio.Future[str] = loop.create_future()
+    output_task = asyncio.create_task(consume_output(published))
+    try:
+        public_url = await asyncio.wait_for(asyncio.shield(published), timeout=45)
+        last_health_error = "no response"
+        async with httpx.AsyncClient(timeout=10) as client:
+            for _ in range(20):
+                if process.returncode is not None:
+                    raise RuntimeError(
+                        "ngrok exited after publishing its URL: "
+                        + "".join(recent[-20:])
+                    )
+                try:
+                    response = await client.get(f"{public_url}/health")
+                    last_health_error = (
+                        f"HTTP {response.status_code}: {response.text[:500]}"
+                    )
+                    if response.status_code == 200:
+                        break
+                except httpx.HTTPError as exc:
+                    last_health_error = f"{type(exc).__name__}: {exc}"
+                await asyncio.sleep(0.5)
+            else:
+                raise RuntimeError(
+                    "ngrok tunnel never reached backend health; "
+                    f"last result: {last_health_error}; ngrok: "
+                    + "".join(recent[-20:])
+                )
+        yield public_url
+    finally:
+        if process.returncode is None:
+            process.terminate()
+            try:
+                await asyncio.wait_for(process.wait(), timeout=10)
+            except TimeoutError:
+                process.kill()
+                await process.wait()
+        await asyncio.gather(output_task, return_exceptions=True)
+
+
+def _e2b_tunnel(backend_url: str):
+    configured = os.getenv("FUNCTION_BENCH_PUBLIC_URL")
+    if configured:
+        return _static_url(configured.rstrip("/"))
+    tunnel = os.getenv("FUNCTION_BENCH_TUNNEL", "cloudflared").strip().lower()
+    if tunnel == "cloudflared":
+        return _cloudflared_quick_tunnel(backend_url)
+    if tunnel == "ngrok":
+        return _ngrok_tunnel(backend_url)
+    raise RuntimeError("FUNCTION_BENCH_TUNNEL must be cloudflared or ngrok")
+
+
 async def _resolve_public_ipv4(
     client: httpx.AsyncClient, hostname: str
 ) -> tuple[str, ...]:
@@ -196,7 +329,7 @@ async def _resolve_public_ipv4(
             for answer in answers
             if int(answer.get("type", 0)) == 1 and answer.get("data")
         )
-    except (httpx.HTTPError, KeyError, TypeError, ValueError):
+    except httpx.HTTPError, KeyError, TypeError, ValueError:
         return ()
 
 
@@ -230,7 +363,9 @@ async def _curl_health_with_resolved_ip(
 
 def _agentbox_log_tail(log_path: Path, *, lines: int = 80) -> str:
     try:
-        return "".join(log_path.read_text(errors="replace").splitlines(keepends=True)[-lines:])
+        return "".join(
+            log_path.read_text(errors="replace").splitlines(keepends=True)[-lines:]
+        )
     except OSError:
         return "<AgentBox log unavailable>"
 
@@ -264,6 +399,7 @@ async def _agentbox_service(
         "AGENTBOX_PROVIDER": provider,
         "AGENTBOX_API_KEY": api_key,
         "AGENTBOX_API_URL": manager_url,
+        "AGENTBOX_RUNTIME_CREDENTIAL_KEY": ("function-benchmark-runtime-key-0001"),
         "AGENTBOX_STATE_DB_PATH": str(state_path),
         "AGENTBOX_AUTO_CREATE_SCHEMA": "true",
         "AGENTBOX_WORKSPACE_IMAGE": workspace_image_name,
@@ -325,7 +461,9 @@ async def _agentbox_service(
                         )
                     try:
                         response = await client.get(f"{manager_url}/health/ready")
-                        last_result = f"HTTP {response.status_code}: {response.text[:500]}"
+                        last_result = (
+                            f"HTTP {response.status_code}: {response.text[:500]}"
+                        )
                         if response.status_code == 200:
                             break
                     except httpx.HTTPError as exc:
@@ -392,7 +530,7 @@ async def function_benchmark_runtime(
             pytest.fail("E2B benchmark env is missing: " + ", ".join(missing))
 
     tunnel_context = (
-        _cloudflared_quick_tunnel(backend_server["host_base_url"])
+        _e2b_tunnel(backend_server["host_base_url"])
         if provider == "e2b"
         else _static_url(backend_server["docker_base_url"])
     )
@@ -416,6 +554,7 @@ async def function_benchmark_runtime(
             "function_runtime_gateway_url": settings.function_runtime_gateway_url,
         }
         runtime: FunctionBenchmarkRuntime | None = None
+        benchmark_error: BaseException | None = None
         try:
             settings.api_url = gateway_url
             settings.agentbox_api_url = manager_url
@@ -443,6 +582,8 @@ async def function_benchmark_runtime(
                     "AGENTBOX_API_KEY": api_key,
                     "API_URL": gateway_url,
                     "FUNCTION_RUNTIME_GATEWAY_URL": gateway_url,
+                    "DEBUG": "false",
+                    "LOG_LEVEL": "INFO",
                 }
                 try:
                     async with production_worker_process(
@@ -453,10 +594,12 @@ async def function_benchmark_runtime(
                     ) as worker:
                         try:
                             yield runtime
-                        except BaseException:
+                        except BaseException as exc:
+                            benchmark_error = exc
                             print(worker.read_log_tail())
                             raise
                 finally:
+                    cleanup_errors: list[str] = []
                     async with AgentBoxClient(
                         base_url=manager_url,
                         api_key=api_key,
@@ -471,8 +614,27 @@ async def function_benchmark_runtime(
                                         datetime.now(UTC) + timedelta(seconds=60)
                                     ),
                                 )
-                            except Exception:
-                                pass
+                            except AgentBoxApiError as exc:
+                                if exc.code == "SANDBOX_NOT_FOUND":
+                                    continue
+                                cleanup_errors.append(
+                                    f"{workload_kind.value}/{logical_id}: "
+                                    f"{type(exc).__name__}: {exc}"
+                                )
+                            except Exception as exc:
+                                cleanup_errors.append(
+                                    f"{workload_kind.value}/{logical_id}: "
+                                    f"{type(exc).__name__}: {exc}"
+                                )
+                    if cleanup_errors:
+                        message = (
+                            "AgentBox benchmark sandbox cleanup failed:\n"
+                            + "\n".join(cleanup_errors)
+                        )
+                        if benchmark_error is not None:
+                            benchmark_error.add_note(message)
+                        else:
+                            raise RuntimeError(message)
         finally:
             for name, value in original_backend.items():
                 setattr(settings, name, value)
@@ -481,6 +643,8 @@ async def function_benchmark_runtime(
 @asynccontextmanager
 async def _static_url(url: str) -> AsyncIterator[str]:
     yield url.rstrip("/")
+
+
 __all__ = [
     "authenticated_client",
     "backend_server",

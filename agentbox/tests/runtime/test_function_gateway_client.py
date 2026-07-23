@@ -9,7 +9,7 @@ import pytest
 
 from agentbox.function_runtime.runner import GatewayClient
 from agentbox.function_runtime.runtime_models import (
-    AttemptClaim,
+    RunClaim,
     RuntimeIdentity,
     TerminalReport,
 )
@@ -18,13 +18,12 @@ from agentbox.function_runtime.runtime_models import (
 pytestmark = pytest.mark.asyncio
 
 
-def _claim() -> AttemptClaim:
-    return AttemptClaim(
-        attempt_id=uuid4(),
-        fence=7,
-        runtime_token="runtime-token-" + "x" * 32,
+def _claim() -> RunClaim:
+    return RunClaim(
+        run_id=uuid4(),
+        callback_token="callback-token-" + "x" * 32,
         artifact_url="/artifact",
-        artifact_sha256=f"sha256:{'a' * 64}",
+        revision_hash=f"sha256:{'a' * 64}",
         input_data={},
         config=None,
         identity=RuntimeIdentity(
@@ -54,7 +53,6 @@ async def test_terminal_callback_retries_identical_payload_after_lost_response()
 
     claim = _claim()
     report = TerminalReport(
-        fence=claim.fence,
         status="completed",
         output_data={"answer": 42},
         stdout="done",
@@ -95,20 +93,28 @@ async def test_terminal_callback_retries_transient_status_and_honors_retry_after
         transport=httpx.MockTransport(handler),
     )
     try:
-        await gateway.started(claim)
+        await gateway.terminal(
+            claim,
+            TerminalReport(
+                status="completed",
+                output_data={},
+                stdout="",
+                stderr="",
+            ),
+        )
     finally:
         await gateway.close()
 
     assert attempts == 2
 
 
-async def test_terminal_callback_does_not_retry_fence_or_credential_rejection():
+async def test_terminal_callback_does_not_retry_state_or_credential_rejection():
     attempts = 0
 
     async def handler(request: httpx.Request) -> httpx.Response:
         nonlocal attempts
         attempts += 1
-        return httpx.Response(409, json={"detail": "stale fence"}, request=request)
+        return httpx.Response(409, json={"detail": "terminal run"}, request=request)
 
     claim = _claim()
     gateway = GatewayClient(
@@ -117,7 +123,15 @@ async def test_terminal_callback_does_not_retry_fence_or_credential_rejection():
     )
     try:
         with pytest.raises(httpx.HTTPStatusError):
-            await gateway.started(claim)
+            await gateway.terminal(
+                claim,
+                TerminalReport(
+                    status="completed",
+                    output_data={},
+                    stdout="",
+                    stderr="",
+                ),
+            )
     finally:
         await gateway.close()
 

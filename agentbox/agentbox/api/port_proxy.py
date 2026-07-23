@@ -10,14 +10,15 @@ from fastapi.responses import JSONResponse, StreamingResponse
 import websockets
 
 from agentbox.domain import AgentBoxError
-from agentbox.observability import create_inherited_task
+from agentbox.observability import create_inherited_task, get_logger
 from agentbox.port_access import PortAccessService
 
-from .deps import port_access
+from .deps import port_access, port_proxy_http_client
 from .fabric import agentbox_error_response
 
 
 access_router = APIRouter()
+logger = get_logger(__name__)
 _HOP_BY_HOP = frozenset(
     {
         "connection",
@@ -48,6 +49,7 @@ async def proxy_http_port(
     token: str,
     path: str = "",
     service: PortAccessService = Depends(port_access),
+    client: httpx.AsyncClient = Depends(port_proxy_http_client),
 ):
     deadline = datetime.now(timezone.utc) + timedelta(seconds=20)
     try:
@@ -62,9 +64,6 @@ async def proxy_http_port(
     if request.headers.get("host"):
         headers["X-Forwarded-Host"] = request.headers["host"]
 
-    client = httpx.AsyncClient(
-        timeout=httpx.Timeout(20, read=None), follow_redirects=False
-    )
     upstream_request = client.build_request(
         request.method,
         target_url,
@@ -73,8 +72,15 @@ async def proxy_http_port(
     )
     try:
         upstream = await client.send(upstream_request, stream=True)
-    except Exception:
-        await client.aclose()
+    except Exception as exc:
+        upstream_hostname = urlsplit(target.base_url).hostname or ""
+        logger.error(
+            "port.proxy.upstream_failed",
+            method=request.method,
+            protocol=urlsplit(target.base_url).scheme,
+            provider="e2b" if upstream_hostname.endswith(".e2b.app") else "private",
+            exc_info=(type(exc), exc, exc.__traceback__),
+        )
         return JSONResponse(
             status_code=502,
             content={
@@ -104,7 +110,6 @@ async def proxy_http_port(
                 yield chunk
         finally:
             await upstream.aclose()
-            await client.aclose()
 
     return StreamingResponse(
         body(),
@@ -207,3 +212,17 @@ def _request_headers(items: list[tuple[str, str]]) -> dict[str, str]:
         if name.lower() not in _HOP_BY_HOP
         and name.lower() not in _PRIVATE_REQUEST_HEADERS
     }
+
+
+def create_port_proxy_http_client() -> httpx.AsyncClient:
+    """Create the process-wide upstream pool used by all HTTP port grants."""
+
+    return httpx.AsyncClient(
+        timeout=httpx.Timeout(20, read=None),
+        follow_redirects=False,
+        limits=httpx.Limits(
+            max_connections=128,
+            max_keepalive_connections=64,
+            keepalive_expiry=60,
+        ),
+    )

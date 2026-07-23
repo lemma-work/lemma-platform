@@ -127,6 +127,7 @@ lemma-pod-bundle = { path = "../lemma-pod-bundle", editable = true }
 [tool.basedpyright]
 pythonVersion = "3.14"
 typeCheckingMode = "standard"
+extraPaths = ["../agentbox-client"]
 exclude = [
     "app/**/tests/**",
     "app/modules/test_support/**",

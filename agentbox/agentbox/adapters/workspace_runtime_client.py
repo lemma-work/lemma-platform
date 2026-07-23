@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import base64
 from collections.abc import AsyncIterable, AsyncIterator, Mapping
 from datetime import datetime, timezone
 import struct
@@ -113,6 +114,11 @@ class WorkspaceRuntimeClient:
             ),
             output_limit_bytes=request.output_limit_bytes,
             deadline_at=request.deadline_at,
+            initial_input_base64=(
+                base64.b64encode(request.initial_input).decode()
+                if request.initial_input is not None
+                else None
+            ),
         )
         response = await self._request(
             "POST",
@@ -228,6 +234,15 @@ class WorkspaceRuntimeClient:
             status_errors=_FILESYSTEM_STATUS_ERRORS,
         )
         return RuntimeFileStatResponse.model_validate(response.json()).to_domain()
+
+    async def create_directory(self, path: str, *, deadline_at: datetime) -> None:
+        await self._request(
+            "PUT",
+            "/directories",
+            deadline_at=deadline_at,
+            params={"path": path},
+            status_errors=_FILESYSTEM_STATUS_ERRORS,
+        )
 
     async def list_files(
         self, path: str, *, deadline_at: datetime

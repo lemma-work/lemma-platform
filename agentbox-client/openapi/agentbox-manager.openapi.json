@@ -775,6 +775,18 @@
             "title": "Environment",
             "type": "array"
           },
+          "initial_input_base64": {
+            "anyOf": [
+              {
+                "maxLength": 1398104,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Initial Input Base64"
+          },
           "operation_id": {
             "format": "uuid",
             "title": "Operation Id",
@@ -1185,6 +1197,85 @@
         "summary": "Ensure Sandbox"
       }
     },
+    "/sandboxes/{workload_kind}/{logical_id}/directories": {
+      "put": {
+        "operationId": "put_sandboxes_workload_kind_logical_id_directories",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "workload_kind",
+            "required": true,
+            "schema": {
+              "$ref": "#/components/schemas/WorkloadKind"
+            }
+          },
+          {
+            "in": "path",
+            "name": "logical_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Logical Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "path",
+            "required": true,
+            "schema": {
+              "maxLength": 4096,
+              "minLength": 1,
+              "pattern": "^/",
+              "title": "Path",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "deadline_at",
+            "required": true,
+            "schema": {
+              "format": "date-time",
+              "title": "Deadline At",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "x-api-key",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Api-Key"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Create Directory"
+      }
+    },
     "/sandboxes/{workload_kind}/{logical_id}/files": {
       "delete": {
         "operationId": "delete_sandboxes_workload_kind_logical_id_files",
@@ -1410,7 +1501,7 @@
             "schema": {
               "anyOf": [
                 {
-                  "maximum": 67108864,
+                  "maximum": 2147483648,
                   "minimum": 0,
                   "type": "integer"
                 },
@@ -1547,18 +1638,6 @@
             }
           }
         ],
-        "requestBody": {
-          "content": {
-            "application/octet-stream": {
-              "schema": {
-                "contentMediaType": "application/octet-stream",
-                "title": "Data",
-                "type": "string"
-              }
-            }
-          },
-          "required": true
-        },
         "responses": {
           "200": {
             "content": {

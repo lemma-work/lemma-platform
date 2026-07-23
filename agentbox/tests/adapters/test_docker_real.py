@@ -3,18 +3,14 @@ from __future__ import annotations
 import asyncio
 from datetime import datetime, timedelta, timezone
 import hashlib
-from io import BytesIO
-import json
 import os
 from pathlib import Path
 from urllib.parse import urlsplit
 from uuid import uuid4
-import zipfile
 
-from fastapi import FastAPI, Header, HTTPException, Response
+from fastapi import FastAPI
 import httpx
 import pytest
-import uvicorn
 
 from agentbox_client import AgentBoxClient
 from agentbox_client import AdmissionClass as ClientAdmissionClass
@@ -53,9 +49,10 @@ from agentbox.domain import (
 )
 from agentbox.filesystem import FilesystemService
 from agentbox.lifecycle import SandboxLifecycleService
-from agentbox.api.port_proxy import access_router
+from agentbox.api.port_proxy import access_router, create_port_proxy_http_client
 from agentbox.port_access import PortAccessService, PortAccessSigner
 from agentbox.persistence.uow import StateDatabase
+from agentbox.ports import ProviderAllocationRef
 from agentbox.processes import ProcessExecutionService
 from agentbox.python_sessions import PythonSessionService
 from agentbox.profiles import DockerProfileArtifact, ProfileRegistry, SandboxProfile
@@ -102,13 +99,30 @@ def function_profile() -> SandboxProfile:
     return SandboxProfile(
         ref=SandboxProfileRef(name="function-python-v1", digest=f"sha256:{'f' * 64}"),
         workload_kind=WorkloadKind.FUNCTION,
-        runtime_abi="lemma-function-python-1",
-        capabilities=frozenset({SandboxCapability.PROCESS}),
+        runtime_abi="lemma-function-python-3.14-linux-x86_64-1",
+        capabilities=frozenset({SandboxCapability.PORT_ACCESS}),
         allowed_roots=("/tmp",),
         docker=DockerProfileArtifact(
             image="agentbox-function:dev",
-            command=("sleep", "infinity"),
-            readiness_argv=("python", "-c", "pass"),
+            command=(
+                "lemma-function-runtime",
+                "serve",
+                "--host",
+                "0.0.0.0",
+                "--port",
+                "8090",
+            ),
+            readiness_argv=(
+                "python",
+                "-c",
+                (
+                    "import urllib.request;"
+                    "urllib.request.urlopen("
+                    "'http://127.0.0.1:8090/healthz',timeout=1).read()"
+                ),
+            ),
+            published_ports=(8090,),
+            runtime_port=8090,
         ),
         e2b=None,
     )
@@ -573,6 +587,33 @@ async def test_real_docker_runtime_process_pty_input_resize_and_reconnect(
         volume_name = storage.provider_storage_id
         assert handle.ready is True
 
+        versions_id = uuid4()
+        await processes.start(
+            key,
+            StartProcessRequest(
+                operation_id=versions_id,
+                shell_command=(
+                    "printf 'node:%s\\n' \"$(node --version)\"; "
+                    "printf 'pnpm:%s\\n' \"$(pnpm --version)\"; "
+                    "printf 'uv:%s\\n' \"$(uv --version)\"; "
+                    "lit --help >/dev/null"
+                ),
+                argv=None,
+                cwd="/workspace",
+                environment=(),
+                tty=None,
+                output_limit_bytes=65536,
+                deadline_at=deadline,
+            ),
+        )
+        versions, versions_output = await _read_terminal(
+            processes, key, versions_id, deadline_at=deadline
+        )
+        assert versions.state == ProcessState.SUCCEEDED, versions_output
+        assert b"node:v24.18.0" in versions_output
+        assert b"pnpm:11.15.1" in versions_output
+        assert b"uv:uv 0.11.31" in versions_output
+
         operation_id = uuid4()
         started, created = await processes.start(
             key,
@@ -820,12 +861,16 @@ async def test_real_docker_runtime_process_pty_input_resize_and_reconnect(
 
         proxy_app = FastAPI()
         proxy_app.state.port_access = port_access
+        proxy_app.state.port_proxy_http_client = create_port_proxy_http_client()
         proxy_app.include_router(access_router)
-        async with httpx.AsyncClient(
-            transport=httpx.ASGITransport(app=proxy_app),
-            base_url="http://agentbox.test",
-        ) as proxy_client:
-            proxied_health = await proxy_client.get(f"/port-access/{token}/health")
+        try:
+            async with httpx.AsyncClient(
+                transport=httpx.ASGITransport(app=proxy_app),
+                base_url="http://agentbox.test",
+            ) as proxy_client:
+                proxied_health = await proxy_client.get(f"/port-access/{token}/health")
+        finally:
+            await proxy_app.state.port_proxy_http_client.aclose()
         assert proxied_health.status_code == 200
 
         await filesystem.write(
@@ -892,9 +937,9 @@ async def test_real_docker_runtime_process_pty_input_resize_and_reconnect(
         await database.dispose()
 
 
-async def test_real_docker_function_process_input_reconnect_and_process_group_cancel(
+async def test_real_docker_function_runtime_port_and_exact_destroy(
     tmp_path: Path,
-):
+) -> None:
     sandbox_profile = function_profile()
     registry = ProfileRegistry((sandbox_profile,))
     engine = DockerEngineClient(socket_path=docker_socket())
@@ -904,15 +949,14 @@ async def test_real_docker_function_process_input_reconnect_and_process_group_ca
         DockerAdapterConfig(
             scope="docker:function-runtime-test",
             allow_mutable_images=True,
-            memory_bytes=256 * 1024 * 1024,
-            nano_cpus=500_000_000,
+            function_memory_bytes=512 * 1024 * 1024,
+            function_nano_cpus=1_000_000_000,
             pids_limit=128,
         ),
     )
     database = StateDatabase(f"sqlite+aiosqlite:///{tmp_path / 'state.db'}")
     await database.create_schema_for_test()
     lifecycle = SandboxLifecycleService(database, adapter)
-    processes = ProcessExecutionService(database, adapter)
     key = SandboxKey(WorkloadKind.FUNCTION, uuid4())
     deadline = datetime.now(timezone.utc) + timedelta(seconds=60)
     provider_id: str | None = None
@@ -927,343 +971,40 @@ async def test_real_docker_function_process_input_reconnect_and_process_group_ca
         assert handle.ready is True
         async with database.uow() as uow:
             allocation = await uow.repository.current_allocation(key)
-            await uow.commit()
-        assert allocation is not None and allocation.provider_id is not None
+        assert allocation is not None
+        assert allocation.provider_id is not None
         provider_id = allocation.provider_id
 
-        operation_id = uuid4()
-        started, created = await processes.start(
-            key,
-            StartProcessRequest(
-                operation_id=operation_id,
-                shell_command='read ticket; printf \'ticket:%s secret:%s\\n\' "$ticket" "$SECRET"',
-                argv=None,
-                cwd="/tmp",
-                environment=(EnvironmentVariable("SECRET", "ephemeral"),),
-                tty=None,
-                output_limit_bytes=65536,
-                deadline_at=deadline,
+        target = await adapter.resolve_port_target(
+            ProviderAllocationRef(
+                provider_id=allocation.provider_id,
+                provider_instance_id=allocation.provider_instance_id,
+                allocation_id=allocation.allocation_id,
+                allocation_token=allocation.allocation_token,
+                key=key,
             ),
-        )
-        assert created is True
-        await processes.send_input(
-            key, operation_id, b"single-use-ticket\n", deadline_at=deadline
-        )
-        result = await processes.read_output(
-            key,
-            operation_id,
-            after_sequence=0,
-            wait_seconds=10,
+            port=8090,
+            protocol=PortProtocol.HTTP,
             deadline_at=deadline,
         )
-        assert result.state == ProcessState.SUCCEEDED
-        assert b"ticket:single-use-ticket secret:ephemeral" in b"".join(
-            chunk.data for chunk in result.chunks
-        )
-        assert started.provider_process_id is not None
-        reconnected = await processes.read_output(
-            key,
-            operation_id,
-            after_sequence=result.next_sequence,
-            wait_seconds=0,
-            deadline_at=deadline,
-        )
-        assert reconnected.chunks == ()
-        assert reconnected.state == ProcessState.SUCCEEDED
-
-        cancellation_id = uuid4()
-        await processes.start(
-            key,
-            StartProcessRequest(
-                operation_id=cancellation_id,
-                shell_command='sleep 60 & child=$!; printf \'child:%s\\n\' "$child"; wait "$child"',
-                argv=None,
-                cwd="/tmp",
-                environment=(),
-                tty=None,
-                output_limit_bytes=65536,
-                deadline_at=deadline,
-            ),
-        )
-        running = await processes.read_output(
-            key,
-            cancellation_id,
-            after_sequence=0,
-            wait_seconds=5,
-            deadline_at=deadline,
-        )
-        child_line = b"".join(chunk.data for chunk in running.chunks).decode()
-        child_pid = int(child_line.strip().split(":", 1)[1])
-        await processes.terminate(
-            key,
-            cancellation_id,
-            grace_seconds=0.1,
-            deadline_at=deadline,
-        )
-        cancelled = await processes.read_output(
-            key,
-            cancellation_id,
-            after_sequence=running.next_sequence,
-            wait_seconds=0,
-            deadline_at=deadline,
-        )
-        assert cancelled.state == ProcessState.CANCELLED
-        descendant_check = await engine.run_exec(
-            provider_id,
-            ("bash", "-lc", f"! kill -0 {child_pid} 2>/dev/null"),
-            working_dir="/tmp",
-            deadline_at=deadline,
-        )
-        assert descendant_check == 0
-        assert database.active_units_of_work == 0
-        assert await lifecycle.destroy(key, deadline_at=deadline)
-        assert await engine.inspect_container(provider_id, deadline_at=deadline) is None
-    finally:
-        cleanup_deadline = datetime.now(timezone.utc) + timedelta(seconds=30)
-        if provider_id is not None:
-            await engine.delete_container(
-                provider_id, deadline_at=cleanup_deadline, force=True
-            )
-        await adapter.close()
-        await database.dispose()
-
-
-def _function_artifact(function_name: str) -> bytes:
-    source = f"""#input_type_name: FunctionInput
-#output_type_name: FunctionOutput
-#function_name: {function_name}
-
-from pydantic import BaseModel
-from lemma_sdk import FunctionContext
-
-class FunctionInput(BaseModel):
-    value: int
-
-class FunctionOutput(BaseModel):
-    value: int
-
-async def {function_name}(ctx: FunctionContext, data: FunctionInput) -> FunctionOutput:
-    print(f'executed-for:{{ctx.user_id}}')
-    return FunctionOutput(value=data.value + 1)
-"""
-    manifest = {
-        "format_version": 1,
-        "runtime_abi": "lemma-function-python-1",
-        "builder_digest": "docker-real-test-builder",
-        "dependency_lock": [],
-        "source_path": "function.py",
-        "input_model": "FunctionInput",
-        "output_model": "FunctionOutput",
-        "entrypoint": function_name,
-        "config_model": None,
-        "dependency_path": None,
-    }
-    output = BytesIO()
-    with zipfile.ZipFile(output, "w", compression=zipfile.ZIP_DEFLATED) as archive:
-        archive.writestr("manifest.json", json.dumps(manifest, sort_keys=True))
-        archive.writestr("function.py", source)
-    return output.getvalue()
-
-
-async def test_real_docker_function_runner_recovers_lost_terminal_response(
-    tmp_path: Path,
-):
-    function_name = "increment"
-    artifact = _function_artifact(function_name)
-    artifact_sha256 = f"sha256:{hashlib.sha256(artifact).hexdigest()}"
-    attempt_id = uuid4()
-    user_id = uuid4()
-    pod_id = uuid4()
-    function_id = uuid4()
-    ticket = f"ticket-{uuid4()}"
-    runtime_token = f"runtime-{uuid4()}-{uuid4()}"
-    events: list[tuple[str, dict]] = []
-    claimed = False
-    terminal_attempts = 0
-    terminal_payload: dict | None = None
-    terminal_event = asyncio.Event()
-    gateway = FastAPI()
-
-    @gateway.post("/internal/function-runtime/attempts:claim")
-    async def claim(authorization: str | None = Header(default=None)):
-        nonlocal claimed
-        if authorization != f"Bearer {ticket}" or claimed:
-            raise HTTPException(status_code=409, detail="ticket already claimed")
-        claimed = True
-        return {
-            "attempt_id": str(attempt_id),
-            "fence": 1,
-            "runtime_token": runtime_token,
-            "artifact_url": f"/internal/function-runtime/attempts/{attempt_id}/artifact",
-            "artifact_sha256": artifact_sha256,
-            "input_data": {"value": 41},
-            "config": None,
-            "identity": {
-                "user_id": str(user_id),
-                "user_email": "function@example.test",
-                "pod_id": str(pod_id),
-                "function_id": str(function_id),
-                "function_name": function_name,
-                "organization_id": None,
-            },
-            "lemma_token": "delegated-lemma-token",
-            "lemma_base_url": "http://lemma.invalid",
-            "deadline_at": (
-                datetime.now(timezone.utc) + timedelta(seconds=30)
-            ).isoformat(),
+        async with httpx.AsyncClient(timeout=10) as client:
+            response = await client.get(f"{target.base_url}/healthz")
+        assert response.status_code == 200
+        assert response.json() == {
+            "ready": True,
+            "runtime_abi": "lemma-function-python-3.14-linux-x86_64-1",
         }
 
-    @gateway.get("/internal/function-runtime/attempts/{requested_attempt_id}/artifact")
-    async def get_artifact(
-        requested_attempt_id: str,
-        authorization: str | None = Header(default=None),
-    ):
-        if (
-            requested_attempt_id != str(attempt_id)
-            or authorization != f"Bearer {runtime_token}"
-        ):
-            raise HTTPException(status_code=403)
-        return Response(content=artifact, media_type="application/zip")
-
-    @gateway.post(
-        "/internal/function-runtime/attempts/{requested_attempt_id}:{event_name}"
-    )
-    async def report(
-        requested_attempt_id: str,
-        event_name: str,
-        payload: dict,
-        authorization: str | None = Header(default=None),
-    ):
-        nonlocal terminal_attempts, terminal_payload
-        if (
-            requested_attempt_id != str(attempt_id)
-            or authorization != f"Bearer {runtime_token}"
-        ):
-            raise HTTPException(status_code=403)
-        if event_name == "terminal":
-            terminal_attempts += 1
-            if terminal_payload is None:
-                terminal_payload = payload
-                events.append((event_name, payload))
-                return Response(
-                    status_code=503,
-                    headers={"Retry-After": "0.05"},
-                )
-            assert payload == terminal_payload
-            terminal_event.set()
-            return {"accepted": True, "duplicate": True}
-        events.append((event_name, payload))
-        return {"accepted": True, "duplicate": False}
-
-    config = uvicorn.Config(
-        gateway,
-        host="0.0.0.0",
-        port=0,
-        lifespan="off",
-        log_level="warning",
-    )
-    server = uvicorn.Server(config)
-    server_task = asyncio.create_task(server.serve())
-    while not server.started:
-        if server_task.done():
-            raise RuntimeError("function gateway failed to start")
-        await asyncio.sleep(0.01)
-    gateway_port = server.servers[0].sockets[0].getsockname()[1]
-
-    sandbox_profile = function_profile()
-    registry = ProfileRegistry((sandbox_profile,))
-    engine = DockerEngineClient(socket_path=docker_socket())
-    adapter = DockerSandboxAdapter(
-        engine,
-        registry,
-        DockerAdapterConfig(
-            scope="docker:function-runner-test",
-            allow_mutable_images=True,
-            memory_bytes=512 * 1024 * 1024,
-            nano_cpus=1_000_000_000,
-            pids_limit=256,
-            add_host_gateway=True,
-        ),
-    )
-    database = StateDatabase(f"sqlite+aiosqlite:///{tmp_path / 'state.db'}")
-    await database.create_schema_for_test()
-    lifecycle = SandboxLifecycleService(database, adapter)
-    processes = ProcessExecutionService(database, adapter)
-    key = SandboxKey(WorkloadKind.FUNCTION, pod_id)
-    deadline = datetime.now(timezone.utc) + timedelta(seconds=60)
-    provider_id: str | None = None
-
-    try:
-        handle = await lifecycle.ensure(
-            key,
-            sandbox_profile.ref,
-            admission_class=AdmissionClass.LATENCY,
-            deadline_at=deadline,
-        )
-        assert handle.ready is True
-        async with database.uow() as uow:
-            allocation = await uow.repository.current_allocation(key)
-            await uow.commit()
-        assert allocation is not None and allocation.provider_id is not None
-        provider_id = allocation.provider_id
-
-        operation_id = uuid4()
-        request = StartProcessRequest(
-            operation_id=operation_id,
-            shell_command=None,
-            argv=("lemma-function-runtime", "execute"),
-            cwd="/tmp",
-            environment=(
-                EnvironmentVariable(
-                    "LEMMA_FUNCTION_GATEWAY_URL",
-                    f"http://host.docker.internal:{gateway_port}",
-                ),
-            ),
-            tty=None,
-            output_limit_bytes=65536,
-            deadline_at=deadline,
-        )
-        _process, created = await processes.start(key, request)
-        assert created is True
-        await processes.send_input(
-            key, operation_id, f"{ticket}\n".encode(), deadline_at=deadline
-        )
-        await asyncio.wait_for(terminal_event.wait(), timeout=30)
-        snapshot = await processes.read_output(
-            key,
-            operation_id,
-            after_sequence=0,
-            wait_seconds=10,
-            deadline_at=deadline,
-        )
-        if snapshot.state == ProcessState.RUNNING:
-            snapshot = await processes.read_output(
-                key,
-                operation_id,
-                after_sequence=snapshot.next_sequence,
-                wait_seconds=10,
-                deadline_at=deadline,
-            )
-        assert snapshot.state == ProcessState.SUCCEEDED
-        duplicate, duplicate_created = await processes.start(key, request)
-        assert duplicate_created is False
-        assert duplicate.operation_id == operation_id
-
-        assert [event for event, _payload in events] == ["started", "terminal"]
-        assert terminal_attempts == 2
-        terminal = events[-1][1]
-        assert terminal["status"] == "completed"
-        assert terminal["output_data"] == {"value": 42}
-        assert f"executed-for:{user_id}" in terminal["stdout"]
-        assert ticket not in json.dumps(terminal)
+        assert await lifecycle.destroy(key, deadline_at=deadline)
+        assert await engine.inspect_container(provider_id, deadline_at=deadline) is None
         assert database.active_units_of_work == 0
     finally:
         cleanup_deadline = datetime.now(timezone.utc) + timedelta(seconds=30)
         if provider_id is not None:
             await engine.delete_container(
-                provider_id, deadline_at=cleanup_deadline, force=True
+                provider_id,
+                deadline_at=cleanup_deadline,
+                force=True,
             )
         await adapter.close()
         await database.dispose()
-        server.should_exit = True
-        await server_task

@@ -1,221 +1,127 @@
+"""Persistence for one public function run and exactly one execution."""
+
 from __future__ import annotations
 
 from datetime import datetime, timezone
+import hmac
 from uuid import UUID
 
 from sqlalchemy import select
 
+from app.core.config import settings
 from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
-from app.modules.function.application.function_attempt_credentials import (
-    FunctionAttemptCredentialSigner,
+from app.core.log.log import get_logger
+from app.modules.function.application.function_callback_credentials import (
+    FunctionCallbackCredentialSigner,
 )
+from app.modules.function.application.function_session_token_cache import (
+    FunctionSessionTokenKey,
+)
+from app.modules.function.contracts.runtime import RuntimeTimings
 from app.modules.function.domain.entities import (
-    FunctionAttemptRuntimeContext,
-    FunctionAttemptStatus,
-    FunctionExecutionClaim,
-    FunctionExecutionStatus,
+    FunctionDispatchMode,
+    FunctionExecutionDispatch,
     FunctionRunEntity,
+    FunctionRunRuntimeContext,
     FunctionRunStatus,
+    FunctionSessionPrincipal,
 )
 from app.modules.function.domain.events import (
     FunctionRunCompletedEvent,
     FunctionRunFailedEvent,
     FunctionRunStartedEvent,
 )
-from app.modules.function.infrastructure.execution_claim_repository import (
-    FunctionExecutionClaimRepository,
-)
-from app.modules.function.infrastructure.models import (
-    FunctionExecutionAttemptModel,
-    FunctionExecutionRequestModel,
-    FunctionModel,
-    FunctionRevisionModel,
-    FunctionRunModel,
-)
+from app.modules.function.domain.types import JsonObject
+from app.modules.function.infrastructure.models import FunctionModel, FunctionRunModel
 
 
-TERMINAL_ATTEMPT_STATES = (
-    FunctionAttemptStatus.COMPLETED.value,
-    FunctionAttemptStatus.FAILED.value,
-    FunctionAttemptStatus.CANCELLED.value,
-    FunctionAttemptStatus.UNKNOWN.value,
-)
+TERMINAL_RUN_STATES = {
+    FunctionRunStatus.COMPLETED,
+    FunctionRunStatus.FAILED,
+    FunctionRunStatus.CANCELLED,
+}
+logger = get_logger(__name__)
 
 
 class FunctionExecutionRepository:
+    """Own the durable state transitions carried by ``function_runs`` itself."""
+
     def __init__(
         self,
         uow: SqlAlchemyUnitOfWork,
-        credential_signer: FunctionAttemptCredentialSigner,
+        credential_signer: FunctionCallbackCredentialSigner,
     ) -> None:
         self.uow = uow
         self.session = uow.session
         self._credential_signer = credential_signer
-        self._claim_repository = FunctionExecutionClaimRepository(
-            self.session, credential_signer
-        )
 
-    async def claim_run(
+    async def resolve_dispatch(
         self,
         run_id: UUID,
         *,
-        worker_id: str,
-        total_units: int,
-        api_reserved_units: int,
-        lease_seconds: int,
-        now: datetime | None = None,
-    ) -> FunctionExecutionClaim | None:
-        timestamp = now or datetime.now(timezone.utc)
-        return await self._claim_repository.claim(
-            run_id,
-            worker_id=worker_id,
-            total_units=total_units,
-            api_reserved_units=api_reserved_units,
-            lease_seconds=lease_seconds,
-            timestamp=timestamp,
-        )
-
-    async def mark_process_started(
-        self, attempt_id: UUID, *, provider_process_id: str | None
-    ) -> None:
-        attempt = await self.session.get(FunctionExecutionAttemptModel, attempt_id)
-        if (
-            attempt is None
-            or attempt.status != FunctionAttemptStatus.PROCESS_STARTING.value
-        ):
-            return
-        attempt.status = FunctionAttemptStatus.PROCESS_STARTED.value
-        attempt.provider_process_id = provider_process_id
-        await self.session.flush()
-
-    async def claim_ticket(
-        self, ticket_digest: str, *, now: datetime | None = None
-    ) -> FunctionAttemptRuntimeContext | None:
-        timestamp = now or datetime.now(timezone.utc)
-        row = (
-            await self.session.execute(
-                select(
-                    FunctionExecutionAttemptModel,
-                    FunctionExecutionRequestModel,
-                    FunctionRunModel,
-                    FunctionModel,
-                    FunctionRevisionModel,
-                )
-                .join(
-                    FunctionExecutionRequestModel,
-                    FunctionExecutionRequestModel.id
-                    == FunctionExecutionAttemptModel.request_id,
-                )
-                .join(
-                    FunctionRunModel,
-                    FunctionRunModel.id == FunctionExecutionAttemptModel.run_id,
-                )
-                .join(
-                    FunctionModel,
-                    FunctionModel.id == FunctionExecutionRequestModel.function_id,
-                )
-                .join(
-                    FunctionRevisionModel,
-                    FunctionRevisionModel.id
-                    == FunctionExecutionRequestModel.revision_id,
-                )
-                .where(FunctionExecutionAttemptModel.ticket_digest == ticket_digest)
-                .with_for_update(of=FunctionExecutionAttemptModel)
-            )
-        ).one_or_none()
-        if row is None:
+        mode: FunctionDispatchMode,
+    ) -> FunctionExecutionDispatch | FunctionRunEntity | None:
+        rows = await self._run_and_function(run_id)
+        if rows is None:
             return None
-        attempt, request, run, function, revision = row
-        if (
-            attempt.ticket_expires_at <= timestamp
-            or attempt.status
-            not in {
-                FunctionAttemptStatus.PROCESS_STARTED.value,
-                FunctionAttemptStatus.RUNNING.value,
-            }
-            or run.current_attempt_id != attempt.id
-            or run.execution_fence != attempt.fence
-        ):
-            return None
-        # Idempotent for a lost claim response. The ticket identifies only this
-        # process attempt and cannot authorize another run; accepting it again
-        # is required to recover after the response is lost post-commit.
-        if attempt.ticket_claimed_at is None:
-            attempt.ticket_claimed_at = timestamp
-        await self.session.flush()
-        return self._runtime_context(attempt, request, run, function, revision)
+        run, function = rows
+        if run.status != FunctionRunStatus.PENDING:
+            return run.to_entity()
+        return self._dispatch(run, function, mode=mode)
 
-    async def runtime_context(
-        self, runtime_token_digest: str
-    ) -> FunctionAttemptRuntimeContext | None:
-        row = (
-            await self.session.execute(
-                select(
-                    FunctionExecutionAttemptModel,
-                    FunctionExecutionRequestModel,
-                    FunctionRunModel,
-                    FunctionModel,
-                    FunctionRevisionModel,
-                )
-                .join(
-                    FunctionExecutionRequestModel,
-                    FunctionExecutionRequestModel.id
-                    == FunctionExecutionAttemptModel.request_id,
-                )
-                .join(
-                    FunctionRunModel,
-                    FunctionRunModel.id == FunctionExecutionAttemptModel.run_id,
-                )
-                .join(
-                    FunctionModel,
-                    FunctionModel.id == FunctionExecutionRequestModel.function_id,
-                )
-                .join(
-                    FunctionRevisionModel,
-                    FunctionRevisionModel.id
-                    == FunctionExecutionRequestModel.revision_id,
-                )
-                .where(
-                    FunctionExecutionAttemptModel.runtime_token_digest
-                    == runtime_token_digest
-                )
-            )
-        ).one_or_none()
-        if row is None:
-            return None
-        attempt, request, run, function, revision = row
-        if attempt.ticket_claimed_at is None:
-            return None
-        return self._runtime_context(attempt, request, run, function, revision)
-
-    async def mark_started(
+    async def active_dispatch(
         self,
-        context: FunctionAttemptRuntimeContext,
+        run_id: UUID,
         *,
+        mode: FunctionDispatchMode,
+    ) -> FunctionExecutionDispatch | None:
+        rows = await self._run_and_function(run_id)
+        if rows is None:
+            return None
+        run, function = rows
+        if run.status in TERMINAL_RUN_STATES:
+            return None
+        return self._dispatch(run, function, mode=mode)
+
+    async def claim_execution(
+        self,
+        run_id: UUID,
+        principal: FunctionSessionPrincipal,
+        *,
+        revision_hash: str,
+        input_data: JsonObject,
+        delegated_tokens_enabled: bool,
         now: datetime | None = None,
-    ) -> bool:
+    ) -> FunctionRunRuntimeContext | None:
         timestamp = now or datetime.now(timezone.utc)
-        attempt = await self.session.get(
-            FunctionExecutionAttemptModel, context.attempt_id
-        )
-        run = await self.session.get(FunctionRunModel, context.run_id)
-        request = await self.session.scalar(
-            select(FunctionExecutionRequestModel).where(
-                FunctionExecutionRequestModel.run_id == context.run_id
-            )
-        )
-        if attempt is None or run is None or request is None:
-            return False
-        if run.current_attempt_id != attempt.id or run.execution_fence != context.fence:
-            return False
-        if attempt.status == FunctionAttemptStatus.RUNNING.value:
-            return True
-        if attempt.status != FunctionAttemptStatus.PROCESS_STARTED.value:
-            return False
-        attempt.status = FunctionAttemptStatus.RUNNING.value
-        attempt.started_at = timestamp
-        request.status = FunctionExecutionStatus.RUNNING.value
-        run.status = FunctionRunStatus.RUNNING.value
+        rows = await self._run_and_function(run_id, for_update=True)
+        if rows is None:
+            return None
+        run, function = rows
+        if (
+            run.status != FunctionRunStatus.PENDING
+            or run.deadline_at is None
+            or run.deadline_at <= timestamp
+            or run.revision_hash != revision_hash
+            or (run.input_data or {}) != input_data
+            or run.user_id != principal.user_id
+            or function.pod_id != principal.pod_id
+            or run.function_id != principal.function_id
+        ):
+            return None
+        expected_session_id = FunctionSessionTokenKey(
+            user_id=run.user_id,
+            pod_id=function.pod_id,
+            function_id=run.function_id,
+            revision_hash=revision_hash,
+            workload_name=function.name,
+            scope=(),
+            delegated_tokens_enabled=delegated_tokens_enabled,
+        ).session_id
+        if not hmac.compare_digest(expected_session_id, principal.session_id):
+            return None
+
+        run.status = FunctionRunStatus.RUNNING
         run.started_at = timestamp
         self.uow.collect_events(
             [
@@ -224,60 +130,89 @@ class FunctionExecutionRepository:
                     function_id=run.function_id,
                     started_at=timestamp,
                     user_email=run.user_email,
-                    workspace_process_id=str(attempt.operation_id),
                 )
             ]
         )
         await self.session.flush()
-        return True
+        return self._runtime_context(run, function)
+
+    async def runtime_context(
+        self,
+        run_id: UUID,
+        callback_token: str,
+    ) -> FunctionRunRuntimeContext | None:
+        expected = self._credential_signer.derive(run_id)
+        if not hmac.compare_digest(expected, callback_token):
+            return None
+        rows = await self._run_and_function(run_id)
+        if rows is None:
+            return None
+        run, function = rows
+        if (
+            run.status != FunctionRunStatus.RUNNING
+            and run.status not in TERMINAL_RUN_STATES
+        ):
+            return None
+        return self._runtime_context(run, function)
+
+    async def active_runtime_context(
+        self,
+        run_id: UUID,
+        callback_token: str,
+        *,
+        now: datetime | None = None,
+    ) -> FunctionRunRuntimeContext | None:
+        """Authorize reads that are useful only while the exact run is active.
+
+        Callback credentials are restart-stable so a terminal report can be
+        acknowledged idempotently. That property must not turn the artifact
+        endpoint into an indefinitely valid download capability.
+        """
+
+        expected = self._credential_signer.derive(run_id)
+        if not hmac.compare_digest(expected, callback_token):
+            return None
+        rows = await self._run_and_function(run_id)
+        if rows is None:
+            return None
+        run, function = rows
+        timestamp = now or datetime.now(timezone.utc)
+        if (
+            run.status != FunctionRunStatus.RUNNING
+            or run.deadline_at is None
+            or run.deadline_at <= timestamp
+        ):
+            return None
+        return self._runtime_context(run, function)
 
     async def complete(
         self,
-        context: FunctionAttemptRuntimeContext,
+        context: FunctionRunRuntimeContext,
         *,
-        payload_hash: str,
         completed: bool,
-        output_data: dict | None,
+        output_data: JsonObject | None,
         error: str | None,
         logs: str | None,
+        timings: RuntimeTimings | None = None,
         now: datetime | None = None,
     ) -> tuple[FunctionRunEntity | None, bool, bool]:
         timestamp = now or datetime.now(timezone.utc)
-        attempt = await self.session.get(
-            FunctionExecutionAttemptModel, context.attempt_id
+        run = await self.session.scalar(
+            select(FunctionRunModel)
+            .where(FunctionRunModel.id == context.run_id)
+            .with_for_update()
         )
-        run = await self.session.get(FunctionRunModel, context.run_id)
-        request = await self.session.scalar(
-            select(FunctionExecutionRequestModel).where(
-                FunctionExecutionRequestModel.run_id == context.run_id
-            )
-        )
-        if attempt is None or run is None or request is None:
+        if run is None:
             return None, False, False
-        if run.current_attempt_id != attempt.id or run.execution_fence != context.fence:
-            return None, False, False
-        if attempt.status in TERMINAL_ATTEMPT_STATES:
-            same_payload = attempt.terminal_payload_hash == payload_hash
-            return run.to_entity(), same_payload, same_payload
+        if run.status in TERMINAL_RUN_STATES:
+            return run.to_entity(), True, True
+        if run.status != FunctionRunStatus.RUNNING:
+            return run.to_entity(), False, False
 
-        attempt.status = (
-            FunctionAttemptStatus.COMPLETED.value
-            if completed
-            else FunctionAttemptStatus.FAILED.value
-        )
-        attempt.terminal_payload_hash = payload_hash
-        attempt.completed_at = timestamp
-        request.status = (
-            FunctionExecutionStatus.COMPLETED.value
-            if completed
-            else FunctionExecutionStatus.FAILED.value
-        )
-        request.lease_owner = None
-        request.lease_expires_at = None
         run.status = (
-            FunctionRunStatus.COMPLETED.value
+            FunctionRunStatus.COMPLETED
             if completed
-            else FunctionRunStatus.FAILED.value
+            else FunctionRunStatus.FAILED
         )
         run.output_data = output_data if completed else None
         run.error = error
@@ -290,7 +225,6 @@ class FunctionExecutionRepository:
                 output_data=run.output_data,
                 logs=logs,
                 completed_at=timestamp,
-                workspace_process_id=str(attempt.operation_id),
             )
             if completed
             else FunctionRunFailedEvent(
@@ -299,46 +233,86 @@ class FunctionExecutionRepository:
                 error=error,
                 logs=logs,
                 completed_at=timestamp,
-                workspace_process_id=str(attempt.operation_id),
             )
         )
         self.uow.collect_events([event])
+        if settings.function_execution_diagnostics:
+            logger.warning(
+                "function.execution.diagnostics.runtime",
+                run_id=str(run.id),
+                queued_to_claim_ms=self._duration_ms(run.created_at, run.started_at),
+                run_to_terminal_ms=self._duration_ms(run.created_at, timestamp),
+                runtime_total_ms=timings.total_ms if timings is not None else None,
+                runtime_claim_ms=timings.claim_ms if timings is not None else None,
+                runtime_artifact_ms=(
+                    timings.artifact_ms if timings is not None else None
+                ),
+                runtime_worker_ms=timings.worker_ms if timings is not None else None,
+                measured_user_code_ms=(
+                    timings.user_code_ms if timings is not None else None
+                ),
+                artifact_cache_hit=(
+                    timings.artifact_cache_hit if timings is not None else None
+                ),
+            )
         await self.session.flush()
         return run.to_entity(), True, False
 
     async def fail_dispatch(
         self,
-        claim: FunctionExecutionClaim,
+        dispatch: FunctionExecutionDispatch,
         *,
         error: str,
-        unknown: bool,
     ) -> FunctionRunEntity | None:
-        attempt = await self.session.get(
-            FunctionExecutionAttemptModel, claim.attempt_id
+        return await self._finish_without_result(
+            dispatch.run_id,
+            run_status=FunctionRunStatus.FAILED,
+            error=error,
         )
-        run = await self.session.get(FunctionRunModel, claim.run_id)
-        request = await self.session.scalar(
-            select(FunctionExecutionRequestModel).where(
-                FunctionExecutionRequestModel.run_id == claim.run_id
-            )
+
+    async def cancel_dispatch(
+        self,
+        dispatch: FunctionExecutionDispatch,
+        *,
+        error: str = "Function execution was cancelled",
+    ) -> FunctionRunEntity | None:
+        return await self._finish_without_result(
+            dispatch.run_id,
+            run_status=FunctionRunStatus.CANCELLED,
+            error=error,
         )
-        if attempt is None or run is None or request is None:
+
+    async def fail_unfinished(
+        self,
+        run_id: UUID,
+        *,
+        error: str,
+    ) -> FunctionRunEntity | None:
+        return await self._finish_without_result(
+            run_id,
+            run_status=FunctionRunStatus.FAILED,
+            error=error,
+        )
+
+    async def _finish_without_result(
+        self,
+        run_id: UUID,
+        *,
+        run_status: FunctionRunStatus,
+        error: str,
+    ) -> FunctionRunEntity | None:
+        run = await self.session.scalar(
+            select(FunctionRunModel)
+            .where(FunctionRunModel.id == run_id)
+            .with_for_update()
+        )
+        if run is None:
             return None
-        if run.current_attempt_id != attempt.id or run.execution_fence != claim.fence:
+        if run.status in TERMINAL_RUN_STATES:
             return run.to_entity()
-        if attempt.status in TERMINAL_ATTEMPT_STATES:
-            return run.to_entity()
+
         timestamp = datetime.now(timezone.utc)
-        attempt.status = (
-            FunctionAttemptStatus.UNKNOWN.value
-            if unknown
-            else FunctionAttemptStatus.FAILED.value
-        )
-        attempt.completed_at = timestamp
-        request.status = FunctionExecutionStatus.FAILED.value
-        request.lease_owner = None
-        request.lease_expires_at = None
-        run.status = FunctionRunStatus.FAILED.value
+        run.status = run_status
         run.error = error
         run.completed_at = timestamp
         self.uow.collect_events(
@@ -349,75 +323,80 @@ class FunctionExecutionRepository:
                     error=error,
                     logs=run.logs,
                     completed_at=timestamp,
-                    workspace_process_id=str(attempt.operation_id),
                 )
             ]
         )
         await self.session.flush()
         return run.to_entity()
 
-    async def fail_queued(
-        self, run_id: UUID, *, error: str
-    ) -> FunctionRunEntity | None:
-        request = await self.session.scalar(
-            select(FunctionExecutionRequestModel)
-            .where(FunctionExecutionRequestModel.run_id == run_id)
-            .with_for_update()
+    async def _run_and_function(
+        self,
+        run_id: UUID,
+        *,
+        for_update: bool = False,
+    ) -> tuple[FunctionRunModel, FunctionModel] | None:
+        statement = (
+            select(FunctionRunModel, FunctionModel)
+            .join(
+                FunctionModel,
+                FunctionModel.id == FunctionRunModel.function_id,
+            )
+            .where(FunctionRunModel.id == run_id)
         )
-        run = await self.session.get(FunctionRunModel, run_id)
-        if request is None or run is None:
-            return None
-        if request.status != FunctionExecutionStatus.QUEUED.value:
-            return run.to_entity()
-        timestamp = datetime.now(timezone.utc)
-        request.status = FunctionExecutionStatus.FAILED.value
-        run.status = FunctionRunStatus.FAILED.value
-        run.error = error
-        run.completed_at = timestamp
-        self.uow.collect_events(
-            [
-                FunctionRunFailedEvent(
-                    run_id=run.id,
-                    function_id=run.function_id,
-                    error=error,
-                    logs=None,
-                    completed_at=timestamp,
-                )
-            ]
-        )
-        await self.session.flush()
-        return run.to_entity()
+        if for_update:
+            statement = statement.with_for_update(of=FunctionRunModel)
+        row = (await self.session.execute(statement)).one_or_none()
+        return tuple(row) if row is not None else None
 
-    async def _latest_attempt(
-        self, run_id: UUID
-    ) -> FunctionExecutionAttemptModel | None:
-        return await self.session.scalar(
-            select(FunctionExecutionAttemptModel)
-            .where(FunctionExecutionAttemptModel.run_id == run_id)
-            .order_by(FunctionExecutionAttemptModel.number.desc())
-            .limit(1)
+    @staticmethod
+    def _dispatch(
+        run: FunctionRunModel,
+        function: FunctionModel,
+        *,
+        mode: FunctionDispatchMode,
+    ) -> FunctionExecutionDispatch:
+        if run.deadline_at is None or run.revision_hash is None:
+            raise RuntimeError("function run is missing immutable execution state")
+        return FunctionExecutionDispatch(
+            run_id=run.id,
+            pod_id=function.pod_id,
+            function_id=function.id,
+            function_name=function.name,
+            user_id=run.user_id,
+            mode=mode,
+            deadline_at=run.deadline_at,
+            revision_hash=run.revision_hash,
+            input_data=run.input_data or {},
         )
 
     @staticmethod
     def _runtime_context(
-        attempt: FunctionExecutionAttemptModel,
-        request: FunctionExecutionRequestModel,
         run: FunctionRunModel,
         function: FunctionModel,
-        revision: FunctionRevisionModel,
-    ) -> FunctionAttemptRuntimeContext:
-        return FunctionAttemptRuntimeContext(
-            attempt_id=attempt.id,
+    ) -> FunctionRunRuntimeContext:
+        if run.deadline_at is None or run.revision_hash is None:
+            raise RuntimeError("function run is missing immutable execution state")
+        return FunctionRunRuntimeContext(
             run_id=run.id,
-            fence=attempt.fence,
-            operation_id=attempt.operation_id,
-            deadline_at=request.deadline_at,
-            revision=revision.to_entity(),
+            deadline_at=run.deadline_at,
+            revision_hash=run.revision_hash,
+            artifact_path=(
+                f"artifacts/{run.revision_hash.removeprefix('sha256:')}.zip"
+            ),
             input_data=run.input_data or {},
             config=function.config,
             user_id=run.user_id,
             user_email=run.user_email,
-            pod_id=request.pod_id,
+            pod_id=function.pod_id,
             function_id=function.id,
             function_name=function.name,
         )
+
+    @staticmethod
+    def _duration_ms(
+        started: datetime | None,
+        finished: datetime | None,
+    ) -> float | None:
+        if started is None or finished is None:
+            return None
+        return round((finished - started).total_seconds() * 1000, 3)

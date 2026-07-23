@@ -1,12 +1,14 @@
-"""Durable function dispatcher over AgentBox's generic sandbox/process API."""
+"""Durable function dispatcher over AgentBox's resident sandbox runtime API."""
 
 from __future__ import annotations
 
 import asyncio
-from collections.abc import Callable
+from collections.abc import Awaitable, Callable
+from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
-from urllib.parse import urlparse
-from uuid import UUID, uuid7
+import time
+from urllib.parse import urljoin, urlparse
+from uuid import UUID
 
 import httpx
 
@@ -14,9 +16,6 @@ from agentbox_client import (
     AdmissionClass,
     AgentBoxApiError,
     AgentBoxClient,
-    EnvironmentVariable,
-    ProcessRef,
-    ProcessState,
     ProfileRef,
     RetryDisposition,
     WorkloadKind,
@@ -26,14 +25,28 @@ from app.core.config import settings
 from app.core.infrastructure.db.uow_factory import UnitOfWorkFactory
 from app.core.log.log import get_logger
 from app.core.redaction import redact_text
-from app.modules.function.application.function_attempt_credentials import (
-    FunctionAttemptCredentialSigner,
+from app.core.request_context import create_inherited_task
+from app.modules.function.application.function_callback_credentials import (
+    FunctionCallbackCredentialSigner,
+)
+from app.modules.function.application.function_session_token_cache import (
+    FunctionSessionTokenCache,
+    FunctionSessionTokenKey,
+)
+from app.modules.function.application.function_runtime_endpoint_cache import (
+    FunctionRuntimeEndpoint,
+    FunctionRuntimeEndpointCache,
+    FunctionRuntimeEndpointKey,
+)
+from app.modules.function.contracts.runtime import (
+    RuntimeAcceptedResponse,
+    RuntimeTerminalRequest,
 )
 from app.modules.function.domain.entities import (
-    FunctionExecutionClaim,
+    FunctionDispatchMode,
+    FunctionExecutionDispatch,
     FunctionRunEntity,
     FunctionRunStatus,
-    FunctionType,
 )
 from app.modules.function.infrastructure.execution_repository import (
     FunctionExecutionRepository,
@@ -47,19 +60,22 @@ _TERMINAL_RUN_STATES = {
     FunctionRunStatus.FAILED,
     FunctionRunStatus.CANCELLED,
 }
-_TERMINAL_PROCESS_STATES = {
-    ProcessState.SUCCEEDED,
-    ProcessState.FAILED,
-    ProcessState.CANCELLED,
-    ProcessState.TIMED_OUT,
-}
+_FUNCTION_RUNTIME_PORT = 8090
 
 
 AgentBoxClientFactory = Callable[[], AgentBoxClient]
+TokenMinter = Callable[..., Awaitable[str]]
+
+
+@dataclass(slots=True)
+class FunctionDispatchTimings:
+    resolve_ms: float | None = None
+    endpoint_ms: float | None = None
+    runtime_call_ms: float | None = None
 
 
 class FunctionDispatcher:
-    """Reserve in Postgres, execute externally, then persist in a new UoW.
+    """Resolve one persisted run, execute externally, then read terminal state.
 
     No method keeps a Unit of Work alive across an AgentBox request, sleep,
     output wait, identity call, or object-store call.
@@ -69,133 +85,203 @@ class FunctionDispatcher:
         self,
         *,
         uow_factory: UnitOfWorkFactory,
-        credential_signer: FunctionAttemptCredentialSigner,
+        credential_signer: FunctionCallbackCredentialSigner,
         agentbox_client_factory: AgentBoxClientFactory,
-        worker_id: str | None = None,
+        token_minter: TokenMinter,
+        token_cache: FunctionSessionTokenCache,
+        endpoint_cache: FunctionRuntimeEndpointCache,
+        delegated_tokens_enabled: bool,
     ) -> None:
         self._uow_factory = uow_factory
         self._signer = credential_signer
         self._agentbox_client_factory = agentbox_client_factory
-        self._worker_id = worker_id or f"dispatcher-{uuid7()}"
+        self._token_minter = token_minter
+        self._token_cache = token_cache
+        self._endpoint_cache = endpoint_cache
+        self._delegated_tokens_enabled = delegated_tokens_enabled
         self._profile = ProfileRef(
             name=settings.agentbox_function_profile_name,
             digest=settings.agentbox_function_profile_digest,
         )
 
-    async def execute(self, run_id: UUID) -> FunctionRunEntity:
-        claim = await self._wait_for_claim(run_id)
-        if isinstance(claim, FunctionRunEntity):
-            return claim
+    async def execute(
+        self,
+        run_id: UUID,
+        *,
+        mode: FunctionDispatchMode,
+    ) -> FunctionRunEntity:
+        execute_started = time.perf_counter()
+        phase_started = execute_started
+        phase_timings = FunctionDispatchTimings()
+        dispatch = await self._resolve_dispatch(run_id, mode=mode)
+        phase_timings.resolve_ms = self._elapsed_ms(phase_started)
+        if isinstance(dispatch, FunctionRunEntity):
+            self._log_diagnostics(
+                run_id,
+                phase_timings,
+                execute_started,
+                outcome=dispatch.status.value,
+            )
+            return dispatch
 
-        client = self._agentbox_client_factory()
+        function_token_task = create_inherited_task(
+            self._function_session_token(dispatch)
+        )
         try:
-            await self._ensure_sandbox(client, claim)
-            process = await self._start_process(client, claim)
-            async with self._uow_factory() as uow:
-                await FunctionExecutionRepository(
-                    uow, self._signer
-                ).mark_process_started(
-                    claim.attempt_id,
-                    provider_process_id=None,
+            phase_started = time.perf_counter()
+            endpoint = await self._runtime_endpoint(dispatch)
+            phase_timings.endpoint_ms = self._elapsed_ms(phase_started)
+            function_token = await function_token_task
+            phase_started = time.perf_counter()
+            runtime_response = await self._invoke_runtime(
+                dispatch,
+                endpoint=endpoint,
+                function_token=function_token,
+            )
+            phase_timings.runtime_call_ms = self._elapsed_ms(phase_started)
+            if isinstance(runtime_response, RuntimeAcceptedResponse):
+                # The resident runtime returns 202 only after its backend claim
+                # committed PENDING -> RUNNING. Long JOB/deferred execution then
+                # belongs to the runtime callback, not to a backend worker poll.
+                result = await self._load_run(dispatch.run_id)
+            else:
+                result = await self._load_run(dispatch.run_id)
+            if (
+                dispatch.mode == FunctionDispatchMode.SYNCHRONOUS
+                and result.status not in _TERMINAL_RUN_STATES
+            ):
+                raise InvocationOutcomeUnconfirmed(
+                    "function runtime returned before durable terminal state"
                 )
-            await self._deliver_ticket(client, claim)
-            return await self._wait_for_terminal(client, claim, process)
+            self._log_diagnostics(
+                run_id,
+                phase_timings,
+                execute_started,
+                outcome=result.status.value,
+            )
+            return result
         except BaseException as exc:
             if isinstance(exc, asyncio.CancelledError):
-                await self._best_effort_terminate(client, claim)
+                await self._best_effort_cancel(dispatch)
+                async with self._uow_factory() as uow:
+                    await FunctionExecutionRepository(
+                        uow, self._signer
+                    ).cancel_dispatch(dispatch)
                 raise
-            unknown = self._is_unknown_outcome(exc)
-            if unknown:
-                await self._best_effort_terminate(client, claim)
-            message = self._execution_error(exc, unknown=unknown)
+            if isinstance(exc, InvocationOutcomeUnconfirmed):
+                current = await self._load_run(run_id)
+                if current.status in _TERMINAL_RUN_STATES:
+                    self._log_diagnostics(
+                        run_id,
+                        phase_timings,
+                        execute_started,
+                        outcome=current.status.value,
+                    )
+                    return current
+                await self._best_effort_cancel(dispatch)
+            message = self._execution_error(exc)
             async with self._uow_factory() as uow:
                 failed = await FunctionExecutionRepository(
                     uow, self._signer
-                ).fail_dispatch(claim, error=message, unknown=unknown)
+                ).fail_dispatch(dispatch, error=message)
             if failed is None:
-                return await self._load_run(run_id)
+                failed = await self._load_run(run_id)
+            self._log_diagnostics(
+                run_id,
+                phase_timings,
+                execute_started,
+                outcome="dispatch_failed",
+            )
             return failed
         finally:
-            await client.close()
+            if not function_token_task.done():
+                function_token_task.cancel()
+            await asyncio.gather(function_token_task, return_exceptions=True)
 
     async def cancel(self, run_id: UUID) -> FunctionRunEntity:
-        claim = await self._active_claim(run_id)
-        if claim is None:
+        dispatch = await self._active_dispatch(
+            run_id,
+            mode=FunctionDispatchMode.ASYNCHRONOUS,
+        )
+        if dispatch is None:
             return await self._load_run(run_id)
-        client = self._agentbox_client_factory()
-        try:
-            await client.terminate_process(
-                WorkloadKind.FUNCTION,
-                claim.pod_id,
-                claim.operation_id,
-                deadline_at=self._control_deadline(claim.deadline_at),
-                grace_seconds=2,
+        endpoint = await self._runtime_endpoint(
+            dispatch,
+            deadline_at=self._control_deadline(dispatch.deadline_at),
+        )
+        async with httpx.AsyncClient(
+            timeout=httpx.Timeout(5, read=5),
+            follow_redirects=False,
+        ) as runtime:
+            await runtime.post(
+                urljoin(
+                    endpoint.url,
+                    f"runs/{dispatch.run_id}:cancel",
+                ),
+                headers={"Authorization": self._callback_authorization(run_id)},
             )
-        finally:
-            await client.close()
         async with self._uow_factory() as uow:
-            run = await FunctionExecutionRepository(uow, self._signer).fail_dispatch(
-                claim,
-                error="Function execution was cancelled",
-                unknown=False,
-            )
+            run = await FunctionExecutionRepository(
+                uow, self._signer
+            ).cancel_dispatch(dispatch)
         return run or await self._load_run(run_id)
 
-    async def _wait_for_claim(
-        self, run_id: UUID
-    ) -> FunctionExecutionClaim | FunctionRunEntity:
-        while True:
-            async with self._uow_factory() as uow:
-                run = await FunctionRunRepository(uow).get_run(run_id)
-                if run is None:
-                    raise LookupError(f"function run {run_id} does not exist")
-                if run.status in _TERMINAL_RUN_STATES:
-                    return run
-                deadline_at = run.deadline_at
-                claim = await FunctionExecutionRepository(uow, self._signer).claim_run(
-                    run_id,
-                    worker_id=self._worker_id,
-                    total_units=settings.function_execution_units_per_pod,
-                    api_reserved_units=(settings.function_execution_api_reserved_units),
-                    lease_seconds=settings.function_execution_claim_lease_seconds,
-                )
-            if claim is not None:
-                return claim
-            if deadline_at is None or self._now() >= deadline_at:
-                async with self._uow_factory() as uow:
-                    failed = await FunctionExecutionRepository(
-                        uow, self._signer
-                    ).fail_queued(
-                        run_id, error="Function execution deadline exceeded in queue"
-                    )
-                return failed or await self._load_run(run_id)
-            await asyncio.sleep(0.05)
-
-    async def _active_claim(self, run_id: UUID) -> FunctionExecutionClaim | None:
+    async def _resolve_dispatch(
+        self,
+        run_id: UUID,
+        *,
+        mode: FunctionDispatchMode,
+    ) -> FunctionExecutionDispatch | FunctionRunEntity:
         async with self._uow_factory() as uow:
-            return await FunctionExecutionRepository(uow, self._signer).claim_run(
-                run_id,
-                worker_id=self._worker_id,
-                total_units=settings.function_execution_units_per_pod,
-                api_reserved_units=settings.function_execution_api_reserved_units,
-                lease_seconds=settings.function_execution_claim_lease_seconds,
-            )
+            resolved = await FunctionExecutionRepository(
+                uow, self._signer
+            ).resolve_dispatch(run_id, mode=mode)
+        if resolved is None:
+            raise LookupError(f"function run {run_id} does not exist")
+        if (
+            isinstance(resolved, FunctionExecutionDispatch)
+            and self._now() >= resolved.deadline_at
+        ):
+            async with self._uow_factory() as uow:
+                failed = await FunctionExecutionRepository(
+                    uow, self._signer
+                ).fail_unfinished(
+                    run_id,
+                    error="Function execution deadline exceeded",
+                )
+            return failed or await self._load_run(run_id)
+        return resolved
+
+    async def _active_dispatch(
+        self,
+        run_id: UUID,
+        *,
+        mode: FunctionDispatchMode,
+    ) -> FunctionExecutionDispatch | None:
+        async with self._uow_factory() as uow:
+            return await FunctionExecutionRepository(
+                uow, self._signer
+            ).active_dispatch(run_id, mode=mode)
 
     async def _ensure_sandbox(
-        self, client: AgentBoxClient, claim: FunctionExecutionClaim
+        self,
+        client: AgentBoxClient,
+        dispatch: FunctionExecutionDispatch,
+        *,
+        deadline_at: datetime,
     ) -> None:
-        while self._now() < claim.deadline_at:
+        while self._now() < deadline_at:
             try:
                 handle = await client.ensure_sandbox(
                     WorkloadKind.FUNCTION,
-                    claim.pod_id,
+                    dispatch.pod_id,
                     profile=self._profile,
                     admission_class=(
                         AdmissionClass.LATENCY
-                        if claim.function_type == FunctionType.API
+                        if dispatch.mode == FunctionDispatchMode.SYNCHRONOUS
                         else AdmissionClass.BATCH
                     ),
-                    deadline_at=claim.deadline_at,
+                    deadline_at=deadline_at,
                 )
             except AgentBoxApiError as exc:
                 if exc.retry not in {
@@ -203,146 +289,173 @@ class FunctionDispatcher:
                     RetryDisposition.SAFE_SAME_OPERATION,
                 }:
                     raise
-                await self._wait_retry(exc.retry_after_ms, claim.deadline_at)
+                await self._wait_retry(exc.retry_after_ms, deadline_at)
                 continue
             except httpx.TransportError:
                 # Ensuring a logical key is idempotent; AgentBox owns exact-create
                 # reconciliation through its durable allocation token.
-                await self._wait_retry(None, claim.deadline_at)
+                await self._wait_retry(None, deadline_at)
                 continue
             if handle.ready:
                 return
-            await self._wait_retry(handle.retry_after_ms, claim.deadline_at)
+            await self._wait_retry(handle.retry_after_ms, deadline_at)
         raise TimeoutError("function sandbox was not ready before the deadline")
 
-    async def _start_process(
-        self, client: AgentBoxClient, claim: FunctionExecutionClaim
-    ) -> ProcessRef:
-        environment = (
-            EnvironmentVariable(
-                name="LEMMA_FUNCTION_GATEWAY_URL",
-                value=self._runtime_gateway_url(),
-            ),
-        )
-        while self._now() < claim.deadline_at:
-            try:
-                process = await client.start_process(
-                    WorkloadKind.FUNCTION,
-                    claim.pod_id,
-                    operation_id=claim.operation_id,
-                    deadline_at=claim.deadline_at,
-                    cwd="/tmp",
-                    argv=("lemma-function-runtime", "execute"),
-                    environment=environment,
-                    output_limit_bytes=8 * 1024 * 1024,
-                )
-            except AgentBoxApiError as exc:
-                if exc.retry not in {
-                    RetryDisposition.WAIT,
-                    RetryDisposition.SAFE_SAME_OPERATION,
-                }:
-                    raise
-                await self._wait_retry(exc.retry_after_ms, claim.deadline_at)
-                continue
-            except httpx.TransportError:
-                # Retry only the same operation_id. AgentBox's process intent
-                # makes this exact retry safe even if the response was lost.
-                await self._wait_retry(None, claim.deadline_at)
-                continue
-            if process.state == ProcessState.UNKNOWN:
-                await self._wait_retry(100, claim.deadline_at)
-                continue
-            return process
-        raise UnknownFunctionDispatch("process start outcome remained unknown")
-
-    async def _deliver_ticket(
-        self, client: AgentBoxClient, claim: FunctionExecutionClaim
-    ) -> None:
-        try:
-            await client.send_process_input(
-                WorkloadKind.FUNCTION,
-                claim.pod_id,
-                claim.operation_id,
-                f"{claim.ticket}\n".encode(),
-                deadline_at=claim.deadline_at,
-            )
-        except httpx.TransportError:
-            # Arbitrary stdin writes cannot be made exactly-once across a lost
-            # response. Do not blindly write again; monitor this exact process.
-            logger.warning(
-                "function.dispatcher.ticket_delivery.unknown",
-                run_id=str(claim.run_id),
-                attempt_id=str(claim.attempt_id),
-            )
-            return
-        except AgentBoxApiError as exc:
-            if exc.retry == RetryDisposition.WAIT:
-                raise UnknownFunctionDispatch(
-                    "ticket delivery could not be confirmed"
-                ) from exc
-            raise
-
-    async def _wait_for_terminal(
+    async def _invoke_runtime(
         self,
-        client: AgentBoxClient,
-        claim: FunctionExecutionClaim,
-        process: ProcessRef,
-    ) -> FunctionRunEntity:
-        sequence = 0
-        process_state = process.state
-        terminal_seen_at: datetime | None = None
-        while self._now() < claim.deadline_at:
-            run = await self._load_run(claim.run_id)
-            if run.status in _TERMINAL_RUN_STATES:
-                return run
-            if process_state in _TERMINAL_PROCESS_STATES:
-                terminal_seen_at = terminal_seen_at or self._now()
-                if self._now() - terminal_seen_at >= timedelta(seconds=2):
-                    raise UnknownFunctionDispatch(
-                        "function process exited without a terminal callback"
-                    )
-                await asyncio.sleep(0.05)
-                continue
-            try:
-                snapshot = await client.read_process_output(
-                    WorkloadKind.FUNCTION,
-                    claim.pod_id,
-                    claim.operation_id,
-                    deadline_at=claim.deadline_at,
-                    after_sequence=sequence,
-                    wait_seconds=1,
+        dispatch: FunctionExecutionDispatch,
+        *,
+        endpoint: FunctionRuntimeEndpoint,
+        function_token: str,
+    ) -> RuntimeTerminalRequest | RuntimeAcceptedResponse:
+        remaining = (dispatch.deadline_at - self._now()).total_seconds()
+        if remaining <= 0:
+            raise TimeoutError("function execution deadline elapsed")
+        url = urljoin(
+            endpoint.url,
+            f"functions/{dispatch.function_id}/runs/{dispatch.run_id}",
+        )
+        headers = {
+            "Authorization": f"Bearer {function_token}",
+            "If-Match": f'"{dispatch.revision_hash}"',
+            "X-Lemma-Gateway-Url": self._runtime_gateway_url(),
+            # This capability cannot authorize execution. It lets the backend
+            # cancel the exact run even during the narrow interval between
+            # runtime task creation and the durable claim response.
+            "X-Lemma-Run-Token": self._signer.derive(dispatch.run_id),
+        }
+        if dispatch.mode == FunctionDispatchMode.ASYNCHRONOUS:
+            headers["Prefer"] = "respond-async"
+        try:
+            async with httpx.AsyncClient(
+                timeout=httpx.Timeout(
+                    max(0.1, min(10.0, remaining)),
+                    read=max(0.1, remaining),
+                ),
+                follow_redirects=False,
+            ) as runtime:
+                response = await runtime.post(
+                    url,
+                    headers=headers,
+                    json={"input": dispatch.input_data},
                 )
-                sequence = snapshot.next_sequence
-                process_state = snapshot.state
-            except AgentBoxApiError as exc:
-                if exc.retry == RetryDisposition.DO_NOT_RETRY:
-                    raise UnknownFunctionDispatch(
-                        "function process could not be inspected"
-                    ) from exc
-                await self._wait_retry(exc.retry_after_ms, claim.deadline_at)
-            except httpx.TransportError:
-                await self._wait_retry(None, claim.deadline_at)
+        except httpx.TransportError as exc:
+            await self._endpoint_cache.invalidate(
+                self._endpoint_key(dispatch),
+                endpoint=endpoint,
+            )
+            raise InvocationOutcomeUnconfirmed(
+                "function invocation response was lost"
+            ) from exc
+        if response.status_code >= 500:
+            await self._endpoint_cache.invalidate(
+                self._endpoint_key(dispatch),
+                endpoint=endpoint,
+            )
+            raise InvocationOutcomeUnconfirmed(
+                f"function runtime returned {response.status_code}"
+            )
+        if response.status_code in {401, 403, 404, 410}:
+            await self._endpoint_cache.invalidate(
+                self._endpoint_key(dispatch),
+                endpoint=endpoint,
+            )
+        response.raise_for_status()
+        if dispatch.mode == FunctionDispatchMode.ASYNCHRONOUS:
+            if response.status_code != 202:
+                raise InvocationOutcomeUnconfirmed(
+                    "function runtime did not acknowledge asynchronous execution"
+                )
+            accepted = RuntimeAcceptedResponse.model_validate(response.json())
+            if accepted.run_id != dispatch.run_id:
+                raise InvocationOutcomeUnconfirmed(
+                    "function runtime acknowledged a different run"
+                )
+            return accepted
+        if response.status_code != 200:
+            raise InvocationOutcomeUnconfirmed(
+                "function runtime did not return a terminal API response"
+            )
+        return RuntimeTerminalRequest.model_validate(response.json())
 
-        await self._best_effort_terminate(client, claim)
-        raise TimeoutError("function execution exceeded its deadline")
-
-    async def _best_effort_terminate(
-        self, client: AgentBoxClient, claim: FunctionExecutionClaim
+    async def _best_effort_cancel(
+        self, dispatch: FunctionExecutionDispatch
     ) -> None:
         try:
-            await client.terminate_process(
-                WorkloadKind.FUNCTION,
-                claim.pod_id,
-                claim.operation_id,
-                deadline_at=self._control_deadline(claim.deadline_at),
-                grace_seconds=2,
+            endpoint = await self._runtime_endpoint(
+                dispatch,
+                deadline_at=self._control_deadline(dispatch.deadline_at),
             )
+            async with httpx.AsyncClient(
+                timeout=httpx.Timeout(5),
+                follow_redirects=False,
+            ) as runtime:
+                await runtime.post(
+                    urljoin(
+                        endpoint.url,
+                        f"runs/{dispatch.run_id}:cancel",
+                    ),
+                    headers={
+                        "Authorization": self._callback_authorization(
+                            dispatch.run_id
+                        )
+                    },
+                )
         except Exception:
             logger.warning(
-                "function.dispatcher.process_termination.failed",
-                run_id=str(claim.run_id),
-                attempt_id=str(claim.attempt_id),
+                "function.dispatcher.runtime_cancellation.failed",
+                run_id=str(dispatch.run_id),
             )
+
+    async def _runtime_endpoint(
+        self,
+        dispatch: FunctionExecutionDispatch,
+        *,
+        deadline_at: datetime | None = None,
+    ) -> FunctionRuntimeEndpoint:
+        effective_deadline = deadline_at or dispatch.deadline_at
+        return await self._endpoint_cache.get(
+            self._endpoint_key(dispatch),
+            loader=lambda: self._load_runtime_endpoint(
+                dispatch,
+                deadline_at=effective_deadline,
+            ),
+        )
+
+    async def _load_runtime_endpoint(
+        self,
+        dispatch: FunctionExecutionDispatch,
+        *,
+        deadline_at: datetime,
+    ) -> FunctionRuntimeEndpoint:
+        client = self._agentbox_client_factory()
+        try:
+            await self._ensure_sandbox(
+                client,
+                dispatch,
+                deadline_at=deadline_at,
+            )
+            grant = await client.create_port_access(
+                WorkloadKind.FUNCTION,
+                dispatch.pod_id,
+                _FUNCTION_RUNTIME_PORT,
+                expires_at=self._port_access_expiry(deadline_at),
+            )
+            return FunctionRuntimeEndpoint(
+                url=grant.url,
+                expires_at=grant.expires_at,
+            )
+        finally:
+            await client.close()
+
+    def _endpoint_key(
+        self,
+        dispatch: FunctionExecutionDispatch,
+    ) -> FunctionRuntimeEndpointKey:
+        return FunctionRuntimeEndpointKey(
+            pod_id=dispatch.pod_id,
+            profile_digest=self._profile.digest,
+        )
 
     async def _load_run(self, run_id: UUID) -> FunctionRunEntity:
         async with self._uow_factory() as uow:
@@ -350,6 +463,22 @@ class FunctionDispatcher:
         if run is None:
             raise LookupError(f"function run {run_id} does not exist")
         return run
+
+    async def _function_session_token(
+        self, dispatch: FunctionExecutionDispatch
+    ) -> str:
+        return await self._token_cache.get(
+            FunctionSessionTokenKey(
+                user_id=dispatch.user_id,
+                pod_id=dispatch.pod_id,
+                function_id=dispatch.function_id,
+                revision_hash=dispatch.revision_hash,
+                workload_name=dispatch.function_name,
+                scope=(),
+                delegated_tokens_enabled=self._delegated_tokens_enabled,
+            ),
+            minter=self._token_minter,
+        )
 
     @staticmethod
     async def _wait_retry(retry_after_ms: int | None, deadline_at: datetime) -> None:
@@ -375,27 +504,54 @@ class FunctionDispatcher:
         return max(execution_deadline, FunctionDispatcher._now() + timedelta(seconds=5))
 
     @staticmethod
+    def _port_access_expiry(execution_deadline: datetime) -> datetime:
+        return min(
+            execution_deadline + timedelta(seconds=10),
+            FunctionDispatcher._now() + timedelta(hours=23, minutes=55),
+        )
+
+    @staticmethod
     def _now() -> datetime:
         return datetime.now(timezone.utc)
 
-    @staticmethod
-    def _is_unknown_outcome(exc: BaseException) -> bool:
-        if isinstance(exc, UnknownFunctionDispatch):
-            return True
-        if isinstance(exc, AgentBoxApiError):
-            return exc.code in {"UNKNOWN_DISPATCH", "AMBIGUOUS_CREATE"}
-        return False
+    def _callback_authorization(self, run_id: UUID) -> str:
+        return f"Bearer {self._signer.derive(run_id)}"
 
     @staticmethod
-    def _execution_error(exc: BaseException, *, unknown: bool) -> str:
-        if unknown:
-            return "Function execution outcome is unknown; the attempt was not replayed"
+    def _execution_error(exc: BaseException) -> str:
+        if isinstance(exc, InvocationOutcomeUnconfirmed):
+            return "Function execution failed because the runtime response was not confirmed"
         if isinstance(exc, TimeoutError):
             return "Function execution deadline exceeded"
         if isinstance(exc, AgentBoxApiError):
-            return f"Function sandbox error ({redact_text(exc.code)})"
+            code = str(getattr(exc, "code", "PROVIDER_UNAVAILABLE"))
+            return f"Function sandbox error ({redact_text(code)})"
         return "Function execution failed"
 
+    @staticmethod
+    def _elapsed_ms(started: float) -> float:
+        return round((time.perf_counter() - started) * 1000, 3)
 
-class UnknownFunctionDispatch(RuntimeError):
-    """The attempt may have crossed an external side-effect boundary."""
+    @staticmethod
+    def _log_diagnostics(
+        run_id: UUID,
+        phases: FunctionDispatchTimings,
+        execute_started: float,
+        *,
+        outcome: str,
+    ) -> None:
+        if not settings.function_execution_diagnostics:
+            return
+        logger.warning(
+            "function.execution.diagnostics.dispatch",
+            run_id=str(run_id),
+            outcome=outcome,
+            total_ms=FunctionDispatcher._elapsed_ms(execute_started),
+            resolve_ms=phases.resolve_ms,
+            endpoint_ms=phases.endpoint_ms,
+            runtime_call_ms=phases.runtime_call_ms,
+        )
+
+
+class InvocationOutcomeUnconfirmed(RuntimeError):
+    """The runtime response was not confirmed; the run still terminates FAILED."""

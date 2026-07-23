@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from starlette.requests import HTTPConnection
+import httpx
 
 from agentbox.filesystem import FilesystemService
 from agentbox.lifecycle import SandboxLifecycleService
@@ -27,3 +28,7 @@ def python_sessions(connection: HTTPConnection) -> PythonSessionService:
 
 def port_access(connection: HTTPConnection) -> PortAccessService:
     return connection.app.state.port_access
+
+
+def port_proxy_http_client(connection: HTTPConnection) -> httpx.AsyncClient:
+    return connection.app.state.port_proxy_http_client

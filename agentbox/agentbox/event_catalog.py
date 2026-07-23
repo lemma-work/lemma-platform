@@ -39,6 +39,17 @@ EVENT_CATALOG: dict[str, EventSpec] = {
     "http.request.rate_limited": EventSpec(
         "warning", frozenset({"duration_ms", "method", "route", "status_code"})
     ),
+    "http.request.completed": EventSpec(
+        "debug", frozenset({"duration_ms", "method", "route", "status_code"})
+    ),
+    "http.request.slow": EventSpec(
+        "warning",
+        frozenset({"duration_ms", "latency_kind", "method", "route", "status_code"}),
+    ),
+    "port.proxy.upstream_failed": EventSpec(
+        "error",
+        frozenset({"method", "protocol", "provider"}),
+    ),
     "release.identity.malformed": EventSpec("warning", frozenset()),
     "release.identity.missing": EventSpec("warning", frozenset()),
 }

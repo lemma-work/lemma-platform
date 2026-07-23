@@ -98,7 +98,17 @@ class PortAccessSigner:
 
     @staticmethod
     def _decode(value: str) -> bytes:
-        return base64.urlsafe_b64decode(value + "=" * (-len(value) % 4))
+        decoded = base64.b64decode(
+            value + "=" * (-len(value) % 4),
+            altchars=b"-_",
+            validate=True,
+        )
+        # Base64url without padding has multiple textual aliases when unused
+        # trailing bits are non-zero. Accepting an alias would allow a signed
+        # URL to be textually modified without changing its decoded signature.
+        if PortAccessSigner._encode(decoded) != value:
+            raise ValueError("port-access token encoding is not canonical")
+        return decoded
 
 
 class PortAccessService:
@@ -126,27 +136,46 @@ class PortAccessService:
         now = datetime.now(timezone.utc)
         if not 1 <= port <= 65535:
             raise self._invalid("port must be in 1..65535")
+        if key.workload_kind == WorkloadKind.FUNCTION and port != 8090:
+            raise AgentBoxError(
+                ErrorCode.UNSUPPORTED_CAPABILITY,
+                "function profile exposes only the resident runtime port",
+                retry=RetryDisposition.DO_NOT_RETRY,
+                status_code=422,
+            )
         if expires_at.tzinfo is None or expires_at <= now:
             raise self._invalid("expires_at must be a future absolute timestamp")
-        if expires_at > now + timedelta(hours=1):
-            raise self._invalid("port access cannot exceed one hour")
+        maximum_lifetime = (
+            timedelta(hours=24)
+            if key.workload_kind == WorkloadKind.FUNCTION
+            else timedelta(hours=1)
+        )
+        if expires_at > now + maximum_lifetime:
+            raise self._invalid(
+                "function runtime access cannot exceed 24 hours"
+                if key.workload_kind == WorkloadKind.FUNCTION
+                else "port access cannot exceed one hour"
+            )
         async with self._database.uow() as uow:
             logical = await uow.repository.get_logical(key)
             allocation = await uow.repository.current_allocation(key)
-            await uow.commit()
-        if (
-            logical is None
-            or allocation is None
-            or allocation.provider_id is None
-            or allocation.state != AllocationState.ACTIVE
-            or logical.allocation_epoch < 1
-        ):
-            raise AgentBoxError(
-                ErrorCode.PROVISIONING,
-                "sandbox is not ready for port access",
-                retry=RetryDisposition.WAIT,
-                status_code=409,
+            if (
+                logical is None
+                or allocation is None
+                or allocation.provider_id is None
+                or allocation.state != AllocationState.ACTIVE
+                or logical.allocation_epoch < 1
+            ):
+                raise AgentBoxError(
+                    ErrorCode.PROVISIONING,
+                    "sandbox is not ready for port access",
+                    retry=RetryDisposition.WAIT,
+                    status_code=409,
+                )
+            logical = await uow.repository.protect_port_access(
+                key, until=expires_at, now=now
             )
+            await uow.commit()
         claims = PortAccessClaims(
             key=key,
             allocation_id=allocation.allocation_id,
@@ -205,6 +234,7 @@ class PortAccessService:
             port=claims.port,
             protocol=claims.protocol,
             deadline_at=deadline_at,
+            activity_until=claims.expires_at,
         )
         return claims, target
 

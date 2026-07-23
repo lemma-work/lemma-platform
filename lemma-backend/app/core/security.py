@@ -66,7 +66,6 @@ EXCLUDED_PATHS = (
     "/webhooks",
     "/agent-runtime/runs/",  # run-scoped MCP routes validate their own token
     "/agent-runtime/conversations/",  # conversation-scoped MCP routes validate their own token
-    "/internal/function-runtime/",  # sandbox runner validates attempt credentials
 )
 
 
@@ -95,6 +94,19 @@ def _is_datastore_changes_ws_path(path: str) -> bool:
     except ValueError:
         return False
     return True
+
+
+def _is_function_runtime_callback_path(path: str) -> bool:
+    """Callback/artifact routes use the post-claim internal capability.
+
+    ``.../{run_id}:claim`` routes are deliberately not excluded: they must
+    authenticate the delegated function session through the canonical auth
+    stack before the gateway can claim a run.
+    """
+
+    return path.startswith(
+        "/internal/function-runtime/runs/"
+    ) and not path.endswith(":claim")
 
 
 def _is_public_desktop_auth_path(path: str, method: str) -> bool:
@@ -137,6 +149,7 @@ async def verify_auth(connection: HTTPConnection):
 
     if (
         connection.url.path.startswith(EXCLUDED_PATHS)
+        or _is_function_runtime_callback_path(connection.url.path)
         or _is_surface_webhook_path(connection.url.path)
         or _is_public_desktop_auth_path(
             connection.url.path,

@@ -1,6 +1,6 @@
 # AgentBox Sandbox Protocol
 
-**Status:** Proposed design; core typed protocol implemented, acceptance in progress
+**Status:** Implemented and verified for Docker and E2B; Kubernetes deferred
 
 **Parent:** [AgentBox](README.md)
 
@@ -9,8 +9,8 @@
 ## 1. Purpose
 
 This document defines AgentBox's provider-neutral model, internal ports, durable
-state, breaking the canonical API HTTP/WebSocket API, error semantics, admission behavior, and
-reconciliation algorithms. Provider-specific mappings are defined in
+state, canonical breaking HTTP/WebSocket API, error semantics, admission behavior,
+and reconciliation algorithms. Provider-specific mappings are defined in
 [Provider adapters](provider-adapters.md).
 
 The protocol separates four resources that the current implementation conflates:
@@ -350,10 +350,13 @@ class PortAccessPort(Protocol):
     ) -> PortAccessGrant: ...
 ```
 
-Only workspace profiles support port grants. The adapter returns an opaque grant
-with URL, required headers/query/subprotocols, expiry, allocation ID, and epoch.
-AgentBox signs the user-facing URL and never exposes provider credentials. Grants
-are invalid after allocation replacement or workspace release.
+Workspace profiles support caller-facing application grants. Function profiles
+support only the fixed private resident-runtime port declared by the immutable
+profile, and only the backend service audience may request that grant. The adapter
+returns an opaque grant with URL, expiry, allocation ID, and epoch. Provider
+addresses, traffic tokens, and credentials remain behind AgentBox's signed proxy.
+Grants are invalid after allocation replacement, workspace release, or function
+destruction.
 
 ### 4.6 Internal provider ports
 
@@ -449,7 +452,9 @@ disconnects close the upstream stream and incomplete upload temporaries are remo
 POST .../ports/{port}:access
 ```
 
-The request contains protocol, audience, and TTL. Function workloads always return
+The request contains protocol, audience, and TTL. Workspace ports are constrained
+by the workspace profile. Function workloads accept only the profile's private
+resident-runtime port and backend audience; every other function port returns
 `UNSUPPORTED_CAPABILITY`.
 
 ## 6. Durable persistence model
@@ -718,9 +723,10 @@ allocation active or explicitly degraded; it never pauses behind an active proce
 
 ### 7.3 Function idle destruction
 
-AgentBox updates `last_used_at` on process start/completion. A background cleanup
-worker selects current `FUNCTION` allocations with no nonterminal process and five
-minutes of idle time, marks them `DESTROYING`, and calls exact provider deletion.
+AgentBox updates `last_used_at` on signed resident-runtime access. A background
+cleanup worker selects current `FUNCTION` allocations with no active port lease and
+five minutes of idle time, marks them `DESTROYING`, and calls exact provider
+deletion. The backend/runtime deadline extension protects an active long JOB.
 There is no release/suspend transition.
 
 ### 7.4 Permanent destroy
@@ -734,14 +740,14 @@ webhook/inventory observations from resurrecting the sandbox.
 ## 8. Provider readiness
 
 Readiness means the provider can serve the capabilities required by the selected
-profile. It is not a universal port-8080/8090 health check.
+profile. It is profile-specific rather than a universal port-8080/8090 check.
 
 - Docker/Kubernetes workspace: allocation running plus private workspace runtime
   ready and authenticated.
 - E2B workspace: exact sandbox connected plus one native command/filesystem smoke
   operation; the template already contains build-time-ready static processes.
-- Function: exact allocation ready to accept a native exec of
-  `lemma-function-runtime`; no long-running function HTTP server is probed.
+- Function: exact allocation plus resident runtime `/healthz` on the fixed private
+  profile port with the expected runtime ABI.
 
 Readiness is performed once per allocation publication and after an explicit
 degraded repair. Normal operations do not repeat it.
@@ -761,8 +767,8 @@ batch        - background stateless allocation
 ```
 
 Provider scope configuration reserves concurrent and creation capacity between
-classes. Function execution-unit priority remains a backend concern; AgentBox
-admission protects provider-wide sandbox creation and active-allocation quotas.
+classes. This admission protects provider-wide sandbox creation and
+active-allocation quotas; it does not impose an invocation concurrency model.
 
 On a provider 429:
 
@@ -841,8 +847,8 @@ Rules:
 - Only exact-ID delete/not-found postconditions make deletion terminal.
 - An allocation-token query may bind one exact provider object; duplicate objects
   are quarantined and exact-deleted after review/grace.
-- Unknown process dispatch is resolved by provider tag/PID, runtime attempt status,
-  or caller-owned function callback. It is never resolved by starting again.
+- Unknown process dispatch is resolved by provider tag/PID or the adapter-private
+  process supervisor. It is never resolved by starting again.
 - Stale profile allocations drain and destroy after their processes become terminal.
 - Orphans are quarantined before destruction and cannot be adopted merely because
   their logical ID matches.

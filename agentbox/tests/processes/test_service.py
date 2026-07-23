@@ -172,13 +172,7 @@ async def test_process_start_is_durable_deduplicated_and_outside_uow(
 
     original = request(operation_id)
     first, first_created = await service.start(key, original)
-    second, second_created = await service.start(
-        key,
-        replace(
-            original,
-            environment=(EnvironmentVariable("ATTEMPT_TICKET", "rotated-secret"),),
-        ),
-    )
+    second, second_created = await service.start(key, original)
 
     assert first.state == ProcessState.RUNNING
     assert second == first
@@ -189,6 +183,16 @@ async def test_process_start_is_durable_deduplicated_and_outside_uow(
 
     with pytest.raises(AgentBoxError) as raised:
         await service.start(key, replace(original, shell_command="echo changed"))
+    assert raised.value.code == ErrorCode.OPERATION_CONFLICT
+
+    with pytest.raises(AgentBoxError) as raised:
+        await service.start(
+            key,
+            replace(
+                original,
+                environment=(EnvironmentVariable("ATTEMPT_TICKET", "rotated-secret"),),
+            ),
+        )
     assert raised.value.code == ErrorCode.OPERATION_CONFLICT
 
 

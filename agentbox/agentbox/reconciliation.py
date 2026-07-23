@@ -23,7 +23,7 @@ from agentbox.ports import (
 
 
 class AgentBoxReconciler:
-    """Repair indeterminate provider transitions by exact durable identity."""
+    """Repair ambiguous provider transitions by exact durable identity."""
 
     def __init__(
         self,

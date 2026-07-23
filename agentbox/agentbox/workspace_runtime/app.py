@@ -335,6 +335,14 @@ def create_app(
     ) -> RuntimeFileStatResponse:
         return RuntimeFileStatResponse.from_domain(await filesystem.stat(path))
 
+    @app.put("/directories", status_code=204)
+    async def create_directory(
+        path: str = Query(min_length=1, max_length=4096, pattern=r"^/"),
+        _auth: None = Depends(authenticate),
+    ) -> Response:
+        await filesystem.create_directory(path)
+        return Response(status_code=204)
+
     @app.get("/files", response_model=RuntimeFileListResponse)
     async def list_files(
         path: str = Query(min_length=1, max_length=4096, pattern=r"^/"),

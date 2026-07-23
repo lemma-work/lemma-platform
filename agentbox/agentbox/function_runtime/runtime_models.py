@@ -6,6 +6,8 @@ from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, Field
 
+from .types import JsonObject
+
 
 class RuntimeModel(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
@@ -20,18 +22,22 @@ class RuntimeIdentity(RuntimeModel):
     organization_id: UUID | None = None
 
 
-class AttemptClaim(RuntimeModel):
-    attempt_id: UUID
-    fence: int = Field(ge=1)
-    runtime_token: str = Field(min_length=32)
+class RunClaim(RuntimeModel):
+    run_id: UUID
+    callback_token: str = Field(min_length=32)
     artifact_url: str
-    artifact_sha256: str = Field(pattern=r"^sha256:[0-9a-f]{64}$")
-    input_data: dict[str, Any]
-    config: dict[str, Any] | None = None
+    revision_hash: str = Field(pattern=r"^sha256:[0-9a-f]{64}$")
+    input_data: JsonObject
+    config: JsonObject | None = None
     identity: RuntimeIdentity
     lemma_token: str
     lemma_base_url: str
     deadline_at: datetime
+
+
+class RunAccepted(RuntimeModel):
+    accepted: Literal[True] = True
+    run_id: UUID
 
 
 class FunctionArtifactManifest(RuntimeModel):
@@ -50,9 +56,9 @@ class FunctionArtifactManifest(RuntimeModel):
 class WorkerRequest(RuntimeModel):
     artifact_root: str
     manifest: FunctionArtifactManifest
-    attempt_id: UUID
-    input_data: dict[str, Any]
-    config: dict[str, Any] | None
+    run_id: UUID
+    input_data: JsonObject
+    config: JsonObject | None
     identity: RuntimeIdentity
     lemma_token: str
     lemma_base_url: str
@@ -66,7 +72,7 @@ class RuntimeFailure(RuntimeModel):
 
 class WorkerResult(RuntimeModel):
     ok: bool
-    output_data: dict[str, Any] | None = None
+    output_data: JsonObject | None = None
     error: RuntimeFailure | None = None
 
     def model_post_init(self, _context: Any) -> None:
@@ -74,11 +80,36 @@ class WorkerResult(RuntimeModel):
             raise ValueError("successful results cannot contain an error")
 
 
+class WorkerResponse(WorkerResult):
+    stdout: str = ""
+    stderr: str = ""
+    output_truncated: bool = False
+    user_code_ms: float = Field(default=0, ge=0)
+
+
+class WorkerReady(RuntimeModel):
+    ready: bool
+    error: RuntimeFailure | None = None
+
+    def model_post_init(self, _context: Any) -> None:
+        if self.ready == (self.error is not None):
+            raise ValueError("ready workers cannot contain an error")
+
+
+class RuntimeTimings(RuntimeModel):
+    total_ms: float = Field(default=0, ge=0)
+    claim_ms: float = Field(default=0, ge=0)
+    artifact_ms: float = Field(default=0, ge=0)
+    worker_ms: float = Field(default=0, ge=0)
+    user_code_ms: float = Field(default=0, ge=0)
+    artifact_cache_hit: bool = False
+
+
 class TerminalReport(RuntimeModel):
-    fence: int = Field(ge=1)
     status: Literal["completed", "failed"]
-    output_data: dict[str, Any] | None = None
+    output_data: JsonObject | None = None
     error: RuntimeFailure | None = None
     stdout: str
     stderr: str
     output_truncated: bool = False
+    timings: RuntimeTimings = Field(default_factory=RuntimeTimings)

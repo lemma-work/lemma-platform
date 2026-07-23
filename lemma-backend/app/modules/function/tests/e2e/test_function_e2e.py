@@ -1801,7 +1801,7 @@ async def test_job_function_long_run_is_not_destroyed_while_active(
     test_pod,
     worker,
 ):
-    """A nonterminal process fences function idle cleanup without heartbeats."""
+    """An active run prevents function-sandbox idle cleanup without heartbeats."""
     import agentbox.config as agentbox_config
 
     original = {

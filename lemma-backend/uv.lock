@@ -47,6 +47,7 @@ provides-extras = ["e2b", "postgres"]
 [package.metadata.requires-dev]
 dev = [
     { name = "agentbox-client", editable = "../agentbox-client" },
+    { name = "lemma-sdk", editable = "../lemma-python" },
     { name = "pytest", specifier = ">=8.4.0" },
     { name = "pytest-asyncio", specifier = ">=1.2.0" },
     { name = "ruff", specifier = ">=0.15.0,<0.16.0" },

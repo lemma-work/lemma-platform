@@ -79,6 +79,21 @@ class _FakeActivityStore:
         self.removed.append(user_id)
 
 
+class _FakeManagerClient:
+    def __init__(self) -> None:
+        self.directories: list[tuple[UUID, str]] = []
+
+    async def create_directory(
+        self,
+        logical_id: UUID,
+        path: str,
+        *,
+        deadline_at,
+    ) -> None:
+        del deadline_at
+        self.directories.append((logical_id, path))
+
+
 def _service(
     sandbox: _FakeSandbox,
     *,
@@ -177,7 +192,7 @@ async def test_get_session_uses_canonical_logical_workspace_id(
     user_id = uuid4()
     sandbox = _FakeSandbox()
     service = _service(sandbox)
-    manager_client = object()
+    manager_client = _FakeManagerClient()
 
     async def environment(*_args: Any, **_kwargs: Any) -> dict[str, str]:
         return {"LEMMA_TOKEN": "dynamic"}
@@ -195,3 +210,4 @@ async def test_get_session_uses_canonical_logical_workspace_id(
     assert session.sandbox_id == str(user_id)
     assert session.client is manager_client
     assert session.env_vars == {"LEMMA_TOKEN": "dynamic"}
+    assert manager_client.directories == [(user_id, "/workspace")]

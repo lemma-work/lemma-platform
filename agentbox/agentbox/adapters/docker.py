@@ -5,13 +5,13 @@ import base64
 from collections.abc import AsyncIterable, AsyncIterator
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timezone
 import hashlib
 import hmac
 from io import BytesIO
 import tarfile
-import time
-from uuid import uuid4
+
+import httpx
 
 from agentbox.domain import (
     ByteRange,
@@ -19,11 +19,8 @@ from agentbox.domain import (
     ExecutePythonRequest,
     FileStat,
     PortProtocol,
-    ProcessOutputChannel,
-    ProcessOutputChunk,
     ProcessRef,
     ProcessOutputSnapshot,
-    ProcessState,
     PythonResult,
     PythonSessionRef,
     SandboxProfileRef,
@@ -60,12 +57,6 @@ from agentbox.ports import (
     ProviderStorageResult,
 )
 from agentbox.profiles import ProfileRegistry
-from agentbox.function_runtime.process_protocol import (
-    ProcessInspection,
-    ProcessManifest,
-    ProcessStateRecord,
-    RuntimeEnvironmentVariable,
-)
 
 from .docker_engine import (
     DockerContainerCreateRequest,
@@ -73,9 +64,6 @@ from .docker_engine import (
     DockerEmptyObject,
     DockerEngineClient,
     DockerEngineError,
-    DockerExecResult,
-    DockerExecCreateRequest,
-    DockerExecStartRequest,
     DockerHostConfig,
     DockerPortBinding,
     DockerRequestAmbiguous,
@@ -99,6 +87,8 @@ class DockerAdapterConfig:
     allow_mutable_images: bool = False
     memory_bytes: int = 2 * 1024 * 1024 * 1024
     nano_cpus: int = 1_000_000_000
+    function_memory_bytes: int = 2 * 1024 * 1024 * 1024
+    function_nano_cpus: int = 4_000_000_000
     pids_limit: int = 512
     add_host_gateway: bool = False
     private_network: str | None = None
@@ -106,6 +96,16 @@ class DockerAdapterConfig:
     max_file_transfer_bytes: int = 256 * 1024 * 1024
 
     def __post_init__(self) -> None:
+        if (
+            min(
+                self.memory_bytes,
+                self.nano_cpus,
+                self.function_memory_bytes,
+                self.function_nano_cpus,
+            )
+            < 1
+        ):
+            raise ValueError("Docker memory and CPU limits must be positive")
         if self.max_file_transfer_bytes < 1:
             raise ValueError("Docker filesystem transfer limit must be positive")
 
@@ -121,12 +121,6 @@ class RuntimeCredentialSigner:
     def token(self, provider_id: str) -> str:
         digest = hmac.new(self.key, provider_id.encode(), hashlib.sha256).digest()
         return base64.urlsafe_b64encode(digest).decode().rstrip("=")
-
-
-@dataclass(frozen=True, slots=True)
-class _FunctionProcessFiles:
-    state: ProcessStateRecord | None
-    chunks: tuple[ProcessOutputChunk, ...]
 
 
 class DockerSandboxAdapter:
@@ -200,11 +194,25 @@ class DockerSandboxAdapter:
         tmpfs: dict[str, str] = {}
         if is_function:
             tmpfs["/tmp"] = "rw,noexec,nosuid,size=512m"
+            # Native wheels in verified function artifacts must mmap executable
+            # segments. Keep general /tmp noexec and provide one private,
+            # ephemeral executable mount only for the content-addressed cache.
+            tmpfs["/run/lemma-function-cache"] = (
+                "rw,exec,nosuid,nodev,size=512m,mode=0700,uid=10001,gid=10001"
+            )
         host_config = DockerHostConfig(
             binds=binds,
             port_bindings=port_bindings,
-            memory=self._config.memory_bytes,
-            nano_cpus=self._config.nano_cpus,
+            memory=(
+                self._config.function_memory_bytes
+                if is_function
+                else self._config.memory_bytes
+            ),
+            nano_cpus=(
+                self._config.function_nano_cpus
+                if is_function
+                else self._config.nano_cpus
+            ),
             pids_limit=self._config.pids_limit,
             # Function control state lives entirely in /tmp. Keeping the image
             # root read-only catches accidental writes and enforces the same
@@ -225,8 +233,17 @@ class DockerSandboxAdapter:
             exposed_ports=exposed_ports,
             host_config=host_config,
             working_dir="/workspace" if not is_function else "/tmp",
-            env=(
-                f"AGENTBOX_MAX_FILE_TRANSFER_BYTES={self._config.max_file_transfer_bytes}",
+            env=tuple(
+                item
+                for item in (
+                    f"AGENTBOX_MAX_FILE_TRANSFER_BYTES={self._config.max_file_transfer_bytes}",
+                    (
+                        "LEMMA_FUNCTION_CACHE_ROOT=/run/lemma-function-cache"
+                        if is_function
+                        else None
+                    ),
+                )
+                if item is not None
             ),
         )
         try:
@@ -293,23 +310,33 @@ class DockerSandboxAdapter:
                     "Docker container image does not match profile artifact"
                 )
             if artifact.runtime_port is not None:
-                await self._wait_runtime_ready(
-                    inspected,
-                    runtime_port=artifact.runtime_port,
+                if workload_kind == WorkloadKind.FUNCTION:
+                    await self._wait_function_runtime_ready(
+                        inspected,
+                        runtime_port=artifact.runtime_port,
+                        deadline_at=deadline_at,
+                    )
+                else:
+                    await self._wait_runtime_ready(
+                        inspected,
+                        runtime_port=artifact.runtime_port,
+                        deadline_at=deadline_at,
+                    )
+            if artifact.readiness_argv:
+                exit_code = await self._engine.run_exec(
+                    allocation.provider_id,
+                    artifact.readiness_argv,
+                    working_dir=(
+                        "/tmp"
+                        if workload_kind == WorkloadKind.FUNCTION
+                        else "/workspace"
+                    ),
                     deadline_at=deadline_at,
                 )
-            exit_code = await self._engine.run_exec(
-                allocation.provider_id,
-                artifact.readiness_argv,
-                working_dir=(
-                    "/tmp" if workload_kind == WorkloadKind.FUNCTION else "/workspace"
-                ),
-                deadline_at=deadline_at,
-            )
-            if exit_code != 0:
-                raise ProviderAllocationFailed(
-                    f"Docker readiness command failed with exit code {exit_code}"
-                )
+                if exit_code != 0:
+                    raise ProviderAllocationFailed(
+                        f"Docker readiness command failed with exit code {exit_code}"
+                    )
         except ProviderAllocationFailed:
             raise
         except ProviderNotReady:
@@ -324,8 +351,6 @@ class DockerSandboxAdapter:
     async def start_process(
         self, request: ProviderProcessStartRequest
     ) -> ProviderProcessStartResult:
-        if request.process.key.workload_kind == WorkloadKind.FUNCTION:
-            return await self._start_function_process(request)
         client = await self._runtime_client(
             request.allocation.provider_id,
             deadline_at=request.request.deadline_at,
@@ -351,14 +376,6 @@ class DockerSandboxAdapter:
         data: bytes,
         deadline_at: datetime,
     ) -> None:
-        if allocation.key.workload_kind == WorkloadKind.FUNCTION:
-            await self._send_function_process_input(
-                allocation,
-                process=process,
-                data=data,
-                deadline_at=deadline_at,
-            )
-            return
         client = await self._runtime_client(
             allocation.provider_id, deadline_at=deadline_at
         )
@@ -378,14 +395,6 @@ class DockerSandboxAdapter:
         wait_seconds: float,
         deadline_at: datetime,
     ) -> ProcessOutputSnapshot:
-        if allocation.key.workload_kind == WorkloadKind.FUNCTION:
-            return await self._read_function_process_output(
-                allocation,
-                process=process,
-                after_sequence=after_sequence,
-                wait_seconds=wait_seconds,
-                deadline_at=deadline_at,
-            )
         client = await self._runtime_client(
             allocation.provider_id, deadline_at=deadline_at
         )
@@ -407,10 +416,6 @@ class DockerSandboxAdapter:
         size: TerminalSize,
         deadline_at: datetime,
     ) -> None:
-        if allocation.key.workload_kind == WorkloadKind.FUNCTION:
-            raise ProviderLifecycleError(
-                "function profile does not support terminal resize"
-            )
         client = await self._runtime_client(
             allocation.provider_id, deadline_at=deadline_at
         )
@@ -429,14 +434,6 @@ class DockerSandboxAdapter:
         grace_seconds: float,
         deadline_at: datetime,
     ) -> None:
-        if allocation.key.workload_kind == WorkloadKind.FUNCTION:
-            await self._terminate_function_process(
-                allocation,
-                process=process,
-                grace_seconds=grace_seconds,
-                deadline_at=deadline_at,
-            )
-            return
         client = await self._runtime_client(
             allocation.provider_id, deadline_at=deadline_at
         )
@@ -460,6 +457,18 @@ class DockerSandboxAdapter:
             allocation.provider_id, deadline_at=deadline_at
         ) as client:
             return await client.stat_file(path, deadline_at=deadline_at)
+
+    async def create_directory(
+        self,
+        allocation: ProviderAllocationRef,
+        *,
+        path: str,
+        deadline_at: datetime,
+    ) -> None:
+        async with self._filesystem_client(
+            allocation.provider_id, deadline_at=deadline_at
+        ) as client:
+            await client.create_directory(path, deadline_at=deadline_at)
 
     async def list_files(
         self,
@@ -654,7 +663,9 @@ class DockerSandboxAdapter:
         port: int,
         protocol: PortProtocol,
         deadline_at: datetime,
+        activity_until: datetime | None = None,
     ) -> ProviderPortTarget:
+        del activity_until
         inspected = await self._engine.inspect_container(
             allocation.provider_id, deadline_at=deadline_at
         )
@@ -774,335 +785,6 @@ class DockerSandboxAdapter:
     async def close(self) -> None:
         await self._engine.close()
 
-    async def _start_function_process(
-        self, request: ProviderProcessStartRequest
-    ) -> ProviderProcessStartResult:
-        if request.request.tty is not None:
-            raise ProviderProcessStartRejected(
-                "function sandboxes do not support terminal processes"
-            )
-        manifest = ProcessManifest(
-            operation_id=request.process.operation_id,
-            shell_command=request.request.shell_command,
-            argv=request.request.argv,
-            cwd=request.request.cwd,
-            environment=tuple(
-                RuntimeEnvironmentVariable(name=item.name, value=item.value)
-                for item in request.request.environment
-            ),
-            output_limit_bytes=request.request.output_limit_bytes,
-            deadline_at=request.request.deadline_at,
-        )
-        try:
-            created = await self._engine.create_exec(
-                request.allocation.provider_id,
-                DockerExecCreateRequest(
-                    argv=(
-                        "/usr/local/bin/python",
-                        "-m",
-                        "agentbox.function_runtime.process_supervisor",
-                        str(request.process.operation_id),
-                    ),
-                    attach_stdin=False,
-                    attach_stdout=False,
-                    attach_stderr=False,
-                    working_dir="/tmp",
-                    env=(
-                        "AGENTBOX_PROCESS_MANIFEST="
-                        + base64.b64encode(
-                            manifest.model_dump_json().encode()
-                        ).decode(),
-                    ),
-                ),
-                deadline_at=request.request.deadline_at,
-            )
-            try:
-                await self._engine.start_exec(
-                    created.exec_id,
-                    DockerExecStartRequest(detach=True),
-                    deadline_at=request.request.deadline_at,
-                )
-            except DockerRequestAmbiguous as exc:
-                if not await self._wait_for_function_start(
-                    request.allocation,
-                    request.process,
-                    deadline_at=request.request.deadline_at,
-                ):
-                    raise ProviderProcessStartAmbiguous(str(exc)) from exc
-            else:
-                if not await self._wait_for_function_start(
-                    request.allocation,
-                    request.process,
-                    deadline_at=request.request.deadline_at,
-                ):
-                    inspected = await self._engine.inspect_exec(
-                        created.exec_id, deadline_at=request.request.deadline_at
-                    )
-                    if not inspected.running:
-                        diagnostic = await self._function_process_diagnostic(
-                            request.allocation,
-                            process=request.process,
-                            deadline_at=request.request.deadline_at,
-                        )
-                        raise ProviderProcessStartRejected(
-                            "function process supervisor exited before start "
-                            f"(exit={inspected.exit_code})"
-                            + (f": {diagnostic}" if diagnostic else "")
-                        )
-                    raise ProviderProcessStartAmbiguous(
-                        "function process supervisor is running without a start record"
-                    )
-        except ProviderProcessStartAmbiguous:
-            raise
-        except DockerEngineError as exc:
-            raise ProviderProcessStartRejected(str(exc)) from exc
-        return ProviderProcessStartResult(
-            provider_process_id=created.exec_id,
-            provider_tag=str(request.process.operation_id),
-        )
-
-    async def _wait_for_function_start(
-        self,
-        allocation: ProviderAllocationRef,
-        process: ProcessRef,
-        *,
-        deadline_at: datetime,
-    ) -> bool:
-        wait_until = min(
-            deadline_at,
-            datetime.now(timezone.utc)
-            + timedelta(seconds=self._config.process_start_observation_seconds),
-        )
-        while datetime.now(timezone.utc) < wait_until:
-            try:
-                result = await self._engine.run_exec_capture(
-                    allocation.provider_id,
-                    (
-                        "/usr/bin/test",
-                        "-s",
-                        f"/tmp/.agentbox/processes/{process.operation_id}/state.json",
-                    ),
-                    deadline_at=min(deadline_at, wait_until),
-                )
-            except DockerEngineError:
-                result = None
-            if result is not None and result.exit_code == 0:
-                return True
-            await asyncio.sleep(0.1)
-        return False
-
-    async def _send_function_process_input(
-        self,
-        allocation: ProviderAllocationRef,
-        *,
-        process: ProcessRef,
-        data: bytes,
-        deadline_at: datetime,
-    ) -> None:
-        path = self._function_process_directory(process)
-        del path
-        for index, offset in enumerate(range(0, len(data), 48 * 1024)):
-            chunk = data[offset : offset + 48 * 1024]
-            name = f"{time.time_ns():020d}-{index:06d}-{uuid4().hex}"
-            result = await self._engine.run_exec_capture(
-                allocation.provider_id,
-                (
-                    "/usr/local/bin/python",
-                    "-m",
-                    "agentbox.function_runtime.process_control",
-                    "input",
-                    str(process.operation_id),
-                    name,
-                ),
-                environment=self._function_control_environment(input_data=chunk),
-                deadline_at=deadline_at,
-            )
-            self._check_function_control_result(result)
-
-    async def _read_function_process_output(
-        self,
-        allocation: ProviderAllocationRef,
-        *,
-        process: ProcessRef,
-        after_sequence: int,
-        wait_seconds: float,
-        deadline_at: datetime,
-    ) -> ProcessOutputSnapshot:
-        wait_until = min(
-            deadline_at,
-            datetime.now(timezone.utc) + timedelta(seconds=wait_seconds),
-        )
-        while True:
-            files = await self._function_process_files(
-                allocation,
-                process=process,
-                after_sequence=after_sequence,
-                deadline_at=deadline_at,
-            )
-            state = self._process_state(files.state)
-            chunks = tuple(
-                chunk for chunk in files.chunks if chunk.sequence >= after_sequence
-            )
-            if chunks or state in self._terminal_process_states() or not wait_seconds:
-                return ProcessOutputSnapshot(
-                    chunks=chunks,
-                    next_sequence=(
-                        files.state.next_sequence
-                        if files.state is not None
-                        else after_sequence
-                    ),
-                    truncated_before_sequence=(
-                        files.state.truncated_before_sequence
-                        if files.state is not None
-                        else None
-                    ),
-                    state=state,
-                    exit_code=(files.state.exit_code if files.state else None),
-                )
-            if datetime.now(timezone.utc) >= wait_until:
-                return ProcessOutputSnapshot(
-                    chunks=(),
-                    next_sequence=(
-                        files.state.next_sequence
-                        if files.state is not None
-                        else after_sequence
-                    ),
-                    truncated_before_sequence=(
-                        files.state.truncated_before_sequence
-                        if files.state is not None
-                        else None
-                    ),
-                    state=state,
-                    exit_code=(files.state.exit_code if files.state else None),
-                )
-            await asyncio.sleep(0.05)
-
-    async def _terminate_function_process(
-        self,
-        allocation: ProviderAllocationRef,
-        *,
-        process: ProcessRef,
-        grace_seconds: float,
-        deadline_at: datetime,
-    ) -> None:
-        result = await self._engine.run_exec_capture(
-            allocation.provider_id,
-            (
-                "/usr/local/bin/python",
-                "-m",
-                "agentbox.function_runtime.process_control",
-                "cancel",
-                str(process.operation_id),
-                str(grace_seconds),
-            ),
-            deadline_at=deadline_at,
-        )
-        self._check_function_control_result(result)
-        while datetime.now(timezone.utc) < deadline_at:
-            files = await self._function_process_files(
-                allocation, process=process, deadline_at=deadline_at
-            )
-            if self._process_state(files.state) in self._terminal_process_states():
-                return
-            await asyncio.sleep(0.02)
-        raise ProviderLifecycleError(
-            "function process did not terminate before the control deadline"
-        )
-
-    async def _function_process_files(
-        self,
-        allocation: ProviderAllocationRef,
-        *,
-        process: ProcessRef,
-        after_sequence: int = 0,
-        deadline_at: datetime,
-    ) -> _FunctionProcessFiles:
-        result = await self._engine.run_exec_capture(
-            allocation.provider_id,
-            (
-                "/usr/local/bin/python",
-                "-m",
-                "agentbox.function_runtime.process_control",
-                "inspect",
-                str(process.operation_id),
-                str(after_sequence),
-            ),
-            environment=self._function_control_environment(),
-            deadline_at=deadline_at,
-        )
-        self._check_function_control_result(result)
-        inspection = ProcessInspection.model_validate_json(result.stdout)
-        return _FunctionProcessFiles(
-            state=inspection.state,
-            chunks=tuple(
-                ProcessOutputChunk(
-                    sequence=chunk.sequence,
-                    channel=ProcessOutputChannel(chunk.channel),
-                    data=base64.b64decode(chunk.data_base64, validate=True),
-                )
-                for chunk in inspection.chunks
-            ),
-        )
-
-    async def _function_process_diagnostic(
-        self,
-        allocation: ProviderAllocationRef,
-        *,
-        process: ProcessRef,
-        deadline_at: datetime,
-    ) -> str:
-        result = await self._engine.run_exec_capture(
-            allocation.provider_id,
-            (
-                "/bin/bash",
-                "-lc",
-                f"cat /tmp/agentbox-supervisor-{process.operation_id}.log",
-            ),
-            environment=self._function_control_environment(),
-            deadline_at=deadline_at,
-        )
-        return (result.stdout or result.stderr)[:4096].decode(errors="replace").strip()
-
-    @staticmethod
-    def _function_process_directory(process: ProcessRef) -> str:
-        return f"/tmp/.agentbox/processes/{process.operation_id}"
-
-    @staticmethod
-    def _function_control_environment(
-        *, input_data: bytes | None = None
-    ) -> tuple[str, ...]:
-        values: list[str] = []
-        if input_data is not None:
-            values.append(
-                "AGENTBOX_PROCESS_INPUT=" + base64.b64encode(input_data).decode()
-            )
-        return tuple(values)
-
-    @staticmethod
-    def _check_function_control_result(result: DockerExecResult) -> None:
-        if result.exit_code != 0:
-            message = result.stderr.decode(errors="replace").strip()
-            raise DockerEngineError(
-                message or f"function process control exited {result.exit_code}"
-            )
-
-    @staticmethod
-    def _process_state(state: ProcessStateRecord | None) -> ProcessState:
-        if state is None:
-            return ProcessState.STARTING
-        return ProcessState(state.state.value)
-
-    @staticmethod
-    def _terminal_process_states() -> frozenset[ProcessState]:
-        return frozenset(
-            {
-                ProcessState.SUCCEEDED,
-                ProcessState.FAILED,
-                ProcessState.CANCELLED,
-                ProcessState.TIMED_OUT,
-            }
-        )
-
     async def _ensure_volume(
         self,
         name: str,
@@ -1166,6 +848,35 @@ class DockerSandboxAdapter:
         finally:
             await client.close()
 
+    async def _wait_function_runtime_ready(
+        self,
+        inspected: DockerContainerInspect,
+        *,
+        runtime_port: int,
+        deadline_at: datetime,
+    ) -> None:
+        base_url = self._runtime_base_url(
+            inspected,
+            runtime_port=runtime_port,
+            private_network=self._config.private_network,
+        )
+        async with httpx.AsyncClient(
+            base_url=base_url,
+            timeout=httpx.Timeout(0.25),
+            follow_redirects=False,
+        ) as client:
+            while datetime.now(timezone.utc) < deadline_at:
+                try:
+                    response = await client.get("/healthz")
+                    if response.status_code == 200:
+                        return
+                except httpx.TransportError:
+                    pass
+                await asyncio.sleep(0.05)
+        raise ProviderNotReady(
+            "Docker function runtime is still starting", retry_after_ms=250
+        )
+
     @asynccontextmanager
     async def _filesystem_client(
         self, provider_id: str, *, deadline_at: datetime
@@ -1222,25 +933,35 @@ class DockerSandboxAdapter:
         private_network: str | None = None,
         request_timeout_seconds: float = 35,
     ) -> WorkspaceRuntimeClient:
+        base_url = DockerSandboxAdapter._runtime_base_url(
+            inspected,
+            runtime_port=runtime_port,
+            private_network=private_network,
+        )
+        return WorkspaceRuntimeClient(
+            base_url,
+            token,
+            request_timeout_seconds=request_timeout_seconds,
+        )
+
+    @staticmethod
+    def _runtime_base_url(
+        inspected: DockerContainerInspect,
+        *,
+        runtime_port: int,
+        private_network: str | None,
+    ) -> str:
         if private_network:
             attachment = inspected.network_settings.networks.get(private_network)
             if attachment is None or not attachment.ip_address:
                 raise WorkspaceRuntimeError(
                     "Docker runtime is not attached to the configured private network"
                 )
-            return WorkspaceRuntimeClient(
-                f"http://{attachment.ip_address}:{runtime_port}",
-                token,
-                request_timeout_seconds=request_timeout_seconds,
-            )
+            return f"http://{attachment.ip_address}:{runtime_port}"
         bindings = inspected.network_settings.ports.get(f"{runtime_port}/tcp")
         if not bindings:
             raise WorkspaceRuntimeError("Docker runtime port is not published")
-        return WorkspaceRuntimeClient(
-            f"http://127.0.0.1:{bindings[0].host_port}",
-            token,
-            request_timeout_seconds=request_timeout_seconds,
-        )
+        return f"http://127.0.0.1:{bindings[0].host_port}"
 
     @staticmethod
     def _token_archive(token: str) -> bytes:

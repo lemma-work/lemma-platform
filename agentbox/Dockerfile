@@ -1,4 +1,4 @@
-ARG PYTHON_IMAGE=python:3.14-slim
+ARG PYTHON_IMAGE=python:3.14.6-slim
 ARG UV_VERSION=0.11.31
 
 FROM ghcr.io/astral-sh/uv:${UV_VERSION} AS uv-runtime
@@ -28,6 +28,7 @@ COPY agentbox/pyproject.toml ./
 COPY agentbox/uv.lock ./
 COPY agentbox-client /agentbox-client
 RUN --mount=type=cache,target=/root/.cache/uv \
+    --mount=type=bind,source=lemma-python,target=/lemma-python,readonly \
     uv sync \
         --locked \
         --no-dev \

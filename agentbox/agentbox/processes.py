@@ -354,10 +354,19 @@ class ProcessExecutionService:
                 str(request.operation_id),
                 command,
                 request.cwd,
-                "\x1e".join(item.name for item in request.environment),
+                hashlib.sha256(
+                    "\x1e".join(
+                        f"{item.name}\x1d{item.value}" for item in request.environment
+                    ).encode()
+                ).hexdigest(),
                 tty,
                 str(request.output_limit_bytes),
                 request.deadline_at.isoformat(),
+                (
+                    hashlib.sha256(request.initial_input).hexdigest()
+                    if request.initial_input is not None
+                    else "none"
+                ),
             )
         )
         return hashlib.sha256(canonical.encode()).hexdigest()

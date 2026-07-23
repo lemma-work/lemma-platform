@@ -38,14 +38,33 @@ from app.composition.workspace_identity import (
     mint_workspace_token,
     resolve_workspace_organization_id,
 )
-from app.modules.function.application.function_attempt_credentials import (
-    FunctionAttemptCredentialSigner,
+from app.modules.function.application.function_callback_credentials import (
+    FunctionCallbackCredentialSigner,
 )
 from app.modules.function.application.function_runtime_gateway import (
     FunctionRuntimeGateway,
 )
+from app.modules.function.application.function_runtime_endpoint_cache import (
+    FunctionRuntimeEndpointCache,
+)
+from app.modules.function.application.function_session_token_cache import (
+    FunctionSessionTokenCache,
+)
 from app.modules.function.application.function_dispatcher import FunctionDispatcher
+from app.modules.function.infrastructure.function_run_queue import (
+    StreaqFunctionRunQueue,
+)
 from agentbox_client import AgentBoxClient
+
+
+_function_session_token_cache = FunctionSessionTokenCache(
+    ttl_seconds=settings.function_session_token_cache_ttl_seconds,
+    max_entries=settings.function_session_token_cache_max_entries,
+)
+_function_runtime_endpoint_cache = FunctionRuntimeEndpointCache(
+    ttl_seconds=settings.function_runtime_endpoint_cache_ttl_seconds,
+    max_entries=settings.function_runtime_endpoint_cache_max_entries,
+)
 
 
 def get_function_storage_factory():
@@ -65,11 +84,11 @@ def get_function_storage_factory():
     return build
 
 
-def build_function_attempt_credential_signer() -> FunctionAttemptCredentialSigner:
+def build_function_callback_credential_signer() -> FunctionCallbackCredentialSigner:
     secret = reveal_secret(settings.function_runtime_secret)
     if not secret:
         raise RuntimeError("FUNCTION_RUNTIME_SECRET must be configured")
-    return FunctionAttemptCredentialSigner(secret)
+    return FunctionCallbackCredentialSigner(secret)
 
 
 def get_function_runtime_gateway(
@@ -78,8 +97,7 @@ def get_function_runtime_gateway(
     return FunctionRuntimeGateway(
         uow_factory=uow_factory,
         storage_factory=get_function_storage_factory(),
-        credential_signer=build_function_attempt_credential_signer(),
-        token_minter=mint_workspace_token,
+        credential_signer=build_function_callback_credential_signer(),
         organization_resolver=resolve_workspace_organization_id,
         lemma_base_url=settings.function_runtime_gateway_url or settings.api_url,
         delegated_tokens_enabled=settings.authz_delegated_tokens_enabled,
@@ -96,10 +114,8 @@ def build_function_service(uow) -> FunctionService:
         run_repository=FunctionRunRepository(
             uow,
             message_bus=message_bus,
-            execution_units=settings.function_execution_standard_units,
         ),
         storage_factory=get_function_storage_factory(),
-        job_queue=get_streaq_job_queue(),
         icon_service=create_icon_service(),
     )
 
@@ -133,8 +149,12 @@ def build_function_dispatcher(uow_factory: UnitOfWorkFactory) -> FunctionDispatc
 
     return FunctionDispatcher(
         uow_factory=uow_factory,
-        credential_signer=build_function_attempt_credential_signer(),
+        credential_signer=build_function_callback_credential_signer(),
         agentbox_client_factory=client_factory,
+        token_minter=mint_workspace_token,
+        token_cache=_function_session_token_cache,
+        endpoint_cache=_function_runtime_endpoint_cache,
+        delegated_tokens_enabled=settings.authz_delegated_tokens_enabled,
     )
 
 
@@ -146,6 +166,7 @@ def build_function_use_cases(uow_factory: UnitOfWorkFactory) -> FunctionUseCases
         build_function_service,
         build_function_definition_compiler(),
         build_function_dispatcher(uow_factory),
+        StreaqFunctionRunQueue(get_streaq_job_queue()),
     )
 
 

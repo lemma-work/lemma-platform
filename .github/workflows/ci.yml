@@ -105,6 +105,8 @@ jobs:
         run: uv sync --all-extras --locked
       - name: Ruff
         run: uv run ruff check agentbox tests ../agentbox-client/agentbox_client ../agentbox-client/tests
+      - name: AgentBox OpenAPI contract drift
+        run: uv run python ../agentbox-client/scripts/generate.py --check
       - name: AgentBox non-e2e tests with real PostgreSQL parity
         run: uv run python -m pytest tests -m "not e2e"
         env:

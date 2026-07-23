@@ -70,6 +70,32 @@ async def test_client_uses_typed_workload_route_and_absolute_deadline() -> None:
     await http.aclose()
 
 
+async def test_client_creates_workspace_directory_through_typed_route() -> None:
+    logical_id = uuid4()
+    captured: list[httpx.Request] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        captured.append(request)
+        return httpx.Response(204)
+
+    http = httpx.AsyncClient(
+        base_url="http://agentbox.test", transport=httpx.MockTransport(handler)
+    )
+    client = AgentBoxClient(
+        base_url="http://agentbox.test", api_key="secret", client=http
+    )
+    await client.create_directory(
+        logical_id,
+        "/workspace/c/2026-07-23/example",
+        deadline_at=deadline(),
+    )
+
+    assert captured[0].method == "PUT"
+    assert captured[0].url.path == f"/sandboxes/workspace/{logical_id}/directories"
+    assert captured[0].url.params["path"] == "/workspace/c/2026-07-23/example"
+    await http.aclose()
+
+
 async def test_binary_process_output_is_decoded_without_text_coercion() -> None:
     logical_id = uuid4()
     operation_id = uuid4()
@@ -142,7 +168,7 @@ async def test_typed_error_exposes_retry_disposition() -> None:
     await http.aclose()
 
 
-async def test_typed_indeterminate_error_is_not_treated_as_successful_202() -> None:
+async def test_unknown_dispatch_error_is_not_treated_as_successful_202() -> None:
     def handler(_request: httpx.Request) -> httpx.Response:
         return httpx.Response(
             202,

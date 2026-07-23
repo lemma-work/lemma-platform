@@ -17,7 +17,10 @@ from agentbox_client import (
     WorkloadKind,
 )
 from app.modules.workspace.contracts import SandboxInfo
-from app.modules.workspace.agentbox_session import AgentBoxWorkspaceSession
+from app.modules.workspace.agentbox_session import (
+    AgentBoxWorkspaceSession,
+    canonical_workspace_cwd,
+)
 from app.modules.workspace.services.agentbox_manager import (
     AgentBoxSandbox,
     agentbox_sandbox_id,
@@ -89,6 +92,13 @@ class WorkspaceSandboxService:
         close = getattr(self.sandbox, "close", None)
         if close is not None:
             await close()
+
+    @classmethod
+    async def close_shared_manager_client(cls) -> None:
+        cached = cls._shared_manager_client
+        cls._shared_manager_client = None
+        if cached is not None:
+            await cached[1].close()
 
     async def _get_sandbox_info(self, user_id: UUID) -> SandboxInfo | None:
         return await self.sandbox.get_sandbox(user_id)
@@ -298,6 +308,12 @@ class WorkspaceSandboxService:
         env_vars: dict[str, str] | None = None,
     ) -> IWorkspaceSession:
         sandbox_info = await self.get_or_create_sandbox(user_id)
+        resolved_cwd = canonical_workspace_cwd(initial_cwd)
+        await self._get_manager_client().create_directory(
+            agentbox_sandbox_id(user_id),
+            resolved_cwd,
+            deadline_at=datetime.now(timezone.utc) + timedelta(seconds=30),
+        )
 
         if env_vars is None:
             env_vars = await self.get_env_vars(
@@ -325,7 +341,7 @@ class WorkspaceSandboxService:
             sandbox_id=str(agentbox_sandbox_id(user_id)),
             session_id=session_id,
             env_vars=env_vars,
-            initial_cwd=initial_cwd,
+            initial_cwd=resolved_cwd,
             auto_close=close_on_exit,
             activity_callback=_activity_callback,
             owns_client=False,

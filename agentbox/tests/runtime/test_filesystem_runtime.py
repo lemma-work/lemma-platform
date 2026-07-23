@@ -112,6 +112,46 @@ async def test_write_and_move_create_missing_destination_directories(
     assert not (tmp_path / "nested" / "source.bin").exists()
 
 
+async def test_directory_creation_is_idempotent_and_conflicts_fail_closed(
+    tmp_path: Path,
+) -> None:
+    app = create_app(token=TOKEN, allowed_roots=(str(tmp_path),))
+    transport = httpx.ASGITransport(app=app)
+    directory = tmp_path / "conversations" / "nested"
+    conflict = tmp_path / "not-a-directory"
+    conflict.write_text("file")
+
+    async with httpx.AsyncClient(
+        transport=transport, base_url="http://runtime.test"
+    ) as client:
+        first = await client.put(
+            "/directories",
+            headers=HEADERS,
+            params={"path": str(directory)},
+        )
+        second = await client.put(
+            "/directories",
+            headers=HEADERS,
+            params={"path": str(directory)},
+        )
+        root = await client.put(
+            "/directories",
+            headers=HEADERS,
+            params={"path": str(tmp_path)},
+        )
+        rejected = await client.put(
+            "/directories",
+            headers=HEADERS,
+            params={"path": str(conflict)},
+        )
+
+    assert first.status_code == 204
+    assert second.status_code == 204
+    assert root.status_code == 204
+    assert directory.is_dir()
+    assert rejected.status_code == 422
+
+
 async def test_streaming_transfer_is_bounded_and_failed_upload_is_atomic(
     tmp_path: Path,
 ) -> None:

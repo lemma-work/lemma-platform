@@ -7,20 +7,23 @@ must invoke it between short database phases.
 
 from __future__ import annotations
 
-import json
-from typing import Any
 from uuid import UUID, uuid4
 
 from app.modules.function.application.function_artifact_builder import (
     FunctionArtifactBuilder,
     parse_runtime_header,
 )
-from app.modules.function.domain.entities import FunctionEntity, FunctionRevisionEntity
+from app.modules.function.domain.entities import (
+    FunctionArtifact,
+    FunctionEntity,
+    FunctionSchemaSet,
+)
 from app.modules.function.domain.errors import FunctionValidationError
 from app.modules.function.domain.ports import (
     FunctionStorageFactoryPort,
     WorkspaceSessionPort,
 )
+from app.modules.function.domain.types import JsonObject
 from app.modules.workspace.contracts import PythonExecutionResult
 
 
@@ -42,22 +45,21 @@ class FunctionDefinitionCompiler:
     async def write_code(self, function_id: UUID, path: str, code: str) -> None:
         await self._storage_factory(function_id).write_file(path, code)
 
-    async def build_revision(
+    async def build_artifact(
         self,
         function: FunctionEntity,
         code: str,
         *,
-        revision_number: int,
-    ) -> FunctionRevisionEntity:
+        python_packages: tuple[str, ...],
+    ) -> FunctionArtifact:
         if function.id is None:
             raise FunctionValidationError(
                 "Function must be persisted before its revision can be built"
             )
         return await self._artifact_builder.build(
             function_id=function.id,
-            revision_number=revision_number,
             code=code,
-            python_packages=tuple(function.python_packages),
+            python_packages=python_packages,
         )
 
     async def extract_schemas(
@@ -67,7 +69,7 @@ class FunctionDefinitionCompiler:
         code_path: str,
         pod_id: UUID,
         function_id: UUID,
-    ) -> tuple[dict[str, Any], dict[str, Any], dict[str, Any] | None]:
+    ) -> tuple[JsonObject, JsonObject, JsonObject | None]:
         """Execute only the supplied source in a fresh, auto-deleted context.
 
         ``code_path`` is retained as the compiler filename for useful tracebacks;
@@ -96,7 +98,7 @@ class FunctionDefinitionCompiler:
         )
 
         async with session:
-            result: PythonExecutionResult = await session.execute_code(
+            result = await session.execute_code(
                 schema_program,
                 timeout=60,
             )
@@ -106,21 +108,8 @@ class FunctionDefinitionCompiler:
                 details=self._execution_error_details(result),
             )
 
-        payload = self._extract_payload(result.stdout, marker)
-        input_schema = payload.get("input")
-        output_schema = payload.get("output")
-        config_schema = payload.get("config")
-        if not isinstance(input_schema, dict) or not isinstance(output_schema, dict):
-            raise FunctionValidationError(
-                "Function code emitted invalid input or output schema data.",
-                details={"stage": "schema_extraction"},
-            )
-        if config_schema is not None and not isinstance(config_schema, dict):
-            raise FunctionValidationError(
-                "Function code emitted invalid config schema data.",
-                details={"stage": "schema_extraction"},
-            )
-        return input_schema, output_schema, config_schema
+        schemas = self._extract_payload(result.stdout, marker)
+        return schemas.input, schemas.output, schemas.config
 
     @staticmethod
     def _schema_program(
@@ -152,20 +141,20 @@ class FunctionDefinitionCompiler:
         )
 
     @staticmethod
-    def _extract_payload(stdout: str | None, marker: str) -> dict[str, Any]:
+    def _extract_payload(stdout: str | None, marker: str) -> FunctionSchemaSet:
         if stdout:
             for line in reversed(stdout.splitlines()):
                 if not line.startswith(marker):
                     continue
                 try:
-                    payload = json.loads(line[len(marker) :])
-                except json.JSONDecodeError as exc:
+                    return FunctionSchemaSet.model_validate_json(
+                        line[len(marker) :]
+                    )
+                except ValueError as exc:
                     raise FunctionValidationError(
                         "Function code emitted invalid JSON schema output.",
                         details={"stage": "schema_extraction"},
                     ) from exc
-                if isinstance(payload, dict):
-                    return payload
         raise FunctionValidationError(
             "Function code ran but did not emit schema output.",
             details={"stage": "schema_extraction"},
@@ -191,8 +180,8 @@ class FunctionDefinitionCompiler:
     @staticmethod
     def _execution_error_details(
         result: PythonExecutionResult,
-    ) -> dict[str, Any]:
-        details: dict[str, Any] = {"stage": "schema_extraction"}
+    ) -> JsonObject:
+        details: JsonObject = {"stage": "schema_extraction"}
         if result.stdout:
             details["stdout"] = result.stdout
         if result.stderr:

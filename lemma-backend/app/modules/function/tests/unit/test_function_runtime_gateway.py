@@ -1,27 +1,26 @@
 from __future__ import annotations
 
 from contextlib import asynccontextmanager
+from datetime import datetime, timedelta, timezone
 import hashlib
 from uuid import uuid4
 
 import pytest
 
-from app.modules.function.application.function_attempt_credentials import (
-    FunctionAttemptCredentialSigner,
+from app.modules.function.application.function_callback_credentials import (
+    FunctionCallbackCredentialSigner,
 )
 from app.modules.function.application.function_runtime_gateway import (
     FunctionRuntimeGateway,
-    RuntimeFenceRejected,
+    RuntimeCredentialRejected,
 )
 from app.modules.function.contracts.runtime import (
     RuntimeClaimRequest,
-    RuntimeStartedRequest,
     RuntimeTerminalRequest,
 )
 from app.modules.function.domain.entities import (
-    FunctionAttemptRuntimeContext,
-    FunctionRevisionEntity,
-    FunctionRevisionStatus,
+    FunctionRunRuntimeContext,
+    FunctionSessionPrincipal,
 )
 
 
@@ -37,26 +36,14 @@ class _UowState:
             self.active -= 1
 
 
-def _context(artifact: bytes) -> FunctionAttemptRuntimeContext:
+def _context(artifact: bytes) -> FunctionRunRuntimeContext:
     function_id = uuid4()
-    return FunctionAttemptRuntimeContext(
-        attempt_id=uuid4(),
+    revision_hash = f"sha256:{hashlib.sha256(artifact).hexdigest()}"
+    return FunctionRunRuntimeContext(
         run_id=uuid4(),
-        fence=4,
-        operation_id=uuid4(),
-        deadline_at="2099-01-01T00:00:00Z",
-        revision=FunctionRevisionEntity(
-            id=uuid4(),
-            function_id=function_id,
-            revision_number=1,
-            status=FunctionRevisionStatus.READY,
-            code_sha256=f"sha256:{'1' * 64}",
-            artifact_sha256=f"sha256:{hashlib.sha256(artifact).hexdigest()}",
-            artifact_path="artifacts/function.zip",
-            runtime_abi="lemma-function-python-1",
-            builder_digest="test-builder",
-            manifest={},
-        ),
+        deadline_at=datetime.now(timezone.utc) + timedelta(seconds=30),
+        revision_hash=revision_hash,
+        artifact_path=f"artifacts/{revision_hash.removeprefix('sha256:')}.zip",
         input_data={"value": 3},
         config={"mode": "test"},
         user_id=uuid4(),
@@ -73,7 +60,7 @@ async def test_gateway_releases_database_before_identity_and_storage_io(
 ) -> None:
     artifact = b"immutable artifact"
     context = _context(artifact)
-    signer = FunctionAttemptCredentialSigner("g" * 32)
+    signer = FunctionCallbackCredentialSigner("g" * 32)
     state = _UowState()
     terminal_calls = []
 
@@ -81,20 +68,22 @@ async def test_gateway_releases_database_before_identity_and_storage_io(
         def __init__(self, _uow, _signer):
             pass
 
-        async def claim_ticket(self, _digest):
+        async def claim_execution(self, *_args, **_kwargs):
             return context
 
-        async def runtime_context(self, _digest):
-            return context
+        async def runtime_context(self, run_id, callback_token):
+            if (
+                run_id == context.run_id
+                and callback_token == signer.derive(context.run_id)
+            ):
+                return context
+            return None
 
-        async def mark_started(self, received):
-            assert received == context
-            return True
+        async def active_runtime_context(self, run_id, callback_token):
+            return await self.runtime_context(run_id, callback_token)
 
         async def complete(self, received, **kwargs):
             duplicate = bool(terminal_calls)
-            if duplicate:
-                assert kwargs == terminal_calls[0][1]
             terminal_calls.append((received, kwargs))
             return None, True, duplicate
 
@@ -107,12 +96,8 @@ async def test_gateway_releases_database_before_identity_and_storage_io(
     class _Storage:
         async def read_file(self, path):
             assert state.active == 0
-            assert path == "artifacts/function.zip"
+            assert path == context.artifact_path
             return artifact
-
-    async def token_minter(**_kwargs):
-        assert state.active == 0
-        return "lemma-token"
 
     async def organization_resolver(_pod_id):
         assert state.active == 0
@@ -122,51 +107,52 @@ async def test_gateway_releases_database_before_identity_and_storage_io(
         uow_factory=state.factory,
         storage_factory=lambda _function_id: _Storage(),
         credential_signer=signer,
-        token_minter=token_minter,
         organization_resolver=organization_resolver,
         lemma_base_url="https://api.lemma.test",
         delegated_tokens_enabled=True,
     )
-    ticket = signer.derive(context.attempt_id, "ticket")
+    function_token = "delegated-function-token"
+    principal = FunctionSessionPrincipal(
+        user_id=context.user_id,
+        pod_id=context.pod_id,
+        function_id=context.function_id,
+        session_id="function-session:test",
+    )
     claim = await gateway.claim(
-        ticket, RuntimeClaimRequest(runtime_abi="lemma-function-python-1")
+        function_token,
+        principal,
+        context.run_id,
+        RuntimeClaimRequest(
+            revision_hash=context.revision_hash,
+            input_data=context.input_data,
+        ),
     )
-    assert claim.attempt_id == context.attempt_id
-    assert claim.runtime_token == signer.derive(context.attempt_id, "runtime")
-    assert await gateway.artifact(context.attempt_id, claim.runtime_token) == artifact
-    started = await gateway.started(
-        context.attempt_id,
-        claim.runtime_token,
-        RuntimeStartedRequest(fence=context.fence),
-    )
-    assert started.accepted
+    assert claim.run_id == context.run_id
+    assert claim.callback_token == signer.derive(context.run_id)
+    assert claim.lemma_token == function_token
+    assert await gateway.artifact(context.run_id, claim.callback_token) == artifact
+
     terminal_request = RuntimeTerminalRequest(
-        fence=context.fence,
         status="completed",
         output_data={"answer": 42},
         stdout="ok",
         stderr="",
     )
     terminal = await gateway.terminal(
-        context.attempt_id,
-        claim.runtime_token,
+        context.run_id,
+        claim.callback_token,
         terminal_request,
     )
-    assert terminal.accepted
-    assert terminal.duplicate is False
     duplicate = await gateway.terminal(
-        context.attempt_id,
-        claim.runtime_token,
+        context.run_id,
+        claim.callback_token,
         terminal_request,
     )
-    assert duplicate.accepted
-    assert duplicate.duplicate is True
-    with pytest.raises(RuntimeFenceRejected):
-        await gateway.terminal(
-            context.attempt_id,
-            claim.runtime_token,
-            terminal_request.model_copy(update={"fence": context.fence + 1}),
-        )
+
+    assert terminal.accepted and not terminal.duplicate
+    assert duplicate.accepted and duplicate.duplicate
     assert terminal_calls[0][1]["output_data"] == {"answer": 42}
     assert len(terminal_calls) == 2
+    with pytest.raises(RuntimeCredentialRejected):
+        await gateway.artifact(context.run_id, "wrong-callback-token")
     assert state.active == 0

@@ -3,26 +3,26 @@ from __future__ import annotations
 import asyncio
 from dataclasses import dataclass
 import hashlib
-import json
 import keyword
 import os
 from pathlib import Path
-import platform
 import shutil
 import tempfile
-from uuid import UUID, uuid7
+from uuid import UUID
 import zipfile
 
 from app.core.config import settings
 from app.modules.function.domain.entities import (
-    FunctionRevisionEntity,
-    FunctionRevisionStatus,
+    FunctionArtifact,
+    FunctionArtifactManifest,
 )
 from app.modules.function.domain.errors import FunctionValidationError
 from app.modules.function.domain.ports import FunctionStorageFactoryPort
 
 
-RUNTIME_ABI = "lemma-function-python-1"
+FUNCTION_PYTHON_VERSION = "3.14"
+FUNCTION_PYTHON_PLATFORM = "x86_64-manylinux_2_28"
+RUNTIME_ABI = "lemma-function-python-3.14-linux-x86_64-1"
 
 
 @dataclass(frozen=True, slots=True)
@@ -84,7 +84,7 @@ class FunctionArtifactBuilder:
         self._storage_factory = storage_factory
         self._uv = settings.function_builder_executable
         self._python_platform = (
-            settings.function_builder_python_platform or self._default_platform()
+            settings.function_builder_python_platform or FUNCTION_PYTHON_PLATFORM
         )
         self._builder_digest = settings.function_builder_digest
 
@@ -92,56 +92,40 @@ class FunctionArtifactBuilder:
         self,
         *,
         function_id: UUID,
-        revision_number: int,
         code: str,
         python_packages: tuple[str, ...],
-        idempotent: bool = False,
-    ) -> FunctionRevisionEntity:
+    ) -> FunctionArtifact:
         header = parse_runtime_header(code)
         build_root = Path(await asyncio.to_thread(tempfile.mkdtemp, prefix="lemma-fn-"))
         try:
             dependency_lock = await self._build_dependencies(
                 build_root, python_packages
             )
-            manifest = {
-                "format_version": 1,
-                "runtime_abi": RUNTIME_ABI,
-                "builder_digest": self._builder_digest,
-                "dependency_lock": dependency_lock,
-                "source_path": "function.py",
-                "input_model": header.input_model,
-                "output_model": header.output_model,
-                "entrypoint": header.entrypoint,
-                "config_model": header.config_model,
-                "dependency_path": (
+            manifest = FunctionArtifactManifest(
+                runtime_abi=RUNTIME_ABI,
+                builder_digest=self._builder_digest,
+                dependency_lock=dependency_lock,
+                input_model=header.input_model,
+                output_model=header.output_model,
+                entrypoint=header.entrypoint,
+                config_model=header.config_model,
+                dependency_path=(
                     "site-packages" if python_packages else None
                 ),
-            }
+            )
             archive = await asyncio.to_thread(
                 self._archive,
                 build_root,
                 code,
                 manifest,
             )
-            artifact_sha256 = f"sha256:{hashlib.sha256(archive).hexdigest()}"
-            code_sha256 = f"sha256:{hashlib.sha256(code.encode()).hexdigest()}"
-            artifact_path = f"artifacts/{artifact_sha256.removeprefix('sha256:')}.zip"
+            revision_hash = f"sha256:{hashlib.sha256(archive).hexdigest()}"
+            artifact_path = f"artifacts/{revision_hash.removeprefix('sha256:')}.zip"
             await self._storage_factory(function_id).write_file(
                 artifact_path, archive
             )
-            return FunctionRevisionEntity(
-                id=uuid7(),
-                function_id=function_id,
-                revision_number=revision_number,
-                status=FunctionRevisionStatus.READY,
-                code_sha256=code_sha256,
-                artifact_sha256=artifact_sha256,
-                artifact_path=artifact_path,
-                runtime_abi=RUNTIME_ABI,
-                builder_digest=self._builder_digest,
-                dependency_lock=dependency_lock,
-                manifest=manifest,
-                idempotent=idempotent,
+            return FunctionArtifact(
+                revision_hash=revision_hash,
             )
         finally:
             await asyncio.to_thread(shutil.rmtree, build_root, True)
@@ -165,7 +149,7 @@ class FunctionArtifactBuilder:
             "--output-file",
             str(lock),
             "--python-version",
-            "3.12",
+            FUNCTION_PYTHON_VERSION,
             "--python-platform",
             self._python_platform,
             "--no-build",
@@ -181,7 +165,7 @@ class FunctionArtifactBuilder:
             "--requirements",
             str(lock),
             "--python-version",
-            "3.12",
+            FUNCTION_PYTHON_VERSION,
             "--python-platform",
             self._python_platform,
             "--no-build",
@@ -215,14 +199,15 @@ class FunctionArtifactBuilder:
             )
 
     @staticmethod
-    def _archive(root: Path, code: str, manifest: dict[str, object]) -> bytes:
+    def _archive(
+        root: Path,
+        code: str,
+        manifest: FunctionArtifactManifest,
+    ) -> bytes:
         source = root / "function.py"
         manifest_path = root / "manifest.json"
         source.write_text(code, encoding="utf-8")
-        manifest_path.write_text(
-            json.dumps(manifest, sort_keys=True, separators=(",", ":")),
-            encoding="utf-8",
-        )
+        manifest_path.write_text(manifest.model_dump_json(), encoding="utf-8")
         descriptor, output_name = tempfile.mkstemp(
             prefix="lemma-fn-artifact-", suffix=".zip"
         )
@@ -249,14 +234,3 @@ class FunctionArtifactBuilder:
             return output.read_bytes()
         finally:
             output.unlink(missing_ok=True)
-
-    @staticmethod
-    def _default_platform() -> str:
-        machine = platform.machine().lower()
-        if machine in {"arm64", "aarch64"}:
-            return "aarch64-manylinux_2_28"
-        if machine in {"x86_64", "amd64"}:
-            return "x86_64-manylinux_2_28"
-        raise RuntimeError(
-            "FUNCTION_BUILDER_PYTHON_PLATFORM is required on this architecture"
-        )

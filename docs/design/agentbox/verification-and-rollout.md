@@ -1,6 +1,6 @@
 # AgentBox Verification and Rollout
 
-**Status:** Proposed design; verification and rollout gates in progress
+**Status:** Docker and E2B implementation verified; Kubernetes rollout deferred
 
 **Parent:** [AgentBox](README.md)
 
@@ -10,7 +10,7 @@ AgentBox is accepted by behavior, failure semantics, and measured latency—not 
 adapter method coverage alone. The executable suite and Docker/E2B case catalog live
 in [Testing strategy](testing-strategy.md). This document defines acceptance gates,
 security/performance evidence, breaking migration, rollback boundaries, and provider
-promotion.
+enablement.
 
 The initial implementation supports exactly two tested providers:
 
@@ -84,8 +84,9 @@ create/start/release/destroy operations.
 
 ### 3.2 Create-at-most-once
 
-- Concurrent ensure calls singleflight on one allocation/create attempt.
-- Manager restart between attempt commit and provider call dispatches at most once.
+- Concurrent ensure calls singleflight on one allocation token.
+- Manager restart between allocation commit and provider call dispatches at most
+  once for that token.
 - Lost create response leaves the allocation `UNKNOWN` and does not call create
   again.
 - Matching allocation-token event/list observation binds the exact provider ID.
@@ -199,7 +200,8 @@ case IDs become mandatory for Kubernetes before that adapter is enabled.
 - Expired, revoked, wrong-audience, and stale-epoch grants fail.
 - Raw provider credentials/addresses are absent from user responses.
 - A workspace release invalidates outstanding grants.
-- Function sandbox port access is `UNSUPPORTED_CAPABILITY`.
+- Function sandbox accepts only the profile-declared resident-runtime port and
+  backend audience; every other port/audience is `UNSUPPORTED_CAPABILITY`.
 
 ## 5. Provider-specific conformance
 
@@ -218,7 +220,7 @@ evidence for hostile production isolation.
 
 ### 5.2 Kubernetes
 
-This is a deferred provider-promotion program, not an initial release gate. When the
+This is a deferred provider-enablement program, not an initial release gate. When the
 Kubernetes implementation milestone begins, the following becomes mandatory before
 any Kubernetes profile is enabled.
 
@@ -252,7 +254,9 @@ selected in production configuration.
 - Secured app grant works and raw traffic token does not escape AgentBox.
 - Lost create response resolves through allocation metadata/webhook with one create.
 - Duplicate lifecycle deliveries are idempotent.
-- Function template exposes no public traffic or function HTTP service.
+- Function template exposes no unauthenticated public traffic. Its resident
+  function HTTP service is reachable only through E2B's secured TLS gateway and an
+  AgentBox signed port grant.
 - Function sandbox is killed, not paused, after five idle minutes.
 - Long JOB sets one timeout past deadline and completes without heartbeat.
 - Provider 429 honors retry-after and does not cause adapter-local create retries.
@@ -267,7 +271,7 @@ than a skipped pass.
 ## 6. Function execution tests
 
 Run the same full backend function suite through AgentBox Docker and E2B profiles.
-It becomes a Kubernetes gate only when that deferred adapter is promoted.
+It becomes a Kubernetes gate only when that deferred adapter is enabled.
 
 ### 6.1 Revision and artifact
 
@@ -284,18 +288,31 @@ It becomes a Kubernetes gate only when that deferred adapter is promoted.
 
 - API returns terminal result synchronously within deadline.
 - JOB returns pending and completes through callback/outbox.
-- Both use one durable PostgreSQL queue and the same per-pod sandbox.
-- Four standard API invocations overlap under eight units.
-- At most three standard JOBs occupy six JOB units.
-- Under JOB saturation, a standard API run uses the reserved two units.
-- API rows are claimed before queued JOB rows; running JOBs are not preempted.
+- API commits its run and dispatches directly; it never enters the worker queue.
+- JOB uses the durable backend queue. Both modes use the same run claim, runtime
+  endpoint, and per-pod sandbox.
+- Five API invocations overlap through isolated warm revision workers without a
+  four-slot or execution-unit admission model. Higher worker counts are exercised
+  by runtime stress tests rather than treated as a public admission promise.
+- Concurrent JOBs use the same bounded resident worker pool. The bound is a private
+  process-safety guard, not a public capacity promise.
+- Under JOB saturation, API dispatch begins without waiting for the backend JOB
+  worker because the paths are independent.
 - Queue time counts against run deadline.
-- Backend process restart does not lose API or JOB work.
+- A backend restart before JOB claim permits queue redelivery. After claim, neither
+  API nor JOB is automatically invoked again; callback or deadline reconciliation
+  finishes the same durable run.
 
 ### 6.3 Identity and permissions
 
-- Ticket is single-use, hashed at rest, expires at deadline, and cannot be claimed by
-  another attempt/fence.
+- One delegated function-session bearer is cached for five minutes by
+  user/pod/function/revision/workload/scope inputs and used for both invocation
+  authentication and the SDK context. Grants remain live backend authorization data.
+- The bearer alone cannot create arbitrary work: it must match a backend-created
+  run and its authoritative user/pod/function/revision/input.
+- The post-claim callback/artifact capability is derived for exactly one run and
+  cannot authorize another run. Artifact reads require an active, unexpired run;
+  terminal callback replay can only acknowledge the already-durable terminal state.
 - Sandbox argv/env/files contain no user/provider/cloud/object-store credential.
 - Runtime capability is limited to exact run, pod, revision, principal, and grants.
 - Function-principal grants and invoking-user audit/RLS attribution remain correct.
@@ -306,8 +323,8 @@ It becomes a Kubernetes gate only when that deferred adapter is promoted.
 
 - Input/output schemas validate exact active revision.
 - Duplicate started/log/terminal callbacks are idempotent.
-- Old-fence callback cannot update current attempt/run.
-- Terminal transaction releases units and emits one completion outbox event.
+- A late callback cannot update an already-terminal run.
+- Terminal transaction emits one completion outbox event.
 - Missing outbox event is repaired without repeating execution.
 - Agent tools, workflows, schedules, and direct API observe consistent terminal data.
 
@@ -315,30 +332,32 @@ It becomes a Kubernetes gate only when that deferred adapter is promoted.
 
 - API 120-second and JOB 600-second defaults flow as absolute deadlines.
 - Runtime kills child and grandchildren at timeout.
-- Cancel before ticket claim revokes ticket and starts no code.
-- Cancel after start targets exact attempt process group.
+- Cancel before run claim makes the run terminal and starts no code.
+- Cancel after start targets the exact run's revision-worker process group.
 - Failed termination reports `termination_confirmed=false` and remains reconciled.
-- Late success after a fenced cancel/timeout cannot alter public terminal state.
+- Late success after cancel/timeout cannot alter public terminal state.
 
 ### 6.6 Unknown and replay
 
 Fault inject at every boundary:
 
 - provider create accepted, response lost;
-- process started, response lost;
-- ticket claimed, started callback lost;
+- invocation accepted, response lost;
+- operation claimed, started callback lost;
 - external side effect completed, terminal callback lost;
 - sandbox disappears during artifact download or execution;
 - backend/gateway database connection fails during callback.
 
 Assertions:
 
-- one allocation-token create and one operation-ID process start;
-- non-idempotent claimed/possibly claimed attempt is never automatically replayed;
-- unresolved attempt becomes publicly `INDETERMINATE` after grace;
-- explicitly idempotent revision may create a new attempt/fence under the same public
-  run and logical idempotency key;
-- zero duplicate side effects in the non-idempotent injected suite.
+- one provider create per allocation token and at most one user-code execution per
+  `function_run_id`;
+- neither AgentBox nor the backend automatically replays a claimed or possibly
+  claimed run;
+- callback or deadline reconciliation makes the same run terminal;
+- a client retry creates a new run and may repeat external side effects, just as a
+  retry after an ordinary mid-function failure can;
+- zero duplicate side effects caused by platform replay of one run.
 
 ## 7. Security testing
 
@@ -349,14 +368,15 @@ Execute malicious workspace/function fixtures that attempt:
 - Docker/containerd/Kubernetes/provider API access;
 - cloud metadata and private/link-local network access;
 - DNS rebinding and redirect to denied destinations;
-- direct-internet and proxy-bypass attempts, undeclared HTTPS names, non-443
-  destinations, and expired/wrong-attempt egress capabilities;
+- direct-internet and proxy-bypass attempts, arbitrary HTTPS names, non-443
+  destinations, and expired/wrong-run capabilities;
 - cross-workspace and cross-pod filesystem/process/network access;
 - fork, PID, CPU, memory, disk, log, output, and decompression bombs;
 - terminal ANSI/OSC/control-sequence injection;
 - native-wheel and import-time malicious code;
 - runtime-control API access from user code;
-- ticket/capability replay and callback forgery.
+- delegated-session misuse, operation/callback capability replay, and callback
+  forgery.
 
 Launch requires:
 
@@ -375,12 +395,12 @@ Measure and report p50/p95/p99 for each provider/profile:
 admission wait
 allocation create or workspace resume
 provider readiness
-process start acknowledgment
+resident invocation acknowledgment
 Python context creation/execution
 first output
-ticket claim
+run claim
 artifact fetch/verify/cache
-invocation child start
+revision worker acquisition
 user duration
 terminal callback persistence
 end-to-end API/JOB completion
@@ -393,7 +413,7 @@ Test dimensions:
 - no dependencies, small pure-Python dependencies, and native wheels;
 - user duration 0 ms, 100 ms, 1 s, 30 s, maximum;
 - input/output 1 KiB through configured large-object threshold;
-- concurrency 1, 4, 8, 32;
+- full-stack concurrency one and five, plus higher-count runtime stress;
 - pod counts 1, 10, and production quota-sized;
 - API/JOB mixes including JOB saturation;
 - create burst at/above provider rate limit.
@@ -406,9 +426,9 @@ Initial launch gates:
 | Cold no-dependency function p95 | ≤ 8 s |
 | E2B workspace resume p95 | ≤ 2 s |
 | Warm workspace command control overhead p95 | ≤ 500 ms, excluding command |
-| API start under JOB saturation with reserve free | ≤ 2 s |
-| Provider creates per logical allocation attempt | ≤ 1 |
-| Duplicate side effects in ambiguous non-idempotent tests | 0 |
+| API start under JOB saturation | ≤ 2 s |
+| Provider creates per allocation token | ≤ 1 |
+| Duplicate side effects caused by platform replay | 0 |
 | Platform-caused eligible run success | ≥ 99.9% monthly canary |
 
 Seven consecutive development days and a production canary window must pass before
@@ -425,8 +445,8 @@ views:
 - allocation states, age, idle duration, and profile digest;
 - ambiguous create/unknown process backlog and oldest age;
 - workspace release/resume/delete latency and retained storage;
-- function queue age, units, API reserve use, and allocation reuse;
-- function unknown/indeterminate, timeout, cancel, artifact, and callback failures;
+- function JOB queue age, API latency, resident worker use, and allocation reuse;
+- function deadline, cancel, artifact, invocation-response, and callback failures;
 - cost/runtime by provider, workload, pod/user, and profile.
 
 Required alerts:
@@ -438,12 +458,12 @@ Required alerts:
 - retained workspace past deletion deadline;
 - function allocation idle beyond cleanup grace;
 - exact cleanup failure or orphan growth;
-- stale-fence callback or suspected duplicate dispatch;
+- late callback mutation or suspected duplicate invocation;
 - credential/network security test regression.
 
 Operator tools must inspect logical sandbox, physical allocations, process intents,
-queue/attempt/fence, and provider event history by public correlation ID without
-revealing secrets.
+function run/queue state, and provider event history by public correlation ID
+without revealing secrets.
 
 ## 10. Breaking migration
 
@@ -476,8 +496,8 @@ callers. There is no live compatibility facade for the experimental API.
 
 ### Phase 3: backend function plane on Docker
 
-- Add immutable revision/build pipeline, durable queue/attempt/capacity/ticket state,
-  runtime and controlled-egress gateways, slim runtime, callbacks, and
+- Add immutable revision/build pipeline, direct API and durable JOB run/session
+  state, runtime gateway, slim runtime, callbacks, and
   reconciliation.
 - Pass full-stack Docker API/JOB, priority, cancellation, ambiguity, and cleanup
   cases before adding another provider.
@@ -511,9 +531,9 @@ callers. There is no live compatibility facade for the experimental API.
   dispatcher/gateway, and profile release manifest as one coordinated release.
 - Create fresh workspace storage on first use. Existing workspace files and live
   Python/process state are intentionally not migrated.
-- Rollback is allowed only before a replacement-plane function ticket is claimed or
-  after all replacement-plane attempts are terminal. No run falls back after an
-  attempt is acknowledged.
+- Rollback is allowed only before a replacement-plane function run is claimed or
+  after all replacement-plane runs are terminal. No claimed run falls back to the
+  experimental executor.
 
 ### Phase 7: production canary and default
 
@@ -531,13 +551,13 @@ callers. There is no live compatibility facade for the experimental API.
 - Add disposable kind/k3d/minikube conformance plus a separate production
   gVisor/Kata cluster security lane.
 - Run the complete shared workspace/browser/API/JOB catalog; enable Kubernetes only
-  after independent provider promotion.
+  after independent provider verification.
 
 ## 11. Rollback rules
 
 - Workspace rollback does not restore experimental workspace data. Any rollback
   creates another fresh workspace after replacement operations are drained.
-- A function run never switches execution systems after its ticket is claimed or
+- A function run never switches execution systems after its operation is claimed or
   claim is uncertain.
 - Unclaimed queued runs may be drained and resubmitted only through an explicit
   migration transaction preserving run identity and deadline.
@@ -569,5 +589,5 @@ Every implementation release publishes:
 
 The initial implementation is complete only when the documentation describes
 observed shipped behavior and every mandatory acceptance case passes against Docker
-and E2B. Kubernetes is complete only after its later independent promotion program
+and E2B. Kubernetes is complete only after its later independent verification program
 passes the same portable catalog plus Kubernetes-specific gates.

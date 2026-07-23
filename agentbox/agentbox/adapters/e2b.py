@@ -5,9 +5,10 @@ from collections import deque
 from collections.abc import AsyncIterable, AsyncIterator, Iterator, Mapping
 from contextlib import contextmanager
 from dataclasses import dataclass, field
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 import hashlib
 import ipaddress
+import math
 import posixpath
 import shlex
 from tempfile import SpooledTemporaryFile
@@ -128,6 +129,7 @@ class E2BAdapterConfig:
     workspace_timeout_seconds: int = 300
     function_timeout_seconds: int = 300
     function_idle_grace_seconds: int = 300
+    function_timeout_refresh_seconds: int = 60
     rate_limit_retry_after_ms: int = 5_000
     workspace_allow_internet_access: bool = True
     function_allow_out: tuple[str, ...] = ()
@@ -142,6 +144,8 @@ class E2BAdapterConfig:
             raise ValueError("E2B request timeout must be in 1..120 seconds")
         if self.workspace_timeout_seconds < 60 or self.function_timeout_seconds < 60:
             raise ValueError("E2B sandbox timeouts must be at least 60 seconds")
+        if self.function_timeout_refresh_seconds < 1:
+            raise ValueError("E2B function timeout refresh must be positive")
         if self.rate_limit_retry_after_ms < 1:
             raise ValueError("E2B rate limit retry delay must be positive")
         if self.max_file_transfer_bytes < 1:
@@ -218,6 +222,8 @@ class E2BSandboxAdapter:
         self._sandboxes: dict[str, E2BSandboxType] = {}
         self._processes: dict[tuple[str, str], _ProcessBuffer] = {}
         self._process_lock = asyncio.Lock()
+        self._function_timeout_until: dict[str, datetime] = {}
+        self._function_timeout_lock = asyncio.Lock()
 
     async def create(self, request: ProviderCreateRequest) -> ProviderCreateResult:
         artifact = self._profiles.e2b_artifact(
@@ -273,6 +279,10 @@ class E2BSandboxAdapter:
             raise ProviderCreateAmbiguous(str(exc)) from exc
 
         self._sandboxes[sandbox.sandbox_id] = sandbox
+        if not workspace:
+            self._function_timeout_until[sandbox.sandbox_id] = datetime.now(
+                timezone.utc
+            ) + timedelta(seconds=timeout)
         storage = (
             ProviderStorageResult(
                 provider_storage_id=sandbox.sandbox_id,
@@ -348,6 +358,7 @@ class E2BSandboxAdapter:
                 request_timeout=self._request_timeout(deadline_at),
             )
             self._sandboxes.pop(allocation.provider_id, None)
+            self._function_timeout_until.pop(allocation.provider_id, None)
             await self._drop_process_buffers(allocation.provider_id)
         except SandboxNotFoundException:
             return
@@ -439,11 +450,11 @@ class E2BSandboxAdapter:
             else shlex.join(request.request.argv or ())
         )
         try:
-            await self._extend_for_process(
-                sandbox,
-                request.allocation.key.workload_kind,
-                request.request.deadline_at,
-            )
+            if request.allocation.key.workload_kind == WorkloadKind.FUNCTION:
+                await self._extend_function_lifetime(
+                    sandbox,
+                    request.request.deadline_at,
+                )
             if request.request.tty is None:
                 handle = await sandbox.commands.run(
                     self._wrapped_command(request.process.operation_id, command),
@@ -487,6 +498,23 @@ class E2BSandboxAdapter:
                     await sandbox.pty.kill(handle.pid)
                     raise
             process_id = str(handle.pid)
+            if request.request.initial_input is not None:
+                if request.request.tty is None:
+                    await sandbox.commands.send_stdin(
+                        handle.pid,
+                        request.request.initial_input,
+                        request_timeout=self._request_timeout(
+                            request.request.deadline_at
+                        ),
+                    )
+                else:
+                    await sandbox.pty.send_stdin(
+                        handle.pid,
+                        request.request.initial_input,
+                        request_timeout=self._request_timeout(
+                            request.request.deadline_at
+                        ),
+                    )
             await self._register_process(
                 request.allocation.provider_id,
                 process_id,
@@ -632,6 +660,20 @@ class E2BSandboxAdapter:
                 safe_path, request_timeout=self._request_timeout(deadline_at)
             )
             return self._file_stat(info, sha256=None)
+
+    async def create_directory(
+        self,
+        allocation: ProviderAllocationRef,
+        *,
+        path: str,
+        deadline_at: datetime,
+    ) -> None:
+        with self._translate_filesystem_errors():
+            sandbox = await self._connect(allocation, deadline_at=deadline_at)
+            await sandbox.files.make_dir(
+                self._safe_path(allocation.key.workload_kind, path),
+                request_timeout=self._request_timeout(deadline_at),
+            )
 
     async def list_files(
         self,
@@ -980,8 +1022,11 @@ class E2BSandboxAdapter:
         port: int,
         protocol: PortProtocol,
         deadline_at: datetime,
+        activity_until: datetime | None = None,
     ) -> ProviderPortTarget:
         sandbox = await self._connect(allocation, deadline_at=deadline_at)
+        if allocation.key.workload_kind == WorkloadKind.FUNCTION:
+            await self._extend_function_lifetime(sandbox, activity_until or deadline_at)
         headers = (
             (
                 ProviderMetadataEntry(
@@ -993,7 +1038,10 @@ class E2BSandboxAdapter:
             else ()
         )
         return ProviderPortTarget(
-            base_url=f"{protocol.value}://{sandbox.get_host(port)}",
+            # E2B exposes every sandbox port through its TLS-terminating public
+            # gateway. ``protocol`` describes the application-facing grant;
+            # it must not downgrade the provider hop to cleartext HTTP.
+            base_url=f"https://{sandbox.get_host(port)}",
             headers=headers,
         )
 
@@ -1004,6 +1052,7 @@ class E2BSandboxAdapter:
                     task.cancel()
         self._processes.clear()
         self._sandboxes.clear()
+        self._function_timeout_until.clear()
 
     async def _connect(
         self,
@@ -1026,6 +1075,10 @@ class E2BSandboxAdapter:
             request_timeout=self._request_timeout(deadline_at),
         )
         self._sandboxes[allocation.provider_id] = sandbox
+        if allocation.key.workload_kind == WorkloadKind.FUNCTION:
+            self._function_timeout_until[allocation.provider_id] = datetime.now(
+                timezone.utc
+            ) + timedelta(seconds=timeout)
         return sandbox
 
     def _validate_info(
@@ -1087,19 +1140,31 @@ class E2BSandboxAdapter:
             )
         await self._drop_process_buffers(provider_id)
 
-    async def _extend_for_process(
+    async def _extend_function_lifetime(
         self,
         sandbox: E2BSandboxType,
-        workload_kind: WorkloadKind,
         deadline_at: datetime,
     ) -> None:
-        if workload_kind != WorkloadKind.FUNCTION:
-            return
-        remaining = max(60, int(self._remaining(deadline_at)))
-        await sandbox.set_timeout(
-            remaining + self._config.function_idle_grace_seconds,
-            request_timeout=self._request_timeout(deadline_at),
+        refresh = timedelta(seconds=self._config.function_timeout_refresh_seconds)
+        required_until = deadline_at + timedelta(
+            seconds=self._config.function_idle_grace_seconds
         )
+        async with self._function_timeout_lock:
+            known_until = self._function_timeout_until.get(sandbox.sandbox_id)
+            if known_until is not None and known_until >= required_until:
+                return
+            target_until = required_until + refresh
+            timeout = max(
+                60,
+                math.ceil((target_until - datetime.now(timezone.utc)).total_seconds()),
+            )
+            await sandbox.set_timeout(
+                timeout,
+                request_timeout=self._request_timeout(deadline_at),
+            )
+            self._function_timeout_until[sandbox.sandbox_id] = datetime.now(
+                timezone.utc
+            ) + timedelta(seconds=timeout)
 
     async def _register_process(
         self,

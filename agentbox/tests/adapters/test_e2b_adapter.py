@@ -18,6 +18,7 @@ from agentbox.domain import (
     CreatePythonSessionRequest,
     EnvironmentVariable,
     ExecutePythonRequest,
+    PortProtocol,
     ProcessState,
     PythonExecutionState,
     SandboxCapability,
@@ -31,7 +32,7 @@ from agentbox.filesystem import FilesystemService
 from agentbox.lifecycle import SandboxLifecycleService
 from agentbox.persistence.uow import StateDatabase
 from agentbox.processes import ProcessExecutionService
-from agentbox.ports import ProviderMetadataEntry
+from agentbox.ports import ProviderAllocationRef, ProviderMetadataEntry
 from agentbox.profiles import E2BProfileArtifact, ProfileRegistry, SandboxProfile
 from agentbox.python_sessions import PythonSessionService
 
@@ -251,6 +252,7 @@ class FakeSandbox:
         self.contexts: dict[str, FakeContext] = {}
         self.paused = False
         self.timeout = 300
+        self.timeout_calls = 0
         self.last_python_env: dict[str, str] = {}
 
     @classmethod
@@ -309,6 +311,7 @@ class FakeSandbox:
 
     async def set_timeout(self, timeout: int, **_kwargs):
         self.timeout = timeout
+        self.timeout_calls += 1
 
     async def pause(self, **_kwargs):
         self.paused = True
@@ -373,8 +376,8 @@ def function_profile() -> SandboxProfile:
     return SandboxProfile(
         ref=SandboxProfileRef("function-python-v1", f"sha256:{'b' * 64}"),
         workload_kind=WorkloadKind.FUNCTION,
-        runtime_abi="lemma-function-python-1",
-        capabilities=frozenset({SandboxCapability.PROCESS}),
+        runtime_abi="lemma-function-python-3.14-linux-x86_64-1",
+        capabilities=frozenset({SandboxCapability.PORT_ACCESS}),
         allowed_roots=("/tmp",),
         docker=None,
         e2b=E2BProfileArtifact(template_id="function-template", build_id="build-1"),
@@ -411,6 +414,82 @@ async def test_function_egress_is_restricted_to_configured_gateway(
         "allow_out": ["benchmark.trycloudflare.com"],
         "deny_out": ["0.0.0.0/0"],
     }
+
+
+async def test_port_access_uses_e2b_tls_gateway_and_traffic_token(
+    database: StateDatabase,
+) -> None:
+    provider, _lifecycle, key, deadline, _handle = await provision(database)
+    async with database.uow() as uow:
+        allocation = await uow.repository.current_allocation(key)
+    assert allocation is not None
+    assert allocation.provider_id is not None
+
+    target = await provider.resolve_port_target(
+        ProviderAllocationRef(
+            provider_id=allocation.provider_id,
+            provider_instance_id=allocation.provider_instance_id,
+            allocation_id=allocation.allocation_id,
+            allocation_token=allocation.allocation_token,
+            key=key,
+        ),
+        port=8090,
+        protocol=PortProtocol.HTTP,
+        deadline_at=deadline,
+    )
+
+    assert target.base_url == f"https://8090-{allocation.provider_id}.e2b.test"
+    assert tuple((header.name, header.value) for header in target.headers) == (
+        ("E2B-Traffic-Access-Token", "traffic-token"),
+    )
+
+
+async def test_function_port_access_extends_timeout_once_across_a_burst(
+    database: StateDatabase,
+) -> None:
+    selected_profile = function_profile()
+    provider = E2BSandboxAdapter(
+        ProfileRegistry((selected_profile,)),
+        E2BAdapterConfig(
+            api_key="e2b_" + "0" * 40,
+            scope="e2b:function-timeout-test",
+        ),
+        sandbox_class=FakeSandbox,
+    )
+    lifecycle = SandboxLifecycleService(database, provider)
+    key = SandboxKey(WorkloadKind.FUNCTION, uuid4())
+    deadline = datetime.now(timezone.utc) + timedelta(seconds=30)
+    await lifecycle.ensure(
+        key,
+        selected_profile.ref,
+        admission_class=AdmissionClass.LATENCY,
+        deadline_at=deadline,
+    )
+    async with database.uow() as uow:
+        allocation = await uow.repository.current_allocation(key)
+    assert allocation is not None
+    assert allocation.provider_id is not None
+    provider_ref = ProviderAllocationRef(
+        provider_id=allocation.provider_id,
+        provider_instance_id=allocation.provider_instance_id,
+        allocation_id=allocation.allocation_id,
+        allocation_token=allocation.allocation_token,
+        key=key,
+    )
+    activity_until = datetime.now(timezone.utc) + timedelta(minutes=10)
+    for _ in range(2):
+        await provider.resolve_port_target(
+            provider_ref,
+            port=8090,
+            protocol=PortProtocol.HTTP,
+            deadline_at=deadline,
+            activity_until=activity_until,
+        )
+
+    sandbox = next(iter(FakeSandbox.instances.values()))
+    assert sandbox.timeout_calls == 1
+    assert sandbox.timeout >= 10 * 60 + 300
+    await provider.close()
 
 
 @pytest.fixture(autouse=True)
@@ -556,6 +635,7 @@ async def test_native_process_files_and_python_are_provider_neutral(
             tty=None,
             output_limit_bytes=65536,
             deadline_at=deadline,
+            initial_input=b"single-use-ticket\n",
         ),
     )
     await asyncio.sleep(0)
@@ -599,6 +679,7 @@ async def test_native_process_files_and_python_are_provider_neutral(
     assert result.state == PythonExecutionState.SUCCEEDED
     assert result.result == "42"
     sandbox = next(iter(FakeSandbox.instances.values()))
+    assert sandbox.commands.stdin == [(100, b"single-use-ticket\n")]
     assert sandbox.last_python_env == {"DYNAMIC_TOKEN": "fresh"}
     assert "secret" not in repr(session)
     assert database.active_units_of_work == 0

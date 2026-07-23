@@ -9,9 +9,8 @@ import pytest
 
 from app.core.authorization.context import Context
 from app.modules.function.domain.entities import (
+    FunctionDispatchMode,
     FunctionEntity,
-    FunctionRevisionEntity,
-    FunctionRevisionStatus,
     FunctionRunEntity,
     FunctionRunStatus,
     FunctionStatus,
@@ -23,7 +22,6 @@ from app.modules.function.domain.errors import (
     FunctionRunNotFoundError,
     FunctionValidationError,
 )
-from app.modules.function.domain.events import FunctionRunExecutionRequestedEvent
 from app.modules.function.services.function_service import (
     FunctionService,
     parse_python_packages,
@@ -44,22 +42,6 @@ def _function(**overrides) -> FunctionEntity:
     }
     values.update(overrides)
     return FunctionEntity(**values)
-
-
-def _revision(function: FunctionEntity) -> FunctionRevisionEntity:
-    assert function.id is not None
-    return FunctionRevisionEntity(
-        id=uuid4(),
-        function_id=function.id,
-        revision_number=1,
-        status=FunctionRevisionStatus.READY,
-        code_sha256=f"sha256:{'1' * 64}",
-        artifact_sha256=f"sha256:{'2' * 64}",
-        artifact_path="artifacts/test.zip",
-        runtime_abi="lemma-function-python-1",
-        builder_digest="test-builder",
-        manifest={},
-    )
 
 
 def _run(function: FunctionEntity) -> FunctionRunEntity:
@@ -97,7 +79,6 @@ def service(
         function_repository=function_repository,
         run_repository=run_repository,
         storage_factory=lambda _function_id: AsyncMock(),
-        job_queue=AsyncMock(),
     )
 
 
@@ -142,10 +123,13 @@ async def test_resolve_create_requires_authorization(service: FunctionService) -
     ("header", "expected"),
     [
         ("#python_packages: pandas numpy pandas\n", ["pandas", "numpy"]),
-        ("#python_packages: requests[socks] numpy>=1.0,<2.0\n", [
-            "requests[socks]",
-            "numpy>=1.0,<2.0",
-        ]),
+        (
+            "#python_packages: requests[socks] numpy>=1.0,<2.0\n",
+            [
+                "requests[socks]",
+                "numpy>=1.0,<2.0",
+            ],
+        ),
         ("#function_name: execute\n", []),
     ],
 )
@@ -214,27 +198,28 @@ async def test_get_run_reports_missing(
 
 
 @pytest.mark.parametrize(
-    ("function_type", "force_dispatch", "expects_job_id"),
+    ("function_type", "dispatch_mode", "expects_job_id"),
     [
-        (FunctionType.API, False, False),
-        (FunctionType.API, True, True),
-        (FunctionType.JOB, False, True),
+        (FunctionType.API, None, False),
+        (FunctionType.JOB, None, True),
+        (FunctionType.API, FunctionDispatchMode.ASYNCHRONOUS, True),
     ],
 )
-async def test_resolve_execute_creates_one_durable_request(
+async def test_resolve_execute_creates_only_the_durable_pending_run(
     service: FunctionService,
     function_repository: AsyncMock,
     run_repository: AsyncMock,
     context: Context,
     function_type: FunctionType,
-    force_dispatch: bool,
+    dispatch_mode: FunctionDispatchMode | None,
     expects_job_id: bool,
 ) -> None:
-    function = _function(type=function_type, status=FunctionStatus.READY)
-    revision = _revision(function)
-    function.active_revision_id = revision.id
+    function = _function(
+        type=function_type,
+        status=FunctionStatus.READY,
+        revision_hash=f"sha256:{'2' * 64}",
+    )
     function_repository.get_by_name.return_value = function
-    function_repository.get_revision.return_value = revision
     run_repository.create_run.side_effect = lambda item: item
 
     resolved = await service.resolve_execute(
@@ -244,14 +229,14 @@ async def test_resolve_execute_creates_one_durable_request(
         function.user_id,
         None,
         ctx=context,
-        force_dispatch=force_dispatch,
+        dispatch_mode=dispatch_mode,
     )
 
     assert (resolved.run.job_id is not None) is expects_job_id
-    events = resolved.run.collect_events()
-    assert len(events) == 1
-    assert isinstance(events[0], FunctionRunExecutionRequestedEvent)
+    assert resolved.run.collect_events() == []
     run_repository.create_run.assert_awaited_once()
+    created_run = run_repository.create_run.await_args.args[0]
+    assert created_run.revision_hash == function.revision_hash
 
 
 async def test_resolve_execute_requires_ready_revision(

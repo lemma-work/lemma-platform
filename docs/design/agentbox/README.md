@@ -1,6 +1,6 @@
 # AgentBox: Sandbox Fabric
 
-**Status:** Proposed design; implementation and conformance in progress
+**Status:** Implemented and verified for Docker and E2B; Kubernetes deferred
 
 **Date:** 2026-07-22
 
@@ -23,10 +23,12 @@ filesystem access, stateful Python sessions, terminal processes, application por
 access, and reconciliation.
 
 AgentBox is not a function platform. The Lemma backend owns function definitions,
-immutable revisions, durable runs, API/JOB scheduling, execution attempts,
-priorities, callbacks, cancellation policy, results, and domain events. Function
-execution obtains a stateless pod sandbox and starts a generic process through
-AgentBox. No function-specific HTTP service, queue, or result cache runs inside a
+immutable artifacts, durable runs, API/JOB scheduling, deadlines, callbacks,
+cancellation policy, results, and domain events. A function
+sandbox contains one profile-owned resident runtime on a fixed private port.
+AgentBox starts and health-checks that opaque profile runtime and exposes it only
+through a short-lived, allocation-bound port grant. AgentBox does not interpret its
+invocation protocol. No durable queue or public result registry runs inside a
 sandbox.
 
 The design intentionally uses different lifecycle policies for the two workloads:
@@ -52,7 +54,8 @@ with user workspaces. Provider-generated IDs remain private AgentBox data.
 The current implementation couples four independently difficult concerns:
 
 1. provider lifecycle;
-2. an HTTP runtime inside every sandbox;
+2. a workload-specific HTTP runtime incorrectly used as AgentBox's generic control
+   plane;
 3. user workspace sessions and browser/application routing;
 4. function scheduling and execution.
 
@@ -91,7 +94,7 @@ explicit.
   reconnect, files, and application ports coherent across providers.
 - Give API functions a bounded low-latency path and JOB functions a durable queued
   path without using a user workspace.
-- Ensure one logical create attempt causes at most one provider create request.
+- Ensure one persisted allocation token causes at most one provider create request.
 - Make deadlines, capacity, unknown outcomes, and retry permission explicit.
 - Keep provider SDKs and credentials out of the Lemma backend.
 - Run the same behavioral conformance suite against real Docker and E2B
@@ -105,8 +108,9 @@ explicit.
 - Preserving Python variables or running processes across a portable workspace
   release boundary. Files are the portable guarantee.
 - Providing persistent files, memory, or process state for functions.
-- Providing exactly-once external side effects. Lemma provides fencing and avoids
-  unsafe replay; arbitrary external systems remain nontransactional.
+- Providing exactly-once external side effects. Lemma never automatically replays
+  an invocation, but arbitrary external systems remain nontransactional and a
+  function may fail after producing partial side effects.
 - Treating functions within the same pod as mutually hostile. The pod sandbox is
   the default strong boundary.
 - Treating ordinary Docker/runc as a production hostile-code boundary.
@@ -117,7 +121,7 @@ explicit.
 - Supporting Daytona, Podman, or additional managed providers in the first
   implementation.
 - Claiming Kubernetes production support in the initial Docker/E2B delivery. Its
-  adapter contract remains designed now, but implementation promotion waits for a
+  adapter contract remains designed now, but production enablement waits for a
   real disposable-cluster and strong-runtime test program.
 - Migrating or adopting experimental AgentBox database rows, workspace files,
   sessions, processes, Docker resources, or E2B sandboxes. Cutover starts from an
@@ -196,13 +200,14 @@ flowchart TB
 - artifact build and retention;
 - public `FunctionRun` state and API/JOB behavior;
 - the durable execution queue and priority policy;
-- attempt IDs, fences, deadlines, tickets, callbacks, and terminal outcomes;
-- per-pod execution units and API reservation;
+- run IDs, deadlines, callbacks, cancellation, and terminal outcomes;
+- direct API dispatch and bounded JOB admission;
 - domain completion events and workflow resumption.
 
-AgentBox sees a request to ensure a `FUNCTION` sandbox and start an opaque process.
-It does not know whether that process represents an API function, a JOB function,
-or another future stateless workload.
+AgentBox sees a request to ensure a `FUNCTION` sandbox and open an authenticated
+port to the opaque runtime declared by its profile. It does not know whether a
+request through that port represents an API function, a JOB function, or another
+future stateless workload.
 
 ## 6. Profiles and artifacts
 
@@ -227,12 +232,15 @@ Initial profiles:
 
 ### 6.2 `function-python-v1`
 
-- `lemma-function-runtime` launcher and invocation child;
+- one resident `lemma-function-runtime serve` process per pod sandbox;
+- revision-keyed reusable Python workers that import immutable code once and handle
+  one invocation at a time;
 - exact supported CPython 3.14 ABI and a locked `uv` environment;
 - certificate and minimal operating-system runtime dependencies;
-- no browser, Node, package installer, compiler, AgentBox runtime HTTP server, or
-  persistent volume;
-- no public ingress;
+- no browser, Node, package installer, compiler, workspace runtime, or persistent
+  volume;
+- no unauthenticated public ingress; the fixed runtime port is reachable only
+  through an allocation-bound AgentBox grant;
 - Lemma runtime gateway plus a controlled egress gateway that enforces the
   revision-declared public HTTPS destinations;
 - five-minute warm idle period followed by destruction.
@@ -294,14 +302,14 @@ stateDiagram-v2
 ```mermaid
 stateDiagram-v2
     [*] --> Absent
-    Absent --> Provisioning: first eligible attempt
+    Absent --> Provisioning: first eligible run
     Provisioning --> Warm: provider ready
-    Warm --> Busy: process admitted
-    Busy --> Busy: concurrent process admitted
-    Busy --> Warm: final process completed
+    Warm --> Busy: invocation admitted
+    Busy --> Busy: concurrent invocation admitted
+    Busy --> Warm: final invocation completed
     Warm --> Destroying: idle for five minutes
     Busy --> Draining: profile replacement requested
-    Draining --> Destroying: all attempts terminal
+    Draining --> Destroying: all invocations terminal
     Destroying --> Absent
 ```
 
@@ -312,13 +320,15 @@ allocation is destroyed on every provider.
 ## 8. Reliability principles
 
 1. **One owner per decision.** AgentBox decides provider create/release/destroy
-   retries. The function dispatcher decides run replay. Backend callers do neither.
+   recovery. The function dispatcher never replays an invocation; a client creates
+   a new run when its own semantics permit another execution.
 2. **One deadline.** Every operation carries an absolute UTC deadline. Nested
    components derive their remaining timeout and never reset the caller's budget.
 3. **Create once.** Persist an allocation token before provider create. Dispatch
    exactly once for that token.
-4. **Unknown is a real outcome.** If acceptance cannot be proved or disproved, keep
-   the attempt fenced and reconcile it. Do not convert uncertainty into recreation.
+4. **Unknown provider acceptance is a real allocation state.** If provider create
+   acceptance cannot be proved or disproved, retain the exact allocation token and
+   reconcile it. Do not convert uncertainty into another provider create.
 5. **No hot-path inventory.** Exact stored provider identity is used for normal
    operations. Inventory, webhooks, and metadata queries repair background state.
 6. **No semantic retry from HTTP status alone.** Typed error provenance determines
@@ -326,7 +336,7 @@ allocation is destroyed on every provider.
 7. **No heartbeat protocol.** Active AgentBox operations and provider timeouts cover
    liveness. Long operations set their timeout once from the absolute deadline.
 8. **No function polling in healthy execution.** Runtime callbacks complete durable
-   attempts. Inspection exists for reconciliation and cancellation only.
+   runs. Inspection exists for reconciliation and cancellation only.
 
 ## 9. Security invariants
 
@@ -337,7 +347,13 @@ allocation is destroyed on every provider.
 - Reusable human access/refresh tokens never enter function sandboxes.
 - Workspace credentials are short-lived, session-scoped, and removed before
   release.
-- Function execution receives only a single-use attempt ticket over stdin.
+- Function invocation and the Lemma SDK use one delegated function-session bearer,
+  cached for up to five minutes by `(user, pod, function, revision hash)`. Grants
+  remain live backend data and are checked when the token is used rather than
+  embedded in the token or revision identity. The bearer is the only credential
+  that authorizes execution. Exact `function_run_id` and the atomic run claim
+  provide per-call deduplication. A separate run-scoped callback capability is
+  returned only after claim and is not exposed to function code.
 - Function public ingress is disabled.
 - Private, link-local, metadata, cluster-control, Docker socket, and provider-control
   networks are unavailable to user/function code.
@@ -345,7 +361,8 @@ allocation is destroyed on every provider.
 - Docker is development/conformance only for untrusted multi-tenant execution.
 - Kubernetes production uses an approved sandbox `RuntimeClass`, initially gVisor
   or Kata.
-- Every callback and terminal transition is conditional on `(attempt_id, fence)`.
+- Every callback and terminal transition is authenticated for the exact
+  `function_run_id` and conditional on its current durable state.
 
 ## 10. Source-of-truth rule
 
@@ -367,12 +384,11 @@ invariants, and the acceptance gates together.
 | Allocation token | AgentBox-generated unique identifier for one create attempt |
 | Allocation epoch | Monotonic logical incarnation used to fence sessions/processes |
 | Profile | Immutable workload image/template, capabilities, and policies |
-| Operation ID | Caller-generated identifier for one process-start intention |
+| Operation ID | Caller-generated identifier for one generic AgentBox process start |
 | Provider process ID | Opaque provider-native process or runtime reference |
 | Release | Stop workspace compute while preserving workspace files |
 | Destroy | Permanently remove a physical allocation; for workspace delete, storage too |
-| Attempt | One durable function execution dispatch protected by a fence |
-| Unknown outcome | Dispatch may have happened but cannot yet be conclusively observed |
-| Execution unit | Backend scheduling weight inside one function pod sandbox |
-| Runtime gateway | Trusted backend API for ticket claim, artifact access, callbacks, and SDK operations |
-| Egress gateway | Trusted proxy that enforces an attempt's revision-declared public HTTPS destinations |
+| Function run ID | Durable identity and idempotency key for one requested execution |
+| Unknown allocation outcome | Provider allocation creation may have succeeded but cannot yet be conclusively observed |
+| Runtime gateway | Trusted backend API for function-session validation, run claim, artifact access, callbacks, and SDK operations |
+| Egress gateway | Trusted proxy for the explicitly allowed function network path |
