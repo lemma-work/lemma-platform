@@ -955,13 +955,14 @@ equal the desktop version, and safely stages both archives under Application
 Support. The offline installer bundles the same extracted payloads.
 
 The online artifact is the default download. For the current macOS arm64
-release, the measured compressed runtime payload is approximately 307 MB for
-the host pack plus 224 MB for the guest appliance. The offline `.app` expands
-to approximately 3.0 GiB because it embeds both packs, including the guest's
-2 GiB sparse root disk. Release notes and install preflight must distinguish
-online package size, first-run download size, expanded immutable runtime, and
-writable user/data headroom; presenting the offline installed size as the
-normal download expectation is a product defect.
+release, the online `.app` is approximately 10 MiB installed and the measured
+compressed runtime payload is approximately 307 MB for the host pack plus 224
+MB for the guest appliance. The offline `.app` expands to approximately 3.0
+GiB because it embeds both packs, including the guest's 2 GiB sparse root disk.
+Release notes and install preflight must distinguish online package size,
+first-run download size, expanded immutable runtime, and writable user/data
+headroom; presenting the offline installed size as the normal download
+expectation is a product defect.
 
 Downloads use system proxy settings, bounded redirects/timeouts, resumable
 range requests, exact `Content-Range` validation, archive and expanded-size

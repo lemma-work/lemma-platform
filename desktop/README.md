@@ -70,8 +70,8 @@ Every release publishes two signed and notarized packages per platform:
 - **offline** — the same components plus the complete host and managed-guest
   runtime payloads.
 
-The **online package is the recommended default**. It is roughly a normal
-desktop-app-sized shell and downloads the selected immutable runtime after the
+The **online package is the recommended default**. The current macOS `.app` is
+about 10 MiB installed and downloads the selected immutable runtime after the
 user chooses Local mode. The offline package is intentionally large: the
 current macOS bundle is about 3.0 GiB installed because it embeds a relocatable
 Python backend, Node/Next frontend, and a 2 GiB sparse Linux appliance image.
