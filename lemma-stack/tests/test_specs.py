@@ -128,6 +128,9 @@ def test_embedded_agentbox_podman_wiring(config, paths, manifest):
     assert spec.env["AGENTBOX_API_URL"] == "http://backend:8000/internal/agentbox"
     assert spec.env["AGENTBOX_DOCKER_SOCKET_PATH"] == "/var/run/docker.sock"
     assert spec.env["AGENTBOX_DOCKER_PRIVATE_NETWORK"] == "lemma-local-net"
+    assert spec.env["AGENTBOX_STATE_DATABASE_URL"].startswith(
+        "postgresql+asyncpg://"
+    )
     assert spec.env["AGENTBOX_STATE_DATABASE_URL"].endswith("/agentbox")
     assert len(spec.env["AGENTBOX_RUNTIME_CREDENTIAL_KEY"]) == 44
     assert spec.env["AGENTBOX_ADD_HOST_GATEWAY"] == "false"

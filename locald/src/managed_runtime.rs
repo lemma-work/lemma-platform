@@ -226,7 +226,7 @@ impl ManagedRuntimeController {
             (
                 "AGENTBOX_STATE_DATABASE_URL".into(),
                 format!(
-                    "postgresql://postgres:{}@{host}:5432/agentbox",
+                    "postgresql+asyncpg://postgres:{}@{host}:5432/agentbox",
                     self.spec.credentials.postgres_password
                 ),
             ),
@@ -639,6 +639,8 @@ mod tests {
 
         let environment = controller.backend_environment().unwrap();
         assert!(environment["DATABASE_URL"].contains("@192.168.64.10:5432/lemma"));
+        assert!(environment["AGENTBOX_STATE_DATABASE_URL"].starts_with("postgresql+asyncpg://"));
+        assert!(environment["AGENTBOX_STATE_DATABASE_URL"].contains("@192.168.64.10:5432/agentbox"));
         assert_eq!(
             environment["SUPERTOKENS_CORE_URL"],
             "http://192.168.64.10:3567"

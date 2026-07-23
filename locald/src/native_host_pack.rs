@@ -142,12 +142,24 @@ fn build(
     let files = data_root.join("files");
     let workspaces = data_root.join("workspaces");
     let state = paths.root.join("state");
+    let process_home = state.join("home");
+    let process_cache = state.join("cache");
+    let process_config = state.join("config");
+    let process_data = state.join("data");
+    let tldextract_cache = process_cache.join("tldextract");
+    let embedding_cache = process_cache.join("fastembed");
     for directory in [
         &object_storage,
         &files,
         &workspaces,
         &state,
         &state.join("emails"),
+        &process_home,
+        &process_cache,
+        &process_config,
+        &process_data,
+        &tldextract_cache,
+        &embedding_cache,
     ] {
         fs::create_dir_all(directory)?;
     }
@@ -168,6 +180,17 @@ fn build(
         ("LOG_LEVEL", "INFO".to_owned()),
         ("JSON_LOGS_ENABLED", "true".to_owned()),
         ("OBSERVABILITY_ENABLED", "false".to_owned()),
+        // A packaged service must neither depend on nor mutate arbitrary user
+        // home/cache state. Keep all library state app-owned on macOS and
+        // Windows, and force SuperTokens to use tldextract's bundled PSL so
+        // first startup also works offline.
+        ("HOME", path_text(&process_home)?),
+        ("XDG_CACHE_HOME", path_text(&process_cache)?),
+        ("XDG_CONFIG_HOME", path_text(&process_config)?),
+        ("XDG_DATA_HOME", path_text(&process_data)?),
+        ("TLDEXTRACT_CACHE", path_text(&tldextract_cache)?),
+        ("SUPERTOKENS_TLDEXTRACT_DISABLE_HTTP", "1".to_owned()),
+        ("LOCAL_EMBEDDING_CACHE_DIR", path_text(&embedding_cache)?),
         (
             "DATABASE_URL",
             format!(
@@ -213,7 +236,7 @@ fn build(
         (
             "AGENTBOX_STATE_DATABASE_URL",
             format!(
-                "postgresql://postgres:{}@127.0.0.1:{POSTGRES_PORT}/agentbox",
+                "postgresql+asyncpg://postgres:{}@127.0.0.1:{POSTGRES_PORT}/agentbox",
                 material.postgres_password
             ),
         ),
@@ -584,10 +607,38 @@ mod tests {
             manifest["services"][0]["env"]["AGENTBOX_PROVIDER"],
             "lemma_local"
         );
+        assert!(
+            manifest["services"][0]["env"]["AGENTBOX_STATE_DATABASE_URL"]
+                .as_str()
+                .unwrap()
+                .starts_with("postgresql+asyncpg://")
+        );
         assert_eq!(
             manifest["services"][0]["env"]["DOCUMENT_PROCESSOR"],
             "markitdown"
         );
+        assert_eq!(
+            manifest["services"][0]["env"]["HOME"],
+            path_text(&paths.root.join("state/home")).unwrap()
+        );
+        assert_eq!(
+            manifest["services"][0]["env"]["XDG_CACHE_HOME"],
+            path_text(&paths.root.join("state/cache")).unwrap()
+        );
+        assert_eq!(
+            manifest["services"][0]["env"]["TLDEXTRACT_CACHE"],
+            path_text(&paths.root.join("state/cache/tldextract")).unwrap()
+        );
+        assert_eq!(
+            manifest["services"][0]["env"]["SUPERTOKENS_TLDEXTRACT_DISABLE_HTTP"],
+            "1"
+        );
+        assert_eq!(
+            manifest["services"][0]["env"]["LOCAL_EMBEDDING_CACHE_DIR"],
+            path_text(&paths.root.join("state/cache/fastembed")).unwrap()
+        );
+        assert!(paths.root.join("state/cache/tldextract").is_dir());
+        assert!(paths.root.join("state/cache/fastembed").is_dir());
         assert_eq!(
             manifest["services"][0]["env"]["AUTH_EMAIL_VERIFICATION_REQUIRED"],
             "false"

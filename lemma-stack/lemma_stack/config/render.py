@@ -110,7 +110,9 @@ def backend_env(
         "AGENTBOX_RUNTIME_CREDENTIAL_KEY": _agentbox_runtime_key(doc),
         "AGENTBOX_WORKSPACE_IMAGE": workspace_image,
         "AGENTBOX_FUNCTION_IMAGE": function_image,
-        "AGENTBOX_STATE_DATABASE_URL": "postgresql://postgres:postgres@db:5432/agentbox",
+        "AGENTBOX_STATE_DATABASE_URL": (
+            "postgresql+asyncpg://postgres:postgres@db:5432/agentbox"
+        ),
         "AGENTBOX_AUTO_CREATE_SCHEMA": "true",
         "AGENTBOX_DOCKER_SOCKET_PATH": container_socket,
         "AGENTBOX_DOCKER_SCOPE": f"{provider}:local",
@@ -223,7 +225,7 @@ def host_backend_env(
                 f"{backend_origin(doc)}/internal/agentbox"
             ),
             "AGENTBOX_STATE_DATABASE_URL": (
-                f"postgresql://postgres:{postgres_password}@127.0.0.1:"
+                f"postgresql+asyncpg://postgres:{postgres_password}@127.0.0.1:"
                 f"{store.port(doc, 'postgres')}/agentbox"
             ),
             "AGENTBOX_DOCKER_PRIVATE_NETWORK": "",

@@ -64,6 +64,9 @@ def test_builds_exact_backend_frontend_native_contract(paths, tmp_path):
     backend, frontend = manifest["services"]
     assert backend["command"][1:4] == ["-m", "uvicorn", "local_app:app"]
     assert backend["env"]["DATABASE_URL"].endswith(":55432/lemma")
+    assert backend["env"]["AGENTBOX_STATE_DATABASE_URL"].startswith(
+        "postgresql+asyncpg://"
+    )
     assert backend["env"]["AGENTBOX_STATE_DATABASE_URL"].endswith(":55432/agentbox")
     assert backend["env"]["WORKSPACE_CALLBACK_API_URL"] == ("http://host.lemma.internal:8711")
     assert backend["env"]["FUNCTION_RUNTIME_GATEWAY_URL"] == (
