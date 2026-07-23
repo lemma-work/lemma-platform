@@ -40,3 +40,4 @@ __pycache__/
 .dev-logs/
 # Rust build outputs (desktop and local daemon)
 **/target/
+**/.build/
