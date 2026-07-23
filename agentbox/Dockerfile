@@ -17,25 +17,16 @@ ENV PYTHONUNBUFFERED=1 \
 COPY --from=uv-runtime /uv /usr/local/bin/uv
 
 RUN apt-get update \
-    && apt-get install -y --no-install-recommends ca-certificates curl docker-cli \
+    && apt-get install -y --no-install-recommends ca-certificates \
     && rm -rf /var/lib/apt/lists/*
-
-# Static podman remote client so the manager can drive a podman socket
-# (CONTAINER_HOST=unix://...) the same way docker-cli drives docker.sock.
-ARG PODMAN_REMOTE_VERSION=5.5.2
-ARG TARGETARCH
-RUN arch="${TARGETARCH:-$(dpkg --print-architecture)}" \
-    && curl -fsSL "https://github.com/containers/podman/releases/download/v${PODMAN_REMOTE_VERSION}/podman-remote-static-linux_${arch}.tar.gz" \
-        | tar -xz -C /tmp \
-    && install -m 0755 "/tmp/bin/podman-remote-static-linux_${arch}" /usr/local/bin/podman \
-    && rm -rf /tmp/bin
 
 RUN groupadd --gid 10001 appuser \
     && useradd --uid 10001 --gid 10001 -d /home/appuser -m appuser
 
-COPY agentbox ./agentbox
-COPY pyproject.toml ./
-COPY uv.lock ./
+COPY agentbox/agentbox ./agentbox
+COPY agentbox/pyproject.toml ./
+COPY agentbox/uv.lock ./
+COPY agentbox-client /agentbox-client
 RUN --mount=type=cache,target=/root/.cache/uv \
     uv sync \
         --locked \

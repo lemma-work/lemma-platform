@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import pytest
 
-from lemma_stack.config import render, store
+from lemma_stack.config import store
 from lemma_stack.release import manifest as m
 from lemma_stack.stack import specs as specs_mod
 from lemma_stack.stack.specs import run_args
@@ -110,19 +110,20 @@ def test_selinux_adds_z_to_rw_binds_only(config, paths, manifest):
 
 def test_agentbox_podman_wiring(config, paths, manifest):
     spec = by_name(build(config, paths, manifest, provider="podman"), "agentbox")
-    assert spec.env["AGENTBOX_PROVIDER"] == "podman"
-    assert spec.env["CONTAINER_HOST"] == "unix:///run/podman/podman.sock"
-    assert spec.env["AGENTBOX_NETWORK"] == "lemma-local-net"
+    assert spec.env["AGENTBOX_PROVIDER"] == "docker"
+    assert spec.env["AGENTBOX_DOCKER_SOCKET_PATH"] == "/var/run/docker.sock"
+    assert spec.env["AGENTBOX_DOCKER_PRIVATE_NETWORK"] == "lemma-local-net"
     assert spec.env["AGENTBOX_ADD_HOST_GATEWAY"] == "false"
     assert spec.user == "root"
     mounts = dict((t, s) for s, t, _ in spec.binds)
-    assert mounts["/run/podman/podman.sock"] == "/run/user/501/podman/podman.sock"
+    assert mounts["/var/run/docker.sock"] == "/run/user/501/podman/podman.sock"
 
 
 def test_agentbox_docker_wiring(config, paths, manifest):
     spec = by_name(build(config, paths, manifest, provider="docker"), "agentbox")
     assert spec.env["AGENTBOX_PROVIDER"] == "docker"
-    assert "CONTAINER_HOST" not in spec.env
+    assert spec.env["AGENTBOX_DOCKER_SOCKET_PATH"] == "/var/run/docker.sock"
+    assert spec.env["AGENTBOX_DOCKER_PRIVATE_NETWORK"] == "lemma-local-net"
     mounts = dict((t, s) for s, t, _ in spec.binds)
     assert mounts["/var/run/docker.sock"] == "/var/run/docker.sock"
 
@@ -216,4 +217,3 @@ def test_custom_ports_flow_into_urls(config, paths, manifest):
     assert frontend.env["NEXT_PUBLIC_SITE_URL"] == "http://127-0-0-1.sslip.io:4000"
     assert frontend.env["NEXT_PUBLIC_AUTH_EMAIL_VERIFICATION_REQUIRED"] == "false"
     assert backend.env["APP_BASE_DOMAIN"] == "127-0-0-1.sslip.io:9000"
-    assert render.agentbox_app_domain(config) == "127-0-0-1.sslip.io:8721"

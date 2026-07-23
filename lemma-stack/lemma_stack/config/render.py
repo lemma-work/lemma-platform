@@ -143,11 +143,14 @@ def agentbox_env(
     function_image: str,
     container_socket: str,
 ) -> dict[str, str]:
-    del paths
+    # AgentBox's local provider is the Docker Engine API adapter. Podman exposes
+    # a compatible API on its socket, so the host runtime selects the mounted
+    # socket but does not become a separate AgentBox provider.
+    del paths, provider
     env = {
         "AGENTBOX_API_KEY": store.agentbox_api_key(doc),
         "AGENTBOX_API_URL": "http://agentbox:8000",
-        "AGENTBOX_PROVIDER": provider,
+        "AGENTBOX_PROVIDER": "docker",
         "AGENTBOX_WORKSPACE_IMAGE": workspace_image,
         "AGENTBOX_FUNCTION_IMAGE": function_image,
         "AGENTBOX_STATE_DB_PATH": f"{STATE_MOUNT}/agentbox-manager/state.db",

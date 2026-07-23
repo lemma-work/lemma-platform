@@ -20,16 +20,16 @@ print-images:
 	@echo "workspace: $(WORKSPACE_IMAGE):$(TAG)"
 	@echo "function: $(FUNCTION_IMAGE):$(TAG)"
 
-## Build local single-platform images. The runtime image uses the monorepo root context.
+## Build local single-platform images from the monorepo root context.
 build: build-manager build-workspace build-function
 
 build-manager:
 	docker build \
 		--platform $(PLATFORM) \
-		-f Dockerfile \
+		-f agentbox/Dockerfile \
 		--build-arg PYTHON_IMAGE=$(PYTHON_IMAGE) \
 		-t $(MANAGER_IMAGE):$(TAG) \
-		.
+		..
 
 build-workspace:
 	docker build \
@@ -71,11 +71,11 @@ push: push-manager push-workspace push-function
 push-manager:
 	docker buildx build \
 		--platform $(PLATFORMS) \
-		-f Dockerfile \
+		-f agentbox/Dockerfile \
 		--build-arg PYTHON_IMAGE=$(PYTHON_IMAGE) \
 		-t $(MANAGER_IMAGE):$(TAG) \
 		--push \
-		.
+		..
 
 push-workspace:
 	docker buildx build \

@@ -63,7 +63,7 @@ jobs:
             context: .
             dockerfile: lemma-frontend/Dockerfile
           - name: lemma-agentbox
-            context: agentbox
+            context: .
             dockerfile: agentbox/Dockerfile
           - name: lemma-agentbox-workspace
             context: .
