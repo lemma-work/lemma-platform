@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import base64
 import hashlib
+import os
 
 from tomlkit import TOMLDocument
 
@@ -182,51 +183,66 @@ def host_backend_env(
     )
     env.pop("PYTHONPATH", None)
     env.pop("CONTAINER_HOST", None)
+    postgres_password = "postgres"
+    redis_url = f"redis://127.0.0.1:{store.port(doc, 'redis')}"
+    managed_runtime_cli = ""
+    if provider == "lemma_local":
+        postgres_password = _managed_secret("LEMMA_MANAGED_POSTGRES_PASSWORD")
+        redis_password = _managed_secret("LEMMA_MANAGED_REDIS_PASSWORD")
+        managed_runtime_cli = os.environ.get("LEMMA_MANAGED_RUNTIME_CLI", "").strip()
+        if not managed_runtime_cli:
+            raise ValueError("LEMMA_MANAGED_RUNTIME_CLI is required for lemma_local")
+        redis_url = f"redis://:{redis_password}@127.0.0.1:{store.port(doc, 'redis')}"
+
     env.update(
         {
             "DATABASE_URL": (
-                "postgresql+asyncpg://postgres:postgres@127.0.0.1:"
+                f"postgresql+asyncpg://postgres:{postgres_password}@127.0.0.1:"
                 f"{store.port(doc, 'postgres')}/lemma"
             ),
             "DATASTORE_DATABASE_URL": (
-                "postgresql+asyncpg://postgres:postgres@127.0.0.1:"
+                f"postgresql+asyncpg://postgres:{postgres_password}@127.0.0.1:"
                 f"{store.port(doc, 'postgres')}/lemma_datastore"
             ),
-            "REDIS_URL": f"redis://127.0.0.1:{store.port(doc, 'redis')}",
-            "SUPERTOKENS_CORE_URL": (
-                f"http://127.0.0.1:{store.port(doc, 'supertokens')}"
-            ),
+            "REDIS_URL": redis_url,
+            "SUPERTOKENS_CORE_URL": (f"http://127.0.0.1:{store.port(doc, 'supertokens')}"),
             "AGENTBOX_API_URL": f"http://127.0.0.1:{backend_port}/internal/agentbox",
             "AGENTBOX_STATE_DATABASE_URL": (
-                "postgresql://postgres:postgres@127.0.0.1:"
+                f"postgresql://postgres:{postgres_password}@127.0.0.1:"
                 f"{store.port(doc, 'postgres')}/agentbox"
             ),
             "AGENTBOX_STORAGE_ROOT": str(paths.workspaces_dir),
             "AGENTBOX_STORAGE_HOST_ROOT": str(paths.workspaces_dir),
             "AGENTBOX_NETWORK": "",
             "AGENTBOX_ADD_HOST_GATEWAY": "true",
-            "WORKSPACE_CALLBACK_API_URL": (
-                f"http://host.lemma.internal:{backend_port}"
-            ),
-            "WORKSPACE_CALLBACK_AUTH_URL": (
-                f"http://host.lemma.internal:{frontend_port}/auth"
-            ),
-            "WORKSPACE_CALLBACK_FRONTEND_URL": (
-                f"http://host.lemma.internal:{frontend_port}"
-            ),
+            "WORKSPACE_CALLBACK_API_URL": (f"http://host.lemma.internal:{backend_port}"),
+            "WORKSPACE_CALLBACK_AUTH_URL": (f"http://host.lemma.internal:{frontend_port}/auth"),
+            "WORKSPACE_CALLBACK_FRONTEND_URL": (f"http://host.lemma.internal:{frontend_port}"),
             "SCHEDULER_API_URL": f"http://127.0.0.1:{backend_port}",
             "LOCAL_OBJECT_STORAGE_ROOT": str(paths.object_storage_dir),
             "LOCAL_FILE_STORAGE_ROOT": str(paths.files_dir),
-            "LOCAL_AGENT_RUNTIME_CONFIG_PATH": str(
-                paths.state_dir / "agent-runtime.json"
-            ),
+            "LOCAL_AGENT_RUNTIME_CONFIG_PATH": str(paths.state_dir / "agent-runtime.json"),
             "EMAIL_OUTPUT_DIR": str(paths.state_dir / "emails"),
         }
     )
+    if provider == "lemma_local":
+        env.update(
+            {
+                "AGENTBOX_LOCAL_RUNTIME_CLI": managed_runtime_cli,
+                "AGENTBOX_ADD_HOST_GATEWAY": "false",
+            }
+        )
     # User settings retain normal last-wins semantics.
     env.update(store.env_overrides(doc, "agentbox"))
     env.update(store.env_overrides(doc, "backend"))
     return env
+
+
+def _managed_secret(name: str) -> str:
+    value = os.environ.get(name, "").strip()
+    if not 32 <= len(value) <= 128 or not value.isascii() or not value.isalnum():
+        raise ValueError(f"{name} must be 32 to 128 ASCII letters or digits")
+    return value
 
 
 def frontend_env(doc: TOMLDocument) -> dict[str, str]:

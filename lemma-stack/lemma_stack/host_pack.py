@@ -86,9 +86,31 @@ def build_manifest(
     if skills.is_dir():
         backend_env["LEMMA_SKILLS_ROOT"] = str(skills)
 
+    managed_runtime = None
+    if selected_provider == "lemma_local":
+        postgres_password = os.environ["LEMMA_MANAGED_POSTGRES_PASSWORD"]
+        redis_password = os.environ["LEMMA_MANAGED_REDIS_PASSWORD"]
+        managed_runtime = {
+            "images": {
+                name: release.infra_image(name) for name in ("postgres", "redis", "supertokens")
+            },
+            "credentials": {
+                "postgres_password": postgres_password,
+                "redis_password": redis_password,
+            },
+            "ports": {
+                "postgres": store.port(config, "postgres"),
+                "redis": store.port(config, "redis"),
+                "supertokens": store.port(config, "supertokens"),
+                "backend": store.port(config, "backend"),
+                "frontend": store.port(config, "frontend"),
+            },
+        }
+
     return {
         "schema_version": HOST_PACK_SCHEMA_VERSION,
         "release": release.version,
+        "managed_runtime": managed_runtime,
         "setup": [
             {
                 "id": "migrations",

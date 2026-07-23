@@ -85,7 +85,9 @@ def _print_next_steps(config) -> None:
         )
         console.print("       lemma-stack config set LEMMA_DEFAULT_MODEL_TYPE openai_compat")
         console.print("       lemma-stack config set LEMMA_OPENAI_API_KEY <key>")
-        console.print("       lemma-stack config set LEMMA_OPENAI_BASE_URL https://api.openai.com/v1")
+        console.print(
+            "       lemma-stack config set LEMMA_OPENAI_BASE_URL https://api.openai.com/v1"
+        )
         console.print("       lemma-stack config set LEMMA_OPENAI_DEFAULT_MODEL gpt-4o")
         console.print("       lemma-stack config set LEMMA_OPENAI_MODEL_NAMES gpt-4o,gpt-4o-mini")
         step += 1
@@ -113,7 +115,9 @@ def install(
     runtime_choice: str = typer.Option(
         "auto", "--runtime", help="Container runtime: auto, docker, or podman."
     ),
-    channel: Optional[str] = typer.Option(None, help="Release channel or version (default: stable)."),
+    channel: Optional[str] = typer.Option(
+        None, help="Release channel or version (default: stable)."
+    ),
     manifest_path: Optional[Path] = typer.Option(
         None, "--manifest", help="Install from a local release manifest JSON (testing/air-gap)."
     ),
@@ -250,7 +254,9 @@ def status(json_output: bool = typer.Option(False, "--json")) -> None:
         table.add_column(column)
     for row in rows:
         health = row["health"] or "-"
-        state = f"[green]{row['status']}[/green]" if row["running"] else f"[red]{row['status']}[/red]"
+        state = (
+            f"[green]{row['status']}[/green]" if row["running"] else f"[red]{row['status']}[/red]"
+        )
         table.add_row(row["service"], state, health, ", ".join(row["ports"]) or "-")
     console.print(table)
 
@@ -284,8 +290,8 @@ def host_manifest(
     else:
         release = release_manifest.load_pinned(paths)
     selected_provider = provider or store.provider(config)
-    if selected_provider not in {"docker", "podman"}:
-        raise AdminError(f"unsupported transitional host-pack provider: {selected_provider}")
+    if selected_provider not in {"docker", "podman", "lemma_local"}:
+        raise AdminError(f"unsupported host-pack provider: {selected_provider}")
     destination = output or paths.run_dir / "host-pack.json"
     manifest = host_pack.build_manifest(
         pack_root,
@@ -354,7 +360,11 @@ def doctor(json_output: bool = typer.Option(False, "--json")) -> None:
 
     state = detect.detect()
     for cli, flags in state.items():
-        detail = "running" if flags["running"] else ("installed, not running" if flags["installed"] else "not installed")
+        detail = (
+            "running"
+            if flags["running"]
+            else ("installed, not running" if flags["installed"] else "not installed")
+        )
         check(f"runtime:{cli}", flags["installed"], detail)
     check("config", paths.config_file.exists(), str(paths.config_file))
     check("release", paths.release_file.exists(), str(paths.release_file))
@@ -486,7 +496,9 @@ def db_shell() -> None:
     """Open psql against the stack's postgres."""
     ctx = _load_context()
     raise typer.Exit(
-        ctx.runtime.stream("exec", "-it", f"{CONTAINER_PREFIX}-db", "psql", "-U", "postgres", "lemma")
+        ctx.runtime.stream(
+            "exec", "-it", f"{CONTAINER_PREFIX}-db", "psql", "-U", "postgres", "lemma"
+        )
     )
 
 

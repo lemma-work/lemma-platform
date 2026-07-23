@@ -59,18 +59,12 @@ def test_builds_exact_backend_frontend_native_contract(paths, tmp_path):
         "upgrade",
         "head",
     ]
-    assert manifest["setup"][0]["env"]["DATABASE_URL"].endswith(
-        ":55432/lemma"
-    )
+    assert manifest["setup"][0]["env"]["DATABASE_URL"].endswith(":55432/lemma")
     backend, frontend = manifest["services"]
     assert backend["command"][1:4] == ["-m", "uvicorn", "local_app:app"]
     assert backend["env"]["DATABASE_URL"].endswith(":55432/lemma")
-    assert backend["env"]["AGENTBOX_STATE_DATABASE_URL"].endswith(
-        ":55432/agentbox"
-    )
-    assert backend["env"]["WORKSPACE_CALLBACK_API_URL"] == (
-        "http://host.lemma.internal:8711"
-    )
+    assert backend["env"]["AGENTBOX_STATE_DATABASE_URL"].endswith(":55432/agentbox")
+    assert backend["env"]["WORKSPACE_CALLBACK_API_URL"] == ("http://host.lemma.internal:8711")
     assert backend["env"]["AGENTBOX_REQUIRE_CALLBACK"] == "true"
     assert backend["env"]["BROWSER_SDK_PATH"].endswith("lemma-client.js")
     assert frontend["dependencies"] == ["backend"]
@@ -87,6 +81,50 @@ def test_user_environment_remains_last_wins(paths, tmp_path):
 
     assert manifest["services"][0]["env"]["REDIS_URL"] == "redis://custom:9999"
     assert manifest["services"][1]["env"]["PORT"] == "4700"
+
+
+def test_managed_runtime_contract_is_explicit(paths, tmp_path, monkeypatch):
+    release = parse(
+        {
+            "schema_version": 1,
+            "version": "1.2.3",
+            "min_admin_version": "0",
+            "images": {
+                "backend": "backend:test",
+                "frontend": "frontend:test",
+                "agentbox_runtime": "runtime@sha256:agentbox",
+            },
+            "infra": {
+                "postgres": "postgres@sha256:postgres",
+                "redis": "redis@sha256:redis",
+                "supertokens": "supertokens@sha256:supertokens",
+            },
+        }
+    )
+    monkeypatch.setenv("LEMMA_MANAGED_POSTGRES_PASSWORD", "a" * 64)
+    monkeypatch.setenv("LEMMA_MANAGED_REDIS_PASSWORD", "b" * 64)
+    monkeypatch.setenv("LEMMA_MANAGED_RUNTIME_CLI", "/signed/lemma-runtime")
+
+    manifest = build_manifest(
+        _pack(tmp_path), paths, store.new_document(), release, provider="lemma_local"
+    )
+
+    runtime = manifest["managed_runtime"]
+    assert runtime["images"]["postgres"] == "postgres@sha256:postgres"
+    assert runtime["ports"] == {
+        "postgres": 55432,
+        "redis": 56379,
+        "supertokens": 53567,
+        "backend": 8711,
+        "frontend": 3711,
+    }
+    backend = manifest["services"][0]
+    assert backend["env"]["AGENTBOX_PROVIDER"] == "lemma_local"
+    assert backend["env"]["AGENTBOX_LOCAL_RUNTIME_CLI"] == "/signed/lemma-runtime"
+    assert backend["env"]["AGENTBOX_ADD_HOST_GATEWAY"] == "false"
+    assert backend["env"]["DATABASE_URL"].startswith("postgresql+asyncpg://postgres:" + "a" * 64)
+    assert backend["env"]["REDIS_URL"].startswith("redis://:" + "b" * 64)
+    assert backend["env"]["WORKSPACE_CALLBACK_API_URL"] == ("http://host.lemma.internal:8711")
 
 
 def test_missing_pack_file_is_actionable(paths, tmp_path):

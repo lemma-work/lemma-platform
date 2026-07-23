@@ -47,8 +47,43 @@ const INHERITED_ENVIRONMENT: [&str; 24] = [
 pub struct HostPackManifest {
     pub schema_version: u64,
     pub release: String,
+    #[serde(default)]
+    pub managed_runtime: Option<ManagedRuntimeSpec>,
     pub setup: Vec<HostSetupSpec>,
     pub services: Vec<HostProcessSpec>,
+}
+
+#[derive(Clone, Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ManagedRuntimeSpec {
+    pub images: ManagedRuntimeImages,
+    pub credentials: ManagedRuntimeCredentials,
+    pub ports: ManagedRuntimePorts,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct ManagedRuntimeImages {
+    pub postgres: String,
+    pub redis: String,
+    pub supertokens: String,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct ManagedRuntimeCredentials {
+    pub postgres_password: String,
+    pub redis_password: String,
+}
+
+#[derive(Clone, Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ManagedRuntimePorts {
+    pub postgres: u16,
+    pub redis: u16,
+    pub supertokens: u16,
+    pub backend: u16,
+    pub frontend: u16,
 }
 
 #[derive(Clone, Debug, Deserialize)]
@@ -202,6 +237,10 @@ impl HostProcessManager {
 
     pub fn release(&self) -> &str {
         &self.manifest.release
+    }
+
+    pub fn managed_runtime(&self) -> Option<&ManagedRuntimeSpec> {
+        self.manifest.managed_runtime.as_ref()
     }
 
     pub fn desired_running(&self) -> bool {
@@ -757,6 +796,7 @@ mod tests {
         HostPackManifest {
             schema_version: 1,
             release: "test".into(),
+            managed_runtime: None,
             setup: vec![setup("migrations")],
             services,
         }

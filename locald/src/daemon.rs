@@ -11,6 +11,7 @@ use interprocess::local_socket::{prelude::*, ListenerOptions};
 use serde_json::{json, Value};
 
 use crate::host_process::HostProcessManager;
+use crate::managed_runtime::{ManagedRuntimeBootstrap, ManagedRuntimeController};
 use crate::paths::LocalPaths;
 use crate::protocol::{
     append_bounded_journal, authenticate, error_event, load_or_create_token, read_bounded_line,
@@ -35,6 +36,7 @@ pub struct Daemon {
     supervisor_waiters: Mutex<HashMap<String, mpsc::Sender<Value>>>,
     next_internal_request: AtomicU64,
     host_processes: Option<Arc<HostProcessManager>>,
+    managed_runtime: Option<Arc<ManagedRuntimeController>>,
     host_operation_running: AtomicBool,
 }
 
@@ -43,16 +45,34 @@ impl Daemon {
         paths.ensure()?;
         let token = load_or_create_token(&paths.token)?;
         let state = StateSnapshot::load(&paths.state);
+        let managed_bootstrap = ManagedRuntimeBootstrap::discover(&paths)?;
         let host_manifest = match env::var_os("LEMMA_LOCALD_HOST_PACK_MANIFEST") {
             Some(path) if !path.is_empty() => Some(PathBuf::from(path)),
             _ => env::var_os("LEMMA_LOCALD_HOST_PACK_ROOT")
                 .filter(|path| !path.is_empty())
                 .map(PathBuf::from)
-                .map(|pack_root| prepare_host_manifest(&paths, &pack_root))
+                .map(|pack_root| {
+                    prepare_host_manifest(&paths, &pack_root, managed_bootstrap.as_ref())
+                })
                 .transpose()?,
         };
         let host_processes = host_manifest
             .map(|path| HostProcessManager::load(&path, paths.root.join("logs")))
+            .transpose()?;
+        let managed_runtime = host_processes
+            .as_ref()
+            .and_then(|manager| manager.managed_runtime().cloned())
+            .map(|spec| {
+                managed_bootstrap
+                    .as_ref()
+                    .ok_or_else(|| {
+                        io::Error::new(
+                            io::ErrorKind::NotFound,
+                            "host manifest requires managed runtime artifacts",
+                        )
+                    })?
+                    .controller(&paths, spec)
+            })
             .transpose()?;
         Ok(Arc::new(Self {
             paths,
@@ -64,6 +84,7 @@ impl Daemon {
             supervisor_waiters: Mutex::new(HashMap::new()),
             next_internal_request: AtomicU64::new(1),
             host_processes,
+            managed_runtime,
             host_operation_running: AtomicBool::new(false),
         }))
     }
@@ -154,7 +175,13 @@ impl Daemon {
                 "daemon_version": DAEMON_VERSION,
                 "pid": std::process::id(),
                 "compatibility_supervisor": true,
-                "mode": if self.host_processes.is_some() { "host-packs" } else { "compatibility" },
+                "mode": if self.managed_runtime.is_some() {
+                    "managed-local"
+                } else if self.host_processes.is_some() {
+                    "host-packs"
+                } else {
+                    "compatibility"
+                },
                 "host_pack_release": self.host_processes.as_ref().map(|manager| manager.release()),
             }),
         );
@@ -211,6 +238,10 @@ impl Daemon {
                     let state = self.state.lock().expect("state lock poisoned");
                     event["url"] = Value::String(state.url.clone());
                     event["api_url"] = Value::String(state.api_url.clone());
+                    if let Some(runtime) = self.managed_runtime.as_ref() {
+                        event["managed_runtime"] =
+                            serde_json::to_value(runtime.status()).unwrap_or(Value::Null);
+                    }
                     self.send_direct(client, event);
                     return true;
                 }
@@ -296,6 +327,11 @@ impl Daemon {
                     failure = Some(error.to_string());
                 }
             }
+            if let Some(runtime) = daemon.managed_runtime.as_ref() {
+                if let Err(error) = runtime.shutdown() {
+                    failure.get_or_insert_with(|| error.to_string());
+                }
+            }
             if let Some(mut supervisor) = daemon
                 .supervisor
                 .lock()
@@ -378,14 +414,14 @@ impl Daemon {
                         .get("infra")
                         .and_then(Value::as_bool)
                         .unwrap_or(false);
-                    if command == "stop" && !stopped_infra {
+                    if command == "stop" {
                         daemon.broadcast(json!({
                             "v": PROTOCOL_VERSION, "event": "state", "status": "stopped",
                             "running": false, "ready": false,
                         }));
                         daemon.broadcast(json!({
                             "v": PROTOCOL_VERSION, "event": "stopped",
-                            "infra": false,
+                            "infra": stopped_infra,
                         }));
                     }
                     daemon.broadcast(json!({
@@ -438,18 +474,31 @@ impl Daemon {
         }));
         self.broadcast(json!({
             "v": PROTOCOL_VERSION, "event": "ready", "url": state.url,
-            "api_url": state.api_url, "mode": "host-packs", "release": manager.release(),
+            "api_url": state.api_url,
+            "mode": if self.managed_runtime.is_some() { "managed-local" } else { "host-packs" },
+            "release": manager.release(),
         }));
         Ok(())
     }
 
     fn prepare_private_infra(self: &Arc<Self>) -> io::Result<()> {
+        if let Some(runtime) = self.managed_runtime.as_ref() {
+            self.broadcast(json!({
+                "v": PROTOCOL_VERSION, "event": "phase", "key": "runtime",
+                "label": "Preparing private runtime", "progress": 38,
+                "detail": "starting app-owned Linux services",
+            }));
+            return runtime.start();
+        }
         self.wait_for_supervisor(json!({
             "cmd": "start", "setup": false, "rebuild": false, "infra_only": true,
         }))
     }
 
     fn stop_private_infra(self: &Arc<Self>) -> io::Result<()> {
+        if let Some(runtime) = self.managed_runtime.as_ref() {
+            return runtime.stop_infrastructure();
+        }
         self.wait_for_supervisor(json!({"cmd": "stop", "infra": true}))
     }
 
@@ -729,9 +778,13 @@ fn supervisor_base_command() -> io::Result<Command> {
     Ok(command)
 }
 
-fn prepare_host_manifest(paths: &LocalPaths, pack_root: &std::path::Path) -> io::Result<PathBuf> {
+fn prepare_host_manifest(
+    paths: &LocalPaths,
+    pack_root: &std::path::Path,
+    managed_runtime: Option<&ManagedRuntimeBootstrap>,
+) -> io::Result<PathBuf> {
     let destination = paths.root.join("host-pack.json");
-    let provider = transitional_provider();
+    let provider = transitional_provider(managed_runtime.is_some());
     let mut command = supervisor_base_command()?;
     command
         .args(["host-manifest", "--pack-root"])
@@ -740,6 +793,9 @@ fn prepare_host_manifest(paths: &LocalPaths, pack_root: &std::path::Path) -> io:
         .arg(&destination)
         .args(["--provider", &provider])
         .env("LEMMA_DESKTOP", "1");
+    if let Some(runtime) = managed_runtime {
+        runtime.apply_manifest_environment(&mut command);
+    }
     let output = command.output()?;
     if !output.status.success() {
         let detail = String::from_utf8_lossy(&output.stderr);
@@ -757,9 +813,15 @@ fn prepare_host_manifest(paths: &LocalPaths, pack_root: &std::path::Path) -> io:
     Ok(destination)
 }
 
-fn transitional_provider() -> String {
+fn transitional_provider(managed_runtime_available: bool) -> String {
     match env::var("AGENTBOX_PROVIDER") {
-        Ok(provider) if matches!(provider.as_str(), "docker" | "podman") => provider,
+        Ok(provider)
+            if matches!(provider.as_str(), "docker" | "podman")
+                || (provider == "lemma_local" && managed_runtime_available) =>
+        {
+            provider
+        }
+        _ if managed_runtime_available => "lemma_local".into(),
         _ if Command::new("podman").arg("--version").output().is_ok() => "podman".into(),
         _ if Command::new("docker").arg("--version").output().is_ok() => "docker".into(),
         // The compatibility supervisor can install Podman when neither CLI is

@@ -84,10 +84,21 @@ version = "0.1.0"
 dependencies = [
  "getrandom 0.3.4",
  "interprocess",
+ "lemma-runtime-manager",
  "libc",
  "serde",
  "serde_json",
  "tempfile",
+]
+
+[[package]]
+name = "lemma-runtime-manager"
+version = "0.1.0"
+dependencies = [
+ "getrandom 0.3.4",
+ "libc",
+ "serde",
+ "serde_json",
 ]
 
 [[package]]
