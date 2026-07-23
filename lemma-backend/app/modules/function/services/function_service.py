@@ -124,6 +124,14 @@ class ResolvedExecution:
     run: FunctionRunEntity
 
 
+class LegacyFunctionRevisionRequired(Exception):
+    """Internal control flow for a pre-artifact function definition."""
+
+    def __init__(self, function: FunctionEntity):
+        super().__init__(function.name)
+        self.function = function
+
+
 @dataclass(slots=True)
 class FunctionUpdatePlan:
     """In-memory-mutated function plus what the sandbox/persist phases need: the
@@ -226,6 +234,21 @@ class FunctionService:
     async def _delete_function_row(self, function_id: UUID) -> bool:
         async with self._repos() as (function_repository, _run_repository):
             return await function_repository.delete(function_id)
+
+    async def activate_revision_if_missing(
+        self,
+        function_id: UUID,
+        *,
+        expected_code_path: str,
+        revision_hash: str,
+        code_path: str,
+    ) -> FunctionEntity | None:
+        return await self.repository.activate_revision_if_missing(
+            function_id,
+            expected_code_path=expected_code_path,
+            revision_hash=revision_hash,
+            code_path=code_path,
+        )
 
     async def get_function_by_name(
         self,
@@ -480,7 +503,11 @@ class FunctionService:
             ),
         )
 
-        if function.status != FunctionStatus.READY or function.revision_hash is None:
+        if function.status != FunctionStatus.READY:
+            raise FunctionValidationError("Function has no ready executable revision")
+        if function.revision_hash is None:
+            if function.code_path is not None:
+                raise LegacyFunctionRevisionRequired(function)
             raise FunctionValidationError("Function has no ready executable revision")
 
         run_entity = FunctionRunEntity(

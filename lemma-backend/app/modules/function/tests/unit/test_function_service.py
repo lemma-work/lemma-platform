@@ -24,6 +24,7 @@ from app.modules.function.domain.errors import (
 )
 from app.modules.function.services.function_service import (
     FunctionService,
+    LegacyFunctionRevisionRequired,
     parse_python_packages,
 )
 from app.modules.test_support.authz import allow_all_context, deny_all_context
@@ -256,3 +257,30 @@ async def test_resolve_execute_requires_ready_revision(
             None,
             ctx=context,
         )
+
+
+async def test_resolve_execute_requests_backfill_for_ready_legacy_source(
+    service: FunctionService,
+    function_repository: AsyncMock,
+    run_repository: AsyncMock,
+    context: Context,
+) -> None:
+    function = _function(
+        status=FunctionStatus.READY,
+        code_path="test-function.py",
+        revision_hash=None,
+    )
+    function_repository.get_by_name.return_value = function
+
+    with pytest.raises(LegacyFunctionRevisionRequired) as raised:
+        await service.resolve_execute(
+            function.pod_id,
+            function.name,
+            {},
+            function.user_id,
+            None,
+            ctx=context,
+        )
+
+    assert raised.value.function is function
+    run_repository.create_run.assert_not_awaited()

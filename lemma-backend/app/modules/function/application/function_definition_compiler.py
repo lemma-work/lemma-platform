@@ -42,6 +42,10 @@ class FunctionDefinitionCompiler:
         self._storage_factory = storage_factory
         self._artifact_builder = FunctionArtifactBuilder(storage_factory)
 
+    async def read_code(self, function_id: UUID, path: str) -> str:
+        code = await self._storage_factory(function_id).read_file(path)
+        return code.decode("utf-8") if isinstance(code, bytes) else code
+
     async def write_code(self, function_id: UUID, path: str, code: str) -> None:
         await self._storage_factory(function_id).write_file(path, code)
 
