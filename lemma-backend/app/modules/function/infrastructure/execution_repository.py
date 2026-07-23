@@ -1,9 +1,9 @@
 from __future__ import annotations
 
-from datetime import datetime, timedelta, timezone
-from uuid import UUID, uuid7
+from datetime import datetime, timezone
+from uuid import UUID
 
-from sqlalchemy import func, select
+from sqlalchemy import select
 
 from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
 from app.modules.function.application.function_attempt_credentials import (
@@ -16,12 +16,14 @@ from app.modules.function.domain.entities import (
     FunctionExecutionStatus,
     FunctionRunEntity,
     FunctionRunStatus,
-    FunctionType,
 )
 from app.modules.function.domain.events import (
     FunctionRunCompletedEvent,
     FunctionRunFailedEvent,
     FunctionRunStartedEvent,
+)
+from app.modules.function.infrastructure.execution_claim_repository import (
+    FunctionExecutionClaimRepository,
 )
 from app.modules.function.infrastructure.models import (
     FunctionExecutionAttemptModel,
@@ -32,10 +34,6 @@ from app.modules.function.infrastructure.models import (
 )
 
 
-ACTIVE_REQUEST_STATES = (
-    FunctionExecutionStatus.DISPATCHING.value,
-    FunctionExecutionStatus.RUNNING.value,
-)
 TERMINAL_ATTEMPT_STATES = (
     FunctionAttemptStatus.COMPLETED.value,
     FunctionAttemptStatus.FAILED.value,
@@ -53,6 +51,9 @@ class FunctionExecutionRepository:
         self.uow = uow
         self.session = uow.session
         self._credential_signer = credential_signer
+        self._claim_repository = FunctionExecutionClaimRepository(
+            self.session, credential_signer
+        )
 
     async def claim_run(
         self,
@@ -65,175 +66,13 @@ class FunctionExecutionRepository:
         now: datetime | None = None,
     ) -> FunctionExecutionClaim | None:
         timestamp = now or datetime.now(timezone.utc)
-        pod_id = await self.session.scalar(
-            select(FunctionExecutionRequestModel.pod_id).where(
-                FunctionExecutionRequestModel.run_id == run_id
-            )
-        )
-        if pod_id is None:
-            return None
-        # All reservations for a pod lock the same queued/active rows in the same
-        # order. This makes the capacity calculation atomic without repeatedly
-        # locking the pod's unbounded terminal history or keeping a connection
-        # while the resulting provider work runs. Read only the pod id before
-        # acquiring the lock: loading the ORM request here would leave a stale
-        # QUEUED/next_fence value in SQLAlchemy's identity map while another
-        # dispatcher owns the lock.
-        locked_request_ids = await self.session.scalars(
-            select(FunctionExecutionRequestModel.id)
-            .where(
-                FunctionExecutionRequestModel.pod_id == pod_id,
-                FunctionExecutionRequestModel.status.in_(
-                    (FunctionExecutionStatus.QUEUED.value, *ACTIVE_REQUEST_STATES)
-                ),
-            )
-            .order_by(FunctionExecutionRequestModel.id)
-            .with_for_update()
-        )
-        locked_request_ids.all()
-        request = await self.session.scalar(
-            select(FunctionExecutionRequestModel)
-            .where(FunctionExecutionRequestModel.run_id == run_id)
-            .execution_options(populate_existing=True)
-        )
-        if request is None:
-            return None
-        if request.status in {
-            FunctionExecutionStatus.COMPLETED.value,
-            FunctionExecutionStatus.FAILED.value,
-            FunctionExecutionStatus.CANCELLED.value,
-        }:
-            return None
-        if request.status in ACTIVE_REQUEST_STATES:
-            if (
-                request.lease_owner is not None
-                and request.lease_owner != worker_id
-                and request.lease_expires_at is not None
-                and request.lease_expires_at > timestamp
-            ):
-                return None
-            attempt = await self._latest_attempt(run_id)
-            if attempt is None:
-                return None
-            request.lease_owner = worker_id
-            request.lease_expires_at = timestamp + timedelta(seconds=lease_seconds)
-            ticket = self._credential_signer.derive(attempt.id, "ticket")
-            runtime_token = self._credential_signer.derive(attempt.id, "runtime")
-            return FunctionExecutionClaim(
-                run_id=run_id,
-                attempt_id=attempt.id,
-                operation_id=attempt.operation_id,
-                fence=attempt.fence,
-                pod_id=request.pod_id,
-                function_id=request.function_id,
-                revision_id=request.revision_id,
-                function_type=FunctionType(request.kind),
-                deadline_at=request.deadline_at,
-                ticket=ticket,
-                runtime_token=runtime_token,
-            )
-        if request.status != FunctionExecutionStatus.QUEUED.value:
-            return None
-        if request.available_at > timestamp or request.deadline_at <= timestamp:
-            return None
-
-        if request.kind == FunctionType.JOB.value:
-            queued_api = await self.session.scalar(
-                select(FunctionExecutionRequestModel.id)
-                .where(
-                    FunctionExecutionRequestModel.pod_id == request.pod_id,
-                    FunctionExecutionRequestModel.kind == FunctionType.API.value,
-                    FunctionExecutionRequestModel.status
-                    == FunctionExecutionStatus.QUEUED.value,
-                    FunctionExecutionRequestModel.available_at <= timestamp,
-                    FunctionExecutionRequestModel.deadline_at > timestamp,
-                )
-                .limit(1)
-            )
-            if queued_api is not None:
-                return None
-
-        active_units = int(
-            await self.session.scalar(
-                select(
-                    func.coalesce(func.sum(FunctionExecutionRequestModel.units), 0)
-                ).where(
-                    FunctionExecutionRequestModel.pod_id == request.pod_id,
-                    FunctionExecutionRequestModel.status.in_(ACTIVE_REQUEST_STATES),
-                )
-            )
-            or 0
-        )
-        job_units = int(
-            await self.session.scalar(
-                select(
-                    func.coalesce(func.sum(FunctionExecutionRequestModel.units), 0)
-                ).where(
-                    FunctionExecutionRequestModel.pod_id == request.pod_id,
-                    FunctionExecutionRequestModel.status.in_(ACTIVE_REQUEST_STATES),
-                    FunctionExecutionRequestModel.kind == FunctionType.JOB.value,
-                )
-            )
-            or 0
-        )
-        if active_units + request.units > total_units:
-            return None
-        if (
-            request.kind == FunctionType.JOB.value
-            and job_units + request.units > total_units - api_reserved_units
-        ):
-            return None
-
-        number = (
-            int(
-                await self.session.scalar(
-                    select(
-                        func.coalesce(func.max(FunctionExecutionAttemptModel.number), 0)
-                    ).where(FunctionExecutionAttemptModel.run_id == run_id)
-                )
-                or 0
-            )
-            + 1
-        )
-        attempt_id = uuid7()
-        ticket = self._credential_signer.derive(attempt_id, "ticket")
-        runtime_token = self._credential_signer.derive(attempt_id, "runtime")
-        fence = request.next_fence
-        attempt = FunctionExecutionAttemptModel(
-            id=attempt_id,
-            run_id=run_id,
-            request_id=request.id,
-            number=number,
-            fence=fence,
-            operation_id=uuid7(),
-            status=FunctionAttemptStatus.PROCESS_STARTING.value,
-            ticket_digest=self._credential_signer.digest(ticket),
-            runtime_token_digest=self._credential_signer.digest(runtime_token),
-            ticket_expires_at=request.deadline_at,
-        )
-        self.session.add(attempt)
-        request.status = FunctionExecutionStatus.DISPATCHING.value
-        request.next_fence = fence + 1
-        request.lease_owner = worker_id
-        request.lease_expires_at = timestamp + timedelta(seconds=lease_seconds)
-        run = await self.session.get(FunctionRunModel, run_id)
-        if run is None:
-            raise RuntimeError("function execution request has no public run")
-        run.current_attempt_id = attempt_id
-        run.execution_fence = fence
-        await self.session.flush()
-        return FunctionExecutionClaim(
-            run_id=run_id,
-            attempt_id=attempt_id,
-            operation_id=attempt.operation_id,
-            fence=fence,
-            pod_id=request.pod_id,
-            function_id=request.function_id,
-            revision_id=request.revision_id,
-            function_type=FunctionType(request.kind),
-            deadline_at=request.deadline_at,
-            ticket=ticket,
-            runtime_token=runtime_token,
+        return await self._claim_repository.claim(
+            run_id,
+            worker_id=worker_id,
+            total_units=total_units,
+            api_reserved_units=api_reserved_units,
+            lease_seconds=lease_seconds,
+            timestamp=timestamp,
         )
 
     async def mark_process_started(
