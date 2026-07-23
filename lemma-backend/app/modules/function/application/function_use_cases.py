@@ -142,7 +142,7 @@ class FunctionUseCases:
                 "Function revision migration did not activate an executable revision"
             )
         logger.info(
-            "function.legacy_revision_backfilled",
+            "function.use_cases.legacy_revision_backfilled",
             function_id=str(function.id),
             pod_id=str(function.pod_id),
             revision_hash=activated.revision_hash,
