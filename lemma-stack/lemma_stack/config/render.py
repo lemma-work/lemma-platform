@@ -125,6 +125,7 @@ def backend_env(
         "WORKSPACE_CALLBACK_API_URL": "http://backend:8000",
         "WORKSPACE_CALLBACK_AUTH_URL": "http://frontend:8080/auth",
         "WORKSPACE_CALLBACK_FRONTEND_URL": "http://frontend:8080",
+        "FUNCTION_RUNTIME_GATEWAY_URL": "http://backend:8000",
         # browser-facing URLs
         "API_URL": backend_origin(doc),
         "FRONTEND_URL": frontend_origin(doc),
@@ -230,6 +231,9 @@ def host_backend_env(
             "WORKSPACE_CALLBACK_API_URL": (f"http://host.lemma.internal:{backend_port}"),
             "WORKSPACE_CALLBACK_AUTH_URL": (f"http://host.lemma.internal:{frontend_port}/auth"),
             "WORKSPACE_CALLBACK_FRONTEND_URL": (f"http://host.lemma.internal:{frontend_port}"),
+            "FUNCTION_RUNTIME_GATEWAY_URL": (
+                f"http://host.lemma.internal:{backend_port}"
+            ),
             "SCHEDULER_API_URL": f"http://127.0.0.1:{backend_port}",
             "LOCAL_OBJECT_STORAGE_ROOT": str(paths.object_storage_dir),
             "LOCAL_FILE_STORAGE_ROOT": str(paths.files_dir),

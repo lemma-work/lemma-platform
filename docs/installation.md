@@ -181,10 +181,11 @@ Use the exact loopback names shown by Lemma:
 Built React apps use the same routing and session behavior as
 `<app-name>.apps.lemma.work` in production.
 
-Agent sandboxes receive the explicit `host.lemma.internal` bridge configured by
-the managed runtime. A new sandbox must reach the API health endpoint before it
-is reported ready. The backend does not guess the container topology and does
-not rewrite `localhost` or `127.0.0.1`.
+Agent and function sandboxes receive the explicit `host.lemma.internal` bridge
+configured by the managed runtime through `WORKSPACE_CALLBACK_*` and
+`FUNCTION_RUNTIME_GATEWAY_URL`. A new sandbox must reach the API health
+endpoint before it is reported ready. The backend does not guess the container
+topology and does not rewrite `localhost` or `127.0.0.1`.
 
 ## Install the optional stack-control CLI
 

@@ -145,6 +145,7 @@ def test_embedded_agentbox_docker_wiring(config, paths, manifest):
     assert spec.env["AGENTBOX_DOCKER_SOCKET_PATH"] == "/var/run/docker.sock"
     assert spec.env["AGENTBOX_DOCKER_PRIVATE_NETWORK"] == "lemma-local-net"
     assert spec.env["WORKSPACE_CALLBACK_API_URL"] == "http://backend:8000"
+    assert spec.env["FUNCTION_RUNTIME_GATEWAY_URL"] == "http://backend:8000"
     assert spec.env["WORKSPACE_CALLBACK_AUTH_URL"] == "http://frontend:8080/auth"
     assert spec.env["WORKSPACE_CALLBACK_FRONTEND_URL"] == "http://frontend:8080"
     mounts = dict((t, s) for s, t, _ in spec.binds)
@@ -211,6 +212,7 @@ def test_backend_env_golden(config, paths, manifest):
     assert env["SUPERTOKENS_CORE_URL"] == "http://supertokens:3567"
     assert env["AGENTBOX_API_URL"] == "http://backend:8000/internal/agentbox"
     assert env["WORKSPACE_CALLBACK_API_URL"] == "http://backend:8000"
+    assert env["FUNCTION_RUNTIME_GATEWAY_URL"] == "http://backend:8000"
     assert env["SCHEDULER_API_URL"] == "http://backend:8000"
     assert env["API_URL"] == "http://api.lemma.localhost:8711"
     assert env["FRONTEND_URL"] == "http://app.lemma.localhost:3711"

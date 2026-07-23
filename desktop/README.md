@@ -42,8 +42,9 @@ The local gateway exposes stable loopback-only origins:
 - `http://<sandbox>-<app>.workspaces.lemma.localhost:8711` — live sandbox apps.
 
 Sandbox callbacks are explicit configuration. The backend passes
-`WORKSPACE_CALLBACK_*` values through unchanged and never infers or rewrites
-`localhost` to `host.docker.internal`. Managed launch configuration sets the
+`WORKSPACE_CALLBACK_*` and `FUNCTION_RUNTIME_GATEWAY_URL` values through
+unchanged and never infers or rewrites `localhost` to
+`host.docker.internal`. Managed launch configuration sets the
 sandbox-reachable `host.lemma.internal` bridge and every fresh sandbox must
 reach the API health endpoint before it becomes ready.
 

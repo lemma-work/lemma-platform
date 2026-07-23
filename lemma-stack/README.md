@@ -66,8 +66,8 @@ The backend is one process containing API, worker, scheduler, AgentBox manager,
 surface receivers, and in-process MarkItDown conversion. AgentBox durable state
 uses the `agentbox` database in the shared PostgreSQL instance. There is no
 separate AgentBox or Kreuzberg service. Sandbox API callbacks come from explicit
-`WORKSPACE_CALLBACK_*` configuration; the backend does not infer runtime
-topology or rewrite `localhost`.
+`WORKSPACE_CALLBACK_*` and `FUNCTION_RUNTIME_GATEWAY_URL` configuration; the
+backend does not infer runtime topology or rewrite `localhost`.
 
 ## External-runtime compatibility
 

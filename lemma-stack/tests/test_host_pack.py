@@ -66,6 +66,9 @@ def test_builds_exact_backend_frontend_native_contract(paths, tmp_path):
     assert backend["env"]["DATABASE_URL"].endswith(":55432/lemma")
     assert backend["env"]["AGENTBOX_STATE_DATABASE_URL"].endswith(":55432/agentbox")
     assert backend["env"]["WORKSPACE_CALLBACK_API_URL"] == ("http://host.lemma.internal:8711")
+    assert backend["env"]["FUNCTION_RUNTIME_GATEWAY_URL"] == (
+        "http://host.lemma.internal:8711"
+    )
     assert backend["env"]["AGENTBOX_WORKSPACE_IMAGE"] == "workspace:test"
     assert backend["env"]["AGENTBOX_FUNCTION_IMAGE"] == "function:test"
     assert backend["env"]["AGENTBOX_LOCAL_RUNTIME_TIMEOUT_SECONDS"] == "600"
@@ -139,6 +142,9 @@ def test_managed_runtime_contract_is_explicit(paths, tmp_path, monkeypatch):
     assert backend["env"]["DATABASE_URL"].startswith("postgresql+asyncpg://postgres:" + "a" * 64)
     assert backend["env"]["REDIS_URL"].startswith("redis://:" + "b" * 64)
     assert backend["env"]["WORKSPACE_CALLBACK_API_URL"] == ("http://host.lemma.internal:8711")
+    assert backend["env"]["FUNCTION_RUNTIME_GATEWAY_URL"] == (
+        "http://host.lemma.internal:8711"
+    )
 
 
 def test_missing_pack_file_is_actionable(paths, tmp_path):
