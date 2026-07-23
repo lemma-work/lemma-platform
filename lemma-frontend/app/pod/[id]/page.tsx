@@ -1,21 +1,21 @@
 'use client';
 
 import { use, useEffect, useMemo, useRef, useState, type CSSProperties } from 'react';
-import Image from 'next/image';
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
-import { ArrowRight, ArrowUp, Loader2, MessageCircle, Plus, UserPlus, X } from '@/components/ui/icons';
+import { ArrowRight, ArrowUp, ChevronDown, ChevronUp, Loader2, Plus, UserPlus, X } from '@/components/ui/icons';
 
 import { useAIAssistant } from '@/components/ai/ai-assistant-context';
 import { StepLoader } from '@/components/brand/loader';
 import { ProtectedRoute } from '@/components/auth/protected-route';
-import { FirstWinChecklist } from '@/components/education/first-win-checklist';
 import { resolveDefaultAgentRuntime } from '@/components/agents/agent-runtime-helpers';
 import { RuntimeModelPicker } from '@/components/lemma/assistant/model-picker';
-import { RecipeFeatureCard } from '@/components/recipes/recipe-card';
-import { featuredRecipes } from '@/lib/recipes/recipes';
+import { StarterThemePicker } from '@/components/recipes/starter-theme-card';
+import { Button } from '@/components/ui/button';
+import { FEATURED_STARTER_THEMES } from '@/lib/recipes/recipes';
 import { useLaunchRecipe } from '@/lib/recipes/use-launch-recipe';
 import { useAgents } from '@/lib/hooks/use-agents';
+import { useAppPages } from '@/lib/hooks/use-app';
 import { useScopedConversations } from '@/lib/hooks/use-assistants';
 import { useAgentRuntimes, useAvailableAgentRuntimeHarnesses } from '@/lib/hooks/use-agent-runtime';
 import {
@@ -32,7 +32,11 @@ import { cn } from '@/lib/utils';
 import { formatAgentName } from '@/lib/utils/agents';
 import { isConversationRunningStatus, normalizeConversationStatus } from '@/lib/utils/conversations';
 import { describeScheduleConfig, getScheduleTargetKind, getScheduleTargetName } from '@/lib/utils/schedules';
-import type { AgentRuntimeConfig, AssistantSurface, Conversation } from '@/lib/types';
+import {
+    resolvePodHomeStarterMode,
+    type PodHomeResourceSignals,
+} from '@/lib/pods/pod-home-starters';
+import type { AgentRuntimeConfig, Conversation } from '@/lib/types';
 
 const RUNNING_RUN_STATUSES = new Set(['PENDING', 'RUNNING', 'EXECUTING', 'IN_PROGRESS', 'PROCESSING']);
 const FAILED_RUN_STATUSES = new Set(['FAILED', 'ERROR', 'CANCELLED', 'CANCELED']);
@@ -40,6 +44,7 @@ const COMPLETED_RUN_STATUSES = new Set(['COMPLETED', 'SUCCESS', 'SUCCEEDED']);
 const RECENT_CONVERSATION_STATUSES = new Set(['completed', 'complete', 'success', 'succeeded', 'failed', 'error']);
 const COMPOSER_LAUNCH_DURATION_MS = 560;
 const HOME_PANELS_DEFER_MS = 600;
+const POD_HOME_STARTER_DISMISS_KEY = 'lemma:pod-home:starter-nudge';
 
 interface ComposerLaunchAnimation {
     id: number;
@@ -60,9 +65,22 @@ function PodBlankChatHome({ podId }: { podId: string }) {
     const assistant = useAIAssistant();
     const podAccess = usePodAccess(podId);
     const { data: pod } = usePod(podId);
+    const { launchRecipe } = useLaunchRecipe(podId, { podName: pod?.name });
     const { data: runtimeCatalog } = useAgentRuntimes(pod?.organization_id);
     const { data: availableHarnesses } = useAvailableAgentRuntimeHarnesses();
     const canWriteConversations = podAccess.can('conversation.write');
+    const canReadAgents = podAccess.can('agent.read');
+    const canReadWorkflows = podAccess.can('workflow.read');
+    const canReadSurfaces = podAccess.canAccessRoute('surfaces');
+    const canReadConversations = podAccess.can('conversation.read');
+    const { data: homeAgentsData, isLoading: isLoadingHomeAgents } = useAgents(canReadAgents ? podId : undefined);
+    const { data: homeFlows = [], isLoading: isLoadingHomeFlows } = useFlows(canReadWorkflows ? podId : undefined);
+    const { pages: homeAppPages, isLoading: isLoadingHomeApps } = useAppPages(podId);
+    const { data: homeSurfaces = [], isLoading: isLoadingHomeSurfaces } = usePodSurfaces(canReadSurfaces ? podId : undefined);
+    const { data: homeConversationsData, isLoading: isLoadingHomeConversations } = useScopedConversations(
+        { podId },
+        { limit: 1, enabled: canReadConversations },
+    );
     const [draft, setDraft] = useState('');
     const [isSending, setIsSending] = useState(false);
     const [launchAnimation, setLaunchAnimation] = useState<ComposerLaunchAnimation | null>(null);
@@ -84,6 +102,24 @@ function PodBlankChatHome({ podId }: { podId: string }) {
     const podDefaultRuntime = pod?.config?.default_runtime
         ?? resolveDefaultAgentRuntime(runtimeCatalog, pod?.config?.default_profile_id, availableHarnesses);
     const selectedCommandRuntime = assistant.conversationRuntime ?? null;
+    const isLoadingHomeState =
+        isLoadingHomeAgents ||
+        isLoadingHomeFlows ||
+        isLoadingHomeApps ||
+        isLoadingHomeSurfaces ||
+        isLoadingHomeConversations;
+    const podHomeResourceSignals = useMemo<PodHomeResourceSignals>(() => ({
+        appCount: homeAppPages.length,
+        agentCount: homeAgentsData?.items?.length || 0,
+        workflowCount: homeFlows.length,
+        surfaceCount: homeSurfaces.length,
+        activeSurfaceCount: homeSurfaces.filter((surface) => String(surface.status || '').toUpperCase() === 'ACTIVE').length,
+        scheduleCount: 0,
+        conversationCount: homeConversationsData?.items?.length || 0,
+        hasUsedWorkflow: false,
+    }), [homeAgentsData?.items?.length, homeAppPages.length, homeConversationsData?.items?.length, homeFlows.length, homeSurfaces]);
+    const starterMode = resolvePodHomeStarterMode(podHomeResourceSignals);
+    const showStarterHome = podAccess.isBuilder && !isLoadingHomeState && starterMode === 'fresh';
 
     const handleCommandRuntimeChange = (runtime: AgentRuntimeConfig | null) => {
         void assistant.setConversationModel(
@@ -217,10 +253,44 @@ function PodBlankChatHome({ podId }: { podId: string }) {
             <main
                 aria-hidden={isBlankingHome}
                 className={cn(
-                    "mx-auto flex min-h-full w-full max-w-6xl flex-1 flex-col items-center px-5 pb-10 pt-10 sm:px-6 md:pt-14",
+                    "mx-auto flex min-h-full w-full max-w-6xl flex-1 flex-col items-center px-5 pb-10 pt-8 sm:px-6 md:pt-12",
                     isBlankingHome && "pointer-events-none opacity-0",
                 )}
             >
+                {showStarterHome ? (
+                    <section className="w-full">
+                        <div className="max-w-3xl">
+                            <p className="type-eyebrow-mono text-[var(--text-tertiary)]">Start inside this pod</p>
+                            <h1 className="mt-3 text-3xl font-semibold leading-tight tracking-tight text-[var(--text-primary)] sm:text-4xl">
+                                What should {pod?.name || 'this pod'} become?
+                            </h1>
+                            <p className="mt-3 max-w-2xl text-base leading-7 text-[var(--text-secondary)]">
+                                Choose a direction, then pick a concrete starting point inside it. Lemma builds the app, agent, data, and connections together — all inside this pod.
+                            </p>
+                        </div>
+                        <div className="mt-7">
+                            <StarterThemePicker
+                                themes={FEATURED_STARTER_THEMES}
+                                onLaunch={(recipe, message) => launchRecipe(recipe, { message })}
+                            />
+                        </div>
+                        <div className="mt-5 flex items-center justify-between gap-4">
+                            <p className="text-sm text-[var(--text-tertiary)]">Explore a family first. Choose the concrete build inside.</p>
+                            <Link
+                                href={`/pod/${podId}/recipes`}
+                                className="custom-focus-ring inline-flex shrink-0 items-center gap-1.5 text-sm font-medium text-[var(--text-primary)]"
+                            >
+                                See every starting point
+                                <ArrowRight className="h-4 w-4" />
+                            </Link>
+                        </div>
+                        <div className="my-8 flex items-center gap-3 text-xs text-[var(--text-tertiary)]">
+                            <span className="h-px flex-1 bg-[var(--border-subtle)]" />
+                            or describe your own
+                            <span className="h-px flex-1 bg-[var(--border-subtle)]" />
+                        </div>
+                    </section>
+                ) : null}
                 <div className="w-full max-w-4xl">
                     {assistant.pendingFiles.length > 0 ? (
                         <div className="mb-3 flex flex-wrap justify-center gap-2">
@@ -284,7 +354,11 @@ function PodBlankChatHome({ podId }: { podId: string }) {
                                 }
                             }}
                             rows={1}
-                            placeholder={canWriteConversations ? "What should happen next?" : "You can read this pod, but not start new conversations."}
+                            placeholder={canWriteConversations
+                                ? showStarterHome
+                                    ? "Describe the app, agent, or workflow you want..."
+                                    : "What should happen next?"
+                                : "You can read this pod, but not start new conversations."}
                             disabled={!canWriteConversations}
                             className="inline-edit-field min-h-10 flex-1 resize-none bg-transparent py-3 text-base leading-6 text-[var(--text-primary)] outline-none placeholder:text-[var(--text-tertiary)]"
                         />
@@ -310,7 +384,11 @@ function PodBlankChatHome({ podId }: { podId: string }) {
                         </button>
                     </form>
                 </div>
-                {showHomePanels ? <PodAgentWorkflowKanban podId={podId} /> : <PodHomePanelsSkeleton />}
+                {!showStarterHome
+                    ? showHomePanels
+                        ? <PodAgentWorkflowKanban podId={podId} baseResourceSignals={podHomeResourceSignals} />
+                        : <PodHomePanelsSkeleton />
+                    : null}
             </main>
             {launchAnimation && launchAnimationStyle ? (
                 <div
@@ -427,7 +505,13 @@ type KanbanItem = {
     iconUrl?: string | null;
 };
 
-function PodAgentWorkflowKanban({ podId }: { podId: string }) {
+function PodAgentWorkflowKanban({
+    podId,
+    baseResourceSignals,
+}: {
+    podId: string;
+    baseResourceSignals: PodHomeResourceSignals;
+}) {
     const podAccess = usePodAccess(podId);
     const canReadAgents = podAccess.can('agent.read');
     const canReadWorkflows = podAccess.can('workflow.read');
@@ -546,277 +630,161 @@ function PodAgentWorkflowKanban({ podId }: { podId: string }) {
 
     const isLoading = loadingAgents || loadingWorkflows || loadingSchedules || loadingRuns || loadingConversations;
     const hasKanbanItems = upcomingItems.length + movingItems.length + recentOutcomeItems.length > 0;
+    const hasUsedWorkflow = runSnapshots.some((snapshot) => snapshot.runs.some((run) => {
+        const status = normalizeWorkflowRunStatus(run.status);
+        return RUNNING_RUN_STATUSES.has(status) || COMPLETED_RUN_STATUSES.has(status);
+    }));
+    const starterMode = resolvePodHomeStarterMode({
+        ...baseResourceSignals,
+        agentCount: agents.length,
+        workflowCount: workflows.length,
+        scheduleCount: schedules.length,
+        conversationCount: conversations.length,
+        hasUsedWorkflow,
+    });
+    const showFormingNudge = podAccess.isBuilder && !isLoading && starterMode === 'forming';
 
     return (
         <>
-            {!isLoading ? (
-                <FirstWinChecklist
-                    podId={podId}
-                    agentCount={agents.length}
-                    workflowCount={workflows.length}
-                    conversationCount={conversations.length}
-                />
-            ) : null}
             <div className="mt-8 w-full space-y-6">
                 <PodJoinRequestsHomePanel podId={podId} />
-                <PodSurfacesHomePanel podId={podId} />
-            {isLoading || hasKanbanItems ? (
-                <section className="pod-home-work-section">
-                    <div className="pod-home-work-heading flex items-center justify-between gap-4">
-                        <h2 className="pod-home-work-title">Activity</h2>
-                        <div className="pod-home-work-live-pill">
-                            {isLoading ? (
-                                <Loader2 className="h-3 w-3 animate-spin" />
-                            ) : movingItems.length > 0 ? (
-                                <span className="pod-home-work-live-dot" />
-                            ) : null}
-                            <span>
-                                {movingItems.length > 0 ? `${movingItems.length} running · ` : ''}
-                                {schedules.length} scheduled
-                            </span>
+                {isLoading || hasKanbanItems ? (
+                    <section className="pod-home-work-section">
+                        <div className="pod-home-work-heading flex items-center justify-between gap-4">
+                            <h2 className="pod-home-work-title">Activity</h2>
+                            <div className="pod-home-work-live-pill">
+                                {isLoading ? (
+                                    <Loader2 className="h-3 w-3 animate-spin" />
+                                ) : movingItems.length > 0 ? (
+                                    <span className="pod-home-work-live-dot" />
+                                ) : null}
+                                <span>
+                                    {movingItems.length > 0 ? `${movingItems.length} running · ` : ''}
+                                    {schedules.length} scheduled
+                                </span>
+                            </div>
                         </div>
-                    </div>
 
-                    <div className="pod-home-work-panel">
-                        {upcomingItems.length > 0 ? (
-                            <div className="pod-home-work-section-row">
-                                <p className="pod-home-work-section-label">Upcoming</p>
-                                <div className="pod-home-work-list">
-                                    {upcomingItems.map((item) => (
-                                        <KanbanCard key={item.id} item={item} />
-                                    ))}
+                        <div className="pod-home-work-panel">
+                            {upcomingItems.length > 0 ? (
+                                <div className="pod-home-work-section-row">
+                                    <p className="pod-home-work-section-label">Upcoming</p>
+                                    <div className="pod-home-work-list">
+                                        {upcomingItems.map((item) => (
+                                            <KanbanCard key={item.id} item={item} />
+                                        ))}
+                                    </div>
                                 </div>
-                            </div>
-                        ) : null}
+                            ) : null}
 
-                        {movingItems.length > 0 ? (
-                            <div className="pod-home-work-section-row">
-                                <p className="pod-home-work-section-label">Working now</p>
-                                <div className="pod-home-work-list">
-                                    {movingItems.map((item) => (
-                                        <KanbanCard key={item.id} item={item} />
-                                    ))}
+                            {movingItems.length > 0 ? (
+                                <div className="pod-home-work-section-row">
+                                    <p className="pod-home-work-section-label">Working now</p>
+                                    <div className="pod-home-work-list">
+                                        {movingItems.map((item) => (
+                                            <KanbanCard key={item.id} item={item} />
+                                        ))}
+                                    </div>
                                 </div>
-                            </div>
-                        ) : null}
+                            ) : null}
 
-                        {recentOutcomeItems.length > 0 ? (
-                            <div className="pod-home-work-section-row">
-                                <p className="pod-home-work-section-label">Recent outcomes</p>
-                                <div className="pod-home-work-list">
-                                    {recentOutcomeItems.map((item) => (
-                                        <KanbanCard key={item.id} item={item} />
-                                    ))}
+                            {recentOutcomeItems.length > 0 ? (
+                                <div className="pod-home-work-section-row">
+                                    <p className="pod-home-work-section-label">Recent outcomes</p>
+                                    <div className="pod-home-work-list">
+                                        {recentOutcomeItems.map((item) => (
+                                            <KanbanCard key={item.id} item={item} />
+                                        ))}
+                                    </div>
                                 </div>
-                            </div>
-                        ) : null}
-                    </div>
-                </section>
-            ) : null}
-
-                {!isLoading || hasKanbanItems ? <PodRecipesHomePanel podId={podId} /> : null}
+                            ) : null}
+                        </div>
+                    </section>
+                ) : null}
+                {showFormingNudge ? <PodRecipesHomeNudge podId={podId} /> : null}
             </div>
         </>
     );
 }
 
-const SURFACE_META: Record<string, { label: string; logo: string }> = {
-    SLACK: { label: 'Slack', logo: '/surfaces/slack.png' },
-    TEAMS: { label: 'Teams', logo: '/surfaces/teams.png' },
-    GMAIL: { label: 'Gmail', logo: '/surfaces/gmail.png' },
-    OUTLOOK: { label: 'Outlook', logo: '/surfaces/outlook.png' },
-    TELEGRAM: { label: 'Telegram', logo: '/surfaces/telegram.png' },
-    WHATSAPP: { label: 'WhatsApp', logo: '/surfaces/whatsapp.png' },
-};
-
-const SURFACE_STATUS_TONE: Record<'success' | 'warning' | 'danger' | 'muted', { text: string; dot: string }> = {
-    success: { text: 'text-[var(--state-success)]', dot: 'bg-[var(--state-success)]' },
-    warning: { text: 'text-[var(--state-warning)]', dot: 'bg-[var(--state-warning)]' },
-    danger: { text: 'text-[var(--state-error)]', dot: 'bg-[var(--state-error)]' },
-    muted: { text: 'text-[var(--text-tertiary)]', dot: 'bg-[var(--text-tertiary)]' },
-};
-
-function surfaceStatusView(status?: string | null): { label: string; tone: 'success' | 'warning' | 'danger' | 'muted' } {
-    const raw = String(status || '').toUpperCase();
-    if (raw === 'ACTIVE') return { label: 'Live', tone: 'success' };
-    if (raw === 'PENDING_ADMIN_CONSENT') return { label: 'Needs consent', tone: 'warning' };
-    if (raw === 'ERROR') return { label: 'Error', tone: 'danger' };
-    return { label: 'Paused', tone: 'muted' };
-}
-
-function surfaceAddress(surface: AssistantSurface): string {
-    const channel = surface.config?.channels?.[0];
-    return (channel?.channel_name || channel?.channel_id || surface.surface_identity_username || '').trim();
-}
-
-// "Reachable at" — the inbound twin of "Your apps". Surfaces shown as relationships
-// (channel → who answers → live), not as a platform config grid. A real callout
-// invites the first connection when nothing is wired up yet.
-function PodSurfacesHomePanel({ podId }: { podId: string }) {
-    const podAccess = usePodAccess(podId);
-    const canUse = podAccess.canAccessRoute('surfaces');
-    const { data: surfaces = [], isLoading } = usePodSurfaces(canUse ? podId : undefined);
-    const surfacesHref = `/pod/${podId}/surfaces`;
-
-    if (!canUse) return null;
-
-    if (isLoading) {
-        return (
-            <section className="pod-home-surfaces-panel w-full" data-state="loading" role="status" aria-label="Loading surfaces">
-                <div className="flex items-center justify-between gap-3">
-                    <h2 className="text-base font-normal text-[var(--text-secondary)]">Surfaces</h2>
-                    <div className="lemma-skeleton h-3 w-12 rounded-md" />
-                </div>
-                <ul className="mt-2 flex flex-col gap-0.5" aria-hidden="true">
-                    {[0, 1, 2].map((item) => (
-                        <li key={item} className="flex items-center gap-3 px-2 py-2">
-                            <div className="lemma-skeleton h-8 w-8 shrink-0 rounded-lg" />
-                            <div className="min-w-0 flex-1 space-y-2">
-                                <div className="lemma-skeleton h-3 w-40 max-w-full rounded-md" />
-                                <div className="lemma-skeleton h-2.5 w-24 rounded-md" />
-                            </div>
-                            <div className="lemma-skeleton h-3 w-10 rounded-md" />
-                        </li>
-                    ))}
-                </ul>
-            </section>
-        );
-    }
-
-    if (surfaces.length === 0) {
-        return (
-            <section className="pod-home-surfaces-panel w-full" data-state="ready">
-                <h2 className="text-base font-normal text-[var(--text-secondary)]">Surfaces</h2>
-                <div className="mt-2 flex flex-wrap items-center gap-x-3 gap-y-2">
-                    <span className="flex items-center gap-1.5">
-                        {(['SLACK', 'GMAIL', 'TELEGRAM'] as const).map((key) => (
-                            <span
-                                key={key}
-                                className="surface-logo-chip flex h-7 w-7 items-center justify-center rounded-md"
-                            >
-                                <Image src={SURFACE_META[key].logo} alt={SURFACE_META[key].label} width={16} height={16} className="object-contain" />
-                            </span>
-                        ))}
-                    </span>
-                    <p className="text-sm leading-6 text-[var(--text-secondary)]">
-                        No surfaces yet —{' '}
-                        <Link
-                            href={surfacesHref}
-                            className="custom-focus-ring font-medium text-[var(--text-primary)] underline-offset-2 hover:underline"
-                        >
-                            connect a surface
-                        </Link>{' '}
-                        so this pod can answer messages where your team already works.
-                    </p>
-                </div>
-            </section>
-        );
-    }
-
-    const sorted = [...surfaces].sort(
-        (a, b) => (b.status === 'ACTIVE' ? 1 : 0) - (a.status === 'ACTIVE' ? 1 : 0),
-    );
-
-    return (
-        <section className="pod-home-surfaces-panel w-full" data-state="ready">
-            <div className="flex items-center justify-between gap-3">
-                <h2 className="text-base font-normal text-[var(--text-secondary)]">Surfaces</h2>
-                <Link
-                    href={surfacesHref}
-                    className="custom-focus-ring shrink-0 text-sm font-medium text-[var(--text-tertiary)] transition-colors hover:text-[var(--text-primary)]"
-                >
-                    Manage
-                </Link>
-            </div>
-            <ul className="pod-home-surfaces-list mt-2 flex flex-col gap-0.5">
-                {sorted.map((surface) => {
-                    const platform = String(surface.platform || '').toUpperCase();
-                    const meta = SURFACE_META[platform];
-                    const label = meta?.label || formatDisplayName(platform);
-                    const status = surfaceStatusView(surface.status);
-                    const tone = SURFACE_STATUS_TONE[status.tone];
-                    const address = surfaceAddress(surface);
-                    const responder = surface.agent_name?.trim() || 'Pod default';
-
-                    return (
-                        <li key={surface.id}>
-                            <Link
-                                href={surfacesHref}
-                                className="group flex items-center gap-3 rounded-lg px-2 py-2 transition-colors hover:bg-[color:color-mix(in_srgb,var(--surface-2)_55%,transparent)]"
-                            >
-                                <span className={cn(
-                                    'flex h-8 w-8 shrink-0 items-center justify-center rounded-lg',
-                                    meta?.logo
-                                        ? 'surface-logo-chip'
-                                        : 'border border-[color:color-mix(in_srgb,var(--border-subtle)_50%,transparent)] bg-[var(--surface-2)]'
-                                )}>
-                                    {meta?.logo ? (
-                                        <Image src={meta.logo} alt="" width={16} height={16} className="object-contain" />
-                                    ) : (
-                                        <MessageCircle className="h-4 w-4 text-[var(--text-secondary)]" />
-                                    )}
-                                </span>
-                                <div className="min-w-0 flex-1">
-                                    <p className="truncate text-sm text-[var(--text-primary)]">
-                                        <span className="font-normal">{label}</span>
-                                        {address ? <span className="text-[var(--text-tertiary)]"> · {address}</span> : null}
-                                    </p>
-                                    <p className="truncate text-xs text-[var(--text-secondary)]">
-                                        {responder} answers
-                                    </p>
-                                </div>
-                                <span className={cn('inline-flex shrink-0 items-center gap-1.5 text-xs', tone.text)}>
-                                    <span className={cn('h-1.5 w-1.5 rounded-full', tone.dot)} />
-                                    {status.label}
-                                </span>
-                            </Link>
-                        </li>
-                    );
-                })}
-            </ul>
-        </section>
-    );
-}
-
-function PodRecipesHomePanel({ podId }: { podId: string }) {
+function PodRecipesHomeNudge({ podId }: { podId: string }) {
+    const themes = FEATURED_STARTER_THEMES;
     const { launchRecipe } = useLaunchRecipe(podId);
-    const featured = featuredRecipes.slice(0, 3);
+    const [expanded, setExpanded] = useState(false);
+    const [dismissed, setDismissed] = useState<boolean | null>(null);
+    const storageKey = `${POD_HOME_STARTER_DISMISS_KEY}:${podId}`;
 
-    if (featured.length === 0) return null;
+    useEffect(() => {
+        let nextDismissed = false;
+        try {
+            nextDismissed = window.localStorage.getItem(storageKey) === '1';
+        } catch {}
+        const frame = window.requestAnimationFrame(() => setDismissed(nextDismissed));
+        return () => window.cancelAnimationFrame(frame);
+    }, [storageKey]);
+
+    const dismiss = () => {
+        try {
+            window.localStorage.setItem(storageKey, '1');
+        } catch {
+            // The in-memory dismissal still works when browser storage is unavailable.
+        }
+        setDismissed(true);
+    };
+
+    if (themes.length === 0 || dismissed !== false) return null;
 
     return (
-        <section className="w-full">
-            <div className="flex flex-col gap-4 lg:flex-row lg:items-end lg:justify-between">
-                <div className="max-w-2xl">
-                    <p className="type-eyebrow-mono">
-                        Recipes
-                    </p>
-                    <h2 className="mt-2 text-lg font-medium text-[var(--text-primary)]">
-                        Fastest way to feel this pod work
-                    </h2>
-                    <p className="mt-1 text-sm leading-6 text-[var(--text-secondary)]">
-                        A recipe adds capability in minutes — from a one-line prompt the assistant builds, to a bot you message, to a full kit.
-                    </p>
+        <section className="pod-home-starter-nudge w-full" data-expanded={expanded ? 'true' : 'false'}>
+            <div className="flex flex-col gap-3 sm:flex-row sm:items-center">
+                <span className="pod-home-starter-nudge-icon">
+                    <Plus className="h-4 w-4" />
+                </span>
+                <div className="min-w-0 flex-1">
+                    <h2 className="text-sm font-medium text-[var(--text-primary)]">Add another capability</h2>
+                    <p className="mt-0.5 truncate text-xs text-[var(--text-tertiary)]">Dashboards, channel agents, knowledge, intake, and automations.</p>
                 </div>
-                <Link
-                    href={`/pod/${podId}/recipes`}
-                    className="custom-focus-ring inline-flex h-9 items-center justify-center gap-2 rounded-md border border-[color:var(--button-secondary-border)] bg-[var(--button-secondary-bg)] px-3 text-sm font-medium text-[var(--button-secondary-fg)] transition-colors hover:border-[var(--field-border-hover)] hover:bg-[var(--button-secondary-bg-hover)]"
-                >
-                    All recipes
-                    <ArrowRight className="h-4 w-4" />
-                </Link>
+                <div className="flex shrink-0 items-center gap-1">
+                    <Button
+                        type="button"
+                        variant="ghost"
+                        size="sm"
+                        onClick={() => setExpanded((value) => !value)}
+                        aria-expanded={expanded}
+                        className="h-8 gap-1.5 px-2.5 text-xs"
+                    >
+                        {expanded ? 'Hide ideas' : 'Show ideas'}
+                        {expanded ? <ChevronUp className="h-3.5 w-3.5" /> : <ChevronDown className="h-3.5 w-3.5" />}
+                    </Button>
+                    <Link
+                        href={`/pod/${podId}/recipes`}
+                        className="custom-focus-ring inline-flex h-8 items-center gap-1 rounded-md px-2.5 text-xs text-[var(--text-tertiary)] transition-colors hover:text-[var(--text-primary)]"
+                    >
+                        Browse all
+                        <ArrowRight className="h-3.5 w-3.5" />
+                    </Link>
+                    <Button
+                        type="button"
+                        variant="ghost"
+                        size="icon"
+                        onClick={dismiss}
+                        aria-label="Dismiss starter suggestions for this pod"
+                        title="Dismiss"
+                        className="h-8 w-8 text-[var(--text-tertiary)]"
+                    >
+                        <X className="h-3.5 w-3.5" />
+                    </Button>
+                </div>
             </div>
 
-            <div className="mt-4 grid gap-3 lg:grid-cols-3">
-                {featured.map((recipe) => (
-                    <RecipeFeatureCard
-                        key={recipe.id}
-                        podId={podId}
-                        recipe={recipe}
-                        onLaunch={() => launchRecipe(recipe)}
+            {expanded ? (
+                <div className="mt-3 border-t border-[var(--border-subtle)] pt-3">
+                    <StarterThemePicker
+                        themes={themes}
+                        onLaunch={(recipe, message) => launchRecipe(recipe, { message })}
                     />
-                ))}
-            </div>
+                </div>
+            ) : null}
         </section>
     );
 }

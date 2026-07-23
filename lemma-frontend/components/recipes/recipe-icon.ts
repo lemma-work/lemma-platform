@@ -1,22 +1,16 @@
 import { createElement, type ReactElement } from 'react';
 import {
     BookOpen,
-    Briefcase,
-    CalendarDays,
     Contact2,
     Eye,
-    Flame,
     Inbox,
-    Lightbulb,
     ListChecks,
     type LemmaIcon,
     MessageSquare,
     MessagesSquare,
     Newspaper,
-    NotebookPen,
     PackageOpen,
     PanelsTopLeft,
-    Receipt,
     RefreshCw,
     Send,
     Sparkles,
@@ -26,34 +20,20 @@ import {
 import type { Recipe, RecipeBuilds } from '@/lib/recipes/recipes';
 
 const BY_ID: Record<string, LemmaIcon> = {
-    // quick wins
-    'personal-crm': Contact2,
-    'reading-digest': BookOpen,
-    'meeting-notes': ListChecks,
-    'job-tracker': Briefcase,
-    'habit-tracker': Flame,
-    'daily-log': NotebookPen,
-    // bots & surfaces
-    'slack-standup-bot': MessageSquare,
-    'expense-logger-bot': Receipt,
-    'ask-my-data-bot': MessagesSquare,
-    'email-intake-bot': Inbox,
-    'site-support-bot': MessagesSquare,
-    // creators & indies
-    'content-idea-engine': Lightbulb,
-    'newsletter-curator': Newspaper,
-    'competitor-watch': Eye,
-    'lead-finder': Send,
-    // consultants
-    'client-invoice-tracker': Receipt,
-    'proposal-drafter': NotebookPen,
-    // team ops
-    'renewal-review': RefreshCw,
-    'support-triage': MessagesSquare,
-    'approvals-queue': ListChecks,
-    'standup-digest': CalendarDays,
-    'content-pipeline': NotebookPen,
-    'lightweight-crm': Contact2,
+    'dashboard-internal-tool': PanelsTopLeft,
+    'inbox-review-queue': Inbox,
+    'knowledge-workspace': BookOpen,
+    'portal-intake': Send,
+    'whatsapp-agent': MessageSquare,
+    'telegram-agent-app': Send,
+    'slack-agent': MessagesSquare,
+    'email-agent': Inbox,
+    'teams-agent': MessagesSquare,
+    'monitor-alert': Eye,
+    'intake-triage': RefreshCw,
+    'approval-review': ListChecks,
+    'scheduled-briefing': Newspaper,
+    'follow-up-chaser': Contact2,
 };
 
 const BY_BUILDS: Record<RecipeBuilds, LemmaIcon> = {

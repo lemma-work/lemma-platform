@@ -240,21 +240,19 @@ export const AUDIENCE_OPTIONS: Array<{
 // are concrete outcomes ("Personal CRM") rather than build strategies, so a
 // first-timer picks a result instead of a method.
 const PERSONAL_START_RECIPE_IDS = [
-  "meal-log-bot",
-  "expense-logger-bot",
-  "ask-my-data-bot",
-  "personal-crm",
-  "reading-digest",
-  "habit-tracker",
+  "telegram-personal-logger",
+  "dashboard-internal-tool",
+  "knowledge-workspace",
+  "monitor-alert",
 ];
 
 const TEAM_START_RECIPE_IDS = [
-  "support-triage",
-  "approvals-queue",
-  "slack-standup-bot",
-  "email-intake-bot",
-  "lightweight-crm",
-  "renewal-review",
+  "crm-pipeline-app",
+  "whatsapp-support-desk",
+  "slack-knowledge-teammate",
+  "email-agent",
+  "inbox-review-queue",
+  "approval-review",
 ];
 
 export function startRecipesForAudience(audience: Audience): Recipe[] {

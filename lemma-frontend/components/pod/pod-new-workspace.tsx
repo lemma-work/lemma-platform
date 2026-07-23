@@ -181,7 +181,7 @@ export function PodNewWorkspace({
                     {recipes.length > 0 ? (
                         <div className="flex flex-wrap items-center gap-x-1 gap-y-1">
                             <div className="w-24 shrink-0 px-2 text-xs text-[var(--text-tertiary)]">
-                                From a recipe
+                                Starting points
                             </div>
                             {recipes.map((recipe) => (
                                 <RecipeLaunchRow
@@ -195,7 +195,7 @@ export function PodNewWorkspace({
                                 href={`/pod/${podId}/recipes`}
                                 className="custom-focus-ring inline-flex h-8 items-center gap-1 rounded-md px-2 text-xs text-[var(--text-tertiary)] transition-colors hover:text-[var(--text-primary)]"
                             >
-                                All recipes
+                                All starters
                                 <ArrowRight className="h-3.5 w-3.5" />
                             </Link>
                         </div>
