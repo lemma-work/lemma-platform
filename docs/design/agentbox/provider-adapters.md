@@ -174,7 +174,9 @@ Create:
 2. create or reuse the named volume recorded for the logical workspace storage row;
 3. create the container from the workspace image digest;
 4. mount the volume at `/workspace` and no host project paths;
-5. publish only required app ports on `127.0.0.1` with random host ports;
+5. on the installed stack, attach the container to the manager's private network
+   without publishing runtime or app ports; a standalone development fallback may
+   publish required ports on `127.0.0.1` with random host ports;
 6. apply CPU, memory, PID, and ephemeral-storage limits;
 7. drop Linux capabilities and prohibit privilege escalation;
 8. start the container and wait for the private workspace runtime;
@@ -224,9 +226,11 @@ Workspace filesystem operations use the private workspace runtime, not shell/bas
 commands. Docker archive APIs may be used for bulk import/export only after path and
 symlink validation.
 
-User port access goes through an AgentBox signed reverse proxy to the loopback-bound
-random host port. Raw host ports and Docker container addresses are not returned to
-the backend or user.
+User port access goes through an AgentBox signed reverse proxy. On the installed
+stack, the manager reaches the container IP over their shared private network and
+the sandbox port is not host-published. A standalone development fallback may proxy
+to a loopback-bound random host port. Raw host ports and Docker container addresses
+are never returned to the backend or user.
 
 ### 5.5 Inventory and recovery
 

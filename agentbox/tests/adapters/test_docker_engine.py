@@ -11,6 +11,7 @@ from agentbox.adapters.docker_engine import (
     DockerContainerInspect,
     DockerEngineClient,
     DockerHostConfig,
+    DockerNetworkCreateRequest,
     DockerRequestAmbiguous,
 )
 
@@ -79,6 +80,47 @@ async def test_container_inspect_parses_private_network_attachment():
     assert (
         inspected.network_settings.networks["lemma-private"].ip_address == "172.28.0.7"
     )
+
+
+async def test_network_create_and_delete_use_typed_engine_requests():
+    observed: list[httpx.Request] = []
+
+    async def handler(request: httpx.Request) -> httpx.Response:
+        observed.append(request)
+        if request.method == "POST":
+            return httpx.Response(
+                201,
+                json={"Id": "network-123", "Warning": ""},
+                request=request,
+            )
+        return httpx.Response(204, request=request)
+
+    engine = DockerEngineClient(transport=httpx.MockTransport(handler))
+    deadline = datetime.now(timezone.utc) + timedelta(seconds=10)
+    created = await engine.create_network(
+        DockerNetworkCreateRequest(
+            name="lemma-private",
+            labels={"managed-by": "agentbox-test"},
+        ),
+        deadline_at=deadline,
+    )
+    deleted = await engine.delete_network(
+        created.network_id,
+        deadline_at=deadline,
+    )
+    await engine.close()
+
+    assert created.network_id == "network-123"
+    assert deleted is True
+    assert [request.method for request in observed] == ["POST", "DELETE"]
+    assert observed[0].url.path == "/v1.44/networks/create"
+    assert json.loads(observed[0].content) == {
+        "Name": "lemma-private",
+        "CheckDuplicate": True,
+        "Driver": "bridge",
+        "Labels": {"managed-by": "agentbox-test"},
+    }
+    assert observed[1].url.path == "/v1.44/networks/network-123"
 
 
 async def test_lost_container_create_response_is_ambiguous():

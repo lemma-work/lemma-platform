@@ -16,12 +16,24 @@ import httpx
 import pytest
 import uvicorn
 
+from agentbox_client import AgentBoxClient
+from agentbox_client import AdmissionClass as ClientAdmissionClass
+from agentbox_client import ProcessState as ClientProcessState
+from agentbox_client import ProfileRef as ClientProfileRef
+from agentbox_client import WorkloadKind as ClientWorkloadKind
 from agentbox.adapters.docker import (
     DockerAdapterConfig,
     DockerSandboxAdapter,
     RuntimeCredentialSigner,
 )
 from agentbox.adapters.docker_engine import DockerEngineClient
+from agentbox.adapters.docker_engine import (
+    DockerContainerCreateRequest,
+    DockerEmptyObject,
+    DockerHostConfig,
+    DockerNetworkCreateRequest,
+    DockerPortBinding,
+)
 from agentbox.domain import (
     AdmissionClass,
     ByteRange,
@@ -218,6 +230,266 @@ async def test_real_docker_create_profile_replace_and_volume_persistence(
             await engine.delete_volume(volume_name, deadline_at=cleanup_deadline)
         await adapter.close()
         await database.dispose()
+
+
+async def test_real_docker_private_network_reaches_unpublished_runtime(
+    tmp_path: Path,
+):
+    del tmp_path
+    engine = DockerEngineClient(socket_path=docker_socket())
+    test_run = str(uuid4())
+    network_name = f"agentbox-private-{uuid4().hex[:12]}"
+    manager_name = f"agentbox-private-manager-{uuid4().hex[:12]}"
+    provider_scope = f"docker:private-network:{uuid4()}"
+    api_key = f"private-network-api-{uuid4()}"
+    profile_digest = f"sha256:{'d' * 64}"
+    deadline = datetime.now(timezone.utc) + timedelta(seconds=120)
+    network = await engine.create_network(
+        DockerNetworkCreateRequest(
+            name=network_name,
+            labels={
+                "managed-by": "agentbox-conformance",
+                "test-run": test_run,
+            },
+        ),
+        deadline_at=deadline,
+    )
+    manager_id: str | None = None
+    workspace_id = uuid4()
+    workspace_provider_id: str | None = None
+    workspace_volume_name: str | None = None
+
+    try:
+        manager = await engine.create_container(
+            manager_name,
+            DockerContainerCreateRequest(
+                image=os.getenv("AGENTBOX_MANAGER_TEST_IMAGE", "agentbox-manager:dev"),
+                labels={
+                    "managed-by": "agentbox-conformance-manager",
+                    "test-run": test_run,
+                },
+                user="0",
+                working_dir="/app",
+                env=(
+                    "AGENTBOX_ENVIRONMENT=test",
+                    f"AGENTBOX_API_KEY={api_key}",
+                    "AGENTBOX_API_URL=http://agentbox-manager:8000",
+                    "AGENTBOX_PROVIDER=docker",
+                    "AGENTBOX_STATE_DB_PATH=/tmp/agentbox-state.db",
+                    "AGENTBOX_AUTO_CREATE_SCHEMA=true",
+                    "AGENTBOX_DOCKER_SOCKET_PATH=/var/run/docker.sock",
+                    f"AGENTBOX_DOCKER_SCOPE={provider_scope}",
+                    "AGENTBOX_DOCKER_ALLOW_MUTABLE_IMAGES=true",
+                    f"AGENTBOX_DOCKER_PRIVATE_NETWORK={network_name}",
+                    "AGENTBOX_ADD_HOST_GATEWAY=false",
+                    "AGENTBOX_WORKSPACE_PROFILE_NAME=workspace-python-v1",
+                    f"AGENTBOX_WORKSPACE_PROFILE_DIGEST={profile_digest}",
+                    "AGENTBOX_WORKSPACE_IMAGE=agentbox-workspace:dev",
+                    "AGENTBOX_FUNCTION_PROFILE_NAME=function-python-v1",
+                    f"AGENTBOX_FUNCTION_PROFILE_DIGEST=sha256:{'f' * 64}",
+                    "AGENTBOX_FUNCTION_IMAGE=agentbox-function:dev",
+                    f"AGENTBOX_RUNTIME_CREDENTIAL_KEY={'n' * 32}",
+                    "AGENTBOX_CLEANUP_INTERVAL_SECONDS=30",
+                ),
+                exposed_ports={"8000/tcp": DockerEmptyObject()},
+                host_config=DockerHostConfig(
+                    binds=("/var/run/docker.sock:/var/run/docker.sock",),
+                    port_bindings={
+                        "8000/tcp": (
+                            DockerPortBinding(host_ip="127.0.0.1", host_port=""),
+                        )
+                    },
+                    network_mode=network_name,
+                    memory=512 * 1024 * 1024,
+                    nano_cpus=1_000_000_000,
+                    pids_limit=256,
+                ),
+            ),
+            deadline_at=deadline,
+        )
+        manager_id = manager.container_id
+        await engine.start_container(manager_id, deadline_at=deadline)
+        manager_inspect = await engine.inspect_container(
+            manager_id,
+            deadline_at=deadline,
+        )
+        assert manager_inspect is not None
+        manager_ports = manager_inspect.network_settings.ports.get("8000/tcp")
+        assert manager_ports
+        manager_url = f"http://127.0.0.1:{manager_ports[0].host_port}"
+
+        async with httpx.AsyncClient(timeout=1) as health_client:
+            last_health = "no response"
+            for _ in range(300):
+                manager_inspect = await engine.inspect_container(
+                    manager_id,
+                    deadline_at=deadline,
+                )
+                assert manager_inspect is not None
+                assert manager_inspect.state.running, manager_inspect.state
+                try:
+                    response = await health_client.get(f"{manager_url}/health/ready")
+                    last_health = f"HTTP {response.status_code}: {response.text[:200]}"
+                    if response.status_code == 200:
+                        break
+                except httpx.HTTPError as exc:
+                    last_health = f"{type(exc).__name__}: {exc}"
+                await asyncio.sleep(0.1)
+            else:
+                raise AssertionError(f"manager did not become ready: {last_health}")
+
+        async with AgentBoxClient(
+            base_url=manager_url,
+            api_key=api_key,
+            timeout_seconds=120,
+        ) as client:
+            while True:
+                handle = await client.ensure_sandbox(
+                    ClientWorkloadKind.WORKSPACE,
+                    workspace_id,
+                    profile=ClientProfileRef(
+                        name="workspace-python-v1",
+                        digest=profile_digest,
+                    ),
+                    admission_class=ClientAdmissionClass.INTERACTIVE,
+                    deadline_at=deadline,
+                )
+                if handle.ready:
+                    break
+                assert datetime.now(timezone.utc) < deadline
+                await asyncio.sleep((handle.retry_after_ms or 100) / 1000)
+
+            inventory = await engine.list_containers(
+                labels={
+                    "managed-by": "agentbox",
+                    "provider-scope": provider_scope,
+                    "logical-id": str(workspace_id),
+                },
+                deadline_at=deadline,
+            )
+            assert len(inventory) == 1
+            workspace_provider_id = inventory[0].container_id
+            workspace_inspect = await engine.inspect_container(
+                workspace_provider_id,
+                deadline_at=deadline,
+            )
+            assert workspace_inspect is not None
+            workspace_volume_name = workspace_inspect.config.labels.get(
+                "workspace-storage-id"
+            )
+            attachment = workspace_inspect.network_settings.networks.get(network_name)
+            assert attachment is not None and attachment.ip_address
+            assert not workspace_inspect.network_settings.ports.get("8080/tcp")
+
+            operation_id = uuid4()
+            await client.start_process(
+                ClientWorkloadKind.WORKSPACE,
+                workspace_id,
+                operation_id=operation_id,
+                shell_command="printf 'private-runtime-ok\\n'",
+                cwd="/workspace",
+                deadline_at=deadline,
+            )
+            output = await client.read_process_output(
+                ClientWorkloadKind.WORKSPACE,
+                workspace_id,
+                operation_id,
+                wait_seconds=10,
+                deadline_at=deadline,
+            )
+            output_chunks = list(output.chunks)
+            if output.state == ClientProcessState.RUNNING:
+                output = await client.read_process_output(
+                    ClientWorkloadKind.WORKSPACE,
+                    workspace_id,
+                    operation_id,
+                    after_sequence=output.next_sequence,
+                    wait_seconds=10,
+                    deadline_at=deadline,
+                )
+                output_chunks.extend(output.chunks)
+            assert output.state == ClientProcessState.SUCCEEDED
+            assert b"private-runtime-ok" in b"".join(
+                chunk.data for chunk in output_chunks
+            )
+
+            await client.destroy_sandbox(
+                ClientWorkloadKind.WORKSPACE,
+                workspace_id,
+                deadline_at=deadline,
+            )
+
+        assert (
+            await engine.inspect_container(
+                workspace_provider_id,
+                deadline_at=deadline,
+            )
+            is None
+        )
+        if workspace_volume_name is not None:
+            assert (
+                await engine.inspect_volume(
+                    workspace_volume_name,
+                    deadline_at=deadline,
+                )
+                is None
+            )
+        assert not await engine.list_containers(
+            labels={
+                "managed-by": "agentbox",
+                "provider-scope": provider_scope,
+            },
+            deadline_at=deadline,
+        )
+    finally:
+        cleanup_deadline = datetime.now(timezone.utc) + timedelta(seconds=30)
+        inventory = await engine.list_containers(
+            labels={
+                "managed-by": "agentbox",
+                "provider-scope": provider_scope,
+            },
+            deadline_at=cleanup_deadline,
+        )
+        cleanup_volumes = {
+            inspected.config.labels["workspace-storage-id"]
+            for item in inventory
+            if (
+                (
+                    inspected := await engine.inspect_container(
+                        item.container_id,
+                        deadline_at=cleanup_deadline,
+                    )
+                )
+                is not None
+                and "workspace-storage-id" in inspected.config.labels
+            )
+        }
+        for item in inventory:
+            await engine.delete_container(
+                item.container_id,
+                deadline_at=cleanup_deadline,
+                force=True,
+            )
+        for volume_name in cleanup_volumes:
+            await engine.delete_volume(volume_name, deadline_at=cleanup_deadline)
+        manager_inventory = await engine.list_containers(
+            labels={
+                "managed-by": "agentbox-conformance-manager",
+                "test-run": test_run,
+            },
+            deadline_at=cleanup_deadline,
+        )
+        for item in manager_inventory:
+            await engine.delete_container(
+                item.container_id,
+                deadline_at=cleanup_deadline,
+                force=True,
+            )
+        await engine.delete_network(
+            network.network_id,
+            deadline_at=cleanup_deadline,
+        )
+        await engine.close()
 
 
 async def test_real_docker_runtime_process_pty_input_resize_and_reconnect(

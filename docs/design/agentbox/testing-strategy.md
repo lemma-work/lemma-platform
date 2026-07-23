@@ -1,6 +1,6 @@
 # AgentBox Testing Strategy
 
-**Status:** Proposed design; executable Docker/E2B conformance in progress
+**Status:** Implementation specification; Docker/E2B release verification in progress
 
 **Parent:** [AgentBox](README.md)
 
@@ -33,18 +33,19 @@ security launch requirements, migration, and promotion decisions.
 
 ### 1.1 Current implementation evidence
 
-As of 2026-07-22, the following has been executed from the working tree:
+As of 2026-07-23, the following has been executed from the implementation branch:
 
 | Suite | Result | What it proves |
 | --- | ---: | --- |
-| AgentBox unit/contract suite | 69 passed, 6 provider-gated skips | Typed state, API, adapters, runtimes, fault paths, exact cleanup reconciliation |
-| Real Docker adapter suite | 4 passed | Workspace lifecycle/volume, shell, PTY, Python, files, browser/port access, function process and runner callback |
-| Real E2B adapter suite | 2 passed | Immutable create, Node/pnpm/uv/LiteParse, shell/stdin, PTY/resize, native files, Code Interpreter state, headful browser, pause/auto-resume, function process/cancel, exact deletion |
-| Backend-to-Docker function journey | Passed | Ticket claim, artifact verification, runner execution, gateway terminal callback |
+| AgentBox unit/contract suite | 90 passed, 7 provider-gated skips | Typed SQLAlchemy state, API, adapters, runtimes, streaming files, fault paths, exact cleanup reconciliation |
+| Real Docker adapter suite | 5 passed | Workspace lifecycle/volume, shell, PTY, Python, files, browser/port access, private-network manager topology, function process and runner callback |
+| Real E2B adapter suite | 2 passed against fresh candidate builds | Immutable create, Node/pnpm/uv/LiteParse, shell/stdin, PTY/resize, native files, Code Interpreter state, headful browser, pause/auto-resume, function process/cancel, exact deletion |
+| Backend API/JOB benchmark | Passed on Docker and the prior E2B release | Ticket claim, immutable artifact verification, real runner/gateway/database execution, 1,000-row table reads/writes at concurrency five |
 
-This is development evidence, not final release acceptance. Full backend API and JOB
-journeys through E2B, distributed PostgreSQL concurrency, chaos/performance gates,
-and protected-CI publication are still open. Kubernetes remains deferred.
+This is development evidence, not final release acceptance. The fresh E2B candidate
+builds still require the complete API/JOB benchmark before promotion. Remaining
+chaos/performance gates and protected-CI publication stay blocking. Kubernetes
+remains deferred.
 
 ## 2. Testing principles
 

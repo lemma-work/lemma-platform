@@ -1139,6 +1139,7 @@ class DockerSandboxAdapter:
             inspected,
             runtime_port=runtime_port,
             token=token,
+            private_network=self._config.private_network,
             request_timeout_seconds=0.25,
         )
         try:

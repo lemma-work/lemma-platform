@@ -71,6 +71,18 @@ class DockerVolume(DockerApiModel):
     labels: dict[str, str] = Field(default_factory=dict, alias="Labels")
 
 
+class DockerNetworkCreateRequest(DockerApiModel):
+    name: str = Field(alias="Name")
+    check_duplicate: bool = Field(default=True, alias="CheckDuplicate")
+    driver: str = Field(default="bridge", alias="Driver")
+    labels: dict[str, str] = Field(default_factory=dict, alias="Labels")
+
+
+class DockerNetworkCreateResponse(DockerApiModel):
+    network_id: str = Field(alias="Id")
+    warning: str = Field(default="", alias="Warning")
+
+
 class DockerContainerState(DockerApiModel):
     status: str = Field(alias="Status")
     running: bool = Field(alias="Running")
@@ -304,6 +316,30 @@ class DockerEngineClient:
         response = await self._request(
             "DELETE",
             f"/volumes/{name}",
+            deadline_at=deadline_at,
+            expected=(204, 404),
+        )
+        return response.status_code == 204
+
+    async def create_network(
+        self,
+        request: DockerNetworkCreateRequest,
+        *,
+        deadline_at: datetime,
+    ) -> DockerNetworkCreateResponse:
+        response = await self._request(
+            "POST",
+            "/networks/create",
+            deadline_at=deadline_at,
+            expected=(201,),
+            json_body=request,
+        )
+        return DockerNetworkCreateResponse.model_validate(response.json())
+
+    async def delete_network(self, network_id: str, *, deadline_at: datetime) -> bool:
+        response = await self._request(
+            "DELETE",
+            f"/networks/{network_id}",
             deadline_at=deadline_at,
             expected=(204, 404),
         )

@@ -10,6 +10,7 @@ WORKSPACE_IMAGE := $(REGISTRY)/lemma-agentbox-workspace
 FUNCTION_IMAGE := $(REGISTRY)/lemma-agentbox-function
 TEST_WORKSPACE_IMAGE ?= agentbox-workspace:dev
 TEST_FUNCTION_IMAGE ?= agentbox-function:dev
+TEST_MANAGER_IMAGE ?= agentbox-manager:dev
 
 .PHONY: build build-manager build-workspace build-function build-test-images
 .PHONY: push push-manager push-workspace push-function
@@ -51,6 +52,12 @@ build-function:
 # Canonical names consumed by the real Docker conformance suite. Keeping this
 # explicit prevents CI from accidentally reusing unrelated mutable local tags.
 build-test-images:
+	docker build \
+		--platform $(PLATFORM) \
+		-f agentbox/Dockerfile \
+		--build-arg PYTHON_IMAGE=$(PYTHON_IMAGE) \
+		-t $(TEST_MANAGER_IMAGE) \
+		..
 	docker build \
 		--platform $(PLATFORM) \
 		-f Dockerfile.workspace \
