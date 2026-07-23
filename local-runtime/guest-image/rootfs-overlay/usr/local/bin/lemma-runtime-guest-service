@@ -1,0 +1,12 @@
+#!/bin/sh
+set -eu
+
+capability=/etc/lemma/guest.capability
+if [ -r /mnt/lemma-control/guest.capability ]; then
+  capability=/mnt/lemma-control/guest.capability
+fi
+
+export LEMMA_GUEST_CAPABILITY_FILE="$capability"
+export LEMMA_GUEST_STATE_ROOT=/var/lib/lemma
+export LEMMA_NERDCTL_BIN=/usr/local/bin/nerdctl
+exec /usr/local/bin/lemma-guestd serve-vsock

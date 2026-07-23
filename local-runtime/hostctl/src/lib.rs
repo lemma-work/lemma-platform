@@ -7,6 +7,7 @@ use std::process::{Command, Stdio};
 
 const MAX_REQUEST_BYTES: u64 = 1024 * 1024;
 const MAX_RESPONSE_BYTES: u64 = 4 * 1024 * 1024;
+const RESPONSE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(8 * 60);
 
 pub enum Transport {
     #[cfg(unix)]
@@ -145,7 +146,10 @@ fn exchange(transport: &Transport, request: &[u8]) -> io::Result<Vec<u8>> {
     use std::os::unix::net::UnixStream;
     let Transport::Unix(path) = transport;
     let mut stream = UnixStream::connect(path)?;
-    stream.set_read_timeout(Some(std::time::Duration::from_secs(180)))?;
+    // A first-run core.ensure may pull several multi-architecture images on a
+    // slow connection. Keep the exchange bounded without treating a normal
+    // cold install as a failed guest.
+    stream.set_read_timeout(Some(RESPONSE_TIMEOUT))?;
     stream.set_write_timeout(Some(std::time::Duration::from_secs(10)))?;
     stream.write_all(request)?;
     stream.write_all(b"\n")?;

@@ -12,6 +12,7 @@ private struct RuntimePaths {
     let kernel: URL
     let initialRamdisk: URL
     let disk: URL
+    let dataDisk: URL
     let machineIdentifier: URL
     let consoleLog: URL
 
@@ -21,12 +22,14 @@ private struct RuntimePaths {
         kernel = self.root.appendingPathComponent("vmlinuz")
         initialRamdisk = self.root.appendingPathComponent("initrd")
         disk = self.root.appendingPathComponent("disk.raw")
+        dataDisk = self.root.appendingPathComponent("data.raw")
         machineIdentifier = self.root.appendingPathComponent("machine-id")
         consoleLog = self.root.appendingPathComponent("console.log")
         for (label, url) in [
             ("kernel", kernel),
             ("initial RAM disk", initialRamdisk),
             ("guest disk", disk),
+            ("guest data disk", dataDisk),
         ] where !FileManager.default.fileExists(atPath: url.path) {
             throw RuntimeError.invalid("Managed runtime is missing \(label): \(url.path)")
         }
@@ -99,13 +102,21 @@ private func configuration(
         cachingMode: .automatic,
         synchronizationMode: .full
     )
-    configuration.storageDevices = [VZVirtioBlockDeviceConfiguration(attachment: diskAttachment)]
+    let dataAttachment = try VZDiskImageStorageDeviceAttachment(
+        url: paths.dataDisk,
+        readOnly: false,
+        cachingMode: .automatic,
+        synchronizationMode: .full
+    )
+    configuration.storageDevices = [
+        VZVirtioBlockDeviceConfiguration(attachment: diskAttachment),
+        VZVirtioBlockDeviceConfiguration(attachment: dataAttachment),
+    ]
 
     let network = VZVirtioNetworkDeviceConfiguration()
     network.attachment = VZNATNetworkDeviceAttachment()
     configuration.networkDevices = [network]
     configuration.entropyDevices = [VZVirtioEntropyDeviceConfiguration()]
-    configuration.memoryBalloonDevices = [VZVirtioTraditionalMemoryBalloonDeviceConfiguration()]
     configuration.socketDevices = [VZVirtioSocketDeviceConfiguration()]
     if let controlShare {
         let directory = VZSharedDirectory(url: controlShare, readOnly: true)
@@ -116,8 +127,11 @@ private func configuration(
     }
 
     let serial = VZVirtioConsoleDeviceSerialPortConfiguration()
+    guard let serialInput = FileHandle(forReadingAtPath: "/dev/null") else {
+        throw RuntimeError.invalid("Could not open /dev/null for guest serial input")
+    }
     serial.attachment = VZFileHandleSerialPortAttachment(
-        fileHandleForReading: FileHandle.nullDevice,
+        fileHandleForReading: serialInput,
         fileHandleForWriting: try privateFileHandle(paths.consoleLog)
     )
     configuration.serialPorts = [serial]
@@ -134,6 +148,40 @@ private final class VirtualMachineDelegate: NSObject, VZVirtualMachineDelegate {
     func virtualMachine(_ virtualMachine: VZVirtualMachine, didStopWithError error: Error) {
         fputs("lemma-vz: guest stopped with error: \(error.localizedDescription)\n", stderr)
         exit(EXIT_FAILURE)
+    }
+}
+
+private final class StopCoordinator {
+    private let virtualMachine: VZVirtualMachine
+    private var requested = false
+
+    init(virtualMachine: VZVirtualMachine) {
+        self.virtualMachine = virtualMachine
+    }
+
+    func request() {
+        guard !requested else { return }
+        requested = true
+        if virtualMachine.canRequestStop {
+            do {
+                try virtualMachine.requestStop()
+                return
+            } catch {
+                fputs("lemma-vz: graceful guest stop failed: \(error.localizedDescription)\n", stderr)
+            }
+        }
+        guard virtualMachine.canStop else {
+            fputs("lemma-vz: guest cannot be stopped in its current state\n", stderr)
+            exit(EXIT_FAILURE)
+        }
+        // Last-resort VZ stop is destructive, but is still preferable to the
+        // host killing the helper while disk writes are in flight.
+        virtualMachine.stop { error in
+            if let error {
+                fputs("lemma-vz: forced guest stop failed: \(error.localizedDescription)\n", stderr)
+                exit(EXIT_FAILURE)
+            }
+        }
     }
 }
 
@@ -227,28 +275,32 @@ private final class GuestBridge {
                     continue
                 }
                 _ = fcntl(client, F_SETFD, FD_CLOEXEC)
-                socketDevice.connect(toPort: guestPort) { result in
-                    switch result {
-                    case .failure(let error):
-                        let payload = "{\"ok\":false,\"error\":{\"code\":\"guest_unavailable\",\"message\":\"\(error.localizedDescription)\",\"retryable\":true,\"status_code\":503}}\n"
-                        _ = try? writeAll(client, Data(payload.utf8))
-                        close(client)
-                    case .success(let connection):
-                        DispatchQueue.global(qos: .userInitiated).async {
-                            defer {
-                                connection.close()
-                                close(client)
-                            }
-                            do {
-                                let request = try readLine(client, limit: maxRequestBytes)
-                                try writeAll(connection.fileDescriptor, request)
-                                let response = try readLine(
-                                    connection.fileDescriptor,
-                                    limit: maxResponseBytes
-                                )
-                                try writeAll(client, response)
-                            } catch {
-                                fputs("lemma-vz: bridge error: \(error.localizedDescription)\n", stderr)
+                // Virtualization framework objects are main-queue confined.
+                // Accepting clients and copying bounded payloads stays off-main.
+                DispatchQueue.main.async { [socketDevice] in
+                    socketDevice.connect(toPort: guestPort) { result in
+                        switch result {
+                        case .failure(let error):
+                            let payload = "{\"ok\":false,\"error\":{\"code\":\"guest_unavailable\",\"message\":\"\(error.localizedDescription)\",\"retryable\":true,\"status_code\":503}}\n"
+                            _ = try? writeAll(client, Data(payload.utf8))
+                            close(client)
+                        case .success(let connection):
+                            DispatchQueue.global(qos: .userInitiated).async {
+                                defer {
+                                    connection.close()
+                                    close(client)
+                                }
+                                do {
+                                    let request = try readLine(client, limit: maxRequestBytes)
+                                    try writeAll(connection.fileDescriptor, request)
+                                    let response = try readLine(
+                                        connection.fileDescriptor,
+                                        limit: maxResponseBytes
+                                    )
+                                    try writeAll(client, response)
+                                } catch {
+                                    fputs("lemma-vz: bridge error: \(error.localizedDescription)\n", stderr)
+                                }
                             }
                         }
                     }
@@ -290,6 +342,17 @@ private func serve(arguments: [String]) throws -> Never {
     )
     let delegate = VirtualMachineDelegate()
     vm.delegate = delegate
+    let stopCoordinator = StopCoordinator(virtualMachine: vm)
+    var signalSources: [DispatchSourceSignal] = []
+    for signalNumber in [SIGTERM, SIGINT] {
+        signal(signalNumber, SIG_IGN)
+        let source = DispatchSource.makeSignalSource(signal: signalNumber, queue: .main)
+        source.setEventHandler {
+            stopCoordinator.request()
+        }
+        source.resume()
+        signalSources.append(source)
+    }
     var bridge: GuestBridge?
     vm.start { result in
         switch result {
@@ -310,7 +373,7 @@ private func serve(arguments: [String]) throws -> Never {
             }
         }
     }
-    withExtendedLifetime((vm, delegate, bridge)) {
+    withExtendedLifetime((vm, delegate, bridge, stopCoordinator, signalSources)) {
         RunLoop.main.run(until: Date.distantFuture)
     }
     fatalError("unreachable")

@@ -1,0 +1,1 @@
+lemma-control /mnt/lemma-control virtiofs ro,nofail,x-systemd.device-timeout=2s 0 0

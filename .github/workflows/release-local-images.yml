@@ -174,10 +174,39 @@ jobs:
         working-directory: /tmp/digests
         run: |
           mkdir -p digests-out
-          d=$(docker buildx imagetools inspect \
-            "${{ env.IMAGE_PREFIX }}/${{ matrix.image }}:v${{ steps.version.outputs.version }}" \
-            --format '{{json .Manifest.Digest}}' | tr -d '"')
-          echo "{\"name\": \"${{ matrix.image }}\", \"digest\": \"$d\"}" > "digests-out/${{ matrix.image }}.json"
+          IMAGE="${{ env.IMAGE_PREFIX }}/${{ matrix.image }}:v${{ steps.version.outputs.version }}" \
+          NAME="${{ matrix.image }}" \
+          python3 - <<'PY'
+          import json
+          import os
+          import subprocess
+          from pathlib import Path
+
+          ref = os.environ["IMAGE"]
+          manifest = json.loads(subprocess.check_output(
+              ["docker", "buildx", "imagetools", "inspect", ref, "--raw"],
+              text=True,
+          ))
+          platforms = {
+              f"{item['platform']['os']}/{item['platform']['architecture']}": item["digest"]
+              for item in manifest.get("manifests", [])
+              if item.get("platform", {}).get("os") and item.get("platform", {}).get("architecture")
+          }
+          required = {"linux/amd64", "linux/arm64"}
+          if not required.issubset(platforms):
+              raise SystemExit(f"{ref} is missing release platforms: {required - platforms.keys()}")
+          digest = subprocess.check_output(
+              [
+                  "docker", "buildx", "imagetools", "inspect", ref,
+                  "--format", "{{json .Manifest.Digest}}",
+              ],
+              text=True,
+          ).strip().strip('"')
+          entry = {"name": os.environ["NAME"], "digest": digest, "platforms": platforms}
+          Path(f"digests-out/{os.environ['NAME']}.json").write_text(
+              json.dumps(entry, indent=2) + "\n"
+          )
+          PY
 
       - name: Upload merged digest
         uses: actions/upload-artifact@v4
@@ -186,10 +215,119 @@ jobs:
           path: /tmp/digests/digests-out/${{ matrix.image }}.json
           retention-days: 1
 
+  infra-digests:
+    name: Pin third-party infrastructure images
+    runs-on: ubuntu-latest
+    needs: protected-e2e-gate
+    env:
+      POSTGRES_IMAGE: docker.io/pgvector/pgvector:0.8.3-pg16
+      REDIS_IMAGE: docker.io/redis/redis-stack-server:7.2.0-v19
+      SUPERTOKENS_IMAGE: docker.io/supertokens/supertokens-postgresql:11.4.5
+    steps:
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Resolve immutable manifest digests
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import json
+          import os
+          import subprocess
+          from pathlib import Path
+
+          refs = {
+              "postgres": os.environ["POSTGRES_IMAGE"],
+              "redis": os.environ["REDIS_IMAGE"],
+              "supertokens": os.environ["SUPERTOKENS_IMAGE"],
+          }
+          pinned = {}
+          for name, ref in refs.items():
+              manifest = json.loads(subprocess.check_output(
+                  ["docker", "buildx", "imagetools", "inspect", ref, "--raw"],
+                  text=True,
+              ))
+              platforms = {
+                  f"{item['platform']['os']}/{item['platform']['architecture']}": item["digest"]
+                  for item in manifest.get("manifests", [])
+                  if item.get("platform", {}).get("os") and item.get("platform", {}).get("architecture")
+              }
+              required = {"linux/amd64", "linux/arm64"}
+              if not required.issubset(platforms):
+                  raise SystemExit(f"{ref} is missing release platforms: {required - platforms.keys()}")
+              digest = subprocess.check_output(
+                  [
+                      "docker", "buildx", "imagetools", "inspect", ref,
+                      "--format", "{{json .Manifest.Digest}}",
+                  ],
+                  text=True,
+              ).strip().strip('"')
+              if not digest.startswith("sha256:"):
+                  raise SystemExit(f"could not resolve digest for {ref}: {digest}")
+              pinned[name] = {"ref": ref, "digest": digest, "platforms": platforms}
+          Path("infra-digests.json").write_text(json.dumps(pinned, indent=2) + "\n")
+          PY
+
+      - name: Upload infrastructure digests
+        uses: actions/upload-artifact@v4
+        with:
+          name: infra-digests
+          path: infra-digests.json
+          if-no-files-found: error
+          retention-days: 1
+
+  guest-runtimes:
+    name: Build managed guest runtime (${{ matrix.target }})
+    needs: protected-e2e-gate
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: macos-aarch64
+            runner: ubuntu-24.04-arm
+          - target: windows-x86_64
+            runner: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v7
+
+      - name: Set up Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Install ARM64 kernel unpacker
+        if: matrix.target == 'macos-aarch64'
+        run: sudo apt-get update && sudo apt-get install -y zstd
+
+      - name: Build guest control daemon
+        run: cargo build --manifest-path local-runtime/guestd/Cargo.toml --release
+
+      - name: Assemble private guest artifact
+        shell: bash
+        run: |
+          bash scripts/build_local_guest_runtime.sh \
+            --target "${{ matrix.target }}" \
+            --guestd local-runtime/guestd/target/release/lemma-guestd \
+            --output "guest-runtime-out/lemma-guest-runtime-${{ matrix.target }}.zip"
+
+      - name: Upload managed guest runtime
+        uses: actions/upload-artifact@v4
+        with:
+          name: guest-runtime-${{ matrix.target }}
+          path: |
+            guest-runtime-out/lemma-guest-runtime-${{ matrix.target }}.zip
+            guest-runtime-out/lemma-guest-runtime-${{ matrix.target }}.zip.json
+          if-no-files-found: error
+          retention-days: 1
+
   host-packs:
     name: Build native host pack (${{ matrix.target }})
     runs-on: ${{ matrix.runner }}
-    needs: merge
+    needs: [merge, infra-digests]
     strategy:
       fail-fast: false
       matrix:
@@ -229,11 +367,18 @@ jobs:
           path: digests
           merge-multiple: true
 
+      - name: Download infrastructure digests
+        uses: actions/download-artifact@v8
+        with:
+          name: infra-digests
+          path: digests
+
       - name: Generate pack release input
         shell: bash
         env:
           VERSION: ${{ steps.version.outputs.version }}
           PREFIX: ${{ env.IMAGE_PREFIX }}
+          TARGET: ${{ matrix.target }}
         run: |
           python - <<'PY'
           import json
@@ -242,14 +387,26 @@ jobs:
 
           version = os.environ["VERSION"]
           prefix = os.environ["PREFIX"]
-          digests = {
-              entry["name"]: entry["digest"]
-              for path in Path("digests").glob("*.json")
-              for entry in [json.loads(path.read_text())]
-          }
+          platform = {
+              "aarch64-apple-darwin": "linux/arm64",
+              "x86_64-pc-windows-msvc": "linux/amd64",
+          }[os.environ["TARGET"]]
+          digests = {}
+          for path in Path("digests").glob("*.json"):
+              entry = json.loads(path.read_text())
+              if "name" in entry:
+                  digests[entry["name"]] = entry
 
           def image(name):
-              return {"ref": f"{prefix}/{name}:v{version}", "digest": digests[name]}
+              return {
+                  "ref": f"{prefix}/{name}:v{version}",
+                  "digest": digests[name]["platforms"][platform],
+              }
+
+          infra = json.loads(Path("digests/infra-digests.json").read_text())
+          for entry in infra.values():
+              entry["digest"] = entry["platforms"][platform]
+              entry.pop("platforms", None)
 
           release = {
               "schema_version": 1,
@@ -260,6 +417,7 @@ jobs:
                   "frontend": image("lemma-frontend"),
                   "agentbox_runtime": image("lemma-agentbox-runtime"),
               },
+              "infra": infra,
           }
           Path("host-release.json").write_text(json.dumps(release, indent=2) + "\n")
           PY
@@ -286,7 +444,7 @@ jobs:
   manifest:
     name: Publish release manifest
     runs-on: ubuntu-latest
-    needs: [merge, host-packs]
+    needs: [merge, infra-digests, guest-runtimes, host-packs]
     steps:
       - name: Resolve version
         id: version
@@ -314,6 +472,19 @@ jobs:
           path: host-packs
           merge-multiple: true
 
+      - name: Download infrastructure digests
+        uses: actions/download-artifact@v8
+        with:
+          name: infra-digests
+          path: digests
+
+      - name: Download managed guest runtimes
+        uses: actions/download-artifact@v8
+        with:
+          pattern: guest-runtime-*
+          path: guest-runtimes
+          merge-multiple: true
+
       - name: Generate lemma-local.json
         shell: bash
         env:
@@ -333,7 +504,8 @@ jobs:
           digests = {}
           for path in Path("digests").glob("*.json"):
               entry = json.loads(path.read_text())
-              digests[entry["name"]] = entry["digest"]
+              if "name" in entry:
+                  digests[entry["name"]] = entry["digest"]
 
           def image(name: str) -> dict:
               return {"ref": f"{prefix}/{name}:v{version}", "digest": digests[name]}
@@ -344,6 +516,21 @@ jobs:
               import hashlib
               digest = hashlib.sha256(path.read_bytes()).hexdigest()
               host_packs[target] = {
+                  "url": (
+                      f"https://github.com/{repository}/releases/download/"
+                      f"v{version}/{path.name}"
+                  ),
+                  "sha256": digest,
+                  "size": path.stat().st_size,
+                  "format": "zip",
+              }
+
+          guest_runtimes = {}
+          for path in sorted(Path("guest-runtimes").glob("lemma-guest-runtime-*.zip")):
+              target = path.stem.removeprefix("lemma-guest-runtime-")
+              import hashlib
+              digest = hashlib.sha256(path.read_bytes()).hexdigest()
+              guest_runtimes[target] = {
                   "url": (
                       f"https://github.com/{repository}/releases/download/"
                       f"v{version}/{path.name}"
@@ -367,12 +554,18 @@ jobs:
                   "agentbox": image("lemma-agentbox"),
                   "agentbox_runtime": image("lemma-agentbox-runtime"),
               },
+              # Keep schema-1 compatibility for older lemma-stack clients:
+              # public infra entries remain strings, now pinned to the
+              # multi-platform index digest. Native host packs separately use
+              # the exact per-platform child digest resolved above.
               "infra": {
-                  "postgres": "docker.io/pgvector/pgvector:0.8.3-pg16",
-                  "redis": "docker.io/redis/redis-stack:7.2.0-v19",
-                  "supertokens": "docker.io/supertokens/supertokens-postgresql:11.4.5",
+                  name: f"{entry['ref']}@{entry['digest']}"
+                  for name, entry in json.loads(
+                      Path("digests/infra-digests.json").read_text()
+                  ).items()
               },
               "host_packs": host_packs,
+              "guest_runtimes": guest_runtimes,
           }
           Path("lemma-local.json").write_text(json.dumps(manifest, indent=2) + "\n")
           print(json.dumps(manifest, indent=2))
@@ -385,6 +578,7 @@ jobs:
           files: |
             lemma-local.json
             host-packs/lemma-host-pack-*.zip
+            guest-runtimes/lemma-guest-runtime-*.zip
           # Only generate release notes on a real tag push; workflow_dispatch
           # re-runs are used to repair an existing release (backfill the
           # lemma-local.json asset) and must not overwrite the release body.

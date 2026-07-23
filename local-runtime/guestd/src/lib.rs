@@ -2,9 +2,10 @@ use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use std::collections::BTreeMap;
 use std::fs::{self, OpenOptions};
-use std::io::{self, BufRead, BufReader, Read, Write};
+use std::io::{self, BufRead, BufReader, Read, Seek, SeekFrom, Write};
 use std::net::{IpAddr, SocketAddr, TcpStream, ToSocketAddrs};
 use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
+use std::os::unix::process::CommandExt;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output, Stdio};
 use std::thread;
@@ -16,6 +17,8 @@ const MAX_REQUEST_BYTES: u64 = 1024 * 1024;
 const MAX_RESPONSE_BYTES: usize = 4 * 1024 * 1024;
 const CONTAINER_PREFIX: &str = "agentbox-";
 const MANAGED_LABEL: &str = "app.kubernetes.io/name=agentbox-sandbox";
+const ENGINE_COMMAND_TIMEOUT: Duration = Duration::from_secs(120);
+const ENGINE_PULL_TIMEOUT: Duration = Duration::from_secs(300);
 
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -207,13 +210,73 @@ impl NerdctlEngine {
 
 impl Engine for NerdctlEngine {
     fn run(&self, arguments: &[String]) -> Result<Output, String> {
-        Command::new(&self.executable)
-            .args(["--namespace", "lemma"])
-            .args(arguments)
-            .stdin(Stdio::null())
-            .output()
-            .map_err(|error| error.to_string())
+        let timeout = if arguments.first().is_some_and(|value| value == "pull") {
+            ENGINE_PULL_TIMEOUT
+        } else {
+            ENGINE_COMMAND_TIMEOUT
+        };
+        run_bounded_engine_command(&self.executable, arguments, timeout)
     }
+}
+
+fn run_bounded_engine_command(
+    executable: &Path,
+    arguments: &[String],
+    timeout: Duration,
+) -> Result<Output, String> {
+    // File-backed capture avoids the classic timeout deadlock where a forked
+    // helper keeps a stdout/stderr pipe open after its parent is terminated.
+    let mut stdout = tempfile::tempfile().map_err(|error| error.to_string())?;
+    let mut stderr = tempfile::tempfile().map_err(|error| error.to_string())?;
+    let mut command = Command::new(executable);
+    command
+        .args(["--namespace", "lemma"])
+        .args(arguments)
+        .stdin(Stdio::null())
+        .stdout(Stdio::from(
+            stdout.try_clone().map_err(|error| error.to_string())?,
+        ))
+        .stderr(Stdio::from(
+            stderr.try_clone().map_err(|error| error.to_string())?,
+        ))
+        .process_group(0);
+    let mut child = command.spawn().map_err(|error| error.to_string())?;
+    let deadline = Instant::now() + timeout;
+    let status = loop {
+        if let Some(status) = child.try_wait().map_err(|error| error.to_string())? {
+            break status;
+        }
+        if Instant::now() >= deadline {
+            let process_group = -(child.id() as i32);
+            // The child is its own process-group leader. Killing the group
+            // bounds nerdctl helpers as well as the top-level client.
+            unsafe {
+                libc::kill(process_group, libc::SIGKILL);
+            }
+            let _ = child.wait();
+            return Err(format!(
+                "managed container engine command timed out after {}s",
+                timeout.as_secs()
+            ));
+        }
+        thread::sleep(Duration::from_millis(100));
+    };
+
+    let mut stdout_bytes = Vec::new();
+    let mut stderr_bytes = Vec::new();
+    stdout
+        .seek(SeekFrom::Start(0))
+        .and_then(|_| stdout.read_to_end(&mut stdout_bytes))
+        .map_err(|error| error.to_string())?;
+    stderr
+        .seek(SeekFrom::Start(0))
+        .and_then(|_| stderr.read_to_end(&mut stderr_bytes))
+        .map_err(|error| error.to_string())?;
+    Ok(Output {
+        status,
+        stdout: stdout_bytes,
+        stderr: stderr_bytes,
+    })
 }
 
 pub struct GuestService<E: Engine> {
@@ -306,6 +369,8 @@ impl<E: Engine> GuestService<E> {
                 "endpoint_host": self.endpoint_host,
                 "host_gateway": self.host_gateway,
             })),
+            "diagnostics.network" => Ok(network_diagnostics()),
+            "system.shutdown" => self.shutdown(),
             "core.ensure" => self.ensure_core(request.parameters),
             "core.status" => self.core_status(),
             "core.stop" => self.stop_core(),
@@ -331,16 +396,30 @@ impl<E: Engine> GuestService<E> {
             &parameters.credentials.postgres_password,
         )?;
         validate_secret("redis_password", &parameters.credentials.redis_password)?;
-        for image in [
+        let images = [
             &parameters.images.postgres,
             &parameters.images.redis,
             &parameters.images.supertokens,
-        ] {
+        ];
+        for image in images {
             validate_image(image)?;
-            self.run_checked(&["pull".into(), image.clone()])?;
         }
+        // These are independent immutable images. Pull them concurrently so a
+        // fresh install is bounded by the slowest registry transfer rather
+        // than the sum of all three transfers.
+        thread::scope(|scope| -> Result<(), GuestError> {
+            let handles: Vec<_> = images
+                .into_iter()
+                .map(|image| scope.spawn(move || self.ensure_image(image)))
+                .collect();
+            for handle in handles {
+                handle
+                    .join()
+                    .map_err(|_| GuestError::engine("managed image pull worker failed"))??;
+            }
+            Ok(())
+        })?;
 
-        self.ensure_network("lemma-core")?;
         self.ensure_volume("lemma-postgres-data")?;
         let postgres_env = BTreeMap::from([
             ("POSTGRES_USER".into(), "postgres".into()),
@@ -353,53 +432,40 @@ impl<E: Engine> GuestService<E> {
         self.ensure_core_container(
             "lemma-core-postgres",
             &parameters.images.postgres,
+            "postgres-v1",
             &postgres_env,
             &[
                 "--network".into(),
-                "lemma-core".into(),
-                "--network-alias".into(),
-                "postgres".into(),
+                "host".into(),
                 "--volume".into(),
                 "lemma-postgres-data:/var/lib/postgresql/data".into(),
-                "--publish".into(),
-                "0.0.0.0:5432:5432".into(),
             ],
             &[],
         )?;
 
-        let redis_config = self.state_root.join("redis.conf");
-        write_private_atomic(
-            &redis_config,
+        self.ensure_volume("lemma-redis-data")?;
+        let redis_env = BTreeMap::from([(
+            "REDIS_ARGS".into(),
             format!(
-                "bind 0.0.0.0\nprotected-mode yes\nappendonly yes\nrequirepass {}\n",
+                "--bind 0.0.0.0 --protected-mode yes --appendonly yes --dir /data --requirepass {}",
                 parameters.credentials.redis_password
-            )
-            .as_bytes(),
-        )?;
+            ),
+        )]);
         self.ensure_core_container(
             "lemma-core-redis",
             &parameters.images.redis,
-            &BTreeMap::new(),
+            "redis-stack-server-v2",
+            &redis_env,
             &[
                 "--network".into(),
-                "lemma-core".into(),
-                "--network-alias".into(),
-                "redis".into(),
-                "--mount".into(),
-                format!(
-                    "type=bind,src={},dst=/usr/local/etc/redis/redis.conf,ro",
-                    redis_config.display()
-                ),
-                "--publish".into(),
-                "0.0.0.0:6379:6379".into(),
+                "host".into(),
+                "--volume".into(),
+                "lemma-redis-data:/data".into(),
             ],
-            &[
-                "redis-server".into(),
-                "/usr/local/etc/redis/redis.conf".into(),
-            ],
+            &[],
         )?;
 
-        self.wait_engine_command(
+        if let Err(mut error) = self.wait_engine_command(
             &[
                 "exec".into(),
                 "lemma-core-postgres".into(),
@@ -408,28 +474,27 @@ impl<E: Engine> GuestService<E> {
                 "postgres".into(),
             ],
             120,
-        )?;
+        ) {
+            if let Some(diagnostic) = self.container_log_summary("lemma-core-postgres") {
+                error.message = format!("{}: {diagnostic}", error.message);
+            }
+            return Err(error);
+        }
         self.ensure_databases()?;
 
         let supertokens_env = BTreeMap::from([(
             "POSTGRESQL_CONNECTION_URI".into(),
             format!(
-                "postgresql://postgres:{}@postgres:5432/supertokens",
+                "postgresql://postgres:{}@127.0.0.1:5432/supertokens",
                 parameters.credentials.postgres_password
             ),
         )]);
         self.ensure_core_container(
             "lemma-core-supertokens",
             &parameters.images.supertokens,
+            "supertokens-v1",
             &supertokens_env,
-            &[
-                "--network".into(),
-                "lemma-core".into(),
-                "--network-alias".into(),
-                "supertokens".into(),
-                "--publish".into(),
-                "0.0.0.0:3567:3567".into(),
-            ],
+            &["--network".into(), "host".into()],
             &[],
         )?;
         self.wait_tcp(5432, 120)?;
@@ -448,18 +513,28 @@ impl<E: Engine> GuestService<E> {
         ] {
             let container = format!("lemma-core-{name}");
             let inspect = self.inspect_raw(&container)?;
-            let running = inspect
+            let state = inspect
                 .as_ref()
                 .and_then(|value| value.get("State"))
-                .and_then(Value::as_object)
+                .and_then(Value::as_object);
+            let running = state
                 .and_then(|value| value.get("Running"))
                 .and_then(Value::as_bool)
                 .unwrap_or(false);
+            let state_name = state
+                .and_then(|value| value.get("Status"))
+                .and_then(Value::as_str)
+                .unwrap_or("missing");
+            let exit_code = state
+                .and_then(|value| value.get("ExitCode"))
+                .and_then(Value::as_i64);
             ready &= running;
             components.insert(
                 name.into(),
                 json!({
                     "running": running,
+                    "state": state_name,
+                    "exit_code": exit_code,
                     "endpoint": format!("{}:{port}", self.endpoint_host),
                 }),
             );
@@ -482,15 +557,36 @@ impl<E: Engine> GuestService<E> {
         Ok(json!({"stopped": true}))
     }
 
-    fn ensure_network(&self, name: &str) -> Result<(), GuestError> {
-        let inspect = self
-            .engine
-            .run(&["network".into(), "inspect".into(), name.into()])
-            .map_err(GuestError::engine)?;
-        if !inspect.status.success() {
-            self.run_checked(&["network".into(), "create".into(), name.into()])?;
+    fn shutdown(&self) -> Result<Value, GuestError> {
+        let stopped_containers = self.stop_all_containers()?;
+        let mut result = schedule_shutdown()?;
+        result["stopped_containers"] = json!(stopped_containers);
+        Ok(result)
+    }
+
+    fn stop_all_containers(&self) -> Result<usize, GuestError> {
+        let output = self.run_checked(&["ps".into(), "--quiet".into()])?;
+        let container_ids = output
+            .lines()
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .map(|value| {
+                if value.len() > 128 || !value.bytes().all(|byte| byte.is_ascii_hexdigit()) {
+                    return Err(GuestError::engine(
+                        "container engine returned an invalid container identifier",
+                    ));
+                }
+                Ok(value.to_owned())
+            })
+            .collect::<Result<Vec<_>, _>>()?;
+        if container_ids.is_empty() {
+            return Ok(0);
         }
-        Ok(())
+
+        let mut arguments = vec!["stop".into(), "--time".into(), "5".into()];
+        arguments.extend(container_ids.iter().cloned());
+        self.run_checked(&arguments)?;
+        Ok(container_ids.len())
     }
 
     fn ensure_volume(&self, name: &str) -> Result<(), GuestError> {
@@ -508,6 +604,7 @@ impl<E: Engine> GuestService<E> {
         &self,
         name: &str,
         image: &str,
+        config_generation: &str,
         environment: &BTreeMap<String, String>,
         options: &[String],
         command: &[String],
@@ -521,7 +618,27 @@ impl<E: Engine> GuestService<E> {
             .and_then(Value::as_object)
             .and_then(|value| value.get("work.lemma.image-ref"))
             .and_then(Value::as_str);
-        if current.is_some() && current_image != Some(image) {
+        let current_platform = current
+            .as_ref()
+            .and_then(|value| value.get("Config"))
+            .and_then(Value::as_object)
+            .and_then(|value| value.get("Labels"))
+            .and_then(Value::as_object)
+            .and_then(|value| value.get("work.lemma.platform"))
+            .and_then(Value::as_str);
+        let current_config_generation = current
+            .as_ref()
+            .and_then(|value| value.get("Config"))
+            .and_then(Value::as_object)
+            .and_then(|value| value.get("Labels"))
+            .and_then(Value::as_object)
+            .and_then(|value| value.get("work.lemma.config-generation"))
+            .and_then(Value::as_str);
+        if current.is_some()
+            && (current_image != Some(image)
+                || current_platform != Some(guest_platform())
+                || current_config_generation != Some(config_generation))
+        {
             self.run_checked(&["rm".into(), "--force".into(), name.into()])?;
         } else if let Some(current) = current {
             let running = current
@@ -539,12 +656,18 @@ impl<E: Engine> GuestService<E> {
         let mut arguments = vec![
             "run".into(),
             "--detach".into(),
+            "--platform".into(),
+            guest_platform().into(),
             "--name".into(),
             name.into(),
             "--label".into(),
             "work.lemma.component=core".into(),
             "--label".into(),
             format!("work.lemma.image-ref={image}"),
+            "--label".into(),
+            format!("work.lemma.platform={}", guest_platform()),
+            "--label".into(),
+            format!("work.lemma.config-generation={config_generation}"),
         ];
         arguments.extend_from_slice(options);
         if !environment.is_empty() {
@@ -568,6 +691,22 @@ impl<E: Engine> GuestService<E> {
         let parsed: Value = serde_json::from_slice(&output.stdout)
             .map_err(|error| GuestError::engine(format!("invalid inspect response: {error}")))?;
         Ok(parsed.as_array().and_then(|items| items.first()).cloned())
+    }
+
+    fn container_log_summary(&self, name: &str) -> Option<String> {
+        let output = self
+            .engine
+            .run(&["logs".into(), "--tail".into(), "20".into(), name.into()])
+            .ok()?;
+        let logs = if output.stderr.is_empty() {
+            String::from_utf8_lossy(&output.stdout)
+        } else {
+            String::from_utf8_lossy(&output.stderr)
+        };
+        logs.lines()
+            .rev()
+            .find(|line| !line.trim().is_empty())
+            .map(redact_engine_error)
     }
 
     fn wait_engine_command(&self, arguments: &[String], timeout: u64) -> Result<(), GuestError> {
@@ -655,12 +794,14 @@ impl<E: Engine> GuestService<E> {
     fn wait_redis(&self, password: &str, timeout: u64) -> Result<(), GuestError> {
         let deadline = Instant::now() + Duration::from_secs(timeout);
         while Instant::now() < deadline {
-            if redis_ping(&self.endpoint_host, password).is_ok() {
+            if redis_stack_ready(&self.endpoint_host, password).is_ok() {
                 return Ok(());
             }
             thread::sleep(Duration::from_millis(250));
         }
-        Err(GuestError::engine("Redis did not become ready"))
+        Err(GuestError::engine(
+            "Redis Stack did not become ready with Search and JSON modules",
+        ))
     }
 
     fn ensure(&self, value: Value) -> Result<Value, GuestError> {
@@ -676,6 +817,7 @@ impl<E: Engine> GuestService<E> {
                 self.run_checked(&["start".into(), container_name(&parameters.sandbox_id)])?;
             }
         } else {
+            self.ensure_image(&parameters.image)?;
             let workspace = self.workspace(&parameters.sandbox_id)?;
             let env_file = self.write_env_file(&parameters.sandbox_id, &parameters.env)?;
             let arguments =
@@ -829,6 +971,45 @@ impl<E: Engine> GuestService<E> {
             .map_err(|_| GuestError::engine("container engine returned non-UTF8 output"))
     }
 
+    fn ensure_image(&self, image: &str) -> Result<(), GuestError> {
+        let inspect = self
+            .engine
+            .run(&[
+                "image".into(),
+                "inspect".into(),
+                "--platform".into(),
+                guest_platform().into(),
+                image.into(),
+            ])
+            .map_err(GuestError::engine)?;
+        if inspect.status.success() {
+            return Ok(());
+        }
+        let output = self
+            .engine
+            .run(&[
+                "pull".into(),
+                "--quiet".into(),
+                "--platform".into(),
+                guest_platform().into(),
+                image.into(),
+            ])
+            .map_err(GuestError::engine)?;
+        if output.status.success() {
+            return Ok(());
+        }
+        let error = redact_engine_error(&String::from_utf8_lossy(&output.stderr));
+        let diagnostic = network_diagnostics();
+        let dns_ok = diagnostic["dns_ok"].as_bool().unwrap_or(false);
+        let registry_reachable = diagnostic["registry_reachable"].as_bool().unwrap_or(false);
+        let hint = match (dns_ok, registry_reachable) {
+            (false, _) => "registry DNS lookup failed",
+            (true, false) => "registry HTTPS endpoint is unreachable",
+            (true, true) => "registry is reachable; retry the immutable image download",
+        };
+        Err(GuestError::engine(format!("{error}; {hint}")))
+    }
+
     fn workspace(&self, sandbox_id: &str) -> Result<PathBuf, GuestError> {
         let root = self.state_root.join("workspaces");
         let path = root.join(sandbox_id);
@@ -949,6 +1130,8 @@ fn build_run_arguments(
     let mut arguments = vec![
         "run".into(),
         "--detach".into(),
+        "--platform".into(),
+        guest_platform().into(),
         "--name".into(),
         container_name(&parameters.sandbox_id),
         "--label".into(),
@@ -985,6 +1168,16 @@ fn build_run_arguments(
     }
     arguments.push(parameters.image.clone());
     arguments
+}
+
+#[cfg(target_arch = "aarch64")]
+fn guest_platform() -> &'static str {
+    "linux/arm64"
+}
+
+#[cfg(target_arch = "x86_64")]
+fn guest_platform() -> &'static str {
+    "linux/amd64"
 }
 
 fn snapshot_from_inspect(
@@ -1163,52 +1356,19 @@ fn validate_environment(environment: &BTreeMap<String, String>) -> Result<(), Gu
 }
 
 fn validate_secret(name: &str, value: &str) -> Result<(), GuestError> {
-    if !(16..=512).contains(&value.len()) || value.contains(['\n', '\r', '\0']) {
+    if !(16..=512).contains(&value.len())
+        || !value
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || byte == b'-' || byte == b'_')
+    {
         return Err(GuestError::invalid(format!(
-            "{name} must contain 16 to 512 single-line characters"
+            "{name} must contain 16 to 512 ASCII letters, digits, '-' or '_'"
         )));
     }
     Ok(())
 }
 
-fn write_private_atomic(path: &Path, contents: &[u8]) -> Result<(), GuestError> {
-    let parent = path
-        .parent()
-        .ok_or_else(|| GuestError::engine("private file has no parent directory"))?;
-    fs::create_dir_all(parent).map_err(|error| GuestError::engine(error.to_string()))?;
-    let nonce = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .unwrap_or_default()
-        .as_nanos();
-    let temporary = parent.join(format!(
-        ".{}.{}-{nonce}.tmp",
-        path.file_name()
-            .and_then(|value| value.to_str())
-            .unwrap_or("lemma-private"),
-        std::process::id()
-    ));
-    let result = (|| {
-        let mut file = OpenOptions::new()
-            .write(true)
-            .create_new(true)
-            .mode(0o600)
-            .open(&temporary)
-            .map_err(|error| GuestError::engine(error.to_string()))?;
-        file.write_all(contents)
-            .map_err(|error| GuestError::engine(error.to_string()))?;
-        file.sync_all()
-            .map_err(|error| GuestError::engine(error.to_string()))?;
-        fs::rename(&temporary, path).map_err(|error| GuestError::engine(error.to_string()))?;
-        fs::set_permissions(path, fs::Permissions::from_mode(0o600))
-            .map_err(|error| GuestError::engine(error.to_string()))
-    })();
-    if result.is_err() {
-        let _ = fs::remove_file(&temporary);
-    }
-    result
-}
-
-fn redis_ping(host: &str, password: &str) -> io::Result<()> {
+fn redis_stack_ready(host: &str, password: &str) -> io::Result<()> {
     validate_secret("redis_password", password)
         .map_err(|error| io::Error::new(io::ErrorKind::InvalidInput, error.message))?;
     let address = (host, 6379)
@@ -1220,19 +1380,26 @@ fn redis_ping(host: &str, password: &str) -> io::Result<()> {
     stream.set_write_timeout(Some(Duration::from_secs(2)))?;
     write!(
         stream,
-        "*2\r\n$4\r\nAUTH\r\n${}\r\n{}\r\n*1\r\n$4\r\nPING\r\n",
+        "*2\r\n$4\r\nAUTH\r\n${}\r\n{}\r\n*1\r\n$4\r\nPING\r\n*2\r\n$6\r\nMODULE\r\n$4\r\nLIST\r\n*1\r\n$4\r\nQUIT\r\n",
         password.len(),
         password
     )?;
     stream.flush()?;
-    let mut response = [0_u8; 256];
-    let count = stream.read(&mut response)?;
-    let response = std::str::from_utf8(&response[..count])
+    let mut response = Vec::new();
+    stream.take(64 * 1024).read_to_end(&mut response)?;
+    let response = std::str::from_utf8(&response)
         .map_err(|_| io::Error::new(io::ErrorKind::InvalidData, "Redis returned non-UTF8"))?;
-    if response.contains("+OK\r\n") && response.contains("+PONG\r\n") {
+    let response = response.to_ascii_lowercase();
+    if response.contains("+ok\r\n")
+        && response.contains("+pong\r\n")
+        && response.contains("search")
+        && response.contains("rejson")
+    {
         Ok(())
     } else {
-        Err(io::Error::other("Redis authentication or ping failed"))
+        Err(io::Error::other(
+            "Redis authentication, ping, or required modules failed",
+        ))
     }
 }
 
@@ -1407,7 +1574,7 @@ pub fn serve_vsock<E: Engine>(service: &GuestService<E>) -> io::Result<()> {
         if raw < 0 {
             return Err(io::Error::last_os_error());
         }
-        let listener = OwnedFd::from_raw_fd(raw);
+        let _listener = OwnedFd::from_raw_fd(raw);
         let mut address: libc::sockaddr_vm = zeroed();
         address.svm_family = libc::AF_VSOCK as libc::sa_family_t;
         address.svm_cid = libc::VMADDR_CID_ANY;
@@ -1443,7 +1610,7 @@ pub fn serve_vsock<E: Engine>(service: &GuestService<E>) -> io::Result<()> {
             let _ = handle_reader(reader, writer, service);
         }
         #[allow(unreachable_code)]
-        drop(listener);
+        drop(_listener);
     }
 }
 
@@ -1492,6 +1659,89 @@ pub fn probe_http(url: &str) -> io::Result<()> {
     } else {
         Err(io::Error::other(format!("health returned {status}")))
     }
+}
+
+fn network_diagnostics() -> Value {
+    let dns = Command::new("/usr/bin/timeout")
+        .args([
+            "--signal=KILL",
+            "5s",
+            "/usr/bin/getent",
+            "ahostsv4",
+            "registry-1.docker.io",
+        ])
+        .stdin(Stdio::null())
+        .output();
+    let mut addresses = Vec::new();
+    if let Ok(output) = &dns {
+        if output.status.success() {
+            for address in String::from_utf8_lossy(&output.stdout)
+                .lines()
+                .filter_map(|line| line.split_whitespace().next())
+            {
+                if valid_ip(address) && !addresses.iter().any(|value| value == address) {
+                    addresses.push(address.to_owned());
+                }
+                if addresses.len() == 4 {
+                    break;
+                }
+            }
+        }
+    }
+
+    // Docker Hub's registry endpoint normally answers an unauthenticated
+    // /v2/ request with 401. That still proves DNS, routing and TLS are usable.
+    let registry = Command::new("/usr/bin/curl")
+        .args([
+            "--head",
+            "--silent",
+            "--output",
+            "/dev/null",
+            "--connect-timeout",
+            "3",
+            "--max-time",
+            "5",
+            "--write-out",
+            "%{http_code}",
+            "https://registry-1.docker.io/v2/",
+        ])
+        .stdin(Stdio::null())
+        .output();
+    let registry_status = registry
+        .ok()
+        .filter(|output| output.status.success())
+        .and_then(|output| String::from_utf8(output.stdout).ok())
+        .and_then(|value| value.trim().parse::<u16>().ok());
+    let registry_reachable = registry_status.is_some_and(|status| (200..500).contains(&status));
+    let clock_epoch = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs();
+
+    json!({
+        "clock_epoch": clock_epoch,
+        "dns_ok": !addresses.is_empty(),
+        "registry_addresses": addresses,
+        "registry_http_status": registry_status,
+        "registry_reachable": registry_reachable,
+    })
+}
+
+fn schedule_shutdown() -> Result<Value, GuestError> {
+    let output = Command::new("/usr/bin/systemctl")
+        .args(["--no-block", "poweroff"])
+        .stdin(Stdio::null())
+        .output()
+        .map_err(|error| {
+            GuestError::engine(format!("could not request guest shutdown: {error}"))
+        })?;
+    if !output.status.success() {
+        return Err(GuestError::engine(format!(
+            "could not request guest shutdown: {}",
+            redact_engine_error(&String::from_utf8_lossy(&output.stderr))
+        )));
+    }
+    Ok(json!({"stopping": true}))
 }
 
 #[cfg(test)]
@@ -1741,17 +1991,48 @@ mod tests {
     }
 
     #[test]
-    fn atomic_private_files_replace_contents_and_remain_owner_only() {
+    fn shutdown_stops_every_running_container_in_one_bounded_command() {
         let root = tempdir().unwrap();
-        let path = root.path().join("redis.conf");
-        write_private_atomic(&path, b"first").unwrap();
-        write_private_atomic(&path, b"second").unwrap();
+        let service = GuestService::new(
+            FakeEngine::new(vec![
+                output(true, "aabbccddeeff\n001122334455\n"),
+                output(true, "aabbccddeeff\n001122334455\n"),
+            ]),
+            root.path().into(),
+            "192.168.64.2".into(),
+            "192.168.64.1".into(),
+            None,
+        )
+        .unwrap();
 
-        assert_eq!(fs::read(&path).unwrap(), b"second");
+        assert_eq!(service.stop_all_containers().unwrap(), 2);
         assert_eq!(
-            fs::metadata(&path).unwrap().permissions().mode() & 0o777,
-            0o600
+            service.engine.commands.lock().unwrap().as_slice(),
+            [
+                vec!["ps".to_owned(), "--quiet".to_owned()],
+                vec![
+                    "stop".to_owned(),
+                    "--time".to_owned(),
+                    "5".to_owned(),
+                    "aabbccddeeff".to_owned(),
+                    "001122334455".to_owned(),
+                ],
+            ]
         );
-        assert_eq!(fs::read_dir(root.path()).unwrap().count(), 1);
+    }
+
+    #[test]
+    fn engine_timeout_kills_the_entire_process_group() {
+        let root = tempdir().unwrap();
+        let executable = root.path().join("forking-engine");
+        fs::write(&executable, "#!/bin/sh\nsleep 30\n").unwrap();
+        fs::set_permissions(&executable, fs::Permissions::from_mode(0o700)).unwrap();
+        let started = Instant::now();
+
+        let error =
+            run_bounded_engine_command(&executable, &[], Duration::from_millis(100)).unwrap_err();
+
+        assert!(error.contains("timed out"));
+        assert!(started.elapsed() < Duration::from_secs(2));
     }
 }

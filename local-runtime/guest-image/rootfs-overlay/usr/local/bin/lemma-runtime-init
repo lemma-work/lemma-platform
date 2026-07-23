@@ -1,0 +1,21 @@
+#!/bin/sh
+set -eu
+
+# WSL does not need a persistent guest RPC daemon: the signed Windows bridge
+# invokes lemma-guestd request inside this private distribution. It does need
+# one durable containerd instance. VZ boots through systemd instead.
+mkdir -p /run/containerd /var/lib/containerd /var/log/lemma
+if ! /usr/bin/ctr --address /run/containerd/containerd.sock version >/dev/null 2>&1; then
+  nohup /usr/bin/containerd \
+    >>/var/log/lemma/containerd.log 2>&1 </dev/null &
+fi
+
+attempt=0
+until /usr/bin/ctr --address /run/containerd/containerd.sock version >/dev/null 2>&1; do
+  attempt=$((attempt + 1))
+  if [ "$attempt" -ge 120 ]; then
+    echo "containerd did not become ready" >&2
+    exit 1
+  fi
+  sleep 1
+done

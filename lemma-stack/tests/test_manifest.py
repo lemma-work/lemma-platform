@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import json
-import re
 from pathlib import Path
 
 import pytest
@@ -38,15 +37,26 @@ def test_parse_and_pull_refs():
     assert manifest.infra_image("redis") == m.DEFAULT_INFRA_IMAGES["redis"]
 
 
+def test_infrastructure_images_accept_release_digests():
+    data = sample(
+        infra={
+            "postgres": {
+                "ref": "docker.io/pgvector/pgvector:0.8.3-pg16",
+                "digest": "sha256:infra",
+            }
+        }
+    )
+
+    assert m.parse(data).infra_image("postgres").endswith("@sha256:infra")
+
+
 def test_release_workflow_uses_the_stack_supertokens_version():
     workflow = (
-        Path(__file__).resolve().parents[2]
-        / ".github/workflows/release-local-images.yml"
+        Path(__file__).resolve().parents[2] / ".github/workflows/release-local-images.yml"
     ).read_text(encoding="utf-8")
-    match = re.search(r'"supertokens": "([^"]+)"', workflow)
-
-    assert match is not None
-    assert match.group(1) == m.DEFAULT_INFRA_IMAGES["supertokens"]
+    assert f"SUPERTOKENS_IMAGE: {m.DEFAULT_INFRA_IMAGES['supertokens']}" in workflow
+    assert '"linux/amd64", "linux/arm64"' in workflow
+    assert 'digests[name]["platforms"][platform]' in workflow
 
 
 def test_pull_refs_contain_no_separate_manager_or_document_service():
@@ -115,6 +125,23 @@ def test_native_host_pack_is_optional_but_must_be_valid_when_present():
                 },
             )
         )
+
+
+def test_managed_guest_runtime_is_additive_and_verified():
+    data = sample(
+        guest_runtimes={
+            "macos-aarch64": {
+                "url": "https://example.test/lemma-guest-runtime.zip",
+                "sha256": "b" * 64,
+                "size": 5678,
+                "format": "zip",
+            }
+        }
+    )
+
+    runtime = m.parse(data).guest_runtime("macos-aarch64")
+    assert runtime.sha256 == "b" * 64
+    assert runtime.size == 5678
 
 
 def test_min_admin_version_gate():

@@ -7,10 +7,14 @@ use std::process::{Child, Command, Stdio};
 use std::sync::Mutex;
 use std::thread;
 use std::time::{Duration, Instant};
+#[cfg(target_os = "macos")]
+use std::time::{SystemTime, UNIX_EPOCH};
 
 const CAPABILITY_BYTES: usize = 32;
 const MAX_RESPONSE_BYTES: usize = 4 * 1024 * 1024;
 const WSL_DISTRIBUTION: &str = "LemmaRuntime";
+#[cfg(target_os = "macos")]
+const DATA_DISK_BYTES: u64 = 24 * 1024 * 1024 * 1024;
 
 #[derive(Clone, Debug)]
 pub struct ManagedRuntimeConfig {
@@ -35,6 +39,8 @@ pub struct ManagedRuntime {
     capability_file: PathBuf,
     control_socket: PathBuf,
     #[cfg(target_os = "macos")]
+    host_epoch_file: PathBuf,
+    #[cfg(target_os = "macos")]
     vm: Mutex<Option<Child>>,
 }
 
@@ -45,6 +51,8 @@ impl ManagedRuntime {
         set_private_directory(&run_root)?;
         Ok(Self {
             capability_file: run_root.join("guest.capability"),
+            #[cfg(target_os = "macos")]
+            host_epoch_file: run_root.join("host.epoch"),
             control_socket: config.local_root.join("run/guest.sock"),
             config,
             #[cfg(target_os = "macos")]
@@ -55,7 +63,10 @@ impl ManagedRuntime {
     pub fn start(&self) -> io::Result<ManagedRuntimeStatus> {
         self.ensure_capability()?;
         #[cfg(target_os = "macos")]
-        self.start_macos()?;
+        {
+            self.refresh_host_epoch()?;
+            self.start_macos()?;
+        }
         #[cfg(windows)]
         self.start_windows()?;
         self.wait_ready()
@@ -130,12 +141,35 @@ impl ManagedRuntime {
         #[cfg(target_os = "macos")]
         {
             if let Some(mut child) = self.vm.lock().expect("VM lock poisoned").take() {
+                let _ = self.request("system.shutdown", json!({}));
+                let deadline = Instant::now() + Duration::from_secs(20);
+                while Instant::now() < deadline {
+                    if child.try_wait()?.is_some() {
+                        return Ok(());
+                    }
+                    thread::sleep(Duration::from_millis(100));
+                }
+                let result = unsafe { libc::kill(child.id() as libc::pid_t, libc::SIGTERM) };
+                if result != 0 {
+                    return Err(io::Error::last_os_error());
+                }
+                let deadline = Instant::now() + Duration::from_secs(5);
+                while Instant::now() < deadline {
+                    if child.try_wait()?.is_some() {
+                        return Ok(());
+                    }
+                    thread::sleep(Duration::from_millis(100));
+                }
                 child.kill()?;
                 child.wait()?;
             }
         }
         #[cfg(windows)]
         {
+            // WSL's private distribution is terminated by the host rather
+            // than systemd poweroff. Ask the guest to stop every managed
+            // container first so databases and sandboxes flush cleanly.
+            let _ = self.request("system.shutdown", json!({}));
             let output = Command::new(&self.config.wsl_executable)
                 .args(["--terminate", WSL_DISTRIBUTION])
                 .output()?;
@@ -198,23 +232,28 @@ impl ManagedRuntime {
     }
 
     #[cfg(target_os = "macos")]
+    fn refresh_host_epoch(&self) -> io::Result<()> {
+        let epoch = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map_err(|error| io::Error::other(format!("host clock is invalid: {error}")))?
+            .as_secs();
+        write_private_atomic(&self.host_epoch_file, format!("{epoch}\n").as_bytes())
+    }
+
+    #[cfg(target_os = "macos")]
     fn start_macos(&self) -> io::Result<()> {
         let source = self.config.artifact_root.join("macos-aarch64");
         let runtime = self.config.local_root.join("runtime/macos");
         fs::create_dir_all(&runtime)?;
-        for name in ["vmlinuz", "initrd"] {
-            copy_immutable(&source.join(name), &runtime.join(name))?;
-        }
-        let disk = runtime.join("disk.raw");
-        if !disk.exists() {
-            copy_immutable(&source.join("disk.raw"), &disk)?;
-        }
+        set_private_directory(&runtime)?;
         let mut guard = self.vm.lock().expect("VM lock poisoned");
         if let Some(child) = guard.as_mut() {
             if child.try_wait()?.is_none() {
                 return Ok(());
             }
         }
+        refresh_macos_release(&source, &runtime)?;
+        create_private_sparse_file(&runtime.join("data.raw"), DATA_DISK_BYTES)?;
         let _ = fs::remove_file(&self.control_socket);
         let child = Command::new(&self.config.vz_executable)
             .arg("serve")
@@ -324,17 +363,67 @@ impl ManagedRuntime {
     }
 }
 
-fn copy_immutable(source: &Path, destination: &Path) -> io::Result<()> {
+#[cfg(target_os = "macos")]
+fn refresh_macos_release(source: &Path, destination: &Path) -> io::Result<()> {
+    let source_marker = source.join("runtime.json");
+    if !source_marker.is_file() {
+        return Err(io::Error::new(
+            io::ErrorKind::NotFound,
+            format!(
+                "managed runtime metadata is missing: {}",
+                source_marker.display()
+            ),
+        ));
+    }
+    let marker = destination.join("runtime.json");
+    let current = fs::read(&source_marker)?;
+    let unchanged = fs::read(&marker).ok().as_deref() == Some(current.as_slice())
+        && ["vmlinuz", "initrd", "disk.raw"]
+            .iter()
+            .all(|name| destination.join(name).is_file());
+    if unchanged {
+        return Ok(());
+    }
+    for name in ["vmlinuz", "initrd", "disk.raw"] {
+        copy_release_file(&source.join(name), &destination.join(name))?;
+    }
+    write_private_atomic(&marker, &current)
+}
+
+#[cfg(target_os = "macos")]
+fn create_private_sparse_file(path: &Path, size: u64) -> io::Result<()> {
+    if path.exists() {
+        if path.metadata()?.len() != size {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                format!(
+                    "managed data disk has an unexpected size: {}",
+                    path.display()
+                ),
+            ));
+        }
+        return ensure_private_file(path);
+    }
+    let mut options = OpenOptions::new();
+    options.write(true).create_new(true);
+    use std::os::unix::fs::OpenOptionsExt;
+    options.mode(0o600);
+    let file = options.open(path)?;
+    file.set_len(size)?;
+    file.sync_all()?;
+    ensure_private_file(path)
+}
+
+#[cfg(target_os = "macos")]
+fn copy_release_file(source: &Path, destination: &Path) -> io::Result<()> {
     if !source.is_file() {
         return Err(io::Error::new(
             io::ErrorKind::NotFound,
             format!("managed runtime artifact is missing: {}", source.display()),
         ));
     }
-    if destination.exists() {
-        return Ok(());
-    }
     let temporary = destination.with_extension(format!("staging-{}", std::process::id()));
+    let _ = fs::remove_file(&temporary);
     fs::copy(source, &temporary)?;
     fs::rename(temporary, destination)
 }
@@ -345,6 +434,7 @@ fn write_private_atomic(path: &Path, contents: &[u8]) -> io::Result<()> {
         .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidInput, "path has no parent"))?;
     fs::create_dir_all(parent)?;
     let temporary = path.with_extension(format!("tmp-{}", std::process::id()));
+    let _ = fs::remove_file(&temporary);
     let mut options = OpenOptions::new();
     options.write(true).create_new(true);
     #[cfg(unix)]
@@ -453,17 +543,98 @@ mod tests {
         ensure_private_file(runtime.capability_file()).unwrap();
     }
 
+    #[cfg(target_os = "macos")]
     #[test]
-    fn atomic_copy_never_overwrites_mutable_guest_disk() {
+    fn release_files_are_atomically_refreshed() {
         let root = tempdir().unwrap();
-        let source = root.path().join("base.raw");
-        let destination = root.path().join("disk.raw");
-        fs::write(&source, "base").unwrap();
-        fs::write(&destination, "user-data").unwrap();
+        let source = root.path().join("source-vmlinuz");
+        let destination = root.path().join("vmlinuz");
+        fs::write(&source, "new-kernel").unwrap();
+        fs::write(&destination, "old-kernel").unwrap();
 
-        copy_immutable(&source, &destination).unwrap();
+        copy_release_file(&source, &destination).unwrap();
 
-        assert_eq!(fs::read_to_string(destination).unwrap(), "user-data");
+        assert_eq!(fs::read_to_string(destination).unwrap(), "new-kernel");
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn release_refresh_replaces_os_seed_but_preserves_separate_data_disk() {
+        let root = tempdir().unwrap();
+        let source = root.path().join("source");
+        let destination = root.path().join("destination");
+        fs::create_dir_all(&source).unwrap();
+        fs::create_dir_all(&destination).unwrap();
+        for name in ["vmlinuz", "initrd", "disk.raw"] {
+            fs::write(source.join(name), format!("new-{name}")).unwrap();
+            fs::write(destination.join(name), format!("old-{name}")).unwrap();
+        }
+        fs::write(source.join("runtime.json"), b"release-two").unwrap();
+        fs::write(destination.join("runtime.json"), b"release-one").unwrap();
+        fs::write(destination.join("data.raw"), b"user-state").unwrap();
+
+        refresh_macos_release(&source, &destination).unwrap();
+
+        assert_eq!(
+            fs::read(destination.join("disk.raw")).unwrap(),
+            b"new-disk.raw"
+        );
+        assert_eq!(
+            fs::read(destination.join("data.raw")).unwrap(),
+            b"user-state"
+        );
+        assert_eq!(
+            fs::read(destination.join("runtime.json")).unwrap(),
+            b"release-two"
+        );
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn creates_private_sparse_data_disk_once() {
+        use std::io::{Read, Seek, SeekFrom};
+
+        let root = tempdir().unwrap();
+        let disk = root.path().join("data.raw");
+
+        create_private_sparse_file(&disk, 1024 * 1024).unwrap();
+        let mut file = OpenOptions::new()
+            .read(true)
+            .write(true)
+            .open(&disk)
+            .unwrap();
+        file.seek(SeekFrom::End(-5)).unwrap();
+        file.write_all(b"state").unwrap();
+        create_private_sparse_file(&disk, 1024 * 1024).unwrap();
+        file.seek(SeekFrom::End(-5)).unwrap();
+        let mut state = String::new();
+        file.read_to_string(&mut state).unwrap();
+
+        assert_eq!(state, "state");
+        ensure_private_file(&disk).unwrap();
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn refreshes_private_host_epoch_for_direct_boot_guests() {
+        let root = tempdir().unwrap();
+        let runtime = ManagedRuntime::new(ManagedRuntimeConfig {
+            local_root: root.path().join("local"),
+            artifact_root: root.path().join("artifacts"),
+            bridge_executable: root.path().join("lemma-runtime"),
+            vz_executable: root.path().join("lemma-vz"),
+        })
+        .unwrap();
+
+        runtime.refresh_host_epoch().unwrap();
+
+        let epoch: u64 = fs::read_to_string(&runtime.host_epoch_file)
+            .unwrap()
+            .trim()
+            .parse()
+            .unwrap();
+        assert!(epoch > 1_700_000_000);
+        ensure_private_file(&runtime.host_epoch_file).unwrap();
     }
 
     #[cfg(windows)]

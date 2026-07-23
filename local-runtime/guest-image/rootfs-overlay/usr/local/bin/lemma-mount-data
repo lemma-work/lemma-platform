@@ -1,0 +1,29 @@
+#!/bin/sh
+set -eu
+
+device=/dev/vdb
+data_root=/var/lib/lemma-data
+
+if ! /usr/sbin/blkid -p -s TYPE -o value "$device" | grep -qx ext4; then
+  /usr/sbin/mkfs.ext4 -F -L lemma-data "$device"
+fi
+
+mkdir -p "$data_root"
+if ! /usr/bin/mountpoint -q "$data_root"; then
+  /usr/bin/mount -t ext4 -o noatime "$device" "$data_root"
+fi
+
+mkdir -p \
+  "$data_root/containerd" \
+  "$data_root/lemma/run" \
+  "$data_root/lemma/workspaces" \
+  /var/lib/containerd \
+  /var/lib/lemma
+chmod 0700 "$data_root/lemma" "$data_root/lemma/run" "$data_root/lemma/workspaces"
+
+if ! /usr/bin/mountpoint -q /var/lib/containerd; then
+  /usr/bin/mount --bind "$data_root/containerd" /var/lib/containerd
+fi
+if ! /usr/bin/mountpoint -q /var/lib/lemma; then
+  /usr/bin/mount --bind "$data_root/lemma" /var/lib/lemma
+fi
