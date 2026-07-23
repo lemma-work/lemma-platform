@@ -34,13 +34,25 @@ from lemma_stack.supervise import run_supervisor
 
 app = typer.Typer(
     name="lemma-stack",
-    help="Install and manage a local Lemma stack rooted at ~/.lemma/local.",
+    help=(
+        "Control the managed Lemma Desktop runtime, with an explicit "
+        "Docker/Podman compatibility path for Linux and advanced use."
+    ),
     no_args_is_help=True,
     pretty_exceptions_enable=False,
 )
-config_app = typer.Typer(help="Read and edit the stack configuration.", no_args_is_help=True)
-db_app = typer.Typer(help="Postgres passthrough (infra has no host ports).", no_args_is_help=True)
-redis_app = typer.Typer(help="Redis passthrough.", no_args_is_help=True)
+config_app = typer.Typer(
+    help="Read and apply managed Desktop or external-runtime configuration.",
+    no_args_is_help=True,
+)
+db_app = typer.Typer(
+    help="External-runtime Postgres passthrough (compatibility installs only).",
+    no_args_is_help=True,
+)
+redis_app = typer.Typer(
+    help="External-runtime Redis passthrough (compatibility installs only).",
+    no_args_is_help=True,
+)
 self_app = typer.Typer(help="Information about lemma-stack itself.", no_args_is_help=True)
 app.add_typer(config_app, name="config")
 app.add_typer(db_app, name="db")
@@ -188,7 +200,9 @@ def _print_next_steps(config) -> None:
 @app.command()
 def install(
     runtime_choice: str = typer.Option(
-        "auto", "--runtime", help="Container runtime: auto, docker, or podman."
+        "auto",
+        "--runtime",
+        help="Compatibility container runtime: auto, docker, or podman.",
     ),
     channel: Optional[str] = typer.Option(
         None, help="Release channel or version (default: stable)."
@@ -207,7 +221,7 @@ def install(
     ),
     assume_yes: bool = typer.Option(False, "-y", "--yes", help="Answer yes to prompts."),
 ) -> None:
-    """Install the Lemma stack: pick a runtime, pull a release, start everything."""
+    """Install the external-runtime compatibility stack (not managed Desktop)."""
     paths = LocalPaths()
     paths.ensure()
     config = store.load_or_create(paths)
@@ -299,7 +313,7 @@ def prepare() -> None:
 
 @app.command()
 def start() -> None:
-    """Start (or reconcile) the installed stack."""
+    """Start or reconcile managed Desktop, or an external compatibility stack."""
     if client := _managed_locald():
         _managed_request(client, "start")
         state = _managed_request(client, "status")
@@ -312,9 +326,13 @@ def start() -> None:
 
 @app.command()
 def stop(
-    infra: bool = typer.Option(False, "--infra", help="Also stop db/redis/supertokens."),
+    infra: bool = typer.Option(
+        False,
+        "--infra",
+        help="Also stop managed private infrastructure or compatibility containers.",
+    ),
 ) -> None:
-    """Stop the stack (app services; --infra stops everything)."""
+    """Stop application services; --infra also stops private infrastructure."""
     if client := _managed_locald():
         _managed_request(client, "stop", infra=infra)
         return
@@ -327,7 +345,7 @@ def stop(
 
 @app.command()
 def restart() -> None:
-    """Restart the stack, re-rendering config (apply config.toml changes)."""
+    """Restart application services and apply the active configuration."""
     if client := _managed_locald():
         _managed_request(client, "restart")
         state = _managed_request(client, "status")
@@ -412,7 +430,7 @@ def supervise(
         False, "--dry-run", help="Walk the startup phases without executing anything (UI dev)."
     ),
 ) -> None:
-    """Desktop supervisor: JSON-line events on stdout, commands on stdin."""
+    """Legacy UI-development supervisor for an external-runtime stack."""
     raise typer.Exit(run_supervisor(dry_run=dry_run))
 
 
@@ -451,7 +469,13 @@ def host_manifest(
 
 @app.command()
 def logs(
-    service: str = typer.Argument(..., help="One of: db, redis, supertokens, backend, frontend."),
+    service: str = typer.Argument(
+        ...,
+        help=(
+            "Managed: locald, backend, frontend. External compatibility: "
+            "db, redis, supertokens, backend, frontend."
+        ),
+    ),
     follow: bool = typer.Option(False, "-f", "--follow"),
     lines: int = typer.Option(200, "--lines"),
 ) -> None:
@@ -511,11 +535,13 @@ def _tail_file(path: Path, *, lines: int, follow: bool) -> None:
 @app.command()
 def uninstall(
     purge_data: bool = typer.Option(
-        False, "--purge-data", help="Also delete ~/.lemma/local data and the postgres volume."
+        False,
+        "--purge-data",
+        help="Also delete external-runtime data and its Postgres volume.",
     ),
     assume_yes: bool = typer.Option(False, "-y", "--yes"),
 ) -> None:
-    """Remove all stack containers (and optionally all data)."""
+    """Remove an external-runtime compatibility install (not managed Desktop)."""
     ctx = _load_context()
     if not confirm(
         "Remove all Lemma stack containers?" + (" AND ALL DATA?" if purge_data else ""),
@@ -541,7 +567,7 @@ def uninstall(
 
 @app.command()
 def doctor(json_output: bool = typer.Option(False, "--json")) -> None:
-    """Check prerequisites and configuration."""
+    """Check managed Desktop or external-runtime health and configuration."""
     paths = LocalPaths()
     checks: list[dict] = []
 
@@ -874,6 +900,23 @@ def self_info(json_output: bool = typer.Option(False, "--json")) -> None:
     else:
         for key, value in payload.items():
             console.print(f"{key}: {value}")
+
+
+@self_app.command("register-cli")
+def self_register_cli(
+    make_active: bool = typer.Option(
+        True,
+        "--use/--no-use",
+        help="Also make the managed local server active in the Lemma pod CLI.",
+    ),
+) -> None:
+    """Register managed Desktop as the `local` server for the Lemma pod CLI."""
+    register_local_server(
+        base_url="http://api.lemma.localhost:8711",
+        auth_url="http://app.lemma.localhost:3711/auth",
+        make_active=make_active,
+    )
+    ok("managed Desktop registered as Lemma CLI server 'local'")
 
 
 def main() -> None:

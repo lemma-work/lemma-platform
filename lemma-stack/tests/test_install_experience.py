@@ -159,7 +159,7 @@ def test_docker_linux_install_sh_lemma_stack():
     """
     result = run_in_container(
         "ubuntu:24.04",
-        f"""
+        """
 set -e
 apt-get update -qq && apt-get install -y -qq curl ca-certificates python3 2>&1 | tail -3
 
@@ -171,12 +171,12 @@ export PATH="$HOME/.local/bin:$PATH"
 # lemma-stack should be installed and responding
 STACK_VER=$(lemma-stack self version 2>&1)
 echo "$STACK_VER"
-echo "$STACK_VER" | grep -q "lemma-stack" || {{ echo "FAIL: lemma-stack not responding"; exit 1; }}
+echo "$STACK_VER" | grep -q "lemma-stack" || { echo "FAIL: lemma-stack not responding"; exit 1; }
 
 # lemma-stack doctor should run (expected: no runtime = fails, but no crash)
 # doctor exits 1 when checks fail; capture output without triggering set -e
 DOCTOR=$(lemma-stack doctor 2>&1 || true)
-echo "$DOCTOR" | grep -q "runtime:docker" || {{ echo "FAIL: doctor missing runtime check"; exit 1; }}
+echo "$DOCTOR" | grep -q "runtime:docker" || { echo "FAIL: doctor missing runtime check"; exit 1; }
 
 echo "ALL CHECKS PASSED"
 """,
@@ -286,6 +286,8 @@ def test_install_ps1_structure():
     assert "ErrorActionPreference" in content, "install.ps1 must set error handling"
     assert "Get-Command uv" in content, "install.ps1 must check for uv"
     assert "LEMMA_STACK_SOURCE" in content, "install.ps1 must support local checkout override"
+    assert "LEMMA_STACK_CLI_ONLY" in content, "install.ps1 must support managed CLI-only setup"
+    assert "self register-cli --use" in content, "CLI-only setup must register managed Desktop"
 
 
 def test_install_sh_structure():
@@ -297,6 +299,8 @@ def test_install_sh_structure():
     assert "lemma-stack" in content, "install.sh must install lemma-stack"
     assert "lemma-stack install" in content, "install.sh must hand off to lemma-stack install"
     assert "LEMMA_STACK_SOURCE" in content, "install.sh must support local checkout override"
+    assert "--cli-only" in content, "install.sh must support managed CLI-only setup"
+    assert "self register-cli --use" in content, "CLI-only setup must register managed Desktop"
     assert "curl" in content, "install.sh must use curl to install uv"
 
 

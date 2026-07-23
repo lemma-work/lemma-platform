@@ -170,23 +170,44 @@ server/org/pod from the resource views or with chat slash commands:
 
 ## Local Stack Setup
 
-Installing and managing a local Lemma stack is handled by the separate
-`lemma-stack` tool, not the CLI. Install and start it with:
+Install the signed Lemma Desktop online or offline package, choose **Local**,
+and let the first setup finish once. Desktop owns the private VZ/WSL2 runtime;
+Docker, Podman, and raw `localhost` URLs are not part of the managed path.
+
+The optional `lemma-stack` control CLI can start and manage that same install
+while the Desktop window is closed. On macOS:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/lemma-work/lemma-platform/main/install.sh | bash
+curl -fsSL https://raw.githubusercontent.com/lemma-work/lemma-platform/main/install.sh |
+  bash -s -- --cli-only
 ```
 
-`lemma-stack install` registers the stack as the CLI server named `local`
-(API `http://localhost:8711`, auth `http://localhost:3711/auth`), so afterwards:
+On Windows PowerShell:
+
+```powershell
+$env:LEMMA_STACK_CLI_ONLY = "1"
+irm https://raw.githubusercontent.com/lemma-work/lemma-platform/main/install.ps1 | iex
+Remove-Item Env:LEMMA_STACK_CLI_ONLY
+```
+
+CLI-only bootstrap registers the server named `local` with the exact managed
+origins:
+
+- API: `http://api.lemma.localhost:8711`
+- Auth: `http://app.lemma.localhost:3711/auth`
+
+Then select it and authenticate:
 
 ```bash
 lemma servers select local
 lemma auth login
 ```
 
-Manage the stack with `lemma-stack start|stop|status|logs|config|uninstall`.
-See `lemma-stack --help` and the `lemma-stack/` package for details.
+Use `lemma-stack start|stop|restart|status|doctor|logs|config` for managed
+operations. `lemma-stack uninstall`, `db`, and `redis` are container-oriented
+commands for the explicit external-runtime compatibility path, not Desktop.
+See the [local installation guide](../docs/installation.md) for package
+selection, first-run setup, Control Center, configuration, and repair.
 
 ## Common Workflow
 
@@ -199,7 +220,7 @@ lemma pods select --save-default
 lemma tui
 ```
 
-Local (after `lemma-stack install`):
+Local (after Desktop setup and CLI-only registration):
 
 ```bash
 lemma servers select local

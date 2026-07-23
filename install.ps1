@@ -2,15 +2,15 @@
 #
 #   iwr https://raw.githubusercontent.com/lemma-work/lemma-platform/main/install.ps1 | iex
 #
-# Installs uv (if missing), installs lemma-stack as a uv tool, and hands off
-# to `lemma-stack install`, which detects Docker Desktop, pulls the released
-# images, and starts the stack at ~/.lemma/local. Pass arguments through:
+# Installs uv (if missing) and installs lemma-stack as a uv tool. By default it
+# then starts the external Docker/Podman compatibility installer. Managed
+# Windows users should install Lemma Desktop and use -CliOnly:
 #
-#   .\install.ps1 --runtime docker -y
-#
-# Requires: PowerShell 5.1+ or PowerShell 7+, Docker Desktop running.
+#   .\install.ps1 -CliOnly
+#   .\install.ps1 --runtime docker -y  # external compatibility path
 
 param(
+    [switch]$CliOnly,
     [Parameter(ValueFromRemainingArguments = $true)]
     [string[]]$StackArgs
 )
@@ -60,6 +60,13 @@ if (-not (Get-Command lemma-stack -ErrorAction SilentlyContinue)) {
 
 if (-not (Get-Command lemma-stack -ErrorAction SilentlyContinue)) {
     Fail "lemma-stack installed but not on PATH. Run: uv tool update-shell"
+}
+
+if ($CliOnly -or $env:LEMMA_STACK_CLI_ONLY -eq "1") {
+    & lemma-stack self register-cli --use
+    if ($LASTEXITCODE -ne 0) { Fail "Could not register the managed local server." }
+    Say "Installed lemma-stack. It will discover Lemma Desktop after Local setup has run once."
+    exit 0
 }
 
 & lemma-stack install @StackArgs

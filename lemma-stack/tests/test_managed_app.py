@@ -145,3 +145,20 @@ def test_managed_config_uses_transactional_daemon_api_and_write_only_secrets(
     assert apply[1]["payload"]["config"]["ai"]["protocol"] == "openai_compat"
     assert apply[1]["payload"]["secrets"] == {"ai.api_key": "local-secret"}
     assert "local-secret" not in capsys.readouterr().out
+
+
+def test_register_cli_uses_managed_loopback_origins(monkeypatch) -> None:
+    observed: dict[str, object] = {}
+
+    def register(**values) -> None:
+        observed.update(values)
+
+    monkeypatch.setattr(stack_app, "register_local_server", register)
+
+    stack_app.self_register_cli(make_active=True)
+
+    assert observed == {
+        "base_url": "http://api.lemma.localhost:8711",
+        "auth_url": "http://app.lemma.localhost:3711/auth",
+        "make_active": True,
+    }

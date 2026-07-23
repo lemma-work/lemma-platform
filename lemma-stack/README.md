@@ -18,7 +18,19 @@ lemma-stack doctor [--json]
 lemma-stack logs locald|backend|frontend [-f]
 lemma-stack config list|get|set|unset|path
 lemma-stack self info [--json]
+lemma-stack self register-cli [--use|--no-use]
 ```
+
+Install the optional control CLI after completing Desktop Local setup once:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/lemma-work/lemma-platform/main/install.sh |
+  bash -s -- --cli-only
+```
+
+On PowerShell, set `LEMMA_STACK_CLI_ONLY=1` while invoking `install.ps1`. The
+bootstrap installs this tool from the repository (it is not on PyPI yet) and
+registers the managed origins as the Lemma pod CLI server named `local`.
 
 The CLI can start the durable daemon while Desktop is closed. It discovers the
 active immutable host/guest release from Desktop configuration and passes only
@@ -39,8 +51,7 @@ failure. For example:
 lemma-stack config set \
   ai.protocol=openai_compat \
   ai.base_url=http://127.0.0.1:11434/v1 \
-  ai.default_model=qwen3 \
-  ai.api_key=lemma-local
+  ai.default_model=qwen3
 ```
 
 Managed local endpoints are:
@@ -66,7 +77,6 @@ advanced adoption/migration. It requires Docker or Podman and stores state under
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/lemma-work/lemma-platform/main/install.sh | bash
-lemma-stack install --runtime docker
 ```
 
 ```text
@@ -82,6 +92,12 @@ This compatibility path is never auto-selected by Desktop and never modifies
 the user's default Docker context or Podman connection. Its configuration lives
 in `~/.lemma/local/config.toml`; managed Desktop secrets instead live in the OS
 credential vault and are changed through Control Center.
+
+`db`, `redis`, and `uninstall` are external-runtime-only commands. Removing
+managed Desktop or its data is not delegated to those container commands.
+
+The complete user guide is
+[Install and run Lemma Local](../docs/installation.md).
 
 ## Development
 
