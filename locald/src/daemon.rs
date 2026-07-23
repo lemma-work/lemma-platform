@@ -12,6 +12,7 @@ use serde_json::{json, Value};
 
 use crate::host_process::HostProcessManager;
 use crate::managed_runtime::{ManagedRuntimeBootstrap, ManagedRuntimeController};
+use crate::operator_config::{ApplyOperatorConfig, OperatorConfigStore};
 use crate::paths::LocalPaths;
 use crate::protocol::{
     append_bounded_journal, authenticate, error_event, load_or_create_token, read_bounded_line,
@@ -37,6 +38,7 @@ pub struct Daemon {
     next_internal_request: AtomicU64,
     host_processes: Option<Arc<HostProcessManager>>,
     managed_runtime: Option<Arc<ManagedRuntimeController>>,
+    operator_config: Arc<OperatorConfigStore>,
     host_operation_running: AtomicBool,
 }
 
@@ -45,6 +47,7 @@ impl Daemon {
         paths.ensure()?;
         let token = load_or_create_token(&paths.token)?;
         let state = StateSnapshot::load(&paths.state);
+        let operator_config = OperatorConfigStore::load(paths.root.join("operator-config.json"))?;
         let managed_bootstrap = ManagedRuntimeBootstrap::discover(&paths)?;
         let host_manifest = match env::var_os("LEMMA_LOCALD_HOST_PACK_MANIFEST") {
             Some(path) if !path.is_empty() => Some(PathBuf::from(path)),
@@ -59,6 +62,9 @@ impl Daemon {
         let host_processes = host_manifest
             .map(|path| HostProcessManager::load(&path, paths.root.join("logs")))
             .transpose()?;
+        if let Some(manager) = host_processes.as_ref() {
+            manager.set_backend_environment(operator_config.backend_environment()?);
+        }
         let managed_runtime = host_processes
             .as_ref()
             .and_then(|manager| manager.managed_runtime().cloned())
@@ -85,6 +91,7 @@ impl Daemon {
             next_internal_request: AtomicU64::new(1),
             host_processes,
             managed_runtime,
+            operator_config,
             host_operation_running: AtomicBool::new(false),
         }))
     }
@@ -231,6 +238,23 @@ impl Daemon {
             self.start_daemon_shutdown(id, client.clone());
             return true;
         }
+        match command.as_str() {
+            "control.snapshot" => {
+                match self.control_snapshot(id.as_ref()) {
+                    Ok(event) => self.send_direct(client, event),
+                    Err(error) => self.send_direct(
+                        client,
+                        error_event("control-snapshot-failed", error.to_string(), id.as_ref()),
+                    ),
+                }
+                return true;
+            }
+            "config.apply" => {
+                self.apply_operator_config(request, client);
+                return true;
+            }
+            _ => {}
+        }
         if let Some(manager) = self.host_processes.as_ref() {
             match command.as_str() {
                 "status" => {
@@ -298,6 +322,124 @@ impl Daemon {
             ),
         }
         true
+    }
+
+    fn control_snapshot(&self, id: Option<&Value>) -> io::Result<Value> {
+        let mut event = json!({
+            "v": PROTOCOL_VERSION,
+            "event": "control.snapshot",
+            "operator": self.operator_config.snapshot()?,
+            "state": self.state.lock().expect("state lock poisoned").event(None),
+            "services": self.host_processes.as_ref().map(|manager| manager.status()),
+            "release": self.host_processes.as_ref().map(|manager| manager.release()),
+            "managed_runtime": self.managed_runtime.as_ref().and_then(|runtime| runtime.status()),
+            "paths": {
+                "locald": &self.paths.root,
+                "logs": self.paths.root.join("logs"),
+            },
+        });
+        if let Some(id) = id {
+            event["id"] = id.clone();
+        }
+        Ok(event)
+    }
+
+    fn apply_operator_config(self: &Arc<Self>, request: Value, client: &mpsc::Sender<String>) {
+        let id = request.get("id").cloned();
+        if self
+            .host_operation_running
+            .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
+            .is_err()
+        {
+            self.send_direct(
+                client,
+                error_event("busy", "another local operation is running", id.as_ref()),
+            );
+            return;
+        }
+        let payload = request.get("payload").cloned().unwrap_or(Value::Null);
+        let apply: ApplyOperatorConfig = match serde_json::from_value(payload) {
+            Ok(apply) => apply,
+            Err(error) => {
+                self.host_operation_running.store(false, Ordering::Release);
+                self.send_direct(
+                    client,
+                    error_event(
+                        "bad-input",
+                        format!("invalid config patch: {error}"),
+                        id.as_ref(),
+                    ),
+                );
+                return;
+            }
+        };
+        self.send_direct(
+            client,
+            json!({"v": PROTOCOL_VERSION, "event":"ack", "cmd":"config.apply", "id": id.as_ref()}),
+        );
+        let daemon = Arc::clone(self);
+        thread::spawn(move || {
+            let previous = daemon.operator_config.capture_state();
+            let was_running = daemon
+                .host_processes
+                .as_ref()
+                .is_some_and(|manager| manager.desired_running());
+            let result = previous.and_then(|previous| {
+                let snapshot = daemon.operator_config.apply(apply)?;
+                let activate: io::Result<Value> = (|| {
+                    if let Some(manager) = daemon.host_processes.as_ref() {
+                        manager.set_backend_environment(
+                            daemon.operator_config.backend_environment()?,
+                        );
+                        if was_running {
+                            manager.restart_backend()?;
+                        }
+                    }
+                    Ok(snapshot)
+                })();
+                match activate {
+                    Ok(snapshot) => Ok(snapshot),
+                    Err(error) => {
+                        let rollback = daemon.operator_config.restore_state(previous).and_then(|_| {
+                            if let Some(manager) = daemon.host_processes.as_ref() {
+                                manager.set_backend_environment(
+                                    daemon.operator_config.backend_environment()?,
+                                );
+                                if was_running {
+                                    manager.start_all()?;
+                                }
+                            }
+                            Ok(())
+                        });
+                        match rollback {
+                            Ok(()) => Err(io::Error::other(format!(
+                                "new configuration could not be activated and was rolled back: {error}"
+                            ))),
+                            Err(rollback_error) => Err(io::Error::other(format!(
+                                "new configuration could not be activated: {error}; rollback also failed: {rollback_error}"
+                            ))),
+                        }
+                    }
+                }
+            });
+            match result {
+                Ok(snapshot) => daemon.broadcast(json!({
+                    "v": PROTOCOL_VERSION,
+                    "event": "config.applied",
+                    "id": id.as_ref(),
+                    "operator": snapshot,
+                    "restart": "backend",
+                })),
+                Err(error) => daemon.broadcast(error_event(
+                    "config-apply-failed",
+                    error.to_string(),
+                    id.as_ref(),
+                )),
+            }
+            daemon
+                .host_operation_running
+                .store(false, Ordering::Release);
+        });
     }
 
     fn start_daemon_shutdown(self: &Arc<Self>, id: Option<Value>, client: mpsc::Sender<String>) {

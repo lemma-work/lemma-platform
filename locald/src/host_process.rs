@@ -194,6 +194,7 @@ pub struct HostProcessManager {
     ordered_ids: Vec<String>,
     by_id: HashMap<String, HostProcessSpec>,
     state: Mutex<ProcessState>,
+    backend_environment: Mutex<HashMap<String, String>>,
     desired_running: AtomicBool,
     log_dir: PathBuf,
 }
@@ -224,6 +225,7 @@ impl HostProcessManager {
             ordered_ids,
             by_id,
             state: Mutex::new(ProcessState::default()),
+            backend_environment: Mutex::new(HashMap::new()),
             desired_running: AtomicBool::new(false),
             log_dir,
         });
@@ -245,6 +247,13 @@ impl HostProcessManager {
 
     pub fn desired_running(&self) -> bool {
         self.desired_running.load(Ordering::Acquire)
+    }
+
+    pub fn set_backend_environment(&self, environment: HashMap<String, String>) {
+        *self
+            .backend_environment
+            .lock()
+            .expect("backend environment lock poisoned") = environment;
     }
 
     pub fn start_all(&self) -> io::Result<()> {
@@ -329,16 +338,8 @@ impl HostProcessManager {
         self.desired_running.store(false, Ordering::Release);
         let mut first_error = None;
         for id in self.ordered_ids.iter().rev() {
-            let child = self
-                .state
-                .lock()
-                .expect("host process lock poisoned")
-                .children
-                .remove(id);
-            if let Some(mut child) = child {
-                if let Err(error) = terminate_process_group(&mut child.child) {
-                    first_error.get_or_insert(error);
-                }
+            if let Err(error) = self.stop_process(id) {
+                first_error.get_or_insert(error);
             }
         }
         if let Some(error) = first_error {
@@ -351,6 +352,28 @@ impl HostProcessManager {
     pub fn restart_all(&self) -> io::Result<()> {
         self.stop_all()?;
         self.start_all()
+    }
+
+    pub fn restart_backend(&self) -> io::Result<()> {
+        self.desired_running.store(false, Ordering::Release);
+        self.stop_process("backend")?;
+        {
+            let mut state = self.state.lock().expect("host process lock poisoned");
+            state.circuit_open.remove("backend");
+            state.restart_history.remove("backend");
+            state.restart_not_before.remove("backend");
+        }
+        self.spawn_if_missing("backend")?;
+        if let Some(health) = &self.by_id["backend"].health {
+            if let Err(error) = wait_http_health(health) {
+                let _ = self.stop_process("backend");
+                return Err(io::Error::other(format!(
+                    "backend failed health gate after configuration: {error}"
+                )));
+            }
+        }
+        self.desired_running.store(true, Ordering::Release);
+        Ok(())
     }
 
     pub fn status(&self) -> Vec<HostProcessStatus> {
@@ -413,11 +436,8 @@ impl HostProcessManager {
             state.children.remove(id);
         }
 
-        let spec = self
-            .by_id
-            .get(id)
-            .ok_or_else(|| io::Error::new(io::ErrorKind::NotFound, id.to_owned()))?;
-        let child = spawn_process(spec, &self.log_dir)?;
+        let spec = self.process_spec_for_spawn(id)?;
+        let child = spawn_process(&spec, &self.log_dir)?;
         self.state
             .lock()
             .expect("host process lock poisoned")
@@ -430,6 +450,36 @@ impl HostProcessManager {
                 },
             );
         Ok(())
+    }
+
+    fn process_spec_for_spawn(&self, id: &str) -> io::Result<HostProcessSpec> {
+        let mut spec = self
+            .by_id
+            .get(id)
+            .cloned()
+            .ok_or_else(|| io::Error::new(io::ErrorKind::NotFound, id.to_owned()))?;
+        if id == "backend" {
+            spec.env.extend(
+                self.backend_environment
+                    .lock()
+                    .expect("backend environment lock poisoned")
+                    .clone(),
+            );
+        }
+        Ok(spec)
+    }
+
+    fn stop_process(&self, id: &str) -> io::Result<()> {
+        let child = self
+            .state
+            .lock()
+            .expect("host process lock poisoned")
+            .children
+            .remove(id);
+        match child {
+            Some(mut child) => terminate_process_group(&mut child.child),
+            None => Ok(()),
+        }
     }
 
     fn inspect_exits(&self) {
@@ -866,6 +916,36 @@ mod tests {
             .contains("migrations setup"));
     }
 
+    #[test]
+    fn operator_secrets_are_ephemeral_and_backend_scoped() {
+        let root = tempdir().unwrap();
+        let manager = HostProcessManager::new(
+            manifest(vec![
+                service("frontend", &["backend"]),
+                service("backend", &[]),
+            ]),
+            root.path().into(),
+        )
+        .unwrap();
+        manager.set_backend_environment(HashMap::from([(
+            "LEMMA_OPENAI_API_KEY".into(),
+            "vault-secret".into(),
+        )]));
+
+        assert_eq!(
+            manager.process_spec_for_spawn("backend").unwrap().env["LEMMA_OPENAI_API_KEY"],
+            "vault-secret"
+        );
+        assert!(!manager
+            .process_spec_for_spawn("frontend")
+            .unwrap()
+            .env
+            .contains_key("LEMMA_OPENAI_API_KEY"));
+        assert!(!manager.by_id["backend"]
+            .env
+            .contains_key("LEMMA_OPENAI_API_KEY"));
+    }
+
     #[cfg(unix)]
     #[test]
     fn starts_and_stops_backend_and_frontend_process_groups() {
@@ -887,6 +967,41 @@ mod tests {
         assert!(manager.status().iter().all(|process| process.running));
         manager.stop_all().unwrap();
         assert!(manager.status().iter().all(|process| !process.running));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn backend_config_restart_keeps_the_frontend_process_running() {
+        let command = vec![
+            "/bin/sh".into(),
+            "-c".into(),
+            "trap 'exit 0' TERM; while :; do sleep 1; done".into(),
+        ];
+        let mut backend = service("backend", &[]);
+        backend.command = command.clone();
+        let mut frontend = service("frontend", &["backend"]);
+        frontend.command = command;
+        let root = tempdir().unwrap();
+        let mut value = manifest(vec![frontend, backend]);
+        value.setup[0].command = vec!["/usr/bin/true".into()];
+        let manager = HostProcessManager::new(value, root.path().into()).unwrap();
+        manager.start_all().unwrap();
+        let before: HashMap<_, _> = manager
+            .status()
+            .into_iter()
+            .map(|process| (process.id, process.pid.unwrap()))
+            .collect();
+
+        manager.restart_backend().unwrap();
+
+        let after: HashMap<_, _> = manager
+            .status()
+            .into_iter()
+            .map(|process| (process.id, process.pid.unwrap()))
+            .collect();
+        assert_ne!(before["backend"], after["backend"]);
+        assert_eq!(before["frontend"], after["frontend"]);
+        manager.stop_all().unwrap();
     }
 
     #[cfg(unix)]
