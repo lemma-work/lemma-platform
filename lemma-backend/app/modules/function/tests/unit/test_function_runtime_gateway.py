@@ -11,6 +11,7 @@ from app.modules.function.application.function_attempt_credentials import (
 )
 from app.modules.function.application.function_runtime_gateway import (
     FunctionRuntimeGateway,
+    RuntimeFenceRejected,
 )
 from app.modules.function.contracts.runtime import (
     RuntimeClaimRequest,
@@ -91,8 +92,11 @@ async def test_gateway_releases_database_before_identity_and_storage_io(
             return True
 
         async def complete(self, received, **kwargs):
+            duplicate = bool(terminal_calls)
+            if duplicate:
+                assert kwargs == terminal_calls[0][1]
             terminal_calls.append((received, kwargs))
-            return None, True, False
+            return None, True, duplicate
 
     monkeypatch.setattr(
         "app.modules.function.application.function_runtime_gateway."
@@ -136,17 +140,33 @@ async def test_gateway_releases_database_before_identity_and_storage_io(
         RuntimeStartedRequest(fence=context.fence),
     )
     assert started.accepted
+    terminal_request = RuntimeTerminalRequest(
+        fence=context.fence,
+        status="completed",
+        output_data={"answer": 42},
+        stdout="ok",
+        stderr="",
+    )
     terminal = await gateway.terminal(
         context.attempt_id,
         claim.runtime_token,
-        RuntimeTerminalRequest(
-            fence=context.fence,
-            status="completed",
-            output_data={"answer": 42},
-            stdout="ok",
-            stderr="",
-        ),
+        terminal_request,
     )
     assert terminal.accepted
+    assert terminal.duplicate is False
+    duplicate = await gateway.terminal(
+        context.attempt_id,
+        claim.runtime_token,
+        terminal_request,
+    )
+    assert duplicate.accepted
+    assert duplicate.duplicate is True
+    with pytest.raises(RuntimeFenceRejected):
+        await gateway.terminal(
+            context.attempt_id,
+            claim.runtime_token,
+            terminal_request.model_copy(update={"fence": context.fence + 1}),
+        )
     assert terminal_calls[0][1]["output_data"] == {"answer": 42}
+    assert len(terminal_calls) == 2
     assert state.active == 0

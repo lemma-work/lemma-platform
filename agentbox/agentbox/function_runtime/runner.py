@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+from datetime import datetime, timedelta, timezone
 import hashlib
 import os
 from pathlib import Path
@@ -33,10 +34,17 @@ _MAX_LOG_BYTES = 4 * 1024 * 1024
 
 
 class GatewayClient:
-    def __init__(self, base_url: str) -> None:
+    def __init__(
+        self,
+        base_url: str,
+        *,
+        transport: httpx.AsyncBaseTransport | None = None,
+    ) -> None:
         self._base_url = base_url.rstrip("/") + "/"
         self._client = httpx.AsyncClient(
-            timeout=httpx.Timeout(20, read=60), follow_redirects=False
+            timeout=httpx.Timeout(20, read=60),
+            follow_redirects=False,
+            transport=transport,
         )
 
     async def claim(self, ticket: str) -> AttemptClaim:
@@ -67,15 +75,58 @@ class GatewayClient:
     async def _post_event(
         self, claim: AttemptClaim, event: str, payload: dict[str, object]
     ) -> None:
-        response = await self._client.post(
-            urljoin(
-                self._base_url,
-                f"internal/function-runtime/attempts/{claim.attempt_id}:{event}",
-            ),
-            headers={"Authorization": f"Bearer {claim.runtime_token}"},
-            json=payload,
+        url = urljoin(
+            self._base_url,
+            f"internal/function-runtime/attempts/{claim.attempt_id}:{event}",
         )
-        response.raise_for_status()
+        headers = {"Authorization": f"Bearer {claim.runtime_token}"}
+        retry_deadline = min(
+            datetime.now(timezone.utc) + timedelta(seconds=5),
+            claim.deadline_at.astimezone(timezone.utc) + timedelta(seconds=5),
+        )
+        delay_seconds = 0.1
+        while True:
+            remaining = (retry_deadline - datetime.now(timezone.utc)).total_seconds()
+            request_timeout = max(0.1, min(2.0, remaining))
+            retry_after_seconds: float | None = None
+            try:
+                response = await self._client.post(
+                    url,
+                    headers=headers,
+                    json=payload,
+                    timeout=request_timeout,
+                )
+            except httpx.TransportError:
+                if datetime.now(timezone.utc) >= retry_deadline:
+                    raise
+            else:
+                if 200 <= response.status_code < 300:
+                    return
+                if not self._retryable_event_status(response.status_code):
+                    response.raise_for_status()
+                retry_after_seconds = self._retry_after_seconds(response)
+                if datetime.now(timezone.utc) >= retry_deadline:
+                    response.raise_for_status()
+            sleep_seconds = retry_after_seconds or delay_seconds
+            remaining = (retry_deadline - datetime.now(timezone.utc)).total_seconds()
+            if remaining <= 0:
+                raise TimeoutError(f"{event} callback retry deadline elapsed")
+            await asyncio.sleep(min(sleep_seconds, remaining))
+            delay_seconds = min(delay_seconds * 2, 1.0)
+
+    @staticmethod
+    def _retryable_event_status(status_code: int) -> bool:
+        return status_code in {408, 425, 429} or status_code >= 500
+
+    @staticmethod
+    def _retry_after_seconds(response: httpx.Response) -> float | None:
+        configured = response.headers.get("Retry-After")
+        if configured is None:
+            return None
+        try:
+            return max(0.05, min(float(configured), 1.0))
+        except ValueError:
+            return None
 
     async def close(self) -> None:
         await self._client.aclose()
