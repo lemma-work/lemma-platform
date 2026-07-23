@@ -131,6 +131,12 @@ def test_embedded_agentbox_podman_wiring(config, paths, manifest):
     assert spec.env["AGENTBOX_NETWORK"] == "lemma-local-net"
     assert spec.env["AGENTBOX_ADD_HOST_GATEWAY"] == "false"
     assert spec.env["AGENTBOX_REQUIRE_CALLBACK"] == "true"
+    assert spec.env["AGENTBOX_MEMORY_LIMIT"] == "2g"
+    assert spec.env["AGENTBOX_CPU_LIMIT"] == "2"
+    assert spec.env["AGENTBOX_LOCAL_RUNTIME_TIMEOUT_SECONDS"] == "600"
+    assert (
+        spec.env["AGENTBOX_DEFER_INITIAL_RECONCILIATION_UNTIL_SERVING"] == "true"
+    )
     assert spec.user == "root"
     mounts = dict((t, s) for s, t, _ in spec.binds)
     assert mounts["/run/podman/podman.sock"] == "/run/user/501/podman/podman.sock"
@@ -220,6 +226,11 @@ def test_backend_env_golden(config, paths, manifest):
     assert env["LOCAL_KREUZBERG_ENABLED"] == "false"
     assert env["EMBEDDING_PROVIDER"] == "local"
     assert env["AUTH_EMAIL_VERIFICATION_REQUIRED"] == "false"
+    assert env["AUTH_EMAIL_DELIVERABILITY_CHECKS_ENABLED"] == "false"
+    assert env["AUTH_DISPOSABLE_EMAIL_DOMAINS_ENABLED"] == "false"
+    assert env["AUTH_ABUSE_PROTECTION_ENABLED"] == "false"
+    assert env["AUTH_ALTCHA_ENABLED"] == "false"
+    assert env["DESKTOP_AUTH_CREATE_LIMIT"] == "0"
     assert env["AGENTBOX_API_KEY"] == store.agentbox_api_key(config)
     assert env["AGENTBOX_APP_DOMAIN"] == "workspaces.lemma.localhost:8711"
     # chat surfaces default to no-public-URL receive modes

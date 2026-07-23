@@ -90,6 +90,10 @@ class Settings(BaseSettings):
     agentbox_lifecycle_claim_wait_seconds: float = 30.0
     agentbox_provider_allocation_ttl_seconds: float = 600.0
     agentbox_reconcile_interval_seconds: float = 60.0
+    # Embedded local runtimes require the host API to be accepting callbacks
+    # before a durable sandbox can be reconciled. Hosted deployments keep the
+    # stricter pre-serve reconciliation default.
+    agentbox_defer_initial_reconciliation_until_serving: bool = False
     agentbox_orphan_grace_seconds: float = 120.0
     agentbox_suspended_retention_seconds: float = 604800.0
     agentbox_storage_root: str = "/tmp/agentbox-workspaces"

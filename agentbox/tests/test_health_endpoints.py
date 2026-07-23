@@ -10,6 +10,7 @@ import agentbox.api.app as app_module
 from agentbox.api.app import (
     RequestContextMiddleware,
     create_app,
+    deferred_initial_reconciliation,
     health_live,
     health_ready,
 )
@@ -30,6 +31,32 @@ def _request(*, store, manager, task_done: bool = False):
 @pytest.mark.asyncio
 async def test_liveness_is_process_only() -> None:
     assert await health_live() == {"status": "ok"}
+
+
+@pytest.mark.asyncio
+async def test_deferred_initial_reconciliation_yields_before_provider_io(
+    monkeypatch,
+) -> None:
+    order: list[str] = []
+
+    async def delay(_seconds: float) -> None:
+        order.append("delay")
+
+    async def reconcile() -> None:
+        order.append("reconcile")
+
+    manager = SimpleNamespace(
+        reconcile=AsyncMock(side_effect=reconcile),
+        record_reconciliation_success=Mock(),
+        record_reconciliation_failure=Mock(),
+    )
+    monkeypatch.setattr(app_module.asyncio, "sleep", delay)
+
+    await deferred_initial_reconciliation(manager)
+
+    assert order == ["delay", "reconcile"]
+    manager.record_reconciliation_success.assert_called_once_with()
+    manager.record_reconciliation_failure.assert_not_called()
 
 
 def test_app_factory_can_preserve_parent_process_telemetry() -> None:

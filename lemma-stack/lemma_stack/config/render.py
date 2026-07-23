@@ -114,6 +114,10 @@ def backend_env(
         "AGENTBOX_ADD_HOST_GATEWAY": "false",
         "AGENTBOX_HOST_ALIAS": "host.lemma.internal",
         "AGENTBOX_REQUIRE_CALLBACK": "true",
+        "AGENTBOX_MEMORY_LIMIT": "2g",
+        "AGENTBOX_CPU_LIMIT": "2",
+        "AGENTBOX_LOCAL_RUNTIME_TIMEOUT_SECONDS": "600",
+        "AGENTBOX_DEFER_INITIAL_RECONCILIATION_UNTIL_SERVING": "true",
         # sandboxes share the network; no host.docker.internal rewrite
         "WORKSPACE_CALLBACK_API_URL": "http://backend:8000",
         "WORKSPACE_CALLBACK_AUTH_URL": "http://frontend:8080/auth",
@@ -143,6 +147,11 @@ def backend_env(
         # Local installs do not require SMTP. Keep accounts usable while the
         # filesystem sender remains available for explicitly testing emails.
         "AUTH_EMAIL_VERIFICATION_REQUIRED": "false",
+        "AUTH_EMAIL_DELIVERABILITY_CHECKS_ENABLED": "false",
+        "AUTH_DISPOSABLE_EMAIL_DOMAINS_ENABLED": "false",
+        "AUTH_ABUSE_PROTECTION_ENABLED": "false",
+        "AUTH_ALTCHA_ENABLED": "false",
+        "DESKTOP_AUTH_CREATE_LIMIT": "0",
         "AUTH_WHATSAPP_MOBILE_VERIFICATION_ENABLED": "false",
         "EMBEDDING_PROVIDER": "local",
         "WEB_SEARCH_PROVIDER": "duckduckgo",

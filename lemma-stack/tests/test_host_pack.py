@@ -66,6 +66,13 @@ def test_builds_exact_backend_frontend_native_contract(paths, tmp_path):
     assert backend["env"]["AGENTBOX_STATE_DATABASE_URL"].endswith(":55432/agentbox")
     assert backend["env"]["WORKSPACE_CALLBACK_API_URL"] == ("http://host.lemma.internal:8711")
     assert backend["env"]["AGENTBOX_REQUIRE_CALLBACK"] == "true"
+    assert backend["env"]["AGENTBOX_MEMORY_LIMIT"] == "2g"
+    assert backend["env"]["AGENTBOX_CPU_LIMIT"] == "2"
+    assert backend["env"]["AGENTBOX_LOCAL_RUNTIME_TIMEOUT_SECONDS"] == "600"
+    assert (
+        backend["env"]["AGENTBOX_DEFER_INITIAL_RECONCILIATION_UNTIL_SERVING"]
+        == "true"
+    )
     assert backend["env"]["BROWSER_SDK_PATH"].endswith("lemma-client.js")
     assert frontend["dependencies"] == ["backend"]
     assert frontend["env"]["HOSTNAME"] == "127.0.0.1"

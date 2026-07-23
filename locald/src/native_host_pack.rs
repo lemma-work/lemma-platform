@@ -210,6 +210,15 @@ fn build(
         ("AGENTBOX_ADD_HOST_GATEWAY", "false".to_owned()),
         ("AGENTBOX_HOST_ALIAS", "host.lemma.internal".to_owned()),
         ("AGENTBOX_REQUIRE_CALLBACK", "true".to_owned()),
+        // Keep one sandbox from consuming the private VM's core-service
+        // headroom. The VZ guest itself is sized automatically from host RAM.
+        ("AGENTBOX_MEMORY_LIMIT", "2g".to_owned()),
+        ("AGENTBOX_CPU_LIMIT", "2".to_owned()),
+        ("AGENTBOX_LOCAL_RUNTIME_TIMEOUT_SECONDS", "600".to_owned()),
+        (
+            "AGENTBOX_DEFER_INITIAL_RECONCILIATION_UNTIL_SERVING",
+            "true".to_owned(),
+        ),
         (
             "AGENTBOX_LOCAL_RUNTIME_CLI",
             path_text(&material.bridge_executable)?,
@@ -254,6 +263,14 @@ fn build(
         ("EMAIL_TRANSPORT", "filesystem".to_owned()),
         ("EMAIL_OUTPUT_DIR", path_text(&state.join("emails"))?),
         ("AUTH_EMAIL_VERIFICATION_REQUIRED", "false".to_owned()),
+        (
+            "AUTH_EMAIL_DELIVERABILITY_CHECKS_ENABLED",
+            "false".to_owned(),
+        ),
+        ("AUTH_DISPOSABLE_EMAIL_DOMAINS_ENABLED", "false".to_owned()),
+        ("AUTH_ABUSE_PROTECTION_ENABLED", "false".to_owned()),
+        ("AUTH_ALTCHA_ENABLED", "false".to_owned()),
+        ("DESKTOP_AUTH_CREATE_LIMIT", "0".to_owned()),
         (
             "AUTH_WHATSAPP_MOBILE_VERIFICATION_ENABLED",
             "false".to_owned(),
@@ -549,6 +566,31 @@ mod tests {
         assert_eq!(
             manifest["services"][0]["env"]["DOCUMENT_PROCESSOR"],
             "markitdown"
+        );
+        assert_eq!(
+            manifest["services"][0]["env"]["AUTH_EMAIL_VERIFICATION_REQUIRED"],
+            "false"
+        );
+        assert_eq!(
+            manifest["services"][0]["env"]["AUTH_ABUSE_PROTECTION_ENABLED"],
+            "false"
+        );
+        assert_eq!(
+            manifest["services"][0]["env"]["DESKTOP_AUTH_CREATE_LIMIT"],
+            "0"
+        );
+        assert_eq!(
+            manifest["services"][0]["env"]["AGENTBOX_MEMORY_LIMIT"],
+            "2g"
+        );
+        assert_eq!(manifest["services"][0]["env"]["AGENTBOX_CPU_LIMIT"], "2");
+        assert_eq!(
+            manifest["services"][0]["env"]["AGENTBOX_LOCAL_RUNTIME_TIMEOUT_SECONDS"],
+            "600"
+        );
+        assert_eq!(
+            manifest["services"][0]["env"]["AGENTBOX_DEFER_INITIAL_RECONCILIATION_UNTIL_SERVING"],
+            "true"
         );
         assert_eq!(
             manifest["managed_runtime"]["images"]["postgres"],

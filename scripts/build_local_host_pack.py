@@ -28,6 +28,13 @@ LOCAL_WHEEL_PROJECTS = (
     "lemma-backend/lemma-connectors",
     "lemma-backend",
 )
+LOCAL_WHEEL_PACKAGES = (
+    "agentbox-client",
+    "agentbox",
+    "lemma-pod-bundle",
+    "lemma-connectors",
+    "lemma-backend",
+)
 
 
 def run(*args: str | Path, cwd: Path = REPO_ROOT, env: dict[str, str] | None = None) -> None:
@@ -67,30 +74,48 @@ def python_executable(python_root: Path) -> Path:
     raise SystemExit(f"standalone Python executable not found under {python_root}")
 
 
-def install_python(output: Path, version: str, wheels: Path) -> Path:
-    staging = output / ".python-install"
-    bin_dir = output / ".python-bin"
-    environment = os.environ.copy()
-    environment["UV_PYTHON_BIN_DIR"] = str(bin_dir)
-    run(
-        "uv",
-        "python",
-        "install",
-        version,
-        "--install-dir",
-        staging,
-        env=environment,
-    )
-    installed = one_child(
-        staging,
-        "standalone Python installation",
-        preferred=f"cpython-{version}-",
-    )
+def install_python(
+    output: Path,
+    version: str,
+    wheels: Path,
+    explicit_python_root: Path | None = None,
+) -> Path:
     destination = output / "backend/python"
     destination.parent.mkdir(parents=True, exist_ok=True)
-    installed.replace(destination)
-    shutil.rmtree(staging)
-    shutil.rmtree(bin_dir, ignore_errors=True)
+    if explicit_python_root is not None:
+        source = explicit_python_root.resolve()
+        executable = python_executable(source)
+        detected = subprocess.check_output(
+            [str(executable), "-c", "import sys; print('.'.join(map(str, sys.version_info[:3])))"],
+            text=True,
+        ).strip()
+        if detected != version:
+            raise SystemExit(
+                f"explicit Python root is {detected}, expected exact {version}: {source}"
+            )
+        shutil.copytree(source, destination, symlinks=True)
+    else:
+        staging = output / ".python-install"
+        bin_dir = output / ".python-bin"
+        environment = os.environ.copy()
+        environment["UV_PYTHON_BIN_DIR"] = str(bin_dir)
+        run(
+            "uv",
+            "python",
+            "install",
+            version,
+            "--install-dir",
+            staging,
+            env=environment,
+        )
+        installed = one_child(
+            staging,
+            "standalone Python installation",
+            preferred=f"cpython-{version}-",
+        )
+        installed.replace(destination)
+        shutil.rmtree(staging)
+        shutil.rmtree(bin_dir, ignore_errors=True)
 
     executable = python_executable(destination)
     if os.name != "nt" and not (destination / "bin/python3").exists():
@@ -121,7 +146,11 @@ def install_python(output: Path, version: str, wheels: Path) -> Path:
         "--extra",
         "local",
         "--no-emit-project",
-        "--no-emit-local",
+        *(
+            argument
+            for package in LOCAL_WHEEL_PACKAGES
+            for argument in ("--no-emit-package", package)
+        ),
         "--no-hashes",
         "--quiet",
         "--output-file",
@@ -137,7 +166,6 @@ def install_python(output: Path, version: str, wheels: Path) -> Path:
         # system Python. uv marks managed downloads as externally managed, so
         # explicitly authorize installing the application into this pack.
         "--break-system-packages",
-        "--compile-bytecode",
         "--find-links",
         wheels,
         "--requirements",
@@ -150,7 +178,11 @@ def install_python(output: Path, version: str, wheels: Path) -> Path:
             "AGENTBOX_API_KEY": "host-pack-smoke",
             "AGENTBOX_API_URL": "http://127.0.0.1:8711/internal/agentbox",
             "AGENTBOX_ENDPOINT_STATE_KEYS": "",
-            "AGENTBOX_PROVIDER": "docker",
+            "AGENTBOX_PROVIDER": "lemma_local",
+            # Provider construction validates that the managed-runtime bridge
+            # exists. The private Python executable is a harmless stand-in for
+            # this build-only smoke test; no bridge request is made.
+            "AGENTBOX_LOCAL_RUNTIME_CLI": str(executable),
         }
     )
     run(
@@ -158,7 +190,10 @@ def install_python(output: Path, version: str, wheels: Path) -> Path:
         "-c",
         (
             "from fastmcp import FastMCP; "
+            "from agentbox.providers import build_sandbox_provider; "
             "import local_app, markitdown, uvicorn; "
+            "provider = build_sandbox_provider(); "
+            "assert provider.provider_name == 'lemma_local'; "
             "print('backend pack: import ok')"
         ),
         env=smoke_environment,
@@ -275,6 +310,11 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--release-manifest", type=Path, required=True)
     parser.add_argument("--python", default="3.14.2")
+    parser.add_argument(
+        "--python-root",
+        type=Path,
+        help="copy an existing exact-version standalone Python distribution",
+    )
     parser.add_argument("--node-root", type=Path)
     parser.add_argument("--archive", type=Path)
     parser.add_argument(
@@ -316,7 +356,7 @@ def main() -> None:
         raise SystemExit("release manifest lacks version or agentbox_runtime")
 
     with tempfile.TemporaryDirectory(prefix="lemma-host-wheels-") as wheel_dir:
-        install_python(output, args.python, Path(wheel_dir))
+        install_python(output, args.python, Path(wheel_dir), args.python_root)
     copy_backend_assets(output)
     build_frontend(output, args.node_root)
     shutil.copy2(release_manifest, output / "release.json")

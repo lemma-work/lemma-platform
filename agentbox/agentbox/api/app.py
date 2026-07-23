@@ -20,6 +20,7 @@ from agentbox.providers.protocol import SandboxCapabilitiesProvider
 from agentbox.state_store import create_state_store
 from agentbox.telemetry import instrument_app, shutdown_telemetry
 from agentbox.observability import (
+    DependencyIncident,
     bind_context,
     create_background_task,
     get_logger,
@@ -33,6 +34,21 @@ from .sessions import router as sessions_router
 
 logger = get_logger(__name__)
 _QUIET_HEALTH_PATHS = frozenset({"/health", "/health/live", "/health/ready", "/livez"})
+
+
+async def deferred_initial_reconciliation(manager: SandboxLifecycleManager) -> None:
+    """Reconcile only after the embedding ASGI server can receive callbacks."""
+
+    await asyncio.sleep(1)
+    incident = DependencyIncident("agentbox.reconciliation", logger=logger)
+    try:
+        await manager.reconcile()
+    except Exception as exc:
+        manager.record_reconciliation_failure()
+        incident.record_failure(exc)
+    else:
+        manager.record_reconciliation_success()
+        incident.record_success()
 
 
 class RequestContextMiddleware:
@@ -228,10 +244,19 @@ async def lifespan(app: FastAPI):
         app.state.store = store
         app.state.lifecycle_manager = manager
         app.state.sandbox_app_ready_cache = set()
-        # Reconcile before accepting requests so durable reservations and
-        # provider inventory agree after a manager revision restart.
-        await manager.reconcile()
-        manager.record_reconciliation_success()
+        # Most providers reconcile before accepting requests. Lemma Desktop's
+        # sandbox callback targets this same process, so its first pass must be
+        # deferred until uvicorn is actually listening or startup deadlocks on
+        # its own callback readiness gate.
+        initial_reconciliation_task = None
+        if settings.agentbox_defer_initial_reconciliation_until_serving:
+            initial_reconciliation_task = create_background_task(
+                deferred_initial_reconciliation(manager),
+                name="agentbox-initial-reconciliation",
+            )
+        else:
+            await manager.reconcile()
+            manager.record_reconciliation_success()
         app.state.cleanup_task = create_background_task(
             cleanup_loop(manager), name="agentbox-cleanup"
         )
@@ -241,14 +266,20 @@ async def lifespan(app: FastAPI):
         app.state.provider_lease_renewal_task = create_background_task(
             provider_lease_renewal_loop(manager), name="agentbox-provider-lease-renewal"
         )
+        app.state.initial_reconciliation_task = initial_reconciliation_task
         logger.info("service.started")
         try:
             yield
         finally:
-            tasks = (
-                app.state.cleanup_task,
-                app.state.reconciliation_task,
-                app.state.provider_lease_renewal_task,
+            tasks = tuple(
+                task
+                for task in (
+                    app.state.initial_reconciliation_task,
+                    app.state.cleanup_task,
+                    app.state.reconciliation_task,
+                    app.state.provider_lease_renewal_task,
+                )
+                if task is not None
             )
             for task in tasks:
                 task.cancel()

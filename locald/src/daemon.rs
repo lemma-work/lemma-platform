@@ -128,11 +128,100 @@ impl Daemon {
         let daemon = Arc::clone(self);
         thread::spawn(move || {
             let mut previous = String::new();
+            let mut next_runtime_probe = std::time::Instant::now();
+            let mut next_runtime_recovery = std::time::Instant::now();
+            let mut runtime_failure_reported = false;
             loop {
                 let manager = daemon
                     .host_processes
                     .as_ref()
                     .expect("host monitor requires manager");
+                let now = std::time::Instant::now();
+                if now >= next_runtime_probe
+                    && !daemon.host_operation_running.load(Ordering::Acquire)
+                {
+                    next_runtime_probe = now + std::time::Duration::from_secs(5);
+                    if let Some(runtime) = daemon.managed_runtime.as_ref() {
+                        let runtime_expected =
+                            runtime.status().is_some() || manager.desired_running();
+                        if runtime_expected {
+                            match runtime.probe() {
+                                Ok(_) => {
+                                    manager.mark_dependency_ready();
+                                    runtime_failure_reported = false;
+                                }
+                                Err(error) => {
+                                    let message = error.to_string();
+                                    manager.mark_dependency_unavailable(message.clone());
+                                    if !runtime_failure_reported {
+                                        runtime_failure_reported = true;
+                                        daemon.broadcast(error_event(
+                                            "managed-runtime-lost",
+                                            format!(
+                                                "Lemma's private runtime stopped unexpectedly: {message}"
+                                            ),
+                                            None,
+                                        ));
+                                        daemon.broadcast(json!({
+                                            "v": PROTOCOL_VERSION,
+                                            "event": "state",
+                                            "status": "error",
+                                            "running": true,
+                                            "ready": false,
+                                        }));
+                                    }
+                                    if manager.desired_running()
+                                        && now >= next_runtime_recovery
+                                        && daemon
+                                            .host_operation_running
+                                            .compare_exchange(
+                                                false,
+                                                true,
+                                                Ordering::AcqRel,
+                                                Ordering::Acquire,
+                                            )
+                                            .is_ok()
+                                    {
+                                        next_runtime_recovery =
+                                            now + std::time::Duration::from_secs(15);
+                                        manager.mark_dependency_recovering();
+                                        daemon.broadcast(json!({
+                                            "v": PROTOCOL_VERSION,
+                                            "event": "phase",
+                                            "key": "runtime-recovery",
+                                            "label": "Recovering private runtime",
+                                            "progress": 38,
+                                            "detail": "restarting app-owned Linux services",
+                                        }));
+                                        let recovery = Arc::clone(&daemon);
+                                        thread::spawn(move || {
+                                            let result = recovery.recover_managed_stack();
+                                            if let Err(error) = result {
+                                                if let Some(manager) =
+                                                    recovery.host_processes.as_ref()
+                                                {
+                                                    manager.mark_dependency_unavailable(
+                                                        error.to_string(),
+                                                    );
+                                                }
+                                                recovery.broadcast(error_event(
+                                                    "managed-runtime-recovery-failed",
+                                                    format!(
+                                                        "Could not recover Lemma's private runtime: {error}"
+                                                    ),
+                                                    None,
+                                                ));
+                                            }
+                                            recovery
+                                                .host_operation_running
+                                                .store(false, Ordering::Release);
+                                        });
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
                 let event = manager.status_event(None);
                 let current = event.to_string();
                 if current != previous {
@@ -526,7 +615,11 @@ impl Daemon {
         {
             self.send_direct(
                 &client,
-                error_event("busy", "another local operation is running", id.as_ref()),
+                error_event(
+                    "busy",
+                    "Lemma is already working on a local operation; its progress will continue in this client",
+                    id.as_ref(),
+                ),
             );
             return;
         }
@@ -679,6 +772,12 @@ impl Daemon {
 
     fn start_host_packs(self: &Arc<Self>, manager: &HostProcessManager) -> io::Result<()> {
         self.prepare_private_infra()?;
+        manager.mark_dependency_ready();
+        let mut backend_environment = self.operator_config.backend_environment()?;
+        if let Some(runtime) = self.managed_runtime.as_ref() {
+            backend_environment.extend(runtime.backend_environment()?);
+        }
+        manager.set_backend_environment(backend_environment);
         self.broadcast(json!({
             "v": PROTOCOL_VERSION, "event": "phase", "key": "migrations",
             "label": "Checking workspace data", "progress": 68,
@@ -706,6 +805,41 @@ impl Daemon {
             "v": PROTOCOL_VERSION, "event": "ready", "url": state.url,
             "api_url": state.api_url,
             "mode": if self.managed_runtime.is_some() { "managed-local" } else { "host-packs" },
+            "release": manager.release(),
+        }));
+        Ok(())
+    }
+
+    fn recover_managed_stack(self: &Arc<Self>) -> io::Result<()> {
+        let runtime = self
+            .managed_runtime
+            .as_ref()
+            .ok_or_else(|| io::Error::other("managed runtime is unavailable"))?;
+        let manager = self
+            .host_processes
+            .as_ref()
+            .ok_or_else(|| io::Error::other("host process manager is unavailable"))?;
+        runtime.start()?;
+        let mut backend_environment = self.operator_config.backend_environment()?;
+        backend_environment.extend(runtime.backend_environment()?);
+        manager.set_backend_environment(backend_environment);
+        manager.restart_all()?;
+        manager.mark_dependency_ready();
+
+        let state = self.state.lock().expect("state lock poisoned").clone();
+        self.broadcast(json!({
+            "v": PROTOCOL_VERSION,
+            "event": "state",
+            "status": "running",
+            "running": true,
+            "ready": true,
+        }));
+        self.broadcast(json!({
+            "v": PROTOCOL_VERSION,
+            "event": "ready",
+            "url": state.url,
+            "api_url": state.api_url,
+            "mode": "managed-local",
             "release": manager.release(),
         }));
         Ok(())

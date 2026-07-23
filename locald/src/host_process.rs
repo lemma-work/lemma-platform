@@ -196,6 +196,10 @@ pub struct HostProcessManager {
     state: Mutex<ProcessState>,
     backend_environment: Mutex<HashMap<String, String>>,
     desired_running: AtomicBool,
+    health_ready: AtomicBool,
+    startup_in_progress: AtomicBool,
+    dependency_ready: AtomicBool,
+    dependency_error: Mutex<Option<String>>,
     log_dir: PathBuf,
 }
 
@@ -227,6 +231,10 @@ impl HostProcessManager {
             state: Mutex::new(ProcessState::default()),
             backend_environment: Mutex::new(HashMap::new()),
             desired_running: AtomicBool::new(false),
+            health_ready: AtomicBool::new(false),
+            startup_in_progress: AtomicBool::new(false),
+            dependency_ready: AtomicBool::new(true),
+            dependency_error: Mutex::new(None),
             log_dir,
         });
         let monitor = Arc::clone(&manager);
@@ -256,7 +264,47 @@ impl HostProcessManager {
             .expect("backend environment lock poisoned") = environment;
     }
 
+    pub fn mark_dependency_ready(&self) {
+        self.dependency_ready.store(true, Ordering::Release);
+        *self
+            .dependency_error
+            .lock()
+            .expect("dependency error lock poisoned") = None;
+    }
+
+    pub fn mark_dependency_recovering(&self) {
+        self.dependency_ready.store(false, Ordering::Release);
+        *self
+            .dependency_error
+            .lock()
+            .expect("dependency error lock poisoned") = None;
+    }
+
+    pub fn mark_dependency_unavailable(&self, message: String) {
+        self.dependency_ready.store(false, Ordering::Release);
+        *self
+            .dependency_error
+            .lock()
+            .expect("dependency error lock poisoned") = Some(message);
+    }
+
     pub fn start_all(&self) -> io::Result<()> {
+        if self
+            .startup_in_progress
+            .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
+            .is_err()
+        {
+            return Err(io::Error::new(
+                io::ErrorKind::WouldBlock,
+                "host process startup is already running",
+            ));
+        }
+        let result = self.start_all_inner();
+        self.startup_in_progress.store(false, Ordering::Release);
+        result
+    }
+
+    fn start_all_inner(&self) -> io::Result<()> {
         self.inspect_exits();
         if self
             .state
@@ -267,8 +315,17 @@ impl HostProcessManager {
             == self.ordered_ids.len()
         {
             self.desired_running.store(true, Ordering::Release);
+            for id in &self.ordered_ids {
+                if let Some(health) = &self.by_id[id].health {
+                    wait_http_health(health).map_err(|error| {
+                        io::Error::other(format!("{id} failed health gate: {error}"))
+                    })?;
+                }
+            }
+            self.health_ready.store(true, Ordering::Release);
             return Ok(());
         }
+        self.health_ready.store(false, Ordering::Release);
         self.desired_running.store(false, Ordering::Release);
         {
             let mut state = self.state.lock().expect("host process lock poisoned");
@@ -293,15 +350,23 @@ impl HostProcessManager {
                 }
             }
         }
+        self.health_ready.store(true, Ordering::Release);
         Ok(())
     }
 
     fn run_setups(&self) -> io::Result<()> {
         for setup in &self.manifest.setup {
+            let mut environment = setup.env.clone();
+            environment.extend(
+                self.backend_environment
+                    .lock()
+                    .expect("backend environment lock poisoned")
+                    .clone(),
+            );
             let mut child = spawn_command(
                 &setup.command,
                 setup.cwd.as_deref(),
-                &setup.env,
+                &environment,
                 process_log(&self.log_dir, &setup.id)?,
             )?;
             let deadline = Instant::now() + Duration::from_secs(setup.timeout_seconds);
@@ -335,6 +400,7 @@ impl HostProcessManager {
     }
 
     pub fn stop_all(&self) -> io::Result<()> {
+        self.health_ready.store(false, Ordering::Release);
         self.desired_running.store(false, Ordering::Release);
         let mut first_error = None;
         for id in self.ordered_ids.iter().rev() {
@@ -355,6 +421,7 @@ impl HostProcessManager {
     }
 
     pub fn restart_backend(&self) -> io::Result<()> {
+        self.health_ready.store(false, Ordering::Release);
         self.desired_running.store(false, Ordering::Release);
         self.stop_process("backend")?;
         {
@@ -372,6 +439,7 @@ impl HostProcessManager {
                 )));
             }
         }
+        self.health_ready.store(true, Ordering::Release);
         self.desired_running.store(true, Ordering::Release);
         Ok(())
     }
@@ -398,9 +466,20 @@ impl HostProcessManager {
 
     pub fn status_event(&self, id: Option<&Value>) -> Value {
         let components = self.status();
-        let ready = components.iter().all(|component| component.running);
+        let all_running = components.iter().all(|component| component.running);
+        let dependency_ready = self.dependency_ready.load(Ordering::Acquire);
+        let dependency_error = self
+            .dependency_error
+            .lock()
+            .expect("dependency error lock poisoned")
+            .clone();
+        let ready = all_running
+            && self.health_ready.load(Ordering::Acquire)
+            && !self.startup_in_progress.load(Ordering::Acquire)
+            && dependency_ready;
         let desired = self.desired_running();
-        let failed = components.iter().any(|component| component.circuit_open);
+        let failed = components.iter().any(|component| component.circuit_open)
+            || (desired && dependency_error.is_some());
         let mut event = json!({
             "v": 1,
             "event": "status",
@@ -418,6 +497,8 @@ impl HostProcessManager {
             "ready": ready,
             "running": ready || (desired && components.iter().any(|process| process.running)),
             "components": components,
+            "dependency_ready": dependency_ready,
+            "dependency_error": dependency_error,
         });
         if let Some(id) = id {
             event["id"] = id.clone();
@@ -498,6 +579,9 @@ impl HostProcessManager {
                 Ok(None) => {}
             }
         }
+        if !exited.is_empty() {
+            self.health_ready.store(false, Ordering::Release);
+        }
         for (id, exit) in exited {
             state.children.remove(&id);
             state.last_exit.insert(id, exit);
@@ -506,7 +590,9 @@ impl HostProcessManager {
 
     fn reconcile_crashes(&self) {
         self.inspect_exits();
-        if !self.desired_running.load(Ordering::Acquire) {
+        if !self.desired_running.load(Ordering::Acquire)
+            || self.startup_in_progress.load(Ordering::Acquire)
+        {
             return;
         }
 
@@ -551,12 +637,25 @@ impl HostProcessManager {
             };
             if ready_to_spawn {
                 let result = self.spawn_if_missing(id);
+                let result = result.and_then(|_| {
+                    if let Some(health) = &spec.health {
+                        if let Err(error) = wait_http_health(health) {
+                            let _ = self.stop_process(id);
+                            return Err(error);
+                        }
+                    }
+                    Ok(())
+                });
                 let mut state = self.state.lock().expect("host process lock poisoned");
                 state.restart_not_before.remove(id);
                 if let Err(error) = result {
                     state
                         .last_exit
                         .insert(id.clone(), format!("restart failed: {error}"));
+                } else if state.children.len() == self.ordered_ids.len()
+                    && self.dependency_ready.load(Ordering::Acquire)
+                {
+                    self.health_ready.store(true, Ordering::Release);
                 }
             }
         }
@@ -946,6 +1045,58 @@ mod tests {
             .contains_key("LEMMA_OPENAI_API_KEY"));
     }
 
+    #[test]
+    fn dependency_failure_clears_readiness_and_surfaces_the_cause() {
+        let root = tempdir().unwrap();
+        let manager = HostProcessManager::new(
+            manifest(vec![
+                service("frontend", &["backend"]),
+                service("backend", &[]),
+            ]),
+            root.path().into(),
+        )
+        .unwrap();
+        manager.desired_running.store(true, Ordering::Release);
+        manager.health_ready.store(true, Ordering::Release);
+
+        manager.mark_dependency_unavailable("private VM exited".into());
+        let failed = manager.status_event(None);
+        assert_eq!(failed["ready"], false);
+        assert_eq!(failed["status"], "error");
+        assert_eq!(failed["dependency_error"], "private VM exited");
+
+        manager.mark_dependency_recovering();
+        let recovering = manager.status_event(None);
+        assert_eq!(recovering["status"], "starting");
+        assert!(recovering["dependency_error"].is_null());
+
+        manager.mark_dependency_ready();
+        let recovered = manager.status_event(None);
+        assert_eq!(recovered["dependency_ready"], true);
+        assert!(recovered["dependency_error"].is_null());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn migration_setup_receives_the_same_dynamic_backend_environment() {
+        let root = tempdir().unwrap();
+        let mut value = manifest(vec![
+            service("frontend", &["backend"]),
+            service("backend", &[]),
+        ]);
+        value.setup[0].command = vec!["/usr/bin/env".into()];
+        let manager = HostProcessManager::new(value, root.path().into()).unwrap();
+        manager.set_backend_environment(HashMap::from([(
+            "DATABASE_URL".into(),
+            "postgresql://private-guest/lemma".into(),
+        )]));
+
+        manager.run_setups().unwrap();
+
+        let log = std::fs::read_to_string(root.path().join("migrations.log")).unwrap();
+        assert!(log.contains("DATABASE_URL=postgresql://private-guest/lemma"));
+    }
+
     #[cfg(unix)]
     #[test]
     fn starts_and_stops_backend_and_frontend_process_groups() {
@@ -965,8 +1116,10 @@ mod tests {
 
         manager.start_all().unwrap();
         assert!(manager.status().iter().all(|process| process.running));
+        assert_eq!(manager.status_event(None)["ready"], true);
         manager.stop_all().unwrap();
         assert!(manager.status().iter().all(|process| !process.running));
+        assert_eq!(manager.status_event(None)["ready"], false);
     }
 
     #[cfg(unix)]

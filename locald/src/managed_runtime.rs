@@ -1,9 +1,9 @@
+use std::collections::HashMap;
 use std::env;
 use std::fs::{self, OpenOptions};
 use std::io::{self, Write};
 use std::net::{IpAddr, Ipv4Addr, Shutdown, SocketAddr, TcpListener, TcpStream};
 use std::path::{Path, PathBuf};
-use std::process::Command;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::thread::{self, JoinHandle};
@@ -184,30 +184,81 @@ impl ManagedRuntimeController {
             .clone()
     }
 
+    pub fn probe(&self) -> io::Result<ManagedRuntimeStatus> {
+        match self.runtime.health() {
+            Ok(status) => {
+                *self.status.lock().expect("managed runtime status poisoned") =
+                    Some(status.clone());
+                Ok(status)
+            }
+            Err(error) => {
+                self.clear_forwarders();
+                Err(error)
+            }
+        }
+    }
+
+    pub fn backend_environment(&self) -> io::Result<HashMap<String, String>> {
+        let status = self.status().ok_or_else(|| {
+            io::Error::new(
+                io::ErrorKind::NotConnected,
+                "private runtime is not ready for host processes",
+            )
+        })?;
+        let host = private_ipv4(&status.endpoint_host, "guest endpoint")?;
+        let capability_file = runtime_path_value(self.runtime.capability_file())?;
+        let control_socket = runtime_path_value(self.runtime.control_socket())?;
+        Ok(HashMap::from([
+            (
+                "DATABASE_URL".into(),
+                format!(
+                    "postgresql+asyncpg://postgres:{}@{host}:5432/lemma",
+                    self.spec.credentials.postgres_password
+                ),
+            ),
+            (
+                "DATASTORE_DATABASE_URL".into(),
+                format!(
+                    "postgresql+asyncpg://postgres:{}@{host}:5432/lemma_datastore",
+                    self.spec.credentials.postgres_password
+                ),
+            ),
+            (
+                "AGENTBOX_STATE_DATABASE_URL".into(),
+                format!(
+                    "postgresql://postgres:{}@{host}:5432/agentbox",
+                    self.spec.credentials.postgres_password
+                ),
+            ),
+            (
+                "REDIS_URL".into(),
+                format!(
+                    "redis://:{}@{host}:6379",
+                    self.spec.credentials.redis_password
+                ),
+            ),
+            ("SUPERTOKENS_CORE_URL".into(), format!("http://{host}:3567")),
+            // The backend invokes the narrow runtime bridge for AgentBox
+            // lifecycle operations. Pass explicit paths to the app-owned
+            // capability and transport; the bridge must never guess from a
+            // developer checkout or rewrite a localhost URL.
+            ("LEMMA_GUEST_CAPABILITY_FILE".into(), capability_file),
+            ("LEMMA_GUEST_CONTROL_SOCKET".into(), control_socket),
+            ("LEMMA_WSL_DISTRIBUTION".into(), "LemmaRuntime".into()),
+        ]))
+    }
+
     fn ensure_forwarders(&self, status: &ManagedRuntimeStatus) -> io::Result<()> {
-        let endpoint_host = private_ipv4(&status.endpoint_host, "guest endpoint")?;
         let host_gateway = private_ipv4(&status.host_gateway, "guest host gateway")?;
         let mut current = self.forwarders.lock().expect("forwarder lock poisoned");
         if !current.is_empty() {
             return Ok(());
         }
 
+        // Host applications use the guest's private NAT address directly.
+        // Only sandbox callbacks need guest-to-host bridges; no database,
+        // cache, or auth service is published on a host loopback port.
         let bindings = [
-            (
-                "postgres",
-                SocketAddr::from((Ipv4Addr::LOCALHOST, self.spec.ports.postgres)),
-                SocketAddr::from((endpoint_host, 5432)),
-            ),
-            (
-                "redis",
-                SocketAddr::from((Ipv4Addr::LOCALHOST, self.spec.ports.redis)),
-                SocketAddr::from((endpoint_host, 6379)),
-            ),
-            (
-                "supertokens",
-                SocketAddr::from((Ipv4Addr::LOCALHOST, self.spec.ports.supertokens)),
-                SocketAddr::from((endpoint_host, 3567)),
-            ),
             (
                 "sandbox-api-callback",
                 SocketAddr::from((host_gateway, self.spec.ports.backend)),
@@ -240,6 +291,15 @@ impl ManagedRuntimeController {
     }
 }
 
+fn runtime_path_value(path: &Path) -> io::Result<String> {
+    path.to_str().map(str::to_owned).ok_or_else(|| {
+        io::Error::new(
+            io::ErrorKind::InvalidData,
+            format!("managed runtime path is not Unicode: {}", path.display()),
+        )
+    })
+}
+
 struct TcpForwarder {
     stop: Arc<AtomicBool>,
     local_address: SocketAddr,
@@ -262,8 +322,16 @@ impl TcpForwarder {
             while !thread_stop.load(Ordering::Acquire) {
                 match listener.accept() {
                     Ok((stream, _)) => {
+                        if let Err(error) = stream.set_nonblocking(false) {
+                            eprintln!(
+                                "managed {label} route could not configure accepted socket: {error}"
+                            );
+                            continue;
+                        }
                         thread::spawn(move || {
-                            let _ = proxy_connection(stream, target);
+                            if let Err(error) = proxy_connection(stream, target) {
+                                eprintln!("managed {label} route to {target} failed: {error}");
+                            }
                         });
                     }
                     Err(error) if error.kind() == io::ErrorKind::WouldBlock => {
@@ -503,6 +571,10 @@ mod tests {
         .unwrap();
         let local = forwarder.local_address;
         let mut client = TcpStream::connect(local).unwrap();
+        // macOS inherits O_NONBLOCK from the listener onto accepted sockets.
+        // Prove the relay waits for a real client instead of treating the
+        // initial EAGAIN before request bytes arrive as EOF/failure.
+        thread::sleep(Duration::from_millis(50));
         client.write_all(b"ping").unwrap();
         let mut output = [0_u8; 4];
         client.read_exact(&mut output).unwrap();
@@ -523,5 +595,58 @@ mod tests {
         assert!(private_ipv4("127.0.0.1", "guest").is_err());
         assert!(private_ipv4("8.8.8.8", "guest").is_err());
         assert!(private_ipv4("::1", "guest").is_err());
+    }
+
+    #[test]
+    fn host_processes_use_private_guest_services_without_published_infra_ports() {
+        let root = tempdir().unwrap();
+        let controller = ManagedRuntimeController {
+            runtime: ManagedRuntime::new(ManagedRuntimeConfig {
+                local_root: root.path().join("local"),
+                artifact_root: root.path().join("artifacts"),
+                bridge_executable: root.path().join("lemma-runtime"),
+                #[cfg(target_os = "macos")]
+                vz_executable: root.path().join("lemma-vz"),
+                #[cfg(windows)]
+                wsl_executable: PathBuf::from("wsl.exe"),
+            })
+            .unwrap(),
+            spec: ManagedRuntimeSpec {
+                images: crate::host_process::ManagedRuntimeImages {
+                    postgres: "postgres@sha256:test".into(),
+                    redis: "redis@sha256:test".into(),
+                    supertokens: "supertokens@sha256:test".into(),
+                },
+                credentials: crate::host_process::ManagedRuntimeCredentials {
+                    postgres_password: "a".repeat(64),
+                    redis_password: "b".repeat(64),
+                },
+                ports: crate::host_process::ManagedRuntimePorts {
+                    postgres: 55432,
+                    redis: 56379,
+                    supertokens: 53567,
+                    backend: 8711,
+                    frontend: 3711,
+                },
+            },
+            forwarders: Mutex::new(Vec::new()),
+            status: Mutex::new(Some(ManagedRuntimeStatus {
+                endpoint_host: "192.168.64.10".into(),
+                host_gateway: "192.168.64.1".into(),
+                engine: "containerd".into(),
+            })),
+        };
+
+        let environment = controller.backend_environment().unwrap();
+        assert!(environment["DATABASE_URL"].contains("@192.168.64.10:5432/lemma"));
+        assert_eq!(
+            environment["SUPERTOKENS_CORE_URL"],
+            "http://192.168.64.10:3567"
+        );
+        assert!(environment["LEMMA_GUEST_CAPABILITY_FILE"]
+            .ends_with("local/run/guest-control/guest.capability"));
+        assert!(environment["LEMMA_GUEST_CONTROL_SOCKET"].ends_with("local/run/guest.sock"));
+        assert_eq!(environment["LEMMA_WSL_DISTRIBUTION"], "LemmaRuntime");
+        assert!(!environment.values().any(|value| value.contains(":55432")));
     }
 }

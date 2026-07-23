@@ -44,8 +44,8 @@ import {
   createDesktopVerifier,
   getPendingDesktopAuth,
   getStoredDesktopRequestId,
-  isLemmaDesktop,
   readDesktopRequestIdFromSearch,
+  shouldUseDesktopBrowserHandoff,
   storeDesktopRequestId,
   storePendingDesktopAuth,
   type PendingDesktopAuth,
@@ -831,7 +831,7 @@ function DesktopSignInPage() {
 }
 
 function DesktopAwareAuthLanding() {
-  return isLemmaDesktop() ? <DesktopSignInPage /> : <AuthLanding />;
+  return shouldUseDesktopBrowserHandoff() ? <DesktopSignInPage /> : <AuthLanding />;
 }
 
 function RefreshSessionPage() {
