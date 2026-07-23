@@ -78,7 +78,7 @@ def profile(name: str, fill: str) -> SandboxProfile:
         ),
         allowed_roots=("/workspace",),
         docker=DockerProfileArtifact(
-            image="python:3.12-slim",
+            image="agentbox-workspace:dev",
             command=("sleep", "infinity"),
             readiness_argv=("python", "-c", "pass"),
         ),

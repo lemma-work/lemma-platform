@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import asyncio
 import base64
+from collections.abc import AsyncIterator
+from contextlib import asynccontextmanager
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 import hashlib
@@ -36,6 +38,10 @@ from agentbox.ports import (
     ProviderCreateRejected,
     ProviderCreateRequest,
     ProviderCreateResult,
+    ProviderFilesystemConflict,
+    ProviderFilesystemNotFound,
+    ProviderFilesystemRejected,
+    ProviderFilesystemUnavailable,
     ProviderInventoryAllocation,
     ProviderMetadataEntry,
     ProviderNotReady,
@@ -79,6 +85,9 @@ from .docker_engine import (
 from .workspace_runtime_client import (
     WorkspaceRuntimeClient,
     WorkspaceRuntimeError,
+    WorkspaceRuntimeFileConflict,
+    WorkspaceRuntimeFileNotFound,
+    WorkspaceRuntimeFileRejected,
     WorkspaceRuntimePythonAmbiguous,
     WorkspaceRuntimeStartAmbiguous,
 )
@@ -439,13 +448,10 @@ class DockerSandboxAdapter:
         path: str,
         deadline_at: datetime,
     ) -> FileStat:
-        client = await self._runtime_client(
+        async with self._filesystem_client(
             allocation.provider_id, deadline_at=deadline_at
-        )
-        try:
+        ) as client:
             return await client.stat_file(path, deadline_at=deadline_at)
-        finally:
-            await client.close()
 
     async def list_files(
         self,
@@ -454,13 +460,10 @@ class DockerSandboxAdapter:
         path: str,
         deadline_at: datetime,
     ) -> tuple[FileStat, ...]:
-        client = await self._runtime_client(
+        async with self._filesystem_client(
             allocation.provider_id, deadline_at=deadline_at
-        )
-        try:
+        ) as client:
             return await client.list_files(path, deadline_at=deadline_at)
-        finally:
-            await client.close()
 
     async def read_file(
         self,
@@ -470,13 +473,10 @@ class DockerSandboxAdapter:
         byte_range: ByteRange,
         deadline_at: datetime,
     ) -> bytes:
-        client = await self._runtime_client(
+        async with self._filesystem_client(
             allocation.provider_id, deadline_at=deadline_at
-        )
-        try:
+        ) as client:
             return await client.read_file(path, byte_range, deadline_at=deadline_at)
-        finally:
-            await client.close()
 
     async def write_file(
         self,
@@ -487,18 +487,15 @@ class DockerSandboxAdapter:
         expected_sha256: str | None,
         deadline_at: datetime,
     ) -> FileStat:
-        client = await self._runtime_client(
+        async with self._filesystem_client(
             allocation.provider_id, deadline_at=deadline_at
-        )
-        try:
+        ) as client:
             return await client.write_file(
                 path,
                 data,
                 expected_sha256=expected_sha256,
                 deadline_at=deadline_at,
             )
-        finally:
-            await client.close()
 
     async def move_file(
         self,
@@ -508,13 +505,10 @@ class DockerSandboxAdapter:
         destination: str,
         deadline_at: datetime,
     ) -> None:
-        client = await self._runtime_client(
+        async with self._filesystem_client(
             allocation.provider_id, deadline_at=deadline_at
-        )
-        try:
+        ) as client:
             await client.move_file(source, destination, deadline_at=deadline_at)
-        finally:
-            await client.close()
 
     async def delete_file(
         self,
@@ -524,14 +518,16 @@ class DockerSandboxAdapter:
         recursive: bool,
         deadline_at: datetime,
     ) -> bool:
-        client = await self._runtime_client(
-            allocation.provider_id, deadline_at=deadline_at
-        )
         try:
-            await client.delete_file(path, recursive=recursive, deadline_at=deadline_at)
-            return True
-        finally:
-            await client.close()
+            async with self._filesystem_client(
+                allocation.provider_id, deadline_at=deadline_at
+            ) as client:
+                await client.delete_file(
+                    path, recursive=recursive, deadline_at=deadline_at
+                )
+                return True
+        except ProviderFilesystemNotFound:
+            return False
 
     async def create_python_session(
         self,
@@ -1129,6 +1125,28 @@ class DockerSandboxAdapter:
             )
         finally:
             await client.close()
+
+    @asynccontextmanager
+    async def _filesystem_client(
+        self, provider_id: str, *, deadline_at: datetime
+    ) -> AsyncIterator[WorkspaceRuntimeClient]:
+        client: WorkspaceRuntimeClient | None = None
+        try:
+            client = await self._runtime_client(provider_id, deadline_at=deadline_at)
+            yield client
+        except WorkspaceRuntimeFileNotFound as exc:
+            raise ProviderFilesystemNotFound(str(exc)) from exc
+        except WorkspaceRuntimeFileConflict as exc:
+            raise ProviderFilesystemConflict(str(exc)) from exc
+        except WorkspaceRuntimeFileRejected as exc:
+            raise ProviderFilesystemRejected(
+                str(exc), status_code=exc.status_code
+            ) from exc
+        except (WorkspaceRuntimeError, DockerEngineError) as exc:
+            raise ProviderFilesystemUnavailable(str(exc)) from exc
+        finally:
+            if client is not None:
+                await client.close()
 
     async def _runtime_client(
         self, provider_id: str, *, deadline_at: datetime

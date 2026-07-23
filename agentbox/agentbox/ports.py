@@ -182,6 +182,30 @@ class ProviderProcessStartRejected(RuntimeError):
     """Process start definitively failed before a process was created."""
 
 
+class ProviderFilesystemNotFound(RuntimeError):
+    """The requested path definitively does not exist in the allocation."""
+
+
+class ProviderFilesystemConflict(RuntimeError):
+    """A filesystem precondition or destination constraint was not satisfied."""
+
+
+class ProviderFilesystemRejected(RuntimeError):
+    """The provider definitively rejected the filesystem operation."""
+
+    def __init__(self, message: str, *, status_code: int = 422) -> None:
+        super().__init__(message)
+        self.status_code = status_code
+
+
+class ProviderFilesystemUnavailable(RuntimeError):
+    """Filesystem outcome is unavailable and must not be inferred as not-found."""
+
+    def __init__(self, message: str, *, retry_after_ms: int | None = None) -> None:
+        super().__init__(message)
+        self.retry_after_ms = retry_after_ms
+
+
 class ProviderProcessPort(Protocol):
     async def start_process(
         self, request: ProviderProcessStartRequest

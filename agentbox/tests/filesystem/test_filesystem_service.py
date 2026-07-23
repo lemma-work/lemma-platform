@@ -9,9 +9,12 @@ import pytest_asyncio
 
 from agentbox.domain import (
     AdmissionClass,
+    AgentBoxError,
     ByteRange,
+    ErrorCode,
     FileKind,
     FileStat,
+    RetryDisposition,
     SandboxKey,
     SandboxProfileRef,
     StorageKind,
@@ -24,6 +27,10 @@ from agentbox.ports import (
     ProviderAllocationRef,
     ProviderCreateRequest,
     ProviderCreateResult,
+    ProviderFilesystemConflict,
+    ProviderFilesystemNotFound,
+    ProviderFilesystemRejected,
+    ProviderFilesystemUnavailable,
     ProviderReadyResult,
 )
 
@@ -207,4 +214,73 @@ async def test_all_filesystem_provider_io_occurs_after_uow_closes(
         "move",
         "delete",
     ]
+    assert database.active_units_of_work == 0
+
+
+@pytest.mark.parametrize(
+    ("provider_error", "code", "status_code", "retry", "retry_after_ms"),
+    [
+        (
+            ProviderFilesystemNotFound("missing"),
+            ErrorCode.FILE_NOT_FOUND,
+            404,
+            RetryDisposition.DO_NOT_RETRY,
+            None,
+        ),
+        (
+            ProviderFilesystemConflict("digest mismatch"),
+            ErrorCode.FILE_CONFLICT,
+            409,
+            RetryDisposition.DO_NOT_RETRY,
+            None,
+        ),
+        (
+            ProviderFilesystemRejected("too large", status_code=413),
+            ErrorCode.INVALID_REQUEST,
+            413,
+            RetryDisposition.DO_NOT_RETRY,
+            None,
+        ),
+        (
+            ProviderFilesystemUnavailable("rate limited", retry_after_ms=750),
+            ErrorCode.PROVIDER_UNAVAILABLE,
+            503,
+            RetryDisposition.WAIT,
+            750,
+        ),
+    ],
+)
+async def test_filesystem_provider_failures_have_typed_public_semantics(
+    database: StateDatabase,
+    monkeypatch: pytest.MonkeyPatch,
+    provider_error: RuntimeError,
+    code: ErrorCode,
+    status_code: int,
+    retry: RetryDisposition,
+    retry_after_ms: int | None,
+) -> None:
+    provider = Provider(database)
+    key = SandboxKey(WorkloadKind.FUNCTION, uuid4())
+    deadline = datetime.now(timezone.utc) + timedelta(seconds=30)
+    await SandboxLifecycleService(database, provider).ensure(
+        key,
+        SandboxProfileRef("function-python-v1", f"sha256:{'a' * 64}"),
+        admission_class=AdmissionClass.LATENCY,
+        deadline_at=deadline,
+    )
+
+    async def fail_stat(*_args, **_kwargs):
+        raise provider_error
+
+    monkeypatch.setattr(provider, "stat_file", fail_stat)
+
+    with pytest.raises(AgentBoxError) as raised:
+        await FilesystemService(database, provider).stat(
+            key, "/workspace/missing", deadline_at=deadline
+        )
+
+    assert raised.value.code == code
+    assert raised.value.status_code == status_code
+    assert raised.value.retry == retry
+    assert raised.value.retry_after_ms == retry_after_ms
     assert database.active_units_of_work == 0

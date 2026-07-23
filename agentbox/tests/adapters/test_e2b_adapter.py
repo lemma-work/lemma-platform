@@ -124,6 +124,27 @@ class FakePty:
         return True
 
 
+class FakeFileStream:
+    def __init__(self, data: bytes, *, chunk_size: int = 3) -> None:
+        self._chunks = tuple(
+            data[offset : offset + chunk_size]
+            for offset in range(0, len(data), chunk_size)
+        )
+
+    async def __aenter__(self) -> FakeFileStream:
+        return self
+
+    async def __aexit__(self, *_args: object) -> None:
+        return None
+
+    def __aiter__(self):
+        return self._iterate()
+
+    async def _iterate(self):
+        for chunk in self._chunks:
+            yield chunk
+
+
 class FakeFiles:
     def __init__(self) -> None:
         self.data: dict[str, bytes] = {}
@@ -139,6 +160,8 @@ class FakeFiles:
 
     async def read(self, path: str, format: str = "text", **_kwargs):
         value = self.data[path]
+        if format == "stream":
+            return FakeFileStream(value)
         return bytearray(value) if format == "bytes" else value.decode()
 
     async def write(self, path: str, data: bytes, **_kwargs):
@@ -442,6 +465,11 @@ async def test_workspace_uses_exact_pause_resume_identity_and_native_storage(
         ByteRange(0, None),
         deadline_at=deadline,
     )
+    stat = await FilesystemService(database, provider).stat(
+        key,
+        "/workspace/state.bin",
+        deadline_at=deadline,
+    )
 
     assert created.ready is True
     assert released.ready is False
@@ -456,6 +484,9 @@ async def test_workspace_uses_exact_pause_resume_identity_and_native_storage(
     await lifecycle.destroy(key, deadline_at=deadline)
     assert provider_id not in FakeSandbox.instances
     assert FakeSandbox.kill_calls == [provider_id]
+    assert stat.sha256 == (
+        "sha256:75b07bb3ffb3b8ad63e79b983fbef8fd0ee8e7292144b4e7d3b57bd682074087"
+    )
 
 
 async def test_rate_limit_reuses_same_allocation_token_without_hot_loop(

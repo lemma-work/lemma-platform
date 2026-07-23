@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from collections.abc import Mapping
 from datetime import datetime, timezone
 import struct
 
@@ -50,6 +51,29 @@ class WorkspaceRuntimeStartAmbiguous(WorkspaceRuntimeError):
 
 class WorkspaceRuntimePythonAmbiguous(WorkspaceRuntimeError):
     pass
+
+
+class WorkspaceRuntimeFileNotFound(WorkspaceRuntimeError):
+    pass
+
+
+class WorkspaceRuntimeFileConflict(WorkspaceRuntimeError):
+    pass
+
+
+class WorkspaceRuntimeFileRejected(WorkspaceRuntimeError):
+    def __init__(self, message: str, *, status_code: int) -> None:
+        super().__init__(message)
+        self.status_code = status_code
+
+
+_FILESYSTEM_STATUS_ERRORS: Mapping[int, type[WorkspaceRuntimeError]] = {
+    404: WorkspaceRuntimeFileNotFound,
+    409: WorkspaceRuntimeFileConflict,
+    413: WorkspaceRuntimeFileRejected,
+    422: WorkspaceRuntimeFileRejected,
+    507: WorkspaceRuntimeFileRejected,
+}
 
 
 class WorkspaceRuntimeClient:
@@ -197,7 +221,11 @@ class WorkspaceRuntimeClient:
 
     async def stat_file(self, path: str, *, deadline_at: datetime) -> FileStat:
         response = await self._request(
-            "GET", "/files:stat", deadline_at=deadline_at, params={"path": path}
+            "GET",
+            "/files:stat",
+            deadline_at=deadline_at,
+            params={"path": path},
+            status_errors=_FILESYSTEM_STATUS_ERRORS,
         )
         return RuntimeFileStatResponse.model_validate(response.json()).to_domain()
 
@@ -205,7 +233,11 @@ class WorkspaceRuntimeClient:
         self, path: str, *, deadline_at: datetime
     ) -> tuple[FileStat, ...]:
         response = await self._request(
-            "GET", "/files", deadline_at=deadline_at, params={"path": path}
+            "GET",
+            "/files",
+            deadline_at=deadline_at,
+            params={"path": path},
+            status_errors=_FILESYSTEM_STATUS_ERRORS,
         )
         body = RuntimeFileListResponse.model_validate(response.json())
         return tuple(item.to_domain() for item in body.entries)
@@ -221,7 +253,11 @@ class WorkspaceRuntimeClient:
         if byte_range.length is not None:
             params["length"] = str(byte_range.length)
         response = await self._request(
-            "GET", "/files:content", deadline_at=deadline_at, params=params
+            "GET",
+            "/files:content",
+            deadline_at=deadline_at,
+            params=params,
+            status_errors=_FILESYSTEM_STATUS_ERRORS,
         )
         return response.content
 
@@ -243,6 +279,7 @@ class WorkspaceRuntimeClient:
             params=params,
             content=data,
             content_type="application/octet-stream",
+            status_errors=_FILESYSTEM_STATUS_ERRORS,
         )
         return RuntimeFileStatResponse.model_validate(response.json()).to_domain()
 
@@ -254,6 +291,7 @@ class WorkspaceRuntimeClient:
             "/files:move",
             deadline_at=deadline_at,
             json_body=RuntimeMoveFileRequest(source=source, destination=destination),
+            status_errors=_FILESYSTEM_STATUS_ERRORS,
         )
 
     async def delete_file(
@@ -268,6 +306,7 @@ class WorkspaceRuntimeClient:
             "/files",
             deadline_at=deadline_at,
             params={"path": path, "recursive": str(recursive).lower()},
+            status_errors=_FILESYSTEM_STATUS_ERRORS,
         )
 
     async def create_python_session(
@@ -353,6 +392,7 @@ class WorkspaceRuntimeClient:
         content_type: str | None = None,
         params: dict[str, str] | None = None,
         ambiguous_error: type[WorkspaceRuntimeError] | None = None,
+        status_errors: Mapping[int, type[WorkspaceRuntimeError]] | None = None,
     ) -> httpx.Response:
         remaining = (deadline_at - datetime.now(timezone.utc)).total_seconds()
         if remaining <= 0:
@@ -378,7 +418,13 @@ class WorkspaceRuntimeClient:
                 f"workspace runtime transport failed: {type(exc).__name__}"
             ) from exc
         if response.status_code < 200 or response.status_code >= 300:
-            raise WorkspaceRuntimeError(
-                f"workspace runtime returned HTTP {response.status_code}"
+            error_type = (status_errors or {}).get(
+                response.status_code, WorkspaceRuntimeError
             )
+            if error_type is WorkspaceRuntimeFileRejected:
+                raise WorkspaceRuntimeFileRejected(
+                    f"workspace runtime returned HTTP {response.status_code}",
+                    status_code=response.status_code,
+                )
+            raise error_type(f"workspace runtime returned HTTP {response.status_code}")
         return response

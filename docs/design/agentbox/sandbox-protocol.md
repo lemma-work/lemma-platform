@@ -799,10 +799,19 @@ Normative mapping:
 | `PROVIDER_UNAVAILABLE` | 503 | contextual | Definitive pre-dispatch failure or unavailable read |
 | `ALLOCATION_CHANGED` | 409 | `DO_NOT_RETRY` | Session/process belongs to a stale epoch |
 | `OPERATION_CONFLICT` | 409 | `DO_NOT_RETRY` | Operation ID reused with different request |
+| `FILE_NOT_FOUND` | 404 | `DO_NOT_RETRY` | Filesystem path definitively does not exist |
+| `FILE_CONFLICT` | 409 | `DO_NOT_RETRY` | Digest precondition, destination, or directory constraint failed |
+| `INVALID_REQUEST` | 4xx | `DO_NOT_RETRY` | Filesystem or request validation was definitively rejected |
 
 `SAFE_SAME_OPERATION` is allowed only when AgentBox proves the provider did not
 accept a request or the exact provider operation is intrinsically idempotent. It
 always reuses the same allocation/operation ID.
+
+Provider transport failures, timeouts, rate limits, and unavailable allocations must
+never be collapsed into `FILE_NOT_FOUND`. Adapters translate native provider/runtime
+errors into typed filesystem port failures; the service boundary then emits the
+portable codes above. Definitive payload limits preserve their meaningful HTTP status
+(`413`, `422`, or `507`) while exposing `INVALID_REQUEST`.
 
 ## 11. Reconciliation
 

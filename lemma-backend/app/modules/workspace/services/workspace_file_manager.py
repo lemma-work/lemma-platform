@@ -1,11 +1,12 @@
 """Workspace file manager."""
 
 from datetime import datetime
+from pathlib import Path
 import posixpath
+import shutil
+import tempfile
 from typing import Optional, Union
 from uuid import UUID
-from pathlib import Path
-import tempfile
 
 from agentbox_client import AgentBoxApiError
 
@@ -21,20 +22,43 @@ class WorkspaceFileManager:
 
     def __init__(self, user_id: UUID, cwd: Optional[str] = None):
         self.user_id = user_id
-        self.cwd = cwd.strip("/") if cwd else ""
+        self.cwd = self._normalize_cwd(cwd)
         self._local_base: Path | None = None
 
         if settings.environment == "testing":
-            root = Path(tempfile.gettempdir()) / "lemma_test_storage"
+            root = (Path(tempfile.gettempdir()) / "lemma_test_storage").resolve()
             self._local_base = root / str(self.user_id)
             if self.cwd:
                 self._local_base = self._local_base / self.cwd
+            self._local_base = self._local_base.resolve()
             self._local_base.mkdir(parents=True, exist_ok=True)
 
     def _local_path(self, path: str) -> Path:
         if not self._local_base:
             raise RuntimeError("Local storage is not configured")
-        return self._local_base / path
+        if "\x00" in path or Path(path).is_absolute():
+            raise ValueError("local file path must be relative")
+        candidate = (self._local_base / path).resolve()
+        try:
+            candidate.relative_to(self._local_base)
+        except ValueError as exc:
+            raise ValueError("local file path escapes its configured root") from exc
+        return candidate
+
+    @staticmethod
+    def _normalize_cwd(cwd: str | None) -> str:
+        if not cwd:
+            return ""
+        if "\x00" in cwd or cwd.startswith("/"):
+            raise ValueError("workspace cwd must be relative to /workspace")
+        root = posixpath.normpath(posixpath.join("/workspace", cwd))
+        if root != "/workspace" and not root.startswith("/workspace/"):
+            raise ValueError("workspace cwd escapes /workspace")
+        return "" if root == "/workspace" else posixpath.relpath(root, "/workspace")
+
+    @staticmethod
+    def _is_missing_error(error: AgentBoxApiError) -> bool:
+        return error.status_code == 404 and error.code == "FILE_NOT_FOUND"
 
     def _workspace_path(self, path: str) -> str:
         root = posixpath.normpath(
@@ -92,8 +116,10 @@ class WorkspaceFileManager:
         async with session:
             try:
                 entries = await session.list_files(runtime_path, timeout=30)
-            except AgentBoxApiError:
-                return []
+            except AgentBoxApiError as exc:
+                if self._is_missing_error(exc):
+                    return []
+                raise
         if not entries:
             return []
 
@@ -130,8 +156,10 @@ class WorkspaceFileManager:
                     self._workspace_path(path),
                     timeout=30,
                 )
-        except AgentBoxApiError:
-            return None
+        except AgentBoxApiError as exc:
+            if self._is_missing_error(exc):
+                return None
+            raise
         return FileInfo(
             name=posixpath.basename(item.path),
             path=self._relative_workspace_path(item.path),
@@ -160,7 +188,9 @@ class WorkspaceFileManager:
                     timeout=60,
                 )
         except AgentBoxApiError as exc:
-            raise FileNotFoundError(f"File {path} not found") from exc
+            if self._is_missing_error(exc):
+                raise FileNotFoundError(f"File {path} not found") from exc
+            raise
         try:
             return bytes_data.decode("utf-8")
         except UnicodeDecodeError:
@@ -199,8 +229,10 @@ class WorkspaceFileManager:
         """Delete a file or directory idempotently."""
         if self._local_base:
             file_path = self._local_path(path)
-            if file_path.exists():
+            if file_path.is_symlink() or file_path.is_file():
                 file_path.unlink()
+            elif file_path.is_dir():
+                shutil.rmtree(file_path)
             return
 
         session = await self._get_workspace_session()
@@ -211,5 +243,7 @@ class WorkspaceFileManager:
                     recursive=True,
                     timeout=30,
                 )
-        except AgentBoxApiError:
-            return
+        except AgentBoxApiError as exc:
+            if self._is_missing_error(exc):
+                return
+            raise

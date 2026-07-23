@@ -2,7 +2,8 @@ from __future__ import annotations
 
 import asyncio
 from collections import deque
-from collections.abc import Mapping
+from collections.abc import Iterator, Mapping
+from contextlib import contextmanager
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 import hashlib
@@ -17,8 +18,11 @@ from e2b import (
     ALL_TRAFFIC,
     AuthenticationException,
     FileNotFoundException,
+    FileUploadException,
     InvalidArgumentException,
+    NotEnoughSpaceException,
     RateLimitException,
+    SandboxException,
     SandboxNotFoundException,
     TemplateException,
     TimeoutException,
@@ -55,6 +59,10 @@ from agentbox.ports import (
     ProviderCreateRejected,
     ProviderCreateRequest,
     ProviderCreateResult,
+    ProviderFilesystemConflict,
+    ProviderFilesystemNotFound,
+    ProviderFilesystemRejected,
+    ProviderFilesystemUnavailable,
     ProviderInventoryAllocation,
     ProviderLifecycleError,
     ProviderNotReady,
@@ -613,20 +621,26 @@ class E2BSandboxAdapter:
         path: str,
         deadline_at: datetime,
     ) -> FileStat:
-        sandbox = await self._connect(allocation, deadline_at=deadline_at)
-        safe_path = self._safe_path(allocation.key.workload_kind, path)
-        info = await sandbox.files.get_info(
-            safe_path, request_timeout=self._request_timeout(deadline_at)
-        )
-        digest = None
-        if info.type == FileType.FILE:
-            data = await sandbox.files.read(
-                safe_path,
-                format="bytes",
-                request_timeout=self._request_timeout(deadline_at),
+        with self._translate_filesystem_errors():
+            sandbox = await self._connect(allocation, deadline_at=deadline_at)
+            safe_path = self._safe_path(allocation.key.workload_kind, path)
+            info = await sandbox.files.get_info(
+                safe_path, request_timeout=self._request_timeout(deadline_at)
             )
-            digest = f"sha256:{hashlib.sha256(bytes(data)).hexdigest()}"
-        return self._file_stat(info, sha256=digest)
+            digest = None
+            if info.type == FileType.FILE:
+                hasher = hashlib.sha256()
+                stream = await sandbox.files.read(
+                    safe_path,
+                    format="stream",
+                    request_timeout=self._request_timeout(deadline_at),
+                    stream_idle_timeout=self._request_timeout(deadline_at),
+                )
+                async with stream:
+                    async for chunk in stream:
+                        hasher.update(chunk)
+                digest = f"sha256:{hasher.hexdigest()}"
+            return self._file_stat(info, sha256=digest)
 
     async def list_files(
         self,
@@ -635,13 +649,14 @@ class E2BSandboxAdapter:
         path: str,
         deadline_at: datetime,
     ) -> tuple[FileStat, ...]:
-        sandbox = await self._connect(allocation, deadline_at=deadline_at)
-        entries = await sandbox.files.list(
-            self._safe_path(allocation.key.workload_kind, path),
-            depth=1,
-            request_timeout=self._request_timeout(deadline_at),
-        )
-        return tuple(self._file_stat(entry, sha256=None) for entry in entries)
+        with self._translate_filesystem_errors():
+            sandbox = await self._connect(allocation, deadline_at=deadline_at)
+            entries = await sandbox.files.list(
+                self._safe_path(allocation.key.workload_kind, path),
+                depth=1,
+                request_timeout=self._request_timeout(deadline_at),
+            )
+            return tuple(self._file_stat(entry, sha256=None) for entry in entries)
 
     async def read_file(
         self,
@@ -651,18 +666,21 @@ class E2BSandboxAdapter:
         byte_range: ByteRange,
         deadline_at: datetime,
     ) -> bytes:
-        sandbox = await self._connect(allocation, deadline_at=deadline_at)
-        data = bytes(
-            await sandbox.files.read(
-                self._safe_path(allocation.key.workload_kind, path),
-                format="bytes",
-                request_timeout=self._request_timeout(deadline_at),
+        with self._translate_filesystem_errors():
+            sandbox = await self._connect(allocation, deadline_at=deadline_at)
+            data = bytes(
+                await sandbox.files.read(
+                    self._safe_path(allocation.key.workload_kind, path),
+                    format="bytes",
+                    request_timeout=self._request_timeout(deadline_at),
+                )
             )
-        )
-        end = (
-            None if byte_range.length is None else byte_range.offset + byte_range.length
-        )
-        return data[byte_range.offset : end]
+            end = (
+                None
+                if byte_range.length is None
+                else byte_range.offset + byte_range.length
+            )
+            return data[byte_range.offset : end]
 
     async def write_file(
         self,
@@ -673,42 +691,43 @@ class E2BSandboxAdapter:
         expected_sha256: str | None,
         deadline_at: datetime,
     ) -> FileStat:
-        sandbox = await self._connect(allocation, deadline_at=deadline_at)
-        safe_path = self._safe_path(allocation.key.workload_kind, path)
-        await sandbox.files.make_dir(
-            posixpath.dirname(safe_path),
-            request_timeout=self._request_timeout(deadline_at),
-        )
-        if expected_sha256 is not None:
-            existing = await sandbox.files.read(
-                safe_path,
-                format="bytes",
+        with self._translate_filesystem_errors():
+            sandbox = await self._connect(allocation, deadline_at=deadline_at)
+            safe_path = self._safe_path(allocation.key.workload_kind, path)
+            await sandbox.files.make_dir(
+                posixpath.dirname(safe_path),
                 request_timeout=self._request_timeout(deadline_at),
             )
-            actual = f"sha256:{hashlib.sha256(bytes(existing)).hexdigest()}"
-            if actual != expected_sha256:
-                raise ValueError("file digest precondition failed")
-        temporary = f"{safe_path}.agentbox-{allocation.allocation_token.hex}.tmp"
-        await sandbox.files.write(
-            temporary,
-            data,
-            request_timeout=self._request_timeout(deadline_at),
-            use_octet_stream=True,
-        )
-        try:
-            info = await sandbox.files.rename(
+            if expected_sha256 is not None:
+                existing = await sandbox.files.read(
+                    safe_path,
+                    format="bytes",
+                    request_timeout=self._request_timeout(deadline_at),
+                )
+                actual = f"sha256:{hashlib.sha256(bytes(existing)).hexdigest()}"
+                if actual != expected_sha256:
+                    raise ProviderFilesystemConflict("file digest precondition failed")
+            temporary = f"{safe_path}.agentbox-{allocation.allocation_token.hex}.tmp"
+            await sandbox.files.write(
                 temporary,
-                safe_path,
+                data,
                 request_timeout=self._request_timeout(deadline_at),
+                use_octet_stream=True,
             )
-        except Exception:
             try:
-                await sandbox.files.remove(temporary)
+                info = await sandbox.files.rename(
+                    temporary,
+                    safe_path,
+                    request_timeout=self._request_timeout(deadline_at),
+                )
             except Exception:
-                pass
-            raise
-        digest = f"sha256:{hashlib.sha256(data).hexdigest()}"
-        return self._file_stat(info, sha256=digest)
+                try:
+                    await sandbox.files.remove(temporary)
+                except Exception:
+                    pass
+                raise
+            digest = f"sha256:{hashlib.sha256(data).hexdigest()}"
+            return self._file_stat(info, sha256=digest)
 
     async def move_file(
         self,
@@ -718,12 +737,20 @@ class E2BSandboxAdapter:
         destination: str,
         deadline_at: datetime,
     ) -> None:
-        sandbox = await self._connect(allocation, deadline_at=deadline_at)
-        await sandbox.files.rename(
-            self._safe_path(allocation.key.workload_kind, source),
-            self._safe_path(allocation.key.workload_kind, destination),
-            request_timeout=self._request_timeout(deadline_at),
-        )
+        with self._translate_filesystem_errors():
+            sandbox = await self._connect(allocation, deadline_at=deadline_at)
+            safe_destination = self._safe_path(
+                allocation.key.workload_kind, destination
+            )
+            await sandbox.files.make_dir(
+                posixpath.dirname(safe_destination),
+                request_timeout=self._request_timeout(deadline_at),
+            )
+            await sandbox.files.rename(
+                self._safe_path(allocation.key.workload_kind, source),
+                safe_destination,
+                request_timeout=self._request_timeout(deadline_at),
+            )
 
     async def delete_file(
         self,
@@ -733,27 +760,31 @@ class E2BSandboxAdapter:
         recursive: bool,
         deadline_at: datetime,
     ) -> bool:
-        sandbox = await self._connect(allocation, deadline_at=deadline_at)
-        safe_path = self._safe_path(allocation.key.workload_kind, path)
-        if not await sandbox.files.exists(
-            safe_path, request_timeout=self._request_timeout(deadline_at)
-        ):
-            return False
-        info = await sandbox.files.get_info(
-            safe_path, request_timeout=self._request_timeout(deadline_at)
-        )
-        if info.type == FileType.DIR and not recursive:
-            entries = await sandbox.files.list(
+        with self._translate_filesystem_errors():
+            sandbox = await self._connect(allocation, deadline_at=deadline_at)
+            safe_path = self._safe_path(allocation.key.workload_kind, path)
+            if not await sandbox.files.exists(
+                safe_path, request_timeout=self._request_timeout(deadline_at)
+            ):
+                return False
+            info = await sandbox.files.get_info(
+                safe_path, request_timeout=self._request_timeout(deadline_at)
+            )
+            if info.type == FileType.DIR and not recursive:
+                entries = await sandbox.files.list(
+                    safe_path,
+                    depth=1,
+                    request_timeout=self._request_timeout(deadline_at),
+                )
+                if entries:
+                    raise ProviderFilesystemConflict(
+                        "directory is not empty; recursive=true is required"
+                    )
+            await sandbox.files.remove(
                 safe_path,
-                depth=1,
                 request_timeout=self._request_timeout(deadline_at),
             )
-            if entries:
-                raise ValueError("directory is not empty; recursive=true is required")
-        await sandbox.files.remove(
-            safe_path, request_timeout=self._request_timeout(deadline_at)
-        )
-        return True
+            return True
 
     async def create_python_session(
         self,
@@ -1227,6 +1258,39 @@ class E2BSandboxAdapter:
             mode=info.mode,
             sha256=sha256,
         )
+
+    @contextmanager
+    def _translate_filesystem_errors(self) -> Iterator[None]:
+        try:
+            yield
+        except (
+            ProviderFilesystemConflict,
+            ProviderFilesystemNotFound,
+            ProviderFilesystemRejected,
+            ProviderFilesystemUnavailable,
+        ):
+            raise
+        except FileNotFoundException as exc:
+            raise ProviderFilesystemNotFound(str(exc)) from exc
+        except NotEnoughSpaceException as exc:
+            raise ProviderFilesystemRejected(str(exc), status_code=507) from exc
+        except (InvalidArgumentException, ValueError) as exc:
+            raise ProviderFilesystemRejected(str(exc)) from exc
+        except RateLimitException as exc:
+            raise ProviderFilesystemUnavailable(
+                str(exc),
+                retry_after_ms=self._config.rate_limit_retry_after_ms,
+            ) from exc
+        except (
+            AuthenticationException,
+            FileUploadException,
+            SandboxNotFoundException,
+            TemplateException,
+            TimeoutException,
+            SandboxException,
+            httpx.TransportError,
+        ) as exc:
+            raise ProviderFilesystemUnavailable(str(exc)) from exc
 
     @staticmethod
     def _safe_path(workload_kind: WorkloadKind, path: str) -> str:
