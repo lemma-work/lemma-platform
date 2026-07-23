@@ -2,18 +2,28 @@ from __future__ import annotations
 
 from starlette.requests import HTTPConnection
 
-from agentbox.lifecycle_manager import SandboxLifecycleManager
-from agentbox.providers import SandboxProvider
-from agentbox.state_store.protocol import AsyncStateStore
+from agentbox.filesystem import FilesystemService
+from agentbox.lifecycle import SandboxLifecycleService
+from agentbox.port_access import PortAccessService
+from agentbox.processes import ProcessExecutionService
+from agentbox.python_sessions import PythonSessionService
 
 
-def sandbox_provider(connection: HTTPConnection) -> SandboxProvider:
-    return connection.app.state.sandbox_provider
+def sandbox_lifecycle(connection: HTTPConnection) -> SandboxLifecycleService:
+    return connection.app.state.sandbox_lifecycle
 
 
-def state_store(connection: HTTPConnection) -> AsyncStateStore:
-    return connection.app.state.store
+def process_execution(connection: HTTPConnection) -> ProcessExecutionService:
+    return connection.app.state.process_execution
 
 
-def lifecycle_manager(connection: HTTPConnection) -> SandboxLifecycleManager:
-    return connection.app.state.lifecycle_manager
+def filesystem(connection: HTTPConnection) -> FilesystemService:
+    return connection.app.state.filesystem
+
+
+def python_sessions(connection: HTTPConnection) -> PythonSessionService:
+    return connection.app.state.python_sessions
+
+
+def port_access(connection: HTTPConnection) -> PortAccessService:
+    return connection.app.state.port_access

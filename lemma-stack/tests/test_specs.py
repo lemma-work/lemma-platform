@@ -19,7 +19,8 @@ def manifest():
                 "backend": "ghcr.io/lemma-work/lemma-backend:v1.0.0",
                 "frontend": "ghcr.io/lemma-work/lemma-frontend:v1.0.0",
                 "agentbox": "ghcr.io/lemma-work/lemma-agentbox:v1.0.0",
-                "agentbox_runtime": "ghcr.io/lemma-work/lemma-agentbox-runtime:v1.0.0",
+                "agentbox_workspace": "ghcr.io/lemma-work/lemma-agentbox-workspace:v1.0.0",
+                "agentbox_function": "ghcr.io/lemma-work/lemma-agentbox-function:v1.0.0",
             },
         }
     )

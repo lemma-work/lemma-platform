@@ -1,6 +1,6 @@
 name: Release Local Stack Images
 
-# Builds the four images the local-stack installer (lemma-stack) consumes,
+# Builds the five images the local-stack installer (lemma-stack) consumes,
 # pushes them to ghcr.io, and attaches a release manifest (lemma-local.json)
 # to the GitHub release. lemma-stack resolves:
 #   stable  -> releases/latest/download/lemma-local.json
@@ -65,9 +65,12 @@ jobs:
           - name: lemma-agentbox
             context: agentbox
             dockerfile: agentbox/Dockerfile
-          - name: lemma-agentbox-runtime
+          - name: lemma-agentbox-workspace
             context: .
-            dockerfile: agentbox/Dockerfile.runtime
+            dockerfile: agentbox/Dockerfile.workspace
+          - name: lemma-agentbox-function
+            context: .
+            dockerfile: agentbox/Dockerfile.function
         platform:
           - arch: amd64
             runner: ubuntu-latest
@@ -128,7 +131,8 @@ jobs:
           - lemma-backend
           - lemma-frontend
           - lemma-agentbox
-          - lemma-agentbox-runtime
+          - lemma-agentbox-workspace
+          - lemma-agentbox-function
     steps:
       - name: Resolve version
         id: version
@@ -240,7 +244,8 @@ jobs:
                   "backend": image("lemma-backend"),
                   "frontend": image("lemma-frontend"),
                   "agentbox": image("lemma-agentbox"),
-                  "agentbox_runtime": image("lemma-agentbox-runtime"),
+                  "agentbox_workspace": image("lemma-agentbox-workspace"),
+                  "agentbox_function": image("lemma-agentbox-function"),
               },
               "infra": {
                   "postgres": "docker.io/pgvector/pgvector:0.8.3-pg16",

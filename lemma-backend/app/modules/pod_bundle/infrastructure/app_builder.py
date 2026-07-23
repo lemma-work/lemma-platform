@@ -7,7 +7,7 @@ reasons:
 * **It must be rebuilt.** A Vite app bakes ``VITE_LEMMA_POD_ID`` (and the API
   URLs) into its bundle at build time, and its ``public_slug`` is unique
   platform-wide — both change when the pod is imported elsewhere, so a prebuilt
-  dist from the source pod is useless. The rebuild runs ``npm install && npm run
+  dist from the source pod is useless. The rebuild runs ``pnpm install && pnpm run
   build`` inside the importing user's AgentBox sandbox with the *target* pod's
   values. (A static/no-``package.json`` app needs no rebuild — the host injects
   ``window.__LEMMA_CONFIG__`` at serve time — so its files are deployed as-is.)
@@ -41,7 +41,6 @@ from uuid import UUID
 from app.core.concurrency.offload import run_blocking
 from app.core.config import settings
 from app.core.log.log import get_logger
-from app.core.request_context import create_inherited_task
 from app.modules.pod_bundle.domain.errors import AppBuildFailedError
 
 logger = get_logger(__name__)
@@ -131,45 +130,6 @@ def _chunks(text: str, size: int):
 # --- agentbox build (no DB connection) ---------------------------------------
 
 
-@contextlib.asynccontextmanager
-async def _keep_sandbox_alive(session: Any):
-    """Heartbeat the session's sandbox so the idle reaper does not delete it while
-    a multi-minute build runs. Best-effort; no-ops when the session has no manager
-    client (e.g. in tests). Mirrors ``FunctionRunExecutor._keep_sandbox_alive``."""
-    import asyncio
-
-    sandbox_id = getattr(session, "sandbox_id", None)
-    client = getattr(session, "client", None)
-    heartbeat = getattr(client, "heartbeat_sandbox", None)
-    if not sandbox_id or heartbeat is None:
-        yield
-        return
-
-    interval = int(os.getenv("LEMMA_SANDBOX_HEARTBEAT_INTERVAL_SECONDS", "30"))
-
-    async def _loop() -> None:
-        first = True
-        while True:
-            if not first:
-                await asyncio.sleep(interval)
-            first = False
-            try:
-                await heartbeat(sandbox_id)
-            except Exception:  # noqa: BLE001 - best-effort keepalive
-                logger.debug(
-                    "pod_bundle.app_builder.app_build_sandbox_heartbeat_s.observed",
-                    sandbox_id=sandbox_id,
-                )
-
-    task = create_inherited_task(_loop(), name="pod-app-build-stream")
-    try:
-        yield
-    finally:
-        task.cancel()
-        with contextlib.suppress(asyncio.CancelledError):
-            await task
-
-
 class AppSandboxBuilder:
     """Runs the Vite build for an app inside the importing user's AgentBox and
     returns the built ``dist`` archive bytes. Holds no DB connection."""
@@ -211,39 +171,39 @@ class AppSandboxBuilder:
         build_dir = f"/workspace/.lemma-app-build/{app_slug}"
         src_dir = f"{build_dir}/src"
         async with session:
-            async with _keep_sandbox_alive(session):
-                await self._sh(
-                    session,
-                    f"rm -rf {shlex.quote(build_dir)} && mkdir -p {shlex.quote(src_dir)}",
+            await self._sh(
+                session,
+                f"rm -rf {shlex.quote(build_dir)} && mkdir -p {shlex.quote(src_dir)}",
+            )
+            await self._upload(session, source_zip, f"{build_dir}/source.zip")
+            await self._sh(
+                session,
+                f"cd {shlex.quote(build_dir)} && unzip -oq source.zip -d src",
+            )
+            await self._run_build(session, src_dir)
+            dist_index = f"{src_dir}/dist/index.html"
+            check = await session.exec_command(
+                cmd=f"test -f {shlex.quote(dist_index)}",
+                timeout=_IO_TIMEOUT_SECONDS,
+            )
+            if not check.get("success"):
+                raise AppBuildFailedError(
+                    f"App '{app_slug}' build produced no dist/index.html."
                 )
-                await self._upload(session, source_zip, f"{build_dir}/source.zip")
-                await self._sh(
-                    session,
-                    f"cd {shlex.quote(build_dir)} && unzip -oq source.zip -d src",
-                )
-                await self._run_build(session, src_dir)
-                dist_index = f"{src_dir}/dist/index.html"
-                check = await session.exec_command(
-                    cmd=f"test -f {shlex.quote(dist_index)}",
-                    timeout=_IO_TIMEOUT_SECONDS,
-                )
-                if not check.get("success"):
-                    raise AppBuildFailedError(
-                        f"App '{app_slug}' build produced no dist/index.html."
-                    )
-                await self._sh(
-                    session,
-                    f"cd {shlex.quote(src_dir)}/dist && zip -rq {shlex.quote(build_dir)}/dist.zip .",
-                )
-                return await self._download(session, f"{build_dir}/dist.zip")
+            await self._sh(
+                session,
+                f"cd {shlex.quote(src_dir)}/dist && zip -rq {shlex.quote(build_dir)}/dist.zip .",
+            )
+            return await self._download(session, f"{build_dir}/dist.zip")
 
     async def _run_build(self, session: Any, src_dir: str) -> None:
-        # Honor a checked-in lockfile's package manager, else npm (always present).
+        # pnpm is the canonical JavaScript package manager in workspace images.
         script = (
             f"cd {shlex.quote(src_dir)} && "
-            "if [ -f pnpm-lock.yaml ]; then pnpm install && pnpm run build; "
-            "elif [ -f yarn.lock ]; then yarn install && yarn build; "
-            "else npm install && npm run build; fi"
+            "if [ -f pnpm-lock.yaml ]; then "
+            "pnpm install --frozen-lockfile; "
+            "else pnpm install --no-frozen-lockfile; fi "
+            "&& pnpm run build"
         )
         result = await session.exec_command(cmd=script, timeout=_BUILD_TIMEOUT_SECONDS)
         if not result.get("success"):

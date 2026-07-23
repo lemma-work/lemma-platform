@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import asyncio
 from contextlib import asynccontextmanager
+from datetime import datetime, timedelta, timezone
+import hashlib
 import hmac
 import re
 import time
@@ -11,31 +13,48 @@ from uuid import UUID
 from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
 
-from agentbox.config import settings
-from agentbox.endpoint_state import validate_endpoint_state_keyring
-from agentbox.lifecycle_manager import SandboxLifecycleManager, reconciliation_loop
-from agentbox.providers import build_sandbox_provider
-from agentbox.providers.errors import ProviderError
-from agentbox.providers.protocol import SandboxCapabilitiesProvider
-from agentbox.state_store import create_state_store
-from agentbox.telemetry import instrument_app, shutdown_telemetry
-from agentbox.observability import (
-    bind_context,
-    create_background_task,
-    get_logger,
-    validate_release_identity,
+from agentbox.adapters.docker import (
+    DockerAdapterConfig,
+    DockerSandboxAdapter,
+    RuntimeCredentialSigner,
 )
+from agentbox.adapters.docker_engine import DockerEngineClient
+from agentbox.config import settings
+from agentbox.domain import (
+    AgentBoxError,
+    ProviderAdmissionPolicy,
+    SandboxCapability,
+    SandboxProfileRef,
+    WorkloadKind,
+)
+from agentbox.filesystem import FilesystemService
+from agentbox.lifecycle import SandboxLifecycleService
+from agentbox.maintenance import SandboxMaintenanceWorker, maintenance_loop
+from agentbox.port_access import PortAccessService, PortAccessSigner
+from agentbox.persistence.uow import StateDatabase
+from agentbox.processes import ProcessExecutionService
+from agentbox.profiles import (
+    DockerProfileArtifact,
+    E2BProfileArtifact,
+    ProfileRegistry,
+    SandboxProfile,
+)
+from agentbox.python_sessions import PythonSessionService
+from agentbox.observability import bind_context, get_logger
+from agentbox.observability import create_background_task
+from agentbox.reconciliation import AgentBoxReconciler, reconciliation_loop
 
-from .apps import router as apps_router
-from .lifecycle import cleanup_loop, provider_lease_renewal_loop
-from .sandboxes import router as sandboxes_router
-from .sessions import router as sessions_router
+from .fabric import agentbox_error_response, router
+from .port_proxy import access_router
+
 
 logger = get_logger(__name__)
 _QUIET_HEALTH_PATHS = frozenset({"/health", "/health/live", "/health/ready", "/livez"})
 
 
 class RequestContextMiddleware:
+    """Bind trusted request lineage and emit one redacted request outcome."""
+
     REQUEST_ID_RE = re.compile(r"^[A-Za-z0-9._:-]{1,128}$")
     JOB_ID_RE = re.compile(r"^[A-Za-z0-9._:-]{1,160}$")
     SLOW_SECONDS = 2.0
@@ -133,10 +152,12 @@ class RequestContextMiddleware:
                 response = JSONResponse(
                     status_code=500,
                     content={
-                        "detail": {
+                        "error": {
+                            "code": "INTERNAL",
                             "message": "Internal server error",
-                            "code": "INTERNAL_ERROR",
-                            "retryable": False,
+                            "retry": "do_not_retry",
+                            "retry_after_ms": None,
+                            "context": None,
                         }
                     },
                 )
@@ -187,176 +208,295 @@ class RequestContextMiddleware:
                             if streaming and response_started_at is not None
                             else finished_at - started_at
                         )
+                        log = (
+                            logger.warning
+                            if elapsed >= self.SLOW_SECONDS
+                            else logger.debug
+                        )
+                        fields = {
+                            "method": str(scope.get("method", "UNKNOWN")),
+                            "route": str(route),
+                            "status_code": status_code,
+                            "duration_ms": round(elapsed * 1000, 1),
+                        }
                         if elapsed >= self.SLOW_SECONDS:
-                            logger.warning(
-                                "http.request.slow",
-                                method=str(scope.get("method", "UNKNOWN")),
-                                route=str(route),
-                                status_code=status_code,
-                                duration_ms=round(elapsed * 1000, 1),
-                                latency_kind=(
-                                    "time_to_first_byte" if streaming else "total"
-                                ),
+                            fields["latency_kind"] = (
+                                "time_to_first_byte" if streaming else "total"
                             )
+                            log("http.request.slow", **fields)
                         else:
-                            logger.debug(
-                                "http.request.completed",
-                                method=str(scope.get("method", "UNKNOWN")),
-                                route=str(route),
-                                status_code=status_code,
-                                duration_ms=duration_ms,
-                            )
+                            log("http.request.completed", **fields)
+
+
+def _database_url() -> str:
+    if settings.agentbox_state_database_url:
+        return settings.agentbox_state_database_url
+    return f"sqlite+aiosqlite:///{settings.agentbox_state_db_path}"
+
+
+def _profiles() -> ProfileRegistry:
+    workspace_e2b = (
+        E2BProfileArtifact(
+            template_id=settings.agentbox_e2b_workspace_template,
+            build_id=settings.agentbox_e2b_workspace_build_id,
+        )
+        if settings.agentbox_e2b_workspace_template
+        and settings.agentbox_e2b_workspace_build_id
+        else None
+    )
+    workspace = SandboxProfile(
+        ref=SandboxProfileRef(
+            settings.agentbox_workspace_profile_name,
+            settings.agentbox_workspace_profile_digest,
+        ),
+        workload_kind=WorkloadKind.WORKSPACE,
+        # The portable ABI is semantic rather than a false interpreter pin:
+        # Docker currently uses Python 3.14 while E2B Code Interpreter owns a
+        # managed Python 3.13 kernel. The locked workspace packages support both.
+        runtime_abi="lemma-workspace-python-1-node-24",
+        capabilities=frozenset(
+            {
+                SandboxCapability.PROCESS,
+                SandboxCapability.PTY,
+                SandboxCapability.PYTHON_SESSION,
+                SandboxCapability.FILESYSTEM,
+                SandboxCapability.PORT_ACCESS,
+                SandboxCapability.BROWSER,
+            }
+        ),
+        allowed_roots=("/workspace", "/tmp"),
+        docker=DockerProfileArtifact(
+            image=settings.agentbox_workspace_image,
+            command=(),
+            readiness_argv=("python", "-c", "pass"),
+            published_ports=(8080, 4848),
+            runtime_port=8080,
+        ),
+        e2b=workspace_e2b,
+    )
+    function_e2b = (
+        E2BProfileArtifact(
+            template_id=settings.agentbox_e2b_function_template,
+            build_id=settings.agentbox_e2b_function_build_id,
+        )
+        if settings.agentbox_e2b_function_template
+        and settings.agentbox_e2b_function_build_id
+        else None
+    )
+    function = SandboxProfile(
+        ref=SandboxProfileRef(
+            settings.agentbox_function_profile_name,
+            settings.agentbox_function_profile_digest,
+        ),
+        workload_kind=WorkloadKind.FUNCTION,
+        runtime_abi="lemma-function-python-1",
+        capabilities=frozenset({SandboxCapability.PROCESS}),
+        allowed_roots=("/tmp",),
+        docker=DockerProfileArtifact(
+            image=settings.agentbox_function_image,
+            command=("sleep", "infinity"),
+            readiness_argv=("python", "-c", "pass"),
+        ),
+        e2b=function_e2b,
+    )
+    return ProfileRegistry((workspace, function))
+
+
+def _runtime_key() -> bytes:
+    configured = (settings.agentbox_runtime_credential_key or "").encode()
+    if len(configured) >= 32:
+        return configured
+    return hashlib.sha256(settings.agentbox_api_key.encode()).digest()
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    validate_release_identity()
-    # Routes can contain provider access tokens. Refuse to accept traffic unless
-    # the durable-state encryption keyring is valid, rather than discovering a
-    # missing key on the first sandbox create or migrated-route republish.
-    validate_endpoint_state_keyring()
-    provider = build_sandbox_provider()
-    store = None
-    try:
-        store = await create_state_store(
-            database_url=settings.agentbox_state_database_url,
-            sqlite_path=settings.agentbox_state_db_path,
-            durable_env_keys=settings.agentbox_state_durable_env_key_set,
+    database = StateDatabase(_database_url())
+    if settings.agentbox_auto_create_schema:
+        await database.create_schema_for_test()
+    profiles = _profiles()
+    if settings.agentbox_provider == "docker":
+        engine = DockerEngineClient(socket_path=settings.agentbox_docker_socket_path)
+        provider = DockerSandboxAdapter(
+            engine,
+            profiles,
+            DockerAdapterConfig(
+                scope=settings.agentbox_docker_scope,
+                allow_mutable_images=settings.agentbox_docker_allow_mutable_images,
+                add_host_gateway=settings.agentbox_add_host_gateway,
+                private_network=settings.agentbox_docker_private_network,
+            ),
+            runtime_credentials=RuntimeCredentialSigner(_runtime_key()),
         )
-        manager = SandboxLifecycleManager(provider, store, owner=str(uuid.uuid4()))
-        app.state.sandbox_provider = provider
-        app.state.store = store
-        app.state.lifecycle_manager = manager
-        app.state.sandbox_app_ready_cache = set()
-        # Reconcile before accepting requests so durable reservations and
-        # provider inventory agree after a manager revision restart.
-        await manager.reconcile()
-        manager.record_reconciliation_success()
-        app.state.cleanup_task = create_background_task(
-            cleanup_loop(manager), name="agentbox-cleanup"
-        )
-        app.state.reconciliation_task = create_background_task(
-            reconciliation_loop(manager), name="agentbox-reconciliation"
-        )
-        app.state.provider_lease_renewal_task = create_background_task(
-            provider_lease_renewal_loop(manager), name="agentbox-provider-lease-renewal"
-        )
-        logger.info("service.started")
-        try:
-            yield
-        finally:
-            tasks = (
-                app.state.cleanup_task,
-                app.state.reconciliation_task,
-                app.state.provider_lease_renewal_task,
+    elif settings.agentbox_provider == "e2b":
+        from agentbox.adapters.e2b import E2BAdapterConfig, E2BSandboxAdapter
+
+        if settings.agentbox_e2b_api_key is None:
+            raise RuntimeError("E2B_API_KEY is required for the E2B provider")
+        if (
+            settings.agentbox_e2b_workspace_template is None
+            or settings.agentbox_e2b_workspace_build_id is None
+            or settings.agentbox_e2b_function_template is None
+            or settings.agentbox_e2b_function_build_id is None
+        ):
+            raise RuntimeError(
+                "E2B workspace/function template IDs and immutable build IDs are required"
             )
-            for task in tasks:
-                task.cancel()
-            for task in tasks:
-                try:
-                    await task
-                except asyncio.CancelledError:
-                    pass
-            await manager.close()
-            logger.info("service.stopped")
-            shutdown_telemetry()
-    finally:
-        await provider.close()
-        if store is not None:
-            await store.close()
-
-
-app = FastAPI(title="AgentBox Manager", version="0.1.0", lifespan=lifespan)
-app.add_middleware(RequestContextMiddleware)
-instrument_app(app)
-
-
-@app.exception_handler(ProviderError)
-async def provider_exception_handler(
-    request: Request, exc: ProviderError
-) -> JSONResponse:
-    state = request.scope.setdefault("state", {})
-    state["lemma_error_type"] = type(exc).__name__
-    state["lemma_error_code"] = exc.code
-    return JSONResponse(
-        status_code=exc.status_code,
-        headers=exc.headers,
-        content={
-            "detail": {
-                "message": str(exc),
-                "code": exc.code,
-                "retryable": exc.retryable,
-            }
-        },
+        provider = E2BSandboxAdapter(
+            profiles,
+            E2BAdapterConfig(
+                api_key=settings.agentbox_e2b_api_key,
+                scope=settings.agentbox_e2b_scope,
+                request_timeout_seconds=(settings.agentbox_e2b_request_timeout_seconds),
+                function_allow_out=(
+                    settings.agentbox_e2b_function_allow_out_hosts
+                ),
+            ),
+        )
+    else:
+        raise RuntimeError(
+            f"unsupported AgentBox provider: {settings.agentbox_provider!r}"
+        )
+    app.state.database = database
+    app.state.provider = provider
+    admission_policy = ProviderAdmissionPolicy(
+        max_active=settings.agentbox_provider_max_active,
+        create_rate_per_second=(settings.agentbox_provider_create_rate_per_second),
+        create_burst=settings.agentbox_provider_create_burst,
+        interactive_capacity_reserve=(
+            settings.agentbox_provider_interactive_capacity_reserve
+        ),
+        latency_capacity_reserve=(settings.agentbox_provider_latency_capacity_reserve),
     )
+    lifecycle = SandboxLifecycleService(
+        database,
+        provider,
+        admission_policy,
+        workspace_retention_seconds=settings.agentbox_workspace_retention_seconds,
+    )
+    app.state.sandbox_lifecycle = lifecycle
+    app.state.process_execution = ProcessExecutionService(database, provider)
+    app.state.filesystem = FilesystemService(database, provider)
+    app.state.python_sessions = PythonSessionService(database, provider)
+    app.state.port_access = PortAccessService(
+        database,
+        provider,
+        PortAccessSigner(_runtime_key()),
+        public_base_url=(settings.agentbox_public_url or settings.agentbox_api_url),
+    )
+    reconciler = AgentBoxReconciler(
+        database,
+        provider,
+        create_absence_grace_seconds=(
+            settings.agentbox_ambiguous_create_absence_grace_seconds
+        ),
+        claim_seconds=settings.agentbox_reconcile_claim_seconds,
+        retry_seconds=max(0.1, settings.agentbox_reconcile_interval_seconds),
+    )
+    app.state.reconciler = reconciler
+    await reconciler.reconcile_once(
+        deadline_at=datetime.now(timezone.utc)
+        + timedelta(seconds=settings.agentbox_reconcile_operation_timeout_seconds)
+    )
+    app.state.reconciliation_task = create_background_task(
+        reconciliation_loop(
+            reconciler,
+            interval_seconds=settings.agentbox_reconcile_interval_seconds,
+            operation_timeout_seconds=(
+                settings.agentbox_reconcile_operation_timeout_seconds
+            ),
+        ),
+        name="agentbox-reconciliation",
+    )
+    maintenance = SandboxMaintenanceWorker(
+        database,
+        lifecycle,
+        workspace_idle_seconds=settings.agentbox_workspace_idle_seconds,
+        function_idle_seconds=settings.agentbox_function_idle_seconds,
+    )
+    app.state.maintenance = maintenance
+    app.state.maintenance_task = create_background_task(
+        maintenance_loop(
+            maintenance,
+            interval_seconds=settings.agentbox_cleanup_interval_seconds,
+            operation_timeout_seconds=(
+                settings.agentbox_reconcile_operation_timeout_seconds
+            ),
+        ),
+        name="agentbox-maintenance",
+    )
+    try:
+        yield
+    finally:
+        app.state.reconciliation_task.cancel()
+        app.state.maintenance_task.cancel()
+        await asyncio.gather(
+            app.state.reconciliation_task,
+            app.state.maintenance_task,
+            return_exceptions=True,
+        )
+        await provider.close()
+        await database.dispose()
 
 
-@app.get("/health")
-async def health(request: Request) -> dict[str, str | bool]:
-    provider = request.app.state.sandbox_provider
-    response: dict[str, str | bool] = {
-        "status": "ok",
-        "provider": provider.provider_name,
-    }
-    if isinstance(provider, SandboxCapabilitiesProvider):
-        response.update(provider.capabilities.diagnostic())
-    return response
+app = FastAPI(title="AgentBox", lifespan=lifespan)
+app.add_middleware(RequestContextMiddleware)
+app.include_router(router)
+app.include_router(access_router)
+
+
+@app.exception_handler(AgentBoxError)
+async def handle_agentbox_error(
+    _request: Request, error: AgentBoxError
+) -> JSONResponse:
+    return agentbox_error_response(error)
 
 
 @app.get("/health/live")
 @app.get("/livez")
 async def health_live() -> dict[str, str]:
-    """Process-only liveness; never performs dependency I/O."""
     return {"status": "ok"}
 
 
+@app.get("/health")
 @app.get("/health/ready")
 async def health_ready(request: Request) -> JSONResponse:
-    """Bounded readiness with generic, non-sensitive component states."""
+    database = getattr(request.app.state, "database", None)
+    provider = getattr(request.app.state, "provider", None)
+    reconciliation_task = getattr(request.app.state, "reconciliation_task", None)
+    maintenance_task = getattr(request.app.state, "maintenance_task", None)
     components = {
-        "manager": "ready",
-        "state_store": "ready",
-        "provider": "ready",
+        "database": "ready",
+        "provider": "ready" if provider is not None else "unavailable",
+        "reconciler": (
+            "ready"
+            if reconciliation_task is not None and not reconciliation_task.done()
+            else "unavailable"
+        ),
+        "maintenance": (
+            "ready"
+            if maintenance_task is not None and not maintenance_task.done()
+            else "unavailable"
+        ),
     }
-    app_state = request.app.state
-    manager = getattr(app_state, "lifecycle_manager", None)
-    store = getattr(app_state, "store", None)
-    reconciliation_task = getattr(app_state, "reconciliation_task", None)
-    cleanup_task = getattr(app_state, "cleanup_task", None)
-    lease_task = getattr(app_state, "provider_lease_renewal_task", None)
-
-    if manager is None or any(
-        task is None or task.done()
-        for task in (reconciliation_task, cleanup_task, lease_task)
-    ):
-        components["manager"] = "unavailable"
-
-    if store is None:
-        components["state_store"] = "unavailable"
+    if database is None:
+        components["database"] = "unavailable"
     else:
         try:
-            await asyncio.wait_for(store.healthcheck(), timeout=0.75)
+            await asyncio.wait_for(database.healthcheck(), timeout=0.75)
         except Exception:
-            components["state_store"] = "unavailable"
-
-    if (
-        manager is None
-        or reconciliation_task is None
-        or reconciliation_task.done()
-        or not manager.reconciliation_is_fresh()
-    ):
-        components["provider"] = "unavailable"
-
-    ready = all(value == "ready" for value in components.values())
+            components["database"] = "unavailable"
+    ready_state = all(value == "ready" for value in components.values())
     return JSONResponse(
-        status_code=200 if ready else 503,
+        status_code=200 if ready_state else 503,
         content={
-            "status": "ready" if ready else "not_ready",
+            "status": "ready" if ready_state else "not_ready",
+            "provider": getattr(provider, "name", None),
             "components": components,
         },
     )
 
 
-app.include_router(sandboxes_router)
-app.include_router(sessions_router)
-app.include_router(apps_router)
+# Stable import names for tests and embedding applications.
+live = health_live
+ready = health_ready

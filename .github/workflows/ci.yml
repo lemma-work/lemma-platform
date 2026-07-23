@@ -115,13 +115,16 @@ jobs:
         run: |
           docker version
           docker info
+      - name: Build canonical Docker conformance images
+        run: make build-test-images
       - name: Real Docker provider contract
         timeout-minutes: 20
         run: >-
           uv run python -m pytest
-          tests/e2e/test_local_providers_real_e2e.py
-          -m e2e -k docker
+          tests/adapters/test_docker_real.py
           --junitxml=agentbox-docker-e2e.xml
+        env:
+          AGENTBOX_RUN_DOCKER_TESTS: "1"
 
   backend-unit:
     name: lemma-backend unit

@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from uuid import UUID
 
-from sqlalchemy import delete, select
+from sqlalchemy import delete, func, select
 from sqlalchemy.orm import load_only
 
 from app.core.authorization.context import Context, ResourceType, ResourceVisibility
@@ -22,7 +22,9 @@ from app.core.domain.message_bus import MessageBus
 from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
 from app.modules.function.domain.entities import (
     FunctionEntity,
+    FunctionExecutionStatus,
     FunctionRunEntity,
+    FunctionType,
 )
 from app.modules.function.domain.errors import (
     FunctionNotFoundError,
@@ -32,7 +34,12 @@ from app.modules.function.domain.ports import (
     FunctionRepositoryPort,
     FunctionRunRepositoryPort,
 )
-from app.modules.function.infrastructure.models import FunctionModel, FunctionRunModel
+from app.modules.function.infrastructure.models import (
+    FunctionExecutionRequestModel,
+    FunctionModel,
+    FunctionRevisionModel,
+    FunctionRunModel,
+)
 
 
 class FunctionRepository(FunctionRepositoryPort):
@@ -88,6 +95,10 @@ class FunctionRepository(FunctionRepositoryPort):
         result = await self.session.execute(stmt)
         row = result.one_or_none()
         return self._to_entity_with_allowed_actions(row[0], row[1]) if row else None
+
+    async def get_revision(self, revision_id: UUID):
+        model = await self.session.get(FunctionRevisionModel, revision_id)
+        return model.to_entity() if model is not None else None
 
     async def get_by_name(
         self,
@@ -197,6 +208,20 @@ class FunctionRepository(FunctionRepositoryPort):
             )
         model.status = function.status
         model.type = function.type
+        model.python_packages = function.python_packages
+        if function.pending_revision is not None:
+            revision = function.pending_revision
+            existing_revision = await self.session.get(
+                FunctionRevisionModel, revision.id
+            )
+            if existing_revision is None:
+                self.session.add(
+                    FunctionRevisionModel(
+                        **revision.model_dump(exclude={"created_at"})
+                    )
+                )
+            model.active_revision_id = revision.id
+            function.active_revision_id = revision.id
 
         await self.session.flush()
         self._collect_events(function)
@@ -225,17 +250,27 @@ class FunctionRepository(FunctionRepositoryPort):
         result = await self.session.execute(stmt)
         return result.rowcount > 0
 
+    async def next_revision_number(self, function_id: UUID) -> int:
+        latest = await self.session.scalar(
+            select(func.max(FunctionRevisionModel.revision_number)).where(
+                FunctionRevisionModel.function_id == function_id
+            )
+        )
+        return int(latest or 0) + 1
+
 
 class FunctionRunRepository(FunctionRunRepositoryPort):
     def __init__(
         self,
         uow: SqlAlchemyUnitOfWork,
         message_bus: MessageBus | None = None,
+        execution_units: int = 2,
     ):
         self.uow = uow
         self.session = uow.session
         if message_bus is not None:
             self.uow.set_message_bus(message_bus)
+        self._execution_units = execution_units
 
     def _collect_events(self, entity: FunctionEntity | FunctionRunEntity) -> None:
         if hasattr(entity, "collect_events"):
@@ -248,6 +283,29 @@ class FunctionRunRepository(FunctionRunRepositoryPort):
         model = FunctionRunModel(**payload)
         self.session.add(model)
         await self.session.flush()
+        if entity.revision_id is not None and entity.deadline_at is not None:
+            function = await self.session.get(FunctionModel, entity.function_id)
+            if function is None:
+                raise FunctionNotFoundError(
+                    f"Function {entity.function_id} not found"
+                )
+            function_type = FunctionType(function.type)
+            self.session.add(
+                FunctionExecutionRequestModel(
+                    run_id=model.id,
+                    pod_id=function.pod_id,
+                    function_id=function.id,
+                    revision_id=entity.revision_id,
+                    kind=function_type.value,
+                    status=FunctionExecutionStatus.QUEUED.value,
+                    priority=0 if function_type == FunctionType.API else 10,
+                    units=self._execution_units,
+                    next_fence=1,
+                    available_at=model.created_at,
+                    deadline_at=entity.deadline_at,
+                )
+            )
+            await self.session.flush()
         self._collect_events(entity)
         return model.to_entity()
 

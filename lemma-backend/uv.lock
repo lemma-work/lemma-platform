@@ -7,6 +7,52 @@ resolution-markers = [
 ]
 
 [[package]]
+name = "agentbox"
+version = "0.1.0"
+source = { editable = "../agentbox" }
+dependencies = [
+    { name = "aiosqlite" },
+    { name = "alembic" },
+    { name = "fastapi", extra = ["standard"] },
+    { name = "httpx" },
+    { name = "opentelemetry-exporter-otlp" },
+    { name = "opentelemetry-instrumentation-fastapi" },
+    { name = "opentelemetry-instrumentation-httpx" },
+    { name = "pydantic" },
+    { name = "pydantic-settings" },
+    { name = "sqlalchemy", extra = ["asyncio"] },
+    { name = "uvicorn", extra = ["standard"] },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "aiosqlite", specifier = ">=0.21.0,<0.22.0" },
+    { name = "alembic", specifier = ">=1.16.0,<2.0.0" },
+    { name = "e2b", marker = "extra == 'e2b'", specifier = "==2.34.0" },
+    { name = "e2b-code-interpreter", marker = "extra == 'e2b'", specifier = "==2.8.1" },
+    { name = "fastapi", extras = ["standard"], specifier = ">=0.128.0" },
+    { name = "httpx", specifier = ">=0.28.1" },
+    { name = "opentelemetry-exporter-otlp", specifier = ">=1.42.0" },
+    { name = "opentelemetry-instrumentation-fastapi", specifier = ">=0.63b0" },
+    { name = "opentelemetry-instrumentation-httpx", specifier = ">=0.63b0" },
+    { name = "psycopg", extras = ["binary"], marker = "extra == 'postgres'", specifier = ">=3.2.0" },
+    { name = "psycopg-pool", marker = "extra == 'postgres'", specifier = ">=3.2.0" },
+    { name = "pydantic", specifier = ">=2.11.0" },
+    { name = "pydantic-settings", specifier = ">=2.14.2" },
+    { name = "sqlalchemy", extras = ["asyncio"], specifier = ">=2.0.41,<2.1.0" },
+    { name = "uvicorn", extras = ["standard"], specifier = ">=0.42.0" },
+]
+provides-extras = ["e2b", "postgres"]
+
+[package.metadata.requires-dev]
+dev = [
+    { name = "agentbox-client", editable = "../agentbox-client" },
+    { name = "pytest", specifier = ">=8.4.0" },
+    { name = "pytest-asyncio", specifier = ">=1.2.0" },
+    { name = "ruff", specifier = ">=0.15.0,<0.16.0" },
+]
+
+[[package]]
 name = "agentbox-client"
 version = "0.1.0"
 source = { editable = "../agentbox-client" }
@@ -23,11 +69,9 @@ requires-dist = [
 
 [package.metadata.requires-dev]
 dev = [
-    { name = "fastapi", extras = ["standard"], specifier = ">=0.128.0" },
-    { name = "kubernetes", specifier = ">=34.1.0" },
-    { name = "pydantic-settings", specifier = ">=2.14.2" },
     { name = "pytest", specifier = ">=8.4.0" },
-    { name = "uvicorn", extras = ["standard"], specifier = ">=0.42.0" },
+    { name = "pytest-asyncio", specifier = ">=1.2.0" },
+    { name = "ruff", specifier = ">=0.15.0,<0.16.0" },
 ]
 
 [[package]]
@@ -149,6 +193,18 @@ source = { registry = "https://pypi.org/simple" }
 sdist = { url = "https://files.pythonhosted.org/packages/b9/25/d36d056e62a1dc3dd51ce76e7647c62966702193dc91eafa7fd4e1006a91/aiosmtplib-5.1.2.tar.gz", hash = "sha256:04a0ea3c678f5b719f998f290dce010ca512e1385836d3944206299df03b060f", size = 71031, upload-time = "2026-06-20T15:00:48.269Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/d5/ec/c5a415cd1309eaac28ad3c599458194d25ba07189bb07a1bac2c6713c17e/aiosmtplib-5.1.2-py3-none-any.whl", hash = "sha256:070d467cc329dafd0af59108ba5d217d973cba10309910fed359a2a7bfb52d7a", size = 28394, upload-time = "2026-06-20T15:00:47.299Z" },
+]
+
+[[package]]
+name = "aiosqlite"
+version = "0.21.0"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "typing-extensions" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/13/7d/8bca2bf9a247c2c5dfeec1d7a5f40db6518f88d314b8bca9da29670d2671/aiosqlite-0.21.0.tar.gz", hash = "sha256:131bb8056daa3bc875608c631c678cda73922a2d4ba8aec373b19f18c17e7aa3", size = 13454, upload-time = "2025-02-03T07:30:16.235Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/f5/10/6c25ed6de94c49f88a91fa5018cb4c0f3625f31d5be9f771ebe5cc7cd506/aiosqlite-0.21.0-py3-none-any.whl", hash = "sha256:2549cf4057f95f53dcba16f2b64e8e2791d7e1adedb13197dd8ed77bb226d7d0", size = 15792, upload-time = "2025-02-03T07:30:13.6Z" },
 ]
 
 [[package]]
@@ -1764,6 +1820,7 @@ markitdown = [
 
 [package.dev-dependencies]
 dev = [
+    { name = "agentbox" },
     { name = "basedpyright" },
     { name = "diff-cover" },
     { name = "kubernetes" },
@@ -1837,6 +1894,7 @@ provides-extras = ["gcp-kms", "keychain", "markitdown"]
 
 [package.metadata.requires-dev]
 dev = [
+    { name = "agentbox", editable = "../agentbox" },
     { name = "basedpyright", specifier = ">=1.39.9" },
     { name = "diff-cover", specifier = ">=9.7.1" },
     { name = "kubernetes", specifier = ">=34.1.0" },
@@ -4028,6 +4086,11 @@ wheels = [
     { url = "https://files.pythonhosted.org/packages/0d/c9/f14fdf71bb8957e0c7e39db69bbdf12b5c80f4ef775fdfa127bf4e0d6760/sqlalchemy-2.0.51-cp314-cp314t-win32.whl", hash = "sha256:9161cfc9efce70d1715f47d6ff40f79c6778c00d53be4fbc09d70301e4b83ba7", size = 2151313, upload-time = "2026-06-15T16:03:39.127Z" },
     { url = "https://files.pythonhosted.org/packages/6a/c6/673e618e6f4f297e126d9b56ea2f6478708f6c1af4e3223835c22e2c3697/sqlalchemy-2.0.51-cp314-cp314t-win_amd64.whl", hash = "sha256:159bb6ba32059f57ad7375a8f50d844dd2f19d14954ecf820cd33e20debd46b2", size = 2186280, upload-time = "2026-06-15T16:03:40.569Z" },
     { url = "https://files.pythonhosted.org/packages/e2/22/dbf013a12ec759e54a34a119e9e217435b3f71b2dd5c61a7ade0a25dae87/sqlalchemy-2.0.51-py3-none-any.whl", hash = "sha256:bb024d8b621d0be75f4f44ecc7c950450026e76d66dc8f791bb5331d7fed59d5", size = 1944334, upload-time = "2026-06-15T16:09:22.418Z" },
+]
+
+[package.optional-dependencies]
+asyncio = [
+    { name = "greenlet" },
 ]
 
 [[package]]

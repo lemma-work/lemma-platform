@@ -100,21 +100,12 @@ class AppWorkerContext:
             FunctionRunRepository,
         )
         from app.modules.function.services.function_service import FunctionService
-        from app.modules.pod.services.authorization_factory import (
-            create_authorization_service,
-        )
-        from app.modules.workspace.services.workspace_tool_runtime import (
-            get_function_workspace_runtime,
-        )
-
         message_bus = get_message_bus()
         return FunctionService(
             function_repository=FunctionRepository(uow, message_bus=message_bus),
             run_repository=FunctionRunRepository(uow, message_bus=message_bus),
-            workspace_service=get_function_workspace_runtime(),
             storage_factory=self.build_function_storage_factory(),
             job_queue=self.job_queue,
-            authorization_service=create_authorization_service(uow),
         )
 
     def build_function_use_cases(self):

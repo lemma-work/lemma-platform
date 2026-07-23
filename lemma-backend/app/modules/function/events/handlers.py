@@ -44,9 +44,6 @@ from app.modules.function.domain.errors import (
     FunctionRunNotFoundError,
 )
 from app.modules.function.infrastructure.repositories import FunctionRunRepository
-from app.modules.function.application.function_run_executor import (
-    _JOB_FUNCTION_TIMEOUT_SECONDS,
-)
 from app.core.log.log import get_logger
 
 logger = get_logger(__name__)
@@ -197,10 +194,7 @@ async def process_function_run(
                     raise FunctionNotFoundError(f"Function {run.function_id} not found")
 
             use_cases = worker_ctx.build_function_use_cases()
-            await use_cases.execute_run_by_id(
-                parsed_run_id,
-                timeout_seconds=_JOB_FUNCTION_TIMEOUT_SECONDS,
-            )
+            await use_cases.execute_run_by_id(parsed_run_id)
             return
         except Exception as exc:
             last_error = exc

@@ -111,7 +111,7 @@ def test_docker_linux_lemma_cli_install():
     """
     result = run_in_container(
         "python:3.12-slim",
-        f"""
+        """
 set -e
 pip install --quiet uv
 cd /repo/lemma-cli
@@ -159,7 +159,7 @@ def test_docker_linux_install_sh_lemma_stack():
     """
     result = run_in_container(
         "ubuntu:24.04",
-        f"""
+        """
 set -e
 apt-get update -qq && apt-get install -y -qq curl ca-certificates python3 2>&1 | tail -3
 
@@ -171,12 +171,12 @@ export PATH="$HOME/.local/bin:$PATH"
 # lemma-stack should be installed and responding
 STACK_VER=$(lemma-stack self version 2>&1)
 echo "$STACK_VER"
-echo "$STACK_VER" | grep -q "lemma-stack" || {{ echo "FAIL: lemma-stack not responding"; exit 1; }}
+echo "$STACK_VER" | grep -q "lemma-stack" || { echo "FAIL: lemma-stack not responding"; exit 1; }
 
 # lemma-stack doctor should run (expected: no runtime = fails, but no crash)
 # doctor exits 1 when checks fail; capture output without triggering set -e
 DOCTOR=$(lemma-stack doctor 2>&1 || true)
-echo "$DOCTOR" | grep -q "runtime:docker" || {{ echo "FAIL: doctor missing runtime check"; exit 1; }}
+echo "$DOCTOR" | grep -q "runtime:docker" || { echo "FAIL: doctor missing runtime check"; exit 1; }
 
 echo "ALL CHECKS PASSED"
 """,

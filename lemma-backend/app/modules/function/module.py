@@ -8,7 +8,11 @@ def _routers():
         router as function,
     )
 
-    return [function]
+    from app.modules.function.api.controllers.function_runtime_controller import (
+        router as function_runtime,
+    )
+
+    return [function, function_runtime]
 
 
 def _event_routers():

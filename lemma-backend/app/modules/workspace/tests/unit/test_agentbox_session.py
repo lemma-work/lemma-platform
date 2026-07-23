@@ -1,176 +1,189 @@
 from __future__ import annotations
 
 from typing import Any
+from uuid import UUID, uuid4
 
 import httpx
 import pytest
 
+from agentbox_client.models import (
+    ProcessOutputChannel,
+    ProcessOutputChunk,
+    ProcessOutputSnapshot,
+    ProcessState,
+    PythonExecutionState,
+    PythonResult,
+)
 from app.modules.workspace.agentbox_session import AgentBoxWorkspaceSession
 
 
-class _FakeAgentBoxClient:
-    async def execute_code(self, *args: Any, **kwargs: Any) -> dict[str, Any]:
-        raise _http_status_error(
-            500,
-            "Internal Server Error",
-            "/sandboxes/s1/sessions/session-1/python",
-        )
-
-    async def exec_command(self, *args: Any, **kwargs: Any) -> dict[str, Any]:
-        raise _http_status_error(
-            500,
-            "Internal Server Error",
-            "/sandboxes/s1/sessions/session-1/exec-command",
-        )
-
-    async def write_stdin(self, *args: Any, **kwargs: Any) -> dict[str, Any]:
-        raise _http_status_error(
-            404,
-            "Not Found",
-            "/sandboxes/s1/sessions/session-1/stdin",
-        )
-
-
-class _ReadTimeoutAgentBoxClient:
-    async def exec_command(self, *args: Any, **kwargs: Any) -> dict[str, Any]:
-        request = httpx.Request(
-            "POST",
-            "https://api.agentbox.test/sandboxes/s1/sessions/session-1/exec-command",
-        )
-        raise httpx.ReadTimeout("timed out", request=request)
-
-
-class _FlakyCreateSessionClient:
+class _CanonicalClient:
     def __init__(self) -> None:
-        self.create_calls = 0
-        self.deleted = False
+        self.started: list[dict[str, Any]] = []
+        self.inputs: list[bytes] = []
+        self.python_creates: list[dict[str, Any]] = []
+        self.python_executes: list[dict[str, Any]] = []
+        self.deleted_python = False
         self.closed = False
+        self._reads = 0
 
-    async def create_session(self, *args: Any, **kwargs: Any) -> dict[str, Any]:
-        self.create_calls += 1
-        if self.create_calls == 1:
-            raise _http_status_error(
-                502,
-                "Bad Gateway",
-                "/sandboxes/s1/sessions/session-1",
+    async def start_process(self, *_args: Any, **kwargs: Any) -> None:
+        self.started.append(kwargs)
+
+    async def read_process_output(
+        self, *_args: Any, **_kwargs: Any
+    ) -> ProcessOutputSnapshot:
+        self._reads += 1
+        if self._reads == 1:
+            return ProcessOutputSnapshot(
+                chunks=(
+                    ProcessOutputChunk(
+                        sequence=1,
+                        channel=ProcessOutputChannel.STDOUT,
+                        data=b"hello\n",
+                    ),
+                ),
+                next_sequence=2,
+                truncated_before_sequence=None,
+                state=ProcessState.RUNNING,
+                exit_code=None,
             )
-        return {"session_id": "session-1"}
+        return ProcessOutputSnapshot(
+            chunks=(
+                ProcessOutputChunk(
+                    sequence=2,
+                    channel=ProcessOutputChannel.STDERR,
+                    data=b"warning\n",
+                ),
+            ),
+            next_sequence=3,
+            truncated_before_sequence=None,
+            state=ProcessState.SUCCEEDED,
+            exit_code=0,
+        )
 
-    async def delete_session(self, *args: Any, **kwargs: Any) -> bool:
-        self.deleted = True
-        return True
+    async def send_process_input(
+        self, *_args: Any, data: bytes | None = None, **_kwargs: Any
+    ) -> None:
+        # AgentBoxClient accepts data positionally; preserve either fake form.
+        if data is not None:
+            self.inputs.append(data)
+
+    async def create_python_session(self, *_args: Any, **kwargs: Any) -> None:
+        self.python_creates.append(kwargs)
+
+    async def execute_python(self, *_args: Any, **kwargs: Any) -> PythonResult:
+        self.python_executes.append(kwargs)
+        return PythonResult(
+            operation_id=kwargs["operation_id"],
+            state=PythonExecutionState.SUCCEEDED,
+            stdout="native\n",
+            stderr="",
+            result="42",
+            error_name=None,
+            error_message=None,
+            traceback=None,
+            output_truncated=False,
+        )
+
+    async def delete_python_session(self, *_args: Any, **_kwargs: Any) -> None:
+        self.deleted_python = True
 
     async def close(self) -> None:
         self.closed = True
 
 
-def _http_status_error(
-    status_code: int,
-    reason: str,
-    path: str,
-) -> httpx.HTTPStatusError:
-    request = httpx.Request("POST", f"https://api.agentbox.test{path}")
-    response = httpx.Response(
-        status_code,
-        json={"detail": reason},
-        request=request,
-    )
-    return httpx.HTTPStatusError(
-        f"Server error '{status_code} {reason}'",
-        request=request,
-        response=response,
+class _TransportFailureClient(_CanonicalClient):
+    async def start_process(self, *_args: Any, **_kwargs: Any) -> None:
+        request = httpx.Request("POST", "https://agentbox.test/processes")
+        raise httpx.ReadTimeout("lost response", request=request)
+
+
+def _session(client: _CanonicalClient) -> AgentBoxWorkspaceSession:
+    return AgentBoxWorkspaceSession(
+        client=client,  # type: ignore[arg-type]
+        sandbox_id=uuid4(),
+        session_id="conversation-1",
+        env_vars={"LEMMA_TOKEN": "dynamic", "LEMMA_BASE_URL": "https://api"},
     )
 
 
 @pytest.mark.asyncio
-async def test_exec_command_returns_retryable_failure_on_agentbox_500():
+async def test_shell_process_uses_typed_environment_and_collects_both_channels() -> None:
+    client = _CanonicalClient()
+    session = _session(client)
+
+    result = await session.exec_command(cmd="printf hello")
+
+    assert result["success"] is True
+    assert result["completed"] is True
+    assert result["stdout"] == "hello\n"
+    assert result["stderr"] == "warning\n"
+    assert result["exit_code"] == 0
+    assert client.started[0]["shell_command"] == "printf hello"
+    assert {item.name for item in client.started[0]["environment"]} == {
+        "LEMMA_BASE_URL",
+        "LEMMA_TOKEN",
+    }
+
+
+@pytest.mark.asyncio
+async def test_yielded_process_returns_stable_operation_id_for_reconnect() -> None:
+    client = _CanonicalClient()
+    session = _session(client)
+
+    result = await session.exec_command(cmd="sleep 30", yield_time_ms=0)
+
+    assert result["success"] is True
+    assert result["completed"] is False
+    assert UUID(result["process_id"])
+    assert client.started[0]["operation_id"] == UUID(result["process_id"])
+
+
+@pytest.mark.asyncio
+async def test_python_session_declares_keys_but_sends_values_per_execution() -> None:
+    client = _CanonicalClient()
+    session = _session(client)
+
+    result = await session.execute_code("40 + 2")
+    await session.close()
+
+    assert result.success is True
+    assert result.stdout == "native\n"
+    assert result.result == "42"
+    assert client.python_creates[0]["environment_keys"] == (
+        "LEMMA_BASE_URL",
+        "LEMMA_TOKEN",
+    )
+    assert {item.name: item.value for item in client.python_executes[0]["environment"]} == {
+        "LEMMA_BASE_URL": "https://api",
+        "LEMMA_TOKEN": "dynamic",
+    }
+    assert client.deleted_python is True
+    assert client.closed is True
+
+
+@pytest.mark.asyncio
+async def test_relative_initial_cwd_is_canonicalized_under_workspace() -> None:
+    client = _CanonicalClient()
     session = AgentBoxWorkspaceSession(
-        client=_FakeAgentBoxClient(),  # type: ignore[arg-type]
-        sandbox_id="s1",
-        session_id="session-1",
+        client=client,  # type: ignore[arg-type]
+        sandbox_id=uuid4(),
+        initial_cwd="tasks/function-1",
     )
 
-    result = await session.exec_command(cmd="pwd")
+    await session.execute_code("40 + 2")
+
+    assert client.python_creates[0]["cwd"] == "/workspace/tasks/function-1"
+
+
+@pytest.mark.asyncio
+async def test_transport_failure_returns_operation_identity_without_blind_replay() -> None:
+    session = _session(_TransportFailureClient())
+
+    result = await session.exec_command(cmd="non-idempotent-command")
 
     assert result["success"] is False
     assert result["completed"] is False
-    assert result["exit_code"] is None
-    assert "HTTP 500 Internal Server Error" in result["error"]
-    assert "retry" in result["error"].lower()
-
-
-@pytest.mark.asyncio
-async def test_exec_command_initial_read_timeout_is_completed_without_process_id():
-    session = AgentBoxWorkspaceSession(
-        client=_ReadTimeoutAgentBoxClient(),  # type: ignore[arg-type]
-        sandbox_id="s1",
-        session_id="session-1",
-    )
-
-    result = await session.exec_command(cmd="agent-browser snapshot -i -u")
-
-    assert result["success"] is False
-    assert result["completed"] is True
-    assert result["process_id"] is None
-    assert "transport failed" in result["error"]
-
-
-@pytest.mark.asyncio
-async def test_execute_code_returns_python_failure_on_agentbox_500():
-    session = AgentBoxWorkspaceSession(
-        client=_FakeAgentBoxClient(),  # type: ignore[arg-type]
-        sandbox_id="s1",
-        session_id="session-1",
-    )
-
-    result = await session.execute_code("1 + 1")
-
-    assert result.success is False
-    assert result.error_in_exec is not None
-    assert result.error_in_exec["ename"] == "TransientAgentBoxError"
-    assert "HTTP 500 Internal Server Error" in result.error_in_exec["evalue"]
-
-
-@pytest.mark.asyncio
-async def test_write_stdin_returns_non_retryable_failure_on_agentbox_404():
-    session = AgentBoxWorkspaceSession(
-        client=_FakeAgentBoxClient(),  # type: ignore[arg-type]
-        sandbox_id="s1",
-        session_id="session-1",
-    )
-
-    result = await session.write_stdin(process_id="proc-1", chars="")
-
-    assert result["success"] is False
-    assert result["completed"] is True
-    assert result["exit_code"] == 404
-    assert result["process_id"] == "proc-1"
-    assert "HTTP 404 Not Found" in result["error"]
-
-
-@pytest.mark.asyncio
-async def test_enter_retries_transient_session_create_failure(
-    monkeypatch: pytest.MonkeyPatch,
-):
-    client = _FlakyCreateSessionClient()
-    sleeps: list[float] = []
-
-    async def fake_sleep(delay: float) -> None:
-        sleeps.append(delay)
-
-    monkeypatch.setattr("app.modules.workspace.agentbox_session.asyncio.sleep", fake_sleep)
-
-    session = AgentBoxWorkspaceSession(
-        client=client,  # type: ignore[arg-type]
-        sandbox_id="s1",
-        session_id="session-1",
-        heartbeat_interval_seconds=0,
-    )
-
-    async with session:
-        pass
-
-    assert client.create_calls == 2
-    assert sleeps == [0.25]
-    assert client.deleted is True
-    assert client.closed is True
+    assert UUID(result["process_id"])
+    assert "transport failed" in result["error"].lower()

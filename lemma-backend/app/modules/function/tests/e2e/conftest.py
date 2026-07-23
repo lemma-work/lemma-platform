@@ -12,6 +12,7 @@ from app.modules.test_support.e2e import fixtures as e2e_fixtures
 from app.modules.test_support.e2e.runtime import (
     backend_server,
     configure_workspace_api_url,
+    function_image,
     local_agentbox_server,
     workspace_image,
 )
@@ -64,6 +65,7 @@ __all__ = [
     "e2e_settings",
     "fixed_test_org",
     "fixed_test_user",
+    "function_image",
     "postgres_container",
     "redis_container",
     "scenario",

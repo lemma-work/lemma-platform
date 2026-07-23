@@ -19,7 +19,8 @@ def sample(**overrides) -> dict:
             "backend": {"ref": "ghcr.io/lemma-work/lemma-backend:v1.4.0", "digest": "sha256:aa"},
             "frontend": {"ref": "ghcr.io/lemma-work/lemma-frontend:v1.4.0"},
             "agentbox": "ghcr.io/lemma-work/lemma-agentbox:v1.4.0",
-            "agentbox_runtime": {"ref": "ghcr.io/lemma-work/lemma-agentbox-runtime:v1.4.0"},
+            "agentbox_workspace": {"ref": "ghcr.io/lemma-work/lemma-agentbox-workspace:v1.4.0"},
+            "agentbox_function": {"ref": "ghcr.io/lemma-work/lemma-agentbox-function:v1.4.0"},
         },
         "infra": {"postgres": "docker.io/pgvector/pgvector:0.8.0-pg16"},
     }
@@ -58,8 +59,8 @@ def test_kreuzberg_pull_only_when_enabled():
 
 def test_missing_image_rejected():
     data = sample()
-    del data["images"]["agentbox_runtime"]
-    with pytest.raises(AdminError, match="agentbox_runtime"):
+    del data["images"]["agentbox_function"]
+    with pytest.raises(AdminError, match="agentbox_function"):
         m.parse(data)
 
 

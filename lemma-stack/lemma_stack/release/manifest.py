@@ -24,7 +24,13 @@ from lemma_stack.paths import LocalPaths
 SCHEMA_VERSION = 1
 DEFAULT_REPO = "lemma-work/lemma-platform"
 MANIFEST_ASSET = "lemma-local.json"
-APP_IMAGE_KEYS = ("backend", "frontend", "agentbox", "agentbox_runtime")
+APP_IMAGE_KEYS = (
+    "backend",
+    "frontend",
+    "agentbox",
+    "agentbox_workspace",
+    "agentbox_function",
+)
 
 # Fresh installs get pg16; the dev stack stays on pg15 for volume compat.
 DEFAULT_INFRA_IMAGES = {

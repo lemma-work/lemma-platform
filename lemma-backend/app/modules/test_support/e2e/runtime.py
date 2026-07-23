@@ -51,9 +51,7 @@ def _read_root_env_value(key: str) -> str | None:
     return None
 
 
-# Source paths the runtime image is built from (Dockerfile.runtime COPYs these).
-# A change to any of them must invalidate the cached image — see
-# _agentbox_image_fingerprint.
+# Source paths used by the canonical workspace and function images.
 _AGENTBOX_BUILD_INPUTS = (
     "agentbox",
     "lemma-python",
@@ -134,9 +132,9 @@ def workspace_image(e2e_settings) -> Generator[str, None, None]:
     else:
         fingerprint = _agentbox_image_fingerprint(repo_root)
         image = (
-            f"agentbox-runtime:e2e-{fingerprint}"
+            f"agentbox-workspace:e2e-{fingerprint}"
             if fingerprint
-            else "agentbox-runtime:e2e"
+            else "agentbox-workspace:e2e"
         )
 
     inspect = subprocess.run(
@@ -148,11 +146,11 @@ def workspace_image(e2e_settings) -> Generator[str, None, None]:
     image_present = inspect.returncode == 0
     # Fall back to always-build only when we couldn't fingerprint (floating tag).
     should_build = not image_present or (
-        not configured_image and image == "agentbox-runtime:e2e"
+        not configured_image and image == "agentbox-workspace:e2e"
     )
 
     if should_build:
-        dockerfile = repo_root / "agentbox" / "Dockerfile.runtime"
+        dockerfile = repo_root / "agentbox" / "Dockerfile.workspace"
         build = subprocess.run(
             [
                 "docker",
@@ -173,6 +171,51 @@ def workspace_image(e2e_settings) -> Generator[str, None, None]:
                 f"'{image}'.\nSTDOUT:\n{build.stdout}\nSTDERR:\n{build.stderr}"
             )
 
+    yield image
+
+
+@pytest.fixture(scope="module")
+def function_image(e2e_settings) -> Generator[str, None, None]:
+    """Build the slim stateless function runner image used by AgentBox."""
+
+    del e2e_settings
+    repo_root = Path(__file__).resolve().parents[5]
+    configured_image = os.getenv("FUNCTION_E2E_IMAGE")
+    if configured_image:
+        image = configured_image
+    else:
+        fingerprint = _agentbox_image_fingerprint(repo_root)
+        image = (
+            f"agentbox-function:e2e-{fingerprint}"
+            if fingerprint
+            else "agentbox-function:e2e"
+        )
+    inspect = subprocess.run(
+        ["docker", "image", "inspect", image],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    if inspect.returncode != 0:
+        build = subprocess.run(
+            [
+                "docker",
+                "build",
+                "-f",
+                str(repo_root / "agentbox" / "Dockerfile.function"),
+                "-t",
+                image,
+                str(repo_root),
+            ],
+            check=False,
+            capture_output=True,
+            text=True,
+        )
+        if build.returncode != 0:
+            pytest.fail(
+                "Function e2e image build failed "
+                f"for '{image}'.\nSTDOUT:\n{build.stdout}\nSTDERR:\n{build.stderr}"
+            )
     yield image
 
 
@@ -225,6 +268,7 @@ async def backend_server(test_app) -> AsyncGenerator[dict[str, str], None]:
 @pytest_asyncio.fixture(scope="function")
 async def local_agentbox_server(
     workspace_image,
+    function_image,
     tmp_path_factory,
     e2e_settings,
 ) -> AsyncGenerator[dict[str, str], None]:
@@ -244,31 +288,23 @@ async def local_agentbox_server(
         sys.path.insert(0, str(agentbox_root))
 
     state_path = tmp_path_factory.mktemp("agentbox-state") / "state.db"
-    storage_root = tmp_path_factory.mktemp("agentbox-workspaces")
     manager_url = e2e_settings.agentbox_api_url
-    app_domain = f"127-0-0-1.sslip.io:{port}"
     api_key = e2e_settings.agentbox_api_key
-    runtime_platform = os.getenv("AGENTBOX_PLATFORM")
 
     env_updates = {
         "AGENTBOX_PROVIDER": "docker",
         "AGENTBOX_API_KEY": api_key,
-        "AGENTBOX_ENDPOINT_STATE_KEYS": (
-            "YWdlbnRib3gtZW5kcG9pbnQtc3RhdGUtdGVzdC1rZXk="
-        ),
         "AGENTBOX_API_URL": manager_url,
-        "AGENTBOX_APP_DOMAIN": app_domain,
-        "AGENTBOX_RUNTIME_IMAGE": workspace_image,
+        "AGENTBOX_PUBLIC_URL": manager_url,
+        "AGENTBOX_WORKSPACE_IMAGE": workspace_image,
+        "AGENTBOX_FUNCTION_IMAGE": function_image,
         "AGENTBOX_STATE_DB_PATH": str(state_path),
-        "AGENTBOX_STORAGE_ROOT": str(storage_root),
-        "AGENTBOX_ENDPOINT_HOST": "127.0.0.1",
-        "AGENTBOX_E2E_LABEL": "true",
-        "AGENTBOX_SESSION_IDLE_TIMEOUT_SECONDS": "300",
-        "AGENTBOX_SANDBOX_IDLE_TIMEOUT_SECONDS": "300",
+        "AGENTBOX_AUTO_CREATE_SCHEMA": "true",
+        "AGENTBOX_ADD_HOST_GATEWAY": "true",
+        "AGENTBOX_WORKSPACE_IDLE_SECONDS": "300",
+        "AGENTBOX_FUNCTION_IDLE_SECONDS": "300",
         "AGENTBOX_CLEANUP_INTERVAL_SECONDS": "30",
     }
-    if runtime_platform:
-        env_updates["AGENTBOX_PLATFORM"] = runtime_platform
 
     original_env = {key: os.environ.get(key) for key in env_updates}
     os.environ.update(env_updates)
@@ -280,18 +316,19 @@ async def local_agentbox_server(
         "agentbox_provider": agentbox_config.settings.agentbox_provider,
         "agentbox_api_key": agentbox_config.settings.agentbox_api_key,
         "agentbox_api_url": agentbox_config.settings.agentbox_api_url,
-        "agentbox_app_domain": agentbox_config.settings.agentbox_app_domain,
-        "agentbox_runtime_image": agentbox_config.settings.agentbox_runtime_image,
+        "agentbox_public_url": agentbox_config.settings.agentbox_public_url,
+        "agentbox_workspace_image": agentbox_config.settings.agentbox_workspace_image,
+        "agentbox_function_image": agentbox_config.settings.agentbox_function_image,
         "agentbox_state_db_path": agentbox_config.settings.agentbox_state_db_path,
-        "agentbox_storage_root": agentbox_config.settings.agentbox_storage_root,
-        "agentbox_endpoint_host": agentbox_config.settings.agentbox_endpoint_host,
-        "agentbox_e2e_label": agentbox_config.settings.agentbox_e2e_label,
-        "agentbox_platform": agentbox_config.settings.agentbox_platform,
-        "agentbox_session_idle_timeout_seconds": (
-            agentbox_config.settings.agentbox_session_idle_timeout_seconds
+        "agentbox_auto_create_schema": (
+            agentbox_config.settings.agentbox_auto_create_schema
         ),
-        "agentbox_sandbox_idle_timeout_seconds": (
-            agentbox_config.settings.agentbox_sandbox_idle_timeout_seconds
+        "agentbox_add_host_gateway": agentbox_config.settings.agentbox_add_host_gateway,
+        "agentbox_workspace_idle_seconds": (
+            agentbox_config.settings.agentbox_workspace_idle_seconds
+        ),
+        "agentbox_function_idle_seconds": (
+            agentbox_config.settings.agentbox_function_idle_seconds
         ),
         "agentbox_cleanup_interval_seconds": (
             agentbox_config.settings.agentbox_cleanup_interval_seconds
@@ -300,15 +337,14 @@ async def local_agentbox_server(
     agentbox_config.settings.agentbox_provider = "docker"
     agentbox_config.settings.agentbox_api_key = api_key
     agentbox_config.settings.agentbox_api_url = manager_url
-    agentbox_config.settings.agentbox_app_domain = app_domain
-    agentbox_config.settings.agentbox_runtime_image = workspace_image
+    agentbox_config.settings.agentbox_public_url = manager_url
+    agentbox_config.settings.agentbox_workspace_image = workspace_image
+    agentbox_config.settings.agentbox_function_image = function_image
     agentbox_config.settings.agentbox_state_db_path = str(state_path)
-    agentbox_config.settings.agentbox_storage_root = str(storage_root)
-    agentbox_config.settings.agentbox_endpoint_host = "127.0.0.1"
-    agentbox_config.settings.agentbox_e2e_label = True
-    agentbox_config.settings.agentbox_platform = runtime_platform
-    agentbox_config.settings.agentbox_session_idle_timeout_seconds = 300
-    agentbox_config.settings.agentbox_sandbox_idle_timeout_seconds = 300
+    agentbox_config.settings.agentbox_auto_create_schema = True
+    agentbox_config.settings.agentbox_add_host_gateway = True
+    agentbox_config.settings.agentbox_workspace_idle_seconds = 300
+    agentbox_config.settings.agentbox_function_idle_seconds = 300
     agentbox_config.settings.agentbox_cleanup_interval_seconds = 30
 
     config = uvicorn.Config(

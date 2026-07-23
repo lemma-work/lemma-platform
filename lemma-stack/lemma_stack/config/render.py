@@ -52,10 +52,6 @@ def app_base_domain(doc: TOMLDocument) -> str:
     return f"{LOCAL_HOST}:{store.port(doc, 'backend')}"
 
 
-def agentbox_app_domain(doc: TOMLDocument) -> str:
-    return f"{LOCAL_HOST}:{store.port(doc, 'agentbox')}"
-
-
 def backend_env(doc: TOMLDocument, paths: LocalPaths) -> dict[str, str]:
     kreuzberg_enabled = store.feature(doc, "kreuzberg")
     env = {
@@ -143,24 +139,23 @@ def agentbox_env(
     paths: LocalPaths,
     *,
     provider: str,
-    runtime_image: str,
+    workspace_image: str,
+    function_image: str,
     container_socket: str,
 ) -> dict[str, str]:
+    del paths
     env = {
         "AGENTBOX_API_KEY": store.agentbox_api_key(doc),
         "AGENTBOX_API_URL": "http://agentbox:8000",
         "AGENTBOX_PROVIDER": provider,
-        "AGENTBOX_RUNTIME_IMAGE": runtime_image,
-        "AGENTBOX_STORAGE_ROOT": WORKSPACES_MOUNT,
-        "AGENTBOX_STORAGE_HOST_ROOT": str(paths.workspaces_dir),
+        "AGENTBOX_WORKSPACE_IMAGE": workspace_image,
+        "AGENTBOX_FUNCTION_IMAGE": function_image,
         "AGENTBOX_STATE_DB_PATH": f"{STATE_MOUNT}/agentbox-manager/state.db",
-        "AGENTBOX_APP_DOMAIN": agentbox_app_domain(doc),
-        # sandboxes join the stack network; reachable by DNS, no host ports
-        "AGENTBOX_NETWORK": NETWORK_NAME,
+        "AGENTBOX_AUTO_CREATE_SCHEMA": "true",
+        "AGENTBOX_DOCKER_SOCKET_PATH": container_socket,
+        "AGENTBOX_DOCKER_PRIVATE_NETWORK": NETWORK_NAME,
         "AGENTBOX_ADD_HOST_GATEWAY": "false",
     }
-    if provider == "podman":
-        env["CONTAINER_HOST"] = f"unix://{container_socket}"
     env.update(store.env_overrides(doc, "agentbox"))
     return env
 

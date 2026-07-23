@@ -53,18 +53,12 @@ def main() -> int:
     os.environ.setdefault("AGENTBOX_API_KEY", "openapi-generation-key")
     os.environ.setdefault("AGENTBOX_API_URL", "http://127.0.0.1:8721")
 
-    from agentbox.api.app import app as manager_app
-    from agentbox.function_executor import app as function_executor_app
+    from agentbox.api.app import app
 
     ok = True
     ok &= _write_json(
         OPENAPI_DIR / "agentbox-manager.openapi.json",
-        _normalize_operation_ids(manager_app.openapi()),
-        check=args.check,
-    )
-    ok &= _write_json(
-        OPENAPI_DIR / "function-executor.openapi.json",
-        _normalize_operation_ids(function_executor_app.openapi()),
+        _normalize_operation_ids(app.openapi()),
         check=args.check,
     )
 

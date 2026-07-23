@@ -77,6 +77,7 @@ markitdown = [
 
 [dependency-groups]
 dev = [
+    "agentbox",
     "basedpyright>=1.39.9",
     "diff-cover>=9.7.1",
     "kubernetes>=34.1.0",
@@ -108,6 +109,7 @@ allow-direct-references = true
 [tool.uv.sources]
 lemma-connectors = { path = "lemma-connectors", editable = true }
 agentbox-client = { path = "../agentbox-client", editable = true }
+agentbox = { path = "../agentbox", editable = true }
 lemma-pod-bundle = { path = "../lemma-pod-bundle", editable = true }
 
 # Ruff config. The full default ruleset is not yet enforced repo-wide (generated

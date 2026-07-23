@@ -15,10 +15,11 @@ from uuid import uuid4
 
 import pytest
 
-from app.modules.function.application.function_run_executor import FunctionRunExecutor
 from app.modules.function.application.function_use_cases import FunctionUseCases
 from app.modules.function.domain.entities import (
     FunctionEntity,
+    FunctionRevisionEntity,
+    FunctionRevisionStatus,
     FunctionRunEntity,
     FunctionRunStatus,
     FunctionStatus,
@@ -58,16 +59,6 @@ def _stub_pod_context(monkeypatch):
         "app.core.authorization.scope.resolve_pod_context",
         AsyncMock(return_value=SimpleNamespace(require=AsyncMock())),
     )
-    # The executor builds its run-status repo + message bus from each short UoW
-    # via inline imports — stub them so the engine's status writes are no-ops.
-    monkeypatch.setattr(
-        "app.modules.function.infrastructure.repositories.FunctionRunRepository",
-        lambda uow, message_bus=None: AsyncMock(),
-    )
-    monkeypatch.setattr(
-        "app.core.infrastructure.events.message_bus.get_message_bus",
-        lambda: AsyncMock(),
-    )
 
 
 def _function(**overrides) -> FunctionEntity:
@@ -92,20 +83,38 @@ async def test_create_extracts_schemas_with_no_connection_held(monkeypatch):
         persist_create=AsyncMock(return_value=created),
         get_function_by_name=AsyncMock(return_value=created),
     )
-    executor = FunctionRunExecutor(
-        uow_factory=factory,
-        workspace_service=AsyncMock(),
-        storage_factory=lambda function_id: AsyncMock(),
+    compiler = SimpleNamespace(
+        write_code=AsyncMock(),
+        extract_schemas=AsyncMock(),
+        build_revision=AsyncMock(),
     )
+    dispatcher = SimpleNamespace(execute=AsyncMock(), cancel=AsyncMock())
     captured = {}
 
     async def _fake_extract(user_id, code, code_path, pod_id, function_id):
         captured["open"] = factory.state["open"]
         return ({"a": 1}, {"b": 2}, None)
 
-    executor.extract_schemas = _fake_extract
+    compiler.extract_schemas.side_effect = _fake_extract
 
-    use_cases = FunctionUseCases(factory, lambda uow: service, executor)
+    async def _fake_build(function, code, *, revision_number):
+        assert factory.state["open"] is False
+        return FunctionRevisionEntity(
+            id=uuid4(),
+            function_id=function.id,
+            revision_number=revision_number,
+            status=FunctionRevisionStatus.READY,
+            code_sha256=f"sha256:{'a' * 64}",
+            artifact_sha256=f"sha256:{'b' * 64}",
+            artifact_path="artifacts/test.zip",
+            runtime_abi="lemma-function-python-1",
+            builder_digest="test-builder",
+            manifest={},
+        )
+
+    compiler.build_revision.side_effect = _fake_build
+
+    use_cases = FunctionUseCases(factory, lambda uow: service, compiler, dispatcher)
     result = await use_cases.create_function(
         pod_id=created.pod_id,
         entity=created,
@@ -140,21 +149,23 @@ async def test_execute_api_touches_sandbox_with_no_connection_held(monkeypatch):
     )
 
     captured = {}
+    failed = run.model_copy(update={"status": FunctionRunStatus.FAILED})
 
-    async def _fake_get_session(**kwargs):
-        # Provisioning the sandbox must happen with no DB connection held.
+    async def _dispatch(run_id):
         captured["open"] = factory.state["open"]
-        raise ValueError("stop before the function executor")  # non-recoverable
+        assert run_id == run.id
+        return failed
 
-    workspace_service = AsyncMock()
-    workspace_service.get_session = _fake_get_session
-    executor = FunctionRunExecutor(
-        uow_factory=factory,
-        workspace_service=workspace_service,
-        storage_factory=lambda function_id: AsyncMock(),
+    dispatcher = SimpleNamespace(
+        execute=AsyncMock(side_effect=_dispatch),
+        cancel=AsyncMock(),
     )
-
-    use_cases = FunctionUseCases(factory, lambda uow: service, executor)
+    use_cases = FunctionUseCases(
+        factory,
+        lambda uow: service,
+        SimpleNamespace(),
+        dispatcher,
+    )
     result = await use_cases.execute_function(
         pod_id=function.pod_id,
         name="api-fn",
@@ -180,20 +191,23 @@ async def test_execute_run_by_id_worker_path_needs_no_ctx():
         user_email="u@example.com",
         status=FunctionRunStatus.PENDING,
     )
-    service = SimpleNamespace(
-        load_run_and_function=AsyncMock(return_value=(function, run))
-    )
     completed = run.model_copy()
     completed.status = FunctionRunStatus.COMPLETED
-    executor = SimpleNamespace(execute=AsyncMock(return_value=completed))
+    dispatcher = SimpleNamespace(
+        execute=AsyncMock(return_value=completed),
+        cancel=AsyncMock(),
+    )
 
-    use_cases = FunctionUseCases(factory, lambda uow: service, executor)
+    use_cases = FunctionUseCases(
+        factory,
+        lambda uow: SimpleNamespace(),
+        SimpleNamespace(),
+        dispatcher,
+    )
     # No request / no ctx is supplied — the worker trusts the persisted run.
-    result = await use_cases.execute_run_by_id(run.id, timeout_seconds=42)
+    result = await use_cases.execute_run_by_id(run.id)
 
-    service.load_run_and_function.assert_awaited_once_with(run.id)
-    executor.execute.assert_awaited_once()
-    assert executor.execute.await_args.kwargs["timeout_seconds"] == 42
+    dispatcher.execute.assert_awaited_once_with(run.id)
     assert result.status == FunctionRunStatus.COMPLETED
 
 
@@ -212,9 +226,14 @@ async def test_execute_job_returns_pending_without_running_sandbox():
             return_value=ResolvedExecution(function=function, run=run)
         )
     )
-    executor = SimpleNamespace(execute=AsyncMock())
+    dispatcher = SimpleNamespace(execute=AsyncMock(), cancel=AsyncMock())
 
-    use_cases = FunctionUseCases(factory, lambda uow: service, executor)
+    use_cases = FunctionUseCases(
+        factory,
+        lambda uow: service,
+        SimpleNamespace(),
+        dispatcher,
+    )
     result = await use_cases.execute_function(
         pod_id=function.pod_id,
         name="job-fn",
@@ -226,4 +245,4 @@ async def test_execute_job_returns_pending_without_running_sandbox():
 
     # JOB dispatch returns the PENDING run; the worker runs it later.
     assert result.status == FunctionRunStatus.PENDING
-    executor.execute.assert_not_awaited()
+    dispatcher.execute.assert_not_awaited()

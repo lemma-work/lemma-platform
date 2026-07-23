@@ -54,11 +54,24 @@ def test_logging_reconciliation_context_and_exception_safety(monkeypatch) -> Non
             event_id=UUID("22222222-2222-2222-2222-222222222222"),
             job_id="job-1",
         ):
-            get_logger("agentbox.test").info("service.started")
+            get_logger("agentbox.test").info(
+                "dependency.recovered",
+                dependency="docker",
+                failure_count=1,
+                incident_duration_ms=25,
+            )
             try:
                 raise RuntimeError("CANARY secret /private/source.py\nprovider payload")
             except RuntimeError:
-                get_logger("agentbox.test").exception("agentbox.runtime.request_failed")
+                get_logger("agentbox.test").exception(
+                    "http.request.failed",
+                    method="POST",
+                    route="/sandboxes/{workload_kind}/{logical_id}",
+                    status_code=500,
+                    duration_ms=25,
+                    error_type="RuntimeError",
+                    error_code="INTERNAL",
+                )
             try:
                 raise ValueError("CANARY foreign secret /private/provider.py")
             except ValueError:
@@ -74,7 +87,7 @@ def test_logging_reconciliation_context_and_exception_safety(monkeypatch) -> Non
     assert lines[0] == {
         "timestamp": lines[0]["timestamp"],
         "level": "info",
-        "event": "service.started",
+        "event": "dependency.recovered",
         "logger": "agentbox.test",
         "service.name": "lemma-agentbox",
         "service.version": "a" * 40,
@@ -84,6 +97,9 @@ def test_logging_reconciliation_context_and_exception_safety(monkeypatch) -> Non
         "correlation_id": "11111111-1111-1111-1111-111111111111",
         "event_id": "22222222-2222-2222-2222-222222222222",
         "job_id": "job-1",
+        "dependency": "docker",
+        "failure_count": 1,
+        "incident_duration_ms": 25,
     }
     assert lines[1]["error_type"] == "RuntimeError"
     assert len(lines[1]["error_stack_hash"]) == 64

@@ -2,7 +2,7 @@
 
 from datetime import datetime
 from enum import Enum
-from typing import ClassVar
+from typing import Any, ClassVar
 from uuid import UUID
 
 from pydantic import BaseModel, Field, PrivateAttr
@@ -37,6 +37,84 @@ class FunctionType(str, Enum):
     JOB = "JOB"
 
 
+class FunctionRevisionStatus(str, Enum):
+    BUILDING = "BUILDING"
+    READY = "READY"
+    FAILED = "FAILED"
+
+
+class FunctionExecutionStatus(str, Enum):
+    QUEUED = "QUEUED"
+    DISPATCHING = "DISPATCHING"
+    RUNNING = "RUNNING"
+    COMPLETED = "COMPLETED"
+    FAILED = "FAILED"
+    CANCELLED = "CANCELLED"
+
+
+class FunctionAttemptStatus(str, Enum):
+    RESERVED = "RESERVED"
+    PROCESS_STARTING = "PROCESS_STARTING"
+    PROCESS_STARTED = "PROCESS_STARTED"
+    RUNNING = "RUNNING"
+    COMPLETED = "COMPLETED"
+    FAILED = "FAILED"
+    CANCELLED = "CANCELLED"
+    UNKNOWN = "UNKNOWN"
+
+
+class FunctionRevisionEntity(BaseModel):
+    id: UUID
+    function_id: UUID
+    revision_number: int
+    status: FunctionRevisionStatus
+    code_sha256: str
+    artifact_sha256: str
+    artifact_path: str
+    runtime_abi: str
+    builder_digest: str
+    dependency_lock: tuple[str, ...] = ()
+    manifest: dict[str, Any]
+    idempotent: bool = False
+    created_at: datetime | None = None
+
+    model_config = {"from_attributes": True}
+
+
+class FunctionExecutionClaim(BaseModel):
+    run_id: UUID
+    attempt_id: UUID
+    operation_id: UUID
+    fence: int
+    pod_id: UUID
+    function_id: UUID
+    revision_id: UUID
+    function_type: FunctionType
+    deadline_at: datetime
+    ticket: str
+    runtime_token: str
+
+    model_config = {"from_attributes": True}
+
+
+class FunctionAttemptRuntimeContext(BaseModel):
+    attempt_id: UUID
+    run_id: UUID
+    fence: int
+    operation_id: UUID
+    deadline_at: datetime
+    revision: FunctionRevisionEntity
+    input_data: dict[str, Any]
+    config: dict[str, Any] | None
+    user_id: UUID
+    user_email: str | None
+    pod_id: UUID
+    function_id: UUID
+    function_name: str
+
+    model_config = {"from_attributes": True}
+
+
 class FunctionEntity(BaseModel):
     """Function entity representing a programmatic task."""
 
@@ -58,9 +136,13 @@ class FunctionEntity(BaseModel):
     type: FunctionType = FunctionType.API
     status: FunctionStatus = FunctionStatus.DRAFT
     visibility: str = "POD"
-    # pip dependencies declared in the code's `#python_packages:` header; the
-    # agentbox function executor installs these before running the function.
+    # Registry dependencies declared in `#python_packages:`. The revision
+    # builder resolves and packages them before READY; invocation never installs.
     python_packages: list[str] = Field(default_factory=list)
+    active_revision_id: UUID | None = None
+    pending_revision: FunctionRevisionEntity | None = Field(
+        default=None, exclude=True, repr=False
+    )
     allowed_actions: list[str] = Field(default_factory=list)
     # Timestamps
     created_at: datetime | None = None
@@ -97,6 +179,7 @@ class FunctionRunEntity(BaseModel):
 
     id: UUID | None = None
     function_id: UUID
+    revision_id: UUID | None = None
     user_id: UUID
     input_data: dict | None = None
     output_data: dict | None = None
@@ -105,6 +188,9 @@ class FunctionRunEntity(BaseModel):
     job_id: str | None = None
     workspace_session_id: str | None = None
     workspace_process_id: str | None = None
+    current_attempt_id: UUID | None = None
+    execution_fence: int = 0
+    deadline_at: datetime | None = None
     error: str | None = None
     logs: str | None = None
     started_at: datetime | None = None

@@ -15,7 +15,7 @@ import pytest
 _REAL_MODE = (
     os.getenv("E2E_REAL", "").lower() in ("1", "true", "yes")
     or os.getenv("E2E_LLM_MODE", "").lower() == "real"
-    or os.getenv("E2E_SANDBOX_MODE", "").lower() == "docker"
+    or os.getenv("E2E_SANDBOX_MODE", "").lower() in {"docker", "e2b"}
     or os.getenv("LEMMA_RUN_PROVIDER_E2E") == "1"
 )
 if not _REAL_MODE:
@@ -59,22 +59,16 @@ def _e2e_real_llm() -> bool:
 
 
 def _e2e_real_sandbox() -> bool:
-    """True when e2e uses the real Docker AgentBox; default is the fake."""
+    """All supported E2E sandbox modes use a real AgentBox provider."""
     mode = os.getenv("E2E_SANDBOX_MODE", "").lower()
-    if mode == "docker":
-        return True
-    if mode == "fake":
-        return False
-    return os.getenv("E2E_REAL", "").lower() in ("1", "true", "yes")
+    return mode in {"", "docker", "e2b"}
 
 
 def pytest_collection_modifyitems(config, items):
     """Classify e2e tests and gate them by the active e2e mode.
 
-    Default mode is fast/mocked: the agent LLM is a deterministic FunctionModel
-    and workspace tools hit the in-process fake AgentBox — so provider/agent-run
-    tests RUN (no key, no Docker). Real mode (``E2E_REAL=1`` / ``E2E_LLM_MODE=real``
-    / ``E2E_SANDBOX_MODE=docker``) hits the real model + Docker AgentBox.
+    The LLM may be deterministic, but sandbox behavior always uses a real
+    Docker or credential-gated E2B AgentBox.
     """
     real_llm = _e2e_real_llm()
     real_sandbox = _e2e_real_sandbox()

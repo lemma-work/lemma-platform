@@ -138,7 +138,7 @@ make test-e2e-runtime   # only the slow/worker/workspace/provider/local_cli subs
 
 ### Markers & modes
 
-Markers: `e2e`, `slow`, `worker` (needs the real streaq worker), `workspace` (needs the Docker workspace image), `provider` (needs the real model), `local_cli`. Mode is selected by env: `E2E_REAL=1`, `E2E_LLM_MODE=real|mock`, `E2E_SANDBOX_MODE=docker|fake` (the mocked gate skips `real_*` tests automatically).
+Markers: `e2e`, `slow`, `worker` (needs the real streaq worker), `workspace` (needs a real sandbox provider), `provider` (needs the real model), `local_cli`. The model can be deterministic or real via `E2E_LLM_MODE=mock|real`; sandbox coverage always uses Docker (`E2E_SANDBOX_MODE=docker`) or credential-gated E2B.
 
 ### Pre-merge e2e gate (CI)
 

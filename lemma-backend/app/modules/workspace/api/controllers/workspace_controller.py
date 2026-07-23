@@ -6,16 +6,13 @@ from uuid import UUID
 from fastapi import APIRouter, HTTPException, status
 from pydantic import BaseModel
 
-from agentbox_client import AgentBoxClient
 from app.core.api.dependencies import CurrentUser
 from app.core.config import settings
-from app.core.request_context import correlation_headers
 from app.modules.workspace.services.agentbox_manager import agentbox_sandbox_id
 from app.modules.workspace.services.workspace_activity_store import WorkspaceActivity
 from app.modules.workspace.services.workspace_sandbox_service import (
     WorkspaceSandboxService,
     get_workspace_activity_store,
-    get_workspace_state_store,
 )
 
 router = APIRouter(prefix="/workspace", tags=["Workspace"])
@@ -86,58 +83,29 @@ async def get_workspace_me(user: CurrentUser) -> WorkspaceMeResponse:
         user_id=user.id,
     )
 
-    client = AgentBoxClient(
-        base_url=settings.agentbox_api_url,
-        api_key=api_key,
-        timeout_seconds=300.0,
-        context_headers_provider=correlation_headers,
-    )
-    try:
-        sandbox = await client.ensure_sandbox(
-            sandbox_id,
-            env={
-                "LEMMA_BASE_URL": (
-                    WorkspaceSandboxService.resolve_workspace_api_url_for_runtime(
-                        runtime
-                    )
-                )
-            },
-        )
-        browser_access = await client.get_app_access_url(
-            sandbox_id,
-            "browser",
-            ttl_seconds=_WORKSPACE_ME_APP_TOKEN_TTL_SECONDS,
-        )
-    finally:
-        await client.close()
-
-    await get_workspace_state_store().mark_running(
-        runtime=runtime,
-        user_id=user.id,
-        pod_name=None,
-        container_name=sandbox.id,
-        namespace=None,
-        workspace_url=f"agentbox://{sandbox_id}",
+    service = WorkspaceSandboxService()
+    sandbox = await service.get_or_create_sandbox(user.id)
+    browser_access = await service.create_browser_access(
+        user.id,
+        ttl_seconds=_WORKSPACE_ME_APP_TOKEN_TTL_SECONDS,
+        ensure_sandbox=False,
     )
 
     return WorkspaceMeResponse(
         user_id=user.id,
         sandbox=WorkspaceMeSandbox(
-            id=sandbox_id,
+            id=str(sandbox_id),
             status=sandbox.status,
-            ready=sandbox.ready,
+            ready=sandbox.status == "RUNNING",
             runtime=runtime,
             updated_at=datetime.now(timezone.utc),
         ),
         active_session=_active_session_from_activity(activity),
         apps={
             "browser": WorkspaceMeApp(
-                app=browser_access.app,
+                app="browser",
                 url=browser_access.url,
-                expires_at=datetime.fromtimestamp(
-                    browser_access.expires_at,
-                    tz=timezone.utc,
-                ),
+                expires_at=browser_access.expires_at,
             )
         },
     )

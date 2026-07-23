@@ -1,0 +1,28 @@
+[project]
+name = "agentbox-workspace-environment"
+version = "1.0.0"
+requires-python = ">=3.13,<3.15"
+dependencies = [
+    "fastapi[standard]>=0.128.0",
+    "lemma-terminal",
+    "lemma-pod-bundle",
+    "lemma-sdk",
+    "matplotlib",
+    "numpy",
+    "openpyxl",
+    "pandas",
+    "pillow",
+    "pydantic>=2.11.0",
+    "python-dateutil",
+    "requests",
+    "tabulate",
+    "uvicorn[standard]>=0.42.0",
+]
+
+[tool.uv]
+package = false
+
+[tool.uv.sources]
+lemma-terminal = { path = "../../../lemma-cli" }
+lemma-pod-bundle = { path = "../../../lemma-pod-bundle" }
+lemma-sdk = { path = "../../../lemma-python" }

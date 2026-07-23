@@ -1,11 +1,20 @@
-ARG PYTHON_IMAGE=python:3.14.4-slim
+ARG PYTHON_IMAGE=python:3.14-slim
+ARG UV_VERSION=0.11.31
+
+FROM ghcr.io/astral-sh/uv:${UV_VERSION} AS uv-runtime
 FROM ${PYTHON_IMAGE}
 
 WORKDIR /app
 
 ENV PYTHONUNBUFFERED=1 \
     PYTHONDONTWRITEBYTECODE=1 \
-    PYTHONPATH=/app
+    PYTHONPATH=/app \
+    UV_PROJECT_ENVIRONMENT=/opt/agentbox \
+    UV_COMPILE_BYTECODE=1 \
+    UV_LINK_MODE=copy \
+    PATH=/opt/agentbox/bin:/usr/local/bin:/usr/local/sbin:/usr/sbin:/usr/bin:/sbin:/bin
+
+COPY --from=uv-runtime /uv /usr/local/bin/uv
 
 RUN apt-get update \
     && apt-get install -y --no-install-recommends ca-certificates curl docker-cli \
@@ -26,7 +35,14 @@ RUN groupadd --gid 10001 appuser \
 
 COPY agentbox ./agentbox
 COPY pyproject.toml ./
-RUN pip install --no-cache-dir .
+COPY uv.lock ./
+RUN --mount=type=cache,target=/root/.cache/uv \
+    uv sync \
+        --locked \
+        --no-dev \
+        --no-editable \
+        --extra e2b \
+        --extra postgres
 
 USER 10001:10001
 

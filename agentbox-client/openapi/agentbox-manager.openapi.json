@@ -1,284 +1,255 @@
 {
   "components": {
     "schemas": {
-      "AppAccessRequest": {
+      "AdmissionClass": {
+        "enum": [
+          "interactive",
+          "latency",
+          "batch"
+        ],
+        "title": "AdmissionClass",
+        "type": "string"
+      },
+      "AllocationState": {
+        "enum": [
+          "reserved",
+          "provisioning",
+          "unknown",
+          "active",
+          "quiescing",
+          "released",
+          "draining",
+          "destroying",
+          "destroyed",
+          "error"
+        ],
+        "title": "AllocationState",
+        "type": "string"
+      },
+      "CreatePortAccessRequest": {
         "additionalProperties": false,
         "properties": {
-          "ttl_seconds": {
-            "default": 1800,
-            "maximum": 3600.0,
-            "minimum": 60.0,
-            "title": "Ttl Seconds",
-            "type": "integer"
-          }
-        },
-        "title": "AppAccessRequest",
-        "type": "object"
-      },
-      "AppAccessResponse": {
-        "properties": {
-          "app": {
-            "title": "App",
-            "type": "string"
-          },
           "expires_at": {
+            "format": "date-time",
             "title": "Expires At",
-            "type": "integer"
-          },
-          "sandbox_id": {
-            "title": "Sandbox Id",
             "type": "string"
           },
-          "url": {
-            "title": "Url",
-            "type": "string"
+          "protocol": {
+            "$ref": "#/components/schemas/PortProtocol",
+            "default": "http"
           }
         },
         "required": [
-          "sandbox_id",
-          "app",
-          "url",
           "expires_at"
         ],
-        "title": "AppAccessResponse",
+        "title": "CreatePortAccessRequest",
         "type": "object"
       },
-      "DeleteResponse": {
-        "properties": {
-          "deleted": {
-            "title": "Deleted",
-            "type": "boolean"
-          },
-          "sandbox_id": {
-            "title": "Sandbox Id",
-            "type": "string"
-          }
-        },
-        "required": [
-          "sandbox_id",
-          "deleted"
-        ],
-        "title": "DeleteResponse",
-        "type": "object"
-      },
-      "ExecCommandRequest": {
+      "CreatePythonSessionModel": {
         "additionalProperties": false,
         "properties": {
-          "cmd": {
-            "title": "Cmd",
+          "cwd": {
+            "default": "/workspace",
+            "maxLength": 4096,
+            "minLength": 1,
+            "pattern": "^/",
+            "title": "Cwd",
             "type": "string"
           },
-          "max_output_tokens": {
-            "anyOf": [
-              {
-                "minimum": 1.0,
-                "type": "integer"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Max Output Tokens"
+          "deadline_at": {
+            "format": "date-time",
+            "title": "Deadline At",
+            "type": "string"
           },
-          "timeout": {
-            "anyOf": [
-              {
-                "maximum": 3600.0,
-                "minimum": 1.0,
-                "type": "integer"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "default": 300,
-            "title": "Timeout"
-          },
-          "tty": {
-            "default": false,
-            "title": "Tty",
-            "type": "boolean"
-          },
-          "workdir": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Workdir"
-          },
-          "yield_time_ms": {
-            "anyOf": [
-              {
-                "minimum": 0.0,
-                "type": "integer"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Yield Time Ms"
+          "environment_keys": {
+            "default": [],
+            "items": {
+              "type": "string"
+            },
+            "title": "Environment Keys",
+            "type": "array"
           }
         },
         "required": [
-          "cmd"
+          "deadline_at"
         ],
-        "title": "ExecCommandRequest",
+        "title": "CreatePythonSessionModel",
         "type": "object"
       },
-      "ExecCommandResponse": {
+      "DeadlineRequest": {
+        "additionalProperties": false,
         "properties": {
-          "completed": {
-            "default": true,
-            "title": "Completed",
-            "type": "boolean"
-          },
-          "error": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Error"
-          },
-          "exit_code": {
-            "anyOf": [
-              {
-                "type": "integer"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Exit Code"
-          },
-          "process_id": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Process Id"
-          },
-          "stderr": {
-            "default": "",
-            "title": "Stderr",
+          "deadline_at": {
+            "format": "date-time",
+            "title": "Deadline At",
             "type": "string"
-          },
-          "stdout": {
-            "default": "",
-            "title": "Stdout",
-            "type": "string"
-          },
-          "success": {
-            "title": "Success",
-            "type": "boolean"
           }
         },
         "required": [
-          "success"
+          "deadline_at"
         ],
-        "title": "ExecCommandResponse",
+        "title": "DeadlineRequest",
         "type": "object"
       },
-      "ExecutePythonRequest": {
+      "EnsureSandboxRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "admission_class": {
+            "$ref": "#/components/schemas/AdmissionClass"
+          },
+          "deadline_at": {
+            "format": "date-time",
+            "title": "Deadline At",
+            "type": "string"
+          },
+          "profile": {
+            "$ref": "#/components/schemas/ProfileRefModel"
+          }
+        },
+        "required": [
+          "profile",
+          "admission_class",
+          "deadline_at"
+        ],
+        "title": "EnsureSandboxRequest",
+        "type": "object"
+      },
+      "EnvironmentVariableModel": {
+        "additionalProperties": false,
+        "properties": {
+          "name": {
+            "maxLength": 256,
+            "minLength": 1,
+            "title": "Name",
+            "type": "string"
+          },
+          "value": {
+            "maxLength": 65536,
+            "title": "Value",
+            "type": "string"
+          }
+        },
+        "required": [
+          "name",
+          "value"
+        ],
+        "title": "EnvironmentVariableModel",
+        "type": "object"
+      },
+      "ExecutePythonModel": {
         "additionalProperties": false,
         "properties": {
           "code": {
+            "maxLength": 4194304,
+            "minLength": 1,
             "title": "Code",
             "type": "string"
           },
-          "timeout_seconds": {
-            "default": 60,
-            "maximum": 600.0,
+          "deadline_at": {
+            "format": "date-time",
+            "title": "Deadline At",
+            "type": "string"
+          },
+          "environment": {
+            "default": [],
+            "items": {
+              "$ref": "#/components/schemas/EnvironmentVariableModel"
+            },
+            "title": "Environment",
+            "type": "array"
+          },
+          "operation_id": {
+            "format": "uuid",
+            "title": "Operation Id",
+            "type": "string"
+          },
+          "output_limit_bytes": {
+            "default": 1048576,
+            "maximum": 67108864.0,
             "minimum": 1.0,
-            "title": "Timeout Seconds",
+            "title": "Output Limit Bytes",
             "type": "integer"
           }
         },
         "required": [
-          "code"
+          "operation_id",
+          "code",
+          "deadline_at"
         ],
-        "title": "ExecutePythonRequest",
+        "title": "ExecutePythonModel",
         "type": "object"
       },
-      "ExecutePythonResponse": {
+      "FileKind": {
+        "enum": [
+          "file",
+          "directory",
+          "symlink"
+        ],
+        "title": "FileKind",
+        "type": "string"
+      },
+      "FileListResponse": {
+        "additionalProperties": false,
         "properties": {
-          "error_name": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Error Name"
-          },
-          "exit_code": {
-            "anyOf": [
-              {
-                "type": "integer"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Exit Code"
-          },
-          "result": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Result"
-          },
-          "sandbox_id": {
-            "title": "Sandbox Id",
-            "type": "string"
-          },
-          "session_id": {
-            "title": "Session Id",
-            "type": "string"
-          },
-          "status": {
-            "enum": [
-              "completed",
-              "error"
-            ],
-            "title": "Status",
-            "type": "string"
-          },
-          "stderr": {
-            "title": "Stderr",
-            "type": "string"
-          },
-          "stdout": {
-            "title": "Stdout",
-            "type": "string"
+          "entries": {
+            "items": {
+              "$ref": "#/components/schemas/FileStatResponse"
+            },
+            "title": "Entries",
+            "type": "array"
           }
         },
         "required": [
-          "sandbox_id",
-          "session_id",
-          "stdout",
-          "stderr",
-          "status"
+          "entries"
         ],
-        "title": "ExecutePythonResponse",
+        "title": "FileListResponse",
+        "type": "object"
+      },
+      "FileStatResponse": {
+        "additionalProperties": false,
+        "properties": {
+          "kind": {
+            "$ref": "#/components/schemas/FileKind"
+          },
+          "mode": {
+            "minimum": 0.0,
+            "title": "Mode",
+            "type": "integer"
+          },
+          "modified_at": {
+            "format": "date-time",
+            "title": "Modified At",
+            "type": "string"
+          },
+          "path": {
+            "title": "Path",
+            "type": "string"
+          },
+          "sha256": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Sha256"
+          },
+          "size_bytes": {
+            "minimum": 0.0,
+            "title": "Size Bytes",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "path",
+          "kind",
+          "size_bytes",
+          "modified_at",
+          "mode"
+        ],
+        "title": "FileStatResponse",
         "type": "object"
       },
       "HTTPValidationError": {
@@ -294,32 +265,118 @@
         "title": "HTTPValidationError",
         "type": "object"
       },
-      "ListProcessesResponse": {
+      "MoveFileRequest": {
+        "additionalProperties": false,
         "properties": {
-          "processes": {
-            "items": {
-              "$ref": "#/components/schemas/RuntimeProcessInfo"
-            },
-            "title": "Processes",
-            "type": "array"
-          }
-        },
-        "title": "ListProcessesResponse",
-        "type": "object"
-      },
-      "RuntimeProcessInfo": {
-        "properties": {
-          "cmd": {
-            "title": "Cmd",
+          "deadline_at": {
+            "format": "date-time",
+            "title": "Deadline At",
             "type": "string"
           },
-          "completed": {
-            "default": false,
-            "title": "Completed",
-            "type": "boolean"
+          "destination": {
+            "maxLength": 4096,
+            "minLength": 1,
+            "pattern": "^/",
+            "title": "Destination",
+            "type": "string"
+          },
+          "source": {
+            "maxLength": 4096,
+            "minLength": 1,
+            "pattern": "^/",
+            "title": "Source",
+            "type": "string"
+          }
+        },
+        "required": [
+          "source",
+          "destination",
+          "deadline_at"
+        ],
+        "title": "MoveFileRequest",
+        "type": "object"
+      },
+      "PortAccessResponse": {
+        "additionalProperties": false,
+        "properties": {
+          "expires_at": {
+            "format": "date-time",
+            "title": "Expires At",
+            "type": "string"
+          },
+          "logical_id": {
+            "format": "uuid",
+            "title": "Logical Id",
+            "type": "string"
+          },
+          "port": {
+            "maximum": 65535.0,
+            "minimum": 1.0,
+            "title": "Port",
+            "type": "integer"
+          },
+          "protocol": {
+            "$ref": "#/components/schemas/PortProtocol"
+          },
+          "url": {
+            "title": "Url",
+            "type": "string"
+          },
+          "workload_kind": {
+            "$ref": "#/components/schemas/WorkloadKind"
+          }
+        },
+        "required": [
+          "workload_kind",
+          "logical_id",
+          "port",
+          "protocol",
+          "url",
+          "expires_at"
+        ],
+        "title": "PortAccessResponse",
+        "type": "object"
+      },
+      "PortProtocol": {
+        "enum": [
+          "http",
+          "https"
+        ],
+        "title": "PortProtocol",
+        "type": "string"
+      },
+      "ProcessRefResponse": {
+        "additionalProperties": false,
+        "properties": {
+          "allocation_epoch": {
+            "minimum": 1.0,
+            "title": "Allocation Epoch",
+            "type": "integer"
+          },
+          "allocation_id": {
+            "format": "uuid",
+            "title": "Allocation Id",
+            "type": "string"
+          },
+          "completed_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Completed At"
           },
           "cwd": {
             "title": "Cwd",
+            "type": "string"
+          },
+          "deadline_at": {
+            "format": "date-time",
+            "title": "Deadline At",
             "type": "string"
           },
           "exit_code": {
@@ -333,190 +390,456 @@
             ],
             "title": "Exit Code"
           },
-          "process_id": {
-            "title": "Process Id",
+          "operation_id": {
+            "format": "uuid",
+            "title": "Operation Id",
             "type": "string"
           },
+          "output_limit_bytes": {
+            "maximum": 67108864.0,
+            "minimum": 1.0,
+            "title": "Output Limit Bytes",
+            "type": "integer"
+          },
           "started_at": {
-            "title": "Started At",
-            "type": "number"
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Started At"
+          },
+          "state": {
+            "$ref": "#/components/schemas/ProcessState"
           },
           "tty": {
-            "default": false,
             "title": "Tty",
             "type": "boolean"
           }
         },
         "required": [
-          "process_id",
-          "cmd",
+          "operation_id",
+          "allocation_id",
+          "allocation_epoch",
+          "state",
           "cwd",
-          "started_at"
+          "tty",
+          "output_limit_bytes",
+          "deadline_at",
+          "started_at",
+          "completed_at",
+          "exit_code"
         ],
-        "title": "RuntimeProcessInfo",
+        "title": "ProcessRefResponse",
         "type": "object"
       },
-      "RuntimeSessionHeartbeatResponse": {
+      "ProcessState": {
+        "enum": [
+          "reserved",
+          "starting",
+          "unknown",
+          "running",
+          "succeeded",
+          "failed",
+          "cancelled",
+          "timed_out"
+        ],
+        "title": "ProcessState",
+        "type": "string"
+      },
+      "ProfileRefModel": {
+        "additionalProperties": false,
         "properties": {
-          "active": {
-            "title": "Active",
-            "type": "boolean"
-          },
-          "sandbox_id": {
-            "title": "Sandbox Id",
+          "digest": {
+            "pattern": "^sha256:[0-9a-f]{64}$",
+            "title": "Digest",
             "type": "string"
           },
-          "session_id": {
-            "title": "Session Id",
+          "name": {
+            "maxLength": 128,
+            "minLength": 1,
+            "title": "Name",
             "type": "string"
           }
         },
         "required": [
-          "sandbox_id",
-          "session_id",
-          "active"
+          "name",
+          "digest"
         ],
-        "title": "RuntimeSessionHeartbeatResponse",
+        "title": "ProfileRefModel",
         "type": "object"
       },
-      "RuntimeSessionRequest": {
+      "PythonExecutionState": {
+        "enum": [
+          "reserved",
+          "starting",
+          "unknown",
+          "succeeded",
+          "failed",
+          "timed_out"
+        ],
+        "title": "PythonExecutionState",
+        "type": "string"
+      },
+      "PythonResultResponse": {
         "additionalProperties": false,
         "properties": {
-          "cwd": {
-            "default": "/workspace",
-            "title": "Cwd",
+          "error_message": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Error Message"
+          },
+          "error_name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Error Name"
+          },
+          "operation_id": {
+            "format": "uuid",
+            "title": "Operation Id",
             "type": "string"
           },
-          "env": {
-            "additionalProperties": {
-              "type": "string"
-            },
-            "title": "Env",
-            "type": "object"
+          "output_truncated": {
+            "title": "Output Truncated",
+            "type": "boolean"
+          },
+          "result": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Result"
+          },
+          "state": {
+            "$ref": "#/components/schemas/PythonExecutionState"
+          },
+          "stderr": {
+            "title": "Stderr",
+            "type": "string"
+          },
+          "stdout": {
+            "title": "Stdout",
+            "type": "string"
+          },
+          "traceback": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Traceback"
           }
         },
-        "title": "RuntimeSessionRequest",
+        "required": [
+          "operation_id",
+          "state",
+          "stdout",
+          "stderr",
+          "result",
+          "error_name",
+          "error_message",
+          "traceback",
+          "output_truncated"
+        ],
+        "title": "PythonResultResponse",
         "type": "object"
       },
-      "RuntimeSessionResponse": {
+      "PythonSessionResponse": {
+        "additionalProperties": false,
         "properties": {
+          "allocation_epoch": {
+            "minimum": 1.0,
+            "title": "Allocation Epoch",
+            "type": "integer"
+          },
+          "allocation_id": {
+            "format": "uuid",
+            "title": "Allocation Id",
+            "type": "string"
+          },
           "cwd": {
             "title": "Cwd",
             "type": "string"
           },
-          "env_keys": {
+          "environment_keys": {
             "items": {
               "type": "string"
             },
-            "title": "Env Keys",
+            "title": "Environment Keys",
             "type": "array"
           },
-          "sandbox_id": {
-            "title": "Sandbox Id",
-            "type": "string"
-          },
           "session_id": {
+            "format": "uuid",
             "title": "Session Id",
             "type": "string"
+          },
+          "state": {
+            "$ref": "#/components/schemas/PythonSessionState"
           }
         },
         "required": [
-          "sandbox_id",
           "session_id",
-          "cwd"
+          "allocation_id",
+          "allocation_epoch",
+          "cwd",
+          "environment_keys",
+          "state"
         ],
-        "title": "RuntimeSessionResponse",
+        "title": "PythonSessionResponse",
         "type": "object"
       },
-      "SandboxEnsureRequest": {
+      "PythonSessionState": {
+        "enum": [
+          "reserved",
+          "creating",
+          "unknown",
+          "active",
+          "stale",
+          "deleted"
+        ],
+        "title": "PythonSessionState",
+        "type": "string"
+      },
+      "ResizeProcessRequest": {
         "additionalProperties": false,
         "properties": {
-          "env": {
-            "additionalProperties": {
-              "type": "string"
-            },
-            "title": "Env",
-            "type": "object"
-          }
-        },
-        "title": "SandboxEnsureRequest",
-        "type": "object"
-      },
-      "SandboxHeartbeatResponse": {
-        "properties": {
-          "active": {
-            "title": "Active",
-            "type": "boolean"
+          "deadline_at": {
+            "format": "date-time",
+            "title": "Deadline At",
+            "type": "string"
           },
-          "sandbox_id": {
-            "title": "Sandbox Id",
-            "type": "string"
+          "size": {
+            "$ref": "#/components/schemas/TerminalSizeModel"
           }
         },
         "required": [
-          "sandbox_id",
-          "active"
+          "size",
+          "deadline_at"
         ],
-        "title": "SandboxHeartbeatResponse",
+        "title": "ResizeProcessRequest",
         "type": "object"
       },
-      "SandboxResponse": {
-        "properties": {
-          "sandbox": {
-            "$ref": "#/components/schemas/SandboxSummary"
-          }
-        },
-        "required": [
-          "sandbox"
+      "SandboxDesiredState": {
+        "enum": [
+          "present",
+          "released",
+          "deleted"
         ],
-        "title": "SandboxResponse",
-        "type": "object"
+        "title": "SandboxDesiredState",
+        "type": "string"
       },
-      "SandboxSummary": {
+      "SandboxHandleResponse": {
+        "additionalProperties": false,
         "properties": {
-          "id": {
-            "title": "Id",
+          "allocation_epoch": {
+            "minimum": 0.0,
+            "title": "Allocation Epoch",
+            "type": "integer"
+          },
+          "allocation_id": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Allocation Id"
+          },
+          "allocation_state": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/AllocationState"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "desired_state": {
+            "$ref": "#/components/schemas/SandboxDesiredState"
+          },
+          "logical_id": {
+            "format": "uuid",
+            "title": "Logical Id",
             "type": "string"
+          },
+          "operation_id": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Operation Id"
+          },
+          "profile": {
+            "$ref": "#/components/schemas/ProfileRefModel"
           },
           "ready": {
             "title": "Ready",
             "type": "boolean"
           },
-          "status": {
-            "enum": [
-              "CREATING",
-              "RUNNING",
-              "STOPPED",
-              "ERROR"
+          "retry_after_ms": {
+            "anyOf": [
+              {
+                "minimum": 0.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
             ],
-            "title": "Status",
-            "type": "string"
+            "title": "Retry After Ms"
+          },
+          "workload_kind": {
+            "$ref": "#/components/schemas/WorkloadKind"
           }
         },
         "required": [
-          "id",
+          "workload_kind",
+          "logical_id",
+          "desired_state",
+          "profile",
+          "allocation_state",
+          "allocation_id",
+          "allocation_epoch",
           "ready",
-          "status"
+          "operation_id"
         ],
-        "title": "SandboxSummary",
+        "title": "SandboxHandleResponse",
         "type": "object"
       },
-      "SuspendResponse": {
+      "StartProcessModel": {
+        "additionalProperties": false,
         "properties": {
-          "sandbox_id": {
-            "title": "Sandbox Id",
+          "argv": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Argv"
+          },
+          "cwd": {
+            "maxLength": 4096,
+            "minLength": 1,
+            "pattern": "^/",
+            "title": "Cwd",
             "type": "string"
           },
-          "suspended": {
-            "title": "Suspended",
-            "type": "boolean"
+          "deadline_at": {
+            "format": "date-time",
+            "title": "Deadline At",
+            "type": "string"
+          },
+          "environment": {
+            "default": [],
+            "items": {
+              "$ref": "#/components/schemas/EnvironmentVariableModel"
+            },
+            "title": "Environment",
+            "type": "array"
+          },
+          "operation_id": {
+            "format": "uuid",
+            "title": "Operation Id",
+            "type": "string"
+          },
+          "output_limit_bytes": {
+            "default": 1048576,
+            "maximum": 67108864.0,
+            "minimum": 1.0,
+            "title": "Output Limit Bytes",
+            "type": "integer"
+          },
+          "shell_command": {
+            "anyOf": [
+              {
+                "maxLength": 1048576,
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Shell Command"
+          },
+          "tty": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/TerminalSizeModel"
+              },
+              {
+                "type": "null"
+              }
+            ]
           }
         },
         "required": [
-          "sandbox_id",
-          "suspended"
+          "operation_id",
+          "cwd",
+          "deadline_at"
         ],
-        "title": "SuspendResponse",
+        "title": "StartProcessModel",
+        "type": "object"
+      },
+      "TerminalSizeModel": {
+        "additionalProperties": false,
+        "properties": {
+          "cols": {
+            "maximum": 1000.0,
+            "minimum": 1.0,
+            "title": "Cols",
+            "type": "integer"
+          },
+          "rows": {
+            "maximum": 1000.0,
+            "minimum": 1.0,
+            "title": "Rows",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "cols",
+          "rows"
+        ],
+        "title": "TerminalSizeModel",
         "type": "object"
       },
       "ValidationError": {
@@ -559,59 +882,18 @@
         "title": "ValidationError",
         "type": "object"
       },
-      "WriteStdinRequest": {
-        "additionalProperties": false,
-        "properties": {
-          "chars": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Chars"
-          },
-          "max_output_tokens": {
-            "anyOf": [
-              {
-                "minimum": 1.0,
-                "type": "integer"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Max Output Tokens"
-          },
-          "process_id": {
-            "title": "Process Id",
-            "type": "string"
-          },
-          "yield_time_ms": {
-            "anyOf": [
-              {
-                "minimum": 0.0,
-                "type": "integer"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Yield Time Ms"
-          }
-        },
-        "required": [
-          "process_id"
+      "WorkloadKind": {
+        "enum": [
+          "workspace",
+          "function"
         ],
-        "title": "WriteStdinRequest",
-        "type": "object"
+        "title": "WorkloadKind",
+        "type": "string"
       }
     }
   },
   "info": {
-    "title": "AgentBox Manager",
+    "title": "AgentBox",
     "version": "0.1.0"
   },
   "openapi": "3.1.0",
@@ -623,11 +905,27 @@
           "200": {
             "content": {
               "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Health Ready"
+      }
+    },
+    "/health/live": {
+      "get": {
+        "operationId": "get_health_live",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
                 "schema": {
                   "additionalProperties": {
                     "type": "string"
                   },
-                  "title": "Response Health Health Get",
+                  "title": "Response Health Live Health Live Get",
                   "type": "object"
                 }
               }
@@ -635,19 +933,76 @@
             "description": "Successful Response"
           }
         },
-        "summary": "Health"
+        "summary": "Health Live"
       }
     },
-    "/sandboxes/{sandbox_id}": {
+    "/health/ready": {
+      "get": {
+        "operationId": "get_health_ready",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Health Ready"
+      }
+    },
+    "/livez": {
+      "get": {
+        "operationId": "get_livez",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": {
+                    "type": "string"
+                  },
+                  "title": "Response Health Live Livez Get",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Health Live"
+      }
+    },
+    "/sandboxes/{workload_kind}/{logical_id}": {
       "delete": {
-        "operationId": "delete_sandboxes_sandbox_id",
+        "operationId": "delete_sandboxes_workload_kind_logical_id",
         "parameters": [
           {
             "in": "path",
-            "name": "sandbox_id",
+            "name": "workload_kind",
             "required": true,
             "schema": {
-              "title": "Sandbox Id",
+              "$ref": "#/components/schemas/WorkloadKind"
+            }
+          },
+          {
+            "in": "path",
+            "name": "logical_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Logical Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "deadline_at",
+            "required": true,
+            "schema": {
+              "format": "date-time",
+              "title": "Deadline At",
               "type": "string"
             }
           },
@@ -669,14 +1024,7 @@
           }
         ],
         "responses": {
-          "200": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/DeleteResponse"
-                }
-              }
-            },
+          "204": {
             "description": "Successful Response"
           },
           "422": {
@@ -690,17 +1038,26 @@
             "description": "Validation Error"
           }
         },
-        "summary": "Delete Sandbox"
+        "summary": "Destroy Sandbox"
       },
       "get": {
-        "operationId": "get_sandboxes_sandbox_id",
+        "operationId": "get_sandboxes_workload_kind_logical_id",
         "parameters": [
           {
             "in": "path",
-            "name": "sandbox_id",
+            "name": "workload_kind",
             "required": true,
             "schema": {
-              "title": "Sandbox Id",
+              "$ref": "#/components/schemas/WorkloadKind"
+            }
+          },
+          {
+            "in": "path",
+            "name": "logical_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Logical Id",
               "type": "string"
             }
           },
@@ -726,7 +1083,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/SandboxSummary"
+                  "$ref": "#/components/schemas/SandboxHandleResponse"
                 }
               }
             },
@@ -743,17 +1100,26 @@
             "description": "Validation Error"
           }
         },
-        "summary": "Get Sandbox"
+        "summary": "Inspect Sandbox"
       },
       "put": {
-        "operationId": "put_sandboxes_sandbox_id",
+        "operationId": "put_sandboxes_workload_kind_logical_id",
         "parameters": [
           {
             "in": "path",
-            "name": "sandbox_id",
+            "name": "workload_kind",
             "required": true,
             "schema": {
-              "title": "Sandbox Id",
+              "$ref": "#/components/schemas/WorkloadKind"
+            }
+          },
+          {
+            "in": "path",
+            "name": "logical_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Logical Id",
               "type": "string"
             }
           },
@@ -778,7 +1144,7 @@
           "content": {
             "application/json": {
               "schema": {
-                "$ref": "#/components/schemas/SandboxEnsureRequest"
+                "$ref": "#/components/schemas/EnsureSandboxRequest"
               }
             }
           },
@@ -789,11 +1155,21 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/SandboxResponse"
+                  "$ref": "#/components/schemas/SandboxHandleResponse"
                 }
               }
             },
             "description": "Successful Response"
+          },
+          "202": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SandboxHandleResponse"
+                }
+              }
+            },
+            "description": "Accepted"
           },
           "422": {
             "content": {
@@ -809,25 +1185,424 @@
         "summary": "Ensure Sandbox"
       }
     },
-    "/sandboxes/{sandbox_id}/apps/{app_name}/access": {
-      "post": {
-        "operationId": "post_sandboxes_sandbox_id_apps_app_name_access",
+    "/sandboxes/{workload_kind}/{logical_id}/files": {
+      "delete": {
+        "operationId": "delete_sandboxes_workload_kind_logical_id_files",
         "parameters": [
           {
             "in": "path",
-            "name": "sandbox_id",
+            "name": "workload_kind",
             "required": true,
             "schema": {
-              "title": "Sandbox Id",
-              "type": "string"
+              "$ref": "#/components/schemas/WorkloadKind"
             }
           },
           {
             "in": "path",
-            "name": "app_name",
+            "name": "logical_id",
             "required": true,
             "schema": {
-              "title": "App Name",
+              "format": "uuid",
+              "title": "Logical Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "path",
+            "required": true,
+            "schema": {
+              "maxLength": 4096,
+              "minLength": 1,
+              "pattern": "^/",
+              "title": "Path",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "recursive",
+            "required": false,
+            "schema": {
+              "default": false,
+              "title": "Recursive",
+              "type": "boolean"
+            }
+          },
+          {
+            "in": "query",
+            "name": "deadline_at",
+            "required": true,
+            "schema": {
+              "format": "date-time",
+              "title": "Deadline At",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "x-api-key",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Api-Key"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Delete File"
+      },
+      "get": {
+        "operationId": "get_sandboxes_workload_kind_logical_id_files",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "workload_kind",
+            "required": true,
+            "schema": {
+              "$ref": "#/components/schemas/WorkloadKind"
+            }
+          },
+          {
+            "in": "path",
+            "name": "logical_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Logical Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "path",
+            "required": true,
+            "schema": {
+              "maxLength": 4096,
+              "minLength": 1,
+              "pattern": "^/",
+              "title": "Path",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "deadline_at",
+            "required": true,
+            "schema": {
+              "format": "date-time",
+              "title": "Deadline At",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "x-api-key",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Api-Key"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FileListResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "List Files"
+      }
+    },
+    "/sandboxes/{workload_kind}/{logical_id}/files:content": {
+      "get": {
+        "operationId": "get_sandboxes_workload_kind_logical_id_files_content",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "workload_kind",
+            "required": true,
+            "schema": {
+              "$ref": "#/components/schemas/WorkloadKind"
+            }
+          },
+          {
+            "in": "path",
+            "name": "logical_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Logical Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "path",
+            "required": true,
+            "schema": {
+              "maxLength": 4096,
+              "minLength": 1,
+              "pattern": "^/",
+              "title": "Path",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "offset",
+            "required": false,
+            "schema": {
+              "default": 0,
+              "minimum": 0,
+              "title": "Offset",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "query",
+            "name": "length",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "maximum": 67108864,
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Length"
+            }
+          },
+          {
+            "in": "query",
+            "name": "deadline_at",
+            "required": true,
+            "schema": {
+              "format": "date-time",
+              "title": "Deadline At",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "x-api-key",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Api-Key"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Read File"
+      },
+      "put": {
+        "operationId": "put_sandboxes_workload_kind_logical_id_files_content",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "workload_kind",
+            "required": true,
+            "schema": {
+              "$ref": "#/components/schemas/WorkloadKind"
+            }
+          },
+          {
+            "in": "path",
+            "name": "logical_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Logical Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "path",
+            "required": true,
+            "schema": {
+              "maxLength": 4096,
+              "minLength": 1,
+              "pattern": "^/",
+              "title": "Path",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "deadline_at",
+            "required": true,
+            "schema": {
+              "format": "date-time",
+              "title": "Deadline At",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "expected_sha256",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "pattern": "^sha256:[0-9a-f]{64}$",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Expected Sha256"
+            }
+          },
+          {
+            "in": "header",
+            "name": "x-api-key",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Api-Key"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/octet-stream": {
+              "schema": {
+                "contentMediaType": "application/octet-stream",
+                "title": "Data",
+                "type": "string"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FileStatResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Write File"
+      }
+    },
+    "/sandboxes/{workload_kind}/{logical_id}/files:move": {
+      "post": {
+        "operationId": "post_sandboxes_workload_kind_logical_id_files_move",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "workload_kind",
+            "required": true,
+            "schema": {
+              "$ref": "#/components/schemas/WorkloadKind"
+            }
+          },
+          {
+            "in": "path",
+            "name": "logical_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Logical Id",
               "type": "string"
             }
           },
@@ -852,7 +1627,169 @@
           "content": {
             "application/json": {
               "schema": {
-                "$ref": "#/components/schemas/AppAccessRequest"
+                "$ref": "#/components/schemas/MoveFileRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "204": {
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Move File"
+      }
+    },
+    "/sandboxes/{workload_kind}/{logical_id}/files:stat": {
+      "get": {
+        "operationId": "get_sandboxes_workload_kind_logical_id_files_stat",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "workload_kind",
+            "required": true,
+            "schema": {
+              "$ref": "#/components/schemas/WorkloadKind"
+            }
+          },
+          {
+            "in": "path",
+            "name": "logical_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Logical Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "path",
+            "required": true,
+            "schema": {
+              "maxLength": 4096,
+              "minLength": 1,
+              "pattern": "^/",
+              "title": "Path",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "deadline_at",
+            "required": true,
+            "schema": {
+              "format": "date-time",
+              "title": "Deadline At",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "x-api-key",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Api-Key"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FileStatResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Stat File"
+      }
+    },
+    "/sandboxes/{workload_kind}/{logical_id}/ports/{port}:access": {
+      "post": {
+        "operationId": "post_sandboxes_workload_kind_logical_id_ports_port_access",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "workload_kind",
+            "required": true,
+            "schema": {
+              "$ref": "#/components/schemas/WorkloadKind"
+            }
+          },
+          {
+            "in": "path",
+            "name": "logical_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Logical Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "port",
+            "required": true,
+            "schema": {
+              "title": "Port",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "header",
+            "name": "x-api-key",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Api-Key"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreatePortAccessRequest"
               }
             }
           },
@@ -863,7 +1800,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/AppAccessResponse"
+                  "$ref": "#/components/schemas/PortAccessResponse"
                 }
               }
             },
@@ -880,505 +1817,28 @@
             "description": "Validation Error"
           }
         },
-        "summary": "Get Sandbox App Access Url"
+        "summary": "Create Port Access"
       }
     },
-    "/sandboxes/{sandbox_id}/apps/{app_name}/{path}": {
-      "delete": {
-        "operationId": "delete_sandboxes_sandbox_id_apps_app_name_path",
-        "parameters": [
-          {
-            "in": "path",
-            "name": "sandbox_id",
-            "required": true,
-            "schema": {
-              "title": "Sandbox Id",
-              "type": "string"
-            }
-          },
-          {
-            "in": "path",
-            "name": "app_name",
-            "required": true,
-            "schema": {
-              "title": "App Name",
-              "type": "string"
-            }
-          },
-          {
-            "in": "path",
-            "name": "path",
-            "required": true,
-            "schema": {
-              "title": "Path",
-              "type": "string"
-            }
-          },
-          {
-            "in": "header",
-            "name": "x-api-key",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "X-Api-Key"
-            }
-          }
-        ],
-        "responses": {
-          "200": {
-            "content": {
-              "application/json": {
-                "schema": {}
-              }
-            },
-            "description": "Successful Response"
-          },
-          "422": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
-                }
-              }
-            },
-            "description": "Validation Error"
-          }
-        },
-        "summary": "Proxy Sandbox App Internal"
-      },
+    "/sandboxes/{workload_kind}/{logical_id}/processes": {
       "get": {
-        "operationId": "get_sandboxes_sandbox_id_apps_app_name_path",
+        "operationId": "get_sandboxes_workload_kind_logical_id_processes",
         "parameters": [
           {
             "in": "path",
-            "name": "sandbox_id",
+            "name": "workload_kind",
             "required": true,
             "schema": {
-              "title": "Sandbox Id",
-              "type": "string"
+              "$ref": "#/components/schemas/WorkloadKind"
             }
           },
           {
             "in": "path",
-            "name": "app_name",
+            "name": "logical_id",
             "required": true,
             "schema": {
-              "title": "App Name",
-              "type": "string"
-            }
-          },
-          {
-            "in": "path",
-            "name": "path",
-            "required": true,
-            "schema": {
-              "title": "Path",
-              "type": "string"
-            }
-          },
-          {
-            "in": "header",
-            "name": "x-api-key",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "X-Api-Key"
-            }
-          }
-        ],
-        "responses": {
-          "200": {
-            "content": {
-              "application/json": {
-                "schema": {}
-              }
-            },
-            "description": "Successful Response"
-          },
-          "422": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
-                }
-              }
-            },
-            "description": "Validation Error"
-          }
-        },
-        "summary": "Proxy Sandbox App Internal"
-      },
-      "head": {
-        "operationId": "head_sandboxes_sandbox_id_apps_app_name_path",
-        "parameters": [
-          {
-            "in": "path",
-            "name": "sandbox_id",
-            "required": true,
-            "schema": {
-              "title": "Sandbox Id",
-              "type": "string"
-            }
-          },
-          {
-            "in": "path",
-            "name": "app_name",
-            "required": true,
-            "schema": {
-              "title": "App Name",
-              "type": "string"
-            }
-          },
-          {
-            "in": "path",
-            "name": "path",
-            "required": true,
-            "schema": {
-              "title": "Path",
-              "type": "string"
-            }
-          },
-          {
-            "in": "header",
-            "name": "x-api-key",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "X-Api-Key"
-            }
-          }
-        ],
-        "responses": {
-          "200": {
-            "content": {
-              "application/json": {
-                "schema": {}
-              }
-            },
-            "description": "Successful Response"
-          },
-          "422": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
-                }
-              }
-            },
-            "description": "Validation Error"
-          }
-        },
-        "summary": "Proxy Sandbox App Internal"
-      },
-      "options": {
-        "operationId": "options_sandboxes_sandbox_id_apps_app_name_path",
-        "parameters": [
-          {
-            "in": "path",
-            "name": "sandbox_id",
-            "required": true,
-            "schema": {
-              "title": "Sandbox Id",
-              "type": "string"
-            }
-          },
-          {
-            "in": "path",
-            "name": "app_name",
-            "required": true,
-            "schema": {
-              "title": "App Name",
-              "type": "string"
-            }
-          },
-          {
-            "in": "path",
-            "name": "path",
-            "required": true,
-            "schema": {
-              "title": "Path",
-              "type": "string"
-            }
-          },
-          {
-            "in": "header",
-            "name": "x-api-key",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "X-Api-Key"
-            }
-          }
-        ],
-        "responses": {
-          "200": {
-            "content": {
-              "application/json": {
-                "schema": {}
-              }
-            },
-            "description": "Successful Response"
-          },
-          "422": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
-                }
-              }
-            },
-            "description": "Validation Error"
-          }
-        },
-        "summary": "Proxy Sandbox App Internal"
-      },
-      "patch": {
-        "operationId": "patch_sandboxes_sandbox_id_apps_app_name_path",
-        "parameters": [
-          {
-            "in": "path",
-            "name": "sandbox_id",
-            "required": true,
-            "schema": {
-              "title": "Sandbox Id",
-              "type": "string"
-            }
-          },
-          {
-            "in": "path",
-            "name": "app_name",
-            "required": true,
-            "schema": {
-              "title": "App Name",
-              "type": "string"
-            }
-          },
-          {
-            "in": "path",
-            "name": "path",
-            "required": true,
-            "schema": {
-              "title": "Path",
-              "type": "string"
-            }
-          },
-          {
-            "in": "header",
-            "name": "x-api-key",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "X-Api-Key"
-            }
-          }
-        ],
-        "responses": {
-          "200": {
-            "content": {
-              "application/json": {
-                "schema": {}
-              }
-            },
-            "description": "Successful Response"
-          },
-          "422": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
-                }
-              }
-            },
-            "description": "Validation Error"
-          }
-        },
-        "summary": "Proxy Sandbox App Internal"
-      },
-      "post": {
-        "operationId": "post_sandboxes_sandbox_id_apps_app_name_path",
-        "parameters": [
-          {
-            "in": "path",
-            "name": "sandbox_id",
-            "required": true,
-            "schema": {
-              "title": "Sandbox Id",
-              "type": "string"
-            }
-          },
-          {
-            "in": "path",
-            "name": "app_name",
-            "required": true,
-            "schema": {
-              "title": "App Name",
-              "type": "string"
-            }
-          },
-          {
-            "in": "path",
-            "name": "path",
-            "required": true,
-            "schema": {
-              "title": "Path",
-              "type": "string"
-            }
-          },
-          {
-            "in": "header",
-            "name": "x-api-key",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "X-Api-Key"
-            }
-          }
-        ],
-        "responses": {
-          "200": {
-            "content": {
-              "application/json": {
-                "schema": {}
-              }
-            },
-            "description": "Successful Response"
-          },
-          "422": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
-                }
-              }
-            },
-            "description": "Validation Error"
-          }
-        },
-        "summary": "Proxy Sandbox App Internal"
-      },
-      "put": {
-        "operationId": "put_sandboxes_sandbox_id_apps_app_name_path",
-        "parameters": [
-          {
-            "in": "path",
-            "name": "sandbox_id",
-            "required": true,
-            "schema": {
-              "title": "Sandbox Id",
-              "type": "string"
-            }
-          },
-          {
-            "in": "path",
-            "name": "app_name",
-            "required": true,
-            "schema": {
-              "title": "App Name",
-              "type": "string"
-            }
-          },
-          {
-            "in": "path",
-            "name": "path",
-            "required": true,
-            "schema": {
-              "title": "Path",
-              "type": "string"
-            }
-          },
-          {
-            "in": "header",
-            "name": "x-api-key",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "X-Api-Key"
-            }
-          }
-        ],
-        "responses": {
-          "200": {
-            "content": {
-              "application/json": {
-                "schema": {}
-              }
-            },
-            "description": "Successful Response"
-          },
-          "422": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
-                }
-              }
-            },
-            "description": "Validation Error"
-          }
-        },
-        "summary": "Proxy Sandbox App Internal"
-      }
-    },
-    "/sandboxes/{sandbox_id}/heartbeat": {
-      "post": {
-        "description": "Keep a sandbox alive while a long-running workload (e.g. a JOB function)\nis using it but holds no runtime session.\n\nThe idle reaper deletes a sandbox once it has had no sessions for\n``agentbox_sandbox_idle_timeout_seconds``. A workload that runs through the\nfunction_executor app (not a runtime session) would otherwise be reaped\nmid-run, so the caller heartbeats the sandbox to reset its idle clock. This\nonly touches manager state -- it never re-provisions the pod.",
-        "operationId": "post_sandboxes_sandbox_id_heartbeat",
-        "parameters": [
-          {
-            "in": "path",
-            "name": "sandbox_id",
-            "required": true,
-            "schema": {
-              "title": "Sandbox Id",
+              "format": "uuid",
+              "title": "Logical Id",
               "type": "string"
             }
           },
@@ -1404,82 +1864,11 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/SandboxHeartbeatResponse"
-                }
-              }
-            },
-            "description": "Successful Response"
-          },
-          "422": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
-                }
-              }
-            },
-            "description": "Validation Error"
-          }
-        },
-        "summary": "Heartbeat Sandbox"
-      }
-    },
-    "/sandboxes/{sandbox_id}/sessions/{session_id}": {
-      "delete": {
-        "operationId": "delete_sandboxes_sandbox_id_sessions_session_id",
-        "parameters": [
-          {
-            "in": "path",
-            "name": "sandbox_id",
-            "required": true,
-            "schema": {
-              "title": "Sandbox Id",
-              "type": "string"
-            }
-          },
-          {
-            "in": "path",
-            "name": "session_id",
-            "required": true,
-            "schema": {
-              "title": "Session Id",
-              "type": "string"
-            }
-          },
-          {
-            "in": "header",
-            "name": "x-api-key",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "X-Api-Key"
-            }
-          }
-        ],
-        "responses": {
-          "200": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "additionalProperties": {
-                    "anyOf": [
-                      {
-                        "type": "string"
-                      },
-                      {
-                        "type": "boolean"
-                      }
-                    ]
+                  "items": {
+                    "$ref": "#/components/schemas/ProcessRefResponse"
                   },
-                  "title": "Response Delete Runtime Session Sandboxes  Sandbox Id  Sessions  Session Id  Delete",
-                  "type": "object"
+                  "title": "Response List Processes Sandboxes  Workload Kind   Logical Id  Processes Get",
+                  "type": "array"
                 }
               }
             },
@@ -1496,17 +1885,624 @@
             "description": "Validation Error"
           }
         },
-        "summary": "Delete Runtime Session"
+        "summary": "List Processes"
+      },
+      "post": {
+        "operationId": "post_sandboxes_workload_kind_logical_id_processes",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "workload_kind",
+            "required": true,
+            "schema": {
+              "$ref": "#/components/schemas/WorkloadKind"
+            }
+          },
+          {
+            "in": "path",
+            "name": "logical_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Logical Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "x-api-key",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Api-Key"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/StartProcessModel"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProcessRefResponse"
+                }
+              }
+            },
+            "description": "OK"
+          },
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProcessRefResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Start Process"
+      }
+    },
+    "/sandboxes/{workload_kind}/{logical_id}/processes/{operation_id}": {
+      "delete": {
+        "operationId": "delete_sandboxes_workload_kind_logical_id_processes_operation_id",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "workload_kind",
+            "required": true,
+            "schema": {
+              "$ref": "#/components/schemas/WorkloadKind"
+            }
+          },
+          {
+            "in": "path",
+            "name": "logical_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Logical Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "operation_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Operation Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "deadline_at",
+            "required": true,
+            "schema": {
+              "format": "date-time",
+              "title": "Deadline At",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "grace_seconds",
+            "required": false,
+            "schema": {
+              "default": 5,
+              "maximum": 30,
+              "minimum": 0,
+              "title": "Grace Seconds",
+              "type": "number"
+            }
+          },
+          {
+            "in": "header",
+            "name": "x-api-key",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Api-Key"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProcessRefResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Terminate Process"
+      },
+      "get": {
+        "operationId": "get_sandboxes_workload_kind_logical_id_processes_operation_id",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "workload_kind",
+            "required": true,
+            "schema": {
+              "$ref": "#/components/schemas/WorkloadKind"
+            }
+          },
+          {
+            "in": "path",
+            "name": "logical_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Logical Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "operation_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Operation Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "x-api-key",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Api-Key"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProcessRefResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Inspect Process"
+      }
+    },
+    "/sandboxes/{workload_kind}/{logical_id}/processes/{operation_id}/output": {
+      "get": {
+        "operationId": "get_sandboxes_workload_kind_logical_id_processes_operation_id_output",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "workload_kind",
+            "required": true,
+            "schema": {
+              "$ref": "#/components/schemas/WorkloadKind"
+            }
+          },
+          {
+            "in": "path",
+            "name": "logical_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Logical Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "operation_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Operation Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "deadline_at",
+            "required": true,
+            "schema": {
+              "format": "date-time",
+              "title": "Deadline At",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "after_seq",
+            "required": false,
+            "schema": {
+              "default": 0,
+              "minimum": 0,
+              "title": "After Seq",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "query",
+            "name": "wait_seconds",
+            "required": false,
+            "schema": {
+              "default": 0,
+              "maximum": 30,
+              "minimum": 0,
+              "title": "Wait Seconds",
+              "type": "number"
+            }
+          },
+          {
+            "in": "header",
+            "name": "x-api-key",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Api-Key"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Read Process Output"
+      }
+    },
+    "/sandboxes/{workload_kind}/{logical_id}/processes/{operation_id}:input": {
+      "post": {
+        "operationId": "post_sandboxes_workload_kind_logical_id_processes_operation_id_input",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "workload_kind",
+            "required": true,
+            "schema": {
+              "$ref": "#/components/schemas/WorkloadKind"
+            }
+          },
+          {
+            "in": "path",
+            "name": "logical_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Logical Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "operation_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Operation Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "deadline_at",
+            "required": true,
+            "schema": {
+              "format": "date-time",
+              "title": "Deadline At",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "x-api-key",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Api-Key"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/octet-stream": {
+              "schema": {
+                "contentMediaType": "application/octet-stream",
+                "title": "Data",
+                "type": "string"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "204": {
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Send Process Input"
+      }
+    },
+    "/sandboxes/{workload_kind}/{logical_id}/processes/{operation_id}:resize": {
+      "post": {
+        "operationId": "post_sandboxes_workload_kind_logical_id_processes_operation_id_resize",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "workload_kind",
+            "required": true,
+            "schema": {
+              "$ref": "#/components/schemas/WorkloadKind"
+            }
+          },
+          {
+            "in": "path",
+            "name": "logical_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Logical Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "operation_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Operation Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "x-api-key",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Api-Key"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ResizeProcessRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "204": {
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Resize Process"
+      }
+    },
+    "/sandboxes/{workload_kind}/{logical_id}/python-sessions/{session_id}": {
+      "delete": {
+        "operationId": "delete_sandboxes_workload_kind_logical_id_python_sessions_session_id",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "workload_kind",
+            "required": true,
+            "schema": {
+              "$ref": "#/components/schemas/WorkloadKind"
+            }
+          },
+          {
+            "in": "path",
+            "name": "logical_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Logical Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "session_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Session Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "deadline_at",
+            "required": true,
+            "schema": {
+              "format": "date-time",
+              "title": "Deadline At",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "x-api-key",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Api-Key"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Delete Python Session"
       },
       "put": {
-        "operationId": "put_sandboxes_sandbox_id_sessions_session_id",
+        "operationId": "put_sandboxes_workload_kind_logical_id_python_sessions_session_id",
         "parameters": [
           {
             "in": "path",
-            "name": "sandbox_id",
+            "name": "workload_kind",
             "required": true,
             "schema": {
-              "title": "Sandbox Id",
+              "$ref": "#/components/schemas/WorkloadKind"
+            }
+          },
+          {
+            "in": "path",
+            "name": "logical_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Logical Id",
               "type": "string"
             }
           },
@@ -1515,6 +2511,7 @@
             "name": "session_id",
             "required": true,
             "schema": {
+              "format": "uuid",
               "title": "Session Id",
               "type": "string"
             }
@@ -1540,7 +2537,7 @@
           "content": {
             "application/json": {
               "schema": {
-                "$ref": "#/components/schemas/RuntimeSessionRequest"
+                "$ref": "#/components/schemas/CreatePythonSessionModel"
               }
             }
           },
@@ -1551,7 +2548,17 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/RuntimeSessionResponse"
+                  "$ref": "#/components/schemas/PythonSessionResponse"
+                }
+              }
+            },
+            "description": "OK"
+          },
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PythonSessionResponse"
                 }
               }
             },
@@ -1568,19 +2575,28 @@
             "description": "Validation Error"
           }
         },
-        "summary": "Create Runtime Session"
+        "summary": "Create Python Session"
       }
     },
-    "/sandboxes/{sandbox_id}/sessions/{session_id}/exec-command": {
+    "/sandboxes/{workload_kind}/{logical_id}/python-sessions/{session_id}:execute": {
       "post": {
-        "operationId": "post_sandboxes_sandbox_id_sessions_session_id_exec_command",
+        "operationId": "post_sandboxes_workload_kind_logical_id_python_sessions_session_id_execute",
         "parameters": [
           {
             "in": "path",
-            "name": "sandbox_id",
+            "name": "workload_kind",
             "required": true,
             "schema": {
-              "title": "Sandbox Id",
+              "$ref": "#/components/schemas/WorkloadKind"
+            }
+          },
+          {
+            "in": "path",
+            "name": "logical_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Logical Id",
               "type": "string"
             }
           },
@@ -1589,6 +2605,7 @@
             "name": "session_id",
             "required": true,
             "schema": {
+              "format": "uuid",
               "title": "Session Id",
               "type": "string"
             }
@@ -1614,7 +2631,7 @@
           "content": {
             "application/json": {
               "schema": {
-                "$ref": "#/components/schemas/ExecCommandRequest"
+                "$ref": "#/components/schemas/ExecutePythonModel"
               }
             }
           },
@@ -1625,282 +2642,17 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/ExecCommandResponse"
+                  "$ref": "#/components/schemas/PythonResultResponse"
                 }
               }
             },
-            "description": "Successful Response"
+            "description": "OK"
           },
-          "422": {
+          "201": {
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
-                }
-              }
-            },
-            "description": "Validation Error"
-          }
-        },
-        "summary": "Exec Runtime Process Command"
-      }
-    },
-    "/sandboxes/{sandbox_id}/sessions/{session_id}/heartbeat": {
-      "post": {
-        "operationId": "post_sandboxes_sandbox_id_sessions_session_id_heartbeat",
-        "parameters": [
-          {
-            "in": "path",
-            "name": "sandbox_id",
-            "required": true,
-            "schema": {
-              "title": "Sandbox Id",
-              "type": "string"
-            }
-          },
-          {
-            "in": "path",
-            "name": "session_id",
-            "required": true,
-            "schema": {
-              "title": "Session Id",
-              "type": "string"
-            }
-          },
-          {
-            "in": "header",
-            "name": "x-api-key",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "X-Api-Key"
-            }
-          }
-        ],
-        "responses": {
-          "200": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/RuntimeSessionHeartbeatResponse"
-                }
-              }
-            },
-            "description": "Successful Response"
-          },
-          "422": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
-                }
-              }
-            },
-            "description": "Validation Error"
-          }
-        },
-        "summary": "Heartbeat Runtime Session"
-      }
-    },
-    "/sandboxes/{sandbox_id}/sessions/{session_id}/processes": {
-      "get": {
-        "operationId": "get_sandboxes_sandbox_id_sessions_session_id_processes",
-        "parameters": [
-          {
-            "in": "path",
-            "name": "sandbox_id",
-            "required": true,
-            "schema": {
-              "title": "Sandbox Id",
-              "type": "string"
-            }
-          },
-          {
-            "in": "path",
-            "name": "session_id",
-            "required": true,
-            "schema": {
-              "title": "Session Id",
-              "type": "string"
-            }
-          },
-          {
-            "in": "header",
-            "name": "x-api-key",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "X-Api-Key"
-            }
-          }
-        ],
-        "responses": {
-          "200": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ListProcessesResponse"
-                }
-              }
-            },
-            "description": "Successful Response"
-          },
-          "422": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
-                }
-              }
-            },
-            "description": "Validation Error"
-          }
-        },
-        "summary": "List Runtime Processes"
-      }
-    },
-    "/sandboxes/{sandbox_id}/sessions/{session_id}/processes/{process_id}": {
-      "delete": {
-        "operationId": "delete_sandboxes_sandbox_id_sessions_session_id_processes_process_id",
-        "parameters": [
-          {
-            "in": "path",
-            "name": "sandbox_id",
-            "required": true,
-            "schema": {
-              "title": "Sandbox Id",
-              "type": "string"
-            }
-          },
-          {
-            "in": "path",
-            "name": "session_id",
-            "required": true,
-            "schema": {
-              "title": "Session Id",
-              "type": "string"
-            }
-          },
-          {
-            "in": "path",
-            "name": "process_id",
-            "required": true,
-            "schema": {
-              "title": "Process Id",
-              "type": "string"
-            }
-          },
-          {
-            "in": "header",
-            "name": "x-api-key",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "X-Api-Key"
-            }
-          }
-        ],
-        "responses": {
-          "200": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ExecCommandResponse"
-                }
-              }
-            },
-            "description": "Successful Response"
-          },
-          "422": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
-                }
-              }
-            },
-            "description": "Validation Error"
-          }
-        },
-        "summary": "Terminate Runtime Process"
-      }
-    },
-    "/sandboxes/{sandbox_id}/sessions/{session_id}/python": {
-      "post": {
-        "operationId": "post_sandboxes_sandbox_id_sessions_session_id_python",
-        "parameters": [
-          {
-            "in": "path",
-            "name": "sandbox_id",
-            "required": true,
-            "schema": {
-              "title": "Sandbox Id",
-              "type": "string"
-            }
-          },
-          {
-            "in": "path",
-            "name": "session_id",
-            "required": true,
-            "schema": {
-              "title": "Session Id",
-              "type": "string"
-            }
-          },
-          {
-            "in": "header",
-            "name": "x-api-key",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "X-Api-Key"
-            }
-          }
-        ],
-        "requestBody": {
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/ExecutePythonRequest"
-              }
-            }
-          },
-          "required": true
-        },
-        "responses": {
-          "200": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ExecutePythonResponse"
+                  "$ref": "#/components/schemas/PythonResultResponse"
                 }
               }
             },
@@ -1920,16 +2672,25 @@
         "summary": "Execute Python"
       }
     },
-    "/sandboxes/{sandbox_id}/sessions/{session_id}/stdin": {
+    "/sandboxes/{workload_kind}/{logical_id}/python-sessions/{session_id}:restart": {
       "post": {
-        "operationId": "post_sandboxes_sandbox_id_sessions_session_id_stdin",
+        "operationId": "post_sandboxes_workload_kind_logical_id_python_sessions_session_id_restart",
         "parameters": [
           {
             "in": "path",
-            "name": "sandbox_id",
+            "name": "workload_kind",
             "required": true,
             "schema": {
-              "title": "Sandbox Id",
+              "$ref": "#/components/schemas/WorkloadKind"
+            }
+          },
+          {
+            "in": "path",
+            "name": "logical_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Logical Id",
               "type": "string"
             }
           },
@@ -1938,6 +2699,7 @@
             "name": "session_id",
             "required": true,
             "schema": {
+              "format": "uuid",
               "title": "Session Id",
               "type": "string"
             }
@@ -1963,7 +2725,7 @@
           "content": {
             "application/json": {
               "schema": {
-                "$ref": "#/components/schemas/WriteStdinRequest"
+                "$ref": "#/components/schemas/DeadlineRequest"
               }
             }
           },
@@ -1974,7 +2736,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/ExecCommandResponse"
+                  "$ref": "#/components/schemas/PythonSessionResponse"
                 }
               }
             },
@@ -1991,20 +2753,28 @@
             "description": "Validation Error"
           }
         },
-        "summary": "Write Runtime Process Stdin"
+        "summary": "Restart Python Session"
       }
     },
-    "/sandboxes/{sandbox_id}/suspend": {
+    "/sandboxes/{workload_kind}/{logical_id}:release": {
       "post": {
-        "description": "Release idle compute while retaining the logical user sandbox.",
-        "operationId": "post_sandboxes_sandbox_id_suspend",
+        "operationId": "post_sandboxes_workload_kind_logical_id_release",
         "parameters": [
           {
             "in": "path",
-            "name": "sandbox_id",
+            "name": "workload_kind",
             "required": true,
             "schema": {
-              "title": "Sandbox Id",
+              "$ref": "#/components/schemas/WorkloadKind"
+            }
+          },
+          {
+            "in": "path",
+            "name": "logical_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Logical Id",
               "type": "string"
             }
           },
@@ -2025,12 +2795,22 @@
             }
           }
         ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/DeadlineRequest"
+              }
+            }
+          },
+          "required": true
+        },
         "responses": {
           "200": {
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/SuspendResponse"
+                  "$ref": "#/components/schemas/SandboxHandleResponse"
                 }
               }
             },
@@ -2047,7 +2827,7 @@
             "description": "Validation Error"
           }
         },
-        "summary": "Suspend Sandbox"
+        "summary": "Release Sandbox"
       }
     }
   }

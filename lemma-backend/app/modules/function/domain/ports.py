@@ -6,7 +6,11 @@ from typing import Optional, Protocol, Tuple
 from uuid import UUID
 
 from app.core.authorization.context import Context
-from app.modules.function.domain.entities import FunctionEntity, FunctionRunEntity
+from app.modules.function.domain.entities import (
+    FunctionEntity,
+    FunctionRevisionEntity,
+    FunctionRunEntity,
+)
 
 
 class FunctionRepositoryPort(Protocol):
@@ -21,6 +25,12 @@ class FunctionRepositoryPort(Protocol):
     async def update(self, function: FunctionEntity) -> FunctionEntity: ...
 
     async def delete(self, id: UUID) -> bool: ...
+
+    async def next_revision_number(self, function_id: UUID) -> int: ...
+
+    async def get_revision(
+        self, revision_id: UUID
+    ) -> FunctionRevisionEntity | None: ...
 
     async def list_by_pod(
         self, pod_id: UUID, limit: int = 100, cursor: str | None = None
@@ -71,6 +81,14 @@ class FunctionStoragePort(Protocol):
 
 class FunctionStorageFactoryPort(Protocol):
     def __call__(self, function_id: UUID) -> FunctionStoragePort: ...
+
+
+class FunctionExecutionPort(Protocol):
+    """Backend execution plane; provider adapters never implement this port."""
+
+    async def execute(self, run_id: UUID) -> FunctionRunEntity: ...
+
+    async def cancel(self, run_id: UUID) -> FunctionRunEntity: ...
 
 
 class AccountResolutionPort(Protocol):

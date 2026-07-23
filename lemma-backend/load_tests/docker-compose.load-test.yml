@@ -8,6 +8,8 @@
 #
 #   # 1. Build the image (from repo root):
 #   docker build -t lemma-backend:load-test -f lemma-backend/Dockerfile .
+#   docker build -t lemma-agentbox:load-test -f agentbox/Dockerfile agentbox
+#   make -C agentbox build-test-images
 #
 #   # 2. Bring up infrastructure + API + worker:
 #   docker compose -f load_tests/docker-compose.load-test.yml up -d
@@ -72,16 +74,24 @@ services:
     networks:
       - load_test_net
 
-  # ── Fake AgentBox (mock sandbox manager) ──────────────────────────────────
-  # Serves the AgentBox manager HTTP contract + the in-sandbox function_executor
-  # app with canned responses, so function create + execute (and workspace tools)
-  # run in the load test without a real Docker sandbox. Functions are not really
-  # executed; output_data echoes the input — enough to exercise the full pipeline
-  # and its connection behavior.
-  fake-agentbox:
-    image: ${LEMMA_IMAGE:-lemma-backend:load-test}
-    container_name: lemma-load-fake-agentbox
-    command: ["uvicorn", "app.modules.workspace.testing.fake_agentbox:create_fake_agentbox_app", "--factory", "--host", "0.0.0.0", "--port", "9000"]
+  # ── Canonical AgentBox with the real Docker adapter ───────────────────────
+  agentbox:
+    image: ${AGENTBOX_IMAGE:-lemma-agentbox:load-test}
+    container_name: lemma-load-agentbox
+    environment:
+      AGENTBOX_API_KEY: "load-test-agentbox-key"
+      AGENTBOX_API_URL: "http://agentbox:8000"
+      AGENTBOX_PROVIDER: "docker"
+      AGENTBOX_DOCKER_SOCKET_PATH: "/var/run/docker.sock"
+      AGENTBOX_DOCKER_PRIVATE_NETWORK: "lemma-load-test-net"
+      AGENTBOX_WORKSPACE_IMAGE: ${AGENTBOX_WORKSPACE_IMAGE:-agentbox-workspace:dev}
+      AGENTBOX_FUNCTION_IMAGE: ${AGENTBOX_FUNCTION_IMAGE:-agentbox-function:dev}
+      AGENTBOX_STATE_DB_PATH: "/data/state.db"
+      AGENTBOX_AUTO_CREATE_SCHEMA: "true"
+      AGENTBOX_ADD_HOST_GATEWAY: "false"
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+      - agentbox_state:/data
     networks:
       - load_test_net
     deploy:
@@ -119,11 +129,11 @@ services:
       # instant mock makes runs CPU-bound and saturates one core). ~2 turns/run.
       E2E_MOCK_LLM_LATENCY_MS: "1500"
       LEMMA_OPENAI_API_KEY: "EMPTY"
-      # Fake AgentBox: function create/execute + workspace tools hit the mock
-      # sandbox manager instead of a real Docker AgentBox.
-      AGENTBOX_API_URL: "http://fake-agentbox:9000"
-      AGENTBOX_API_KEY: "EMPTY"
-      E2E_SANDBOX_MODE: "fake"
+      API_URL: "http://api:8000"
+      FUNCTION_RUNTIME_GATEWAY_URL: "http://api:8000"
+      AGENTBOX_API_URL: "http://agentbox:8000"
+      AGENTBOX_API_KEY: "load-test-agentbox-key"
+      E2E_SANDBOX_MODE: "docker"
     ports:
       - "8000:8000"
     depends_on:
@@ -133,7 +143,7 @@ services:
         condition: service_healthy
       redis:
         condition: service_started
-      fake-agentbox:
+      agentbox:
         condition: service_started
     healthcheck:
       test: ["CMD-SHELL", "python -c \"import urllib.request; urllib.request.urlopen('http://localhost:8000/health')\" || exit 1"]
@@ -179,10 +189,11 @@ services:
       # instant mock makes runs CPU-bound and saturates one core). ~2 turns/run.
       E2E_MOCK_LLM_LATENCY_MS: "1500"
       LEMMA_OPENAI_API_KEY: "EMPTY"
-      # Fake AgentBox: JOB function runs + workspace tools hit the mock manager.
-      AGENTBOX_API_URL: "http://fake-agentbox:9000"
-      AGENTBOX_API_KEY: "EMPTY"
-      E2E_SANDBOX_MODE: "fake"
+      API_URL: "http://api:8000"
+      FUNCTION_RUNTIME_GATEWAY_URL: "http://api:8000"
+      AGENTBOX_API_URL: "http://agentbox:8000"
+      AGENTBOX_API_KEY: "load-test-agentbox-key"
+      E2E_SANDBOX_MODE: "docker"
     depends_on:
       db:
         condition: service_healthy
@@ -190,7 +201,7 @@ services:
         condition: service_healthy
       redis:
         condition: service_started
-      fake-agentbox:
+      agentbox:
         condition: service_started
     networks:
       - load_test_net
@@ -206,4 +217,8 @@ services:
 
 networks:
   load_test_net:
+    name: lemma-load-test-net
     driver: bridge
+
+volumes:
+  agentbox_state:

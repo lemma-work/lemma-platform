@@ -754,13 +754,11 @@ class Settings(BaseSettings):
             "saturate one core and distort connection/latency measurements."
         ),
     )
-    e2e_sandbox_mode: Literal["docker", "fake"] = Field(
+    e2e_sandbox_mode: Literal["docker", "e2b"] = Field(
         default="docker",
         description=(
-            "TEST HOOK ONLY. 'fake' runs workspace/CLI tools against an in-process "
-            "subprocess AgentBox instead of the Docker manager, so e2e needs no "
-            "Docker image. Production/dev leave this at 'docker'. The e2e fixtures "
-            "default it to 'fake' (override with E2E_REAL=1)."
+            "TEST HOOK ONLY. Selects the real AgentBox provider used by E2E. "
+            "Docker is the default; E2B is credential-gated."
         ),
     )
     e2e_disable_worker_file_autoindex: bool = Field(
@@ -779,6 +777,50 @@ class Settings(BaseSettings):
     )
     agentbox_api_key: Optional[str] = Field(
         description="Bearer API key for the AgentBox manager", default=None
+    )
+    agentbox_workspace_profile_name: str = Field(
+        default="workspace-python-v1",
+        description="Immutable AgentBox workspace profile name",
+    )
+    agentbox_workspace_profile_digest: str = Field(
+        default=f"sha256:{'1' * 64}",
+        pattern=r"^sha256:[0-9a-f]{64}$",
+        description="Immutable AgentBox workspace profile digest",
+    )
+    agentbox_function_profile_name: str = Field(
+        default="function-python-v1",
+        description="Immutable AgentBox function profile name",
+    )
+    agentbox_function_profile_digest: str = Field(
+        default=f"sha256:{'2' * 64}",
+        pattern=r"^sha256:[0-9a-f]{64}$",
+        description="Immutable AgentBox function profile digest",
+    )
+    function_builder_executable: str = Field(
+        default="uv",
+        description="Executable used only while prebuilding function dependencies",
+    )
+    function_builder_python_platform: Optional[str] = Field(
+        default=None,
+        description="uv Linux wheel target matching the function runtime image",
+    )
+    function_builder_digest: str = Field(
+        default="local-uv-builder-1",
+        description="Immutable builder identity included in function revision hashes",
+    )
+    function_runtime_secret: Optional[SecretStr] = Field(
+        default=None,
+        description="HMAC key deriving restart-stable one-use attempt credentials",
+    )
+    function_execution_units_per_pod: int = Field(default=8, ge=2, le=128)
+    function_execution_api_reserved_units: int = Field(default=2, ge=0, le=128)
+    function_execution_standard_units: int = Field(default=2, ge=1, le=128)
+    function_execution_claim_lease_seconds: int = Field(default=60, ge=10, le=600)
+    function_api_deadline_seconds: int = Field(default=120, ge=1, le=3600)
+    function_job_deadline_seconds: int = Field(default=600, ge=1, le=86_400)
+    function_runtime_gateway_url: Optional[str] = Field(
+        default=None,
+        description="Backend URL reachable from function sandboxes",
     )
     workspace_callback_api_url: Optional[str] = Field(
         default=None,

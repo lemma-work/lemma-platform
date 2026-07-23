@@ -16,14 +16,8 @@ if ! mkdir -p "$HOME_DIR" 2>/dev/null || [ ! -w "$HOME_DIR" ]; then
   HOME_DIR="/tmp/agentbox-home-${UID:-10001}"
   mkdir -p "$HOME_DIR"
 fi
-NPM_CACHE_DIR="${NPM_CONFIG_CACHE:-$HOME_DIR/.npm}"
-if ! mkdir -p "$NPM_CACHE_DIR" 2>/dev/null || [ ! -w "$NPM_CACHE_DIR" ]; then
-  NPM_CACHE_DIR="/tmp/agentbox-npm-${UID:-10001}"
-  mkdir -p "$NPM_CACHE_DIR"
-fi
 
 export HOME="$HOME_DIR"
-export NPM_CONFIG_CACHE="$NPM_CACHE_DIR"
 export DISPLAY="$DISPLAY_VALUE"
 export AGENT_BROWSER_HEADED="${AGENT_BROWSER_HEADED:-true}"
 export AGENT_BROWSER_PROFILE="$PROFILE_DIR"

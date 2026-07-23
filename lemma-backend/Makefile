@@ -33,7 +33,25 @@ BACKEND_COVERAGE_FILE ?= $(CURDIR)/.coverage.backend
 BACKEND_COVERAGE_RUN_ENV = COVERAGE_PROCESS_START=$(CURDIR)/.coveragerc COVERAGE_FILE=$(BACKEND_COVERAGE_FILE)
 BACKEND_COVERAGE_DATA_ENV = COVERAGE_FILE=$(BACKEND_COVERAGE_FILE)
 
-.PHONY: help test test-unit test-e2e test-e2e-real test-e2e-fast test-e2e-runtime test-module coverage coverage-unit coverage-e2e coverage-backend-unit coverage-backend-e2e-shard coverage-backend-report coverage-backend-gate test-collect lint lint-async typecheck-critical architecture migrate docker-build docker-build-cloud docker-build-arm64 docker-build-amd64 agentbox-build teams-manifest-zip load-test-build load-test-up load-test-migrate load-test-setup load-test-run load-test-sse load-test-journey load-test-datastore-up load-test-datastore-setup load-test-datastore-files load-test-datastore-stats load-test-datastore-down load-test-monitor load-test-down load-test
+# Full-path function quality benchmark. E2B identifiers are immutable builds
+# that passed the Docker/E2B parity run; update them only with new promotion
+# evidence. The E2B API key is read from lemma-backend/.env or the environment.
+FUNCTION_BENCH_CONCURRENCY ?= 5
+FUNCTION_BENCH_INVOCATIONS ?= 5
+FUNCTION_BENCH_SOURCE_ROWS ?= 1000
+FUNCTION_BENCH_WRITE_ROWS ?= 1000
+FUNCTION_BENCH_TERMINAL_TIMEOUT_SECONDS ?= 300
+include ../agentbox/templates/e2b/promoted-builds.env
+FUNCTION_BENCH_ENV = \
+	E2E_REAL=1 \
+	FUNCTION_BENCH_CONCURRENCY=$(FUNCTION_BENCH_CONCURRENCY) \
+	FUNCTION_BENCH_INVOCATIONS=$(FUNCTION_BENCH_INVOCATIONS) \
+	FUNCTION_BENCH_SOURCE_ROWS=$(FUNCTION_BENCH_SOURCE_ROWS) \
+	FUNCTION_BENCH_WRITE_ROWS=$(FUNCTION_BENCH_WRITE_ROWS) \
+	FUNCTION_BENCH_TERMINAL_TIMEOUT_SECONDS=$(FUNCTION_BENCH_TERMINAL_TIMEOUT_SECONDS)
+FUNCTION_BENCH_TEST = app/modules/function/tests/perf/test_function_execution_benchmark.py
+
+.PHONY: help test test-unit test-e2e test-e2e-real test-e2e-fast test-e2e-runtime test-module coverage coverage-unit coverage-e2e coverage-backend-unit coverage-backend-e2e-shard coverage-backend-report coverage-backend-gate test-collect lint lint-async typecheck-critical architecture migrate docker-build docker-build-cloud docker-build-arm64 docker-build-amd64 agentbox-build benchmark-functions-docker benchmark-functions-e2b teams-manifest-zip load-test-build load-test-up load-test-migrate load-test-setup load-test-run load-test-sse load-test-journey load-test-datastore-up load-test-datastore-setup load-test-datastore-files load-test-datastore-stats load-test-datastore-down load-test-monitor load-test-down load-test
 
 help:
 	@echo "Lemma backend:"
@@ -58,6 +76,8 @@ help:
 	@echo "                         # package Teams manifest zip"
 	@echo "  make docker-build      # build backend image from monorepo root"
 	@echo "  make agentbox-build # build local AgentBox runtime images"
+	@echo "  make benchmark-functions-docker # API/JOB table benchmark on Docker"
+	@echo "  make benchmark-functions-e2b    # same benchmark on pinned E2B builds"
 	@echo ""
 	@echo "Load testing (WebSocket capacity on a simulated 2 CPU / 2 GB server):"
 	@echo "  make load-test         # full end-to-end: build → up → setup → run → stats"
@@ -240,6 +260,20 @@ docker-build-amd64:
 
 agentbox-build:
 	$(MAKE) -C ../agentbox build
+
+benchmark-functions-docker:
+	$(FUNCTION_BENCH_ENV) \
+		FUNCTION_BENCH_PROVIDER=docker \
+		uv run pytest $(FUNCTION_BENCH_TEST) -q -s -o timeout=1800
+
+benchmark-functions-e2b:
+	$(FUNCTION_BENCH_ENV) \
+		FUNCTION_BENCH_PROVIDER=e2b \
+		AGENTBOX_E2B_WORKSPACE_TEMPLATE=$(AGENTBOX_E2B_WORKSPACE_TEMPLATE) \
+		AGENTBOX_E2B_WORKSPACE_BUILD_ID=$(AGENTBOX_E2B_WORKSPACE_BUILD_ID) \
+		AGENTBOX_E2B_FUNCTION_TEMPLATE=$(AGENTBOX_E2B_FUNCTION_TEMPLATE) \
+		AGENTBOX_E2B_FUNCTION_BUILD_ID=$(AGENTBOX_E2B_FUNCTION_BUILD_ID) \
+		uv run pytest $(FUNCTION_BENCH_TEST) -q -s -o timeout=1800
 
 teams-manifest-zip:
 	python3 scripts/package_teams_manifest.py \

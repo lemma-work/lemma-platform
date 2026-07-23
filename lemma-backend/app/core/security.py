@@ -66,6 +66,7 @@ EXCLUDED_PATHS = (
     "/webhooks",
     "/agent-runtime/runs/",  # run-scoped MCP routes validate their own token
     "/agent-runtime/conversations/",  # conversation-scoped MCP routes validate their own token
+    "/internal/function-runtime/",  # sandbox runner validates attempt credentials
 )
 
 
