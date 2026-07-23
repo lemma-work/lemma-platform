@@ -148,6 +148,24 @@ pub fn installed_runtime(root: &Path, release: &str) -> InstalledRuntime {
     }
 }
 
+pub fn manifest_release(path: &Path) -> io::Result<String> {
+    Ok(load_manifest(path)?.version)
+}
+
+pub fn quarantine_runtime(runtime: &InstalledRuntime) -> io::Result<PathBuf> {
+    validate_installed(runtime)?;
+    let root = runtime
+        .host_pack_root
+        .parent()
+        .ok_or_else(|| invalid("installed runtime has no release root"))?;
+    if runtime.managed_runtime_root.parent() != Some(root) {
+        return Err(invalid("installed runtime roots do not share one release"));
+    }
+    let quarantined = quarantine_path(root)?;
+    fs::rename(root, &quarantined)?;
+    Ok(quarantined)
+}
+
 impl InstalledRuntime {
     pub fn is_complete(&self) -> bool {
         validate_installed(self).is_ok()
@@ -623,6 +641,54 @@ mod tests {
         writer.finish().unwrap();
     }
 
+    fn complete_runtime(root: &Path, release: &str) -> InstalledRuntime {
+        let runtime = installed_runtime(root, release);
+        fs::create_dir_all(&runtime.host_pack_root).unwrap();
+        fs::write(
+            runtime.host_pack_root.join("release.json"),
+            serde_json::to_vec(&serde_json::json!({"version": release})).unwrap(),
+        )
+        .unwrap();
+        let host_files: &[&str] = if cfg!(windows) {
+            &[
+                "pack.json",
+                "backend/python/python.exe",
+                "frontend/node/node.exe",
+            ]
+        } else {
+            &[
+                "pack.json",
+                "backend/python/bin/python3",
+                "frontend/node/bin/node",
+            ]
+        };
+        for relative in host_files {
+            let path = runtime.host_pack_root.join(relative);
+            fs::create_dir_all(path.parent().unwrap()).unwrap();
+            fs::write(path, b"present").unwrap();
+        }
+        fs::write(
+            runtime.host_pack_root.join("pack.json"),
+            serde_json::to_vec(&serde_json::json!({"release": release})).unwrap(),
+        )
+        .unwrap();
+        let guest = runtime.managed_runtime_root.join(guest_target());
+        fs::create_dir_all(&guest).unwrap();
+        fs::write(
+            guest.join("runtime.json"),
+            serde_json::to_vec(&serde_json::json!({"target": guest_target()})).unwrap(),
+        )
+        .unwrap();
+        for relative in if cfg!(target_os = "macos") {
+            &["vmlinuz", "initrd", "disk.raw"][..]
+        } else {
+            &["rootfs.tar"][..]
+        } {
+            fs::write(guest.join(relative), b"present").unwrap();
+        }
+        runtime
+    }
+
     #[test]
     fn extracts_only_enclosed_regular_files_and_preserves_executable_mode() {
         let root = tempfile::tempdir().unwrap();
@@ -709,45 +775,24 @@ mod tests {
         )
         .unwrap();
         assert!(!runtime.is_complete());
+        assert!(complete_runtime(root.path(), "1.2.3").is_complete());
+    }
 
-        let host_files: &[&str] = if cfg!(windows) {
-            &[
-                "pack.json",
-                "backend/python/python.exe",
-                "frontend/node/node.exe",
-            ]
-        } else {
-            &[
-                "pack.json",
-                "backend/python/bin/python3",
-                "frontend/node/bin/node",
-            ]
-        };
-        for relative in host_files {
-            let path = runtime.host_pack_root.join(relative);
-            fs::create_dir_all(path.parent().unwrap()).unwrap();
-            fs::write(path, b"present").unwrap();
-        }
-        fs::write(
-            runtime.host_pack_root.join("pack.json"),
-            br#"{"release":"1.2.3"}"#,
-        )
-        .unwrap();
-        let guest = runtime.managed_runtime_root.join(guest_target());
-        fs::create_dir_all(&guest).unwrap();
-        fs::write(
-            guest.join("runtime.json"),
-            serde_json::to_vec(&serde_json::json!({"target": guest_target()})).unwrap(),
-        )
-        .unwrap();
-        for relative in if cfg!(target_os = "macos") {
-            &["vmlinuz", "initrd", "disk.raw"][..]
-        } else {
-            &["rootfs.tar"][..]
-        } {
-            fs::write(guest.join(relative), b"present").unwrap();
-        }
-        assert!(runtime.is_complete());
+    #[test]
+    fn quarantine_moves_only_one_verified_immutable_release() {
+        let root = tempfile::tempdir().unwrap();
+        let release = root.path().join("1.2.3");
+        let runtime = complete_runtime(&release, "1.2.3");
+
+        let quarantined = quarantine_runtime(&runtime).unwrap();
+
+        assert!(!release.exists());
+        assert!(quarantined.is_dir());
+        assert!(quarantined
+            .file_name()
+            .unwrap()
+            .to_string_lossy()
+            .starts_with(".1.2.3.invalid-"));
     }
 
     #[test]

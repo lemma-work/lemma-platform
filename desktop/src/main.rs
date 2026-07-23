@@ -51,6 +51,17 @@ struct UiState {
     url: String,
 }
 
+#[derive(Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct RuntimeInfo {
+    desktop_release: String,
+    active_release: Option<String>,
+    previous_release: Option<String>,
+    source: String,
+    rollback_available: bool,
+    repair_available: bool,
+}
+
 struct Shell {
     ui: Mutex<UiState>,
     locald_writer: Mutex<Option<SendHalf>>,
@@ -163,12 +174,74 @@ fn read_config() -> Value {
 fn write_config(update: impl FnOnce(&mut Value)) -> Result<(), String> {
     let mut config = read_config();
     update(&mut config);
-    std::fs::create_dir_all(app_support_dir())
+    let directory = app_support_dir();
+    std::fs::create_dir_all(&directory)
         .map_err(|error| format!("could not create desktop config directory: {error}"))?;
     let serialized = serde_json::to_vec_pretty(&config)
         .map_err(|error| format!("could not encode desktop config: {error}"))?;
-    std::fs::write(config_path(), serialized)
-        .map_err(|error| format!("could not save desktop config: {error}"))
+    let destination = config_path();
+    let temporary = destination.with_extension(format!("json.next-{}", std::process::id()));
+    let _ = std::fs::remove_file(&temporary);
+    let mut options = std::fs::OpenOptions::new();
+    options.write(true).create_new(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        options.mode(0o600);
+    }
+    let mut file = options
+        .open(&temporary)
+        .map_err(|error| format!("could not stage desktop config: {error}"))?;
+    file.write_all(&serialized)
+        .and_then(|_| file.sync_all())
+        .map_err(|error| format!("could not persist desktop config: {error}"))?;
+    replace_config_file(&temporary, &destination)
+        .map_err(|error| format!("could not activate desktop config: {error}"))?;
+    #[cfg(unix)]
+    {
+        if let Ok(directory) = std::fs::File::open(directory) {
+            let _ = directory.sync_all();
+        }
+    }
+    Ok(())
+}
+
+#[cfg(not(windows))]
+fn replace_config_file(
+    source: &std::path::Path,
+    destination: &std::path::Path,
+) -> std::io::Result<()> {
+    std::fs::rename(source, destination)
+}
+
+#[cfg(windows)]
+fn replace_config_file(
+    source: &std::path::Path,
+    destination: &std::path::Path,
+) -> std::io::Result<()> {
+    use std::os::windows::ffi::OsStrExt;
+    use windows_sys::Win32::Storage::FileSystem::{
+        MoveFileExW, MOVEFILE_REPLACE_EXISTING, MOVEFILE_WRITE_THROUGH,
+    };
+
+    let source: Vec<u16> = source.as_os_str().encode_wide().chain(Some(0)).collect();
+    let destination: Vec<u16> = destination
+        .as_os_str()
+        .encode_wide()
+        .chain(Some(0))
+        .collect();
+    let result = unsafe {
+        MoveFileExW(
+            source.as_ptr(),
+            destination.as_ptr(),
+            MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH,
+        )
+    };
+    if result == 0 {
+        Err(std::io::Error::last_os_error())
+    } else {
+        Ok(())
+    }
 }
 
 fn connection_mode() -> String {
@@ -250,17 +323,22 @@ fn bundled_host_pack_root() -> Option<PathBuf> {
         .find(|root| root.join("release.json").is_file())
 }
 
-fn installed_runtime() -> Option<artifact_install::InstalledRuntime> {
-    let config = read_config();
-    let installed = config.get("installedRuntime")?;
+fn runtime_from_config_value(installed: &Value) -> Option<artifact_install::InstalledRuntime> {
     let release = installed.get("release")?.as_str()?;
     let root = PathBuf::from(installed.get("root")?.as_str()?);
     let runtime = artifact_install::installed_runtime(&root, release);
     runtime.is_complete().then_some(runtime)
 }
 
+fn configured_runtime(config: &Value, key: &str) -> Option<artifact_install::InstalledRuntime> {
+    runtime_from_config_value(config.get(key)?)
+}
+
 fn host_pack_root() -> Option<PathBuf> {
-    bundled_host_pack_root().or_else(|| installed_runtime().map(|runtime| runtime.host_pack_root))
+    let config = read_config();
+    bundled_host_pack_root().or_else(|| {
+        configured_runtime(&config, "installedRuntime").map(|runtime| runtime.host_pack_root)
+    })
 }
 
 fn bundled_managed_runtime_root() -> Option<PathBuf> {
@@ -286,8 +364,10 @@ fn bundled_managed_runtime_root() -> Option<PathBuf> {
 }
 
 fn managed_runtime_root() -> Option<PathBuf> {
-    bundled_managed_runtime_root()
-        .or_else(|| installed_runtime().map(|runtime| runtime.managed_runtime_root))
+    let config = read_config();
+    bundled_managed_runtime_root().or_else(|| {
+        configured_runtime(&config, "installedRuntime").map(|runtime| runtime.managed_runtime_root)
+    })
 }
 
 fn bundled_release_manifest() -> Option<PathBuf> {
@@ -330,9 +410,44 @@ fn bundled_sibling(name: &str) -> Option<PathBuf> {
 }
 
 fn bundled_host_pack_release() -> Option<String> {
-    let release = host_pack_root()?.join("release.json");
+    host_pack_release(&host_pack_root()?)
+}
+
+fn host_pack_release(root: &std::path::Path) -> Option<String> {
+    let release = root.join("release.json");
     let payload: Value = serde_json::from_slice(&std::fs::read(release).ok()?).ok()?;
     payload["version"].as_str().map(str::to_owned)
+}
+
+fn runtime_info_snapshot() -> RuntimeInfo {
+    let config = read_config();
+    let configured = configured_runtime(&config, "installedRuntime");
+    let previous = configured_runtime(&config, "previousRuntime");
+    let bundled = bundled_host_pack_root()
+        .filter(|_| bundled_managed_runtime_root().is_some())
+        .and_then(|root| host_pack_release(&root));
+    let (active_release, source) = if bundled.is_some() {
+        (bundled, "bundled".to_string())
+    } else {
+        (
+            configured.as_ref().map(|runtime| runtime.release.clone()),
+            "downloaded".to_string(),
+        )
+    };
+    let downloaded_active = source == "downloaded";
+    RuntimeInfo {
+        desktop_release: env!("CARGO_PKG_VERSION").into(),
+        active_release,
+        previous_release: previous.as_ref().map(|runtime| runtime.release.clone()),
+        source,
+        // Schema-1 releases do not declare database rollback compatibility.
+        // Retain the prior immutable pack, but never offer an unsafe downgrade.
+        rollback_available: false,
+        repair_available: downloaded_active
+            && configured
+                .as_ref()
+                .is_some_and(|runtime| runtime.release == env!("CARGO_PKG_VERSION")),
+    }
 }
 
 fn locald_matches_host_pack(hello: &Value, required_release: Option<&str>) -> bool {
@@ -412,15 +527,40 @@ fn ensure_locald(app: &AppHandle) -> Result<(), String> {
 }
 
 fn ensure_runtime_artifacts(app: &AppHandle) -> Result<(), String> {
-    if host_pack_root().is_some() && managed_runtime_root().is_some() {
+    if runtime_root().join("locald/Cargo.toml").is_file() {
         return Ok(());
     }
-    if runtime_root().join("locald/Cargo.toml").is_file() {
+    let config = read_config();
+    if let Some(bundled_host) = bundled_host_pack_root() {
+        if bundled_managed_runtime_root().is_none() {
+            return Err("the bundled managed runtime is incomplete".into());
+        }
+        let release = host_pack_release(&bundled_host)
+            .ok_or("the bundled native runtime has no valid release marker")?;
+        if release != env!("CARGO_PKG_VERSION") {
+            return Err(format!(
+                "bundled runtime release {release} does not match desktop release {}",
+                env!("CARGO_PKG_VERSION")
+            ));
+        }
+        return Ok(());
+    }
+    if configured_runtime(&config, "installedRuntime")
+        .is_some_and(|runtime| runtime.release == env!("CARGO_PKG_VERSION"))
+    {
         return Ok(());
     }
     let manifest = bundled_release_manifest().ok_or_else(|| {
         "this online installer is missing its signed local release manifest".to_string()
     })?;
+    let manifest_release = artifact_install::manifest_release(&manifest)
+        .map_err(|error| format!("could not read the signed local release manifest: {error}"))?;
+    if manifest_release != env!("CARGO_PKG_VERSION") {
+        return Err(format!(
+            "signed runtime release {manifest_release} does not match desktop release {}",
+            env!("CARGO_PKG_VERSION")
+        ));
+    }
     emit_runtime_install_progress(app, "Preparing local runtime", 1, None);
     let installed = artifact_install::install_from_manifest(
         &manifest,
@@ -442,20 +582,33 @@ fn ensure_runtime_artifacts(app: &AppHandle) -> Result<(), String> {
         },
     )
     .map_err(|error| format!("could not install the local runtime: {error}"))?;
+    activate_installed_runtime(&installed)?;
+    emit_runtime_install_progress(app, "Local runtime installed", 92, None);
+    Ok(())
+}
+
+fn activate_installed_runtime(
+    installed: &artifact_install::InstalledRuntime,
+) -> Result<(), String> {
     let root = installed
         .host_pack_root
         .parent()
         .ok_or("installed runtime has no release root")?
         .to_string_lossy()
         .into_owned();
+    let next = json!({"release": installed.release, "root": root});
     write_config(|config| {
-        config["installedRuntime"] = json!({
-            "release": installed.release,
-            "root": root,
-        });
-    })?;
-    emit_runtime_install_progress(app, "Local runtime installed", 92, None);
-    Ok(())
+        let current = config
+            .get("installedRuntime")
+            .cloned()
+            .unwrap_or(Value::Null);
+        if runtime_from_config_value(&current).is_some()
+            && current.get("release") != next.get("release")
+        {
+            config["previousRuntime"] = current;
+        }
+        config["installedRuntime"] = next;
+    })
 }
 
 fn emit_runtime_install_progress(
@@ -605,13 +758,28 @@ fn request_locald_replacement(connection: &mut LocaldConnection) -> Result<(), S
 fn wait_for_locald_exit() -> Result<(), String> {
     let root = locald_root();
     let name = locald_socket_name(&root)?;
-    for _ in 0..50 {
+    for _ in 0..450 {
         if LocalSocketStream::connect(name.clone()).is_err() {
             return Ok(());
         }
         std::thread::sleep(Duration::from_millis(100));
     }
     Err("the previous local service manager did not stop for the app update".into())
+}
+
+fn stop_locald_for_runtime_maintenance(app: &AppHandle) -> Result<(), String> {
+    if let Ok(mut connection) = connect_locald() {
+        request_locald_replacement(&mut connection)?;
+        wait_for_locald_exit()?;
+    }
+    let shell: State<Shell> = app.state();
+    *shell.locald_writer.lock().unwrap() = None;
+    Ok(())
+}
+
+fn start_after_runtime_maintenance(app: &AppHandle, request_id: &str) -> Result<(), String> {
+    ensure_locald(app)?;
+    send_to_locald(app, json!({"cmd":"start", "id": request_id}))
 }
 
 fn install_locald_connection(app: &AppHandle, connection: LocaldConnection) {
@@ -972,6 +1140,60 @@ fn prepare_runtime(window: WebviewWindow, app: AppHandle) -> Result<(), String> 
         &app,
         json!({"cmd":"runtime.prepare", "id":"shell-runtime-prepare"}),
     )
+}
+
+#[tauri::command]
+fn runtime_info(window: WebviewWindow) -> Result<RuntimeInfo, String> {
+    require_control_window(&window)?;
+    Ok(runtime_info_snapshot())
+}
+
+#[tauri::command]
+fn repair_runtime(window: WebviewWindow, app: AppHandle) -> Result<(), String> {
+    require_control_window(&window)?;
+    if current_mode(&app) != "local" {
+        return Err("runtime repair is available only for a local workspace".into());
+    }
+    let original_config = read_config();
+    let current = configured_runtime(&original_config, "installedRuntime")
+        .ok_or("there is no verified downloaded runtime to repair")?;
+    if current.release != env!("CARGO_PKG_VERSION") {
+        return Err(
+            "this retained runtime cannot be repaired with the current signed manifest".into(),
+        );
+    }
+    let original_root = current
+        .host_pack_root
+        .parent()
+        .ok_or("installed runtime has no release root")?
+        .to_path_buf();
+    stop_locald_for_runtime_maintenance(&app)?;
+    emit_runtime_install_progress(&app, "Isolating the damaged runtime", 1, None);
+    let quarantined = artifact_install::quarantine_runtime(&current)
+        .map_err(|error| format!("could not isolate the installed runtime: {error}"))?;
+
+    let repair = ensure_runtime_artifacts(&app)
+        .and_then(|_| start_after_runtime_maintenance(&app, "shell-start-after-runtime-repair"));
+    if let Err(error) = repair {
+        if original_root.exists() {
+            let replacement =
+                artifact_install::installed_runtime(&original_root, env!("CARGO_PKG_VERSION"));
+            if replacement.is_complete() {
+                let _ = artifact_install::quarantine_runtime(&replacement);
+            } else {
+                let failed = original_root
+                    .with_file_name(format!(".runtime-repair-failed-{}", std::process::id()));
+                let _ = std::fs::rename(&original_root, failed);
+            }
+        }
+        let _ = std::fs::rename(&quarantined, &original_root);
+        let _ = write_config(|config| *config = original_config);
+        let _ = start_after_runtime_maintenance(&app, "shell-start-after-repair-rollback");
+        return Err(format!(
+            "runtime repair failed and the prior verified release was restored: {error}"
+        ));
+    }
+    Ok(())
 }
 
 #[tauri::command]
@@ -1361,6 +1583,8 @@ fn main() {
             login,
             open_control_center,
             prepare_runtime,
+            runtime_info,
+            repair_runtime,
             control_snapshot,
             apply_operator_config
         ])
@@ -1579,6 +1803,33 @@ mod tests {
         assert!(html.contains("!s.error"));
         assert!(html.contains("await window.lemmaDesktop.openAuth(\"signup\")"));
         assert!(!html.contains("Nothing leaves your machine"));
+    }
+
+    #[test]
+    fn control_center_exposes_honest_runtime_repair_and_rollback_boundaries() {
+        let html = include_str!("../ui/control.html");
+
+        assert!(html.contains("Signed release lifecycle"));
+        assert!(html.contains("repair_runtime"));
+        assert!(html.contains("schema-1 releases do not claim database-safe downgrade"));
+        assert!(html.contains("Lemma will not risk opening migrated data with an older backend"));
+    }
+
+    #[test]
+    fn desktop_config_replacement_never_exposes_a_partial_file() {
+        let root = tempfile::tempdir().unwrap();
+        let destination = root.path().join("desktop-config.json");
+        let source = root.path().join("desktop-config.json.next");
+        std::fs::write(&destination, br#"{"revision":1}"#).unwrap();
+        std::fs::write(&source, br#"{"revision":2}"#).unwrap();
+
+        replace_config_file(&source, &destination).unwrap();
+
+        assert_eq!(
+            std::fs::read_to_string(&destination).unwrap(),
+            r#"{"revision":2}"#
+        );
+        assert!(!source.exists());
     }
 
     #[test]

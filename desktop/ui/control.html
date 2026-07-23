@@ -103,6 +103,7 @@
       <button data-page="integrations">Integrations <span class="dot" id="dot-integrations"></span></button>
       <button data-page="surfaces">Agent Surfaces <span class="dot" id="dot-surfaces"></span></button>
       <button data-page="services">Services <span class="dot" id="dot-services"></span></button>
+      <button data-page="updates">Updates <span class="dot" id="dot-updates"></span></button>
       <button data-page="diagnostics">Diagnostics <span class="dot"></span></button>
     </nav>
     <div class="aside-foot"><span id="release">Release —</span><br />Secrets: operating-system vault</div>
@@ -160,7 +161,14 @@
 
     <section class="page" data-page="services"><div class="grid"><article class="card full"><h2>Capability health</h2><p>The application topology stays one backend plus one frontend; database/cache/auth are private background dependencies.</p><div id="service-list"></div><div class="actions"><button class="btn" data-action="restart">Restart application</button><button class="btn danger" data-action="stop-all">Stop everything</button></div></article></div></section>
 
-    <section class="page" data-page="diagnostics"><div class="grid"><article class="card"><h2>Local paths</h2><p class="code" id="diag-paths">Loading…</p><button class="btn" data-action="logs">Open logs folder</button></article><article class="card"><h2>Network contract</h2><p>Main UI: <span class="code">app.lemma.localhost:3711</span><br />API: <span class="code">api.lemma.localhost:8711</span><br />Built apps: <span class="code">&lt;slug&gt;.apps.lemma.localhost:8711</span></p></article><article class="card full"><h2>Repair controls</h2><p>Restart preserves all databases, files, and sandbox workspaces. Stop everything cleanly powers down Lemma’s private runtime only.</p><div class="actions"><button class="btn" data-action="start">Reconcile desired state</button><button class="btn" data-action="restart">Restart application</button><button class="btn danger" data-action="stop-all">Stop private runtime</button></div></article></div></section>
+    <section class="page" data-page="updates"><div class="grid">
+      <article class="card third"><div class="eyebrow">Desktop</div><div class="metric" id="runtime-desktop-release">—</div><p>The signed native application release.</p></article>
+      <article class="card third"><div class="eyebrow">Active runtime</div><div class="metric" id="runtime-active-release">—</div><p id="runtime-source">Checking immutable host and guest packs.</p></article>
+      <article class="card third"><div class="eyebrow">Previous runtime</div><div class="metric" id="runtime-previous-release">None</div><p>Retained for controlled recovery when the release contract permits it.</p></article>
+      <article class="card full"><h2>Signed release lifecycle</h2><p>Installing a newer signed Lemma app stages its exact matching runtime on the next local launch. The old verified pack is retained, but schema-1 releases do not claim database-safe downgrade compatibility.</p><div class="notice" id="rollback-notice">Rollback is intentionally unavailable until a release declares its data rollback boundary. Lemma will not risk opening migrated data with an older backend.</div><div class="actions"><button class="btn" id="repair-runtime" data-action="repair-runtime">Verify &amp; repair current runtime</button></div></article>
+    </div></section>
+
+    <section class="page" data-page="diagnostics"><div class="grid"><article class="card"><h2>Local paths</h2><p class="code" id="diag-paths">Loading…</p><button class="btn" data-action="logs">Open logs folder</button></article><article class="card"><h2>Network contract</h2><p>Main UI: <span class="code">app.lemma.localhost:3711</span><br />API: <span class="code">api.lemma.localhost:8711</span><br />Built apps: <span class="code">&lt;slug&gt;.apps.lemma.localhost:8711</span></p></article><article class="card full"><h2>Repair controls</h2><p>Restart preserves all databases, files, and sandbox workspaces. Runtime repair replaces only signed application/runtime files and restores the verified prior copy if repair fails.</p><div class="actions"><button class="btn" data-action="start">Reconcile desired state</button><button class="btn" data-action="restart">Restart application</button><button class="btn" data-action="repair-runtime">Verify &amp; repair runtime</button><button class="btn danger" data-action="stop-all">Stop private runtime</button></div></article></div></section>
   </main>
 </div>
 <div class="toast" id="toast" hidden></div>
@@ -175,10 +183,12 @@
     integrations: ["Integrations", "Configure connector credentials without mixing them with login or agent-surface apps."],
     surfaces: ["Agent Surfaces", "Make agents reachable through the channels you explicitly enable."],
     services: ["Services", "Capability health with the technical process view available when you need it."],
+    updates: ["Updates", "Exact release matching, immutable packs, and data-safe recovery boundaries."],
     diagnostics: ["Diagnostics", "Local paths, network contracts, logs, and non-destructive repair controls."],
   };
   let snapshot = null;
   let state = null;
+  let runtimeInfo = null;
   let request = 0;
   const nextId = (prefix) => `control-${prefix}-${Date.now()}-${++request}`;
   const $ = (id) => document.getElementById(id);
@@ -256,6 +266,20 @@
     $("service-list").innerHTML = serviceHtml; $("overview-services").innerHTML = serviceHtml;
     $("diag-paths").textContent = snapshot.paths ? `Control: ${snapshot.paths.locald}\nLogs: ${snapshot.paths.logs}` : "Paths unavailable";
   }
+  function renderRuntime() {
+    if (!runtimeInfo) return;
+    $("runtime-desktop-release").textContent = runtimeInfo.desktopRelease;
+    $("runtime-active-release").textContent = runtimeInfo.activeRelease || "Not installed";
+    $("runtime-previous-release").textContent = runtimeInfo.previousRelease || "None";
+    $("runtime-source").textContent = runtimeInfo.source === "bundled" ? "Verified inside this signed app." : "Verified immutable download.";
+    document.querySelectorAll('[data-action="repair-runtime"]').forEach((item) => { item.disabled = !runtimeInfo.repairAvailable; });
+    $("dot-updates").className = `dot ${runtimeInfo.activeRelease === runtimeInfo.desktopRelease ? "ok" : "warn"}`;
+    $("rollback-notice").hidden = runtimeInfo.rollbackAvailable;
+  }
+  async function loadRuntimeInfo() {
+    try { runtimeInfo = await invoke("runtime_info"); renderRuntime(); }
+    catch (error) { toast(String(error), true); }
+  }
   function escapeHtml(value) { const node = document.createElement("span"); node.textContent = String(value || ""); return node.innerHTML; }
 
   function collect() {
@@ -282,7 +306,18 @@
       if (action === "stop") await invoke("stop", { includeInfra: false });
       if (action === "stop-all") await invoke("stop", { includeInfra: true });
       if (action === "logs") await invoke("open_logs");
-    } catch (error) { toast(String(error), true); }
+      if (action === "repair-runtime") {
+        if (!window.confirm("Stop Lemma briefly and replace only the current signed runtime files? Workspace data and configuration are preserved.")) return;
+        document.querySelectorAll('[data-action="repair-runtime"]').forEach((item) => { item.disabled = true; item.textContent = "Repairing…"; });
+        await invoke("repair_runtime");
+        document.querySelectorAll('[data-action="repair-runtime"]').forEach((item) => { item.textContent = "Verify & repair runtime"; });
+        await loadRuntimeInfo();
+        toast("Runtime files were verified and repaired. Lemma is starting.");
+      }
+    } catch (error) {
+      document.querySelectorAll('[data-action="repair-runtime"]').forEach((item) => { item.disabled = !runtimeInfo?.repairAvailable; item.textContent = "Verify & repair runtime"; });
+      toast(String(error), true);
+    }
   }));
   $("detect-ollama").addEventListener("click", () => { $("ai-protocol").value = "openai_compat"; $("ai-base").value = "http://127.0.0.1:11434/v1"; $("ai-key").value = ""; $("ai-private-network").checked = false; toast("Ollama selected. Validate & apply will discover installed models."); });
   $("detect-lmstudio").addEventListener("click", () => { $("ai-protocol").value = "openai_compat"; $("ai-base").value = "http://127.0.0.1:1234/v1"; $("ai-key").value = ""; $("ai-private-network").checked = false; toast("LM Studio selected. Start its server, then Validate & apply."); });
@@ -291,11 +326,12 @@
     if (event.event === "control.snapshot") { snapshot = event; state = event.state; fill(); render(); }
     if (event.event === "config.applied") { snapshot.operator = event.operator; fill(); render(); document.querySelectorAll("[data-save]").forEach((b) => { b.disabled = false; b.textContent = b.closest("[data-page=ai]") ? "Validate & apply" : b.closest("[data-page=integrations]") ? "Save integrations" : "Save surfaces"; }); toast("Configuration saved. Provider and backend health checks passed."); requestSnapshot(); }
     if (event.event === "error") { document.querySelectorAll("[data-save]").forEach((b) => { b.disabled = false; b.textContent = "Try again"; }); toast(event.message || "Local operation failed", true); }
-    if (["status", "state", "ready", "phase"].includes(event.event)) requestSnapshot();
+    if (["status", "state", "ready", "phase"].includes(event.event)) { requestSnapshot(); if (event.event === "ready") loadRuntimeInfo(); }
   });
   let snapshotTimer = null;
   function requestSnapshot() { clearTimeout(snapshotTimer); snapshotTimer = setTimeout(() => invoke("control_snapshot", { id: nextId("snapshot") }).catch((error) => toast(String(error), true)), 100); }
   requestSnapshot();
+  loadRuntimeInfo();
 })();
 </script>
 </body>

@@ -79,6 +79,18 @@ entrypoints, and archive layout pass validation. Incomplete downloads remain
 available for Retry. The offline build starts from its bundled payload without
 network access (cloud models and OAuth still require their own network access).
 
+Every online launch requires the installed host/guest release to match the
+signed desktop release exactly; an older complete pack is no longer accepted
+merely because it exists. A newer desktop stages its matching immutable release
+and retains the prior verified pack. Desktop configuration is activated through
+a flushed atomic replacement on both macOS and Windows. Control Center can
+quarantine and redownload a damaged current runtime without touching the
+database disk, operator configuration, vault, or workspaces; if repair fails,
+the original verified directory and configuration are restored. Schema-1 does
+not declare database downgrade compatibility, so the UI deliberately withholds
+manual rollback even though the prior pack is retained. Safe rollback becomes
+available only with the manifest-v2 data boundary and pre-update snapshot.
+
 Release artifacts are named `*-online.*` and `*-offline.*`. Windows host
 runtime entrypoints are Authenticode-signed before the downloadable archive is
 hashed. macOS apps and DMGs are Developer ID signed, notarized, and stapled.

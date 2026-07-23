@@ -937,6 +937,18 @@ both DMGs are Developer ID signed, notarized, and stapled. The schema-2 format
 below remains the update/rollback target; it is not required to bootstrap the
 first managed release.
 
+The shipping schema-1 activator now enforces an exact desktop/runtime release
+match on every launch, stages into an immutable release directory, atomically
+replaces the flushed desktop pointer (including through `MoveFileExW` on
+Windows), and retains the prior verified release. A non-destructive Control
+Center repair stops only Lemma, quarantines the current release, redownloads and
+revalidates the exact signed artifacts, then starts them; any repair failure
+restores the original directory and pointer. Schema 1 has no data rollback
+classification or pre-update logical snapshot, so its UI must not expose a
+manual runtime downgrade. Retention is recovery preparation, not a rollback
+claim. Manifest v2 plus section 16's snapshot transaction remains the gate for
+that action.
+
 ### 14.1 Release manifest v2
 
 ```json
