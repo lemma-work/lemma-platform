@@ -51,7 +51,8 @@ def decode_output(content: bytes) -> list[tuple[int, int, bytes]]:
 async def wait_for_terminal(
     client: httpx.AsyncClient, operation_id: str
 ) -> dict[str, object]:
-    for _ in range(100):
+    deadline = asyncio.get_running_loop().time() + 5
+    while asyncio.get_running_loop().time() < deadline:
         response = await client.get(f"/processes/{operation_id}", headers=HEADERS)
         payload = response.json()
         if payload["state"] != "running":
