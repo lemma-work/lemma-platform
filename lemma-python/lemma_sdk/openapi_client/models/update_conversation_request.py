@@ -102,7 +102,7 @@ class UpdateConversationRequest:
                 agent_runtime_type_0 = AgentRuntimeConfig.from_dict(data)
 
                 return agent_runtime_type_0
-            except (TypeError, ValueError, AttributeError, KeyError):
+            except TypeError, ValueError, AttributeError, KeyError:
                 pass
             return cast(AgentRuntimeConfig | None | Unset, data)
 
@@ -130,7 +130,7 @@ class UpdateConversationRequest:
                 metadata_type_0 = UpdateConversationRequestMetadataType0.from_dict(data)
 
                 return metadata_type_0
-            except (TypeError, ValueError, AttributeError, KeyError):
+            except TypeError, ValueError, AttributeError, KeyError:
                 pass
             return cast(None | Unset | UpdateConversationRequestMetadataType0, data)
 

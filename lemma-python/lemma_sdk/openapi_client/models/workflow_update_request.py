@@ -148,7 +148,7 @@ class WorkflowUpdateRequest:
                 mode_type_0 = WorkflowMode(data)
 
                 return mode_type_0
-            except (TypeError, ValueError, AttributeError, KeyError):
+            except TypeError, ValueError, AttributeError, KeyError:
                 pass
             return cast(None | Unset | WorkflowMode, data)
 
@@ -174,7 +174,7 @@ class WorkflowUpdateRequest:
                 start_type_0_type_0 = ManualWorkflowStartInput.from_dict(data)
 
                 return start_type_0_type_0
-            except (TypeError, ValueError, AttributeError, KeyError):
+            except TypeError, ValueError, AttributeError, KeyError:
                 pass
             try:
                 if not isinstance(data, dict):
@@ -182,7 +182,7 @@ class WorkflowUpdateRequest:
                 start_type_0_type_1 = ScheduledWorkflowStartInput.from_dict(data)
 
                 return start_type_0_type_1
-            except (TypeError, ValueError, AttributeError, KeyError):
+            except TypeError, ValueError, AttributeError, KeyError:
                 pass
             try:
                 if not isinstance(data, dict):
@@ -190,7 +190,7 @@ class WorkflowUpdateRequest:
                 start_type_0_type_2 = EventWorkflowStartInput.from_dict(data)
 
                 return start_type_0_type_2
-            except (TypeError, ValueError, AttributeError, KeyError):
+            except TypeError, ValueError, AttributeError, KeyError:
                 pass
             try:
                 if not isinstance(data, dict):
@@ -198,7 +198,7 @@ class WorkflowUpdateRequest:
                 start_type_0_type_3 = DataStoreWorkflowStartInput.from_dict(data)
 
                 return start_type_0_type_3
-            except (TypeError, ValueError, AttributeError, KeyError):
+            except TypeError, ValueError, AttributeError, KeyError:
                 pass
             return cast(
                 DataStoreWorkflowStartInput
@@ -223,7 +223,7 @@ class WorkflowUpdateRequest:
                 visibility_type_0 = ResourceVisibility(data)
 
                 return visibility_type_0
-            except (TypeError, ValueError, AttributeError, KeyError):
+            except TypeError, ValueError, AttributeError, KeyError:
                 pass
             return cast(None | ResourceVisibility | Unset, data)
 

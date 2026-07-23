@@ -10,16 +10,19 @@ import agentbox.api.app as app_module
 from agentbox.api.app import RequestContextMiddleware, health_live, health_ready
 
 
-def _request(*, store, manager, task_done: bool = False):
-    task = SimpleNamespace(done=lambda: task_done)
-    state = SimpleNamespace(
-        store=store,
-        lifecycle_manager=manager,
-        reconciliation_task=task,
-        cleanup_task=task,
-        provider_lease_renewal_task=task,
+def _request(*, database=None, provider=None):
+    reconciliation_task = SimpleNamespace(done=lambda: False)
+    maintenance_task = SimpleNamespace(done=lambda: False)
+    return SimpleNamespace(
+        app=SimpleNamespace(
+            state=SimpleNamespace(
+                database=database,
+                provider=provider,
+                reconciliation_task=reconciliation_task,
+                maintenance_task=maintenance_task,
+            )
+        )
     )
-    return SimpleNamespace(app=SimpleNamespace(state=state))
 
 
 @pytest.mark.asyncio
@@ -28,39 +31,41 @@ async def test_liveness_is_process_only() -> None:
 
 
 @pytest.mark.asyncio
-async def test_readiness_reports_only_generic_component_states() -> None:
-    store = SimpleNamespace(healthcheck=AsyncMock())
-    manager = SimpleNamespace(reconciliation_is_fresh=Mock(return_value=True))
-    response = await health_ready(_request(store=store, manager=manager))
+async def test_readiness_probes_database_and_reports_provider() -> None:
+    database = SimpleNamespace(healthcheck=AsyncMock())
+    provider = SimpleNamespace(name="docker")
+    response = await health_ready(_request(database=database, provider=provider))
+
     assert response.status_code == 200
     assert json.loads(response.body) == {
         "status": "ready",
+        "provider": "docker",
         "components": {
-            "manager": "ready",
-            "state_store": "ready",
+            "database": "ready",
             "provider": "ready",
+            "reconciler": "ready",
+            "maintenance": "ready",
         },
     }
-    store.healthcheck.assert_awaited_once()
+    database.healthcheck.assert_awaited_once()
 
 
 @pytest.mark.asyncio
-async def test_readiness_fails_for_store_reconciliation_or_task_failure() -> None:
-    store = SimpleNamespace(
+async def test_readiness_redacts_dependency_failure() -> None:
+    database = SimpleNamespace(
         healthcheck=AsyncMock(side_effect=RuntimeError("CANARY database URL"))
     )
-    manager = SimpleNamespace(reconciliation_is_fresh=Mock(return_value=False))
-    response = await health_ready(
-        _request(store=store, manager=manager, task_done=True)
-    )
+    response = await health_ready(_request(database=database, provider=None))
+
     assert response.status_code == 503
-    body = json.loads(response.body)
-    assert body == {
+    assert json.loads(response.body) == {
         "status": "not_ready",
+        "provider": None,
         "components": {
-            "manager": "unavailable",
-            "state_store": "unavailable",
+            "database": "unavailable",
             "provider": "unavailable",
+            "reconciler": "ready",
+            "maintenance": "ready",
         },
     }
     assert "CANARY" not in response.body.decode()
@@ -93,12 +98,7 @@ async def test_all_health_routes_are_quiet(monkeypatch, path: str) -> None:
         messages.append(message)
 
     await middleware(
-        {
-            "type": "http",
-            "path": path,
-            "method": "GET",
-            "headers": [],
-        },
+        {"type": "http", "path": path, "method": "GET", "headers": []},
         AsyncMock(),
         send,
     )

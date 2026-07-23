@@ -200,7 +200,7 @@ class AgentSurfaceResponse:
                 account_id_type_0 = UUID(data)
 
                 return account_id_type_0
-            except (TypeError, ValueError, AttributeError, KeyError):
+            except TypeError, ValueError, AttributeError, KeyError:
                 pass
             return cast(None | Unset | UUID, data)
 
@@ -217,7 +217,7 @@ class AgentSurfaceResponse:
                 agent_id_type_0 = UUID(data)
 
                 return agent_id_type_0
-            except (TypeError, ValueError, AttributeError, KeyError):
+            except TypeError, ValueError, AttributeError, KeyError:
                 pass
             return cast(None | Unset | UUID, data)
 
@@ -250,7 +250,7 @@ class AgentSurfaceResponse:
                 reach_type_0 = SurfaceReach.from_dict(data)
 
                 return reach_type_0
-            except (TypeError, ValueError, AttributeError, KeyError):
+            except TypeError, ValueError, AttributeError, KeyError:
                 pass
             return cast(None | SurfaceReach | Unset, data)
 

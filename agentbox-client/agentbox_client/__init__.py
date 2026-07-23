@@ -1,5 +1,40 @@
-from agentbox_client.client import AgentBoxClient
-from agentbox_client.sessions import AgentBoxSession
+from agentbox_client.client import AgentBoxApiError, AgentBoxClient
+from agentbox_client.models import (
+    AdmissionClass,
+    EnvironmentVariable,
+    FileKind,
+    FileStat,
+    PortAccessGrant,
+    PortProtocol,
+    ProcessOutputSnapshot,
+    ProcessRef,
+    ProcessState,
+    ProfileRef,
+    PythonResult,
+    PythonSession,
+    SandboxHandle,
+    RetryDisposition,
+    TerminalSize,
+    WorkloadKind,
+)
 
-__all__ = ["AgentBoxClient", "AgentBoxSession"]
-
+__all__ = [
+    "AdmissionClass",
+    "AgentBoxApiError",
+    "AgentBoxClient",
+    "EnvironmentVariable",
+    "FileKind",
+    "FileStat",
+    "PortAccessGrant",
+    "PortProtocol",
+    "ProcessOutputSnapshot",
+    "ProcessRef",
+    "ProcessState",
+    "ProfileRef",
+    "PythonResult",
+    "PythonSession",
+    "SandboxHandle",
+    "RetryDisposition",
+    "TerminalSize",
+    "WorkloadKind",
+]

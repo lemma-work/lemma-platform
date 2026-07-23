@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import base64
 import os
 from pathlib import Path
 import subprocess
@@ -25,7 +24,7 @@ class DevWorkflowTests(unittest.TestCase):
         return subprocess.run(
             command,
             cwd=cwd,
-            env={**os.environ, "AGENTBOX_ENDPOINT_STATE_KEYS": ""},
+            env=os.environ.copy(),
             text=True,
             capture_output=True,
             check=check,
@@ -40,7 +39,7 @@ class DevWorkflowTests(unittest.TestCase):
                 values[key] = value
         return values
 
-    def test_init_generates_complete_local_config_and_stable_agentbox_key(self):
+    def test_init_generates_complete_local_config_and_agentbox_override_file(self):
         with tempfile.TemporaryDirectory() as raw_tmp:
             tmp = Path(raw_tmp)
             backend = tmp / "backend"
@@ -69,17 +68,11 @@ class DevWorkflowTests(unittest.TestCase):
             self.assertEqual(backend_env["API_URL"], "http://localhost:8710")
             self.assertEqual(backend_env["FRONTEND_URL"], "http://localhost:3710")
 
-            key_before = self.env_values(agentbox / ".env")[
-                "AGENTBOX_ENDPOINT_STATE_KEYS"
-            ]
-            decoded = base64.urlsafe_b64decode(key_before)
-            self.assertEqual(len(decoded), 32)
+            agentbox_text = (agentbox / ".env").read_text()
+            self.assertIn("AgentBox local overrides", agentbox_text)
 
             self.run_make(tmp, "_init-agentbox-env", variables=variables)
-            key_after = self.env_values(agentbox / ".env")[
-                "AGENTBOX_ENDPOINT_STATE_KEYS"
-            ]
-            self.assertEqual(key_after, key_before)
+            self.assertEqual((agentbox / ".env").read_text(), agentbox_text)
 
     def test_ensure_backend_env_appends_only_missing_values(self):
         with tempfile.TemporaryDirectory() as raw_tmp:
@@ -135,7 +128,7 @@ class DevWorkflowTests(unittest.TestCase):
             self.assertIn(str(log_file), output)
             self.assertIn("startup failed", output)
 
-    def test_agentbox_launch_uses_postgres_extra_and_persistent_key(self):
+    def test_agentbox_launch_uses_postgres_and_canonical_images(self):
         with tempfile.TemporaryDirectory() as raw_tmp:
             tmp = Path(raw_tmp)
             result = self.run_make(
@@ -143,13 +136,13 @@ class DevWorkflowTests(unittest.TestCase):
                 "-n",
                 "_run-agentbox",
                 variables={
-                    "AGENTBOX_ENDPOINT_STATE_KEYS": "test-key",
                     "DEV_LOG_DIR": str(tmp / "logs"),
                 },
             )
 
             self.assertIn("AGENTBOX_STATE_DATABASE_URL=postgresql://", result.stdout)
-            self.assertIn("AGENTBOX_ENDPOINT_STATE_KEYS=test-key", result.stdout)
+            self.assertIn("AGENTBOX_WORKSPACE_IMAGE=agentbox-workspace:dev", result.stdout)
+            self.assertIn("AGENTBOX_FUNCTION_IMAGE=agentbox-function:dev", result.stdout)
             self.assertIn("uv run --extra postgres uvicorn", result.stdout)
 
     def test_public_mode_tunnels_only_api_and_keeps_frontend_local(self):

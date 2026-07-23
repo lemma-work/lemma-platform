@@ -176,7 +176,7 @@ class AccountResponseSchema:
                 allowed_scopes_type_0 = cast(list[str], data)
 
                 return allowed_scopes_type_0
-            except (TypeError, ValueError, AttributeError, KeyError):
+            except TypeError, ValueError, AttributeError, KeyError:
                 pass
             return cast(list[str] | None, data)
 
@@ -212,7 +212,7 @@ class AccountResponseSchema:
                 )
 
                 return preferences_type_0
-            except (TypeError, ValueError, AttributeError, KeyError):
+            except TypeError, ValueError, AttributeError, KeyError:
                 pass
             return cast(AccountResponseSchemaPreferencesType0 | None, data)
 
@@ -235,7 +235,7 @@ class AccountResponseSchema:
                 connector_type_0 = ConnectorResponseSchema.from_dict(data)
 
                 return connector_type_0
-            except (TypeError, ValueError, AttributeError, KeyError):
+            except TypeError, ValueError, AttributeError, KeyError:
                 pass
             return cast(ConnectorResponseSchema | None | Unset, data)
 

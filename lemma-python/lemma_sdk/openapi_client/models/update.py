@@ -173,7 +173,7 @@ class Update:
                 data_type_0 = File(payload=BytesIO(data))
 
                 return data_type_0
-            except (TypeError, ValueError, AttributeError, KeyError):
+            except TypeError, ValueError, AttributeError, KeyError:
                 pass
             return cast(File | None | Unset, data)
 

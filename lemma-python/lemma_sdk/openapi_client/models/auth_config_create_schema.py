@@ -108,7 +108,7 @@ class AuthConfigCreateSchema:
                 )
 
                 return credential_config_type_0
-            except (TypeError, ValueError, AttributeError, KeyError):
+            except TypeError, ValueError, AttributeError, KeyError:
                 pass
             return cast(
                 AuthConfigCreateSchemaCredentialConfigType0 | None | Unset, data

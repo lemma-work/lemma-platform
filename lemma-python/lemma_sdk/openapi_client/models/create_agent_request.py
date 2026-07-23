@@ -204,7 +204,7 @@ class CreateAgentRequest:
                 agent_runtime_type_0 = AgentRuntimeConfig.from_dict(data)
 
                 return agent_runtime_type_0
-            except (TypeError, ValueError, AttributeError, KeyError):
+            except TypeError, ValueError, AttributeError, KeyError:
                 pass
             return cast(AgentRuntimeConfig | None | Unset, data)
 
@@ -241,7 +241,7 @@ class CreateAgentRequest:
                 input_schema_type_0 = CreateAgentRequestInputSchemaType0.from_dict(data)
 
                 return input_schema_type_0
-            except (TypeError, ValueError, AttributeError, KeyError):
+            except TypeError, ValueError, AttributeError, KeyError:
                 pass
             return cast(CreateAgentRequestInputSchemaType0 | None | Unset, data)
 
@@ -260,7 +260,7 @@ class CreateAgentRequest:
                 metadata_type_0 = CreateAgentRequestMetadataType0.from_dict(data)
 
                 return metadata_type_0
-            except (TypeError, ValueError, AttributeError, KeyError):
+            except TypeError, ValueError, AttributeError, KeyError:
                 pass
             return cast(CreateAgentRequestMetadataType0 | None | Unset, data)
 
@@ -281,7 +281,7 @@ class CreateAgentRequest:
                 )
 
                 return output_schema_type_0
-            except (TypeError, ValueError, AttributeError, KeyError):
+            except TypeError, ValueError, AttributeError, KeyError:
                 pass
             return cast(CreateAgentRequestOutputSchemaType0 | None | Unset, data)
 
@@ -300,7 +300,7 @@ class CreateAgentRequest:
                 permissions_type_0 = AgentPermissionsReplaceRequest.from_dict(data)
 
                 return permissions_type_0
-            except (TypeError, ValueError, AttributeError, KeyError):
+            except TypeError, ValueError, AttributeError, KeyError:
                 pass
             return cast(AgentPermissionsReplaceRequest | None | Unset, data)
 

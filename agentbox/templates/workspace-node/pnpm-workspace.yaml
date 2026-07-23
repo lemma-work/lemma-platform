@@ -1,0 +1,5 @@
+allowBuilds:
+  agent-browser: true
+
+engineStrict: true
+strictDepBuilds: true

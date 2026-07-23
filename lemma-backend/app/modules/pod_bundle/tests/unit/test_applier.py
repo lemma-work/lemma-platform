@@ -64,6 +64,12 @@ async def test_app_step_not_dispatched_by_applier(tmp_path):
         await applier.apply_step(_step(StepKind.APP, "dashboard"))
 
 
+async def test_function_step_not_dispatched_by_applier(tmp_path):
+    applier = _applier(tmp_path)
+    with pytest.raises(StepNotApplicableError):
+        await applier.apply_step(_step(StepKind.FUNCTION, "triage"))
+
+
 class FakeTableService:
     def __init__(self):
         self.created = []
@@ -211,7 +217,6 @@ async def test_table_update_adds_new_columns_only(tmp_path, monkeypatch):
 # --- grants ------------------------------------------------------------------
 
 
-_FUNC_ID = uuid4()
 _AGENT_ID = uuid4()
 
 
@@ -314,89 +319,6 @@ def test_grants_from_payload_accepts_bare_grants_list():
     assert len(grants) == 1
     assert grants[0].resource_type == ResourceType.FUNCTION
     assert _grants_from_payload({}) == []
-
-
-class FakeFunctionService:
-    def __init__(self):
-        self.created = []
-        self.updated = []
-
-    async def get_function_by_name(
-        self, pod_id, name, user_id, *, raise_not_found=False, ctx=None
-    ):
-        return None
-
-    async def create_function(self, entity, user_id, code=None, ctx=None):
-        entity.id = _FUNC_ID
-        self.created.append(entity.name)
-        return entity
-
-
-async def test_function_apply_applies_grants_and_invalidates(tmp_path, monkeypatch):
-    from app.core.authorization.context import ResourceType
-
-    root = tmp_path / "bundle"
-    _write(
-        root / "functions" / "triage" / "triage.json",
-        {
-            "name": "triage",
-            "code": "def main():\n    return {}\n",
-            "permissions": {
-                "grants": [
-                    {
-                        "resource_type": "datastore_table",
-                        "resource_name": "tickets",
-                        "permission_ids": ["datastore.record.read"],
-                    }
-                ]
-            },
-        },
-    )
-    fake = FakeFunctionService()
-    monkeypatch.setattr(
-        "app.modules.function.api.dependencies.build_function_service",
-        lambda uow: fake,
-    )
-    calls = _patch_grant_layer(monkeypatch)
-    invalidated: dict = {}
-
-    async def _invalidate(*, pod_id, function_id):
-        invalidated["function_id"] = function_id
-
-    monkeypatch.setattr(
-        "app.modules.workspace.services.workspace_tool_runtime."
-        "invalidate_function_workspace_env_cache",
-        _invalidate,
-    )
-
-    await _grant_applier(root).apply_step(_step(StepKind.FUNCTION, "triage"))
-
-    assert fake.created == ["triage"]
-    assert calls["replace"]["grantee_type"] == "FUNCTION"
-    assert calls["replace"]["grantee_id"] == _FUNC_ID
-    assert calls["replace"]["grants"] == ["NORMALIZED"]
-    grant = calls["validated"][0]
-    assert grant.resource_type == ResourceType.DATASTORE_TABLE
-    assert grant.resource_name == "tickets"
-    # Cache dropped so the new scopes take effect on the next run.
-    assert invalidated["function_id"] == _FUNC_ID
-
-
-async def test_function_apply_without_grants_skips_grant_layer(tmp_path, monkeypatch):
-    root = tmp_path / "bundle"
-    _write(
-        root / "functions" / "noop" / "noop.json",
-        {"name": "noop", "code": "def main():\n    return {}\n"},
-    )
-    fake = FakeFunctionService()
-    monkeypatch.setattr(
-        "app.modules.function.api.dependencies.build_function_service",
-        lambda uow: fake,
-    )
-    calls = _patch_grant_layer(monkeypatch)
-    await _grant_applier(root).apply_step(_step(StepKind.FUNCTION, "noop"))
-    assert fake.created == ["noop"]
-    assert "replace" not in calls  # no grants -> grant layer untouched
 
 
 class FakeAgentService:

@@ -146,7 +146,16 @@ class Supervisor:
     def _op_start(self, *, setup: bool, rebuild: bool) -> None:
         self._set_state("starting", ready=False)
         if self.dry_run:
-            for key in ("check", "pull", "infra", "migrations", "workspace", "backend", "frontend", "verify"):
+            for key in (
+                "check",
+                "pull",
+                "infra",
+                "migrations",
+                "workspace",
+                "backend",
+                "frontend",
+                "verify",
+            ):
                 self._set_phase(key, "dry run")
                 time.sleep(0.4)
             self.emit("provider", provider="docker")
@@ -263,8 +272,12 @@ class Supervisor:
 
     def _run_op(self, name: str, request_id: object, fn, **kwargs) -> None:
         if not self._op_lock.acquire(blocking=False):
-            self.emit("error", id=request_id, code="busy",
-                      message=f"cannot run {name!r}: another operation is in progress")
+            self.emit(
+                "error",
+                id=request_id,
+                code="busy",
+                message=f"cannot run {name!r}: another operation is in progress",
+            )
             return
 
         def worker() -> None:
@@ -297,8 +310,13 @@ class Supervisor:
         elif cmd == "status":
             self._emit_status(request_id)
         elif cmd == "start":
-            self._run_op("start", request_id, self._op_start,
-                         setup=bool(message.get("setup")), rebuild=bool(message.get("rebuild")))
+            self._run_op(
+                "start",
+                request_id,
+                self._op_start,
+                setup=bool(message.get("setup")),
+                rebuild=bool(message.get("rebuild")),
+            )
         elif cmd == "stop":
             self._run_op("stop", request_id, self._op_stop, infra=bool(message.get("infra")))
         elif cmd == "restart":
@@ -307,8 +325,9 @@ class Supervisor:
             self._stop_services_on_exit = bool(message.get("stop_services"))
             self._shutdown.set()
         else:
-            self.emit("error", id=request_id, code="unknown-command",
-                      message=f"unknown command {cmd!r}")
+            self.emit(
+                "error", id=request_id, code="unknown-command", message=f"unknown command {cmd!r}"
+            )
 
     def run(self) -> int:
         self._claim_stdio()

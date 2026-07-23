@@ -18,9 +18,8 @@ import redis.asyncio as redis
 from app.modules.agent.tests.e2e.system_lemma_helpers import system_lemma_env_overlay
 
 _DEFAULT_READINESS_MARKERS = (
-    "Worker starting...",
-    "`HandleAgentRunEvent` waiting for messages",
-    "`HandleScheduleEvents` waiting for messages",
+    '"logger": "app.core.infrastructure.jobs.streaq_runtime"',
+    '"event": "service.started"',
 )
 
 

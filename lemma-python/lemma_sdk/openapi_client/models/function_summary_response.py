@@ -217,7 +217,7 @@ class FunctionSummaryResponse:
                 config_type_0 = FunctionSummaryResponseConfigType0.from_dict(data)
 
                 return config_type_0
-            except (TypeError, ValueError, AttributeError, KeyError):
+            except TypeError, ValueError, AttributeError, KeyError:
                 pass
             return cast(FunctionSummaryResponseConfigType0 | None | Unset, data)
 

@@ -292,7 +292,7 @@ class FunctionDetailResponse:
                 config_type_0 = FunctionDetailResponseConfigType0.from_dict(data)
 
                 return config_type_0
-            except (TypeError, ValueError, AttributeError, KeyError):
+            except TypeError, ValueError, AttributeError, KeyError:
                 pass
             return cast(FunctionDetailResponseConfigType0 | None | Unset, data)
 
@@ -313,7 +313,7 @@ class FunctionDetailResponse:
                 )
 
                 return config_schema_type_0
-            except (TypeError, ValueError, AttributeError, KeyError):
+            except TypeError, ValueError, AttributeError, KeyError:
                 pass
             return cast(FunctionDetailResponseConfigSchemaType0 | None | Unset, data)
 

@@ -1,13 +1,14 @@
 """Workspace file manager."""
 
-import base64
 from datetime import datetime
-import json
+from pathlib import Path
+import posixpath
+import shutil
+import tempfile
 from typing import Optional, Union
 from uuid import UUID
-from pathlib import Path
-import shlex
-import tempfile
+
+from agentbox_client import AgentBoxApiError
 
 from app.core.config import settings
 from app.modules.workspace.domain.file_types import FileInfo
@@ -21,28 +22,56 @@ class WorkspaceFileManager:
 
     def __init__(self, user_id: UUID, cwd: Optional[str] = None):
         self.user_id = user_id
-        self.cwd = cwd.strip("/") if cwd else ""
+        self.cwd = self._normalize_cwd(cwd)
         self._local_base: Path | None = None
 
         if settings.environment == "testing":
-            root = Path(tempfile.gettempdir()) / "lemma_test_storage"
+            root = (Path(tempfile.gettempdir()) / "lemma_test_storage").resolve()
             self._local_base = root / str(self.user_id)
             if self.cwd:
                 self._local_base = self._local_base / self.cwd
+            self._local_base = self._local_base.resolve()
             self._local_base.mkdir(parents=True, exist_ok=True)
 
     def _local_path(self, path: str) -> Path:
         if not self._local_base:
             raise RuntimeError("Local storage is not configured")
-        return self._local_base / path
+        if "\x00" in path or Path(path).is_absolute():
+            raise ValueError("local file path must be relative")
+        candidate = (self._local_base / path).resolve()
+        try:
+            candidate.relative_to(self._local_base)
+        except ValueError as exc:
+            raise ValueError("local file path escapes its configured root") from exc
+        return candidate
+
+    @staticmethod
+    def _normalize_cwd(cwd: str | None) -> str:
+        if not cwd:
+            return ""
+        if "\x00" in cwd or cwd.startswith("/"):
+            raise ValueError("workspace cwd must be relative to /workspace")
+        root = posixpath.normpath(posixpath.join("/workspace", cwd))
+        if root != "/workspace" and not root.startswith("/workspace/"):
+            raise ValueError("workspace cwd escapes /workspace")
+        return "" if root == "/workspace" else posixpath.relpath(root, "/workspace")
+
+    @staticmethod
+    def _is_missing_error(error: AgentBoxApiError) -> bool:
+        return error.status_code == 404 and error.code == "FILE_NOT_FOUND"
 
     def _workspace_path(self, path: str) -> str:
-        relative = path.lstrip("/")
-        if self.cwd and relative:
-            return f"{self.cwd}/{relative}"
-        if self.cwd:
-            return self.cwd
-        return relative
+        root = posixpath.normpath(
+            posixpath.join("/workspace", self.cwd) if self.cwd else "/workspace"
+        )
+        candidate = posixpath.normpath(posixpath.join(root, path.lstrip("/")))
+        if candidate != root and not candidate.startswith(f"{root}/"):
+            raise ValueError("workspace file path escapes its configured root")
+        return candidate
+
+    def _relative_workspace_path(self, path: str) -> str:
+        root = self._workspace_path("")
+        return posixpath.relpath(path, root)
 
     async def _get_workspace_session(self):
         from app.modules.workspace.services.workspace_sandbox_service import (
@@ -85,40 +114,25 @@ class WorkspaceFileManager:
         session = await self._get_workspace_session()
         runtime_path = self._workspace_path(path)
         async with session:
-            script = (
-                "import json, pathlib; "
-                f"p=pathlib.Path({runtime_path or '.'!r}); "
-                "items=[]; "
-                "items=[{'name': x.name, 'path': str(x), "
-                "'type': 'directory' if x.is_dir() else 'file', "
-                "'size': x.stat().st_size} for x in p.iterdir()] if p.exists() else []; "
-                "print(json.dumps(items))"
-            )
-            result = await session.exec_command(
-                cmd=f"python -c {shlex.quote(script)}",
-                timeout=30,
-            )
-        if not result.get("success"):
+            try:
+                entries = await session.list_files(runtime_path, timeout=30)
+            except AgentBoxApiError as exc:
+                if self._is_missing_error(exc):
+                    return []
+                raise
+        if not entries:
             return []
 
-        base_prefix = f"{self.cwd}/" if self.cwd else ""
-        results = []
-        for item in json.loads(result.get("stdout") or "[]"):
-            item_path = item["path"]
-            if item_path.startswith("/workspace/"):
-                item_path = item_path[len("/workspace/") :]
-            results.append(
-                FileInfo(
-                    name=item["name"],
-                    path=item_path[len(base_prefix) :]
-                    if base_prefix and item_path.startswith(base_prefix)
-                    else item_path,
-                    type=item.get("type", "file"),
-                    size=item.get("size"),
-                    last_modified=item.get("last_modified"),
-                )
+        return [
+            FileInfo(
+                name=posixpath.basename(item.path),
+                path=self._relative_workspace_path(item.path),
+                type=item.kind.value,
+                size=item.size_bytes,
+                last_modified=item.modified_at.isoformat(),
             )
-        return results
+            for item in entries
+        ]
 
     async def get_file_info(self, path: str) -> Optional[FileInfo]:
         """Get file information."""
@@ -135,13 +149,24 @@ class WorkspaceFileManager:
                 last_modified=datetime.fromtimestamp(stat.st_mtime).isoformat(),
             )
 
-        parent = str(Path(path).parent)
-        if parent == ".":
-            parent = ""
-        for item in await self.list_files(parent):
-            if item.path == path:
-                return item
-        return None
+        session = await self._get_workspace_session()
+        try:
+            async with session:
+                item = await session.stat_file(
+                    self._workspace_path(path),
+                    timeout=30,
+                )
+        except AgentBoxApiError as exc:
+            if self._is_missing_error(exc):
+                return None
+            raise
+        return FileInfo(
+            name=posixpath.basename(item.path),
+            path=self._relative_workspace_path(item.path),
+            type=item.kind.value,
+            size=item.size_bytes,
+            last_modified=item.modified_at.isoformat(),
+        )
 
     async def read_file(self, path: str) -> Union[bytes, str]:
         """Read a file."""
@@ -156,14 +181,16 @@ class WorkspaceFileManager:
                 return bytes_data
 
         session = await self._get_workspace_session()
-        async with session:
-            result = await session.exec_command(
-                cmd=f"base64 -w 0 {shlex.quote(self._workspace_path(path))}",
-                timeout=60,
-            )
-        if not result.get("success"):
-            raise FileNotFoundError(f"File {path} not found")
-        bytes_data = base64.b64decode(result.get("stdout") or "")
+        try:
+            async with session:
+                bytes_data = await session.read_file(
+                    self._workspace_path(path),
+                    timeout=60,
+                )
+        except AgentBoxApiError as exc:
+            if self._is_missing_error(exc):
+                raise FileNotFoundError(f"File {path} not found") from exc
+            raise
         try:
             return bytes_data.decode("utf-8")
         except UnicodeDecodeError:
@@ -188,38 +215,35 @@ class WorkspaceFileManager:
 
         session = await self._get_workspace_session()
         runtime_path = self._workspace_path(path)
-        encoded = base64.b64encode(content).decode("ascii")
-        command = (
-            f"mkdir -p {shlex.quote(str(Path(runtime_path).parent))} && "
-            f"printf %s {shlex.quote(encoded)} | base64 -d > {shlex.quote(runtime_path)}"
-        )
         async with session:
-            result = await session.exec_command(cmd=command, timeout=60)
-        if not result.get("success"):
-            raise RuntimeError(result.get("stderr") or result.get("error") or "Write failed")
-        base_prefix = f"{self.cwd}/" if self.cwd else ""
-        result_path = runtime_path
-        if base_prefix and result_path.startswith(base_prefix):
-            result_path = result_path[len(base_prefix) :]
+            item = await session.write_file(runtime_path, content, timeout=60)
         return FileInfo(
-            name=Path(path).name,
-            path=result_path,
-            type="file",
-            size=len(content),
-            last_modified=datetime.now().isoformat(),
+            name=posixpath.basename(item.path),
+            path=self._relative_workspace_path(item.path),
+            type=item.kind.value,
+            size=item.size_bytes,
+            last_modified=item.modified_at.isoformat(),
         )
 
     async def delete_file(self, path: str) -> None:
-        """Delete a file."""
+        """Delete a file or directory idempotently."""
         if self._local_base:
             file_path = self._local_path(path)
-            if file_path.exists():
+            if file_path.is_symlink() or file_path.is_file():
                 file_path.unlink()
+            elif file_path.is_dir():
+                shutil.rmtree(file_path)
             return
 
         session = await self._get_workspace_session()
-        async with session:
-            await session.exec_command(
-                cmd=f"rm -rf {shlex.quote(self._workspace_path(path))}",
-                timeout=30,
-            )
+        try:
+            async with session:
+                await session.delete_file(
+                    self._workspace_path(path),
+                    recursive=True,
+                    timeout=30,
+                )
+        except AgentBoxApiError as exc:
+            if self._is_missing_error(exc):
+                return
+            raise

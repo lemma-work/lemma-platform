@@ -11,7 +11,6 @@ from app.core.infrastructure.events.models import DomainEventOutbox
 
 _outbox_ready = False
 _outbox_lock = asyncio.Lock()
-_dispatcher = None
 
 
 async def ensure_datastore_event_outbox() -> None:
@@ -36,28 +35,8 @@ async def ensure_datastore_event_outbox() -> None:
 
 
 def reset_datastore_event_outbox_state() -> None:
-    global _dispatcher, _outbox_ready
+    global _outbox_ready
     _outbox_ready = False
-    _dispatcher = None
-
-
-async def dispatch_datastore_outbox_once() -> int:
-    """Best-effort latency nudge; durable retry remains worker-owned."""
-    global _dispatcher
-    from app.core.infrastructure.events.message_bus import get_message_bus
-    from app.core.infrastructure.events.outbox import OutboxDispatcher
-    from app.modules.datastore.infrastructure.session import (
-        get_datastore_session_maker,
-    )
-
-    try:
-        if _dispatcher is None:
-            _dispatcher = OutboxDispatcher(
-                get_datastore_session_maker(), get_message_bus()
-            )
-        return await _dispatcher.dispatch_once()
-    except Exception:  # noqa: BLE001 -- the committed outbox is the retry source
-        return 0
 
 
 async def stage_domain_events(session, events: list[DomainEvent]) -> None:

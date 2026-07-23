@@ -405,7 +405,7 @@ async def test_display_resource_slack_routes_pod_resource_catalog_to_deep_links(
     # separately below.
     assert rendered.count("https://app.example.test/pod/") >= len(resource_calls) - 1
     assert "incidents" in rendered
-    assert "fake-agentbox.local" in rendered
+    assert "/port-access/" in rendered
     assert "incident-triage" in rendered
     assert "summarize-incident" in rendered
     assert "incident-response" in rendered

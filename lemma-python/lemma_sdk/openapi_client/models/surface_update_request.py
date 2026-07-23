@@ -104,7 +104,7 @@ class SurfaceUpdateRequest:
                 account_id_type_0 = UUID(data)
 
                 return account_id_type_0
-            except (TypeError, ValueError, AttributeError, KeyError):
+            except TypeError, ValueError, AttributeError, KeyError:
                 pass
             return cast(None | Unset | UUID, data)
 
@@ -130,7 +130,7 @@ class SurfaceUpdateRequest:
                 credential_mode_type_0 = SurfaceCredentialMode(data)
 
                 return credential_mode_type_0
-            except (TypeError, ValueError, AttributeError, KeyError):
+            except TypeError, ValueError, AttributeError, KeyError:
                 pass
             return cast(None | SurfaceCredentialMode | Unset, data)
 

@@ -6,6 +6,7 @@ from app.modules.test_support.e2e import fixtures as e2e_fixtures
 from app.modules.test_support.e2e.runtime import (
     backend_server as runtime_backend_server,
     configure_workspace_api_url as runtime_configure_workspace_api_url,
+    function_image as runtime_function_image,
     local_agentbox_server as runtime_local_agentbox_server,
     workspace_image as runtime_workspace_image,
 )
@@ -31,4 +32,5 @@ scenario = e2e_fixtures.scenario
 backend_server = runtime_backend_server
 configure_workspace_api_url = runtime_configure_workspace_api_url
 local_agentbox_server = runtime_local_agentbox_server
+function_image = runtime_function_image
 workspace_image = runtime_workspace_image

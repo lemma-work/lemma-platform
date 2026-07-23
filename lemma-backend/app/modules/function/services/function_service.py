@@ -2,10 +2,10 @@
 
 from __future__ import annotations
 
-import hashlib
 import contextlib
 import re
 from dataclasses import dataclass
+from datetime import datetime, timedelta, timezone
 from uuid import UUID, uuid7
 
 from app.core.authorization.context import (
@@ -16,10 +16,10 @@ from app.core.authorization.context import (
 )
 from app.core.authorization.delegation_revocation import revoke_delegation
 from app.core.authorization.permissions import Permissions
-from app.core.helpers.slug import slugify
-from app.core.domain.job_queue import JobQueuePort
+from app.core.config import settings
 from app.modules.icon.contracts import IconCleanupPort
 from app.modules.function.domain.entities import (
+    FunctionDispatchMode,
     FunctionEntity,
     FunctionRunEntity,
     FunctionRunStatus,
@@ -27,42 +27,32 @@ from app.modules.function.domain.entities import (
     FunctionType,
     FunctionUpdateEntity,
 )
+from app.modules.function.domain.identities import function_run_job_id
 from app.modules.function.domain.errors import (
     FunctionConflictError,
     FunctionNotFoundError,
     FunctionRunNotFoundError,
     FunctionValidationError,
 )
-from app.modules.function.domain.events import (
-    FunctionRunExecutionRequestedEvent,
-)
 from app.modules.function.domain.ports import (
     FunctionStorageFactoryPort,
     FunctionRepositoryPort,
     FunctionRunRepositoryPort,
-    WorkspaceSessionPort,
 )
+from app.modules.function.domain.types import JsonObject
 
 from app.modules.pod.contracts import PodRole
 from app.core.log.log import get_logger
 
 logger = get_logger(__name__)
 
-# The execution engine owns the sandbox machinery + its run-status writers.
-from app.modules.function.application.function_run_executor import (  # noqa: E402
-    FunctionRunExecutor,
-)
-
 # A function's `#python_packages:` header declares pip dependencies that the
-# agentbox executor installs before running. The values are passed to `pip
-# install`, so each must be a PEP 508-ish spec (name + optional [extras] +
-# optional version specifier) — never a flag, URL, path, space, or shell
-# metacharacter. Mirrors agentbox/agentbox/function_executor.py.
+# immutable artifact builder resolves before the revision becomes READY.
 _MAX_PYTHON_PACKAGES = 30
 _MAX_PACKAGE_SPEC_LENGTH = 128
 _PYTHON_PACKAGE_SPEC_RE = re.compile(
-    r"^[A-Za-z0-9][A-Za-z0-9._-]*"          # distribution name
-    r"(\[[A-Za-z0-9._,-]+\])?"               # optional extras
+    r"^[A-Za-z0-9][A-Za-z0-9._-]*"  # distribution name
+    r"(\[[A-Za-z0-9._,-]+\])?"  # optional extras
     r"([<>=!~]=?[A-Za-z0-9._*+!,<>=~-]*)?$"  # optional version specifier(s)
 )
 
@@ -143,7 +133,6 @@ class FunctionUpdatePlan:
     function: FunctionEntity
     old_icon_url: str | None
     code: str | None
-    code_path: str | None
 
 
 class FunctionService:
@@ -153,34 +142,16 @@ class FunctionService:
         self,
         function_repository: FunctionRepositoryPort,
         run_repository: FunctionRunRepositoryPort,
-        workspace_service: WorkspaceSessionPort,
         storage_factory: FunctionStorageFactoryPort,
-        authorization_service: object,
-        job_queue: JobQueuePort | None = None,
         icon_service: IconCleanupPort | None = None,
-        function_executor_client_factory=None,
     ):
         # Bound mode only: real repositories + authorization. The use-case layer
-        # builds one of these per short UoW; the long-running sandbox sagas live
-        # in FunctionRunExecutor / FunctionUseCases, never here.
+        # builds one of these per short UoW; long-running sandbox work lives in
+        # FunctionDefinitionCompiler / FunctionUseCases, never here.
         self.repository = function_repository
         self.run_repository = run_repository
-        self.workspace_service = workspace_service
         self.storage_factory = storage_factory
-        self.job_queue = job_queue
         self.icon_service = icon_service
-        self.authorization_service = authorization_service
-        self.function_executor_client_factory = function_executor_client_factory
-        # A bound execution engine (status writes go through the bound
-        # run_repository). The leak-safe production path uses a factory-mode engine
-        # built by FunctionUseCases instead.
-        self._executor = FunctionRunExecutor(
-            uow_factory=None,
-            run_repository=run_repository,
-            workspace_service=workspace_service,
-            storage_factory=storage_factory,
-            function_executor_client_factory=function_executor_client_factory,
-        )
 
     async def _require_pod_permission(
         self,
@@ -256,49 +227,6 @@ class FunctionService:
         async with self._repos() as (function_repository, _run_repository):
             return await function_repository.delete(function_id)
 
-    async def create_function(
-        self,
-        entity: FunctionEntity,
-        user_id: UUID,
-        code: str | None = None,
-        ctx: Context | None = None,
-    ) -> FunctionEntity:
-        if ctx is not None:
-            await ctx.require(Permissions.FUNCTION_CREATE, ResourceRef.pod(entity.pod_id))
-        else:
-            raise RuntimeError("Context is required for function authorization")
-
-        entity.user_id = user_id
-        entity.visibility = _normalize_function_visibility(entity.visibility)
-        await self._validate_resources(entity)
-        # Conflict check + insert in one short UoW (released before schema work).
-        created = await self._create_function_checked(entity)
-        assert created.id is not None
-
-        if not code:
-            return created
-
-        # storage write + schema extraction provision/run a sandbox — keep them
-        # OUT of any DB session so a pooled connection is not held for the
-        # (multi-second) round-trip. Persist the extracted schemas in a fresh
-        # short UoW afterwards.
-        path = f"{slugify(created.name)}.py"
-        storage = self.storage_factory(created.id)
-        await storage.write_file(path, code)
-
-        # Fail fast on a bad dependency spec before the heavier schema extraction.
-        created.python_packages = self._parse_python_packages(code)
-        input_schema, output_schema, config_schema = await self._extract_schemas(
-            user_id, code, path, created.pod_id, created.id
-        )
-        created.input_schema = input_schema
-        created.output_schema = output_schema
-        created.config_schema = config_schema
-        created.code_path = path
-        created.code_hash = hashlib.sha256(code.encode("utf-8")).hexdigest()
-        created.status = FunctionStatus.READY
-        return await self._update_function_row(created)
-
     async def get_function_by_name(
         self,
         pod_id: UUID,
@@ -328,70 +256,6 @@ class FunctionService:
         if include_code and function.code_path:
             function.code = await self._get_code(function)
         return function
-
-    async def update_function(
-        self,
-        pod_id: UUID,
-        name: str,
-        update_entity: FunctionUpdateEntity,
-        user_id: UUID,
-        ctx: Context | None = None,
-    ) -> FunctionEntity:
-        function = await self.get_function_by_name(
-            pod_id, name, user_id, raise_not_found=True, include_code=False, ctx=ctx
-        )
-        assert function is not None
-        assert function.id is not None
-        old_icon_url = function.icon_url
-
-        await self._require_pod_permission(
-            pod_id=function.pod_id,
-            user_id=user_id,
-            required_role=PodRole.EDITOR,
-            message=f"User {user_id} does not have editor access to pod {function.pod_id}",
-            function_id=function.id,
-            ctx=ctx,
-        )
-
-        if update_entity.visibility is not None:
-            function.visibility = _normalize_function_visibility(update_entity.visibility)
-
-        code_path = function.code_path
-        if update_entity.code:
-            if not code_path:
-                code_path = f"{slugify(function.name)}.py"
-
-            storage = self.storage_factory(function.id)
-            await storage.write_file(code_path, update_entity.code)
-
-            function.python_packages = self._parse_python_packages(update_entity.code)
-            input_schema, output_schema, config_schema = await self._extract_schemas(
-                user_id, update_entity.code, code_path, function.pod_id, function.id
-            )
-            function.input_schema = input_schema
-            function.output_schema = output_schema
-            function.config_schema = config_schema
-            function.code_path = code_path
-            function.code_hash = hashlib.sha256(update_entity.code.encode("utf-8")).hexdigest()
-            function.status = FunctionStatus.READY
-
-        if update_entity.description is not None:
-            function.description = update_entity.description
-        if "icon_url" in update_entity.model_fields_set:
-            function.icon_url = update_entity.icon_url
-        if "config" in update_entity.model_fields_set and update_entity.config is not None:
-            function.config = update_entity.config
-        if update_entity.type is not None:
-            function.type = update_entity.type
-
-        updated = await self._update_function_row(function)
-        if self.icon_service and old_icon_url != updated.icon_url:
-            await self.icon_service.delete_by_url(old_icon_url)
-        if ctx is not None:
-            async with self._repos() as (function_repository, _run_repository):
-                refreshed = await function_repository.get_by_name(pod_id, name, ctx=ctx)
-            return refreshed or updated
-        return updated
 
     async def delete_function(
         self,
@@ -464,15 +328,16 @@ class FunctionService:
             return function.code
         if not function.code_path:
             raise FunctionValidationError(f"Function {function.name} has no code")
+        if function.id is None:
+            raise FunctionValidationError(
+                "Function must be persisted before reading code"
+            )
         storage = self.storage_factory(function.id)
         code = await storage.read_file(function.code_path)
         if isinstance(code, bytes):
             code = code.decode("utf-8")
         function.code = code
         return code
-
-    def _parse_python_packages(self, code: str) -> list[str]:
-        return parse_python_packages(code)
 
     # -- Per-phase methods for the use-case layer (bound mode, no sandbox) -----
     #
@@ -525,18 +390,20 @@ class FunctionService:
         )
 
         if update_entity.visibility is not None:
-            function.visibility = _normalize_function_visibility(update_entity.visibility)
+            function.visibility = _normalize_function_visibility(
+                update_entity.visibility
+            )
 
         code = update_entity.code or None
-        code_path = function.code_path
-        if code and not code_path:
-            code_path = f"{slugify(function.name)}.py"
 
         if update_entity.description is not None:
             function.description = update_entity.description
         if "icon_url" in update_entity.model_fields_set:
             function.icon_url = update_entity.icon_url
-        if "config" in update_entity.model_fields_set and update_entity.config is not None:
+        if (
+            "config" in update_entity.model_fields_set
+            and update_entity.config is not None
+        ):
             function.config = update_entity.config
         if update_entity.type is not None:
             function.type = update_entity.type
@@ -545,7 +412,6 @@ class FunctionService:
             function=function,
             old_icon_url=old_icon_url,
             code=code,
-            code_path=code_path if code else None,
         )
 
     async def persist_update(
@@ -589,22 +455,18 @@ class FunctionService:
         self,
         pod_id: UUID,
         name: str,
-        input_data: dict,
+        input_data: JsonObject,
         user_id: UUID,
         user_email: str | None,
         *,
         ctx: Context,
-        force_dispatch: bool = False,
+        dispatch_mode: FunctionDispatchMode | None = None,
     ) -> ResolvedExecution:
-        """Authorize FUNCTION_EXECUTE + create the PENDING run (+ JOB enqueue
-        event on the same UoW). DB only. The function is loaded directly (execute
-        needs only FUNCTION_EXECUTE, not FUNCTION_READ).
+        """Authorize FUNCTION_EXECUTE and persist its one PENDING run. DB only.
 
-        ``force_dispatch`` enqueues the run to the worker even for API functions
-        (which normally run inline). The workflow engine uses this so it can
-        suspend on the run id and release its run-row lock/connection instead of
-        holding them across the function's sandbox round-trip; the worker executes
-        the run and its FunctionRunCompleted event resumes the workflow."""
+        Queue publication is deliberately owned by ``FunctionUseCases`` after
+        this transaction commits and releases its connection.
+        """
         function = await self._load_function_by_name(pod_id, name, ctx=ctx)
         if function is None:
             raise FunctionNotFoundError(f"Function {name} not found")
@@ -618,22 +480,34 @@ class FunctionService:
             ),
         )
 
+        if function.status != FunctionStatus.READY or function.revision_hash is None:
+            raise FunctionValidationError("Function has no ready executable revision")
+
         run_entity = FunctionRunEntity(
             id=uuid7(),
             function_id=function.id,
+            revision_hash=function.revision_hash,
             user_id=user_id,
             user_email=user_email,
             input_data=input_data,
             status=FunctionRunStatus.PENDING,
-        )
-        if function.type == FunctionType.JOB or force_dispatch:
-            run_entity.job_id = self._run_job_id(run_entity.id)
-            run_entity.add_event(
-                FunctionRunExecutionRequestedEvent(
-                    run_id=run_entity.id,
-                    function_id=function.id,
+            deadline_at=datetime.now(timezone.utc)
+            + timedelta(
+                seconds=(
+                    settings.function_job_deadline_seconds
+                    if function.type == FunctionType.JOB
+                    else settings.function_api_deadline_seconds
                 )
-            )
+            ),
+        )
+        assert run_entity.id is not None
+        effective_mode = dispatch_mode or (
+            FunctionDispatchMode.ASYNCHRONOUS
+            if function.type == FunctionType.JOB
+            else FunctionDispatchMode.SYNCHRONOUS
+        )
+        if effective_mode == FunctionDispatchMode.ASYNCHRONOUS:
+            run_entity.job_id = function_run_job_id(run_entity.id)
         run = await self._create_run(run_entity)
         return ResolvedExecution(function=function, run=run)
 
@@ -662,9 +536,6 @@ class FunctionService:
         """Best-effort icon cleanup (storage only, no DB) after a delete."""
         if self.icon_service and icon_url:
             await self.icon_service.delete_by_url(icon_url)
-
-    def _run_job_id(self, run_id: UUID) -> str:
-        return f"function:{run_id}"
 
     async def list_runs(
         self,
@@ -715,13 +586,3 @@ class FunctionService:
                 "Run does not belong to the specified function"
             )
         return run
-
-    async def _extract_schemas(
-        self, user_id: UUID, code: str, code_path: str, pod_id: UUID, function_id: UUID
-    ) -> tuple[dict, dict, dict | None]:
-        # Schema extraction is a sandbox round-trip — delegated to the execution
-        # engine. Kept as a thin method so create/update can call it and tests can
-        # patch it on the service instance.
-        return await self._executor.extract_schemas(
-            user_id, code, code_path, pod_id, function_id
-        )

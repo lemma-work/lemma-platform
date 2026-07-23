@@ -6,11 +6,13 @@ import asyncio
 import contextlib
 import hashlib
 import os
+import re
 import socket
 import subprocess
 import sys
 import uuid
-from collections.abc import AsyncGenerator, Generator
+from collections.abc import AsyncGenerator, AsyncIterator, Generator
+from contextlib import asynccontextmanager
 from pathlib import Path
 from urllib.parse import urlparse
 
@@ -34,14 +36,10 @@ def _available_port() -> int:
         return int(sock.getsockname()[1])
 
 
-def _read_root_env_value(key: str) -> str | None:
-    """Read a single key from the monorepo root .env (creds are not auto-loaded
-    into the sealed e2e settings)."""
-    root = Path(__file__).resolve().parents[5]
-    env_file = root / ".env"
-    if not env_file.exists():
+def _read_env_file_value(path: Path, key: str) -> str | None:
+    if not path.exists():
         return None
-    for raw in env_file.read_text().splitlines():
+    for raw in path.read_text().splitlines():
         line = raw.strip()
         if not line or line.startswith("#") or "=" not in line:
             continue
@@ -51,9 +49,291 @@ def _read_root_env_value(key: str) -> str | None:
     return None
 
 
-# Source paths the runtime image is built from (Dockerfile.runtime COPYs these).
-# A change to any of them must invalidate the cached image — see
-# _agentbox_image_fingerprint.
+def _e2b_environment(key: str) -> str | None:
+    """Resolve protected E2B test configuration without mutating the process env."""
+
+    configured = os.getenv(key)
+    if configured:
+        return configured
+    repo_root = Path(__file__).resolve().parents[5]
+    backend_value = _read_env_file_value(repo_root / "lemma-backend" / ".env", key)
+    if backend_value:
+        return backend_value
+    return _read_env_file_value(
+        repo_root / "agentbox" / "templates" / "e2b" / "promoted-builds.env",
+        key,
+    )
+
+
+_NGROK_URL = re.compile(r"https://[a-z0-9-]+\.(?:ngrok-free\.app|ngrok\.app)")
+_CLOUDFLARE_URL = re.compile(r"https://[a-z0-9-]+\.trycloudflare\.com")
+
+
+async def _terminate_subprocess(process: asyncio.subprocess.Process) -> None:
+    if process.returncode is not None:
+        return
+    process.terminate()
+    try:
+        await asyncio.wait_for(process.wait(), timeout=10)
+    except TimeoutError:
+        process.kill()
+        await process.wait()
+
+
+async def _cleanup_e2b_scope(
+    *,
+    agentbox_root: Path,
+    environment: dict[str, str],
+    provider_scope: str,
+) -> None:
+    """Kill only E2B sandboxes carrying this test's unique provider scope."""
+
+    cleanup_source = """
+import asyncio
+import os
+
+from e2b.sandbox.sandbox_api import SandboxQuery
+from e2b_code_interpreter import AsyncSandbox
+
+
+async def main():
+    expected = {
+        "managed-by": "agentbox",
+        "provider-scope": os.environ["AGENTBOX_E2B_SCOPE"],
+    }
+
+    async def find_exact():
+        paginator = AsyncSandbox.list(
+            query=SandboxQuery(metadata=expected),
+            limit=100,
+            api_key=os.environ["E2B_API_KEY"],
+            request_timeout=60,
+        )
+        sandbox_ids = []
+        while paginator.has_next:
+            for item in await paginator.next_items(request_timeout=60):
+                metadata = dict(item.metadata or {})
+                if all(
+                    metadata.get(key) == value
+                    for key, value in expected.items()
+                ):
+                    sandbox_ids.append(item.sandbox_id)
+        return sandbox_ids
+
+    for _ in range(5):
+        sandbox_ids = await find_exact()
+        if not sandbox_ids:
+            return
+        for sandbox_id in sandbox_ids:
+            await AsyncSandbox.kill(
+                sandbox_id,
+                api_key=os.environ["E2B_API_KEY"],
+                request_timeout=60,
+            )
+        await asyncio.sleep(0.5)
+    remaining = await find_exact()
+    if remaining:
+        raise RuntimeError(
+            f"{len(remaining)} sandbox(es) remain in the exact test scope"
+        )
+
+
+asyncio.run(main())
+"""
+    cleanup_env = {
+        **environment,
+        "AGENTBOX_E2B_SCOPE": provider_scope,
+    }
+    process = await asyncio.create_subprocess_exec(
+        str(agentbox_root / ".venv" / "bin" / "python"),
+        "-c",
+        cleanup_source,
+        cwd=str(agentbox_root),
+        env=cleanup_env,
+        stdout=asyncio.subprocess.PIPE,
+        stderr=asyncio.subprocess.PIPE,
+    )
+    try:
+        stdout, stderr = await asyncio.wait_for(process.communicate(), timeout=90)
+    except TimeoutError:
+        await _terminate_subprocess(process)
+        raise RuntimeError("Timed out cleaning the exact E2B test scope") from None
+    if process.returncode != 0:
+        diagnostic = (stderr or stdout).decode(errors="replace")[-4000:]
+        raise RuntimeError("Exact E2B test-scope cleanup failed: " + diagnostic)
+
+
+@asynccontextmanager
+async def _external_e2b_agentbox_server(
+    *,
+    agentbox_root: Path,
+    manager_url: str,
+    port: int,
+    environment: dict[str, str],
+    provider_scope: str,
+) -> AsyncIterator[None]:
+    """Run the E2B manager in AgentBox's own dependency environment."""
+
+    process = await asyncio.create_subprocess_exec(
+        str(agentbox_root / ".venv" / "bin" / "uvicorn"),
+        "agentbox.server:app",
+        "--host",
+        "127.0.0.1",
+        "--port",
+        str(port),
+        "--log-level",
+        "warning",
+        "--no-access-log",
+        cwd=str(agentbox_root),
+        env={**environment, "AGENTBOX_LOG_LEVEL": "WARNING"},
+        stdout=asyncio.subprocess.PIPE,
+        stderr=asyncio.subprocess.STDOUT,
+    )
+    assert process.stdout is not None
+    recent: list[str] = []
+
+    async def consume_output() -> None:
+        while line := await process.stdout.readline():
+            recent.append(line.decode(errors="replace"))
+            if len(recent) > 100:
+                del recent[:-100]
+
+    output_task = asyncio.create_task(consume_output())
+    try:
+        async with httpx.AsyncClient(timeout=1.0) as client:
+            for _ in range(200):
+                if process.returncode is not None:
+                    raise RuntimeError(
+                        "External E2B AgentBox exited before startup: "
+                        + "".join(recent[-20:])
+                    )
+                try:
+                    response = await client.get(f"{manager_url}/health")
+                    if response.status_code == 200:
+                        break
+                except httpx.HTTPError:
+                    pass
+                await asyncio.sleep(0.1)
+            else:
+                raise RuntimeError("Timed out waiting for external E2B AgentBox health")
+        yield
+    finally:
+        try:
+            await _terminate_subprocess(process)
+        finally:
+            await asyncio.gather(output_task, return_exceptions=True)
+            await _cleanup_e2b_scope(
+                agentbox_root=agentbox_root,
+                environment=environment,
+                provider_scope=provider_scope,
+            )
+
+
+@asynccontextmanager
+async def _temporary_workspace_tunnel(
+    backend_url: str,
+) -> AsyncIterator[str]:
+    """Expose the test backend to a remote E2B workspace for CLI callbacks."""
+
+    configured = os.getenv("WORKSPACE_E2E_PUBLIC_URL")
+    if configured:
+        yield configured.rstrip("/")
+        return
+
+    tunnel = os.getenv("WORKSPACE_E2E_TUNNEL", "ngrok").strip().lower()
+    if tunnel == "ngrok":
+        command = (
+            "ngrok",
+            "http",
+            backend_url,
+            "--log",
+            "stdout",
+            "--log-format",
+            "json",
+            "--log-level",
+            "info",
+        )
+        url_pattern = _NGROK_URL
+    elif tunnel == "cloudflared":
+        command = (
+            "cloudflared",
+            "tunnel",
+            "--url",
+            backend_url,
+            "--no-autoupdate",
+        )
+        url_pattern = _CLOUDFLARE_URL
+    else:
+        raise RuntimeError("WORKSPACE_E2E_TUNNEL must be ngrok or cloudflared")
+
+    try:
+        process = await asyncio.create_subprocess_exec(
+            *command,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.STDOUT,
+        )
+    except FileNotFoundError as exc:
+        raise RuntimeError(f"{tunnel} is required for E2B workspace E2E") from exc
+
+    assert process.stdout is not None
+    recent: list[str] = []
+
+    async def consume_output(published: asyncio.Future[str]) -> None:
+        while line := await process.stdout.readline():
+            text = line.decode(errors="replace")
+            recent.append(text)
+            if len(recent) > 100:
+                del recent[:-100]
+            if not published.done() and (match := url_pattern.search(text)):
+                published.set_result(match.group(0))
+        if not published.done():
+            published.set_exception(
+                RuntimeError(
+                    f"{tunnel} exited before publishing a tunnel: "
+                    + "".join(recent[-20:])
+                )
+            )
+
+    published = asyncio.get_running_loop().create_future()
+    output_task = asyncio.create_task(consume_output(published))
+    try:
+        public_url = await asyncio.wait_for(asyncio.shield(published), timeout=45)
+        last_health_result = "no response"
+        async with httpx.AsyncClient(timeout=10) as client:
+            for _ in range(30):
+                if process.returncode is not None:
+                    raise RuntimeError(
+                        f"{tunnel} exited after publishing its URL: "
+                        + "".join(recent[-20:])
+                    )
+                try:
+                    response = await client.get(f"{public_url}/health")
+                    last_health_result = (
+                        f"HTTP {response.status_code}: {response.text[:500]}"
+                    )
+                    if response.status_code == 200:
+                        break
+                except httpx.HTTPError as exc:
+                    last_health_result = f"{type(exc).__name__}: {exc}"
+                await asyncio.sleep(0.5)
+            else:
+                raise RuntimeError(
+                    f"{tunnel} tunnel never reached backend health; "
+                    f"last result: {last_health_result}"
+                )
+        yield public_url
+    finally:
+        if process.returncode is None:
+            process.terminate()
+            try:
+                await asyncio.wait_for(process.wait(), timeout=10)
+            except TimeoutError:
+                process.kill()
+                await process.wait()
+        await asyncio.gather(output_task, return_exceptions=True)
+
+
+# Source paths used by the canonical workspace and function images.
 _AGENTBOX_BUILD_INPUTS = (
     "agentbox",
     "lemma-python",
@@ -134,9 +414,9 @@ def workspace_image(e2e_settings) -> Generator[str, None, None]:
     else:
         fingerprint = _agentbox_image_fingerprint(repo_root)
         image = (
-            f"agentbox-runtime:e2e-{fingerprint}"
+            f"agentbox-workspace:e2e-{fingerprint}"
             if fingerprint
-            else "agentbox-runtime:e2e"
+            else "agentbox-workspace:e2e"
         )
 
     inspect = subprocess.run(
@@ -148,11 +428,11 @@ def workspace_image(e2e_settings) -> Generator[str, None, None]:
     image_present = inspect.returncode == 0
     # Fall back to always-build only when we couldn't fingerprint (floating tag).
     should_build = not image_present or (
-        not configured_image and image == "agentbox-runtime:e2e"
+        not configured_image and image == "agentbox-workspace:e2e"
     )
 
     if should_build:
-        dockerfile = repo_root / "agentbox" / "Dockerfile.runtime"
+        dockerfile = repo_root / "agentbox" / "Dockerfile.workspace"
         build = subprocess.run(
             [
                 "docker",
@@ -173,6 +453,61 @@ def workspace_image(e2e_settings) -> Generator[str, None, None]:
                 f"'{image}'.\nSTDOUT:\n{build.stdout}\nSTDERR:\n{build.stderr}"
             )
 
+    yield image
+
+
+@pytest.fixture(scope="module")
+def function_image(e2e_settings) -> Generator[str, None, None]:
+    """Build the slim stateless function runner image used by AgentBox.
+
+    Function artifacts currently declare the x86_64 runtime ABI, including for
+    native wheels. Build the E2E runtime for that exact platform even on arm64
+    developer machines; a native arm image would accept the profile but could
+    not load the artifact's compiled extensions.
+    """
+
+    del e2e_settings
+    repo_root = Path(__file__).resolve().parents[5]
+    configured_image = os.getenv("FUNCTION_E2E_IMAGE")
+    platform = os.getenv("FUNCTION_E2E_PLATFORM", "linux/amd64")
+    if configured_image:
+        image = configured_image
+    else:
+        fingerprint = _agentbox_image_fingerprint(repo_root)
+        platform_tag = platform.rsplit("/", 1)[-1].replace("_", "-")
+        image = (
+            f"agentbox-function:e2e-{platform_tag}-{fingerprint}"
+            if fingerprint
+            else f"agentbox-function:e2e-{platform_tag}"
+        )
+    inspect = subprocess.run(
+        ["docker", "image", "inspect", image],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    if inspect.returncode != 0:
+        build = subprocess.run(
+            [
+                "docker",
+                "build",
+                "--platform",
+                platform,
+                "-f",
+                str(repo_root / "agentbox" / "Dockerfile.function"),
+                "-t",
+                image,
+                str(repo_root),
+            ],
+            check=False,
+            capture_output=True,
+            text=True,
+        )
+        if build.returncode != 0:
+            pytest.fail(
+                "Function e2e image build failed "
+                f"for '{image}'.\nSTDOUT:\n{build.stdout}\nSTDERR:\n{build.stderr}"
+            )
     yield image
 
 
@@ -224,11 +559,11 @@ async def backend_server(test_app) -> AsyncGenerator[dict[str, str], None]:
 
 @pytest_asyncio.fixture(scope="function")
 async def local_agentbox_server(
-    workspace_image,
+    request,
     tmp_path_factory,
     e2e_settings,
 ) -> AsyncGenerator[dict[str, str], None]:
-    """Run the local Docker AgentBox manager used by workspace e2e tests.
+    """Run a real Docker- or E2B-backed AgentBox manager for workspace E2E.
 
     Binds to the session-pinned port (``e2e_settings`` sets ``agentbox_api_url``)
     rather than a fresh per-test port, so the session-scoped worker subprocess --
@@ -244,34 +579,86 @@ async def local_agentbox_server(
         sys.path.insert(0, str(agentbox_root))
 
     state_path = tmp_path_factory.mktemp("agentbox-state") / "state.db"
-    storage_root = tmp_path_factory.mktemp("agentbox-workspaces")
     manager_url = e2e_settings.agentbox_api_url
-    app_domain = f"127-0-0-1.sslip.io:{port}"
     api_key = e2e_settings.agentbox_api_key
-    runtime_platform = os.getenv("AGENTBOX_PLATFORM")
+    provider_name = e2e_settings.e2e_sandbox_mode
+    e2b_scope = f"e2b:agent-e2e:{uuid.uuid4()}"
+
+    if provider_name == "docker":
+        workspace_image = request.getfixturevalue("workspace_image")
+        function_image = request.getfixturevalue("function_image")
+        e2b_values: dict[str, str] = {}
+    else:
+        required_e2b = {
+            "E2B_API_KEY": _e2b_environment("E2B_API_KEY"),
+            "E2B_WORKSPACE_TEMPLATE": _e2b_environment(
+                "AGENTBOX_E2B_WORKSPACE_TEMPLATE"
+            ),
+            "E2B_WORKSPACE_TEMPLATE_BUILD_ID": _e2b_environment(
+                "AGENTBOX_E2B_WORKSPACE_BUILD_ID"
+            ),
+            "E2B_FUNCTION_TEMPLATE": _e2b_environment("AGENTBOX_E2B_FUNCTION_TEMPLATE"),
+            "E2B_FUNCTION_TEMPLATE_BUILD_ID": _e2b_environment(
+                "AGENTBOX_E2B_FUNCTION_BUILD_ID"
+            ),
+        }
+        missing = [name for name, value in required_e2b.items() if not value]
+        if missing:
+            pytest.fail(
+                "E2B workspace E2E configuration is missing: " + ", ".join(missing)
+            )
+        e2b_values = {name: value for name, value in required_e2b.items() if value}
+        workspace_image = "agentbox-workspace:unused-by-e2b"
+        function_image = "agentbox-function:unused-by-e2b"
 
     env_updates = {
-        "AGENTBOX_PROVIDER": "docker",
+        "AGENTBOX_PROVIDER": provider_name,
         "AGENTBOX_API_KEY": api_key,
-        "AGENTBOX_ENDPOINT_STATE_KEYS": (
-            "YWdlbnRib3gtZW5kcG9pbnQtc3RhdGUtdGVzdC1rZXk="
-        ),
         "AGENTBOX_API_URL": manager_url,
-        "AGENTBOX_APP_DOMAIN": app_domain,
-        "AGENTBOX_RUNTIME_IMAGE": workspace_image,
+        "AGENTBOX_PUBLIC_URL": manager_url,
+        "AGENTBOX_RUNTIME_CREDENTIAL_KEY": "test-runtime-credential-key-32-bytes",
+        "AGENTBOX_WORKSPACE_IMAGE": workspace_image,
+        "AGENTBOX_FUNCTION_IMAGE": function_image,
         "AGENTBOX_STATE_DB_PATH": str(state_path),
-        "AGENTBOX_STORAGE_ROOT": str(storage_root),
-        "AGENTBOX_ENDPOINT_HOST": "127.0.0.1",
-        "AGENTBOX_E2E_LABEL": "true",
-        "AGENTBOX_SESSION_IDLE_TIMEOUT_SECONDS": "300",
-        "AGENTBOX_SANDBOX_IDLE_TIMEOUT_SECONDS": "300",
+        "AGENTBOX_AUTO_CREATE_SCHEMA": "true",
+        "AGENTBOX_ADD_HOST_GATEWAY": "true",
+        "AGENTBOX_WORKSPACE_IDLE_SECONDS": "300",
+        "AGENTBOX_FUNCTION_IDLE_SECONDS": "300",
         "AGENTBOX_CLEANUP_INTERVAL_SECONDS": "30",
+        **e2b_values,
     }
-    if runtime_platform:
-        env_updates["AGENTBOX_PLATFORM"] = runtime_platform
+    if provider_name == "e2b":
+        env_updates.update(
+            {
+                "AGENTBOX_E2B_SCOPE": e2b_scope,
+                "AGENTBOX_E2B_REQUEST_TIMEOUT_SECONDS": "60",
+            }
+        )
 
     original_env = {key: os.environ.get(key) for key in env_updates}
     os.environ.update(env_updates)
+
+    if provider_name == "e2b":
+        try:
+            async with _external_e2b_agentbox_server(
+                agentbox_root=agentbox_root,
+                manager_url=manager_url,
+                port=port,
+                environment={**os.environ},
+                provider_scope=e2b_scope,
+            ):
+                yield {
+                    "manager_base_url": manager_url,
+                    "api_key": api_key,
+                    "provider": provider_name,
+                }
+        finally:
+            for key, value in original_env.items():
+                if value is None:
+                    os.environ.pop(key, None)
+                else:
+                    os.environ[key] = value
+        return
 
     import agentbox.config as agentbox_config
     import agentbox.server as agentbox_server
@@ -280,36 +667,75 @@ async def local_agentbox_server(
         "agentbox_provider": agentbox_config.settings.agentbox_provider,
         "agentbox_api_key": agentbox_config.settings.agentbox_api_key,
         "agentbox_api_url": agentbox_config.settings.agentbox_api_url,
-        "agentbox_app_domain": agentbox_config.settings.agentbox_app_domain,
-        "agentbox_runtime_image": agentbox_config.settings.agentbox_runtime_image,
-        "agentbox_state_db_path": agentbox_config.settings.agentbox_state_db_path,
-        "agentbox_storage_root": agentbox_config.settings.agentbox_storage_root,
-        "agentbox_endpoint_host": agentbox_config.settings.agentbox_endpoint_host,
-        "agentbox_e2e_label": agentbox_config.settings.agentbox_e2e_label,
-        "agentbox_platform": agentbox_config.settings.agentbox_platform,
-        "agentbox_session_idle_timeout_seconds": (
-            agentbox_config.settings.agentbox_session_idle_timeout_seconds
+        "agentbox_public_url": agentbox_config.settings.agentbox_public_url,
+        "agentbox_runtime_credential_key": (
+            agentbox_config.settings.agentbox_runtime_credential_key
         ),
-        "agentbox_sandbox_idle_timeout_seconds": (
-            agentbox_config.settings.agentbox_sandbox_idle_timeout_seconds
+        "agentbox_workspace_image": agentbox_config.settings.agentbox_workspace_image,
+        "agentbox_function_image": agentbox_config.settings.agentbox_function_image,
+        "agentbox_state_db_path": agentbox_config.settings.agentbox_state_db_path,
+        "agentbox_auto_create_schema": (
+            agentbox_config.settings.agentbox_auto_create_schema
+        ),
+        "agentbox_add_host_gateway": agentbox_config.settings.agentbox_add_host_gateway,
+        "agentbox_workspace_idle_seconds": (
+            agentbox_config.settings.agentbox_workspace_idle_seconds
+        ),
+        "agentbox_function_idle_seconds": (
+            agentbox_config.settings.agentbox_function_idle_seconds
         ),
         "agentbox_cleanup_interval_seconds": (
             agentbox_config.settings.agentbox_cleanup_interval_seconds
         ),
+        "agentbox_e2b_api_key": agentbox_config.settings.agentbox_e2b_api_key,
+        "agentbox_e2b_scope": agentbox_config.settings.agentbox_e2b_scope,
+        "agentbox_e2b_workspace_template": (
+            agentbox_config.settings.agentbox_e2b_workspace_template
+        ),
+        "agentbox_e2b_workspace_build_id": (
+            agentbox_config.settings.agentbox_e2b_workspace_build_id
+        ),
+        "agentbox_e2b_function_template": (
+            agentbox_config.settings.agentbox_e2b_function_template
+        ),
+        "agentbox_e2b_function_build_id": (
+            agentbox_config.settings.agentbox_e2b_function_build_id
+        ),
+        "agentbox_e2b_request_timeout_seconds": (
+            agentbox_config.settings.agentbox_e2b_request_timeout_seconds
+        ),
     }
-    agentbox_config.settings.agentbox_provider = "docker"
+    agentbox_config.settings.agentbox_provider = provider_name
     agentbox_config.settings.agentbox_api_key = api_key
     agentbox_config.settings.agentbox_api_url = manager_url
-    agentbox_config.settings.agentbox_app_domain = app_domain
-    agentbox_config.settings.agentbox_runtime_image = workspace_image
+    agentbox_config.settings.agentbox_public_url = manager_url
+    agentbox_config.settings.agentbox_runtime_credential_key = (
+        "test-runtime-credential-key-32-bytes"
+    )
+    agentbox_config.settings.agentbox_workspace_image = workspace_image
+    agentbox_config.settings.agentbox_function_image = function_image
     agentbox_config.settings.agentbox_state_db_path = str(state_path)
-    agentbox_config.settings.agentbox_storage_root = str(storage_root)
-    agentbox_config.settings.agentbox_endpoint_host = "127.0.0.1"
-    agentbox_config.settings.agentbox_e2e_label = True
-    agentbox_config.settings.agentbox_platform = runtime_platform
-    agentbox_config.settings.agentbox_session_idle_timeout_seconds = 300
-    agentbox_config.settings.agentbox_sandbox_idle_timeout_seconds = 300
+    agentbox_config.settings.agentbox_auto_create_schema = True
+    agentbox_config.settings.agentbox_add_host_gateway = True
+    agentbox_config.settings.agentbox_workspace_idle_seconds = 300
+    agentbox_config.settings.agentbox_function_idle_seconds = 300
     agentbox_config.settings.agentbox_cleanup_interval_seconds = 30
+    if provider_name == "e2b":
+        agentbox_config.settings.agentbox_e2b_api_key = e2b_values["E2B_API_KEY"]
+        agentbox_config.settings.agentbox_e2b_scope = e2b_scope
+        agentbox_config.settings.agentbox_e2b_workspace_template = e2b_values[
+            "E2B_WORKSPACE_TEMPLATE"
+        ]
+        agentbox_config.settings.agentbox_e2b_workspace_build_id = e2b_values[
+            "E2B_WORKSPACE_TEMPLATE_BUILD_ID"
+        ]
+        agentbox_config.settings.agentbox_e2b_function_template = e2b_values[
+            "E2B_FUNCTION_TEMPLATE"
+        ]
+        agentbox_config.settings.agentbox_e2b_function_build_id = e2b_values[
+            "E2B_FUNCTION_TEMPLATE_BUILD_ID"
+        ]
+        agentbox_config.settings.agentbox_e2b_request_timeout_seconds = 60
 
     config = uvicorn.Config(
         app=agentbox_server.app,
@@ -353,7 +779,11 @@ async def local_agentbox_server(
             else:
                 raise RuntimeError("Timed out waiting for local AgentBox health")
 
-        yield {"manager_base_url": manager_url, "api_key": api_key}
+        yield {
+            "manager_base_url": manager_url,
+            "api_key": api_key,
+            "provider": provider_name,
+        }
     finally:
         server.should_exit = True
         try:
@@ -376,45 +806,60 @@ async def configure_workspace_api_url(
     backend_server,
     local_agentbox_server,
 ) -> AsyncGenerator[dict[str, str], None]:
-    """Route workspace SDK calls to the per-test backend and local AgentBox manager."""
+    """Route workspace SDK calls to the backend and selected AgentBox provider."""
 
     from app.modules.workspace.services.workspace_tool_runtime import (
-        reset_workspace_tool_runtimes,
+        close_workspace_tool_runtimes,
     )
 
-    original_api_url = settings.api_url
-    original_api_url_env = os.environ.get("API_URL")
+    original_callback_url = settings.workspace_callback_api_url
+    original_callback_url_env = os.environ.get("WORKSPACE_CALLBACK_API_URL")
     original_manager_url = settings.agentbox_api_url
     original_manager_url_env = os.environ.get("AGENTBOX_API_URL")
     original_manager_key = settings.agentbox_api_key
     original_manager_key_env = os.environ.get("AGENTBOX_API_KEY")
 
-    reset_workspace_tool_runtimes()
-    settings.api_url = backend_server["host_base_url"]
-    settings.agentbox_api_url = local_agentbox_server["manager_base_url"]
-    settings.agentbox_api_key = local_agentbox_server["api_key"]
-    os.environ["API_URL"] = backend_server["host_base_url"]
-    os.environ["AGENTBOX_API_URL"] = local_agentbox_server["manager_base_url"]
-    os.environ["AGENTBOX_API_KEY"] = local_agentbox_server["api_key"]
-    try:
-        yield {**backend_server, **local_agentbox_server}
-    finally:
-        reset_workspace_tool_runtimes()
-        settings.api_url = original_api_url
-        settings.agentbox_api_url = original_manager_url
-        settings.agentbox_api_key = original_manager_key
-        if original_api_url_env is None:
-            os.environ.pop("API_URL", None)
-        else:
-            os.environ["API_URL"] = original_api_url_env
-        if original_manager_url_env is None:
-            os.environ.pop("AGENTBOX_API_URL", None)
-        else:
-            os.environ["AGENTBOX_API_URL"] = original_manager_url_env
-        if original_manager_key_env is None:
-            os.environ.pop("AGENTBOX_API_KEY", None)
-        else:
-            os.environ["AGENTBOX_API_KEY"] = original_manager_key_env
+    tunnel = (
+        _temporary_workspace_tunnel(backend_server["host_base_url"])
+        if local_agentbox_server["provider"] == "e2b"
+        else contextlib.nullcontext(None)
+    )
+    async with tunnel as public_callback_url:
+        await close_workspace_tool_runtimes()
+        workspace_callback_url = (
+            public_callback_url
+            if public_callback_url is not None
+            else backend_server["docker_base_url"]
+        )
+        settings.workspace_callback_api_url = workspace_callback_url
+        settings.agentbox_api_url = local_agentbox_server["manager_base_url"]
+        settings.agentbox_api_key = local_agentbox_server["api_key"]
+        os.environ["WORKSPACE_CALLBACK_API_URL"] = workspace_callback_url
+        os.environ["AGENTBOX_API_URL"] = local_agentbox_server["manager_base_url"]
+        os.environ["AGENTBOX_API_KEY"] = local_agentbox_server["api_key"]
+        try:
+            yield {
+                **backend_server,
+                **local_agentbox_server,
+                "workspace_callback_url": settings.workspace_callback_api_url,
+            }
+        finally:
+            await close_workspace_tool_runtimes()
+            settings.workspace_callback_api_url = original_callback_url
+            settings.agentbox_api_url = original_manager_url
+            settings.agentbox_api_key = original_manager_key
+            if original_callback_url_env is None:
+                os.environ.pop("WORKSPACE_CALLBACK_API_URL", None)
+            else:
+                os.environ["WORKSPACE_CALLBACK_API_URL"] = original_callback_url_env
+            if original_manager_url_env is None:
+                os.environ.pop("AGENTBOX_API_URL", None)
+            else:
+                os.environ["AGENTBOX_API_URL"] = original_manager_url_env
+            if original_manager_key_env is None:
+                os.environ.pop("AGENTBOX_API_KEY", None)
+            else:
+                os.environ["AGENTBOX_API_KEY"] = original_manager_key_env
 
 
 @pytest_asyncio.fixture(scope="function")

@@ -8,7 +8,6 @@ from app.modules.agent.domain.events import AgentRunCompletedEvent
 from app.modules.agent.domain.value_objects import AgentRunStatus
 from app.modules.function.domain.events import (
     FunctionRunCompletedEvent,
-    FunctionRunExecutionRequestedEvent,
     FunctionRunFailedEvent,
 )
 from app.modules.workflow.events import handlers
@@ -182,12 +181,12 @@ async def test_workflow_enqueues_function_failure_with_error():
 @pytest.mark.asyncio
 async def test_workflow_ignores_non_terminal_function_event():
     job_queue = _FakeJobQueue()
-    event = FunctionRunExecutionRequestedEvent(
-        run_id=uuid4(), function_id=uuid4()
-    ).model_dump(mode="json")
+    event = {
+        "event_type": "function.run.started",
+        "run_id": str(uuid4()),
+        "function_id": str(uuid4()),
+    }
 
-    await handlers.handle_function_run_event(
-        event, _FakeLogger(), job_queue=job_queue
-    )
+    await handlers.handle_function_run_event(event, _FakeLogger(), job_queue=job_queue)
 
     assert job_queue.enqueued == []

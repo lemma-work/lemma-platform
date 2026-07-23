@@ -92,7 +92,7 @@ class PodUpdateRequest:
                 config_type_0 = PodConfig.from_dict(data)
 
                 return config_type_0
-            except (TypeError, ValueError, AttributeError, KeyError):
+            except TypeError, ValueError, AttributeError, KeyError:
                 pass
             return cast(None | PodConfig | Unset, data)
 

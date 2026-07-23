@@ -63,7 +63,6 @@ class BundleApplier:
         handler = {
             StepKind.TABLE: self._apply_table,
             StepKind.TABLE_DATA: self._apply_table_data,
-            StepKind.FUNCTION: self._apply_function,
             StepKind.AGENT: self._apply_agent,
             StepKind.AGENT_GRANTS: self._apply_agent_grants,
             StepKind.SCHEDULE: self._apply_schedule,
@@ -72,8 +71,8 @@ class BundleApplier:
             StepKind.FILE: self._apply_file,
         }.get(step.kind)
         if handler is None:
-            # APP is applied by the self-scoped AppStepRunner (it builds in the
-            # agentbox with no pooled connection held), so it never reaches here.
+            # APP and FUNCTION are applied by self-scoped runners because they
+            # perform AgentBox/storage I/O with no pooled connection held.
             raise StepNotApplicableError(
                 f"{step.kind.value} import is not supported yet; skipped."
             )
@@ -204,68 +203,6 @@ class BundleApplier:
             search_enabled=bool(meta.get("search_enabled", True)),
             visibility=meta.get("visibility") or "POD",
         )
-
-    # --- functions -------------------------------------------------------
-
-    async def _apply_function(self, step: PlanStep) -> None:
-        from app.composition.pod_bundle_resources import build_function_service
-        from app.modules.function.contracts import (
-            FunctionEntity,
-            FunctionUpdateEntity,
-        )
-
-        service = build_function_service(self._uow)
-        payload = self._load("functions", step.name)
-        code = payload.get("code")
-        code = code if isinstance(code, str) else None
-        existing = await service.get_function_by_name(
-            self._pod_id, step.name, self._user_id, raise_not_found=False, ctx=self._ctx
-        )
-        if existing is None:
-            entity = FunctionEntity(
-                pod_id=self._pod_id,
-                user_id=self._user_id,
-                name=step.name,
-                description=payload.get("description"),
-                icon_url=payload.get("icon_url"),
-                config=payload.get("config"),
-                visibility=payload.get("visibility") or "POD",
-            )
-            function = await service.create_function(
-                entity, self._user_id, code=code, ctx=self._ctx
-            )
-        else:
-            function = await service.update_function(
-                self._pod_id,
-                step.name,
-                FunctionUpdateEntity(
-                    description=payload.get("description"),
-                    icon_url=payload.get("icon_url"),
-                    code=code,
-                    config=payload.get("config"),
-                    visibility=payload.get("visibility"),
-                ),
-                self._user_id,
-                ctx=self._ctx,
-            )
-
-        # Resource grants (e.g. datastore-table read/write) are what let the
-        # function's LemmaDataStoreClient actually reach its tables at run time.
-        # Apply them in the same short UoW as the create/update so an imported
-        # function is executable immediately, then drop the delegated-token env
-        # cache so the new scopes take effect on the next run.
-        grants = _grants_from_payload(payload)
-        if grants and function.id is not None:
-            from app.composition.pod_bundle_apps import (
-                invalidate_function_workspace_env_cache,
-            )
-
-            await self._apply_grants(
-                grantee_type="FUNCTION", grantee_id=function.id, grants=grants
-            )
-            await invalidate_function_workspace_env_cache(
-                pod_id=self._pod_id, function_id=function.id
-            )
 
     # --- agents ----------------------------------------------------------
 

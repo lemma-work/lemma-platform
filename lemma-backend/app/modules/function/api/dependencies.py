@@ -25,13 +25,46 @@ from app.modules.function.infrastructure.repositories import (
     FunctionRepository,
     FunctionRunRepository,
 )
-from app.modules.function.application.function_run_executor import FunctionRunExecutor
+from app.modules.function.application.function_definition_compiler import (
+    FunctionDefinitionCompiler,
+)
 from app.modules.function.application.function_use_cases import FunctionUseCases
 from app.modules.function.services.function_file_manager import FunctionFileManager
 from app.modules.function.services.function_service import FunctionService
-from app.composition.authorization import create_authorization_service
-from app.core.config import settings
+from app.core.config import reveal_secret, settings
 from app.core.object_storage import build_object_store, local_file_storage_path
+from app.core.request_context import correlation_headers
+from app.composition.workspace_identity import (
+    mint_workspace_token,
+    resolve_workspace_organization_id,
+)
+from app.modules.function.application.function_callback_credentials import (
+    FunctionCallbackCredentialSigner,
+)
+from app.modules.function.application.function_runtime_gateway import (
+    FunctionRuntimeGateway,
+)
+from app.modules.function.application.function_runtime_endpoint_cache import (
+    FunctionRuntimeEndpointCache,
+)
+from app.modules.function.application.function_session_token_cache import (
+    FunctionSessionTokenCache,
+)
+from app.modules.function.application.function_dispatcher import FunctionDispatcher
+from app.modules.function.infrastructure.function_run_queue import (
+    StreaqFunctionRunQueue,
+)
+from agentbox_client import AgentBoxClient
+
+
+_function_session_token_cache = FunctionSessionTokenCache(
+    ttl_seconds=settings.function_session_token_cache_ttl_seconds,
+    max_entries=settings.function_session_token_cache_max_entries,
+)
+_function_runtime_endpoint_cache = FunctionRuntimeEndpointCache(
+    ttl_seconds=settings.function_runtime_endpoint_cache_ttl_seconds,
+    max_entries=settings.function_runtime_endpoint_cache_max_entries,
+)
 
 
 def get_function_storage_factory():
@@ -51,6 +84,26 @@ def get_function_storage_factory():
     return build
 
 
+def build_function_callback_credential_signer() -> FunctionCallbackCredentialSigner:
+    secret = reveal_secret(settings.function_runtime_secret)
+    if not secret:
+        raise RuntimeError("FUNCTION_RUNTIME_SECRET must be configured")
+    return FunctionCallbackCredentialSigner(secret)
+
+
+def get_function_runtime_gateway(
+    uow_factory: UnitOfWorkFactory = Depends(get_uow_factory),
+) -> FunctionRuntimeGateway:
+    return FunctionRuntimeGateway(
+        uow_factory=uow_factory,
+        storage_factory=get_function_storage_factory(),
+        credential_signer=build_function_callback_credential_signer(),
+        organization_resolver=resolve_workspace_organization_id,
+        lemma_base_url=settings.function_runtime_gateway_url or settings.api_url,
+        delegated_tokens_enabled=settings.authz_delegated_tokens_enabled,
+    )
+
+
 def build_function_service(uow) -> FunctionService:
     """Construct a bound FunctionService (single wiring source). Used by read
     endpoints and as the per-phase collaborator the use case builds inside each
@@ -58,12 +111,12 @@ def build_function_service(uow) -> FunctionService:
     message_bus = get_message_bus()
     return FunctionService(
         function_repository=FunctionRepository(uow, message_bus=message_bus),
-        run_repository=FunctionRunRepository(uow, message_bus=message_bus),
-        workspace_service=get_function_workspace_runtime(),
+        run_repository=FunctionRunRepository(
+            uow,
+            message_bus=message_bus,
+        ),
         storage_factory=get_function_storage_factory(),
-        job_queue=get_streaq_job_queue(),
         icon_service=create_icon_service(),
-        authorization_service=create_authorization_service(uow),
     )
 
 
@@ -72,13 +125,36 @@ def get_function_service(uow: UoWDep) -> FunctionService:
     return build_function_service(uow)
 
 
-def build_function_run_executor(uow_factory: UnitOfWorkFactory) -> FunctionRunExecutor:
-    """Construct the sandbox execution engine (factory mode — short-UoW status
-    writes). No repos held, no ctx."""
-    return FunctionRunExecutor(
-        uow_factory=uow_factory,
+def build_function_definition_compiler() -> FunctionDefinitionCompiler:
+    """Construct the DB-free function definition build collaborator."""
+    return FunctionDefinitionCompiler(
         workspace_service=get_function_workspace_runtime(),
         storage_factory=get_function_storage_factory(),
+    )
+
+
+def build_function_dispatcher(uow_factory: UnitOfWorkFactory) -> FunctionDispatcher:
+    api_url = settings.agentbox_api_url
+    api_key = settings.agentbox_api_key
+    if not api_url or not api_key:
+        raise RuntimeError("AGENTBOX_API_URL and AGENTBOX_API_KEY are required")
+
+    def client_factory() -> AgentBoxClient:
+        return AgentBoxClient(
+            base_url=api_url,
+            api_key=api_key,
+            timeout_seconds=120,
+            context_headers_provider=correlation_headers,
+        )
+
+    return FunctionDispatcher(
+        uow_factory=uow_factory,
+        credential_signer=build_function_callback_credential_signer(),
+        agentbox_client_factory=client_factory,
+        token_minter=mint_workspace_token,
+        token_cache=_function_session_token_cache,
+        endpoint_cache=_function_runtime_endpoint_cache,
+        delegated_tokens_enabled=settings.authz_delegated_tokens_enabled,
     )
 
 
@@ -88,7 +164,9 @@ def build_function_use_cases(uow_factory: UnitOfWorkFactory) -> FunctionUseCases
     return FunctionUseCases(
         uow_factory,
         build_function_service,
-        build_function_run_executor(uow_factory),
+        build_function_definition_compiler(),
+        build_function_dispatcher(uow_factory),
+        StreaqFunctionRunQueue(get_streaq_job_queue()),
     )
 
 
@@ -100,6 +178,9 @@ def get_function_use_cases(
 
 FunctionServiceDep = Annotated[FunctionService, Depends(get_function_service)]
 FunctionUseCasesDep = Annotated[FunctionUseCases, Depends(get_function_use_cases)]
+FunctionRuntimeGatewayDep = Annotated[
+    FunctionRuntimeGateway, Depends(get_function_runtime_gateway)
+]
 
 # Auth dependencies for controller routes
 FunctionViewerDep = require_action(Permissions.FUNCTION_READ, pod_from_path)

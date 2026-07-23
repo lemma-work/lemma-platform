@@ -136,7 +136,7 @@ class UpdateFunctionRequest:
                 config_type_0 = UpdateFunctionRequestConfigType0.from_dict(data)
 
                 return config_type_0
-            except (TypeError, ValueError, AttributeError, KeyError):
+            except TypeError, ValueError, AttributeError, KeyError:
                 pass
             return cast(None | Unset | UpdateFunctionRequestConfigType0, data)
 
@@ -171,7 +171,7 @@ class UpdateFunctionRequest:
                 type_type_0 = FunctionType(data)
 
                 return type_type_0
-            except (TypeError, ValueError, AttributeError, KeyError):
+            except TypeError, ValueError, AttributeError, KeyError:
                 pass
             return cast(FunctionType | None | Unset, data)
 
@@ -188,7 +188,7 @@ class UpdateFunctionRequest:
                 visibility_type_0 = ResourceVisibility(data)
 
                 return visibility_type_0
-            except (TypeError, ValueError, AttributeError, KeyError):
+            except TypeError, ValueError, AttributeError, KeyError:
                 pass
             return cast(None | ResourceVisibility | Unset, data)
 

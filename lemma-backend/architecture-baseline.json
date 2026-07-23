@@ -195,7 +195,6 @@
     "app/modules/datastore/infrastructure/kreuzberg_helper.py": 702,
     "app/modules/datastore/infrastructure/record_repository.py": 615,
     "app/modules/datastore/services/files/writer.py": 733,
-    "app/modules/function/application/function_run_executor.py": 970,
     "app/modules/function/services/function_service.py": 728,
     "app/modules/identity/services/organization_service.py": 672,
     "app/modules/pod_bundle/events/handlers.py": 1001,

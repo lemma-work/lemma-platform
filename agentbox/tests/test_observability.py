@@ -126,7 +126,9 @@ async def test_unhandled_request_emits_one_safe_failure_and_response_id(
     start = next(item for item in sent if item["type"] == "http.response.start")
     assert start["status"] == 500
     assert dict(start["headers"])[b"x-request-id"] == b"request-1"
-    failures = [record for record in caplog.records if record.msg == "http.request.failed"]
+    failures = [
+        record for record in caplog.records if record.msg == "http.request.failed"
+    ]
     assert len(failures) == 1
     fields = failures[0].lemma_fields
     assert fields["error_type"] == "RuntimeError"

@@ -15,15 +15,17 @@ from uuid import uuid4
 
 import pytest
 
-from app.modules.function.application.function_run_executor import FunctionRunExecutor
 from app.modules.function.application.function_use_cases import FunctionUseCases
 from app.modules.function.domain.entities import (
+    FunctionArtifact,
+    FunctionDispatchMode,
     FunctionEntity,
     FunctionRunEntity,
     FunctionRunStatus,
     FunctionStatus,
     FunctionType,
 )
+from app.modules.function.domain.errors import FunctionRunQueueUnavailable
 from app.modules.function.services.function_service import ResolvedExecution
 
 pytestmark = pytest.mark.asyncio
@@ -58,16 +60,6 @@ def _stub_pod_context(monkeypatch):
         "app.core.authorization.scope.resolve_pod_context",
         AsyncMock(return_value=SimpleNamespace(require=AsyncMock())),
     )
-    # The executor builds its run-status repo + message bus from each short UoW
-    # via inline imports — stub them so the engine's status writes are no-ops.
-    monkeypatch.setattr(
-        "app.modules.function.infrastructure.repositories.FunctionRunRepository",
-        lambda uow, message_bus=None: AsyncMock(),
-    )
-    monkeypatch.setattr(
-        "app.core.infrastructure.events.message_bus.get_message_bus",
-        lambda: AsyncMock(),
-    )
 
 
 def _function(**overrides) -> FunctionEntity:
@@ -92,20 +84,44 @@ async def test_create_extracts_schemas_with_no_connection_held(monkeypatch):
         persist_create=AsyncMock(return_value=created),
         get_function_by_name=AsyncMock(return_value=created),
     )
-    executor = FunctionRunExecutor(
-        uow_factory=factory,
-        workspace_service=AsyncMock(),
-        storage_factory=lambda function_id: AsyncMock(),
+    compiler = SimpleNamespace(
+        write_code=AsyncMock(),
+        extract_schemas=AsyncMock(),
+        build_artifact=AsyncMock(),
     )
+    dispatcher = SimpleNamespace(execute=AsyncMock(), cancel=AsyncMock())
     captured = {}
+    operations: list[str] = []
 
     async def _fake_extract(user_id, code, code_path, pod_id, function_id):
         captured["open"] = factory.state["open"]
         return ({"a": 1}, {"b": 2}, None)
 
-    executor.extract_schemas = _fake_extract
+    compiler.extract_schemas.side_effect = _fake_extract
 
-    use_cases = FunctionUseCases(factory, lambda uow: service, executor)
+    async def _fake_build(function, code, *, python_packages):
+        assert factory.state["open"] is False
+        assert python_packages == ()
+        operations.append("artifact")
+        return FunctionArtifact(revision_hash=f"sha256:{'b' * 64}")
+
+    compiler.build_artifact.side_effect = _fake_build
+
+    async def _fake_write(function_id, path, code):
+        assert factory.state["open"] is False
+        assert function_id == created.id
+        assert path == f"revisions/{'b' * 64}/function.py"
+        operations.append("source")
+
+    compiler.write_code.side_effect = _fake_write
+
+    use_cases = FunctionUseCases(
+        factory,
+        lambda uow: service,
+        compiler,
+        dispatcher,
+        AsyncMock(),
+    )
     result = await use_cases.create_function(
         pod_id=created.pod_id,
         entity=created,
@@ -119,6 +135,8 @@ async def test_create_extracts_schemas_with_no_connection_held(monkeypatch):
     assert factory.state["open"] is False
     # Resolve (insert) + persist happened in distinct short UoWs.
     assert factory.state["opens"] >= 2
+    assert operations == ["artifact", "source"]
+    assert created.code_path == f"revisions/{'b' * 64}/function.py"
     assert result is created
 
 
@@ -140,21 +158,25 @@ async def test_execute_api_touches_sandbox_with_no_connection_held(monkeypatch):
     )
 
     captured = {}
+    failed = run.model_copy(update={"status": FunctionRunStatus.FAILED})
 
-    async def _fake_get_session(**kwargs):
-        # Provisioning the sandbox must happen with no DB connection held.
+    async def _dispatch(run_id, **kwargs):
         captured["open"] = factory.state["open"]
-        raise ValueError("stop before the function executor")  # non-recoverable
+        captured["mode"] = kwargs["mode"]
+        assert run_id == run.id
+        return failed
 
-    workspace_service = AsyncMock()
-    workspace_service.get_session = _fake_get_session
-    executor = FunctionRunExecutor(
-        uow_factory=factory,
-        workspace_service=workspace_service,
-        storage_factory=lambda function_id: AsyncMock(),
+    dispatcher = SimpleNamespace(
+        execute=AsyncMock(side_effect=_dispatch),
+        cancel=AsyncMock(),
     )
-
-    use_cases = FunctionUseCases(factory, lambda uow: service, executor)
+    use_cases = FunctionUseCases(
+        factory,
+        lambda uow: service,
+        SimpleNamespace(),
+        dispatcher,
+        AsyncMock(),
+    )
     result = await use_cases.execute_function(
         pod_id=function.pod_id,
         name="api-fn",
@@ -165,6 +187,7 @@ async def test_execute_api_touches_sandbox_with_no_connection_held(monkeypatch):
     )
 
     assert captured["open"] is False
+    assert captured["mode"] == FunctionDispatchMode.SYNCHRONOUS
     assert result.status == FunctionRunStatus.FAILED
     assert factory.state["open"] is False
 
@@ -180,20 +203,27 @@ async def test_execute_run_by_id_worker_path_needs_no_ctx():
         user_email="u@example.com",
         status=FunctionRunStatus.PENDING,
     )
-    service = SimpleNamespace(
-        load_run_and_function=AsyncMock(return_value=(function, run))
-    )
     completed = run.model_copy()
     completed.status = FunctionRunStatus.COMPLETED
-    executor = SimpleNamespace(execute=AsyncMock(return_value=completed))
+    dispatcher = SimpleNamespace(
+        execute=AsyncMock(return_value=completed),
+        cancel=AsyncMock(),
+    )
 
-    use_cases = FunctionUseCases(factory, lambda uow: service, executor)
+    use_cases = FunctionUseCases(
+        factory,
+        lambda uow: SimpleNamespace(),
+        SimpleNamespace(),
+        dispatcher,
+        AsyncMock(),
+    )
     # No request / no ctx is supplied — the worker trusts the persisted run.
-    result = await use_cases.execute_run_by_id(run.id, timeout_seconds=42)
+    result = await use_cases.execute_run_by_id(run.id)
 
-    service.load_run_and_function.assert_awaited_once_with(run.id)
-    executor.execute.assert_awaited_once()
-    assert executor.execute.await_args.kwargs["timeout_seconds"] == 42
+    dispatcher.execute.assert_awaited_once_with(
+        run.id,
+        mode=FunctionDispatchMode.ASYNCHRONOUS,
+    )
     assert result.status == FunctionRunStatus.COMPLETED
 
 
@@ -207,14 +237,22 @@ async def test_execute_job_returns_pending_without_running_sandbox():
         user_id=function.user_id,
         status=FunctionRunStatus.PENDING,
     )
+    run.job_id = f"function:{run.id}"
     service = SimpleNamespace(
         resolve_execute=AsyncMock(
             return_value=ResolvedExecution(function=function, run=run)
-        )
+        ),
     )
-    executor = SimpleNamespace(execute=AsyncMock())
+    dispatcher = SimpleNamespace(execute=AsyncMock(), cancel=AsyncMock())
+    queue = SimpleNamespace(enqueue=AsyncMock(return_value=f"function:{run.id}"))
 
-    use_cases = FunctionUseCases(factory, lambda uow: service, executor)
+    use_cases = FunctionUseCases(
+        factory,
+        lambda uow: service,
+        SimpleNamespace(),
+        dispatcher,
+        queue,
+    )
     result = await use_cases.execute_function(
         pod_id=function.pod_id,
         name="job-fn",
@@ -224,6 +262,54 @@ async def test_execute_job_returns_pending_without_running_sandbox():
         request=SimpleNamespace(),
     )
 
-    # JOB dispatch returns the PENDING run; the worker runs it later.
+    # The run transaction, including its deterministic async dispatch identity,
+    # closes before the one queue round-trip.
     assert result.status == FunctionRunStatus.PENDING
-    executor.execute.assert_not_awaited()
+    assert result.job_id == f"function:{run.id}"
+    queue.enqueue.assert_awaited_once_with(run.id)
+    assert factory.state["opens"] == 1
+    dispatcher.execute.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_execute_job_queue_failure_leaves_recoverable_pending_run():
+    factory = _TrackingUowFactory()
+    function = _function(type=FunctionType.JOB)
+    run = FunctionRunEntity(
+        id=uuid4(),
+        function_id=function.id,
+        user_id=function.user_id,
+        status=FunctionRunStatus.PENDING,
+        job_id=None,
+    )
+    run.job_id = f"function:{run.id}"
+    service = SimpleNamespace(
+        resolve_execute=AsyncMock(
+            return_value=ResolvedExecution(function=function, run=run)
+        ),
+    )
+    dispatcher = SimpleNamespace(execute=AsyncMock(), cancel=AsyncMock())
+    queue = SimpleNamespace(
+        enqueue=AsyncMock(side_effect=FunctionRunQueueUnavailable("down"))
+    )
+    use_cases = FunctionUseCases(
+        factory,
+        lambda uow: service,
+        SimpleNamespace(),
+        dispatcher,
+        queue,
+    )
+
+    result = await use_cases.execute_function(
+        pod_id=function.pod_id,
+        name="job-fn",
+        input_data={},
+        user_id=function.user_id,
+        user_email=None,
+        request=SimpleNamespace(),
+    )
+
+    assert result.status == FunctionRunStatus.PENDING
+    assert result.job_id == f"function:{run.id}"
+    assert factory.state["opens"] == 1
+    dispatcher.execute.assert_not_awaited()

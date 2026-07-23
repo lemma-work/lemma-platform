@@ -1,0 +1,100 @@
+from __future__ import annotations
+
+import asyncio
+from datetime import datetime, timedelta, timezone
+from uuid import uuid4
+
+import pytest
+
+from app.modules.function.application.function_runtime_endpoint_cache import (
+    FunctionRuntimeEndpoint,
+    FunctionRuntimeEndpointCache,
+    FunctionRuntimeEndpointKey,
+)
+
+
+@pytest.mark.asyncio
+async def test_runtime_endpoint_cache_single_flights_and_invalidates_exact_value() -> None:
+    now = datetime.now(timezone.utc)
+    monotonic = 10.0
+    cache = FunctionRuntimeEndpointCache(
+        ttl_seconds=30,
+        clock=lambda: monotonic,
+        wall_clock=lambda: now,
+    )
+    key = FunctionRuntimeEndpointKey(
+        pod_id=uuid4(),
+        profile_digest=f"sha256:{'a' * 64}",
+    )
+    first = FunctionRuntimeEndpoint(
+        url="https://runtime.example/first/",
+        expires_at=now + timedelta(minutes=5),
+    )
+    second = FunctionRuntimeEndpoint(
+        url="https://runtime.example/second/",
+        expires_at=now + timedelta(minutes=5),
+    )
+    calls = 0
+    release = asyncio.Event()
+
+    async def load_first() -> FunctionRuntimeEndpoint:
+        nonlocal calls
+        calls += 1
+        await release.wait()
+        return first
+
+    tasks = [
+        asyncio.create_task(cache.get(key, loader=load_first))
+        for _ in range(10)
+    ]
+    await asyncio.sleep(0)
+    release.set()
+    assert await asyncio.gather(*tasks) == [first] * 10
+    assert calls == 1
+
+    await cache.invalidate(key, endpoint=second)
+    assert await cache.get(key, loader=load_first) == first
+    assert calls == 1
+
+    await cache.invalidate(key, endpoint=first)
+
+    async def load_second() -> FunctionRuntimeEndpoint:
+        nonlocal calls
+        calls += 1
+        return second
+
+    assert await cache.get(key, loader=load_second) == second
+    assert calls == 2
+
+
+@pytest.mark.asyncio
+async def test_runtime_endpoint_cache_expires_before_port_grant() -> None:
+    wall_now = datetime.now(timezone.utc)
+    monotonic_now = 20.0
+    cache = FunctionRuntimeEndpointCache(
+        ttl_seconds=30,
+        clock=lambda: monotonic_now,
+        wall_clock=lambda: wall_now,
+    )
+    key = FunctionRuntimeEndpointKey(
+        pod_id=uuid4(),
+        profile_digest=f"sha256:{'b' * 64}",
+    )
+    calls = 0
+
+    async def loader() -> FunctionRuntimeEndpoint:
+        nonlocal calls
+        calls += 1
+        return FunctionRuntimeEndpoint(
+            url=f"https://runtime.example/{calls}/",
+            expires_at=wall_now + timedelta(seconds=10),
+        )
+
+    first = await cache.get(key, loader=loader)
+    monotonic_now += 7.9
+    assert await cache.get(key, loader=loader) == first
+    monotonic_now += 0.2
+    refreshed = await cache.get(key, loader=loader)
+
+    assert refreshed != first
+    assert calls == 2

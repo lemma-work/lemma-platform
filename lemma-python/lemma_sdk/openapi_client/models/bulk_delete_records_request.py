@@ -55,7 +55,7 @@ class BulkDeleteRecordsRequest:
                     record_ids_item_type_2 = UUID(data)
 
                     return record_ids_item_type_2
-                except (TypeError, ValueError, AttributeError, KeyError):
+                except TypeError, ValueError, AttributeError, KeyError:
                     pass
                 return cast(int | str | UUID, data)
 

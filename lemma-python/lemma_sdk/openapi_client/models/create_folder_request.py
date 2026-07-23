@@ -112,7 +112,7 @@ class CreateFolderRequest:
                 parent_id_type_0 = UUID(data)
 
                 return parent_id_type_0
-            except (TypeError, ValueError, AttributeError, KeyError):
+            except TypeError, ValueError, AttributeError, KeyError:
                 pass
             return cast(None | Unset | UUID, data)
 

@@ -161,7 +161,7 @@ class WorkflowRunWaitResponse:
                 assigned_pod_member_id_type_0 = UUID(data)
 
                 return assigned_pod_member_id_type_0
-            except (TypeError, ValueError, AttributeError, KeyError):
+            except TypeError, ValueError, AttributeError, KeyError:
                 pass
             return cast(None | Unset | UUID, data)
 
@@ -180,7 +180,7 @@ class WorkflowRunWaitResponse:
                 completed_at_type_0 = isoparse(data)
 
                 return completed_at_type_0
-            except (TypeError, ValueError, AttributeError, KeyError):
+            except TypeError, ValueError, AttributeError, KeyError:
                 pass
             return cast(datetime.datetime | None | Unset, data)
 
@@ -197,7 +197,7 @@ class WorkflowRunWaitResponse:
                 created_at_type_0 = isoparse(data)
 
                 return created_at_type_0
-            except (TypeError, ValueError, AttributeError, KeyError):
+            except TypeError, ValueError, AttributeError, KeyError:
                 pass
             return cast(datetime.datetime | None | Unset, data)
 

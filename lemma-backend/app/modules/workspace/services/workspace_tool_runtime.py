@@ -255,6 +255,7 @@ async def close_workspace_tool_runtimes() -> None:
     _function_workspace_runtime = None
     for runtime in runtimes:
         await runtime.close()
+    await WorkspaceSandboxService.close_shared_manager_client()
 
 
 async def invalidate_function_workspace_env_cache(

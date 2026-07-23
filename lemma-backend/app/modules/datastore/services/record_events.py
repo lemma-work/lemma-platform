@@ -88,5 +88,12 @@ class RecordEventCoordinator:
             await self.publish(event)
 
     async def dispatch(self) -> None:
+        """Optionally notify an external dispatcher after the durable commit.
+
+        Production API requests deliberately have no dispatcher callback. The
+        worker-owned transactional outbox loop publishes staged events without
+        making record-write latency depend on Redis or per-event acknowledgement
+        writes.
+        """
         if self.dispatcher is not None:
             await self.dispatcher()

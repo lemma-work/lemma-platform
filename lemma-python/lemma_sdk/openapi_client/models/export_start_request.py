@@ -99,7 +99,7 @@ class ExportStartRequest:
                 data_tables_type_0 = cast(list[str], data)
 
                 return data_tables_type_0
-            except (TypeError, ValueError, AttributeError, KeyError):
+            except TypeError, ValueError, AttributeError, KeyError:
                 pass
             return cast(list[str] | None | Unset, data)
 
@@ -116,7 +116,7 @@ class ExportStartRequest:
                 include_type_0 = cast(list[str], data)
 
                 return include_type_0
-            except (TypeError, ValueError, AttributeError, KeyError):
+            except TypeError, ValueError, AttributeError, KeyError:
                 pass
             return cast(list[str] | None | Unset, data)
 

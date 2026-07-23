@@ -45,6 +45,11 @@ FROM python:3.14-slim-bookworm
 # Set working directory
 WORKDIR /app
 
+# Function dependency resolution happens before a revision becomes READY. The
+# runtime image keeps the same pinned uv binary as the build stage; invocation
+# sandboxes never contain a package manager.
+COPY --from=builder /usr/local/bin/uv /usr/local/bin/uv
+
 # Create non-root user for security
 # -d /home/appuser: explicitly set home directory
 # -m: create the home directory
