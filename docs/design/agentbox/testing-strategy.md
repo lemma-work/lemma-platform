@@ -38,7 +38,7 @@ As of 2026-07-23, the following has been executed from the implementation branch
 | Suite | Result | What it proves |
 | --- | ---: | --- |
 | AgentBox unit/contract suite | 93 passed, 7 provider-gated skips | Typed SQLAlchemy state, API, adapters, runtimes, streaming files, fenced callback recovery, fault paths, exact cleanup reconciliation |
-| Real Docker adapter suite | 5 passed | Workspace lifecycle/volume, shell, PTY, Python, files, browser/port access, private-network manager topology, function process and runner callback |
+| Real Docker adapter suite | 5 passed | Workspace lifecycle/volume, shell, PTY, Python, files, browser/port access, private-network manager topology, function process, lost terminal response recovery, and duplicate-safe callback |
 | Real E2B adapter suite | 2 passed against fresh candidate builds | Immutable create, Node/pnpm/uv/LiteParse, shell/stdin, PTY/resize, native files, Code Interpreter state, headful browser, pause/auto-resume, function process/cancel, exact deletion |
 | Backend API/JOB benchmark | Passed on Docker and the prior E2B release | Ticket claim, immutable artifact verification, real runner/gateway/database execution, 1,000-row table reads/writes at concurrency five |
 

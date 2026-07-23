@@ -1065,7 +1065,7 @@ async def {function_name}(ctx: FunctionContext, data: FunctionInput) -> Function
     return output.getvalue()
 
 
-async def test_real_docker_function_runner_claims_ticket_and_reports_terminal_once(
+async def test_real_docker_function_runner_recovers_lost_terminal_response(
     tmp_path: Path,
 ):
     function_name = "increment"
@@ -1079,6 +1079,8 @@ async def test_real_docker_function_runner_claims_ticket_and_reports_terminal_on
     runtime_token = f"runtime-{uuid4()}-{uuid4()}"
     events: list[tuple[str, dict]] = []
     claimed = False
+    terminal_attempts = 0
+    terminal_payload: dict | None = None
     terminal_event = asyncio.Event()
     gateway = FastAPI()
 
@@ -1132,15 +1134,26 @@ async def test_real_docker_function_runner_claims_ticket_and_reports_terminal_on
         payload: dict,
         authorization: str | None = Header(default=None),
     ):
+        nonlocal terminal_attempts, terminal_payload
         if (
             requested_attempt_id != str(attempt_id)
             or authorization != f"Bearer {runtime_token}"
         ):
             raise HTTPException(status_code=403)
-        events.append((event_name, payload))
         if event_name == "terminal":
+            terminal_attempts += 1
+            if terminal_payload is None:
+                terminal_payload = payload
+                events.append((event_name, payload))
+                return Response(
+                    status_code=503,
+                    headers={"Retry-After": "0.05"},
+                )
+            assert payload == terminal_payload
             terminal_event.set()
-        return {"accepted": True}
+            return {"accepted": True, "duplicate": True}
+        events.append((event_name, payload))
+        return {"accepted": True, "duplicate": False}
 
     config = uvicorn.Config(
         gateway,
@@ -1237,6 +1250,7 @@ async def test_real_docker_function_runner_claims_ticket_and_reports_terminal_on
         assert duplicate.operation_id == operation_id
 
         assert [event for event, _payload in events] == ["started", "terminal"]
+        assert terminal_attempts == 2
         terminal = events[-1][1]
         assert terminal["status"] == "completed"
         assert terminal["output_data"] == {"value": 42}
