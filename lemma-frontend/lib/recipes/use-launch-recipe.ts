@@ -3,7 +3,7 @@
 import { useCallback } from 'react';
 import { useRouter } from 'next/navigation';
 
-import { buildRecipeConversationHref, type Recipe } from './recipes';
+import { buildRecipeConversationHref, type Recipe, type RecipeLaunchOptions } from './recipes';
 
 // One gesture for "add this recipe to the pod": open a full conversation primed
 // to build it. Prompt recipes seed an intent; repo recipes seed the kit install.
@@ -13,8 +13,8 @@ export function useLaunchRecipe(podId: string, opts?: { podName?: string | null 
     const podName = opts?.podName ?? null;
 
     const launchRecipe = useCallback(
-        (recipe: Recipe) => {
-            router.push(buildRecipeConversationHref(podId, recipe, { podName }));
+        (recipe: Recipe, launchOpts?: Pick<RecipeLaunchOptions, 'message' | 'mode' | 'firstRun'>) => {
+            router.push(buildRecipeConversationHref(podId, recipe, { podName, ...launchOpts }));
         },
         [podId, podName, router],
     );

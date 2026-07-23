@@ -38,7 +38,8 @@ import {
   kitCatalog,
   type KitDefinition,
 } from "@/lib/kits/catalog";
-import { RECIPE_BUILDS_LABEL, type Recipe } from "@/lib/recipes/recipes";
+import { renderRecipeIcon } from "@/components/recipes/recipe-icon";
+import { RECIPE_OUTPUT_LABEL, type Recipe } from "@/lib/recipes/recipes";
 import { cn } from "@/lib/utils";
 import { toast } from "sonner";
 import { useAvailableAgentRuntimeHarnesses } from "@/lib/hooks/use-agent-runtime";
@@ -1017,15 +1018,15 @@ export function StartStep({
     ? "Build this"
     : selectedRecipe?.source.kind === "repo"
       ? "Install recipe"
-      : "Build recipe";
+      : "Start building";
 
   return (
     <SetupSplitPanel
-      title="What should we add first?"
+      title="What should this pod become?"
       subtitle={
         personal
-          ? `${podName} is ready. Add a recipe, let Lemma build with you, or describe something specific.`
-          : `${podName} is ready. Add a team recipe, let Lemma build with you, or describe the workflow you want.`
+          ? `${podName} is ready. Choose a strong starting shape or describe exactly what you want.`
+          : `${podName} is ready. Start with an app, a channel agent, or an operating loop for your team.`
       }
       preview={
         <StartPreviewBody
@@ -1083,7 +1084,7 @@ export function StartStep({
 
         <div className="mt-5 flex items-center gap-3 text-xs text-[var(--text-tertiary)]">
           <span className="h-px flex-1 bg-[var(--border-subtle)]" />
-          or install a recipe
+          or choose a starting point
           <span className="h-px flex-1 bg-[var(--border-subtle)]" />
         </div>
 
@@ -1106,20 +1107,29 @@ export function StartStep({
                 ].join(" ")}
               >
                 <span className="flex items-center justify-between gap-2">
-                  <span className="text-sm font-semibold text-[var(--text-primary)]">
-                    {recipe.name}
+                  <span className="flex min-w-0 items-center gap-2.5">
+                    <span className="recipe-icon-tile flex h-8 w-8 shrink-0 items-center justify-center rounded-lg">
+                      {renderRecipeIcon(recipe, { className: "h-4 w-4", strokeWidth: 1.8 })}
+                    </span>
+                    <span className="min-w-0 truncate text-sm font-semibold text-[var(--text-primary)]">
+                      {recipe.name}
+                    </span>
                   </span>
                   {selected ? (
                     <Check className="h-4 w-4 shrink-0 text-[var(--text-primary)]" />
                   ) : null}
                 </span>
                 <span className="mt-1 block text-xs leading-5 text-[var(--text-secondary)]">
-                  {recipe.blurb}
+                  {recipe.kicker}
                 </span>
-                <span className="chip chip-sm mt-3 self-start font-mono text-[var(--text-tertiary)]">
-                  {recipe.source.kind === "repo"
-                    ? "GitHub kit"
-                    : RECIPE_BUILDS_LABEL[recipe.builds]}
+                <span className="mt-3 flex flex-wrap gap-1.5">
+                  {recipe.source.kind === "repo" ? (
+                    <span className="chip chip-sm chip-muted">Published kit</span>
+                  ) : recipe.outputs.slice(0, 3).map((output) => (
+                    <span key={output} className="chip chip-sm chip-muted">
+                      {RECIPE_OUTPUT_LABEL[output]}
+                    </span>
+                  ))}
                 </span>
               </button>
             );

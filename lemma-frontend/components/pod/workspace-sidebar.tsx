@@ -610,7 +610,7 @@ export function WorkspaceSidebar({ podId, podName, podIconUrl, onCollapse }: Wor
         if (isKitsRoute) {
             return (
                 <RouteWorktree>
-                    <WorktreeEmpty label="Preview a kit, then install or customize it." />
+                    <WorktreeEmpty label="Choose a starting point, then add it to this pod." />
                 </RouteWorktree>
             );
         }
@@ -787,7 +787,7 @@ export function WorkspaceSidebar({ podId, podName, podIconUrl, onCollapse }: Wor
                                             className="lemma-menu-row px-2"
                                         >
                                             <ProductIcon kind="apps" size="xs" />
-                                            Browse recipes
+                                            Add from a starter
                                         </DropdownMenu.Item>
                                     ) : null}
                                     <DropdownMenu.Separator className="my-1 h-px bg-[var(--border-subtle)]" />

@@ -121,7 +121,7 @@ function getPodSectionLabel(podId: string, pathname: string) {
             return "Apps";
         case "recipes":
         case "kits":
-            return "Recipes";
+            return "Add capability";
         default:
             return formatDisplayName(section);
     }
