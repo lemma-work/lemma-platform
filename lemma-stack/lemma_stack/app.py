@@ -281,6 +281,23 @@ def install(
 
 
 @app.command()
+def prepare() -> None:
+    """Prepare the app-owned host runtime (one-time Windows setup if needed)."""
+    client = _managed_locald()
+    if client is None:
+        raise AdminError(
+            "no managed Lemma Desktop runtime is installed; open Lemma Desktop to install it"
+        )
+    event = _managed_request(client, "runtime.prepare")
+    if event.get("reboot_required"):
+        warn("restart Windows, then reopen Lemma; local setup will continue automatically")
+    elif event.get("ready"):
+        ok("local runtime prerequisites are ready")
+    else:
+        raise AdminError("local runtime preparation did not report a usable state")
+
+
+@app.command()
 def start() -> None:
     """Start (or reconcile) the installed stack."""
     if client := _managed_locald():

@@ -239,6 +239,10 @@ impl Daemon {
             return true;
         }
         match command.as_str() {
+            "runtime.prepare" => {
+                self.start_runtime_prepare(request, client.clone());
+                return true;
+            }
             "control.snapshot" => {
                 match self.control_snapshot(id.as_ref()) {
                     Ok(event) => self.send_direct(client, event),
@@ -572,14 +576,94 @@ impl Daemon {
                     }));
                 }
                 Err(error) => {
+                    let message = error.to_string();
                     daemon.broadcast(error_event(
-                        "host-operation-failed",
-                        error.to_string(),
+                        runtime_operation_error_code(&message, "host-operation-failed"),
+                        message,
                         id.as_ref(),
                     ));
                     daemon.broadcast(json!({
                         "v": PROTOCOL_VERSION, "event": "done", "cmd": command,
                         "id": id.as_ref(), "ok": false,
+                    }));
+                }
+            }
+            daemon
+                .host_operation_running
+                .store(false, Ordering::Release);
+        });
+    }
+
+    fn start_runtime_prepare(self: &Arc<Self>, request: Value, client: mpsc::Sender<String>) {
+        let id = request.get("id").cloned();
+        let Some(runtime) = self.managed_runtime.as_ref().cloned() else {
+            self.send_direct(
+                &client,
+                error_event(
+                    "managed-runtime-unavailable",
+                    "this installation does not include an app-owned runtime",
+                    id.as_ref(),
+                ),
+            );
+            return;
+        };
+        if self
+            .host_operation_running
+            .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
+            .is_err()
+        {
+            self.send_direct(
+                &client,
+                error_event("busy", "another local operation is running", id.as_ref()),
+            );
+            return;
+        }
+        self.send_direct(
+            &client,
+            json!({
+                "v": PROTOCOL_VERSION,
+                "event": "ack",
+                "cmd": "runtime.prepare",
+                "id": id.as_ref(),
+            }),
+        );
+
+        let daemon = Arc::clone(self);
+        thread::spawn(move || {
+            match runtime.prepare_host() {
+                Ok(result) => {
+                    let mut prepared = json!({
+                        "v": PROTOCOL_VERSION,
+                        "event": "runtime.prepared",
+                        "id": id.as_ref(),
+                    });
+                    if let (Some(target), Some(fields)) =
+                        (prepared.as_object_mut(), result.as_object())
+                    {
+                        target.extend(fields.clone());
+                    }
+                    daemon.broadcast(prepared);
+                    daemon.broadcast(json!({
+                        "v": PROTOCOL_VERSION,
+                        "event": "done",
+                        "cmd": "runtime.prepare",
+                        "id": id.as_ref(),
+                        "ok": true,
+                    }));
+                }
+                Err(error) => {
+                    let message = error.to_string();
+                    daemon.broadcast(error_event(
+                        runtime_operation_error_code(&message, "runtime-prepare-failed"),
+                        message,
+                        id.as_ref(),
+                    ));
+                    daemon.broadcast(json!({
+                        "v": PROTOCOL_VERSION,
+                        "event": "done",
+                        "cmd": "runtime.prepare",
+                        "id": id.as_ref(),
+                        "ok": false,
                     }));
                 }
             }
@@ -870,6 +954,18 @@ impl Daemon {
     }
 }
 
+fn runtime_operation_error_code(message: &str, fallback: &'static str) -> &'static str {
+    if message.contains("restart to finish enabling WSL 2") {
+        "wsl-reboot-required"
+    } else if message.contains("WSL 2 is required") {
+        "wsl-required"
+    } else if message.contains("did not approve or complete WSL 2 setup") {
+        "wsl-setup-denied"
+    } else {
+        fallback
+    }
+}
+
 fn supervisor_command() -> io::Result<Command> {
     let mut command = supervisor_base_command()?;
     command.arg("supervise");
@@ -1004,5 +1100,39 @@ fn create_listener(paths: &LocalPaths) -> io::Result<LocalSocketListener> {
             create()
         }
         Err(error) => Err(error),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::runtime_operation_error_code;
+
+    #[test]
+    fn windows_runtime_errors_have_stable_user_action_codes() {
+        assert_eq!(
+            runtime_operation_error_code(
+                "WSL 2 is required for Lemma's private runtime",
+                "host-operation-failed"
+            ),
+            "wsl-required"
+        );
+        assert_eq!(
+            runtime_operation_error_code(
+                "Windows must restart to finish enabling WSL 2",
+                "host-operation-failed"
+            ),
+            "wsl-reboot-required"
+        );
+        assert_eq!(
+            runtime_operation_error_code(
+                "Windows did not approve or complete WSL 2 setup",
+                "runtime-prepare-failed"
+            ),
+            "wsl-setup-denied"
+        );
+        assert_eq!(
+            runtime_operation_error_code("database failed", "host-operation-failed"),
+            "host-operation-failed"
+        );
     }
 }

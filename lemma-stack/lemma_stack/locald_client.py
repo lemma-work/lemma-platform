@@ -199,7 +199,7 @@ class LocaldClient:
         self.ensure_running()
         request_id = f"lemma-stack-{os.getpid()}-{uuid.uuid4().hex}"
         request = {"v": 1, "cmd": command, "id": request_id, **payload}
-        timeout = 600 if command in {"start", "restart"} else 120
+        timeout = 600 if command in {"start", "restart", "runtime.prepare"} else 120
         result = self._invoke("send", json.dumps(request, separators=(",", ":")), timeout=timeout)
         matching = [
             event
@@ -217,6 +217,7 @@ class LocaldClient:
             "ping": "pong",
             "control.snapshot": "control.snapshot",
             "config.apply": "config.applied",
+            "runtime.prepare": "runtime.prepared",
         }
         expected = final_kinds.get(command, "done")
         final = next(

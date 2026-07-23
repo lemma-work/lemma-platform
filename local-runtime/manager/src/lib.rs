@@ -3,7 +3,10 @@ use serde_json::{json, Value};
 use std::fs::{self, OpenOptions};
 use std::io::{self, Write};
 use std::path::{Path, PathBuf};
-use std::process::{Child, Command, Stdio};
+#[cfg(target_os = "macos")]
+use std::process::Child;
+use std::process::{Command, Stdio};
+#[cfg(target_os = "macos")]
 use std::sync::Mutex;
 use std::thread;
 use std::time::{Duration, Instant};
@@ -70,6 +73,24 @@ impl ManagedRuntime {
         #[cfg(windows)]
         self.start_windows()?;
         self.wait_ready()
+    }
+
+    pub fn prepare_host(&self) -> io::Result<Value> {
+        #[cfg(target_os = "macos")]
+        {
+            Ok(json!({"ready": true, "reboot_required": false, "platform": "macos"}))
+        }
+        #[cfg(windows)]
+        {
+            self.prepare_windows_host()
+        }
+        #[cfg(not(any(target_os = "macos", windows)))]
+        {
+            Err(io::Error::new(
+                io::ErrorKind::Unsupported,
+                "managed host preparation is unsupported on this platform",
+            ))
+        }
     }
 
     pub fn request(&self, operation: &str, parameters: Value) -> io::Result<Value> {
@@ -279,6 +300,18 @@ impl ManagedRuntime {
 
     #[cfg(windows)]
     fn start_windows(&self) -> io::Result<()> {
+        if !self.windows_wsl_ready() {
+            let pending = self.wsl_setup_marker().is_file();
+            return Err(io::Error::new(
+                io::ErrorKind::NotFound,
+                if pending {
+                    "Windows must restart to finish enabling WSL 2; restart Windows, then reopen Lemma"
+                } else {
+                    "WSL 2 is required for Lemma's private runtime; choose Set up Windows runtime and approve the Windows prompt"
+                },
+            ));
+        }
+        let _ = fs::remove_file(self.wsl_setup_marker());
         let install = self.config.local_root.join("runtime/wsl");
         fs::create_dir_all(&install)?;
         let distributions = self.wsl(&["--list", "--quiet"], None)?;
@@ -333,6 +366,84 @@ impl ManagedRuntime {
             None,
         )?;
         Ok(())
+    }
+
+    #[cfg(windows)]
+    fn windows_wsl_ready(&self) -> bool {
+        Command::new(&self.config.wsl_executable)
+            .arg("--status")
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .status()
+            .is_ok_and(|status| status.success())
+    }
+
+    #[cfg(windows)]
+    fn wsl_setup_marker(&self) -> PathBuf {
+        self.config
+            .local_root
+            .join("runtime/wsl-setup-pending.json")
+    }
+
+    #[cfg(windows)]
+    fn prepare_windows_host(&self) -> io::Result<Value> {
+        if self.windows_wsl_ready() {
+            let _ = fs::remove_file(self.wsl_setup_marker());
+            return Ok(json!({
+                "ready": true,
+                "reboot_required": false,
+                "platform": "windows",
+            }));
+        }
+        write_private_atomic(
+            &self.wsl_setup_marker(),
+            br#"{"schema_version":1,"operation":"wsl-install"}"#,
+        )?;
+        let script = concat!(
+            "$ErrorActionPreference='Stop'; ",
+            "try { $p=Start-Process -FilePath (Join-Path $env:WINDIR 'System32\\wsl.exe') ",
+            "-ArgumentList @('--install','--no-distribution','--no-launch') ",
+            "-Verb RunAs -Wait -PassThru; exit $p.ExitCode } ",
+            "catch { Write-Error 'Windows administrator approval was cancelled or failed'; exit 1223 }"
+        );
+        let status = match Command::new("powershell.exe")
+            .args([
+                "-NoLogo",
+                "-NoProfile",
+                "-NonInteractive",
+                "-ExecutionPolicy",
+                "Bypass",
+                "-Command",
+                script,
+            ])
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .status()
+        {
+            Ok(status) => status,
+            Err(error) => {
+                let _ = fs::remove_file(self.wsl_setup_marker());
+                return Err(error);
+            }
+        };
+        if !status.success() {
+            let _ = fs::remove_file(self.wsl_setup_marker());
+            return Err(io::Error::new(
+                io::ErrorKind::PermissionDenied,
+                "Windows did not approve or complete WSL 2 setup",
+            ));
+        }
+        let ready = self.windows_wsl_ready();
+        if ready {
+            let _ = fs::remove_file(self.wsl_setup_marker());
+        }
+        Ok(json!({
+            "ready": ready,
+            "reboot_required": !ready,
+            "platform": "windows",
+        }))
     }
 
     #[cfg(windows)]
@@ -455,6 +566,8 @@ fn set_private_directory(path: &Path) -> io::Result<()> {
         use std::os::unix::fs::PermissionsExt;
         fs::set_permissions(path, fs::Permissions::from_mode(0o700))?;
     }
+    #[cfg(not(unix))]
+    let _ = path;
     Ok(())
 }
 
@@ -473,6 +586,8 @@ fn ensure_private_file(path: &Path) -> io::Result<()> {
             ));
         }
     }
+    #[cfg(not(unix))]
+    let _ = path;
     Ok(())
 }
 

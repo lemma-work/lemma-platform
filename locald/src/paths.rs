@@ -2,9 +2,11 @@ use std::env;
 use std::io;
 use std::path::{Path, PathBuf};
 
+#[cfg(unix)]
+use interprocess::local_socket::GenericFilePath;
 #[cfg(windows)]
 use interprocess::local_socket::GenericNamespaced;
-use interprocess::local_socket::{prelude::*, GenericFilePath, Name};
+use interprocess::local_socket::{prelude::*, Name};
 
 #[derive(Clone, Debug)]
 pub struct LocalPaths {
@@ -75,6 +77,7 @@ impl LocalPaths {
     }
 }
 
+#[cfg(not(windows))]
 fn home_dir() -> io::Result<PathBuf> {
     env::var_os("HOME")
         .map(PathBuf::from)

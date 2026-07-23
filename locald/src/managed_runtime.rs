@@ -74,8 +74,6 @@ impl ManagedRuntimeBootstrap {
             let wsl_executable = env::var_os("LEMMA_LOCALD_WSL_BIN")
                 .map(PathBuf::from)
                 .unwrap_or_else(|| PathBuf::from("wsl.exe"));
-            #[cfg(windows)]
-            ensure_wsl_available(&wsl_executable)?;
 
             Ok(Some(Self {
                 artifact_root,
@@ -138,6 +136,10 @@ pub struct ManagedRuntimeController {
 }
 
 impl ManagedRuntimeController {
+    pub fn prepare_host(&self) -> io::Result<serde_json::Value> {
+        self.runtime.prepare_host()
+    }
+
     pub fn start(&self) -> io::Result<()> {
         validate_spec(&self.spec)?;
         let status = self.runtime.start()?;
@@ -434,6 +436,8 @@ fn ensure_private_file(path: &Path) -> io::Result<()> {
             ));
         }
     }
+    #[cfg(not(unix))]
+    let _ = path;
     Ok(())
 }
 
@@ -456,19 +460,6 @@ fn bundled_executable(variable: &str, sibling_name: &str) -> io::Result<PathBuf>
         ));
     }
     Ok(path)
-}
-
-#[cfg(windows)]
-fn ensure_wsl_available(executable: &Path) -> io::Result<()> {
-    let output = Command::new(executable).arg("--status").output()?;
-    if output.status.success() {
-        Ok(())
-    } else {
-        Err(io::Error::new(
-            io::ErrorKind::Unsupported,
-            "Windows Subsystem for Linux 2 is required for local sandboxes",
-        ))
-    }
 }
 
 #[cfg(test)]

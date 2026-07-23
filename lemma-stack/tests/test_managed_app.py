@@ -65,6 +65,13 @@ class FakeManagedClient:
                     "endpoint_host": "127.0.0.1",
                 },
             }
+        if command == "runtime.prepare":
+            return {
+                "event": "runtime.prepared",
+                "ready": True,
+                "reboot_required": False,
+                "platform": "windows",
+            }
         return {"event": "done", "ok": True}
 
 
@@ -88,6 +95,16 @@ def test_lifecycle_commands_route_through_managed_daemon(monkeypatch) -> None:
         ("restart", {}),
         ("status", {}),
     ]
+
+
+def test_prepare_routes_the_explicit_host_prerequisite_action(monkeypatch, capsys) -> None:
+    client = FakeManagedClient()
+    monkeypatch.setattr(stack_app, "_managed_locald", lambda: client)
+
+    stack_app.prepare()
+
+    assert client.requests == [("runtime.prepare", {})]
+    assert "prerequisites are ready" in capsys.readouterr().out
 
 
 def test_managed_status_and_doctor_do_not_probe_external_runtimes(monkeypatch, capsys) -> None:

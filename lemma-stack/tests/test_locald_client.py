@@ -123,3 +123,44 @@ def test_request_surfaces_structured_daemon_errors(
 
     with pytest.raises(LocaldError, match="another operation is running"):
         client.request("restart")
+
+
+def test_runtime_prepare_returns_its_structured_result(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    binary = tmp_path / "lemma-locald"
+    _fake_binary(binary)
+    client = LocaldClient(binary, tmp_path, {})
+    monkeypatch.setattr(LocaldClient, "ensure_running", lambda self: None)
+
+    def invoke(self, *arguments: str, timeout: float):
+        del self
+        assert timeout == 600
+        request_id = json.loads(arguments[1])["id"]
+        output = "\n".join(
+            [
+                json.dumps(
+                    {
+                        "event": "runtime.prepared",
+                        "id": request_id,
+                        "ready": False,
+                        "reboot_required": True,
+                    }
+                ),
+                json.dumps(
+                    {
+                        "event": "done",
+                        "cmd": "runtime.prepare",
+                        "id": request_id,
+                        "ok": True,
+                    }
+                ),
+            ]
+        )
+        return subprocess.CompletedProcess([], 0, stdout=output, stderr="")
+
+    monkeypatch.setattr(LocaldClient, "_invoke", invoke)
+
+    event = client.request("runtime.prepare")
+
+    assert event["reboot_required"] is True

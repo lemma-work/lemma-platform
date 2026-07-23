@@ -232,9 +232,10 @@ No Homebrew prompt, terminal window, VM name, or fixed RAM/disk allocation appea
 2. Lemma checks WSL version and virtualization support.
 3. If WSL2 is ready, Lemma imports its private distribution into `%LOCALAPPDATA%\Lemma\runtime` and continues without installing Ubuntu.
 4. If WSL is available but stale, Lemma explains and invokes the standard WSL update flow.
-5. If the Windows feature is disabled, Lemma asks once for elevation, runs the smallest enablement action, and records a resumable post-reboot continuation. It does not leave the user at a generic installer error.
-6. The private distribution never becomes the user's default distro and does not modify other distributions.
-7. Core and optional workspace packs install and onboarding continues.
+5. If the Windows feature is disabled, ordinary startup remains read-only and shows **Set up Windows runtime**. Only that explicit user action asks once for elevation and runs `wsl.exe --install --no-distribution --no-launch`; cancellation is recoverable.
+6. If Windows requires a reboot, Lemma records a private resume marker, explains the single required restart, and continues startup on the next launch. It does not leave the user at a generic installer error.
+7. The private distribution never becomes the user's default distro and does not modify other distributions.
+8. Core and optional workspace packs install and onboarding continues.
 
 ### 10.3 Existing runtime adoption
 

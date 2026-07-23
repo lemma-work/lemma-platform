@@ -513,6 +513,7 @@
     cursor: pointer;
   }
   .err-actions button.dark { background: #131313; border-color: #131313; color: #faf6ee; }
+  .err-actions button:disabled { cursor: wait; opacity: 0.55; }
 
   pre.log {
     position: absolute;
@@ -580,7 +581,7 @@
         <span class="choice-top">
           <span class="flag">Local</span>
         </span>
-        <strong>Run Lemma on this Mac</strong>
+        <strong id="local-choice-title">Run Lemma on this Mac</strong>
         <span class="choice-body">Set up local services and keep workspace data here.</span>
         <span class="choice-action">Review →</span>
       </button>
@@ -590,10 +591,10 @@
 
   <section id="local-confirm" hidden>
     <p class="setup-kicker">Local setup</p>
-    <p class="choice-intro">Lemma will install and run services on this Mac.</p>
+    <p class="choice-intro" id="local-confirm-intro">Lemma will install and run services on this Mac.</p>
     <div class="local-review">
       <ul>
-        <li>Workspace data is stored on this Mac.</li>
+        <li id="local-data-copy">Workspace data is stored on this Mac.</li>
         <li>First setup takes a few minutes and uses additional disk space.</li>
         <li>AI models and connected integrations may send data to their providers.</li>
       </ul>
@@ -611,6 +612,7 @@
   <div id="errwrap" hidden>
     <p class="errbox" id="errdetail"></p>
     <div class="err-actions">
+      <button class="dark" id="prepare-windows" type="button" hidden>Set up Windows runtime</button>
       <button class="dark" id="retry" type="button">Try again</button>
       <button id="error-logs" type="button">View log</button>
     </div>
@@ -636,6 +638,7 @@
         start: () => invoke("start"),
         stop: (includeInfra = false) => invoke("stop", { includeInfra }),
         restart: () => invoke("restart"),
+        prepareRuntime: () => invoke("prepare_runtime"),
         openApp: () => invoke("open_app"),
         openAuth: (mode = "signin") => invoke("login", { mode }),
         openLogs: () => invoke("open_logs"),
@@ -667,6 +670,7 @@
       start: () => { clearTimeout(timer); i = 0; step(); },
       stop: () => clearTimeout(timer),
       restart: () => { clearTimeout(timer); i = 0; step(); },
+      prepareRuntime: () => console.log("[demo] prepare Windows runtime"),
       openApp: () => console.log("[demo] open app"),
       openAuth: (mode = "signin") => console.log("[demo] open auth", mode),
       openLogs: () => console.log("[demo] open logs"),
@@ -679,8 +683,10 @@
   })();
 
   // ---- the script: poetic line + honest mono subtitle per real phase ----
+  const IS_WINDOWS = /Windows/i.test(navigator.userAgent);
+  const DEVICE = IS_WINDOWS ? "PC" : "Mac";
   const VOICE = {
-    boot:       ["A new kind of workspace is arriving on this Mac.", "starting"],
+    boot:       [`A new kind of workspace is arriving on this ${DEVICE}.`, "starting"],
     download:   ["Bringing the runtime here.", "downloading runtime"],
     check:      ["Preparing the ground.", "toolchain & configuration"],
     infra:      ["Giving it memory.", "database & cache"],
@@ -704,6 +710,16 @@
   const openBtn = document.getElementById("open-app");
   const errwrap = document.getElementById("errwrap");
   const errdetail = document.getElementById("errdetail");
+  const retryBtn = document.getElementById("retry");
+  const prepareWindowsBtn = document.getElementById("prepare-windows");
+
+  if (IS_WINDOWS) {
+    document.getElementById("local-choice-title").textContent = "Run Lemma on this PC";
+    document.getElementById("local-confirm-intro").textContent =
+      "Lemma will install and run services on this PC.";
+    document.getElementById("local-data-copy").textContent =
+      "Workspace data is stored on this PC.";
+  }
 
   let shownLine = "";
   let queuedLine = null;
@@ -745,10 +761,24 @@
       window.__orb?.stall();
       scene.classList.add("stalled");
       scene.classList.remove("awake");
-      say("Something stopped.");
-      truth.textContent = "";
+      const needsWindowsSetup = ["wsl-required", "wsl-setup-denied"].includes(s.errorCode);
+      const needsWindowsRestart = s.errorCode === "wsl-reboot-required";
+      say(needsWindowsSetup
+        ? "Windows needs one permission."
+        : needsWindowsRestart
+          ? "One restart, then Lemma continues."
+          : "Something stopped.");
+      truth.textContent = needsWindowsSetup
+        ? "one-time Windows setup · no Docker Desktop or Ubuntu"
+        : needsWindowsRestart
+          ? "restart Windows, then reopen Lemma"
+          : "";
       errdetail.textContent = s.status || "startup failed";
       errwrap.hidden = false;
+      prepareWindowsBtn.hidden = !needsWindowsSetup;
+      prepareWindowsBtn.disabled = false;
+      prepareWindowsBtn.textContent = "Set up Windows runtime";
+      retryBtn.hidden = needsWindowsSetup || needsWindowsRestart;
       openBtn.hidden = true;
       whisper.classList.remove("on");
       return;
@@ -756,6 +786,8 @@
     if (scene.classList.contains("stalled")) window.__orb?.resume();
     scene.classList.remove("stalled");
     errwrap.hidden = true;
+    prepareWindowsBtn.hidden = true;
+    retryBtn.hidden = false;
 
     const voice = VOICE[s.phaseKey] || VOICE.boot;
     if (s.ready) {
@@ -872,12 +904,22 @@
       errwrap.hidden = false;
     }
   });
-  document.getElementById("retry").addEventListener("click", () => {
+  retryBtn.addEventListener("click", () => {
     errwrap.hidden = true;
     scene.classList.remove("stalled");
     say(VOICE.boot[0]);
     startWhispers();
     window.lemmaDesktop.start();
+  });
+  prepareWindowsBtn.addEventListener("click", () => {
+    prepareWindowsBtn.disabled = true;
+    prepareWindowsBtn.textContent = "Waiting for Windows…";
+    errdetail.textContent = "Approve the Windows prompt. Lemma will continue here when setup finishes.";
+    window.lemmaDesktop.prepareRuntime().catch((error) => {
+      prepareWindowsBtn.disabled = false;
+      prepareWindowsBtn.textContent = "Try Windows setup again";
+      errdetail.textContent = String(error || "Windows runtime setup could not start.");
+    });
   });
   const switchModeBtn = document.getElementById("switch-mode");
   switchModeBtn.addEventListener("click", () => window.lemmaDesktop.chooseConnectionMode());

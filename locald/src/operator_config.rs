@@ -827,6 +827,8 @@ fn ensure_private_file(path: &Path) -> io::Result<()> {
             ));
         }
     }
+    #[cfg(not(unix))]
+    let _ = path;
     Ok(())
 }
 

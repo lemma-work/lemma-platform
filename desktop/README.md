@@ -25,6 +25,15 @@ for the current compatibility mode, and sandbox containers are created on
 demand. PostgreSQL also owns the separate `agentbox` database. There is no
 Kreuzberg service and no Python/PyInstaller supervisor.
 
+Windows startup is also app-owned. Normal startup performs a read-only
+`wsl.exe --status` check. If WSL2 is unavailable, the local splash offers a
+separate **Set up Windows runtime** action; only that explicit action opens UAC
+and runs `wsl.exe --install --no-distribution --no-launch`. Lemma never installs
+Ubuntu, changes the default distribution, or modifies global `.wslconfig`.
+When Windows requires a reboot, a per-install resume marker makes the next app
+launch continue automatically. The same operation is available as
+`lemma-stack prepare` for terminal-led installs.
+
 The local gateway exposes stable loopback-only origins:
 
 - `http://app.lemma.localhost:3711` — workspace frontend;

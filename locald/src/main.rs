@@ -104,6 +104,7 @@ fn client_event_finishes(command: &str, event: &str) -> bool {
         "ping" => event == "pong",
         "control.snapshot" => event == "control.snapshot",
         "config.apply" => event == "config.applied",
+        "runtime.prepare" => event == "done",
         _ => event == "done",
     }
 }
@@ -121,6 +122,11 @@ mod tests {
             "control.snapshot"
         ));
         assert!(client_event_finishes("config.apply", "config.applied"));
+        assert!(client_event_finishes("runtime.prepare", "done"));
+        assert!(!client_event_finishes(
+            "runtime.prepare",
+            "runtime.prepared"
+        ));
         assert!(client_event_finishes("start", "done"));
         assert!(client_event_finishes("anything", "error"));
         assert!(!client_event_finishes("control.snapshot", "state"));

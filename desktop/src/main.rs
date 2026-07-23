@@ -38,6 +38,7 @@ const CONNECTION_MODE_PROMPT_REVISION: u64 = 1;
 #[serde(rename_all = "camelCase")]
 struct UiState {
     status: String,
+    error_code: String,
     phase: String,
     phase_key: String,
     progress: u64,
@@ -650,6 +651,7 @@ fn locald_gone(app: &AppHandle) {
         if ui.running {
             ui.status = "Local service manager disconnected".into();
             ui.error = true;
+            ui.error_code = "locald-disconnected".into();
             ui.running = false;
         }
         ui.clone()
@@ -674,6 +676,7 @@ fn handle_locald_event(app: &AppHandle, event: &Value) {
     let kind = event["event"].as_str().unwrap_or_default();
     let _ = app.emit_to("control", "lemma:locald-event", event.clone());
 
+    let mut start_after_prepare = false;
     let snapshot = {
         let mut ui = shell.ui.lock().unwrap();
         match kind {
@@ -695,46 +698,64 @@ fn handle_locald_event(app: &AppHandle, event: &Value) {
                     format!("{}: {}", ui.phase, detail)
                 };
                 ui.error = ui.phase_key == "error";
+                if !ui.error {
+                    ui.error_code.clear();
+                }
             }
             "state" => {
                 ui.running = event["running"].as_bool().unwrap_or(false);
                 ui.ready = event["ready"].as_bool().unwrap_or(false);
-                ui.error = event["status"].as_str() == Some("error");
+                let event_is_error = event["status"].as_str() == Some("error");
+                let keep_actionable_error =
+                    is_actionable_runtime_error(&ui.error_code) && !ui.ready && !event_is_error;
+                ui.error = event_is_error || keep_actionable_error;
+                if !ui.error {
+                    ui.error_code.clear();
+                }
             }
             "status" => {
                 ui.running = event["running"].as_bool().unwrap_or(ui.running);
                 ui.ready = event["ready"].as_bool().unwrap_or(ui.ready);
-                ui.error = event["status"].as_str() == Some("error");
+                let event_is_error = event["status"].as_str() == Some("error");
+                let keep_actionable_error =
+                    is_actionable_runtime_error(&ui.error_code) && !ui.ready && !event_is_error;
+                ui.error = event_is_error || keep_actionable_error;
+                if !ui.error {
+                    ui.error_code.clear();
+                }
                 if let Some(url) = event["url"].as_str() {
                     ui.url = url.to_string();
                 }
-                if let Some(phase) = event.get("phase").and_then(Value::as_object) {
-                    ui.phase = phase
-                        .get("label")
-                        .and_then(Value::as_str)
-                        .unwrap_or(&ui.phase)
-                        .to_string();
-                    ui.phase_key = phase
-                        .get("key")
-                        .and_then(Value::as_str)
-                        .unwrap_or(&ui.phase_key)
-                        .to_string();
-                    ui.progress = phase
-                        .get("progress")
-                        .and_then(Value::as_u64)
-                        .unwrap_or(ui.progress);
-                    let detail = phase.get("detail").and_then(Value::as_str).unwrap_or("");
-                    ui.status = if detail.is_empty() {
-                        ui.phase.clone()
-                    } else {
-                        format!("{}: {detail}", ui.phase)
-                    };
+                if !keep_actionable_error {
+                    if let Some(phase) = event.get("phase").and_then(Value::as_object) {
+                        ui.phase = phase
+                            .get("label")
+                            .and_then(Value::as_str)
+                            .unwrap_or(&ui.phase)
+                            .to_string();
+                        ui.phase_key = phase
+                            .get("key")
+                            .and_then(Value::as_str)
+                            .unwrap_or(&ui.phase_key)
+                            .to_string();
+                        ui.progress = phase
+                            .get("progress")
+                            .and_then(Value::as_u64)
+                            .unwrap_or(ui.progress);
+                        let detail = phase.get("detail").and_then(Value::as_str).unwrap_or("");
+                        ui.status = if detail.is_empty() {
+                            ui.phase.clone()
+                        } else {
+                            format!("{}: {detail}", ui.phase)
+                        };
+                    }
                 }
             }
             "ready" => {
                 ui.ready = true;
                 ui.running = true;
                 ui.error = false;
+                ui.error_code.clear();
                 // Main, API, built-app, and workspace-app hosts all live below
                 // the reserved lemma.localhost loopback cookie boundary.
                 if let Some(url) = event["url"].as_str() {
@@ -744,7 +765,28 @@ fn handle_locald_event(app: &AppHandle, event: &Value) {
             }
             "error" => {
                 ui.error = true;
+                ui.error_code = event["code"].as_str().unwrap_or_default().into();
                 ui.status = event["message"].as_str().unwrap_or("startup failed").into();
+            }
+            "runtime.prepared" => {
+                let ready = event["ready"].as_bool().unwrap_or(false);
+                let reboot_required = event["reboot_required"].as_bool().unwrap_or(!ready);
+                ui.ready = false;
+                ui.running = false;
+                ui.phase = "Preparing Windows".into();
+                ui.phase_key = "runtime".into();
+                if ready {
+                    ui.error = false;
+                    ui.error_code.clear();
+                    ui.status = "Windows runtime is ready. Starting Lemma…".into();
+                    start_after_prepare = ui.mode == "local";
+                } else if reboot_required {
+                    ui.error = true;
+                    ui.error_code = "wsl-reboot-required".into();
+                    ui.status =
+                        "Restart Windows to finish setup, then reopen Lemma; setup will continue automatically"
+                            .into();
+                }
             }
             _ => {}
         }
@@ -753,9 +795,28 @@ fn handle_locald_event(app: &AppHandle, event: &Value) {
 
     let has_error = snapshot.error;
     let _ = app.emit("lemma:state", snapshot);
+    if start_after_prepare {
+        let app = app.clone();
+        std::thread::spawn(move || {
+            // The daemon releases its single-operation guard immediately after
+            // publishing runtime.prepared. Avoid racing the follow-up start.
+            std::thread::sleep(Duration::from_millis(250));
+            let _ = send_to_locald(
+                &app,
+                json!({"cmd":"start", "id":"shell-start-after-runtime-prepare"}),
+            );
+        });
+    }
     if kind == "error" || has_error {
         show_splash(app);
     }
+}
+
+fn is_actionable_runtime_error(code: &str) -> bool {
+    matches!(
+        code,
+        "wsl-required" | "wsl-reboot-required" | "wsl-setup-denied"
+    )
 }
 
 fn open_app_window(app: &AppHandle, url: &str) -> Result<(), String> {
@@ -885,6 +946,32 @@ fn require_control_window(window: &WebviewWindow) -> Result<(), String> {
     } else {
         Err("this operation is available only in the privileged Control Center".into())
     }
+}
+
+fn require_local_native_window(window: &WebviewWindow) -> Result<(), String> {
+    if !matches!(window.label(), "main" | "control") {
+        return Err("this operation is available only in a Lemma native window".into());
+    }
+    let url = window
+        .url()
+        .map_err(|error| format!("could not inspect native window: {error}"))?;
+    if url.scheme() != "tauri" {
+        return Err("remote workspace pages cannot prepare the local runtime".into());
+    }
+    Ok(())
+}
+
+#[tauri::command]
+fn prepare_runtime(window: WebviewWindow, app: AppHandle) -> Result<(), String> {
+    require_local_native_window(&window)?;
+    if current_mode(&app) != "local" {
+        return Err("choose the local workspace before preparing its runtime".into());
+    }
+    ensure_locald(&app)?;
+    send_to_locald(
+        &app,
+        json!({"cmd":"runtime.prepare", "id":"shell-runtime-prepare"}),
+    )
 }
 
 #[tauri::command]
@@ -1273,6 +1360,7 @@ fn main() {
             get_state,
             login,
             open_control_center,
+            prepare_runtime,
             control_snapshot,
             apply_operator_config
         ])
@@ -1484,6 +1572,8 @@ mod tests {
         assert!(html.contains("Run Lemma on this Mac"));
         assert!(html.contains("Cloud and local workspaces do not share data"));
         assert!(html.contains("Install local services"));
+        assert!(html.contains("Set up Windows runtime"));
+        assert!(html.contains("prepareRuntime: () => invoke(\"prepare_runtime\")"));
         assert!(html.contains("lemma-mark-bar-2"));
         assert!(html.contains("s.phaseKey === \"boot\""));
         assert!(html.contains("!s.error"));

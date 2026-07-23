@@ -424,7 +424,16 @@ Use a private imported WSL2 distribution named with a collision-resistant produc
 - Do not edit global `.wslconfig` silently. Detect `autoMemoryReclaim`; recommend or apply changes only with explicit user confirmation because the file affects every WSL distribution.
 - Terminate only the Lemma distribution during idle/repair. Never call global `wsl --shutdown` during normal operation.
 
-If WSL is missing, the installer invokes the supported Windows enablement command with elevation, records a resume token in the per-user install state, and continues after reboot.
+If WSL is missing, `lemma-locald` reports the stable `wsl-required` state;
+startup never elevates implicitly. The native splash or `lemma-stack prepare`
+must explicitly request the authenticated `runtime.prepare` operation. On that
+operation only, the runtime opens UAC and executes the fixed command
+`wsl.exe --install --no-distribution --no-launch`. Cancellation removes the
+pending marker. A successful command that still fails `wsl.exe --status`
+records `runtime/wsl-setup-pending.json`, reports `wsl-reboot-required`, and
+continues startup automatically after the next Windows launch. No caller can
+supply PowerShell or WSL arguments, and remote workspace webviews cannot invoke
+the native preparation command.
 
 ### 6.3 External provider
 
@@ -1402,6 +1411,8 @@ Add:
 The guest daemon, authenticated protocol, platform launchers, VZ disk/runtime,
 private WSL distribution, and service reconciliation are implemented. Adaptive
 resource policy and user-facing backup/restore remain open release work.
+Windows clean-host enablement is exposed as the explicit authenticated
+`runtime.prepare` operation with UAC cancellation and post-reboot resume UX.
 
 ### 25.4 Phase D: AgentBox provider — implemented
 

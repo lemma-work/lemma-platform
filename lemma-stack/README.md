@@ -10,6 +10,7 @@ the same versioned local control API as Desktop:
 
 ```text
 lemma-stack start
+lemma-stack prepare
 lemma-stack stop [--infra]
 lemma-stack restart
 lemma-stack status [--json]
@@ -24,6 +25,9 @@ active immutable host/guest release from Desktop configuration and passes only
 explicit runtime paths. Set `LEMMA_LOCALD_BIN` for an enterprise/custom binary
 location. `LEMMA_STACK_FORCE_EXTERNAL_RUNTIME=1` is the explicit escape hatch
 for an existing Docker/Podman install on a machine that also has managed Lemma.
+On Windows, `lemma-stack prepare` is the explicit one-time WSL2 enablement
+action. Ordinary `start` remains unprivileged and tells the caller whether
+preparation or a Windows restart is required.
 
 Managed configuration commands read and apply the same transactional schema as
 Control Center. Dotted secret keys such as `ai.api_key` are write-only: the CLI
