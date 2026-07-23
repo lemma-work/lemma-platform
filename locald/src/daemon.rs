@@ -38,6 +38,7 @@ pub struct Daemon {
     supervisor_waiters: Mutex<HashMap<String, mpsc::Sender<Value>>>,
     next_internal_request: AtomicU64,
     host_processes: Option<Arc<HostProcessManager>>,
+    host_pack_root: Option<String>,
     managed_runtime: Option<Arc<ManagedRuntimeController>>,
     operator_config: Arc<OperatorConfigStore>,
     host_operation_running: AtomicBool,
@@ -50,16 +51,18 @@ impl Daemon {
         let state = StateSnapshot::load(&paths.state);
         let operator_config = OperatorConfigStore::load(paths.root.join("operator-config.json"))?;
         let managed_bootstrap = ManagedRuntimeBootstrap::discover(&paths)?;
+        let host_pack_root = env::var_os("LEMMA_LOCALD_HOST_PACK_ROOT")
+            .filter(|path| !path.is_empty())
+            .map(PathBuf::from);
         let host_manifest = match env::var_os("LEMMA_LOCALD_HOST_PACK_MANIFEST") {
             Some(path) if !path.is_empty() => Some(PathBuf::from(path)),
-            _ => env::var_os("LEMMA_LOCALD_HOST_PACK_ROOT")
-                .filter(|path| !path.is_empty())
-                .map(PathBuf::from)
+            _ => host_pack_root
+                .as_ref()
                 .map(|pack_root| match managed_bootstrap.as_ref() {
                     Some(runtime) => {
-                        native_host_pack::prepare(&paths, &pack_root, runtime.manifest_material())
+                        native_host_pack::prepare(&paths, pack_root, runtime.manifest_material())
                     }
-                    None => prepare_compatibility_host_manifest(&paths, &pack_root),
+                    None => prepare_compatibility_host_manifest(&paths, pack_root),
                 })
                 .transpose()?,
         };
@@ -94,6 +97,7 @@ impl Daemon {
             supervisor_waiters: Mutex::new(HashMap::new()),
             next_internal_request: AtomicU64::new(1),
             host_processes,
+            host_pack_root: host_pack_root.map(path_identity),
             managed_runtime,
             operator_config,
             host_operation_running: AtomicBool::new(false),
@@ -283,6 +287,7 @@ impl Daemon {
                     "compatibility"
                 },
                 "host_pack_release": self.host_processes.as_ref().map(|manager| manager.release()),
+                "host_pack_root": self.host_pack_root.as_deref(),
             }),
         );
         self.send_direct(
@@ -1200,6 +1205,13 @@ fn transitional_provider(managed_runtime_available: bool) -> String {
         // present. Render the matching backend profile in advance.
         _ => "podman".into(),
     }
+}
+
+fn path_identity(path: PathBuf) -> String {
+    std::fs::canonicalize(&path)
+        .unwrap_or(path)
+        .to_string_lossy()
+        .into_owned()
 }
 
 fn create_listener(paths: &LocalPaths) -> io::Result<LocalSocketListener> {

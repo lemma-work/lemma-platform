@@ -642,6 +642,7 @@
         openApp: () => invoke("open_app"),
         openAuth: (mode = "signin") => invoke("login", { mode }),
         openLogs: () => invoke("open_logs"),
+        installerLog: () => invoke("installer_log"),
         chooseConnectionMode: () => invoke("choose_connection_mode"),
         setConnectionMode: (mode) => invoke("set_connection_mode", { mode }),
         getState: () => invoke("get_state"),
@@ -674,6 +675,7 @@
       openApp: () => console.log("[demo] open app"),
       openAuth: (mode = "signin") => console.log("[demo] open auth", mode),
       openLogs: () => console.log("[demo] open logs"),
+      installerLog: () => Promise.resolve("[demo] installer log is available here"),
       chooseConnectionMode: () => console.log("[demo] switch mode"),
       setConnectionMode: (mode) => { console.log("[demo] mode:", mode); if (mode === "local") window.lemmaDesktop.start(); },
       getState: () => Promise.resolve({ status: "waiting", phaseKey: "boot", progress: 2, ready: false, running: false, error: false, setup: true, mode: "undecided" }),
@@ -871,15 +873,32 @@
   // ---- log ----------------------------------------------------------------
   const logEl = document.getElementById("log");
   const logLines = [];
+  let savedInstallerLog = "";
+  function renderLog() {
+    const sections = [savedInstallerLog, logLines.join("\n")].filter(Boolean);
+    logEl.textContent = sections.join("\n");
+    logEl.scrollTop = logEl.scrollHeight;
+  }
+  async function refreshInstallerLog() {
+    try {
+      savedInstallerLog = await window.lemmaDesktop.installerLog();
+    } catch (error) {
+      savedInstallerLog = `Could not read installer log: ${String(error)}`;
+    }
+    if (!logEl.hidden) renderLog();
+  }
   function appendLog(line) {
     if (!line) return;
     logLines.push(line);
     if (logLines.length > 500) logLines.shift();
-    if (!logEl.hidden) { logEl.textContent = logLines.join("\n"); logEl.scrollTop = logEl.scrollHeight; }
+    if (!logEl.hidden) renderLog();
   }
   function toggleLog() {
     logEl.hidden = !logEl.hidden;
-    if (!logEl.hidden) { logEl.textContent = logLines.join("\n"); logEl.scrollTop = logEl.scrollHeight; }
+    if (!logEl.hidden) {
+      renderLog();
+      refreshInstallerLog();
+    }
   }
   document.getElementById("toggle-log").addEventListener("click", toggleLog);
   document.getElementById("error-logs").addEventListener("click", toggleLog);
@@ -888,7 +907,7 @@
   let primaryAction = "auth";
   openBtn.addEventListener("click", async () => {
     if (primaryAction === "start") {
-      window.lemmaDesktop.start();
+      window.lemmaDesktop.start().catch((error) => appendLog(`ERROR ${String(error)}`));
       return;
     }
     openBtn.disabled = true;
@@ -909,7 +928,7 @@
     scene.classList.remove("stalled");
     say(VOICE.boot[0]);
     startWhispers();
-    window.lemmaDesktop.start();
+    window.lemmaDesktop.start().catch((error) => appendLog(`ERROR ${String(error)}`));
   });
   prepareWindowsBtn.addEventListener("click", () => {
     prepareWindowsBtn.disabled = true;
@@ -992,6 +1011,7 @@
   truth.textContent = "";
   window.lemmaDesktop.onLog(appendLog);
   window.lemmaDesktop.onState(renderState);
+  refreshInstallerLog();
   function shouldAutoStart(s) {
     return Boolean(
       s &&
@@ -1007,7 +1027,9 @@
       showChooser();
     } else {
       renderState(s);
-      if (shouldAutoStart(s)) window.lemmaDesktop.start();
+      if (shouldAutoStart(s)) {
+        window.lemmaDesktop.start().catch((error) => appendLog(`ERROR ${String(error)}`));
+      }
     }
   });
 </script>

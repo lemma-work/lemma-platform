@@ -7,13 +7,14 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use reqwest::blocking::Client;
 use reqwest::header::{CONTENT_RANGE, RANGE};
 use reqwest::redirect::Policy;
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
 const MANIFEST_SCHEMA_VERSION: u64 = 1;
 const MAX_ARCHIVE_BYTES: u64 = 6 * 1024 * 1024 * 1024;
 const MAX_EXTRACTED_BYTES: u128 = 12 * 1024 * 1024 * 1024;
 const MAX_ARCHIVE_ENTRIES: usize = 100_000;
+const INSTALLED_ARTIFACTS_FILE: &str = ".lemma-runtime-artifacts.json";
 
 #[derive(Clone, Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -32,6 +33,19 @@ struct ReleaseManifest {
     host_packs: HashMap<String, ArtifactRef>,
     #[serde(default)]
     guest_runtimes: HashMap<String, ArtifactRef>,
+}
+
+#[derive(Debug, Deserialize, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+struct InstalledArtifactIdentity {
+    schema_version: u64,
+    release: String,
+    host_target: String,
+    host_sha256: String,
+    host_size: u64,
+    guest_target: String,
+    guest_sha256: String,
+    guest_size: u64,
 }
 
 #[derive(Clone, Debug)]
@@ -61,18 +75,19 @@ pub fn install_from_manifest(
             manifest.version
         )));
     }
-    let destination = install_root.join("releases").join(&manifest.version);
-    let installed = installed_runtime(&destination, &manifest.version);
-    if installed.is_complete() {
-        return Ok(installed);
-    }
-
     let host = artifact_for(&manifest.host_packs, host_target(), "native host pack")?;
     let guest = artifact_for(
         &manifest.guest_runtimes,
         guest_target(),
         "managed guest runtime",
     )?;
+    let identity = artifact_identity(&manifest.version, host, guest);
+    let destination = install_root.join("releases").join(&manifest.version);
+    let installed = installed_runtime(&destination, &manifest.version);
+    if installed.is_complete() && installed_artifacts_match(&destination, &identity) {
+        return Ok(installed);
+    }
+
     let total = host
         .size
         .checked_add(guest.size)
@@ -116,6 +131,7 @@ pub fn install_from_manifest(
         extract_archive(&guest_archive, &staging.join("managed-runtime"))?;
         let staged = installed_runtime(&staging, &manifest.version);
         validate_installed(&staged)?;
+        write_installed_artifacts(&staging, &identity)?;
         fs::create_dir_all(
             destination
                 .parent()
@@ -137,6 +153,11 @@ pub fn install_from_manifest(
 
     let installed = installed_runtime(&destination, &manifest.version);
     validate_installed(&installed)?;
+    if !installed_artifacts_match(&destination, &identity) {
+        return Err(invalid(
+            "installed runtime artifact identity does not match the signed manifest",
+        ));
+    }
     Ok(installed)
 }
 
@@ -150,6 +171,29 @@ pub fn installed_runtime(root: &Path, release: &str) -> InstalledRuntime {
 
 pub fn manifest_release(path: &Path) -> io::Result<String> {
     Ok(load_manifest(path)?.version)
+}
+
+pub fn runtime_matches_manifest(
+    runtime: &InstalledRuntime,
+    manifest_path: &Path,
+    required_release: &str,
+) -> io::Result<bool> {
+    let manifest = load_manifest(manifest_path)?;
+    if manifest.version != required_release || runtime.release != required_release {
+        return Ok(false);
+    }
+    let host = artifact_for(&manifest.host_packs, host_target(), "native host pack")?;
+    let guest = artifact_for(
+        &manifest.guest_runtimes,
+        guest_target(),
+        "managed guest runtime",
+    )?;
+    let root = runtime
+        .host_pack_root
+        .parent()
+        .ok_or_else(|| invalid("installed runtime has no release root"))?;
+    Ok(runtime.is_complete()
+        && installed_artifacts_match(root, &artifact_identity(required_release, host, guest)))
 }
 
 pub fn quarantine_runtime(runtime: &InstalledRuntime) -> io::Result<PathBuf> {
@@ -563,6 +607,45 @@ fn validate_installed(runtime: &InstalledRuntime) -> io::Result<()> {
     Ok(())
 }
 
+fn artifact_identity(
+    release: &str,
+    host: &ArtifactRef,
+    guest: &ArtifactRef,
+) -> InstalledArtifactIdentity {
+    InstalledArtifactIdentity {
+        schema_version: MANIFEST_SCHEMA_VERSION,
+        release: release.to_owned(),
+        host_target: host_target().to_owned(),
+        host_sha256: host.sha256.clone(),
+        host_size: host.size,
+        guest_target: guest_target().to_owned(),
+        guest_sha256: guest.sha256.clone(),
+        guest_size: guest.size,
+    }
+}
+
+fn installed_artifacts_match(root: &Path, expected: &InstalledArtifactIdentity) -> bool {
+    fs::read(root.join(INSTALLED_ARTIFACTS_FILE))
+        .ok()
+        .and_then(|raw| serde_json::from_slice::<InstalledArtifactIdentity>(&raw).ok())
+        .is_some_and(|actual| actual == *expected)
+}
+
+fn write_installed_artifacts(root: &Path, identity: &InstalledArtifactIdentity) -> io::Result<()> {
+    let path = root.join(INSTALLED_ARTIFACTS_FILE);
+    let mut options = OpenOptions::new();
+    options.write(true).create_new(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        options.mode(0o600);
+    }
+    let mut file = options.open(path)?;
+    file.write_all(&serde_json::to_vec(identity)?)?;
+    file.write_all(b"\n")?;
+    file.sync_all()
+}
+
 fn download_error(error: &reqwest::Error) -> &'static str {
     if error.is_timeout() {
         "artifact download timed out"
@@ -776,6 +859,37 @@ mod tests {
         .unwrap();
         assert!(!runtime.is_complete());
         assert!(complete_runtime(root.path(), "1.2.3").is_complete());
+    }
+
+    #[test]
+    fn cached_runtime_must_match_the_signed_artifact_identity() {
+        let root = tempfile::tempdir().unwrap();
+        let release = root.path().join("1.2.3");
+        let runtime = complete_runtime(&release, "1.2.3");
+        let host = ArtifactRef {
+            url: "https://downloads.example.test/host.zip".into(),
+            sha256: "a".repeat(64),
+            size: 42,
+            format: "zip".into(),
+        };
+        let guest = ArtifactRef {
+            url: "https://downloads.example.test/guest.zip".into(),
+            sha256: "b".repeat(64),
+            size: 84,
+            format: "zip".into(),
+        };
+        let expected = artifact_identity("1.2.3", &host, &guest);
+
+        assert!(runtime.is_complete());
+        assert!(!installed_artifacts_match(&release, &expected));
+        write_installed_artifacts(&release, &expected).unwrap();
+        assert!(installed_artifacts_match(&release, &expected));
+
+        let changed = InstalledArtifactIdentity {
+            guest_sha256: "c".repeat(64),
+            ..expected
+        };
+        assert!(!installed_artifacts_match(&release, &changed));
     }
 
     #[test]

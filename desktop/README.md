@@ -84,6 +84,11 @@ On first local launch, the online build downloads the exact host and guest ZIPs
 named in its embedded manifest through the system proxy. Downloads are
 resumable, HTTPS-only, bounded, and verified by exact size and SHA-256 before
 safe staged extraction. The manifest release must equal the desktop release.
+The installed cache also records both signed artifact identities, so a
+same-version development build cannot silently reuse different host or guest
+bits. Setup progress and errors are appended to a bounded private
+`runtime/install.log` and **View log** reads that file even before the daemon
+exists.
 Activation occurs only after host markers, guest target markers, native
 entrypoints, and archive layout pass validation. Incomplete downloads remain
 available for Retry. The offline build starts from its bundled payload without

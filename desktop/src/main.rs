@@ -30,6 +30,7 @@ use interprocess::local_socket::{prelude::*, Name, RecvHalf, SendHalf};
 
 const DEFAULT_HOSTED_URL: &str = "https://lemma.work";
 const DEFAULT_LOCAL_URL: &str = "http://app.lemma.localhost:3711";
+const MAX_INSTALL_LOG_BYTES: u64 = 1024 * 1024;
 // Legacy development builds persisted a mode before the released chooser
 // contract was stable. Require that chooser once, then retain the new choice.
 const CONNECTION_MODE_PROMPT_REVISION: u64 = 1;
@@ -132,6 +133,44 @@ fn locald_root() -> PathBuf {
 
 fn runtime_install_root() -> PathBuf {
     app_support_dir().join("runtime")
+}
+
+fn install_log_path() -> PathBuf {
+    runtime_install_root().join("install.log")
+}
+
+fn append_install_log(message: &str) {
+    let path = install_log_path();
+    let Some(parent) = path.parent() else {
+        return;
+    };
+    if std::fs::create_dir_all(parent).is_err() {
+        return;
+    }
+    if path
+        .metadata()
+        .is_ok_and(|metadata| metadata.len() >= MAX_INSTALL_LOG_BYTES)
+    {
+        let previous = path.with_extension("previous.log");
+        let _ = std::fs::remove_file(&previous);
+        let _ = std::fs::rename(&path, previous);
+    }
+    let mut options = std::fs::OpenOptions::new();
+    options.create(true).append(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        options.mode(0o600);
+    }
+    let Ok(mut file) = options.open(path) else {
+        return;
+    };
+    let timestamp = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_millis();
+    let clean = message.replace(['\r', '\n'], " ");
+    let _ = writeln!(file, "{timestamp} {clean}");
 }
 
 fn locald_socket_name(root: &std::path::Path) -> Result<Name<'_>, String> {
@@ -451,14 +490,17 @@ fn bundled_vz() -> Option<PathBuf> {
     .find(|path| path.is_file())
 }
 
-fn bundled_host_pack_release() -> Option<String> {
-    host_pack_release(&host_pack_root()?)
-}
-
 fn host_pack_release(root: &std::path::Path) -> Option<String> {
     let release = root.join("release.json");
     let payload: Value = serde_json::from_slice(&std::fs::read(release).ok()?).ok()?;
     payload["version"].as_str().map(str::to_owned)
+}
+
+fn path_identity(path: &std::path::Path) -> String {
+    std::fs::canonicalize(path)
+        .unwrap_or_else(|_| path.to_path_buf())
+        .to_string_lossy()
+        .into_owned()
 }
 
 fn runtime_info_snapshot() -> RuntimeInfo {
@@ -492,11 +534,20 @@ fn runtime_info_snapshot() -> RuntimeInfo {
     }
 }
 
-fn locald_matches_host_pack(hello: &Value, required_release: Option<&str>) -> bool {
-    required_release.is_none_or(|required| {
-        matches!(hello["mode"].as_str(), Some("host-packs" | "managed-local"))
-            && hello["host_pack_release"].as_str() == Some(required)
-    })
+fn locald_matches_host_pack(
+    hello: &Value,
+    required_release: Option<&str>,
+    required_root: Option<&std::path::Path>,
+) -> bool {
+    match (required_release, required_root) {
+        (None, None) => true,
+        (Some(release), Some(root)) => {
+            matches!(hello["mode"].as_str(), Some("host-packs" | "managed-local"))
+                && hello["host_pack_release"].as_str() == Some(release)
+                && hello["host_pack_root"].as_str() == Some(path_identity(root).as_str())
+        }
+        _ => false,
+    }
 }
 
 fn enriched_path() -> String {
@@ -540,9 +591,14 @@ fn ensure_locald(app: &AppHandle) -> Result<(), String> {
 
     ensure_runtime_artifacts(app)?;
 
-    let required_release = bundled_host_pack_release();
+    let required_root = host_pack_root();
+    let required_release = required_root.as_deref().and_then(host_pack_release);
     if let Ok(mut connection) = connect_locald() {
-        if locald_matches_host_pack(&connection.hello, required_release.as_deref()) {
+        if locald_matches_host_pack(
+            &connection.hello,
+            required_release.as_deref(),
+            required_root.as_deref(),
+        ) {
             install_locald_connection(app, connection);
             return Ok(());
         }
@@ -555,7 +611,11 @@ fn ensure_locald(app: &AppHandle) -> Result<(), String> {
     for _ in 0..80 {
         match connect_locald() {
             Ok(connection)
-                if locald_matches_host_pack(&connection.hello, required_release.as_deref()) =>
+                if locald_matches_host_pack(
+                    &connection.hello,
+                    required_release.as_deref(),
+                    required_root.as_deref(),
+                ) =>
             {
                 install_locald_connection(app, connection);
                 return Ok(());
@@ -569,6 +629,19 @@ fn ensure_locald(app: &AppHandle) -> Result<(), String> {
 }
 
 fn ensure_runtime_artifacts(app: &AppHandle) -> Result<(), String> {
+    match ensure_runtime_artifacts_inner(app) {
+        Ok(()) => Ok(()),
+        Err(error) => {
+            let message = actionable_runtime_install_error(&error);
+            append_install_log(&format!("ERROR {message}"));
+            emit_log(app, &message);
+            emit_runtime_install_error(app, &message);
+            Err(message)
+        }
+    }
+}
+
+fn ensure_runtime_artifacts_inner(app: &AppHandle) -> Result<(), String> {
     if runtime_root().join("locald/Cargo.toml").is_file() {
         return Ok(());
     }
@@ -587,11 +660,6 @@ fn ensure_runtime_artifacts(app: &AppHandle) -> Result<(), String> {
         }
         return Ok(());
     }
-    if configured_runtime(&config, "installedRuntime")
-        .is_some_and(|runtime| runtime.release == env!("CARGO_PKG_VERSION"))
-    {
-        return Ok(());
-    }
     let manifest = bundled_release_manifest().ok_or_else(|| {
         "this online installer is missing its signed local release manifest".to_string()
     })?;
@@ -602,6 +670,17 @@ fn ensure_runtime_artifacts(app: &AppHandle) -> Result<(), String> {
             "signed runtime release {manifest_release} does not match desktop release {}",
             env!("CARGO_PKG_VERSION")
         ));
+    }
+    if let Some(runtime) = configured_runtime(&config, "installedRuntime") {
+        let matches = artifact_install::runtime_matches_manifest(
+            &runtime,
+            &manifest,
+            env!("CARGO_PKG_VERSION"),
+        )
+        .map_err(|error| format!("could not verify the installed local runtime: {error}"))?;
+        if matches {
+            return Ok(());
+        }
     }
     emit_runtime_install_progress(app, "Preparing local runtime", 1, None);
     let installed = artifact_install::install_from_manifest(
@@ -627,6 +706,17 @@ fn ensure_runtime_artifacts(app: &AppHandle) -> Result<(), String> {
     activate_installed_runtime(&installed)?;
     emit_runtime_install_progress(app, "Local runtime installed", 92, None);
     Ok(())
+}
+
+fn actionable_runtime_install_error(error: &str) -> String {
+    if error.contains("artifact download failed with HTTP 404") {
+        return format!(
+            "The runtime package for Lemma {} is not published yet (HTTP 404). \
+             Use this build's matching offline installer or publish its runtime artifacts.",
+            env!("CARGO_PKG_VERSION")
+        );
+    }
+    error.to_owned()
 }
 
 fn activate_installed_runtime(
@@ -659,6 +749,12 @@ fn emit_runtime_install_progress(
     progress: u64,
     remaining_bytes: Option<u64>,
 ) {
+    let detail = match remaining_bytes {
+        Some(bytes) => format!("{label}: {} MB remaining", bytes.div_ceil(1024 * 1024)),
+        None => label.to_owned(),
+    };
+    append_install_log(&detail);
+    emit_log(app, &detail);
     let shell: State<Shell> = app.state();
     let snapshot = {
         let mut ui = shell.ui.lock().unwrap();
@@ -666,13 +762,28 @@ fn emit_runtime_install_progress(
         ui.phase = label.to_owned();
         ui.phase_key = "runtime-install".into();
         ui.progress = progress;
-        ui.status = match remaining_bytes {
-            Some(bytes) => format!("{label}: {} MB remaining", bytes.div_ceil(1024 * 1024)),
-            None => label.to_owned(),
-        };
+        ui.status = detail;
         ui.clone()
     };
     let _ = app.emit("lemma:state", snapshot);
+}
+
+fn emit_runtime_install_error(app: &AppHandle, message: &str) {
+    let shell: State<Shell> = app.state();
+    let snapshot = {
+        let mut ui = shell.ui.lock().unwrap();
+        ui.setup = true;
+        ui.phase = "Local runtime setup".into();
+        ui.phase_key = "runtime-install".into();
+        ui.status = message.to_owned();
+        ui.error = true;
+        ui.error_code = "runtime-install-failed".into();
+        ui.ready = false;
+        ui.running = false;
+        ui.clone()
+    };
+    let _ = app.emit("lemma:state", snapshot);
+    show_splash(app);
 }
 
 fn spawn_locald() -> Result<(), String> {
@@ -1153,6 +1264,26 @@ fn open_logs(_app: AppHandle) -> Result<(), String> {
         .spawn()
         .map_err(|e| format!("could not open {}: {e}", logs.display()))?;
     Ok(())
+}
+
+#[tauri::command]
+fn installer_log() -> Result<String, String> {
+    let path = install_log_path();
+    let raw = match std::fs::read_to_string(&path) {
+        Ok(raw) => raw,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            return Ok("No local installer log entries yet.".into());
+        }
+        Err(error) => {
+            return Err(format!(
+                "could not read local installer log {}: {error}",
+                path.display()
+            ));
+        }
+    };
+    let mut lines: Vec<&str> = raw.lines().rev().take(500).collect();
+    lines.reverse();
+    Ok(lines.join("\n"))
 }
 
 #[tauri::command]
@@ -1651,6 +1782,7 @@ fn main() {
             restart,
             open_app,
             open_logs,
+            installer_log,
             choose_connection_mode,
             set_connection_mode,
             get_state,
@@ -1778,7 +1910,15 @@ mod tests {
 
     #[test]
     fn durable_daemon_must_match_the_bundled_host_pack_release() {
+        let root = tempfile::tempdir().unwrap();
+        let pack = root.path().join("local-runtime");
+        std::fs::create_dir_all(&pack).unwrap();
         let current = json!({
+            "event": "hello", "protocol": 1, "mode": "host-packs",
+            "host_pack_release": "1.2.3",
+            "host_pack_root": path_identity(&pack),
+        });
+        let old_same_version = json!({
             "event": "hello", "protocol": 1, "mode": "host-packs",
             "host_pack_release": "1.2.3",
         });
@@ -1786,10 +1926,41 @@ mod tests {
             "event": "hello", "protocol": 1, "mode": "compatibility",
         });
 
-        assert!(locald_matches_host_pack(&current, Some("1.2.3")));
-        assert!(!locald_matches_host_pack(&current, Some("1.2.4")));
-        assert!(!locald_matches_host_pack(&compatibility, Some("1.2.3")));
-        assert!(locald_matches_host_pack(&compatibility, None));
+        assert!(locald_matches_host_pack(
+            &current,
+            Some("1.2.3"),
+            Some(&pack)
+        ));
+        assert!(!locald_matches_host_pack(
+            &current,
+            Some("1.2.4"),
+            Some(&pack)
+        ));
+        assert!(!locald_matches_host_pack(
+            &old_same_version,
+            Some("1.2.3"),
+            Some(&pack)
+        ));
+        assert!(!locald_matches_host_pack(
+            &compatibility,
+            Some("1.2.3"),
+            Some(&pack)
+        ));
+        assert!(locald_matches_host_pack(&compatibility, None, None));
+    }
+
+    #[test]
+    fn unpublished_online_runtime_error_is_actionable_and_logged_in_app() {
+        let message = actionable_runtime_install_error(
+            "could not install local runtime: artifact download failed with HTTP 404",
+        );
+        assert!(message.contains("not published yet"));
+        assert!(message.contains("matching offline installer"));
+
+        let splash = include_str!("../ui/index.html");
+        assert!(splash.contains("installerLog: () => invoke(\"installer_log\")"));
+        assert!(splash.contains("refreshInstallerLog"));
+        assert!(splash.contains("View log"));
     }
 
     #[test]

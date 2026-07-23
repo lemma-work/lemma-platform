@@ -385,6 +385,14 @@ Install the online/offline package for the same version, then use **Control
 Center → Updates → Verify & repair current runtime**. Repair verifies signed
 runtime files and preserves user data.
 
+### “Runtime package … is not published yet”
+
+The online shell is present, but its matching immutable host or guest runtime
+asset is not available at the URL in the signed release manifest. This is
+expected only for an unpublished development build. Use that build's matching
+offline installer or publish the runtime assets before distributing the online
+installer; repeatedly selecting Retry cannot repair a missing release asset.
+
 ### Windows asks for setup or restart
 
 Select **Set up Windows runtime**, approve the one-time Windows prompt, and
@@ -407,7 +415,14 @@ configuration remains active after a failed apply.
 
 ### More diagnostics
 
-Use **Control Center → Diagnostics → Open logs folder**, or:
+Select **View log** directly on the setup/error screen to see the persistent
+installer transcript, including downloads, verification, activation, and the
+exact error from the latest attempt. It is retained at
+`runtime/install.log` below the managed state directory and rotates at 1 MiB.
+It remains available even when `lemma-locald` has not started.
+
+Use **Control Center → Diagnostics → Open logs folder** for the installer,
+daemon, backend, frontend, and VM logs, or:
 
 ```bash
 lemma-stack status --json
