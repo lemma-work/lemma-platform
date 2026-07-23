@@ -3,7 +3,7 @@ from __future__ import annotations
 import asyncio
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
-from uuid import uuid7
+from uuid import uuid4
 
 import pytest
 
@@ -74,12 +74,12 @@ def _request(
     return WorkerRequest(
         artifact_root=str(artifact),
         manifest=manifest,
-        run_id=uuid7(),
+        run_id=uuid4(),
         input_data={"value": value, "hold_ms": hold_ms},
         config=None,
         identity=RuntimeIdentity(
-            user_id=uuid7(),
-            pod_id=uuid7(),
+            user_id=uuid4(),
+            pod_id=uuid4(),
             function_id=function_id,
             function_name="cached",
         ),
@@ -151,7 +151,7 @@ def execute(ctx, data):
 async def test_revision_worker_is_reused_for_same_hash(tmp_path: Path) -> None:
     artifact, manifest = _artifact(tmp_path)
     registry = RevisionWorkerRegistry(max_workers=4)
-    function_id = uuid7()
+    function_id = uuid4()
     digest = f"sha256:{'a' * 64}"
     deadline = datetime.now(timezone.utc) + timedelta(seconds=10)
     try:
@@ -159,7 +159,7 @@ async def test_revision_worker_is_reused_for_same_hash(tmp_path: Path) -> None:
             function_id=function_id,
             revision_hash=digest,
             artifact_root=artifact,
-            run_id=uuid7(),
+            run_id=uuid4(),
             request=_request(
                 artifact,
                 manifest,
@@ -172,7 +172,7 @@ async def test_revision_worker_is_reused_for_same_hash(tmp_path: Path) -> None:
             function_id=function_id,
             revision_hash=digest,
             artifact_root=artifact,
-            run_id=uuid7(),
+            run_id=uuid4(),
             request=_request(
                 artifact,
                 manifest,
@@ -194,7 +194,7 @@ async def test_reused_worker_preserves_legacy_function_environment(
 ) -> None:
     artifact, manifest = _legacy_artifact(tmp_path)
     registry = RevisionWorkerRegistry(max_workers=1)
-    function_id = uuid7()
+    function_id = uuid4()
     digest = f"sha256:{'b' * 64}"
     deadline = datetime.now(timezone.utc) + timedelta(seconds=10)
     first = _request(
@@ -207,7 +207,7 @@ async def test_reused_worker_preserves_legacy_function_environment(
         update={
             "identity": first.identity.model_copy(
                 update={
-                    "organization_id": uuid7(),
+                    "organization_id": uuid4(),
                     "user_email": "first@example.test",
                 }
             ),
@@ -264,7 +264,7 @@ async def test_reused_worker_preserves_legacy_function_environment(
 async def test_idle_revision_caches_are_evicted_by_lru(tmp_path: Path) -> None:
     artifact, manifest = _artifact(tmp_path)
     registry = RevisionWorkerRegistry(max_workers=3, max_cached_revisions=2)
-    function_ids = (uuid7(), uuid7(), uuid7())
+    function_ids = (uuid4(), uuid4(), uuid4())
     deadline = datetime.now(timezone.utc) + timedelta(seconds=20)
 
     async def invoke(function_id):
@@ -272,7 +272,7 @@ async def test_idle_revision_caches_are_evicted_by_lru(tmp_path: Path) -> None:
             function_id=function_id,
             revision_hash=f"sha256:{str(function_id).replace('-', '') * 2}",
             artifact_root=artifact,
-            run_id=uuid7(),
+            run_id=uuid4(),
             request=_request(
                 artifact,
                 manifest,
@@ -300,8 +300,8 @@ async def test_idle_workers_are_reclaimed_across_revision_pools(
 ) -> None:
     artifact, manifest = _artifact(tmp_path)
     registry = RevisionWorkerRegistry(max_workers=2, max_cached_revisions=4)
-    first_function = uuid7()
-    second_function = uuid7()
+    first_function = uuid4()
+    second_function = uuid4()
     deadline = datetime.now(timezone.utc) + timedelta(seconds=20)
 
     async def invoke(function_id, *, hold_ms: int = 0):
@@ -309,7 +309,7 @@ async def test_idle_workers_are_reclaimed_across_revision_pools(
             function_id=function_id,
             revision_hash=f"sha256:{str(function_id).replace('-', '') * 2}",
             artifact_root=artifact,
-            run_id=uuid7(),
+            run_id=uuid4(),
             request=_request(
                 artifact,
                 manifest,
@@ -344,8 +344,8 @@ async def test_idle_workers_are_reclaimed_across_revision_pools(
 async def test_active_workers_are_never_reclaimed(tmp_path: Path) -> None:
     artifact, manifest = _artifact(tmp_path)
     registry = RevisionWorkerRegistry(max_workers=1, max_cached_revisions=4)
-    first_function = uuid7()
-    second_function = uuid7()
+    first_function = uuid4()
+    second_function = uuid4()
     deadline = datetime.now(timezone.utc) + timedelta(seconds=20)
 
     async def invoke(function_id, *, hold_ms: int = 0):
@@ -353,7 +353,7 @@ async def test_active_workers_are_never_reclaimed(tmp_path: Path) -> None:
             function_id=function_id,
             revision_hash=f"sha256:{str(function_id).replace('-', '') * 2}",
             artifact_root=artifact,
-            run_id=uuid7(),
+            run_id=uuid4(),
             request=_request(
                 artifact,
                 manifest,
