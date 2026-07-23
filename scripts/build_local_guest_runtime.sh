@@ -92,7 +92,7 @@ PY
     "$artifact/vmlinuz"
   cp "$initrd" "$artifact/initrd"
   truncate -s 2G "$artifact/disk.raw"
-  docker run --rm --platform linux/amd64 \
+  docker run --rm --platform "linux/$docker_arch" \
     --mount "type=bind,source=$rootfs_tar,target=/input/rootfs.tar,readonly" \
     --mount "type=bind,source=$artifact,target=/artifact" \
     ubuntu:24.04 \
@@ -107,6 +107,7 @@ PY
     '
 else
   mv "$rootfs_tar" "$artifact/rootfs.tar"
+  rootfs_tar="$artifact/rootfs.tar"
 fi
 
 python3 - "$artifact/runtime.json" "$target" "$rootfs_tar" "$artifact" "$kata_kernel_version" "$kata_archive_url" "$kata_archive_sha256" <<'PY'
