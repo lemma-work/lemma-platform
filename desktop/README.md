@@ -70,6 +70,16 @@ Every release publishes two signed and notarized packages per platform:
 - **offline** — the same components plus the complete host and managed-guest
   runtime payloads.
 
+The **online package is the recommended default**. It is roughly a normal
+desktop-app-sized shell and downloads the selected immutable runtime after the
+user chooses Local mode. The offline package is intentionally large: the
+current macOS bundle is about 3.0 GiB installed because it embeds a relocatable
+Python backend, Node/Next frontend, and a 2 GiB sparse Linux appliance image.
+That size is expected for the air-gapped artifact, not an accidental copy of
+the source checkout. The current runtime downloads are about 307 MB for the
+compressed host pack and 224 MB for the compressed guest pack; expanded
+runtime plus writable data requires additional free space.
+
 On first local launch, the online build downloads the exact host and guest ZIPs
 named in its embedded manifest through the system proxy. Downloads are
 resumable, HTTPS-only, bounded, and verified by exact size and SHA-256 before

@@ -166,6 +166,21 @@ jobs:
       - name: Build native local sidecars
         run: desktop/scripts/build-sidecar.sh
 
+      - name: Sign virtualization helper with its entitlement
+        shell: bash
+        env:
+          APPLE_SIGNING_IDENTITY: ${{ steps.apple-signing.outputs.signing-identity }}
+        run: |
+          set -euo pipefail
+          helper="desktop/binaries/lemma-vz-aarch64-apple-darwin"
+          codesign --force --timestamp --options runtime \
+            --entitlements desktop/entitlements.plist \
+            --sign "${APPLE_SIGNING_IDENTITY}" \
+            "${helper}"
+          codesign --verify --strict --verbose=2 "${helper}"
+          codesign -d --entitlements :- "${helper}" 2>&1 \
+            | grep -F "com.apple.security.virtualization"
+
       - name: Build online DMG
         working-directory: desktop
         run: |
@@ -228,11 +243,12 @@ jobs:
           app="desktop/target/release/bundle/macos/Lemma.app"
           locald="${app}/Contents/MacOS/lemma-locald"
           runtime_bridge="${app}/Contents/MacOS/lemma-runtime"
-          vz="${app}/Contents/MacOS/lemma-vz"
+          vz="${app}/Contents/Resources/lemma-vz"
 
           test -x "${locald}"
           test -x "${runtime_bridge}"
           test -x "${vz}"
+          test ! -e "${app}/Contents/MacOS/lemma-vz"
           test ! -e "${app}/Contents/MacOS/lemma-supervisor"
           test ! -e "${app}/Contents/MacOS/uv"
           codesign --verify --deep --strict --verbose=2 "${app}"

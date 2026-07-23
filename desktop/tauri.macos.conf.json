@@ -2,8 +2,10 @@
   "bundle": {
     "externalBin": [
       "binaries/lemma-locald",
-      "binaries/lemma-runtime",
-      "binaries/lemma-vz"
-    ]
+      "binaries/lemma-runtime"
+    ],
+    "resources": {
+      "binaries/lemma-vz-aarch64-apple-darwin": "lemma-vz"
+    }
   }
 }

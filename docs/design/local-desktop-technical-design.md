@@ -219,7 +219,7 @@ It does not own service process lifetimes. Quitting or crashing the shell does n
 
 Control Center assets are bundled with the desktop and receive a dedicated capability file. Commands are narrowly typed—such as `local_status`, `local_operation_start`, `secret_set`, and `support_bundle_create`—rather than generic shell, filesystem, or arbitrary daemon request access.
 
-The workspace product loads from `http://lemma.localhost:<port>` in a separate webview/window with no Tauri IPC capability. A frontend compromise therefore reaches only the normal authenticated Lemma API, not OS secrets or lifecycle controls.
+The workspace product loads from `http://app.lemma.localhost:<port>` in a separate webview/window with no Tauri IPC capability. A frontend compromise therefore reaches only the normal authenticated Lemma API, not OS secrets or lifecycle controls.
 
 ### 5.5 Local gateway
 
@@ -240,7 +240,7 @@ Responsibilities:
 Preferred origins:
 
 ```text
-http://lemma.localhost:<port>                         frontend
+http://app.lemma.localhost:<port>                     frontend
 http://api.lemma.localhost:<port>                     API/auth/widgets
 http://<public-slug>.apps.lemma.localhost:<port>      built pod React/web apps
 http://<sandbox>-<app>.workspaces.lemma.localhost:<port> ephemeral AgentBox apps
@@ -250,7 +250,7 @@ The gateway routes by a validated, lower-cased Host header:
 
 | Host class | Upstream | Notes |
 | --- | --- | --- |
-| `lemma.localhost` | frontend | Main Next application only. |
+| `app.lemma.localhost` | frontend | Main Next application only. |
 | `api.lemma.localhost` | backend | Normal API, auth, public SDK, datastore assets, widgets, MCP/WebSocket/SSE. |
 | one DNS label before `.apps.lemma.localhost` | backend | Preserve Host; `AppHostRoutingMiddleware` resolves the public slug and serves `/public/apps` assets. |
 | one DNS label before `.workspaces.lemma.localhost` | embedded AgentBox private app proxy | Label remains `<sandbox-id>-<runtime-app-slug>`; route never reaches frontend. |
@@ -368,6 +368,22 @@ The guest contains only:
 
 OCI application images remain release artifacts. `lemma-guestd` accepts declarative service specs over an authenticated channel, pulls/imports verified images, and reports status/events. It does not expose the raw containerd socket to the host network.
 
+The shipping macOS appliance uses Ubuntu 24.04 userspace and initramfs with the
+exact container-optimized Kata kernel pinned by Apple's Containerization build
+(`kata-static` 3.17.0, kernel 6.12.28-153). The source archive, kernel, initrd,
+and root filesystem hashes are recorded in `runtime.json`; clean builds verify
+the Kata archive before extraction. This avoids depending on Ubuntu's moving
+GA/HWE kernel packages, both of which produced reproducible VZ faults under
+the Lemma container workload. CNI selects the legacy iptables backend because
+this minimal kernel does not provide Ubuntu's nftables module set.
+
+Fresh PostgreSQL provisioning is idempotent across the official image's
+temporary-server restart. Database existence queries are the source of truth:
+after any ambiguous `createdb` result, including a committed transaction whose
+connection closed with exit 1, `lemma-guestd` rechecks the catalog before it
+attempts another create. The same PostgreSQL instance owns `lemma`,
+`lemma_datastore`, `agentbox`, and `supertokens` databases.
+
 ## 6. Platform runtime implementations
 
 ### 6.1 macOS provider
@@ -397,6 +413,16 @@ Resource policy example:
 | 32+ GiB | 10 GiB | 512 MiB | 6 |
 
 These are adaptive defaults subject to measurement. Control Center exposes Balanced/Low resource/Performance policies and advanced ceilings, not a required machine-size form.
+
+The host VZ helper owns one persistent virtio-vsock RPC channel to
+`lemma-guestd` and multiplexes authenticated local Unix-socket requests over it
+serially. Opening and closing a guest connection for every 250 ms readiness
+probe triggered faults in VZ container kernels and is prohibited. The helper
+reconnects only after guest-channel failure, drains each response before
+serving the next local client, and keeps the channel valid even if a local
+caller times out. The packaged helper is separately code-signed with only the
+`com.apple.security.virtualization` entitlement and is then sealed into the
+outer application signature.
 
 #### Follow-on provider: Apple Containerization
 
@@ -743,8 +769,8 @@ For gateway port `P`, schema rendering produces the following logical values (th
 ```text
 # backend
 API_URL=http://api.lemma.localhost:P
-FRONTEND_URL=http://lemma.localhost:P
-AUTH_FRONTEND_URL=http://lemma.localhost:P/auth
+FRONTEND_URL=http://app.lemma.localhost:P
+AUTH_FRONTEND_URL=http://app.lemma.localhost:P/auth
 APP_BASE_DOMAIN=apps.lemma.localhost:P
 SESSION_COOKIE_DOMAIN=.lemma.localhost
 CORS_ORIGIN_REGEX=<anchored generated regex for exact main/API/app origins on P>
@@ -752,8 +778,8 @@ AGENTBOX_APP_DOMAIN=workspaces.lemma.localhost:P
 
 # frontend runtime config
 NEXT_PUBLIC_API_URL=http://api.lemma.localhost:P
-NEXT_PUBLIC_SITE_URL=http://lemma.localhost:P
-NEXT_PUBLIC_AUTH_URL=http://lemma.localhost:P/auth
+NEXT_PUBLIC_SITE_URL=http://app.lemma.localhost:P
+NEXT_PUBLIC_AUTH_URL=http://app.lemma.localhost:P/auth
 NEXT_PUBLIC_SESSION_TOKEN_DOMAIN=.lemma.localhost
 NEXT_PUBLIC_SHARED_SESSION_DOMAIN=lemma.localhost
 NEXT_PUBLIC_APPS_DOMAIN_SUFFIX=apps.lemma.localhost
@@ -927,6 +953,15 @@ URL, exact byte size, SHA-256 digest, and `zip` format. The online desktop embed
 that manifest inside the platform-signed application, requires its release to
 equal the desktop version, and safely stages both archives under Application
 Support. The offline installer bundles the same extracted payloads.
+
+The online artifact is the default download. For the current macOS arm64
+release, the measured compressed runtime payload is approximately 307 MB for
+the host pack plus 224 MB for the guest appliance. The offline `.app` expands
+to approximately 3.0 GiB because it embeds both packs, including the guest's
+2 GiB sparse root disk. Release notes and install preflight must distinguish
+online package size, first-run download size, expanded immutable runtime, and
+writable user/data headroom; presenting the offline installed size as the
+normal download expectation is a product defect.
 
 Downloads use system proxy settings, bounded redirects/timeouts, resumable
 range requests, exact `Content-Range` validation, archive and expanded-size
@@ -1425,6 +1460,11 @@ private WSL distribution, and service reconciliation are implemented. Adaptive
 resource policy and user-facing backup/restore remain open release work.
 Windows clean-host enablement is exposed as the explicit authenticated
 `runtime.prepare` operation with UAC cancellation and post-reboot resume UX.
+The macOS implementation now uses a hash-pinned Kata kernel, persistent vsock
+RPC channel, legacy-iptables CNI compatibility, and catalog-verified
+PostgreSQL database creation. A clean offline bundle has reached Ready on its
+first Start, created a real sandbox, run the bundled Lemma CLI, and reached the
+host API through the explicit `host.lemma.internal` bridge.
 
 ### 25.4 Phase D: AgentBox provider — implemented
 

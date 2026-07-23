@@ -283,11 +283,32 @@ fn runtime_root() -> PathBuf {
     if let Some(root) = read_config()["runtimeRoot"].as_str() {
         return PathBuf::from(root);
     }
-    // Compile-time fallback: the monorepo containing this crate.
-    PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .parent()
-        .expect("crate has a parent directory")
-        .to_path_buf()
+    default_runtime_root(
+        std::env::current_exe().ok().as_deref(),
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR")),
+        cfg!(debug_assertions),
+    )
+}
+
+fn default_runtime_root(
+    executable: Option<&std::path::Path>,
+    manifest_dir: &std::path::Path,
+    development: bool,
+) -> PathBuf {
+    if development {
+        // Debug builds may use the monorepo containing this crate. A release
+        // build must never trust its compile-time checkout path: that path can
+        // still exist on a developer/test machine after the app is copied to
+        // Applications, causing the signed package to skip artifact install.
+        return manifest_dir
+            .parent()
+            .expect("desktop crate has a parent directory")
+            .to_path_buf();
+    }
+    executable
+        .and_then(std::path::Path::parent)
+        .map(std::path::Path::to_path_buf)
+        .unwrap_or_default()
 }
 
 /// The durable local daemon shipped next to the app executable.
@@ -407,6 +428,27 @@ fn bundled_sibling(name: &str) -> Option<PathBuf> {
     let suffix = if cfg!(windows) { ".exe" } else { "" };
     let candidate = executable.parent()?.join(format!("{name}{suffix}"));
     candidate.is_file().then_some(candidate)
+}
+
+#[cfg(target_os = "macos")]
+fn bundled_vz() -> Option<PathBuf> {
+    if let Some(path) = std::env::var_os("LEMMA_DESKTOP_VZ_BIN")
+        .map(PathBuf::from)
+        .filter(|path| path.is_file())
+    {
+        return Some(path);
+    }
+    let executable = std::env::current_exe().ok()?;
+    let bin_dir = executable.parent()?;
+    [
+        // Signed resource in packaged apps. It is deliberately not an
+        // externalBin because Tauri would replace its helper entitlement.
+        bin_dir.join("../Resources/lemma-vz"),
+        // Development/test compatibility.
+        bin_dir.join("lemma-vz"),
+    ]
+    .into_iter()
+    .find(|path| path.is_file())
 }
 
 fn bundled_host_pack_release() -> Option<String> {
@@ -698,7 +740,7 @@ fn spawn_locald() -> Result<(), String> {
         #[cfg(target_os = "macos")]
         command.env(
             "LEMMA_LOCALD_VZ_BIN",
-            bundled_sibling("lemma-vz").ok_or("bundled lemma-vz helper is missing")?,
+            bundled_vz().ok_or("bundled lemma-vz helper is missing")?,
         );
     }
     command
@@ -932,9 +974,23 @@ fn handle_locald_event(app: &AppHandle, event: &Value) {
                 // Stay on the splash: the user proceeds via its CTA.
             }
             "error" => {
-                ui.error = true;
-                ui.error_code = event["code"].as_str().unwrap_or_default().into();
-                ui.status = event["message"].as_str().unwrap_or("startup failed").into();
+                let code = event["code"].as_str().unwrap_or_default();
+                if code == "busy" {
+                    // Every authenticated desktop client already receives the
+                    // in-flight operation's broadcast progress. A repeated
+                    // Start click is therefore informational, not a failure.
+                    ui.error = false;
+                    ui.error_code.clear();
+                    ui.status = if ui.phase.is_empty() {
+                        "Lemma is already working on that operation…".into()
+                    } else {
+                        format!("{} is still in progress…", ui.phase)
+                    };
+                } else {
+                    ui.error = true;
+                    ui.error_code = code.into();
+                    ui.status = event["message"].as_str().unwrap_or("startup failed").into();
+                }
             }
             "runtime.prepared" => {
                 let ready = event["ready"].as_bool().unwrap_or(false);
@@ -1378,9 +1434,18 @@ fn desktop_context_script(mode: &str) -> String {
         "version": env!("CARGO_PKG_VERSION"),
         "mode": mode,
     });
+    let local_auth = if mode == "local" {
+        // NEXT_PUBLIC values are also rendered into the native host-pack
+        // environment. Inject the local auth policy before any page script as
+        // a cache-independent guard for an already-open desktop webview.
+        "window.__LEMMA_AUTH_CONFIG__ = Object.freeze({AUTH_EMAIL_VERIFICATION_REQUIRED: \"false\"});"
+    } else {
+        ""
+    };
     format!(
-        "window.__LEMMA_DESKTOP__ = Object.freeze({});",
-        serde_json::to_string(&context).unwrap_or_else(|_| "{}".into())
+        "window.__LEMMA_DESKTOP__ = Object.freeze({});{}",
+        serde_json::to_string(&context).unwrap_or_else(|_| "{}".into()),
+        local_auth,
     )
 }
 
@@ -1406,18 +1471,27 @@ fn desktop_auth_url(base: &str, auth_mode: &str) -> String {
     )
 }
 
+fn local_auth_url(base: &str, auth_mode: &str) -> String {
+    format!("{}/auth?show={auth_mode}", base.trim_end_matches('/'),)
+}
+
 #[tauri::command]
 async fn login(app: AppHandle, mode: Option<String>) -> Result<(), String> {
     let base = app_base_url(&app);
+    let connection_mode = current_mode(&app);
     let auth_mode = if mode.as_deref() == Some("signup") {
         "signup"
     } else {
         "signin"
     };
-    // Keep `main` as the waiting/exchange surface in both modes. The frontend
-    // creates a short-lived request, opens marked auth in the system browser,
-    // and consumes the result when `lemma://auth/complete` returns.
-    open_app_window(&app, &desktop_auth_url(&base, auth_mode))
+    let url = if connection_mode == "local" {
+        local_auth_url(&base, auth_mode)
+    } else {
+        // Hosted accounts keep credentials in the user's normal browser and
+        // return through the one-time PKCE-style desktop handoff.
+        desktop_auth_url(&base, auth_mode)
+    };
+    open_app_window(&app, &url)
 }
 
 fn build_tray(app: &AppHandle) -> tauri::Result<()> {
@@ -1859,14 +1933,39 @@ mod tests {
     }
 
     #[test]
-    fn desktop_auth_uses_the_browser_handoff_in_every_mode() {
+    fn hosted_auth_uses_browser_handoff_while_local_auth_stays_in_app() {
         assert_eq!(
             desktop_auth_url("https://lemma.work", "signup"),
             "https://lemma.work/auth/desktop?mode=signup"
         );
         assert_eq!(
-            desktop_auth_url("http://app.lemma.localhost:3711/", "signin"),
-            "http://app.lemma.localhost:3711/auth/desktop?mode=signin"
+            local_auth_url("http://app.lemma.localhost:3711/", "signup"),
+            "http://app.lemma.localhost:3711/auth?show=signup"
         );
+    }
+
+    #[test]
+    fn packaged_runtime_root_never_falls_back_to_the_build_checkout() {
+        let executable =
+            std::path::Path::new("/Applications/Lemma.app/Contents/MacOS/lemma-desktop");
+        let checkout = std::path::Path::new("/Users/developer/lemma-platform/desktop");
+
+        assert_eq!(
+            default_runtime_root(Some(executable), checkout, false),
+            std::path::Path::new("/Applications/Lemma.app/Contents/MacOS")
+        );
+        assert_eq!(
+            default_runtime_root(Some(executable), checkout, true),
+            std::path::Path::new("/Users/developer/lemma-platform")
+        );
+    }
+
+    #[test]
+    fn local_desktop_context_disables_email_verification_before_page_scripts() {
+        let local = desktop_context_script("local");
+        let hosted = desktop_context_script("hosted");
+
+        assert!(local.contains("AUTH_EMAIL_VERIFICATION_REQUIRED: \"false\""));
+        assert!(!hosted.contains("AUTH_EMAIL_VERIFICATION_REQUIRED"));
     }
 }

@@ -252,6 +252,14 @@ Release engineering produces:
 
 Offline install must clearly state that cloud model providers and OAuth authorization still need network access. A local model endpoint can make normal agent use offline.
 
+The online artifact is the recommended consumer download. Current macOS arm64
+measurements are about 307 MB compressed for the host pack and 224 MB for the
+guest pack after installation selects Local mode. The air-gapped `.app` is
+approximately 3.0 GiB installed because it embeds both expanded packs and the
+guest's sparse disk image. The download page and preflight UI must label these
+as different products and show download, expanded runtime, and writable-data
+headroom separately.
+
 ## 11. First-run onboarding
 
 Onboarding is resumable and versioned. Closing Lemma never loses completed work. Each screen has Back, Continue, and—only where safe—Do this later.
