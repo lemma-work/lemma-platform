@@ -11,6 +11,7 @@ ProviderFactory = Callable[[], SandboxLifecycleProvider]
 _BUILTIN_PROVIDERS = {
     "docker": "agentbox.providers.docker:DockerSandboxProvider",
     "podman": "agentbox.providers.podman:PodmanSandboxProvider",
+    "lemma_local": "agentbox.providers.lemma_local:LemmaLocalSandboxProvider",
     "kubernetes": "agentbox.kubernetes:SandboxKubernetesClient",
     "e2b": "agentbox.providers.e2b:E2BSandboxProvider",
     "daytona": "agentbox.providers.daytona:DaytonaSandboxProvider",

@@ -113,6 +113,13 @@ class Settings(BaseSettings):
     agentbox_memory_limit: str | None = None
     agentbox_cpu_limit: str | None = None
     agentbox_e2e_label: bool = False
+    # Managed Desktop provider. The host bridge accepts one bounded JSON
+    # request on stdin and emits one bounded JSON response on stdout, keeping
+    # callback URLs and delegated environment values out of argv/process lists.
+    agentbox_local_runtime_cli: str = "lemma-runtime"
+    agentbox_local_runtime_timeout_seconds: float = Field(
+        default=180.0, ge=1.0, le=1800.0
+    )
 
     @property
     def agentbox_state_durable_env_key_set(self) -> frozenset[str]:
