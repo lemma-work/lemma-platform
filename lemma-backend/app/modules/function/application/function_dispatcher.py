@@ -64,6 +64,7 @@ _FUNCTION_RUNTIME_PORT = 8090
 
 
 AgentBoxClientFactory = Callable[[], AgentBoxClient]
+RuntimeHttpClientFactory = Callable[[], httpx.AsyncClient]
 TokenMinter = Callable[..., Awaitable[str]]
 
 
@@ -90,6 +91,7 @@ class FunctionDispatcher:
         token_minter: TokenMinter,
         token_cache: FunctionSessionTokenCache,
         endpoint_cache: FunctionRuntimeEndpointCache,
+        runtime_http_client_factory: RuntimeHttpClientFactory,
         delegated_tokens_enabled: bool,
     ) -> None:
         self._uow_factory = uow_factory
@@ -98,6 +100,7 @@ class FunctionDispatcher:
         self._token_minter = token_minter
         self._token_cache = token_cache
         self._endpoint_cache = endpoint_cache
+        self._runtime_http_client_factory = runtime_http_client_factory
         self._delegated_tokens_enabled = delegated_tokens_enabled
         self._profile = ProfileRef(
             name=settings.agentbox_function_profile_name,
@@ -209,21 +212,19 @@ class FunctionDispatcher:
             dispatch,
             deadline_at=self._control_deadline(dispatch.deadline_at),
         )
-        async with httpx.AsyncClient(
+        runtime = self._runtime_http_client_factory()
+        await runtime.post(
+            urljoin(
+                endpoint.url,
+                f"runs/{dispatch.run_id}:cancel",
+            ),
+            headers={"Authorization": self._callback_authorization(run_id)},
             timeout=httpx.Timeout(5, read=5),
-            follow_redirects=False,
-        ) as runtime:
-            await runtime.post(
-                urljoin(
-                    endpoint.url,
-                    f"runs/{dispatch.run_id}:cancel",
-                ),
-                headers={"Authorization": self._callback_authorization(run_id)},
-            )
+        )
         async with self._uow_factory() as uow:
-            run = await FunctionExecutionRepository(
-                uow, self._signer
-            ).cancel_dispatch(dispatch)
+            run = await FunctionExecutionRepository(uow, self._signer).cancel_dispatch(
+                dispatch
+            )
         return run or await self._load_run(run_id)
 
     async def _resolve_dispatch(
@@ -259,9 +260,9 @@ class FunctionDispatcher:
         mode: FunctionDispatchMode,
     ) -> FunctionExecutionDispatch | None:
         async with self._uow_factory() as uow:
-            return await FunctionExecutionRepository(
-                uow, self._signer
-            ).active_dispatch(run_id, mode=mode)
+            return await FunctionExecutionRepository(uow, self._signer).active_dispatch(
+                run_id, mode=mode
+            )
 
     async def _ensure_sandbox(
         self,
@@ -327,18 +328,16 @@ class FunctionDispatcher:
         if dispatch.mode == FunctionDispatchMode.ASYNCHRONOUS:
             headers["Prefer"] = "respond-async"
         try:
-            async with httpx.AsyncClient(
+            runtime = self._runtime_http_client_factory()
+            response = await runtime.post(
+                url,
+                headers=headers,
+                json={"input": dispatch.input_data},
                 timeout=httpx.Timeout(
                     max(0.1, min(10.0, remaining)),
                     read=max(0.1, remaining),
                 ),
-                follow_redirects=False,
-            ) as runtime:
-                response = await runtime.post(
-                    url,
-                    headers=headers,
-                    json={"input": dispatch.input_data},
-                )
+            )
         except httpx.TransportError as exc:
             await self._endpoint_cache.invalidate(
                 self._endpoint_key(dispatch),
@@ -378,29 +377,23 @@ class FunctionDispatcher:
             )
         return RuntimeTerminalRequest.model_validate(response.json())
 
-    async def _best_effort_cancel(
-        self, dispatch: FunctionExecutionDispatch
-    ) -> None:
+    async def _best_effort_cancel(self, dispatch: FunctionExecutionDispatch) -> None:
         try:
             endpoint = await self._runtime_endpoint(
                 dispatch,
                 deadline_at=self._control_deadline(dispatch.deadline_at),
             )
-            async with httpx.AsyncClient(
+            runtime = self._runtime_http_client_factory()
+            await runtime.post(
+                urljoin(
+                    endpoint.url,
+                    f"runs/{dispatch.run_id}:cancel",
+                ),
+                headers={
+                    "Authorization": self._callback_authorization(dispatch.run_id)
+                },
                 timeout=httpx.Timeout(5),
-                follow_redirects=False,
-            ) as runtime:
-                await runtime.post(
-                    urljoin(
-                        endpoint.url,
-                        f"runs/{dispatch.run_id}:cancel",
-                    ),
-                    headers={
-                        "Authorization": self._callback_authorization(
-                            dispatch.run_id
-                        )
-                    },
-                )
+            )
         except Exception:
             logger.warning(
                 "function.dispatcher.runtime_cancellation.failed",
@@ -464,9 +457,7 @@ class FunctionDispatcher:
             raise LookupError(f"function run {run_id} does not exist")
         return run
 
-    async def _function_session_token(
-        self, dispatch: FunctionExecutionDispatch
-    ) -> str:
+    async def _function_session_token(self, dispatch: FunctionExecutionDispatch) -> str:
         return await self._token_cache.get(
             FunctionSessionTokenKey(
                 user_id=dispatch.user_id,

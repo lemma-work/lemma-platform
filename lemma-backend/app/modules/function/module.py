@@ -1,5 +1,7 @@
 """Function module registration."""
 
+from contextlib import asynccontextmanager
+
 from app.core.registry import LemmaModule
 
 
@@ -22,8 +24,23 @@ def _event_routers():
     return [router]
 
 
+@asynccontextmanager
+async def _close_runtime_http_clients(context):
+    del context
+    try:
+        yield
+    finally:
+        from app.modules.function.api.dependencies import (
+            close_function_runtime_http_clients,
+        )
+
+        await close_function_runtime_http_clients()
+
+
 module = LemmaModule(
     name="function",
     routers=_routers,
     event_routers=_event_routers,
+    api_lifespans=(_close_runtime_http_clients,),
+    worker_lifespans=(_close_runtime_http_clients,),
 )

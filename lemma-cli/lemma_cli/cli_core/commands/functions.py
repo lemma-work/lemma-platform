@@ -210,7 +210,7 @@ def run_function(
         ),
     ),
     wait_timeout: float = typer.Option(180.0, "--wait-timeout", min=1.0),
-    poll_interval: float = typer.Option(2.0, "--poll-interval", min=0.5),
+    poll_interval: float = typer.Option(0.5, "--poll-interval", min=0.5),
 ) -> None:
     """Run a function with an optional JSON input payload."""
     payload = read_json(json_payload, file)
