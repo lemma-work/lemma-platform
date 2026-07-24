@@ -182,25 +182,78 @@ class _ProcessBuffer:
         if not encoded:
             return
         async with self.condition:
-            chunk = ProcessOutputChunk(
-                sequence=self.next_sequence,
-                channel=channel,
-                data=encoded,
-            )
-            self.next_sequence += 1
-            self.chunks.append(chunk)
-            self.total_bytes += len(encoded)
-            while self.chunks and self.total_bytes > self.output_limit_bytes:
-                removed = self.chunks.popleft()
-                self.total_bytes -= len(removed.data)
-                self.truncated_before_sequence = removed.sequence + 1
+            if self.state != ProcessState.RUNNING:
+                return
+            self._append_locked(channel, encoded)
             self.condition.notify_all()
 
-    async def complete(self, state: ProcessState, exit_code: int | None) -> None:
+    async def complete(
+        self,
+        state: ProcessState,
+        exit_code: int | None,
+        *,
+        stdout: str | bytes | None = None,
+        stderr: str | bytes | None = None,
+    ) -> None:
         async with self.condition:
+            if self.state != ProcessState.RUNNING:
+                return
+            self._append_authoritative_suffix_locked(
+                ProcessOutputChannel.STDOUT,
+                stdout,
+            )
+            self._append_authoritative_suffix_locked(
+                ProcessOutputChannel.STDERR,
+                stderr,
+            )
             self.state = state
             self.exit_code = exit_code
             self.condition.notify_all()
+
+    def _append_authoritative_suffix_locked(
+        self,
+        channel: ProcessOutputChannel,
+        data: str | bytes | None,
+    ) -> None:
+        if data is None:
+            return
+        encoded = data.encode(errors="replace") if isinstance(data, str) else data
+        if not encoded:
+            return
+        buffered = b"".join(
+            chunk.data for chunk in self.chunks if chunk.channel == channel
+        )
+        if not buffered:
+            missing = encoded
+        elif encoded.startswith(buffered):
+            missing = encoded[len(buffered) :]
+        else:
+            buffered_offset = encoded.rfind(buffered)
+            missing = (
+                encoded[buffered_offset + len(buffered) :]
+                if buffered_offset >= 0
+                else b""
+            )
+        if missing:
+            self._append_locked(channel, missing)
+
+    def _append_locked(
+        self,
+        channel: ProcessOutputChannel,
+        data: bytes,
+    ) -> None:
+        chunk = ProcessOutputChunk(
+            sequence=self.next_sequence,
+            channel=channel,
+            data=data,
+        )
+        self.next_sequence += 1
+        self.chunks.append(chunk)
+        self.total_bytes += len(data)
+        while self.chunks and self.total_bytes > self.output_limit_bytes:
+            removed = self.chunks.popleft()
+            self.total_bytes -= len(removed.data)
+            self.truncated_before_sequence = removed.sequence + 1
 
 
 class E2BSandboxAdapter:
@@ -1187,7 +1240,12 @@ class E2BSandboxAdapter:
         try:
             result = await handle.wait()
         except CommandExitException as exc:
-            await buffer.complete(ProcessState.FAILED, exc.exit_code)
+            await buffer.complete(
+                ProcessState.FAILED,
+                exc.exit_code,
+                stdout=exc.stdout,
+                stderr=exc.stderr,
+            )
         except asyncio.CancelledError:
             raise
         except Exception:
@@ -1200,6 +1258,8 @@ class E2BSandboxAdapter:
                 if result.exit_code == 0
                 else ProcessState.FAILED,
                 result.exit_code,
+                stdout=getattr(result, "stdout", None),
+                stderr=getattr(result, "stderr", None),
             )
 
     async def _enforce_process_deadline(
