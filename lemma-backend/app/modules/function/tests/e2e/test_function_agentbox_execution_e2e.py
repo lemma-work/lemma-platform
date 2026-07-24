@@ -24,6 +24,9 @@ from app.modules.function.application.function_dispatcher import FunctionDispatc
 from app.modules.function.application.function_runtime_endpoint_cache import (
     FunctionRuntimeEndpointCache,
 )
+from app.modules.function.application.function_runtime_http_client import (
+    FunctionRuntimeHttpClientPool,
+)
 from app.modules.function.application.function_session_token_cache import (
     FunctionSessionTokenCache,
 )
@@ -89,9 +92,7 @@ async def _create_run(
     python_packages: tuple[str, ...] = (),
 ) -> UUID:
     function_id = uuid7()
-    artifact = await FunctionArtifactBuilder(
-        get_function_storage_factory()
-    ).build(
+    artifact = await FunctionArtifactBuilder(get_function_storage_factory()).build(
         function_id=function_id,
         code=code,
         python_packages=python_packages,
@@ -185,6 +186,7 @@ async def test_api_and_job_execute_through_one_per_pod_docker_sandbox(
                 timeout_seconds=60,
             )
 
+        runtime_http_clients = FunctionRuntimeHttpClientPool()
         dispatcher = FunctionDispatcher(
             uow_factory=SessionUnitOfWorkFactory(db_manager.session_factory),
             credential_signer=FunctionCallbackCredentialSigner(secret),
@@ -192,6 +194,7 @@ async def test_api_and_job_execute_through_one_per_pod_docker_sandbox(
             token_minter=mint_workspace_token,
             token_cache=FunctionSessionTokenCache(),
             endpoint_cache=FunctionRuntimeEndpointCache(),
+            runtime_http_client_factory=runtime_http_clients.get,
             delegated_tokens_enabled=settings.authz_delegated_tokens_enabled,
         )
 
@@ -244,4 +247,6 @@ async def test_api_and_job_execute_through_one_per_pod_docker_sandbox(
                 deadline_at=datetime.now(timezone.utc) + timedelta(seconds=15),
             )
     finally:
+        if "runtime_http_clients" in locals():
+            await runtime_http_clients.close()
         settings.function_runtime_gateway_url = original_gateway_url

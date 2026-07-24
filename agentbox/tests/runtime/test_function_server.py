@@ -107,6 +107,40 @@ async def test_gateway_claim_receives_exact_invocation_identity(monkeypatch) -> 
     }
 
 
+async def test_gateway_client_is_reused_until_service_closes(monkeypatch) -> None:
+    from agentbox.function_runtime import server as server_module
+
+    created: list[str] = []
+    closed: list[str] = []
+
+    class _Gateway:
+        def __init__(self, base_url: str) -> None:
+            self.base_url = base_url
+            created.append(base_url)
+
+        async def close(self) -> None:
+            closed.append(self.base_url)
+
+    monkeypatch.setattr(server_module, "GatewayClient", _Gateway)
+    service = FunctionRuntimeService(max_workers=1, max_cached_revisions=1)
+
+    first = await service._gateway("https://gateway.lemma.test")
+    second = await service._gateway("https://gateway.lemma.test")
+    other = await service._gateway("https://other-gateway.lemma.test")
+
+    assert first is second
+    assert other is not first
+    assert created == [
+        "https://gateway.lemma.test",
+        "https://other-gateway.lemma.test",
+    ]
+    assert closed == []
+
+    await service.close()
+
+    assert closed == created
+
+
 async def test_async_accept_returns_after_claim_without_waiting_for_terminal(
     monkeypatch,
 ) -> None:

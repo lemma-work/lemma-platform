@@ -41,7 +41,7 @@ class AgentSettings(BaseSettings):
         description="TTL for cached rendered agent runtime-context briefs; zero disables caching.",
     )
     function_run_poll_interval_seconds: float = Field(
-        default=5.0,
+        default=0.5,
         description="Interval an agent tool waits between function-run status polls.",
     )
     conversation_title_model: str | None = Field(
