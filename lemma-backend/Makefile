@@ -36,7 +36,8 @@ BACKEND_COVERAGE_DATA_ENV = COVERAGE_FILE=$(BACKEND_COVERAGE_FILE)
 # Full-path function quality benchmark. E2B identifiers are exact immutable
 # test inputs; this target never changes templates, aliases, or account state
 # beyond creating and exactly deleting its own tracked sandboxes. The E2B API
-# key is read from lemma-backend/.env or the environment.
+# key and immutable profile IDs are read from lemma-backend/.env or the
+# environment.
 FUNCTION_BENCH_CONCURRENCY ?= 5
 FUNCTION_BENCH_INVOCATIONS ?= 5
 FUNCTION_BENCH_SOURCE_ROWS ?= 1000
@@ -44,7 +45,6 @@ FUNCTION_BENCH_WRITE_ROWS ?= 1000
 FUNCTION_BENCH_POLL_INTERVAL_SECONDS ?= 0.5
 FUNCTION_BENCH_TERMINAL_TIMEOUT_SECONDS ?= 300
 FUNCTION_BENCH_TUNNEL ?= ngrok
-include ../agentbox/templates/e2b/promoted-builds.env
 FUNCTION_BENCH_ENV = \
 	E2E_REAL=1 \
 	DEBUG=false \

@@ -16,6 +16,21 @@ NODE_LINUX_X64_SHA256 = (
     "55aa7153f9d88f28d765fcdad5ae6945b5c0f98a36881703817e4c450fa76742"
 )
 PNPM_VERSION = "11.15.1"
+DEFAULT_CPU_COUNT = 1
+DEFAULT_MEMORY_MB = 2048
+
+
+def _positive_int_environment(name: str, *, default: int) -> int:
+    raw = os.environ.get(name)
+    if raw is None:
+        return default
+    try:
+        value = int(raw)
+    except ValueError as exc:
+        raise ValueError(f"{name} must be an integer") from exc
+    if value < 1:
+        raise ValueError(f"{name} must be at least 1")
+    return value
 
 
 def _install_uv_command() -> str:
@@ -298,11 +313,33 @@ def build(
     if not os.environ.get("E2B_API_KEY"):
         raise RuntimeError("E2B_API_KEY is required")
     selected = {
-        "workspace": (workspace_template, "lemma-agentbox-workspace", 2, 2048),
+        "workspace": (
+            workspace_template,
+            "lemma-agentbox-workspace",
+            _positive_int_environment(
+                "AGENTBOX_E2B_WORKSPACE_CPU_COUNT",
+                default=DEFAULT_CPU_COUNT,
+            ),
+            _positive_int_environment(
+                "AGENTBOX_E2B_WORKSPACE_MEMORY_MB",
+                default=DEFAULT_MEMORY_MB,
+            ),
+        ),
         # The resident runtime imports each immutable revision once and adds
         # workers as concurrent invocations arrive. This is a safety envelope,
         # not an advertised four-request admission limit.
-        "function": (function_template, "lemma-agentbox-function", 4, 2048),
+        "function": (
+            function_template,
+            "lemma-agentbox-function",
+            _positive_int_environment(
+                "AGENTBOX_E2B_FUNCTION_CPU_COUNT",
+                default=DEFAULT_CPU_COUNT,
+            ),
+            _positive_int_environment(
+                "AGENTBOX_E2B_FUNCTION_MEMORY_MB",
+                default=DEFAULT_MEMORY_MB,
+            ),
+        ),
     }
     names = tuple(selected) if target == "all" else (target,)
     result: dict[str, dict[str, str]] = {}
@@ -320,6 +357,8 @@ def build(
             "template_id": built.template_id,
             "build_id": built.build_id,
             "name": built.name,
+            "cpu_count": str(cpu_count),
+            "memory_mb": str(memory_mb),
         }
     return result
 
