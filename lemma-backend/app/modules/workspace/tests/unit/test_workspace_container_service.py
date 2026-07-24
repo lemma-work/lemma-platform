@@ -4,8 +4,11 @@ import asyncio
 from typing import Any
 from uuid import UUID, uuid4
 
+import httpx
 import pytest
 
+from agentbox_client import AgentBoxApiError, RetryDisposition
+from agentbox_client.models import AgentBoxErrorBody, AgentBoxErrorResponse
 from app.core.config import settings
 from app.modules.workspace.contracts import SandboxInfo
 from app.modules.workspace.services.workspace_sandbox_service import (
@@ -92,6 +95,25 @@ class _FakeManagerClient:
     ) -> None:
         del deadline_at
         self.directories.append((logical_id, path))
+
+
+def _api_error(retry: RetryDisposition) -> AgentBoxApiError:
+    response = httpx.Response(
+        503,
+        request=httpx.Request(
+            "PUT", "http://agentbox.test/sandboxes/workspace/id/directories"
+        ),
+    )
+    return AgentBoxApiError(
+        response,
+        AgentBoxErrorResponse(
+            error=AgentBoxErrorBody(
+                code="PROVIDER_UNAVAILABLE",
+                message="sandbox provider allocation no longer exists",
+                retry=retry,
+            )
+        ),
+    )
 
 
 def _service(
@@ -211,3 +233,53 @@ async def test_get_session_uses_canonical_logical_workspace_id(
     assert session.client is manager_client
     assert session.env_vars == {"LEMMA_TOKEN": "dynamic"}
     assert manager_client.directories == [(user_id, "/workspace")]
+
+
+@pytest.mark.asyncio
+async def test_get_session_reensures_after_missing_provider_allocation(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    user_id = uuid4()
+    sandbox = _FakeSandbox()
+    service = _service(sandbox)
+
+    class _RecoveringManagerClient(_FakeManagerClient):
+        async def create_directory(
+            self,
+            logical_id: UUID,
+            path: str,
+            *,
+            deadline_at,
+        ) -> None:
+            await super().create_directory(
+                logical_id,
+                path,
+                deadline_at=deadline_at,
+            )
+            if len(self.directories) == 1:
+                raise _api_error(RetryDisposition.SAFE_SAME_OPERATION)
+
+    manager_client = _RecoveringManagerClient()
+
+    async def environment(*_args: Any, **_kwargs: Any) -> dict[str, str]:
+        return {"LEMMA_TOKEN": "dynamic"}
+
+    async def no_wait(_seconds: float) -> None:
+        return None
+
+    monkeypatch.setattr(service, "get_env_vars", environment)
+    monkeypatch.setattr(service, "_get_manager_client", lambda: manager_client)
+    monkeypatch.setattr(asyncio, "sleep", no_wait)
+
+    session = await service.get_session(
+        user_id=user_id,
+        pod_id=None,
+        session_id="conversation",
+    )
+
+    assert session.sandbox_id == str(user_id)
+    assert len(sandbox.ensure_calls) == 2
+    assert manager_client.directories == [
+        (user_id, "/workspace"),
+        (user_id, "/workspace"),
+    ]

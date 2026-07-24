@@ -10,9 +10,11 @@ from uuid import UUID, uuid4
 from app.core.config import settings
 from app.core.request_context import correlation_headers
 from agentbox_client import (
+    AgentBoxApiError,
     AgentBoxClient,
     PortAccessGrant,
     PortProtocol,
+    RetryDisposition,
     WorkloadKind,
 )
 from app.modules.workspace.contracts import SandboxInfo
@@ -277,12 +279,10 @@ class WorkspaceSandboxService:
         scope: list[str] | None = None,
         env_vars: dict[str, str] | None = None,
     ) -> IWorkspaceSession:
-        sandbox_info = await self.get_or_create_sandbox(user_id)
         resolved_cwd = canonical_workspace_cwd(initial_cwd)
-        await self._get_manager_client().create_directory(
-            agentbox_sandbox_id(user_id),
+        sandbox_info = await self._ensure_workspace_directory(
+            user_id,
             resolved_cwd,
-            deadline_at=datetime.now(timezone.utc) + timedelta(seconds=30),
         )
 
         if env_vars is None:
@@ -315,6 +315,41 @@ class WorkspaceSandboxService:
             auto_close=close_on_exit,
             activity_callback=_activity_callback,
             owns_client=False,
+        )
+
+    async def _ensure_workspace_directory(
+        self,
+        user_id: UUID,
+        path: str,
+    ) -> SandboxInfo:
+        deadline_at = datetime.now(timezone.utc) + timedelta(
+            seconds=_SANDBOX_MANAGER_HTTP_TIMEOUT_SECONDS
+        )
+        while datetime.now(timezone.utc) < deadline_at:
+            sandbox_info = await self.get_or_create_sandbox(user_id)
+            try:
+                await self._get_manager_client().create_directory(
+                    agentbox_sandbox_id(user_id),
+                    path,
+                    deadline_at=deadline_at,
+                )
+            except AgentBoxApiError as exc:
+                if exc.retry not in (
+                    RetryDisposition.WAIT,
+                    RetryDisposition.SAFE_SAME_OPERATION,
+                ):
+                    raise
+                remaining = (
+                    deadline_at - datetime.now(timezone.utc)
+                ).total_seconds()
+                if remaining <= 0:
+                    break
+                delay = max(0.05, (exc.retry_after_ms or 250) / 1000)
+                await asyncio.sleep(min(delay, remaining))
+                continue
+            return sandbox_info
+        raise TimeoutError(
+            f"workspace sandbox {agentbox_sandbox_id(user_id)} did not become usable"
         )
 
     def _get_manager_client(self) -> AgentBoxClient:

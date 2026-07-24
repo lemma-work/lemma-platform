@@ -159,6 +159,55 @@ class FailedReadinessProvider(FakeProvider):
             raise ProviderLifecycleError("provider unavailable during cleanup")
 
 
+class MissingNativeWorkspaceProvider(FakeProvider):
+    workspace_storage_kind = StorageKind.SANDBOX_NATIVE
+
+    def __init__(self, database: StateDatabase) -> None:
+        super().__init__(database)
+        self.destroy_calls: list[ProviderAllocationRef] = []
+
+    async def create(self, request: ProviderCreateRequest) -> ProviderCreateResult:
+        assert self.database.active_units_of_work == 0
+        self.create_calls.append(request)
+        provider_id = f"sandbox-{len(self.create_calls)}"
+        return ProviderCreateResult(
+            provider_id=provider_id,
+            provider_instance_id=provider_id,
+            provider_request_id=None,
+            workspace_storage=ProviderStorageResult(
+                provider_storage_id=provider_id,
+                bound_to_allocation=True,
+            ),
+        )
+
+    async def wait_ready(
+        self,
+        allocation: ProviderAllocationRef,
+        *,
+        profile: SandboxProfileRef,
+        deadline_at: datetime,
+    ) -> ProviderReadyResult:
+        del profile, deadline_at
+        assert self.database.active_units_of_work == 0
+        self.ready_calls += 1
+        if self.ready_calls == 1:
+            raise ProviderAllocationFailed("sandbox no longer exists")
+        return ProviderReadyResult(
+            provider_id=allocation.provider_id,
+            provider_instance_id=allocation.provider_instance_id,
+        )
+
+    async def destroy_allocation(
+        self,
+        allocation: ProviderAllocationRef,
+        *,
+        deadline_at: datetime,
+    ) -> None:
+        del deadline_at
+        assert self.database.active_units_of_work == 0
+        self.destroy_calls.append(allocation)
+
+
 async def test_logical_namespace_is_composite(database: StateDatabase):
     logical_id = uuid4()
     workspace = SandboxKey(WorkloadKind.WORKSPACE, logical_id)
@@ -337,6 +386,74 @@ async def test_failed_readiness_cleanup_failure_remains_reconcilable(
     assert reconciled == 1
     assert len(provider.destroy_calls) == 2
     assert allocations[0].state == AllocationState.ERROR
+
+
+async def test_missing_sandbox_native_workspace_rebinds_to_new_allocation(
+    database: StateDatabase,
+):
+    provider = MissingNativeWorkspaceProvider(database)
+    service = SandboxLifecycleService(database, provider)
+    key = SandboxKey(WorkloadKind.WORKSPACE, uuid4())
+    deadline = datetime.now(timezone.utc) + timedelta(seconds=30)
+
+    with pytest.raises(AgentBoxError) as raised:
+        await service.ensure(
+            key,
+            profile(),
+            admission_class=AdmissionClass.INTERACTIVE,
+            deadline_at=deadline,
+        )
+
+    assert raised.value.retry == RetryDisposition.SAFE_SAME_OPERATION
+    recovered = await service.ensure(
+        key,
+        profile(),
+        admission_class=AdmissionClass.INTERACTIVE,
+        deadline_at=deadline,
+    )
+
+    assert recovered.ready is True
+    assert len(provider.create_calls) == 2
+    assert [item.provider_id for item in provider.destroy_calls] == ["sandbox-1"]
+    async with database.uow() as uow:
+        storage = await uow.repository.get_workspace_storage(key)
+        allocations = await uow.repository.list_allocations(key)
+        await uow.commit()
+    assert storage is not None
+    assert storage.provider_storage_id == "sandbox-2"
+    assert storage.bound_allocation_id == recovered.allocation_id
+    assert [item.state for item in allocations] == [
+        AllocationState.ERROR,
+        AllocationState.ACTIVE,
+    ]
+    assert allocations[1].provider_id == "sandbox-2"
+
+
+async def test_active_sandbox_native_workspace_cannot_be_rebound(
+    database: StateDatabase,
+):
+    provider = MissingNativeWorkspaceProvider(database)
+    provider.ready_calls = 1
+    service = SandboxLifecycleService(database, provider)
+    key = SandboxKey(WorkloadKind.WORKSPACE, uuid4())
+    deadline = datetime.now(timezone.utc) + timedelta(seconds=30)
+
+    active = await service.ensure(
+        key,
+        profile(),
+        admission_class=AdmissionClass.INTERACTIVE,
+        deadline_at=deadline,
+    )
+
+    async with database.uow() as uow:
+        with pytest.raises(AgentBoxError) as raised:
+            await uow.repository.bind_workspace_storage(
+                key,
+                provider_storage_id="sandbox-other",
+                allocation_id=uuid4(),
+            )
+    assert raised.value.code == ErrorCode.OPERATION_CONFLICT
+    assert active.ready is True
 
 
 async def test_profile_change_replaces_and_fences_allocation(
