@@ -665,15 +665,16 @@ def _log_operation_terminal(
 ) -> None:
     from agentbox.observability import get_logger
 
-    fields: dict[str, Any] = {
-        **attributes,
-        "outcome": outcome,
-        "duration_ms": round(duration_ms, 1),
-    }
+    bounded_duration_ms = round(duration_ms, 1)
     if outcome == "success":
         get_logger("agentbox.lifecycle").info(
             "agentbox.operation.completed",
-            **fields,
+            operation=attributes["operation"],
+            workload_kind=attributes["workload_kind"],
+            provider=attributes["provider"],
+            profile=attributes["profile"],
+            outcome=outcome,
+            duration_ms=bounded_duration_ms,
         )
         return
 
@@ -689,24 +690,60 @@ def _log_operation_terminal(
             bounded_error_code,
         )
     )
-    fields.update(
-        {
-            "error_type": error_type,
-            "error_code": bounded_error_code,
-            "error_fingerprint": hashlib.sha256(
-                fingerprint_source.encode()
-            ).hexdigest(),
-        }
-    )
+    error_fingerprint = hashlib.sha256(fingerprint_source.encode()).hexdigest()
     logger = get_logger("agentbox.lifecycle")
     if outcome == "timeout":
-        logger.error("agentbox.operation.timed_out", **fields)
+        logger.error(
+            "agentbox.operation.timed_out",
+            operation=attributes["operation"],
+            workload_kind=attributes["workload_kind"],
+            provider=attributes["provider"],
+            profile=attributes["profile"],
+            outcome=outcome,
+            duration_ms=bounded_duration_ms,
+            error_type=error_type,
+            error_code=bounded_error_code,
+            error_fingerprint=error_fingerprint,
+        )
     elif outcome == "cancelled":
-        logger.warning("agentbox.operation.cancelled", **fields)
+        logger.warning(
+            "agentbox.operation.cancelled",
+            operation=attributes["operation"],
+            workload_kind=attributes["workload_kind"],
+            provider=attributes["provider"],
+            profile=attributes["profile"],
+            outcome=outcome,
+            duration_ms=bounded_duration_ms,
+            error_type=error_type,
+            error_code=bounded_error_code,
+            error_fingerprint=error_fingerprint,
+        )
     elif outcome == "rejected":
-        logger.warning("agentbox.operation.rejected", **fields)
+        logger.warning(
+            "agentbox.operation.rejected",
+            operation=attributes["operation"],
+            workload_kind=attributes["workload_kind"],
+            provider=attributes["provider"],
+            profile=attributes["profile"],
+            outcome=outcome,
+            duration_ms=bounded_duration_ms,
+            error_type=error_type,
+            error_code=bounded_error_code,
+            error_fingerprint=error_fingerprint,
+        )
     else:
-        logger.error("agentbox.operation.failed", **fields)
+        logger.error(
+            "agentbox.operation.failed",
+            operation=attributes["operation"],
+            workload_kind=attributes["workload_kind"],
+            provider=attributes["provider"],
+            profile=attributes["profile"],
+            outcome=outcome,
+            duration_ms=bounded_duration_ms,
+            error_type=error_type,
+            error_code=bounded_error_code,
+            error_fingerprint=error_fingerprint,
+        )
     if outcome in {"failure", "timeout"}:
         _terminal_operation_error_state.set(True)
 
@@ -721,17 +758,38 @@ def _log_control_terminal(
 ) -> None:
     from agentbox.observability import get_logger
 
-    logger = get_logger(f"agentbox.{operation}")
-    fields = {
-        "outcome": outcome,
-        "duration_ms": round(duration_ms, 1),
-        "count": max(0, count),
-    }
-    if outcome == "success":
-        logger.debug(f"agentbox.{operation}.completed", **fields)
+    duration_ms = round(duration_ms, 1)
+    count = max(0, count)
+    error_type = type(error).__name__ if error is not None else "UnknownError"
+    if operation == "cleanup" and outcome == "success":
+        get_logger("agentbox.cleanup").debug(
+            "agentbox.cleanup.completed",
+            outcome=outcome,
+            duration_ms=duration_ms,
+            count=count,
+        )
         return
-    logger.warning(
-        f"agentbox.{operation}.failed",
-        **fields,
-        error_type=type(error).__name__ if error is not None else "UnknownError",
+    if operation == "cleanup":
+        get_logger("agentbox.cleanup").warning(
+            "agentbox.cleanup.failed",
+            outcome=outcome,
+            duration_ms=duration_ms,
+            count=count,
+            error_type=error_type,
+        )
+        return
+    if operation == "reconcile" and outcome == "success":
+        get_logger("agentbox.reconcile").debug(
+            "agentbox.reconcile.completed",
+            outcome=outcome,
+            duration_ms=duration_ms,
+            count=count,
+        )
+        return
+    get_logger("agentbox.reconcile").warning(
+        "agentbox.reconcile.failed",
+        outcome=outcome,
+        duration_ms=duration_ms,
+        count=count,
+        error_type=error_type,
     )
