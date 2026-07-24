@@ -408,6 +408,12 @@ Start menu. The app reuses the complete verified runtime without contacting the
 artifact host. The manifest override is required again only for repair or a
 different unpublished runtime version.
 
+For a true clean-machine Finder test, use the self-contained
+`lemma-desktop-macos-offline-test-<commit>` DMG produced by the same branch
+workflow. It embeds the exact verified runtime, needs no environment variables,
+and does not depend on unpublished release URLs. Its approximately 3 GiB
+installed size is deliberate and limited to branch acceptance testing.
+
 ### Windows asks for setup or restart
 
 Select **Set up Windows runtime**, approve the one-time Windows prompt, and

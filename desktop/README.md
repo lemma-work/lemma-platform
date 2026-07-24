@@ -153,24 +153,48 @@ mode it:
   `test-<12-character-commit>` rather than changing release or `latest` tags;
 - builds both native host packs and managed guest runtimes;
 - uploads `lemma-local-test-<commit>` for 14 days;
+- uploads `lemma-desktop-macos-offline-test-<commit>`, a self-contained,
+  ad-hoc-signed DMG that installs from Finder with no Terminal configuration;
 - does not create or modify a GitHub Release.
 
 Branch-test Windows host packs are intentionally unsigned because pull requests
 cannot access release signing credentials. Published Windows runtimes still
 require Authenticode signing and timestamp verification.
 
-For the current `0.6.2` desktop:
+For the current `0.6.2` desktop, first run the protected E2E workflow for the
+branch head, then dispatch the test artifact workflow:
 
 ```sh
 branch=codex/local-desktop-redesign
 sha="$(git rev-parse HEAD)"
 
+gh workflow run backend-protected-e2e.yml --ref "${branch}"
+# Wait for that exact commit-linked run to pass.
+
 gh workflow run release-local-images.yml \
   --ref "${branch}" \
   -f version=0.6.2 \
   -f publish=false
+```
 
-# After the two workflows are green, substitute their run IDs.
+# After the artifact workflow is green, the simplest fresh-Mac test is:
+
+```sh
+gh run download <runtime-run-id> \
+  -n "lemma-desktop-macos-offline-test-${sha}" \
+  -D /tmp/lemma-pr/desktop
+```
+
+Open the downloaded DMG, copy Lemma to Applications, and open it normally.
+That test package intentionally occupies roughly 3 GiB after installation
+because it embeds the exact native and private-VM runtimes. It is for
+unreleased-branch acceptance testing; the normal released app remains the small
+online installer.
+
+To test the online downloader itself before release publication, download both
+the small CI DMG and the branch runtime bundle:
+
+```sh
 gh run download <runtime-run-id> \
   -n "lemma-local-test-${sha}" \
   -D /tmp/lemma-pr/runtime
@@ -182,8 +206,8 @@ python scripts/prepare_desktop_test_runtime.py \
   --artifacts-dir /tmp/lemma-pr/runtime
 ```
 
-Open the downloaded DMG, copy Lemma to Applications, quit any older Lemma
-process, and launch its executable with the localized manifest:
+Open that CI DMG, copy Lemma to Applications, quit any older Lemma process, and
+launch its executable with the localized manifest:
 
 ```sh
 LEMMA_DESKTOP_CONNECTION_MODE=local \

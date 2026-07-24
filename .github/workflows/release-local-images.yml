@@ -725,3 +725,162 @@ jobs:
             guest-runtimes/lemma-guest-runtime-*.zip
           if-no-files-found: error
           retention-days: 14
+
+      - name: Upload branch-test manifest for Desktop packaging
+        if: github.event_name == 'workflow_dispatch' && !inputs.publish
+        uses: actions/upload-artifact@v4
+        with:
+          name: lemma-local-test-manifest-${{ github.sha }}
+          path: lemma-local.json
+          if-no-files-found: error
+          retention-days: 1
+
+  macos-test-desktop:
+    name: Package self-contained macOS test app
+    if: github.event_name == 'workflow_dispatch' && !inputs.publish
+    runs-on: macos-14
+    needs: manifest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v7
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v5
+        with:
+          node-version: 22
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache cargo
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            desktop/target
+          key: desktop-test-cargo-${{ runner.os }}-${{ hashFiles('desktop/Cargo.lock') }}
+          restore-keys: desktop-test-cargo-${{ runner.os }}-
+
+      - name: Download macOS native host pack
+        uses: actions/download-artifact@v8
+        with:
+          name: host-pack-aarch64-apple-darwin
+          path: desktop/runtime/download
+
+      - name: Download macOS managed guest runtime
+        uses: actions/download-artifact@v8
+        with:
+          name: guest-runtime-macos-aarch64
+          path: desktop/runtime/download
+
+      - name: Download exact branch-test manifest
+        uses: actions/download-artifact@v8
+        with:
+          name: lemma-local-test-manifest-${{ github.sha }}
+          path: desktop/runtime/download
+
+      - name: Verify and stage self-contained runtime
+        shell: bash
+        env:
+          VERSION: ${{ inputs.version }}
+          TARGET: aarch64-apple-darwin
+          GUEST_TARGET: macos-aarch64
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import hashlib
+          import json
+          import os
+          from pathlib import Path
+
+          root = Path("desktop/runtime/download")
+          manifest = json.loads((root / "lemma-local.json").read_text())
+          version = os.environ["VERSION"].removeprefix("v")
+          if manifest["version"] != version:
+              raise SystemExit("branch-test manifest version does not match Desktop")
+          for group, prefix, target in (
+              ("host_packs", "lemma-host-pack", os.environ["TARGET"]),
+              ("guest_runtimes", "lemma-guest-runtime", os.environ["GUEST_TARGET"]),
+          ):
+              archive = root / f"{prefix}-{target}.zip"
+              expected = manifest[group][target]
+              actual = hashlib.sha256(archive.read_bytes()).hexdigest()
+              if archive.stat().st_size != expected["size"] or actual != expected["sha256"]:
+                  raise SystemExit(f"{archive.name} digest/size mismatch")
+          PY
+
+          ditto -x -k \
+            "desktop/runtime/download/lemma-host-pack-${TARGET}.zip" \
+            desktop/runtime
+          mkdir -p desktop/runtime/managed-runtime
+          ditto -x -k \
+            "desktop/runtime/download/lemma-guest-runtime-${GUEST_TARGET}.zip" \
+            desktop/runtime/managed-runtime
+
+          test -f desktop/runtime/local-runtime/release.json
+          test -x desktop/runtime/local-runtime/backend/python/bin/python3
+          test -x desktop/runtime/local-runtime/frontend/node/bin/node
+          test -f desktop/runtime/managed-runtime/macos-aarch64/runtime.json
+          test -f desktop/runtime/managed-runtime/macos-aarch64/vmlinuz
+          test -f desktop/runtime/managed-runtime/macos-aarch64/initrd
+          test -f desktop/runtime/managed-runtime/macos-aarch64/disk.raw
+
+      - name: Bake splash concepts
+        run: node desktop/scripts/extract-concepts.mjs
+
+      - name: Verify baked splash concepts are committed
+        run: git diff --exit-code desktop/ui/concepts.gen.json
+
+      - name: Build native local sidecars
+        run: desktop/scripts/build-sidecar.sh
+
+      - name: Run Desktop tests
+        working-directory: desktop
+        run: cargo test --locked
+
+      - name: Sign virtualization helper with test entitlement
+        shell: bash
+        run: |
+          set -euo pipefail
+          helper="desktop/binaries/lemma-vz-aarch64-apple-darwin"
+          codesign --force --options runtime \
+            --entitlements desktop/entitlements.plist \
+            --sign - \
+            "${helper}"
+          codesign --verify --strict --verbose=2 "${helper}"
+          codesign -d --entitlements :- "${helper}" 2>&1 \
+            | grep -F "com.apple.security.virtualization"
+
+      - name: Build self-contained macOS test DMG
+        working-directory: desktop
+        env:
+          APPLE_SIGNING_IDENTITY: "-"
+        run: |
+          set -euo pipefail
+          npx -y @tauri-apps/cli@2.11.4 build --config tauri.dist.conf.json
+
+      - name: Verify self-contained test application
+        shell: bash
+        run: |
+          set -euo pipefail
+          app="desktop/target/release/bundle/macos/Lemma.app"
+          test -x "${app}/Contents/MacOS/lemma-locald"
+          test -x "${app}/Contents/MacOS/lemma-runtime"
+          test -x "${app}/Contents/Resources/lemma-vz"
+          test -f "${app}/Contents/Resources/local-runtime/release.json"
+          test -f "${app}/Contents/Resources/managed-runtime/macos-aarch64/runtime.json"
+          codesign --verify --deep --strict --verbose=2 "${app}"
+          codesign -d --entitlements :- \
+            "${app}/Contents/Resources/lemma-vz" 2>&1 \
+            | grep -F "com.apple.security.virtualization"
+          test "$(jq -r .version "${app}/Contents/Resources/local-runtime/release.json")" = \
+            "$(jq -r .version desktop/tauri.conf.json)"
+
+      - name: Upload self-contained macOS test DMG
+        uses: actions/upload-artifact@v4
+        with:
+          name: lemma-desktop-macos-offline-test-${{ github.sha }}
+          path: desktop/target/release/bundle/dmg/Lemma_*_aarch64.dmg
+          if-no-files-found: error
+          retention-days: 14
