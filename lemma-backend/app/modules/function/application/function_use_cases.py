@@ -32,6 +32,7 @@ from app.modules.function.application.function_definition_compiler import (
 from app.modules.function.application.function_observability import (
     function_span,
     mark_span_outcome,
+    observe_function_phase,
 )
 from app.modules.function.domain.entities import (
     FunctionDispatchMode,
@@ -509,25 +510,15 @@ class FunctionUseCases:
         if function.type == FunctionType.JOB:
             return await self._enqueue_run(run)
         del function, user_email, run_as_workload
-        with function_span(
+        with observe_function_phase(
             "function.execution.accepted",
             execution_mode="synchronous",
             runtime_profile=settings.agentbox_function_profile_name,
-        ) as span:
-            try:
-                result = await self._dispatcher.execute(
-                    run.id,
-                    mode=FunctionDispatchMode.SYNCHRONOUS,
-                )
-            except BaseException as exc:
-                mark_span_outcome(
-                    span,
-                    "failed",
-                    error_type=type(exc).__name__,
-                )
-                raise
-            mark_span_outcome(span, "completed")
-            return result
+        ):
+            return await self._dispatcher.execute(
+                run.id,
+                mode=FunctionDispatchMode.SYNCHRONOUS,
+            )
 
     async def _enqueue_run(self, run: FunctionRunEntity) -> FunctionRunEntity:
         """Best-effort fast publish backed by durable pending-run reconciliation.

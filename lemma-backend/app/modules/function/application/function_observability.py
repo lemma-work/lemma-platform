@@ -2,14 +2,20 @@
 
 from __future__ import annotations
 
+import asyncio
 from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import datetime
 import hashlib
+import re
+import time
 from typing import Iterator, Literal
 
+import httpx
 from opentelemetry import metrics, trace
 from opentelemetry.trace import Span, SpanKind, Status, StatusCode
+
+from agentbox_client import AgentBoxApiError, RetryDisposition
 
 from app.core.log.log import get_logger
 from app.modules.function.domain.entities import FunctionRunEntity
@@ -149,6 +155,73 @@ def mark_span_outcome(
         span.set_status(Status(StatusCode.ERROR, error_type or outcome))
 
 
+def exception_outcome(
+    exc: Exception | asyncio.CancelledError,
+) -> FunctionOutcome:
+    if isinstance(exc, asyncio.CancelledError):
+        return "cancelled"
+    if isinstance(exc, TimeoutError):
+        return "timed_out"
+    if isinstance(exc, AgentBoxApiError) and exc.retry not in {
+        RetryDisposition.WAIT,
+        RetryDisposition.SAFE_SAME_OPERATION,
+    }:
+        return "rejected"
+    if isinstance(exc, httpx.HTTPStatusError) and 400 <= exc.response.status_code < 500:
+        return "rejected"
+    return "failed"
+
+
+def exception_error_code(
+    exc: Exception | asyncio.CancelledError,
+) -> str | None:
+    if isinstance(exc, AgentBoxApiError):
+        code = str(getattr(exc, "code", "PROVIDER_UNAVAILABLE"))
+        return code if re.fullmatch(r"[A-Z0-9_.-]{1,64}", code) else None
+    if isinstance(exc, httpx.HTTPStatusError):
+        return str(exc.response.status_code)
+    return None
+
+
+@contextmanager
+def observe_function_phase(
+    name: str,
+    *,
+    execution_mode: str,
+    runtime_profile: str,
+    phases: FunctionPhaseTimings | None = None,
+    duration_field: Literal["sandbox_start_ms", "runtime_call_ms"] | None = None,
+    kind: SpanKind = SpanKind.INTERNAL,
+) -> Iterator[None]:
+    """Observe one phase and preserve its elapsed time even when it fails."""
+
+    started = time.perf_counter()
+    with function_span(
+        name,
+        execution_mode=execution_mode,
+        runtime_profile=runtime_profile,
+        kind=kind,
+    ) as span:
+        try:
+            yield
+        except (Exception, asyncio.CancelledError) as exc:
+            mark_span_outcome(
+                span,
+                exception_outcome(exc),
+                error_type=type(exc).__name__,
+            )
+            raise
+        else:
+            mark_span_outcome(span, "completed")
+        finally:
+            if phases is not None and duration_field is not None:
+                setattr(
+                    phases,
+                    duration_field,
+                    round((time.perf_counter() - started) * 1000, 3),
+                )
+
+
 def record_active(
     delta: int,
     *,
@@ -162,6 +235,38 @@ def record_active(
             runtime_profile=runtime_profile,
         ),
     )
+
+
+def _record_terminal_metrics(
+    *,
+    total_ms: float | None,
+    phases: FunctionPhaseTimings,
+    attributes: dict[str, str | bool],
+) -> None:
+    function_executions.add(1, attributes)
+    if total_ms is not None:
+        function_end_to_end_duration.record(total_ms, attributes)
+    if phases.queue_wait_ms is not None:
+        function_queue_wait_duration.record(max(0.0, phases.queue_wait_ms), attributes)
+    if phases.sandbox_start_ms is not None:
+        function_sandbox_start_duration.record(
+            max(0.0, phases.sandbox_start_ms), attributes
+        )
+    if phases.runtime_call_ms is not None:
+        function_runtime_duration.record(max(0.0, phases.runtime_call_ms), attributes)
+
+
+def _error_fingerprint(
+    *,
+    outcome: FunctionOutcome,
+    error_type: str | None,
+    error_code: str | None,
+) -> str | None:
+    if error_type is None:
+        return None
+    return hashlib.sha256(
+        f"{outcome}:{error_type}:{error_code or ''}".encode()
+    ).hexdigest()
 
 
 def record_terminal(
@@ -183,119 +288,113 @@ def record_terminal(
         outcome=outcome,
         cold=phases.cold,
     )
-    function_executions.add(1, metric_attributes)
-    if total_ms is not None:
-        function_end_to_end_duration.record(total_ms, metric_attributes)
-    if phases.queue_wait_ms is not None:
-        function_queue_wait_duration.record(
-            max(0.0, phases.queue_wait_ms), metric_attributes
-        )
-    if phases.sandbox_start_ms is not None:
-        function_sandbox_start_duration.record(
-            max(0.0, phases.sandbox_start_ms), metric_attributes
-        )
-    if phases.runtime_call_ms is not None:
-        function_runtime_duration.record(
-            max(0.0, phases.runtime_call_ms), metric_attributes
-        )
+    _record_terminal_metrics(
+        total_ms=total_ms,
+        phases=phases,
+        attributes=metric_attributes,
+    )
+    run_id = str(run.id) if run.id is not None else None
+    fingerprint = _error_fingerprint(
+        outcome=outcome,
+        error_type=error_type,
+        error_code=error_code,
+    )
 
-    fingerprint = None
-    if error_type is not None:
-        fingerprint = hashlib.sha256(
-            f"{outcome}:{error_type}:{error_code or ''}".encode()
-        ).hexdigest()
-    if outcome == "completed":
-        logger.info(
-            "function.execution.completed",
-            run_id=str(run.id) if run.id is not None else None,
-            function_id=str(run.function_id),
-            operation_name="function.execute",
-            outcome=outcome,
-            duration_ms=total_ms,
-            queue_wait_ms=phases.queue_wait_ms,
-            sandbox_start_ms=phases.sandbox_start_ms,
-            runtime_call_ms=phases.runtime_call_ms,
-            finalization_ms=phases.finalization_ms,
-            execution_mode=execution_mode.lower(),
-            runtime_profile=runtime_profile,
-            cold=phases.cold,
-            error_type=error_type,
-            error_code=error_code,
-            error_stack_hash=fingerprint,
-        )
-    elif outcome == "failed":
-        logger.error(
-            "function.execution.failed",
-            run_id=str(run.id) if run.id is not None else None,
-            function_id=str(run.function_id),
-            operation_name="function.execute",
-            outcome=outcome,
-            duration_ms=total_ms,
-            queue_wait_ms=phases.queue_wait_ms,
-            sandbox_start_ms=phases.sandbox_start_ms,
-            runtime_call_ms=phases.runtime_call_ms,
-            finalization_ms=phases.finalization_ms,
-            execution_mode=execution_mode.lower(),
-            runtime_profile=runtime_profile,
-            cold=phases.cold,
-            error_type=error_type,
-            error_code=error_code,
-            error_stack_hash=fingerprint,
-        )
-    elif outcome == "timed_out":
-        logger.warning(
-            "function.execution.timed_out",
-            run_id=str(run.id) if run.id is not None else None,
-            function_id=str(run.function_id),
-            operation_name="function.execute",
-            outcome=outcome,
-            duration_ms=total_ms,
-            queue_wait_ms=phases.queue_wait_ms,
-            sandbox_start_ms=phases.sandbox_start_ms,
-            runtime_call_ms=phases.runtime_call_ms,
-            finalization_ms=phases.finalization_ms,
-            execution_mode=execution_mode.lower(),
-            runtime_profile=runtime_profile,
-            cold=phases.cold,
-            error_type=error_type,
-            error_code=error_code,
-            error_stack_hash=fingerprint,
-        )
-    elif outcome == "cancelled":
-        logger.info(
-            "function.execution.cancelled",
-            run_id=str(run.id) if run.id is not None else None,
-            function_id=str(run.function_id),
-            operation_name="function.execute",
-            outcome=outcome,
-            duration_ms=total_ms,
-            queue_wait_ms=phases.queue_wait_ms,
-            sandbox_start_ms=phases.sandbox_start_ms,
-            runtime_call_ms=phases.runtime_call_ms,
-            finalization_ms=phases.finalization_ms,
-            execution_mode=execution_mode.lower(),
-            runtime_profile=runtime_profile,
-            cold=phases.cold,
-            error_type=error_type,
-            error_code=error_code,
-            error_stack_hash=fingerprint,
-        )
-    else:
-        logger.warning(
-            "function.execution.rejected",
-            run_id=str(run.id) if run.id is not None else None,
-            function_id=str(run.function_id),
-            operation_name="function.execute",
-            outcome=outcome,
-            duration_ms=total_ms,
-            queue_wait_ms=phases.queue_wait_ms,
-            sandbox_start_ms=phases.sandbox_start_ms,
-            runtime_call_ms=phases.runtime_call_ms,
-            finalization_ms=phases.finalization_ms,
-            execution_mode=execution_mode.lower(),
-            runtime_profile=runtime_profile,
-            cold=phases.cold,
-            error_type=error_type,
-            error_code=error_code,
-            error_stack_hash=fingerprint,
-        )
+    # Literal event/level pairs keep the exact logging contract statically
+    # reviewable while ``match`` makes the outcome mapping explicit.
+    match outcome:
+        case "completed":
+            logger.info(
+                "function.execution.completed",
+                run_id=run_id,
+                function_id=str(run.function_id),
+                operation_name="function.execute",
+                outcome=outcome,
+                duration_ms=total_ms,
+                queue_wait_ms=phases.queue_wait_ms,
+                sandbox_start_ms=phases.sandbox_start_ms,
+                runtime_call_ms=phases.runtime_call_ms,
+                finalization_ms=phases.finalization_ms,
+                execution_mode=execution_mode.lower(),
+                runtime_profile=runtime_profile,
+                cold=phases.cold,
+                error_type=error_type,
+                error_code=error_code,
+                error_stack_hash=fingerprint,
+            )
+        case "failed":
+            logger.error(
+                "function.execution.failed",
+                run_id=run_id,
+                function_id=str(run.function_id),
+                operation_name="function.execute",
+                outcome=outcome,
+                duration_ms=total_ms,
+                queue_wait_ms=phases.queue_wait_ms,
+                sandbox_start_ms=phases.sandbox_start_ms,
+                runtime_call_ms=phases.runtime_call_ms,
+                finalization_ms=phases.finalization_ms,
+                execution_mode=execution_mode.lower(),
+                runtime_profile=runtime_profile,
+                cold=phases.cold,
+                error_type=error_type,
+                error_code=error_code,
+                error_stack_hash=fingerprint,
+            )
+        case "timed_out":
+            logger.warning(
+                "function.execution.timed_out",
+                run_id=run_id,
+                function_id=str(run.function_id),
+                operation_name="function.execute",
+                outcome=outcome,
+                duration_ms=total_ms,
+                queue_wait_ms=phases.queue_wait_ms,
+                sandbox_start_ms=phases.sandbox_start_ms,
+                runtime_call_ms=phases.runtime_call_ms,
+                finalization_ms=phases.finalization_ms,
+                execution_mode=execution_mode.lower(),
+                runtime_profile=runtime_profile,
+                cold=phases.cold,
+                error_type=error_type,
+                error_code=error_code,
+                error_stack_hash=fingerprint,
+            )
+        case "cancelled":
+            logger.info(
+                "function.execution.cancelled",
+                run_id=run_id,
+                function_id=str(run.function_id),
+                operation_name="function.execute",
+                outcome=outcome,
+                duration_ms=total_ms,
+                queue_wait_ms=phases.queue_wait_ms,
+                sandbox_start_ms=phases.sandbox_start_ms,
+                runtime_call_ms=phases.runtime_call_ms,
+                finalization_ms=phases.finalization_ms,
+                execution_mode=execution_mode.lower(),
+                runtime_profile=runtime_profile,
+                cold=phases.cold,
+                error_type=error_type,
+                error_code=error_code,
+                error_stack_hash=fingerprint,
+            )
+        case "rejected":
+            logger.warning(
+                "function.execution.rejected",
+                run_id=run_id,
+                function_id=str(run.function_id),
+                operation_name="function.execute",
+                outcome=outcome,
+                duration_ms=total_ms,
+                queue_wait_ms=phases.queue_wait_ms,
+                sandbox_start_ms=phases.sandbox_start_ms,
+                runtime_call_ms=phases.runtime_call_ms,
+                finalization_ms=phases.finalization_ms,
+                execution_mode=execution_mode.lower(),
+                runtime_profile=runtime_profile,
+                cold=phases.cold,
+                error_type=error_type,
+                error_code=error_code,
+                error_stack_hash=fingerprint,
+            )

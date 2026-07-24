@@ -1,8 +1,11 @@
 from __future__ import annotations
 
+import asyncio
 from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
 from uuid import uuid4
+
+import pytest
 
 from app.modules.function.application import function_observability as observability
 from app.modules.function.application.function_observability import (
@@ -20,6 +23,34 @@ class _Instrument:
 
     def record(self, value, attributes) -> None:
         self.measurements.append((value, attributes))
+
+
+def test_phase_observation_records_failed_elapsed_time(monkeypatch) -> None:
+    timings = iter((10.0, 10.125))
+    outcomes: list[tuple[str, str | None]] = []
+    monkeypatch.setattr(observability.time, "perf_counter", lambda: next(timings))
+    monkeypatch.setattr(
+        observability,
+        "mark_span_outcome",
+        lambda _span, outcome, *, error_type=None: outcomes.append(
+            (outcome, error_type)
+        ),
+    )
+    phases = FunctionPhaseTimings()
+
+    with pytest.raises(TimeoutError):
+        with observability.observe_function_phase(
+            "function.runtime.call",
+            execution_mode="synchronous",
+            runtime_profile="function-python-v1",
+            phases=phases,
+            duration_field="runtime_call_ms",
+        ):
+            raise TimeoutError
+
+    assert phases.runtime_call_ms == 125
+    assert outcomes == [("timed_out", "TimeoutError")]
+    assert observability.exception_outcome(asyncio.CancelledError()) == "cancelled"
 
 
 def test_terminal_observation_records_bounded_metrics_and_phase_durations(

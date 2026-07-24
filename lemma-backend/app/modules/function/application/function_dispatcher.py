@@ -4,10 +4,7 @@ from __future__ import annotations
 
 import asyncio
 from collections.abc import Awaitable, Callable
-from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
-import time
-import re
 from urllib.parse import urljoin, urlparse
 from uuid import UUID
 
@@ -32,11 +29,11 @@ from app.modules.function.application.function_callback_credentials import (
     FunctionCallbackCredentialSigner,
 )
 from app.modules.function.application.function_observability import (
-    FunctionOutcome,
     FunctionPhaseTimings,
     duration_ms,
-    function_span,
-    mark_span_outcome,
+    exception_error_code,
+    exception_outcome,
+    observe_function_phase,
     record_active,
     record_terminal,
 )
@@ -79,13 +76,6 @@ RuntimeHttpClientFactory = Callable[[], httpx.AsyncClient]
 TokenMinter = Callable[..., Awaitable[str]]
 
 
-@dataclass(slots=True)
-class FunctionDispatchTimings:
-    queue_wait_ms: float | None = None
-    sandbox_start_ms: float | None = None
-    runtime_call_ms: float | None = None
-
-
 class FunctionDispatcher:
     """Resolve one persisted run, execute externally, then read terminal state.
 
@@ -124,7 +114,7 @@ class FunctionDispatcher:
         *,
         mode: FunctionDispatchMode,
     ) -> FunctionRunEntity:
-        phase_timings = FunctionDispatchTimings()
+        phase_timings = FunctionPhaseTimings()
         dispatch = await self._resolve_dispatch(run_id, mode=mode)
         if isinstance(dispatch, FunctionRunEntity):
             return dispatch
@@ -144,60 +134,32 @@ class FunctionDispatcher:
             self._function_session_token(dispatch)
         )
         try:
-            phase_started = time.perf_counter()
-            try:
-                with function_span(
-                    "function.agentbox.admission",
-                    execution_mode=execution_mode,
-                    runtime_profile=runtime_profile,
-                ) as sandbox_span:
-                    try:
-                        endpoint = await self._runtime_endpoint(dispatch)
-                    except BaseException as exc:
-                        mark_span_outcome(
-                            sandbox_span,
-                            self._exception_outcome(exc),
-                            error_type=type(exc).__name__,
-                        )
-                        raise
-                    else:
-                        mark_span_outcome(sandbox_span, "completed")
-            finally:
-                phase_timings.sandbox_start_ms = self._elapsed_ms(phase_started)
+            with observe_function_phase(
+                "function.agentbox.admission",
+                execution_mode=execution_mode,
+                runtime_profile=runtime_profile,
+                phases=phase_timings,
+                duration_field="sandbox_start_ms",
+            ):
+                endpoint = await self._runtime_endpoint(dispatch)
             function_token = await function_token_task
-            phase_started = time.perf_counter()
-            try:
-                with function_span(
-                    "function.runtime.call",
-                    execution_mode=execution_mode,
-                    runtime_profile=runtime_profile,
-                    kind=SpanKind.CLIENT,
-                ) as runtime_span:
-                    try:
-                        runtime_response = await self._invoke_runtime(
-                            dispatch,
-                            endpoint=endpoint,
-                            function_token=function_token,
-                            phase_timings=phase_timings,
-                        )
-                    except BaseException as exc:
-                        mark_span_outcome(
-                            runtime_span,
-                            self._exception_outcome(exc),
-                            error_type=type(exc).__name__,
-                        )
-                        raise
-                    else:
-                        mark_span_outcome(runtime_span, "completed")
-            finally:
-                phase_timings.runtime_call_ms = self._elapsed_ms(phase_started)
-            if isinstance(runtime_response, RuntimeAcceptedResponse):
-                # The resident runtime returns 202 only after its backend claim
-                # committed PENDING -> RUNNING. Long JOB/deferred execution then
-                # belongs to the runtime callback, not to a backend worker poll.
-                result = await self._load_run(dispatch.run_id)
-            else:
-                result = await self._load_run(dispatch.run_id)
+            with observe_function_phase(
+                "function.runtime.call",
+                execution_mode=execution_mode,
+                runtime_profile=runtime_profile,
+                phases=phase_timings,
+                duration_field="runtime_call_ms",
+                kind=SpanKind.CLIENT,
+            ):
+                await self._invoke_runtime(
+                    dispatch,
+                    endpoint=endpoint,
+                    function_token=function_token,
+                    phase_timings=phase_timings,
+                )
+            # A 202 is returned only after the runtime's durable claim commits.
+            # Deferred completion then belongs to its callback, not worker polls.
+            result = await self._load_run(dispatch.run_id)
             if (
                 dispatch.mode == FunctionDispatchMode.SYNCHRONOUS
                 and result.status not in _TERMINAL_RUN_STATES
@@ -206,7 +168,7 @@ class FunctionDispatcher:
                     "function runtime returned before durable terminal state"
                 )
             return result
-        except BaseException as exc:
+        except (Exception, asyncio.CancelledError) as exc:
             if isinstance(exc, asyncio.CancelledError):
                 await self._best_effort_cancel(dispatch)
                 async with self._uow_factory() as uow:
@@ -223,7 +185,7 @@ class FunctionDispatcher:
                         outcome="cancelled",
                         execution_mode=execution_mode,
                         runtime_profile=runtime_profile,
-                        phases=self._observability_phases(phase_timings),
+                        phases=phase_timings,
                         error_type=type(exc).__name__,
                     )
                 raise
@@ -240,15 +202,15 @@ class FunctionDispatcher:
             if failed is None:
                 failed = await self._load_run(run_id)
             if transitioned and failed.status == FunctionRunStatus.FAILED:
-                outcome = self._exception_outcome(exc)
+                outcome = exception_outcome(exc)
                 record_terminal(
                     failed,
                     outcome=outcome,
                     execution_mode=execution_mode,
                     runtime_profile=runtime_profile,
-                    phases=self._observability_phases(phase_timings),
+                    phases=phase_timings,
                     error_type=type(exc).__name__,
-                    error_code=self._error_code(exc),
+                    error_code=exception_error_code(exc),
                 )
             return failed
         finally:
@@ -395,7 +357,7 @@ class FunctionDispatcher:
         *,
         endpoint: FunctionRuntimeEndpoint,
         function_token: str,
-        phase_timings: FunctionDispatchTimings,
+        phase_timings: FunctionPhaseTimings,
     ) -> RuntimeTerminalRequest | RuntimeAcceptedResponse:
         remaining = (dispatch.deadline_at - self._now()).total_seconds()
         if remaining <= 0:
@@ -605,7 +567,7 @@ class FunctionDispatcher:
         return f"Bearer {self._signer.derive(run_id)}"
 
     @staticmethod
-    def _execution_error(exc: BaseException) -> str:
+    def _execution_error(exc: Exception | asyncio.CancelledError) -> str:
         if isinstance(exc, InvocationOutcomeUnconfirmed):
             return "Function execution failed because the runtime response was not confirmed"
         if isinstance(exc, TimeoutError):
@@ -614,44 +576,6 @@ class FunctionDispatcher:
             code = str(getattr(exc, "code", "PROVIDER_UNAVAILABLE"))
             return f"Function sandbox error ({redact_text(code)})"
         return "Function execution failed"
-
-    @staticmethod
-    def _elapsed_ms(started: float) -> float:
-        return round((time.perf_counter() - started) * 1000, 3)
-
-    @staticmethod
-    def _exception_outcome(exc: BaseException) -> FunctionOutcome:
-        if isinstance(exc, asyncio.CancelledError):
-            return "cancelled"
-        if isinstance(exc, TimeoutError):
-            return "timed_out"
-        if isinstance(exc, AgentBoxApiError) and exc.retry not in {
-            RetryDisposition.WAIT,
-            RetryDisposition.SAFE_SAME_OPERATION,
-        }:
-            return "rejected"
-        if isinstance(exc, httpx.HTTPStatusError) and 400 <= exc.response.status_code < 500:
-            return "rejected"
-        return "failed"
-
-    @staticmethod
-    def _error_code(exc: BaseException) -> str | None:
-        if isinstance(exc, AgentBoxApiError):
-            code = str(getattr(exc, "code", "PROVIDER_UNAVAILABLE"))
-            return code if re.fullmatch(r"[A-Z0-9_.-]{1,64}", code) else None
-        if isinstance(exc, httpx.HTTPStatusError):
-            return str(exc.response.status_code)
-        return None
-
-    @staticmethod
-    def _observability_phases(
-        phases: FunctionDispatchTimings,
-    ) -> FunctionPhaseTimings:
-        return FunctionPhaseTimings(
-            queue_wait_ms=phases.queue_wait_ms,
-            sandbox_start_ms=phases.sandbox_start_ms,
-            runtime_call_ms=phases.runtime_call_ms,
-        )
 
 
 class InvocationOutcomeUnconfirmed(RuntimeError):
