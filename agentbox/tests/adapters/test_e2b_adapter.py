@@ -11,7 +11,11 @@ from e2b.sandbox.filesystem.filesystem import EntryInfo, FileType
 import pytest
 import pytest_asyncio
 
-from agentbox.adapters.e2b import E2BAdapterConfig, E2BSandboxAdapter
+from agentbox.adapters.e2b import (
+    E2BAdapterConfig,
+    E2BSandboxAdapter,
+    _ProcessBuffer,
+)
 from agentbox.domain import (
     AdmissionClass,
     ByteRange,
@@ -19,6 +23,7 @@ from agentbox.domain import (
     EnvironmentVariable,
     ExecutePythonRequest,
     PortProtocol,
+    ProcessOutputChannel,
     ProcessState,
     PythonExecutionState,
     SandboxCapability,
@@ -38,6 +43,34 @@ from agentbox.python_sessions import PythonSessionService
 
 
 pytestmark = pytest.mark.asyncio
+
+
+async def test_terminal_result_reconciles_output_before_completion() -> None:
+    buffer = _ProcessBuffer(output_limit_bytes=65_536)
+    await buffer.append(ProcessOutputChannel.STDOUT, "first\n")
+
+    await buffer.complete(
+        ProcessState.SUCCEEDED,
+        0,
+        stdout="first\nlast\n",
+        stderr="warning\n",
+    )
+    # A callback delivered after handle.wait() must not duplicate the
+    # authoritative terminal result.
+    await buffer.append(ProcessOutputChannel.STDOUT, "last\n")
+
+    assert buffer.state == ProcessState.SUCCEEDED
+    assert buffer.exit_code == 0
+    assert b"".join(
+        chunk.data
+        for chunk in buffer.chunks
+        if chunk.channel == ProcessOutputChannel.STDOUT
+    ) == b"first\nlast\n"
+    assert b"".join(
+        chunk.data
+        for chunk in buffer.chunks
+        if chunk.channel == ProcessOutputChannel.STDERR
+    ) == b"warning\n"
 
 
 @dataclass
