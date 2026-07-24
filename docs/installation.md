@@ -1,498 +1,285 @@
-# Install and run Lemma Local
+# Install and run Lemma locally
 
-This is the authoritative installation and operations guide for the managed
-local product. Lemma Desktop is the supported local installation on macOS and
-Windows. It owns the runtime, starts the application, stores secrets safely,
-and exposes the same controls through its UI and the optional `lemma-stack`
-CLI.
+Lemma Desktop is the supported local installation. It installs and operates
+Lemma without asking the user to install Docker, Podman, Homebrew, Python,
+Node.js, PostgreSQL, Redis, or a general-purpose VM manager.
 
-The normal path does **not** require Docker Desktop, Podman, Homebrew, Node.js,
-Python, a Linux distribution, or manual VM sizing.
+The signed application is a small online installer. On first local launch it
+downloads the exact host and private-guest runtime for that Desktop version,
+verifies their SHA-256 digests, extracts them into app-owned storage, and then
+starts Lemma. Infrastructure and AgentBox OCI images are also downloaded when
+first needed, so this release is not an air-gapped installer.
 
-## Choose a package
+## Supported systems
 
-Each Desktop release has two variants:
-
-| Package | Use it when | What happens on first local setup |
-| --- | --- | --- |
-| **Online** | The computer can reach the release download | The small signed app downloads the exact, digest-pinned host and guest runtime for its own version. This is the recommended package. |
-| **Offline** | The computer is air-gapped or runtime downloads are blocked | The complete host and guest runtime is already inside the installer. No runtime download is required. |
-
-The current macOS online app is about 10 MiB installed. The offline app is
-about 3 GiB installed because it includes the relocatable backend, frontend,
-and managed Linux runtime. The offline size is expected. Leave at least 10 GiB
-free for the installed runtime, writable database, files, and sandbox
-workspaces.
-
-Supported Desktop targets for this release are:
-
-| Platform | Minimum | Architecture | Managed runtime |
+| Platform | Minimum | Architecture | Private runtime |
 | --- | --- | --- | --- |
-| macOS | macOS 14 | Apple silicon | App-owned Virtualization.framework guest |
-| Windows | Windows 11 23H2 | x86-64 | Private `LemmaRuntime` WSL2 distribution |
+| macOS | macOS 14 | Apple silicon | Apple Virtualization.framework |
+| Windows | Windows 11 23H2 | x86-64 | Private WSL2 distribution |
 
-Intel Macs, Windows on Arm, and desktop Linux are not part of this release.
-The external Docker/Podman compatibility path remains available for Linux,
-development, and advanced migrations.
+Intel Macs, Windows on Arm, and Desktop Linux are not release targets yet.
 
-## Install on macOS
+Allow at least the expanded runtime size shown during setup plus 4 GiB of
+working headroom. The immutable host and guest runtimes are gated at 2.25 GiB
+combined; user databases, files, images, and AgentBox workspaces grow
+separately.
+
+## macOS installation
 
 1. Open the [latest Lemma release](https://github.com/lemma-work/lemma-platform/releases/latest).
-2. Download `Lemma_<version>_aarch64-online.dmg`, or the `offline` variant for
-   an air-gapped installation.
+2. Download `Lemma_<version>_aarch64-online.dmg`.
 3. Open the DMG and drag **Lemma** into **Applications**.
-4. Eject the DMG, then open `/Applications/Lemma.app`.
+4. Eject the DMG and open `/Applications/Lemma.app`.
+5. Choose **Local** and select **Install local services**.
 
-Do not keep running Lemma from the mounted installer. The CLI and repair flow
-look for the signed application in `/Applications` or your user Applications
-folder.
+Run Lemma from Applications, not from the mounted DMG. The public application
+contains only the Desktop shell, `lemma-locald`, native runtime helpers, and
+runtime metadata; CI rejects an installed public app larger than 25 MiB.
 
-The release DMG and nested runtime helpers are Developer ID signed, notarized,
-and stapled. Normal setup does not ask for administrator access.
-
-Pull-request DMGs produced by CI are ad-hoc signed and are for maintainers
-only. They are paired with a short-lived Actions runtime bundle rather than
-durable GitHub Release assets. Follow
-[the Desktop branch-test procedure](../desktop/README.md#test-an-unreleased-branch-end-to-end);
-do not treat that developer path as an end-user installation channel.
-
-## Install on Windows
+## Windows installation
 
 1. Open the [latest Lemma release](https://github.com/lemma-work/lemma-platform/releases/latest).
-2. Download `Lemma_<version>_x64-online-setup.exe`, or the `offline` variant for
-   an air-gapped installation.
+2. Download `Lemma_<version>_x64-online-setup.exe`.
 3. Run the signed installer and open Lemma.
+4. Choose **Local** and select **Install local services**.
 
-Lemma uses its own minimal WSL2 distribution; it does not install Ubuntu,
-Docker Desktop, or Podman, and it does not change the default WSL distribution
-or global `.wslconfig`.
+Lemma imports a private `LemmaRuntime` WSL2 distribution. It does not install
+Ubuntu, Docker Desktop, or Podman, and it does not change the default WSL
+distribution. If WSL2 features are unavailable, **Set up Windows runtime**
+requests elevation explicitly. Restart Windows if requested, then reopen
+Lemma; setup resumes.
 
-If WSL2 is unavailable, Lemma shows **Set up Windows runtime**. That separate,
-explicit action opens the Windows elevation prompt and enables the required
-WSL components. Windows may require one restart. Reopen Lemma after the
-restart and setup continues automatically.
+## First start and account creation
 
-## First local setup
+Setup reports the real stage being performed:
 
-The first launch asks where the workspace should run:
+1. Resolve and validate runtime metadata.
+2. Download the host runtime.
+3. Download the private guest runtime.
+4. Verify and extract both archives.
+5. Start the private runtime.
+6. Prepare infrastructure images.
+7. Start PostgreSQL and its `lemma` and `agentbox` databases.
+8. Start Redis.
+9. Start SuperTokens.
+10. Run migrations and start the all-in-one backend.
+11. Start the frontend.
+12. Stabilize both processes and open the workspace.
 
-1. Choose **Local**.
-2. Review the local-data notice and select **Install local services**.
-3. Let setup finish. The online package downloads and verifies its exact
-   runtime; the offline package activates its bundled runtime.
-4. Select **Create your account**.
-5. Create the local owner inside the Lemma app.
+Downloads show measured bytes, throughput, and ETA when available. Opaque work
+shows its stage without invented byte counts. Interrupted downloads resume,
+verified archives are reused, and failed staging directories are never
+activated.
 
-Local account creation stays in the app. It does not open the system browser,
-does not require SMTP, and does not require email verification. Hosted
-`lemma.work` sign-in intentionally uses the system browser instead.
+Select **Create account** after Lemma reports Ready. Local signup stays inside
+the Desktop window. Local-only configuration disables email verification and
+internet-facing auth throttles; SMTP is not required. Hosted Lemma sign-in
+continues to use the system browser.
 
-The first start performs database initialization and may take several minutes.
-Later starts reuse the installed runtime and persistent data. A single backend
-process runs the API, worker, scheduler, AgentBox manager, surface receivers,
-and document conversion; the frontend is the only other Lemma application
-process. PostgreSQL, Redis, compatible local auth, and sandbox workloads remain
-private implementation details.
+The local application consists of:
 
-## Open and manage Lemma in the UI
+- one all-in-one Python backend for API, workers, schedules, AgentBox
+  management, surfaces, and document conversion;
+- one Next.js frontend process;
+- one private Linux runtime containing PostgreSQL, Redis, SuperTokens, and
+  isolated AgentBox containers.
 
-Open **Local Control Center** from Lemma's application or tray menu. Its pages
-are:
+Embedding-model initialization runs in the background and is non-fatal.
+Signup, files, tables, settings, and normal workspace access do not wait for
+Hugging Face. Semantic operations report a temporary capability error if the
+model is still preparing.
 
-- **Overview** — readiness, configured capabilities, recent health, and daily
-  start/stop actions.
-- **AI Providers** — the required system model profile.
-- **Integrations** — Composio plus Google and Microsoft connector OAuth apps.
-- **Agent Surfaces** — Slack, Telegram, Teams, WhatsApp, and Resend settings.
-- **Services** — application and private-runtime capability health.
-- **Updates** — Desktop/runtime version matching and runtime repair.
-- **Diagnostics** — local paths, loopback endpoints, logs, and repair actions.
+## Configure an AI provider
 
-The daily controls have deliberate meanings:
+If no validated provider exists, authenticated local pages show **Configure an
+AI provider**. Open it, or use **Local Control Center → AI Providers**.
 
-| Control | Effect |
+Supported setup paths include:
+
+- OpenAI-compatible APIs;
+- Anthropic-compatible APIs;
+- local Ollama;
+- local LM Studio.
+
+Enter a base URL, default model, and API key when required, then choose
+**Validate & apply**. Lemma discovers models and verifies that the default
+model is usable. Configuration and secrets are applied transactionally; a
+failed backend restart restores the prior configuration. Secrets live in
+macOS Keychain or Windows Credential Manager.
+
+Agents remain unavailable with a clear reason until a provider validates.
+Non-AI features remain available.
+
+## Configure integrations and surfaces
+
+Use **Local Control Center → Integrations** for Composio and custom Google or
+Microsoft OAuth applications. Copy the callback URL displayed by the running
+installation; ports are deliberately dynamic.
+
+Use **Agent Surfaces** for Slack, Telegram, Teams, WhatsApp, and Resend.
+Socket/long-polling modes do not require ingress. Webhook surfaces require a
+public callback configured by the operator; Lemma does not create a tunnel
+silently. Resend is optional and is unrelated to local account creation.
+
+## Lifecycle and tray behavior
+
+Closing the window hides Lemma to the tray so workers and schedules keep
+running.
+
+| Action | Result |
 | --- | --- |
-| **Open Lemma** | Opens the local workspace. |
-| **Start** | Reconciles the desired state and starts anything missing. |
-| **Restart application** | Restarts the backend and frontend while preserving private infrastructure and data. |
-| **Stop application** | Stops the backend and frontend; private infrastructure stays warm. |
-| **Stop everything** | Stops the application and private runtime. The next Start brings them back. |
-| **Verify & repair runtime** | Replaces damaged signed runtime files without deleting configuration, databases, files, or workspaces. |
+| **Open Lemma** | Shows the workspace. |
+| **Start Services** | Starts or reconciles the current desired state. |
+| **Restart Services** | Restarts the backend and frontend without deleting data. |
+| **Stop Services** | Stops the backend and frontend but leaves infrastructure warm. |
+| **Stop Services and Infra** | Stops application processes and the private runtime. |
+| **Quit Lemma** | Closes Desktop while the durable daemon and desired services continue. |
+| **Quit and stop Lemma** | Stops all application/private-runtime resources, then exits. |
 
-Closing the window does not silently destroy local services. Use the explicit
-stop controls when you want Lemma to sleep.
+Only explicit full stop releases all guest memory. A transient component
+restart after Ready does not bounce the workspace back to the installer.
 
-## Configure the system AI profile
+## URLs and ports
 
-Agents require one validated system AI profile. In **Control Center → AI
-Providers**:
+On first start Lemma asks the OS for two high loopback ports and persists them
+in `locald/network.json`. If an unrelated process later occupies either port,
+Lemma does not terminate it; it allocates and persists a new pair.
 
-1. Choose **OpenAI compatible** or **Anthropic compatible**.
-2. Enter the provider base URL and a default model ID.
-3. Enter an API key when the provider requires one.
-4. Select **Validate & apply**.
+The current URLs appear in Control Center and `lemma-stack status --json`:
 
-Lemma connects to the configured provider, discovers its available models, and
-requires the default model to be present. The backend is health-checked before
-the new configuration becomes active. A failed apply restores the previous
-configuration and secret values.
-
-For local models, **Use Ollama** and **Use LM Studio** fill the standard
-loopback endpoint. Loopback model servers do not require a placeholder API
-key. A model server on another private-network address requires both an
-explicit **Trust this private-network endpoint** choice and whatever
-authentication that server expects. Lemma never scans the local network.
-
-## Configure integrations and agent surfaces
-
-All of these settings are optional:
-
-- **Composio** enables its connector catalog using an API key and optional
-  webhook secret.
-- **Google connector OAuth app** configures Gmail, Calendar, and Drive
-  connections. Copy its exact local callback from **Local Control Center →
-  Integrations** after the runtime has started.
-- **Microsoft connector OAuth app** configures Microsoft connections and uses
-  the same local callback path. These credentials are separate from Teams bot
-  credentials.
-- **Slack Socket Mode** and **Telegram long polling** work without public
-  ingress.
-- **Teams**, **WhatsApp**, and webhook modes require a public callback that you
-  configure. Lemma never creates a tunnel silently.
-- **Resend** configures inbound email for an owned domain. It is not needed for
-  local account creation.
-
-Secret fields are write-only after saving. They live in macOS Keychain or
-Windows Credential Manager, never in the operator configuration file, status
-events, or logs.
-
-## Local URLs
-
-On first start, Lemma asks the operating system for a high frontend/backend
-port pair and stores it in the app-owned `locald/network.json`. The pair stays
-stable across app and machine restarts. Use the exact loopback URLs shown in
-**Local Control Center → Diagnostics**:
-
-| Surface | URL |
+| Surface | Shape |
 | --- | --- |
 | Workspace | `http://app.lemma.localhost:<frontend-port>` |
-| API and auth | `http://app.lemma.localhost:<backend-port>` |
-| Built React app | `http://<slug>.apps.lemma.localhost:<backend-port>` |
-| Live sandbox app | `http://<sandbox>-<app>.workspaces.lemma.localhost:<backend-port>` |
-| Connector OAuth callback | `http://app.lemma.localhost:<backend-port>/api/v1/connectors/oauth/callback` |
+| API/auth | `http://app.lemma.localhost:<backend-port>` |
+| Built app | `http://<slug>.apps.lemma.localhost:<backend-port>` |
+| Sandbox app | `http://<sandbox>-<app>.workspaces.lemma.localhost:<backend-port>` |
 
-`lemma.localhost` is reserved for loopback and does not require public DNS.
-Built React apps use the same routing and session behavior as
-`<app-name>.apps.lemma.work` in production.
+Using the same `app.lemma.localhost` host for frontend and API preserves
+WKWebView-compatible session cookies while ports distinguish the processes.
+Production React apps remain available at
+`<app-name>.apps.lemma.work`; local builds use the corresponding
+`*.apps.lemma.localhost` route.
 
-The ports are deliberately not a documented constant. The Desktop shell,
-frontend configuration, backend CORS/auth configuration, sandbox callback
-bridge, and CLI all consume locald's resolved pair. Development-only overrides
-are available through `LEMMA_LOCALD_FRONTEND_PORT` and
-`LEMMA_LOCALD_BACKEND_PORT`; both must be supplied together.
+AgentBox receives the resolved API bridge as
+`http://host.lemma.internal:<backend-port>`. The backend never guesses a
+container runtime and never rewrites localhost automatically.
 
-Core startup does not wait for the optional local semantic-search model.
-**Services** may show embeddings as **Preparing** or **Degraded** while signup,
-workspace use, agents, and non-semantic operations remain available. A failed
-model download is retried by a later semantic-search operation and is recorded
-in the Backend log.
+## CLI control
 
-Agent and function sandboxes receive the explicit `host.lemma.internal` bridge
-configured by the managed runtime through `WORKSPACE_CALLBACK_*` and
-`FUNCTION_RUNTIME_GATEWAY_URL`. A new sandbox must reach the API health
-endpoint before it is reported ready. The backend does not guess the container
-topology and does not rewrite `localhost` or `127.0.0.1`.
-
-## Install the optional stack-control CLI
-
-The Desktop installer supplies the signed application and runtime. Complete
-Local setup in Desktop once; after that `lemma-stack` can start and control the
-same runtime even while the Desktop window is closed.
-
-The CLI is not required for normal Desktop use. Its bootstrap installs `uv`
-and the `lemma-stack` Python tool, but it does not install Docker or Podman
-when used in CLI-only mode.
-
-macOS:
+The optional `lemma-stack` CLI discovers the installed Desktop daemon and its
+dynamic endpoints. Complete one Desktop local installation first.
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/lemma-work/lemma-platform/main/install.sh |
-  bash -s -- --cli-only
-```
-
-Windows PowerShell:
-
-```powershell
-$env:LEMMA_STACK_CLI_ONLY = "1"
-irm https://raw.githubusercontent.com/lemma-work/lemma-platform/main/install.ps1 | iex
-Remove-Item Env:LEMMA_STACK_CLI_ONLY
-```
-
-The `lemma-stack` distribution is currently installed from this repository;
-it is not a separately published PyPI package. If the command is not visible
-in a new terminal, run `uv tool update-shell`, reopen the terminal, and retry.
-
-Verify discovery:
-
-```bash
-lemma-stack self info
-lemma-stack status
-```
-
-If the CLI says no managed runtime is installed, put Lemma in Applications (on
-macOS), open Desktop, choose Local, and let the first setup finish. The CLI
-does not replace the signed Desktop/runtime installer in this release.
-
-## Run and diagnose from the CLI
-
-```text
-lemma-stack start
-lemma-stack stop
-lemma-stack stop --infra
-lemma-stack restart
 lemma-stack status
 lemma-stack status --json
+lemma-stack start
+lemma-stack restart
+lemma-stack stop
+lemma-stack stop --infra
 lemma-stack doctor
-lemma-stack doctor --json
 lemma-stack logs locald
-lemma-stack logs backend
-lemma-stack logs frontend
 lemma-stack logs backend --follow
-lemma-stack self info --json
+lemma-stack logs frontend
 ```
 
-On Windows, `lemma-stack prepare` performs the same explicit one-time WSL2
-enablement as **Set up Windows runtime**. It may report that a Windows restart
-is required. Ordinary `start` does not elevate.
-
-`doctor` intentionally fails until the application services are healthy and an
-AI provider is validated. Use `status` when you only need lifecycle state.
-Private PostgreSQL and Redis internals are shown in Control Center rather than
-exposed as host services.
-
-## Configure from the CLI
-
-Managed CLI configuration uses the same transactional schema and OS credential
-vault as Control Center:
+Managed configuration uses the same schema, validation, rollback, and OS vault
+as Control Center:
 
 ```bash
 lemma-stack config list
-lemma-stack config list --json
 lemma-stack config get ai.protocol
-lemma-stack config path
-```
-
-Apply all fields of a new provider in one command so the profile can be
-validated as a unit. For a loopback Ollama-compatible server:
-
-```bash
-lemma-stack config set ai.protocol=openai_compat ai.base_url=http://127.0.0.1:11434/v1 ai.default_model=qwen3
-```
-
-For a hosted OpenAI-compatible provider:
-
-```bash
-lemma-stack config set ai.protocol=openai_compat ai.base_url=https://provider.example/v1 ai.default_model=MODEL_ID ai.api_key=YOUR_API_KEY
-```
-
-Useful managed keys include:
-
-```text
-ai.protocol
-ai.base_url
-ai.default_model
-ai.vision_models
-ai.allow_private_network
-ai.api_key
-
-integrations.composio_enabled
-integrations.composio_api_key
-integrations.composio_webhook_secret
-integrations.google_client_id
-integrations.google_client_secret
-integrations.microsoft_client_id
-integrations.microsoft_client_secret
-
-surfaces.slack_socket_mode
-surfaces.slack_app_token
-surfaces.slack_bot_token
-surfaces.slack_signing_secret
-surfaces.telegram_polling
-surfaces.telegram_bot_token
-surfaces.telegram_webhook_secret
-surfaces.teams_app_id
-surfaces.teams_tenant_id
-surfaces.teams_app_password
-surfaces.whatsapp_phone_number_id
-surfaces.whatsapp_waba_id
-surfaces.whatsapp_access_token
-surfaces.whatsapp_verify_token
-surfaces.whatsapp_app_secret
-surfaces.resend_inbound_domain
-surfaces.resend_api_key
-surfaces.resend_signing_secret
-```
-
-Boolean values accept `true` or `false`. List values such as
-`ai.vision_models` are comma-separated. `ai.models` is read-only because it is
-the result of provider discovery.
-
-Unset a normal field or remove a vault secret with the same command:
-
-```bash
-lemma-stack config unset surfaces.telegram_polling
-lemma-stack config unset surfaces.telegram_bot_token
+lemma-stack config set \
+  ai.protocol=openai_compat \
+  ai.base_url=http://127.0.0.1:11434/v1 \
+  ai.default_model=qwen3
 lemma-stack config unset ai.protocol
 ```
 
-Managed secret values can never be printed back; `list` and `get` report only
-`<configured>` or `<not configured>`. `config edit` is intentionally
-unavailable for managed Desktop because direct file edits would bypass
-validation, health checks, rollback, and the OS vault.
-
-## Install the pod CLI
-
-`lemma-stack` operates the local installation. The separate `lemma` command
-builds and operates pods:
+The separate `lemma` CLI operates pods. Register it against the resolved local
+server rather than hardcoding ports:
 
 ```bash
-uv tool install lemma-terminal
+lemma-stack self register-cli --use
 lemma servers select local
 lemma auth login
-lemma skills install
 ```
 
-Local auth opens at the managed `lemma.localhost` origins. Do not replace those
-server URLs with raw `localhost`, `127.0.0.1`, or `sslip.io`.
+## Diagnostics and repair
 
-See the [Lemma CLI setup guide](../lemma-cli/SETUP.md) for server and
-project-scoped configuration.
+The setup error view and **Control Center → Diagnostics** expose bounded,
+redacted logs for:
 
-## Updates, data, and removal
+- installer;
+- lifecycle events;
+- local daemon;
+- migrations;
+- backend;
+- frontend;
+- VM helper;
+- guest and infrastructure services.
 
-Installing a newer signed Desktop package stages the exact matching immutable
-runtime on the next local launch. The prior verified runtime is retained for
-recovery, but this release does not offer manual downgrade because its data
-schema does not declare downgrade compatibility. **Verify & repair runtime**
-repairs only runtime files and preserves data.
+Logs use opaque cursors that survive rotation, return at most 128 KiB per
+request, and redact passwords, tokens, API keys, cookies, and connection
+credentials. A failed component is selected automatically and its recent
+excerpt appears with the error.
+
+Use **Open logs folder** for the source files. Webview debugging is available
+from **Open developer tools** or `Cmd+Option+I` on macOS /
+`Ctrl+Alt+I` on Windows. Set `LEMMA_DESKTOP_DEVTOOLS=1` for an automatic
+inspector in a source/debug launch.
+
+**Verify & repair runtime** replaces only immutable signed runtime files. It
+does not delete the private data disk. If a child exits during startup, Lemma
+fails immediately with its status and recent log excerpt instead of waiting
+for the health timeout.
+
+## Updates, data, and uninstall
 
 Managed state lives under:
 
 - macOS: `~/Library/Application Support/Lemma`
 - Windows: `%LOCALAPPDATA%\Lemma`
 
-Removing the application does not silently delete this state. A supported
-managed-data removal UI is not shipped in this release, so back up important
-work before deleting that directory manually. `lemma-stack uninstall` applies
-only to the external Docker/Podman compatibility install; it does not uninstall
-managed Desktop data.
+Important subpaths include:
 
-## Troubleshooting
+- `runtime/releases/<version>` — immutable installed host/guest release;
+- `locald/network.json` — resolved loopback ports;
+- `locald/processes.json` — exact owned-process ledger;
+- `locald/runtime/macos/data.raw` — sparse macOS persistent data disk;
+- `locald/logs` and `runtime/install.log` — diagnostics.
 
-### Lemma says “Asleep”
+The active macOS guest root is attached directly from its release directory as
+read-only. Volatile OS state uses tmpfs; PostgreSQL, Redis, SuperTokens,
+containerd, and AgentBox workspaces use the separate data disk. Updates replace
+the immutable release and preserve data.
 
-The application is intentionally stopped. Select **Start Lemma** once. A
-second Start during the same operation follows the existing progress instead
-of launching another operation.
+Removing the app does not silently remove user data. Quit and stop Lemma,
+back up anything important, remove the application, and only then remove the
+platform state directory if a destructive reset is intended.
 
-### “Another local operation is running”
+## Test an unreleased pull request
 
-Setup, start, stop, restart, configuration apply, and repair are serialized.
-Wait for the current progress to finish. Current Desktop builds attach repeated
-Start requests to the operation already in progress.
+The `Release Local Images` workflow can be manually dispatched on a PR branch
+with `publish=false`. It produces
+`lemma-desktop-macos-pr-test-<commit>`, an ad-hoc-signed DMG containing the
+branch’s compressed, digest-verified host and guest archives.
 
-### “No such file or directory” or a missing runtime bridge
+This is not a public offline installer. It exercises the same first-launch
+installer using trusted application resources, while infrastructure and
+AgentBox OCI images still require network access. CI rejects:
 
-Confirm Lemma was copied to Applications and is not running from the DMG.
-Install the online/offline package for the same version, then use **Control
-Center → Updates → Verify & repair current runtime**. Repair verifies signed
-runtime files and preserves user data.
+- combined host/guest compressed archives above 750 MiB;
+- the PR application resources above 850 MiB;
+- expanded immutable runtimes above 2.25 GiB;
+- a macOS guest root above 1.25 GiB.
 
-### “Runtime package … is not published yet”
+Download the artifact for the exact commit, copy Lemma to Applications, and
+perform the clean-install checklist in
+[the Desktop maintainer guide](../desktop/README.md).
 
-The online shell is present, but its matching immutable host or guest runtime
-asset is not available at the URL in the signed release manifest. This is
-expected only for an unpublished development build. Use that build's matching
-offline installer or publish the runtime assets before distributing the online
-installer; repeatedly selecting Retry cannot repair a missing release asset.
+## External-runtime compatibility
 
-For an unreleased branch build, use its localized test manifest for the first
-verified installation as described in
-[`desktop/README.md`](../desktop/README.md#test-an-unreleased-branch-end-to-end).
-After activation, quit Lemma and reopen it normally from Applications or the
-Start menu. The app reuses the complete verified runtime without contacting the
-artifact host. The manifest override is required again only for repair or a
-different unpublished runtime version.
-
-For a true clean-machine Finder test, use the self-contained
-`lemma-desktop-macos-offline-test-<commit>` DMG produced by the same branch
-workflow. It embeds the exact verified runtime, needs no environment variables,
-and does not depend on unpublished release URLs. Its approximately 3 GiB
-installed size is deliberate and limited to branch acceptance testing.
-
-### Windows asks for setup or restart
-
-Select **Set up Windows runtime**, approve the one-time Windows prompt, and
-restart Windows if requested. Reopen Lemma; do not install Ubuntu or Docker
-Desktop for this flow.
-
-### A port is already in use
-
-Managed Desktop never stops an unrelated process. If another application owns
-one of Lemma's persisted ports, the next start allocates and persists a new
-pair, then updates every local runtime URL together. Open **Local Control Center
-→ Diagnostics** to copy the new origins. OAuth providers with an allowlisted
-local callback must be updated if this rare recovery occurs.
-
-### AI validation fails
-
-Check that the base URL is the provider's API root, the API key can list
-models, and the default model is returned by that provider. For a LAN endpoint,
-enable the explicit private-network trust option. The previous working
-configuration remains active after a failed apply.
-
-### More diagnostics
-
-For native webview issues, open **Local Control Center → Diagnostics → Open
-developer tools** or press `Cmd+Option+I` on macOS (`Ctrl+Alt+I` on Windows).
-This opens the inspector for the real Lemma application webview, including its
-Console, Network, and Storage views. Set `LEMMA_DESKTOP_DEVTOOLS=1` before
-launching the Desktop executable to open it automatically. Local backend access
-logs record request methods, paths, and status codes in `backend.log`; request
-headers, cookies, credentials, and bodies are not logged.
-
-Select **View logs** directly on the setup/error screen for live, bounded tabs
-covering installer, locald events, migrations, backend, frontend, and private
-infrastructure. Lemma automatically selects the component that failed and
-includes its recent excerpt on the error screen. Secrets are redacted before
-log content reaches the webview. **Copy** copies the selected tab and **Open
-logs folder** opens the persistent source files.
-
-Use **Control Center → Diagnostics → Open logs folder** for the installer,
-daemon, backend, frontend, and VM logs, or:
-
-```bash
-lemma-stack status --json
-lemma-stack doctor --json
-lemma-stack logs locald
-lemma-stack logs backend
-lemma-stack logs frontend
-```
-
-## External-runtime compatibility and source development
-
-The installer without `--cli-only` retains the old Docker/Podman stack for
-Linux, CI, development, and explicit migration work:
-
-```bash
-curl -fsSL https://raw.githubusercontent.com/lemma-work/lemma-platform/main/install.sh | bash
-```
-
-That path stores its own configuration under `~/.lemma/local`, exposes
-container-oriented `db`, `redis`, and `uninstall` commands, and is never
-auto-selected by Desktop. Set `LEMMA_STACK_FORCE_EXTERNAL_RUNTIME=1` only when
-you intentionally want it on a machine that also has managed Desktop.
-
-For hot-reload work from a source checkout, follow
-[CONTRIBUTING.md](../CONTRIBUTING.md). Developer ports and prerequisites are
-separate from the supported Desktop installation above.
+`lemma-stack install` still supports explicit Docker/Podman compatibility for
+Linux, development, CI, and migrations. Desktop never auto-selects that path,
+never adopts the user’s default runtime, and does not document fixed ports for
+managed installations.

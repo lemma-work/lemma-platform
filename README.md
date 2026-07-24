@@ -49,9 +49,10 @@ Each job carries its own state, actions, and ways for people to see the work. Le
 <a href="https://github.com/lemma-work/lemma-platform/releases/latest"><img src="https://img.shields.io/badge/Download_for_macOS-141414?style=for-the-badge&logo=apple&logoColor=white" alt="Download Lemma for macOS"></a>
 
 Download the signed **online** package from the latest release for macOS 14+
-on Apple silicon or Windows 11 23H2+ on x86-64. Use the larger **offline**
-package only when runtime downloads are unavailable. On macOS, drag Lemma to
+on Apple silicon or Windows 11 23H2+ on x86-64. On macOS, drag Lemma to
 Applications before opening it; on Windows, run the signed setup executable.
+The small installer downloads digest-verified runtime components on first use;
+public offline packages are not offered in this release.
 
 Choose **Local**, select **Install local services**, and create the local owner
 inside the app. Lemma owns its lightweight VZ/WSL2 runtime; the normal path

@@ -170,7 +170,7 @@ server/org/pod from the resource views or with chat slash commands:
 
 ## Local Stack Setup
 
-Install the signed Lemma Desktop online or offline package, choose **Local**,
+Install the signed Lemma Desktop online package, choose **Local**,
 and let the first setup finish once. Desktop owns the private VZ/WSL2 runtime;
 Docker, Podman, and raw `localhost` URLs are not part of the managed path.
 
@@ -190,11 +190,9 @@ irm https://raw.githubusercontent.com/lemma-work/lemma-platform/main/install.ps1
 Remove-Item Env:LEMMA_STACK_CLI_ONLY
 ```
 
-CLI-only bootstrap registers the server named `local` with the exact managed
-origins:
-
-- API: `http://app.lemma.localhost:8711`
-- Auth: `http://app.lemma.localhost:3711/auth`
+CLI-only bootstrap registers the server named `local`. It discovers the current
+API and auth origins from Desktop's app-owned locald state; the persistent
+high ports are selected during installation and must not be hardcoded.
 
 Then select it and authenticate:
 

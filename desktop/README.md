@@ -1,242 +1,197 @@
-# Lemma Desktop
+# Lemma Desktop maintainer guide
 
-Lemma Desktop is the signed Tauri shell for Lemma Local. It offers either a
-hosted connection or a zero-toolchain local install; users do not install
-Docker, Podman, Homebrew, Python, Node.js, or a general-purpose VM manager.
+Lemma Desktop is a thin Tauri shell over the durable `lemma-locald` control
+plane. It supports hosted Lemma and a zero-toolchain local installation.
 
-## Runtime architecture
+For the user journey, see [Install and run Lemma locally](../docs/installation.md).
+For requirements and architecture, see the
+[product specification](../docs/design/local-desktop-product-spec.md) and
+[technical design](../docs/design/local-desktop-technical-design.md).
 
-The desktop shell owns native windows, connection-mode selection, navigation,
-and the privileged Control Center. It connects to the durable Rust
-`lemma-locald` daemon through a mode-`0600` Unix socket on macOS or a
-login-session-scoped named pipe on Windows. Remote application pages never
-receive Tauri IPC capability.
+## Shipped topology
 
-Managed local mode has two long-lived Lemma application processes:
+The host runs:
 
-- one all-in-one Python backend containing API, worker, scheduler, AgentBox
-  manager, surface receivers, and in-process document conversion;
-- one Next.js frontend process, including local serving for built React apps.
+- `lemma-desktop`;
+- `lemma-locald`;
+- one all-in-one Python backend;
+- one Next.js frontend;
+- `lemma-runtime` plus `lemma-vz` on macOS or WSL tooling on Windows.
 
-Infrastructure is private to Lemma. macOS uses a lightweight
-Virtualization.framework guest; Windows uses a private WSL2 distribution.
-PostgreSQL and Redis are always-on guest services, SuperTokens is retained only
-for the current compatibility mode, and sandbox containers are created on
-demand. PostgreSQL also owns the separate `agentbox` database. There is no
-Kreuzberg service and no Python/PyInstaller supervisor.
+The private guest runs PostgreSQL, Redis, SuperTokens, containerd, and AgentBox
+sandboxes. There is no user-facing Docker/Podman dependency and no Kreuzberg
+container. PDF/document conversion runs in the backend.
 
-Windows startup is also app-owned. Normal startup performs a read-only
-`wsl.exe --status` check. If WSL2 is unavailable, the local splash offers a
-separate **Set up Windows runtime** action; only that explicit action opens UAC
-and runs `wsl.exe --install --no-distribution --no-launch`. Lemma never installs
-Ubuntu, changes the default distribution, or modifies global `.wslconfig`.
-When Windows requires a reboot, a per-install resume marker makes the next app
-launch continue automatically. The same operation is available as
-`lemma-stack prepare` for terminal-led installs.
+Closing every window hides Desktop to the tray. The daemon and desired services
+survive shell exit so schedules continue. **Quit and stop Lemma** performs a
+full stop before exit.
 
-The local gateway exposes stable loopback-only origins on an OS-selected high
-frontend/backend port pair. locald persists the pair in private
-`network.json`, exposes it in status, and rewrites every launch environment
-from that source of truth. The Control Center shows the exact workspace, API,
-built-app, live-sandbox, and connector callback URLs. If an unrelated listener
-later occupies a persisted port, locald rotates the pair without killing it.
+## Runtime packaging
 
-Sandbox callbacks are explicit configuration. The backend passes
-`WORKSPACE_CALLBACK_*` and `FUNCTION_RUNTIME_GATEWAY_URL` values through
-unchanged and never infers or rewrites `localhost` to
-`host.docker.internal`. Managed launch configuration sets the
-sandbox-reachable `host.lemma.internal` bridge and every fresh sandbox must
-reach the API health endpoint before it becomes ready.
+Public release apps bundle only `lemma-local.json` and native control helpers.
+The application must remain at or below 25 MiB installed. First launch
+downloads:
 
-## Control Center
+- `lemma-host-pack-<target>.zip`;
+- `lemma-guest-runtime-<target>.zip`.
 
-The Control Center is a separate privileged local window with Overview, AI,
-Integrations, Surfaces, Services, and Diagnostics sections. It can configure
-OpenAI-compatible and Anthropic-compatible providers, discover models from a
-provider's real `/models` endpoint, select a default model, and configure OAuth
-applications and messaging surfaces.
+Every manifest entry contains source URL/resource, SHA-256, compressed size,
+expanded size, archive format, platform target, and release identity. Archives
+are resumable, verified while transferring, extracted into disposable staging,
+validated, and atomically activated.
 
-Secrets are stored in the operating-system credential vault and are injected
-only into the backend process. Snapshots and events expose presence flags, not
-secret values. Configuration activation restarts only the backend, health
-checks the new process, and rolls both configuration and vault state back if
-activation fails; the frontend remains running.
+The PR test DMG embeds the two compressed archives and rewrites only their
+manifest sources to trusted resource names. It must not contain expanded
+`local-runtime` or `managed-runtime` directories.
 
-## Online and offline installation
+Current hard gates:
 
-Every release publishes two signed and notarized packages per platform:
+- host plus guest compressed: 750 MiB;
+- PR bundled application: 850 MiB;
+- expanded immutable runtime: 2.25 GiB;
+- macOS root disk: 1.25 GiB;
+- public application: 25 MiB.
 
-- **online** — the Tauri shell, `lemma-locald`, native runtime bridges, and a
-  release manifest embedded in the signed app;
-- **offline** — the same components plus the complete host and managed-guest
-  runtime payloads.
+OCI infrastructure/sandbox images are not included. Public offline claims and
+offline release artifacts are intentionally removed.
 
-The **online package is the recommended default**. The current macOS `.app` is
-about 10 MiB installed and downloads the selected immutable runtime after the
-user chooses Local mode. The offline package is intentionally large: the
-current macOS bundle is about 3.0 GiB installed because it embeds a relocatable
-Python backend, Node/Next frontend, and a 2 GiB sparse Linux appliance image.
-That size is expected for the air-gapped artifact, not an accidental copy of
-the source checkout. The current runtime downloads are about 307 MB for the
-compressed host pack and 224 MB for the compressed guest pack; expanded
-runtime plus writable data requires additional free space.
+## Build and test locally
 
-On first local launch, the online build downloads the exact host and guest ZIPs
-named in its embedded manifest through the system proxy. Downloads are
-resumable, HTTPS-only, bounded, and verified by exact size and SHA-256 before
-safe staged extraction. The manifest release must equal the desktop release.
-The installed cache also records both signed artifact identities, so a
-same-version development build cannot silently reuse different host or guest
-bits. Setup progress and errors are appended to a bounded private
-`runtime/install.log` and **View log** reads that file even before the daemon
-exists.
-Activation occurs only after host markers, guest target markers, native
-entrypoints, and archive layout pass validation. Incomplete downloads remain
-available for Retry. The offline build starts from its bundled payload without
-network access (cloud models and OAuth still require their own network access).
+Prerequisites for maintainers are Rust, Node.js 22, Swift/Xcode on macOS,
+Python/uv, and the repository’s normal build toolchain.
 
-Every online launch requires the installed host/guest release to match the
-signed desktop release exactly; an older complete pack is no longer accepted
-merely because it exists. A newer desktop stages its matching immutable release
-and retains the prior verified pack. Desktop configuration is activated through
-a flushed atomic replacement on both macOS and Windows. Control Center can
-quarantine and redownload a damaged current runtime without touching the
-database disk, operator configuration, vault, or workspaces; if repair fails,
-the original verified directory and configuration are restored. Schema-1 does
-not declare database downgrade compatibility, so the UI deliberately withholds
-manual rollback even though the prior pack is retained. Safe rollback becomes
-available only with the manifest-v2 data boundary and pre-update snapshot.
+Run focused validation:
 
-Release artifacts are named `*-online.*` and `*-offline.*`. Windows host
-runtime entrypoints are Authenticode-signed before the downloadable archive is
-hashed. macOS apps and DMGs are Developer ID signed, notarized, and stapled.
-The app ships only the virtualization entitlement required by the managed Mac
-runtime; legacy JIT, unsigned-executable-memory, and disabled-library-validation
-exceptions are absent.
+```bash
+cargo test --manifest-path desktop/Cargo.toml --locked
+cargo test --manifest-path locald/Cargo.toml --locked
+cargo test --manifest-path local-runtime/manager/Cargo.toml --locked
+cargo test --manifest-path local-runtime/guestd/Cargo.toml --locked
+swift build --package-path local-runtime/macos-vz
+uv run --project lemma-backend pytest \
+  lemma-backend/app/tests/unit/test_health_endpoints.py
+npx tsc --noEmit --project lemma-frontend/tsconfig.json
+```
 
-## Development
+Build Desktop sidecars:
 
-```sh
-node desktop/scripts/extract-concepts.mjs
+```bash
 desktop/scripts/build-sidecar.sh
-cd desktop
-cargo test --all-targets
-cargo clippy --all-targets -- -D warnings
-cargo run
 ```
 
-Useful development overrides:
+For source-level installer testing, prepare an exact manifest and archives and
+set:
 
-- `LEMMA_DESKTOP_CONNECTION_MODE=hosted|local`
-- `LEMMA_DESKTOP_RUNTIME_ROOT=/path/to/lemma-platform`
-- `LEMMA_DESKTOP_HOST_PACK_ROOT=/path/to/local-runtime`
-- `LEMMA_DESKTOP_MANAGED_RUNTIME_ROOT=/path/to/managed-runtime`
-- `LEMMA_DESKTOP_RELEASE_MANIFEST=/path/to/lemma-local.json`
-- `LEMMA_DESKTOP_ALLOW_LOCAL_ARTIFACTS=1` — permits `file://` ZIPs only when
-  `LEMMA_DESKTOP_RELEASE_MANIFEST` points to that exact developer manifest
-- `LEMMA_DESKTOP_LOCALD_BIN=/path/to/lemma-locald`
-- `LEMMA_DESKTOP_HOSTED_URL=...` and `LEMMA_DESKTOP_LOCAL_URL=...`
+```bash
+export LEMMA_DESKTOP_RELEASE_MANIFEST=/absolute/path/lemma-local.json
+export LEMMA_DESKTOP_ALLOW_LOCAL_ARTIFACTS=1
+```
 
-The manifest and runtime-root overrides are explicit development/enterprise
-controls; no backend hostname mutation is tied to them.
+Only that explicitly selected manifest may use `file://` artifact sources.
+Packaged releases ignore development port overrides and do not enable arbitrary
+local artifacts.
 
-### Test an unreleased branch end to end
+## Build the PR test DMG
 
-The normal CI workflow uploads an ad-hoc-signed macOS online DMG named
-`lemma-desktop-macos-<github.sha>`. On a pull request, `github.sha` is the
-temporary PR merge commit rather than the branch head, so download the DMG by
-artifact pattern as shown below. The Release Local Stack Images workflow can
-also be manually dispatched on the same branch with `publish=false`. In that
-mode it:
+Run the **Release Local Images** workflow on the PR branch with:
 
-- pushes workspace/function and application images under
-  `test-<12-character-commit>` rather than changing release or `latest` tags;
-- builds both native host packs and managed guest runtimes;
-- uploads `lemma-local-test-<commit>` for 14 days;
-- uploads `lemma-desktop-macos-offline-test-<commit>`, a self-contained,
-  ad-hoc-signed DMG that installs from Finder with no Terminal configuration;
-- does not create or modify a GitHub Release.
+- `version`: the Desktop version, currently `0.6.2`;
+- `publish`: `false`.
 
-Branch-test Windows host packs are intentionally unsigned because pull requests
-cannot access release signing credentials. Published Windows runtimes still
-require Authenticode signing and timestamp verification.
+The workflow builds and verifies both runtimes, creates a resource-backed
+manifest, builds an ad-hoc-signed DMG, enforces size gates, and uploads:
 
-For the current `0.6.2` desktop, first run the protected E2E workflow for the
-branch head, then dispatch the test artifact workflow:
+```text
+lemma-desktop-macos-pr-test-<full-commit-sha>
+```
 
-```sh
-branch=codex/local-desktop-redesign
+Download with GitHub CLI:
+
+```bash
 sha="$(git rev-parse HEAD)"
-
-gh workflow run backend-protected-e2e.yml --ref "${branch}"
-# Wait for that exact commit-linked run to pass.
-
-gh workflow run release-local-images.yml \
-  --ref "${branch}" \
-  -f version=0.6.2 \
-  -f publish=false
+gh run list --workflow release-local-images.yml --branch "$(git branch --show-current)"
+gh run download RUN_ID \
+  -n "lemma-desktop-macos-pr-test-${sha}" \
+  -D /tmp/lemma-pr-dmg
 ```
 
-# After the artifact workflow is green, the simplest fresh-Mac test is:
+The test app installs its embedded compressed runtimes into Application
+Support on first launch. Registry access remains required for infrastructure
+and AgentBox images.
 
-```sh
-gh run download <runtime-run-id> \
-  -n "lemma-desktop-macos-offline-test-${sha}" \
-  -D /tmp/lemma-pr/desktop
+## Clean macOS acceptance test
+
+Use a disposable test machine where possible. For an intentionally destructive
+local reset, first select **Quit and stop Lemma**, remove the test app, then
+remove `~/Library/Application Support/Lemma`. Never make a release repair
+delete that directory.
+
+Acceptance flow:
+
+1. Copy the PR app from the DMG to Applications; confirm the copy is not multi-GB.
+2. Launch from Applications and choose Local.
+3. Confirm download/extraction stages show real progress and no Start button.
+4. Create a local account inside WKWebView; verify it remains authenticated.
+5. Confirm the workspace does not return to the installer after Ready.
+6. Configure Ollama, LM Studio, or an API provider; verify the AI banner clears.
+7. Run an AgentBox operation that uses `lemma` CLI against the dynamic API.
+8. Open a built React app at `*.apps.lemma.localhost`.
+9. Close the window; verify schedules/services remain available from the tray.
+10. Restart and confirm ports and data persist.
+11. Inspect every Diagnostics source and exercise runtime repair.
+12. Use **Quit and stop Lemma** and confirm the VM releases memory.
+
+Also test with blocked Hugging Face access, a failed OCI registry/DNS request,
+and unrelated listeners occupying persisted ports.
+
+## Runtime state and debugging
+
+macOS state root:
+
+```text
+~/Library/Application Support/Lemma
 ```
 
-Open the downloaded DMG, copy Lemma to Applications, and open it normally.
-That test package intentionally occupies roughly 3 GiB after installation
-because it embeds the exact native and private-VM runtimes. It is for
-unreleased-branch acceptance testing; the normal released app remains the small
-online installer.
+Key files:
 
-To test the online downloader itself before release publication, download both
-the small CI DMG and the branch runtime bundle:
-
-```sh
-gh run download <runtime-run-id> \
-  -n "lemma-local-test-${sha}" \
-  -D /tmp/lemma-pr/runtime
-gh run download <ci-run-id> \
-  --pattern "lemma-desktop-macos-*" \
-  -D /tmp/lemma-pr/desktop
-
-python scripts/prepare_desktop_test_runtime.py \
-  --artifacts-dir /tmp/lemma-pr/runtime
+```text
+desktop-config.json
+runtime/install.log
+runtime/releases/<version>/
+locald/network.json
+locald/installation.id
+locald/processes.json
+locald/events.jsonl
+locald/logs/
+locald/runtime/macos/data.raw
+locald/runtime/macos/console.log
 ```
 
-Open that CI DMG, copy Lemma to Applications, quit any older Lemma process, and
-launch its executable with the localized manifest:
+Set `LEMMA_DESKTOP_DEVTOOLS=1` for the WKWebView inspector and
+`LEMMA_DESKTOP_DEBUG=1` for protocol event output. The in-app Diagnostics view
+is the preferred user-facing path; it returns bounded redacted data.
 
-```sh
-LEMMA_DESKTOP_CONNECTION_MODE=local \
-LEMMA_DESKTOP_RELEASE_MANIFEST=/tmp/lemma-pr/runtime/lemma-local.local.json \
-LEMMA_DESKTOP_ALLOW_LOCAL_ARTIFACTS=1 \
-/Applications/Lemma.app/Contents/MacOS/lemma-desktop
+Development-only dynamic-port overrides require both variables:
+
+```bash
+export LEMMA_LOCALD_FRONTEND_PORT=49180
+export LEMMA_LOCALD_BACKEND_PORT=49181
 ```
 
-The file override does not weaken normal packages: it requires both explicit
-environment variables, accepts only absolute hostless `file://` URLs, and
-still enforces the workflow-recorded size, SHA-256, ZIP layout, extracted-size,
-and release-version checks. After that first verified installation succeeds,
-quit Lemma and reopen it normally from Applications. The activated runtime
-retains its verified artifact identity and starts offline; the environment
-override and branch artifact files are needed again only for an explicit repair
-or another unpublished runtime version. For a source-built runtime, the direct
-`LEMMA_DESKTOP_HOST_PACK_ROOT` and `LEMMA_DESKTOP_MANAGED_RUNTIME_ROOT`
-overrides remain faster.
+Packaged release builds ignore them.
 
-Build a small online package with `tauri.online.conf.json`, or a complete
-offline package after staging `runtime/local-runtime` and
-`runtime/managed-runtime` with `tauri.dist.conf.json`:
+## Release policy
 
-```sh
-cd desktop
-npx -y @tauri-apps/cli@2.11.4 build --config tauri.online.conf.json
-npx -y @tauri-apps/cli@2.11.4 build --config tauri.dist.conf.json
-```
+`release-desktop.yml` publishes only signed/notarized online macOS and Windows
+installers. `release-local-images.yml` publishes immutable host/guest runtimes
+and the release manifest. The release gate requires the platform E2Es, size
+breakdown, signatures, and runtime integrity checks.
 
-The release workflow requires Apple Developer ID/notarization credentials or a
-Windows code-signing PFX plus RFC 3161 timestamp URL. Missing credentials stop
-the build before public artifacts are uploaded.
+Do not reintroduce:
+
+- expanded runtimes in the public app;
+- public offline/air-gapped claims;
+- hardcoded managed ports;
+- default localhost rewriting in the backend;
+- Podman/Docker/Kreuzberg requirements in the Desktop journey;
+- service health that accepts non-2xx or the wrong runtime generation.

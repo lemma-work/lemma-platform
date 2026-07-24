@@ -365,8 +365,10 @@ LEMMA_RUN_CONNECTOR=1 uv run --with pytest --with pytest-asyncio \
   pytest tests/integration -m integration -s
 ```
 
-It defaults to `http://127.0.0.1:8711` (the local API) and falls back to the CLI
-auth session if `LEMMA_TOKEN` is unset. Point elsewhere with
+This development-only scenario defaults to the fixed API port used by
+`make dev`; a packaged Desktop installation instead discovers its dynamic
+endpoint through locald. The scenario falls back to the CLI auth session if
+`LEMMA_TOKEN` is unset. Point elsewhere with
 `LEMMA_CONNECTOR_BASE_URL` / `LEMMA_CONNECTOR_TOKEN`. The scenario creates a
 fresh org and pod, exercises tables/records/query/files/functions/agents/
 workflows/connectors, prints a summary, and deletes the pod.
