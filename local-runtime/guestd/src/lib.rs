@@ -20,6 +20,8 @@ const MANAGED_LABEL: &str = "app.kubernetes.io/name=agentbox-sandbox";
 const ENGINE_COMMAND_TIMEOUT: Duration = Duration::from_secs(120);
 const ENGINE_PULL_TIMEOUT: Duration = Duration::from_secs(300);
 const CACHE_REPAIR_RESPONSE_GRACE: Duration = Duration::from_secs(10);
+const CORE_MEMORY_RESERVATION_BYTES: u64 = 1536 * 1024 * 1024;
+const DEFAULT_SANDBOX_MEMORY_BYTES: u64 = 2 * 1024 * 1024 * 1024;
 
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -197,6 +199,14 @@ struct CoreCredentials {
 struct CoreParameters {
     images: CoreImages,
     credentials: CoreCredentials,
+}
+
+#[derive(Clone, Copy)]
+enum CoreStage {
+    Images,
+    Postgres,
+    Redis,
+    SuperTokens,
 }
 
 pub trait Engine: Send + Sync {
@@ -385,6 +395,12 @@ impl<E: Engine> GuestService<E> {
             "diagnostics.sandbox" => self.sandbox_diagnostics(request.parameters),
             "system.shutdown" => self.shutdown(),
             "core.ensure" => self.ensure_core(request.parameters),
+            "core.images" => self.ensure_core_stage(request.parameters, CoreStage::Images),
+            "core.postgres" => self.ensure_core_stage(request.parameters, CoreStage::Postgres),
+            "core.redis" => self.ensure_core_stage(request.parameters, CoreStage::Redis),
+            "core.supertokens" => {
+                self.ensure_core_stage(request.parameters, CoreStage::SuperTokens)
+            }
             "core.status" => self.core_status(),
             "core.stop" => self.stop_core(),
             "sandbox.ensure" => self.ensure(request.parameters),
@@ -402,6 +418,26 @@ impl<E: Engine> GuestService<E> {
     }
 
     fn ensure_core(&self, value: Value) -> Result<Value, GuestError> {
+        let parameters = self.parse_core_parameters(value)?;
+        self.ensure_core_images(&parameters)?;
+        self.ensure_postgres(&parameters)?;
+        self.ensure_redis(&parameters)?;
+        self.ensure_supertokens(&parameters)?;
+        self.core_status()
+    }
+
+    fn ensure_core_stage(&self, value: Value, stage: CoreStage) -> Result<Value, GuestError> {
+        let parameters = self.parse_core_parameters(value)?;
+        match stage {
+            CoreStage::Images => self.ensure_core_images(&parameters)?,
+            CoreStage::Postgres => self.ensure_postgres(&parameters)?,
+            CoreStage::Redis => self.ensure_redis(&parameters)?,
+            CoreStage::SuperTokens => self.ensure_supertokens(&parameters)?,
+        }
+        self.core_status()
+    }
+
+    fn parse_core_parameters(&self, value: Value) -> Result<CoreParameters, GuestError> {
         let parameters: CoreParameters = serde_json::from_value(value)
             .map_err(|error| GuestError::invalid(format!("invalid core parameters: {error}")))?;
         validate_secret(
@@ -417,6 +453,15 @@ impl<E: Engine> GuestService<E> {
         for image in images {
             validate_image(image)?;
         }
+        Ok(parameters)
+    }
+
+    fn ensure_core_images(&self, parameters: &CoreParameters) -> Result<(), GuestError> {
+        let images = [
+            &parameters.images.postgres,
+            &parameters.images.redis,
+            &parameters.images.supertokens,
+        ];
         // These are independent immutable images. Pull them concurrently so a
         // fresh install is bounded by the slowest registry transfer rather
         // than the sum of all three transfers.
@@ -431,8 +476,10 @@ impl<E: Engine> GuestService<E> {
                     .map_err(|_| GuestError::engine("managed image pull worker failed"))??;
             }
             Ok(())
-        })?;
+        })
+    }
 
+    fn ensure_postgres(&self, parameters: &CoreParameters) -> Result<(), GuestError> {
         self.ensure_volume("lemma-postgres-data")?;
         let postgres_env = BTreeMap::from([
             ("POSTGRES_USER".into(), "postgres".into()),
@@ -450,12 +497,34 @@ impl<E: Engine> GuestService<E> {
             &[
                 "--network".into(),
                 "host".into(),
+                "--memory".into(),
+                "512m".into(),
+                "--cpus".into(),
+                "1.5".into(),
                 "--volume".into(),
                 "lemma-postgres-data:/var/lib/postgresql/data".into(),
             ],
             &[],
         )?;
+        if let Err(mut error) = self.wait_engine_command(
+            &[
+                "exec".into(),
+                "lemma-core-postgres".into(),
+                "pg_isready".into(),
+                "-U".into(),
+                "postgres".into(),
+            ],
+            120,
+        ) {
+            if let Some(diagnostic) = self.container_log_summary("lemma-core-postgres") {
+                error.message = format!("{}: {diagnostic}", error.message);
+            }
+            return Err(error);
+        }
+        self.ensure_databases()
+    }
 
+    fn ensure_redis(&self, parameters: &CoreParameters) -> Result<(), GuestError> {
         self.ensure_volume("lemma-redis-data")?;
         let redis_env = BTreeMap::from([(
             "REDIS_ARGS".into(),
@@ -472,48 +541,46 @@ impl<E: Engine> GuestService<E> {
             &[
                 "--network".into(),
                 "host".into(),
+                "--memory".into(),
+                "512m".into(),
+                "--cpus".into(),
+                "1".into(),
                 "--volume".into(),
                 "lemma-redis-data:/data".into(),
             ],
             &[],
         )?;
+        self.wait_redis(&parameters.credentials.redis_password, 120)
+    }
 
-        if let Err(mut error) = self.wait_engine_command(
-            &[
-                "exec".into(),
-                "lemma-core-postgres".into(),
-                "pg_isready".into(),
-                "-U".into(),
-                "postgres".into(),
-            ],
-            120,
-        ) {
-            if let Some(diagnostic) = self.container_log_summary("lemma-core-postgres") {
-                error.message = format!("{}: {diagnostic}", error.message);
-            }
-            return Err(error);
-        }
-        self.ensure_databases()?;
-
-        let supertokens_env = BTreeMap::from([(
-            "POSTGRESQL_CONNECTION_URI".into(),
-            format!(
-                "postgresql://postgres:{}@127.0.0.1:5432/supertokens",
-                parameters.credentials.postgres_password
+    fn ensure_supertokens(&self, parameters: &CoreParameters) -> Result<(), GuestError> {
+        let supertokens_env = BTreeMap::from([
+            (
+                "POSTGRESQL_CONNECTION_URI".into(),
+                format!(
+                    "postgresql://postgres:{}@127.0.0.1:5432/supertokens",
+                    parameters.credentials.postgres_password
+                ),
             ),
-        )]);
+            ("JAVA_TOOL_OPTIONS".into(), "-Xms128m -Xmx512m".into()),
+        ]);
         self.ensure_core_container(
             "lemma-core-supertokens",
             &parameters.images.supertokens,
             "supertokens-v1",
             &supertokens_env,
-            &["--network".into(), "host".into()],
+            &[
+                "--network".into(),
+                "host".into(),
+                "--memory".into(),
+                "768m".into(),
+                "--cpus".into(),
+                "1".into(),
+            ],
             &[],
         )?;
         self.wait_tcp(5432, 120)?;
-        self.wait_redis(&parameters.credentials.redis_password, 120)?;
-        self.wait_http_port(3567, "/hello", 120)?;
-        self.core_status()
+        self.wait_http_port(3567, "/hello", 120)
     }
 
     fn health(&self) -> Result<Value, GuestError> {
@@ -540,7 +607,71 @@ impl<E: Engine> GuestService<E> {
             "status": "ready", "engine": "containerd",
             "endpoint_host": self.endpoint_host,
             "host_gateway": self.host_gateway,
+            "active_sandboxes": self.running_sandbox_count().unwrap_or(0),
         }))
+    }
+
+    fn running_sandbox_count(&self) -> Result<usize, GuestError> {
+        let output = self.run_checked(&[
+            "ps".into(),
+            "--quiet".into(),
+            "--filter".into(),
+            format!("label={MANAGED_LABEL}"),
+        ])?;
+        Ok(output
+            .lines()
+            .filter(|line| !line.trim().is_empty())
+            .count())
+    }
+
+    fn admit_sandbox_memory(&self, requested: u64) -> Result<(), GuestError> {
+        let total = guest_total_memory_bytes()?;
+        let output = self.run_checked(&[
+            "ps".into(),
+            "--quiet".into(),
+            "--filter".into(),
+            format!("label={MANAGED_LABEL}"),
+        ])?;
+        let mut allocated = 0_u64;
+        for container in output
+            .lines()
+            .map(str::trim)
+            .filter(|line| !line.is_empty())
+        {
+            let inspect = self.inspect_raw(container)?.ok_or_else(|| {
+                GuestError::engine("running sandbox disappeared during memory admission")
+            })?;
+            let memory = inspect
+                .get("HostConfig")
+                .and_then(Value::as_object)
+                .and_then(|config| config.get("Memory"))
+                .and_then(Value::as_u64)
+                .filter(|value| *value > 0)
+                .unwrap_or(DEFAULT_SANDBOX_MEMORY_BYTES);
+            allocated = allocated
+                .checked_add(memory)
+                .ok_or_else(|| GuestError::engine("sandbox memory allocation overflow"))?;
+        }
+        let required = CORE_MEMORY_RESERVATION_BYTES
+            .checked_add(allocated)
+            .and_then(|value| value.checked_add(requested))
+            .ok_or_else(|| GuestError::engine("sandbox memory requirement overflow"))?;
+        if required > total {
+            return Err(GuestError {
+                code: "resource_capacity".into(),
+                message: format!(
+                    "Not enough private-runtime memory for this sandbox: {} MiB requested, {} MiB available after core services and active sandboxes",
+                    requested / (1024 * 1024),
+                    total
+                        .saturating_sub(CORE_MEMORY_RESERVATION_BYTES)
+                        .saturating_sub(allocated)
+                        / (1024 * 1024)
+                ),
+                retryable: true,
+                status_code: 429,
+            });
+        }
+        Ok(())
     }
 
     fn core_status(&self) -> Result<Value, GuestError> {
@@ -936,6 +1067,7 @@ impl<E: Engine> GuestService<E> {
         validate_apps(&parameters.apps)?;
         validate_environment(&parameters.env)?;
         validate_metadata(&parameters.metadata)?;
+        let requested_memory = validate_resources(&parameters.resources)?;
         if parameters.workload_kind == WorkloadKind::Workspace
             && parameters
                 .runtime_token
@@ -977,6 +1109,7 @@ impl<E: Engine> GuestService<E> {
             None => true,
         };
         if should_create {
+            self.admit_sandbox_memory(requested_memory)?;
             self.ensure_sandbox_image(&parameters.image, parameters.workload_kind)?;
             let workspace = match parameters.workload_kind {
                 WorkloadKind::Workspace => Some(self.workspace(&parameters.sandbox_id)?),
@@ -1883,6 +2016,81 @@ fn redis_stack_ready(host: &str, password: &str) -> io::Result<()> {
     }
 }
 
+fn validate_resources(resources: &ResourceSpec) -> Result<u64, GuestError> {
+    let memory = resources
+        .memory
+        .as_deref()
+        .filter(|value| !value.trim().is_empty())
+        .map(parse_memory_bytes)
+        .transpose()?
+        .unwrap_or(DEFAULT_SANDBOX_MEMORY_BYTES);
+    if !(256 * 1024 * 1024..=6 * 1024 * 1024 * 1024).contains(&memory) {
+        return Err(GuestError::invalid(
+            "sandbox memory must be between 256 MiB and 6 GiB",
+        ));
+    }
+    if let Some(cpus) = resources
+        .cpus
+        .as_deref()
+        .filter(|value| !value.trim().is_empty())
+    {
+        let cpus = cpus
+            .parse::<f64>()
+            .ok()
+            .filter(|value| value.is_finite() && (0.1..=16.0).contains(value))
+            .ok_or_else(|| {
+                GuestError::invalid("sandbox cpus must be a number between 0.1 and 16")
+            })?;
+        let _ = cpus;
+    }
+    Ok(memory)
+}
+
+fn parse_memory_bytes(value: &str) -> Result<u64, GuestError> {
+    let value = value.trim().to_ascii_lowercase();
+    let (digits, multiplier) = [
+        ("gib", 1024_u64.pow(3)),
+        ("gb", 1000_u64.pow(3)),
+        ("gi", 1024_u64.pow(3)),
+        ("g", 1024_u64.pow(3)),
+        ("mib", 1024_u64.pow(2)),
+        ("mb", 1000_u64.pow(2)),
+        ("mi", 1024_u64.pow(2)),
+        ("m", 1024_u64.pow(2)),
+        ("kib", 1024_u64),
+        ("kb", 1000_u64),
+        ("ki", 1024_u64),
+        ("k", 1024_u64),
+        ("b", 1_u64),
+    ]
+    .into_iter()
+    .find_map(|(suffix, multiplier)| {
+        value
+            .strip_suffix(suffix)
+            .map(|digits| (digits, multiplier))
+    })
+    .unwrap_or((&value, 1));
+    let number = digits
+        .parse::<u64>()
+        .map_err(|_| GuestError::invalid("sandbox memory has an invalid size"))?;
+    number
+        .checked_mul(multiplier)
+        .ok_or_else(|| GuestError::invalid("sandbox memory size overflow"))
+}
+
+fn guest_total_memory_bytes() -> Result<u64, GuestError> {
+    let meminfo = fs::read_to_string("/proc/meminfo")
+        .map_err(|error| GuestError::engine(format!("could not read guest memory: {error}")))?;
+    let kib = meminfo
+        .lines()
+        .find_map(|line| line.strip_prefix("MemTotal:"))
+        .and_then(|value| value.split_whitespace().next())
+        .and_then(|value| value.parse::<u64>().ok())
+        .ok_or_else(|| GuestError::engine("guest memory total was unavailable"))?;
+    kib.checked_mul(1024)
+        .ok_or_else(|| GuestError::engine("guest memory total overflow"))
+}
+
 fn validate_image(image: &str) -> Result<(), GuestError> {
     if image.is_empty()
         || image.len() > 512
@@ -2504,6 +2712,30 @@ mod tests {
             "/var/lib/lemma/run/runtime-token-box-1,dst=/run/agentbox-bootstrap/token,readonly"
         ));
         assert!(joined.ends_with("ghcr.io/lemma/workspace@sha256:abc"));
+    }
+
+    #[test]
+    fn sandbox_resource_limits_are_bounded_and_normalized() {
+        assert_eq!(parse_memory_bytes("2g").unwrap(), 2 * 1024 * 1024 * 1024);
+        assert_eq!(parse_memory_bytes("512MiB").unwrap(), 512 * 1024 * 1024);
+        assert_eq!(
+            validate_resources(&ResourceSpec {
+                memory: Some("2Gi".into()),
+                cpus: Some("2.5".into()),
+            })
+            .unwrap(),
+            2 * 1024 * 1024 * 1024
+        );
+        assert!(validate_resources(&ResourceSpec {
+            memory: Some("64m".into()),
+            cpus: Some("2".into()),
+        })
+        .is_err());
+        assert!(validate_resources(&ResourceSpec {
+            memory: Some("2g".into()),
+            cpus: Some("99".into()),
+        })
+        .is_err());
     }
 
     #[test]

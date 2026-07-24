@@ -100,6 +100,18 @@ def test_capability_health_reports_embeddings_separately(client, monkeypatch):
     }
 
 
+def test_capability_health_exposes_safe_local_ai_readiness(client, monkeypatch):
+    monkeypatch.setattr(appmod.settings, "lemma_local_ai_ready", False)
+
+    r = client.get("/health/capabilities")
+
+    assert r.status_code == 200
+    assert r.json()["capabilities"]["ai_profile"] == {
+        "status": "needs_setup",
+        "detail": "Configure an AI provider in Lemma Control Center",
+    }
+
+
 def test_ready_returns_503_when_db_down(client, monkeypatch):
     monkeypatch.setattr(appmod, "get_engine", lambda: _FakeEngineDown())
     monkeypatch.setattr(appmod.channel_service, "ping", AsyncMock(return_value=True))

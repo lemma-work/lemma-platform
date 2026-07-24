@@ -236,6 +236,13 @@ class Settings(BaseSettings):
         ge=1,
         description="Desktop auth handoff creation rate-limit window in seconds.",
     )
+    lemma_local_ai_ready: Optional[bool] = Field(
+        default=None,
+        description=(
+            "Safe local Desktop readiness flag. None outside managed-local installs; "
+            "never contains provider credentials."
+        ),
+    )
     lemma_default_model_type: Literal["openai_compat", "anthropic_compat"] = Field(
         default="openai_compat",
         description="Server-provided Lemma system model profile provider type.",

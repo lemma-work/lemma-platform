@@ -370,6 +370,11 @@ impl OperatorConfigStore {
             .expect("operator config poisoned")
             .clone();
         let mut environment = HashMap::new();
+        let secret_presence = self.secret_presence(&config)?;
+        environment.insert(
+            "LEMMA_LOCAL_AI_READY".into(),
+            (readiness(&config, &secret_presence)["ai"] == "ready").to_string(),
+        );
         match config.ai.protocol.as_str() {
             "openai_compat" => {
                 environment.insert("LEMMA_DEFAULT_MODEL_TYPE".into(), "openai_compat".into());

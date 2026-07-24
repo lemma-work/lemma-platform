@@ -1,5 +1,5 @@
 use std::collections::{HashMap, HashSet, VecDeque};
-use std::fs::{File, OpenOptions};
+use std::fs::{self, File, OpenOptions};
 use std::io::{self, Read, Write};
 use std::net::{IpAddr, Ipv4Addr, SocketAddr, TcpListener, TcpStream, ToSocketAddrs};
 use std::path::{Path, PathBuf};
@@ -13,6 +13,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 
 const MANIFEST_SCHEMA_VERSION: u64 = 1;
+const PROCESS_LEDGER_SCHEMA_VERSION: u64 = 1;
 const REQUIRED_SERVICES: [&str; 2] = ["backend", "frontend"];
 const REQUIRED_SETUPS: [&str; 1] = ["migrations"];
 const INHERITED_ENVIRONMENT: [&str; 24] = [
@@ -186,6 +187,30 @@ struct ManagedChild {
     started_at: Instant,
 }
 
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+struct ProcessLedger {
+    schema_version: u64,
+    installation_id: String,
+    entries: Vec<ProcessLedgerEntry>,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+struct ProcessLedgerEntry {
+    service_id: String,
+    pid: u32,
+    executable: String,
+    start_identity: String,
+    installation_id: String,
+    runtime_generation: String,
+}
+
+struct ProcessIdentity {
+    executable: String,
+    start_identity: String,
+}
+
 #[derive(Default)]
 struct ProcessState {
     children: HashMap<String, ManagedChild>,
@@ -217,6 +242,13 @@ pub struct HostProcessManager {
     dependency_ready: AtomicBool,
     dependency_error: Mutex<Option<String>>,
     idle_port_reservations: Mutex<HashMap<u16, TcpListener>>,
+    runtime_generation: Mutex<String>,
+    generation_prepared: AtomicBool,
+    process_ledger_path: PathBuf,
+    process_ledger_lock: Mutex<()>,
+    installation_id: String,
+    #[cfg(windows)]
+    windows_job: usize,
     log_dir: PathBuf,
 }
 
@@ -241,7 +273,15 @@ impl HostProcessManager {
             .map(|spec| (spec.id.clone(), spec))
             .collect();
         std::fs::create_dir_all(&log_dir)?;
+        let state_root = log_dir
+            .parent()
+            .ok_or_else(|| io::Error::other("host process log directory has no parent"))?;
+        let installation_id = load_or_create_installation_id(state_root)?;
+        let process_ledger_path = state_root.join("processes.json");
+        reclaim_verified_processes(&process_ledger_path, &installation_id, &manifest)?;
         let idle_port_reservations = reserve_managed_app_ports(&manifest)?;
+        #[cfg(windows)]
+        let windows_job = create_windows_job()?;
         let manager = Arc::new(Self {
             manifest,
             ordered_ids,
@@ -254,6 +294,13 @@ impl HostProcessManager {
             dependency_ready: AtomicBool::new(true),
             dependency_error: Mutex::new(None),
             idle_port_reservations: Mutex::new(idle_port_reservations),
+            runtime_generation: Mutex::new(String::new()),
+            generation_prepared: AtomicBool::new(false),
+            process_ledger_path,
+            process_ledger_lock: Mutex::new(()),
+            installation_id,
+            #[cfg(windows)]
+            windows_job,
             log_dir,
         });
         let monitor = Arc::clone(&manager);
@@ -308,6 +355,10 @@ impl HostProcessManager {
     }
 
     pub fn start_all(&self) -> io::Result<()> {
+        self.start_all_with_progress(|_| {})
+    }
+
+    pub fn start_all_with_progress(&self, mut progress: impl FnMut(&str)) -> io::Result<()> {
         if self
             .startup_in_progress
             .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
@@ -318,12 +369,31 @@ impl HostProcessManager {
                 "host process startup is already running",
             ));
         }
-        let result = self.start_all_inner();
+        let result = self.start_all_inner(&mut progress);
         self.startup_in_progress.store(false, Ordering::Release);
         result
     }
 
-    fn start_all_inner(&self) -> io::Result<()> {
+    pub fn prepare_runtime_generation(&self) -> io::Result<String> {
+        self.inspect_exits();
+        let has_children = !self
+            .state
+            .lock()
+            .expect("host process lock poisoned")
+            .children
+            .is_empty();
+        let mut generation = self
+            .runtime_generation
+            .lock()
+            .expect("runtime generation lock poisoned");
+        if !has_children {
+            *generation = random_generation()?;
+            self.generation_prepared.store(true, Ordering::Release);
+        }
+        Ok(generation.clone())
+    }
+
+    fn start_all_inner(&self, progress: &mut dyn FnMut(&str)) -> io::Result<()> {
         self.inspect_exits();
         if self
             .state
@@ -335,8 +405,8 @@ impl HostProcessManager {
         {
             self.desired_running.store(true, Ordering::Release);
             for id in &self.ordered_ids {
-                if let Some(health) = &self.by_id[id].health {
-                    self.wait_process_health(id, health).map_err(|error| {
+                if let Some(health) = self.health_spec(id) {
+                    self.wait_process_health(id, &health).map_err(|error| {
                         io::Error::other(format!("{id} failed health gate: {error}"))
                     })?;
                 }
@@ -347,6 +417,12 @@ impl HostProcessManager {
         }
         self.health_ready.store(false, Ordering::Release);
         self.desired_running.store(false, Ordering::Release);
+        if !self.generation_prepared.swap(false, Ordering::AcqRel) {
+            *self
+                .runtime_generation
+                .lock()
+                .expect("runtime generation lock poisoned") = random_generation()?;
+        }
         {
             let mut state = self.state.lock().expect("host process lock poisoned");
             state.circuit_open.clear();
@@ -354,16 +430,18 @@ impl HostProcessManager {
             state.restart_not_before.clear();
         }
 
+        progress("migrations");
         self.run_setups()?;
         self.desired_running.store(true, Ordering::Release);
         for id in &self.ordered_ids {
+            progress(id);
             self.release_idle_port_for(id);
             if let Err(error) = self.spawn_if_missing(id) {
                 let _ = self.stop_all();
                 return Err(error);
             }
-            if let Some(health) = &self.by_id[id].health {
-                if let Err(error) = self.wait_process_health(id, health) {
+            if let Some(health) = self.health_spec(id) {
+                if let Err(error) = self.wait_process_health(id, &health) {
                     let _ = self.stop_all();
                     return Err(io::Error::other(format!(
                         "{id} failed health gate: {error}"
@@ -381,8 +459,7 @@ impl HostProcessManager {
 
     fn verify_all_health_now(&self) -> io::Result<()> {
         for id in &self.ordered_ids {
-            if let Some(health) = &self.by_id[id].health {
-                let mut health = health.clone();
+            if let Some(mut health) = self.health_spec(id) {
                 health.stabilization_seconds = 0;
                 self.wait_process_health(id, &health).map_err(|error| {
                     io::Error::other(format!("{id} failed final health gate: {error}"))
@@ -409,6 +486,8 @@ impl HostProcessManager {
                     &environment,
                     process_log(&self.log_dir, &setup.id)?,
                 )?;
+                #[cfg(windows)]
+                assign_child_to_windows_job(self.windows_job, &mut child)?;
                 loop {
                     if let Some(status) = child.try_wait()? {
                         if status.success() {
@@ -492,8 +571,8 @@ impl HostProcessManager {
             state.restart_not_before.remove("backend");
         }
         self.spawn_if_missing("backend")?;
-        if let Some(health) = &self.by_id["backend"].health {
-            if let Err(error) = self.wait_process_health("backend", health) {
+        if let Some(health) = self.health_spec("backend") {
+            if let Err(error) = self.wait_process_health("backend", &health) {
                 let _ = self.stop_process("backend");
                 return Err(io::Error::other(format!(
                     "backend failed health gate after configuration: {error}"
@@ -561,6 +640,11 @@ impl HostProcessManager {
             "capabilities": self.capabilities(),
             "dependency_ready": dependency_ready,
             "dependency_error": dependency_error,
+            "runtime_generation": self
+                .runtime_generation
+                .lock()
+                .expect("runtime generation lock poisoned")
+                .clone(),
         });
         if let Some(id) = id {
             event["id"] = id.clone();
@@ -580,9 +664,7 @@ impl HostProcessManager {
             ));
         }
         let mut health = self
-            .by_id
-            .get("backend")
-            .and_then(|backend| backend.health.clone())
+            .health_spec("backend")
             .ok_or_else(|| io::Error::new(io::ErrorKind::NotFound, "backend health is missing"))?;
         health.url = health
             .url
@@ -610,7 +692,26 @@ impl HostProcessManager {
         }
 
         let spec = self.process_spec_for_spawn(id)?;
-        let child = spawn_process(&spec, &self.log_dir)?;
+        #[allow(unused_mut)]
+        let mut child = spawn_process(&spec, &self.log_dir)?;
+        #[cfg(windows)]
+        assign_child_to_windows_job(self.windows_job, &mut child)?;
+        if let Err(error) = self.record_child(id, &child) {
+            if let Some(status) = child.try_wait()? {
+                let excerpt = tail_log(&self.log_dir.join(format!("{id}.log")), 8 * 1024);
+                let suffix = excerpt
+                    .filter(|value| !value.trim().is_empty())
+                    .map(|value| format!("; recent log:\n{}", self.redact_excerpt(value)))
+                    .unwrap_or_default();
+                return Err(io::Error::other(format!(
+                    "{id} process exited with {status}{suffix}"
+                )));
+            }
+            let _ = terminate_process_group(&mut child);
+            return Err(io::Error::other(format!(
+                "could not record ownership of {id}: {error}"
+            )));
+        }
         self.state
             .lock()
             .expect("host process lock poisoned")
@@ -639,7 +740,43 @@ impl HostProcessManager {
                     .clone(),
             );
         }
+        let generation = self
+            .runtime_generation
+            .lock()
+            .expect("runtime generation lock poisoned")
+            .clone();
+        if !generation.is_empty() {
+            match id {
+                "backend" => {
+                    spec.env
+                        .insert("LEMMA_RUNTIME_INSTANCE_ID".into(), generation.clone());
+                }
+                "frontend" => {
+                    spec.env.insert(
+                        "NEXT_PUBLIC_LEMMA_RUNTIME_INSTANCE_ID".into(),
+                        generation.clone(),
+                    );
+                }
+                _ => {}
+            }
+            if let Some(health) = spec.health.as_mut() {
+                health.expected_body = Some(generation);
+            }
+        }
         Ok(spec)
+    }
+
+    fn health_spec(&self, id: &str) -> Option<HttpHealthSpec> {
+        let mut health = self.by_id.get(id)?.health.clone()?;
+        let generation = self
+            .runtime_generation
+            .lock()
+            .expect("runtime generation lock poisoned")
+            .clone();
+        if !generation.is_empty() {
+            health.expected_body = Some(generation);
+        }
+        Some(health)
     }
 
     fn stop_process(&self, id: &str) -> io::Result<()> {
@@ -649,10 +786,14 @@ impl HostProcessManager {
             .expect("host process lock poisoned")
             .children
             .remove(id);
-        match child {
+        let result = match child {
             Some(mut child) => terminate_process_group(&mut child.child),
             None => Ok(()),
+        };
+        if result.is_ok() {
+            self.remove_ledger_entry(id)?;
         }
+        result
     }
 
     fn release_idle_port_for(&self, id: &str) {
@@ -714,7 +855,8 @@ impl HostProcessManager {
         }
         for (id, exit) in exited {
             state.children.remove(&id);
-            state.last_exit.insert(id, exit);
+            state.last_exit.insert(id.clone(), exit);
+            let _ = self.remove_ledger_entry(&id);
         }
     }
 
@@ -768,8 +910,8 @@ impl HostProcessManager {
             if ready_to_spawn {
                 let result = self.spawn_if_missing(id);
                 let result = result.and_then(|_| {
-                    if let Some(health) = &spec.health {
-                        if let Err(error) = self.wait_process_health(id, health) {
+                    if let Some(health) = self.health_spec(id) {
+                        if let Err(error) = self.wait_process_health(id, &health) {
                             let _ = self.stop_process(id);
                             return Err(error);
                         }
@@ -871,6 +1013,314 @@ impl HostProcessManager {
         }
         excerpt
     }
+
+    fn record_child(&self, id: &str, child: &Child) -> io::Result<()> {
+        let _guard = self
+            .process_ledger_lock
+            .lock()
+            .expect("process ledger lock poisoned");
+        let identity = process_identity(child.id())?;
+        let generation = self
+            .runtime_generation
+            .lock()
+            .expect("runtime generation lock poisoned")
+            .clone();
+        let mut ledger = read_process_ledger(&self.process_ledger_path)
+            .filter(|ledger| ledger.installation_id == self.installation_id)
+            .unwrap_or_else(|| ProcessLedger {
+                schema_version: PROCESS_LEDGER_SCHEMA_VERSION,
+                installation_id: self.installation_id.clone(),
+                entries: Vec::new(),
+            });
+        ledger.entries.retain(|entry| entry.service_id != id);
+        ledger.entries.push(ProcessLedgerEntry {
+            service_id: id.to_owned(),
+            pid: child.id(),
+            executable: identity.executable,
+            start_identity: identity.start_identity,
+            installation_id: self.installation_id.clone(),
+            runtime_generation: generation,
+        });
+        write_process_ledger(&self.process_ledger_path, &ledger)
+    }
+
+    fn remove_ledger_entry(&self, id: &str) -> io::Result<()> {
+        let _guard = self
+            .process_ledger_lock
+            .lock()
+            .expect("process ledger lock poisoned");
+        let Some(mut ledger) = read_process_ledger(&self.process_ledger_path) else {
+            return Ok(());
+        };
+        if ledger.installation_id != self.installation_id {
+            return Ok(());
+        }
+        ledger.entries.retain(|entry| entry.service_id != id);
+        write_process_ledger(&self.process_ledger_path, &ledger)
+    }
+}
+
+pub(crate) fn reclaim_persisted_installation_processes(state_root: &Path) -> io::Result<()> {
+    let manifest_path = state_root.join("host-pack.json");
+    let raw = match fs::read_to_string(&manifest_path) {
+        Ok(raw) => raw,
+        Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(()),
+        Err(error) => return Err(error),
+    };
+    // A damaged prior manifest is not sufficient proof of ownership. Leave
+    // every process untouched; dynamic port allocation will safely route
+    // around any listener that remains.
+    let Ok(manifest) = serde_json::from_str::<HostPackManifest>(&raw) else {
+        return Ok(());
+    };
+    let installation_id = load_or_create_installation_id(state_root)?;
+    reclaim_verified_processes(
+        &state_root.join("processes.json"),
+        &installation_id,
+        &manifest,
+    )
+}
+
+fn load_or_create_installation_id(root: &Path) -> io::Result<String> {
+    let path = root.join("installation.id");
+    if let Ok(value) = fs::read_to_string(&path) {
+        let value = value.trim();
+        if value.len() == 32 && value.bytes().all(|byte| byte.is_ascii_hexdigit()) {
+            return Ok(value.to_owned());
+        }
+    }
+    let value = random_generation()?;
+    write_private_atomic(&path, format!("{value}\n").as_bytes())?;
+    Ok(value)
+}
+
+fn read_process_ledger(path: &Path) -> Option<ProcessLedger> {
+    let raw = fs::read(path).ok()?;
+    if raw.len() > 1024 * 1024 {
+        return None;
+    }
+    let ledger = serde_json::from_slice::<ProcessLedger>(&raw).ok()?;
+    (ledger.schema_version == PROCESS_LEDGER_SCHEMA_VERSION).then_some(ledger)
+}
+
+fn write_process_ledger(path: &Path, ledger: &ProcessLedger) -> io::Result<()> {
+    write_private_atomic(path, &serde_json::to_vec_pretty(ledger)?)
+}
+
+fn write_private_atomic(path: &Path, contents: &[u8]) -> io::Result<()> {
+    let parent = path
+        .parent()
+        .ok_or_else(|| io::Error::other("process ledger has no parent"))?;
+    fs::create_dir_all(parent)?;
+    let temporary = parent.join(format!(
+        ".processes-{}-{}.tmp",
+        std::process::id(),
+        random_generation()?
+    ));
+    let _ = fs::remove_file(&temporary);
+    let mut options = OpenOptions::new();
+    options.write(true).create_new(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        options.mode(0o600);
+    }
+    let mut file = options.open(&temporary)?;
+    file.write_all(contents)?;
+    file.sync_all()?;
+    replace_private_file(&temporary, path)?;
+    #[cfg(unix)]
+    File::open(parent)?.sync_all()?;
+    Ok(())
+}
+
+fn replace_private_file(source: &Path, destination: &Path) -> io::Result<()> {
+    #[cfg(windows)]
+    if destination.exists() {
+        fs::remove_file(destination)?;
+    }
+    #[cfg(not(windows))]
+    let _ = destination;
+    fs::rename(source, destination)
+}
+
+fn reclaim_verified_processes(
+    ledger_path: &Path,
+    installation_id: &str,
+    manifest: &HostPackManifest,
+) -> io::Result<()> {
+    let Some(ledger) = read_process_ledger(ledger_path) else {
+        return Ok(());
+    };
+    if ledger.installation_id != installation_id {
+        return Ok(());
+    }
+    for entry in &ledger.entries {
+        if entry.installation_id != installation_id
+            || entry.runtime_generation.len() != 32
+            || !entry
+                .runtime_generation
+                .bytes()
+                .all(|byte| byte.is_ascii_hexdigit())
+        {
+            continue;
+        }
+        let Some(spec) = manifest
+            .services
+            .iter()
+            .find(|spec| spec.id == entry.service_id)
+        else {
+            continue;
+        };
+        let Some(expected) = spec
+            .command
+            .first()
+            .and_then(|path| Path::new(path).canonicalize().ok())
+        else {
+            continue;
+        };
+        let Ok(identity) = process_identity(entry.pid) else {
+            continue;
+        };
+        if identity.executable == entry.executable
+            && identity.start_identity == entry.start_identity
+            && Path::new(&identity.executable)
+                .canonicalize()
+                .is_ok_and(|actual| actual == expected)
+        {
+            terminate_verified_process(entry.pid)?;
+        }
+    }
+    write_process_ledger(
+        ledger_path,
+        &ProcessLedger {
+            schema_version: PROCESS_LEDGER_SCHEMA_VERSION,
+            installation_id: installation_id.to_owned(),
+            entries: Vec::new(),
+        },
+    )
+}
+
+#[cfg(unix)]
+fn process_identity(pid: u32) -> io::Result<ProcessIdentity> {
+    let pid = pid.to_string();
+    let executable = Command::new("/bin/ps")
+        .args(["-p", &pid, "-o", "comm="])
+        .output()?;
+    let started = Command::new("/bin/ps")
+        .args(["-p", &pid, "-o", "lstart="])
+        .output()?;
+    if !executable.status.success() || !started.status.success() {
+        return Err(io::Error::new(io::ErrorKind::NotFound, "process not found"));
+    }
+    let executable = String::from_utf8(executable.stdout)
+        .map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error))?;
+    let executable = Path::new(executable.trim())
+        .canonicalize()?
+        .to_string_lossy()
+        .into_owned();
+    let start_identity = String::from_utf8(started.stdout)
+        .map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error))?
+        .trim()
+        .to_owned();
+    if start_identity.is_empty() {
+        return Err(io::Error::other("process start identity was empty"));
+    }
+    Ok(ProcessIdentity {
+        executable,
+        start_identity,
+    })
+}
+
+#[cfg(unix)]
+fn terminate_verified_process(pid: u32) -> io::Result<()> {
+    let pid = i32::try_from(pid).map_err(|_| io::Error::other("invalid process id"))?;
+    // SAFETY: the caller has matched installation, executable and OS start identity.
+    let result = unsafe { libc::kill(pid, libc::SIGTERM) };
+    if result != 0 {
+        let error = io::Error::last_os_error();
+        if error.raw_os_error() == Some(libc::ESRCH) {
+            return Ok(());
+        }
+        return Err(error);
+    }
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while Instant::now() < deadline {
+        // SAFETY: signal zero only checks whether this exact PID still exists.
+        if unsafe { libc::kill(pid, 0) } != 0 {
+            return Ok(());
+        }
+        thread::sleep(Duration::from_millis(50));
+    }
+    // SAFETY: identity was checked immediately before termination.
+    unsafe { libc::kill(pid, libc::SIGKILL) };
+    Ok(())
+}
+
+#[cfg(windows)]
+fn process_identity(pid: u32) -> io::Result<ProcessIdentity> {
+    use windows_sys::Win32::Foundation::{CloseHandle, FILETIME};
+    use windows_sys::Win32::System::Threading::{
+        GetProcessTimes, OpenProcess, QueryFullProcessImageNameW, PROCESS_QUERY_LIMITED_INFORMATION,
+    };
+
+    let handle = unsafe { OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, 0, pid) };
+    if handle.is_null() {
+        return Err(io::Error::last_os_error());
+    }
+    let result = (|| {
+        let mut path = vec![0_u16; 32_768];
+        let mut path_len = path.len() as u32;
+        if unsafe { QueryFullProcessImageNameW(handle, 0, path.as_mut_ptr(), &mut path_len) } == 0 {
+            return Err(io::Error::last_os_error());
+        }
+        let executable = PathBuf::from(String::from_utf16_lossy(&path[..path_len as usize]))
+            .canonicalize()?
+            .to_string_lossy()
+            .into_owned();
+        let mut creation: FILETIME = unsafe { std::mem::zeroed() };
+        let mut exit: FILETIME = unsafe { std::mem::zeroed() };
+        let mut kernel: FILETIME = unsafe { std::mem::zeroed() };
+        let mut user: FILETIME = unsafe { std::mem::zeroed() };
+        if unsafe { GetProcessTimes(handle, &mut creation, &mut exit, &mut kernel, &mut user) } == 0
+        {
+            return Err(io::Error::last_os_error());
+        }
+        Ok(ProcessIdentity {
+            executable,
+            start_identity: format!(
+                "{:08x}{:08x}",
+                creation.dwHighDateTime, creation.dwLowDateTime
+            ),
+        })
+    })();
+    unsafe { CloseHandle(handle) };
+    result
+}
+
+#[cfg(windows)]
+fn terminate_verified_process(pid: u32) -> io::Result<()> {
+    use windows_sys::Win32::Foundation::CloseHandle;
+    use windows_sys::Win32::System::Threading::{
+        OpenProcess, TerminateProcess, PROCESS_QUERY_LIMITED_INFORMATION, PROCESS_TERMINATE,
+    };
+    let handle = unsafe {
+        OpenProcess(
+            PROCESS_QUERY_LIMITED_INFORMATION | PROCESS_TERMINATE,
+            0,
+            pid,
+        )
+    };
+    if handle.is_null() {
+        return Err(io::Error::last_os_error());
+    }
+    let result = if unsafe { TerminateProcess(handle, 1) } == 0 {
+        Err(io::Error::last_os_error())
+    } else {
+        Ok(())
+    };
+    unsafe { CloseHandle(handle) };
+    result
 }
 
 fn sensitive_key(key: &str) -> bool {
@@ -878,6 +1328,13 @@ fn sensitive_key(key: &str) -> bool {
     ["password", "secret", "token", "api_key", "apikey"]
         .iter()
         .any(|marker| key.contains(marker))
+}
+
+fn random_generation() -> io::Result<String> {
+    let mut bytes = [0_u8; 16];
+    getrandom::fill(&mut bytes)
+        .map_err(|error| io::Error::other(format!("runtime generation failed: {error}")))?;
+    Ok(bytes.iter().map(|byte| format!("{byte:02x}")).collect())
 }
 
 fn reserve_managed_app_ports(manifest: &HostPackManifest) -> io::Result<HashMap<u16, TcpListener>> {
@@ -1075,7 +1532,64 @@ fn spawn_command(
     command.spawn()
 }
 
+#[cfg(windows)]
+fn create_windows_job() -> io::Result<usize> {
+    use windows_sys::Win32::System::JobObjects::{
+        CreateJobObjectW, JobObjectExtendedLimitInformation, SetInformationJobObject,
+        JOBOBJECT_EXTENDED_LIMIT_INFORMATION, JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE,
+    };
+
+    let handle = unsafe { CreateJobObjectW(std::ptr::null(), std::ptr::null()) };
+    if handle.is_null() {
+        return Err(io::Error::last_os_error());
+    }
+    let mut limits: JOBOBJECT_EXTENDED_LIMIT_INFORMATION = unsafe { std::mem::zeroed() };
+    limits.BasicLimitInformation.LimitFlags = JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE;
+    let configured = unsafe {
+        SetInformationJobObject(
+            handle,
+            JobObjectExtendedLimitInformation,
+            &limits as *const _ as *const _,
+            std::mem::size_of_val(&limits) as u32,
+        )
+    };
+    if configured == 0 {
+        unsafe { windows_sys::Win32::Foundation::CloseHandle(handle) };
+        return Err(io::Error::last_os_error());
+    }
+    Ok(handle as usize)
+}
+
+#[cfg(windows)]
+fn assign_child_to_windows_job(job: usize, child: &mut Child) -> io::Result<()> {
+    use std::os::windows::io::AsRawHandle;
+    use windows_sys::Win32::System::JobObjects::AssignProcessToJobObject;
+    let assigned = unsafe { AssignProcessToJobObject(job as _, child.as_raw_handle() as _) };
+    if assigned == 0 {
+        let error = io::Error::last_os_error();
+        let _ = child.kill();
+        let _ = child.wait();
+        Err(error)
+    } else {
+        Ok(())
+    }
+}
+
+#[cfg(windows)]
+impl Drop for HostProcessManager {
+    fn drop(&mut self) {
+        if self.windows_job != 0 {
+            unsafe {
+                windows_sys::Win32::Foundation::CloseHandle(self.windows_job as _);
+            }
+            self.windows_job = 0;
+        }
+    }
+}
+
 fn process_log(log_dir: &Path, id: &str) -> io::Result<File> {
+    let path = log_dir.join(format!("{id}.log"));
+    rotate_log(&path, 5 * 1024 * 1024)?;
     let mut options = OpenOptions::new();
     options.create(true).append(true);
     #[cfg(unix)]
@@ -1083,7 +1597,19 @@ fn process_log(log_dir: &Path, id: &str) -> io::Result<File> {
         use std::os::unix::fs::OpenOptionsExt;
         options.mode(0o600);
     }
-    options.open(log_dir.join(format!("{id}.log")))
+    options.open(path)
+}
+
+fn rotate_log(path: &Path, max_bytes: u64) -> io::Result<()> {
+    if path
+        .metadata()
+        .is_ok_and(|metadata| metadata.len() >= max_bytes)
+    {
+        let previous = path.with_extension("previous.log");
+        let _ = fs::remove_file(&previous);
+        fs::rename(path, previous)?;
+    }
+    Ok(())
 }
 
 #[cfg(unix)]
@@ -1467,6 +1993,82 @@ mod tests {
         manager.stop_all().unwrap();
         assert!(manager.status().iter().all(|process| !process.running));
         assert_eq!(manager.status_event(None)["ready"], false);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn process_ledger_reclaims_only_an_exact_owned_process() {
+        let root = tempdir().unwrap();
+        let ledger_path = root.path().join("processes.json");
+        let installation_id = "0123456789abcdef0123456789abcdef";
+        let mut child = Command::new("/bin/sleep").arg("30").spawn().unwrap();
+        let identity = process_identity(child.id()).unwrap();
+        let mut backend = service("backend", &[]);
+        backend.command = vec!["/bin/sleep".into(), "30".into()];
+        let value = manifest(vec![backend, service("frontend", &["backend"])]);
+        write_process_ledger(
+            &ledger_path,
+            &ProcessLedger {
+                schema_version: PROCESS_LEDGER_SCHEMA_VERSION,
+                installation_id: installation_id.into(),
+                entries: vec![ProcessLedgerEntry {
+                    service_id: "backend".into(),
+                    pid: child.id(),
+                    executable: identity.executable,
+                    start_identity: identity.start_identity,
+                    installation_id: installation_id.into(),
+                    runtime_generation: "0123456789abcdef0123456789abcdef".into(),
+                }],
+            },
+        )
+        .unwrap();
+
+        reclaim_verified_processes(&ledger_path, installation_id, &value).unwrap();
+
+        let deadline = Instant::now() + Duration::from_secs(2);
+        while child.try_wait().unwrap().is_none() && Instant::now() < deadline {
+            thread::sleep(Duration::from_millis(20));
+        }
+        assert!(child.try_wait().unwrap().is_some());
+        assert!(read_process_ledger(&ledger_path)
+            .unwrap()
+            .entries
+            .is_empty());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn process_ledger_never_kills_a_pid_with_the_wrong_start_identity() {
+        let root = tempdir().unwrap();
+        let ledger_path = root.path().join("processes.json");
+        let installation_id = "0123456789abcdef0123456789abcdef";
+        let mut child = Command::new("/bin/sleep").arg("30").spawn().unwrap();
+        let identity = process_identity(child.id()).unwrap();
+        let mut backend = service("backend", &[]);
+        backend.command = vec!["/bin/sleep".into(), "30".into()];
+        let value = manifest(vec![backend, service("frontend", &["backend"])]);
+        write_process_ledger(
+            &ledger_path,
+            &ProcessLedger {
+                schema_version: PROCESS_LEDGER_SCHEMA_VERSION,
+                installation_id: installation_id.into(),
+                entries: vec![ProcessLedgerEntry {
+                    service_id: "backend".into(),
+                    pid: child.id(),
+                    executable: identity.executable,
+                    start_identity: "different-process-start".into(),
+                    installation_id: installation_id.into(),
+                    runtime_generation: "0123456789abcdef0123456789abcdef".into(),
+                }],
+            },
+        )
+        .unwrap();
+
+        reclaim_verified_processes(&ledger_path, installation_id, &value).unwrap();
+
+        assert!(child.try_wait().unwrap().is_none());
+        child.kill().unwrap();
+        child.wait().unwrap();
     }
 
     #[cfg(unix)]

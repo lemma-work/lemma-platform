@@ -793,46 +793,65 @@ impl Daemon {
         manager: &HostProcessManager,
         operation_id: Option<&Value>,
     ) -> io::Result<()> {
-        self.prepare_private_infra()?;
+        let runtime_generation = manager.prepare_runtime_generation()?;
+        self.prepare_private_infra(operation_id, &runtime_generation)?;
         manager.mark_dependency_ready();
         let mut backend_environment = self.operator_config.backend_environment()?;
         if let Some(runtime) = self.managed_runtime.as_ref() {
             backend_environment.extend(runtime.backend_environment()?);
         }
         manager.set_backend_environment(backend_environment);
-        self.broadcast(json!({
-            "v": PROTOCOL_VERSION, "event": "phase", "key": "migrations",
-            "label": "Checking workspace data", "progress": 68,
-            "detail": "applying native database migrations",
-            "operation_id": operation_id,
-            "component": "migrations",
-            "log_source": "migrations",
-        }));
-        self.broadcast(json!({
-            "v": PROTOCOL_VERSION, "event": "phase", "key": "backend",
-            "label": "Preparing backend", "progress": 82, "detail": "starting host pack",
-            "operation_id": operation_id,
-            "component": "backend",
-            "log_source": "backend",
-        }));
-        manager.start_all()?;
-        self.broadcast(json!({
-            "v": PROTOCOL_VERSION, "event": "phase", "key": "frontend",
-            "label": "Preparing Lemma", "progress": 90, "detail": "host packs healthy",
-            "operation_id": operation_id,
-            "component": "frontend",
-            "log_source": "frontend",
-        }));
+        manager.start_all_with_progress(|component| {
+            let (label, progress, detail, log_source) = match component {
+                "migrations" => (
+                    "Checking workspace data",
+                    68,
+                    "applying native database migrations",
+                    "migrations",
+                ),
+                "backend" => (
+                    "Starting the Lemma backend",
+                    78,
+                    "starting API, workers, schedules, AgentBox, and document processing",
+                    "backend",
+                ),
+                "frontend" => (
+                    "Starting the Lemma interface",
+                    90,
+                    "starting the local Next.js application",
+                    "frontend",
+                ),
+                _ => ("Starting Lemma", 75, "starting a host component", "locald"),
+            };
+            self.broadcast(json!({
+                "v": PROTOCOL_VERSION,
+                "event": "phase",
+                "key": component,
+                "stage": component,
+                "label": label,
+                "progress": progress,
+                "detail": detail,
+                "current": 0,
+                "total": 1,
+                "bytes": false,
+                "operation_id": operation_id,
+                "runtime_generation": runtime_generation,
+                "component": component,
+                "log_source": log_source,
+            }));
+        })?;
         let state = self.state.lock().expect("state lock poisoned").clone();
         self.broadcast(json!({
             "v": PROTOCOL_VERSION, "event": "phase", "key": "ready",
             "label": "Lemma is ready", "progress": 100, "detail": "",
             "operation_id": operation_id,
+            "runtime_generation": runtime_generation,
         }));
         self.broadcast(json!({
             "v": PROTOCOL_VERSION, "event": "state", "status": "running",
             "running": true, "ready": true,
             "operation_id": operation_id,
+            "runtime_generation": runtime_generation,
         }));
         self.broadcast(json!({
             "v": PROTOCOL_VERSION, "event": "ready", "url": state.url,
@@ -841,6 +860,7 @@ impl Daemon {
             "release": manager.release(),
             "capabilities": manager.capabilities(),
             "operation_id": operation_id,
+            "runtime_generation": runtime_generation,
         }));
         Ok(())
     }
@@ -880,14 +900,30 @@ impl Daemon {
         Ok(())
     }
 
-    fn prepare_private_infra(self: &Arc<Self>) -> io::Result<()> {
+    fn prepare_private_infra(
+        self: &Arc<Self>,
+        operation_id: Option<&Value>,
+        runtime_generation: &str,
+    ) -> io::Result<()> {
         if let Some(runtime) = self.managed_runtime.as_ref() {
-            self.broadcast(json!({
-                "v": PROTOCOL_VERSION, "event": "phase", "key": "runtime",
-                "label": "Preparing private runtime", "progress": 38,
-                "detail": "starting app-owned Linux services",
-            }));
-            return runtime.start();
+            return runtime.start_with_progress(|component, label, progress, detail| {
+                self.broadcast(json!({
+                    "v": PROTOCOL_VERSION,
+                    "event": "phase",
+                    "key": component,
+                    "stage": component,
+                    "label": label,
+                    "progress": progress,
+                    "detail": detail,
+                    "current": 0,
+                    "total": 1,
+                    "bytes": false,
+                    "operation_id": operation_id,
+                    "runtime_generation": runtime_generation,
+                    "component": component,
+                    "log_source": if component == "vm" { "vm" } else { "guest" },
+                }));
+            });
         }
         self.wait_for_supervisor(json!({
             "cmd": "start", "setup": false, "rebuild": false, "infra_only": true,
@@ -1127,6 +1163,17 @@ impl Daemon {
 
     fn write_daemon_log(&self, line: &str) -> io::Result<()> {
         use std::fs::OpenOptions;
+        const MAX_DAEMON_LOG_BYTES: u64 = 5 * 1024 * 1024;
+        if self
+            .paths
+            .log
+            .metadata()
+            .is_ok_and(|metadata| metadata.len() >= MAX_DAEMON_LOG_BYTES)
+        {
+            let previous = self.paths.log.with_extension("previous.log");
+            let _ = std::fs::remove_file(&previous);
+            std::fs::rename(&self.paths.log, previous)?;
+        }
         let mut file = OpenOptions::new()
             .create(true)
             .append(true)

@@ -50,6 +50,7 @@ pub(crate) fn prepare(
     pack_root: &Path,
     material: ManagedManifestMaterial,
 ) -> io::Result<PathBuf> {
+    crate::host_process::reclaim_persisted_installation_processes(&paths.root)?;
     let ports = load_or_allocate(paths)?;
     let manifest = build(paths, pack_root, &material, ports)?;
     let destination = paths.root.join("host-pack.json");

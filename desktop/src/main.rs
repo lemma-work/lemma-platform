@@ -12,6 +12,7 @@ use serde_json::{json, Value};
 use std::io::{BufRead, BufReader, Read, Seek, SeekFrom, Write};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Mutex;
 use std::time::Duration;
 use tauri::menu::{CheckMenuItem, Menu, MenuItem, PredefinedMenuItem};
@@ -46,6 +47,7 @@ struct UiState {
     eta_seconds: Option<u64>,
     downloaded_bytes: Option<u64>,
     total_bytes: Option<u64>,
+    throughput_bytes_per_second: Option<u64>,
     setup: bool,
     error: bool,
     ready: bool,
@@ -53,8 +55,11 @@ struct UiState {
     mode: String,
     url: String,
     log_source: String,
+    component: String,
     #[serde(skip)]
     active_operation_id: String,
+    #[serde(skip)]
+    completed_operation_ids: Vec<String>,
     #[serde(skip)]
     terminal_recovery_pending: bool,
 }
@@ -83,13 +88,14 @@ struct DiagnosticLogSnapshot {
     sources: Vec<DiagnosticLogSource>,
     source: String,
     entries: String,
-    next_cursor: u64,
+    next_cursor: String,
 }
 
 struct Shell {
     ui: Mutex<UiState>,
     locald_writer: Mutex<Option<SendHalf>>,
     locald_connect: Mutex<()>,
+    quit_after_stop: AtomicBool,
 }
 
 struct LocaldConnection {
@@ -113,6 +119,7 @@ impl Shell {
             ui: Mutex::new(ui),
             locald_writer: Mutex::new(None),
             locald_connect: Mutex::new(()),
+            quit_after_stop: AtomicBool::new(false),
         }
     }
 }
@@ -695,7 +702,7 @@ fn ensure_runtime_artifacts_inner(app: &AppHandle) -> Result<(), String> {
     // recorded artifact identity was written only after the manifest, archive
     // digests, extracted layout, and release markers were verified. Reuse that
     // exact release without consulting the artifact host so ordinary Finder /
-    // Start-menu launches and offline restarts keep working.
+    // Start-menu launches and later cached-runtime restarts keep working.
     //
     // Explicit repair first quarantines the active directory, so it cannot
     // take this path and still re-verifies/downloads from the current manifest.
@@ -726,29 +733,87 @@ fn ensure_runtime_artifacts_inner(app: &AppHandle) -> Result<(), String> {
             return Ok(());
         }
     }
-    emit_runtime_install_progress(app, "Preparing local runtime", 1, None, None);
+    let install_operation_id = operation_id("runtime-install");
+    {
+        let shell: State<Shell> = app.state();
+        let mut ui = shell.ui.lock().unwrap();
+        ui.active_operation_id = install_operation_id.clone();
+    }
+    emit_runtime_install_progress(
+        app,
+        "resolve",
+        "runtime",
+        "Preparing local runtime",
+        1,
+        None,
+        None,
+        None,
+        None,
+    );
+    let install_started = std::time::Instant::now();
     let installed = artifact_install::install_from_manifest(
         &manifest,
         &runtime_install_root(),
         env!("CARGO_PKG_VERSION"),
         &mut |progress| {
-            let percent = if progress.total == 0 {
-                1
+            let fraction = if progress.total == 0 {
+                0
             } else {
-                2 + progress.downloaded.saturating_mul(88) / progress.total
+                progress.current.saturating_mul(1000) / progress.total
             };
+            let percent = match progress.stage {
+                "download" => 2 + fraction.saturating_mul(44) / 1000,
+                "verify" => 47,
+                "host-extract" | "guest-extract" => 49 + fraction.saturating_mul(39) / 1000,
+                "validate" => 90,
+                _ => 1,
+            };
+            let (eta_seconds, throughput_bytes_per_second) =
+                if progress.stage == "download" && progress.current > 0 {
+                    let elapsed = install_started.elapsed().as_secs_f64();
+                    let rate = progress.current as f64 / elapsed.max(0.001);
+                    (
+                        (progress.current < progress.total).then_some(
+                            ((progress.total - progress.current) as f64 / rate).ceil() as u64,
+                        ),
+                        Some(rate.round() as u64),
+                    )
+                } else {
+                    (None, None)
+                };
             emit_runtime_install_progress(
                 app,
+                progress.stage,
+                progress.component,
                 progress.label,
                 percent.min(90),
-                Some(progress.downloaded),
-                Some(progress.total),
+                progress.bytes.then_some(progress.current),
+                progress.bytes.then_some(progress.total),
+                eta_seconds,
+                throughput_bytes_per_second,
             );
         },
     )
     .map_err(|error| format!("could not install the local runtime: {error}"))?;
     activate_installed_runtime(&installed)?;
-    emit_runtime_install_progress(app, "Local runtime installed", 92, None, None);
+    emit_runtime_install_progress(
+        app,
+        "activate",
+        "runtime",
+        "Local runtime installed",
+        92,
+        None,
+        None,
+        None,
+        None,
+    );
+    {
+        let shell: State<Shell> = app.state();
+        let mut ui = shell.ui.lock().unwrap();
+        if ui.active_operation_id == install_operation_id {
+            ui.active_operation_id.clear();
+        }
+    }
     Ok(())
 }
 
@@ -756,7 +821,7 @@ fn actionable_runtime_install_error(error: &str) -> String {
     if error.contains("artifact download failed with HTTP 404") {
         return format!(
             "The runtime package for Lemma {} is not published yet (HTTP 404). \
-             Use this build's matching offline installer or publish its runtime artifacts.",
+             Publish its runtime artifacts, or use the compressed PR test DMG for this exact commit.",
             env!("CARGO_PKG_VERSION")
         );
     }
@@ -789,10 +854,14 @@ fn activate_installed_runtime(
 
 fn emit_runtime_install_progress(
     app: &AppHandle,
+    stage: &str,
+    component: &str,
     label: &str,
     progress: u64,
     downloaded_bytes: Option<u64>,
     total_bytes: Option<u64>,
+    eta_seconds: Option<u64>,
+    throughput_bytes_per_second: Option<u64>,
 ) {
     let detail = match (downloaded_bytes, total_bytes) {
         (Some(downloaded), Some(total)) if total > 0 => format!(
@@ -809,11 +878,14 @@ fn emit_runtime_install_progress(
         let mut ui = shell.ui.lock().unwrap();
         ui.setup = true;
         ui.phase = label.to_owned();
-        ui.phase_key = "runtime-install".into();
+        ui.phase_key = stage.to_owned();
+        ui.component = component.to_owned();
         ui.progress = progress;
         ui.status = detail;
         ui.downloaded_bytes = downloaded_bytes;
         ui.total_bytes = total_bytes;
+        ui.eta_seconds = eta_seconds;
+        ui.throughput_bytes_per_second = throughput_bytes_per_second;
         ui.clone()
     };
     let _ = app.emit("lemma:state", snapshot);
@@ -829,10 +901,12 @@ fn emit_runtime_install_error(app: &AppHandle, message: &str) {
         ui.status = message.to_owned();
         ui.downloaded_bytes = None;
         ui.total_bytes = None;
+        ui.throughput_bytes_per_second = None;
         ui.error = true;
         ui.error_code = "runtime-install-failed".into();
         ui.ready = false;
         ui.running = false;
+        ui.active_operation_id.clear();
         ui.clone()
     };
     let _ = app.emit("lemma:state", snapshot);
@@ -1083,9 +1157,19 @@ fn handle_locald_event(app: &AppHandle, event: &Value) {
             }
         });
     if let Some(event_operation_id) = event_operation_id {
-        let active = shell.ui.lock().unwrap().active_operation_id.clone();
-        if !active.is_empty() && active != event_operation_id {
+        let mut ui = shell.ui.lock().unwrap();
+        if !ui.active_operation_id.is_empty() && ui.active_operation_id != event_operation_id {
             return;
+        }
+        if ui.active_operation_id.is_empty() {
+            if ui
+                .completed_operation_ids
+                .iter()
+                .any(|completed| completed == event_operation_id)
+            {
+                return;
+            }
+            ui.active_operation_id = event_operation_id.to_owned();
         }
     }
     let _ = app.emit_to("control", "lemma:locald-event", event.clone());
@@ -1106,7 +1190,11 @@ fn handle_locald_event(app: &AppHandle, event: &Value) {
                 ui.eta_seconds = event["eta_s"].as_u64();
                 ui.downloaded_bytes = None;
                 ui.total_bytes = None;
+                ui.throughput_bytes_per_second = None;
                 ui.setup = event["setup"].as_bool().unwrap_or(ui.setup);
+                if let Some(component) = event["component"].as_str() {
+                    ui.component = component.into();
+                }
                 if let Some(source) = event["log_source"].as_str() {
                     ui.log_source = source.into();
                 }
@@ -1139,6 +1227,7 @@ fn handle_locald_event(app: &AppHandle, event: &Value) {
                     ui.eta_seconds = None;
                     ui.downloaded_bytes = None;
                     ui.total_bytes = None;
+                    ui.throughput_bytes_per_second = None;
                     ui.status = "Local services are stopped".into();
                 }
             }
@@ -1175,6 +1264,7 @@ fn handle_locald_event(app: &AppHandle, event: &Value) {
                             .unwrap_or(ui.progress);
                         ui.downloaded_bytes = None;
                         ui.total_bytes = None;
+                        ui.throughput_bytes_per_second = None;
                         let detail = phase.get("detail").and_then(Value::as_str).unwrap_or("");
                         ui.status = if detail.is_empty() {
                             ui.phase.clone()
@@ -1189,6 +1279,7 @@ fn handle_locald_event(app: &AppHandle, event: &Value) {
                         ui.eta_seconds = None;
                         ui.downloaded_bytes = None;
                         ui.total_bytes = None;
+                        ui.throughput_bytes_per_second = None;
                         ui.status = "Local services are stopped".into();
                     }
                 }
@@ -1200,6 +1291,7 @@ fn handle_locald_event(app: &AppHandle, event: &Value) {
                 ui.error_code.clear();
                 ui.downloaded_bytes = None;
                 ui.total_bytes = None;
+                ui.throughput_bytes_per_second = None;
                 // Main, API, built-app, and workspace-app hosts all live below
                 // the reserved lemma.localhost loopback cookie boundary.
                 if let Some(url) = event["url"].as_str() {
@@ -1227,6 +1319,9 @@ fn handle_locald_event(app: &AppHandle, event: &Value) {
                     ui.error = true;
                     ui.error_code = code.into();
                     ui.status = event["message"].as_str().unwrap_or("startup failed").into();
+                    if let Some(component) = event["component"].as_str() {
+                        ui.component = component.into();
+                    }
                     if let Some(source) = event["log_source"].as_str() {
                         ui.log_source = source.into();
                     }
@@ -1254,6 +1349,11 @@ fn handle_locald_event(app: &AppHandle, event: &Value) {
             }
             "done" => {
                 if event_operation_id.is_some_and(|id| id == ui.active_operation_id) {
+                    let completed_operation_id = ui.active_operation_id.clone();
+                    ui.completed_operation_ids.push(completed_operation_id);
+                    if ui.completed_operation_ids.len() > 16 {
+                        ui.completed_operation_ids.remove(0);
+                    }
                     ui.active_operation_id.clear();
                 }
             }
@@ -1273,6 +1373,15 @@ fn handle_locald_event(app: &AppHandle, event: &Value) {
     };
 
     let _ = app.emit("lemma:state", snapshot);
+    let quit_after_stop = kind == "done"
+        && event["cmd"].as_str() == Some("stop")
+        && event["ok"].as_bool() == Some(true)
+        && shell.quit_after_stop.swap(false, Ordering::AcqRel);
+    if quit_after_stop {
+        disconnect_locald(app);
+        app.exit(0);
+        return;
+    }
     if schedule_terminal_recovery {
         let app = app.clone();
         std::thread::spawn(move || {
@@ -1334,16 +1443,36 @@ fn show_splash(app: &AppHandle) {
 }
 
 fn show_control_center(app: &AppHandle) -> Result<(), String> {
+    show_control_center_page(app, None)
+}
+
+fn show_control_center_page(app: &AppHandle, page: Option<&str>) -> Result<(), String> {
+    let page = match page.unwrap_or("overview") {
+        "connectors" => "integrations",
+        page => page,
+    };
+    if !matches!(
+        page,
+        "overview" | "ai" | "integrations" | "surfaces" | "services" | "updates" | "diagnostics"
+    ) {
+        return Err(format!("unknown Control Center page: {page}"));
+    }
     if let Some(window) = app.get_webview_window("control") {
         window.show().map_err(|error| error.to_string())?;
         window.set_focus().map_err(|error| error.to_string())?;
+        let _ = app.emit_to("control", "lemma:control-page", page);
         return Ok(());
     }
+    let initial_script = format!(
+        "{}window.__LEMMA_CONTROL_PAGE__={};",
+        desktop_context_script(&current_mode(app)),
+        serde_json::to_string(page).unwrap_or_else(|_| "\"overview\"".into())
+    );
     let window = WebviewWindowBuilder::new(app, "control", WebviewUrl::App("control.html".into()))
         .title("Lemma Control Center")
         .inner_size(1180.0, 780.0)
         .min_inner_size(900.0, 640.0)
-        .initialization_script(desktop_context_script(&current_mode(app)))
+        .initialization_script(initial_script)
         .on_navigation(|url| url.scheme() == "tauri")
         .on_new_window(move |url, _features| {
             if matches!(url.scheme(), "http" | "https") {
@@ -1355,6 +1484,7 @@ fn show_control_center(app: &AppHandle) -> Result<(), String> {
         .map_err(|error| error.to_string())?;
     window.show().map_err(|error| error.to_string())?;
     window.set_focus().map_err(|error| error.to_string())?;
+    let _ = app.emit_to("control", "lemma:control-page", page);
     Ok(())
 }
 
@@ -1466,12 +1596,23 @@ const MAX_DIAGNOSTIC_LOG_READ: u64 = 128 * 1024;
 
 fn diagnostic_log_sources() -> Vec<(&'static str, &'static str, PathBuf)> {
     let root = locald_root();
+    #[cfg(target_os = "macos")]
+    let vm_log = root.join("logs/vz.log");
+    #[cfg(windows)]
+    let vm_log = root.join("logs/wsl.log");
+    #[cfg(all(unix, not(target_os = "macos")))]
+    let vm_log = root.join("logs/runtime.log");
+    #[cfg(target_os = "macos")]
+    let guest_log = root.join("runtime/macos/console.log");
+    #[cfg(not(target_os = "macos"))]
+    let guest_log = root.join("logs/guest.log");
     vec![
         ("events", "Events", root.join("events.jsonl")),
         ("migrations", "Migrations", root.join("logs/migrations.log")),
         ("backend", "Backend", root.join("logs/backend.log")),
         ("frontend", "Frontend", root.join("logs/frontend.log")),
-        ("infrastructure", "Infrastructure", root.join("logs/vz.log")),
+        ("vm", "VM helper", vm_log),
+        ("guest", "Guest services", guest_log),
         ("locald", "Service manager", root.join("locald.log")),
         ("installer", "Installer", install_log_path()),
     ]
@@ -1481,7 +1622,7 @@ fn diagnostic_log_sources() -> Vec<(&'static str, &'static str, PathBuf)> {
 fn diagnostic_logs(
     window: WebviewWindow,
     source: Option<String>,
-    cursor: Option<u64>,
+    cursor: Option<String>,
 ) -> Result<DiagnosticLogSnapshot, String> {
     require_local_native_window(&window)?;
     let sources = diagnostic_log_sources();
@@ -1505,7 +1646,7 @@ fn diagnostic_logs(
                 sources: public_sources,
                 source: selected.into(),
                 entries: format!("No {selected} log entries yet."),
-                next_cursor: 0,
+                next_cursor: String::new(),
             });
         }
         Err(error) => {
@@ -1515,9 +1656,14 @@ fn diagnostic_logs(
             ));
         }
     };
-    let length = file.metadata().map_err(|error| error.to_string())?.len();
+    let metadata = file.metadata().map_err(|error| error.to_string())?;
+    let length = metadata.len();
+    let identity = diagnostic_file_identity(&metadata);
     let start = cursor
-        .filter(|offset| *offset <= length)
+        .as_deref()
+        .and_then(parse_diagnostic_cursor)
+        .filter(|(cursor_identity, offset)| cursor_identity == &identity && *offset <= length)
+        .map(|(_, offset)| offset)
         .unwrap_or_else(|| length.saturating_sub(MAX_DIAGNOSTIC_LOG_READ));
     file.seek(SeekFrom::Start(start))
         .map_err(|error| error.to_string())?;
@@ -1525,7 +1671,7 @@ fn diagnostic_logs(
     file.take(MAX_DIAGNOSTIC_LOG_READ)
         .read_to_end(&mut bytes)
         .map_err(|error| error.to_string())?;
-    let next_cursor = start.saturating_add(bytes.len() as u64);
+    let next_cursor = format!("v1:{identity}:{}", start.saturating_add(bytes.len() as u64));
     let mut entries = String::from_utf8_lossy(&bytes).into_owned();
     if start > 0 {
         if let Some(newline) = entries.find('\n') {
@@ -1539,6 +1685,33 @@ fn diagnostic_logs(
         entries,
         next_cursor,
     })
+}
+
+fn parse_diagnostic_cursor(cursor: &str) -> Option<(String, u64)> {
+    let value = cursor.strip_prefix("v1:")?;
+    let (identity, offset) = value.rsplit_once(':')?;
+    Some((identity.to_owned(), offset.parse().ok()?))
+}
+
+#[cfg(unix)]
+fn diagnostic_file_identity(metadata: &std::fs::Metadata) -> String {
+    use std::os::unix::fs::MetadataExt;
+    format!("{:x}-{:x}", metadata.dev(), metadata.ino())
+}
+
+#[cfg(windows)]
+fn diagnostic_file_identity(metadata: &std::fs::Metadata) -> String {
+    use std::os::windows::fs::MetadataExt;
+    format!(
+        "{:x}-{:x}",
+        metadata.volume_serial_number().unwrap_or_default(),
+        metadata.file_index().unwrap_or_default()
+    )
+}
+
+#[cfg(not(any(unix, windows)))]
+fn diagnostic_file_identity(metadata: &std::fs::Metadata) -> String {
+    format!("{:x}", metadata.len())
 }
 
 fn redact_diagnostic_text(mut text: String) -> String {
@@ -1600,8 +1773,8 @@ fn collect_secret_json_values(value: &Value, sensitive: bool, output: &mut Vec<S
 }
 
 #[tauri::command]
-fn open_control_center(app: AppHandle) -> Result<(), String> {
-    show_control_center(&app)
+fn open_control_center(app: AppHandle, page: Option<String>) -> Result<(), String> {
+    show_control_center_page(&app, page.as_deref())
 }
 
 fn is_control_window_label(label: &str) -> bool {
@@ -1668,7 +1841,17 @@ fn repair_runtime(window: WebviewWindow, app: AppHandle) -> Result<(), String> {
         .ok_or("installed runtime has no release root")?
         .to_path_buf();
     stop_locald_for_runtime_maintenance(&app)?;
-    emit_runtime_install_progress(&app, "Isolating the damaged runtime", 1, None, None);
+    emit_runtime_install_progress(
+        &app,
+        "repair",
+        "runtime",
+        "Isolating the damaged runtime",
+        1,
+        None,
+        None,
+        None,
+        None,
+    );
     let quarantined = artifact_install::quarantine_runtime(&current)
         .map_err(|error| format!("could not isolate the installed runtime: {error}"))?;
 
@@ -1733,8 +1916,7 @@ fn set_connection_mode(app: AppHandle, mode: String) -> Result<(), String> {
         &app,
         json!({"cmd": "start", "setup": setup}),
         operation_id("shell-start"),
-    )?;
-    show_control_center(&app)
+    )
 }
 
 #[tauri::command]
@@ -1976,6 +2158,13 @@ fn build_tray(app: &AppHandle) -> tauri::Result<()> {
     let control_item =
         MenuItem::with_id(app, "control", "Local Control Center…", true, None::<&str>)?;
     let quit_item = MenuItem::with_id(app, "quit", "Quit Lemma", true, None::<&str>)?;
+    let quit_and_stop_item = MenuItem::with_id(
+        app,
+        "quit-and-stop",
+        "Quit and stop Lemma",
+        true,
+        None::<&str>,
+    )?;
     let menu = Menu::with_items(
         app,
         &[
@@ -1997,6 +2186,7 @@ fn build_tray(app: &AppHandle) -> tauri::Result<()> {
             &devtools_item,
             &PredefinedMenuItem::separator(app)?,
             &quit_item,
+            &quit_and_stop_item,
         ],
     )?;
 
@@ -2068,6 +2258,18 @@ fn build_tray(app: &AppHandle) -> tauri::Result<()> {
                 "quit" => {
                     disconnect_locald(&app);
                     app.exit(0);
+                }
+                "quit-and-stop" => {
+                    if current_mode(&app) == "local" {
+                        let shell: State<Shell> = app.state();
+                        shell.quit_after_stop.store(true, Ordering::Release);
+                        if stop(app.clone(), Some(true)).is_err() {
+                            shell.quit_after_stop.store(false, Ordering::Release);
+                        }
+                    } else {
+                        disconnect_locald(&app);
+                        app.exit(0);
+                    }
                 }
                 _ => {}
             }
@@ -2288,7 +2490,7 @@ mod tests {
             "could not install local runtime: artifact download failed with HTTP 404",
         );
         assert!(message.contains("not published yet"));
-        assert!(message.contains("matching offline installer"));
+        assert!(message.contains("compressed PR test DMG"));
 
         let splash = include_str!("../ui/index.html");
         assert!(splash.contains("diagnosticLogs: (source, cursor = null)"));

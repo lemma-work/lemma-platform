@@ -140,20 +140,67 @@ impl ManagedRuntimeController {
     }
 
     pub fn start(&self) -> io::Result<()> {
+        self.start_with_progress(|_, _, _, _| {})
+    }
+
+    pub fn start_with_progress(
+        &self,
+        mut progress: impl FnMut(&str, &str, u64, &str),
+    ) -> io::Result<()> {
         validate_spec(&self.spec)?;
-        let status = self.runtime.start()?;
-        let ensure_result = self.runtime.request(
-            "core.ensure",
-            json!({
-                "images": self.spec.images,
-                "credentials": self.spec.credentials,
-            }),
+        progress(
+            "vm",
+            "Starting private runtime",
+            32,
+            "booting the app-owned Linux appliance",
         );
-        if let Err(error) = ensure_result {
-            let _ = self.runtime.stop();
-            return Err(error);
+        let status = self.runtime.start().map_err(|error| {
+            let _ = self.runtime.capture_diagnostics();
+            error
+        })?;
+        let parameters = json!({
+            "images": self.spec.images,
+            "credentials": self.spec.credentials,
+        });
+        for (operation, component, label, percentage, detail) in [
+            (
+                "core.images",
+                "infrastructure-images",
+                "Preparing infrastructure images",
+                40,
+                "downloading missing PostgreSQL, Redis, and auth layers",
+            ),
+            (
+                "core.postgres",
+                "postgres",
+                "Starting PostgreSQL",
+                50,
+                "preparing Lemma, datastore, AgentBox, and auth databases",
+            ),
+            (
+                "core.redis",
+                "redis",
+                "Starting Redis",
+                58,
+                "preparing local streams, cache, and pub/sub",
+            ),
+            (
+                "core.supertokens",
+                "supertokens",
+                "Starting local authentication",
+                64,
+                "preparing the private auth service",
+            ),
+        ] {
+            progress(component, label, percentage, detail);
+            if let Err(error) = self.runtime.request(operation, parameters.clone()) {
+                let _ = self.runtime.capture_diagnostics();
+                let _ = self.runtime.stop();
+                return Err(error);
+            }
         }
         if let Err(error) = self.ensure_forwarders(&status) {
+            let _ = self.runtime.capture_diagnostics();
             let _ = self.runtime.stop();
             return Err(error);
         }
@@ -308,7 +355,7 @@ struct TcpForwarder {
 
 impl TcpForwarder {
     fn start(label: &'static str, bind: SocketAddr, target: SocketAddr) -> io::Result<Self> {
-        let listener = TcpListener::bind(bind).map_err(|error| {
+        let listener = bind_forwarder_listener(bind).map_err(|error| {
             io::Error::new(
                 error.kind(),
                 format!("could not bind managed {label} route at {bind}: {error}"),
@@ -347,6 +394,30 @@ impl TcpForwarder {
             thread: Some(worker),
         })
     }
+}
+
+#[cfg(unix)]
+fn bind_forwarder_listener(address: SocketAddr) -> io::Result<TcpListener> {
+    use socket2::{Domain, Protocol, Socket, Type};
+
+    let socket = Socket::new(
+        Domain::for_address(address),
+        Type::STREAM,
+        Some(Protocol::TCP),
+    )?;
+    // The forwarder is always bound to Lemma's private guest-to-host gateway.
+    // Reuse permits an immediate controlled restart after a real callback
+    // connection leaves TCP state behind; it does not relax locald's separate
+    // ownership checks for host loopback application ports.
+    socket.set_reuse_address(true)?;
+    socket.bind(&address.into())?;
+    socket.listen(128)?;
+    Ok(socket.into())
+}
+
+#[cfg(not(unix))]
+fn bind_forwarder_listener(address: SocketAddr) -> io::Result<TcpListener> {
+    TcpListener::bind(address)
 }
 
 impl Drop for TcpForwarder {
@@ -642,6 +713,9 @@ mod tests {
                 endpoint_host: "192.168.64.10".into(),
                 host_gateway: "192.168.64.1".into(),
                 engine: "containerd".into(),
+                active_sandboxes: 0,
+                balloon_state: None,
+                balloon_target_bytes: None,
             })),
         };
 

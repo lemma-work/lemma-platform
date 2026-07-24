@@ -8,7 +8,8 @@ private let maxRequestBytes = 1_048_576
 private let maxResponseBytes = 4_194_304
 
 private struct RuntimePaths {
-    let root: URL
+    let release: URL
+    let state: URL
     let kernel: URL
     let initialRamdisk: URL
     let disk: URL
@@ -16,15 +17,21 @@ private struct RuntimePaths {
     let machineIdentifier: URL
     let consoleLog: URL
 
-    init(root: String) throws {
-        let expanded = NSString(string: root).expandingTildeInPath
-        self.root = URL(fileURLWithPath: expanded, isDirectory: true).standardizedFileURL
-        kernel = self.root.appendingPathComponent("vmlinuz")
-        initialRamdisk = self.root.appendingPathComponent("initrd")
-        disk = self.root.appendingPathComponent("disk.raw")
-        dataDisk = self.root.appendingPathComponent("data.raw")
-        machineIdentifier = self.root.appendingPathComponent("machine-id")
-        consoleLog = self.root.appendingPathComponent("console.log")
+    init(release: String, state: String) throws {
+        self.release = URL(
+            fileURLWithPath: NSString(string: release).expandingTildeInPath,
+            isDirectory: true
+        ).standardizedFileURL
+        self.state = URL(
+            fileURLWithPath: NSString(string: state).expandingTildeInPath,
+            isDirectory: true
+        ).standardizedFileURL
+        kernel = self.release.appendingPathComponent("vmlinuz")
+        initialRamdisk = self.release.appendingPathComponent("initrd")
+        disk = self.release.appendingPathComponent("disk.raw")
+        dataDisk = self.state.appendingPathComponent("data.raw")
+        machineIdentifier = self.state.appendingPathComponent("machine-id")
+        consoleLog = self.state.appendingPathComponent("console.log")
         for (label, url) in [
             ("kernel", kernel),
             ("initial RAM disk", initialRamdisk),
@@ -84,6 +91,9 @@ private func configuration(
     // then scale automatically on larger machines.
     let adaptiveMemory = max(UInt64(4 * 1_024 * 1_024 * 1_024), physical / 3)
     configuration.memorySize = min(UInt64(8 * 1_024 * 1_024 * 1_024), adaptiveMemory)
+    configuration.memoryBalloonDevices = [
+        VZVirtioTraditionalMemoryBalloonDeviceConfiguration()
+    ]
 
     let platform = VZGenericPlatformConfiguration()
     platform.machineIdentifier = try machineIdentifier(at: paths.machineIdentifier)
@@ -93,16 +103,17 @@ private func configuration(
     bootLoader.initialRamdiskURL = paths.initialRamdisk
     bootLoader.commandLine = [
         "root=/dev/vda",
-        "rw",
+        "ro",
         "console=hvc0",
         "panic=1",
+        "systemd.volatile=state",
         "systemd.unit=lemma-runtime.target",
     ].joined(separator: " ")
     configuration.bootLoader = bootLoader
 
     let diskAttachment = try VZDiskImageStorageDeviceAttachment(
         url: paths.disk,
-        readOnly: false,
+        readOnly: true,
         cachingMode: .automatic,
         synchronizationMode: .full
     )
@@ -141,6 +152,68 @@ private func configuration(
     configuration.serialPorts = [serial]
     try configuration.validate()
     return configuration
+}
+
+private final class MemoryController {
+    private let device: VZVirtioTraditionalMemoryBalloonDevice?
+    private let ceiling: UInt64
+    private let idleTarget = UInt64(1_536 * 1_024 * 1_024)
+    private var idleGeneration = 0
+    private(set) var state = "active"
+
+    init(virtualMachine: VZVirtualMachine, ceiling: UInt64) {
+        device = virtualMachine.memoryBalloonDevices.first
+            as? VZVirtioTraditionalMemoryBalloonDevice
+        self.ceiling = ceiling
+        if device == nil {
+            state = "unsupported"
+        }
+    }
+
+    func requireCapacity() {
+        dispatchPrecondition(condition: .onQueue(.main))
+        idleGeneration += 1
+        guard let device else {
+            state = "unsupported"
+            return
+        }
+        device.targetVirtualMachineMemorySize = ceiling
+        state = "active"
+    }
+
+    func observe(activeSandboxes: Int) {
+        dispatchPrecondition(condition: .onQueue(.main))
+        if activeSandboxes > 0 {
+            requireCapacity()
+            return
+        }
+        idleGeneration += 1
+        let generation = idleGeneration
+        DispatchQueue.main.asyncAfter(deadline: .now() + 60) { [weak self] in
+            guard let self, self.idleGeneration == generation else { return }
+            guard let device = self.device else {
+                self.state = "unsupported"
+                return
+            }
+            device.targetVirtualMachineMemorySize = min(self.idleTarget, self.ceiling)
+            self.state = "idle-requested"
+        }
+    }
+
+    func annotate(_ response: Data) -> Data {
+        dispatchPrecondition(condition: .onQueue(.main))
+        guard var object = try? JSONSerialization.jsonObject(with: response) as? [String: Any],
+              var result = object["result"] as? [String: Any] else {
+            return response
+        }
+        let active = result["active_sandboxes"] as? Int ?? 0
+        observe(activeSandboxes: active)
+        result["balloon_state"] = state
+        result["balloon_target_bytes"] =
+            device?.targetVirtualMachineMemorySize ?? ceiling
+        object["result"] = result
+        return (try? JSONSerialization.data(withJSONObject: object)) ?? response
+    }
 }
 
 private final class VirtualMachineDelegate: NSObject, VZVirtualMachineDelegate {
@@ -274,9 +347,15 @@ private final class GuestBridge {
     private var guestConnection: VZVirtioSocketConnection?
     private var pendingClients: [Int32] = []
     private var requestActive = false
+    private let memory: MemoryController
 
-    init(socketDevice: VZVirtioSocketDevice, socketPath: String) throws {
+    init(
+        socketDevice: VZVirtioSocketDevice,
+        socketPath: String,
+        memory: MemoryController
+    ) throws {
         self.socketDevice = socketDevice
+        self.memory = memory
         listener = try unixListener(path: socketPath)
     }
 
@@ -335,6 +414,10 @@ private final class GuestBridge {
                 finishRequest(keepGuestConnection: true)
                 return
             }
+            if let object = try? JSONSerialization.jsonObject(with: request) as? [String: Any],
+               object["operation"] as? String == "sandbox.ensure" {
+                DispatchQueue.main.async { [memory] in memory.requireCapacity() }
+            }
             do {
                 try writeAll(connection.fileDescriptor, request)
                 let response = try readLine(
@@ -344,8 +427,18 @@ private final class GuestBridge {
                 guard !response.isEmpty else {
                     throw RuntimeError.invalid("Guest control channel closed")
                 }
+                let delivered: Data
+                if let object = try? JSONSerialization.jsonObject(with: request)
+                    as? [String: Any],
+                   object["operation"] as? String == "health" {
+                    delivered = DispatchQueue.main.sync {
+                        memory.annotate(response)
+                    }
+                } else {
+                    delivered = response
+                }
                 do {
-                    try writeAll(client, response)
+                    try writeAll(client, delivered)
                 } catch {
                     // A timed-out bridge caller may close its Unix socket while
                     // the guest operation finishes. The persistent guest
@@ -392,7 +485,10 @@ private func argument(_ name: String, in arguments: [String]) throws -> String {
 }
 
 private func serve(arguments: [String]) throws -> Never {
-    let runtimePaths = try RuntimePaths(root: argument("--runtime", in: arguments))
+    let runtimePaths = try RuntimePaths(
+        release: argument("--release", in: arguments),
+        state: argument("--runtime", in: arguments)
+    )
     let socketPath = NSString(
         string: try argument("--control-socket", in: arguments)
     ).expandingTildeInPath
@@ -411,9 +507,12 @@ private func serve(arguments: [String]) throws -> Never {
         withIntermediateDirectories: true,
         attributes: [.posixPermissions: NSNumber(value: 0o700)]
     )
-    let vm = VZVirtualMachine(
-        configuration: try configuration(paths: runtimePaths, controlShare: controlShare)
+    let vmConfiguration = try configuration(
+        paths: runtimePaths,
+        controlShare: controlShare
     )
+    let memoryCeiling = vmConfiguration.memorySize
+    let vm = VZVirtualMachine(configuration: vmConfiguration)
     let delegate = VirtualMachineDelegate()
     vm.delegate = delegate
     let stopCoordinator = StopCoordinator(virtualMachine: vm)
@@ -439,7 +538,15 @@ private func serve(arguments: [String]) throws -> Never {
                 exit(EXIT_FAILURE)
             }
             do {
-                bridge = try GuestBridge(socketDevice: socketDevice, socketPath: socketPath)
+                let memory = MemoryController(
+                    virtualMachine: vm,
+                    ceiling: memoryCeiling
+                )
+                bridge = try GuestBridge(
+                    socketDevice: socketDevice,
+                    socketPath: socketPath,
+                    memory: memory
+                )
                 bridge?.serve()
             } catch {
                 fputs("lemma-vz: control bridge failed: \(error.localizedDescription)\n", stderr)
@@ -464,13 +571,16 @@ private func main() throws {
     case "serve":
         try serve(arguments: Array(arguments.dropFirst()))
     case "validate":
-        let paths = try RuntimePaths(root: argument("--runtime", in: arguments))
+        let paths = try RuntimePaths(
+            release: argument("--release", in: arguments),
+            state: argument("--runtime", in: arguments)
+        )
         _ = try configuration(paths: paths)
         print("valid")
     case "--version", "-V":
         print("lemma-vz \(version)")
     case "--help", "-h", nil:
-        print("lemma-vz \(version)\n\nUSAGE:\n  lemma-vz serve --runtime <dir> --control-socket <path> --control-share <dir>\n  lemma-vz validate --runtime <dir>")
+        print("lemma-vz \(version)\n\nUSAGE:\n  lemma-vz serve --release <dir> --runtime <state-dir> --control-socket <path> --control-share <dir>\n  lemma-vz validate --release <dir> --runtime <state-dir>")
     default:
         throw RuntimeError.invalid("Unknown command \(arguments[0])")
     }

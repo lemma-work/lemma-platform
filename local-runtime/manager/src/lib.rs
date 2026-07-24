@@ -35,6 +35,12 @@ pub struct ManagedRuntimeStatus {
     pub endpoint_host: String,
     pub host_gateway: String,
     pub engine: String,
+    #[serde(default)]
+    pub active_sandboxes: usize,
+    #[serde(default)]
+    pub balloon_state: Option<String>,
+    #[serde(default)]
+    pub balloon_target_bytes: Option<u64>,
 }
 
 pub struct ManagedRuntime {
@@ -163,6 +169,42 @@ impl ManagedRuntime {
             .get("result")
             .cloned()
             .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidData, "guest omitted result"))
+    }
+
+    pub fn capture_diagnostics(&self) -> io::Result<()> {
+        #[cfg(target_os = "macos")]
+        {
+            // The VZ serial console is continuously appended by the helper.
+            Ok(())
+        }
+        #[cfg(windows)]
+        {
+            let output = self.wsl(
+                &[
+                    "--distribution",
+                    WSL_DISTRIBUTION,
+                    "--user",
+                    "root",
+                    "--exec",
+                    "/usr/bin/journalctl",
+                    "--no-pager",
+                    "--lines",
+                    "300",
+                ],
+                None,
+            )?;
+            let log_path = self.config.local_root.join("logs/guest.log");
+            rotate_log(&log_path, 5 * 1024 * 1024)?;
+            let mut log = private_appending_log(&log_path)?;
+            let start = output.stdout.len().saturating_sub(128 * 1024);
+            log.write_all(&output.stdout[start..])?;
+            log.write_all(b"\n")?;
+            Ok(())
+        }
+        #[cfg(not(any(target_os = "macos", windows)))]
+        {
+            Ok(())
+        }
     }
 
     /// Verify both the platform runtime process and the guest control plane.
@@ -298,24 +340,28 @@ impl ManagedRuntime {
 
     #[cfg(target_os = "macos")]
     fn start_macos(&self) -> io::Result<()> {
-        let source = self.config.artifact_root.join("macos-aarch64");
-        let runtime = self.config.local_root.join("runtime/macos");
-        fs::create_dir_all(&runtime)?;
-        set_private_directory(&runtime)?;
+        let release = self.config.artifact_root.join("macos-aarch64");
+        validate_macos_release(&release)?;
+        let state = self.config.local_root.join("runtime/macos");
+        fs::create_dir_all(&state)?;
+        set_private_directory(&state)?;
         let mut guard = self.vm.lock().expect("VM lock poisoned");
         if let Some(child) = guard.as_mut() {
             if child.try_wait()?.is_none() {
                 return Ok(());
             }
         }
-        refresh_macos_release(&source, &runtime)?;
-        create_private_sparse_file(&runtime.join("data.raw"), DATA_DISK_BYTES)?;
+        create_private_sparse_file(&state.join("data.raw"), DATA_DISK_BYTES)?;
         let _ = fs::remove_file(&self.control_socket);
         let log_path = self.config.local_root.join("logs/vz.log");
+        rotate_log(&log_path, 5 * 1024 * 1024)?;
+        rotate_log(&state.join("console.log"), 5 * 1024 * 1024)?;
         let child = Command::new(&self.config.vz_executable)
             .arg("serve")
             .arg("--runtime")
-            .arg(&runtime)
+            .arg(&state)
+            .arg("--release")
+            .arg(&release)
             .arg("--control-socket")
             .arg(&self.control_socket)
             .arg("--control-share")
@@ -326,7 +372,7 @@ impl ManagedRuntime {
             )
             .stdin(Stdio::null())
             .stdout(Stdio::null())
-            .stderr(Stdio::from(private_truncating_log(&log_path)?))
+            .stderr(Stdio::from(private_appending_log(&log_path)?))
             .spawn()?;
         *guard = Some(child);
         Ok(())
@@ -499,6 +545,8 @@ impl ManagedRuntime {
 
     #[cfg(windows)]
     fn wsl(&self, arguments: &[&str], input: Option<&[u8]>) -> io::Result<std::process::Output> {
+        let log_path = self.config.local_root.join("logs/wsl.log");
+        rotate_log(&log_path, 5 * 1024 * 1024)?;
         let mut command = Command::new(&self.config.wsl_executable);
         command
             .args(arguments)
@@ -518,6 +566,18 @@ impl ManagedRuntime {
                 .write_all(input)?;
         }
         let output = child.wait_with_output()?;
+        {
+            let mut log = private_appending_log(&log_path)?;
+            writeln!(
+                log,
+                "lemma-runtime: wsl.exe {} -> {}",
+                arguments.join(" "),
+                output.status
+            )?;
+            if !output.stderr.is_empty() {
+                writeln!(log, "{}", first_line(&output.stderr))?;
+            }
+        }
         if !output.status.success() {
             return Err(io::Error::other(first_line(&output.stderr)));
         }
@@ -532,7 +592,7 @@ fn cache_repair_required(error: &io::Error) -> bool {
 }
 
 #[cfg(target_os = "macos")]
-fn refresh_macos_release(source: &Path, destination: &Path) -> io::Result<()> {
+fn validate_macos_release(source: &Path) -> io::Result<()> {
     let source_marker = source.join("runtime.json");
     if !source_marker.is_file() {
         return Err(io::Error::new(
@@ -543,19 +603,16 @@ fn refresh_macos_release(source: &Path, destination: &Path) -> io::Result<()> {
             ),
         ));
     }
-    let marker = destination.join("runtime.json");
-    let current = fs::read(&source_marker)?;
-    let unchanged = fs::read(&marker).ok().as_deref() == Some(current.as_slice())
-        && ["vmlinuz", "initrd", "disk.raw"]
-            .iter()
-            .all(|name| destination.join(name).is_file());
-    if unchanged {
-        return Ok(());
-    }
     for name in ["vmlinuz", "initrd", "disk.raw"] {
-        copy_release_file(&source.join(name), &destination.join(name))?;
+        let path = source.join(name);
+        if !path.is_file() || path.metadata()?.len() == 0 {
+            return Err(io::Error::new(
+                io::ErrorKind::NotFound,
+                format!("managed runtime artifact is missing: {}", path.display()),
+            ));
+        }
     }
-    write_private_atomic(&marker, &current)
+    Ok(())
 }
 
 #[cfg(target_os = "macos")]
@@ -580,20 +637,6 @@ fn create_private_sparse_file(path: &Path, size: u64) -> io::Result<()> {
     file.set_len(size)?;
     file.sync_all()?;
     ensure_private_file(path)
-}
-
-#[cfg(target_os = "macos")]
-fn copy_release_file(source: &Path, destination: &Path) -> io::Result<()> {
-    if !source.is_file() {
-        return Err(io::Error::new(
-            io::ErrorKind::NotFound,
-            format!("managed runtime artifact is missing: {}", source.display()),
-        ));
-    }
-    let temporary = destination.with_extension(format!("staging-{}", std::process::id()));
-    let _ = fs::remove_file(&temporary);
-    fs::copy(source, &temporary)?;
-    fs::rename(temporary, destination)
 }
 
 fn write_private_atomic(path: &Path, contents: &[u8]) -> io::Result<()> {
@@ -648,15 +691,30 @@ fn ensure_private_file(path: &Path) -> io::Result<()> {
     Ok(())
 }
 
-#[cfg(target_os = "macos")]
-fn private_truncating_log(path: &Path) -> io::Result<std::fs::File> {
+fn private_appending_log(path: &Path) -> io::Result<std::fs::File> {
     if let Some(parent) = path.parent() {
         fs::create_dir_all(parent)?;
     }
     let mut options = OpenOptions::new();
-    options.create(true).write(true).truncate(true);
-    use std::os::unix::fs::OpenOptionsExt;
-    options.mode(0o600).open(path)
+    options.create(true).append(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        options.mode(0o600);
+    }
+    options.open(path)
+}
+
+fn rotate_log(path: &Path, max_bytes: u64) -> io::Result<()> {
+    if path
+        .metadata()
+        .is_ok_and(|metadata| metadata.len() >= max_bytes)
+    {
+        let previous = path.with_extension("previous.log");
+        let _ = fs::remove_file(&previous);
+        fs::rename(path, previous)?;
+    }
+    Ok(())
 }
 
 fn first_diagnostic(value: &[u8], fallback: &str) -> String {
@@ -729,48 +787,17 @@ mod tests {
 
     #[cfg(target_os = "macos")]
     #[test]
-    fn release_files_are_atomically_refreshed() {
+    fn immutable_release_requires_all_boot_artifacts() {
         let root = tempdir().unwrap();
-        let source = root.path().join("source-vmlinuz");
-        let destination = root.path().join("vmlinuz");
-        fs::write(&source, "new-kernel").unwrap();
-        fs::write(&destination, "old-kernel").unwrap();
-
-        copy_release_file(&source, &destination).unwrap();
-
-        assert_eq!(fs::read_to_string(destination).unwrap(), "new-kernel");
-    }
-
-    #[cfg(target_os = "macos")]
-    #[test]
-    fn release_refresh_replaces_os_seed_but_preserves_separate_data_disk() {
-        let root = tempdir().unwrap();
-        let source = root.path().join("source");
-        let destination = root.path().join("destination");
-        fs::create_dir_all(&source).unwrap();
-        fs::create_dir_all(&destination).unwrap();
+        let release = root.path().join("release");
+        fs::create_dir_all(&release).unwrap();
         for name in ["vmlinuz", "initrd", "disk.raw"] {
-            fs::write(source.join(name), format!("new-{name}")).unwrap();
-            fs::write(destination.join(name), format!("old-{name}")).unwrap();
+            fs::write(release.join(name), format!("{name}-contents")).unwrap();
         }
-        fs::write(source.join("runtime.json"), b"release-two").unwrap();
-        fs::write(destination.join("runtime.json"), b"release-one").unwrap();
-        fs::write(destination.join("data.raw"), b"user-state").unwrap();
-
-        refresh_macos_release(&source, &destination).unwrap();
-
-        assert_eq!(
-            fs::read(destination.join("disk.raw")).unwrap(),
-            b"new-disk.raw"
-        );
-        assert_eq!(
-            fs::read(destination.join("data.raw")).unwrap(),
-            b"user-state"
-        );
-        assert_eq!(
-            fs::read(destination.join("runtime.json")).unwrap(),
-            b"release-two"
-        );
+        fs::write(release.join("runtime.json"), b"release-two").unwrap();
+        validate_macos_release(&release).unwrap();
+        fs::remove_file(release.join("disk.raw")).unwrap();
+        assert!(validate_macos_release(&release).is_err());
     }
 
     #[cfg(target_os = "macos")]

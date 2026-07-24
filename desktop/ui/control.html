@@ -204,6 +204,12 @@
     $("page-title").textContent = titles[page][0]; $("page-subtitle").textContent = titles[page][1];
   }
   document.querySelectorAll("nav button").forEach((button) => button.addEventListener("click", () => setPage(button.dataset.page)));
+  listen("lemma:control-page", (page) => {
+    if (typeof page === "string" && titles[page]) setPage(page);
+  });
+  if (titles[window.__LEMMA_CONTROL_PAGE__]) {
+    setPage(window.__LEMMA_CONTROL_PAGE__);
+  }
 
   function secretInputs() { return [...document.querySelectorAll("input[data-secret]")]; }
   function labelSecretButton(button, input) {

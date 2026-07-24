@@ -810,7 +810,7 @@
       diagnosticLogs: (source) => Promise.resolve({
         source: source || "events",
         entries: `[demo] ${source || "events"} log is available here`,
-        nextCursor: 1,
+        nextCursor: "v1:demo:1",
         sources: [
           { id: "events", label: "Events" },
           { id: "backend", label: "Backend" },
@@ -916,6 +916,9 @@
     if (Number.isFinite(s.progress)) parts.push(`${Math.min(100, Math.max(0, s.progress))}%`);
     if (Number.isFinite(s.downloadedBytes) && Number.isFinite(s.totalBytes) && s.totalBytes > 0) {
       parts.push(`${formatBytes(s.downloadedBytes)} of ${formatBytes(s.totalBytes)}`);
+    }
+    if (Number.isFinite(s.throughputBytesPerSecond) && s.throughputBytesPerSecond > 0) {
+      parts.push(`${formatBytes(s.throughputBytesPerSecond)}/s`);
     }
     if (s.etaSeconds) parts.push(`about ${formatEta(s.etaSeconds)} remaining`);
     return parts.join(" · ");
@@ -1115,7 +1118,7 @@
     if (text.includes("backend") || text.includes("health gate")) return "backend";
     if (text.includes("download") || text.includes("artifact") || text.includes("install")) return "installer";
     if (text.includes("runtime") || text.includes("container") || text.includes("registry") || text.includes("guest")) {
-      return "infrastructure";
+      return "vm";
     }
     return "events";
   }

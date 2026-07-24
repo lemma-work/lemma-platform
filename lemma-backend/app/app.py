@@ -649,6 +649,15 @@ def create_app(modules=OSS_MODULES) -> FastAPI:
                 }
             },
         }
+        if settings.lemma_local_ai_ready is not None:
+            payload["capabilities"]["ai_profile"] = {
+                "status": "ready" if settings.lemma_local_ai_ready else "needs_setup",
+                "detail": (
+                    "Local AI provider is configured"
+                    if settings.lemma_local_ai_ready
+                    else "Configure an AI provider in Lemma Control Center"
+                ),
+            }
         if settings.lemma_runtime_instance_id:
             payload["instance_id"] = settings.lemma_runtime_instance_id
         return payload
