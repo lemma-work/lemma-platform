@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useState } from "react";
 import { buildApiUrl } from "@/components/auth/portal/auth/config";
+import { Button } from "@/components/ui/button";
 
 type CapabilityHealth = {
   capabilities?: {
@@ -46,13 +47,14 @@ export function LocalAiSetupBanner() {
   }, []);
 
   useEffect(() => {
-    void refresh();
+    const initial = window.setTimeout(() => void refresh(), 0);
     const timer = window.setInterval(refresh, 15_000);
     const onVisibility = () => {
       if (document.visibilityState === "visible") void refresh();
     };
     document.addEventListener("visibilitychange", onVisibility);
     return () => {
+      window.clearTimeout(initial);
       window.clearInterval(timer);
       document.removeEventListener("visibilitychange", onVisibility);
     };
@@ -61,14 +63,15 @@ export function LocalAiSetupBanner() {
   if (!needsSetup) return null;
 
   return (
-    <aside className="sticky top-0 z-[70] flex min-h-12 items-center justify-between gap-4 border-b border-amber-300/60 bg-amber-50 px-5 py-2.5 text-sm text-amber-950 shadow-sm dark:border-amber-700/60 dark:bg-amber-950 dark:text-amber-50">
+    <aside className="state-surface-warning sticky top-0 z-[70] flex min-h-12 items-center justify-between gap-4 px-5 py-2.5 text-sm">
       <span>
         <strong>Configure an AI provider.</strong>{" "}
         Agents are unavailable until a provider validates; the rest of Lemma is ready.
       </span>
-      <button
+      <Button
         type="button"
-        className="shrink-0 rounded-md bg-amber-950 px-3 py-1.5 font-medium text-white hover:bg-amber-800 dark:bg-amber-100 dark:text-amber-950 dark:hover:bg-white"
+        size="sm"
+        className="shrink-0"
         onClick={() => {
           void window.__TAURI__?.core?.invoke?.("open_control_center", {
             page: "ai",
@@ -76,7 +79,7 @@ export function LocalAiSetupBanner() {
         }}
       >
         Configure AI
-      </button>
+      </Button>
     </aside>
   );
 }
