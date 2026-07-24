@@ -77,11 +77,6 @@ _FOREIGN_LOGGER_PREFIXES = frozenset(
         "uvicorn",
     }
 )
-# ``message`` is a reserved/renderer-dependent LogRecord and OTEL body concept.
-# Keep the redacted dependency text in an explicit attribute that survives both
-# the JSON console renderer and OTLP attribute sanitization unchanged.
-_DEPENDENCY_FIELDS = frozenset({"dependency_message"})
-
 _PROHIBITED_FIELDS = {
     "authorization",
     "body",
@@ -287,13 +282,11 @@ def _bounded_contract(_: Any, __: str, event_dict: dict[str, Any]) -> dict[str, 
                     violation = "unexpected_fields"
     else:
         # Dependency messages and interpolation arguments are not controlled by
-        # Lemma. Preserve the already-redacted, bounded message and logger
-        # identity while dropping every uncontrolled auxiliary field.
-        dependency_message = event if isinstance(event, str) else None
-        event_dict["event"] = "dependency.reported"
-        if dependency_message:
-            event_dict["dependency_message"] = dependency_message
-        allowed = _CONTRACT_METADATA_FIELDS | _DEPENDENCY_FIELDS
+        # Lemma. Keep the original message as the log event after centralized
+        # redaction, while dropping uncontrolled auxiliary fields. This keeps
+        # third-party diagnostics useful without allowing their payloads to
+        # bypass the safe logging boundary.
+        allowed = _CONTRACT_METADATA_FIELDS
         for key in list(event_dict):
             if key not in allowed and not key.startswith("_"):
                 event_dict.pop(key, None)
@@ -536,8 +529,8 @@ def get_dependency_logger(name: str, *, level: int | None = None) -> logging.Log
 
     Some libraries (notably FastStream) create their own stdout handler lazily
     when a broker starts. Supplying this logger prevents that late handler from
-    being installed while retaining configured records as bounded, redacted
-    ``dependency.reported`` events.
+    being installed while retaining configured records with their original
+    bounded, redacted messages.
     """
     dependency_logger = logging.getLogger(name)
     dependency_logger.handlers = [

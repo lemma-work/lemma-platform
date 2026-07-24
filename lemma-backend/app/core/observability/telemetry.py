@@ -62,6 +62,7 @@ from openinference.semconv.trace import OpenInferenceSpanKindValues, SpanAttribu
 from pydantic_ai import Agent, InstrumentationSettings
 
 from app.core.log.log import get_logger
+from app.core.redaction import redact_text
 from app.core.observability.span_sanitizer import (
     METRIC_ATTRIBUTE_KEYS,
     SanitizingSpanExporter,
@@ -520,7 +521,6 @@ _SAFE_OTEL_LOG_FIELDS = frozenset(
         "outcome",
         "duration_ms",
         "incident_duration_ms",
-        "dependency_message",
         "failure_count",
         "count",
         "method",
@@ -539,20 +539,22 @@ class SanitizingLoggingHandler(LoggingHandler):
     """Translate only bounded structured fields into OTLP log records."""
 
     def emit(self, record: logging.LogRecord) -> None:
-        candidate = record.msg if isinstance(record.msg, Mapping) else {}
+        candidate = record.msg if isinstance(record.msg, Mapping) else None
         event = candidate.get("event") if isinstance(candidate, Mapping) else None
-        if not isinstance(event, str) or len(event) > 128:
-            event = (
-                str(record.msg)
-                if isinstance(record.msg, str) and "." in record.msg
-                else "dependency.reported"
-            )
+        if isinstance(candidate, Mapping):
+            if not isinstance(event, str) or len(event) > 128:
+                event = "logging.contract.violation"
+        else:
+            try:
+                event = redact_text(record.getMessage())
+            except Exception:
+                event = "unrenderable log record"
         safe_record = logging.LogRecord(
             name=record.name,
             level=record.levelno,
             pathname="",
             lineno=0,
-            msg=event[:128],
+            msg=event[:512],
             args=(),
             exc_info=None,
         )

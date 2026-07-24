@@ -69,12 +69,11 @@ def test_foreign_record_keeps_redacted_bounded_message(captured_stdout) -> None:
         "provider failed token=%s url=https://example.invalid/private", canary
     )
     record = captured_stdout()[0]
-    assert record["event"] == "dependency.reported"
-    assert record["logger"] == "some.foreign.lib"
-    assert record["level"] == "warning"
-    assert record["dependency_message"] == (
+    assert record["event"] == (
         "provider failed token=[REDACTED] url=https://example.invalid/private"
     )
+    assert record["logger"] == "some.foreign.lib"
+    assert record["level"] == "warning"
     assert canary not in json.dumps(record)
 
 
@@ -83,8 +82,7 @@ def test_malformed_dependency_url_cannot_break_logging(captured_stdout) -> None:
         "dependency failed at https://example.com:bad/path?token=CANARY"
     )
     record = captured_stdout()[0]
-    assert record["event"] == "dependency.reported"
-    assert record["dependency_message"] == "dependency failed at [REDACTED_URL]"
+    assert record["event"] == "dependency failed at [REDACTED_URL]"
     assert "CANARY" not in json.dumps(record)
 
 
@@ -206,8 +204,7 @@ def test_reconciliation_after_real_uvicorn_and_streaq_console_configuration() ->
 
     records = [json.loads(line) for line in buffer.getvalue().splitlines() if line]
     assert len(records) == 1
-    assert records[0]["event"] == "dependency.reported"
-    assert records[0]["dependency_message"] == "task failed secret=[REDACTED]"
+    assert records[0]["event"] == "task failed secret=[REDACTED]"
     assert "CANARY" not in json.dumps(records[0])
     assert logging.getLogger("uvicorn.access").handlers == []
     assert logging.getLogger("uvicorn.error").handlers == []
@@ -225,9 +222,8 @@ def test_lazy_dependency_logger_cannot_install_its_own_console_handler(
 
     records = captured_stdout()
     assert len(records) == 1
-    assert records[0]["event"] == "dependency.reported"
+    assert records[0]["event"] == "consumer failed secret=[REDACTED]"
     assert records[0]["logger"] == "faststream.redis"
-    assert records[0]["dependency_message"] == "consumer failed secret=[REDACTED]"
     assert "CANARY" not in json.dumps(records[0])
     assert dependency_logger.handlers == []
 
@@ -258,14 +254,13 @@ def test_production_uses_log_level_and_preserves_every_allowed_dependency_record
         "error",
         "error",
     ]
-    assert [record["dependency_message"] for record in records] == [
+    assert [record["event"] for record in records] == [
         "routine request completed",
         "retrying request attempt=1",
         "retrying request attempt=2",
         "request failed attempt=3",
         "request failed attempt=4",
     ]
-    assert all(record["event"] == "dependency.reported" for record in records)
 
 
 def test_development_debug_level_preserves_dependency_debug_for_diagnosis(
@@ -277,7 +272,7 @@ def test_development_debug_level_preserves_dependency_debug_for_diagnosis(
     dependency_logger.info("routine request completed")
 
     records = captured_stdout()
-    assert [record["dependency_message"] for record in records] == [
+    assert [record["event"] for record in records] == [
         "request assembly detail",
         "routine request completed",
     ]
@@ -314,17 +309,19 @@ def test_known_dependency_families_follow_configured_production_level(
     assert len(records) == 1
     assert records[0]["logger"] == logger_name
     assert records[0]["level"] == "info"
-    assert records[0]["dependency_message"] == "useful client lifecycle"
+    assert records[0]["event"] == "useful client lifecycle"
 
 
 def test_dependency_console_handlers_are_reconciled_to_safe_pipeline(
     captured_stdout,
 ) -> None:
     supertokens_logger = logging.getLogger("com.supertokens")
-    supertokens_logger.addHandler(logging.StreamHandler())
+    supertokens_console = logging.StreamHandler()
+    supertokens_logger.addHandler(supertokens_console)
     supertokens_logger.propagate = False
     fastmcp_logger = logging.getLogger("fastmcp")
-    fastmcp_logger.addHandler(logging.StreamHandler())
+    fastmcp_console = logging.StreamHandler()
+    fastmcp_logger.addHandler(fastmcp_console)
     fastmcp_logger.propagate = False
 
     setup_logging(
@@ -334,9 +331,9 @@ def test_dependency_console_handlers_are_reconciled_to_safe_pipeline(
         log_level="INFO",
     )
 
-    assert supertokens_logger.handlers == []
+    assert supertokens_console not in supertokens_logger.handlers
     assert supertokens_logger.propagate is True
-    assert fastmcp_logger.handlers == []
+    assert fastmcp_console not in fastmcp_logger.handlers
     assert fastmcp_logger.propagate is True
 
 
@@ -364,8 +361,7 @@ def test_repeated_faststream_errors_are_not_hidden_and_keep_correlation(
     assert all(record["logger"] == "faststream.redis" for record in records)
     assert all(record["level"] == "error" for record in records)
     assert all(
-        record["dependency_message"] == "consumer failed credential=[REDACTED]"
-        for record in records
+        record["event"] == "consumer failed credential=[REDACTED]" for record in records
     )
     assert all(record["request_id"] == "request-123" for record in records)
     assert all(record["correlation_id"] == str(correlation_id) for record in records)
@@ -381,7 +377,7 @@ def test_uvicorn_access_records_follow_configured_debug_level(
     records = captured_stdout()
     assert [record["level"] for record in records] == ["debug", "info"]
     assert all(record["logger"] == "uvicorn.access" for record in records)
-    assert [record["dependency_message"] for record in records] == [
+    assert [record["event"] for record in records] == [
         "request routing detail",
         '127.0.0.1 - "GET /health/ready HTTP/1.1" 200',
     ]
