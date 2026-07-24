@@ -9,8 +9,8 @@
 
 use serde::Serialize;
 use serde_json::{json, Value};
-use std::io::{BufRead, BufReader, Write};
-use std::path::PathBuf;
+use std::io::{BufRead, BufReader, Read, Seek, SeekFrom, Write};
+use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::sync::Mutex;
 use std::time::Duration;
@@ -52,6 +52,11 @@ struct UiState {
     running: bool,
     mode: String,
     url: String,
+    log_source: String,
+    #[serde(skip)]
+    active_operation_id: String,
+    #[serde(skip)]
+    terminal_recovery_pending: bool,
 }
 
 #[derive(Clone, Serialize)]
@@ -63,6 +68,22 @@ struct RuntimeInfo {
     source: String,
     rollback_available: bool,
     repair_available: bool,
+}
+
+#[derive(Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct DiagnosticLogSource {
+    id: String,
+    label: String,
+}
+
+#[derive(Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct DiagnosticLogSnapshot {
+    sources: Vec<DiagnosticLogSource>,
+    source: String,
+    entries: String,
+    next_cursor: u64,
 }
 
 struct Shell {
@@ -139,6 +160,14 @@ fn runtime_install_root() -> PathBuf {
 
 fn install_log_path() -> PathBuf {
     runtime_install_root().join("install.log")
+}
+
+fn operation_id(prefix: &str) -> String {
+    let nonce = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_nanos();
+    format!("{prefix}-{}-{nonce}", std::process::id())
 }
 
 fn append_install_log(message: &str) {
@@ -956,7 +985,7 @@ fn stop_locald_for_runtime_maintenance(app: &AppHandle) -> Result<(), String> {
 
 fn start_after_runtime_maintenance(app: &AppHandle, request_id: &str) -> Result<(), String> {
     ensure_locald(app)?;
-    send_to_locald(app, json!({"cmd":"start", "id": request_id}))
+    send_local_operation(app, json!({"cmd":"start"}), operation_id(request_id))
 }
 
 fn install_locald_connection(app: &AppHandle, connection: LocaldConnection) {
@@ -988,6 +1017,27 @@ fn send_to_locald(app: &AppHandle, message: Value) -> Result<(), String> {
         .map_err(|e| format!("locald flush failed: {e}"))
 }
 
+fn send_local_operation(app: &AppHandle, mut request: Value, id: String) -> Result<(), String> {
+    {
+        let shell: State<Shell> = app.state();
+        let mut ui = shell.ui.lock().unwrap();
+        if !ui.active_operation_id.is_empty() {
+            return Ok(());
+        }
+        ui.active_operation_id = id.clone();
+    }
+    request["id"] = Value::String(id.clone());
+    if let Err(error) = send_to_locald(app, request) {
+        let shell: State<Shell> = app.state();
+        let mut ui = shell.ui.lock().unwrap();
+        if ui.active_operation_id == id {
+            ui.active_operation_id.clear();
+        }
+        return Err(error);
+    }
+    Ok(())
+}
+
 fn locald_gone(app: &AppHandle) {
     let shell: State<Shell> = app.state();
     *shell.locald_writer.lock().unwrap() = None;
@@ -999,6 +1049,7 @@ fn locald_gone(app: &AppHandle) {
             ui.error_code = "locald-disconnected".into();
             ui.running = false;
         }
+        ui.active_operation_id.clear();
         ui.clone()
     };
     let _ = app.emit("lemma:state", snapshot);
@@ -1019,10 +1070,28 @@ fn handle_locald_event(app: &AppHandle, event: &Value) {
     }
     let shell: State<Shell> = app.state();
     let kind = event["event"].as_str().unwrap_or_default();
+    let event_operation_id = event
+        .get("operation_id")
+        .and_then(Value::as_str)
+        .or_else(|| {
+            if matches!(kind, "ack" | "done")
+                || (kind == "error" && event["code"].as_str() == Some("busy"))
+            {
+                event.get("id").and_then(Value::as_str)
+            } else {
+                None
+            }
+        });
+    if let Some(event_operation_id) = event_operation_id {
+        let active = shell.ui.lock().unwrap().active_operation_id.clone();
+        if !active.is_empty() && active != event_operation_id {
+            return;
+        }
+    }
     let _ = app.emit_to("control", "lemma:locald-event", event.clone());
 
     let mut start_after_prepare = false;
-    let snapshot = {
+    let (snapshot, schedule_terminal_recovery) = {
         let mut ui = shell.ui.lock().unwrap();
         match kind {
             "log" => {
@@ -1038,6 +1107,9 @@ fn handle_locald_event(app: &AppHandle, event: &Value) {
                 ui.downloaded_bytes = None;
                 ui.total_bytes = None;
                 ui.setup = event["setup"].as_bool().unwrap_or(ui.setup);
+                if let Some(source) = event["log_source"].as_str() {
+                    ui.log_source = source.into();
+                }
                 let detail = event["detail"].as_str().unwrap_or_default();
                 ui.status = if detail.is_empty() {
                     ui.phase.clone()
@@ -1148,10 +1220,16 @@ fn handle_locald_event(app: &AppHandle, event: &Value) {
                     } else {
                         format!("{} is still in progress…", ui.phase)
                     };
+                    if event_operation_id.is_some_and(|id| id == ui.active_operation_id) {
+                        ui.active_operation_id.clear();
+                    }
                 } else {
                     ui.error = true;
                     ui.error_code = code.into();
                     ui.status = event["message"].as_str().unwrap_or("startup failed").into();
+                    if let Some(source) = event["log_source"].as_str() {
+                        ui.log_source = source.into();
+                    }
                 }
             }
             "runtime.prepared" => {
@@ -1174,28 +1252,57 @@ fn handle_locald_event(app: &AppHandle, event: &Value) {
                             .into();
                 }
             }
+            "done" => {
+                if event_operation_id.is_some_and(|id| id == ui.active_operation_id) {
+                    ui.active_operation_id.clear();
+                }
+            }
             _ => {}
         }
-        ui.clone()
+        if ui.ready || !ui.error {
+            ui.terminal_recovery_pending = false;
+        }
+        let schedule_terminal_recovery = matches!(kind, "state" | "status")
+            && ui.error
+            && !ui.ready
+            && !ui.terminal_recovery_pending;
+        if schedule_terminal_recovery {
+            ui.terminal_recovery_pending = true;
+        }
+        (ui.clone(), schedule_terminal_recovery)
     };
 
-    let has_error = snapshot.error;
     let _ = app.emit("lemma:state", snapshot);
+    if schedule_terminal_recovery {
+        let app = app.clone();
+        std::thread::spawn(move || {
+            std::thread::sleep(Duration::from_secs(8));
+            let should_recover = {
+                let shell: State<Shell> = app.state();
+                let ui = shell.ui.lock().unwrap();
+                ui.terminal_recovery_pending && ui.error && !ui.ready && ui.mode == "local"
+            };
+            if should_recover {
+                show_splash(&app);
+            }
+        });
+    }
     if start_after_prepare {
         let app = app.clone();
         std::thread::spawn(move || {
             // The daemon releases its single-operation guard immediately after
             // publishing runtime.prepared. Avoid racing the follow-up start.
             std::thread::sleep(Duration::from_millis(250));
-            let _ = send_to_locald(
+            let _ = send_local_operation(
                 &app,
-                json!({"cmd":"start", "id":"shell-start-after-runtime-prepare"}),
+                json!({"cmd":"start"}),
+                operation_id("shell-start-after-runtime-prepare"),
             );
         });
     }
-    if kind == "error" || has_error {
-        show_splash(app);
-    }
+    // Do not navigate an already-open workspace back to the installer for
+    // transient component events. The splash is already visible during setup;
+    // a lost daemon uses locald_gone(), the terminal recovery path.
 }
 
 fn is_actionable_runtime_error(code: &str) -> bool {
@@ -1278,9 +1385,10 @@ fn start(app: AppHandle) -> Result<(), String> {
     }
     ensure_locald(&app)?;
     let setup = std::env::var("LEMMA_DESKTOP_START_SETUP").as_deref() == Ok("1");
-    send_to_locald(
+    send_local_operation(
         &app,
-        json!({"cmd": "start", "setup": setup, "id": "shell-start"}),
+        json!({"cmd": "start", "setup": setup}),
+        operation_id("shell-start"),
     )
 }
 
@@ -1291,9 +1399,10 @@ fn stop(app: AppHandle, include_infra: Option<bool>) -> Result<(), String> {
     }
     show_splash(&app);
     ensure_locald(&app)?;
-    send_to_locald(
+    send_local_operation(
         &app,
-        json!({"cmd": "stop", "infra": include_infra.unwrap_or(false), "id": "shell-stop"}),
+        json!({"cmd": "stop", "infra": include_infra.unwrap_or(false)}),
+        operation_id("shell-stop"),
     )
 }
 
@@ -1304,7 +1413,11 @@ fn restart(app: AppHandle) -> Result<(), String> {
     }
     show_splash(&app);
     ensure_locald(&app)?;
-    send_to_locald(&app, json!({"cmd": "restart", "id": "shell-restart"}))
+    send_local_operation(
+        &app,
+        json!({"cmd": "restart"}),
+        operation_id("shell-restart"),
+    )
 }
 
 #[tauri::command]
@@ -1347,6 +1460,143 @@ fn installer_log() -> Result<String, String> {
     let mut lines: Vec<&str> = raw.lines().rev().take(500).collect();
     lines.reverse();
     Ok(lines.join("\n"))
+}
+
+const MAX_DIAGNOSTIC_LOG_READ: u64 = 128 * 1024;
+
+fn diagnostic_log_sources() -> Vec<(&'static str, &'static str, PathBuf)> {
+    let root = locald_root();
+    vec![
+        ("events", "Events", root.join("events.jsonl")),
+        ("migrations", "Migrations", root.join("logs/migrations.log")),
+        ("backend", "Backend", root.join("logs/backend.log")),
+        ("frontend", "Frontend", root.join("logs/frontend.log")),
+        ("infrastructure", "Infrastructure", root.join("logs/vz.log")),
+        ("locald", "Service manager", root.join("locald.log")),
+        ("installer", "Installer", install_log_path()),
+    ]
+}
+
+#[tauri::command]
+fn diagnostic_logs(
+    window: WebviewWindow,
+    source: Option<String>,
+    cursor: Option<u64>,
+) -> Result<DiagnosticLogSnapshot, String> {
+    require_local_native_window(&window)?;
+    let sources = diagnostic_log_sources();
+    let selected = source.as_deref().unwrap_or("events");
+    let (_, _, path) = sources
+        .iter()
+        .find(|(id, _, _)| *id == selected)
+        .ok_or_else(|| format!("unknown diagnostic log source: {selected}"))?;
+    let public_sources = sources
+        .iter()
+        .map(|(id, label, _)| DiagnosticLogSource {
+            id: (*id).into(),
+            label: (*label).into(),
+        })
+        .collect();
+
+    let mut file = match std::fs::File::open(path) {
+        Ok(file) => file,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            return Ok(DiagnosticLogSnapshot {
+                sources: public_sources,
+                source: selected.into(),
+                entries: format!("No {selected} log entries yet."),
+                next_cursor: 0,
+            });
+        }
+        Err(error) => {
+            return Err(format!(
+                "could not read diagnostic log {}: {error}",
+                path.display()
+            ));
+        }
+    };
+    let length = file.metadata().map_err(|error| error.to_string())?.len();
+    let start = cursor
+        .filter(|offset| *offset <= length)
+        .unwrap_or_else(|| length.saturating_sub(MAX_DIAGNOSTIC_LOG_READ));
+    file.seek(SeekFrom::Start(start))
+        .map_err(|error| error.to_string())?;
+    let mut bytes = Vec::new();
+    file.take(MAX_DIAGNOSTIC_LOG_READ)
+        .read_to_end(&mut bytes)
+        .map_err(|error| error.to_string())?;
+    let next_cursor = start.saturating_add(bytes.len() as u64);
+    let mut entries = String::from_utf8_lossy(&bytes).into_owned();
+    if start > 0 {
+        if let Some(newline) = entries.find('\n') {
+            entries.drain(..=newline);
+        }
+    }
+    entries = redact_diagnostic_text(entries);
+    Ok(DiagnosticLogSnapshot {
+        sources: public_sources,
+        source: selected.into(),
+        entries,
+        next_cursor,
+    })
+}
+
+fn redact_diagnostic_text(mut text: String) -> String {
+    let root = locald_root();
+    let mut secrets = Vec::new();
+    for path in [
+        root.join("control.token"),
+        root.join("host.secrets.json"),
+        root.join("infra.secrets.json"),
+        root.join("operator-config.json"),
+    ] {
+        collect_secret_file_values(&path, &mut secrets);
+    }
+    secrets.sort_by_key(|value| std::cmp::Reverse(value.len()));
+    secrets.dedup();
+    for secret in secrets {
+        text = text.replace(&secret, "[redacted]");
+    }
+    text
+}
+
+fn collect_secret_file_values(path: &Path, output: &mut Vec<String>) {
+    let Ok(raw) = std::fs::read_to_string(path) else {
+        return;
+    };
+    if path.extension().and_then(|value| value.to_str()) != Some("json") {
+        let value = raw.trim();
+        if value.len() >= 8 {
+            output.push(value.into());
+        }
+        return;
+    }
+    let Ok(value) = serde_json::from_str::<Value>(&raw) else {
+        return;
+    };
+    collect_secret_json_values(&value, false, output);
+}
+
+fn collect_secret_json_values(value: &Value, sensitive: bool, output: &mut Vec<String>) {
+    match value {
+        Value::Object(values) => {
+            for (key, value) in values {
+                let key = key.to_ascii_lowercase();
+                let child_sensitive = sensitive
+                    || ["password", "secret", "token", "api_key", "apikey"]
+                        .iter()
+                        .any(|marker| key.contains(marker));
+                collect_secret_json_values(value, child_sensitive, output);
+            }
+        }
+        Value::Array(values) => {
+            for value in values {
+                collect_secret_json_values(value, sensitive, output);
+            }
+        }
+        Value::String(value) if sensitive && value.len() >= 8 => output.push(value.clone()),
+        _ => {}
+    }
 }
 
 #[tauri::command]
@@ -1479,9 +1729,10 @@ fn set_connection_mode(app: AppHandle, mode: String) -> Result<(), String> {
     }
     ensure_locald(&app)?;
     let setup = std::env::var("LEMMA_DESKTOP_START_SETUP").as_deref() == Ok("1");
-    send_to_locald(
+    send_local_operation(
         &app,
-        json!({"cmd": "start", "setup": setup, "id": "shell-start"}),
+        json!({"cmd": "start", "setup": setup}),
+        operation_id("shell-start"),
     )?;
     show_control_center(&app)
 }
@@ -1861,6 +2112,7 @@ fn main() {
             open_app,
             open_logs,
             installer_log,
+            diagnostic_logs,
             choose_connection_mode,
             set_connection_mode,
             get_state,
@@ -2039,8 +2291,9 @@ mod tests {
         assert!(message.contains("matching offline installer"));
 
         let splash = include_str!("../ui/index.html");
-        assert!(splash.contains("installerLog: () => invoke(\"installer_log\")"));
-        assert!(splash.contains("refreshInstallerLog"));
+        assert!(splash.contains("diagnosticLogs: (source, cursor = null)"));
+        assert!(splash.contains("refreshDiagnosticLog"));
+        assert!(splash.contains("id=\"log-tabs\""));
         assert!(splash.contains("View log"));
     }
 
@@ -2146,6 +2399,10 @@ mod tests {
         assert!(html.contains("repair_runtime"));
         assert!(html.contains("open_developer_tools"));
         assert!(html.contains("Open developer tools"));
+        assert!(html.contains("id=\"network-contract\""));
+        assert!(html.contains("id=\"connector-callback\""));
+        assert!(html.contains("snapshot.state?.api_url"));
+        assert!(!html.contains("http://app.lemma.localhost:8711/api/v1/connectors"));
         assert!(html.contains("schema-1 releases do not claim database-safe downgrade"));
         assert!(html.contains("Lemma will not risk opening migrated data with an older backend"));
     }

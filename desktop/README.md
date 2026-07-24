@@ -34,12 +34,12 @@ When Windows requires a reboot, a per-install resume marker makes the next app
 launch continue automatically. The same operation is available as
 `lemma-stack prepare` for terminal-led installs.
 
-The local gateway exposes stable loopback-only origins:
-
-- `http://app.lemma.localhost:3711` — workspace frontend;
-- `http://app.lemma.localhost:8711` — API and auth on the same cookie host;
-- `http://<slug>.apps.lemma.localhost:8711` — built pod apps;
-- `http://<sandbox>-<app>.workspaces.lemma.localhost:8711` — live sandbox apps.
+The local gateway exposes stable loopback-only origins on an OS-selected high
+frontend/backend port pair. locald persists the pair in private
+`network.json`, exposes it in status, and rewrites every launch environment
+from that source of truth. The Control Center shows the exact workspace, API,
+built-app, live-sandbox, and connector callback URLs. If an unrelated listener
+later occupies a persisted port, locald rotates the pair without killing it.
 
 Sandbox callbacks are explicit configuration. The backend passes
 `WORKSPACE_CALLBACK_*` and `FUNCTION_RUNTIME_GATEWAY_URL` values through

@@ -296,6 +296,7 @@ EVENT_CATALOG: dict[str, EventSpec] = {
     'datastore.module.datastore_query_role_grants_ensured.observed': EventSpec('debug', frozenset()),
     'datastore.module.ensure_datastore_query_role_grants.diagnostic': EventSpec('debug', frozenset()),
     'datastore.module.local_embedding_model_ready.observed': EventSpec('debug', frozenset()),
+    'datastore.module.local_embedding_model_degraded.degraded': EventSpec('warning', frozenset({'error_type'})),
     'datastore.module.preloading_local_embedding_model.observed': EventSpec('debug', frozenset()),
     'datastore.postgres_search_service.add_file_search_s.propagated': EventSpec('debug', frozenset()),
     'datastore.postgres_search_service.could_not_drop_legacy_index.observed': EventSpec('debug', frozenset()),

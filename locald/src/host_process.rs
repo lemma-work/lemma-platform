@@ -1,7 +1,7 @@
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::fs::{File, OpenOptions};
 use std::io::{self, Read, Write};
-use std::net::{IpAddr, SocketAddr, TcpStream, ToSocketAddrs};
+use std::net::{IpAddr, Ipv4Addr, SocketAddr, TcpListener, TcpStream, ToSocketAddrs};
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -126,6 +126,10 @@ pub struct HttpHealthSpec {
     pub url: String,
     #[serde(default = "default_health_timeout")]
     pub timeout_seconds: u64,
+    #[serde(default)]
+    pub expected_body: Option<String>,
+    #[serde(default)]
+    pub stabilization_seconds: u64,
 }
 
 #[derive(Clone, Debug, Deserialize)]
@@ -212,6 +216,7 @@ pub struct HostProcessManager {
     startup_in_progress: AtomicBool,
     dependency_ready: AtomicBool,
     dependency_error: Mutex<Option<String>>,
+    idle_port_reservations: Mutex<HashMap<u16, TcpListener>>,
     log_dir: PathBuf,
 }
 
@@ -236,6 +241,7 @@ impl HostProcessManager {
             .map(|spec| (spec.id.clone(), spec))
             .collect();
         std::fs::create_dir_all(&log_dir)?;
+        let idle_port_reservations = reserve_managed_app_ports(&manifest)?;
         let manager = Arc::new(Self {
             manifest,
             ordered_ids,
@@ -247,6 +253,7 @@ impl HostProcessManager {
             startup_in_progress: AtomicBool::new(false),
             dependency_ready: AtomicBool::new(true),
             dependency_error: Mutex::new(None),
+            idle_port_reservations: Mutex::new(idle_port_reservations),
             log_dir,
         });
         let monitor = Arc::clone(&manager);
@@ -329,11 +336,12 @@ impl HostProcessManager {
             self.desired_running.store(true, Ordering::Release);
             for id in &self.ordered_ids {
                 if let Some(health) = &self.by_id[id].health {
-                    wait_http_health(health).map_err(|error| {
+                    self.wait_process_health(id, health).map_err(|error| {
                         io::Error::other(format!("{id} failed health gate: {error}"))
                     })?;
                 }
             }
+            self.verify_all_health_now()?;
             self.health_ready.store(true, Ordering::Release);
             return Ok(());
         }
@@ -349,12 +357,13 @@ impl HostProcessManager {
         self.run_setups()?;
         self.desired_running.store(true, Ordering::Release);
         for id in &self.ordered_ids {
+            self.release_idle_port_for(id);
             if let Err(error) = self.spawn_if_missing(id) {
                 let _ = self.stop_all();
                 return Err(error);
             }
             if let Some(health) = &self.by_id[id].health {
-                if let Err(error) = wait_http_health(health) {
+                if let Err(error) = self.wait_process_health(id, health) {
                     let _ = self.stop_all();
                     return Err(io::Error::other(format!(
                         "{id} failed health gate: {error}"
@@ -362,7 +371,24 @@ impl HostProcessManager {
                 }
             }
         }
+        if let Err(error) = self.verify_all_health_now() {
+            let _ = self.stop_all();
+            return Err(error);
+        }
         self.health_ready.store(true, Ordering::Release);
+        Ok(())
+    }
+
+    fn verify_all_health_now(&self) -> io::Result<()> {
+        for id in &self.ordered_ids {
+            if let Some(health) = &self.by_id[id].health {
+                let mut health = health.clone();
+                health.stabilization_seconds = 0;
+                self.wait_process_health(id, &health).map_err(|error| {
+                    io::Error::other(format!("{id} failed final health gate: {error}"))
+                })?;
+            }
+        }
         Ok(())
     }
 
@@ -438,6 +464,11 @@ impl HostProcessManager {
                 first_error.get_or_insert(error);
             }
         }
+        if first_error.is_none() {
+            if let Err(error) = self.reserve_idle_ports() {
+                first_error = Some(error);
+            }
+        }
         if let Some(error) = first_error {
             Err(error)
         } else {
@@ -462,7 +493,7 @@ impl HostProcessManager {
         }
         self.spawn_if_missing("backend")?;
         if let Some(health) = &self.by_id["backend"].health {
-            if let Err(error) = wait_http_health(health) {
+            if let Err(error) = self.wait_process_health("backend", health) {
                 let _ = self.stop_process("backend");
                 return Err(io::Error::other(format!(
                     "backend failed health gate after configuration: {error}"
@@ -527,6 +558,7 @@ impl HostProcessManager {
             "ready": ready,
             "running": ready || (desired && components.iter().any(|process| process.running)),
             "components": components,
+            "capabilities": self.capabilities(),
             "dependency_ready": dependency_ready,
             "dependency_error": dependency_error,
         });
@@ -534,6 +566,36 @@ impl HostProcessManager {
             event["id"] = id.clone();
         }
         event
+    }
+
+    pub fn capabilities(&self) -> Option<Value> {
+        self.capabilities_result().ok()
+    }
+
+    fn capabilities_result(&self) -> io::Result<Value> {
+        if !self.health_ready.load(Ordering::Acquire) {
+            return Err(io::Error::new(
+                io::ErrorKind::NotConnected,
+                "backend core health is not ready",
+            ));
+        }
+        let mut health = self
+            .by_id
+            .get("backend")
+            .and_then(|backend| backend.health.clone())
+            .ok_or_else(|| io::Error::new(io::ErrorKind::NotFound, "backend health is missing"))?;
+        health.url = health
+            .url
+            .strip_suffix("/health/ready")
+            .map(|base| format!("{base}/health/capabilities"))
+            .ok_or_else(|| {
+                io::Error::new(
+                    io::ErrorKind::InvalidInput,
+                    "backend health URL has an unexpected path",
+                )
+            })?;
+        let body = probe_http(&health)?;
+        serde_json::from_str(&body).map_err(io::Error::other)
     }
 
     fn spawn_if_missing(&self, id: &str) -> io::Result<()> {
@@ -590,6 +652,44 @@ impl HostProcessManager {
         match child {
             Some(mut child) => terminate_process_group(&mut child.child),
             None => Ok(()),
+        }
+    }
+
+    fn release_idle_port_for(&self, id: &str) {
+        let Some(port) = self.managed_service_port(id) else {
+            return;
+        };
+        self.idle_port_reservations
+            .lock()
+            .expect("idle port reservation lock poisoned")
+            .remove(&port);
+    }
+
+    fn reserve_idle_ports(&self) -> io::Result<()> {
+        let Some(runtime) = self.manifest.managed_runtime.as_ref() else {
+            return Ok(());
+        };
+        let mut reservations = self
+            .idle_port_reservations
+            .lock()
+            .expect("idle port reservation lock poisoned");
+        if !reservations.contains_key(&runtime.ports.backend) {
+            let listener = bind_idle_port(runtime.ports.backend)?;
+            reservations.insert(runtime.ports.backend, listener);
+        }
+        if !reservations.contains_key(&runtime.ports.frontend) {
+            let listener = bind_idle_port(runtime.ports.frontend)?;
+            reservations.insert(runtime.ports.frontend, listener);
+        }
+        Ok(())
+    }
+
+    fn managed_service_port(&self, id: &str) -> Option<u16> {
+        let ports = &self.manifest.managed_runtime.as_ref()?.ports;
+        match id {
+            "backend" => Some(ports.backend),
+            "frontend" => Some(ports.frontend),
+            _ => None,
         }
     }
 
@@ -669,7 +769,7 @@ impl HostProcessManager {
                 let result = self.spawn_if_missing(id);
                 let result = result.and_then(|_| {
                     if let Some(health) = &spec.health {
-                        if let Err(error) = wait_http_health(health) {
+                        if let Err(error) = self.wait_process_health(id, health) {
                             let _ = self.stop_process(id);
                             return Err(error);
                         }
@@ -690,6 +790,114 @@ impl HostProcessManager {
             }
         }
     }
+
+    fn wait_process_health(&self, id: &str, spec: &HttpHealthSpec) -> io::Result<()> {
+        let deadline = Instant::now() + Duration::from_secs(spec.timeout_seconds);
+        let stabilization = Duration::from_secs(spec.stabilization_seconds);
+        let mut healthy_since = None;
+        let mut last_error = None;
+        while Instant::now() < deadline {
+            if let Some(exit) = self.take_process_exit(id)? {
+                let excerpt = tail_log(&self.log_dir.join(format!("{id}.log")), 8 * 1024);
+                let suffix = excerpt
+                    .filter(|value| !value.trim().is_empty())
+                    .map(|value| format!("; recent log:\n{}", self.redact_excerpt(value)))
+                    .unwrap_or_default();
+                return Err(io::Error::other(format!(
+                    "process exited with {exit}{suffix}"
+                )));
+            }
+            match probe_http(spec) {
+                Ok(_) => {
+                    let since = healthy_since.get_or_insert_with(Instant::now);
+                    if since.elapsed() >= stabilization {
+                        return Ok(());
+                    }
+                }
+                Err(error) => {
+                    healthy_since = None;
+                    last_error = Some(error);
+                }
+            }
+            thread::sleep(Duration::from_millis(250));
+        }
+        Err(last_error.unwrap_or_else(|| io::Error::new(io::ErrorKind::TimedOut, "health timeout")))
+    }
+
+    fn take_process_exit(&self, id: &str) -> io::Result<Option<String>> {
+        let mut state = self.state.lock().expect("host process lock poisoned");
+        let Some(managed) = state.children.get_mut(id) else {
+            return Ok(Some("process is not running".into()));
+        };
+        let Some(status) = managed.child.try_wait()? else {
+            return Ok(None);
+        };
+        let exit = format!(
+            "{status} after {} ms",
+            managed.started_at.elapsed().as_millis()
+        );
+        state.children.remove(id);
+        state.last_exit.insert(id.to_owned(), exit.clone());
+        self.health_ready.store(false, Ordering::Release);
+        Ok(Some(exit))
+    }
+
+    fn redact_excerpt(&self, mut excerpt: String) -> String {
+        let mut secrets = Vec::new();
+        if let Some(runtime) = self.manifest.managed_runtime.as_ref() {
+            secrets.push(runtime.credentials.postgres_password.as_str());
+            secrets.push(runtime.credentials.redis_password.as_str());
+        }
+        for spec in &self.manifest.services {
+            for (key, value) in &spec.env {
+                if sensitive_key(key) && value.len() >= 8 {
+                    secrets.push(value);
+                }
+            }
+        }
+        let backend = self
+            .backend_environment
+            .lock()
+            .expect("backend environment lock poisoned");
+        for (key, value) in backend.iter() {
+            if sensitive_key(key) && value.len() >= 8 {
+                secrets.push(value);
+            }
+        }
+        secrets.sort_by_key(|value| std::cmp::Reverse(value.len()));
+        secrets.dedup();
+        for secret in secrets {
+            excerpt = excerpt.replace(secret, "[redacted]");
+        }
+        excerpt
+    }
+}
+
+fn sensitive_key(key: &str) -> bool {
+    let key = key.to_ascii_lowercase();
+    ["password", "secret", "token", "api_key", "apikey"]
+        .iter()
+        .any(|marker| key.contains(marker))
+}
+
+fn reserve_managed_app_ports(manifest: &HostPackManifest) -> io::Result<HashMap<u16, TcpListener>> {
+    let Some(runtime) = manifest.managed_runtime.as_ref() else {
+        return Ok(HashMap::new());
+    };
+    let mut reservations = HashMap::new();
+    for port in [runtime.ports.backend, runtime.ports.frontend] {
+        reservations.insert(port, bind_idle_port(port)?);
+    }
+    Ok(reservations)
+}
+
+fn bind_idle_port(port: u16) -> io::Result<TcpListener> {
+    TcpListener::bind((Ipv4Addr::LOCALHOST, port)).map_err(|error| {
+        io::Error::new(
+            error.kind(),
+            format!("could not reserve Lemma's local port {port}: {error}"),
+        )
+    })
 }
 
 fn validate_and_order(manifest: &HostPackManifest) -> io::Result<Vec<String>> {
@@ -837,7 +1045,10 @@ fn spawn_command(
     command
         .args(&arguments[1..])
         .env_clear()
-        .stdin(Stdio::null())
+        // Services opt into an EOF watchdog. Keeping this pipe owned by Child
+        // makes an abrupt locald exit observable without inspecting or killing
+        // unrelated system processes on the next launch.
+        .stdin(Stdio::piped())
         .stdout(Stdio::from(stdout))
         .stderr(Stdio::from(stderr));
     for key in INHERITED_ENVIRONMENT {
@@ -904,21 +1115,8 @@ fn terminate_process_group(child: &mut Child) -> io::Result<()> {
     child.wait().map(|_| ())
 }
 
-fn wait_http_health(spec: &HttpHealthSpec) -> io::Result<()> {
-    let deadline = Instant::now() + Duration::from_secs(spec.timeout_seconds);
-    let mut last_error = None;
-    while Instant::now() < deadline {
-        match probe_http(&spec.url) {
-            Ok(()) => return Ok(()),
-            Err(error) => last_error = Some(error),
-        }
-        thread::sleep(Duration::from_millis(250));
-    }
-    Err(last_error.unwrap_or_else(|| io::Error::new(io::ErrorKind::TimedOut, "health timeout")))
-}
-
-fn probe_http(url: &str) -> io::Result<()> {
-    let remainder = url.strip_prefix("http://").ok_or_else(|| {
+fn probe_http(spec: &HttpHealthSpec) -> io::Result<String> {
+    let remainder = spec.url.strip_prefix("http://").ok_or_else(|| {
         io::Error::new(io::ErrorKind::InvalidInput, "host health URL must use http")
     })?;
     let (authority, path) = remainder.split_once('/').unwrap_or((remainder, ""));
@@ -946,22 +1144,61 @@ fn probe_http(url: &str) -> io::Result<()> {
         "GET /{} HTTP/1.1\r\nHost: {}\r\nConnection: close\r\n\r\n",
         path, authority
     )?;
-    let mut response = [0_u8; 64];
-    let count = stream.read(&mut response)?;
-    let status_line = std::str::from_utf8(&response[..count])
-        .ok()
-        .and_then(|value| value.lines().next())
-        .unwrap_or_default();
+    let mut response = Vec::new();
+    let mut chunk = [0_u8; 4096];
+    loop {
+        match stream.read(&mut chunk) {
+            Ok(0) => break,
+            Ok(count) => {
+                if response.len() + count > 64 * 1024 {
+                    return Err(io::Error::new(
+                        io::ErrorKind::InvalidData,
+                        "health response exceeds 64 KiB",
+                    ));
+                }
+                response.extend_from_slice(&chunk[..count]);
+            }
+            // Some small HTTP servers close with RST after sending the complete
+            // response. Retain already-read bytes and validate the status/body
+            // instead of discarding a legitimate bounded response.
+            Err(error)
+                if error.kind() == io::ErrorKind::ConnectionReset && !response.is_empty() =>
+            {
+                break;
+            }
+            Err(error) => return Err(error),
+        }
+    }
+    let response_text = std::str::from_utf8(&response)
+        .map_err(|_| io::Error::new(io::ErrorKind::InvalidData, "invalid health response"))?;
+    let status_line = response_text.lines().next().unwrap_or_default();
     let status = status_line
         .split_whitespace()
         .nth(1)
         .and_then(|value| value.parse::<u16>().ok())
         .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidData, "invalid health response"))?;
-    if (200..500).contains(&status) {
-        Ok(())
-    } else {
-        Err(io::Error::other(format!("health returned {status}")))
+    if !(200..300).contains(&status) {
+        return Err(io::Error::other(format!("health returned {status}")));
     }
+    if let Some(expected) = spec.expected_body.as_deref() {
+        if !response_text.contains(expected) {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                "health response came from a different runtime instance",
+            ));
+        }
+    }
+    let body = response_text
+        .split_once("\r\n\r\n")
+        .map(|(_, body)| body)
+        .unwrap_or_default();
+    Ok(body.to_owned())
+}
+
+fn tail_log(path: &Path, max_bytes: usize) -> Option<String> {
+    let bytes = std::fs::read(path).ok()?;
+    let start = bytes.len().saturating_sub(max_bytes);
+    Some(String::from_utf8_lossy(&bytes[start..]).into_owned())
 }
 
 fn is_loopback(address: IpAddr) -> bool {
@@ -971,6 +1208,7 @@ fn is_loopback(address: IpAddr) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::net::{Ipv4Addr, TcpListener};
     use tempfile::tempdir;
 
     fn manifest(services: Vec<HostProcessSpec>) -> HostPackManifest {
@@ -1005,6 +1243,55 @@ mod tests {
             health: None,
             restart: RestartSpec::default(),
         }
+    }
+
+    fn one_response(status: u16, body: &str) -> (HttpHealthSpec, thread::JoinHandle<()>) {
+        let listener = TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).unwrap();
+        let address = listener.local_addr().unwrap();
+        let body = body.to_owned();
+        let server = thread::spawn(move || {
+            let (mut stream, _) = listener.accept().unwrap();
+            let mut request = [0_u8; 1024];
+            let _ = stream.read(&mut request);
+            write!(
+                stream,
+                "HTTP/1.1 {status} Test\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                body.len()
+            )
+            .unwrap();
+            stream.flush().unwrap();
+            stream.shutdown(std::net::Shutdown::Write).unwrap();
+        });
+        (
+            HttpHealthSpec {
+                url: format!("http://{address}/health"),
+                timeout_seconds: 1,
+                expected_body: Some("runtime-123".into()),
+                stabilization_seconds: 0,
+            },
+            server,
+        )
+    }
+
+    #[test]
+    fn health_requires_two_xx_and_the_expected_runtime_identity() {
+        for status in [401, 404, 503] {
+            let (unhealthy, server) = one_response(status, "runtime-123");
+            assert!(probe_http(&unhealthy).is_err());
+            server.join().unwrap();
+        }
+
+        let (stale, stale_server) = one_response(200, "runtime-old");
+        let error = probe_http(&stale).unwrap_err();
+        assert!(
+            error.to_string().contains("different runtime instance"),
+            "{error}"
+        );
+        stale_server.join().unwrap();
+
+        let (healthy, healthy_server) = one_response(200, "runtime-123");
+        probe_http(&healthy).unwrap();
+        healthy_server.join().unwrap();
     }
 
     #[test]
@@ -1180,6 +1467,35 @@ mod tests {
         manager.stop_all().unwrap();
         assert!(manager.status().iter().all(|process| !process.running));
         assert_eq!(manager.status_event(None)["ready"], false);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn startup_reports_child_exit_and_recent_log_without_waiting_for_health_timeout() {
+        let mut backend = service("backend", &[]);
+        backend.command = vec![
+            "/bin/sh".into(),
+            "-c".into(),
+            "echo exact-backend-failure; exit 17".into(),
+        ];
+        backend.health = Some(HttpHealthSpec {
+            url: "http://127.0.0.1:9/health".into(),
+            timeout_seconds: 30,
+            expected_body: Some("runtime-123".into()),
+            stabilization_seconds: 0,
+        });
+        let frontend = service("frontend", &["backend"]);
+        let root = tempdir().unwrap();
+        let mut value = manifest(vec![frontend, backend]);
+        value.setup[0].command = vec!["/usr/bin/true".into()];
+        let manager = HostProcessManager::new(value, root.path().into()).unwrap();
+
+        let started = Instant::now();
+        let error = manager.start_all().unwrap_err().to_string();
+
+        assert!(started.elapsed() < Duration::from_secs(5));
+        assert!(error.contains("process exited"));
+        assert!(error.contains("exact-backend-failure"));
     }
 
     #[cfg(unix)]

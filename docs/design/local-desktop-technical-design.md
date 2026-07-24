@@ -340,6 +340,15 @@ Package a relocatable, signed directory rather than one monolithic self-extracti
 
 Launch a local composition derived from `standalone_app:app` through a small signed shim that receives configuration through inherited handles/files and binds a random loopback port. The composition contains API, Streaq worker, scheduler, native surface receivers, AgentBox manager, and MarkItDown. The shim reports build ID plus subcomponent health to `lemma-locald`.
 
+Managed Desktop sets `LOCAL_EMBEDDING_STARTUP_MODE=background`. Database and
+Redis remain core readiness gates, but a missing local embedding model does
+not delay the API listener or require internet access before signup. Exactly
+one process-local initializer warms the model cache; its state is exposed as
+`preparing`, `ready`, or `degraded` through `/health/capabilities`. Failure is
+non-fatal and a later semantic-search request may retry the guarded
+initialization. Hosted deployments retain blocking startup unless explicitly
+configured otherwise.
+
 Do not merge AgentBox domain code into backend modules. Instead:
 
 1. add an `agentbox` local-runtime dependency/extra to the backend pack;
@@ -736,7 +745,7 @@ document_processor = "markitdown"
 provider = "supertokens_compat"
 
 [network]
-gateway_port = 3711
+allocation = "locald"
 lan_enabled = false
 
 [ai.system]
@@ -909,10 +918,17 @@ Rotate internal credentials through a coordinated config revision. Database pass
 
 ### 13.1 Port allocation
 
-- Gateway prefers 3711 but binds atomically and persists a different free port if occupied.
-- Internal host processes bind port `0`; the daemon reads the selected port from an inherited control channel.
+- On first installation locald allocates distinct frontend and backend ports
+  from the OS ephemeral range and persists them in private `network.json`.
+- On subsequent starts locald validates the persisted pair. If an unrelated
+  listener owns either port, it atomically persists a newly allocated pair;
+  it never terminates an unverified process.
+- The daemon renders frontend, backend, CORS, auth, built-app, OAuth callback,
+  and sandbox bridge URLs from that pair.
 - Guest forwards use random loopback ports and are never persisted as public configuration.
 - CLI server registration reads the current gateway endpoint from the daemon, not a hard-coded port.
+- Fixed overrides exist only for source-development tests and require both
+  `LEMMA_LOCALD_FRONTEND_PORT` and `LEMMA_LOCALD_BACKEND_PORT`.
 
 ### 13.2 Local owner bootstrap
 

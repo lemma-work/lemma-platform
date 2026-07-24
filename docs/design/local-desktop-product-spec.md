@@ -415,6 +415,9 @@ No tunnel is enabled silently. The Overview page shows a prominent “Public ing
 - Opening Lemma starts the host control daemon if needed.
 - Core services start automatically when the user opens the app or invokes a local CLI command.
 - `lemma-locald` starts one all-in-one backend and one frontend process; worker, scheduler, surfaces, AgentBox manager, and document conversion are backend subsystems rather than independently managed services.
+- Core readiness waits for PostgreSQL and Redis, not an optional local
+  embedding-model download. Semantic search is shown separately as preparing,
+  ready, or degraded and can recover without restarting the workspace.
 - The main window becomes interactive in degraded mode as soon as the gateway and configuration UI are ready; it does not wait for optional workspace images.
 - Warm launch goes directly to the product while health verification continues unobtrusively.
 
@@ -601,6 +604,7 @@ The release is blocked if artifact-size and idle-resource budgets regress withou
 | APP-03 | A built pod app has production-parity local serving at `<public-slug>.apps.lemma.localhost`, including assets, SPA routes, SDK config, API auth/CORS, and streaming. | P0 |
 | DATA-03 | AgentBox durable state uses an `agentbox` database on the managed PostgreSQL instance. | P0 |
 | DIAG-01 | Health is dependency-aware and uses stable failure codes. | P0 |
+| DIAG-04 | Optional embedding preparation is reported separately and cannot block core startup. | P0 |
 | DIAG-02 | The UI offers targeted repair before reset/reinstall. | P0 |
 | DIAG-03 | Users can preview and export a redacted support bundle. | P1 |
 | DATA-01 | Updates create a consistent pre-migration snapshot when needed. | P0 |

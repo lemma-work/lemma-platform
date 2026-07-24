@@ -8,6 +8,10 @@ remain outside this process.
 
 from __future__ import annotations
 
+import os
+import sys
+import threading
+
 from fastapi import FastAPI
 
 from agentbox.api.app import app as agentbox_app
@@ -15,6 +19,24 @@ from app.app import create_app as create_api_app
 from app.standalone import EmbeddedApp, build_standalone_app
 
 AGENTBOX_MOUNT_PATH = "/internal/agentbox"
+
+
+def _install_locald_parent_watchdog() -> None:
+    """Exit managed host processes when their owning locald pipe closes."""
+    if os.getenv("LEMMA_LOCALD_PARENT_WATCHDOG") != "1":
+        return
+
+    def watch() -> None:
+        try:
+            sys.stdin.buffer.read()
+        finally:
+            os._exit(0)
+
+    threading.Thread(
+        target=watch,
+        name="lemma-locald-parent-watchdog",
+        daemon=True,
+    ).start()
 
 
 def create_local_app() -> FastAPI:
@@ -29,6 +51,7 @@ def create_local_app() -> FastAPI:
     return local_app
 
 
+_install_locald_parent_watchdog()
 app = create_local_app()
 
 

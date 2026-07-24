@@ -1033,8 +1033,17 @@ class Settings(BaseSettings):
     local_embedding_preload: bool = Field(
         default=True,
         description=(
-            "Initialize local embeddings during worker startup so model/cache "
-            "failures surface before document jobs are accepted."
+            "Compatibility switch for local embedding startup. False forces lazy "
+            "initialization; true uses LOCAL_EMBEDDING_STARTUP_MODE."
+        ),
+    )
+    local_embedding_startup_mode: Literal["blocking", "background", "lazy"] = Field(
+        default="blocking",
+        description=(
+            "How local embeddings initialize. 'blocking' preserves server "
+            "readiness semantics for hosted/developer deployments, 'background' "
+            "warms the model without blocking core API readiness, and 'lazy' "
+            "waits for the first embedding operation."
         ),
     )
     local_embedding_preload_timeout_seconds: float = Field(
@@ -1042,6 +1051,13 @@ class Settings(BaseSettings):
         description=(
             "Maximum worker-startup time allowed for local model preload, including "
             "a first-run model download."
+        ),
+    )
+    lemma_runtime_instance_id: str = Field(
+        default="",
+        description=(
+            "Opaque launch identity echoed by local health endpoints so the "
+            "Desktop supervisor cannot accept a stale process on the same port."
         ),
     )
     openai_compat_embedding_model: str = Field(

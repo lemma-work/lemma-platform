@@ -7,9 +7,21 @@ if (!server) {
   throw new Error("frontend launcher requires the Next.js server path");
 }
 
+if (process.env.LEMMA_LOCALD_PARENT_WATCHDOG === "1") {
+  process.stdin.resume();
+  process.stdin.once("end", () => process.exit(0));
+  process.stdin.once("error", () => process.exit(0));
+}
+
 const publicEnv = {};
 for (const [key, value] of Object.entries(process.env)) {
   if (key.startsWith("NEXT_PUBLIC_")) publicEnv[key] = value ?? "";
+}
+if (
+  process.env.NODE_ENV === "production" &&
+  (!publicEnv.NEXT_PUBLIC_API_URL || !publicEnv.NEXT_PUBLIC_SITE_URL)
+) {
+  throw new Error("locald must provide the production frontend and API origins");
 }
 publicEnv.NEXT_PUBLIC_API_URL ||= "http://app.lemma.localhost:8711";
 publicEnv.NEXT_PUBLIC_SITE_URL ||= "http://app.lemma.localhost:3711";

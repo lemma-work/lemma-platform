@@ -150,8 +150,8 @@ All of these settings are optional:
 - **Composio** enables its connector catalog using an API key and optional
   webhook secret.
 - **Google connector OAuth app** configures Gmail, Calendar, and Drive
-  connections. Its local callback is
-  `http://app.lemma.localhost:8711/api/v1/connectors/oauth/callback`.
+  connections. Copy its exact local callback from **Local Control Center →
+  Integrations** after the runtime has started.
 - **Microsoft connector OAuth app** configures Microsoft connections and uses
   the same local callback path. These credentials are separate from Teams bot
   credentials.
@@ -168,18 +168,34 @@ events, or logs.
 
 ## Local URLs
 
-Use the exact loopback names shown by Lemma:
+On first start, Lemma asks the operating system for a high frontend/backend
+port pair and stores it in the app-owned `locald/network.json`. The pair stays
+stable across app and machine restarts. Use the exact loopback URLs shown in
+**Local Control Center → Diagnostics**:
 
 | Surface | URL |
 | --- | --- |
-| Workspace | `http://app.lemma.localhost:3711` |
-| API and auth | `http://app.lemma.localhost:8711` |
-| Built React app | `http://<slug>.apps.lemma.localhost:8711` |
-| Live sandbox app | `http://<sandbox>-<app>.workspaces.lemma.localhost:8711` |
+| Workspace | `http://app.lemma.localhost:<frontend-port>` |
+| API and auth | `http://app.lemma.localhost:<backend-port>` |
+| Built React app | `http://<slug>.apps.lemma.localhost:<backend-port>` |
+| Live sandbox app | `http://<sandbox>-<app>.workspaces.lemma.localhost:<backend-port>` |
+| Connector OAuth callback | `http://app.lemma.localhost:<backend-port>/api/v1/connectors/oauth/callback` |
 
 `lemma.localhost` is reserved for loopback and does not require public DNS.
 Built React apps use the same routing and session behavior as
 `<app-name>.apps.lemma.work` in production.
+
+The ports are deliberately not a documented constant. The Desktop shell,
+frontend configuration, backend CORS/auth configuration, sandbox callback
+bridge, and CLI all consume locald's resolved pair. Development-only overrides
+are available through `LEMMA_LOCALD_FRONTEND_PORT` and
+`LEMMA_LOCALD_BACKEND_PORT`; both must be supplied together.
+
+Core startup does not wait for the optional local semantic-search model.
+**Services** may show embeddings as **Preparing** or **Degraded** while signup,
+workspace use, agents, and non-semantic operations remain available. A failed
+model download is retried by a later semantic-search operation and is recorded
+in the Backend log.
 
 Agent and function sandboxes receive the explicit `host.lemma.internal` bridge
 configured by the managed runtime through `WORKSPACE_CALLBACK_*` and
@@ -422,10 +438,11 @@ Desktop for this flow.
 
 ### A port is already in use
 
-The managed gateway needs loopback ports `3711` and `8711`. Stop the other
-process using the port, then select **Start** or run `lemma-stack start`. Lemma
-does not silently move to a different origin because cookies and app subdomains
-depend on the stable contract.
+Managed Desktop never stops an unrelated process. If another application owns
+one of Lemma's persisted ports, the next start allocates and persists a new
+pair, then updates every local runtime URL together. Open **Local Control Center
+→ Diagnostics** to copy the new origins. OAuth providers with an allowlisted
+local callback must be updated if this rare recovery occurs.
 
 ### AI validation fails
 
@@ -444,11 +461,12 @@ launching the Desktop executable to open it automatically. Local backend access
 logs record request methods, paths, and status codes in `backend.log`; request
 headers, cookies, credentials, and bodies are not logged.
 
-Select **View log** directly on the setup/error screen to see the persistent
-installer transcript, including downloads, verification, activation, and the
-exact error from the latest attempt. It is retained at
-`runtime/install.log` below the managed state directory and rotates at 1 MiB.
-It remains available even when `lemma-locald` has not started.
+Select **View logs** directly on the setup/error screen for live, bounded tabs
+covering installer, locald events, migrations, backend, frontend, and private
+infrastructure. Lemma automatically selects the component that failed and
+includes its recent excerpt on the error screen. Secrets are redacted before
+log content reaches the webview. **Copy** copies the selected tab and **Open
+logs folder** opens the persistent source files.
 
 Use **Control Center → Diagnostics → Open logs folder** for the installer,
 daemon, backend, frontend, and VM logs, or:

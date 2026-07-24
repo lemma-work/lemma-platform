@@ -201,7 +201,9 @@ class RequestObserverMiddleware:
     HEADER = b"x-request-id"
     REQUEST_ID_RE = re.compile(r"^[A-Za-z0-9._:-]{1,128}$")
     SLOW_SECONDS = 2.0
-    QUIET_PATHS = frozenset({"/health", "/health/live", "/health/ready", "/livez"})
+    QUIET_PATHS = frozenset(
+        {"/health", "/health/live", "/health/ready", "/health/capabilities", "/livez"}
+    )
 
     def __init__(self, app):
         self.app = app
@@ -627,7 +629,29 @@ def create_app(modules=OSS_MODULES) -> FastAPI:
             "status": "ready" if ready else "not_ready",
             "components": components,
         }
+        if settings.lemma_runtime_instance_id:
+            payload["instance_id"] = settings.lemma_runtime_instance_id
         return JSONResponse(payload, status_code=200 if ready else 503)
+
+    @app.get("/health/capabilities", include_in_schema=False)
+    async def health_capabilities():
+        from app.modules.datastore.module import embedding_capability
+
+        embeddings = embedding_capability()
+        payload = {
+            "status": (
+                "degraded" if embeddings.status == "degraded" else embeddings.status
+            ),
+            "capabilities": {
+                "embeddings": {
+                    "status": embeddings.status,
+                    "detail": embeddings.detail,
+                }
+            },
+        }
+        if settings.lemma_runtime_instance_id:
+            payload["instance_id"] = settings.lemma_runtime_instance_id
+        return payload
 
     # Compatibility alias for /health/live during probe migration.
     @app.get("/health", include_in_schema=False)

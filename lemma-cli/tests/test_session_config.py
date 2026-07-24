@@ -5,7 +5,16 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-from lemma_sdk.config import DEFAULT_AUTH_URL, DEFAULT_BASE_URL, load_config
+import pytest
+
+from lemma_sdk.config import (
+    DEFAULT_AUTH_URL,
+    DEFAULT_BASE_URL,
+    get_server_config,
+    load_config,
+    normalize_server_config,
+    resolve_base_url,
+)
 
 from lemma_cli.daemon.config import daemon_ws_url
 from lemma_cli.cli_core.context import render_session_selection
@@ -78,6 +87,78 @@ def test_daemon_ws_url_scheme_derivation():
     )
     # Bare host (no scheme) assumes TLS.
     assert daemon_ws_url("api.lemma.work").startswith("wss://api.lemma.work/")
+
+
+def test_local_server_discovers_dynamic_desktop_endpoints(tmp_path, monkeypatch):
+    locald = tmp_path / "locald"
+    locald.mkdir()
+    (locald / "state.json").write_text(
+        json.dumps(
+            {
+                "url": "http://app.lemma.localhost:52123",
+                "apiUrl": "http://app.lemma.localhost:58765",
+            }
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("LEMMA_LOCALD_ROOT", str(locald))
+    root, selected = normalize_server_config(
+        load_config(tmp_path / "missing.json"),
+        selected_server="local",
+    )
+
+    local = get_server_config(root, selected)
+
+    assert resolve_base_url(None, local, use_env=False) == (
+        "http://app.lemma.localhost:58765"
+    )
+    assert local["auth_url"] == "http://app.lemma.localhost:52123/auth"
+    assert local["_sources"]["base_url"].endswith("state.json")
+
+
+def test_local_server_refreshes_a_stale_registered_endpoint(tmp_path, monkeypatch):
+    locald = tmp_path / "locald"
+    locald.mkdir()
+    (locald / "state.json").write_text(
+        json.dumps(
+            {
+                "url": "http://app.lemma.localhost:52123",
+                "apiUrl": "http://app.lemma.localhost:58765",
+            }
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("LEMMA_LOCALD_ROOT", str(locald))
+    root, selected = normalize_server_config(
+        {
+            "active_server": "local",
+            "servers": {
+                "local": {
+                    "base_url": "http://app.lemma.localhost:8711",
+                    "auth_url": "http://app.lemma.localhost:3711/auth",
+                }
+            },
+        },
+        selected_server="local",
+    )
+
+    local = get_server_config(root, selected)
+
+    assert local["base_url"] == "http://app.lemma.localhost:58765"
+    assert local["auth_url"] == "http://app.lemma.localhost:52123/auth"
+
+
+def test_local_server_never_silently_falls_back_to_cloud(tmp_path, monkeypatch):
+    monkeypatch.setenv("LEMMA_LOCALD_ROOT", str(tmp_path / "missing-locald"))
+    root, selected = normalize_server_config(
+        load_config(tmp_path / "missing.json"),
+        selected_server="local",
+    )
+
+    local = get_server_config(root, selected)
+
+    with pytest.raises(ValueError, match="Desktop local endpoints are unavailable"):
+        resolve_base_url(None, local, use_env=False)
 
 
 def test_session_selection_export_mode_emits_eval_safe_lines(capsys):

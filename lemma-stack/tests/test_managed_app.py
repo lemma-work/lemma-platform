@@ -50,7 +50,8 @@ class FakeManagedClient:
                 "release": "1.2.3",
                 "status": "running",
                 "ready": True,
-                "url": "http://app.lemma.localhost:3711",
+                "url": "http://app.lemma.localhost:52123",
+                "api_url": "http://app.lemma.localhost:58765",
                 "components": [
                     {
                         "id": "backend",
@@ -148,17 +149,19 @@ def test_managed_config_uses_transactional_daemon_api_and_write_only_secrets(
 
 
 def test_register_cli_uses_managed_loopback_origins(monkeypatch) -> None:
+    client = FakeManagedClient()
     observed: dict[str, object] = {}
 
     def register(**values) -> None:
         observed.update(values)
 
     monkeypatch.setattr(stack_app, "register_local_server", register)
+    monkeypatch.setattr(stack_app, "_managed_locald", lambda: client)
 
     stack_app.self_register_cli(make_active=True)
 
     assert observed == {
-        "base_url": "http://app.lemma.localhost:8711",
-        "auth_url": "http://app.lemma.localhost:3711/auth",
+        "base_url": "http://app.lemma.localhost:58765",
+        "auth_url": "http://app.lemma.localhost:52123/auth",
         "make_active": True,
     }

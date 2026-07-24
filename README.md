@@ -59,10 +59,11 @@ does not install or require Docker Desktop, Podman, Homebrew, Python, Node.js,
 Ubuntu, or public DNS. Configure the required AI profile and optional
 integrations in **Local Control Center**.
 
-The workspace is `http://app.lemma.localhost:3711`, the API is
-`http://app.lemma.localhost:8711`, and built pod apps use
-`http://<slug>.apps.lemma.localhost:8711`. See the complete
-[local installation and operations guide](docs/installation.md).
+On first installation Lemma chooses a private high-port pair and keeps it
+stable across restarts. **Local Control Center → Diagnostics** shows the exact
+workspace, API, built-app, and OAuth callback URLs. The CLI discovers the same
+endpoints from Desktop automatically. See the complete [local installation and
+operations guide](docs/installation.md).
 
 Install the CLI, point it at the local stack, and give your coding agent Lemma's skills:
 
@@ -264,9 +265,9 @@ make stop        # stop dev app, AgentBox, and tunnel processes
 make stop-all    # also stop dev infrastructure
 ```
 
-Run `make help` for the full list. The dev stack runs on its own ports
-(frontend 3710, backend 8710) so it never collides with an installed
-`lemma-stack` stack (3711/8711).
+Run `make help` for the full list. The dev stack uses explicit development
+ports (frontend 3710, backend 8710). Managed Desktop installations choose
+persistent high ports instead.
 
 `make dev-public` requires `cloudflared` and creates one temporary
 `*.trycloudflare.com` URL for the API. The frontend and auth UI stay on

@@ -17,10 +17,9 @@ use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
 
+use crate::network::{load_or_allocate, NetworkPorts};
 use crate::paths::LocalPaths;
 
-const FRONTEND_PORT: u16 = 3711;
-const BACKEND_PORT: u16 = 8711;
 const POSTGRES_PORT: u16 = 55432;
 const REDIS_PORT: u16 = 56379;
 const SUPERTOKENS_PORT: u16 = 53567;
@@ -51,7 +50,8 @@ pub(crate) fn prepare(
     pack_root: &Path,
     material: ManagedManifestMaterial,
 ) -> io::Result<PathBuf> {
-    let manifest = build(paths, pack_root, &material)?;
+    let ports = load_or_allocate(paths)?;
+    let manifest = build(paths, pack_root, &material, ports)?;
     let destination = paths.root.join("host-pack.json");
     write_private_atomic(&destination, &serde_json::to_vec_pretty(&manifest)?)?;
     Ok(destination)
@@ -61,6 +61,7 @@ fn build(
     paths: &LocalPaths,
     pack_root: &Path,
     material: &ManagedManifestMaterial,
+    ports: NetworkPorts,
 ) -> io::Result<Value> {
     validate_hex_secret("postgres password", &material.postgres_password)?;
     validate_hex_secret("Redis password", &material.redis_password)?;
@@ -183,8 +184,11 @@ fn build(
         ]
         .concat(),
     ));
-    let frontend_origin = format!("http://{LOCAL_FRONTEND_HOST}:{FRONTEND_PORT}");
-    let backend_origin = format!("http://{LOCAL_BACKEND_HOST}:{BACKEND_PORT}");
+    let frontend_port = ports.frontend_port;
+    let backend_port = ports.backend_port;
+    let runtime_instance_id = random_hex(16)?;
+    let frontend_origin = format!("http://{LOCAL_FRONTEND_HOST}:{frontend_port}");
+    let backend_origin = format!("http://{LOCAL_BACKEND_HOST}:{backend_port}");
     let mut backend_env = BTreeMap::from([
         ("ENVIRONMENT", "local".to_owned()),
         ("DEBUG", "true".to_owned()),
@@ -234,7 +238,7 @@ fn build(
         ("AGENTBOX_ENVIRONMENT", "local".to_owned()),
         (
             "AGENTBOX_API_URL",
-            format!("http://127.0.0.1:{BACKEND_PORT}/internal/agentbox"),
+            format!("http://127.0.0.1:{backend_port}/internal/agentbox"),
         ),
         (
             "AGENTBOX_PUBLIC_URL",
@@ -264,7 +268,7 @@ fn build(
         ("AGENTBOX_LOCAL_CALLBACK_REQUIRED", "true".to_owned()),
         (
             "AGENTBOX_LOCAL_CALLBACK_URL",
-            format!("http://host.lemma.internal:{BACKEND_PORT}"),
+            format!("http://host.lemma.internal:{backend_port}"),
         ),
         ("AGENTBOX_LOCAL_RUNTIME_TIMEOUT_SECONDS", "600".to_owned()),
         (
@@ -273,22 +277,22 @@ fn build(
         ),
         (
             "WORKSPACE_CALLBACK_API_URL",
-            format!("http://host.lemma.internal:{BACKEND_PORT}"),
+            format!("http://host.lemma.internal:{backend_port}"),
         ),
         (
             "WORKSPACE_CALLBACK_AUTH_URL",
-            format!("http://host.lemma.internal:{FRONTEND_PORT}/auth"),
+            format!("http://host.lemma.internal:{frontend_port}/auth"),
         ),
         (
             "WORKSPACE_CALLBACK_FRONTEND_URL",
-            format!("http://host.lemma.internal:{FRONTEND_PORT}"),
+            format!("http://host.lemma.internal:{frontend_port}"),
         ),
         ("API_URL", backend_origin.clone()),
         ("FRONTEND_URL", frontend_origin.clone()),
         ("AUTH_FRONTEND_URL", format!("{frontend_origin}/auth")),
         (
             "SCHEDULER_API_URL",
-            format!("http://127.0.0.1:{BACKEND_PORT}"),
+            format!("http://127.0.0.1:{backend_port}"),
         ),
         ("AUTH_WEBSITE_BASE_PATH", "/auth".to_owned()),
         ("SUPERTOKENS_API_BASE_PATH", "/auth".to_owned()),
@@ -302,7 +306,7 @@ fn build(
         ("SESSION_COOKIE_DOMAIN", String::new()),
         (
             "APP_BASE_DOMAIN",
-            format!("apps.lemma.localhost:{BACKEND_PORT}"),
+            format!("apps.lemma.localhost:{backend_port}"),
         ),
         ("CORS_ORIGIN_REGEX", LOCAL_CORS_ORIGIN_REGEX.to_owned()),
         ("STORAGE_BACKEND", "local".to_owned()),
@@ -328,6 +332,9 @@ fn build(
             "false".to_owned(),
         ),
         ("EMBEDDING_PROVIDER", "local".to_owned()),
+        ("LOCAL_EMBEDDING_STARTUP_MODE", "background".to_owned()),
+        ("LEMMA_RUNTIME_INSTANCE_ID", runtime_instance_id.clone()),
+        ("LEMMA_LOCALD_PARENT_WATCHDOG", "1".to_owned()),
         ("WEB_SEARCH_PROVIDER", "duckduckgo".to_owned()),
         ("ENABLE_TELEGRAM_POLLING_MODE", "true".to_owned()),
         ("ENABLE_SLACK_SOCKET_MODE", "true".to_owned()),
@@ -347,7 +354,7 @@ fn build(
 
     let frontend_env = BTreeMap::from([
         ("NODE_ENV", "production".to_owned()),
-        ("PORT", FRONTEND_PORT.to_string()),
+        ("PORT", frontend_port.to_string()),
         ("HOSTNAME", "127.0.0.1".to_owned()),
         ("NEXT_PUBLIC_API_URL", backend_origin),
         ("NEXT_PUBLIC_AUTH_URL", format!("{frontend_origin}/auth")),
@@ -364,6 +371,11 @@ fn build(
             "NEXT_PUBLIC_AUTH_EMAIL_VERIFICATION_REQUIRED",
             "false".to_owned(),
         ),
+        (
+            "NEXT_PUBLIC_LEMMA_RUNTIME_INSTANCE_ID",
+            runtime_instance_id.clone(),
+        ),
+        ("LEMMA_LOCALD_PARENT_WATCHDOG", "1".to_owned()),
     ]);
 
     Ok(json!({
@@ -383,8 +395,8 @@ fn build(
                 "postgres": POSTGRES_PORT,
                 "redis": REDIS_PORT,
                 "supertokens": SUPERTOKENS_PORT,
-                "backend": BACKEND_PORT,
-                "frontend": FRONTEND_PORT,
+                "backend": backend_port,
+                "frontend": frontend_port,
             },
         },
         "setup": [{
@@ -399,11 +411,16 @@ fn build(
         "services": [
             {
                 "id": "backend",
-                "command": [path_text(&python)?, "-m", "uvicorn", "local_app:app", "--host", "127.0.0.1", "--port", BACKEND_PORT.to_string(), "--ws", "websockets-sansio"],
+                "command": [path_text(&python)?, "-m", "uvicorn", "local_app:app", "--host", "127.0.0.1", "--port", backend_port.to_string(), "--ws", "websockets-sansio"],
                 "cwd": path_text(&backend_dir)?,
                 "env": backend_env,
                 "dependencies": [],
-                "health": {"url": format!("http://127.0.0.1:{BACKEND_PORT}/health/ready"), "timeout_seconds": 180},
+                "health": {
+                    "url": format!("http://127.0.0.1:{backend_port}/health/ready"),
+                    "timeout_seconds": 180,
+                    "expected_body": runtime_instance_id,
+                    "stabilization_seconds": 2
+                },
                 "restart": {"max_restarts": 3, "window_seconds": 60, "backoff_seconds": 2},
             },
             {
@@ -412,7 +429,12 @@ fn build(
                 "cwd": path_text(&frontend_dir)?,
                 "env": frontend_env,
                 "dependencies": ["backend"],
-                "health": {"url": format!("http://127.0.0.1:{FRONTEND_PORT}/"), "timeout_seconds": 120},
+                "health": {
+                    "url": format!("http://127.0.0.1:{frontend_port}/runtime-config.js"),
+                    "timeout_seconds": 120,
+                    "expected_body": runtime_instance_id,
+                    "stabilization_seconds": 2
+                },
                 "restart": {"max_restarts": 3, "window_seconds": 60, "backoff_seconds": 2},
             },
         ],
@@ -487,6 +509,13 @@ fn load_or_create_host_secrets(path: &Path) -> io::Result<HostSecrets> {
     Ok(secrets)
 }
 
+fn random_hex(byte_count: usize) -> io::Result<String> {
+    let mut bytes = vec![0_u8; byte_count];
+    getrandom::fill(&mut bytes)
+        .map_err(|error| io::Error::other(format!("secure randomness failed: {error}")))?;
+    Ok(bytes.iter().map(|byte| format!("{byte:02x}")).collect())
+}
+
 fn validate_hex_secret(label: &str, value: &str) -> io::Result<()> {
     if value.len() != 64
         || !value
@@ -540,6 +569,8 @@ fn ensure_private_file(path: &Path) -> io::Result<()> {
         use std::os::unix::fs::PermissionsExt;
         fs::set_permissions(path, fs::Permissions::from_mode(0o600))?;
     }
+    #[cfg(not(unix))]
+    let _ = path;
     Ok(())
 }
 
@@ -615,6 +646,15 @@ mod tests {
         )
         .unwrap();
         let manifest: Value = serde_json::from_slice(&fs::read(output).unwrap()).unwrap();
+        let frontend_port = manifest["managed_runtime"]["ports"]["frontend"]
+            .as_u64()
+            .unwrap();
+        let backend_port = manifest["managed_runtime"]["ports"]["backend"]
+            .as_u64()
+            .unwrap();
+        let runtime_instance = manifest["services"][0]["env"]["LEMMA_RUNTIME_INSTANCE_ID"]
+            .as_str()
+            .unwrap();
 
         assert_eq!(manifest["release"], "6.2.0");
         assert_eq!(manifest["services"].as_array().unwrap().len(), 2);
@@ -625,7 +665,7 @@ mod tests {
             .any(|argument| argument == "--no-access-log"));
         assert_eq!(
             manifest["services"][0]["env"]["WORKSPACE_CALLBACK_API_URL"],
-            "http://host.lemma.internal:8711"
+            format!("http://host.lemma.internal:{backend_port}")
         );
         assert_eq!(
             manifest["services"][0]["env"]["AGENTBOX_PROVIDER"],
@@ -689,7 +729,7 @@ mod tests {
         assert_eq!(manifest["services"][0]["env"]["SESSION_COOKIE_DOMAIN"], "");
         assert_eq!(
             manifest["services"][0]["env"]["API_URL"],
-            "http://app.lemma.localhost:8711"
+            format!("http://app.lemma.localhost:{backend_port}")
         );
         assert_eq!(
             manifest["services"][1]["env"]["NEXT_PUBLIC_SESSION_TOKEN_DOMAIN"],
@@ -697,7 +737,7 @@ mod tests {
         );
         assert_eq!(
             manifest["services"][1]["env"]["NEXT_PUBLIC_API_URL"],
-            "http://app.lemma.localhost:8711"
+            format!("http://app.lemma.localhost:{backend_port}")
         );
         assert_eq!(
             manifest["services"][0]["env"]["AGENTBOX_LOCAL_WORKSPACE_MEMORY"],
@@ -717,7 +757,7 @@ mod tests {
         );
         assert_eq!(
             manifest["services"][0]["env"]["AGENTBOX_LOCAL_CALLBACK_URL"],
-            "http://host.lemma.internal:8711"
+            format!("http://host.lemma.internal:{backend_port}")
         );
         assert_eq!(
             manifest["services"][0]["env"]["AGENTBOX_WORKSPACE_IMAGE"],
@@ -730,6 +770,25 @@ mod tests {
         assert_eq!(
             manifest["managed_runtime"]["images"]["postgres"],
             "postgres@sha256:postgres"
+        );
+        assert!(frontend_port >= 49_152);
+        assert!(backend_port >= 49_152);
+        assert_ne!(frontend_port, backend_port);
+        assert_eq!(
+            manifest["services"][0]["env"]["LOCAL_EMBEDDING_STARTUP_MODE"],
+            "background"
+        );
+        assert_eq!(
+            manifest["services"][1]["env"]["NEXT_PUBLIC_LEMMA_RUNTIME_INSTANCE_ID"],
+            runtime_instance
+        );
+        assert_eq!(
+            manifest["services"][0]["health"]["expected_body"],
+            runtime_instance
+        );
+        assert_eq!(
+            manifest["services"][1]["health"]["expected_body"],
+            runtime_instance
         );
         assert!(paths.root.join("host.secrets.json").is_file());
     }
@@ -757,6 +816,7 @@ mod tests {
                 redis_password: "b".repeat(64),
                 bridge_executable: PathBuf::from("/signed/lemma-runtime"),
             },
+            load_or_allocate(&paths).unwrap(),
         )
         .unwrap_err();
         assert!(error.to_string().contains("Redis image must be pinned"));

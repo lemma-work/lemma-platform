@@ -352,9 +352,17 @@ impl TcpForwarder {
 impl Drop for TcpForwarder {
     fn drop(&mut self) {
         self.stop.store(true, Ordering::Release);
-        let _ = TcpStream::connect_timeout(&self.local_address, Duration::from_millis(100));
+        // The listener is nonblocking and observes `stop` within 25 ms. Do not
+        // wake it with a synthetic TCP connection: that connection can enter
+        // TIME_WAIT and prevent an immediate restart from reclaiming the exact
+        // callback port on macOS.
         if let Some(worker) = self.thread.take() {
-            let _ = worker.join();
+            if worker.join().is_err() {
+                eprintln!(
+                    "managed callback forwarder at {} stopped unexpectedly",
+                    self.local_address
+                );
+            }
         }
     }
 }

@@ -48,7 +48,7 @@ impl Daemon {
     pub fn new(paths: LocalPaths) -> io::Result<Arc<Self>> {
         paths.ensure()?;
         let token = load_or_create_token(&paths.token)?;
-        let state = StateSnapshot::load(&paths.state);
+        let mut state = StateSnapshot::load(&paths.state);
         let operator_config = OperatorConfigStore::load(paths.root.join("operator-config.json"))?;
         let managed_bootstrap = ManagedRuntimeBootstrap::discover(&paths)?;
         let host_pack_root = env::var_os("LEMMA_LOCALD_HOST_PACK_ROOT")
@@ -71,6 +71,11 @@ impl Daemon {
             .transpose()?;
         if let Some(manager) = host_processes.as_ref() {
             manager.set_backend_environment(operator_config.backend_environment()?);
+            if let Some(runtime) = manager.managed_runtime() {
+                state.url = format!("http://app.lemma.localhost:{}", runtime.ports.frontend);
+                state.api_url = format!("http://app.lemma.localhost:{}", runtime.ports.backend);
+                state.persist(&paths.state)?;
+            }
         }
         let managed_runtime = host_processes
             .as_ref()
@@ -433,6 +438,7 @@ impl Daemon {
             "operator": self.operator_config.snapshot()?,
             "state": self.state.lock().expect("state lock poisoned").event(None),
             "services": self.host_processes.as_ref().map(|manager| manager.status()),
+            "capabilities": self.host_processes.as_ref().and_then(|manager| manager.capabilities()),
             "release": self.host_processes.as_ref().map(|manager| manager.release()),
             "managed_runtime": self.managed_runtime.as_ref().and_then(|runtime| runtime.status()),
             "paths": {
@@ -640,7 +646,7 @@ impl Daemon {
                 .as_ref()
                 .expect("host operation requires manager");
             let result = match command.as_str() {
-                "start" => daemon.start_host_packs(manager),
+                "start" => daemon.start_host_packs(manager, id.as_ref()),
                 "stop" => {
                     let result = manager.stop_all();
                     if result.is_ok() && request.get("infra").and_then(Value::as_bool) == Some(true)
@@ -652,7 +658,7 @@ impl Daemon {
                 }
                 "restart" => manager
                     .stop_all()
-                    .and_then(|_| daemon.start_host_packs(manager)),
+                    .and_then(|_| daemon.start_host_packs(manager, id.as_ref())),
                 _ => unreachable!(),
             };
 
@@ -666,10 +672,12 @@ impl Daemon {
                         daemon.broadcast(json!({
                             "v": PROTOCOL_VERSION, "event": "state", "status": "stopped",
                             "running": false, "ready": false,
+                            "operation_id": id.as_ref(),
                         }));
                         daemon.broadcast(json!({
                             "v": PROTOCOL_VERSION, "event": "stopped",
                             "infra": stopped_infra,
+                            "operation_id": id.as_ref(),
                         }));
                     }
                     daemon.broadcast(json!({
@@ -679,11 +687,16 @@ impl Daemon {
                 }
                 Err(error) => {
                     let message = error.to_string();
-                    daemon.broadcast(error_event(
+                    let mut event = error_event(
                         runtime_operation_error_code(&message, "host-operation-failed"),
-                        message,
+                        message.clone(),
                         id.as_ref(),
-                    ));
+                    );
+                    event["operation_id"] = id.clone().unwrap_or(Value::Null);
+                    let (component, log_source) = error_diagnostic_source(&message);
+                    event["component"] = Value::String(component.into());
+                    event["log_source"] = Value::String(log_source.into());
+                    daemon.broadcast(event);
                     daemon.broadcast(json!({
                         "v": PROTOCOL_VERSION, "event": "done", "cmd": command,
                         "id": id.as_ref(), "ok": false,
@@ -775,7 +788,11 @@ impl Daemon {
         });
     }
 
-    fn start_host_packs(self: &Arc<Self>, manager: &HostProcessManager) -> io::Result<()> {
+    fn start_host_packs(
+        self: &Arc<Self>,
+        manager: &HostProcessManager,
+        operation_id: Option<&Value>,
+    ) -> io::Result<()> {
         self.prepare_private_infra()?;
         manager.mark_dependency_ready();
         let mut backend_environment = self.operator_config.backend_environment()?;
@@ -787,30 +804,43 @@ impl Daemon {
             "v": PROTOCOL_VERSION, "event": "phase", "key": "migrations",
             "label": "Checking workspace data", "progress": 68,
             "detail": "applying native database migrations",
+            "operation_id": operation_id,
+            "component": "migrations",
+            "log_source": "migrations",
         }));
         self.broadcast(json!({
             "v": PROTOCOL_VERSION, "event": "phase", "key": "backend",
             "label": "Preparing backend", "progress": 82, "detail": "starting host pack",
+            "operation_id": operation_id,
+            "component": "backend",
+            "log_source": "backend",
         }));
         manager.start_all()?;
         self.broadcast(json!({
             "v": PROTOCOL_VERSION, "event": "phase", "key": "frontend",
             "label": "Preparing Lemma", "progress": 90, "detail": "host packs healthy",
+            "operation_id": operation_id,
+            "component": "frontend",
+            "log_source": "frontend",
         }));
         let state = self.state.lock().expect("state lock poisoned").clone();
         self.broadcast(json!({
             "v": PROTOCOL_VERSION, "event": "phase", "key": "ready",
             "label": "Lemma is ready", "progress": 100, "detail": "",
+            "operation_id": operation_id,
         }));
         self.broadcast(json!({
             "v": PROTOCOL_VERSION, "event": "state", "status": "running",
             "running": true, "ready": true,
+            "operation_id": operation_id,
         }));
         self.broadcast(json!({
             "v": PROTOCOL_VERSION, "event": "ready", "url": state.url,
             "api_url": state.api_url,
             "mode": if self.managed_runtime.is_some() { "managed-local" } else { "host-packs" },
             "release": manager.release(),
+            "capabilities": manager.capabilities(),
+            "operation_id": operation_id,
         }));
         Ok(())
     }
@@ -1066,7 +1096,15 @@ impl Daemon {
         self.broadcast(event);
     }
 
-    fn broadcast(&self, event: Value) {
+    fn broadcast(&self, mut event: Value) {
+        if event.get("timestamp_ms").is_none() {
+            event["timestamp_ms"] = Value::from(
+                std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .unwrap_or_default()
+                    .as_millis() as u64,
+            );
+        }
         let line = event.to_string();
         if let Err(error) = append_bounded_journal(&self.paths.journal, &line) {
             let _ = self.write_daemon_log(&format!("journal error: {error}"));
@@ -1106,6 +1144,25 @@ fn runtime_operation_error_code(message: &str, fallback: &'static str) -> &'stat
         "wsl-setup-denied"
     } else {
         fallback
+    }
+}
+
+fn error_diagnostic_source(message: &str) -> (&'static str, &'static str) {
+    let message = message.to_ascii_lowercase();
+    if message.contains("migration") || message.contains("alembic") {
+        ("migrations", "migrations")
+    } else if message.contains("frontend") || message.contains("eaddrinuse") {
+        ("frontend", "frontend")
+    } else if message.contains("backend") || message.contains("health gate") {
+        ("backend", "backend")
+    } else if message.contains("runtime")
+        || message.contains("container")
+        || message.contains("registry")
+        || message.contains("guest")
+    {
+        ("infrastructure", "infrastructure")
+    } else {
+        ("locald", "events")
     }
 }
 
@@ -1251,7 +1308,7 @@ fn create_listener(paths: &LocalPaths) -> io::Result<LocalSocketListener> {
 
 #[cfg(test)]
 mod tests {
-    use super::runtime_operation_error_code;
+    use super::{error_diagnostic_source, runtime_operation_error_code};
 
     #[test]
     fn windows_runtime_errors_have_stable_user_action_codes() {
@@ -1279,6 +1336,22 @@ mod tests {
         assert_eq!(
             runtime_operation_error_code("database failed", "host-operation-failed"),
             "host-operation-failed"
+        );
+    }
+
+    #[test]
+    fn startup_errors_select_the_relevant_diagnostic_log() {
+        assert_eq!(
+            error_diagnostic_source("frontend failed: EADDRINUSE"),
+            ("frontend", "frontend")
+        );
+        assert_eq!(
+            error_diagnostic_source("migrations setup exited"),
+            ("migrations", "migrations")
+        );
+        assert_eq!(
+            error_diagnostic_source("registry DNS lookup failed"),
+            ("infrastructure", "infrastructure")
         );
     }
 }

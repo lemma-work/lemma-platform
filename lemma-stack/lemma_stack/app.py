@@ -317,7 +317,7 @@ def start() -> None:
     if client := _managed_locald():
         _managed_request(client, "start")
         state = _managed_request(client, "status")
-        info(f"app: {state.get('url') or 'http://app.lemma.localhost:3711'}")
+        info(f"app: {state.get('url') or 'endpoint unavailable'}")
         return
     ctx = _load_context()
     lifecycle.up(ctx.runtime, ctx.specs(), ctx.manifest, migrate=False)
@@ -349,7 +349,7 @@ def restart() -> None:
     if client := _managed_locald():
         _managed_request(client, "restart")
         state = _managed_request(client, "status")
-        info(f"app: {state.get('url') or 'http://app.lemma.localhost:3711'}")
+        info(f"app: {state.get('url') or 'endpoint unavailable'}")
         return
     ctx = _load_context()
     specs = ctx.specs()
@@ -911,9 +911,19 @@ def self_register_cli(
     ),
 ) -> None:
     """Register managed Desktop as the `local` server for the Lemma pod CLI."""
+    client = _managed_locald()
+    if client is None:
+        raise AdminError(
+            "no managed Lemma Desktop runtime is installed; open Lemma Desktop first"
+        )
+    state = _managed_request(client, "status")
+    base_url = state.get("api_url")
+    workspace_url = state.get("url")
+    if not isinstance(base_url, str) or not isinstance(workspace_url, str):
+        raise AdminError("managed Desktop has not allocated its local endpoints yet")
     register_local_server(
-        base_url="http://app.lemma.localhost:8711",
-        auth_url="http://app.lemma.localhost:3711/auth",
+        base_url=base_url,
+        auth_url=f"{workspace_url.rstrip('/')}/auth",
         make_active=make_active,
     )
     ok("managed Desktop registered as Lemma CLI server 'local'")

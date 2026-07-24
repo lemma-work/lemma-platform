@@ -54,13 +54,14 @@ lemma-stack config set \
   ai.default_model=qwen3
 ```
 
-Managed local endpoints are:
-
-- frontend: `http://app.lemma.localhost:3711`;
-- backend API: `http://app.lemma.localhost:8711` (same cookie host, separate port);
-- built pod apps: `http://<slug>.apps.lemma.localhost:8711`;
-- live workspace apps:
-  `http://<sandbox>-<app>.workspaces.lemma.localhost:8711`.
+Managed Desktop chooses a high frontend/backend port pair on first start,
+persists it in its private `network.json`, and publishes the resolved origins
+through locald status. **Local Control Center → Diagnostics** displays the exact
+workspace, API, built-app, live-workspace, and OAuth callback URLs. The
+`lemma-stack status --json` command returns `url` and `api_url`; the `lemma`
+CLI discovers those values automatically when the `local` server is selected.
+If another application later owns either persisted port, locald safely
+allocates a new pair without terminating the other process.
 
 The backend is one process containing API, worker, scheduler, AgentBox manager,
 surface receivers, and in-process MarkItDown conversion. AgentBox durable state
