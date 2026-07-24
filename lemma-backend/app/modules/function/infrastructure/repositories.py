@@ -5,7 +5,7 @@ from __future__ import annotations
 from datetime import datetime
 from uuid import UUID
 
-from sqlalchemy import delete, select
+from sqlalchemy import delete, select, update
 from sqlalchemy.orm import load_only
 
 from app.core.authorization.context import Context, ResourceType, ResourceVisibility
@@ -25,6 +25,7 @@ from app.modules.function.domain.entities import (
     FunctionEntity,
     FunctionRunEntity,
     FunctionRunStatus,
+    FunctionStatus,
 )
 from app.modules.function.domain.events import FunctionRunFailedEvent
 from app.modules.function.domain.errors import (
@@ -201,6 +202,41 @@ class FunctionRepository(FunctionRepositoryPort):
 
         await self.session.flush()
         return model.to_entity()
+
+    async def activate_revision_if_missing(
+        self,
+        function_id: UUID,
+        *,
+        expected_code_path: str,
+        revision_hash: str,
+        code_path: str,
+    ) -> FunctionEntity | None:
+        """Atomically activate one legacy source revision.
+
+        A first-run backfill may race with another invocation or a user update.
+        The compare-and-set protects the newer definition: only the row that
+        still points at the exact legacy source and has no active revision can
+        be changed.
+        """
+
+        statement = (
+            update(FunctionModel)
+            .where(
+                FunctionModel.id == function_id,
+                FunctionModel.revision_hash.is_(None),
+                FunctionModel.code_path == expected_code_path,
+            )
+            .values(
+                revision_hash=revision_hash,
+                code_path=code_path,
+                status=FunctionStatus.READY,
+            )
+            .returning(FunctionModel)
+        )
+        model = (await self.session.execute(statement)).scalar_one_or_none()
+        if model is not None:
+            return model.to_entity()
+        return await self.get(function_id)
 
     async def delete(self, id: UUID) -> bool:
         pod_id = (

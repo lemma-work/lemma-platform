@@ -342,6 +342,7 @@ EVENT_CATALOG: dict[str, EventSpec] = {
     'function.handlers.function_run_job.propagated': EventSpec('debug', frozenset({'run_id'})),
     'function.handlers.reconcile_function_runs.failed': EventSpec('error', frozenset()),
     'function.handlers.run_reconcile_enqueue_failed.degraded': EventSpec('warning', frozenset({'error_type', 'run_id'})),
+    'function.use_cases.legacy_revision_backfilled': EventSpec('info', frozenset({'function_id', 'pod_id', 'revision_hash'})),
     'function.use_cases.run_enqueue_deferred.degraded': EventSpec('warning', frozenset({'error_type', 'run_id'})),
     'http.request.completed': EventSpec('debug', frozenset({'duration_ms', 'method', 'route', 'status_code'})),
     'http.request.failed': EventSpec('error', frozenset({'duration_ms', 'error_code', 'error_type', 'method', 'route', 'status_code'})),

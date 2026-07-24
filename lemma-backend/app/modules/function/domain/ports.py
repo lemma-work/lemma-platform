@@ -25,6 +25,15 @@ class FunctionRepositoryPort(Protocol):
 
     async def update(self, function: FunctionEntity) -> FunctionEntity: ...
 
+    async def activate_revision_if_missing(
+        self,
+        function_id: UUID,
+        *,
+        expected_code_path: str,
+        revision_hash: str,
+        code_path: str,
+    ) -> FunctionEntity | None: ...
+
     async def delete(self, id: UUID) -> bool: ...
 
     async def list_by_pod(

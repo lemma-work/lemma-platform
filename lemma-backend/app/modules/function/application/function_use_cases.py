@@ -14,7 +14,7 @@ ctx).
 
 from __future__ import annotations
 
-from collections.abc import Callable
+from collections.abc import Awaitable, Callable
 from uuid import UUID
 
 from fastapi import Request
@@ -36,12 +36,17 @@ from app.modules.function.domain.entities import (
     FunctionUpdateEntity,
     RunAsWorkload,
 )
-from app.modules.function.domain.errors import FunctionRunQueueUnavailable
+from app.modules.function.domain.errors import (
+    FunctionRunQueueUnavailable,
+    FunctionValidationError,
+)
 from app.modules.function.domain.ports import FunctionExecutionPort
 from app.modules.function.domain.ports import FunctionRunQueuePort
 from app.modules.function.domain.types import JsonObject
 from app.modules.function.services.function_service import (
     FunctionService,
+    LegacyFunctionRevisionRequired,
+    ResolvedExecution,
     parse_python_packages,
 )
 from app.core.log.log import get_logger
@@ -106,6 +111,57 @@ class FunctionUseCases:
         # to the still-active database revision.
         await self._compiler.write_code(function.id, function.code_path, code)
         function.status = FunctionStatus.READY
+
+    async def _backfill_legacy_revision(self, function: FunctionEntity) -> None:
+        """Compile and atomically activate a pre-artifact function definition."""
+        if function.id is None or function.code_path is None:
+            raise FunctionValidationError(
+                "Function has no source available for revision migration"
+            )
+        legacy_code_path = function.code_path
+        code = await self._compiler.read_code(function.id, legacy_code_path)
+        artifact = await self._compiler.build_artifact(
+            function,
+            code,
+            python_packages=tuple(parse_python_packages(code)),
+        )
+        revision_code_path = (
+            f"revisions/{artifact.revision_hash.removeprefix('sha256:')}/function.py"
+        )
+        await self._compiler.write_code(function.id, revision_code_path, code)
+
+        async with uow_scope(self._uow_factory) as uow:
+            activated = await self._build(uow).activate_revision_if_missing(
+                function.id,
+                expected_code_path=legacy_code_path,
+                revision_hash=artifact.revision_hash,
+                code_path=revision_code_path,
+            )
+        if activated is None or activated.revision_hash is None:
+            raise FunctionValidationError(
+                "Function revision migration did not activate an executable revision"
+            )
+        logger.info(
+            "function.use_cases.legacy_revision_backfilled",
+            function_id=str(function.id),
+            pod_id=str(function.pod_id),
+            revision_hash=activated.revision_hash,
+        )
+
+    async def _resolve_with_revision_backfill(
+        self,
+        resolve_once: Callable[[], Awaitable[ResolvedExecution]],
+    ) -> ResolvedExecution:
+        try:
+            return await resolve_once()
+        except LegacyFunctionRevisionRequired as required:
+            await self._backfill_legacy_revision(required.function)
+        try:
+            return await resolve_once()
+        except LegacyFunctionRevisionRequired as exc:
+            raise FunctionValidationError(
+                "Function revision migration did not activate an executable revision"
+            ) from exc
 
     # -- API-path operations (request ctx) ------------------------------------
 
@@ -309,12 +365,15 @@ class FunctionUseCases:
         request: Request,
         run_as_workload: RunAsWorkload | None = None,
     ) -> FunctionRunEntity:
-        async with pod_context_scope(
-            self._uow_factory, request=request, user_id=user_id, pod_id=pod_id
-        ) as scope:
-            resolved = await self._build(scope.uow).resolve_execute(
-                pod_id, name, input_data, user_id, user_email, ctx=scope.ctx
-            )
+        async def resolve_once() -> ResolvedExecution:
+            async with pod_context_scope(
+                self._uow_factory, request=request, user_id=user_id, pod_id=pod_id
+            ) as scope:
+                return await self._build(scope.uow).resolve_execute(
+                    pod_id, name, input_data, user_id, user_email, ctx=scope.ctx
+                )
+
+        resolved = await self._resolve_with_revision_backfill(resolve_once)
         return await self._run_resolved(
             resolved, user_email=user_email, run_as_workload=run_as_workload
         )
@@ -342,23 +401,26 @@ class FunctionUseCases:
         delegation_actor_name: str | None,
         run_as_workload: RunAsWorkload | None = None,
     ) -> FunctionRunEntity:
-        # Build the delegated ctx AND run resolve_execute inside one live UoW, so
-        # ctx.require's resource hydration never touches a closed session.
-        async with uow_scope(self._uow_factory) as uow:
-            auth_ctx = await AuthorizationDataService(
-                uow.session
-            ).build_delegated_workload_context(
-                user_id=user_id,
-                principal_type=principal_type,
-                principal_id=principal_id,
-                pod_id=pod_id,
-                delegation_scope=delegation_scope,
-                delegation_actor_name=delegation_actor_name,
-            )
-            async with context_scope(auth_ctx):
-                resolved = await self._build(uow).resolve_execute(
-                    pod_id, name, input_data, user_id, None, ctx=auth_ctx
+        async def resolve_once() -> ResolvedExecution:
+            # Build the delegated ctx AND resolve inside one live UoW, so
+            # ctx.require's resource hydration never touches a closed session.
+            async with uow_scope(self._uow_factory) as uow:
+                auth_ctx = await AuthorizationDataService(
+                    uow.session
+                ).build_delegated_workload_context(
+                    user_id=user_id,
+                    principal_type=principal_type,
+                    principal_id=principal_id,
+                    pod_id=pod_id,
+                    delegation_scope=delegation_scope,
+                    delegation_actor_name=delegation_actor_name,
                 )
+                async with context_scope(auth_ctx):
+                    return await self._build(uow).resolve_execute(
+                        pod_id, name, input_data, user_id, None, ctx=auth_ctx
+                    )
+
+        resolved = await self._resolve_with_revision_backfill(resolve_once)
         return await self._run_resolved(
             resolved, user_email=None, run_as_workload=run_as_workload
         )
@@ -373,15 +435,20 @@ class FunctionUseCases:
         input_data: JsonObject,
         user_id: UUID,
     ) -> FunctionRunEntity:
-        async with uow_scope(self._uow_factory) as uow:
-            auth_ctx = await AuthorizationDataService(uow.session).build_user_context(
-                user_id=user_id,
-                pod_id=pod_id,
-            )
-            async with context_scope(auth_ctx):
-                resolved = await self._build(uow).resolve_execute(
-                    pod_id, name, input_data, user_id, None, ctx=auth_ctx
+        async def resolve_once() -> ResolvedExecution:
+            async with uow_scope(self._uow_factory) as uow:
+                auth_ctx = await AuthorizationDataService(
+                    uow.session
+                ).build_user_context(
+                    user_id=user_id,
+                    pod_id=pod_id,
                 )
+                async with context_scope(auth_ctx):
+                    return await self._build(uow).resolve_execute(
+                        pod_id, name, input_data, user_id, None, ctx=auth_ctx
+                    )
+
+        resolved = await self._resolve_with_revision_backfill(resolve_once)
         return await self._run_resolved(resolved, user_email=None)
 
     async def dispatch_function_for_workflow(
@@ -399,21 +466,26 @@ class FunctionUseCases:
         suspends on the run id and releases its run-row lock instead of pinning it
         across the sandbox round-trip. The FunctionRunCompleted event resumes the
         workflow."""
-        async with uow_scope(self._uow_factory) as uow:
-            auth_ctx = await AuthorizationDataService(uow.session).build_user_context(
-                user_id=user_id,
-                pod_id=pod_id,
-            )
-            async with context_scope(auth_ctx):
-                resolved = await self._build(uow).resolve_execute(
-                    pod_id,
-                    name,
-                    input_data,
-                    user_id,
-                    None,
-                    ctx=auth_ctx,
-                    dispatch_mode=FunctionDispatchMode.ASYNCHRONOUS,
+        async def resolve_once() -> ResolvedExecution:
+            async with uow_scope(self._uow_factory) as uow:
+                auth_ctx = await AuthorizationDataService(
+                    uow.session
+                ).build_user_context(
+                    user_id=user_id,
+                    pod_id=pod_id,
                 )
+                async with context_scope(auth_ctx):
+                    return await self._build(uow).resolve_execute(
+                        pod_id,
+                        name,
+                        input_data,
+                        user_id,
+                        None,
+                        ctx=auth_ctx,
+                        dispatch_mode=FunctionDispatchMode.ASYNCHRONOUS,
+                    )
+
+        resolved = await self._resolve_with_revision_backfill(resolve_once)
         return await self._enqueue_run(resolved.run)
 
     # -- Shared dispatch ------------------------------------------------------

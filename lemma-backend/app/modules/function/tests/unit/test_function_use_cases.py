@@ -27,6 +27,9 @@ from app.modules.function.domain.entities import (
 )
 from app.modules.function.domain.errors import FunctionRunQueueUnavailable
 from app.modules.function.services.function_service import ResolvedExecution
+from app.modules.function.services.function_service import (
+    LegacyFunctionRevisionRequired,
+)
 
 pytestmark = pytest.mark.asyncio
 
@@ -190,6 +193,95 @@ async def test_execute_api_touches_sandbox_with_no_connection_held(monkeypatch):
     assert captured["mode"] == FunctionDispatchMode.SYNCHRONOUS
     assert result.status == FunctionRunStatus.FAILED
     assert factory.state["open"] is False
+
+
+@pytest.mark.asyncio
+async def test_execute_backfills_legacy_revision_before_creating_run():
+    factory = _TrackingUowFactory()
+    function = _function(
+        name="legacy-fn",
+        type=FunctionType.API,
+        status=FunctionStatus.READY,
+        code_path="legacy-fn.py",
+        revision_hash=None,
+    )
+    revision_hash = f"sha256:{'c' * 64}"
+    activated = function.model_copy(
+        update={
+            "revision_hash": revision_hash,
+            "code_path": f"revisions/{'c' * 64}/function.py",
+        }
+    )
+    run = FunctionRunEntity(
+        id=uuid4(),
+        function_id=function.id,
+        user_id=function.user_id,
+        status=FunctionRunStatus.PENDING,
+    )
+    resolved = ResolvedExecution(function=activated, run=run)
+    service = SimpleNamespace(
+        resolve_execute=AsyncMock(
+            side_effect=[
+                LegacyFunctionRevisionRequired(function),
+                resolved,
+            ]
+        ),
+        activate_revision_if_missing=AsyncMock(return_value=activated),
+    )
+    code = (
+        "# input_type_name: Input\n"
+        "# output_type_name: Output\n"
+        "# function_name: run\n"
+    )
+    compiler = SimpleNamespace(
+        read_code=AsyncMock(return_value=code),
+        build_artifact=AsyncMock(
+            return_value=FunctionArtifact(revision_hash=revision_hash)
+        ),
+        write_code=AsyncMock(),
+    )
+    completed = run.model_copy(update={"status": FunctionRunStatus.COMPLETED})
+    dispatcher = SimpleNamespace(
+        execute=AsyncMock(return_value=completed),
+        cancel=AsyncMock(),
+    )
+    use_cases = FunctionUseCases(
+        factory,
+        lambda uow: service,
+        compiler,
+        dispatcher,
+        AsyncMock(),
+    )
+
+    result = await use_cases.execute_function(
+        pod_id=function.pod_id,
+        name=function.name,
+        input_data={},
+        user_id=function.user_id,
+        user_email=None,
+        request=SimpleNamespace(),
+    )
+
+    assert result.status == FunctionRunStatus.COMPLETED
+    compiler.read_code.assert_awaited_once_with(function.id, "legacy-fn.py")
+    compiler.build_artifact.assert_awaited_once_with(
+        function,
+        code,
+        python_packages=(),
+    )
+    compiler.write_code.assert_awaited_once_with(
+        function.id,
+        f"revisions/{'c' * 64}/function.py",
+        code,
+    )
+    service.activate_revision_if_missing.assert_awaited_once_with(
+        function.id,
+        expected_code_path="legacy-fn.py",
+        revision_hash=revision_hash,
+        code_path=f"revisions/{'c' * 64}/function.py",
+    )
+    assert service.resolve_execute.await_count == 2
+    assert factory.state["opens"] == 3
 
 
 @pytest.mark.asyncio
