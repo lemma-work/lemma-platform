@@ -207,6 +207,10 @@ class ProviderFilesystemUnavailable(RuntimeError):
         self.retry_after_ms = retry_after_ms
 
 
+class ProviderAllocationMissing(ProviderFilesystemUnavailable):
+    """The allocation backing an operation definitively no longer exists."""
+
+
 class ProviderProcessPort(Protocol):
     async def start_process(
         self, request: ProviderProcessStartRequest

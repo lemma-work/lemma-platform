@@ -11,6 +11,7 @@ import pytest_asyncio
 from agentbox.domain import (
     AdmissionClass,
     AgentBoxError,
+    AllocationState,
     ByteRange,
     ErrorCode,
     FileKind,
@@ -25,6 +26,7 @@ from agentbox.filesystem import FilesystemService
 from agentbox.lifecycle import SandboxLifecycleService
 from agentbox.persistence.uow import StateDatabase
 from agentbox.ports import (
+    ProviderAllocationMissing,
     ProviderAllocationRef,
     ProviderCreateRequest,
     ProviderCreateResult,
@@ -33,6 +35,7 @@ from agentbox.ports import (
     ProviderFilesystemRejected,
     ProviderFilesystemUnavailable,
     ProviderReadyResult,
+    ProviderStorageResult,
 )
 
 
@@ -302,6 +305,74 @@ async def test_filesystem_provider_failures_have_typed_public_semantics(
     assert raised.value.status_code == status_code
     assert raised.value.retry == retry
     assert raised.value.retry_after_ms == retry_after_ms
+    assert database.active_units_of_work == 0
+
+
+async def test_missing_provider_allocation_is_fenced_for_safe_recreate(
+    database: StateDatabase,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class SandboxNativeProvider(Provider):
+        workspace_storage_kind = StorageKind.SANDBOX_NATIVE
+
+        async def create(self, request: ProviderCreateRequest) -> ProviderCreateResult:
+            self._outside_transaction("create")
+            provider_id = f"sandbox-{request.allocation_id}"
+            return ProviderCreateResult(
+                provider_id=provider_id,
+                provider_instance_id=provider_id,
+                provider_request_id=None,
+                workspace_storage=ProviderStorageResult(
+                    provider_storage_id=provider_id,
+                    bound_to_allocation=True,
+                ),
+            )
+
+    provider = SandboxNativeProvider(database)
+    key = SandboxKey(WorkloadKind.WORKSPACE, uuid4())
+    deadline = datetime.now(timezone.utc) + timedelta(seconds=30)
+    lifecycle = SandboxLifecycleService(database, provider)
+    await lifecycle.ensure(
+        key,
+        SandboxProfileRef("workspace-python-v1", f"sha256:{'a' * 64}"),
+        admission_class=AdmissionClass.INTERACTIVE,
+        deadline_at=deadline,
+    )
+
+    async def missing_stat(*_args, **_kwargs):
+        raise ProviderAllocationMissing("sandbox no longer exists")
+
+    monkeypatch.setattr(provider, "stat_file", missing_stat)
+
+    with pytest.raises(AgentBoxError) as raised:
+        await FilesystemService(database, provider).stat(
+            key, "/tmp/payload", deadline_at=deadline
+        )
+
+    assert raised.value.code == ErrorCode.PROVIDER_UNAVAILABLE
+    assert raised.value.status_code == 503
+    assert raised.value.retry == RetryDisposition.SAFE_SAME_OPERATION
+
+    recovered = await lifecycle.ensure(
+        key,
+        SandboxProfileRef("workspace-python-v1", f"sha256:{'a' * 64}"),
+        admission_class=AdmissionClass.INTERACTIVE,
+        deadline_at=deadline,
+    )
+    assert recovered.ready is True
+
+    async with database.uow() as uow:
+        allocations = await uow.repository.list_allocations(key)
+        storage = await uow.repository.get_workspace_storage(key)
+        await uow.commit()
+    assert [item.state for item in allocations] == [
+        AllocationState.ERROR,
+        AllocationState.ACTIVE,
+    ]
+    assert allocations[0].provider_id != allocations[1].provider_id
+    assert storage is not None
+    assert storage.provider_storage_id == allocations[1].provider_id
+    assert storage.bound_allocation_id == allocations[1].allocation_id
     assert database.active_units_of_work == 0
 
 
