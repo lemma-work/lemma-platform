@@ -660,6 +660,19 @@ fn ensure_runtime_artifacts_inner(app: &AppHandle) -> Result<(), String> {
         }
         return Ok(());
     }
+    // A successfully installed and activated runtime is self-contained. Its
+    // recorded artifact identity was written only after the manifest, archive
+    // digests, extracted layout, and release markers were verified. Reuse that
+    // exact release without consulting the artifact host so ordinary Finder /
+    // Start-menu launches and offline restarts keep working.
+    //
+    // Explicit repair first quarantines the active directory, so it cannot
+    // take this path and still re-verifies/downloads from the current manifest.
+    if configured_runtime(&config, "installedRuntime").is_some_and(|runtime| {
+        runtime.release == env!("CARGO_PKG_VERSION") && runtime.has_recorded_artifact_identity()
+    }) {
+        return Ok(());
+    }
     let manifest = bundled_release_manifest().ok_or_else(|| {
         "this online installer is missing its signed local release manifest".to_string()
     })?;

@@ -227,6 +227,32 @@ impl InstalledRuntime {
     pub fn is_complete(&self) -> bool {
         validate_installed(self).is_ok()
     }
+
+    /// Returns true when this runtime was installed from a verified artifact
+    /// manifest rather than merely copied into the release directory.
+    ///
+    /// The recorded identity is the durable trust handoff from installation to
+    /// later offline launches. Updates and explicit repairs still compare
+    /// against their current manifest before installing anything new.
+    pub fn has_recorded_artifact_identity(&self) -> bool {
+        let Some(root) = self.host_pack_root.parent() else {
+            return false;
+        };
+        if self.managed_runtime_root.parent() != Some(root) {
+            return false;
+        }
+        let Some(identity) = read_installed_artifacts(root) else {
+            return false;
+        };
+        identity.schema_version == MANIFEST_SCHEMA_VERSION
+            && identity.release == self.release
+            && identity.host_target == host_target()
+            && identity.guest_target == guest_target()
+            && valid_recorded_digest(&identity.host_sha256)
+            && valid_recorded_digest(&identity.guest_sha256)
+            && (1..=MAX_ARCHIVE_BYTES).contains(&identity.host_size)
+            && (1..=MAX_ARCHIVE_BYTES).contains(&identity.guest_size)
+    }
 }
 
 fn load_manifest(path: &Path) -> io::Result<ReleaseManifest> {
@@ -744,10 +770,21 @@ fn artifact_identity(
 }
 
 fn installed_artifacts_match(root: &Path, expected: &InstalledArtifactIdentity) -> bool {
+    read_installed_artifacts(root).is_some_and(|actual| actual == *expected)
+}
+
+fn read_installed_artifacts(root: &Path) -> Option<InstalledArtifactIdentity> {
     fs::read(root.join(INSTALLED_ARTIFACTS_FILE))
         .ok()
         .and_then(|raw| serde_json::from_slice::<InstalledArtifactIdentity>(&raw).ok())
-        .is_some_and(|actual| actual == *expected)
+}
+
+fn valid_recorded_digest(digest: &str) -> bool {
+    digest.len() == 64
+        && digest.bytes().any(|byte| byte != b'0')
+        && digest
+            .bytes()
+            .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
 }
 
 fn write_installed_artifacts(root: &Path, identity: &InstalledArtifactIdentity) -> io::Result<()> {
@@ -1054,8 +1091,10 @@ mod tests {
         let expected = artifact_identity("1.2.3", &host, &guest);
 
         assert!(runtime.is_complete());
+        assert!(!runtime.has_recorded_artifact_identity());
         assert!(!installed_artifacts_match(&release, &expected));
         write_installed_artifacts(&release, &expected).unwrap();
+        assert!(runtime.has_recorded_artifact_identity());
         assert!(installed_artifacts_match(&release, &expected));
 
         let changed = InstalledArtifactIdentity {
@@ -1063,6 +1102,35 @@ mod tests {
             ..expected
         };
         assert!(!installed_artifacts_match(&release, &changed));
+    }
+
+    #[test]
+    fn recorded_runtime_identity_rejects_placeholders_and_wrong_targets() {
+        let root = tempfile::tempdir().unwrap();
+        let release = root.path().join("1.2.3");
+        let runtime = complete_runtime(&release, "1.2.3");
+        let placeholder = InstalledArtifactIdentity {
+            schema_version: MANIFEST_SCHEMA_VERSION,
+            release: "1.2.3".into(),
+            host_target: host_target().into(),
+            host_sha256: "0".repeat(64),
+            host_size: 1,
+            guest_target: guest_target().into(),
+            guest_sha256: "0".repeat(64),
+            guest_size: 1,
+        };
+        write_installed_artifacts(&release, &placeholder).unwrap();
+        assert!(!runtime.has_recorded_artifact_identity());
+
+        fs::remove_file(release.join(INSTALLED_ARTIFACTS_FILE)).unwrap();
+        let wrong_target = InstalledArtifactIdentity {
+            host_sha256: "a".repeat(64),
+            guest_sha256: "b".repeat(64),
+            host_target: "another-host".into(),
+            ..placeholder
+        };
+        write_installed_artifacts(&release, &wrong_target).unwrap();
+        assert!(!runtime.has_recorded_artifact_identity());
     }
 
     #[test]

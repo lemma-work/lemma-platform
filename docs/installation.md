@@ -400,6 +400,14 @@ expected only for an unpublished development build. Use that build's matching
 offline installer or publish the runtime assets before distributing the online
 installer; repeatedly selecting Retry cannot repair a missing release asset.
 
+For an unreleased branch build, use its localized test manifest for the first
+verified installation as described in
+[`desktop/README.md`](../desktop/README.md#test-an-unreleased-branch-end-to-end).
+After activation, quit Lemma and reopen it normally from Applications or the
+Start menu. The app reuses the complete verified runtime without contacting the
+artifact host. The manifest override is required again only for repair or a
+different unpublished runtime version.
+
 ### Windows asks for setup or restart
 
 Select **Set up Windows runtime**, approve the one-time Windows prompt, and

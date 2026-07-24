@@ -195,7 +195,11 @@ LEMMA_DESKTOP_ALLOW_LOCAL_ARTIFACTS=1 \
 The file override does not weaken normal packages: it requires both explicit
 environment variables, accepts only absolute hostless `file://` URLs, and
 still enforces the workflow-recorded size, SHA-256, ZIP layout, extracted-size,
-and release-version checks. For a source-built runtime, the direct
+and release-version checks. After that first verified installation succeeds,
+quit Lemma and reopen it normally from Applications. The activated runtime
+retains its verified artifact identity and starts offline; the environment
+override and branch artifact files are needed again only for an explicit repair
+or another unpublished runtime version. For a source-built runtime, the direct
 `LEMMA_DESKTOP_HOST_PACK_ROOT` and `LEMMA_DESKTOP_MANAGED_RUNTIME_ROOT`
 overrides remain faster.
 
