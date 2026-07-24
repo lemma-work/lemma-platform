@@ -61,7 +61,10 @@ class AgentBoxSandbox(ISandbox):
                     deadline_at=deadline_at,
                 )
             except AgentBoxApiError as exc:
-                if exc.retry != RetryDisposition.WAIT:
+                if exc.retry not in (
+                    RetryDisposition.WAIT,
+                    RetryDisposition.SAFE_SAME_OPERATION,
+                ):
                     raise
                 await self._wait(exc.retry_after_ms, deadline_at)
                 continue
