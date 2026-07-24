@@ -215,10 +215,11 @@ pub trait Engine: Send + Sync {
 
 pub struct NerdctlEngine {
     executable: PathBuf,
+    capture_root: PathBuf,
 }
 
 impl NerdctlEngine {
-    pub fn discover() -> Result<Self, GuestError> {
+    pub fn discover(state_root: &Path) -> Result<Self, GuestError> {
         let configured = std::env::var_os("LEMMA_NERDCTL_BIN")
             .map(PathBuf::from)
             .unwrap_or_else(|| PathBuf::from("/usr/local/bin/nerdctl"));
@@ -228,8 +229,24 @@ impl NerdctlEngine {
                 configured.display()
             )));
         }
+        let capture_root = std::env::var_os("LEMMA_GUEST_TEMP_ROOT")
+            .map(PathBuf::from)
+            .unwrap_or_else(|| state_root.join("run/engine-tmp"));
+        fs::create_dir_all(&capture_root).map_err(|error| {
+            GuestError::engine(format!(
+                "could not prepare writable container-engine temporary storage at {}: {error}",
+                capture_root.display()
+            ))
+        })?;
+        fs::set_permissions(&capture_root, fs::Permissions::from_mode(0o700)).map_err(|error| {
+            GuestError::engine(format!(
+                "could not secure container-engine temporary storage at {}: {error}",
+                capture_root.display()
+            ))
+        })?;
         Ok(Self {
             executable: configured,
+            capture_root,
         })
     }
 }
@@ -241,23 +258,37 @@ impl Engine for NerdctlEngine {
         } else {
             ENGINE_COMMAND_TIMEOUT
         };
-        run_bounded_engine_command(&self.executable, arguments, timeout)
+        run_bounded_engine_command(&self.executable, &self.capture_root, arguments, timeout)
     }
 }
 
 fn run_bounded_engine_command(
     executable: &Path,
+    capture_root: &Path,
     arguments: &[String],
     timeout: Duration,
 ) -> Result<Output, String> {
     // File-backed capture avoids the classic timeout deadlock where a forked
     // helper keeps a stdout/stderr pipe open after its parent is terminated.
-    let mut stdout = tempfile::tempfile().map_err(|error| error.to_string())?;
-    let mut stderr = tempfile::tempfile().map_err(|error| error.to_string())?;
+    // Keep both our captures and nerdctl's inherited TMPDIR on the app-owned
+    // writable data disk. The appliance root, including /root, is immutable.
+    let mut stdout = tempfile::tempfile_in(capture_root).map_err(|error| {
+        format!(
+            "could not create container-engine stdout capture in {}: {error}",
+            capture_root.display()
+        )
+    })?;
+    let mut stderr = tempfile::tempfile_in(capture_root).map_err(|error| {
+        format!(
+            "could not create container-engine stderr capture in {}: {error}",
+            capture_root.display()
+        )
+    })?;
     let mut command = Command::new(executable);
     command
         .args(["--namespace", "lemma"])
         .args(arguments)
+        .env("TMPDIR", capture_root)
         .stdin(Stdio::null())
         .stdout(Stdio::from(
             stdout.try_clone().map_err(|error| error.to_string())?,
@@ -330,7 +361,7 @@ impl GuestService<NerdctlEngine> {
             .ok_or_else(|| GuestError::engine("could not discover the private host gateway"))?;
         let capability = load_capability()?;
         Self::new(
-            NerdctlEngine::discover()?,
+            NerdctlEngine::discover(&state_root)?,
             state_root,
             endpoint_host,
             host_gateway,
@@ -603,11 +634,16 @@ impl<E: Engine> GuestService<E> {
                 status_code: 503,
             });
         }
+        // Core guest readiness includes a usable container engine. Do not
+        // report the VM healthy with a fabricated zero count when nerdctl
+        // cannot access its writable state; doing so only defers an appliance
+        // layout failure until the first image pull.
+        let active_sandboxes = self.running_sandbox_count()?;
         Ok(json!({
             "status": "ready", "engine": "containerd",
             "endpoint_host": self.endpoint_host,
             "host_gateway": self.host_gateway,
-            "active_sandboxes": self.running_sandbox_count().unwrap_or(0),
+            "active_sandboxes": active_sandboxes,
         }))
     }
 
@@ -2972,6 +3008,7 @@ mod tests {
                 output(true, ""),
                 output(true, ""),
                 output(false, ""),
+                output(true, ""),
             ]),
             root.path().into(),
             "192.168.64.2".into(),
@@ -3090,7 +3127,7 @@ mod tests {
     fn bounded_json_transport_returns_one_response() {
         let root = tempdir().unwrap();
         let service = GuestService::new(
-            FakeEngine::new(vec![]),
+            FakeEngine::new(vec![output(true, "")]),
             root.path().into(),
             "192.168.64.2".into(),
             "192.168.64.1".into(),
@@ -3116,7 +3153,7 @@ mod tests {
     fn persistent_transport_handles_multiple_requests_on_one_connection() {
         let root = tempdir().unwrap();
         let service = GuestService::new(
-            FakeEngine::new(vec![]),
+            FakeEngine::new(vec![output(true, ""), output(true, "")]),
             root.path().into(),
             "192.168.64.2".into(),
             "192.168.64.1".into(),
@@ -3137,6 +3174,24 @@ mod tests {
             let response: Value = serde_json::from_str(line).unwrap();
             assert_eq!(response["result"]["engine"], "containerd");
         }
+    }
+
+    #[test]
+    fn health_fails_closed_when_container_engine_storage_is_unwritable() {
+        let root = tempdir().unwrap();
+        let service = GuestService::new(
+            FakeEngine::new(vec![]),
+            root.path().into(),
+            "192.168.64.2".into(),
+            "192.168.64.1".into(),
+            None,
+        )
+        .unwrap();
+
+        let error = service.health().unwrap_err();
+
+        assert_eq!(error.code, "guest_engine_failed");
+        assert!(error.message.contains("no fake output"));
     }
 
     #[test]
@@ -3227,14 +3282,54 @@ mod tests {
     fn engine_timeout_kills_the_entire_process_group() {
         let root = tempdir().unwrap();
         let executable = root.path().join("forking-engine");
+        let capture_root = root.path().join("captures");
+        fs::create_dir(&capture_root).unwrap();
         fs::write(&executable, "#!/bin/sh\nsleep 30\n").unwrap();
         fs::set_permissions(&executable, fs::Permissions::from_mode(0o700)).unwrap();
         let started = Instant::now();
 
         let error =
-            run_bounded_engine_command(&executable, &[], Duration::from_millis(100)).unwrap_err();
+            run_bounded_engine_command(&executable, &capture_root, &[], Duration::from_millis(100))
+                .unwrap_err();
 
         assert!(error.contains("timed out"));
         assert!(started.elapsed() < Duration::from_secs(2));
+    }
+
+    #[test]
+    fn engine_capture_and_child_tmpdir_use_explicit_writable_storage() {
+        let root = tempdir().unwrap();
+        let executable = root.path().join("capture-engine");
+        let capture_root = root.path().join("captures");
+        fs::create_dir(&capture_root).unwrap();
+        fs::write(&executable, "#!/bin/sh\nprintf '%s' \"$TMPDIR\"\n").unwrap();
+        fs::set_permissions(&executable, fs::Permissions::from_mode(0o700)).unwrap();
+
+        let output =
+            run_bounded_engine_command(&executable, &capture_root, &[], Duration::from_secs(1))
+                .unwrap();
+
+        assert!(output.status.success());
+        assert_eq!(
+            String::from_utf8(output.stdout).unwrap(),
+            capture_root.to_string_lossy()
+        );
+    }
+
+    #[test]
+    fn immutable_guest_routes_temporary_and_network_state_to_writable_mounts() {
+        let fstab = include_str!("../../guest-image/rootfs-overlay/etc/fstab");
+        let mount_data =
+            include_str!("../../guest-image/rootfs-overlay/usr/local/bin/lemma-mount-data");
+        let guest_service = include_str!(
+            "../../guest-image/rootfs-overlay/usr/local/bin/lemma-runtime-guest-service"
+        );
+
+        assert!(fstab.contains("tmpfs /tmp tmpfs"));
+        assert!(mount_data.contains("$data_root/cni/net.d"));
+        assert!(mount_data.contains("/etc/cni/net.d"));
+        assert!(guest_service.contains("HOME=/var/lib/lemma/home"));
+        assert!(guest_service.contains("LEMMA_GUEST_TEMP_ROOT=/tmp/lemma-engine"));
+        assert!(guest_service.contains("TMPDIR=\"$LEMMA_GUEST_TEMP_ROOT\""));
     }
 }

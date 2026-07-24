@@ -74,7 +74,17 @@ if [[ "$target" == "macos-aarch64" ]]; then
   if [[ -n "${LEMMA_KATA_KERNEL_ARCHIVE:-}" ]]; then
     cp "$LEMMA_KATA_KERNEL_ARCHIVE" "$kata_archive"
   else
-    curl -fsSLo "$kata_archive" "$kata_archive_url"
+    curl \
+      --fail \
+      --silent \
+      --show-error \
+      --location \
+      --retry 5 \
+      --retry-all-errors \
+      --retry-delay 2 \
+      --connect-timeout 15 \
+      --output "$kata_archive" \
+      "$kata_archive_url"
   fi
   python3 - "$kata_archive" "$kata_archive_sha256" <<'PY'
 import hashlib

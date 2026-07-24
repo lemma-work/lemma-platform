@@ -42,13 +42,20 @@ fi
 
 mkdir -p \
   "$data_root/containerd" \
+  "$data_root/cni/net.d" \
   "$data_root/nerdctl" \
+  "$data_root/lemma/home" \
   "$data_root/lemma/run" \
   "$data_root/lemma/workspaces" \
+  /etc/cni/net.d \
   /var/lib/containerd \
   /var/lib/nerdctl \
   /var/lib/lemma
-chmod 0700 "$data_root/lemma" "$data_root/lemma/run" "$data_root/lemma/workspaces"
+chmod 0700 \
+  "$data_root/lemma" \
+  "$data_root/lemma/home" \
+  "$data_root/lemma/run" \
+  "$data_root/lemma/workspaces"
 
 generation_tmp="$metadata_generation_file.tmp"
 printf '%s\n' "$container_metadata_generation" > "$generation_tmp"
@@ -63,4 +70,7 @@ if ! /usr/bin/mountpoint -q /var/lib/nerdctl; then
 fi
 if ! /usr/bin/mountpoint -q /var/lib/lemma; then
   /usr/bin/mount --bind "$data_root/lemma" /var/lib/lemma
+fi
+if ! /usr/bin/mountpoint -q /etc/cni/net.d; then
+  /usr/bin/mount --bind "$data_root/cni/net.d" /etc/cni/net.d
 fi

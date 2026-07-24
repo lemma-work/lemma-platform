@@ -53,13 +53,20 @@ RUN chmod 0755 \
         /usr/local/bin/lemma-runtime-init \
     && mkdir -p \
         /etc/lemma \
+        /etc/cni/net.d \
         /mnt/lemma-control \
         /opt/cni \
         /var/lib/lemma/run \
+        /var/lib/lemma/home \
         /var/lib/lemma/workspaces \
         /var/log/lemma \
     && ln -s /usr/lib/cni /opt/cni/bin \
-    && chmod 0700 /etc/lemma /var/lib/lemma /var/lib/lemma/run /var/lib/lemma/workspaces \
+    && chmod 0700 \
+        /etc/lemma \
+        /var/lib/lemma \
+        /var/lib/lemma/home \
+        /var/lib/lemma/run \
+        /var/lib/lemma/workspaces \
     && systemctl enable systemd-networkd.service systemd-resolved.service systemd-timesyncd.service \
     && rm -f /etc/machine-id /var/lib/dbus/machine-id \
     && touch /etc/machine-id
