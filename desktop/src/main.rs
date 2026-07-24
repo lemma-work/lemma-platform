@@ -44,6 +44,8 @@ struct UiState {
     phase_key: String,
     progress: u64,
     eta_seconds: Option<u64>,
+    downloaded_bytes: Option<u64>,
+    total_bytes: Option<u64>,
     setup: bool,
     error: bool,
     ready: bool,
@@ -695,7 +697,7 @@ fn ensure_runtime_artifacts_inner(app: &AppHandle) -> Result<(), String> {
             return Ok(());
         }
     }
-    emit_runtime_install_progress(app, "Preparing local runtime", 1, None);
+    emit_runtime_install_progress(app, "Preparing local runtime", 1, None, None);
     let installed = artifact_install::install_from_manifest(
         &manifest,
         &runtime_install_root(),
@@ -710,14 +712,14 @@ fn ensure_runtime_artifacts_inner(app: &AppHandle) -> Result<(), String> {
                 app,
                 progress.label,
                 percent.min(90),
-                (progress.downloaded < progress.total)
-                    .then_some(progress.total - progress.downloaded),
+                Some(progress.downloaded),
+                Some(progress.total),
             );
         },
     )
     .map_err(|error| format!("could not install the local runtime: {error}"))?;
     activate_installed_runtime(&installed)?;
-    emit_runtime_install_progress(app, "Local runtime installed", 92, None);
+    emit_runtime_install_progress(app, "Local runtime installed", 92, None, None);
     Ok(())
 }
 
@@ -760,11 +762,16 @@ fn emit_runtime_install_progress(
     app: &AppHandle,
     label: &str,
     progress: u64,
-    remaining_bytes: Option<u64>,
+    downloaded_bytes: Option<u64>,
+    total_bytes: Option<u64>,
 ) {
-    let detail = match remaining_bytes {
-        Some(bytes) => format!("{label}: {} MB remaining", bytes.div_ceil(1024 * 1024)),
-        None => label.to_owned(),
+    let detail = match (downloaded_bytes, total_bytes) {
+        (Some(downloaded), Some(total)) if total > 0 => format!(
+            "{label}: {} MB of {} MB",
+            downloaded / (1024 * 1024),
+            total.div_ceil(1024 * 1024)
+        ),
+        _ => label.to_owned(),
     };
     append_install_log(&detail);
     emit_log(app, &detail);
@@ -776,6 +783,8 @@ fn emit_runtime_install_progress(
         ui.phase_key = "runtime-install".into();
         ui.progress = progress;
         ui.status = detail;
+        ui.downloaded_bytes = downloaded_bytes;
+        ui.total_bytes = total_bytes;
         ui.clone()
     };
     let _ = app.emit("lemma:state", snapshot);
@@ -789,6 +798,8 @@ fn emit_runtime_install_error(app: &AppHandle, message: &str) {
         ui.phase = "Local runtime setup".into();
         ui.phase_key = "runtime-install".into();
         ui.status = message.to_owned();
+        ui.downloaded_bytes = None;
+        ui.total_bytes = None;
         ui.error = true;
         ui.error_code = "runtime-install-failed".into();
         ui.ready = false;
@@ -1024,6 +1035,8 @@ fn handle_locald_event(app: &AppHandle, event: &Value) {
                 ui.phase_key = event["key"].as_str().unwrap_or_default().into();
                 ui.progress = event["progress"].as_u64().unwrap_or(0);
                 ui.eta_seconds = event["eta_s"].as_u64();
+                ui.downloaded_bytes = None;
+                ui.total_bytes = None;
                 ui.setup = event["setup"].as_bool().unwrap_or(ui.setup);
                 let detail = event["detail"].as_str().unwrap_or_default();
                 ui.status = if detail.is_empty() {
@@ -1039,18 +1052,29 @@ fn handle_locald_event(app: &AppHandle, event: &Value) {
             "state" => {
                 ui.running = event["running"].as_bool().unwrap_or(false);
                 ui.ready = event["ready"].as_bool().unwrap_or(false);
-                let event_is_error = event["status"].as_str() == Some("error");
+                let event_status = event["status"].as_str().unwrap_or_default();
+                let event_is_error = event_status == "error";
                 let keep_actionable_error =
                     is_actionable_runtime_error(&ui.error_code) && !ui.ready && !event_is_error;
                 ui.error = event_is_error || keep_actionable_error;
                 if !ui.error {
                     ui.error_code.clear();
                 }
+                if event_status == "stopped" && !ui.error {
+                    ui.phase = "Stopped".into();
+                    ui.phase_key = "stopped".into();
+                    ui.progress = 0;
+                    ui.eta_seconds = None;
+                    ui.downloaded_bytes = None;
+                    ui.total_bytes = None;
+                    ui.status = "Local services are stopped".into();
+                }
             }
             "status" => {
                 ui.running = event["running"].as_bool().unwrap_or(ui.running);
                 ui.ready = event["ready"].as_bool().unwrap_or(ui.ready);
-                let event_is_error = event["status"].as_str() == Some("error");
+                let event_status = event["status"].as_str().unwrap_or_default();
+                let event_is_error = event_status == "error";
                 let keep_actionable_error =
                     is_actionable_runtime_error(&ui.error_code) && !ui.ready && !event_is_error;
                 ui.error = event_is_error || keep_actionable_error;
@@ -1061,7 +1085,8 @@ fn handle_locald_event(app: &AppHandle, event: &Value) {
                     ui.url = url.to_string();
                 }
                 if !keep_actionable_error {
-                    if let Some(phase) = event.get("phase").and_then(Value::as_object) {
+                    let phase = event.get("phase").and_then(Value::as_object);
+                    if let Some(phase) = phase {
                         ui.phase = phase
                             .get("label")
                             .and_then(Value::as_str)
@@ -1076,12 +1101,23 @@ fn handle_locald_event(app: &AppHandle, event: &Value) {
                             .get("progress")
                             .and_then(Value::as_u64)
                             .unwrap_or(ui.progress);
+                        ui.downloaded_bytes = None;
+                        ui.total_bytes = None;
                         let detail = phase.get("detail").and_then(Value::as_str).unwrap_or("");
                         ui.status = if detail.is_empty() {
                             ui.phase.clone()
                         } else {
                             format!("{}: {detail}", ui.phase)
                         };
+                    }
+                    if event_status == "stopped" && phase.is_none() && !ui.error {
+                        ui.phase = "Stopped".into();
+                        ui.phase_key = "stopped".into();
+                        ui.progress = 0;
+                        ui.eta_seconds = None;
+                        ui.downloaded_bytes = None;
+                        ui.total_bytes = None;
+                        ui.status = "Local services are stopped".into();
                     }
                 }
             }
@@ -1090,6 +1126,8 @@ fn handle_locald_event(app: &AppHandle, event: &Value) {
                 ui.running = true;
                 ui.error = false;
                 ui.error_code.clear();
+                ui.downloaded_bytes = None;
+                ui.total_bytes = None;
                 // Main, API, built-app, and workspace-app hosts all live below
                 // the reserved lemma.localhost loopback cookie boundary.
                 if let Some(url) = event["url"].as_str() {
@@ -1368,7 +1406,7 @@ fn repair_runtime(window: WebviewWindow, app: AppHandle) -> Result<(), String> {
         .ok_or("installed runtime has no release root")?
         .to_path_buf();
     stop_locald_for_runtime_maintenance(&app)?;
-    emit_runtime_install_progress(&app, "Isolating the damaged runtime", 1, None);
+    emit_runtime_install_progress(&app, "Isolating the damaged runtime", 1, None, None);
     let quarantined = artifact_install::quarantine_runtime(&current)
         .map_err(|error| format!("could not isolate the installed runtime: {error}"))?;
 
@@ -2060,8 +2098,12 @@ mod tests {
         assert!(html.contains("s.phaseKey === \"boot\""));
         assert!(html.contains("!s.error"));
         assert!(html.contains("await window.lemmaDesktop.openApp()"));
-        assert!(html.contains("request accepted · preparing private runtime"));
+        assert!(html.contains("request accepted · keep lemma open"));
         assert!(html.contains("id=\"log-panel\""));
+        assert!(html.contains("id=\"operation-status\""));
+        assert!(html.contains("downloadedBytes"));
+        assert!(html.contains("s.phaseKey === \"stopped\""));
+        assert!(!html.contains("!s.running && s.phaseKey"));
         assert!(!html.contains(">Create your account</button>"));
         assert!(!html.contains("Nothing leaves your machine"));
     }

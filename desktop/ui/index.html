@@ -149,6 +149,27 @@
     color: var(--ink-faint);
     transition: opacity 1s ease;
   }
+  .operation-status {
+    display: flex;
+    min-height: 3.6em;
+    max-width: 620px;
+    margin: 14px 0 0;
+    flex-direction: column;
+    align-items: center;
+    gap: 5px;
+    color: var(--ink-soft);
+  }
+  .operation-detail {
+    font-size: 0.94rem;
+    font-weight: 520;
+    line-height: 1.35;
+  }
+  .operation-meta {
+    font-family: var(--mono);
+    font-size: 0.7rem;
+    letter-spacing: 0.04em;
+    color: var(--gold-deep);
+  }
   .whisper {
     margin: 64px 0 0;
     max-width: 480px;
@@ -232,6 +253,7 @@
     font-size: 0.84rem;
   }
   .scene.choosing .truth,
+  .scene.choosing .operation-status,
   .scene.choosing .whisper,
   .scene.choosing .corner,
   .scene.choosing .progress { display: none; }
@@ -679,6 +701,11 @@
     </div>
   </section>
 
+  <div class="operation-status" id="operation-status" hidden aria-live="polite">
+    <span class="operation-detail" id="operation-detail"></span>
+    <span class="operation-meta" id="operation-meta"></span>
+  </div>
+
   <p class="whisper" id="whisper"></p>
 
   <button class="cta" id="open-app" type="button" hidden>Open Lemma</button>
@@ -740,6 +767,8 @@
         status: key, phase: key, phaseKey: key,
         progress: Math.round(((i + 1) / seq.length) * 100),
         etaSeconds: (seq.length - i) * 7, setup: true,
+        downloadedBytes: key === "download" ? 104857600 : null,
+        totalBytes: key === "download" ? 524288000 : null,
         error: false, ready: key === "ready", running: true,
         mode: "local", url: "http://app.lemma.localhost:3711",
       });
@@ -794,6 +823,9 @@
   const errdetail = document.getElementById("errdetail");
   const retryBtn = document.getElementById("retry");
   const prepareWindowsBtn = document.getElementById("prepare-windows");
+  const operationStatus = document.getElementById("operation-status");
+  const operationDetail = document.getElementById("operation-detail");
+  const operationMeta = document.getElementById("operation-meta");
 
   if (IS_WINDOWS) {
     document.getElementById("local-choice-title").textContent = "Run Lemma on this PC";
@@ -834,6 +866,45 @@
   let lastState = null;
   let readyOpenTimer = null;
   let startRequestPending = false;
+  function formatBytes(bytes) {
+    if (!Number.isFinite(bytes) || bytes < 0) return "";
+    const units = ["B", "KB", "MB", "GB"];
+    let value = bytes;
+    let unit = 0;
+    while (value >= 1024 && unit < units.length - 1) {
+      value /= 1024;
+      unit += 1;
+    }
+    const digits = value >= 100 || unit === 0 ? 0 : value >= 10 ? 1 : 2;
+    return `${value.toFixed(digits)} ${units[unit]}`;
+  }
+  function operationSummary(s) {
+    const parts = [];
+    if (Number.isFinite(s.progress)) parts.push(`${Math.min(100, Math.max(0, s.progress))}%`);
+    if (Number.isFinite(s.downloadedBytes) && Number.isFinite(s.totalBytes) && s.totalBytes > 0) {
+      parts.push(`${formatBytes(s.downloadedBytes)} of ${formatBytes(s.totalBytes)}`);
+    }
+    if (s.etaSeconds) parts.push(`about ${formatEta(s.etaSeconds)} remaining`);
+    return parts.join(" · ");
+  }
+  function operationDescription(s, fallback) {
+    const status = String(s.status || "").trim();
+    const phase = String(s.phase || "").trim();
+    if (!status || status === phase) return fallback;
+    const prefix = `${phase}: `;
+    return status.startsWith(prefix) ? status.slice(prefix.length) : status;
+  }
+  function hideOperationStatus() {
+    operationStatus.hidden = true;
+    operationDetail.textContent = "";
+    operationMeta.textContent = "";
+  }
+  function showOperationStatus(title, detail, meta) {
+    say(title);
+    operationDetail.textContent = detail;
+    operationMeta.textContent = meta;
+    operationStatus.hidden = false;
+  }
   function clearPrimaryBusy() {
     startRequestPending = false;
     openBtn.disabled = false;
@@ -866,6 +937,7 @@
     if (s.error) {
       clearTimeout(readyOpenTimer);
       clearPrimaryBusy();
+      hideOperationStatus();
       progressEl.classList.remove("active");
       window.__orb?.stall();
       scene.classList.add("stalled");
@@ -901,6 +973,7 @@
     const voice = VOICE[s.phaseKey] || VOICE.boot;
     if (s.ready) {
       clearPrimaryBusy();
+      hideOperationStatus();
       window.__orb?.awake();
       scene.classList.add("awake");
       say(READY_LINE);
@@ -911,9 +984,10 @@
       whisper.classList.remove("on");
       stopWhispers();
       scheduleReadyOpen();
-    } else if (s.phaseKey === "stopped" || (!s.running && s.phaseKey !== "boot")) {
+    } else if (s.phaseKey === "stopped") {
       clearTimeout(readyOpenTimer);
       clearPrimaryBusy();
+      hideOperationStatus();
       window.__orb?.resume();
       scene.classList.add("awake");
       say(VOICE.stopped[0]);
@@ -923,19 +997,23 @@
       openBtn.hidden = false;
       whisper.classList.remove("on");
     } else {
-      if (startRequestPending) {
-        openBtn.disabled = true;
-        openBtn.classList.add("busy");
-      }
       if (scene.classList.contains("awake")) {
         scene.classList.remove("awake");
         window.__orb?.resume();
         startWhispers();
       }
       openBtn.hidden = true;
-      say(voice[0]);
-      const eta = s.etaSeconds ? ` · ~${formatEta(s.etaSeconds)}` : "";
-      truth.textContent = voice[1] + eta;
+      openBtn.disabled = true;
+      openBtn.classList.remove("busy");
+      const title = String(s.phase || "").trim() || voice[0];
+      showOperationStatus(
+        title,
+        operationDescription(s, voice[1]),
+        operationSummary(s),
+      );
+      truth.textContent = s.setup
+        ? "first setup in progress · keep lemma open"
+        : "local services are starting";
     }
 
     bar.style.width = `${Math.min(100, s.progress || 0)}%`;
@@ -1033,8 +1111,9 @@
     openBtn.classList.add("busy");
     openBtn.setAttribute("aria-busy", "true");
     openBtn.textContent = "Starting Lemma";
-    say("Starting Lemma.");
-    truth.textContent = "request accepted · preparing private runtime";
+    openBtn.hidden = true;
+    showOperationStatus("Starting Lemma.", "Preparing local services", "6%");
+    truth.textContent = "request accepted · keep lemma open";
     progressEl.classList.add("active");
     const currentProgress = Number.parseFloat(bar.style.width) || 0;
     bar.style.width = `${Math.max(6, currentProgress)}%`;
@@ -1042,6 +1121,8 @@
       await window.lemmaDesktop.start();
     } catch (error) {
       clearPrimaryBusy();
+      hideOperationStatus();
+      openBtn.hidden = false;
       openBtn.textContent = "Try Start again";
       appendLog(`ERROR ${String(error)}`);
     }
@@ -1099,6 +1180,7 @@
     confirmLocalBtn.textContent = "Install local services";
     stopWhispers();
     whisper.classList.remove("on");
+    hideOperationStatus();
     say("Where do you want to run Lemma?");
     truth.textContent = "no local services are installed until you confirm";
   }
@@ -1108,6 +1190,7 @@
     localConfirmEl.hidden = false;
     switchModeBtn.hidden = true;
     localSetupError.hidden = true;
+    hideOperationStatus();
     say("Set up Lemma on this Mac?");
     truth.textContent = "review before installation";
   }
@@ -1122,8 +1205,8 @@
     confirmLocalBtn.disabled = true;
     confirmLocalBtn.textContent = "Starting…";
     hideConnectionChoice();
-    say(VOICE.boot[0]);
-    truth.textContent = "";
+    showOperationStatus("Preparing local Lemma.", "Starting the private runtime", "2%");
+    truth.textContent = "first setup in progress · keep lemma open";
     try {
       await window.lemmaDesktop.setConnectionMode("local");
       switchModeBtn.hidden = false;
