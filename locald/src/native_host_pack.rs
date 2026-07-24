@@ -384,6 +384,8 @@ fn build(
             "cwd": path_text(&backend_dir)?,
             "env": backend_env,
             "timeout_seconds": 300,
+            "max_attempts": 3,
+            "retry_backoff_seconds": 2,
         }],
         "services": [
             {

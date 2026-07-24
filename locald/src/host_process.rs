@@ -97,6 +97,10 @@ pub struct HostSetupSpec {
     pub env: HashMap<String, String>,
     #[serde(default = "default_setup_timeout")]
     pub timeout_seconds: u64,
+    #[serde(default = "default_setup_max_attempts")]
+    pub max_attempts: usize,
+    #[serde(default = "default_setup_retry_backoff")]
+    pub retry_backoff_seconds: u64,
 }
 
 #[derive(Clone, Debug, Deserialize)]
@@ -151,6 +155,14 @@ fn default_health_timeout() -> u64 {
 
 fn default_setup_timeout() -> u64 {
     300
+}
+
+fn default_setup_max_attempts() -> usize {
+    3
+}
+
+fn default_setup_retry_backoff() -> u64 {
+    2
 }
 
 fn default_max_restarts() -> usize {
@@ -355,7 +367,7 @@ impl HostProcessManager {
     }
 
     fn run_setups(&self) -> io::Result<()> {
-        for setup in &self.manifest.setup {
+        'setups: for setup in &self.manifest.setup {
             let mut environment = setup.env.clone();
             environment.extend(
                 self.backend_environment
@@ -363,37 +375,55 @@ impl HostProcessManager {
                     .expect("backend environment lock poisoned")
                     .clone(),
             );
-            let mut child = spawn_command(
-                &setup.command,
-                setup.cwd.as_deref(),
-                &environment,
-                process_log(&self.log_dir, &setup.id)?,
-            )?;
             let deadline = Instant::now() + Duration::from_secs(setup.timeout_seconds);
-            loop {
-                if let Some(status) = child.try_wait()? {
-                    if status.success() {
+            for attempt in 1..=setup.max_attempts {
+                let mut child = spawn_command(
+                    &setup.command,
+                    setup.cwd.as_deref(),
+                    &environment,
+                    process_log(&self.log_dir, &setup.id)?,
+                )?;
+                loop {
+                    if let Some(status) = child.try_wait()? {
+                        if status.success() {
+                            continue 'setups;
+                        }
+                        if attempt == setup.max_attempts {
+                            return Err(io::Error::other(format!(
+                                "{} setup exited with {status} after {attempt} attempts; see {}",
+                                setup.id,
+                                self.log_dir.join(format!("{}.log", setup.id)).display()
+                            )));
+                        }
+                        let backoff = Duration::from_secs(setup.retry_backoff_seconds);
+                        if Instant::now() + backoff >= deadline {
+                            return Err(io::Error::other(format!(
+                                "{} setup exited with {status}; see {}",
+                                setup.id,
+                                self.log_dir.join(format!("{}.log", setup.id)).display()
+                            )));
+                        }
+                        writeln!(
+                            process_log(&self.log_dir, &setup.id)?,
+                            "lemma-locald: setup attempt {attempt} exited with {status}; retrying"
+                        )?;
+                        thread::sleep(backoff);
                         break;
                     }
-                    return Err(io::Error::other(format!(
-                        "{} setup exited with {status}; see {}",
-                        setup.id,
-                        self.log_dir.join(format!("{}.log", setup.id)).display()
-                    )));
+                    if Instant::now() >= deadline {
+                        let _ = terminate_process_group(&mut child);
+                        return Err(io::Error::new(
+                            io::ErrorKind::TimedOut,
+                            format!(
+                                "{} setup exceeded {} seconds; see {}",
+                                setup.id,
+                                setup.timeout_seconds,
+                                self.log_dir.join(format!("{}.log", setup.id)).display()
+                            ),
+                        ));
+                    }
+                    thread::sleep(Duration::from_millis(50));
                 }
-                if Instant::now() >= deadline {
-                    let _ = terminate_process_group(&mut child);
-                    return Err(io::Error::new(
-                        io::ErrorKind::TimedOut,
-                        format!(
-                            "{} setup exceeded {} seconds; see {}",
-                            setup.id,
-                            setup.timeout_seconds,
-                            self.log_dir.join(format!("{}.log", setup.id)).display()
-                        ),
-                    ));
-                }
-                thread::sleep(Duration::from_millis(50));
             }
         }
         Ok(())
@@ -711,6 +741,8 @@ fn validate_and_order(manifest: &HostPackManifest) -> io::Result<Vec<String>> {
             || setup.command.is_empty()
             || setup.command[0].is_empty()
             || setup.timeout_seconds == 0
+            || !(1..=5).contains(&setup.max_attempts)
+            || setup.retry_backoff_seconds > 60
         {
             return Err(io::Error::new(
                 io::ErrorKind::InvalidData,
@@ -958,6 +990,8 @@ mod tests {
             cwd: None,
             env: HashMap::new(),
             timeout_seconds: 10,
+            max_attempts: 3,
+            retry_backoff_seconds: 0,
         }
     }
 
@@ -1095,6 +1129,32 @@ mod tests {
 
         let log = std::fs::read_to_string(root.path().join("migrations.log")).unwrap();
         assert!(log.contains("DATABASE_URL=postgresql://private-guest/lemma"));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn migration_setup_retries_a_transient_cold_guest_failure() {
+        let root = tempdir().unwrap();
+        let marker = root.path().join("route-ready");
+        let mut value = manifest(vec![
+            service("frontend", &["backend"]),
+            service("backend", &[]),
+        ]);
+        value.setup[0].command = vec![
+            "/bin/sh".into(),
+            "-c".into(),
+            "if [ -f \"$1\" ]; then exit 0; fi; touch \"$1\"; exit 65".into(),
+            "lemma-migration-retry".into(),
+            marker.to_string_lossy().into_owned(),
+        ];
+        value.setup[0].max_attempts = 2;
+        let manager = HostProcessManager::new(value, root.path().into()).unwrap();
+
+        manager.run_setups().unwrap();
+
+        let log = std::fs::read_to_string(root.path().join("migrations.log")).unwrap();
+        assert!(log.contains("setup attempt 1 exited"));
+        assert!(marker.is_file());
     }
 
     #[cfg(unix)]
