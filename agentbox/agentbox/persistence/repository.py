@@ -560,12 +560,30 @@ class AgentBoxRepository:
                 status_code=404,
             )
         if row.provider_storage_id not in (None, provider_storage_id):
-            raise AgentBoxError(
-                ErrorCode.OPERATION_CONFLICT,
-                "workspace storage is already bound to another provider resource",
-                retry=RetryDisposition.DO_NOT_RETRY,
-                status_code=409,
-            )
+            stale_sandbox_native_binding = False
+            if (
+                row.storage_kind == StorageKind.SANDBOX_NATIVE.value
+                and row.bound_allocation_id is not None
+                and row.bound_allocation_id != allocation_id
+            ):
+                bound_allocation = await self._session.get(
+                    AllocationRow, row.bound_allocation_id
+                )
+                stale_sandbox_native_binding = (
+                    bound_allocation is None
+                    or bound_allocation.state
+                    in (
+                        AllocationState.ERROR.value,
+                        AllocationState.DESTROYED.value,
+                    )
+                )
+            if not stale_sandbox_native_binding:
+                raise AgentBoxError(
+                    ErrorCode.OPERATION_CONFLICT,
+                    "workspace storage is already bound to another provider resource",
+                    retry=RetryDisposition.DO_NOT_RETRY,
+                    status_code=409,
+                )
         row.provider_storage_id = provider_storage_id
         row.bound_allocation_id = allocation_id
         row.state = StorageState.READY.value
