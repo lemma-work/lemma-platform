@@ -42,6 +42,12 @@ from agentbox.python_sessions import PythonSessionService
 from agentbox.observability import bind_context, get_logger
 from agentbox.observability import create_background_task
 from agentbox.reconciliation import AgentBoxReconciler, reconciliation_loop
+from agentbox.telemetry import (
+    enrich_current_span,
+    reset_terminal_operation_error,
+    shutdown_telemetry,
+    terminal_operation_error_emitted,
+)
 
 from .fabric import agentbox_error_response, router
 from .port_proxy import access_router, create_port_proxy_http_client
@@ -129,12 +135,14 @@ class RequestContextMiddleware:
 
         caught: Exception | None = None
         cancelled = False
+        reset_terminal_operation_error()
         with bind_context(
             request_id=request_id,
             correlation_id=correlation_id,
             event_id=event_id,
             job_id=job_id,
         ):
+            enrich_current_span(request_id=request_id)
             try:
                 await self.app(scope, receive, send_with_request_id)
             except asyncio.CancelledError:
@@ -176,7 +184,9 @@ class RequestContextMiddleware:
                         type(caught).__name__ if caught else "HTTPError",
                     )
                     error_code = state.get("lemma_error_code", "INTERNAL_ERROR")
-                    if status_code >= 500 or caught is not None:
+                    if (
+                        status_code >= 500 or caught is not None
+                    ) and not terminal_operation_error_emitted():
                         exc_info = (
                             (type(caught), caught, caught.__traceback__)
                             if caught is not None
@@ -422,6 +432,7 @@ async def lifespan(app: FastAPI):
         deadline_at=datetime.now(timezone.utc)
         + timedelta(seconds=settings.agentbox_reconcile_operation_timeout_seconds)
     )
+    await lifecycle.refresh_capacity_telemetry()
     app.state.reconciliation_task = create_background_task(
         reconciliation_loop(
             reconciler,
@@ -462,6 +473,7 @@ async def lifespan(app: FastAPI):
         await app.state.port_proxy_http_client.aclose()
         await provider.close()
         await database.dispose()
+        shutdown_telemetry()
 
 
 app = FastAPI(title="AgentBox", lifespan=lifespan)

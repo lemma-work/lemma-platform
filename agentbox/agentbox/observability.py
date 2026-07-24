@@ -301,6 +301,8 @@ class DependencyIncident:
 
 class JsonFormatter(logging.Formatter):
     def format(self, record: logging.LogRecord) -> str:
+        from agentbox.telemetry import current_trace_fields
+
         app_owned = isinstance(getattr(record, "lemma_fields", None), dict)
         event = str(record.msg) if app_owned else "dependency.reported"
         data: dict[str, Any] = {
@@ -314,6 +316,8 @@ class JsonFormatter(logging.Formatter):
             "service.version": _release_sha(),
             "release.sha": _release_sha(),
             "deployment.environment": _environment(),
+            "deployment.environment.name": _environment(),
+            **current_trace_fields(),
             **current_context(),
         }
         fields = getattr(record, "lemma_fields", {}) if app_owned else {}

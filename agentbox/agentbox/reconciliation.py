@@ -20,6 +20,7 @@ from agentbox.ports import (
     ProviderRateLimited,
     SandboxProviderPort,
 )
+from agentbox.telemetry import observed_control_operation
 
 
 class AgentBoxReconciler:
@@ -42,6 +43,7 @@ class AgentBoxReconciler:
         self._retry_seconds = retry_seconds
         self._batch_size = batch_size
 
+    @observed_control_operation("reconcile")
     async def reconcile_once(self, *, deadline_at: datetime) -> int:
         now = datetime.now(timezone.utc)
         async with self._database.uow() as uow:

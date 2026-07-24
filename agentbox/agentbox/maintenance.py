@@ -6,6 +6,7 @@ from datetime import datetime, timedelta, timezone
 from agentbox.domain import AgentBoxError, MaintenanceAction
 from agentbox.lifecycle import SandboxLifecycleService
 from agentbox.persistence.uow import StateDatabase
+from agentbox.telemetry import observed_control_operation
 
 
 class SandboxMaintenanceWorker:
@@ -26,6 +27,7 @@ class SandboxMaintenanceWorker:
         self._function_idle = timedelta(seconds=function_idle_seconds)
         self._batch_size = batch_size
 
+    @observed_control_operation("cleanup")
     async def run_once(self, *, deadline_at: datetime) -> int:
         completed = 0
         for _ in range(self._batch_size):

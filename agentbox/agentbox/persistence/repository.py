@@ -448,6 +448,11 @@ class AgentBoxRepository:
         )
         return active, reserved
 
+    async def provider_admission_counts(self, provider_scope: str) -> tuple[int, int]:
+        """Return aggregate capacity state without exposing allocation identity."""
+
+        return await self._admission_counts(provider_scope)
+
     async def _set_admission_state(
         self,
         allocation: AllocationRow,

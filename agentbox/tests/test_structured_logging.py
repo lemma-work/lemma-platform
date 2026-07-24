@@ -93,6 +93,7 @@ def test_logging_reconciliation_context_and_exception_safety(monkeypatch) -> Non
         "service.version": "a" * 40,
         "release.sha": "a" * 40,
         "deployment.environment": "development",
+        "deployment.environment.name": "development",
         "request_id": "request-1",
         "correlation_id": "11111111-1111-1111-1111-111111111111",
         "event_id": "22222222-2222-2222-2222-222222222222",
