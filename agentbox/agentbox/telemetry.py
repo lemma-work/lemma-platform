@@ -798,39 +798,82 @@ def _log_operation_terminal(
     from agentbox.observability import get_logger
 
     logger = get_logger("agentbox.lifecycle")
-    common: dict[str, Any] = {
-        **attributes,
-        "outcome": outcome,
-        "duration_ms": round(duration_ms, 1),
-    }
+    operation = attributes["operation"]
+    workload_kind = attributes["workload_kind"]
+    provider = attributes["provider"]
+    profile = attributes["profile"]
+    rounded_duration_ms = round(duration_ms, 1)
     if outcome == "success":
-        logger.info("agentbox.operation.completed", **common)
+        logger.info(
+            "agentbox.operation.completed",
+            operation=operation,
+            workload_kind=workload_kind,
+            provider=provider,
+            profile=profile,
+            outcome=outcome,
+            duration_ms=rounded_duration_ms,
+        )
         return
-    if outcome == "timeout":
-        event = "agentbox.operation.timed_out"
-    elif outcome == "cancelled":
-        event = "agentbox.operation.cancelled"
-    elif outcome == "rejected":
-        event = "agentbox.operation.rejected"
-    else:
-        event = "agentbox.operation.failed"
-    logger_method = (
-        logger.warning if outcome in {"cancelled", "rejected"} else logger.error
-    )
     error_type = type(caught).__name__ if caught is not None else "UnknownError"
     bounded_error_code = error_code or (
         "CANCELLED" if outcome == "cancelled" else "INTERNAL"
     )
     fingerprint_source = ":".join(
-        ("lemma-agentbox", attributes["operation"], error_type, bounded_error_code)
+        ("lemma-agentbox", operation, error_type, bounded_error_code)
     )
-    logger_method(
-        event,
-        **common,
-        error_type=error_type,
-        error_code=bounded_error_code,
-        error_fingerprint=hashlib.sha256(fingerprint_source.encode()).hexdigest(),
-    )
+    error_fingerprint = hashlib.sha256(fingerprint_source.encode()).hexdigest()
+    if outcome == "timeout":
+        logger.error(
+            "agentbox.operation.timed_out",
+            operation=operation,
+            workload_kind=workload_kind,
+            provider=provider,
+            profile=profile,
+            outcome=outcome,
+            duration_ms=rounded_duration_ms,
+            error_type=error_type,
+            error_code=bounded_error_code,
+            error_fingerprint=error_fingerprint,
+        )
+    elif outcome == "cancelled":
+        logger.warning(
+            "agentbox.operation.cancelled",
+            operation=operation,
+            workload_kind=workload_kind,
+            provider=provider,
+            profile=profile,
+            outcome=outcome,
+            duration_ms=rounded_duration_ms,
+            error_type=error_type,
+            error_code=bounded_error_code,
+            error_fingerprint=error_fingerprint,
+        )
+    elif outcome == "rejected":
+        logger.warning(
+            "agentbox.operation.rejected",
+            operation=operation,
+            workload_kind=workload_kind,
+            provider=provider,
+            profile=profile,
+            outcome=outcome,
+            duration_ms=rounded_duration_ms,
+            error_type=error_type,
+            error_code=bounded_error_code,
+            error_fingerprint=error_fingerprint,
+        )
+    else:
+        logger.error(
+            "agentbox.operation.failed",
+            operation=operation,
+            workload_kind=workload_kind,
+            provider=provider,
+            profile=profile,
+            outcome=outcome,
+            duration_ms=rounded_duration_ms,
+            error_type=error_type,
+            error_code=bounded_error_code,
+            error_fingerprint=error_fingerprint,
+        )
     if outcome in {"failure", "timeout"}:
         _terminal_operation_error.set(True)
 
@@ -968,16 +1011,38 @@ def _log_control_terminal(
     from agentbox.observability import get_logger
 
     logger = get_logger(f"agentbox.{operation}")
-    fields: dict[str, Any] = {
-        "outcome": outcome,
-        "duration_ms": round(duration_ms, 1),
-        "count": max(0, count),
-    }
+    rounded_duration_ms = round(duration_ms, 1)
+    bounded_count = max(0, count)
     if outcome == "success":
-        logger.debug(f"agentbox.{operation}.completed", **fields)
+        if operation == "cleanup":
+            logger.debug(
+                "agentbox.cleanup.completed",
+                outcome=outcome,
+                duration_ms=rounded_duration_ms,
+                count=bounded_count,
+            )
+        else:
+            logger.debug(
+                "agentbox.reconcile.completed",
+                outcome=outcome,
+                duration_ms=rounded_duration_ms,
+                count=bounded_count,
+            )
         return
-    logger.warning(
-        f"agentbox.{operation}.failed",
-        **fields,
-        error_type=type(caught).__name__ if caught is not None else "UnknownError",
-    )
+    error_type = type(caught).__name__ if caught is not None else "UnknownError"
+    if operation == "cleanup":
+        logger.warning(
+            "agentbox.cleanup.failed",
+            outcome=outcome,
+            duration_ms=rounded_duration_ms,
+            count=bounded_count,
+            error_type=error_type,
+        )
+    else:
+        logger.warning(
+            "agentbox.reconcile.failed",
+            outcome=outcome,
+            duration_ms=rounded_duration_ms,
+            count=bounded_count,
+            error_type=error_type,
+        )
