@@ -153,7 +153,7 @@ async def reconcile_function_runs() -> None:
         for run in expired:
             record_terminal(
                 run,
-                outcome="timed_out",
+                outcome="timeout",
                 execution_mode=(
                     "asynchronous" if run.job_id is not None else "synchronous"
                 ),

@@ -1,4 +1,4 @@
-"""Bounded OpenTelemetry and terminal events for function execution."""
+"""Minimal domain telemetry for durable function execution phases."""
 
 from __future__ import annotations
 
@@ -8,12 +8,13 @@ from dataclasses import dataclass
 from datetime import datetime
 import hashlib
 import re
+import sys
 import time
 from typing import Iterator, Literal
 
 import httpx
-from opentelemetry import metrics, trace
-from opentelemetry.trace import Span, SpanKind, Status, StatusCode
+from opentelemetry import trace
+from opentelemetry.trace import Span, Status, StatusCode
 
 from agentbox_client import AgentBoxApiError, RetryDisposition
 
@@ -22,45 +23,23 @@ from app.modules.function.domain.entities import FunctionRunEntity
 
 
 FunctionOutcome = Literal[
-    "completed",
-    "failed",
-    "timed_out",
+    "success",
+    "failure",
+    "timeout",
     "cancelled",
     "rejected",
+]
+FunctionPhaseName = Literal[
+    "function.execution.accepted",
+    "function.agentbox.admission",
+    "function.runtime.call",
+    "function.execution.finalize",
 ]
 
 logger = get_logger(__name__)
 tracer = trace.get_tracer(__name__)
-meter = metrics.get_meter(__name__)
-
-function_executions = meter.create_counter(
-    "lemma.function.executions",
-    description="Terminal function executions",
-)
-function_end_to_end_duration = meter.create_histogram(
-    "lemma.function.end_to_end.duration",
-    unit="ms",
-    description="Time from accepted function run to durable terminal state",
-)
-function_queue_wait_duration = meter.create_histogram(
-    "lemma.function.queue_wait.duration",
-    unit="ms",
-    description="Time from accepted function run to backend dispatch",
-)
-function_sandbox_start_duration = meter.create_histogram(
-    "lemma.function.sandbox_start.duration",
-    unit="ms",
-    description="Time to obtain a ready AgentBox function runtime endpoint",
-)
-function_runtime_duration = meter.create_histogram(
-    "lemma.function.runtime.duration",
-    unit="ms",
-    description="Active function runtime invocation duration",
-)
-function_active = meter.create_up_down_counter(
-    "lemma.function.active",
-    description="Function dispatches currently active in this service",
-)
+_EXECUTION_MODES = frozenset({"synchronous", "asynchronous"})
+_RUNTIME_PROFILE_RE = re.compile(r"^[a-z][a-z0-9-]{0,63}$")
 
 
 @dataclass(slots=True)
@@ -85,55 +64,40 @@ def duration_ms(started_at: datetime | None, ended_at: datetime | None) -> float
     return round(max(0.0, (ended_at - started_at).total_seconds() * 1000), 3)
 
 
-def function_attributes(
-    *,
-    execution_mode: str,
-    runtime_profile: str,
-    outcome: FunctionOutcome | None = None,
-    cold: bool | None = None,
-) -> dict[str, str | bool]:
-    """Return only finite dimensions approved by the observability contract."""
-
-    attributes: dict[str, str | bool] = {
-        "execution_mode": execution_mode.lower(),
-        "runtime_profile": runtime_profile,
-    }
-    if outcome is not None:
-        attributes["outcome"] = outcome
-    if cold is not None:
-        attributes["cold"] = cold
-    return attributes
+def _bounded_execution_mode(value: str) -> str:
+    normalized = value.lower()
+    return normalized if normalized in _EXECUTION_MODES else "other"
 
 
-def span_attributes(
-    *,
-    execution_mode: str,
-    runtime_profile: str,
-    outcome: FunctionOutcome | None = None,
-    cold: bool | None = None,
-) -> dict[str, str | bool]:
+def _bounded_runtime_profile(value: str) -> str:
+    return value if _RUNTIME_PROFILE_RE.fullmatch(value) else "other"
+
+
+def span_attributes(*, execution_mode: str, runtime_profile: str) -> dict[str, str]:
+    """Return only reviewed, finite attributes for manual domain spans."""
+
     return {
-        f"lemma.{key}": value
-        for key, value in function_attributes(
-            execution_mode=execution_mode,
-            runtime_profile=runtime_profile,
-            outcome=outcome,
-            cold=cold,
-        ).items()
+        "lemma.execution_mode": _bounded_execution_mode(execution_mode),
+        "lemma.runtime_profile": _bounded_runtime_profile(runtime_profile),
     }
 
 
 @contextmanager
 def function_span(
-    name: str,
+    name: FunctionPhaseName,
     *,
     execution_mode: str,
     runtime_profile: str,
-    kind: SpanKind = SpanKind.INTERNAL,
 ) -> Iterator[Span]:
+    """Create one INTERNAL span around a durable domain phase.
+
+    FastAPI, HTTPX, SQLAlchemy, and queue instrumentation own their transport
+    spans. These manual spans group those children without pretending to be a
+    second client, producer, or server boundary.
+    """
+
     with tracer.start_as_current_span(
         name,
-        kind=kind,
         attributes=span_attributes(
             execution_mode=execution_mode,
             runtime_profile=runtime_profile,
@@ -151,17 +115,32 @@ def mark_span_outcome(
     span.set_attribute("lemma.outcome", outcome)
     if error_type is not None:
         span.set_attribute("error.type", error_type)
-    if outcome in {"failed", "timed_out", "rejected"}:
+    if outcome in {"failure", "timeout", "rejected"}:
         span.set_status(Status(StatusCode.ERROR, error_type or outcome))
 
 
+def record_function_accepted(
+    *,
+    execution_mode: str,
+    runtime_profile: str,
+) -> None:
+    """Record the durable accepted milestone outside queue transport spans."""
+
+    with function_span(
+        "function.execution.accepted",
+        execution_mode=execution_mode,
+        runtime_profile=runtime_profile,
+    ) as span:
+        mark_span_outcome(span, "success")
+
+
 def exception_outcome(
-    exc: Exception | asyncio.CancelledError,
+    exc: BaseException,
 ) -> FunctionOutcome:
     if isinstance(exc, asyncio.CancelledError):
         return "cancelled"
     if isinstance(exc, TimeoutError):
-        return "timed_out"
+        return "timeout"
     if isinstance(exc, AgentBoxApiError) and exc.retry not in {
         RetryDisposition.WAIT,
         RetryDisposition.SAFE_SAME_OPERATION,
@@ -169,11 +148,11 @@ def exception_outcome(
         return "rejected"
     if isinstance(exc, httpx.HTTPStatusError) and 400 <= exc.response.status_code < 500:
         return "rejected"
-    return "failed"
+    return "failure"
 
 
 def exception_error_code(
-    exc: Exception | asyncio.CancelledError,
+    exc: BaseException,
 ) -> str | None:
     if isinstance(exc, AgentBoxApiError):
         code = str(getattr(exc, "code", "PROVIDER_UNAVAILABLE"))
@@ -185,75 +164,39 @@ def exception_error_code(
 
 @contextmanager
 def observe_function_phase(
-    name: str,
+    name: FunctionPhaseName,
     *,
     execution_mode: str,
     runtime_profile: str,
     phases: FunctionPhaseTimings | None = None,
     duration_field: Literal["sandbox_start_ms", "runtime_call_ms"] | None = None,
-    kind: SpanKind = SpanKind.INTERNAL,
 ) -> Iterator[None]:
-    """Observe one phase and preserve its elapsed time even when it fails."""
+    """Observe one durable phase without intercepting failure or cancellation."""
 
     started = time.perf_counter()
     with function_span(
         name,
         execution_mode=execution_mode,
         runtime_profile=runtime_profile,
-        kind=kind,
     ) as span:
         try:
             yield
-        except (Exception, asyncio.CancelledError) as exc:
-            mark_span_outcome(
-                span,
-                exception_outcome(exc),
-                error_type=type(exc).__name__,
-            )
-            raise
-        else:
-            mark_span_outcome(span, "completed")
         finally:
+            caught = sys.exception()
+            if caught is None:
+                mark_span_outcome(span, "success")
+            else:
+                mark_span_outcome(
+                    span,
+                    exception_outcome(caught),
+                    error_type=type(caught).__name__,
+                )
             if phases is not None and duration_field is not None:
                 setattr(
                     phases,
                     duration_field,
                     round((time.perf_counter() - started) * 1000, 3),
                 )
-
-
-def record_active(
-    delta: int,
-    *,
-    execution_mode: str,
-    runtime_profile: str,
-) -> None:
-    function_active.add(
-        delta,
-        function_attributes(
-            execution_mode=execution_mode,
-            runtime_profile=runtime_profile,
-        ),
-    )
-
-
-def _record_terminal_metrics(
-    *,
-    total_ms: float | None,
-    phases: FunctionPhaseTimings,
-    attributes: dict[str, str | bool],
-) -> None:
-    function_executions.add(1, attributes)
-    if total_ms is not None:
-        function_end_to_end_duration.record(total_ms, attributes)
-    if phases.queue_wait_ms is not None:
-        function_queue_wait_duration.record(max(0.0, phases.queue_wait_ms), attributes)
-    if phases.sandbox_start_ms is not None:
-        function_sandbox_start_duration.record(
-            max(0.0, phases.sandbox_start_ms), attributes
-        )
-    if phases.runtime_call_ms is not None:
-        function_runtime_duration.record(max(0.0, phases.runtime_call_ms), attributes)
 
 
 def _error_fingerprint(
@@ -269,6 +212,38 @@ def _error_fingerprint(
     ).hexdigest()
 
 
+def _terminal_fields(
+    run: FunctionRunEntity,
+    *,
+    outcome: FunctionOutcome,
+    execution_mode: str,
+    runtime_profile: str,
+    phases: FunctionPhaseTimings,
+    error_type: str | None,
+    error_code: str | None,
+) -> dict[str, str | float | bool | None]:
+    return {
+        "run_id": str(run.id) if run.id is not None else None,
+        "operation_name": "function.execute",
+        "outcome": outcome,
+        "duration_ms": duration_ms(run.created_at, run.completed_at),
+        "queue_wait_ms": phases.queue_wait_ms,
+        "sandbox_start_ms": phases.sandbox_start_ms,
+        "runtime_call_ms": phases.runtime_call_ms,
+        "finalization_ms": phases.finalization_ms,
+        "execution_mode": _bounded_execution_mode(execution_mode),
+        "runtime_profile": _bounded_runtime_profile(runtime_profile),
+        "cold": phases.cold,
+        "error_type": error_type,
+        "error_code": error_code,
+        "error_stack_hash": _error_fingerprint(
+            outcome=outcome,
+            error_type=error_type,
+            error_code=error_code,
+        ),
+    }
+
+
 def record_terminal(
     run: FunctionRunEntity,
     *,
@@ -279,122 +254,26 @@ def record_terminal(
     error_type: str | None = None,
     error_code: str | None = None,
 ) -> None:
-    """Emit one terminal event and its matching bounded metric measurements."""
+    """Emit the one unsampled terminal event for a durable function run."""
 
-    total_ms = duration_ms(run.created_at, run.completed_at)
-    metric_attributes = function_attributes(
+    fields = _terminal_fields(
+        run,
+        outcome=outcome,
         execution_mode=execution_mode,
         runtime_profile=runtime_profile,
-        outcome=outcome,
-        cold=phases.cold,
-    )
-    _record_terminal_metrics(
-        total_ms=total_ms,
         phases=phases,
-        attributes=metric_attributes,
-    )
-    run_id = str(run.id) if run.id is not None else None
-    fingerprint = _error_fingerprint(
-        outcome=outcome,
         error_type=error_type,
         error_code=error_code,
     )
 
-    # Literal event/level pairs keep the exact logging contract statically
-    # reviewable while ``match`` makes the outcome mapping explicit.
     match outcome:
-        case "completed":
-            logger.info(
-                "function.execution.completed",
-                run_id=run_id,
-                function_id=str(run.function_id),
-                operation_name="function.execute",
-                outcome=outcome,
-                duration_ms=total_ms,
-                queue_wait_ms=phases.queue_wait_ms,
-                sandbox_start_ms=phases.sandbox_start_ms,
-                runtime_call_ms=phases.runtime_call_ms,
-                finalization_ms=phases.finalization_ms,
-                execution_mode=execution_mode.lower(),
-                runtime_profile=runtime_profile,
-                cold=phases.cold,
-                error_type=error_type,
-                error_code=error_code,
-                error_stack_hash=fingerprint,
-            )
-        case "failed":
-            logger.error(
-                "function.execution.failed",
-                run_id=run_id,
-                function_id=str(run.function_id),
-                operation_name="function.execute",
-                outcome=outcome,
-                duration_ms=total_ms,
-                queue_wait_ms=phases.queue_wait_ms,
-                sandbox_start_ms=phases.sandbox_start_ms,
-                runtime_call_ms=phases.runtime_call_ms,
-                finalization_ms=phases.finalization_ms,
-                execution_mode=execution_mode.lower(),
-                runtime_profile=runtime_profile,
-                cold=phases.cold,
-                error_type=error_type,
-                error_code=error_code,
-                error_stack_hash=fingerprint,
-            )
-        case "timed_out":
-            logger.warning(
-                "function.execution.timed_out",
-                run_id=run_id,
-                function_id=str(run.function_id),
-                operation_name="function.execute",
-                outcome=outcome,
-                duration_ms=total_ms,
-                queue_wait_ms=phases.queue_wait_ms,
-                sandbox_start_ms=phases.sandbox_start_ms,
-                runtime_call_ms=phases.runtime_call_ms,
-                finalization_ms=phases.finalization_ms,
-                execution_mode=execution_mode.lower(),
-                runtime_profile=runtime_profile,
-                cold=phases.cold,
-                error_type=error_type,
-                error_code=error_code,
-                error_stack_hash=fingerprint,
-            )
+        case "success":
+            logger.info("function.execution.completed", **fields)
+        case "failure":
+            logger.error("function.execution.failed", **fields)
+        case "timeout":
+            logger.warning("function.execution.timed_out", **fields)
         case "cancelled":
-            logger.info(
-                "function.execution.cancelled",
-                run_id=run_id,
-                function_id=str(run.function_id),
-                operation_name="function.execute",
-                outcome=outcome,
-                duration_ms=total_ms,
-                queue_wait_ms=phases.queue_wait_ms,
-                sandbox_start_ms=phases.sandbox_start_ms,
-                runtime_call_ms=phases.runtime_call_ms,
-                finalization_ms=phases.finalization_ms,
-                execution_mode=execution_mode.lower(),
-                runtime_profile=runtime_profile,
-                cold=phases.cold,
-                error_type=error_type,
-                error_code=error_code,
-                error_stack_hash=fingerprint,
-            )
+            logger.info("function.execution.cancelled", **fields)
         case "rejected":
-            logger.warning(
-                "function.execution.rejected",
-                run_id=run_id,
-                function_id=str(run.function_id),
-                operation_name="function.execute",
-                outcome=outcome,
-                duration_ms=total_ms,
-                queue_wait_ms=phases.queue_wait_ms,
-                sandbox_start_ms=phases.sandbox_start_ms,
-                runtime_call_ms=phases.runtime_call_ms,
-                finalization_ms=phases.finalization_ms,
-                execution_mode=execution_mode.lower(),
-                runtime_profile=runtime_profile,
-                cold=phases.cold,
-                error_type=error_type,
-                error_code=error_code,
-                error_stack_hash=fingerprint,
-            )
+            logger.warning("function.execution.rejected", **fields)

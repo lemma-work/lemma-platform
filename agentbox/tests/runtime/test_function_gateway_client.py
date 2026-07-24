@@ -13,7 +13,7 @@ from agentbox.function_runtime.runtime_models import (
     RuntimeIdentity,
     TerminalReport,
 )
-from agentbox.function_runtime.trace_context import bind_traceparent
+from agentbox.function_runtime.trace_context import bind_trace_context
 
 
 pytestmark = pytest.mark.asyncio
@@ -152,8 +152,8 @@ async def test_gateway_callbacks_forward_current_w3c_trace_context():
         transport=httpx.MockTransport(handler),
     )
     try:
-        with bind_traceparent(
-            "00-1234567890abcdef1234567890abcdef-1234567890abcdef-01"
+        with bind_trace_context(
+            {"traceparent": ("00-1234567890abcdef1234567890abcdef-1234567890abcdef-01")}
         ):
             await gateway.terminal(
                 claim,

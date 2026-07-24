@@ -432,7 +432,6 @@ async def lifespan(app: FastAPI):
         deadline_at=datetime.now(timezone.utc)
         + timedelta(seconds=settings.agentbox_reconcile_operation_timeout_seconds)
     )
-    await lifecycle.refresh_capacity_telemetry()
     app.state.reconciliation_task = create_background_task(
         reconciliation_loop(
             reconciler,

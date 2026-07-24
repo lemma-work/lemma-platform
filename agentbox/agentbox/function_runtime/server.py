@@ -34,7 +34,7 @@ from .runtime_models import (
     WorkerRequest,
 )
 from .types import JsonObject
-from .trace_context import bind_traceparent
+from .trace_context import bind_trace_context
 from .worker_pool import RevisionWorkerRegistry, RuntimeOverloaded
 
 
@@ -484,7 +484,7 @@ async def health(_request: Request) -> JSONResponse:
 
 
 async def invoke(request: Request) -> JSONResponse:
-    with bind_traceparent(request.headers.get("traceparent")):
+    with bind_trace_context(request.headers):
         return await _invoke(request)
 
 

@@ -170,6 +170,7 @@ async def test_gateway_releases_database_before_identity_and_storage_io(
     assert terminal_calls[0][1]["output_data"] == {"answer": 42}
     assert len(terminal_calls) == 2
     assert len(telemetry_calls) == 1
+    assert telemetry_calls[0][1]["outcome"] == "success"
     with pytest.raises(RuntimeCredentialRejected):
         await gateway.artifact(context.run_id, "wrong-callback-token")
     assert state.active == 0

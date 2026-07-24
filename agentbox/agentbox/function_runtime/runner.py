@@ -21,7 +21,7 @@ from .runtime_models import (
     RunClaim,
     TerminalReport,
 )
-from .trace_context import current_trace_headers
+from .trace_context import inject_trace_context
 from .types import JsonObject
 
 
@@ -150,10 +150,9 @@ class GatewayClient:
 
     @staticmethod
     def _headers(authorization: str) -> dict[str, str]:
-        return {
-            "Authorization": authorization,
-            **current_trace_headers(),
-        }
+        headers = {"Authorization": authorization}
+        inject_trace_context(headers)
+        return headers
 
 
 def _verify_artifact(data: bytes, expected: str) -> str:

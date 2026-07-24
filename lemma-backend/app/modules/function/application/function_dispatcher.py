@@ -9,7 +9,6 @@ from urllib.parse import urljoin, urlparse
 from uuid import UUID
 
 import httpx
-from opentelemetry.trace import SpanKind
 
 from agentbox_client import (
     AdmissionClass,
@@ -34,7 +33,6 @@ from app.modules.function.application.function_observability import (
     exception_error_code,
     exception_outcome,
     observe_function_phase,
-    record_active,
     record_terminal,
 )
 from app.modules.function.application.function_session_token_cache import (
@@ -125,11 +123,6 @@ class FunctionDispatcher:
 
         execution_mode = mode.value.lower()
         runtime_profile = self._profile.name
-        record_active(
-            1,
-            execution_mode=execution_mode,
-            runtime_profile=runtime_profile,
-        )
         function_token_task = create_inherited_task(
             self._function_session_token(dispatch)
         )
@@ -149,7 +142,6 @@ class FunctionDispatcher:
                 runtime_profile=runtime_profile,
                 phases=phase_timings,
                 duration_field="runtime_call_ms",
-                kind=SpanKind.CLIENT,
             ):
                 await self._invoke_runtime(
                     dispatch,
@@ -217,11 +209,6 @@ class FunctionDispatcher:
             if not function_token_task.done():
                 function_token_task.cancel()
             await asyncio.gather(function_token_task, return_exceptions=True)
-            record_active(
-                -1,
-                execution_mode=execution_mode,
-                runtime_profile=runtime_profile,
-            )
 
     async def cancel(self, run_id: UUID) -> FunctionRunEntity:
         dispatch = await self._active_dispatch(
@@ -288,7 +275,7 @@ class FunctionDispatcher:
             ):
                 record_terminal(
                     result,
-                    outcome="timed_out",
+                    outcome="timeout",
                     execution_mode=mode.value.lower(),
                     runtime_profile=self._profile.name,
                     phases=FunctionPhaseTimings(

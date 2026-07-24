@@ -232,23 +232,24 @@ class FunctionRuntimeGateway:
     @staticmethod
     def _terminal_outcome(request: RuntimeTerminalRequest) -> FunctionOutcome:
         if request.status == "completed":
-            return "completed"
+            return "success"
         error_type = request.error.name.lower() if request.error is not None else ""
         if "timeout" in error_type or "deadline" in error_type:
-            return "timed_out"
+            return "timeout"
         if "cancel" in error_type:
             return "cancelled"
-        return "failed"
+        return "failure"
 
     @staticmethod
     def _terminal_error_type(outcome: FunctionOutcome) -> str | None:
-        if outcome == "completed":
+        if outcome == "success":
             return None
-        if outcome == "timed_out":
-            return "FunctionTimeout"
-        if outcome == "cancelled":
-            return "FunctionCancelled"
-        return "FunctionRuntimeError"
+        return {
+            "failure": "FunctionRuntimeError",
+            "timeout": "FunctionTimeout",
+            "cancelled": "FunctionCancelled",
+            "rejected": "FunctionRejected",
+        }[outcome]
 
     @staticmethod
     def _docker_reachable_url(url: str) -> str:

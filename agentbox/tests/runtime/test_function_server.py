@@ -8,7 +8,7 @@ import pytest
 
 from agentbox.function_runtime.runtime_models import RunAccepted, TerminalReport
 from agentbox.function_runtime.server import FunctionRuntimeService, create_app
-from agentbox.function_runtime.trace_context import current_trace_headers
+from agentbox.function_runtime.trace_context import inject_trace_context
 
 
 pytestmark = pytest.mark.asyncio
@@ -232,7 +232,7 @@ async def test_invocation_extracts_w3c_context_before_starting_runtime_task() ->
 
     class _Runtime:
         async def accept(self, **_kwargs):
-            observed.update(current_trace_headers())
+            inject_trace_context(observed)
             return RunAccepted(run_id=run_id)
 
     run_id = uuid4()
@@ -251,8 +251,7 @@ async def test_invocation_extracts_w3c_context_before_starting_runtime_task() ->
                 "X-Lemma-Run-Token": "r" * 32,
                 "Prefer": "respond-async",
                 "traceparent": (
-                    "00-1234567890abcdef1234567890abcdef-"
-                    "1234567890abcdef-01"
+                    "00-1234567890abcdef1234567890abcdef-1234567890abcdef-01"
                 ),
             },
             json={
@@ -268,8 +267,5 @@ async def test_invocation_extracts_w3c_context_before_starting_runtime_task() ->
 
     assert response.status_code == 202, response.text
     assert observed == {
-        "traceparent": (
-            "00-1234567890abcdef1234567890abcdef-"
-            "1234567890abcdef-01"
-        ),
+        "traceparent": ("00-1234567890abcdef1234567890abcdef-1234567890abcdef-01"),
     }

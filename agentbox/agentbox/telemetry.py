@@ -1,47 +1,34 @@
-"""Privacy-safe OpenTelemetry bootstrap and AgentBox operation instruments.
+"""Thin, privacy-safe OpenTelemetry integration for AgentBox.
 
-The module owns only standard OpenTelemetry APIs. Export destinations and
-credentials remain deployment configuration. All exported spans are sanitized
-through a default-deny allow-list so framework upgrades cannot start exporting
-raw paths, sandbox identifiers, provider responses, or customer payloads.
+FastAPI and HTTPX instrumentation own HTTP spans and W3C propagation. This
+module adds only the domain boundaries those instrumentors cannot infer and a
+default-deny exporter that prevents framework or dependency upgrades from
+exporting paths, identifiers, provider responses, or customer payloads.
 """
 
 from __future__ import annotations
 
 import asyncio
 from collections.abc import Awaitable, Callable, Iterator, Mapping, Sequence
-from contextlib import contextmanager
+from contextlib import AbstractContextManager, contextmanager
 from contextvars import ContextVar
 from functools import wraps
 import hashlib
 import re
-import threading
+import sys
 import time
 from typing import Any, ParamSpec, TypeVar
 
 from fastapi import FastAPI
-from opentelemetry import metrics, trace
-from opentelemetry.exporter.otlp.proto.grpc.metric_exporter import (
-    OTLPMetricExporter as GrpcOTLPMetricExporter,
-)
+from opentelemetry import trace
 from opentelemetry.exporter.otlp.proto.grpc.trace_exporter import (
     OTLPSpanExporter as GrpcOTLPSpanExporter,
-)
-from opentelemetry.exporter.otlp.proto.http.metric_exporter import (
-    OTLPMetricExporter as HttpOTLPMetricExporter,
 )
 from opentelemetry.exporter.otlp.proto.http.trace_exporter import (
     OTLPSpanExporter as HttpOTLPSpanExporter,
 )
 from opentelemetry.instrumentation.httpx import HTTPXClientInstrumentor
-from opentelemetry.metrics import Observation
 from opentelemetry.propagate import set_global_textmap
-from opentelemetry.trace.propagation.tracecontext import (
-    TraceContextTextMapPropagator,
-)
-from opentelemetry.sdk.metrics import MeterProvider
-from opentelemetry.sdk.metrics.export import PeriodicExportingMetricReader
-from opentelemetry.sdk.metrics.view import View
 from opentelemetry.sdk.resources import Resource
 from opentelemetry.sdk.trace import Event, ReadableSpan, TracerProvider
 from opentelemetry.sdk.trace.export import (
@@ -64,45 +51,32 @@ from opentelemetry.trace import (
     StatusCode,
     TraceState,
 )
+from opentelemetry.trace.propagation.tracecontext import (
+    TraceContextTextMapPropagator,
+)
 
 from agentbox.config import settings
-from agentbox.domain import AgentBoxError, ErrorCode, SandboxProfileRef, WorkloadKind
+from agentbox.domain import (
+    AgentBoxError,
+    ErrorCode,
+    SandboxProfileRef,
+    WorkloadKind,
+)
 
 
 _SHA_RE = re.compile(r"^[0-9a-f]{40}$")
 _SAFE_NAME_RE = re.compile(r"^[a-z][a-z0-9_]*(?:\.[a-z][a-z0-9_]*)+$")
 _SAFE_IDENTITY_RE = re.compile(r"^[A-Za-z0-9_.-]{1,128}$")
 _SAFE_PROVIDERS = frozenset({"docker", "e2b"})
-_SAFE_OPERATIONS = frozenset({"ensure", "inspect", "release", "destroy"})
-_SAFE_PHASES = frozenset({"admission_wait", "sandbox_create", "sandbox_readiness"})
-_SAFE_CONTROL_OPERATIONS = frozenset({"cleanup", "reconcile"})
+_LIFECYCLE_OPERATIONS = frozenset({"ensure", "inspect", "release", "destroy"})
+_PHASES = frozenset({"admission_wait", "sandbox_create", "sandbox_readiness"})
+_CONTROL_OPERATIONS = frozenset({"cleanup", "reconcile"})
 _HEALTH_PATHS = "/health,/health/live,/health/ready,/livez"
 _INSTRUMENTATION_VERSION = "1"
-_DURATION_BOUNDARIES_MS = (
-    1,
-    5,
-    10,
-    25,
-    50,
-    100,
-    250,
-    500,
-    1_000,
-    2_500,
-    5_000,
-    10_000,
-    30_000,
-    60_000,
-)
 
-_initialized = False
-_httpx_instrumented = False
-_instrumented_app_ids: set[int] = set()
 _trace_provider: TracerProvider | None = None
-_meter_provider: MeterProvider | None = None
 _tracer = trace.get_tracer("agentbox.telemetry", _INSTRUMENTATION_VERSION)
-_instruments: _AgentBoxInstruments | None = None
-_terminal_operation_error: ContextVar[bool] = ContextVar(
+_terminal_operation_error_state: ContextVar[bool] = ContextVar(
     "agentbox_terminal_operation_error",
     default=False,
 )
@@ -150,21 +124,22 @@ def _normalize_protocol(raw: str | None) -> str:
     raise ValueError(f"unsupported OTLP protocol: {protocol}")
 
 
-def _signal_protocol(signal: str) -> str:
-    specific = getattr(settings, f"otel_exporter_otlp_{signal}_protocol")
-    return _normalize_protocol(specific or settings.otel_exporter_otlp_protocol)
+def _trace_protocol() -> str:
+    return _normalize_protocol(
+        settings.otel_exporter_otlp_traces_protocol
+        or settings.otel_exporter_otlp_protocol
+    )
 
 
-def _signal_endpoint(signal: str) -> str | None:
-    specific = getattr(settings, f"otel_exporter_otlp_{signal}_endpoint")
-    if specific:
-        return specific
+def _trace_endpoint() -> str | None:
+    if settings.otel_exporter_otlp_traces_endpoint:
+        return settings.otel_exporter_otlp_traces_endpoint
     endpoint = settings.otel_exporter_otlp_endpoint
     if not endpoint:
         return None
-    if _signal_protocol(signal) == "grpc":
+    if _trace_protocol() == "grpc":
         return endpoint
-    return f"{endpoint.rstrip('/')}/v1/{signal}"
+    return f"{endpoint.rstrip('/')}/v1/traces"
 
 
 def _parse_headers(raw: str | None) -> dict[str, str] | None:
@@ -178,9 +153,11 @@ def _parse_headers(raw: str | None) -> dict[str, str] | None:
     return headers or None
 
 
-def _signal_headers(signal: str) -> dict[str, str] | None:
-    specific = getattr(settings, f"otel_exporter_otlp_{signal}_headers")
-    return _parse_headers(specific or settings.otel_exporter_otlp_headers)
+def _trace_headers() -> dict[str, str] | None:
+    return _parse_headers(
+        settings.otel_exporter_otlp_traces_headers
+        or settings.otel_exporter_otlp_headers
+    )
 
 
 def _sampler() -> Sampler:
@@ -200,31 +177,14 @@ def _sampler() -> Sampler:
         raise ValueError(f"unsupported OTEL trace sampler: {selected}") from exc
 
 
-def _endpoint_is_insecure(endpoint: str) -> bool:
-    return endpoint.startswith("http://") or "://" not in endpoint
-
-
 def _span_exporter(endpoint: str) -> SpanExporter:
-    protocol = _signal_protocol("traces")
-    headers = _signal_headers("traces")
-    if protocol == "http/protobuf":
+    headers = _trace_headers()
+    if _trace_protocol() == "http/protobuf":
         return HttpOTLPSpanExporter(endpoint=endpoint, headers=headers)
     return GrpcOTLPSpanExporter(
         endpoint=endpoint,
         headers=headers,
-        insecure=_endpoint_is_insecure(endpoint),
-    )
-
-
-def _metric_exporter(endpoint: str):
-    protocol = _signal_protocol("metrics")
-    headers = _signal_headers("metrics")
-    if protocol == "http/protobuf":
-        return HttpOTLPMetricExporter(endpoint=endpoint, headers=headers)
-    return GrpcOTLPMetricExporter(
-        endpoint=endpoint,
-        headers=headers,
-        insecure=_endpoint_is_insecure(endpoint),
+        insecure=endpoint.startswith("http://") or "://" not in endpoint,
     )
 
 
@@ -260,18 +220,6 @@ SPAN_ATTRIBUTE_KEYS = frozenset(
         "agentbox.profile",
         "agentbox.phase",
         "agentbox.outcome",
-    }
-)
-
-METRIC_ATTRIBUTE_KEYS = frozenset(
-    {
-        "operation",
-        "workload_kind",
-        "provider",
-        "profile",
-        "phase",
-        "outcome",
-        "reason",
     }
 )
 
@@ -368,6 +316,8 @@ def _sanitize_span(span: ReadableSpan) -> ReadableSpan:
 
 
 class SanitizingSpanExporter(SpanExporter):
+    """Drop every span field that is not explicitly reviewed above."""
+
     def __init__(self, delegate: SpanExporter) -> None:
         self._delegate = delegate
 
@@ -377,228 +327,94 @@ class SanitizingSpanExporter(SpanExporter):
             try:
                 safe.append(_sanitize_span(span))
             except Exception:
+                # An unknown SDK span shape is safer to drop than export unsanitized.
                 continue
         if not safe:
             return SpanExportResult.SUCCESS
-        try:
-            return self._delegate.export(tuple(safe))
-        except Exception:
-            return SpanExportResult.FAILURE
+        return self._delegate.export(tuple(safe))
 
     def shutdown(self) -> None:
-        try:
-            self._delegate.shutdown()
-        except Exception:
-            return None
+        self._delegate.shutdown()
 
     def force_flush(self, timeout_millis: int = 30_000) -> bool:
-        flush = getattr(self._delegate, "force_flush", None)
-        if not callable(flush):
-            return True
-        try:
-            return bool(flush(timeout_millis))
-        except Exception:
-            return False
-
-
-class _AgentBoxInstruments:
-    def __init__(self, meter: Any) -> None:
-        self.operations = meter.create_counter(
-            "lemma.agentbox.operations",
-            unit="{operation}",
-            description="Completed AgentBox operations",
-        )
-        self.operation_duration = meter.create_histogram(
-            "lemma.agentbox.operation.duration",
-            unit="ms",
-            description="AgentBox operation duration",
-            explicit_bucket_boundaries_advisory=_DURATION_BOUNDARIES_MS,
-        )
-        self.active = meter.create_up_down_counter(
-            "lemma.agentbox.active",
-            unit="{operation}",
-            description="AgentBox operations currently active",
-        )
-        self.admission_wait = meter.create_histogram(
-            "lemma.agentbox.admission_wait.duration",
-            unit="ms",
-            description="Provider admission decision latency",
-            explicit_bucket_boundaries_advisory=_DURATION_BOUNDARIES_MS,
-        )
-        self.sandbox_start = meter.create_histogram(
-            "lemma.agentbox.sandbox_start.duration",
-            unit="ms",
-            description="Sandbox create and readiness phase latency",
-            explicit_bucket_boundaries_advisory=_DURATION_BOUNDARIES_MS,
-        )
-        self.rejections = meter.create_counter(
-            "lemma.agentbox.rejections",
-            unit="{rejection}",
-            description="Rejected AgentBox operations",
-        )
-        self.timeouts = meter.create_counter(
-            "lemma.agentbox.timeouts",
-            unit="{timeout}",
-            description="Timed out AgentBox operations",
-        )
-        self.cleanup = meter.create_counter(
-            "lemma.agentbox.cleanup.operations",
-            unit="{operation}",
-            description="AgentBox cleanup pass outcomes",
-        )
-        self.reconcile = meter.create_counter(
-            "lemma.agentbox.reconcile.operations",
-            unit="{operation}",
-            description="AgentBox reconciliation pass outcomes",
-        )
-        self._capacity_lock = threading.Lock()
-        self._capacity: dict[str, tuple[int, int]] = {}
-        meter.create_observable_gauge(
-            "lemma.agentbox.capacity.limit",
-            callbacks=[self._observe_capacity_limit],
-            unit="{sandbox}",
-            description="Configured provider allocation limit",
-        )
-        meter.create_observable_gauge(
-            "lemma.agentbox.capacity.available",
-            callbacks=[self._observe_capacity_available],
-            unit="{sandbox}",
-            description="Provider allocation capacity currently available",
-        )
-
-    def record_capacity(
-        self, *, provider: str, limit: int, active: int, reserved: int
-    ) -> None:
-        with self._capacity_lock:
-            self._capacity[_bounded_provider(provider)] = (
-                max(0, limit),
-                max(0, limit - active - reserved),
-            )
-
-    def _capacity_snapshot(self) -> tuple[tuple[str, tuple[int, int]], ...]:
-        with self._capacity_lock:
-            return tuple(self._capacity.items())
-
-    def _observe_capacity_limit(self, _options: Any) -> Iterator[Observation]:
-        for provider, (limit, _available) in self._capacity_snapshot():
-            yield Observation(limit, {"provider": provider})
-
-    def _observe_capacity_available(self, _options: Any) -> Iterator[Observation]:
-        for provider, (_limit, available) in self._capacity_snapshot():
-            yield Observation(available, {"provider": provider})
+        return self._delegate.force_flush(timeout_millis)
 
 
 def setup_telemetry() -> None:
-    """Install providers before framework/client modules create instruments."""
+    """Configure tracing once; official instrumentors own HTTP behavior."""
 
-    global _httpx_instrumented
-    global _initialized
-    global _instruments
-    global _meter_provider
     global _trace_provider
     global _tracer
 
-    if _initialized:
+    if (
+        _trace_provider is not None
+        or not settings.observability_enabled
+        or settings.otel_sdk_disabled
+    ):
         return
-    _initialized = True
-    if not settings.observability_enabled or settings.otel_sdk_disabled:
-        return
-
     if settings.otel_propagators.strip().lower() != "tracecontext":
         raise ValueError("AgentBox supports only the W3C tracecontext propagator")
     set_global_textmap(TraceContextTextMapPropagator())
-    resource = _resource()
-    trace_selector = settings.otel_traces_exporter.strip().lower()
-    if trace_selector not in {"none", "otlp"}:
-        raise ValueError(f"unsupported OTEL_TRACES_EXPORTER: {trace_selector}")
-    trace_endpoint = _signal_endpoint("traces")
-    if trace_selector == "otlp" and not trace_endpoint:
+
+    selector = settings.otel_traces_exporter.strip().lower()
+    if selector not in {"none", "otlp"}:
+        raise ValueError(f"unsupported OTEL_TRACES_EXPORTER: {selector}")
+    if selector == "none":
+        return
+    endpoint = _trace_endpoint()
+    if not endpoint:
         raise RuntimeError(
             "OTEL trace export is enabled but the managed OTLP endpoint is missing"
         )
-    if trace_selector == "otlp" and trace_endpoint:
-        provider = TracerProvider(resource=resource, sampler=_sampler())
-        provider.add_span_processor(
-            BatchSpanProcessor(
-                SanitizingSpanExporter(_span_exporter(trace_endpoint)),
-                max_queue_size=2048,
-                max_export_batch_size=512,
-                export_timeout_millis=5_000,
-            )
-        )
-        trace.set_tracer_provider(provider)
-        _trace_provider = provider
-        _tracer = provider.get_tracer("agentbox.telemetry", _INSTRUMENTATION_VERSION)
-        if not _httpx_instrumented:
-            HTTPXClientInstrumentor().instrument(tracer_provider=provider)
-            _httpx_instrumented = True
 
-    metric_selector = settings.otel_metrics_exporter.strip().lower()
-    if metric_selector not in {"none", "otlp"}:
-        raise ValueError(f"unsupported OTEL_METRICS_EXPORTER: {metric_selector}")
-    metric_endpoint = _signal_endpoint("metrics")
-    if metric_selector == "otlp" and not metric_endpoint:
-        raise RuntimeError(
-            "OTEL metric export is enabled but the managed OTLP endpoint is missing"
-        )
-    if metric_selector == "otlp" and metric_endpoint:
-        reader = PeriodicExportingMetricReader(
-            _metric_exporter(metric_endpoint),
-            export_interval_millis=settings.otel_metric_export_interval,
+    provider = TracerProvider(resource=_resource(), sampler=_sampler())
+    provider.add_span_processor(
+        BatchSpanProcessor(
+            SanitizingSpanExporter(_span_exporter(endpoint)),
+            max_queue_size=2048,
+            max_export_batch_size=512,
             export_timeout_millis=5_000,
         )
-        provider = MeterProvider(
-            resource=resource,
-            metric_readers=(reader,),
-            views=(View(instrument_name="*", attribute_keys=METRIC_ATTRIBUTE_KEYS),),
-        )
-        metrics.set_meter_provider(provider)
-        _meter_provider = provider
-        _instruments = _AgentBoxInstruments(
-            provider.get_meter("agentbox.telemetry", _INSTRUMENTATION_VERSION)
-        )
+    )
+    trace.set_tracer_provider(provider)
+    _trace_provider = provider
+    _tracer = provider.get_tracer("agentbox.telemetry", _INSTRUMENTATION_VERSION)
+    HTTPXClientInstrumentor().instrument(tracer_provider=provider)
 
 
 def shutdown_telemetry(timeout_millis: int = 5_000) -> None:
-    global _instruments
-    global _meter_provider
     global _trace_provider
     global _tracer
-    for provider in (_trace_provider, _meter_provider):
-        if provider is None:
-            continue
-        try:
-            provider.force_flush(timeout_millis=timeout_millis)
-        except Exception:
-            pass
+
+    provider = _trace_provider
+    if provider is None:
+        return
+    try:
+        provider.force_flush(timeout_millis=timeout_millis)
+    finally:
         try:
             provider.shutdown()
-        except Exception:
-            pass
-    _trace_provider = None
-    _meter_provider = None
-    _instruments = None
-    _tracer = trace.get_tracer("agentbox.telemetry", _INSTRUMENTATION_VERSION)
+        finally:
+            _trace_provider = None
+            _tracer = trace.get_tracer(
+                "agentbox.telemetry",
+                _INSTRUMENTATION_VERSION,
+            )
 
 
 def instrument_fastapi_app(app: FastAPI) -> None:
-    if (
-        not settings.observability_enabled
-        or settings.otel_sdk_disabled
-        or _trace_provider is None
-        or id(app) in _instrumented_app_ids
-    ):
+    """Let the official FastAPI instrumentor handle routing and idempotency."""
+
+    if _trace_provider is None:
         return
     from opentelemetry.instrumentation.fastapi import FastAPIInstrumentor
 
     FastAPIInstrumentor.instrument_app(
         app,
         tracer_provider=_trace_provider,
-        meter_provider=_meter_provider,
         excluded_urls=_HEALTH_PATHS,
         exclude_spans=["receive", "send"],
     )
-    _instrumented_app_ids.add(id(app))
 
 
 def current_trace_fields() -> dict[str, str]:
@@ -618,11 +434,11 @@ def enrich_current_span(*, request_id: str) -> None:
 
 
 def reset_terminal_operation_error() -> None:
-    _terminal_operation_error.set(False)
+    _terminal_operation_error_state.set(False)
 
 
 def terminal_operation_error_emitted() -> bool:
-    return _terminal_operation_error.get()
+    return _terminal_operation_error_state.get()
 
 
 def _bounded_provider(provider: str) -> str:
@@ -639,24 +455,66 @@ def _bounded_profile(profile: SandboxProfileRef | None) -> str:
     return profile.name if profile.name in reviewed else "other"
 
 
-def _outcome(exc: BaseException | None) -> tuple[str, str | None]:
-    if exc is None:
+def _outcome(error: BaseException | None) -> tuple[str, str | None]:
+    if error is None:
         return "success", None
-    if isinstance(exc, asyncio.CancelledError):
+    if isinstance(error, asyncio.CancelledError):
         return "cancelled", None
-    if isinstance(exc, AgentBoxError):
-        if exc.code == ErrorCode.DEADLINE_EXCEEDED:
-            return "timeout", exc.code.value
-        if exc.code in {
+    if isinstance(error, AgentBoxError):
+        if error.code == ErrorCode.DEADLINE_EXCEEDED:
+            return "timeout", error.code.value
+        if error.code in {
             ErrorCode.CAPACITY_EXHAUSTED,
             ErrorCode.RATE_LIMITED,
             ErrorCode.OPERATION_CONFLICT,
         }:
-            return "rejected", exc.code.value
-        return "failure", exc.code.value
-    if isinstance(exc, TimeoutError):
+            return "rejected", error.code.value
+        return "failure", error.code.value
+    if isinstance(error, TimeoutError):
         return "timeout", "TIMEOUT"
     return "failure", None
+
+
+def _span_attributes(attributes: Mapping[str, str]) -> dict[str, str]:
+    return {
+        f"agentbox.{key.replace('_', '.')}": value for key, value in attributes.items()
+    }
+
+
+TerminalCallback = Callable[[str, float, BaseException | None, str | None], None]
+
+
+@contextmanager
+def _observed_span(
+    name: str,
+    *,
+    attributes: Mapping[str, str],
+    terminal: TerminalCallback | None = None,
+) -> Iterator[None]:
+    """Observe a domain boundary without catching or changing its exceptions."""
+
+    started_at = time.perf_counter()
+    with _tracer.start_as_current_span(
+        name,
+        attributes=dict(attributes),
+        record_exception=False,
+        set_status_on_exception=False,
+    ) as span:
+        try:
+            yield
+        finally:
+            error = sys.exception()
+            outcome, error_code = _outcome(error)
+            duration_ms = max(0.0, (time.perf_counter() - started_at) * 1000)
+            span.set_attribute("agentbox.outcome", outcome)
+            if error is not None:
+                span.set_attribute("error.type", type(error).__name__)
+                if error_code:
+                    span.set_attribute("error.code", error_code)
+                if outcome in {"failure", "timeout"}:
+                    span.set_status(Status(StatusCode.ERROR))
+            if terminal is not None:
+                terminal(outcome, duration_ms, error, error_code)
 
 
 def _operation_attributes(
@@ -667,81 +525,41 @@ def _operation_attributes(
     profile: SandboxProfileRef | None,
 ) -> dict[str, str]:
     return {
-        "operation": operation if operation in _SAFE_OPERATIONS else "other",
+        "operation": operation,
         "workload_kind": workload_kind.value,
         "provider": _bounded_provider(provider),
         "profile": _bounded_profile(profile),
     }
 
 
-def _span_attributes(attributes: Mapping[str, str]) -> dict[str, str]:
-    return {
-        f"agentbox.{key.replace('_', '.')}": value for key, value in attributes.items()
-    }
-
-
-@contextmanager
 def observe_agentbox_operation(
     *,
     operation: str,
     workload_kind: WorkloadKind,
     provider: str,
     profile: SandboxProfileRef | None = None,
-) -> Iterator[None]:
+) -> AbstractContextManager[None]:
+    if operation not in _LIFECYCLE_OPERATIONS:
+        raise ValueError(f"unsupported AgentBox operation: {operation}")
     attributes = _operation_attributes(
         operation=operation,
         workload_kind=workload_kind,
         provider=provider,
         profile=profile,
     )
-    active_attributes = dict(attributes)
-    started_at = time.perf_counter()
-    if _instruments is not None:
-        _instruments.active.add(1, active_attributes)
-    caught: BaseException | None = None
-    with _tracer.start_as_current_span(
-        f"agentbox.{attributes['operation']}",
+    return _observed_span(
+        f"agentbox.{operation}",
         attributes=_span_attributes(attributes),
-        record_exception=False,
-        set_status_on_exception=False,
-    ) as span:
-        try:
-            yield
-        except BaseException as exc:
-            caught = exc
-            raise
-        finally:
-            outcome, error_code = _outcome(caught)
-            duration_ms = max(0.0, (time.perf_counter() - started_at) * 1000)
-            terminal_attributes = {**attributes, "outcome": outcome}
-            span.set_attribute("agentbox.outcome", outcome)
-            if caught is not None:
-                span.set_attribute("error.type", type(caught).__name__)
-                if error_code:
-                    span.set_attribute("error.code", error_code)
-                if outcome in {"failure", "timeout"}:
-                    span.set_status(Status(StatusCode.ERROR))
-            if _instruments is not None:
-                _instruments.active.add(-1, active_attributes)
-                _instruments.operations.add(1, terminal_attributes)
-                _instruments.operation_duration.record(duration_ms, terminal_attributes)
-                if outcome == "rejected":
-                    _instruments.rejections.add(
-                        1,
-                        {
-                            **attributes,
-                            "reason": error_code or "OTHER",
-                        },
-                    )
-                elif outcome == "timeout":
-                    _instruments.timeouts.add(1, attributes)
+        terminal=lambda outcome, duration_ms, error, error_code: (
             _log_operation_terminal(
                 attributes=attributes,
                 outcome=outcome,
                 duration_ms=duration_ms,
-                caught=caught,
+                error=error,
                 error_code=error_code,
             )
+        ),
+    )
 
 
 P = ParamSpec("P")
@@ -751,7 +569,7 @@ R = TypeVar("R")
 def observed_lifecycle_operation(
     operation: str,
 ) -> Callable[[Callable[P, Awaitable[R]]], Callable[P, Awaitable[R]]]:
-    if operation not in _SAFE_OPERATIONS:
+    if operation not in _LIFECYCLE_OPERATIONS:
         raise ValueError(f"unsupported AgentBox operation: {operation}")
 
     def decorate(function: Callable[P, Awaitable[R]]) -> Callable[P, Awaitable[R]]:
@@ -770,17 +588,67 @@ def observed_lifecycle_operation(
                 provider=service._provider.name,
                 profile=profile,
             ):
-                try:
-                    result = await function(*args, **kwargs)
-                except asyncio.CancelledError:
-                    raise
-                except BaseException:
-                    if operation != "inspect":
-                        await service.refresh_capacity_telemetry()
-                    raise
-                if operation != "inspect":
-                    await service.refresh_capacity_telemetry()
-                return result
+                return await function(*args, **kwargs)
+
+        return wrapped
+
+    return decorate
+
+
+async def observe_phase(
+    awaitable: Awaitable[R],
+    *,
+    phase: str,
+    workload_kind: WorkloadKind,
+    provider: str,
+    profile: SandboxProfileRef | None = None,
+) -> R:
+    if phase not in _PHASES:
+        raise ValueError(f"unsupported AgentBox phase: {phase}")
+    operation_attributes = _operation_attributes(
+        operation=phase,
+        workload_kind=workload_kind,
+        provider=provider,
+        profile=profile,
+    )
+    span_attributes = {
+        key: value for key, value in operation_attributes.items() if key != "operation"
+    }
+    span_attributes["phase"] = phase
+    with _observed_span(
+        f"agentbox.{phase}",
+        attributes=_span_attributes(span_attributes),
+    ):
+        return await awaitable
+
+
+def observed_control_operation(
+    operation: str,
+) -> Callable[[Callable[P, Awaitable[int]]], Callable[P, Awaitable[int]]]:
+    if operation not in _CONTROL_OPERATIONS:
+        raise ValueError(f"unsupported AgentBox control operation: {operation}")
+
+    def decorate(
+        function: Callable[P, Awaitable[int]],
+    ) -> Callable[P, Awaitable[int]]:
+        @wraps(function)
+        async def wrapped(*args: P.args, **kwargs: P.kwargs) -> int:
+            result = {"count": 0}
+            with _observed_span(
+                f"agentbox.{operation}",
+                attributes={"agentbox.operation": operation},
+                terminal=lambda outcome, duration_ms, error, _error_code: (
+                    _log_control_terminal(
+                        operation=operation,
+                        outcome=outcome,
+                        duration_ms=duration_ms,
+                        count=result["count"],
+                        error=error,
+                    )
+                ),
+            ):
+                result["count"] = await function(*args, **kwargs)
+                return result["count"]
 
         return wrapped
 
@@ -792,212 +660,55 @@ def _log_operation_terminal(
     attributes: Mapping[str, str],
     outcome: str,
     duration_ms: float,
-    caught: BaseException | None,
+    error: BaseException | None,
     error_code: str | None,
 ) -> None:
     from agentbox.observability import get_logger
 
-    logger = get_logger("agentbox.lifecycle")
-    operation = attributes["operation"]
-    workload_kind = attributes["workload_kind"]
-    provider = attributes["provider"]
-    profile = attributes["profile"]
-    rounded_duration_ms = round(duration_ms, 1)
+    fields: dict[str, Any] = {
+        **attributes,
+        "outcome": outcome,
+        "duration_ms": round(duration_ms, 1),
+    }
     if outcome == "success":
-        logger.info(
+        get_logger("agentbox.lifecycle").info(
             "agentbox.operation.completed",
-            operation=operation,
-            workload_kind=workload_kind,
-            provider=provider,
-            profile=profile,
-            outcome=outcome,
-            duration_ms=rounded_duration_ms,
+            **fields,
         )
         return
-    error_type = type(caught).__name__ if caught is not None else "UnknownError"
+
+    error_type = type(error).__name__ if error is not None else "UnknownError"
     bounded_error_code = error_code or (
         "CANCELLED" if outcome == "cancelled" else "INTERNAL"
     )
     fingerprint_source = ":".join(
-        ("lemma-agentbox", operation, error_type, bounded_error_code)
+        (
+            "lemma-agentbox",
+            attributes["operation"],
+            error_type,
+            bounded_error_code,
+        )
     )
-    error_fingerprint = hashlib.sha256(fingerprint_source.encode()).hexdigest()
+    fields.update(
+        {
+            "error_type": error_type,
+            "error_code": bounded_error_code,
+            "error_fingerprint": hashlib.sha256(
+                fingerprint_source.encode()
+            ).hexdigest(),
+        }
+    )
+    logger = get_logger("agentbox.lifecycle")
     if outcome == "timeout":
-        logger.error(
-            "agentbox.operation.timed_out",
-            operation=operation,
-            workload_kind=workload_kind,
-            provider=provider,
-            profile=profile,
-            outcome=outcome,
-            duration_ms=rounded_duration_ms,
-            error_type=error_type,
-            error_code=bounded_error_code,
-            error_fingerprint=error_fingerprint,
-        )
+        logger.error("agentbox.operation.timed_out", **fields)
     elif outcome == "cancelled":
-        logger.warning(
-            "agentbox.operation.cancelled",
-            operation=operation,
-            workload_kind=workload_kind,
-            provider=provider,
-            profile=profile,
-            outcome=outcome,
-            duration_ms=rounded_duration_ms,
-            error_type=error_type,
-            error_code=bounded_error_code,
-            error_fingerprint=error_fingerprint,
-        )
+        logger.warning("agentbox.operation.cancelled", **fields)
     elif outcome == "rejected":
-        logger.warning(
-            "agentbox.operation.rejected",
-            operation=operation,
-            workload_kind=workload_kind,
-            provider=provider,
-            profile=profile,
-            outcome=outcome,
-            duration_ms=rounded_duration_ms,
-            error_type=error_type,
-            error_code=bounded_error_code,
-            error_fingerprint=error_fingerprint,
-        )
+        logger.warning("agentbox.operation.rejected", **fields)
     else:
-        logger.error(
-            "agentbox.operation.failed",
-            operation=operation,
-            workload_kind=workload_kind,
-            provider=provider,
-            profile=profile,
-            outcome=outcome,
-            duration_ms=rounded_duration_ms,
-            error_type=error_type,
-            error_code=bounded_error_code,
-            error_fingerprint=error_fingerprint,
-        )
+        logger.error("agentbox.operation.failed", **fields)
     if outcome in {"failure", "timeout"}:
-        _terminal_operation_error.set(True)
-
-
-async def observe_phase(
-    awaitable: Awaitable[R],
-    *,
-    phase: str,
-    workload_kind: WorkloadKind,
-    provider: str,
-    profile: SandboxProfileRef | None = None,
-) -> R:
-    bounded_phase = phase if phase in _SAFE_PHASES else "other"
-    attributes = {
-        "workload_kind": workload_kind.value,
-        "provider": _bounded_provider(provider),
-        "profile": _bounded_profile(profile),
-        "phase": bounded_phase,
-    }
-    started_at = time.perf_counter()
-    caught: BaseException | None = None
-    with _tracer.start_as_current_span(
-        f"agentbox.{bounded_phase}",
-        attributes=_span_attributes(attributes),
-        record_exception=False,
-        set_status_on_exception=False,
-    ) as span:
-        try:
-            return await awaitable
-        except BaseException as exc:
-            caught = exc
-            raise
-        finally:
-            outcome, error_code = _outcome(caught)
-            duration_ms = max(0.0, (time.perf_counter() - started_at) * 1000)
-            span.set_attribute("agentbox.outcome", outcome)
-            if caught is not None:
-                span.set_attribute("error.type", type(caught).__name__)
-                if error_code:
-                    span.set_attribute("error.code", error_code)
-                if outcome in {"failure", "timeout"}:
-                    span.set_status(Status(StatusCode.ERROR))
-            if _instruments is not None:
-                metric_attributes = {**attributes, "outcome": outcome}
-                if bounded_phase == "admission_wait":
-                    _instruments.admission_wait.record(duration_ms, metric_attributes)
-                else:
-                    _instruments.sandbox_start.record(duration_ms, metric_attributes)
-
-
-def record_capacity(*, provider: str, limit: int, active: int, reserved: int) -> None:
-    if _instruments is not None:
-        _instruments.record_capacity(
-            provider=provider,
-            limit=limit,
-            active=active,
-            reserved=reserved,
-        )
-
-
-@contextmanager
-def observe_control_operation(operation: str) -> Iterator[dict[str, int]]:
-    bounded = operation if operation in _SAFE_CONTROL_OPERATIONS else "other"
-    result = {"count": 0}
-    started_at = time.perf_counter()
-    caught: BaseException | None = None
-    with _tracer.start_as_current_span(
-        f"agentbox.{bounded}",
-        attributes={"agentbox.operation": bounded},
-        record_exception=False,
-        set_status_on_exception=False,
-    ) as span:
-        try:
-            yield result
-        except BaseException as exc:
-            caught = exc
-            raise
-        finally:
-            outcome, error_code = _outcome(caught)
-            span.set_attribute("agentbox.outcome", outcome)
-            if caught is not None:
-                span.set_attribute("error.type", type(caught).__name__)
-                if error_code:
-                    span.set_attribute("error.code", error_code)
-                if outcome in {"failure", "timeout"}:
-                    span.set_status(Status(StatusCode.ERROR))
-            if _instruments is not None:
-                instrument = (
-                    _instruments.cleanup
-                    if bounded == "cleanup"
-                    else _instruments.reconcile
-                )
-                instrument.add(
-                    max(1, result["count"]),
-                    {"operation": bounded, "outcome": outcome},
-                )
-            _log_control_terminal(
-                operation=bounded,
-                outcome=outcome,
-                duration_ms=max(0.0, (time.perf_counter() - started_at) * 1000),
-                count=result["count"],
-                caught=caught,
-            )
-
-
-def observed_control_operation(
-    operation: str,
-) -> Callable[[Callable[P, Awaitable[int]]], Callable[P, Awaitable[int]]]:
-    if operation not in _SAFE_CONTROL_OPERATIONS:
-        raise ValueError(f"unsupported AgentBox control operation: {operation}")
-
-    def decorate(
-        function: Callable[P, Awaitable[int]],
-    ) -> Callable[P, Awaitable[int]]:
-        @wraps(function)
-        async def wrapped(*args: P.args, **kwargs: P.kwargs) -> int:
-            with observe_control_operation(operation) as result:
-                completed = await function(*args, **kwargs)
-                result["count"] = completed
-                return completed
-
-        return wrapped
-
-    return decorate
+        _terminal_operation_error_state.set(True)
 
 
 def _log_control_terminal(
@@ -1006,43 +717,21 @@ def _log_control_terminal(
     outcome: str,
     duration_ms: float,
     count: int,
-    caught: BaseException | None,
+    error: BaseException | None,
 ) -> None:
     from agentbox.observability import get_logger
 
     logger = get_logger(f"agentbox.{operation}")
-    rounded_duration_ms = round(duration_ms, 1)
-    bounded_count = max(0, count)
+    fields = {
+        "outcome": outcome,
+        "duration_ms": round(duration_ms, 1),
+        "count": max(0, count),
+    }
     if outcome == "success":
-        if operation == "cleanup":
-            logger.debug(
-                "agentbox.cleanup.completed",
-                outcome=outcome,
-                duration_ms=rounded_duration_ms,
-                count=bounded_count,
-            )
-        else:
-            logger.debug(
-                "agentbox.reconcile.completed",
-                outcome=outcome,
-                duration_ms=rounded_duration_ms,
-                count=bounded_count,
-            )
+        logger.debug(f"agentbox.{operation}.completed", **fields)
         return
-    error_type = type(caught).__name__ if caught is not None else "UnknownError"
-    if operation == "cleanup":
-        logger.warning(
-            "agentbox.cleanup.failed",
-            outcome=outcome,
-            duration_ms=rounded_duration_ms,
-            count=bounded_count,
-            error_type=error_type,
-        )
-    else:
-        logger.warning(
-            "agentbox.reconcile.failed",
-            outcome=outcome,
-            duration_ms=rounded_duration_ms,
-            count=bounded_count,
-            error_type=error_type,
-        )
+    logger.warning(
+        f"agentbox.{operation}.failed",
+        **fields,
+        error_type=type(error).__name__ if error is not None else "UnknownError",
+    )

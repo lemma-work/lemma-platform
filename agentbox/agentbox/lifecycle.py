@@ -36,11 +36,7 @@ from agentbox.ports import (
     SandboxProviderPort,
 )
 from agentbox.persistence.uow import StateDatabase
-from agentbox.telemetry import (
-    observe_phase,
-    observed_lifecycle_operation,
-    record_capacity,
-)
+from agentbox.telemetry import observe_phase, observed_lifecycle_operation
 
 
 def allocation_metadata(
@@ -79,24 +75,6 @@ class SandboxLifecycleService:
             admission_policy or ProviderAdmissionPolicy.permissive_for_tests()
         )
         self._workspace_retention_seconds = workspace_retention_seconds
-
-    async def refresh_capacity_telemetry(self) -> None:
-        """Refresh cached gauges without allowing telemetry to affect operations."""
-
-        try:
-            async with self._database.uow() as uow:
-                active, reserved = await uow.repository.provider_admission_counts(
-                    self._provider.scope
-                )
-                await uow.commit()
-        except Exception:
-            return
-        record_capacity(
-            provider=self._provider.name,
-            limit=self._admission_policy.max_active,
-            active=active,
-            reserved=reserved,
-        )
 
     @observed_lifecycle_operation("ensure")
     async def ensure(
@@ -170,13 +148,6 @@ class SandboxLifecycleService:
                     profile=profile,
                 )
             await uow.commit()
-        record_capacity(
-            provider=self._provider.name,
-            limit=decision.limit,
-            active=decision.active,
-            reserved=decision.reserved,
-        )
-
         if not decision.accepted:
             raise self._admission_error(decision)
 
