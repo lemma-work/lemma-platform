@@ -219,7 +219,7 @@ def test_backend_env_golden(config, paths, manifest):
     assert env["WORKSPACE_CALLBACK_API_URL"] == "http://backend:8000"
     assert env["FUNCTION_RUNTIME_GATEWAY_URL"] == "http://backend:8000"
     assert env["SCHEDULER_API_URL"] == "http://backend:8000"
-    assert env["API_URL"] == "http://api.lemma.localhost:8711"
+    assert env["API_URL"] == "http://app.lemma.localhost:8711"
     assert env["FRONTEND_URL"] == "http://app.lemma.localhost:3711"
     assert env["AUTH_FRONTEND_URL"] == "http://app.lemma.localhost:3711/auth"
     assert env["APP_BASE_DOMAIN"] == "apps.lemma.localhost:8711"
@@ -235,7 +235,7 @@ def test_backend_env_golden(config, paths, manifest):
     assert env["DESKTOP_AUTH_CREATE_LIMIT"] == "0"
     assert env["AGENTBOX_API_KEY"] == store.agentbox_api_key(config)
     assert env["AGENTBOX_PUBLIC_URL"] == (
-        "http://api.lemma.localhost:8711/internal/agentbox"
+        "http://app.lemma.localhost:8711/internal/agentbox"
     )
     # chat surfaces default to no-public-URL receive modes
     assert env["ENABLE_TELEGRAM_POLLING_MODE"] == "true"
@@ -250,8 +250,8 @@ def test_custom_ports_flow_into_urls(config, paths, manifest):
     backend = by_name(specs, "backend")
     frontend = by_name(specs, "frontend")
     assert backend.ports == ((9000, 8000),)
-    assert backend.env["API_URL"] == "http://api.lemma.localhost:9000"
-    assert frontend.env["NEXT_PUBLIC_API_URL"] == "http://api.lemma.localhost:9000"
+    assert backend.env["API_URL"] == "http://app.lemma.localhost:9000"
+    assert frontend.env["NEXT_PUBLIC_API_URL"] == "http://app.lemma.localhost:9000"
     assert frontend.env["NEXT_PUBLIC_SITE_URL"] == "http://app.lemma.localhost:4000"
     assert frontend.env["NEXT_PUBLIC_AUTH_EMAIL_VERIFICATION_REQUIRED"] == "false"
     assert backend.env["APP_BASE_DOMAIN"] == "apps.lemma.localhost:9000"
@@ -262,6 +262,6 @@ def test_backend_runs_the_all_in_one_local_entrypoint(config, paths, manifest):
 
     assert backend.command[:2] == ("uvicorn", "local_app:app")
     assert backend.wait_http == (
-        "http://api.lemma.localhost:8711/internal/agentbox/health/ready"
+        "http://app.lemma.localhost:8711/internal/agentbox/health/ready"
     )
     assert "agentbox" not in [spec.name for spec in build(config, paths, manifest)]

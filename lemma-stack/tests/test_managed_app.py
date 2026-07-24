@@ -158,7 +158,7 @@ def test_register_cli_uses_managed_loopback_origins(monkeypatch) -> None:
     stack_app.self_register_cli(make_active=True)
 
     assert observed == {
-        "base_url": "http://api.lemma.localhost:8711",
+        "base_url": "http://app.lemma.localhost:8711",
         "auth_url": "http://app.lemma.localhost:3711/auth",
         "make_active": True,
     }

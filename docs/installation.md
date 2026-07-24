@@ -151,7 +151,7 @@ All of these settings are optional:
   webhook secret.
 - **Google connector OAuth app** configures Gmail, Calendar, and Drive
   connections. Its local callback is
-  `http://api.lemma.localhost:8711/api/v1/connectors/oauth/callback`.
+  `http://app.lemma.localhost:8711/api/v1/connectors/oauth/callback`.
 - **Microsoft connector OAuth app** configures Microsoft connections and uses
   the same local callback path. These credentials are separate from Teams bot
   credentials.
@@ -173,7 +173,7 @@ Use the exact loopback names shown by Lemma:
 | Surface | URL |
 | --- | --- |
 | Workspace | `http://app.lemma.localhost:3711` |
-| API and auth | `http://api.lemma.localhost:8711` |
+| API and auth | `http://app.lemma.localhost:8711` |
 | Built React app | `http://<slug>.apps.lemma.localhost:8711` |
 | Live sandbox app | `http://<sandbox>-<app>.workspaces.lemma.localhost:8711` |
 
@@ -435,6 +435,14 @@ enable the explicit private-network trust option. The previous working
 configuration remains active after a failed apply.
 
 ### More diagnostics
+
+For native webview issues, open **Local Control Center → Diagnostics → Open
+developer tools** or press `Cmd+Option+I` on macOS (`Ctrl+Alt+I` on Windows).
+This opens the inspector for the real Lemma application webview, including its
+Console, Network, and Storage views. Set `LEMMA_DESKTOP_DEVTOOLS=1` before
+launching the Desktop executable to open it automatically. Local backend access
+logs record request methods, paths, and status codes in `backend.log`; request
+headers, cookies, credentials, and bodies are not logged.
 
 Select **View log** directly on the setup/error screen to see the persistent
 installer transcript, including downloads, verification, activation, and the

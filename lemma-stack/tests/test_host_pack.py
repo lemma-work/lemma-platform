@@ -65,6 +65,7 @@ def test_builds_exact_backend_frontend_native_contract(paths, tmp_path):
     assert manifest["setup"][0]["env"]["DATABASE_URL"].endswith(":55432/lemma")
     backend, frontend = manifest["services"]
     assert backend["command"][1:4] == ["-m", "uvicorn", "local_app:app"]
+    assert "--no-access-log" not in backend["command"]
     assert backend["env"]["DATABASE_URL"].endswith(":55432/lemma")
     assert backend["env"]["AGENTBOX_STATE_DATABASE_URL"].startswith(
         "postgresql+asyncpg://"

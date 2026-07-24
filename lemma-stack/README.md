@@ -57,7 +57,7 @@ lemma-stack config set \
 Managed local endpoints are:
 
 - frontend: `http://app.lemma.localhost:3711`;
-- backend API: `http://api.lemma.localhost:8711`;
+- backend API: `http://app.lemma.localhost:8711` (same cookie host, separate port);
 - built pod apps: `http://<slug>.apps.lemma.localhost:8711`;
 - live workspace apps:
   `http://<sandbox>-<app>.workspaces.lemma.localhost:8711`.

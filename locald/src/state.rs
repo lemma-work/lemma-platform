@@ -38,7 +38,7 @@ impl Default for StateSnapshot {
             phase_progress: 4,
             detail: String::new(),
             url: "http://app.lemma.localhost:3711".into(),
-            api_url: "http://api.lemma.localhost:8711".into(),
+            api_url: "http://app.lemma.localhost:8711".into(),
             last_error: None,
             updated_at_ms: now_ms(),
         }
@@ -47,10 +47,12 @@ impl Default for StateSnapshot {
 
 impl StateSnapshot {
     pub fn load(path: &Path) -> Self {
-        std::fs::read_to_string(path)
+        let mut state: Self = std::fs::read_to_string(path)
             .ok()
             .and_then(|raw| serde_json::from_str(&raw).ok())
-            .unwrap_or_default()
+            .unwrap_or_default();
+        state.api_url = migrate_legacy_local_api_url(&state.api_url);
+        state
     }
 
     pub fn observe(&mut self, event: &Value) {
@@ -144,6 +146,17 @@ impl StateSnapshot {
     }
 }
 
+fn migrate_legacy_local_api_url(value: &str) -> String {
+    const LEGACY_PREFIX: &str = "http://api.lemma.localhost";
+    let Some(suffix) = value.strip_prefix(LEGACY_PREFIX) else {
+        return value.to_owned();
+    };
+    if !suffix.is_empty() && !suffix.starts_with(':') && !suffix.starts_with('/') {
+        return value.to_owned();
+    }
+    format!("http://app.lemma.localhost{suffix}")
+}
+
 fn string_field(event: &Value, name: &str, fallback: &str) -> String {
     event
         .get(name)
@@ -173,7 +186,7 @@ mod tests {
         state.observe(&json!({"event": "provider", "provider": "docker"}));
         state.observe(&json!({
             "event": "ready", "url": "http://app.lemma.localhost:4000",
-            "api_url": "http://api.lemma.localhost:9000"
+            "api_url": "http://app.lemma.localhost:9000"
         }));
 
         assert_eq!(state.phase_key, "backend");
@@ -193,6 +206,22 @@ mod tests {
         assert!(!state.ready);
         assert_eq!(state.status, "error");
         assert_eq!(state.last_error.as_deref(), Some("database unavailable"));
+    }
+
+    #[test]
+    fn persisted_api_origin_migrates_to_the_webkit_safe_cookie_host() {
+        assert_eq!(
+            migrate_legacy_local_api_url("http://api.lemma.localhost:8711"),
+            "http://app.lemma.localhost:8711"
+        );
+        assert_eq!(
+            migrate_legacy_local_api_url("https://api.example.com"),
+            "https://api.example.com"
+        );
+        assert_eq!(
+            migrate_legacy_local_api_url("http://api.lemma.localhost.evil:8711"),
+            "http://api.lemma.localhost.evil:8711"
+        );
     }
 
     #[test]

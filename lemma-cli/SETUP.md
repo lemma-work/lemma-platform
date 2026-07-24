@@ -193,7 +193,7 @@ Remove-Item Env:LEMMA_STACK_CLI_ONLY
 CLI-only bootstrap registers the server named `local` with the exact managed
 origins:
 
-- API: `http://api.lemma.localhost:8711`
+- API: `http://app.lemma.localhost:8711`
 - Auth: `http://app.lemma.localhost:3711/auth`
 
 Then select it and authenticate:

@@ -1256,6 +1256,18 @@ fn show_control_center(app: &AppHandle) -> Result<(), String> {
 // ---------------------------------------------------------------------------
 
 #[tauri::command]
+fn open_developer_tools(window: WebviewWindow, app: AppHandle) -> Result<(), String> {
+    require_control_window(&window)?;
+    let main = app
+        .get_webview_window("main")
+        .ok_or("main window is not available")?;
+    main.open_devtools();
+    let _ = main.show();
+    let _ = main.set_focus();
+    Ok(())
+}
+
+#[tauri::command]
 fn start(app: AppHandle) -> Result<(), String> {
     let mode = current_mode(&app);
     if mode == "undecided" {
@@ -1703,6 +1715,13 @@ fn build_tray(app: &AppHandle) -> tauri::Result<()> {
         None::<&str>,
     )?;
     let logs_item = MenuItem::with_id(app, "logs", "Open Logs", true, None::<&str>)?;
+    let devtools_item = MenuItem::with_id(
+        app,
+        "devtools",
+        "Developer Tools",
+        true,
+        Some("CmdOrCtrl+Alt+I"),
+    )?;
     let control_item =
         MenuItem::with_id(app, "control", "Local Control Center…", true, None::<&str>)?;
     let quit_item = MenuItem::with_id(app, "quit", "Quit Lemma", true, None::<&str>)?;
@@ -1724,6 +1743,7 @@ fn build_tray(app: &AppHandle) -> tauri::Result<()> {
             &autostart_item,
             &control_item,
             &logs_item,
+            &devtools_item,
             &PredefinedMenuItem::separator(app)?,
             &quit_item,
         ],
@@ -1787,6 +1807,13 @@ fn build_tray(app: &AppHandle) -> tauri::Result<()> {
                 "logs" => {
                     let _ = open_logs(app);
                 }
+                "devtools" => {
+                    if let Some(window) = app.get_webview_window("main") {
+                        window.open_devtools();
+                        let _ = window.show();
+                        let _ = window.set_focus();
+                    }
+                }
                 "quit" => {
                     disconnect_locald(&app);
                     app.exit(0);
@@ -1843,7 +1870,8 @@ fn main() {
             runtime_info,
             repair_runtime,
             control_snapshot,
-            apply_operator_config
+            apply_operator_config,
+            open_developer_tools
         ])
         .setup(move |app| {
             let handle = app.handle().clone();
@@ -1854,10 +1882,11 @@ fn main() {
                 WebviewUrl::App("index.html".into())
             };
 
-            WebviewWindowBuilder::new(app, "main", initial_url)
+            let main = WebviewWindowBuilder::new(app, "main", initial_url)
                 .title("Lemma")
                 .inner_size(1280.0, 860.0)
                 .min_inner_size(980.0, 680.0)
+                .devtools(true)
                 .initialization_script(desktop_context_script(&mode))
                 .on_navigation(move |url| match navigation_disposition(url) {
                     NavigationDisposition::Allow => true,
@@ -1885,9 +1914,10 @@ fn main() {
                 })
                 .build()?;
 
-            if let Some(main) = handle.get_webview_window("main") {
-                main.show()?;
-                main.set_focus()?;
+            main.show()?;
+            main.set_focus()?;
+            if std::env::var("LEMMA_DESKTOP_DEVTOOLS").as_deref() == Ok("1") {
+                main.open_devtools();
             }
 
             build_tray(&handle)?;
@@ -2114,6 +2144,8 @@ mod tests {
 
         assert!(html.contains("Signed release lifecycle"));
         assert!(html.contains("repair_runtime"));
+        assert!(html.contains("open_developer_tools"));
+        assert!(html.contains("Open developer tools"));
         assert!(html.contains("schema-1 releases do not claim database-safe downgrade"));
         assert!(html.contains("Lemma will not risk opening migrated data with an older backend"));
     }

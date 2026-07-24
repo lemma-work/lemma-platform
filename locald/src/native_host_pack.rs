@@ -25,7 +25,12 @@ const POSTGRES_PORT: u16 = 55432;
 const REDIS_PORT: u16 = 56379;
 const SUPERTOKENS_PORT: u16 = 53567;
 const LOCAL_FRONTEND_HOST: &str = "app.lemma.localhost";
-const LOCAL_BACKEND_HOST: &str = "api.lemma.localhost";
+// Safari/WKWebView blocks a response from a different hostname from setting
+// the SuperTokens session cookies used by the top-level frontend. Keep the
+// processes on separate ports, but expose both through one browser hostname.
+// The backend still binds only to loopback and sandboxes use the explicit
+// host.lemma.internal callback URLs below.
+const LOCAL_BACKEND_HOST: &str = LOCAL_FRONTEND_HOST;
 const LOCAL_CORS_ORIGIN_REGEX: &str = r"^https?://([a-z0-9-]+\.)*lemma\.localhost(:\d+)?$";
 
 #[derive(Clone, Debug)]
@@ -289,11 +294,10 @@ fn build(
         ("SUPERTOKENS_API_GATEWAY_PATH", "/st".to_owned()),
         ("SESSION_COOKIE_SECURE", "false".to_owned()),
         ("SESSION_COOKIE_SAME_SITE", "lax".to_owned()),
-        // Keep local auth cookies host-only on api.lemma.localhost. WKWebView
-        // rejects the parent-domain form used by browsers on some macOS
-        // releases, and every local surface already makes credentialed calls
-        // to the API origin. Host-only scope also prevents user-authored app
-        // subdomains from receiving the API session cookie directly.
+        // Keep local auth cookies host-only on app.lemma.localhost. The
+        // frontend and API use this one hostname on separate ports so
+        // Safari/WKWebView accepts the HttpOnly cookies without widening them
+        // to user-authored app subdomains.
         ("SESSION_COOKIE_DOMAIN", String::new()),
         (
             "APP_BASE_DOMAIN",
@@ -394,7 +398,7 @@ fn build(
         "services": [
             {
                 "id": "backend",
-                "command": [path_text(&python)?, "-m", "uvicorn", "local_app:app", "--host", "127.0.0.1", "--port", BACKEND_PORT.to_string(), "--ws", "websockets-sansio", "--no-access-log"],
+                "command": [path_text(&python)?, "-m", "uvicorn", "local_app:app", "--host", "127.0.0.1", "--port", BACKEND_PORT.to_string(), "--ws", "websockets-sansio"],
                 "cwd": path_text(&backend_dir)?,
                 "env": backend_env,
                 "dependencies": [],
@@ -613,6 +617,11 @@ mod tests {
 
         assert_eq!(manifest["release"], "6.2.0");
         assert_eq!(manifest["services"].as_array().unwrap().len(), 2);
+        assert!(!manifest["services"][0]["command"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|argument| argument == "--no-access-log"));
         assert_eq!(
             manifest["services"][0]["env"]["WORKSPACE_CALLBACK_API_URL"],
             "http://host.lemma.internal:8711"
@@ -674,8 +683,16 @@ mod tests {
         );
         assert_eq!(manifest["services"][0]["env"]["SESSION_COOKIE_DOMAIN"], "");
         assert_eq!(
+            manifest["services"][0]["env"]["API_URL"],
+            "http://app.lemma.localhost:8711"
+        );
+        assert_eq!(
             manifest["services"][1]["env"]["NEXT_PUBLIC_SESSION_TOKEN_DOMAIN"],
             ""
+        );
+        assert_eq!(
+            manifest["services"][1]["env"]["NEXT_PUBLIC_API_URL"],
+            "http://app.lemma.localhost:8711"
         );
         assert_eq!(
             manifest["services"][0]["env"]["AGENTBOX_LOCAL_WORKSPACE_MEMORY"],

@@ -4,9 +4,9 @@ Layering (last wins): packaged defaults -> values derived from config
 (ports, features, runtime) -> the [<service>.env] override section.
 
 Services talk to each other over the lemma-local-net container network using
-DNS aliases (db, redis, supertokens, backend, frontend);
-browser-facing URLs use purpose-specific subdomains below ``lemma.localhost``
-and published ports so local routing mirrors the production domain model.
+DNS aliases (db, redis, supertokens, backend, frontend). Browser-facing UI and
+API URLs use one ``app.lemma.localhost`` hostname on separate published ports
+so Safari/WKWebView accepts host-only HttpOnly session cookies.
 """
 
 from __future__ import annotations
@@ -24,22 +24,23 @@ NETWORK_NAME = "lemma-local-net"
 CONTAINER_PREFIX = "lemma-local"
 POSTGRES_VOLUME = "lemma-local-postgres-data"
 
-# ``.localhost`` and its subdomains are reserved loopback names. Separate
-# frontend/API/app hosts make local behavior match production:
+# ``.localhost`` and its subdomains are reserved loopback names. The main
+# frontend and API deliberately share one host:
 #
-#   app.lemma.localhost
-#   api.lemma.localhost
+#   app.lemma.localhost:<frontend port>
+#   app.lemma.localhost:<backend port>
 #   <slug>.apps.lemma.localhost
 #   <sandbox>-<app>.workspaces.lemma.localhost
 #
-# They remain same-site, while the auth cookie stays host-only on the API
-# origin. Main and built-app frontends authenticate with credentialed requests
-# to that origin; user-authored app hosts never receive the cookie directly.
-# No public DNS, hosts-file edits, proxy, or development certificate is
-# required.
+# A different API hostname makes its Set-Cookie response third-party to the
+# top-level app in Safari/WKWebView, which discards the session. Ports do not
+# participate in cookie host matching, so separate host processes still work
+# with a host-only cookie. User-authored app hosts never receive that cookie
+# directly. No public DNS, hosts-file edits, proxy, or development certificate
+# is required.
 LOCAL_ROOT_DOMAIN = "lemma.localhost"
 LOCAL_FRONTEND_HOST = f"app.{LOCAL_ROOT_DOMAIN}"
-LOCAL_BACKEND_HOST = f"api.{LOCAL_ROOT_DOMAIN}"
+LOCAL_BACKEND_HOST = LOCAL_FRONTEND_HOST
 LOCAL_APPS_DOMAIN = f"apps.{LOCAL_ROOT_DOMAIN}"
 LOCAL_WORKSPACES_DOMAIN = f"workspaces.{LOCAL_ROOT_DOMAIN}"
 # Allow every Lemma-local host depth, on any published port.
@@ -152,8 +153,9 @@ def backend_env(
         "SESSION_COOKIE_SECURE": "false",
         "SESSION_COOKIE_SAME_SITE": "lax",
         # Blank becomes None in the backend, producing a host-only cookie on
-        # api.lemma.localhost. This works in WKWebView and keeps the session
-        # cookie away from user-authored app subdomains.
+        # app.lemma.localhost. The UI and API share that hostname on separate
+        # ports, which works in WKWebView and keeps the session cookie away
+        # from user-authored app subdomains.
         "SESSION_COOKIE_DOMAIN": "",
         # apps served by host at <slug>.<app_base_domain>; allow them in CORS
         "APP_BASE_DOMAIN": app_base_domain(doc),

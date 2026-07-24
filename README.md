@@ -60,7 +60,7 @@ Ubuntu, or public DNS. Configure the required AI profile and optional
 integrations in **Local Control Center**.
 
 The workspace is `http://app.lemma.localhost:3711`, the API is
-`http://api.lemma.localhost:8711`, and built pod apps use
+`http://app.lemma.localhost:8711`, and built pod apps use
 `http://<slug>.apps.lemma.localhost:8711`. See the complete
 [local installation and operations guide](docs/installation.md).
 

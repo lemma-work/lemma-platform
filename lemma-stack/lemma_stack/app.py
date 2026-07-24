@@ -912,7 +912,7 @@ def self_register_cli(
 ) -> None:
     """Register managed Desktop as the `local` server for the Lemma pod CLI."""
     register_local_server(
-        base_url="http://api.lemma.localhost:8711",
+        base_url="http://app.lemma.localhost:8711",
         auth_url="http://app.lemma.localhost:3711/auth",
         make_active=make_active,
     )

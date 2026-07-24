@@ -243,20 +243,21 @@ Responsibilities:
 Preferred origins:
 
 ```text
-http://app.lemma.localhost:<port>                     frontend
-http://api.lemma.localhost:<port>                     API/auth/widgets
-http://<public-slug>.apps.lemma.localhost:<port>      built pod React/web apps
+http://app.lemma.localhost:<frontend-port>            frontend
+http://app.lemma.localhost:<backend-port>             API/auth/widgets
+http://<public-slug>.apps.lemma.localhost:<backend-port> built pod React/web apps
 http://<sandbox>-<app>.workspaces.lemma.localhost:<port> ephemeral AgentBox apps
 ```
 
-The gateway routes by a validated, lower-cased Host header:
+The listeners route by a validated, lower-cased Host header and their owned
+port:
 
-| Host class | Upstream | Notes |
+| Host/port class | Upstream | Notes |
 | --- | --- | --- |
-| `app.lemma.localhost` | frontend | Main Next application only. |
-| `api.lemma.localhost` | backend | Normal API, auth, public SDK, datastore assets, widgets, MCP/WebSocket/SSE. |
-| one DNS label before `.apps.lemma.localhost` | backend | Preserve Host; `AppHostRoutingMiddleware` resolves the public slug and serves `/public/apps` assets. |
-| one DNS label before `.workspaces.lemma.localhost` | embedded AgentBox private app proxy | Label remains `<sandbox-id>-<runtime-app-slug>`; route never reaches frontend. |
+| `app.lemma.localhost:<frontend-port>` | frontend | Main Next application only. |
+| `app.lemma.localhost:<backend-port>` | backend | Normal API, auth, public SDK, datastore assets, widgets, MCP/WebSocket/SSE. Sharing the frontend hostname is required for WKWebView cookie acceptance. |
+| one DNS label before `.apps.lemma.localhost:<backend-port>` | backend | Preserve Host; `AppHostRoutingMiddleware` resolves the public slug and serves `/public/apps` assets. |
+| one DNS label before `.workspaces.lemma.localhost:<port>` | embedded AgentBox private app proxy | Label remains `<sandbox-id>-<runtime-app-slug>`; route never reaches frontend. |
 
 Strip any inbound `X-App-Public-Slug` or internal routing/capability header at the gateway. Either preserve the validated app Host for the existing backend middleware or inject the slug on the private hop, but never trust a browser-supplied routing header. Unknown, bare, multi-label, Unicode/punycode-confusable, overlong, or invalid app hosts return `421 Misdirected Request` before an upstream is contacted.
 
@@ -270,10 +271,20 @@ Local built apps must use the existing production serving path, not a second des
 4. SPA deep links, query/fragment navigation, module scripts, dynamic imports, source maps where enabled, Web Workers, WebSockets, SSE, file downloads, and the public `lemma-client.js`/`lemma-ui.js` routes behave as in production.
 5. The frontend receives `NEXT_PUBLIC_APPS_DOMAIN_SUFFIX=apps.lemma.localhost` so post-auth redirects and app launch links accept only the exact local suffix.
 6. Backend credentialed CORS accepts exactly `http://<valid-slug>.apps.lemma.localhost:<gateway-port>` and the configured main origins. It does not use an unanchored wildcard.
-7. The session provider leaves `SESSION_COOKIE_DOMAIN` empty, producing a host-only cookie on `api.lemma.localhost`. WKWebView rejected the parent-domain `.lemma.localhost` cookie during the macOS matrix test. Main and built-app frontends use credentialed requests to the API origin, so they remain authenticated without receiving the cookie on their own origins. This is both WebKit-compatible and safer for user-authored app subdomains.
+7. The session provider leaves `SESSION_COOKIE_DOMAIN` empty, producing a host-only cookie on `app.lemma.localhost`. The main UI and API share that hostname on separate ports; cookies do not use ports for host matching, and this avoids WKWebView's rejection of third-party `Set-Cookie` responses. Parent-domain `.lemma.localhost` cookies are forbidden. A built app on its own hostname must use an explicit one-time session bootstrap that establishes authentication for that origin; it must never depend on receiving the main UI cookie.
 8. Each app origin has independent localStorage, IndexedDB, Cache Storage, and service-worker scope. Update/uninstall tooling can enumerate and clear local app site data only with explicit user intent.
 
 Production `sales.apps.lemma.work` therefore maps mechanically to local `sales.apps.lemma.localhost:<port>`; the public slug and asset/API code paths do not change.
+
+This boundary follows WebKit's
+[full third-party-cookie blocking](https://webkit.org/blog/10218/full-third-party-cookie-blocking-and-more/)
+and the documented
+[WKWebView cross-origin `Set-Cookie` failure](https://bugs.webkit.org/show_bug.cgi?id=140205).
+SuperTokens can use
+[header-based sessions](https://supertokens.com/docs/post-authentication/session-management/switch-between-cookies-and-header-authentication)
+when a webview cannot provide reliable cookies, but that stores session tokens
+in script-accessible browser storage. Local Desktop keeps HttpOnly cookies and
+uses the same-host/two-port topology instead.
 
 RFC 6761 reserves `localhost` and names beneath it for loopback, and modern browsers consider `http://*.localhost` potentially trustworthy. Before adoption, test cookies, WebSockets, WKWebView, WebView2, and OAuth console acceptance. If any supported environment fails, use one origin with path routing:
 
@@ -780,27 +791,34 @@ The schema is checked into the release and may be extended by backend-provided c
 
 ### 10.5 Local web/app render contract
 
-For gateway port `P`, schema rendering produces the following logical values (the final implementation may deliver them through structured config rather than environment variables):
+For frontend port `F` and backend port `B`, schema rendering produces the
+following logical values (the final implementation may deliver them through
+structured config rather than environment variables):
 
 ```text
 # backend
-API_URL=http://api.lemma.localhost:P
-FRONTEND_URL=http://app.lemma.localhost:P
-AUTH_FRONTEND_URL=http://app.lemma.localhost:P/auth
-APP_BASE_DOMAIN=apps.lemma.localhost:P
+API_URL=http://app.lemma.localhost:B
+FRONTEND_URL=http://app.lemma.localhost:F
+AUTH_FRONTEND_URL=http://app.lemma.localhost:F/auth
+APP_BASE_DOMAIN=apps.lemma.localhost:B
 SESSION_COOKIE_DOMAIN=
-CORS_ORIGIN_REGEX=<anchored generated regex for exact main/API/app origins on P>
-AGENTBOX_APP_DOMAIN=workspaces.lemma.localhost:P
+CORS_ORIGIN_REGEX=<anchored generated regex for exact main/API/app origins>
+AGENTBOX_APP_DOMAIN=workspaces.lemma.localhost:B
 
 # frontend runtime config
-NEXT_PUBLIC_API_URL=http://api.lemma.localhost:P
-NEXT_PUBLIC_SITE_URL=http://app.lemma.localhost:P
-NEXT_PUBLIC_AUTH_URL=http://app.lemma.localhost:P/auth
+NEXT_PUBLIC_API_URL=http://app.lemma.localhost:B
+NEXT_PUBLIC_SITE_URL=http://app.lemma.localhost:F
+NEXT_PUBLIC_AUTH_URL=http://app.lemma.localhost:F/auth
 NEXT_PUBLIC_SESSION_TOKEN_DOMAIN=
 NEXT_PUBLIC_APPS_DOMAIN_SUFFIX=apps.lemma.localhost
 ```
 
-`P` is substituted before process launch and excludes the colon placeholder syntax above. Local app settings are one atomic config group: gateway allowlist, backend app-base/CORS/cookie settings, frontend redirect suffixes, and AgentBox workspace-app domain cannot be applied independently. A mismatch fails configuration validation before either application process starts.
+`F` and `B` are substituted before process launch and exclude the colon
+placeholder syntax above. Local app settings are one atomic config group:
+listener allowlists, backend app-base/CORS/cookie settings, frontend redirect
+suffixes, and AgentBox workspace-app domain cannot be applied independently. A
+mismatch fails configuration validation before either application process
+starts.
 
 ## 11. Model-provider discovery and validation
 

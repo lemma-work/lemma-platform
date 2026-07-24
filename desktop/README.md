@@ -37,7 +37,7 @@ launch continue automatically. The same operation is available as
 The local gateway exposes stable loopback-only origins:
 
 - `http://app.lemma.localhost:3711` — workspace frontend;
-- `http://api.lemma.localhost:8711` — API and auth;
+- `http://app.lemma.localhost:8711` — API and auth on the same cookie host;
 - `http://<slug>.apps.lemma.localhost:8711` — built pod apps;
 - `http://<sandbox>-<app>.workspaces.lemma.localhost:8711` — live sandbox apps.
 

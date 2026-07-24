@@ -145,7 +145,6 @@ def build_manifest(
                     str(store.port(config, "backend")),
                     "--ws",
                     "websockets-sansio",
-                    "--no-access-log",
                 ],
                 "cwd": str(backend_dir),
                 "env": backend_env,
