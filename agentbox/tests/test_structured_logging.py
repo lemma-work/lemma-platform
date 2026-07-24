@@ -76,7 +76,7 @@ def test_logging_reconciliation_context_and_exception_safety(monkeypatch) -> Non
                 raise ValueError("CANARY foreign secret /private/provider.py")
             except ValueError:
                 logging.getLogger("foreign.provider").exception(
-                    "CANARY dependency response"
+                    "dependency response token=CANARY"
                 )
     finally:
         root.handlers = original_handlers
@@ -93,6 +93,7 @@ def test_logging_reconciliation_context_and_exception_safety(monkeypatch) -> Non
         "service.version": "a" * 40,
         "release.sha": "a" * 40,
         "deployment.environment": "development",
+        "deployment.environment.name": "development",
         "request_id": "request-1",
         "correlation_id": "11111111-1111-1111-1111-111111111111",
         "event_id": "22222222-2222-2222-2222-222222222222",
@@ -104,12 +105,54 @@ def test_logging_reconciliation_context_and_exception_safety(monkeypatch) -> Non
     assert lines[1]["error_type"] == "RuntimeError"
     assert len(lines[1]["error_stack_hash"]) == 64
     assert len(lines[1].get("error_frames", [])) <= 8
-    assert lines[2]["event"] == "dependency.reported"
+    assert lines[2]["event"] == "dependency response token=[REDACTED]"
     assert lines[2]["error_type"] == "ValueError"
     assert "CANARY" not in output.getvalue()
     assert records[-1].exc_info is None
     assert records[-1].exc_text is None
     assert getattr(records[-1], "lemma_safe_exception")["error_type"] == "ValueError"
+
+
+def test_dependency_records_keep_message_and_follow_configured_level(
+    monkeypatch,
+) -> None:
+    monkeypatch.setenv("LEMMA_ENVIRONMENT", "development")
+    root = logging.getLogger()
+    original_handlers = list(root.handlers)
+    original_level = root.level
+    dependency = logging.getLogger("httpx")
+    original_dependency_level = dependency.level
+    output = io.StringIO()
+    root.handlers = []
+    try:
+        setup_logging(level="INFO")
+        owned = next(
+            handler
+            for handler in root.handlers
+            if getattr(handler, "_agentbox_json_console_handler", False)
+        )
+        owned.setStream(output)
+        dependency.debug("request details")
+        dependency.info(
+            "request completed authorization=Bearer abc.def.ghi "
+            "url=https://user:password@example.test/path?token=secret"
+        )
+    finally:
+        root.handlers = original_handlers
+        root.setLevel(original_level)
+        dependency.setLevel(original_dependency_level)
+
+    lines = [json.loads(line) for line in output.getvalue().splitlines()]
+    assert len(lines) == 1
+    assert lines[0]["logger"] == "httpx"
+    assert lines[0]["level"] == "info"
+    assert lines[0]["event"] == (
+        "request completed authorization=[REDACTED] [REDACTED] "
+        "url=https://[REDACTED]@example.test/path?token=%5BREDACTED%5D"
+    )
+    assert "abc.def.ghi" not in output.getvalue()
+    assert "password" not in output.getvalue()
+    assert "secret" not in output.getvalue()
 
 
 def test_local_logging_contract_rejects_unregistered_event(monkeypatch) -> None:

@@ -13,6 +13,7 @@ from agentbox.function_runtime.runtime_models import (
     RuntimeIdentity,
     TerminalReport,
 )
+from agentbox.function_runtime.trace_context import bind_trace_context
 
 
 pytestmark = pytest.mark.asyncio
@@ -136,3 +137,36 @@ async def test_terminal_callback_does_not_retry_state_or_credential_rejection():
         await gateway.close()
 
     assert attempts == 1
+
+
+async def test_gateway_callbacks_forward_current_w3c_trace_context():
+    requests: list[httpx.Request] = []
+
+    async def handler(request: httpx.Request) -> httpx.Response:
+        requests.append(request)
+        return httpx.Response(200, json={"accepted": True}, request=request)
+
+    claim = _claim()
+    gateway = GatewayClient(
+        "https://gateway.lemma.test",
+        transport=httpx.MockTransport(handler),
+    )
+    try:
+        with bind_trace_context(
+            {"traceparent": ("00-1234567890abcdef1234567890abcdef-1234567890abcdef-01")}
+        ):
+            await gateway.terminal(
+                claim,
+                TerminalReport(
+                    status="completed",
+                    output_data={},
+                    stdout="",
+                    stderr="",
+                ),
+            )
+    finally:
+        await gateway.close()
+
+    assert requests[0].headers["traceparent"] == (
+        "00-1234567890abcdef1234567890abcdef-1234567890abcdef-01"
+    )

@@ -42,6 +42,7 @@ class Settings(BaseSettings):
     otel_signals: str | None = None
     otel_traces_sampler: str = "parentbased_traceidratio"
     otel_traces_sampler_arg: float = Field(default=0.05, ge=0.0, le=1.0)
+    otel_propagators: str = "tracecontext"
     otel_metric_export_interval: int = Field(default=60000, ge=1000)
 
     agentbox_api_key: str

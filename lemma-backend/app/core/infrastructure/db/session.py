@@ -7,8 +7,14 @@ from sqlalchemy.pool import NullPool
 from sqlalchemy.ext.asyncio import create_async_engine, async_sessionmaker, AsyncSession
 from app.core.config import settings
 from app.core.log.log import get_logger
+from app.core.observability.dependency_incident import DependencyIncident
 
 logger = get_logger(__name__)
+_pool_pressure_incident = DependencyIncident(
+    "database_pool_capacity",
+    logger=logger,
+    degradation_threshold=3,
+)
 
 engine = None
 _async_session_maker = None
@@ -43,20 +49,23 @@ def _build_connect_args() -> dict:
 
 
 def _log_pool_utilization(dbapi_conn, connection_record, proxy=None):
-    """Log a warning when pool utilization exceeds 80% of max capacity.
+    """Track a degraded/recovered pair for sustained pool utilization.
 
     Called on each checkout (connection borrowed from pool). SQLAlchemy's
     PoolEvents.checkout passes (dbapi_connection, connection_record, proxy).
     Uses the pool's internal counters to compute checked-out vs. max
     connections. This gives early visibility into pool exhaustion before it
-    surfaces as a ``TimeoutError`` (pool_timeout) to application code.
+    surfaces as a ``TimeoutError`` (pool_timeout) to application code, without
+    emitting one warning for every checkout while the pool remains pressured.
     """
     try:
         pool = connection_record.pool
         max_conn = pool.size() + pool._max_overflow  # noqa: SLF001
         checked_out = pool.checkedout()
         if max_conn > 0 and checked_out / max_conn >= 0.8:
-            logger.warning("infrastructure.session.db_pool_utilization_high.degraded")
+            _pool_pressure_incident.record_failure(error_type="PoolUtilizationHigh")
+        else:
+            _pool_pressure_incident.record_success()
     except Exception:
         pass
 
@@ -101,13 +110,12 @@ def _log_connection_budget() -> None:
     per_process = main_max + datastore_max
     pg_max = settings.postgres_max_connections
 
-
     if per_process >= pg_max:
         logger.debug(
-            'infrastructure.session.per_process_db_connection_ceiling.diagnostic'
+            "infrastructure.session.per_process_db_connection_ceiling.diagnostic"
         )
     elif per_process * 2 > pg_max:
-        logger.debug('infrastructure.session.two_processes_api_worker_would.diagnostic')
+        logger.debug("infrastructure.session.two_processes_api_worker_would.diagnostic")
 
 
 def get_session_maker():

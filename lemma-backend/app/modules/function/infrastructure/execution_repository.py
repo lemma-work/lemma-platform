@@ -8,16 +8,13 @@ from uuid import UUID
 
 from sqlalchemy import select
 
-from app.core.config import settings
 from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
-from app.core.log.log import get_logger
 from app.modules.function.application.function_callback_credentials import (
     FunctionCallbackCredentialSigner,
 )
 from app.modules.function.application.function_session_token_cache import (
     FunctionSessionTokenKey,
 )
-from app.modules.function.contracts.runtime import RuntimeTimings
 from app.modules.function.domain.entities import (
     FunctionDispatchMode,
     FunctionExecutionDispatch,
@@ -40,7 +37,6 @@ TERMINAL_RUN_STATES = {
     FunctionRunStatus.FAILED,
     FunctionRunStatus.CANCELLED,
 }
-logger = get_logger(__name__)
 
 
 class FunctionExecutionRepository:
@@ -193,7 +189,6 @@ class FunctionExecutionRepository:
         output_data: JsonObject | None,
         error: str | None,
         logs: str | None,
-        timings: RuntimeTimings | None = None,
         now: datetime | None = None,
     ) -> tuple[FunctionRunEntity | None, bool, bool]:
         timestamp = now or datetime.now(timezone.utc)
@@ -236,25 +231,6 @@ class FunctionExecutionRepository:
             )
         )
         self.uow.collect_events([event])
-        if settings.function_execution_diagnostics:
-            logger.warning(
-                "function.execution.diagnostics.runtime",
-                run_id=str(run.id),
-                queued_to_claim_ms=self._duration_ms(run.created_at, run.started_at),
-                run_to_terminal_ms=self._duration_ms(run.created_at, timestamp),
-                runtime_total_ms=timings.total_ms if timings is not None else None,
-                runtime_claim_ms=timings.claim_ms if timings is not None else None,
-                runtime_artifact_ms=(
-                    timings.artifact_ms if timings is not None else None
-                ),
-                runtime_worker_ms=timings.worker_ms if timings is not None else None,
-                measured_user_code_ms=(
-                    timings.user_code_ms if timings is not None else None
-                ),
-                artifact_cache_hit=(
-                    timings.artifact_cache_hit if timings is not None else None
-                ),
-            )
         await self.session.flush()
         return run.to_entity(), True, False
 
@@ -391,12 +367,3 @@ class FunctionExecutionRepository:
             function_id=function.id,
             function_name=function.name,
         )
-
-    @staticmethod
-    def _duration_ms(
-        started: datetime | None,
-        finished: datetime | None,
-    ) -> float | None:
-        if started is None or finished is None:
-            return None
-        return round((finished - started).total_seconds() * 1000, 3)
