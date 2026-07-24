@@ -177,6 +177,7 @@ def install_python(
         locked_requirements,
         *wheel_files,
     )
+    prune_python_runtime(destination)
     smoke_environment = os.environ.copy()
     smoke_environment.update(
         {
@@ -212,6 +213,29 @@ def install_python(
         env=smoke_environment,
     )
     return executable
+
+
+def prune_python_runtime(python_root: Path) -> None:
+    """Remove build/test-only files while retaining package metadata and data."""
+
+    for cache in sorted(python_root.rglob("__pycache__"), reverse=True):
+        shutil.rmtree(cache, ignore_errors=True)
+    for compiled in python_root.rglob("*.py[co]"):
+        compiled.unlink(missing_ok=True)
+
+    for relative in ("include", "share/man", "share/doc"):
+        shutil.rmtree(python_root / relative, ignore_errors=True)
+
+    for standard_library in python_root.glob("lib/python*"):
+        for name in ("test", "idlelib", "turtledemo", "ensurepip"):
+            shutil.rmtree(standard_library / name, ignore_errors=True)
+        site_packages = standard_library / "site-packages"
+        for package in ("app", "agentbox", "agentbox_client", "lemma_connectors"):
+            root = site_packages / package
+            if not root.is_dir():
+                continue
+            for tests in sorted(root.rglob("tests"), reverse=True):
+                shutil.rmtree(tests, ignore_errors=True)
 
 
 def copy_backend_assets(output: Path) -> None:
@@ -319,6 +343,27 @@ def sha256(path: Path) -> str:
     return digest.hexdigest()
 
 
+def tree_size(path: Path) -> int:
+    if not path.exists():
+        return 0
+    return sum(item.stat().st_size for item in path.rglob("*") if item.is_file())
+
+
+def size_breakdown(output: Path) -> dict[str, int]:
+    frontend = output / "frontend"
+    node_bytes = tree_size(frontend / "node")
+    frontend_bytes = tree_size(frontend)
+    python_bytes = tree_size(output / "backend/python")
+    backend_bytes = tree_size(output / "backend")
+    return {
+        "python_bytes": python_bytes,
+        "backend_assets_bytes": max(0, backend_bytes - python_bytes),
+        "node_bytes": node_bytes,
+        "next_bytes": max(0, frontend_bytes - node_bytes),
+        "metadata_bytes": tree_size(output) - backend_bytes - frontend_bytes,
+    }
+
+
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser()
     parser.add_argument("--output", type=Path, required=True)
@@ -355,6 +400,10 @@ def main() -> None:
             "archive": str(args.archive),
             "sha256": sha256(args.archive),
             "size": args.archive.stat().st_size,
+            "expanded_size": sum(
+                path.stat().st_size for path in output.rglob("*") if path.is_file()
+            ),
+            "breakdown": size_breakdown(output),
         }
         args.archive.with_suffix(f"{args.archive.suffix}.json").write_text(
             json.dumps(archive_metadata, indent=2) + "\n", encoding="utf-8"
@@ -400,6 +449,10 @@ def main() -> None:
             "archive": str(args.archive),
             "sha256": sha256(args.archive),
             "size": args.archive.stat().st_size,
+            "expanded_size": sum(
+                path.stat().st_size for path in output.rglob("*") if path.is_file()
+            ),
+            "breakdown": size_breakdown(output),
         }
         args.archive.with_suffix(f"{args.archive.suffix}.json").write_text(
             json.dumps(archive_metadata, indent=2) + "\n", encoding="utf-8"

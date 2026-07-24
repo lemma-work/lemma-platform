@@ -1,8 +1,9 @@
 {
   "bundle": {
     "resources": {
-      "runtime/local-runtime/": "local-runtime/",
-      "runtime/managed-runtime/": "managed-runtime/"
+      "runtime/lemma-local.json": "lemma-local.json",
+      "runtime/bundled/host-runtime.zip": "host-runtime.zip",
+      "runtime/bundled/guest-runtime.zip": "guest-runtime.zip"
     },
     "macOS": {
       "hardenedRuntime": true,

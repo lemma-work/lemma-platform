@@ -1,10 +1,8 @@
 name: Release Lemma Desktop
 
-# Builds signed online and offline Tauri installers for macOS and Windows.
-# The online installer contains the native control plane plus a release manifest;
-# it downloads digest-pinned runtimes on first launch. The offline installer also
-# embeds those runtimes. Missing signing credentials fail before either artifact
-# is published.
+# Builds the signed online installer for macOS and Windows. The application
+# contains only the native control plane and a release manifest; first launch
+# downloads digest-pinned host and guest runtimes with visible progress.
 
 on:
   release:
@@ -198,44 +196,6 @@ jobs:
           APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
           APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
 
-      - name: Stage offline native runtimes
-        shell: bash
-        env:
-          TARGET: aarch64-apple-darwin
-          GUEST_TARGET: macos-aarch64
-        run: |
-          set -euo pipefail
-          ditto -x -k \
-            "desktop/runtime/download/lemma-host-pack-${TARGET}.zip" \
-            desktop/runtime
-          mkdir -p desktop/runtime/managed-runtime
-          ditto -x -k \
-            "desktop/runtime/download/lemma-guest-runtime-${GUEST_TARGET}.zip" \
-            desktop/runtime/managed-runtime
-          test -f desktop/runtime/local-runtime/release.json
-          test -x desktop/runtime/local-runtime/backend/python/bin/python3
-          test -x desktop/runtime/local-runtime/frontend/node/bin/node
-          test -f desktop/runtime/managed-runtime/macos-aarch64/runtime.json
-          test -f desktop/runtime/managed-runtime/macos-aarch64/vmlinuz
-          test -f desktop/runtime/managed-runtime/macos-aarch64/initrd
-          test -f desktop/runtime/managed-runtime/macos-aarch64/disk.raw
-
-      - name: Build offline DMG
-        working-directory: desktop
-        run: |
-          set -euo pipefail
-          npx -y @tauri-apps/cli@2.11.4 build --config tauri.dist.conf.json
-          dmg=(target/release/bundle/dmg/Lemma_*_aarch64.dmg)
-          [[ "${#dmg[@]}" == 1 ]]
-          mv "${dmg[0]}" \
-            "target/release/release-artifacts/Lemma_${VERSION}_aarch64-offline.dmg"
-        env:
-          VERSION: ${{ steps.version.outputs.version }}
-          APPLE_SIGNING_IDENTITY: ${{ steps.apple-signing.outputs.signing-identity }}
-          APPLE_ID: ${{ secrets.APPLE_ID }}
-          APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
-          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
-
       - name: Verify Developer ID signatures and notarization staples
         shell: bash
         run: |
@@ -251,6 +211,8 @@ jobs:
           test ! -e "${app}/Contents/MacOS/lemma-vz"
           test ! -e "${app}/Contents/MacOS/lemma-supervisor"
           test ! -e "${app}/Contents/MacOS/uv"
+          app_bytes="$(du -sk "${app}" | awk '{print $1 * 1024}')"
+          test "${app_bytes}" -le "$((25 * 1024 * 1024))"
           codesign --verify --deep --strict --verbose=2 "${app}"
           codesign --verify --strict --verbose=2 "${locald}"
           codesign --verify --strict --verbose=2 "${runtime_bridge}"
@@ -260,12 +222,10 @@ jobs:
           xcrun stapler validate "${app}"
           xcrun stapler validate \
             "desktop/target/release/release-artifacts/Lemma_${VERSION}_aarch64-online.dmg"
-          xcrun stapler validate \
-            "desktop/target/release/release-artifacts/Lemma_${VERSION}_aarch64-offline.dmg"
         env:
           VERSION: ${{ steps.version.outputs.version }}
 
-      - name: Upload online and offline DMGs to release
+      - name: Upload online DMG to release
         uses: softprops/action-gh-release@v2
         with:
           files: desktop/target/release/release-artifacts/Lemma_*_aarch64-*.dmg
@@ -456,87 +416,18 @@ jobs:
           Move-Item $installers[0].FullName `
             "target/release/release-artifacts/Lemma_${env:VERSION}_x64-online-setup.exe"
 
-      - name: Stage offline native runtimes
-        shell: pwsh
-        env:
-          TARGET: x86_64-pc-windows-msvc
-          GUEST_TARGET: windows-x86_64
-        run: |
-          Expand-Archive `
-            "desktop/runtime/download/lemma-host-pack-$env:TARGET.zip" `
-            desktop/runtime -Force
-          New-Item -ItemType Directory -Force desktop/runtime/managed-runtime | Out-Null
-          Expand-Archive `
-            "desktop/runtime/download/lemma-guest-runtime-$env:GUEST_TARGET.zip" `
-            desktop/runtime/managed-runtime -Force
-          if (-not (Test-Path desktop/runtime/local-runtime/release.json)) {
-            throw "Native host pack is incomplete"
-          }
-          if (-not (Test-Path desktop/runtime/local-runtime/backend/python/python.exe)) {
-            throw "Native backend Python is missing"
-          }
-          if (-not (Test-Path desktop/runtime/local-runtime/frontend/node/node.exe)) {
-            throw "Native frontend Node.js is missing"
-          }
-          if (-not (Test-Path desktop/runtime/managed-runtime/windows-x86_64/runtime.json)) {
-            throw "Managed WSL guest marker is missing"
-          }
-          if (-not (Test-Path desktop/runtime/managed-runtime/windows-x86_64/rootfs.tar)) {
-            throw "Managed WSL guest rootfs is missing"
-          }
-
-      - name: Sign offline host runtime executables
-        shell: pwsh
-        env:
-          CERTIFICATE_THUMBPRINT: ${{ steps.windows-signing.outputs.thumbprint }}
-          WINDOWS_TIMESTAMP_URL: ${{ secrets.WINDOWS_TIMESTAMP_URL }}
-        run: |
-          $signTool = Get-ChildItem `
-            "${env:ProgramFiles(x86)}\Windows Kits\10\bin\*\x64\signtool.exe" `
-            -ErrorAction Stop |
-            Sort-Object FullName -Descending |
-            Select-Object -First 1
-          if (-not $signTool) { throw "Windows SDK signtool.exe was not found" }
-          foreach ($path in @(
-            "desktop/runtime/local-runtime/backend/python/python.exe",
-            "desktop/runtime/local-runtime/frontend/node/node.exe"
-          )) {
-            & $signTool.FullName sign `
-              /sha1 $env:CERTIFICATE_THUMBPRINT `
-              /fd SHA256 `
-              /tr $env:WINDOWS_TIMESTAMP_URL `
-              /td SHA256 `
-              $path
-            if ($LASTEXITCODE -ne 0) { throw "Could not sign offline runtime executable: $path" }
-          }
-
-      - name: Build offline NSIS installer
-        working-directory: desktop
-        shell: pwsh
-        env:
-          VERSION: ${{ steps.version.outputs.version }}
-        run: |
-          npx -y @tauri-apps/cli@2.11.4 build --config tauri.dist.conf.json --bundles nsis
-          if ($LASTEXITCODE -ne 0) { throw "Offline NSIS build failed" }
-          $installers = @(Get-ChildItem target/release/bundle/nsis/Lemma_*_x64-setup.exe)
-          if ($installers.Count -ne 1) { throw "Expected one offline NSIS installer" }
-          Move-Item $installers[0].FullName `
-            "target/release/release-artifacts/Lemma_${env:VERSION}_x64-offline-setup.exe"
-
       - name: Verify Authenticode signatures
         shell: pwsh
         run: |
           $paths = @(
             "desktop/target/release/lemma-desktop.exe",
             "desktop/binaries/lemma-locald-x86_64-pc-windows-msvc.exe",
-            "desktop/binaries/lemma-runtime-x86_64-pc-windows-msvc.exe",
-            "desktop/runtime/local-runtime/backend/python/python.exe",
-            "desktop/runtime/local-runtime/frontend/node/node.exe"
+            "desktop/binaries/lemma-runtime-x86_64-pc-windows-msvc.exe"
           )
           $installers = Get-ChildItem `
             "desktop/target/release/release-artifacts/Lemma_*_x64-*-setup.exe" `
             -ErrorAction Stop
-          if (@($installers).Count -ne 2) { throw "Expected online and offline installers" }
+          if (@($installers).Count -ne 1) { throw "Expected one online installer" }
           $paths += $installers.FullName
           foreach ($path in $paths) {
             if (-not (Test-Path $path)) { throw "Signed release binary is missing: $path" }
@@ -546,7 +437,24 @@ jobs:
             }
           }
 
-      - name: Upload online and offline Windows installers to release
+      - name: Enforce small online application payload
+        shell: pwsh
+        run: |
+          $paths = @(
+            "desktop/target/release/lemma-desktop.exe",
+            "desktop/binaries/lemma-locald-x86_64-pc-windows-msvc.exe",
+            "desktop/binaries/lemma-runtime-x86_64-pc-windows-msvc.exe",
+            "desktop/runtime/lemma-local.json"
+          )
+          $bytes = ($paths | ForEach-Object {
+            if (-not (Test-Path $_)) { throw "Online payload is missing: $_" }
+            (Get-Item $_).Length
+          } | Measure-Object -Sum).Sum
+          if ($bytes -gt 25MB) {
+            throw "Expanded online application payload is $bytes bytes; limit is 25 MiB"
+          }
+
+      - name: Upload online Windows installer to release
         uses: softprops/action-gh-release@v2
         with:
           files: desktop/target/release/release-artifacts/Lemma_*_x64-*-setup.exe

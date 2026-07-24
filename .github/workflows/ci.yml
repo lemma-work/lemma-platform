@@ -531,7 +531,11 @@ jobs:
                   url: "https://downloads.example.invalid/lemma-host-pack.zip",
                   sha256: ("0" * 64),
                   size: 1,
-                  format: "zip"
+                  expanded_size: 1,
+                  format: "zip",
+                  platform: "macos",
+                  architecture: "aarch64",
+                  runtime_version: $version
                 }
               },
               guest_runtimes: {
@@ -539,7 +543,11 @@ jobs:
                   url: "https://downloads.example.invalid/lemma-guest-runtime.zip",
                   sha256: ("0" * 64),
                   size: 1,
-                  format: "zip"
+                  expanded_size: 1,
+                  format: "zip",
+                  platform: "linux",
+                  architecture: "aarch64",
+                  runtime_version: $version
                 }
               }
             }' > desktop/runtime/lemma-local.json

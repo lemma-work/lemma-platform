@@ -91,7 +91,10 @@ PY
   cp "$kata_root/opt/kata/share/kata-containers/vmlinux-${kata_kernel_version}" \
     "$artifact/vmlinuz"
   cp "$initrd" "$artifact/initrd"
-  truncate -s 2G "$artifact/disk.raw"
+  # Build within the product budget, then shrink the ext4 filesystem to its
+  # actual contents plus 128 MiB of update headroom. The resulting RAW file is
+  # sparse and is attached read-only by Lemma Desktop.
+  truncate -s 1280M "$artifact/disk.raw"
   docker run --rm --platform "linux/$docker_arch" \
     --mount "type=bind,source=$rootfs_tar,target=/input/rootfs.tar,readonly" \
     --mount "type=bind,source=$artifact,target=/artifact" \
@@ -104,6 +107,16 @@ PY
       rm -f /rootfs/etc/resolv.conf
       ln -s ../run/systemd/resolve/stub-resolv.conf /rootfs/etc/resolv.conf
       mkfs.ext4 -F -L lemma-root -d /rootfs /artifact/disk.raw
+      e2fsck -fy /artifact/disk.raw >/dev/null
+      resize2fs -M /artifact/disk.raw >/dev/null
+      block_size="$(dumpe2fs -h /artifact/disk.raw 2>/dev/null | grep "^Block size:" | tr -dc "0-9")"
+      block_count="$(dumpe2fs -h /artifact/disk.raw 2>/dev/null | grep "^Block count:" | tr -dc "0-9")"
+      headroom_blocks="$((128 * 1024 * 1024 / block_size))"
+      target_blocks="$((block_count + headroom_blocks))"
+      resize2fs /artifact/disk.raw "${target_blocks}s" >/dev/null
+      truncate -s "$((target_blocks * block_size))" /artifact/disk.raw
+      e2fsck -fy /artifact/disk.raw >/dev/null
+      test "$(stat -c %s /artifact/disk.raw)" -le "$((1280 * 1024 * 1024))"
     '
 else
   mv "$rootfs_tar" "$artifact/rootfs.tar"
@@ -158,5 +171,25 @@ metadata = {
     "sha256": hashlib.sha256(path.read_bytes()).hexdigest(),
     "size": path.stat().st_size,
 }
+with __import__("zipfile").ZipFile(path) as archive:
+    metadata["expanded_size"] = sum(entry.file_size for entry in archive.infolist())
+    metadata["breakdown"] = {
+        "kernel_bytes": sum(
+            entry.file_size for entry in archive.infolist()
+            if entry.filename.endswith("/vmlinuz")
+        ),
+        "initrd_bytes": sum(
+            entry.file_size for entry in archive.infolist()
+            if entry.filename.endswith("/initrd")
+        ),
+        "root_bytes": sum(
+            entry.file_size for entry in archive.infolist()
+            if entry.filename.endswith(("/disk.raw", "/rootfs.tar"))
+        ),
+        "metadata_bytes": sum(
+            entry.file_size for entry in archive.infolist()
+            if entry.filename.endswith("/runtime.json")
+        ),
+    }
 path.with_suffix(path.suffix + ".json").write_text(json.dumps(metadata, indent=2) + "\n")
 PY

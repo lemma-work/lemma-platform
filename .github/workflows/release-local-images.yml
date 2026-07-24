@@ -641,8 +641,15 @@ jobs:
           host_packs = {}
           for path in sorted(Path("host-packs").glob("lemma-host-pack-*.zip")):
               target = path.stem.removeprefix("lemma-host-pack-")
+              platform, architecture = {
+                  "aarch64-apple-darwin": ("macos", "aarch64"),
+                  "x86_64-pc-windows-msvc": ("windows", "x86_64"),
+              }[target]
               import hashlib
               digest = hashlib.sha256(path.read_bytes()).hexdigest()
+              metadata = json.loads(path.with_suffix(path.suffix + ".json").read_text())
+              if metadata["sha256"] != digest or metadata["size"] != path.stat().st_size:
+                  raise SystemExit(f"{path.name} metadata mismatch")
               host_packs[target] = {
                   "url": (
                       f"https://github.com/{repository}/releases/download/"
@@ -650,14 +657,25 @@ jobs:
                   ),
                   "sha256": digest,
                   "size": path.stat().st_size,
+                  "expanded_size": metadata["expanded_size"],
                   "format": "zip",
+                  "platform": platform,
+                  "architecture": architecture,
+                  "runtime_version": version,
               }
 
           guest_runtimes = {}
           for path in sorted(Path("guest-runtimes").glob("lemma-guest-runtime-*.zip")):
               target = path.stem.removeprefix("lemma-guest-runtime-")
+              platform, architecture = {
+                  "macos-aarch64": ("linux", "aarch64"),
+                  "windows-x86_64": ("linux", "x86_64"),
+              }[target]
               import hashlib
               digest = hashlib.sha256(path.read_bytes()).hexdigest()
+              metadata = json.loads(path.with_suffix(path.suffix + ".json").read_text())
+              if metadata["sha256"] != digest or metadata["size"] != path.stat().st_size:
+                  raise SystemExit(f"{path.name} metadata mismatch")
               guest_runtimes[target] = {
                   "url": (
                       f"https://github.com/{repository}/releases/download/"
@@ -665,7 +683,11 @@ jobs:
                   ),
                   "sha256": digest,
                   "size": path.stat().st_size,
+                  "expanded_size": metadata["expanded_size"],
                   "format": "zip",
+                  "platform": platform,
+                  "architecture": architecture,
+                  "runtime_version": version,
               }
 
           manifest = {
@@ -697,6 +719,36 @@ jobs:
               "guest_runtimes": guest_runtimes,
           }
           Path("lemma-local.json").write_text(json.dumps(manifest, indent=2) + "\n")
+          for host_target, guest_target in (
+              ("aarch64-apple-darwin", "macos-aarch64"),
+              ("x86_64-pc-windows-msvc", "windows-x86_64"),
+          ):
+              if host_target not in host_packs or guest_target not in guest_runtimes:
+                  continue
+              compressed = host_packs[host_target]["size"] + guest_runtimes[guest_target]["size"]
+              expanded = (
+                  host_packs[host_target]["expanded_size"]
+                  + guest_runtimes[guest_target]["expanded_size"]
+              )
+              if compressed > 750 * 1024 * 1024:
+                  raise SystemExit(f"{host_target} compressed runtime exceeds 750 MiB")
+              if expanded > 2250 * 1024 * 1024:
+                  raise SystemExit(f"{host_target} expanded runtime exceeds 2.25 GiB")
+              print(json.dumps({
+                  "target": host_target,
+                  "compressed_bytes": compressed,
+                  "expanded_bytes": expanded,
+                  "host_breakdown": json.loads(
+                      next(Path("host-packs").glob(f"lemma-host-pack-{host_target}.zip.json")).read_text()
+                  ).get("breakdown", {}),
+                  "guest_breakdown": json.loads(
+                      next(Path("guest-runtimes").glob(f"lemma-guest-runtime-{guest_target}.zip.json")).read_text()
+                  ).get("breakdown", {}),
+                  "oci_images": manifest["infra"] | {
+                      name: manifest["images"][name]
+                      for name in ("agentbox_workspace", "agentbox_function")
+                  },
+              }, indent=2))
           print(json.dumps(manifest, indent=2))
           PY
 
@@ -780,7 +832,7 @@ jobs:
           name: lemma-local-test-manifest-${{ github.sha }}
           path: desktop/runtime/download
 
-      - name: Verify and stage self-contained runtime
+      - name: Verify and stage compressed PR test runtime
         shell: bash
         env:
           VERSION: ${{ inputs.version }}
@@ -808,23 +860,26 @@ jobs:
               actual = hashlib.sha256(archive.read_bytes()).hexdigest()
               if archive.stat().st_size != expected["size"] or actual != expected["sha256"]:
                   raise SystemExit(f"{archive.name} digest/size mismatch")
+          host = manifest["host_packs"][os.environ["TARGET"]]
+          guest = manifest["guest_runtimes"][os.environ["GUEST_TARGET"]]
+          manifest["host_packs"] = {os.environ["TARGET"]: {
+              **host, "url": None, "resource": "host-runtime.zip"
+          }}
+          manifest["guest_runtimes"] = {os.environ["GUEST_TARGET"]: {
+              **guest, "url": None, "resource": "guest-runtime.zip"
+          }}
+          Path("desktop/runtime/lemma-local.json").write_text(
+              json.dumps(manifest, indent=2) + "\n"
+          )
           PY
 
-          ditto -x -k \
-            "desktop/runtime/download/lemma-host-pack-${TARGET}.zip" \
-            desktop/runtime
-          mkdir -p desktop/runtime/managed-runtime
-          ditto -x -k \
-            "desktop/runtime/download/lemma-guest-runtime-${GUEST_TARGET}.zip" \
-            desktop/runtime/managed-runtime
-
-          test -f desktop/runtime/local-runtime/release.json
-          test -x desktop/runtime/local-runtime/backend/python/bin/python3
-          test -x desktop/runtime/local-runtime/frontend/node/bin/node
-          test -f desktop/runtime/managed-runtime/macos-aarch64/runtime.json
-          test -f desktop/runtime/managed-runtime/macos-aarch64/vmlinuz
-          test -f desktop/runtime/managed-runtime/macos-aarch64/initrd
-          test -f desktop/runtime/managed-runtime/macos-aarch64/disk.raw
+          mkdir -p desktop/runtime/bundled
+          cp "desktop/runtime/download/lemma-host-pack-${TARGET}.zip" \
+            desktop/runtime/bundled/host-runtime.zip
+          cp "desktop/runtime/download/lemma-guest-runtime-${GUEST_TARGET}.zip" \
+            desktop/runtime/bundled/guest-runtime.zip
+          test ! -e desktop/runtime/local-runtime
+          test ! -e desktop/runtime/managed-runtime
 
       - name: Bake splash concepts
         run: node desktop/scripts/extract-concepts.mjs
@@ -852,7 +907,7 @@ jobs:
           codesign -d --entitlements :- "${helper}" 2>&1 \
             | grep -F "com.apple.security.virtualization"
 
-      - name: Build self-contained macOS test DMG
+      - name: Build compressed macOS PR test DMG
         working-directory: desktop
         env:
           APPLE_SIGNING_IDENTITY: "-"
@@ -860,7 +915,7 @@ jobs:
           set -euo pipefail
           npx -y @tauri-apps/cli@2.11.4 build --config tauri.dist.conf.json
 
-      - name: Verify self-contained test application
+      - name: Verify compressed PR test application
         shell: bash
         run: |
           set -euo pipefail
@@ -868,19 +923,24 @@ jobs:
           test -x "${app}/Contents/MacOS/lemma-locald"
           test -x "${app}/Contents/MacOS/lemma-runtime"
           test -x "${app}/Contents/Resources/lemma-vz"
-          test -f "${app}/Contents/Resources/local-runtime/release.json"
-          test -f "${app}/Contents/Resources/managed-runtime/macos-aarch64/runtime.json"
+          test -f "${app}/Contents/Resources/lemma-local.json"
+          test -f "${app}/Contents/Resources/host-runtime.zip"
+          test -f "${app}/Contents/Resources/guest-runtime.zip"
+          test ! -e "${app}/Contents/Resources/local-runtime"
+          test ! -e "${app}/Contents/Resources/managed-runtime"
+          app_bytes="$(du -sk "${app}" | awk '{print $1 * 1024}')"
+          test "${app_bytes}" -le "$((850 * 1024 * 1024))"
           codesign --verify --deep --strict --verbose=2 "${app}"
           codesign -d --entitlements :- \
             "${app}/Contents/Resources/lemma-vz" 2>&1 \
             | grep -F "com.apple.security.virtualization"
-          test "$(jq -r .version "${app}/Contents/Resources/local-runtime/release.json")" = \
+          test "$(jq -r .version "${app}/Contents/Resources/lemma-local.json")" = \
             "$(jq -r .version desktop/tauri.conf.json)"
 
-      - name: Upload self-contained macOS test DMG
+      - name: Upload compressed macOS PR test DMG
         uses: actions/upload-artifact@v4
         with:
-          name: lemma-desktop-macos-offline-test-${{ github.sha }}
+          name: lemma-desktop-macos-pr-test-${{ github.sha }}
           path: desktop/target/release/bundle/dmg/Lemma_*_aarch64.dmg
           if-no-files-found: error
           retention-days: 14
