@@ -19,9 +19,7 @@ from app.modules.function.contracts.runtime import (
     RuntimeTerminalRequest,
 )
 from app.modules.function.domain.entities import (
-    FunctionRunEntity,
     FunctionRunRuntimeContext,
-    FunctionRunStatus,
     FunctionSessionPrincipal,
 )
 
@@ -65,16 +63,6 @@ async def test_gateway_releases_database_before_identity_and_storage_io(
     signer = FunctionCallbackCredentialSigner("g" * 32)
     state = _UowState()
     terminal_calls = []
-    telemetry_calls = []
-    now = datetime.now(timezone.utc)
-    persisted_run = FunctionRunEntity(
-        id=context.run_id,
-        function_id=context.function_id,
-        user_id=context.user_id,
-        status=FunctionRunStatus.COMPLETED,
-        created_at=now - timedelta(seconds=1),
-        completed_at=now,
-    )
 
     class _Repository:
         def __init__(self, _uow, _signer):
@@ -97,16 +85,12 @@ async def test_gateway_releases_database_before_identity_and_storage_io(
         async def complete(self, received, **kwargs):
             duplicate = bool(terminal_calls)
             terminal_calls.append((received, kwargs))
-            return persisted_run, True, duplicate
+            return None, True, duplicate
 
     monkeypatch.setattr(
         "app.modules.function.application.function_runtime_gateway."
         "FunctionExecutionRepository",
         _Repository,
-    )
-    monkeypatch.setattr(
-        "app.modules.function.application.function_runtime_gateway.record_terminal",
-        lambda *args, **kwargs: telemetry_calls.append((args, kwargs)),
     )
 
     class _Storage:
@@ -169,8 +153,6 @@ async def test_gateway_releases_database_before_identity_and_storage_io(
     assert duplicate.accepted and duplicate.duplicate
     assert terminal_calls[0][1]["output_data"] == {"answer": 42}
     assert len(terminal_calls) == 2
-    assert len(telemetry_calls) == 1
-    assert telemetry_calls[0][1]["outcome"] == "success"
     with pytest.raises(RuntimeCredentialRejected):
         await gateway.artifact(context.run_id, "wrong-callback-token")
     assert state.active == 0

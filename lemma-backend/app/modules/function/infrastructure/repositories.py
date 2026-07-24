@@ -329,16 +329,6 @@ class FunctionRunRepository(FunctionRunRepositoryPort):
     ) -> int:
         """Terminalize runs whose one allowed execution window has elapsed."""
 
-        return len(await self.fail_expired_runs(now=now, limit=limit))
-
-    async def fail_expired_runs(
-        self,
-        *,
-        now: datetime,
-        limit: int = 100,
-    ) -> list[FunctionRunEntity]:
-        """Terminalize and return expired runs for post-commit telemetry."""
-
         statement = (
             select(FunctionRunModel)
             .where(
@@ -370,7 +360,7 @@ class FunctionRunRepository(FunctionRunRepositoryPort):
             )
         if runs:
             await self.session.flush()
-        return [run.to_entity() for run in runs]
+        return len(runs)
 
     async def list_pending_async_runs(
         self,

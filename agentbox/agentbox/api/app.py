@@ -44,9 +44,7 @@ from agentbox.observability import create_background_task
 from agentbox.reconciliation import AgentBoxReconciler, reconciliation_loop
 from agentbox.telemetry import (
     enrich_current_span,
-    reset_terminal_operation_error,
     shutdown_telemetry,
-    terminal_operation_error_emitted,
 )
 
 from .fabric import agentbox_error_response, router
@@ -135,7 +133,6 @@ class RequestContextMiddleware:
 
         caught: Exception | None = None
         cancelled = False
-        reset_terminal_operation_error()
         with bind_context(
             request_id=request_id,
             correlation_id=correlation_id,
@@ -184,9 +181,7 @@ class RequestContextMiddleware:
                         type(caught).__name__ if caught else "HTTPError",
                     )
                     error_code = state.get("lemma_error_code", "INTERNAL_ERROR")
-                    if (
-                        status_code >= 500 or caught is not None
-                    ) and not terminal_operation_error_emitted():
+                    if status_code >= 500 or caught is not None:
                         exc_info = (
                             (type(caught), caught, caught.__traceback__)
                             if caught is not None

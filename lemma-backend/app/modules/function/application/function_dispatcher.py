@@ -27,14 +27,6 @@ from app.core.request_context import create_inherited_task
 from app.modules.function.application.function_callback_credentials import (
     FunctionCallbackCredentialSigner,
 )
-from app.modules.function.application.function_observability import (
-    FunctionPhaseTimings,
-    duration_ms,
-    exception_error_code,
-    exception_outcome,
-    observe_function_phase,
-    record_terminal,
-)
 from app.modules.function.application.function_session_token_cache import (
     FunctionSessionTokenCache,
     FunctionSessionTokenKey,
@@ -112,46 +104,28 @@ class FunctionDispatcher:
         *,
         mode: FunctionDispatchMode,
     ) -> FunctionRunEntity:
-        phase_timings = FunctionPhaseTimings()
         dispatch = await self._resolve_dispatch(run_id, mode=mode)
         if isinstance(dispatch, FunctionRunEntity):
             return dispatch
-        phase_timings.queue_wait_ms = duration_ms(
-            dispatch.accepted_at,
-            self._now(),
-        )
 
-        execution_mode = mode.value.lower()
-        runtime_profile = self._profile.name
         function_token_task = create_inherited_task(
             self._function_session_token(dispatch)
         )
         try:
-            with observe_function_phase(
-                "function.agentbox.admission",
-                execution_mode=execution_mode,
-                runtime_profile=runtime_profile,
-                phases=phase_timings,
-                duration_field="sandbox_start_ms",
-            ):
-                endpoint = await self._runtime_endpoint(dispatch)
+            endpoint = await self._runtime_endpoint(dispatch)
             function_token = await function_token_task
-            with observe_function_phase(
-                "function.runtime.call",
-                execution_mode=execution_mode,
-                runtime_profile=runtime_profile,
-                phases=phase_timings,
-                duration_field="runtime_call_ms",
-            ):
-                await self._invoke_runtime(
-                    dispatch,
-                    endpoint=endpoint,
-                    function_token=function_token,
-                    phase_timings=phase_timings,
-                )
-            # A 202 is returned only after the runtime's durable claim commits.
-            # Deferred completion then belongs to its callback, not worker polls.
-            result = await self._load_run(dispatch.run_id)
+            runtime_response = await self._invoke_runtime(
+                dispatch,
+                endpoint=endpoint,
+                function_token=function_token,
+            )
+            if isinstance(runtime_response, RuntimeAcceptedResponse):
+                # The resident runtime returns 202 only after its backend claim
+                # committed PENDING -> RUNNING. Long JOB/deferred execution then
+                # belongs to the runtime callback, not to a backend worker poll.
+                result = await self._load_run(dispatch.run_id)
+            else:
+                result = await self._load_run(dispatch.run_id)
             if (
                 dispatch.mode == FunctionDispatchMode.SYNCHRONOUS
                 and result.status not in _TERMINAL_RUN_STATES
@@ -160,26 +134,13 @@ class FunctionDispatcher:
                     "function runtime returned before durable terminal state"
                 )
             return result
-        except (Exception, asyncio.CancelledError) as exc:
+        except BaseException as exc:
             if isinstance(exc, asyncio.CancelledError):
                 await self._best_effort_cancel(dispatch)
                 async with self._uow_factory() as uow:
-                    cancelled, transitioned = await FunctionExecutionRepository(
+                    await FunctionExecutionRepository(
                         uow, self._signer
-                    ).cancel_dispatch_transition(dispatch)
-                if (
-                    transitioned
-                    and cancelled is not None
-                    and cancelled.status == FunctionRunStatus.CANCELLED
-                ):
-                    record_terminal(
-                        cancelled,
-                        outcome="cancelled",
-                        execution_mode=execution_mode,
-                        runtime_profile=runtime_profile,
-                        phases=phase_timings,
-                        error_type=type(exc).__name__,
-                    )
+                    ).cancel_dispatch(dispatch)
                 raise
             if isinstance(exc, InvocationOutcomeUnconfirmed):
                 current = await self._load_run(run_id)
@@ -188,22 +149,11 @@ class FunctionDispatcher:
                 await self._best_effort_cancel(dispatch)
             message = self._execution_error(exc)
             async with self._uow_factory() as uow:
-                failed, transitioned = await FunctionExecutionRepository(
+                failed = await FunctionExecutionRepository(
                     uow, self._signer
-                ).fail_dispatch_transition(dispatch, error=message)
+                ).fail_dispatch(dispatch, error=message)
             if failed is None:
                 failed = await self._load_run(run_id)
-            if transitioned and failed.status == FunctionRunStatus.FAILED:
-                outcome = exception_outcome(exc)
-                record_terminal(
-                    failed,
-                    outcome=outcome,
-                    execution_mode=execution_mode,
-                    runtime_profile=runtime_profile,
-                    phases=phase_timings,
-                    error_type=type(exc).__name__,
-                    error_code=exception_error_code(exc),
-                )
             return failed
         finally:
             if not function_token_task.done():
@@ -231,19 +181,10 @@ class FunctionDispatcher:
             timeout=httpx.Timeout(5, read=5),
         )
         async with self._uow_factory() as uow:
-            run, transitioned = await FunctionExecutionRepository(
-                uow, self._signer
-            ).cancel_dispatch_transition(dispatch)
-        result = run or await self._load_run(run_id)
-        if transitioned and result.status == FunctionRunStatus.CANCELLED:
-            record_terminal(
-                result,
-                outcome="cancelled",
-                execution_mode=dispatch.mode.value.lower(),
-                runtime_profile=self._profile.name,
-                phases=FunctionPhaseTimings(),
+            run = await FunctionExecutionRepository(uow, self._signer).cancel_dispatch(
+                dispatch
             )
-        return result
+        return run or await self._load_run(run_id)
 
     async def _resolve_dispatch(
         self,
@@ -268,25 +209,7 @@ class FunctionDispatcher:
                     run_id,
                     error="Function execution deadline exceeded",
                 )
-            result = failed or await self._load_run(run_id)
-            if (
-                result.status == FunctionRunStatus.FAILED
-                and result.error == "Function execution deadline exceeded"
-            ):
-                record_terminal(
-                    result,
-                    outcome="timeout",
-                    execution_mode=mode.value.lower(),
-                    runtime_profile=self._profile.name,
-                    phases=FunctionPhaseTimings(
-                        queue_wait_ms=duration_ms(
-                            result.created_at,
-                            result.completed_at,
-                        )
-                    ),
-                    error_type="FunctionDeadlineExceeded",
-                )
-            return result
+            return failed or await self._load_run(run_id)
         return resolved
 
     async def _active_dispatch(
@@ -344,7 +267,6 @@ class FunctionDispatcher:
         *,
         endpoint: FunctionRuntimeEndpoint,
         function_token: str,
-        phase_timings: FunctionPhaseTimings,
     ) -> RuntimeTerminalRequest | RuntimeAcceptedResponse:
         remaining = (dispatch.deadline_at - self._now()).total_seconds()
         if remaining <= 0:
@@ -369,15 +291,7 @@ class FunctionDispatcher:
             response = await runtime.post(
                 url,
                 headers=headers,
-                json={
-                    "input": dispatch.input_data,
-                    "dispatch_timings": {
-                        "queue_wait_ms": phase_timings.queue_wait_ms,
-                        "sandbox_start_ms": phase_timings.sandbox_start_ms,
-                        "execution_mode": dispatch.mode.value.lower(),
-                        "runtime_profile": self._profile.name,
-                    },
-                },
+                json={"input": dispatch.input_data},
                 timeout=httpx.Timeout(
                     max(0.1, min(10.0, remaining)),
                     read=max(0.1, remaining),
@@ -554,7 +468,7 @@ class FunctionDispatcher:
         return f"Bearer {self._signer.derive(run_id)}"
 
     @staticmethod
-    def _execution_error(exc: Exception | asyncio.CancelledError) -> str:
+    def _execution_error(exc: BaseException) -> str:
         if isinstance(exc, InvocationOutcomeUnconfirmed):
             return "Function execution failed because the runtime response was not confirmed"
         if isinstance(exc, TimeoutError):
@@ -563,7 +477,6 @@ class FunctionDispatcher:
             code = str(getattr(exc, "code", "PROVIDER_UNAVAILABLE"))
             return f"Function sandbox error ({redact_text(code)})"
         return "Function execution failed"
-
 
 class InvocationOutcomeUnconfirmed(RuntimeError):
     """The runtime response was not confirmed; the run still terminates FAILED."""

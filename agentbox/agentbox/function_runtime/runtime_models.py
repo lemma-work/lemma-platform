@@ -84,7 +84,6 @@ class WorkerResponse(WorkerResult):
     stdout: str = ""
     stderr: str = ""
     output_truncated: bool = False
-    user_code_ms: float = Field(default=0, ge=0)
 
 
 class WorkerReady(RuntimeModel):
@@ -96,26 +95,6 @@ class WorkerReady(RuntimeModel):
             raise ValueError("ready workers cannot contain an error")
 
 
-class RuntimeTimings(RuntimeModel):
-    total_ms: float = Field(default=0, ge=0)
-    claim_ms: float = Field(default=0, ge=0)
-    artifact_ms: float = Field(default=0, ge=0)
-    worker_ms: float = Field(default=0, ge=0)
-    user_code_ms: float = Field(default=0, ge=0)
-    artifact_cache_hit: bool = False
-    queue_wait_ms: float | None = Field(default=None, ge=0)
-    sandbox_start_ms: float | None = Field(default=None, ge=0)
-    execution_mode: Literal["synchronous", "asynchronous"] = "synchronous"
-    runtime_profile: str = Field(default="unknown", pattern=r"^[A-Za-z0-9_.-]{1,128}$")
-
-
-class DispatchTimings(RuntimeModel):
-    queue_wait_ms: float | None = Field(default=None, ge=0)
-    sandbox_start_ms: float | None = Field(default=None, ge=0)
-    execution_mode: Literal["synchronous", "asynchronous"]
-    runtime_profile: str = Field(pattern=r"^[A-Za-z0-9_.-]{1,128}$")
-
-
 class TerminalReport(RuntimeModel):
     status: Literal["completed", "failed"]
     output_data: JsonObject | None = None
@@ -123,4 +102,3 @@ class TerminalReport(RuntimeModel):
     stdout: str
     stderr: str
     output_truncated: bool = False
-    timings: RuntimeTimings = Field(default_factory=RuntimeTimings)

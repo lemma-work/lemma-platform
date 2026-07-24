@@ -9,7 +9,6 @@ import hmac
 import json
 import os
 from pathlib import Path
-import time
 from urllib.parse import urlparse
 from uuid import UUID
 
@@ -22,14 +21,12 @@ from starlette.routing import Route
 
 from agentbox.observability import create_inherited_task
 
-from .runner import GatewayClient, _cached_artifact_root, _resolve_artifact_root
+from .runner import GatewayClient, _resolve_artifact_root
 from .runtime_models import (
-    DispatchTimings,
     FunctionArtifactManifest,
     RunAccepted,
     RunClaim,
     RuntimeFailure,
-    RuntimeTimings,
     TerminalReport,
     WorkerRequest,
 )
@@ -46,7 +43,6 @@ class InvocationBody(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
 
     input: JsonObject
-    dispatch_timings: DispatchTimings
 
 
 @dataclass(slots=True)
@@ -81,7 +77,6 @@ class FunctionRuntimeService:
         run_token: str,
         gateway_url: str,
         input_data: JsonObject,
-        dispatch_timings: DispatchTimings | None = None,
     ) -> TerminalReport:
         run = await self._start(
             function_token=function_token,
@@ -91,7 +86,6 @@ class FunctionRuntimeService:
             run_token=run_token,
             gateway_url=gateway_url,
             input_data=input_data,
-            dispatch_timings=dispatch_timings or self._default_dispatch_timings(),
         )
         return await asyncio.shield(run.task)
 
@@ -105,7 +99,6 @@ class FunctionRuntimeService:
         run_token: str,
         gateway_url: str,
         input_data: JsonObject,
-        dispatch_timings: DispatchTimings | None = None,
     ) -> RunAccepted:
         run = await self._start(
             function_token=function_token,
@@ -115,7 +108,6 @@ class FunctionRuntimeService:
             run_token=run_token,
             gateway_url=gateway_url,
             input_data=input_data,
-            dispatch_timings=dispatch_timings or self._default_dispatch_timings(),
         )
         await run.accepted.wait()
         if run.acceptance_error is not None:
@@ -132,7 +124,6 @@ class FunctionRuntimeService:
         run_token: str,
         gateway_url: str,
         input_data: JsonObject,
-        dispatch_timings: DispatchTimings,
     ) -> _Run:
         signature = self._signature(
             function_id=function_id,
@@ -169,7 +160,6 @@ class FunctionRuntimeService:
                         run_id=run_id,
                         gateway_url=gateway_url,
                         input_data=input_data,
-                        dispatch_timings=dispatch_timings,
                     )
                 )
                 task.add_done_callback(self._consume_task_result)
@@ -232,27 +222,18 @@ class FunctionRuntimeService:
         run_id: UUID,
         gateway_url: str,
         input_data: JsonObject,
-        dispatch_timings: DispatchTimings,
     ) -> TerminalReport:
-        execution_started = time.perf_counter()
-        claim_ms = 0.0
-        artifact_ms = 0.0
-        worker_ms = 0.0
-        user_code_ms = 0.0
-        artifact_cache_hit = False
         gateway = await self._gateway(gateway_url)
         claim = None
         accepted = False
         try:
             try:
-                phase_started = time.perf_counter()
                 claim = await gateway.claim(
                     function_token,
                     run_id=run_id,
                     revision_hash=revision_hash,
                     input_data=input_data,
                 )
-                claim_ms = self._elapsed_ms(phase_started)
                 self._validate_claim(
                     claim=claim,
                     function_id=function_id,
@@ -262,11 +243,7 @@ class FunctionRuntimeService:
                 )
                 await self._mark_accepted(run_id, claim.callback_token)
                 accepted = True
-                digest = revision_hash.removeprefix("sha256:")
-                artifact_cache_hit = _cached_artifact_root(digest) is not None
-                phase_started = time.perf_counter()
                 root = await _resolve_artifact_root(gateway, claim)
-                artifact_ms = self._elapsed_ms(phase_started)
                 worker = WorkerRequest(
                     artifact_root=str(root),
                     manifest=self._manifest(root),
@@ -277,7 +254,6 @@ class FunctionRuntimeService:
                     lemma_token=claim.lemma_token,
                     lemma_base_url=claim.lemma_base_url,
                 )
-                phase_started = time.perf_counter()
                 response = await self._workers.execute(
                     function_id=function_id,
                     revision_hash=revision_hash,
@@ -286,8 +262,6 @@ class FunctionRuntimeService:
                     request=worker,
                     deadline_at=claim.deadline_at,
                 )
-                worker_ms = self._elapsed_ms(phase_started)
-                user_code_ms = response.user_code_ms
                 report = TerminalReport(
                     status="completed" if response.ok else "failed",
                     output_data=response.output_data,
@@ -295,18 +269,6 @@ class FunctionRuntimeService:
                     stdout=response.stdout,
                     stderr=response.stderr,
                     output_truncated=response.output_truncated,
-                    timings=RuntimeTimings(
-                        total_ms=self._elapsed_ms(execution_started),
-                        claim_ms=claim_ms,
-                        artifact_ms=artifact_ms,
-                        worker_ms=worker_ms,
-                        user_code_ms=user_code_ms,
-                        artifact_cache_hit=artifact_cache_hit,
-                        queue_wait_ms=dispatch_timings.queue_wait_ms,
-                        sandbox_start_ms=dispatch_timings.sandbox_start_ms,
-                        execution_mode=dispatch_timings.execution_mode,
-                        runtime_profile=dispatch_timings.runtime_profile,
-                    ),
                 )
             except asyncio.CancelledError:
                 raise
@@ -319,18 +281,6 @@ class FunctionRuntimeService:
                     error=RuntimeFailure(name=type(exc).__name__, message=str(exc)),
                     stdout="",
                     stderr="",
-                    timings=RuntimeTimings(
-                        total_ms=self._elapsed_ms(execution_started),
-                        claim_ms=claim_ms,
-                        artifact_ms=artifact_ms,
-                        worker_ms=worker_ms,
-                        user_code_ms=user_code_ms,
-                        artifact_cache_hit=artifact_cache_hit,
-                        queue_wait_ms=dispatch_timings.queue_wait_ms,
-                        sandbox_start_ms=dispatch_timings.sandbox_start_ms,
-                        execution_mode=dispatch_timings.execution_mode,
-                        runtime_profile=dispatch_timings.runtime_profile,
-                    ),
                 )
             await gateway.terminal(claim, report)
             return report
@@ -363,17 +313,6 @@ class FunctionRuntimeService:
     def _consume_task_result(task: asyncio.Task[TerminalReport]) -> None:
         if not task.cancelled():
             task.exception()
-
-    @staticmethod
-    def _default_dispatch_timings() -> DispatchTimings:
-        return DispatchTimings(
-            execution_mode="synchronous",
-            runtime_profile="unknown",
-        )
-
-    @staticmethod
-    def _elapsed_ms(started: float) -> float:
-        return round((time.perf_counter() - started) * 1000, 3)
 
     @staticmethod
     def _manifest(root: Path) -> FunctionArtifactManifest:
@@ -516,7 +455,6 @@ async def _invoke(request: Request) -> JSONResponse:
                 run_token=run_token,
                 gateway_url=gateway_url,
                 input_data=body.input,
-                dispatch_timings=body.dispatch_timings,
             )
             return JSONResponse(
                 accepted.model_dump(mode="json"),
@@ -531,7 +469,6 @@ async def _invoke(request: Request) -> JSONResponse:
             run_token=run_token,
             gateway_url=gateway_url,
             input_data=body.input,
-            dispatch_timings=body.dispatch_timings,
         )
         return JSONResponse(report.model_dump(mode="json"))
     except ValueError as exc:

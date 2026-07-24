@@ -8,8 +8,6 @@ import pytest
 from agentbox.api.app import RequestContextMiddleware
 from agentbox.config import settings
 from agentbox.observability import current_context
-from agentbox.telemetry import observe_agentbox_operation
-from agentbox.domain import WorkloadKind
 
 
 async def _run(headers: list[tuple[bytes, bytes]]) -> tuple[dict[str, str], bytes]:
@@ -136,42 +134,3 @@ async def test_unhandled_request_emits_one_safe_failure_and_response_id(
     assert fields["error_type"] == "RuntimeError"
     assert len(fields["error_stack_hash"]) == 64
     assert "CANARY" not in repr(fields)
-
-
-@pytest.mark.asyncio
-async def test_agentbox_terminal_failure_suppresses_duplicate_http_error(
-    monkeypatch, caplog
-) -> None:
-    monkeypatch.setattr(settings, "agentbox_api_key", "manager-key")
-
-    async def failing_app(scope, receive, send):
-        del scope, receive, send
-        with observe_agentbox_operation(
-            operation="ensure",
-            workload_kind=WorkloadKind.FUNCTION,
-            provider="e2b",
-        ):
-            raise RuntimeError("CANARY provider payload")
-
-    async def receive():
-        return {"type": "http.request", "body": b"", "more_body": False}
-
-    async def send(_message):
-        return None
-
-    with caplog.at_level(logging.ERROR):
-        await RequestContextMiddleware(failing_app)(
-            {
-                "type": "http",
-                "method": "POST",
-                "path": "/sandboxes/function/example",
-                "headers": [(b"x-request-id", b"request-1")],
-            },
-            receive,
-            send,
-        )
-
-    terminal_events = [
-        record.msg for record in caplog.records if record.levelno >= logging.ERROR
-    ]
-    assert terminal_events == ["agentbox.operation.failed"]

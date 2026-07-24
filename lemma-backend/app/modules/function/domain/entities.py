@@ -85,7 +85,6 @@ class FunctionExecutionDispatch(BaseModel):
     function_name: str
     user_id: UUID
     mode: FunctionDispatchMode
-    accepted_at: datetime | None = None
     deadline_at: datetime
     revision_hash: str = Field(pattern=r"^sha256:[0-9a-f]{64}$")
     input_data: JsonObject

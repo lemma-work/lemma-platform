@@ -21,15 +21,11 @@ from fastapi import Request
 
 from app.core.authorization.scope import context_scope, pod_context_scope, uow_scope
 from app.core.authorization.service import AuthorizationDataService
-from app.core.config import settings
 from app.core.helpers.slug import slugify
 from app.core.infrastructure.db.uow_factory import UnitOfWorkFactory
 from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
 from app.modules.function.application.function_definition_compiler import (
     FunctionDefinitionCompiler,
-)
-from app.modules.function.application.function_observability import (
-    record_function_accepted,
 )
 from app.modules.function.domain.entities import (
     FunctionDispatchMode,
@@ -507,10 +503,6 @@ class FunctionUseCases:
         if function.type == FunctionType.JOB:
             return await self._enqueue_run(run)
         del function, user_email, run_as_workload
-        record_function_accepted(
-            execution_mode="synchronous",
-            runtime_profile=settings.agentbox_function_profile_name,
-        )
         return await self._dispatcher.execute(
             run.id,
             mode=FunctionDispatchMode.SYNCHRONOUS,
@@ -527,16 +519,9 @@ class FunctionUseCases:
 
         if run.id is None:
             raise ValueError("function run must be persisted before enqueue")
-        record_function_accepted(
-            execution_mode="asynchronous",
-            runtime_profile=settings.agentbox_function_profile_name,
-        )
         try:
             job_id = await self._run_queue.enqueue(run.id)
         except FunctionRunQueueUnavailable as exc:
-            # Queue instrumentation owns the publication span. This event
-            # records the durable state transition without creating a duplicate
-            # producer span around the same transport call.
             logger.warning(
                 "function.use_cases.run_enqueue_deferred.degraded",
                 run_id=str(run.id),

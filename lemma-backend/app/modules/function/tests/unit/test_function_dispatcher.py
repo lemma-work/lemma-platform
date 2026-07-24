@@ -55,7 +55,6 @@ def _dispatch(
         function_name="test-function",
         user_id=uuid4(),
         mode=mode,
-        accepted_at=datetime.now(timezone.utc) - timedelta(milliseconds=250),
         deadline_at=datetime.now(timezone.utc) + timedelta(seconds=30),
         revision_hash=f"sha256:{'a' * 64}",
         input_data={"value": 7},
@@ -156,7 +155,7 @@ async def test_dispatcher_invokes_run_once_and_holds_no_db_during_io(
         async def resolve_dispatch(self, *_args, **_kwargs):
             return dispatch
 
-        async def fail_dispatch_transition(self, *_args, **_kwargs):
+        async def fail_dispatch(self, *_args, **_kwargs):
             raise AssertionError("successful execution must not fail")
 
     class _RunRepository:
@@ -222,13 +221,7 @@ async def test_dispatcher_invokes_run_once_and_holds_no_db_during_io(
     assert len(requests) == 1
     url, request = requests[0]
     assert url.endswith(f"/functions/{dispatch.function_id}/runs/{dispatch.run_id}")
-    assert request["json"]["input"] == dispatch.input_data
-    assert request["json"]["dispatch_timings"]["execution_mode"] == "synchronous"
-    assert request["json"]["dispatch_timings"]["runtime_profile"] == (
-        "function-python-v1"
-    )
-    assert request["json"]["dispatch_timings"]["queue_wait_ms"] >= 250
-    assert request["json"]["dispatch_timings"]["sandbox_start_ms"] >= 0
+    assert request["json"] == {"input": dispatch.input_data}
     assert request["headers"]["Authorization"] == "Bearer delegated-function-token"
     assert request["headers"]["If-Match"] == f'"{dispatch.revision_hash}"'
     assert request["headers"]["X-Lemma-Run-Token"] == signer.derive(dispatch.run_id)
@@ -252,7 +245,7 @@ async def test_job_returns_after_runtime_claim_without_polling_terminal(
         async def resolve_dispatch(self, *_args, **_kwargs):
             return dispatch
 
-        async def fail_dispatch_transition(self, *_args, **_kwargs):
+        async def fail_dispatch(self, *_args, **_kwargs):
             raise AssertionError("accepted JOB execution must not fail")
 
     class _RunRepository:
@@ -308,10 +301,7 @@ async def test_job_returns_after_runtime_claim_without_polling_terminal(
     assert len(requests) == 1
     assert requests[0]["headers"]["Prefer"] == "respond-async"
     assert requests[0]["headers"]["X-Lemma-Run-Token"] == signer.derive(dispatch.run_id)
-    assert requests[0]["json"]["input"] == dispatch.input_data
-    assert requests[0]["json"]["dispatch_timings"]["execution_mode"] == (
-        "asynchronous"
-    )
+    assert requests[0]["json"] == {"input": dispatch.input_data}
     assert tracker.active == 0
 
 
@@ -330,7 +320,7 @@ async def test_lost_response_reconciles_terminal_callback_without_failing(
         async def resolve_dispatch(self, *_args, **_kwargs):
             return dispatch
 
-        async def fail_dispatch_transition(self, *_args, **_kwargs):
+        async def fail_dispatch(self, *_args, **_kwargs):
             raise AssertionError("persisted terminal callback must win")
 
     class _RunRepository:
@@ -392,9 +382,9 @@ async def test_lost_response_fails_once_and_cancels_exact_run(
         async def resolve_dispatch(self, *_args, **_kwargs):
             return dispatch
 
-        async def fail_dispatch_transition(self, _dispatch, *, error):
+        async def fail_dispatch(self, _dispatch, *, error):
             fail_errors.append(error)
-            return failed, True
+            return failed
 
     class _RunRepository:
         def __init__(self, _uow):
@@ -469,11 +459,11 @@ async def test_cancel_targets_exact_run_then_persists_cancelled(monkeypatch) -> 
         async def active_dispatch(self, _run_id, **_kwargs):
             return dispatch
 
-        async def cancel_dispatch_transition(self, received):
+        async def cancel_dispatch(self, received):
             nonlocal persisted
             assert received == dispatch
             persisted = True
-            return cancelled, True
+            return cancelled
 
     monkeypatch.setattr(
         "app.modules.function.application.function_dispatcher."

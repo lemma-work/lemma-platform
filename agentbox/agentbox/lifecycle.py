@@ -36,7 +36,6 @@ from agentbox.ports import (
     SandboxProviderPort,
 )
 from agentbox.persistence.uow import StateDatabase
-from agentbox.telemetry import observe_phase, observed_lifecycle_operation
 
 
 def allocation_metadata(
@@ -76,7 +75,6 @@ class SandboxLifecycleService:
         )
         self._workspace_retention_seconds = workspace_retention_seconds
 
-    @observed_lifecycle_operation("ensure")
     async def ensure(
         self,
         key: SandboxKey,
@@ -136,18 +134,13 @@ class SandboxLifecycleService:
                     limit=self._admission_policy.max_active,
                 )
             else:
-                decision = await observe_phase(
-                    uow.repository.reserve_provider_capacity(
-                        allocation_for_admission.allocation_id,
-                        admission_class=admission_class,
-                        policy=self._admission_policy,
-                    ),
-                    phase="admission_wait",
-                    workload_kind=key.workload_kind,
-                    provider=self._provider.name,
-                    profile=profile,
+                decision = await uow.repository.reserve_provider_capacity(
+                    allocation_for_admission.allocation_id,
+                    admission_class=admission_class,
+                    policy=self._admission_policy,
                 )
             await uow.commit()
+
         if not decision.accepted:
             raise self._admission_error(decision)
 
@@ -215,13 +208,7 @@ class SandboxLifecycleService:
 
         # External create I/O: no SQLAlchemy unit of work/session exists here.
         try:
-            created = await observe_phase(
-                self._provider.create(create_request),
-                phase="sandbox_create",
-                workload_kind=key.workload_kind,
-                provider=self._provider.name,
-                profile=profile,
-            )
+            created = await self._provider.create(create_request)
         except ProviderCreateAmbiguous as exc:
             async with self._database.uow() as uow:
                 await uow.repository.mark_create_unknown(
@@ -347,22 +334,16 @@ class SandboxLifecycleService:
             raise RuntimeError("cannot wait for an allocation without provider ID")
         self._check_deadline(deadline_at)
         try:
-            ready = await observe_phase(
-                self._provider.wait_ready(
-                    ProviderAllocationRef(
-                        provider_id=allocation.provider_id,
-                        provider_instance_id=allocation.provider_instance_id,
-                        allocation_id=allocation.allocation_id,
-                        allocation_token=allocation.allocation_token,
-                        key=allocation.key,
-                    ),
-                    profile=profile,
-                    deadline_at=deadline_at,
+            ready = await self._provider.wait_ready(
+                ProviderAllocationRef(
+                    provider_id=allocation.provider_id,
+                    provider_instance_id=allocation.provider_instance_id,
+                    allocation_id=allocation.allocation_id,
+                    allocation_token=allocation.allocation_token,
+                    key=allocation.key,
                 ),
-                phase="sandbox_readiness",
-                workload_kind=allocation.key.workload_kind,
-                provider=self._provider.name,
                 profile=profile,
+                deadline_at=deadline_at,
             )
         except ProviderNotReady as exc:
             retry_at = datetime.now(timezone.utc) + timedelta(
@@ -460,7 +441,6 @@ class SandboxLifecycleService:
             raise RuntimeError("logical sandbox disappeared after publication")
         return self._handle(logical, allocation)
 
-    @observed_lifecycle_operation("inspect")
     async def inspect(self, key: SandboxKey) -> SandboxHandle | None:
         """Read durable state only; provider inventory is never on this path."""
 
@@ -472,7 +452,6 @@ class SandboxLifecycleService:
             return None
         return self._handle(logical, allocation)
 
-    @observed_lifecycle_operation("release")
     async def release(
         self,
         key: SandboxKey,
@@ -534,7 +513,6 @@ class SandboxLifecycleService:
             await uow.commit()
         return self._handle(logical, allocation)
 
-    @observed_lifecycle_operation("destroy")
     async def destroy(
         self,
         key: SandboxKey,

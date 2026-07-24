@@ -254,15 +254,7 @@ async def test_invocation_extracts_w3c_context_before_starting_runtime_task() ->
                     "00-1234567890abcdef1234567890abcdef-1234567890abcdef-01"
                 ),
             },
-            json={
-                "input": {"value": 1},
-                "dispatch_timings": {
-                    "queue_wait_ms": 20,
-                    "sandbox_start_ms": 40,
-                    "execution_mode": "asynchronous",
-                    "runtime_profile": "function-python-v1",
-                },
-            },
+            json={"input": {"value": 1}},
         )
 
     assert response.status_code == 202, response.text

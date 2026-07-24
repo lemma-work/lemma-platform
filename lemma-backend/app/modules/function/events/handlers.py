@@ -19,12 +19,6 @@ from app.core.infrastructure.jobs.streaq_runtime import (
     streaq_task,
     streaq_worker,
 )
-from app.core.config import settings
-from app.modules.function.application.function_observability import (
-    FunctionPhaseTimings,
-    duration_ms,
-    record_terminal,
-)
 from app.modules.function.domain.errors import (
     FunctionNotFoundError,
     FunctionRunNotFoundError,
@@ -149,27 +143,7 @@ async def reconcile_function_runs() -> None:
             now=now,
         )
         async with uow_factory() as uow:
-            expired = await FunctionRunRepository(uow).fail_expired_runs(now=now)
-        for run in expired:
-            record_terminal(
-                run,
-                outcome="timeout",
-                execution_mode=(
-                    "asynchronous" if run.job_id is not None else "synchronous"
-                ),
-                runtime_profile=settings.agentbox_function_profile_name,
-                phases=FunctionPhaseTimings(
-                    queue_wait_ms=duration_ms(
-                        run.created_at,
-                        run.started_at or run.completed_at,
-                    ),
-                    runtime_call_ms=duration_ms(
-                        run.started_at,
-                        run.completed_at,
-                    ),
-                ),
-                error_type="FunctionDeadlineExceeded",
-            )
+            await FunctionRunRepository(uow).fail_expired(now=now)
     except Exception:
         logger.error(
             "function.handlers.reconcile_function_runs.failed",

@@ -15,7 +15,6 @@ from app.modules.function.application.function_callback_credentials import (
 from app.modules.function.application.function_session_token_cache import (
     FunctionSessionTokenKey,
 )
-from app.modules.function.contracts.runtime import RuntimeTimings
 from app.modules.function.domain.entities import (
     FunctionDispatchMode,
     FunctionExecutionDispatch,
@@ -190,7 +189,6 @@ class FunctionExecutionRepository:
         output_data: JsonObject | None,
         error: str | None,
         logs: str | None,
-        timings: RuntimeTimings | None = None,
         now: datetime | None = None,
     ) -> tuple[FunctionRunEntity | None, bool, bool]:
         timestamp = now or datetime.now(timezone.utc)
@@ -242,18 +240,6 @@ class FunctionExecutionRepository:
         *,
         error: str,
     ) -> FunctionRunEntity | None:
-        run, _transitioned = await self.fail_dispatch_transition(
-            dispatch,
-            error=error,
-        )
-        return run
-
-    async def fail_dispatch_transition(
-        self,
-        dispatch: FunctionExecutionDispatch,
-        *,
-        error: str,
-    ) -> tuple[FunctionRunEntity | None, bool]:
         return await self._finish_without_result(
             dispatch.run_id,
             run_status=FunctionRunStatus.FAILED,
@@ -266,18 +252,6 @@ class FunctionExecutionRepository:
         *,
         error: str = "Function execution was cancelled",
     ) -> FunctionRunEntity | None:
-        run, _transitioned = await self.cancel_dispatch_transition(
-            dispatch,
-            error=error,
-        )
-        return run
-
-    async def cancel_dispatch_transition(
-        self,
-        dispatch: FunctionExecutionDispatch,
-        *,
-        error: str = "Function execution was cancelled",
-    ) -> tuple[FunctionRunEntity | None, bool]:
         return await self._finish_without_result(
             dispatch.run_id,
             run_status=FunctionRunStatus.CANCELLED,
@@ -290,12 +264,11 @@ class FunctionExecutionRepository:
         *,
         error: str,
     ) -> FunctionRunEntity | None:
-        run, _transitioned = await self._finish_without_result(
+        return await self._finish_without_result(
             run_id,
             run_status=FunctionRunStatus.FAILED,
             error=error,
         )
-        return run
 
     async def _finish_without_result(
         self,
@@ -303,16 +276,16 @@ class FunctionExecutionRepository:
         *,
         run_status: FunctionRunStatus,
         error: str,
-    ) -> tuple[FunctionRunEntity | None, bool]:
+    ) -> FunctionRunEntity | None:
         run = await self.session.scalar(
             select(FunctionRunModel)
             .where(FunctionRunModel.id == run_id)
             .with_for_update()
         )
         if run is None:
-            return None, False
+            return None
         if run.status in TERMINAL_RUN_STATES:
-            return run.to_entity(), False
+            return run.to_entity()
 
         timestamp = datetime.now(timezone.utc)
         run.status = run_status
@@ -330,7 +303,7 @@ class FunctionExecutionRepository:
             ]
         )
         await self.session.flush()
-        return run.to_entity(), True
+        return run.to_entity()
 
     async def _run_and_function(
         self,
@@ -367,7 +340,6 @@ class FunctionExecutionRepository:
             function_name=function.name,
             user_id=run.user_id,
             mode=mode,
-            accepted_at=run.created_at,
             deadline_at=run.deadline_at,
             revision_hash=run.revision_hash,
             input_data=run.input_data or {},

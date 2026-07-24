@@ -53,19 +53,6 @@ class RuntimeFailure(RuntimeContract):
     traceback: tuple[str, ...] = Field(default=(), max_length=256)
 
 
-class RuntimeTimings(RuntimeContract):
-    total_ms: float = Field(default=0, ge=0)
-    claim_ms: float = Field(default=0, ge=0)
-    artifact_ms: float = Field(default=0, ge=0)
-    worker_ms: float = Field(default=0, ge=0)
-    user_code_ms: float = Field(default=0, ge=0)
-    artifact_cache_hit: bool = False
-    queue_wait_ms: float | None = Field(default=None, ge=0)
-    sandbox_start_ms: float | None = Field(default=None, ge=0)
-    execution_mode: Literal["synchronous", "asynchronous"] = "synchronous"
-    runtime_profile: str = Field(default="unknown", pattern=r"^[A-Za-z0-9_.-]{1,128}$")
-
-
 class RuntimeTerminalRequest(RuntimeContract):
     status: Literal["completed", "failed"]
     output_data: JsonObject | None = None
@@ -73,7 +60,6 @@ class RuntimeTerminalRequest(RuntimeContract):
     stdout: str = Field(max_length=4 * 1024 * 1024)
     stderr: str = Field(max_length=4 * 1024 * 1024)
     output_truncated: bool = False
-    timings: RuntimeTimings = Field(default_factory=RuntimeTimings)
 
     @model_validator(mode="after")
     def validate_terminal_shape(self) -> RuntimeTerminalRequest:
