@@ -136,13 +136,15 @@ class FunctionDispatcher:
             phase_timings.endpoint_ms = self._elapsed_ms(phase_started)
             function_token = await function_token_task
             phase_started = time.perf_counter()
-            runtime_response = await self._invoke_runtime(
+            runtime_response = await self._invoke_runtime_with_recovery(
                 dispatch,
                 endpoint=endpoint,
                 function_token=function_token,
             )
             phase_timings.runtime_call_ms = self._elapsed_ms(phase_started)
-            if isinstance(runtime_response, RuntimeAcceptedResponse):
+            if isinstance(runtime_response, FunctionRunEntity):
+                result = runtime_response
+            elif isinstance(runtime_response, RuntimeAcceptedResponse):
                 # The resident runtime returns 202 only after its backend claim
                 # committed PENDING -> RUNNING. Long JOB/deferred execution then
                 # belongs to the runtime callback, not to a backend worker poll.
@@ -173,10 +175,7 @@ class FunctionDispatcher:
                 raise
             if isinstance(exc, InvocationOutcomeUnconfirmed):
                 current = await self._load_run(run_id)
-                if current.status in _TERMINAL_RUN_STATES or (
-                    dispatch.mode == FunctionDispatchMode.ASYNCHRONOUS
-                    and current.status == FunctionRunStatus.RUNNING
-                ):
+                if self._durably_confirms_invocation(dispatch, current):
                     self._log_diagnostics(
                         run_id,
                         phase_timings,
@@ -305,6 +304,36 @@ class FunctionDispatcher:
             await self._wait_retry(handle.retry_after_ms, deadline_at)
         raise TimeoutError("function sandbox was not ready before the deadline")
 
+    async def _invoke_runtime_with_recovery(
+        self,
+        dispatch: FunctionExecutionDispatch,
+        *,
+        endpoint: FunctionRuntimeEndpoint,
+        function_token: str,
+    ) -> RuntimeTerminalRequest | RuntimeAcceptedResponse | FunctionRunEntity:
+        current_endpoint = endpoint
+        for attempt in range(2):
+            try:
+                return await self._invoke_runtime(
+                    dispatch,
+                    endpoint=current_endpoint,
+                    function_token=function_token,
+                )
+            except InvocationOutcomeUnconfirmed as exc:
+                current = await self._load_run(dispatch.run_id)
+                if self._durably_confirms_invocation(dispatch, current):
+                    return current
+                if attempt == 0 and exc.safe_same_operation:
+                    # A transport may discard a stale keep-alive connection
+                    # before the request reaches the resident runtime. Reusing
+                    # the exact immutable run identity is safe: the runtime
+                    # deduplicates run IDs and the backend claim is an atomic
+                    # PENDING -> RUNNING transition.
+                    current_endpoint = await self._runtime_endpoint(dispatch)
+                    continue
+                raise
+        raise AssertionError("unreachable function invocation retry state")
+
     async def _invoke_runtime(
         self,
         dispatch: FunctionExecutionDispatch,
@@ -347,7 +376,8 @@ class FunctionDispatcher:
                 endpoint=endpoint,
             )
             raise InvocationOutcomeUnconfirmed(
-                "function invocation response was lost"
+                "function invocation response was lost",
+                safe_same_operation=True,
             ) from exc
         if response.status_code >= 500:
             await self._endpoint_cache.invalidate(
@@ -506,6 +536,16 @@ class FunctionDispatcher:
         return f"Bearer {self._signer.derive(run_id)}"
 
     @staticmethod
+    def _durably_confirms_invocation(
+        dispatch: FunctionExecutionDispatch,
+        run: FunctionRunEntity,
+    ) -> bool:
+        return run.status in _TERMINAL_RUN_STATES or (
+            dispatch.mode == FunctionDispatchMode.ASYNCHRONOUS
+            and run.status == FunctionRunStatus.RUNNING
+        )
+
+    @staticmethod
     def _execution_error(exc: BaseException) -> str:
         if isinstance(exc, InvocationOutcomeUnconfirmed):
             return "Function execution failed because the runtime response was not confirmed"
@@ -545,3 +585,12 @@ class FunctionDispatcher:
 
 class InvocationOutcomeUnconfirmed(RuntimeError):
     """The runtime response was not confirmed; the run still terminates FAILED."""
+
+    def __init__(
+        self,
+        message: str,
+        *,
+        safe_same_operation: bool = False,
+    ) -> None:
+        super().__init__(message)
+        self.safe_same_operation = safe_same_operation
