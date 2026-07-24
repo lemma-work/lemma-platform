@@ -61,16 +61,20 @@ def test_phase_observation_records_failed_elapsed_time(monkeypatch) -> None:
     )
     phases = FunctionPhaseTimings()
 
-    observation = observability.observe_function_phase(
-        "function.runtime.call",
-        execution_mode="synchronous",
-        runtime_profile="function-python-v1",
-        phases=phases,
-        duration_field="runtime_call_ms",
-    )
-    observation.__enter__()
-    assert observation.__exit__(TimeoutError, TimeoutError(), None) is False
+    timeout_propagated = False
+    try:
+        with observability.observe_function_phase(
+            "function.runtime.call",
+            execution_mode="synchronous",
+            runtime_profile="function-python-v1",
+            phases=phases,
+            duration_field="runtime_call_ms",
+        ):
+            raise TimeoutError
+    except TimeoutError:
+        timeout_propagated = True
 
+    assert timeout_propagated
     assert phases.runtime_call_ms == 125
     assert outcomes == [("timeout", "TimeoutError")]
     assert observability.exception_outcome(asyncio.CancelledError()) == "cancelled"
@@ -89,23 +93,20 @@ def test_phase_observation_preserves_cancellation_and_elapsed_time(monkeypatch) 
     )
     phases = FunctionPhaseTimings()
 
-    observation = observability.observe_function_phase(
-        "function.agentbox.admission",
-        execution_mode="asynchronous",
-        runtime_profile="function-python-v1",
-        phases=phases,
-        duration_field="sandbox_start_ms",
-    )
-    observation.__enter__()
-    assert (
-        observation.__exit__(
-            asyncio.CancelledError,
-            asyncio.CancelledError(),
-            None,
-        )
-        is False
-    )
+    cancellation_propagated = False
+    try:
+        with observability.observe_function_phase(
+            "function.agentbox.admission",
+            execution_mode="asynchronous",
+            runtime_profile="function-python-v1",
+            phases=phases,
+            duration_field="sandbox_start_ms",
+        ):
+            raise asyncio.CancelledError
+    except asyncio.CancelledError:
+        cancellation_propagated = True
 
+    assert cancellation_propagated
     assert phases.sandbox_start_ms == 250
     assert outcomes == [("cancelled", "CancelledError")]
 
