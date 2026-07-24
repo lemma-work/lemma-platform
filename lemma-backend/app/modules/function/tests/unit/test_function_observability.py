@@ -61,7 +61,7 @@ def test_phase_observation_records_failed_elapsed_time(monkeypatch) -> None:
     )
     phases = FunctionPhaseTimings()
 
-    with pytest.raises(TimeoutError):
+    def observe_timeout() -> None:
         with observability.observe_function_phase(
             "function.runtime.call",
             execution_mode="synchronous",
@@ -70,6 +70,9 @@ def test_phase_observation_records_failed_elapsed_time(monkeypatch) -> None:
             duration_field="runtime_call_ms",
         ):
             raise TimeoutError
+
+    with pytest.raises(TimeoutError):
+        observe_timeout()
 
     assert phases.runtime_call_ms == 125
     assert outcomes == [("timeout", "TimeoutError")]
