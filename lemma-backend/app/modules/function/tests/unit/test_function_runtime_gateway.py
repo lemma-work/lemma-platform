@@ -13,9 +13,11 @@ from app.modules.function.application.function_callback_credentials import (
 from app.modules.function.application.function_runtime_gateway import (
     FunctionRuntimeGateway,
     RuntimeCredentialRejected,
+    _runtime_failure_message,
 )
 from app.modules.function.contracts.runtime import (
     RuntimeClaimRequest,
+    RuntimeFailure,
     RuntimeTerminalRequest,
 )
 from app.modules.function.domain.entities import (
@@ -52,6 +54,12 @@ def _context(artifact: bytes) -> FunctionRunRuntimeContext:
         function_id=function_id,
         function_name="calculate",
     )
+
+
+def test_runtime_timeout_without_detail_has_stable_user_facing_error() -> None:
+    assert _runtime_failure_message(
+        RuntimeFailure(name="TimeoutError", message="")
+    ) == "Function execution timed out (deadline exceeded)"
 
 
 @pytest.mark.asyncio

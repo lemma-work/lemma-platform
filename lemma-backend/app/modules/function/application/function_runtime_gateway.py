@@ -15,6 +15,7 @@ from app.modules.function.contracts.runtime import (
     RuntimeClaimRequest,
     RuntimeClaimResponse,
     RuntimeEventResponse,
+    RuntimeFailure,
     RuntimeIdentity,
     RuntimeTerminalRequest,
 )
@@ -127,11 +128,11 @@ class FunctionRuntimeGateway:
     ) -> RuntimeEventResponse:
         context = await self._authorized_context(run_id, callback_token)
         logs = self._logs(request)
-        error = None
-        if request.error is not None:
-            error = redact_text(
-                f"{request.error.name}: {request.error.message}"
-            )[:16_384]
+        error = (
+            _runtime_failure_message(request.error)
+            if request.error is not None
+            else None
+        )
         async with self._uow_factory() as uow:
             _run, accepted, duplicate = await FunctionExecutionRepository(
                 uow, self._signer
@@ -181,3 +182,12 @@ class FunctionRuntimeGateway:
         if not sections:
             return None
         return redact_text("\n".join(sections))[: 4 * 1024 * 1024]
+
+
+def _runtime_failure_message(error: RuntimeFailure) -> str:
+    # asyncio.wait_for raises the built-in TimeoutError without a message. The
+    # runtime preserves the exception type, so normalize that empty detail into
+    # the stable timeout semantic expected by API and job function clients.
+    if error.name == "TimeoutError":
+        return "Function execution timed out (deadline exceeded)"
+    return redact_text(f"{error.name}: {error.message}")[:16_384]
