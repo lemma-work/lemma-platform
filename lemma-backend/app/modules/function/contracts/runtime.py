@@ -60,6 +60,10 @@ class RuntimeTimings(RuntimeContract):
     worker_ms: float = Field(default=0, ge=0)
     user_code_ms: float = Field(default=0, ge=0)
     artifact_cache_hit: bool = False
+    queue_wait_ms: float | None = Field(default=None, ge=0)
+    sandbox_start_ms: float | None = Field(default=None, ge=0)
+    execution_mode: Literal["synchronous", "asynchronous"] = "synchronous"
+    runtime_profile: str = Field(default="unknown", pattern=r"^[A-Za-z0-9_.-]{1,128}$")
 
 
 class RuntimeTerminalRequest(RuntimeContract):

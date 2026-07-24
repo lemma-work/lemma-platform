@@ -21,6 +21,7 @@ from .runtime_models import (
     RunClaim,
     TerminalReport,
 )
+from .trace_context import current_trace_headers
 from .types import JsonObject
 
 
@@ -66,7 +67,7 @@ class GatewayClient:
                 self._base_url,
                 f"internal/function-runtime/runs/{run_id}:claim",
             ),
-            headers={"Authorization": f"Bearer {function_token}"},
+            headers=self._headers(f"Bearer {function_token}"),
             json={
                 "revision_hash": revision_hash,
                 "input_data": input_data,
@@ -78,7 +79,7 @@ class GatewayClient:
     async def artifact(self, claim: RunClaim) -> bytes:
         response = await self._client.get(
             urljoin(self._base_url, claim.artifact_url.lstrip("/")),
-            headers={"Authorization": f"Bearer {claim.callback_token}"},
+            headers=self._headers(f"Bearer {claim.callback_token}"),
         )
         response.raise_for_status()
         if len(response.content) > _MAX_ARTIFACT_BYTES:
@@ -95,7 +96,7 @@ class GatewayClient:
             self._base_url,
             f"internal/function-runtime/runs/{claim.run_id}:{event}",
         )
-        headers = {"Authorization": f"Bearer {claim.callback_token}"}
+        headers = self._headers(f"Bearer {claim.callback_token}")
         retry_deadline = min(
             datetime.now(timezone.utc) + timedelta(seconds=5),
             claim.deadline_at.astimezone(timezone.utc) + timedelta(seconds=5),
@@ -146,6 +147,13 @@ class GatewayClient:
 
     async def close(self) -> None:
         await self._client.aclose()
+
+    @staticmethod
+    def _headers(authorization: str) -> dict[str, str]:
+        return {
+            "Authorization": authorization,
+            **current_trace_headers(),
+        }
 
 
 def _verify_artifact(data: bytes, expected: str) -> str:

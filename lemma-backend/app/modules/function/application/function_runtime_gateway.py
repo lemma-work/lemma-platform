@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import hashlib
+import time
 from typing import Awaitable, Callable
 from urllib.parse import urlparse
 from uuid import UUID
@@ -11,6 +12,13 @@ from app.core.infrastructure.db.uow_factory import UnitOfWorkFactory
 from app.core.redaction import redact_text
 from app.modules.function.application.function_callback_credentials import (
     FunctionCallbackCredentialSigner,
+)
+from app.modules.function.application.function_observability import (
+    FunctionOutcome,
+    FunctionPhaseTimings,
+    function_span,
+    mark_span_outcome,
+    record_terminal,
 )
 from app.modules.function.contracts.runtime import (
     RuntimeClaimRequest,
@@ -126,6 +134,7 @@ class FunctionRuntimeGateway:
         callback_token: str,
         request: RuntimeTerminalRequest,
     ) -> RuntimeEventResponse:
+        finalization_started = time.perf_counter()
         context = await self._authorized_context(run_id, callback_token)
         logs = self._logs(request)
         error = None
@@ -133,19 +142,56 @@ class FunctionRuntimeGateway:
             error = redact_text(
                 f"{request.error.name}: {request.error.message}"
             )[:16_384]
-        async with self._uow_factory() as uow:
-            _run, accepted, duplicate = await FunctionExecutionRepository(
-                uow, self._signer
-            ).complete(
-                context,
-                completed=request.status == "completed",
-                output_data=request.output_data,
-                error=error,
-                logs=logs,
-                timings=request.timings,
+        execution_mode = request.timings.execution_mode
+        runtime_profile = request.timings.runtime_profile
+        with function_span(
+            "function.execution.finalize",
+            execution_mode=execution_mode,
+            runtime_profile=runtime_profile,
+        ) as span:
+            async with self._uow_factory() as uow:
+                run, accepted, duplicate = await FunctionExecutionRepository(
+                    uow, self._signer
+                ).complete(
+                    context,
+                    completed=request.status == "completed",
+                    output_data=request.output_data,
+                    error=error,
+                    logs=logs,
+                    timings=request.timings,
+                )
+            if not accepted:
+                mark_span_outcome(
+                    span,
+                    "rejected",
+                    error_type="RuntimeStateRejected",
+                )
+                raise RuntimeStateRejected
+            outcome = self._terminal_outcome(request)
+            terminal_error_type = self._terminal_error_type(outcome)
+            mark_span_outcome(
+                span,
+                outcome,
+                error_type=terminal_error_type,
             )
-        if not accepted:
-            raise RuntimeStateRejected
+        if not duplicate and run is not None:
+            record_terminal(
+                run,
+                outcome=outcome,
+                execution_mode=execution_mode,
+                runtime_profile=runtime_profile,
+                phases=FunctionPhaseTimings(
+                    queue_wait_ms=request.timings.queue_wait_ms,
+                    sandbox_start_ms=request.timings.sandbox_start_ms,
+                    runtime_call_ms=request.timings.total_ms,
+                    finalization_ms=round(
+                        (time.perf_counter() - finalization_started) * 1000,
+                        3,
+                    ),
+                    cold=not request.timings.artifact_cache_hit,
+                ),
+                error_type=terminal_error_type,
+            )
         return RuntimeEventResponse(accepted=True, duplicate=duplicate)
 
     async def _authorized_context(
@@ -182,6 +228,27 @@ class FunctionRuntimeGateway:
         if not sections:
             return None
         return redact_text("\n".join(sections))[: 4 * 1024 * 1024]
+
+    @staticmethod
+    def _terminal_outcome(request: RuntimeTerminalRequest) -> FunctionOutcome:
+        if request.status == "completed":
+            return "completed"
+        error_type = request.error.name.lower() if request.error is not None else ""
+        if "timeout" in error_type or "deadline" in error_type:
+            return "timed_out"
+        if "cancel" in error_type:
+            return "cancelled"
+        return "failed"
+
+    @staticmethod
+    def _terminal_error_type(outcome: FunctionOutcome) -> str | None:
+        if outcome == "completed":
+            return None
+        if outcome == "timed_out":
+            return "FunctionTimeout"
+        if outcome == "cancelled":
+            return "FunctionCancelled"
+        return "FunctionRuntimeError"
 
     @staticmethod
     def _docker_reachable_url(url: str) -> str:

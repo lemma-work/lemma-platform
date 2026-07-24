@@ -8,9 +8,7 @@ from uuid import UUID
 
 from sqlalchemy import select
 
-from app.core.config import settings
 from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
-from app.core.log.log import get_logger
 from app.modules.function.application.function_callback_credentials import (
     FunctionCallbackCredentialSigner,
 )
@@ -40,7 +38,6 @@ TERMINAL_RUN_STATES = {
     FunctionRunStatus.FAILED,
     FunctionRunStatus.CANCELLED,
 }
-logger = get_logger(__name__)
 
 
 class FunctionExecutionRepository:
@@ -236,25 +233,6 @@ class FunctionExecutionRepository:
             )
         )
         self.uow.collect_events([event])
-        if settings.function_execution_diagnostics:
-            logger.warning(
-                "function.execution.diagnostics.runtime",
-                run_id=str(run.id),
-                queued_to_claim_ms=self._duration_ms(run.created_at, run.started_at),
-                run_to_terminal_ms=self._duration_ms(run.created_at, timestamp),
-                runtime_total_ms=timings.total_ms if timings is not None else None,
-                runtime_claim_ms=timings.claim_ms if timings is not None else None,
-                runtime_artifact_ms=(
-                    timings.artifact_ms if timings is not None else None
-                ),
-                runtime_worker_ms=timings.worker_ms if timings is not None else None,
-                measured_user_code_ms=(
-                    timings.user_code_ms if timings is not None else None
-                ),
-                artifact_cache_hit=(
-                    timings.artifact_cache_hit if timings is not None else None
-                ),
-            )
         await self.session.flush()
         return run.to_entity(), True, False
 
@@ -264,6 +242,18 @@ class FunctionExecutionRepository:
         *,
         error: str,
     ) -> FunctionRunEntity | None:
+        run, _transitioned = await self.fail_dispatch_transition(
+            dispatch,
+            error=error,
+        )
+        return run
+
+    async def fail_dispatch_transition(
+        self,
+        dispatch: FunctionExecutionDispatch,
+        *,
+        error: str,
+    ) -> tuple[FunctionRunEntity | None, bool]:
         return await self._finish_without_result(
             dispatch.run_id,
             run_status=FunctionRunStatus.FAILED,
@@ -276,6 +266,18 @@ class FunctionExecutionRepository:
         *,
         error: str = "Function execution was cancelled",
     ) -> FunctionRunEntity | None:
+        run, _transitioned = await self.cancel_dispatch_transition(
+            dispatch,
+            error=error,
+        )
+        return run
+
+    async def cancel_dispatch_transition(
+        self,
+        dispatch: FunctionExecutionDispatch,
+        *,
+        error: str = "Function execution was cancelled",
+    ) -> tuple[FunctionRunEntity | None, bool]:
         return await self._finish_without_result(
             dispatch.run_id,
             run_status=FunctionRunStatus.CANCELLED,
@@ -288,11 +290,12 @@ class FunctionExecutionRepository:
         *,
         error: str,
     ) -> FunctionRunEntity | None:
-        return await self._finish_without_result(
+        run, _transitioned = await self._finish_without_result(
             run_id,
             run_status=FunctionRunStatus.FAILED,
             error=error,
         )
+        return run
 
     async def _finish_without_result(
         self,
@@ -300,16 +303,16 @@ class FunctionExecutionRepository:
         *,
         run_status: FunctionRunStatus,
         error: str,
-    ) -> FunctionRunEntity | None:
+    ) -> tuple[FunctionRunEntity | None, bool]:
         run = await self.session.scalar(
             select(FunctionRunModel)
             .where(FunctionRunModel.id == run_id)
             .with_for_update()
         )
         if run is None:
-            return None
+            return None, False
         if run.status in TERMINAL_RUN_STATES:
-            return run.to_entity()
+            return run.to_entity(), False
 
         timestamp = datetime.now(timezone.utc)
         run.status = run_status
@@ -327,7 +330,7 @@ class FunctionExecutionRepository:
             ]
         )
         await self.session.flush()
-        return run.to_entity()
+        return run.to_entity(), True
 
     async def _run_and_function(
         self,
@@ -364,6 +367,7 @@ class FunctionExecutionRepository:
             function_name=function.name,
             user_id=run.user_id,
             mode=mode,
+            accepted_at=run.created_at,
             deadline_at=run.deadline_at,
             revision_hash=run.revision_hash,
             input_data=run.input_data or {},
@@ -391,12 +395,3 @@ class FunctionExecutionRepository:
             function_id=function.id,
             function_name=function.name,
         )
-
-    @staticmethod
-    def _duration_ms(
-        started: datetime | None,
-        finished: datetime | None,
-    ) -> float | None:
-        if started is None or finished is None:
-            return None
-        return round((finished - started).total_seconds() * 1000, 3)

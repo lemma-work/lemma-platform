@@ -24,6 +24,7 @@ from agentbox.observability import create_inherited_task
 
 from .runner import GatewayClient, _cached_artifact_root, _resolve_artifact_root
 from .runtime_models import (
+    DispatchTimings,
     FunctionArtifactManifest,
     RunAccepted,
     RunClaim,
@@ -33,6 +34,7 @@ from .runtime_models import (
     WorkerRequest,
 )
 from .types import JsonObject
+from .trace_context import bind_traceparent
 from .worker_pool import RevisionWorkerRegistry, RuntimeOverloaded
 
 
@@ -44,6 +46,7 @@ class InvocationBody(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
 
     input: JsonObject
+    dispatch_timings: DispatchTimings
 
 
 @dataclass(slots=True)
@@ -78,6 +81,7 @@ class FunctionRuntimeService:
         run_token: str,
         gateway_url: str,
         input_data: JsonObject,
+        dispatch_timings: DispatchTimings | None = None,
     ) -> TerminalReport:
         run = await self._start(
             function_token=function_token,
@@ -87,6 +91,7 @@ class FunctionRuntimeService:
             run_token=run_token,
             gateway_url=gateway_url,
             input_data=input_data,
+            dispatch_timings=dispatch_timings or self._default_dispatch_timings(),
         )
         return await asyncio.shield(run.task)
 
@@ -100,6 +105,7 @@ class FunctionRuntimeService:
         run_token: str,
         gateway_url: str,
         input_data: JsonObject,
+        dispatch_timings: DispatchTimings | None = None,
     ) -> RunAccepted:
         run = await self._start(
             function_token=function_token,
@@ -109,6 +115,7 @@ class FunctionRuntimeService:
             run_token=run_token,
             gateway_url=gateway_url,
             input_data=input_data,
+            dispatch_timings=dispatch_timings or self._default_dispatch_timings(),
         )
         await run.accepted.wait()
         if run.acceptance_error is not None:
@@ -125,6 +132,7 @@ class FunctionRuntimeService:
         run_token: str,
         gateway_url: str,
         input_data: JsonObject,
+        dispatch_timings: DispatchTimings,
     ) -> _Run:
         signature = self._signature(
             function_id=function_id,
@@ -161,6 +169,7 @@ class FunctionRuntimeService:
                         run_id=run_id,
                         gateway_url=gateway_url,
                         input_data=input_data,
+                        dispatch_timings=dispatch_timings,
                     )
                 )
                 task.add_done_callback(self._consume_task_result)
@@ -223,6 +232,7 @@ class FunctionRuntimeService:
         run_id: UUID,
         gateway_url: str,
         input_data: JsonObject,
+        dispatch_timings: DispatchTimings,
     ) -> TerminalReport:
         execution_started = time.perf_counter()
         claim_ms = 0.0
@@ -292,6 +302,10 @@ class FunctionRuntimeService:
                         worker_ms=worker_ms,
                         user_code_ms=user_code_ms,
                         artifact_cache_hit=artifact_cache_hit,
+                        queue_wait_ms=dispatch_timings.queue_wait_ms,
+                        sandbox_start_ms=dispatch_timings.sandbox_start_ms,
+                        execution_mode=dispatch_timings.execution_mode,
+                        runtime_profile=dispatch_timings.runtime_profile,
                     ),
                 )
             except asyncio.CancelledError:
@@ -312,6 +326,10 @@ class FunctionRuntimeService:
                         worker_ms=worker_ms,
                         user_code_ms=user_code_ms,
                         artifact_cache_hit=artifact_cache_hit,
+                        queue_wait_ms=dispatch_timings.queue_wait_ms,
+                        sandbox_start_ms=dispatch_timings.sandbox_start_ms,
+                        execution_mode=dispatch_timings.execution_mode,
+                        runtime_profile=dispatch_timings.runtime_profile,
                     ),
                 )
             await gateway.terminal(claim, report)
@@ -345,6 +363,13 @@ class FunctionRuntimeService:
     def _consume_task_result(task: asyncio.Task[TerminalReport]) -> None:
         if not task.cancelled():
             task.exception()
+
+    @staticmethod
+    def _default_dispatch_timings() -> DispatchTimings:
+        return DispatchTimings(
+            execution_mode="synchronous",
+            runtime_profile="unknown",
+        )
 
     @staticmethod
     def _elapsed_ms(started: float) -> float:
@@ -459,6 +484,11 @@ async def health(_request: Request) -> JSONResponse:
 
 
 async def invoke(request: Request) -> JSONResponse:
+    with bind_traceparent(request.headers.get("traceparent")):
+        return await _invoke(request)
+
+
+async def _invoke(request: Request) -> JSONResponse:
     try:
         content_length = int(request.headers.get("content-length", "0"))
     except ValueError:
@@ -486,6 +516,7 @@ async def invoke(request: Request) -> JSONResponse:
                 run_token=run_token,
                 gateway_url=gateway_url,
                 input_data=body.input,
+                dispatch_timings=body.dispatch_timings,
             )
             return JSONResponse(
                 accepted.model_dump(mode="json"),
@@ -500,6 +531,7 @@ async def invoke(request: Request) -> JSONResponse:
             run_token=run_token,
             gateway_url=gateway_url,
             input_data=body.input,
+            dispatch_timings=body.dispatch_timings,
         )
         return JSONResponse(report.model_dump(mode="json"))
     except ValueError as exc:

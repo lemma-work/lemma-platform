@@ -18,14 +18,20 @@ from collections.abc import Awaitable, Callable
 from uuid import UUID
 
 from fastapi import Request
+from opentelemetry.trace import SpanKind
 
 from app.core.authorization.scope import context_scope, pod_context_scope, uow_scope
 from app.core.authorization.service import AuthorizationDataService
+from app.core.config import settings
 from app.core.helpers.slug import slugify
 from app.core.infrastructure.db.uow_factory import UnitOfWorkFactory
 from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
 from app.modules.function.application.function_definition_compiler import (
     FunctionDefinitionCompiler,
+)
+from app.modules.function.application.function_observability import (
+    function_span,
+    mark_span_outcome,
 )
 from app.modules.function.domain.entities import (
     FunctionDispatchMode,
@@ -503,10 +509,25 @@ class FunctionUseCases:
         if function.type == FunctionType.JOB:
             return await self._enqueue_run(run)
         del function, user_email, run_as_workload
-        return await self._dispatcher.execute(
-            run.id,
-            mode=FunctionDispatchMode.SYNCHRONOUS,
-        )
+        with function_span(
+            "function.execution.accepted",
+            execution_mode="synchronous",
+            runtime_profile=settings.agentbox_function_profile_name,
+        ) as span:
+            try:
+                result = await self._dispatcher.execute(
+                    run.id,
+                    mode=FunctionDispatchMode.SYNCHRONOUS,
+                )
+            except BaseException as exc:
+                mark_span_outcome(
+                    span,
+                    "failed",
+                    error_type=type(exc).__name__,
+                )
+                raise
+            mark_span_outcome(span, "completed")
+            return result
 
     async def _enqueue_run(self, run: FunctionRunEntity) -> FunctionRunEntity:
         """Best-effort fast publish backed by durable pending-run reconciliation.
@@ -519,15 +540,29 @@ class FunctionUseCases:
 
         if run.id is None:
             raise ValueError("function run must be persisted before enqueue")
-        try:
-            job_id = await self._run_queue.enqueue(run.id)
-        except FunctionRunQueueUnavailable as exc:
-            logger.warning(
-                "function.use_cases.run_enqueue_deferred.degraded",
-                run_id=str(run.id),
-                error_type=type(exc).__name__,
-            )
-            return run
+        with function_span(
+            "function.execution.accepted",
+            execution_mode="asynchronous",
+            runtime_profile=settings.agentbox_function_profile_name,
+            kind=SpanKind.PRODUCER,
+        ) as span:
+            try:
+                job_id = await self._run_queue.enqueue(run.id)
+            except FunctionRunQueueUnavailable as exc:
+                # Durable reconciliation owns recovery; one state-transition
+                # warning is sufficient and the function remains accepted.
+                logger.warning(
+                    "function.use_cases.run_enqueue_deferred.degraded",
+                    run_id=str(run.id),
+                    error_type=type(exc).__name__,
+                )
+                mark_span_outcome(
+                    span,
+                    "failed",
+                    error_type=type(exc).__name__,
+                )
+                return run
+            mark_span_outcome(span, "completed")
         if run.job_id != job_id:
             raise RuntimeError("function run queue returned an unexpected job identity")
         return run
