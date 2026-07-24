@@ -665,6 +665,47 @@ def test_canary_secrets_are_redacted_recursively_and_in_text() -> None:
     assert canary not in redact_text(
         f"GET https://provider.test/cb?code={canary} failed"
     )
+    assert canary not in redact_text(f'provider response {{"token": "{canary}"}}')
+
+
+@pytest.mark.parametrize(
+    "credential_parts",
+    [
+        ("AKIA", "IOSFODNN7EXAMPLE"),
+        ("AIza", "SyD-example-credential-123456"),
+        ("ghp", "_1234567890abcdefghijklmnopqrst"),
+        ("sk-proj", "-1234567890abcdefghijklmnop"),
+        ("sk", "_live_1234567890abcdefghijklmnop"),
+        ("xoxb", "-1234567890-abcdefghijklmnop"),
+    ],
+)
+def test_known_bare_credential_patterns_are_redacted(
+    credential_parts: tuple[str, str],
+) -> None:
+    # Assemble canaries at runtime so secret-scanning push protection never
+    # mistakes a test fixture for a committed live credential.
+    credential = "".join(credential_parts)
+    rendered = redact_text(f"provider returned credential {credential}")
+    assert credential not in rendered
+    assert REDACTED in rendered
+
+
+def test_private_keys_and_sensitive_url_fragments_are_redacted() -> None:
+    private_key = (
+        "-----BEGIN "
+        "PRIVATE KEY-----\n"
+        "CANARY-PRIVATE-MATERIAL\n"
+        "-----END "
+        "PRIVATE KEY-----"
+    )
+    assert "CANARY" not in redact_text(f"provider returned {private_key}")
+    assert (
+        _redact_url(
+            "https://provider.test/callback?ok=yes"
+            "#access_token=CANARY&token_type=bearer"
+        )
+        == "https://provider.test/callback?ok=yes#[REDACTED]"
+    )
 
 
 def test_redaction_handles_urls_exceptions_sequences_and_binary_values() -> None:

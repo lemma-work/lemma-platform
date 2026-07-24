@@ -9,7 +9,6 @@ import os
 from pathlib import Path
 import re
 import sys
-import time
 import traceback
 from typing import Any, Protocol
 from uuid import UUID
@@ -30,7 +29,7 @@ _CONSOLE_HANDLER_MARKER = "_lemma_json_console_handler"
 _APP_RECORD_MARKER = "_lemma_app_owned"
 _release_warning_emitted: set[str] = set()
 _contract_violation_emitted = False
-_dependency_noise_filter: logging.Filter | None = None
+_configured_log_level = logging.INFO
 
 _CONTRACT_METADATA_FIELDS = {
     "causation_id",
@@ -58,23 +57,30 @@ _CONTRACT_METADATA_FIELDS = {
     "trace_id",
 }
 
-_FOREIGN_LOGGER_LEVELS: dict[str, int] = {
-    "httpx": logging.WARNING,
-    "httpcore": logging.WARNING,
-    "uvicorn": logging.WARNING,
-    "uvicorn.access": logging.WARNING,
-    "uvicorn.error": logging.WARNING,
-    "streaq": logging.WARNING,
-    "faststream": logging.WARNING,
-    "apscheduler": logging.WARNING,
-    "sqlalchemy": logging.WARNING,
-    "azure": logging.WARNING,
-    "azure.core": logging.WARNING,
-    "e2b": logging.WARNING,
-}
-
-_DEPENDENCY_WARNING_INTERVAL_SECONDS = 300.0
-_DEPENDENCY_WARNING_KEY_LIMIT = 512
+_FOREIGN_LOGGER_PREFIXES = frozenset(
+    {
+        "apscheduler",
+        "asyncio",
+        "azure",
+        "com.supertokens",
+        "coredis",
+        "e2b",
+        "fastmcp",
+        "faststream",
+        "filelock",
+        "httpcore",
+        "httpx",
+        "mcp",
+        "openai",
+        "sqlalchemy",
+        "streaq",
+        "uvicorn",
+    }
+)
+# ``message`` is a reserved/renderer-dependent LogRecord and OTEL body concept.
+# Keep the redacted dependency text in an explicit attribute that survives both
+# the JSON console renderer and OTLP attribute sanitization unchanged.
+_DEPENDENCY_FIELDS = frozenset({"dependency_message"})
 
 _PROHIBITED_FIELDS = {
     "authorization",
@@ -99,52 +105,6 @@ class ReleaseIdentityError(RuntimeError):
 
 class LoggingContractError(ValueError):
     """Raised when local code violates the exact structured-log contract."""
-
-
-class _RepeatedDependencyWarningFilter(logging.Filter):
-    """Keep the first repeated dependency warning in each bounded time window.
-
-    Application failures use owned structured events and are never handled by
-    this filter. It applies only to known foreign loggers in production, where
-    SDK retry loops can otherwise emit the same warning on every attempt. Error
-    and critical records always pass through.
-    """
-
-    def __init__(
-        self,
-        interval_seconds: float = _DEPENDENCY_WARNING_INTERVAL_SECONDS,
-        key_limit: int = _DEPENDENCY_WARNING_KEY_LIMIT,
-    ) -> None:
-        super().__init__()
-        self._interval = interval_seconds
-        self._key_limit = max(key_limit, 1)
-        self._last_emit: dict[str, float] = {}
-
-    def filter(self, record: logging.LogRecord) -> bool:
-        if record.levelno >= logging.ERROR:
-            return True
-
-        # Hash the template rather than retaining a provider message that may
-        # contain a URL or other sensitive value. ``record.msg`` intentionally
-        # excludes interpolation args so retries with changing IDs still
-        # collapse to one warning.
-        template = (
-            record.msg if isinstance(record.msg, str) else type(record.msg).__name__
-        )
-        fingerprint = hashlib.sha256(
-            f"{record.name}:{record.levelno}:{template}".encode()
-        ).hexdigest()
-        now = time.monotonic()
-        last = self._last_emit.get(fingerprint)
-        if last is not None and now - last < self._interval:
-            return False
-        if (
-            fingerprint not in self._last_emit
-            and len(self._last_emit) >= self._key_limit
-        ):
-            self._last_emit.pop(next(iter(self._last_emit)))
-        self._last_emit[fingerprint] = now
-        return True
 
 
 def _strict_logging_contract_enabled() -> bool:
@@ -327,10 +287,15 @@ def _bounded_contract(_: Any, __: str, event_dict: dict[str, Any]) -> dict[str, 
                     violation = "unexpected_fields"
     else:
         # Dependency messages and interpolation arguments are not controlled by
-        # Lemma and may contain URLs, SQL, or provider response content.
+        # Lemma. Preserve the already-redacted, bounded message and logger
+        # identity while dropping every uncontrolled auxiliary field.
+        dependency_message = event if isinstance(event, str) else None
         event_dict["event"] = "dependency.reported"
+        if dependency_message:
+            event_dict["dependency_message"] = dependency_message
+        allowed = _CONTRACT_METADATA_FIELDS | _DEPENDENCY_FIELDS
         for key in list(event_dict):
-            if key not in _CONTRACT_METADATA_FIELDS and not key.startswith("_"):
+            if key not in allowed and not key.startswith("_"):
                 event_dict.pop(key, None)
 
     if violation is not None:
@@ -388,6 +353,8 @@ def _is_otel_handler(handler: logging.Handler) -> bool:
 
 def _is_console_handler(handler: logging.Handler) -> bool:
     if getattr(handler, _CONSOLE_HANDLER_MARKER, False):
+        return True
+    if handler.__class__.__module__ == "rich.logging":
         return True
     if isinstance(handler, logging.FileHandler):
         return False
@@ -447,19 +414,9 @@ def _processor_formatter(renderer: Any) -> structlog.stdlib.ProcessorFormatter:
     )
 
 
-def _reconcile_dependency_filter(logger: logging.Logger) -> None:
-    logger.filters = [
-        item
-        for item in logger.filters
-        if not isinstance(item, _RepeatedDependencyWarningFilter)
-    ]
-    if _dependency_noise_filter is not None:
-        logger.addFilter(_dependency_noise_filter)
-
-
-def _reconcile_named_loggers() -> None:
+def _reconcile_named_loggers(configured_level: int) -> None:
     manager = logging.root.manager.loggerDict
-    prefixes = tuple(_FOREIGN_LOGGER_LEVELS)
+    prefixes = tuple(_FOREIGN_LOGGER_PREFIXES)
     names = set(prefixes)
     names.update(
         name
@@ -468,22 +425,13 @@ def _reconcile_named_loggers() -> None:
     )
     for name in names:
         logger = logging.getLogger(name)
-        _reconcile_dependency_filter(logger)
         logger.handlers = [
             handler for handler in logger.handlers if not _is_console_handler(handler)
         ]
         for handler in logger.handlers:
             _install_safe_exception_filter(handler)
         logger.propagate = True
-        level = next(
-            (
-                configured
-                for prefix, configured in _FOREIGN_LOGGER_LEVELS.items()
-                if name == prefix or name.startswith(prefix + ".")
-            ),
-            logging.WARNING,
-        )
-        logger.setLevel(level)
+        logger.setLevel(configured_level)
 
 
 def setup_logging(
@@ -494,12 +442,8 @@ def setup_logging(
     log_level: str = "INFO",
 ) -> None:
     """Install or reconcile the one application JSON console pipeline."""
-    global _dependency_noise_filter
+    global _configured_log_level
     resolved_env = env or _bootstrap_environment()
-    production = _deployment_environment(resolved_env) == "production"
-    _dependency_noise_filter = (
-        _RepeatedDependencyWarningFilter() if production else None
-    )
     release_sha = release_sha_for_resource()
     _logging_context.clear()
     _logging_context.update(
@@ -512,6 +456,7 @@ def setup_logging(
     )
 
     resolved_level = getattr(logging, log_level.upper(), logging.INFO)
+    _configured_log_level = resolved_level
     shared = _shared_processors()
     renderer = (
         structlog.processors.JSONRenderer()
@@ -553,7 +498,7 @@ def setup_logging(
         _install_safe_exception_filter(handler)
     root.handlers = [console, *preserved]
     root.setLevel(resolved_level)
-    _reconcile_named_loggers()
+    _reconcile_named_loggers(resolved_level)
 
 
 def validate_release_identity(env: str) -> None:
@@ -586,16 +531,15 @@ def get_logger(name: str) -> Logger:
     return structlog.get_logger().bind(logger=name)  # type: ignore[return-value]
 
 
-def get_dependency_logger(name: str, *, level: int = logging.WARNING) -> logging.Logger:
+def get_dependency_logger(name: str, *, level: int | None = None) -> logging.Logger:
     """Return a foreign-library logger routed through Lemma's safe root pipeline.
 
     Some libraries (notably FastStream) create their own stdout handler lazily
     when a broker starts. Supplying this logger prevents that late handler from
-    being installed while retaining warning/error records as bounded
+    being installed while retaining configured records as bounded, redacted
     ``dependency.reported`` events.
     """
     dependency_logger = logging.getLogger(name)
-    _reconcile_dependency_filter(dependency_logger)
     dependency_logger.handlers = [
         handler
         for handler in dependency_logger.handlers
@@ -604,9 +548,12 @@ def get_dependency_logger(name: str, *, level: int = logging.WARNING) -> logging
     for handler in dependency_logger.handlers:
         _install_safe_exception_filter(handler)
     dependency_logger.propagate = True
-    deployment = _logging_context.get("deployment.environment")
+    requested_level = _configured_log_level if level is None else level
     dependency_logger.setLevel(
-        max(level, logging.WARNING) if deployment == "production" else level
+        max(
+            _configured_log_level,
+            requested_level,
+        )
     )
     return dependency_logger
 

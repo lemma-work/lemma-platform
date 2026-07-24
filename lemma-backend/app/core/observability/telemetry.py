@@ -520,6 +520,7 @@ _SAFE_OTEL_LOG_FIELDS = frozenset(
         "outcome",
         "duration_ms",
         "incident_duration_ms",
+        "dependency_message",
         "failure_count",
         "count",
         "method",
