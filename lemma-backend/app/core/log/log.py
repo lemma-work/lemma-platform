@@ -9,6 +9,7 @@ import os
 from pathlib import Path
 import re
 import sys
+import time
 import traceback
 from typing import Any, Protocol
 from uuid import UUID
@@ -29,6 +30,7 @@ _CONSOLE_HANDLER_MARKER = "_lemma_json_console_handler"
 _APP_RECORD_MARKER = "_lemma_app_owned"
 _release_warning_emitted: set[str] = set()
 _contract_violation_emitted = False
+_dependency_noise_filter: logging.Filter | None = None
 
 _CONTRACT_METADATA_FIELDS = {
     "causation_id",
@@ -71,6 +73,9 @@ _FOREIGN_LOGGER_LEVELS: dict[str, int] = {
     "e2b": logging.WARNING,
 }
 
+_DEPENDENCY_WARNING_INTERVAL_SECONDS = 300.0
+_DEPENDENCY_WARNING_KEY_LIMIT = 512
+
 _PROHIBITED_FIELDS = {
     "authorization",
     "body",
@@ -94,6 +99,52 @@ class ReleaseIdentityError(RuntimeError):
 
 class LoggingContractError(ValueError):
     """Raised when local code violates the exact structured-log contract."""
+
+
+class _RepeatedDependencyWarningFilter(logging.Filter):
+    """Keep the first repeated dependency warning in each bounded time window.
+
+    Application failures use owned structured events and are never handled by
+    this filter. It applies only to known foreign loggers in production, where
+    SDK retry loops can otherwise emit the same warning on every attempt. Error
+    and critical records always pass through.
+    """
+
+    def __init__(
+        self,
+        interval_seconds: float = _DEPENDENCY_WARNING_INTERVAL_SECONDS,
+        key_limit: int = _DEPENDENCY_WARNING_KEY_LIMIT,
+    ) -> None:
+        super().__init__()
+        self._interval = interval_seconds
+        self._key_limit = max(key_limit, 1)
+        self._last_emit: dict[str, float] = {}
+
+    def filter(self, record: logging.LogRecord) -> bool:
+        if record.levelno >= logging.ERROR:
+            return True
+
+        # Hash the template rather than retaining a provider message that may
+        # contain a URL or other sensitive value. ``record.msg`` intentionally
+        # excludes interpolation args so retries with changing IDs still
+        # collapse to one warning.
+        template = (
+            record.msg if isinstance(record.msg, str) else type(record.msg).__name__
+        )
+        fingerprint = hashlib.sha256(
+            f"{record.name}:{record.levelno}:{template}".encode()
+        ).hexdigest()
+        now = time.monotonic()
+        last = self._last_emit.get(fingerprint)
+        if last is not None and now - last < self._interval:
+            return False
+        if (
+            fingerprint not in self._last_emit
+            and len(self._last_emit) >= self._key_limit
+        ):
+            self._last_emit.pop(next(iter(self._last_emit)))
+        self._last_emit[fingerprint] = now
+        return True
 
 
 def _strict_logging_contract_enabled() -> bool:
@@ -396,6 +447,16 @@ def _processor_formatter(renderer: Any) -> structlog.stdlib.ProcessorFormatter:
     )
 
 
+def _reconcile_dependency_filter(logger: logging.Logger) -> None:
+    logger.filters = [
+        item
+        for item in logger.filters
+        if not isinstance(item, _RepeatedDependencyWarningFilter)
+    ]
+    if _dependency_noise_filter is not None:
+        logger.addFilter(_dependency_noise_filter)
+
+
 def _reconcile_named_loggers() -> None:
     manager = logging.root.manager.loggerDict
     prefixes = tuple(_FOREIGN_LOGGER_LEVELS)
@@ -407,6 +468,7 @@ def _reconcile_named_loggers() -> None:
     )
     for name in names:
         logger = logging.getLogger(name)
+        _reconcile_dependency_filter(logger)
         logger.handlers = [
             handler for handler in logger.handlers if not _is_console_handler(handler)
         ]
@@ -432,7 +494,12 @@ def setup_logging(
     log_level: str = "INFO",
 ) -> None:
     """Install or reconcile the one application JSON console pipeline."""
+    global _dependency_noise_filter
     resolved_env = env or _bootstrap_environment()
+    production = _deployment_environment(resolved_env) == "production"
+    _dependency_noise_filter = (
+        _RepeatedDependencyWarningFilter() if production else None
+    )
     release_sha = release_sha_for_resource()
     _logging_context.clear()
     _logging_context.update(
@@ -528,6 +595,7 @@ def get_dependency_logger(name: str, *, level: int = logging.WARNING) -> logging
     ``dependency.reported`` events.
     """
     dependency_logger = logging.getLogger(name)
+    _reconcile_dependency_filter(dependency_logger)
     dependency_logger.handlers = [
         handler
         for handler in dependency_logger.handlers
@@ -536,7 +604,10 @@ def get_dependency_logger(name: str, *, level: int = logging.WARNING) -> logging
     for handler in dependency_logger.handlers:
         _install_safe_exception_filter(handler)
     dependency_logger.propagate = True
-    dependency_logger.setLevel(level)
+    deployment = _logging_context.get("deployment.environment")
+    dependency_logger.setLevel(
+        max(level, logging.WARNING) if deployment == "production" else level
+    )
     return dependency_logger
 
 

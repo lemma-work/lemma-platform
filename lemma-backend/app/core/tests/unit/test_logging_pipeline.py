@@ -222,6 +222,53 @@ def test_lazy_dependency_logger_cannot_install_its_own_console_handler(
     assert dependency_logger.handlers == []
 
 
+def test_production_collapses_repeated_dependency_warnings_but_keeps_errors(
+    captured_stdout,
+) -> None:
+    setup_logging("production", service_name="lemma-api", json_logs=True)
+    dependency_logger = get_dependency_logger("httpx", level=logging.INFO)
+
+    dependency_logger.info("routine request completed")
+    dependency_logger.warning("retrying request attempt=%s", 1)
+    dependency_logger.warning("retrying request attempt=%s", 2)
+    dependency_logger.error("request failed attempt=%s", 3)
+    dependency_logger.error("request failed attempt=%s", 4)
+
+    records = captured_stdout()
+    assert [record["level"] for record in records] == [
+        "warning",
+        "error",
+        "error",
+    ]
+    assert all(record["event"] == "dependency.reported" for record in records)
+
+
+def test_development_keeps_dependency_warning_repeats_for_debugging(
+    captured_stdout,
+) -> None:
+    dependency_logger = get_dependency_logger("httpx", level=logging.INFO)
+
+    dependency_logger.info("routine request completed")
+    dependency_logger.warning("retrying request attempt=%s", 1)
+    dependency_logger.warning("retrying request attempt=%s", 2)
+
+    records = captured_stdout()
+    assert [record["level"] for record in records] == [
+        "info",
+        "warning",
+        "warning",
+    ]
+
+
+def test_uvicorn_access_records_are_silent_even_at_debug_root(
+    captured_stdout,
+) -> None:
+    logging.getLogger("uvicorn.access").info(
+        '127.0.0.1 - "GET /health/ready HTTP/1.1" 200'
+    )
+    assert captured_stdout() == []
+
+
 def test_preserved_handlers_never_receive_raw_exception_data() -> None:
     records: list[logging.LogRecord] = []
 
