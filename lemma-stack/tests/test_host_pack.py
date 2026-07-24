@@ -79,9 +79,11 @@ def test_builds_exact_backend_frontend_native_contract(paths, tmp_path):
     assert backend["env"]["AGENTBOX_FUNCTION_IMAGE"] == "function:test"
     assert backend["env"]["AGENTBOX_LOCAL_RUNTIME_TIMEOUT_SECONDS"] == "600"
     assert backend["env"]["BROWSER_SDK_PATH"].endswith("lemma-client.js")
+    assert backend["env"]["SESSION_COOKIE_DOMAIN"] == ""
     assert frontend["dependencies"] == ["backend"]
     assert frontend["env"]["HOSTNAME"] == "127.0.0.1"
     assert frontend["env"]["PORT"] == "3711"
+    assert frontend["env"]["NEXT_PUBLIC_SESSION_TOKEN_DOMAIN"] == ""
 
 
 def test_user_environment_remains_last_wins(paths, tmp_path):

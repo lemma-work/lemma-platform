@@ -32,15 +32,16 @@ POSTGRES_VOLUME = "lemma-local-postgres-data"
 #   <slug>.apps.lemma.localhost
 #   <sandbox>-<app>.workspaces.lemma.localhost
 #
-# They remain same-site, so a cookie scoped to ``lemma.localhost`` reaches the
-# API and built apps with SameSite=Lax over plain HTTP. No public DNS, hosts-file
-# edits, proxy, or development certificate is required.
+# They remain same-site, while the auth cookie stays host-only on the API
+# origin. Main and built-app frontends authenticate with credentialed requests
+# to that origin; user-authored app hosts never receive the cookie directly.
+# No public DNS, hosts-file edits, proxy, or development certificate is
+# required.
 LOCAL_ROOT_DOMAIN = "lemma.localhost"
 LOCAL_FRONTEND_HOST = f"app.{LOCAL_ROOT_DOMAIN}"
 LOCAL_BACKEND_HOST = f"api.{LOCAL_ROOT_DOMAIN}"
 LOCAL_APPS_DOMAIN = f"apps.{LOCAL_ROOT_DOMAIN}"
 LOCAL_WORKSPACES_DOMAIN = f"workspaces.{LOCAL_ROOT_DOMAIN}"
-LOCAL_COOKIE_DOMAIN = f".{LOCAL_ROOT_DOMAIN}"
 # Allow every Lemma-local host depth, on any published port.
 LOCAL_CORS_ORIGIN_REGEX = r"^https?://([a-z0-9-]+\.)*lemma\.localhost(:\d+)?$"
 
@@ -150,8 +151,10 @@ def backend_env(
         "SUPERTOKENS_API_GATEWAY_PATH": "/st",
         "SESSION_COOKIE_SECURE": "false",
         "SESSION_COOKIE_SAME_SITE": "lax",
-        # share the session cookie across the apex API host and app subdomains
-        "SESSION_COOKIE_DOMAIN": LOCAL_COOKIE_DOMAIN,
+        # Blank becomes None in the backend, producing a host-only cookie on
+        # api.lemma.localhost. This works in WKWebView and keeps the session
+        # cookie away from user-authored app subdomains.
+        "SESSION_COOKIE_DOMAIN": "",
         # apps served by host at <slug>.<app_base_domain>; allow them in CORS
         "APP_BASE_DOMAIN": app_base_domain(doc),
         "CORS_ORIGIN_REGEX": LOCAL_CORS_ORIGIN_REGEX,

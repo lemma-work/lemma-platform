@@ -270,7 +270,7 @@ Local built apps must use the existing production serving path, not a second des
 4. SPA deep links, query/fragment navigation, module scripts, dynamic imports, source maps where enabled, Web Workers, WebSockets, SSE, file downloads, and the public `lemma-client.js`/`lemma-ui.js` routes behave as in production.
 5. The frontend receives `NEXT_PUBLIC_APPS_DOMAIN_SUFFIX=apps.lemma.localhost` so post-auth redirects and app launch links accept only the exact local suffix.
 6. Backend credentialed CORS accepts exactly `http://<valid-slug>.apps.lemma.localhost:<gateway-port>` and the configured main origins. It does not use an unanchored wildcard.
-7. The session provider scopes cookies to `.lemma.localhost` only after the browser/WebView matrix proves Domain/SameSite behavior. Apps remain separate origins even though they are same-site for session purposes.
+7. The session provider leaves `SESSION_COOKIE_DOMAIN` empty, producing a host-only cookie on `api.lemma.localhost`. WKWebView rejected the parent-domain `.lemma.localhost` cookie during the macOS matrix test. Main and built-app frontends use credentialed requests to the API origin, so they remain authenticated without receiving the cookie on their own origins. This is both WebKit-compatible and safer for user-authored app subdomains.
 8. Each app origin has independent localStorage, IndexedDB, Cache Storage, and service-worker scope. Update/uninstall tooling can enumerate and clear local app site data only with explicit user intent.
 
 Production `sales.apps.lemma.work` therefore maps mechanically to local `sales.apps.lemma.localhost:<port>`; the public slug and asset/API code paths do not change.
@@ -788,7 +788,7 @@ API_URL=http://api.lemma.localhost:P
 FRONTEND_URL=http://app.lemma.localhost:P
 AUTH_FRONTEND_URL=http://app.lemma.localhost:P/auth
 APP_BASE_DOMAIN=apps.lemma.localhost:P
-SESSION_COOKIE_DOMAIN=.lemma.localhost
+SESSION_COOKIE_DOMAIN=
 CORS_ORIGIN_REGEX=<anchored generated regex for exact main/API/app origins on P>
 AGENTBOX_APP_DOMAIN=workspaces.lemma.localhost:P
 
@@ -796,8 +796,7 @@ AGENTBOX_APP_DOMAIN=workspaces.lemma.localhost:P
 NEXT_PUBLIC_API_URL=http://api.lemma.localhost:P
 NEXT_PUBLIC_SITE_URL=http://app.lemma.localhost:P
 NEXT_PUBLIC_AUTH_URL=http://app.lemma.localhost:P/auth
-NEXT_PUBLIC_SESSION_TOKEN_DOMAIN=.lemma.localhost
-NEXT_PUBLIC_SHARED_SESSION_DOMAIN=lemma.localhost
+NEXT_PUBLIC_SESSION_TOKEN_DOMAIN=
 NEXT_PUBLIC_APPS_DOMAIN_SUFFIX=apps.lemma.localhost
 ```
 

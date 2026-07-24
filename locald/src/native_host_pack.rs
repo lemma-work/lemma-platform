@@ -26,7 +26,6 @@ const REDIS_PORT: u16 = 56379;
 const SUPERTOKENS_PORT: u16 = 53567;
 const LOCAL_FRONTEND_HOST: &str = "app.lemma.localhost";
 const LOCAL_BACKEND_HOST: &str = "api.lemma.localhost";
-const LOCAL_COOKIE_DOMAIN: &str = ".lemma.localhost";
 const LOCAL_CORS_ORIGIN_REGEX: &str = r"^https?://([a-z0-9-]+\.)*lemma\.localhost(:\d+)?$";
 
 #[derive(Clone, Debug)]
@@ -290,7 +289,12 @@ fn build(
         ("SUPERTOKENS_API_GATEWAY_PATH", "/st".to_owned()),
         ("SESSION_COOKIE_SECURE", "false".to_owned()),
         ("SESSION_COOKIE_SAME_SITE", "lax".to_owned()),
-        ("SESSION_COOKIE_DOMAIN", LOCAL_COOKIE_DOMAIN.to_owned()),
+        // Keep local auth cookies host-only on api.lemma.localhost. WKWebView
+        // rejects the parent-domain form used by browsers on some macOS
+        // releases, and every local surface already makes credentialed calls
+        // to the API origin. Host-only scope also prevents user-authored app
+        // subdomains from receiving the API session cookie directly.
+        ("SESSION_COOKIE_DOMAIN", String::new()),
         (
             "APP_BASE_DOMAIN",
             format!("apps.lemma.localhost:{BACKEND_PORT}"),
@@ -667,6 +671,11 @@ mod tests {
         assert_eq!(
             manifest["services"][0]["env"]["DESKTOP_AUTH_CREATE_LIMIT"],
             "0"
+        );
+        assert_eq!(manifest["services"][0]["env"]["SESSION_COOKIE_DOMAIN"], "");
+        assert_eq!(
+            manifest["services"][1]["env"]["NEXT_PUBLIC_SESSION_TOKEN_DOMAIN"],
+            ""
         );
         assert_eq!(
             manifest["services"][0]["env"]["AGENTBOX_LOCAL_WORKSPACE_MEMORY"],

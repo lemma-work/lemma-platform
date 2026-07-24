@@ -708,7 +708,7 @@ The managed local experience is not generally available until:
 
 These are bounded validation items, not unresolved product direction:
 
-1. Confirm `*.lemma.localhost` cookies, credentialed CORS, redirects, service workers, WebSockets, and SSE in WKWebView, WebView2, Safari, Chrome, Firefox, and provider OAuth consoles. A single-host path fallback may keep the core UI available, but it does not provide safe production-parity app origins; local app serving is release-blocked until the supported client matrix passes or another private per-app origin mechanism is implemented.
+1. Confirm `*.lemma.localhost` credentialed CORS, redirects, service workers, WebSockets, and SSE in WKWebView, WebView2, Safari, Chrome, Firefox, and provider OAuth consoles. The macOS matrix rejected a parent-domain `.lemma.localhost` session cookie in WKWebView, so local auth uses a host-only cookie on `api.lemma.localhost`; every frontend authenticates through credentialed API-origin requests. A single-host path fallback may keep the core UI available, but it does not provide safe production-parity app origins; local app serving is release-blocked until the remaining supported-client matrix passes or another private per-app origin mechanism is implemented.
 2. Benchmark a shared Virtualization.framework VM against Apple Containerization on macOS 26 for PostgreSQL, Redis, the compatibility auth service when enabled, and one to five sandboxes.
 3. Confirm the smallest redis image supports all production-used commands; current code search finds no Redis Stack module API.
 4. Choose the Windows installer format after testing WSL feature enablement, per-user background startup, and enterprise signing requirements.

@@ -223,7 +223,7 @@ def test_backend_env_golden(config, paths, manifest):
     assert env["FRONTEND_URL"] == "http://app.lemma.localhost:3711"
     assert env["AUTH_FRONTEND_URL"] == "http://app.lemma.localhost:3711/auth"
     assert env["APP_BASE_DOMAIN"] == "apps.lemma.localhost:8711"
-    assert env["SESSION_COOKIE_DOMAIN"] == ".lemma.localhost"
+    assert env["SESSION_COOKIE_DOMAIN"] == ""
     assert env["STORAGE_BACKEND"] == "local"
     assert env["LOCAL_KREUZBERG_ENABLED"] == "false"
     assert env["EMBEDDING_PROVIDER"] == "local"
