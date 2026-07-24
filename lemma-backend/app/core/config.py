@@ -542,6 +542,13 @@ class Settings(BaseSettings):
         default=True,
         description="Emit structured JSON logs instead of console-formatted logs",
     )
+    local_http_access_logs_enabled: bool = Field(
+        default=False,
+        description=(
+            "Emit safe HTTP request summaries at INFO for local diagnostics. "
+            "Records only method, route template, status, and duration."
+        ),
+    )
     release_sha: Optional[str] = Field(
         default=None,
         validation_alias=AliasChoices("LEMMA_RELEASE_SHA", "RELEASE_SHA"),

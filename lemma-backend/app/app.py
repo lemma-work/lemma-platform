@@ -341,6 +341,14 @@ class RequestObserverMiddleware:
                                 duration_ms=fields["duration_ms"],
                                 latency_kind=fields["latency_kind"],
                             )
+                        elif settings.local_http_access_logs_enabled:
+                            logger.info(
+                                "http.request.local_completed",
+                                method=fields["method"],
+                                route=fields["route"],
+                                status_code=fields["status_code"],
+                                duration_ms=fields["duration_ms"],
+                            )
                         else:
                             logger.debug(
                                 "http.request.completed",

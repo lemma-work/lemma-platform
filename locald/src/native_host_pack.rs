@@ -190,6 +190,7 @@ fn build(
         ("DEBUG", "true".to_owned()),
         ("LOG_LEVEL", "INFO".to_owned()),
         ("JSON_LOGS_ENABLED", "true".to_owned()),
+        ("LOCAL_HTTP_ACCESS_LOGS_ENABLED", "true".to_owned()),
         ("OBSERVABILITY_ENABLED", "false".to_owned()),
         // A packaged service must neither depend on nor mutate arbitrary user
         // home/cache state. Keep all library state app-owned on macOS and
@@ -672,6 +673,10 @@ mod tests {
         assert_eq!(
             manifest["services"][0]["env"]["AUTH_EMAIL_VERIFICATION_REQUIRED"],
             "false"
+        );
+        assert_eq!(
+            manifest["services"][0]["env"]["LOCAL_HTTP_ACCESS_LOGS_ENABLED"],
+            "true"
         );
         assert_eq!(
             manifest["services"][0]["env"]["AUTH_ABUSE_PROTECTION_ENABLED"],

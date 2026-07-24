@@ -346,6 +346,7 @@ EVENT_CATALOG: dict[str, EventSpec] = {
     'function.use_cases.run_enqueue_deferred.degraded': EventSpec('warning', frozenset({'error_type', 'run_id'})),
     'http.request.completed': EventSpec('debug', frozenset({'duration_ms', 'method', 'route', 'status_code'})),
     'http.request.failed': EventSpec('error', frozenset({'duration_ms', 'error_code', 'error_type', 'method', 'route', 'status_code'})),
+    'http.request.local_completed': EventSpec('info', frozenset({'duration_ms', 'method', 'route', 'status_code'})),
     'http.request.rate_limited': EventSpec('warning', frozenset({'duration_ms', 'method', 'route', 'status_code'})),
     'http.request.slow': EventSpec('warning', frozenset({'duration_ms', 'latency_kind', 'method', 'route', 'status_code'})),
     'icon.icon_service.delete_icon_asset.diagnostic': EventSpec('debug', frozenset()),

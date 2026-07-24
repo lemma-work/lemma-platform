@@ -228,6 +228,7 @@ def test_backend_env_golden(config, paths, manifest):
     assert env["LOCAL_KREUZBERG_ENABLED"] == "false"
     assert env["EMBEDDING_PROVIDER"] == "local"
     assert env["AUTH_EMAIL_VERIFICATION_REQUIRED"] == "false"
+    assert env["LOCAL_HTTP_ACCESS_LOGS_ENABLED"] == "true"
     assert env["AUTH_EMAIL_DELIVERABILITY_CHECKS_ENABLED"] == "false"
     assert env["AUTH_DISPOSABLE_EMAIL_DOMAINS_ENABLED"] == "false"
     assert env["AUTH_ABUSE_PROTECTION_ENABLED"] == "false"

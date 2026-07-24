@@ -104,6 +104,7 @@ def backend_env(
         "DEBUG": "true",
         "LOG_LEVEL": "INFO",
         "JSON_LOGS_ENABLED": "true",
+        "LOCAL_HTTP_ACCESS_LOGS_ENABLED": "true",
         "OBSERVABILITY_ENABLED": "false",
         "PYTHONPATH": "/app",
         # infra over the container network
