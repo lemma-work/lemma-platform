@@ -15,6 +15,7 @@ from agentbox.domain import (
 )
 from agentbox.persistence.uow import StateDatabase
 from agentbox.ports import (
+    ProviderAllocationMissing,
     ProviderAllocationRef,
     ProviderFilesystemConflict,
     ProviderFilesystemNotFound,
@@ -54,7 +55,8 @@ class FilesystemService:
     ) -> FileStat:
         allocation = await self._current_allocation(key, deadline_at)
         return await self._provider_call(
-            self._provider.stat_file(allocation, path=path, deadline_at=deadline_at)
+            self._provider.stat_file(allocation, path=path, deadline_at=deadline_at),
+            allocation=allocation,
         )
 
     async def create_directory(
@@ -66,7 +68,8 @@ class FilesystemService:
                 allocation,
                 path=path,
                 deadline_at=deadline_at,
-            )
+            ),
+            allocation=allocation,
         )
 
     async def list(
@@ -74,7 +77,8 @@ class FilesystemService:
     ) -> tuple[FileStat, ...]:
         allocation = await self._current_allocation(key, deadline_at)
         return await self._provider_call(
-            self._provider.list_files(allocation, path=path, deadline_at=deadline_at)
+            self._provider.list_files(allocation, path=path, deadline_at=deadline_at),
+            allocation=allocation,
         )
 
     async def open_read(
@@ -92,9 +96,14 @@ class FilesystemService:
                 path=path,
                 byte_range=byte_range,
                 deadline_at=deadline_at,
-            )
+            ),
+            allocation=allocation,
         )
-        return self._guard_download(stream, deadline_at=deadline_at)
+        return self._guard_download(
+            stream,
+            allocation=allocation,
+            deadline_at=deadline_at,
+        )
 
     async def read(
         self,
@@ -149,7 +158,8 @@ class FilesystemService:
                 data=self._guard_upload(data, deadline_at=deadline_at),
                 expected_sha256=expected_sha256,
                 deadline_at=deadline_at,
-            )
+            ),
+            allocation=allocation,
         )
 
     async def move(
@@ -167,7 +177,8 @@ class FilesystemService:
                 source=source,
                 destination=destination,
                 deadline_at=deadline_at,
-            )
+            ),
+            allocation=allocation,
         )
 
     async def delete(
@@ -185,15 +196,23 @@ class FilesystemService:
                 path=path,
                 recursive=recursive,
                 deadline_at=deadline_at,
-            )
+            ),
+            allocation=allocation,
         )
 
-    @staticmethod
-    async def _provider_call(operation: Awaitable[ResultT]) -> ResultT:
+    async def _provider_call(
+        self,
+        operation: Awaitable[ResultT],
+        *,
+        allocation: ProviderAllocationRef,
+    ) -> ResultT:
         try:
             return await operation
+        except ProviderAllocationMissing as exc:
+            await self._mark_allocation_missing(allocation)
+            raise self._public_error(exc) from exc
         except _PROVIDER_FILESYSTEM_ERRORS as exc:
-            raise FilesystemService._public_error(exc) from exc
+            raise self._public_error(exc) from exc
 
     async def _guard_upload(
         self, stream: AsyncIterable[bytes], *, deadline_at: datetime
@@ -214,7 +233,11 @@ class FilesystemService:
             yield bytes(chunk)
 
     async def _guard_download(
-        self, stream: AsyncIterator[bytes], *, deadline_at: datetime
+        self,
+        stream: AsyncIterator[bytes],
+        *,
+        allocation: ProviderAllocationRef,
+        deadline_at: datetime,
     ) -> AsyncIterator[bytes]:
         transferred = 0
         try:
@@ -231,6 +254,9 @@ class FilesystemService:
                         status_code=413,
                     )
                 yield bytes(chunk)
+        except ProviderAllocationMissing as exc:
+            await self._mark_allocation_missing(allocation)
+            raise self._public_error(exc) from exc
         except _PROVIDER_FILESYSTEM_ERRORS as exc:
             raise self._public_error(exc) from exc
         finally:
@@ -266,6 +292,13 @@ class FilesystemService:
                 retry=RetryDisposition.DO_NOT_RETRY,
                 status_code=error.status_code,
             )
+        if isinstance(error, ProviderAllocationMissing):
+            return AgentBoxError(
+                ErrorCode.PROVIDER_UNAVAILABLE,
+                "sandbox provider allocation no longer exists",
+                retry=RetryDisposition.SAFE_SAME_OPERATION,
+                status_code=503,
+            )
         return AgentBoxError(
             ErrorCode.PROVIDER_UNAVAILABLE,
             "filesystem provider is unavailable",
@@ -273,6 +306,17 @@ class FilesystemService:
             status_code=503,
             retry_after_ms=error.retry_after_ms,
         )
+
+    async def _mark_allocation_missing(
+        self,
+        allocation: ProviderAllocationRef,
+    ) -> None:
+        async with self._database.uow() as uow:
+            await uow.repository.mark_create_failed(
+                allocation.allocation_token,
+                error_code=ErrorCode.PROVIDER_UNAVAILABLE.value,
+            )
+            await uow.commit()
 
     async def _current_allocation(
         self, key: SandboxKey, deadline_at: datetime

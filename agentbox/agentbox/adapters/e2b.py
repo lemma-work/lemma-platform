@@ -61,6 +61,7 @@ from agentbox.ports import (
     ProviderCreateRejected,
     ProviderCreateRequest,
     ProviderCreateResult,
+    ProviderAllocationMissing,
     ProviderFilesystemConflict,
     ProviderFilesystemNotFound,
     ProviderFilesystemRejected,
@@ -1410,10 +1411,11 @@ class E2BSandboxAdapter:
                 str(exc),
                 retry_after_ms=self._config.rate_limit_retry_after_ms,
             ) from exc
+        except SandboxNotFoundException as exc:
+            raise ProviderAllocationMissing(str(exc)) from exc
         except (
             AuthenticationException,
             FileUploadException,
-            SandboxNotFoundException,
             TemplateException,
             TimeoutException,
             SandboxException,
