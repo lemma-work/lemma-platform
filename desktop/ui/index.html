@@ -438,19 +438,36 @@
   /* ---------- quiet chrome ---------- */
   .progress {
     position: fixed;
-    bottom: 0;
+    top: 0;
     left: 0;
     right: 0;
-    height: 4px;
-    background: rgba(28, 24, 18, 0.07);
+    z-index: 80;
+    height: 8px;
+    overflow: hidden;
+    background: rgba(28, 24, 18, 0.13);
+    box-shadow: 0 1px 0 rgba(255, 255, 255, 0.7);
   }
   .progress > div {
     height: 100%;
     width: 0%;
-    background: linear-gradient(90deg, #d89b3d, var(--gold));
+    position: relative;
+    background: linear-gradient(90deg, #f1ba60 0%, #d89b3d 45%, var(--gold) 100%);
     border-radius: 0 99px 99px 0;
-    box-shadow: 0 0 14px rgba(216, 155, 61, 0.6);
-    transition: width 1.2s ease;
+    box-shadow:
+      0 0 18px rgba(216, 155, 61, 0.8),
+      2px 0 10px rgba(192, 128, 31, 0.85);
+    transition: width 0.65s cubic-bezier(0.22, 1, 0.36, 1);
+  }
+  .progress.active > div::after {
+    content: "";
+    position: absolute;
+    inset: 0;
+    background: linear-gradient(105deg, transparent 20%, rgba(255, 255, 255, 0.65) 50%, transparent 80%);
+    animation: progress-shine 1.7s ease-in-out infinite;
+  }
+  @keyframes progress-shine {
+    from { transform: translateX(-110%); }
+    to { transform: translateX(110%); }
   }
   .corner {
     position: absolute;
@@ -489,6 +506,24 @@
   }
   .scene.awake button.cta { opacity: 1; transform: none; }
   button.cta:hover { background: #2a2a28; }
+  button.cta:disabled { cursor: wait; opacity: 0.78; }
+  button.cta.busy {
+    opacity: 1;
+    transform: none;
+  }
+  button.cta.busy::after {
+    content: "";
+    display: inline-block;
+    width: 0.78em;
+    height: 0.78em;
+    margin-left: 10px;
+    border: 2px solid rgba(250, 246, 238, 0.42);
+    border-top-color: #faf6ee;
+    border-radius: 50%;
+    vertical-align: -0.08em;
+    animation: button-spin 0.75s linear infinite;
+  }
+  @keyframes button-spin { to { transform: rotate(360deg); } }
 
   .errbox {
     max-width: 560px;
@@ -515,24 +550,62 @@
   .err-actions button.dark { background: #131313; border-color: #131313; color: #faf6ee; }
   .err-actions button:disabled { cursor: wait; opacity: 0.55; }
 
-  pre.log {
-    position: absolute;
+  .log-panel {
+    position: fixed;
+    z-index: 100;
     left: 50%;
-    bottom: 46px;
+    bottom: 18px;
     transform: translateX(-50%);
-    width: min(720px, 84vw);
-    max-height: 180px;
-    overflow: auto;
-    background: rgba(16, 18, 20, 0.94);
+    width: min(820px, 88vw);
+    height: min(330px, 42vh);
+    overflow: hidden;
+    background: #101214;
     color: #d7dce2;
+    border: 1px solid rgba(255, 255, 255, 0.12);
+    border-radius: 14px;
+    box-shadow: 0 24px 70px rgba(16, 18, 20, 0.34);
+    text-align: left;
+  }
+  .log-header {
+    height: 44px;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 0 14px 0 16px;
+    border-bottom: 1px solid rgba(255, 255, 255, 0.1);
+    color: rgba(215, 220, 226, 0.72);
+    font-family: var(--mono);
+    font-size: 0.66rem;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+  }
+  .log-header button {
+    all: unset;
+    cursor: pointer;
+    padding: 5px 8px;
+    border-radius: 6px;
+    color: #f3f5f7;
+    text-transform: none;
+    letter-spacing: 0;
+  }
+  .log-header button:hover { background: rgba(255, 255, 255, 0.1); }
+  pre.log {
+    height: calc(100% - 44px);
+    margin: 0;
+    overflow: auto;
     font-family: var(--mono);
     font-size: 0.7rem;
     line-height: 1.5;
-    border-radius: 12px;
-    padding: 12px 15px;
-    text-align: left;
+    padding: 14px 16px 20px;
     user-select: text;
   }
+  .scene.log-open #open-app,
+  .scene.log-open #errwrap {
+    visibility: hidden;
+    pointer-events: none;
+  }
+  .scene.log-open .corner { z-index: 110; }
+  .scene.log-open .corner.right { display: none; }
   [hidden] { display: none !important; }
 
   @media (prefers-reduced-motion: reduce) {
@@ -608,7 +681,7 @@
 
   <p class="whisper" id="whisper"></p>
 
-  <button class="cta" id="open-app" type="button" hidden>Create your account</button>
+  <button class="cta" id="open-app" type="button" hidden>Open Lemma</button>
   <div id="errwrap" hidden>
     <p class="errbox" id="errdetail"></p>
     <div class="err-actions">
@@ -625,7 +698,13 @@
   </div>
   <div class="corner right" id="runinfo"></div>
 
-  <pre class="log" id="log" hidden></pre>
+  <div class="log-panel" id="log-panel" hidden>
+    <div class="log-header">
+      <span>Installer and runtime log</span>
+      <button id="close-log" type="button">Close</button>
+    </div>
+    <pre class="log" id="log"></pre>
+  </div>
 </div>
 
 <script>
@@ -701,12 +780,13 @@
     stopping:   ["Winding down.", "stopping services"],
     stopped:    ["Asleep.", "services stopped"],
   };
-  const READY_LINE = "It's ready. Create your account.";
+  const READY_LINE = "It's ready. Opening Lemma.";
 
   const scene = document.getElementById("scene");
   const lineEl = document.getElementById("line");
   const truth = document.getElementById("truth");
   const whisper = document.getElementById("whisper");
+  const progressEl = document.querySelector(".progress");
   const bar = document.getElementById("bar");
   const runinfo = document.getElementById("runinfo");
   const openBtn = document.getElementById("open-app");
@@ -751,15 +831,42 @@
 
   let sawSetup = false;
   let lastPhase = "";
+  let lastState = null;
+  let readyOpenTimer = null;
+  let startRequestPending = false;
+  function clearPrimaryBusy() {
+    startRequestPending = false;
+    openBtn.disabled = false;
+    openBtn.classList.remove("busy");
+    openBtn.removeAttribute("aria-busy");
+  }
+  function scheduleReadyOpen() {
+    clearTimeout(readyOpenTimer);
+    readyOpenTimer = setTimeout(async () => {
+      if (!lastState?.ready || lastState.error) return;
+      try {
+        await window.lemmaDesktop.openApp();
+      } catch (error) {
+        clearPrimaryBusy();
+        openBtn.hidden = false;
+        openBtn.textContent = "Open Lemma";
+        appendLog(`ERROR ${String(error)}`);
+      }
+    }, 650);
+  }
   function renderState(s) {
     if (!s || !s.phaseKey) return;
     if (s.mode === "undecided") return;
+    lastState = s;
     switchModeBtn.hidden = s.mode !== "local";
     if (s.running || s.ready) hideConnectionChoice();
     if (s.setup) sawSetup = true;
     lastPhase = s.phaseKey;
 
     if (s.error) {
+      clearTimeout(readyOpenTimer);
+      clearPrimaryBusy();
+      progressEl.classList.remove("active");
       window.__orb?.stall();
       scene.classList.add("stalled");
       scene.classList.remove("awake");
@@ -793,16 +900,20 @@
 
     const voice = VOICE[s.phaseKey] || VOICE.boot;
     if (s.ready) {
+      clearPrimaryBusy();
       window.__orb?.awake();
       scene.classList.add("awake");
       say(READY_LINE);
       truth.textContent = VOICE.ready[1];
-      primaryAction = "auth";
-      openBtn.textContent = "Create your account";
+      primaryAction = "open";
+      openBtn.textContent = "Open Lemma";
       openBtn.hidden = false;
       whisper.classList.remove("on");
       stopWhispers();
+      scheduleReadyOpen();
     } else if (s.phaseKey === "stopped" || (!s.running && s.phaseKey !== "boot")) {
+      clearTimeout(readyOpenTimer);
+      clearPrimaryBusy();
       window.__orb?.resume();
       scene.classList.add("awake");
       say(VOICE.stopped[0]);
@@ -812,6 +923,10 @@
       openBtn.hidden = false;
       whisper.classList.remove("on");
     } else {
+      if (startRequestPending) {
+        openBtn.disabled = true;
+        openBtn.classList.add("busy");
+      }
       if (scene.classList.contains("awake")) {
         scene.classList.remove("awake");
         window.__orb?.resume();
@@ -824,6 +939,7 @@
     }
 
     bar.style.width = `${Math.min(100, s.progress || 0)}%`;
+    progressEl.classList.toggle("active", !s.ready && !s.error && s.phaseKey !== "stopped");
     runinfo.textContent = s.ready
       ? ""
       : sawSetup
@@ -871,6 +987,7 @@
     .catch(() => {});
 
   // ---- log ----------------------------------------------------------------
+  const logPanel = document.getElementById("log-panel");
   const logEl = document.getElementById("log");
   const logLines = [];
   let savedInstallerLog = "";
@@ -885,50 +1002,74 @@
     } catch (error) {
       savedInstallerLog = `Could not read installer log: ${String(error)}`;
     }
-    if (!logEl.hidden) renderLog();
+    if (!logPanel.hidden) renderLog();
   }
   function appendLog(line) {
     if (!line) return;
     logLines.push(line);
     if (logLines.length > 500) logLines.shift();
-    if (!logEl.hidden) renderLog();
+    if (!logPanel.hidden) renderLog();
   }
   function toggleLog() {
-    logEl.hidden = !logEl.hidden;
-    if (!logEl.hidden) {
+    logPanel.hidden = !logPanel.hidden;
+    scene.classList.toggle("log-open", !logPanel.hidden);
+    document.getElementById("toggle-log").textContent = logPanel.hidden ? "log" : "close log";
+    if (!logPanel.hidden) {
       renderLog();
       refreshInstallerLog();
     }
   }
   document.getElementById("toggle-log").addEventListener("click", toggleLog);
   document.getElementById("error-logs").addEventListener("click", toggleLog);
+  document.getElementById("close-log").addEventListener("click", toggleLog);
 
   // ---- actions ------------------------------------------------------------
-  let primaryAction = "auth";
+  let primaryAction = "open";
+  async function requestStart() {
+    if (startRequestPending) return;
+    startRequestPending = true;
+    clearTimeout(readyOpenTimer);
+    openBtn.disabled = true;
+    openBtn.classList.add("busy");
+    openBtn.setAttribute("aria-busy", "true");
+    openBtn.textContent = "Starting Lemma";
+    say("Starting Lemma.");
+    truth.textContent = "request accepted · preparing private runtime";
+    progressEl.classList.add("active");
+    const currentProgress = Number.parseFloat(bar.style.width) || 0;
+    bar.style.width = `${Math.max(6, currentProgress)}%`;
+    try {
+      await window.lemmaDesktop.start();
+    } catch (error) {
+      clearPrimaryBusy();
+      openBtn.textContent = "Try Start again";
+      appendLog(`ERROR ${String(error)}`);
+    }
+  }
   openBtn.addEventListener("click", async () => {
     if (primaryAction === "start") {
-      window.lemmaDesktop.start().catch((error) => appendLog(`ERROR ${String(error)}`));
+      await requestStart();
       return;
     }
     openBtn.disabled = true;
-    openBtn.textContent = "Opening account setup…";
+    openBtn.textContent = "Opening Lemma…";
     try {
-      await window.lemmaDesktop.openAuth("signup");
+      await window.lemmaDesktop.openApp();
     } catch (error) {
       openBtn.disabled = false;
-      openBtn.textContent = "Try account setup again";
-      say("Account setup did not open.");
+      openBtn.textContent = "Try opening Lemma again";
+      say("Lemma did not open.");
       truth.textContent = "";
-      errdetail.textContent = String(error || "Could not open account setup.");
+      errdetail.textContent = String(error || "Could not open Lemma.");
       errwrap.hidden = false;
     }
   });
-  retryBtn.addEventListener("click", () => {
+  retryBtn.addEventListener("click", async () => {
     errwrap.hidden = true;
     scene.classList.remove("stalled");
     say(VOICE.boot[0]);
     startWhispers();
-    window.lemmaDesktop.start().catch((error) => appendLog(`ERROR ${String(error)}`));
+    await requestStart();
   });
   prepareWindowsBtn.addEventListener("click", () => {
     prepareWindowsBtn.disabled = true;
@@ -1028,7 +1169,7 @@
     } else {
       renderState(s);
       if (shouldAutoStart(s)) {
-        window.lemmaDesktop.start().catch((error) => appendLog(`ERROR ${String(error)}`));
+        requestStart();
       }
     }
   });

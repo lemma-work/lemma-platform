@@ -2059,7 +2059,10 @@ mod tests {
         assert!(html.contains("lemma-mark-bar-2"));
         assert!(html.contains("s.phaseKey === \"boot\""));
         assert!(html.contains("!s.error"));
-        assert!(html.contains("await window.lemmaDesktop.openAuth(\"signup\")"));
+        assert!(html.contains("await window.lemmaDesktop.openApp()"));
+        assert!(html.contains("request accepted · preparing private runtime"));
+        assert!(html.contains("id=\"log-panel\""));
+        assert!(!html.contains(">Create your account</button>"));
         assert!(!html.contains("Nothing leaves your machine"));
     }
 
