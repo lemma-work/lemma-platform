@@ -61,18 +61,15 @@ def test_phase_observation_records_failed_elapsed_time(monkeypatch) -> None:
     )
     phases = FunctionPhaseTimings()
 
-    def observe_timeout() -> None:
-        with observability.observe_function_phase(
-            "function.runtime.call",
-            execution_mode="synchronous",
-            runtime_profile="function-python-v1",
-            phases=phases,
-            duration_field="runtime_call_ms",
-        ):
-            raise TimeoutError
-
-    with pytest.raises(TimeoutError):
-        observe_timeout()
+    observation = observability.observe_function_phase(
+        "function.runtime.call",
+        execution_mode="synchronous",
+        runtime_profile="function-python-v1",
+        phases=phases,
+        duration_field="runtime_call_ms",
+    )
+    observation.__enter__()
+    assert observation.__exit__(TimeoutError, TimeoutError(), None) is False
 
     assert phases.runtime_call_ms == 125
     assert outcomes == [("timeout", "TimeoutError")]
@@ -92,15 +89,22 @@ def test_phase_observation_preserves_cancellation_and_elapsed_time(monkeypatch) 
     )
     phases = FunctionPhaseTimings()
 
-    with pytest.raises(asyncio.CancelledError):
-        with observability.observe_function_phase(
-            "function.agentbox.admission",
-            execution_mode="asynchronous",
-            runtime_profile="function-python-v1",
-            phases=phases,
-            duration_field="sandbox_start_ms",
-        ):
-            raise asyncio.CancelledError
+    observation = observability.observe_function_phase(
+        "function.agentbox.admission",
+        execution_mode="asynchronous",
+        runtime_profile="function-python-v1",
+        phases=phases,
+        duration_field="sandbox_start_ms",
+    )
+    observation.__enter__()
+    assert (
+        observation.__exit__(
+            asyncio.CancelledError,
+            asyncio.CancelledError(),
+            None,
+        )
+        is False
+    )
 
     assert phases.sandbox_start_ms == 250
     assert outcomes == [("cancelled", "CancelledError")]
