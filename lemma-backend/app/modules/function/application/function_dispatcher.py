@@ -173,7 +173,10 @@ class FunctionDispatcher:
                 raise
             if isinstance(exc, InvocationOutcomeUnconfirmed):
                 current = await self._load_run(run_id)
-                if current.status in _TERMINAL_RUN_STATES:
+                if current.status in _TERMINAL_RUN_STATES or (
+                    dispatch.mode == FunctionDispatchMode.ASYNCHRONOUS
+                    and current.status == FunctionRunStatus.RUNNING
+                ):
                     self._log_diagnostics(
                         run_id,
                         phase_timings,

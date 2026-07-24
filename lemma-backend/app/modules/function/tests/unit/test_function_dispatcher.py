@@ -397,6 +397,64 @@ async def test_lost_response_reconciles_terminal_callback_without_failing(
 
 
 @pytest.mark.asyncio
+async def test_lost_job_ack_reconciles_durable_runtime_claim_without_failing(
+    monkeypatch,
+) -> None:
+    tracker = _UowTracker()
+    dispatch = _dispatch(mode=FunctionDispatchMode.ASYNCHRONOUS)
+    running = _run(dispatch, FunctionRunStatus.RUNNING)
+
+    class _ExecutionRepository:
+        def __init__(self, _uow, _signer):
+            pass
+
+        async def resolve_dispatch(self, *_args, **_kwargs):
+            return dispatch
+
+        async def fail_dispatch(self, *_args, **_kwargs):
+            raise AssertionError("durably claimed JOB execution must not fail")
+
+    class _RunRepository:
+        def __init__(self, _uow):
+            pass
+
+        async def get_run(self, _run_id):
+            return running
+
+    monkeypatch.setattr(
+        "app.modules.function.application.function_dispatcher."
+        "FunctionExecutionRepository",
+        _ExecutionRepository,
+    )
+    monkeypatch.setattr(
+        "app.modules.function.application.function_dispatcher.FunctionRunRepository",
+        _RunRepository,
+    )
+
+    class _RuntimeClient:
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *_args):
+            return None
+
+        async def post(self, url, **_kwargs):
+            raise httpx.ReadError("response lost", request=httpx.Request("POST", url))
+
+    monkeypatch.setattr(
+        "app.modules.function.application.function_dispatcher.httpx.AsyncClient",
+        lambda **_kwargs: _RuntimeClient(),
+    )
+    result = await _dispatcher(
+        tracker,
+        FunctionCallbackCredentialSigner("k" * 32),
+        _sandbox_client(tracker, dispatch),
+    ).execute(dispatch.run_id, mode=FunctionDispatchMode.ASYNCHRONOUS)
+
+    assert result.status == FunctionRunStatus.RUNNING
+
+
+@pytest.mark.asyncio
 async def test_lost_response_fails_once_and_cancels_exact_run(
     monkeypatch,
 ) -> None:
