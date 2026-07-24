@@ -104,15 +104,24 @@ jobs:
       - name: Run E2B workspace and function provider conformance
         env:
           E2B_API_KEY: ${{ secrets.E2B_API_KEY }}
+          AGENTBOX_E2B_WORKSPACE_TEMPLATE: ${{ vars.AGENTBOX_E2B_WORKSPACE_TEMPLATE }}
+          AGENTBOX_E2B_WORKSPACE_BUILD_ID: ${{ vars.AGENTBOX_E2B_WORKSPACE_BUILD_ID }}
+          AGENTBOX_E2B_FUNCTION_TEMPLATE: ${{ vars.AGENTBOX_E2B_FUNCTION_TEMPLATE }}
+          AGENTBOX_E2B_FUNCTION_BUILD_ID: ${{ vars.AGENTBOX_E2B_FUNCTION_BUILD_ID }}
         run: |
-          set -a
-          source ../agentbox/templates/e2b/promoted-builds.env
-          set +a
+          test -n "$AGENTBOX_E2B_WORKSPACE_TEMPLATE"
+          test -n "$AGENTBOX_E2B_WORKSPACE_BUILD_ID"
+          test -n "$AGENTBOX_E2B_FUNCTION_TEMPLATE"
+          test -n "$AGENTBOX_E2B_FUNCTION_BUILD_ID"
           cd ../agentbox
           AGENTBOX_RUN_E2B_TESTS=1 .venv/bin/pytest -q tests/adapters/test_e2b_real.py
       - name: Run E2B benchmark at concurrency 5
         env:
           E2B_API_KEY: ${{ secrets.E2B_API_KEY }}
+          AGENTBOX_E2B_WORKSPACE_TEMPLATE: ${{ vars.AGENTBOX_E2B_WORKSPACE_TEMPLATE }}
+          AGENTBOX_E2B_WORKSPACE_BUILD_ID: ${{ vars.AGENTBOX_E2B_WORKSPACE_BUILD_ID }}
+          AGENTBOX_E2B_FUNCTION_TEMPLATE: ${{ vars.AGENTBOX_E2B_FUNCTION_TEMPLATE }}
+          AGENTBOX_E2B_FUNCTION_BUILD_ID: ${{ vars.AGENTBOX_E2B_FUNCTION_BUILD_ID }}
           FUNCTION_BENCH_CONCURRENCY: "5"
           # The protected lane has no ngrok account dependency. Local acceptance
           # may select ngrok to distinguish tunnel failures from executor failures.

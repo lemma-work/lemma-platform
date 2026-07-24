@@ -59,10 +59,7 @@ def _e2b_environment(key: str) -> str | None:
     backend_value = _read_env_file_value(repo_root / "lemma-backend" / ".env", key)
     if backend_value:
         return backend_value
-    return _read_env_file_value(
-        repo_root / "agentbox" / "templates" / "e2b" / "promoted-builds.env",
-        key,
-    )
+    return None
 
 
 _NGROK_URL = re.compile(r"https://[a-z0-9-]+\.(?:ngrok-free\.app|ngrok\.app)")
