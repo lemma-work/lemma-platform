@@ -113,7 +113,10 @@ PY
       block_count="$(dumpe2fs -h /artifact/disk.raw 2>/dev/null | grep "^Block count:" | tr -dc "0-9")"
       headroom_blocks="$((128 * 1024 * 1024 / block_size))"
       target_blocks="$((block_count + headroom_blocks))"
-      resize2fs /artifact/disk.raw "${target_blocks}s" >/dev/null
+      # With no suffix resize2fs interprets the value in filesystem blocks.
+      # Its "s" suffix means 512-byte sectors, which made this request eight
+      # times too small on our 4 KiB ext4 image and failed the ARM64 build.
+      resize2fs /artifact/disk.raw "$target_blocks" >/dev/null
       truncate -s "$((target_blocks * block_size))" /artifact/disk.raw
       e2fsck -fy /artifact/disk.raw >/dev/null
       test "$(stat -c %s /artifact/disk.raw)" -le "$((1280 * 1024 * 1024))"
