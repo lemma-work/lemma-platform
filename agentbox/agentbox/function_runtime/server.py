@@ -65,6 +65,7 @@ class FunctionRuntimeService:
             max_cached_revisions=max_cached_revisions,
         )
         self._runs: OrderedDict[UUID, _Run] = OrderedDict()
+        self._gateways: dict[str, GatewayClient] = {}
         self._lock = asyncio.Lock()
 
     async def invoke(
@@ -197,6 +198,21 @@ class FunctionRuntimeService:
             task.cancel()
         await asyncio.gather(*tasks, return_exceptions=True)
         await self._workers.close()
+        async with self._lock:
+            gateways = tuple(self._gateways.values())
+            self._gateways.clear()
+        await asyncio.gather(
+            *(gateway.close() for gateway in gateways),
+            return_exceptions=True,
+        )
+
+    async def _gateway(self, gateway_url: str) -> GatewayClient:
+        async with self._lock:
+            gateway = self._gateways.get(gateway_url)
+            if gateway is None:
+                gateway = GatewayClient(gateway_url)
+                self._gateways[gateway_url] = gateway
+            return gateway
 
     async def _execute(
         self,
@@ -214,7 +230,7 @@ class FunctionRuntimeService:
         worker_ms = 0.0
         user_code_ms = 0.0
         artifact_cache_hit = False
-        gateway = GatewayClient(gateway_url)
+        gateway = await self._gateway(gateway_url)
         claim = None
         accepted = False
         try:
@@ -304,8 +320,6 @@ class FunctionRuntimeService:
             if not accepted:
                 await self._mark_rejected(run_id, exc)
             raise
-        finally:
-            await gateway.close()
 
     async def _mark_accepted(self, run_id: UUID, callback_token: str) -> None:
         async with self._lock:

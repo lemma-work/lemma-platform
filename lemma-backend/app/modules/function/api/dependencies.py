@@ -51,6 +51,9 @@ from app.modules.function.application.function_session_token_cache import (
     FunctionSessionTokenCache,
 )
 from app.modules.function.application.function_dispatcher import FunctionDispatcher
+from app.modules.function.application.function_runtime_http_client import (
+    FunctionRuntimeHttpClientPool,
+)
 from app.modules.function.infrastructure.function_run_queue import (
     StreaqFunctionRunQueue,
 )
@@ -65,6 +68,11 @@ _function_runtime_endpoint_cache = FunctionRuntimeEndpointCache(
     ttl_seconds=settings.function_runtime_endpoint_cache_ttl_seconds,
     max_entries=settings.function_runtime_endpoint_cache_max_entries,
 )
+_function_runtime_http_clients = FunctionRuntimeHttpClientPool()
+
+
+async def close_function_runtime_http_clients() -> None:
+    await _function_runtime_http_clients.close()
 
 
 def get_function_storage_factory():
@@ -154,6 +162,7 @@ def build_function_dispatcher(uow_factory: UnitOfWorkFactory) -> FunctionDispatc
         token_minter=mint_workspace_token,
         token_cache=_function_session_token_cache,
         endpoint_cache=_function_runtime_endpoint_cache,
+        runtime_http_client_factory=_function_runtime_http_clients.get,
         delegated_tokens_enabled=settings.authz_delegated_tokens_enabled,
     )
 

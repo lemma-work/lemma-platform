@@ -142,6 +142,7 @@ def _dispatcher(
         token_minter=_token_minter,
         token_cache=FunctionSessionTokenCache(),
         endpoint_cache=FunctionRuntimeEndpointCache(),
+        runtime_http_client_factory=lambda: httpx.AsyncClient(follow_redirects=False),
         delegated_tokens_enabled=True,
     )
 
@@ -219,7 +220,7 @@ async def test_dispatcher_invokes_run_once_and_holds_no_db_during_io(
         async def __aexit__(self, *_args):
             return None
 
-        async def post(self, url, *, headers, json=None):
+        async def post(self, url, *, headers, json=None, timeout=None):
             nonlocal terminal_persisted
             assert tracker.active == 0
             requests.append((url, {"headers": headers, "json": json}))
@@ -251,16 +252,12 @@ async def test_dispatcher_invokes_run_once_and_holds_no_db_during_io(
     assert result.status == FunctionRunStatus.COMPLETED
     assert len(requests) == 1
     url, request = requests[0]
-    assert url.endswith(
-        f"/functions/{dispatch.function_id}/runs/{dispatch.run_id}"
-    )
+    assert url.endswith(f"/functions/{dispatch.function_id}/runs/{dispatch.run_id}")
     assert request["json"] == {"input": dispatch.input_data}
     assert request["headers"]["Authorization"] == "Bearer delegated-function-token"
     assert request["headers"]["If-Match"] == f'"{dispatch.revision_hash}"'
     assert request["headers"]["X-Lemma-Gateway-Url"] == "http://127.0.0.1:8711"
-    assert request["headers"]["X-Lemma-Run-Token"] == signer.derive(
-        dispatch.run_id
-    )
+    assert request["headers"]["X-Lemma-Run-Token"] == signer.derive(dispatch.run_id)
     assert "Idempotency-Key" not in request["headers"]
     assert tracker.active == 0
 
@@ -311,7 +308,7 @@ async def test_job_returns_after_runtime_claim_without_polling_terminal(
         async def __aexit__(self, *_args):
             return None
 
-        async def post(self, url, *, headers, json=None):
+        async def post(self, url, *, headers, json=None, timeout=None):
             assert tracker.active == 0
             requests.append({"url": url, "headers": headers, "json": json})
             return httpx.Response(
@@ -336,9 +333,7 @@ async def test_job_returns_after_runtime_claim_without_polling_terminal(
     assert loads == 1
     assert len(requests) == 1
     assert requests[0]["headers"]["Prefer"] == "respond-async"
-    assert requests[0]["headers"]["X-Lemma-Run-Token"] == signer.derive(
-        dispatch.run_id
-    )
+    assert requests[0]["headers"]["X-Lemma-Run-Token"] == signer.derive(dispatch.run_id)
     assert requests[0]["json"] == {"input": dispatch.input_data}
     assert tracker.active == 0
 
@@ -386,9 +381,7 @@ async def test_lost_response_reconciles_terminal_callback_without_failing(
             return None
 
         async def post(self, url, **_kwargs):
-            raise httpx.ReadError(
-                "response lost", request=httpx.Request("POST", url)
-            )
+            raise httpx.ReadError("response lost", request=httpx.Request("POST", url))
 
     monkeypatch.setattr(
         "app.modules.function.application.function_dispatcher.httpx.AsyncClient",
@@ -455,16 +448,17 @@ async def test_lost_response_fails_once_and_cancels_exact_run(
             if url.endswith(":cancel"):
                 calls["cancel"] += 1
                 assert url.endswith(f"/runs/{dispatch.run_id}:cancel")
-                assert headers["Authorization"] == f"Bearer {signer.derive(dispatch.run_id)}"
+                assert (
+                    headers["Authorization"]
+                    == f"Bearer {signer.derive(dispatch.run_id)}"
+                )
                 return httpx.Response(
                     202,
                     request=httpx.Request("POST", url),
                     json={"accepted": True},
                 )
             calls["invoke"] += 1
-            raise httpx.ReadError(
-                "response lost", request=httpx.Request("POST", url)
-            )
+            raise httpx.ReadError("response lost", request=httpx.Request("POST", url))
 
     monkeypatch.setattr(
         "app.modules.function.application.function_dispatcher.httpx.AsyncClient",
@@ -518,7 +512,7 @@ async def test_cancel_targets_exact_run_then_persists_cancelled(monkeypatch) -> 
         async def __aexit__(self, *_args):
             return None
 
-        async def post(self, url, *, headers):
+        async def post(self, url, *, headers, **_kwargs):
             assert tracker.active == 0
             assert not persisted
             runtime_calls.append((url, headers["Authorization"]))
@@ -541,8 +535,7 @@ async def test_cancel_targets_exact_run_then_persists_cancelled(monkeypatch) -> 
     assert result.status == FunctionRunStatus.CANCELLED
     assert runtime_calls == [
         (
-            "https://agentbox.test/port-access/signed/"
-            f"runs/{dispatch.run_id}:cancel",
+            f"https://agentbox.test/port-access/signed/runs/{dispatch.run_id}:cancel",
             f"Bearer {signer.derive(dispatch.run_id)}",
         )
     ]

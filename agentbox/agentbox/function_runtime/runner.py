@@ -46,6 +46,11 @@ class GatewayClient:
             timeout=httpx.Timeout(20, read=60),
             follow_redirects=False,
             transport=transport,
+            limits=httpx.Limits(
+                max_connections=32,
+                max_keepalive_connections=16,
+                keepalive_expiry=300,
+            ),
         )
 
     async def claim(

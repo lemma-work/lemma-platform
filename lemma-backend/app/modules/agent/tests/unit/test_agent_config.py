@@ -19,7 +19,7 @@ EXPECTED = [
         "AGENT_CONTEXT_BRIEF_CACHE_TTL_SECONDS",
         60,
     ),
-    ("function_run_poll_interval_seconds", "FUNCTION_RUN_POLL_INTERVAL_SECONDS", 5.0),
+    ("function_run_poll_interval_seconds", "FUNCTION_RUN_POLL_INTERVAL_SECONDS", 0.5),
     ("conversation_title_model", "CONVERSATION_TITLE_MODEL", None),
     ("daemon_ws_ping_stale_after_seconds", "DAEMON_WS_PING_STALE_AFTER_SECONDS", 90.0),
     ("daemon_reconnect_grace_seconds", "DAEMON_RECONNECT_GRACE_SECONDS", 120.0),
