@@ -115,6 +115,7 @@ def workspace_template():
         .copy("lemma-python", "/build/lemma-python")
         .copy("lemma-pod-bundle", "/build/lemma-pod-bundle")
         .copy("lemma-cli", "/build/lemma-cli")
+        .copy("lemma-skills", "/build/lemma-skills")
         .copy(
             "agentbox/templates/workspace-python",
             "/build/agentbox/templates/workspace-python",
@@ -145,7 +146,7 @@ def workspace_template():
             "> /root/.local/share/jupyter/kernels/python3/kernel.json && "
             "uv cache clean && "
             "rm -rf /build/lemma-python /build/lemma-pod-bundle "
-            "/build/lemma-cli /build/agentbox",
+            "/build/lemma-cli /build/lemma-skills /build/agentbox",
             user="root",
         )
         .copy(
