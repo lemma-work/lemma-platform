@@ -45,10 +45,10 @@ def surface_setup_message() -> str:
 
 
 def _pod_access_message(pod_id: UUID) -> str:
-    base = settings.auth_frontend_url.rstrip("/")
+    base = settings.frontend_url.rstrip("/")
     return (
         "You're signed up, but don't have access to this workspace yet. "
-        f"Request access here: {base}/pods/{pod_id}"
+        f"Request access here: {base}/pod/{pod_id}"
     )
 
 

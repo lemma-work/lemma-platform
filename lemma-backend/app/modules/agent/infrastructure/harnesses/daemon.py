@@ -11,6 +11,7 @@ from uuid import UUID
 from app.modules.agent.domain.context import AgentContext
 from app.modules.agent.domain.entities import Agent, Conversation, Message
 from app.modules.agent.domain.prompts import build_agent_instructions
+from app.modules.agent.domain.runtime_notes import append_runtime_notes
 from app.modules.agent.domain.value_objects import (
     AgentEvent,
     AgentEventType,
@@ -473,7 +474,10 @@ def _prompt_payload(
     session_id: str | None,
 ) -> JsonObject:
     instructions = build_agent_instructions(agent=agent, conversation=conversation, ctx=ctx)
-    user_prompt = _render_history(messages)
+    # Add volatile context only to this dispatch payload. The Message entities
+    # remain untouched, so runtime notes never enter persisted conversation
+    # history and the stable prompt prefix remains cacheable.
+    user_prompt = append_runtime_notes(_render_history(messages))
     session_sections: list[str] = []
     if instructions:
         session_sections.append("# Instructions\n" + instructions)

@@ -1,9 +1,6 @@
 from __future__ import annotations
-from datetime import datetime, timezone
 
 from app.core.config import settings
-from app.core.request_context import correlation_headers
-from agentbox_client import AgentBoxClient
 from pydantic_ai.tools import RunContext
 from pydantic_ai.toolsets import FunctionToolset
 
@@ -21,10 +18,7 @@ from app.modules.agent.tools.user_interaction.models import (
     validate_display_payload,
 )
 from app.core.widget_html_validation import validate_widget_html
-from app.composition.agent_workspace import (
-    WorkspaceSandboxService,
-    agentbox_sandbox_id,
-)
+from app.composition.agent_workspace import WorkspaceSandboxService
 
 
 async def display_resource(
@@ -89,28 +83,10 @@ async def display_resource(
             )
 
     if request.type == DisplayResourceType.BROWSER:
-        runtime = WorkspaceSandboxService._resolve_runtime()
-        sandbox_id = agentbox_sandbox_id(ctx.deps.user_id)
-        client = AgentBoxClient(
-            base_url=settings.agentbox_api_url,
-            api_key=settings.agentbox_api_key,
-            timeout_seconds=300.0,
-            context_headers_provider=correlation_headers,
-        )
+        workspace_service = WorkspaceSandboxService()
         try:
-            await client.ensure_sandbox(
-                sandbox_id,
-                env={
-                    "LEMMA_BASE_URL": (
-                        WorkspaceSandboxService.resolve_workspace_api_url_for_runtime(
-                            runtime
-                        )
-                    )
-                },
-            )
-            access = await client.get_app_access_url(
-                sandbox_id,
-                "browser",
+            access = await workspace_service.create_browser_access(
+                ctx.deps.user_id,
                 ttl_seconds=1800,
             )
         except Exception as exc:
@@ -119,17 +95,14 @@ async def display_resource(
                 error=f"Failed to create browser display URL: {type(exc).__name__}: {exc}",
             )
         finally:
-            await client.close()
+            await workspace_service.close()
 
         response = DisplayResourceResponse(
             success=True,
             message="BROWSER resource ready for display.",
-            app=access.app,
+            app="browser",
             url=access.url,
-            expires_at=datetime.fromtimestamp(
-                access.expires_at,
-                tz=timezone.utc,
-            ),
+            expires_at=access.expires_at,
         )
         await _maybe_deliver_to_surface(ctx, request, response)
         return response

@@ -31,12 +31,17 @@ N/A cells:
 from __future__ import annotations
 
 import json
+from datetime import datetime, timedelta, timezone
 from uuid import UUID
 
 import pytest
+from agentbox_client import PortAccessGrant, PortProtocol, WorkloadKind
 from httpx import AsyncClient
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.modules.agent.tools.user_interaction import (
+    pydantic_adapter as user_interaction_adapter,
+)
 from app.modules.agent_surfaces.config import surface_settings
 from app.modules.agent_surfaces.domain.ingress_request import (
     SurfacePlatformWebhookIngress,
@@ -246,6 +251,35 @@ async def test_display_resource_slack_routes_pod_resource_catalog_to_deep_links(
     monkeypatch.setattr(app_settings, "api_url", "https://api.example.test")
     monkeypatch.setattr(app_settings, "frontend_url", "https://app.example.test")
     monkeypatch.setattr(surface_settings, "slack_signing_secret", "slack-secret")
+    browser_access_calls: list[tuple[UUID, int]] = []
+
+    class _FakeWorkspaceSandboxService:
+        """Keep this surface-delivery journey hermetic at the AgentBox boundary."""
+
+        async def create_browser_access(
+            self,
+            user_id: UUID,
+            *,
+            ttl_seconds: int,
+        ) -> PortAccessGrant:
+            browser_access_calls.append((user_id, ttl_seconds))
+            return PortAccessGrant(
+                workload_kind=WorkloadKind.WORKSPACE,
+                logical_id=user_id,
+                port=4848,
+                protocol=PortProtocol.HTTP,
+                url="https://agentbox.example.test/port-access/browser-token",
+                expires_at=datetime.now(timezone.utc) + timedelta(seconds=ttl_seconds),
+            )
+
+        async def close(self) -> None:
+            return None
+
+    monkeypatch.setattr(
+        user_interaction_adapter,
+        "WorkspaceSandboxService",
+        _FakeWorkspaceSandboxService,
+    )
     pod_id = test_pod["id"]
     account = await _ensure_connector_account(
         db_session,
@@ -394,7 +428,16 @@ async def test_display_resource_slack_routes_pod_resource_catalog_to_deep_links(
     successful_returns = [
         message for message in tool_returns if message not in invalid_returns
     ]
-    assert all(message["tool_result"]["success"] for message in successful_returns)
+    unexpected_failures = [
+        {
+            "tool_call_id": message["tool_call_id"],
+            "tool_result": message["tool_result"],
+        }
+        for message in successful_returns
+        if not message["tool_result"]["success"]
+    ]
+    assert unexpected_failures == []
+    assert browser_access_calls == [(UUID(fixed_test_user["id"]), 1800)]
 
     slack_messages = await wait_for_messages(
         message_store, "SLACK", min_count=len(resource_calls) + 1
