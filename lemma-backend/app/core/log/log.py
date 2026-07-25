@@ -77,7 +77,10 @@ _FOREIGN_LOGGER_PREFIXES = frozenset(
         "uvicorn",
     }
 )
-_INFO_NOISE_LOGGER_PREFIXES = ("sqlalchemy.orm.mapper",)
+_INFO_NOISE_LOGGER_PREFIXES = (
+    "sqlalchemy.engine",
+    "sqlalchemy.orm.mapper",
+)
 _PROHIBITED_FIELDS = {
     "authorization",
     "body",
@@ -412,6 +415,7 @@ def _reconcile_named_loggers(configured_level: int) -> None:
     manager = logging.root.manager.loggerDict
     prefixes = tuple(_FOREIGN_LOGGER_PREFIXES)
     names = set(prefixes)
+    names.update(_INFO_NOISE_LOGGER_PREFIXES)
     names.update(
         name
         for name in manager
