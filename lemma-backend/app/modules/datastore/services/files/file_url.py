@@ -30,11 +30,17 @@ from app.core.crypto import get_secret_signer
 from app.modules.datastore.config import datastore_settings
 from app.core.infrastructure.cache.redis_json_cache import RedisJsonCache
 from app.core.log.log import get_logger
+from app.core.observability.dependency_incident import DependencyIncident
 from app.modules.datastore.domain.file_entities import DatastoreFileEntity
 from app.modules.datastore.domain.ports import DatastoreStoragePort
 from app.modules.datastore.services.files.projection import datastore_storage_key
 
 logger = get_logger(__name__)
+_cache_incident = DependencyIncident(
+    "datastore_file_url_cache",
+    logger=logger,
+    degradation_threshold=1,
+)
 
 #: Signing purpose for the unified signer (HKDF subkey label).
 _PURPOSE = "datastore-file-url"
@@ -124,9 +130,10 @@ def _get_url_cache() -> RedisJsonCache | None:
                     60, datastore_settings.datastore_file_url_expiry_seconds - 60
                 ),
             )
-        except Exception:
-            logger.warning("datastore.file_url.file_url_cache_unavailable_s.degraded")
+        except Exception as exc:
+            _cache_incident.record_failure(error_type=type(exc).__name__)
             return None
+        _cache_incident.record_success()
     return _url_cache
 
 

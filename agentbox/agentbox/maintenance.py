@@ -5,7 +5,11 @@ from datetime import datetime, timedelta, timezone
 
 from agentbox.domain import AgentBoxError, MaintenanceAction
 from agentbox.lifecycle import SandboxLifecycleService
+from agentbox.observability import get_logger
 from agentbox.persistence.uow import StateDatabase
+
+
+logger = get_logger(__name__)
 
 
 class SandboxMaintenanceWorker:
@@ -79,7 +83,11 @@ async def maintenance_loop(
             await worker.run_once(deadline_at=deadline)
         except asyncio.CancelledError:
             raise
-        except Exception:
+        except Exception as exc:
             # Claims are durable and expire, so later bounded passes continue.
-            pass
+            logger.warning(
+                "agentbox.cleanup.failed",
+                error_type=type(exc).__name__,
+                exc_info=True,
+            )
         await asyncio.sleep(interval_seconds)

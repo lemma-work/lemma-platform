@@ -7,6 +7,7 @@ import json
 import logging
 import logging.config
 from copy import deepcopy
+from uuid import UUID
 
 import pytest
 import structlog
@@ -18,6 +19,7 @@ from app.core.log.log import (
     get_logger,
     setup_logging,
 )
+from app.core.request_context import bind_request_context
 
 
 def _processor_formatter_handler() -> logging.Handler:
@@ -61,14 +63,17 @@ def test_application_record_has_one_line_and_required_schema(captured_stdout) ->
     assert "message" not in records[0]
 
 
-def test_foreign_record_is_stable_and_drops_raw_message(captured_stdout) -> None:
+def test_foreign_record_keeps_redacted_bounded_message(captured_stdout) -> None:
     canary = "CANARY-FOREIGN-SECRET"
     logging.getLogger("some.foreign.lib").warning(
         "provider failed token=%s url=https://example.invalid/private", canary
     )
     record = captured_stdout()[0]
-    assert record["event"] == "dependency.reported"
+    assert record["event"] == (
+        "provider failed token=[REDACTED] url=https://example.invalid/private"
+    )
     assert record["logger"] == "some.foreign.lib"
+    assert record["level"] == "warning"
     assert canary not in json.dumps(record)
 
 
@@ -77,7 +82,7 @@ def test_malformed_dependency_url_cannot_break_logging(captured_stdout) -> None:
         "dependency failed at https://example.com:bad/path?token=CANARY"
     )
     record = captured_stdout()[0]
-    assert record["event"] == "dependency.reported"
+    assert record["event"] == "dependency failed at [REDACTED_URL]"
     assert "CANARY" not in json.dumps(record)
 
 
@@ -169,7 +174,8 @@ def test_setup_reconciles_one_console_and_preserves_non_console_handler(
         assert len(processor_handlers) == 1
         assert preserved in logging.getLogger().handlers
         assert logging.getLogger("uvicorn.access").handlers == []
-        assert logging.getLogger("uvicorn.error").level == logging.WARNING
+        assert logging.getLogger("uvicorn.access").getEffectiveLevel() == logging.INFO
+        assert logging.getLogger("uvicorn.error").getEffectiveLevel() == logging.INFO
     finally:
         logging.getLogger().removeHandler(preserved)
 
@@ -198,7 +204,7 @@ def test_reconciliation_after_real_uvicorn_and_streaq_console_configuration() ->
 
     records = [json.loads(line) for line in buffer.getvalue().splitlines() if line]
     assert len(records) == 1
-    assert records[0]["event"] == "dependency.reported"
+    assert records[0]["event"] == "task failed secret=[REDACTED]"
     assert "CANARY" not in json.dumps(records[0])
     assert logging.getLogger("uvicorn.access").handlers == []
     assert logging.getLogger("uvicorn.error").handlers == []
@@ -216,10 +222,165 @@ def test_lazy_dependency_logger_cannot_install_its_own_console_handler(
 
     records = captured_stdout()
     assert len(records) == 1
-    assert records[0]["event"] == "dependency.reported"
+    assert records[0]["event"] == "consumer failed secret=[REDACTED]"
     assert records[0]["logger"] == "faststream.redis"
     assert "CANARY" not in json.dumps(records[0])
     assert dependency_logger.handlers == []
+
+
+def test_production_uses_log_level_and_preserves_every_allowed_dependency_record(
+    captured_stdout,
+) -> None:
+    setup_logging(
+        "production",
+        service_name="lemma-api",
+        json_logs=True,
+        log_level="INFO",
+    )
+    dependency_logger = get_dependency_logger("httpx")
+
+    dependency_logger.debug("request assembly detail")
+    dependency_logger.info("routine request completed")
+    dependency_logger.warning("retrying request attempt=%s", 1)
+    dependency_logger.warning("retrying request attempt=%s", 2)
+    dependency_logger.error("request failed attempt=%s", 3)
+    dependency_logger.error("request failed attempt=%s", 4)
+
+    records = captured_stdout()
+    assert [record["level"] for record in records] == [
+        "info",
+        "warning",
+        "warning",
+        "error",
+        "error",
+    ]
+    assert [record["event"] for record in records] == [
+        "routine request completed",
+        "retrying request attempt=1",
+        "retrying request attempt=2",
+        "request failed attempt=3",
+        "request failed attempt=4",
+    ]
+
+
+def test_development_debug_level_preserves_dependency_debug_for_diagnosis(
+    captured_stdout,
+) -> None:
+    dependency_logger = get_dependency_logger("httpx")
+
+    dependency_logger.debug("request assembly detail")
+    dependency_logger.info("routine request completed")
+
+    records = captured_stdout()
+    assert [record["event"] for record in records] == [
+        "request assembly detail",
+        "routine request completed",
+    ]
+
+
+@pytest.mark.parametrize(
+    "logger_name",
+    [
+        "com.supertokens",
+        "fastmcp.server.server",
+        "mcp.server.lowlevel.server",
+        "openai._base_client",
+        "filelock",
+        "coredis",
+        "asyncio",
+    ],
+)
+def test_known_dependency_families_follow_configured_production_level(
+    captured_stdout,
+    logger_name,
+) -> None:
+    setup_logging(
+        "production",
+        service_name="lemma-api",
+        json_logs=True,
+        log_level="INFO",
+    )
+    dependency_logger = logging.getLogger(logger_name)
+
+    dependency_logger.debug("routine client detail")
+    dependency_logger.info("useful client lifecycle")
+
+    records = captured_stdout()
+    assert len(records) == 1
+    assert records[0]["logger"] == logger_name
+    assert records[0]["level"] == "info"
+    assert records[0]["event"] == "useful client lifecycle"
+
+
+def test_dependency_console_handlers_are_reconciled_to_safe_pipeline(
+    captured_stdout,
+) -> None:
+    supertokens_logger = logging.getLogger("com.supertokens")
+    supertokens_console = logging.StreamHandler()
+    supertokens_logger.addHandler(supertokens_console)
+    supertokens_logger.propagate = False
+    fastmcp_logger = logging.getLogger("fastmcp")
+    fastmcp_console = logging.StreamHandler()
+    fastmcp_logger.addHandler(fastmcp_console)
+    fastmcp_logger.propagate = False
+
+    setup_logging(
+        "production",
+        service_name="lemma-api",
+        json_logs=True,
+        log_level="INFO",
+    )
+
+    assert supertokens_console not in supertokens_logger.handlers
+    assert supertokens_logger.propagate is True
+    assert fastmcp_console not in fastmcp_logger.handlers
+    assert fastmcp_logger.propagate is True
+
+
+def test_repeated_faststream_errors_are_not_hidden_and_keep_correlation(
+    captured_stdout,
+) -> None:
+    setup_logging(
+        "production",
+        service_name="lemma-worker",
+        json_logs=True,
+        log_level="INFO",
+    )
+    dependency_logger = get_dependency_logger("faststream.redis")
+    correlation_id = UUID("12345678-1234-5678-1234-567812345678")
+
+    with bind_request_context(
+        request_id="request-123",
+        correlation_id=correlation_id,
+    ):
+        for _ in range(3):
+            dependency_logger.error("consumer failed credential=CANARY")
+
+    records = captured_stdout()
+    assert len(records) == 3
+    assert all(record["logger"] == "faststream.redis" for record in records)
+    assert all(record["level"] == "error" for record in records)
+    assert all(
+        record["event"] == "consumer failed credential=[REDACTED]" for record in records
+    )
+    assert all(record["request_id"] == "request-123" for record in records)
+    assert all(record["correlation_id"] == str(correlation_id) for record in records)
+
+
+def test_uvicorn_access_records_follow_configured_debug_level(
+    captured_stdout,
+) -> None:
+    access_logger = logging.getLogger("uvicorn.access")
+    access_logger.debug("request routing detail")
+    access_logger.info('127.0.0.1 - "GET /health/ready HTTP/1.1" 200')
+
+    records = captured_stdout()
+    assert [record["level"] for record in records] == ["debug", "info"]
+    assert all(record["logger"] == "uvicorn.access" for record in records)
+    assert [record["event"] for record in records] == [
+        "request routing detail",
+        '127.0.0.1 - "GET /health/ready HTTP/1.1" 200',
+    ]
 
 
 def test_preserved_handlers_never_receive_raw_exception_data() -> None:

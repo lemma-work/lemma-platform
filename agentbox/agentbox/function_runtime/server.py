@@ -9,7 +9,6 @@ import hmac
 import json
 import os
 from pathlib import Path
-import time
 from urllib.parse import urlparse
 from uuid import UUID
 
@@ -22,17 +21,17 @@ from starlette.routing import Route
 
 from agentbox.observability import create_inherited_task
 
-from .runner import GatewayClient, _cached_artifact_root, _resolve_artifact_root
+from .runner import GatewayClient, _resolve_artifact_root
 from .runtime_models import (
     FunctionArtifactManifest,
     RunAccepted,
     RunClaim,
     RuntimeFailure,
-    RuntimeTimings,
     TerminalReport,
     WorkerRequest,
 )
 from .types import JsonObject
+from .trace_context import bind_trace_context
 from .worker_pool import RevisionWorkerRegistry, RuntimeOverloaded
 
 
@@ -224,25 +223,17 @@ class FunctionRuntimeService:
         gateway_url: str,
         input_data: JsonObject,
     ) -> TerminalReport:
-        execution_started = time.perf_counter()
-        claim_ms = 0.0
-        artifact_ms = 0.0
-        worker_ms = 0.0
-        user_code_ms = 0.0
-        artifact_cache_hit = False
         gateway = await self._gateway(gateway_url)
         claim = None
         accepted = False
         try:
             try:
-                phase_started = time.perf_counter()
                 claim = await gateway.claim(
                     function_token,
                     run_id=run_id,
                     revision_hash=revision_hash,
                     input_data=input_data,
                 )
-                claim_ms = self._elapsed_ms(phase_started)
                 self._validate_claim(
                     claim=claim,
                     function_id=function_id,
@@ -252,11 +243,7 @@ class FunctionRuntimeService:
                 )
                 await self._mark_accepted(run_id, claim.callback_token)
                 accepted = True
-                digest = revision_hash.removeprefix("sha256:")
-                artifact_cache_hit = _cached_artifact_root(digest) is not None
-                phase_started = time.perf_counter()
                 root = await _resolve_artifact_root(gateway, claim)
-                artifact_ms = self._elapsed_ms(phase_started)
                 worker = WorkerRequest(
                     artifact_root=str(root),
                     manifest=self._manifest(root),
@@ -267,7 +254,6 @@ class FunctionRuntimeService:
                     lemma_token=claim.lemma_token,
                     lemma_base_url=claim.lemma_base_url,
                 )
-                phase_started = time.perf_counter()
                 response = await self._workers.execute(
                     function_id=function_id,
                     revision_hash=revision_hash,
@@ -276,8 +262,6 @@ class FunctionRuntimeService:
                     request=worker,
                     deadline_at=claim.deadline_at,
                 )
-                worker_ms = self._elapsed_ms(phase_started)
-                user_code_ms = response.user_code_ms
                 report = TerminalReport(
                     status="completed" if response.ok else "failed",
                     output_data=response.output_data,
@@ -285,14 +269,6 @@ class FunctionRuntimeService:
                     stdout=response.stdout,
                     stderr=response.stderr,
                     output_truncated=response.output_truncated,
-                    timings=RuntimeTimings(
-                        total_ms=self._elapsed_ms(execution_started),
-                        claim_ms=claim_ms,
-                        artifact_ms=artifact_ms,
-                        worker_ms=worker_ms,
-                        user_code_ms=user_code_ms,
-                        artifact_cache_hit=artifact_cache_hit,
-                    ),
                 )
             except asyncio.CancelledError:
                 raise
@@ -305,14 +281,6 @@ class FunctionRuntimeService:
                     error=RuntimeFailure(name=type(exc).__name__, message=str(exc)),
                     stdout="",
                     stderr="",
-                    timings=RuntimeTimings(
-                        total_ms=self._elapsed_ms(execution_started),
-                        claim_ms=claim_ms,
-                        artifact_ms=artifact_ms,
-                        worker_ms=worker_ms,
-                        user_code_ms=user_code_ms,
-                        artifact_cache_hit=artifact_cache_hit,
-                    ),
                 )
             await gateway.terminal(claim, report)
             return report
@@ -345,10 +313,6 @@ class FunctionRuntimeService:
     def _consume_task_result(task: asyncio.Task[TerminalReport]) -> None:
         if not task.cancelled():
             task.exception()
-
-    @staticmethod
-    def _elapsed_ms(started: float) -> float:
-        return round((time.perf_counter() - started) * 1000, 3)
 
     @staticmethod
     def _manifest(root: Path) -> FunctionArtifactManifest:
@@ -459,6 +423,11 @@ async def health(_request: Request) -> JSONResponse:
 
 
 async def invoke(request: Request) -> JSONResponse:
+    with bind_trace_context(request.headers):
+        return await _invoke(request)
+
+
+async def _invoke(request: Request) -> JSONResponse:
     try:
         content_length = int(request.headers.get("content-length", "0"))
     except ValueError:

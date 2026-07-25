@@ -20,6 +20,7 @@ import sys
 import time
 import traceback
 from typing import Any, TypeVar
+from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 from uuid import UUID
 
 from agentbox.event_catalog import EVENT_CATALOG
@@ -36,6 +37,68 @@ _job_id: ContextVar[str | None] = ContextVar("agentbox_job_id", default=None)
 _warning_emitted = False
 _contract_violation_emitted = False
 _HANDLER_MARKER = "_agentbox_json_console_handler"
+_REDACTED = "[REDACTED]"
+_REDACTED_URL = "[REDACTED_URL]"
+_SENSITIVE_KEY_PARTS = frozenset(
+    {
+        "authorization",
+        "cookie",
+        "set-cookie",
+        "token",
+        "secret",
+        "password",
+        "passwd",
+        "api_key",
+        "apikey",
+        "client_secret",
+        "access_key",
+        "private_key",
+        "credential",
+    }
+)
+_BEARER_RE = re.compile(r"(?i)\b(bearer|basic)\s+[a-z0-9._~+/=-]+")
+_JWT_RE = re.compile(r"\beyJ[a-zA-Z0-9_-]+\.[a-zA-Z0-9_-]+\.[a-zA-Z0-9_-]+\b")
+_URL_RE = re.compile(r"https?://[^\s\"'<>]+", re.IGNORECASE)
+_SECRET_ASSIGNMENT_RE = re.compile(
+    r"""(?ix)
+    (?<![a-z0-9_])
+    (?P<quote>["']?)
+    (?P<key>
+        authorization|cookie|token|secret|password|passwd|api[_-]?key|
+        client[_-]?secret|access[_-]?key|private[_-]?key|credential
+    )
+    (?P=quote)
+    (?P<separator>\s*[:=]\s*)
+    (?:"[^"]*"|'[^']*'|[^\s,;]+)
+    """
+)
+_PRIVATE_KEY_RE = re.compile(
+    r"-----BEGIN [A-Z0-9 ]*PRIVATE KEY-----.*?"
+    r"-----END [A-Z0-9 ]*PRIVATE KEY-----",
+    re.DOTALL,
+)
+_KNOWN_TOKEN_PATTERNS = (
+    re.compile(r"\b(?:AKIA|ASIA)[A-Z0-9]{16}\b"),
+    re.compile(r"\bAIza[0-9A-Za-z_-]{20,}\b"),
+    re.compile(r"\bgh[pousr]_[A-Za-z0-9]{20,}\b"),
+    re.compile(r"\bsk-(?:proj-)?[A-Za-z0-9_-]{16,}\b"),
+    re.compile(r"\b(?:sk|rk)_live_[A-Za-z0-9]{16,}\b"),
+    re.compile(r"\bxox[baprs]-[A-Za-z0-9-]{10,}\b"),
+)
+_SENSITIVE_URL_PARAMS = frozenset(
+    {
+        "client_assertion",
+        "code",
+        "key",
+        "oauth_verifier",
+        "sig",
+        "signature",
+        "state",
+        "x-amz-credential",
+        "x-amz-signature",
+        "x-goog-signature",
+    }
+)
 
 
 class ReleaseIdentityError(RuntimeError):
@@ -44,6 +107,72 @@ class ReleaseIdentityError(RuntimeError):
 
 class LoggingContractError(ValueError):
     pass
+
+
+def _is_sensitive_key(key: object) -> bool:
+    normalized = str(key).strip().lower().replace("-", "_")
+    return any(part.replace("-", "_") in normalized for part in _SENSITIVE_KEY_PARTS)
+
+
+def _redact_url(value: str) -> str:
+    try:
+        parsed = urlsplit(value)
+        if not parsed.scheme or not parsed.netloc:
+            return value
+        hostname = parsed.hostname or ""
+        port = parsed.port
+        if port is not None:
+            hostname = f"{hostname}:{port}"
+        netloc = (
+            f"{_REDACTED}@{hostname}"
+            if parsed.username or parsed.password
+            else hostname
+        )
+        query = urlencode(
+            [
+                (
+                    key,
+                    _REDACTED
+                    if _is_sensitive_key(key) or key.lower() in _SENSITIVE_URL_PARAMS
+                    else item,
+                )
+                for key, item in parse_qsl(parsed.query, keep_blank_values=True)
+            ]
+        )
+        fragment_items = parse_qsl(parsed.fragment, keep_blank_values=True)
+        fragment = parsed.fragment
+        if any(
+            _is_sensitive_key(key) or key.lower() in _SENSITIVE_URL_PARAMS
+            for key, _ in fragment_items
+        ):
+            fragment = _REDACTED
+        return urlunsplit((parsed.scheme, netloc, parsed.path, query, fragment))
+    except Exception:
+        return _REDACTED_URL
+
+
+def _redact_text(value: str) -> str:
+    redacted = _PRIVATE_KEY_RE.sub(_REDACTED, value)
+    redacted = _BEARER_RE.sub(
+        lambda match: f"{match.group(1)} {_REDACTED}",
+        redacted,
+    )
+    redacted = _JWT_RE.sub(_REDACTED, redacted)
+    redacted = _SECRET_ASSIGNMENT_RE.sub(
+        lambda match: f"{match.group('key')}{match.group('separator')}{_REDACTED}",
+        redacted,
+    )
+    for pattern in _KNOWN_TOKEN_PATTERNS:
+        redacted = pattern.sub(_REDACTED, redacted)
+    return _URL_RE.sub(lambda match: _redact_url(match.group(0)), redacted)
+
+
+def _safe_record_message(record: logging.LogRecord) -> str:
+    try:
+        message = record.getMessage()
+    except Exception:
+        return "unrenderable log record"
+    return " ".join(_redact_text(message).splitlines())[:512]
 
 
 def _strict_logging_contract_enabled() -> bool:
@@ -301,19 +430,23 @@ class DependencyIncident:
 
 class JsonFormatter(logging.Formatter):
     def format(self, record: logging.LogRecord) -> str:
+        from agentbox.telemetry import current_trace_fields
+
         app_owned = isinstance(getattr(record, "lemma_fields", None), dict)
-        event = str(record.msg) if app_owned else "dependency.reported"
+        event = str(record.msg) if app_owned else _safe_record_message(record)
         data: dict[str, Any] = {
             "timestamp": self.formatTime(record, "%Y-%m-%dT%H:%M:%S%z"),
             "level": record.levelname.lower(),
             "event": event
-            if _EVENT_RE.fullmatch(event)
+            if not app_owned or _EVENT_RE.fullmatch(event)
             else "logging.contract.violation",
             "logger": record.name,
             "service.name": "lemma-agentbox",
             "service.version": _release_sha(),
             "release.sha": _release_sha(),
             "deployment.environment": _environment(),
+            "deployment.environment.name": _environment(),
+            **current_trace_fields(),
             **current_context(),
         }
         fields = getattr(record, "lemma_fields", {}) if app_owned else {}
@@ -386,6 +519,7 @@ def _is_otel_handler(handler: logging.Handler) -> bool:
 
 def setup_logging(*, level: str = "INFO") -> None:
     root = logging.getLogger()
+    resolved_level = getattr(logging, level.upper(), logging.INFO)
     owned = [h for h in root.handlers if getattr(h, _HANDLER_MARKER, False)]
     preserved = [
         h
@@ -400,7 +534,7 @@ def setup_logging(*, level: str = "INFO") -> None:
     for preserved_handler in preserved:
         _install_safe_exception_filter(preserved_handler)
     root.handlers = [handler, *preserved]
-    root.setLevel(getattr(logging, level.upper(), logging.INFO))
+    root.setLevel(resolved_level)
     for name in (
         "azure",
         "e2b",
@@ -420,4 +554,4 @@ def setup_logging(*, level: str = "INFO") -> None:
         for existing in dependency.handlers:
             _install_safe_exception_filter(existing)
         dependency.propagate = True
-        dependency.setLevel(logging.WARNING)
+        dependency.setLevel(resolved_level)

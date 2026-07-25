@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+from unittest.mock import AsyncMock
 
 import pytest
 from redis.exceptions import ConnectionError as RedisConnectionError
@@ -8,6 +9,7 @@ from redis.exceptions import TimeoutError as RedisTimeoutError
 
 from app.core.infrastructure.channels import channel_service as channel_module
 from app.core.infrastructure.channels.channel_service import RedisChannelAdapter
+from app.core.observability.dependency_incident import DependencyIncident
 
 
 class _FakePubSub:
@@ -188,3 +190,48 @@ async def test_realtime_adapter_evicts_only_slow_client() -> None:
             assert await anext(fast_messages) == "still-connected"
 
     await adapter.disconnect()
+
+
+@pytest.mark.asyncio
+async def test_realtime_reconnect_flapping_emits_one_transition_pair() -> None:
+    class _Logger:
+        def __init__(self) -> None:
+            self.records: list[tuple[str, str, dict]] = []
+
+        def warning(self, event: str, **fields) -> None:
+            self.records.append(("warning", event, fields))
+
+        def info(self, event: str, **fields) -> None:
+            self.records.append(("info", event, fields))
+
+    class _FlappingPubSub:
+        def __init__(self) -> None:
+            self.calls = 0
+
+        async def listen(self):
+            self.calls += 1
+            if self.calls <= 2:
+                raise RedisConnectionError("unavailable")
+            yield {
+                "type": "message",
+                "channel": "conversation:1",
+                "data": "recovered",
+            }
+
+    logger = _Logger()
+    pubsub = _FlappingPubSub()
+    adapter = RedisChannelAdapter(client=_FakeRedis())  # type: ignore[arg-type]
+    adapter._connection_incident = DependencyIncident(
+        "realtime_pubsub",
+        logger=logger,  # type: ignore[arg-type]
+        degradation_threshold=2,
+    )
+    adapter._ensure_pubsub = AsyncMock(return_value=pubsub)  # type: ignore[method-assign]
+    adapter._reconnect = AsyncMock()  # type: ignore[method-assign]
+
+    await adapter._listen()
+
+    assert [record[:2] for record in logger.records] == [
+        ("warning", "dependency.degraded"),
+        ("info", "dependency.recovered"),
+    ]

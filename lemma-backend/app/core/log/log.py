@@ -29,6 +29,7 @@ _CONSOLE_HANDLER_MARKER = "_lemma_json_console_handler"
 _APP_RECORD_MARKER = "_lemma_app_owned"
 _release_warning_emitted: set[str] = set()
 _contract_violation_emitted = False
+_configured_log_level = logging.INFO
 
 _CONTRACT_METADATA_FIELDS = {
     "causation_id",
@@ -56,21 +57,26 @@ _CONTRACT_METADATA_FIELDS = {
     "trace_id",
 }
 
-_FOREIGN_LOGGER_LEVELS: dict[str, int] = {
-    "httpx": logging.WARNING,
-    "httpcore": logging.WARNING,
-    "uvicorn": logging.WARNING,
-    "uvicorn.access": logging.WARNING,
-    "uvicorn.error": logging.WARNING,
-    "streaq": logging.WARNING,
-    "faststream": logging.WARNING,
-    "apscheduler": logging.WARNING,
-    "sqlalchemy": logging.WARNING,
-    "azure": logging.WARNING,
-    "azure.core": logging.WARNING,
-    "e2b": logging.WARNING,
-}
-
+_FOREIGN_LOGGER_PREFIXES = frozenset(
+    {
+        "apscheduler",
+        "asyncio",
+        "azure",
+        "com.supertokens",
+        "coredis",
+        "e2b",
+        "fastmcp",
+        "faststream",
+        "filelock",
+        "httpcore",
+        "httpx",
+        "mcp",
+        "openai",
+        "sqlalchemy",
+        "streaq",
+        "uvicorn",
+    }
+)
 _PROHIBITED_FIELDS = {
     "authorization",
     "body",
@@ -276,10 +282,13 @@ def _bounded_contract(_: Any, __: str, event_dict: dict[str, Any]) -> dict[str, 
                     violation = "unexpected_fields"
     else:
         # Dependency messages and interpolation arguments are not controlled by
-        # Lemma and may contain URLs, SQL, or provider response content.
-        event_dict["event"] = "dependency.reported"
+        # Lemma. Keep the original message as the log event after centralized
+        # redaction, while dropping uncontrolled auxiliary fields. This keeps
+        # third-party diagnostics useful without allowing their payloads to
+        # bypass the safe logging boundary.
+        allowed = _CONTRACT_METADATA_FIELDS
         for key in list(event_dict):
-            if key not in _CONTRACT_METADATA_FIELDS and not key.startswith("_"):
+            if key not in allowed and not key.startswith("_"):
                 event_dict.pop(key, None)
 
     if violation is not None:
@@ -337,6 +346,8 @@ def _is_otel_handler(handler: logging.Handler) -> bool:
 
 def _is_console_handler(handler: logging.Handler) -> bool:
     if getattr(handler, _CONSOLE_HANDLER_MARKER, False):
+        return True
+    if handler.__class__.__module__ == "rich.logging":
         return True
     if isinstance(handler, logging.FileHandler):
         return False
@@ -396,9 +407,9 @@ def _processor_formatter(renderer: Any) -> structlog.stdlib.ProcessorFormatter:
     )
 
 
-def _reconcile_named_loggers() -> None:
+def _reconcile_named_loggers(configured_level: int) -> None:
     manager = logging.root.manager.loggerDict
-    prefixes = tuple(_FOREIGN_LOGGER_LEVELS)
+    prefixes = tuple(_FOREIGN_LOGGER_PREFIXES)
     names = set(prefixes)
     names.update(
         name
@@ -413,15 +424,7 @@ def _reconcile_named_loggers() -> None:
         for handler in logger.handlers:
             _install_safe_exception_filter(handler)
         logger.propagate = True
-        level = next(
-            (
-                configured
-                for prefix, configured in _FOREIGN_LOGGER_LEVELS.items()
-                if name == prefix or name.startswith(prefix + ".")
-            ),
-            logging.WARNING,
-        )
-        logger.setLevel(level)
+        logger.setLevel(configured_level)
 
 
 def setup_logging(
@@ -432,6 +435,7 @@ def setup_logging(
     log_level: str = "INFO",
 ) -> None:
     """Install or reconcile the one application JSON console pipeline."""
+    global _configured_log_level
     resolved_env = env or _bootstrap_environment()
     release_sha = release_sha_for_resource()
     _logging_context.clear()
@@ -445,6 +449,7 @@ def setup_logging(
     )
 
     resolved_level = getattr(logging, log_level.upper(), logging.INFO)
+    _configured_log_level = resolved_level
     shared = _shared_processors()
     renderer = (
         structlog.processors.JSONRenderer()
@@ -486,7 +491,7 @@ def setup_logging(
         _install_safe_exception_filter(handler)
     root.handlers = [console, *preserved]
     root.setLevel(resolved_level)
-    _reconcile_named_loggers()
+    _reconcile_named_loggers(resolved_level)
 
 
 def validate_release_identity(env: str) -> None:
@@ -519,13 +524,13 @@ def get_logger(name: str) -> Logger:
     return structlog.get_logger().bind(logger=name)  # type: ignore[return-value]
 
 
-def get_dependency_logger(name: str, *, level: int = logging.WARNING) -> logging.Logger:
+def get_dependency_logger(name: str, *, level: int | None = None) -> logging.Logger:
     """Return a foreign-library logger routed through Lemma's safe root pipeline.
 
     Some libraries (notably FastStream) create their own stdout handler lazily
     when a broker starts. Supplying this logger prevents that late handler from
-    being installed while retaining warning/error records as bounded
-    ``dependency.reported`` events.
+    being installed while retaining configured records with their original
+    bounded, redacted messages.
     """
     dependency_logger = logging.getLogger(name)
     dependency_logger.handlers = [
@@ -536,7 +541,13 @@ def get_dependency_logger(name: str, *, level: int = logging.WARNING) -> logging
     for handler in dependency_logger.handlers:
         _install_safe_exception_filter(handler)
     dependency_logger.propagate = True
-    dependency_logger.setLevel(level)
+    requested_level = _configured_log_level if level is None else level
+    dependency_logger.setLevel(
+        max(
+            _configured_log_level,
+            requested_level,
+        )
+    )
     return dependency_logger
 
 

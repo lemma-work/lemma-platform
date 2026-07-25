@@ -239,6 +239,36 @@ def test_otel_log_handler_constructs_only_bounded_records(monkeypatch) -> None:
     assert not hasattr(safe, "payload")
 
 
+def test_otel_log_handler_preserves_redacted_dependency_record_message(
+    monkeypatch,
+) -> None:
+    captured = []
+    monkeypatch.setattr(
+        LoggingHandler,
+        "emit",
+        lambda _self, record: captured.append(record),
+    )
+    handler = telemetry.SanitizingLoggingHandler(
+        logger_provider=LoggerProvider(),
+    )
+    original = logging.LogRecord(
+        "httpx",
+        logging.WARNING,
+        "/private/CANARY.py",
+        99,
+        "request failed token=%s",
+        ("CANARY",),
+        None,
+    )
+    handler.emit(original)
+    assert len(captured) == 1
+    safe = captured[0]
+    assert safe.msg == "request failed token=[REDACTED]"
+    assert safe.name == "httpx"
+    assert safe.levelno == logging.WARNING
+    assert "CANARY" not in str(safe.msg)
+
+
 @pytest.mark.parametrize("value", ["console", "otlp,console", "invalid"])
 def test_unknown_exporters_fail_closed(monkeypatch, value: str) -> None:
     configured = _settings(

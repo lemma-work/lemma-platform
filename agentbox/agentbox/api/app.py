@@ -42,6 +42,10 @@ from agentbox.python_sessions import PythonSessionService
 from agentbox.observability import bind_context, get_logger
 from agentbox.observability import create_background_task
 from agentbox.reconciliation import AgentBoxReconciler, reconciliation_loop
+from agentbox.telemetry import (
+    enrich_current_span,
+    shutdown_telemetry,
+)
 
 from .fabric import agentbox_error_response, router
 from .port_proxy import access_router, create_port_proxy_http_client
@@ -135,6 +139,7 @@ class RequestContextMiddleware:
             event_id=event_id,
             job_id=job_id,
         ):
+            enrich_current_span(request_id=request_id)
             try:
                 await self.app(scope, receive, send_with_request_id)
             except asyncio.CancelledError:
@@ -490,6 +495,7 @@ async def lifespan(app: FastAPI):
         await app.state.port_proxy_http_client.aclose()
         await provider.close()
         await database.dispose()
+        shutdown_telemetry()
 
 
 app = FastAPI(title="AgentBox", lifespan=lifespan)

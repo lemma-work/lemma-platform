@@ -142,7 +142,6 @@ class FunctionRuntimeGateway:
                 output_data=request.output_data,
                 error=error,
                 logs=logs,
-                timings=request.timings,
             )
         if not accepted:
             raise RuntimeStateRejected

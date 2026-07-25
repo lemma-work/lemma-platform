@@ -11,6 +11,7 @@ from agentbox.domain import (
     WorkloadKind,
 )
 from agentbox.lifecycle import allocation_metadata
+from agentbox.observability import get_logger
 from agentbox.persistence.uow import StateDatabase
 from agentbox.ports import (
     ProviderAllocationFailed,
@@ -20,6 +21,9 @@ from agentbox.ports import (
     ProviderRateLimited,
     SandboxProviderPort,
 )
+
+
+logger = get_logger(__name__)
 
 
 class AgentBoxReconciler:
@@ -265,8 +269,12 @@ async def reconciliation_loop(
             await reconciler.reconcile_once(deadline_at=deadline)
         except asyncio.CancelledError:
             raise
-        except Exception:
+        except Exception as exc:
             # The next bounded pass retries durable candidates. Request handling
             # remains independent of provider inventory availability.
-            pass
+            logger.warning(
+                "agentbox.reconcile.failed",
+                error_type=type(exc).__name__,
+                exc_info=True,
+            )
         await asyncio.sleep(interval_seconds)

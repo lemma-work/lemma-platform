@@ -3,10 +3,12 @@ from __future__ import annotations
 import asyncio
 from uuid import uuid4
 
+import httpx
 import pytest
 
-from agentbox.function_runtime.runtime_models import TerminalReport
-from agentbox.function_runtime.server import FunctionRuntimeService
+from agentbox.function_runtime.runtime_models import RunAccepted, TerminalReport
+from agentbox.function_runtime.server import FunctionRuntimeService, create_app
+from agentbox.function_runtime.trace_context import inject_trace_context
 
 
 pytestmark = pytest.mark.asyncio
@@ -222,3 +224,40 @@ async def test_cancel_can_win_before_runtime_claim_finishes(monkeypatch) -> None
     finally:
         blocked.set()
         await service.close()
+
+
+async def test_invocation_extracts_w3c_context_before_starting_runtime_task() -> None:
+    app = create_app(max_workers=1, max_cached_revisions=1)
+    observed: dict[str, str] = {}
+
+    class _Runtime:
+        async def accept(self, **_kwargs):
+            inject_trace_context(observed)
+            return RunAccepted(run_id=run_id)
+
+    run_id = uuid4()
+    function_id = uuid4()
+    app.state.runtime = _Runtime()
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app),
+        base_url="http://runtime.test",
+    ) as client:
+        response = await client.post(
+            f"/functions/{function_id}/runs/{run_id}",
+            headers={
+                "Authorization": "Bearer delegated-function-token",
+                "If-Match": f'"sha256:{"a" * 64}"',
+                "X-Lemma-Gateway-Url": "https://gateway.lemma.test",
+                "X-Lemma-Run-Token": "r" * 32,
+                "Prefer": "respond-async",
+                "traceparent": (
+                    "00-1234567890abcdef1234567890abcdef-1234567890abcdef-01"
+                ),
+            },
+            json={"input": {"value": 1}},
+        )
+
+    assert response.status_code == 202, response.text
+    assert observed == {
+        "traceparent": ("00-1234567890abcdef1234567890abcdef-1234567890abcdef-01"),
+    }

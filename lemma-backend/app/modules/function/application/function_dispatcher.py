@@ -4,9 +4,7 @@ from __future__ import annotations
 
 import asyncio
 from collections.abc import Awaitable, Callable
-from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
-import time
 from urllib.parse import urljoin
 from uuid import UUID
 
@@ -68,13 +66,6 @@ RuntimeHttpClientFactory = Callable[[], httpx.AsyncClient]
 TokenMinter = Callable[..., Awaitable[str]]
 
 
-@dataclass(slots=True)
-class FunctionDispatchTimings:
-    resolve_ms: float | None = None
-    endpoint_ms: float | None = None
-    runtime_call_ms: float | None = None
-
-
 class FunctionDispatcher:
     """Resolve one persisted run, execute externally, then read terminal state.
 
@@ -113,35 +104,21 @@ class FunctionDispatcher:
         *,
         mode: FunctionDispatchMode,
     ) -> FunctionRunEntity:
-        execute_started = time.perf_counter()
-        phase_started = execute_started
-        phase_timings = FunctionDispatchTimings()
         dispatch = await self._resolve_dispatch(run_id, mode=mode)
-        phase_timings.resolve_ms = self._elapsed_ms(phase_started)
         if isinstance(dispatch, FunctionRunEntity):
-            self._log_diagnostics(
-                run_id,
-                phase_timings,
-                execute_started,
-                outcome=dispatch.status.value,
-            )
             return dispatch
 
         function_token_task = create_inherited_task(
             self._function_session_token(dispatch)
         )
         try:
-            phase_started = time.perf_counter()
             endpoint = await self._runtime_endpoint(dispatch)
-            phase_timings.endpoint_ms = self._elapsed_ms(phase_started)
             function_token = await function_token_task
-            phase_started = time.perf_counter()
             runtime_response = await self._invoke_runtime_with_recovery(
                 dispatch,
                 endpoint=endpoint,
                 function_token=function_token,
             )
-            phase_timings.runtime_call_ms = self._elapsed_ms(phase_started)
             if isinstance(runtime_response, FunctionRunEntity):
                 result = runtime_response
             elif isinstance(runtime_response, RuntimeAcceptedResponse):
@@ -158,12 +135,6 @@ class FunctionDispatcher:
                 raise InvocationOutcomeUnconfirmed(
                     "function runtime returned before durable terminal state"
                 )
-            self._log_diagnostics(
-                run_id,
-                phase_timings,
-                execute_started,
-                outcome=result.status.value,
-            )
             return result
         except BaseException as exc:
             if isinstance(exc, asyncio.CancelledError):
@@ -176,12 +147,6 @@ class FunctionDispatcher:
             if isinstance(exc, InvocationOutcomeUnconfirmed):
                 current = await self._load_run(run_id)
                 if self._durably_confirms_invocation(dispatch, current):
-                    self._log_diagnostics(
-                        run_id,
-                        phase_timings,
-                        execute_started,
-                        outcome=current.status.value,
-                    )
                     return current
                 await self._best_effort_cancel(dispatch)
             message = self._execution_error(exc)
@@ -191,12 +156,6 @@ class FunctionDispatcher:
                 ).fail_dispatch(dispatch, error=message)
             if failed is None:
                 failed = await self._load_run(run_id)
-            self._log_diagnostics(
-                run_id,
-                phase_timings,
-                execute_started,
-                outcome="dispatch_failed",
-            )
             return failed
         finally:
             if not function_token_task.done():
@@ -557,30 +516,6 @@ class FunctionDispatcher:
                 return "Function execution timed out (deadline exceeded)"
             return f"Function sandbox error ({redact_text(code)})"
         return "Function execution failed"
-
-    @staticmethod
-    def _elapsed_ms(started: float) -> float:
-        return round((time.perf_counter() - started) * 1000, 3)
-
-    @staticmethod
-    def _log_diagnostics(
-        run_id: UUID,
-        phases: FunctionDispatchTimings,
-        execute_started: float,
-        *,
-        outcome: str,
-    ) -> None:
-        if not settings.function_execution_diagnostics:
-            return
-        logger.warning(
-            "function.execution.diagnostics.dispatch",
-            run_id=str(run_id),
-            outcome=outcome,
-            total_ms=FunctionDispatcher._elapsed_ms(execute_started),
-            resolve_ms=phases.resolve_ms,
-            endpoint_ms=phases.endpoint_ms,
-            runtime_call_ms=phases.runtime_call_ms,
-        )
 
 
 class InvocationOutcomeUnconfirmed(RuntimeError):

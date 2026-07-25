@@ -77,6 +77,9 @@ GENERAL_SPAN_ATTRIBUTE_KEYS = frozenset(
         "lemma.event_type",
         "lemma.attempt",
         "lemma.outcome",
+        "lemma.execution_mode",
+        "lemma.runtime_profile",
+        "lemma.cold",
     }
 )
 
@@ -135,6 +138,9 @@ METRIC_ATTRIBUTE_KEYS = frozenset(
         "method",
         "route",
         "task_name",
+        "execution_mode",
+        "runtime_profile",
+        "cold",
     }
 )
 

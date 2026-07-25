@@ -826,7 +826,6 @@ class Settings(BaseSettings):
         default=None,
         description="HMAC key deriving restart-stable run callback credentials",
     )
-    function_execution_diagnostics: bool = False
     function_session_token_cache_ttl_seconds: int = Field(
         default=300,
         ge=30,

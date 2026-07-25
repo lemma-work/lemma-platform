@@ -9,7 +9,6 @@ import io
 import os
 from pathlib import Path
 import sys
-import time
 import traceback
 from types import ModuleType
 from typing import Any, Iterator
@@ -190,7 +189,6 @@ async def _serve_request(
 ) -> WorkerResponse:
     stdout = _BoundedTextBuffer()
     stderr = _BoundedTextBuffer()
-    started = time.perf_counter()
     try:
         with redirect_stdout(stdout), redirect_stderr(stderr):
             output = await execute_loaded(request, revision)
@@ -200,7 +198,6 @@ async def _serve_request(
             stdout=stdout.value(),
             stderr=stderr.value(),
             output_truncated=stdout.truncated or stderr.truncated,
-            user_code_ms=(time.perf_counter() - started) * 1000,
         )
     except BaseException as exc:
         return WorkerResponse(
@@ -209,7 +206,6 @@ async def _serve_request(
             stdout=stdout.value(),
             stderr=stderr.value(),
             output_truncated=stdout.truncated or stderr.truncated,
-            user_code_ms=(time.perf_counter() - started) * 1000,
         )
 
 

@@ -18,6 +18,7 @@ from redis.exceptions import RedisError, TimeoutError as RedisTimeoutError
 from app.core.config import settings
 from app.core.domain.realtime import RealtimeChannel, RealtimeSlowConsumerError
 from app.core.log.log import get_logger
+from app.core.observability.dependency_incident import DependencyIncident
 from app.core.request_context import create_background_task
 
 logger = get_logger(__name__)
@@ -52,6 +53,11 @@ class RedisChannelAdapter:
         self._connect_lock = asyncio.Lock()
         self._subscription_lock = asyncio.Lock()
         self._closing = False
+        self._connection_incident = DependencyIncident(
+            "realtime_pubsub",
+            logger=logger,
+            degradation_threshold=2,
+        )
 
     async def connect(self) -> None:
         """Create the shared Redis pool; the Pub/Sub lease stays lazy."""
@@ -160,7 +166,7 @@ class RedisChannelAdapter:
                 except (RedisConnectionError, RedisTimeoutError, OSError) as exc:
                     reconnect_counter.add(1)
                     logger.debug(
-                        'infrastructure.channel_service.realtime_pub_sub_subscribe_replacing.diagnostic',
+                        "infrastructure.channel_service.realtime_pub_sub_subscribe_replacing.diagnostic",
                         error_type=type(exc).__name__,
                     )
                     await self._replace_pubsub()
@@ -233,6 +239,7 @@ class RedisChannelAdapter:
                     data = message.get("data")
                     if not isinstance(data, (str, bytes)):
                         continue
+                    self._connection_incident.record_success()
                     raw_channel = message.get("channel")
                     channel = (
                         raw_channel.decode()
@@ -247,10 +254,7 @@ class RedisChannelAdapter:
                 if self._closing:
                     return
                 reconnect_counter.add(1)
-                logger.warning(
-                    "infrastructure.channel_service.realtime_pub_sub_connection_lost.degraded",
-                    error_type=type(exc).__name__,
-                )
+                self._connection_incident.record_failure(error_type=type(exc).__name__)
                 await self._reconnect(backoff)
                 backoff = min(backoff * 2, RECONNECT_MAX_SECONDS)
 
@@ -313,7 +317,7 @@ class RedisChannelAdapter:
             await pubsub.aclose()
         except RedisError, OSError:
             logger.debug(
-                'infrastructure.channel_service.close_realtime_pub_sub_connection.diagnostic'
+                "infrastructure.channel_service.close_realtime_pub_sub_connection.diagnostic"
             )
 
 
