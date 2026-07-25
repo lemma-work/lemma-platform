@@ -77,6 +77,7 @@ _FOREIGN_LOGGER_PREFIXES = frozenset(
         "uvicorn",
     }
 )
+_INFO_NOISE_LOGGER_PREFIXES = ("sqlalchemy.orm.mapper",)
 _PROHIBITED_FIELDS = {
     "authorization",
     "body",
@@ -424,7 +425,12 @@ def _reconcile_named_loggers(configured_level: int) -> None:
         for handler in logger.handlers:
             _install_safe_exception_filter(handler)
         logger.propagate = True
-        logger.setLevel(configured_level)
+        logger_level = configured_level
+        if configured_level == logging.INFO and name.startswith(
+            _INFO_NOISE_LOGGER_PREFIXES
+        ):
+            logger_level = logging.WARNING
+        logger.setLevel(logger_level)
 
 
 def setup_logging(
