@@ -1,17 +1,158 @@
 from __future__ import annotations
 
 import asyncio
+from datetime import datetime, timedelta, timezone
 from uuid import uuid4
 
 import httpx
 import pytest
 
-from agentbox.function_runtime.runtime_models import RunAccepted, TerminalReport
+from agentbox.function_runtime.runtime_models import (
+    FunctionArtifactManifest,
+    FunctionSchemaSet,
+    RunAccepted,
+    SchemaInspection,
+    TerminalReport,
+)
 from agentbox.function_runtime.server import FunctionRuntimeService, create_app
 from agentbox.function_runtime.trace_context import inject_trace_context
 
 
 pytestmark = pytest.mark.asyncio
+
+
+async def test_schema_inspection_runs_in_disposable_function_worker(tmp_path) -> None:
+    root = tmp_path / "revision"
+    root.mkdir()
+    (root / "manifest.json").write_text(
+        FunctionArtifactManifest(
+            runtime_abi="lemma-function-python-3.14-linux-x86_64-1",
+            builder_digest="test",
+            input_model="Input",
+            output_model="Output",
+            entrypoint="run",
+        ).model_dump_json(),
+        encoding="utf-8",
+    )
+    (root / "function.py").write_text(
+        "from typing import Optional\n"
+        "from pydantic import BaseModel\n"
+        "class Input(BaseModel):\n"
+        "    value: int\n"
+        "class Output(BaseModel):\n"
+        "    note: Optional[str] = None\n"
+        "async def run(ctx, data):\n"
+        "    return Output()\n",
+        encoding="utf-8",
+    )
+
+    result = await FunctionRuntimeService._inspect_artifact_schemas(
+        root,
+        deadline_at=datetime.now(timezone.utc) + timedelta(seconds=10),
+    )
+
+    assert result.ok is True
+    assert result.schemas is not None
+    assert result.schemas.input["properties"]["value"]["type"] == "integer"
+    assert result.schemas.output["properties"]["note"]["anyOf"] == [
+        {"type": "string"},
+        {"type": "null"},
+    ]
+
+
+async def test_schema_inspection_reports_system_exit_from_user_import(tmp_path) -> None:
+    root = tmp_path / "revision"
+    root.mkdir()
+    (root / "manifest.json").write_text(
+        FunctionArtifactManifest(
+            runtime_abi="lemma-function-python-3.14-linux-x86_64-1",
+            builder_digest="test",
+            input_model="Input",
+            output_model="Output",
+            entrypoint="run",
+        ).model_dump_json(),
+        encoding="utf-8",
+    )
+    (root / "function.py").write_text(
+        "raise SystemExit('stop during import')\n",
+        encoding="utf-8",
+    )
+
+    result = await FunctionRuntimeService._inspect_artifact_schemas(
+        root,
+        deadline_at=datetime.now(timezone.utc) + timedelta(seconds=10),
+    )
+
+    assert result.ok is False
+    assert result.error is not None
+    assert result.error.name == "SystemExit"
+
+
+async def test_schema_inspection_kills_worker_at_deadline(tmp_path) -> None:
+    root = tmp_path / "revision"
+    root.mkdir()
+    (root / "manifest.json").write_text(
+        FunctionArtifactManifest(
+            runtime_abi="lemma-function-python-3.14-linux-x86_64-1",
+            builder_digest="test",
+            input_model="Input",
+            output_model="Output",
+            entrypoint="run",
+        ).model_dump_json(),
+        encoding="utf-8",
+    )
+    (root / "function.py").write_text(
+        "import time\n"
+        "time.sleep(5)\n",
+        encoding="utf-8",
+    )
+
+    with pytest.raises(TimeoutError):
+        await FunctionRuntimeService._inspect_artifact_schemas(
+            root,
+            deadline_at=datetime.now(timezone.utc) + timedelta(milliseconds=50),
+        )
+
+
+async def test_schema_route_uses_runtime_compilation_capability() -> None:
+    app = create_app(max_workers=1, max_cached_revisions=1)
+    function_id = uuid4()
+    observed: dict[str, object] = {}
+
+    class _Runtime:
+        async def inspect_schemas(self, **kwargs):
+            observed.update(kwargs)
+            return SchemaInspection(
+                ok=True,
+                schemas=FunctionSchemaSet(
+                    input={"type": "object"},
+                    output={"type": "object"},
+                ),
+            )
+
+    app.state.runtime = _Runtime()
+    revision_hash = f"sha256:{'a' * 64}"
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app),
+        base_url="http://runtime.test",
+    ) as client:
+        response = await client.post(
+            f"/functions/{function_id}/schemas",
+            headers={
+                "Authorization": "Bearer compilation-capability",
+                "If-Match": f'"{revision_hash}"',
+                "X-Lemma-Gateway-Url": "https://gateway.lemma.test",
+            },
+        )
+
+    assert response.status_code == 200
+    assert response.json()["schemas"]["input"] == {"type": "object"}
+    assert observed == {
+        "compilation_token": "compilation-capability",
+        "function_id": function_id,
+        "revision_hash": revision_hash,
+        "gateway_url": "https://gateway.lemma.test",
+    }
 
 
 async def test_run_dedup_requires_same_delegated_function_session(

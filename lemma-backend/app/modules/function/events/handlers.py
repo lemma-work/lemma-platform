@@ -50,13 +50,13 @@ async def _fail_run_after_worker_error(
     """Persist the fallback terminal state without replaying the invocation."""
 
     from app.modules.function.api.dependencies import (
-        build_function_callback_credential_signer,
+        build_function_runtime_capability_signer,
     )
 
     async with worker_ctx.uow() as uow:
         await FunctionExecutionRepository(
             uow,
-            build_function_callback_credential_signer(),
+            build_function_runtime_capability_signer(),
         ).fail_unfinished(
             run_id,
             error=f"Function execution failed ({type(error).__name__})",

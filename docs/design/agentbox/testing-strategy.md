@@ -389,7 +389,7 @@ Every full-stack case is mandatory with `FUNCTION/pod_id` on both Docker and E2B
 
 | ID | Scenario | Required assertions |
 | --- | --- | --- |
-| `FN-BLD-001` | Ready revision | Source, lock, ABI, builder produce immutable signed artifact before `READY` |
+| `FN-BLD-001` | Ready revision | Source, lock, ABI, builder produce immutable signed artifact before `READY`; schema inspection uses `(FUNCTION, pod_id)` and never `WORKSPACE/user_id` |
 | `FN-BLD-002` | Dependency fixture | Dependency is prebuilt; invocation has no package-manager/index activity |
 | `FN-BLD-003` | Tamper/ABI | Digest, manifest, attestation, or ABI mismatch fails before user import |
 | `FN-BLD-004` | Cache equivalence | Empty and warm artifact cache return identical result/log/error semantics |

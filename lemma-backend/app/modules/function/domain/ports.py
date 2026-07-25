@@ -7,11 +7,12 @@ from uuid import UUID
 
 from app.core.authorization.context import Context
 from app.modules.function.domain.entities import (
+    FunctionArtifact,
     FunctionDispatchMode,
     FunctionEntity,
     FunctionRunEntity,
+    FunctionSchemaSet,
 )
-from app.modules.workspace.services.interfaces import IWorkspaceSession
 
 
 class FunctionRepositoryPort(Protocol):
@@ -59,24 +60,6 @@ class FunctionRunRepositoryPort(Protocol):
     ) -> tuple[list[FunctionRunEntity], str | None]: ...
 
 
-class WorkspaceSessionPort(Protocol):
-    async def get_session(
-        self,
-        user_id: UUID,
-        pod_id: UUID | None,
-        session_id: str | None = None,
-        initial_cwd: str = "/workspace",
-        close_on_exit: bool = True,
-        workload_type: str | None = None,
-        workload_id: UUID | None = None,
-        scope: list[str] | None = None,
-        organization_id: UUID | None = None,
-        workload_name: str | None = None,
-        scope_key: str | None = None,
-        env_vars: dict[str, str] | None = None,
-    ) -> IWorkspaceSession: ...
-
-
 class FunctionStoragePort(Protocol):
     async def read_file(self, path: str) -> bytes | str: ...
 
@@ -98,6 +81,17 @@ class FunctionExecutionPort(Protocol):
     ) -> FunctionRunEntity: ...
 
     async def cancel(self, run_id: UUID) -> FunctionRunEntity: ...
+
+
+class FunctionSchemaExecutionPort(Protocol):
+    async def extract_schemas(
+        self,
+        *,
+        function_id: UUID,
+        pod_id: UUID,
+        artifact: FunctionArtifact,
+    ) -> FunctionSchemaSet:
+        raise NotImplementedError
 
 
 class FunctionRunQueuePort(Protocol):

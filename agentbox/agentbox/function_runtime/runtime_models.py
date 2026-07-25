@@ -40,6 +40,12 @@ class RunAccepted(RuntimeModel):
     run_id: UUID
 
 
+class FunctionSchemaSet(RuntimeModel):
+    input: JsonObject
+    output: JsonObject
+    config: JsonObject | None = None
+
+
 class FunctionArtifactManifest(RuntimeModel):
     format_version: Literal[1] = 1
     runtime_abi: str
@@ -68,6 +74,16 @@ class RuntimeFailure(RuntimeModel):
     name: str
     message: str
     traceback: tuple[str, ...] = ()
+
+
+class SchemaInspection(RuntimeModel):
+    ok: bool
+    schemas: FunctionSchemaSet | None = None
+    error: RuntimeFailure | None = None
+
+    def model_post_init(self, _context: Any) -> None:
+        if self.ok != (self.schemas is not None) or self.ok == (self.error is not None):
+            raise ValueError("schema inspection result is inconsistent")
 
 
 class WorkerResult(RuntimeModel):

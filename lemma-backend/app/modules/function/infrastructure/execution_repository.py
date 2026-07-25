@@ -9,8 +9,8 @@ from uuid import UUID
 from sqlalchemy import select
 
 from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
-from app.modules.function.application.function_callback_credentials import (
-    FunctionCallbackCredentialSigner,
+from app.modules.function.application.function_runtime_credentials import (
+    FunctionRuntimeCapabilitySigner,
 )
 from app.modules.function.application.function_session_token_cache import (
     FunctionSessionTokenKey,
@@ -45,7 +45,7 @@ class FunctionExecutionRepository:
     def __init__(
         self,
         uow: SqlAlchemyUnitOfWork,
-        credential_signer: FunctionCallbackCredentialSigner,
+        credential_signer: FunctionRuntimeCapabilitySigner,
     ) -> None:
         self.uow = uow
         self.session = uow.session

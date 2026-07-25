@@ -86,6 +86,28 @@ class GatewayClient:
             raise ValueError("function artifact exceeds the runtime limit")
         return response.content
 
+    async def definition_artifact(
+        self,
+        compilation_token: str,
+        *,
+        function_id: UUID,
+        revision_hash: str,
+    ) -> bytes:
+        response = await self._client.get(
+            urljoin(
+                self._base_url,
+                f"internal/function-runtime/functions/{function_id}/artifact",
+            ),
+            headers={
+                **self._headers(f"Bearer {compilation_token}"),
+                "If-Match": f'"{revision_hash}"',
+            },
+        )
+        response.raise_for_status()
+        if len(response.content) > _MAX_ARTIFACT_BYTES:
+            raise ValueError("function artifact exceeds the runtime limit")
+        return response.content
+
     async def terminal(self, claim: RunClaim, report: TerminalReport) -> None:
         await self._post_event(claim, "terminal", report.model_dump(mode="json"))
 

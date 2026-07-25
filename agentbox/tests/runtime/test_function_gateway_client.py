@@ -39,6 +39,38 @@ def _claim() -> RunClaim:
     )
 
 
+async def test_definition_artifact_uses_revision_scoped_compilation_token():
+    observed: httpx.Request | None = None
+
+    async def handler(request: httpx.Request) -> httpx.Response:
+        nonlocal observed
+        observed = request
+        return httpx.Response(200, content=b"artifact", request=request)
+
+    function_id = uuid4()
+    revision_hash = f"sha256:{'b' * 64}"
+    gateway = GatewayClient(
+        "https://gateway.lemma.test",
+        transport=httpx.MockTransport(handler),
+    )
+    try:
+        artifact = await gateway.definition_artifact(
+            "compilation-token",
+            function_id=function_id,
+            revision_hash=revision_hash,
+        )
+    finally:
+        await gateway.close()
+
+    assert artifact == b"artifact"
+    assert observed is not None
+    assert observed.url.path == (
+        f"/internal/function-runtime/functions/{function_id}/artifact"
+    )
+    assert observed.headers["Authorization"] == "Bearer compilation-token"
+    assert observed.headers["If-Match"] == f'"{revision_hash}"'
+
+
 async def test_terminal_callback_retries_identical_payload_after_lost_response():
     requests: list[httpx.Request] = []
 

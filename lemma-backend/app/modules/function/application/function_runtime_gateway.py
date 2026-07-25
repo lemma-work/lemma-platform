@@ -8,8 +8,8 @@ from uuid import UUID
 
 from app.core.infrastructure.db.uow_factory import UnitOfWorkFactory
 from app.core.redaction import redact_text
-from app.modules.function.application.function_callback_credentials import (
-    FunctionCallbackCredentialSigner,
+from app.modules.function.application.function_runtime_credentials import (
+    FunctionRuntimeCapabilitySigner,
 )
 from app.modules.function.contracts.runtime import (
     RuntimeClaimRequest,
@@ -52,7 +52,7 @@ class FunctionRuntimeGateway:
         *,
         uow_factory: UnitOfWorkFactory,
         storage_factory: FunctionStorageFactoryPort,
-        credential_signer: FunctionCallbackCredentialSigner,
+        credential_signer: FunctionRuntimeCapabilitySigner,
         organization_resolver: OrganizationResolver,
         lemma_base_url: str,
         delegated_tokens_enabled: bool,
@@ -117,6 +117,30 @@ class FunctionRuntimeGateway:
         data = content.encode("utf-8") if isinstance(content, str) else content
         actual = f"sha256:{hashlib.sha256(data).hexdigest()}"
         if actual != context.revision_hash:
+            raise RuntimeArtifactCorrupt
+        return data
+
+    async def definition_artifact(
+        self,
+        function_id: UUID,
+        revision_hash: str,
+        compilation_token: str,
+    ) -> bytes:
+        """Return one immutable draft artifact to the function runtime compiler."""
+
+        if not self._signer.verify_compilation(
+            compilation_token,
+            function_id=function_id,
+            revision_hash=revision_hash,
+        ):
+            raise RuntimeCredentialRejected
+        artifact_path = (
+            f"artifacts/{revision_hash.removeprefix('sha256:')}.zip"
+        )
+        content = await self._storage_factory(function_id).read_file(artifact_path)
+        data = content.encode("utf-8") if isinstance(content, str) else content
+        actual = f"sha256:{hashlib.sha256(data).hexdigest()}"
+        if actual != revision_hash:
             raise RuntimeArtifactCorrupt
         return data
 
