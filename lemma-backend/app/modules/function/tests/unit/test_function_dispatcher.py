@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from contextlib import asynccontextmanager
 from datetime import datetime, timedelta, timezone
+from unittest.mock import AsyncMock
 from uuid import uuid4
 
 import httpx
@@ -166,6 +167,27 @@ def test_agentbox_deadline_error_keeps_stable_timeout_message() -> None:
     assert FunctionDispatcher._execution_error(error) == (
         "Function execution timed out (deadline exceeded)"
     )
+
+
+@pytest.mark.asyncio
+async def test_function_retry_uses_server_floor_and_bounded_jitter(
+    monkeypatch,
+) -> None:
+    sleep = AsyncMock()
+    monkeypatch.setattr(
+        "app.modules.function.application.function_dispatcher.asyncio.sleep",
+        sleep,
+    )
+    monkeypatch.setattr(
+        "app.modules.function.application.function_dispatcher.random.uniform",
+        lambda _low, _high: 1.0,
+    )
+    deadline = datetime.now(timezone.utc) + timedelta(seconds=30)
+
+    await FunctionDispatcher._wait_retry(2_000, deadline, attempt=4)
+    await FunctionDispatcher._wait_retry(10_000, deadline, attempt=0)
+
+    assert [call.args[0] for call in sleep.await_args_list] == [5.0, 10.0]
 
 
 @pytest.mark.asyncio

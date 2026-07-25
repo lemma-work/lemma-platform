@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 from datetime import datetime, timedelta, timezone
+import random
 from typing import Optional
 from uuid import UUID
 
@@ -51,6 +52,7 @@ class AgentBoxSandbox(ISandbox):
             name=settings.agentbox_workspace_profile_name,
             digest=settings.agentbox_workspace_profile_digest,
         )
+        attempt = 0
         while datetime.now(timezone.utc) < deadline_at:
             try:
                 sandbox = await self.client.ensure_sandbox(
@@ -66,11 +68,17 @@ class AgentBoxSandbox(ISandbox):
                     RetryDisposition.SAFE_SAME_OPERATION,
                 ):
                     raise
-                await self._wait(exc.retry_after_ms, deadline_at)
+                await self._wait(exc.retry_after_ms, deadline_at, attempt=attempt)
+                attempt += 1
                 continue
             if sandbox.ready:
                 return self._to_container_info(str(sandbox_id), sandbox)
-            await self._wait(sandbox.retry_after_ms, deadline_at)
+            await self._wait(
+                sandbox.retry_after_ms,
+                deadline_at,
+                attempt=attempt,
+            )
+            attempt += 1
         raise TimeoutError(f"workspace sandbox {sandbox_id} did not become ready")
 
     async def get_sandbox(self, user_id: UUID) -> Optional[SandboxInfo]:
@@ -124,9 +132,18 @@ class AgentBoxSandbox(ISandbox):
         return datetime.now(timezone.utc) + timedelta(minutes=5)
 
     @staticmethod
-    async def _wait(retry_after_ms: int | None, deadline_at: datetime) -> None:
+    async def _wait(
+        retry_after_ms: int | None,
+        deadline_at: datetime,
+        *,
+        attempt: int,
+    ) -> None:
         remaining = (deadline_at - datetime.now(timezone.utc)).total_seconds()
         if remaining <= 0:
             return
-        delay = max(0.05, (retry_after_ms or 250) / 1000)
+        server_floor = max(0.0, (retry_after_ms or 0) / 1000)
+        backoff = min(5.0, 0.5 * (2 ** min(attempt, 4)))
+        # The server's Retry-After is a floor. Positive jitter prevents many
+        # waiting workers from reissuing the same idempotent PUT together.
+        delay = max(server_floor, backoff) * random.uniform(1.0, 1.2)
         await asyncio.sleep(min(delay, remaining))

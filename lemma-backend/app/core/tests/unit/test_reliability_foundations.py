@@ -430,12 +430,42 @@ async def test_outbox_run_recovers_from_infrastructure_failure(monkeypatch) -> N
     dispatcher.dispatch_once = dispatch_once  # type: ignore[method-assign]
     sleep = AsyncMock()
     monkeypatch.setattr("app.core.infrastructure.events.outbox.asyncio.sleep", sleep)
+    monkeypatch.setattr(
+        "app.core.infrastructure.events.outbox.random.uniform",
+        lambda _low, _high: 1.0,
+    )
 
     with pytest.raises(asyncio.CancelledError):
         await dispatcher.run()
 
     assert calls == 2
     sleep.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_outbox_idle_poll_backoff_resets_after_work(monkeypatch) -> None:
+    dispatcher = _OutboxUnderTest(AsyncMock())
+    dispatcher.max_idle_poll_seconds = 5.0
+    results = iter((0, 0, 1, 0))
+
+    async def dispatch_once() -> int:
+        try:
+            return next(results)
+        except StopIteration:
+            raise asyncio.CancelledError
+
+    dispatcher.dispatch_once = dispatch_once  # type: ignore[method-assign]
+    sleep = AsyncMock()
+    monkeypatch.setattr("app.core.infrastructure.events.outbox.asyncio.sleep", sleep)
+    monkeypatch.setattr(
+        "app.core.infrastructure.events.outbox.random.uniform",
+        lambda _low, _high: 1.0,
+    )
+
+    with pytest.raises(asyncio.CancelledError):
+        await dispatcher.run()
+
+    assert [call.args[0] for call in sleep.await_args_list] == [0.5, 1.0, 0.5]
 
 
 @pytest.mark.asyncio

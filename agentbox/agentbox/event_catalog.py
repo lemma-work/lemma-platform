@@ -36,9 +36,6 @@ EVENT_CATALOG: dict[str, EventSpec] = {
             }
         ),
     ),
-    "http.request.rate_limited": EventSpec(
-        "warning", frozenset({"duration_ms", "method", "route", "status_code"})
-    ),
     "http.request.completed": EventSpec(
         "debug", frozenset({"duration_ms", "method", "route", "status_code"})
     ),

@@ -32,6 +32,9 @@ from app.core.infrastructure.events.message_bus import (
     get_message_bus,
 )
 from app.core.infrastructure.events.outbox import outbox_dispatcher_lifespan
+from app.core.infrastructure.events.stream_observability import (
+    redis_stream_snapshot_loop,
+)
 from app.core.infrastructure.jobs.streaq_job_queue import (
     SharedStreaqJobQueue,
     close_streaq_job_queue,
@@ -315,6 +318,10 @@ async def worker_lifespan() -> AsyncGenerator[AppWorkerContext]:
     heartbeat_task = create_background_task(
         _worker_heartbeat_loop(), name="worker-heartbeat"
     )
+    stream_snapshot_task = create_background_task(
+        redis_stream_snapshot_loop(get_message_bus()),
+        name="redis-stream-snapshot",
+    )
 
     started = False
     try:
@@ -331,7 +338,12 @@ async def worker_lifespan() -> AsyncGenerator[AppWorkerContext]:
             started = True
             yield context
     finally:
-        for background_task in (reconcile_task, watchdog_task, heartbeat_task):
+        for background_task in (
+            reconcile_task,
+            watchdog_task,
+            heartbeat_task,
+            stream_snapshot_task,
+        ):
             if background_task is not None and not background_task.done():
                 background_task.cancel()
                 try:

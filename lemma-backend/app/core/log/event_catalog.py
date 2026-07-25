@@ -437,6 +437,7 @@ EVENT_CATALOG: dict[str, EventSpec] = {
     'pubsub.subscriber.subscribed_stream.observed': EventSpec('debug', frozenset()),
     'release.identity.malformed': EventSpec('warning', frozenset({'deployment_environment'})),
     'release.identity.missing': EventSpec('warning', frozenset({'deployment_environment'})),
+    'redis.stream.snapshot': EventSpec('info', frozenset({'active_consumers', 'caught_up', 'consumers', 'delayed', 'group', 'last_delivered_age_seconds', 'length', 'maxlen', 'memory_bytes', 'oldest_pending_ms', 'pending', 'reported_lag', 'stream'})),
     'runtime.heartbeat.write_failed': EventSpec('debug', frozenset({'error_type', 'service'})),
     'runtime.loop_lag.degraded': EventSpec('warning', frozenset({'breach_count', 'lag_ms', 'service', 'threshold_ms', 'unhealthy'})),
     'runtime.loop_lag.recovered': EventSpec('info', frozenset({'breach_count', 'degraded_duration_ms', 'max_lag_ms', 'service'})),

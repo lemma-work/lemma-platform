@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from datetime import datetime, timedelta, timezone
+from unittest.mock import AsyncMock
 from uuid import uuid4
 
 import httpx
@@ -99,3 +101,24 @@ async def test_workspace_does_not_retry_unsafe_operation(monkeypatch):
         await sandbox.ensure_sandbox(user_id)
 
     assert sandbox.client.calls == 1
+
+
+@pytest.mark.asyncio
+async def test_workspace_retry_uses_server_floor_and_bounded_jitter(
+    monkeypatch,
+) -> None:
+    sleep = AsyncMock()
+    monkeypatch.setattr(
+        "app.modules.workspace.services.agentbox_manager.asyncio.sleep",
+        sleep,
+    )
+    monkeypatch.setattr(
+        "app.modules.workspace.services.agentbox_manager.random.uniform",
+        lambda _low, _high: 1.0,
+    )
+    deadline = datetime.now(timezone.utc) + timedelta(seconds=30)
+
+    await AgentBoxSandbox._wait(2_000, deadline, attempt=4)
+    await AgentBoxSandbox._wait(10_000, deadline, attempt=0)
+
+    assert [call.args[0] for call in sleep.await_args_list] == [5.0, 10.0]
