@@ -58,6 +58,7 @@ class OutboxDispatcher:
         max_attempts: int = 10,
         lease_seconds: int = 60,
         poll_seconds: float = 0.5,
+        max_idle_poll_seconds: float | None = None,
         owner: str | None = None,
     ) -> None:
         self._session_maker = session_maker
@@ -66,6 +67,12 @@ class OutboxDispatcher:
         self.max_attempts = max_attempts
         self.lease_seconds = lease_seconds
         self.poll_seconds = poll_seconds
+        self.max_idle_poll_seconds = max(
+            poll_seconds,
+            max_idle_poll_seconds
+            if max_idle_poll_seconds is not None
+            else event_transport_settings.outbox_idle_poll_max_seconds,
+        )
         self.owner = owner or f"{socket.gethostname()}:{os.getpid()}:{uuid4().hex[:8]}"
         self._dispatch_incident = DependencyIncident(
             "outbox.database", logger=logger
@@ -95,6 +102,7 @@ class OutboxDispatcher:
 
     async def run(self) -> None:
         infrastructure_failures = 0
+        idle_delay = self.poll_seconds
         while True:
             try:
                 dispatched = await self.dispatch_once()
@@ -112,7 +120,15 @@ class OutboxDispatcher:
                 continue
             self._dispatch_incident.record_success()
             if dispatched == 0:
-                await asyncio.sleep(self.poll_seconds)
+                await asyncio.sleep(
+                    min(
+                        self.max_idle_poll_seconds,
+                        idle_delay * random.uniform(0.9, 1.1),
+                    )
+                )
+                idle_delay = min(self.max_idle_poll_seconds, idle_delay * 2)
+            else:
+                idle_delay = self.poll_seconds
 
     async def _claim_batch(self) -> list[ClaimedEvent]:
         now = datetime.now(timezone.utc)

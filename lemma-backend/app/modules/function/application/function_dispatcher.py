@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 from collections.abc import Awaitable, Callable
 from datetime import datetime, timedelta, timezone
+import random
 from urllib.parse import urljoin
 from uuid import UUID
 
@@ -232,6 +233,7 @@ class FunctionDispatcher:
         *,
         deadline_at: datetime,
     ) -> None:
+        attempt = 0
         while self._now() < deadline_at:
             try:
                 handle = await client.ensure_sandbox(
@@ -251,16 +253,27 @@ class FunctionDispatcher:
                     RetryDisposition.SAFE_SAME_OPERATION,
                 }:
                     raise
-                await self._wait_retry(exc.retry_after_ms, deadline_at)
+                await self._wait_retry(
+                    exc.retry_after_ms,
+                    deadline_at,
+                    attempt=attempt,
+                )
+                attempt += 1
                 continue
             except httpx.TransportError:
                 # Ensuring a logical key is idempotent; AgentBox owns exact-create
                 # reconciliation through its durable allocation token.
-                await self._wait_retry(None, deadline_at)
+                await self._wait_retry(None, deadline_at, attempt=attempt)
+                attempt += 1
                 continue
             if handle.ready:
                 return
-            await self._wait_retry(handle.retry_after_ms, deadline_at)
+            await self._wait_retry(
+                handle.retry_after_ms,
+                deadline_at,
+                attempt=attempt,
+            )
+            attempt += 1
         raise TimeoutError("function sandbox was not ready before the deadline")
 
     async def _invoke_runtime_with_recovery(
@@ -471,11 +484,18 @@ class FunctionDispatcher:
         )
 
     @staticmethod
-    async def _wait_retry(retry_after_ms: int | None, deadline_at: datetime) -> None:
+    async def _wait_retry(
+        retry_after_ms: int | None,
+        deadline_at: datetime,
+        *,
+        attempt: int = 0,
+    ) -> None:
         remaining = (deadline_at - FunctionDispatcher._now()).total_seconds()
         if remaining <= 0:
             return
-        delay = max(0.05, (retry_after_ms or 200) / 1000)
+        server_floor = max(0.0, (retry_after_ms or 0) / 1000)
+        backoff = min(5.0, 0.5 * (2 ** min(attempt, 4)))
+        delay = max(server_floor, backoff) * random.uniform(1.0, 1.2)
         await asyncio.sleep(min(delay, remaining))
 
     @staticmethod

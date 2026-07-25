@@ -174,7 +174,10 @@ def test_setup_reconciles_one_console_and_preserves_non_console_handler(
         assert len(processor_handlers) == 1
         assert preserved in logging.getLogger().handlers
         assert logging.getLogger("uvicorn.access").handlers == []
-        assert logging.getLogger("uvicorn.access").getEffectiveLevel() == logging.INFO
+        assert (
+            logging.getLogger("uvicorn.access").getEffectiveLevel()
+            == logging.WARNING
+        )
         assert logging.getLogger("uvicorn.error").getEffectiveLevel() == logging.INFO
     finally:
         logging.getLogger().removeHandler(preserved)
@@ -248,14 +251,12 @@ def test_production_uses_log_level_and_preserves_every_allowed_dependency_record
 
     records = captured_stdout()
     assert [record["level"] for record in records] == [
-        "info",
         "warning",
         "warning",
         "error",
         "error",
     ]
     assert [record["event"] for record in records] == [
-        "routine request completed",
         "retrying request attempt=1",
         "retrying request attempt=2",
         "request failed attempt=3",

@@ -39,7 +39,7 @@ from agentbox.profiles import (
     SandboxProfile,
 )
 from agentbox.python_sessions import PythonSessionService
-from agentbox.observability import bind_context, get_logger
+from agentbox.observability import DependencyIncident, bind_context, get_logger
 from agentbox.observability import create_background_task
 from agentbox.reconciliation import AgentBoxReconciler, reconciliation_loop
 from agentbox.telemetry import (
@@ -53,6 +53,11 @@ from .port_proxy import access_router, create_port_proxy_http_client
 
 logger = get_logger(__name__)
 _QUIET_HEALTH_PATHS = frozenset({"/health", "/health/live", "/health/ready", "/livez"})
+_rate_limit_incidents: dict[str, DependencyIncident] = {}
+
+
+class _RateLimitedResponseError(RuntimeError):
+    """Stable type used by the transition-based 429 incident log."""
 
 
 class RequestContextMiddleware:
@@ -198,14 +203,23 @@ class RequestContextMiddleware:
                             exc_info=exc_info,
                         )
                     elif status_code == 429:
-                        logger.warning(
-                            "http.request.rate_limited",
-                            method=str(scope.get("method", "UNKNOWN")),
-                            route=str(route),
-                            status_code=status_code,
-                            duration_ms=duration_ms,
+                        incident_key = (
+                            f"{scope.get('method', 'UNKNOWN')}:{route}"
                         )
+                        _rate_limit_incidents.setdefault(
+                            incident_key,
+                            DependencyIncident(
+                                f"agentbox.http:{incident_key}",
+                                logger=logger,
+                            ),
+                        ).record_failure(_RateLimitedResponseError())
                     else:
+                        incident_key = (
+                            f"{scope.get('method', 'UNKNOWN')}:{route}"
+                        )
+                        incident = _rate_limit_incidents.get(incident_key)
+                        if incident is not None:
+                            incident.record_success()
                         streaming = content_type.startswith("text/event-stream")
                         elapsed = (
                             response_started_at - started_at
