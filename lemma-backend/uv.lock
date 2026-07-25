@@ -24,6 +24,12 @@ dependencies = [
     { name = "uvicorn", extra = ["standard"] },
 ]
 
+[package.optional-dependencies]
+postgres = [
+    { name = "psycopg", extra = ["binary"] },
+    { name = "psycopg-pool" },
+]
+
 [package.metadata]
 requires-dist = [
     { name = "aiosqlite", specifier = ">=0.21.0,<0.22.0" },
@@ -1795,6 +1801,10 @@ gcp-kms = [
 keychain = [
     { name = "keyring" },
 ]
+local = [
+    { name = "agentbox", extra = ["postgres"] },
+    { name = "markitdown", extra = ["docx", "outlook", "pdf", "pptx", "xls", "xlsx"] },
+]
 markitdown = [
     { name = "markitdown", extra = ["docx", "outlook", "pdf", "pptx", "xls", "xlsx"] },
 ]
@@ -1817,6 +1827,7 @@ dev = [
 
 [package.metadata]
 requires-dist = [
+    { name = "agentbox", extras = ["postgres"], marker = "extra == 'local'", editable = "../agentbox" },
     { name = "agentbox-client", editable = "../agentbox-client" },
     { name = "aiofiles", specifier = ">=25.1.0" },
     { name = "aiohttp", specifier = ">=3.13.0" },
@@ -1842,6 +1853,7 @@ requires-dist = [
     { name = "lemma-connectors", editable = "lemma-connectors" },
     { name = "lemma-pod-bundle", editable = "../lemma-pod-bundle" },
     { name = "markdown", specifier = ">=3.8.2" },
+    { name = "markitdown", extras = ["docx", "pptx", "xlsx", "xls", "pdf", "outlook"], marker = "extra == 'local'", specifier = ">=0.1.0" },
     { name = "markitdown", extras = ["docx", "pptx", "xlsx", "xls", "pdf", "outlook"], marker = "extra == 'markitdown'", specifier = ">=0.1.0" },
     { name = "obstore", specifier = ">=0.8.2" },
     { name = "openinference-instrumentation-pydantic-ai", specifier = ">=0.1.12" },
@@ -1871,7 +1883,7 @@ requires-dist = [
     { name = "uvicorn", extras = ["standard"], specifier = ">=0.42.0" },
     { name = "websockets", specifier = ">=16.0" },
 ]
-provides-extras = ["gcp-kms", "keychain", "markitdown"]
+provides-extras = ["local", "gcp-kms", "keychain", "markitdown"]
 
 [package.metadata.requires-dev]
 dev = [
@@ -3914,8 +3926,8 @@ name = "secretstorage"
 version = "3.5.0"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
-    { name = "cryptography" },
-    { name = "jeepney" },
+    { name = "cryptography", marker = "sys_platform != 'win32'" },
+    { name = "jeepney", marker = "sys_platform != 'win32'" },
 ]
 sdist = { url = "https://files.pythonhosted.org/packages/1c/03/e834bcd866f2f8a49a85eaff47340affa3bfa391ee9912a952a1faa68c7b/secretstorage-3.5.0.tar.gz", hash = "sha256:f04b8e4689cbce351744d5537bf6b1329c6fc68f91fa666f60a380edddcd11be", size = 19884, upload-time = "2025-11-23T19:02:53.191Z" }
 wheels = [

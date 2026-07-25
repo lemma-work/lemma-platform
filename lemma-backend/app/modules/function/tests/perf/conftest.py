@@ -405,6 +405,7 @@ async def _agentbox_service(
         "AGENTBOX_WORKSPACE_IMAGE": workspace_image_name,
         "AGENTBOX_FUNCTION_IMAGE": function_image_name,
         "AGENTBOX_ADD_HOST_GATEWAY": "true",
+        "AGENTBOX_HOST_ALIAS": gateway_host,
         "AGENTBOX_WORKSPACE_IDLE_SECONDS": "300",
         "AGENTBOX_FUNCTION_IDLE_SECONDS": "300",
         "AGENTBOX_CLEANUP_INTERVAL_SECONDS": "30",

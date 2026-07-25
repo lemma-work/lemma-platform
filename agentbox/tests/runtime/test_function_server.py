@@ -190,6 +190,53 @@ async def test_async_accept_returns_after_claim_without_waiting_for_terminal(
     assert result.status == "completed"
 
 
+async def test_exact_duplicate_retries_after_pre_acceptance_failure(
+    monkeypatch,
+) -> None:
+    service = FunctionRuntimeService(max_workers=2, max_cached_revisions=1)
+    function_id = uuid4()
+    run_id = uuid4()
+    run_token = "retry-control-" + "r" * 32
+    attempts = 0
+
+    async def execute(**kwargs) -> TerminalReport:
+        nonlocal attempts
+        attempts += 1
+        if attempts == 1:
+            error = RuntimeError("transient claim failure")
+            await service._mark_rejected(kwargs["run_id"], error)
+            raise error
+        await service._mark_accepted(kwargs["run_id"], run_token)
+        return TerminalReport(
+            status="completed",
+            output_data={"ok": True},
+            stdout="",
+            stderr="",
+        )
+
+    monkeypatch.setattr(service, "_execute", execute)
+    arguments = {
+        "function_token": "delegated-session",
+        "function_id": function_id,
+        "revision_hash": f"sha256:{'e' * 64}",
+        "run_id": run_id,
+        "run_token": run_token,
+        "gateway_url": "https://gateway.lemma.test",
+        "input_data": {"value": 4},
+    }
+    try:
+        with pytest.raises(RuntimeError, match="transient claim failure"):
+            await service.accept(**arguments)
+        accepted = await service.accept(**arguments)
+        result = await service.invoke(**arguments)
+    finally:
+        await service.close()
+
+    assert accepted.run_id == run_id
+    assert result.status == "completed"
+    assert attempts == 2
+
+
 async def test_cancel_can_win_before_runtime_claim_finishes(monkeypatch) -> None:
     service = FunctionRuntimeService(max_workers=2, max_cached_revisions=1)
     function_id = uuid4()

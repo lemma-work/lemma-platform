@@ -12,7 +12,7 @@ from lemma_stack.runtime.base import Runtime
 from lemma_stack.stack.specs import CONTAINER_PREFIX, NETWORK_NAME
 
 DB_CONTAINER = f"{CONTAINER_PREFIX}-db"
-EXTRA_DATABASES = ("supertokens", "lemma_datastore")
+EXTRA_DATABASES = ("supertokens", "lemma_datastore", "agentbox")
 VECTOR_DATABASES = ("lemma", "lemma_datastore")
 DATABASE_URL = "postgresql+asyncpg://postgres:postgres@db:5432/lemma"
 

@@ -20,6 +20,7 @@ from app.modules.datastore.domain.file_entities import (
     FileStatus,
 )
 from app.modules.datastore.services.file_service import DatastoreFileService
+from app.modules.datastore.services.system_skill_files import SystemSkillFileProvider
 
 
 def _deny_admin_allow_other_actions(authorization_service_mock: AsyncMock) -> None:
@@ -48,6 +49,14 @@ def _ctx(user_id: UUID) -> SimpleNamespace:
     through to the legacy ``authorization_service`` mock the tests configure
     (mirroring the previous bare-``object()`` ctx behaviour)."""
     return SimpleNamespace(user_id=user_id)
+
+
+def test_system_skills_root_can_be_supplied_by_native_pack(monkeypatch, tmp_path):
+    skills_root = tmp_path / "packaged-skills"
+    skills_root.mkdir()
+    monkeypatch.setenv("LEMMA_SKILLS_ROOT", str(skills_root))
+
+    assert SystemSkillFileProvider()._skills_root() == skills_root
 
 
 async def _update_file_by_path(file_service, pod_id, update_entity, ctx):

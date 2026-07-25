@@ -39,3 +39,6 @@ __pycache__/
 *.dev-infra.pid
 .dev-cloudflared-*.pid
 .dev-logs/
+# Rust build outputs (desktop and local daemon)
+**/target/
+**/.build/

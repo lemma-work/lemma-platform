@@ -1,10 +1,16 @@
 from __future__ import annotations
 
 import json
+import io
 import subprocess
 import sys
 import threading
 import time
+
+from lemma_stack import orchestrate
+from lemma_stack.config import store
+from lemma_stack.release import manifest as release_manifest
+from lemma_stack.supervise import Supervisor
 
 
 def _drive(commands: list[dict], *, settle: float = 5.0) -> list[dict]:
@@ -62,3 +68,75 @@ def test_supervise_protocol_dry_run():
         assert expected in phase_keys
 
     assert by_event["status"][0]["status"] == "running"
+
+
+def test_supervise_can_prepare_only_private_infrastructure_for_host_packs():
+    events = _drive(
+        [{"cmd": "start", "infra_only": True, "id": "infra"}],
+        settle=3.0,
+    )
+    kinds = [event["event"] for event in events]
+    phase_keys = [event["key"] for event in events if event["event"] == "phase"]
+
+    assert "infra-ready" in kinds
+    assert "ready" not in kinds
+    assert "backend" not in phase_keys
+    assert "frontend" not in phase_keys
+    assert any(
+        event["event"] == "done" and event.get("id") == "infra" and event["ok"]
+        for event in events
+    )
+
+
+def test_real_infra_only_start_uses_pin_and_never_runs_app_images_or_migrations(
+    paths, monkeypatch
+):
+    pinned = release_manifest.parse(
+        {
+            "schema_version": 1,
+            "version": "1.2.3",
+            "min_admin_version": "0",
+            "images": {
+                "backend": "backend:test",
+                "frontend": "frontend:test",
+                "agentbox_workspace": "workspace:test",
+                "agentbox_function": "function:test",
+            },
+        }
+    )
+    release_manifest.pin(paths, pinned)
+    config = store.new_document()
+    captured = {}
+    stopped = []
+
+    supervisor = Supervisor()
+    supervisor.paths = paths
+    supervisor._out = io.StringIO()
+    monkeypatch.setattr(supervisor, "_config", lambda: config)
+    monkeypatch.setattr(supervisor, "_resolve_provider", lambda _config: "docker")
+    monkeypatch.setattr(
+        orchestrate,
+        "resolve_manifest",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            AssertionError("pinned native release must not refresh")
+        ),
+    )
+    monkeypatch.setattr(
+        orchestrate, "bring_up", lambda *_args, **kwargs: captured.update(kwargs)
+    )
+    monkeypatch.setattr(
+        orchestrate,
+        "bring_down",
+        lambda called_paths, called_config, *, infra: stopped.append(
+            (called_paths, called_config, infra)
+        ),
+    )
+
+    supervisor._op_start(setup=False, rebuild=False, infra_only=True)
+
+    assert captured["manifest"].version == "1.2.3"
+    assert captured["service_names"] == {"db", "redis", "supertokens"}
+    assert captured["pull_infra_only"] is True
+    assert captured["migrate"] is False
+    assert captured["do_register"] is False
+    assert stopped == [(paths, config, False)]

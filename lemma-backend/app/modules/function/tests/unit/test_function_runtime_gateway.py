@@ -13,9 +13,11 @@ from app.modules.function.application.function_callback_credentials import (
 from app.modules.function.application.function_runtime_gateway import (
     FunctionRuntimeGateway,
     RuntimeCredentialRejected,
+    _runtime_failure_message,
 )
 from app.modules.function.contracts.runtime import (
     RuntimeClaimRequest,
+    RuntimeFailure,
     RuntimeTerminalRequest,
 )
 from app.modules.function.domain.entities import (
@@ -52,6 +54,12 @@ def _context(artifact: bytes) -> FunctionRunRuntimeContext:
         function_id=function_id,
         function_name="calculate",
     )
+
+
+def test_runtime_timeout_without_detail_has_stable_user_facing_error() -> None:
+    assert _runtime_failure_message(
+        RuntimeFailure(name="TimeoutError", message="")
+    ) == "Function execution timed out (deadline exceeded)"
 
 
 @pytest.mark.asyncio
@@ -108,7 +116,7 @@ async def test_gateway_releases_database_before_identity_and_storage_io(
         storage_factory=lambda _function_id: _Storage(),
         credential_signer=signer,
         organization_resolver=organization_resolver,
-        lemma_base_url="https://api.lemma.test",
+        lemma_base_url="http://127.0.0.1:8711/",
         delegated_tokens_enabled=True,
     )
     function_token = "delegated-function-token"
@@ -130,6 +138,7 @@ async def test_gateway_releases_database_before_identity_and_storage_io(
     assert claim.run_id == context.run_id
     assert claim.callback_token == signer.derive(context.run_id)
     assert claim.lemma_token == function_token
+    assert claim.lemma_base_url == "http://127.0.0.1:8711"
     assert await gateway.artifact(context.run_id, claim.callback_token) == artifact
 
     terminal_request = RuntimeTerminalRequest(

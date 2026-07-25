@@ -1,6 +1,10 @@
 {
   "bundle": {
-    "externalBin": ["binaries/lemma-supervisor", "binaries/uv"],
+    "resources": {
+      "runtime/lemma-local.json": "lemma-local.json",
+      "runtime/bundled/host-runtime.zip": "host-runtime.zip",
+      "runtime/bundled/guest-runtime.zip": "guest-runtime.zip"
+    },
     "macOS": {
       "hardenedRuntime": true,
       "entitlements": "entitlements.plist"

@@ -103,6 +103,26 @@ def test_routine_4xx_logs_only_completed_debug_without_sensitive_payload(log_buf
     assert "nope" not in log_buf.getvalue()
 
 
+def test_local_access_log_is_info_and_contains_only_the_route_template(
+    log_buf, monkeypatch
+):
+    monkeypatch.setattr(app_module.settings, "local_http_access_logs_enabled", True)
+    response = _client().get("/domain404?token=CANARY")
+
+    assert response.status_code == 404
+    events = [
+        event
+        for event in _events(log_buf)
+        if event.get("event") == "http.request.local_completed"
+    ]
+    assert len(events) == 1
+    assert events[0]["level"] == "info"
+    assert events[0]["method"] == "GET"
+    assert events[0]["route"] == "/domain404"
+    assert events[0]["status_code"] == 404
+    assert "CANARY" not in log_buf.getvalue()
+
+
 def test_validation_422_logs_only_completed_debug(log_buf):
     c = _client()
     r = c.post("/validate", json={"n": "not-int"})

@@ -180,9 +180,14 @@ variables.
 
 The API request never enters Redis or the backend worker queue.
 
-If the runtime response is lost, the backend checks the durable run once. A
-terminal callback that already committed wins. Otherwise the backend best-effort
-cancels the exact run and marks it failed. It does not POST the invocation again.
+If the runtime response is lost, the backend first reconciles the durable run. A
+terminal callback, or a committed asynchronous `RUNNING` claim, wins. When the
+run is still unconfirmed after a transport failure, the backend may retry the
+same immutable operation exactly once with the same run ID, revision, input and
+session capability. Runtime run-ID deduplication and the atomic
+`PENDING -> RUNNING` claim prevent duplicate execution. A second unconfirmed
+response is best-effort cancelled and marked failed; HTTP error responses are
+never retried.
 
 ## 7. JOB and deferred execution
 

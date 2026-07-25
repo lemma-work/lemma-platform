@@ -125,6 +125,7 @@ class FunctionDefinitionCompiler:
         output_model: str,
         config_model: str | None,
     ) -> str:
+        module_name = f"_lemma_schema_{uuid4().hex}"
         config_expression = (
             f"_lemma_namespace[{config_model!r}].model_json_schema()"
             if config_model
@@ -132,14 +133,23 @@ class FunctionDefinitionCompiler:
         )
         return (
             "import json as _lemma_json\n"
-            "_lemma_namespace = {}\n"
-            f"exec(compile({code!r}, {code_path!r}, 'exec'), "
+            "import sys as _lemma_sys\n"
+            "import types as _lemma_types\n"
+            f"_lemma_module_name = {module_name!r}\n"
+            "_lemma_module = _lemma_types.ModuleType(_lemma_module_name)\n"
+            "_lemma_namespace = _lemma_module.__dict__\n"
+            "_lemma_namespace['__builtins__'] = __builtins__\n"
+            "_lemma_sys.modules[_lemma_module_name] = _lemma_module\n"
+            "try:\n"
+            f"    exec(compile({code!r}, {code_path!r}, 'exec'), "
             "_lemma_namespace, _lemma_namespace)\n"
-            "_lemma_schemas = {\n"
-            f"    'input': _lemma_namespace[{input_model!r}].model_json_schema(),\n"
-            f"    'output': _lemma_namespace[{output_model!r}].model_json_schema(),\n"
-            f"    'config': {config_expression},\n"
-            "}\n"
+            "    _lemma_schemas = {\n"
+            f"        'input': _lemma_namespace[{input_model!r}].model_json_schema(),\n"
+            f"        'output': _lemma_namespace[{output_model!r}].model_json_schema(),\n"
+            f"        'config': {config_expression},\n"
+            "    }\n"
+            "finally:\n"
+            "    _lemma_sys.modules.pop(_lemma_module_name, None)\n"
             f"print({marker!r} + _lemma_json.dumps(_lemma_schemas, "
             "sort_keys=True, separators=(',', ':')))\n"
         )

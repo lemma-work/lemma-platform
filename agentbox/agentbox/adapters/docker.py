@@ -91,6 +91,7 @@ class DockerAdapterConfig:
     function_nano_cpus: int = 4_000_000_000
     pids_limit: int = 512
     add_host_gateway: bool = False
+    host_alias: str | None = None
     private_network: str | None = None
     process_start_observation_seconds: float = 10.0
     max_file_transfer_bytes: int = 256 * 1024 * 1024
@@ -108,6 +109,10 @@ class DockerAdapterConfig:
             raise ValueError("Docker memory and CPU limits must be positive")
         if self.max_file_transfer_bytes < 1:
             raise ValueError("Docker filesystem transfer limit must be positive")
+        if self.add_host_gateway and not self.host_alias:
+            raise ValueError(
+                "Docker host alias is required when host-gateway injection is enabled"
+            )
 
 
 @dataclass(frozen=True, slots=True)
@@ -220,7 +225,7 @@ class DockerSandboxAdapter:
             readonly_rootfs=is_function,
             tmpfs=tmpfs,
             extra_hosts=(
-                ("host.docker.internal:host-gateway",)
+                (f"{self._config.host_alias}:host-gateway",)
                 if self._config.add_host_gateway
                 else ()
             ),

@@ -44,34 +44,35 @@ Each job carries its own state, actions, and ways for people to see the work. Le
 
 ## Quickstart
 
-### Download the Mac app
+### Install Lemma Desktop
 
 <a href="https://github.com/lemma-work/lemma-platform/releases/latest"><img src="https://img.shields.io/badge/Download_for_macOS-141414?style=for-the-badge&logo=apple&logoColor=white" alt="Download Lemma for macOS"></a>
 
-The signed and notarized Mac app is the shortest path on Apple silicon (M1 or newer). Open the latest release, download the `.dmg`, and run Lemma locally.
+Download the signed **online** package from the latest release for macOS 14+
+on Apple silicon or Windows 11 23H2+ on x86-64. On macOS, drag Lemma to
+Applications before opening it; on Windows, run the signed setup executable.
+The small installer downloads digest-verified runtime components on first use;
+public offline packages are not offered in this release.
 
-### Run locally
+Choose **Local**, select **Install local services**, and create the local owner
+inside the app. Lemma owns its lightweight VZ/WSL2 runtime; the normal path
+does not install or require Docker Desktop, Podman, Homebrew, Python, Node.js,
+Ubuntu, or public DNS. Configure the required AI profile and optional
+integrations in **Local Control Center**.
 
-One command brings the full stack up, self-contained. It uses Docker or Podman and can install Podman for you.
-
-**macOS / Linux:**
-
-```bash
-curl -fsSL https://raw.githubusercontent.com/lemma-work/lemma-platform/main/install.sh | bash
-```
-
-**Windows** (PowerShell, Docker Desktop required):
-
-```powershell
-iwr https://raw.githubusercontent.com/lemma-work/lemma-platform/main/install.ps1 | iex
-```
-
-The installer opens Lemma at `http://127-0-0-1.sslip.io:3711`. Authentication is scoped to that exact host, so keep it as shown. Manage the installation with `lemma-stack start|stop|status|logs|config|uninstall`.
+On first installation Lemma chooses a private high-port pair and keeps it
+stable across restarts. **Local Control Center → Diagnostics** shows the exact
+workspace, API, built-app, and OAuth callback URLs. The CLI discovers the same
+endpoints from Desktop automatically. See the complete [local installation and
+operations guide](docs/installation.md).
 
 Install the CLI, point it at the local stack, and give your coding agent Lemma's skills:
 
 ```bash
 uv tool install lemma-terminal
+# The optional stack-control bootstrap registers the `local` server:
+curl -fsSL https://raw.githubusercontent.com/lemma-work/lemma-platform/main/install.sh |
+  bash -s -- --cli-only
 lemma servers select local
 lemma auth login
 lemma skills install
@@ -90,16 +91,17 @@ lemma daemon status
 <details>
 <summary>Configure a provider for server-run agents and conversations</summary>
 
-Provider settings live under `[backend.env]` in `~/.lemma/local/config.toml`:
+Use **Local Control Center → AI Providers**, or apply the same transactional
+configuration through `lemma-stack`:
 
 ```bash
-lemma-stack config set LEMMA_DEFAULT_MODEL_TYPE anthropic_compat
-lemma-stack config set LEMMA_ANTHROPIC_API_KEY sk-ant-...
-# Or use openai_compat with LEMMA_OPENAI_API_KEY and an optional compatible base URL.
-lemma-stack restart
+lemma-stack config set ai.protocol=openai_compat ai.base_url=http://127.0.0.1:11434/v1 ai.default_model=qwen3
 ```
 
-See [installation](docs/installation.md#configure) for every provider and connector setting.
+Secrets are stored in Keychain or Credential Manager, model access is validated
+before activation, and a failed change rolls back. See
+[configuration](docs/installation.md#configure-the-system-ai-profile) for
+hosted providers, integrations, and agent surfaces.
 
 </details>
 
@@ -264,9 +266,9 @@ make stop        # stop dev app, AgentBox, and tunnel processes
 make stop-all    # also stop dev infrastructure
 ```
 
-Run `make help` for the full list. The dev stack runs on its own ports
-(frontend 3710, backend 8710) so it never collides with an installed
-`lemma-stack` stack (3711/8711).
+Run `make help` for the full list. The dev stack uses explicit development
+ports (frontend 3710, backend 8710). Managed Desktop installations choose
+persistent high ports instead.
 
 `make dev-public` requires `cloudflared` and creates one temporary
 `*.trycloudflare.com` URL for the API. The frontend and auth UI stay on

@@ -344,6 +344,7 @@ async def lifespan(app: FastAPI):
                 scope=settings.agentbox_docker_scope,
                 allow_mutable_images=settings.agentbox_docker_allow_mutable_images,
                 add_host_gateway=settings.agentbox_add_host_gateway,
+                host_alias=settings.agentbox_host_alias,
                 private_network=settings.agentbox_docker_private_network,
                 memory_bytes=settings.agentbox_docker_workspace_memory_bytes,
                 nano_cpus=settings.agentbox_docker_workspace_nano_cpus,
@@ -352,6 +353,33 @@ async def lifespan(app: FastAPI):
                 max_file_transfer_bytes=settings.agentbox_max_file_transfer_bytes,
             ),
             runtime_credentials=RuntimeCredentialSigner(_runtime_key()),
+        )
+    elif settings.agentbox_provider == "lemma_local":
+        from agentbox.adapters.lemma_local import (
+            LemmaLocalAdapterConfig,
+            LemmaLocalSandboxAdapter,
+        )
+
+        provider = LemmaLocalSandboxAdapter(
+            profiles,
+            LemmaLocalAdapterConfig(
+                executable=settings.agentbox_local_runtime_cli,
+                scope=settings.agentbox_local_scope,
+                request_timeout_seconds=(
+                    settings.agentbox_local_runtime_timeout_seconds
+                ),
+                workspace_memory=settings.agentbox_local_workspace_memory,
+                workspace_cpus=settings.agentbox_local_workspace_cpus,
+                function_memory=settings.agentbox_local_function_memory,
+                function_cpus=settings.agentbox_local_function_cpus,
+                callback_required=settings.agentbox_local_callback_required,
+                callback_url=settings.agentbox_local_callback_url,
+                callback_health_path=settings.agentbox_local_callback_health_path,
+                callback_timeout_seconds=(
+                    settings.agentbox_local_callback_timeout_seconds
+                ),
+            ),
+            RuntimeCredentialSigner(_runtime_key()),
         )
     elif settings.agentbox_provider == "e2b":
         from agentbox.adapters.e2b import E2BAdapterConfig, E2BSandboxAdapter

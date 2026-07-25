@@ -1,134 +1,197 @@
-# Lemma Desktop (Tauri)
+# Lemma Desktop maintainer guide
 
-The Lemma macOS desktop app — a thin Tauri (Rust) shell around the Python
-supervisor.
+Lemma Desktop is a thin Tauri shell over the durable `lemma-locald` control
+plane. It supports hosted Lemma and a zero-toolchain local installation.
 
-## Architecture
+For the user journey, see [Install and run Lemma locally](../docs/installation.md).
+For requirements and architecture, see the
+[product specification](../docs/design/local-desktop-product-spec.md) and
+[technical design](../docs/design/local-desktop-technical-design.md).
 
-Thin Rust shell + Python supervisor. The shell owns native chrome (window,
-splash, tray, menu, navigation policy) and the supervisor process lifecycle.
-All orchestration intelligence lives in the supervisor
-(`lemma-stack supervise`), which boots the local stack and reports structured
-progress over a JSONL stdio protocol (documented in
-`lemma-stack/lemma_stack/supervise.py`). The supervisor drives the same
-`lemma-stack` install/start used everywhere else, so the desktop and the CLI
-installer can never skew.
+## Shipped topology
 
-- `src/main.rs` — the entire shell (~715 lines)
-- `ui/index.html` — splash screen with a small Tauri adapter for its preload
-  API (`window.lemmaDesktop`)
-- `capabilities/main.json` — IPC permissions for the splash window only;
-  remote pages (the app itself) get no IPC access
+The host runs:
 
-The shell injects a read-only `window.__LEMMA_DESKTOP__` marker into the main
-webview so the shared frontend can choose desktop-safe behavior without gaining
-native IPC privileges. Same-origin new-window requests stay in Lemma; external
-URLs open in the system browser.
+- `lemma-desktop`;
+- `lemma-locald`;
+- one all-in-one Python backend;
+- one Next.js frontend;
+- `lemma-runtime` plus `lemma-vz` on macOS or WSL tooling on Windows.
 
-Desktop login uses a short-lived PKCE-style handoff. The webview keeps a private
-verifier, the system browser completes the normal Lemma login, and the webview
-exchanges the verifier for a fresh cookie session. The `lemma://auth/complete`
-deep link only focuses the app; no access or refresh token is placed in a URL.
+The private guest runs PostgreSQL, Redis, SuperTokens, containerd, and AgentBox
+sandboxes. There is no user-facing Docker/Podman dependency and no Kreuzberg
+container. PDF/document conversion runs in the backend.
 
-Connection modes (persisted in `~/Library/Application Support/Lemma/desktop-config.json`):
-- **undecided** (first launch): asks whether to connect to Lemma Cloud or run
-  Lemma locally; local setup requires a second confirmation before installation
-- **local**: spawns the supervisor, shows the splash with live
-  startup phases, refreshes Stable-channel images, installs the matching
-  `lemma-terminal` release and its curated agent skills, then navigates to
-  `http://localhost:3711` when ready. Explicit version channels stay pinned.
-- **hosted**: loads the hosted app directly, no local services
+Closing every window hides Desktop to the tray. The daemon and desired services
+survive shell exit so schedules continue. **Quit and stop Lemma** performs a
+full stop before exit.
 
-## Development
+## Runtime packaging
 
-```sh
-cd desktop
-cargo build
-./target/debug/lemma-desktop                      # local mode against this checkout
-LEMMA_SUPERVISE_DRY_RUN=1 ./target/debug/lemma-desktop   # splash demo, no services
-LEMMA_DESKTOP_CONNECTION_MODE=hosted ./target/debug/lemma-desktop
+Public release apps bundle only `lemma-local.json` and native control helpers.
+The application must remain at or below 25 MiB installed. First launch
+downloads:
+
+- `lemma-host-pack-<target>.zip`;
+- `lemma-guest-runtime-<target>.zip`.
+
+Every manifest entry contains source URL/resource, SHA-256, compressed size,
+expanded size, archive format, platform target, and release identity. Archives
+are resumable, verified while transferring, extracted into disposable staging,
+validated, and atomically activated.
+
+The PR test DMG embeds the two compressed archives and rewrites only their
+manifest sources to trusted resource names. It must not contain expanded
+`local-runtime` or `managed-runtime` directories.
+
+Current hard gates:
+
+- host plus guest compressed: 750 MiB;
+- PR bundled application: 850 MiB;
+- expanded immutable runtime: 2.25 GiB;
+- macOS root disk: 1.25 GiB;
+- public application: 25 MiB.
+
+OCI infrastructure/sandbox images are not included. Public offline claims and
+offline release artifacts are intentionally removed.
+
+## Build and test locally
+
+Prerequisites for maintainers are Rust, Node.js 22, Swift/Xcode on macOS,
+Python/uv, and the repository’s normal build toolchain.
+
+Run focused validation:
+
+```bash
+cargo test --manifest-path desktop/Cargo.toml --locked
+cargo test --manifest-path locald/Cargo.toml --locked
+cargo test --manifest-path local-runtime/manager/Cargo.toml --locked
+cargo test --manifest-path local-runtime/guestd/Cargo.toml --locked
+swift build --package-path local-runtime/macos-vz
+uv run --project lemma-backend pytest \
+  lemma-backend/app/tests/unit/test_health_endpoints.py
+npx tsc --noEmit --project lemma-frontend/tsconfig.json
 ```
 
-Useful env overrides: `LEMMA_DESKTOP_RUNTIME_ROOT`,
-`LEMMA_DESKTOP_HOSTED_URL`, `LEMMA_DESKTOP_LOCAL_URL`, `AGENTBOX_PROVIDER`.
+Build Desktop sidecars:
 
-The supervisor can be driven without the shell:
-
-```sh
-lemma-stack supervise --dry-run   # then type: {"cmd":"start"}
-```
-
-## Distribution pieces
-
-- `scripts/build-sidecar.sh` — compiles `lemma-stack` into a self-contained
-  binary (`lemma-supervisor`) via PyInstaller from
-  `lemma-stack/lemma_stack/sidecar_main.py`. The sidecar runs `lemma-stack
-  supervise`, which pulls the released container images itself — no runtime
-  checkout or tarball download is involved. Distribution builds also bundle
-  the signed `uv` executable used to install or upgrade `lemma-terminal` when
-  the app was launched from Finder without a shell `PATH`.
-- `scripts/extract-concepts.mjs` — bakes the in-app education concept registry
-  (`lemma-frontend/lib/education/concepts.ts`) into `ui/concepts.gen.json` for
-  the splash tour.
-- `scripts/stage-podman-runtime.mjs` — stages and ad-hoc-signs the macOS arm64
-  Podman runtime (krunkit entitlements in `krunkit-entitlements.plist`).
-
-A distribution build runs the sidecar build then bundles with
-`tauri.dist.conf.json` (adds the supervisor and uv as external binaries):
-
-```sh
-node desktop/scripts/extract-concepts.mjs
+```bash
 desktop/scripts/build-sidecar.sh
-cd desktop && npx -y @tauri-apps/cli@2.11.4 build --config tauri.dist.conf.json
 ```
 
-## CI and code signing
+For source-level installer testing, prepare an exact manifest and archives and
+set:
 
-The main CI workflow builds the supervisor sidecar and DMG, then verifies the
-application and bundled sidecar signatures. Pull requests use Tauri's ad-hoc
-signing identity (`-`) so untrusted code never receives Apple credentials.
-Trusted runs from `main` import a Developer ID Application certificate into an
-ephemeral keychain and verify that the resulting app has a Developer ID
-authority.
+```bash
+export LEMMA_DESKTOP_RELEASE_MANIFEST=/absolute/path/lemma-local.json
+export LEMMA_DESKTOP_ALLOW_LOCAL_ARTIFACTS=1
+```
 
-Developer ID signing requires these Actions secrets:
+Only that explicitly selected manifest may use `file://` artifact sources.
+Packaged releases ignore development port overrides and do not enable arbitrary
+local artifacts.
 
-- `APPLE_CERTIFICATE` — base64-encoded `.p12` export containing the certificate
-  and private key
-- `APPLE_CERTIFICATE_PASSWORD` — password used when exporting the `.p12`
+## Build the PR test DMG
 
-The release workflow uses the same certificate import path and additionally
-requires `APPLE_ID`, `APPLE_PASSWORD` (an app-specific password), and
-`APPLE_TEAM_ID` for notarization. It verifies the Developer ID signature and
-notarization staple before uploading the DMG.
+Run the **Release Local Images** workflow on the PR branch with:
 
-Supervisor resolution order in the shell: `LEMMA_DESKTOP_SUPERVISOR_BIN` →
-bundled sidecar next to the app executable → `uv run --project lemma-stack
-lemma-stack supervise` from a checkout (dev fallback).
+- `version`: the Desktop version, currently `0.6.2`;
+- `publish`: `false`.
 
-## Status / still to do
+The workflow builds and verifies both runtimes, creates a resource-backed
+manifest, builds an ad-hoc-signed DMG, enforces size gates, and uploads:
 
-- [x] Supervisor protocol (start/stop/restart/status, phases, provider auto-detection)
-- [x] Shell: splash, event relay, tray, hide-to-tray, navigation allowlist, modes
-- [x] First-run setup auto-detection (content hash over dep manifests/lockfiles,
-      marker in `.local/lemma/setup-signature`; start auto-upgrades to setup)
-- [x] Runtime payload download-on-demand (manifest URL → download, sha256
-      verify, stage under Application Support, run from staged runtime)
-- [x] Supervisor as compiled sidecar binary (PyInstaller bootstrap)
-- [x] Single-instance enforcement, start-at-login tray toggle
-- [x] Log In tray item (opens `<base>/auth/desktop`)
-- [x] System-browser auth with one-time desktop session handoff and deep-link return
-- [x] Desktop-aware same-origin/new-window navigation policy
-- [x] Podman bundle as downloadable artifact (sidecar downloads it when no
-      Docker is found)
-- [x] Dependency bootstrap: supervisor installs uv/Node (nvm) user-locally
-      during setup on machines without dev tools
-- [x] Hardened-runtime entitlements wired in `tauri.dist.conf.json`; dist
-      builds bake the artifacts URL via `LEMMA_DEFAULT_RUNTIME_MANIFEST_URL`
-- [x] Signing + notarization: dist build signs, notarizes, and staples when
-      `APPLE_SIGNING_IDENTITY`, `APPLE_ID`, `APPLE_PASSWORD`
-      (app-specific password), and `APPLE_TEAM_ID` are set in the environment
-- [ ] tauri-plugin-updater
-- [ ] WKWebView compatibility pass over lemma-frontend (click-through started
-      on a real local run; track issues as found)
-- [ ] Dogfood, then cut a public release
+```text
+lemma-desktop-macos-pr-test-<full-commit-sha>
+```
+
+Download with GitHub CLI:
+
+```bash
+sha="$(git rev-parse HEAD)"
+gh run list --workflow release-local-images.yml --branch "$(git branch --show-current)"
+gh run download RUN_ID \
+  -n "lemma-desktop-macos-pr-test-${sha}" \
+  -D /tmp/lemma-pr-dmg
+```
+
+The test app installs its embedded compressed runtimes into Application
+Support on first launch. Registry access remains required for infrastructure
+and AgentBox images.
+
+## Clean macOS acceptance test
+
+Use a disposable test machine where possible. For an intentionally destructive
+local reset, first select **Quit and stop Lemma**, remove the test app, then
+remove `~/Library/Application Support/Lemma`. Never make a release repair
+delete that directory.
+
+Acceptance flow:
+
+1. Copy the PR app from the DMG to Applications; confirm the copy is not multi-GB.
+2. Launch from Applications and choose Local.
+3. Confirm download/extraction stages show real progress and no Start button.
+4. Create a local account inside WKWebView; verify it remains authenticated.
+5. Confirm the workspace does not return to the installer after Ready.
+6. Configure Ollama, LM Studio, or an API provider; verify the AI banner clears.
+7. Run an AgentBox operation that uses `lemma` CLI against the dynamic API.
+8. Open a built React app at `*.apps.lemma.localhost`.
+9. Close the window; verify schedules/services remain available from the tray.
+10. Restart and confirm ports and data persist.
+11. Inspect every Diagnostics source and exercise runtime repair.
+12. Use **Quit and stop Lemma** and confirm the VM releases memory.
+
+Also test with blocked Hugging Face access, a failed OCI registry/DNS request,
+and unrelated listeners occupying persisted ports.
+
+## Runtime state and debugging
+
+macOS state root:
+
+```text
+~/Library/Application Support/Lemma
+```
+
+Key files:
+
+```text
+desktop-config.json
+runtime/install.log
+runtime/releases/<version>/
+locald/network.json
+locald/installation.id
+locald/processes.json
+locald/events.jsonl
+locald/logs/
+locald/runtime/macos/data.raw
+locald/runtime/macos/console.log
+```
+
+Set `LEMMA_DESKTOP_DEVTOOLS=1` for the WKWebView inspector and
+`LEMMA_DESKTOP_DEBUG=1` for protocol event output. The in-app Diagnostics view
+is the preferred user-facing path; it returns bounded redacted data.
+
+Development-only dynamic-port overrides require both variables:
+
+```bash
+export LEMMA_LOCALD_FRONTEND_PORT=49180
+export LEMMA_LOCALD_BACKEND_PORT=49181
+```
+
+Packaged release builds ignore them.
+
+## Release policy
+
+`release-desktop.yml` publishes only signed/notarized online macOS and Windows
+installers. `release-local-images.yml` publishes immutable host/guest runtimes
+and the release manifest. The release gate requires the platform E2Es, size
+breakdown, signatures, and runtime integrity checks.
+
+Do not reintroduce:
+
+- expanded runtimes in the public app;
+- public offline/air-gapped claims;
+- hardcoded managed ports;
+- default localhost rewriting in the backend;
+- Podman/Docker/Kreuzberg requirements in the Desktop journey;
+- service health that accepts non-2xx or the wrong runtime generation.

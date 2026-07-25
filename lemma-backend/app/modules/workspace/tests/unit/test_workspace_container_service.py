@@ -158,7 +158,7 @@ async def test_ensure_returns_typed_sandbox_and_delegates_concurrency() -> None:
 
 
 @pytest.mark.asyncio
-async def test_ensure_passes_only_static_container_environment(monkeypatch) -> None:
+async def test_ensure_never_rewrites_the_configured_callback_host(monkeypatch) -> None:
     user_id = uuid4()
     sandbox = _FakeSandbox()
     monkeypatch.setattr(settings, "workspace_callback_api_url", None)
@@ -168,7 +168,7 @@ async def test_ensure_passes_only_static_container_environment(monkeypatch) -> N
     await service.get_or_create_sandbox(user_id)
 
     assert sandbox.ensure_calls == [
-        (user_id, {"LEMMA_BASE_URL": "http://host.docker.internal:8710"})
+        (user_id, {"LEMMA_BASE_URL": "http://127-0-0-1.sslip.io:8710"})
     ]
 
 

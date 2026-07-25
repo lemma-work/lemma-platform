@@ -95,6 +95,40 @@ async def test_schema_extraction_uses_isolated_rooted_session() -> None:
     assert session.timeout == 60
 
 
+async def test_schema_program_resolves_python_314_deferred_typing_names(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    marker = "__LEMMA_FUNCTION_SCHEMAS__test:"
+    code = """from typing import Optional
+from pydantic import BaseModel
+
+class Input(BaseModel):
+    value: str
+
+class Output(BaseModel):
+    note: Optional[str] = None
+"""
+    program = FunctionDefinitionCompiler._schema_program(
+        code=code,
+        code_path="functions/deferred_annotations.py",
+        marker=marker,
+        input_model="Input",
+        output_model="Output",
+        config_model=None,
+    )
+
+    exec(program, {})
+
+    output = capsys.readouterr().out.strip()
+    assert output.startswith(marker)
+    schemas = json.loads(output.removeprefix(marker))
+    assert schemas["input"]["properties"]["value"]["type"] == "string"
+    assert schemas["output"]["properties"]["note"]["anyOf"] == [
+        {"type": "string"},
+        {"type": "null"},
+    ]
+
+
 async def test_schema_extraction_rejects_expression_headers_before_sandbox() -> None:
     workspace = AsyncMock()
     compiler = FunctionDefinitionCompiler(

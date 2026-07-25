@@ -3,16 +3,19 @@ from __future__ import annotations
 import json
 import os
 import tempfile
+import sys
 from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Iterator
+from urllib.parse import urlsplit
 
 DEFAULT_BASE_URL = "https://api.lemma.work"
 DEFAULT_AUTH_URL = "https://lemma.work/auth"
 DEFAULT_CONFIG_PATH = Path.home() / ".lemma" / "config.json"
 DEFAULT_SERVER_NAME = "lemma-cloud"
 ENV_SERVER_NAME = "env"
+LOCAL_SERVER_NAME = "local"
 
 
 @dataclass(frozen=True)
@@ -206,7 +209,78 @@ def get_server_config(root_config: dict[str, Any], server: str) -> dict[str, Any
     if not isinstance(server_config, dict):
         raise ValueError(f"Invalid config file: server {normalized!r} must be object")
     servers[normalized] = _ensure_server_shape(server_config)
+    if normalized == LOCAL_SERVER_NAME:
+        discovered = discover_local_server_config()
+        if discovered is not None:
+            # Desktop owns this endpoint contract. Refresh it on every load so
+            # a safe port rotation cannot leave an older CLI registration
+            # pointing at a stale or unrelated listener.
+            servers[normalized].update(discovered)
+            servers[normalized].pop("_local_discovery_error", None)
+        elif not servers[normalized].get("base_url"):
+            servers[normalized]["_local_discovery_error"] = (
+                "Lemma Desktop local endpoints are unavailable. Start the local "
+                "Desktop runtime, then retry with --server local."
+            )
     return servers[normalized]
+
+
+def discover_local_server_config() -> dict[str, Any] | None:
+    """Read the Desktop-owned endpoint state without assuming fixed ports."""
+    root_override = os.getenv("LEMMA_LOCALD_ROOT")
+    if root_override:
+        state_path = Path(root_override) / "state.json"
+    elif sys.platform == "darwin":
+        state_path = (
+            Path.home()
+            / "Library"
+            / "Application Support"
+            / "Lemma"
+            / "locald"
+            / "state.json"
+        )
+    elif os.name == "nt":
+        local_app_data = os.getenv("LOCALAPPDATA")
+        if not local_app_data:
+            return None
+        state_path = Path(local_app_data) / "Lemma" / "locald" / "state.json"
+    else:
+        state_home = Path(os.getenv("XDG_STATE_HOME") or Path.home() / ".local/state")
+        state_path = state_home / "lemma" / "locald" / "state.json"
+    try:
+        state = json.loads(state_path.read_text(encoding="utf-8"))
+    except (OSError, ValueError, TypeError):
+        return None
+    if not isinstance(state, dict):
+        return None
+    base_url = state.get("apiUrl")
+    frontend_url = state.get("url")
+    if not _valid_desktop_endpoint(base_url) or not _valid_desktop_endpoint(frontend_url):
+        return None
+    return {
+        "base_url": str(base_url).rstrip("/"),
+        "auth_url": f"{str(frontend_url).rstrip('/')}/auth",
+        "_sources": {
+            "base_url": str(state_path),
+            "auth_url": str(state_path),
+        },
+    }
+
+
+def _valid_desktop_endpoint(value: Any) -> bool:
+    if not isinstance(value, str):
+        return False
+    parsed = urlsplit(value)
+    return (
+        parsed.scheme == "http"
+        and parsed.hostname == "app.lemma.localhost"
+        and parsed.port is not None
+        and parsed.username is None
+        and parsed.password is None
+        and parsed.path in ("", "/")
+        and not parsed.query
+        and not parsed.fragment
+    )
 
 
 def put_server_config(
@@ -381,6 +455,10 @@ def resolve_base_url(
     *,
     use_env: bool = True,
 ) -> str:
+    if config and config.get("_local_discovery_error") and not (
+        explicit or config.get("base_url") or (os.getenv("LEMMA_BASE_URL") if use_env else None)
+    ):
+        raise ValueError(str(config["_local_discovery_error"]))
     return (
         explicit
         or (config or {}).get("base_url")
@@ -395,6 +473,12 @@ def resolve_auth_url(
     *,
     use_env: bool = True,
 ) -> str:
+    if config and config.get("_local_discovery_error") and not (
+        explicit
+        or (config or {}).get("auth_url")
+        or (os.getenv("LEMMA_AUTH_URL") if use_env else None)
+    ):
+        raise ValueError(str(config["_local_discovery_error"]))
     auth = get_auth_session(config or {})
     return (
         explicit

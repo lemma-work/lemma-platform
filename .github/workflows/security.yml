@@ -176,10 +176,11 @@ jobs:
       - uses: astral-sh/setup-uv@v5
         with:
           enable-cache: true
-      - run: uv sync
+      - run: uv sync --extra local
       - name: Export locked third-party dependency graph
         run: >-
-          uv export --frozen --no-dev --no-emit-project
+          uv export --frozen --no-dev --extra local --no-emit-project
+          --no-emit-package agentbox
           --no-emit-package agentbox-client
           --no-emit-package lemma-pod-bundle
           --no-emit-package lemma-connectors

@@ -7,8 +7,19 @@ from uuid import uuid4
 import httpx
 import pytest
 
-from agentbox_client import PortAccessGrant, SandboxHandle
-from agentbox_client.models import PortProtocol, ProfileRef, WorkloadKind
+from agentbox_client import (
+    AgentBoxApiError,
+    PortAccessGrant,
+    RetryDisposition,
+    SandboxHandle,
+)
+from agentbox_client.models import (
+    AgentBoxErrorBody,
+    AgentBoxErrorResponse,
+    PortProtocol,
+    ProfileRef,
+    WorkloadKind,
+)
 
 from app.modules.function.application.function_callback_credentials import (
     FunctionCallbackCredentialSigner,
@@ -136,6 +147,27 @@ def _dispatcher(
     )
 
 
+def test_agentbox_deadline_error_keeps_stable_timeout_message() -> None:
+    response = httpx.Response(
+        408,
+        request=httpx.Request("POST", "https://agentbox.test/processes"),
+    )
+    error = AgentBoxApiError(
+        response,
+        AgentBoxErrorResponse(
+            error=AgentBoxErrorBody(
+                code="DEADLINE_EXCEEDED",
+                message="process deadline has elapsed",
+                retry=RetryDisposition.DO_NOT_RETRY,
+            )
+        ),
+    )
+
+    assert FunctionDispatcher._execution_error(error) == (
+        "Function execution timed out (deadline exceeded)"
+    )
+
+
 @pytest.mark.asyncio
 async def test_dispatcher_invokes_run_once_and_holds_no_db_during_io(
     monkeypatch,
@@ -177,7 +209,7 @@ async def test_dispatcher_invokes_run_once_and_holds_no_db_during_io(
     monkeypatch.setattr(
         "app.modules.function.application.function_dispatcher.settings."
         "function_runtime_gateway_url",
-        "https://gateway.lemma.test",
+        "http://127.0.0.1:8711",
     )
     requests: list[tuple[str, dict]] = []
 
@@ -224,6 +256,7 @@ async def test_dispatcher_invokes_run_once_and_holds_no_db_during_io(
     assert request["json"] == {"input": dispatch.input_data}
     assert request["headers"]["Authorization"] == "Bearer delegated-function-token"
     assert request["headers"]["If-Match"] == f'"{dispatch.revision_hash}"'
+    assert request["headers"]["X-Lemma-Gateway-Url"] == "http://127.0.0.1:8711"
     assert request["headers"]["X-Lemma-Run-Token"] == signer.derive(dispatch.run_id)
     assert "Idempotency-Key" not in request["headers"]
     assert tracker.active == 0
@@ -364,7 +397,220 @@ async def test_lost_response_reconciles_terminal_callback_without_failing(
 
 
 @pytest.mark.asyncio
-async def test_lost_response_fails_once_and_cancels_exact_run(
+async def test_lost_job_ack_reconciles_durable_runtime_claim_without_failing(
+    monkeypatch,
+) -> None:
+    tracker = _UowTracker()
+    dispatch = _dispatch(mode=FunctionDispatchMode.ASYNCHRONOUS)
+    running = _run(dispatch, FunctionRunStatus.RUNNING)
+
+    class _ExecutionRepository:
+        def __init__(self, _uow, _signer):
+            pass
+
+        async def resolve_dispatch(self, *_args, **_kwargs):
+            return dispatch
+
+        async def fail_dispatch(self, *_args, **_kwargs):
+            raise AssertionError("durably claimed JOB execution must not fail")
+
+    class _RunRepository:
+        def __init__(self, _uow):
+            pass
+
+        async def get_run(self, _run_id):
+            return running
+
+    monkeypatch.setattr(
+        "app.modules.function.application.function_dispatcher."
+        "FunctionExecutionRepository",
+        _ExecutionRepository,
+    )
+    monkeypatch.setattr(
+        "app.modules.function.application.function_dispatcher.FunctionRunRepository",
+        _RunRepository,
+    )
+
+    class _RuntimeClient:
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *_args):
+            return None
+
+        async def post(self, url, **_kwargs):
+            raise httpx.ReadError("response lost", request=httpx.Request("POST", url))
+
+    monkeypatch.setattr(
+        "app.modules.function.application.function_dispatcher.httpx.AsyncClient",
+        lambda **_kwargs: _RuntimeClient(),
+    )
+    result = await _dispatcher(
+        tracker,
+        FunctionCallbackCredentialSigner("k" * 32),
+        _sandbox_client(tracker, dispatch),
+    ).execute(dispatch.run_id, mode=FunctionDispatchMode.ASYNCHRONOUS)
+
+    assert result.status == FunctionRunStatus.RUNNING
+
+
+@pytest.mark.asyncio
+async def test_lost_job_request_retries_same_operation_once(
+    monkeypatch,
+) -> None:
+    tracker = _UowTracker()
+    dispatch = _dispatch(mode=FunctionDispatchMode.ASYNCHRONOUS)
+    pending = _run(dispatch, FunctionRunStatus.PENDING)
+    running = _run(dispatch, FunctionRunStatus.RUNNING)
+    loads = iter((pending, running))
+
+    class _ExecutionRepository:
+        def __init__(self, _uow, _signer):
+            pass
+
+        async def resolve_dispatch(self, *_args, **_kwargs):
+            return dispatch
+
+        async def fail_dispatch(self, *_args, **_kwargs):
+            raise AssertionError("acknowledged retry must not fail")
+
+    class _RunRepository:
+        def __init__(self, _uow):
+            pass
+
+        async def get_run(self, _run_id):
+            return next(loads)
+
+    monkeypatch.setattr(
+        "app.modules.function.application.function_dispatcher."
+        "FunctionExecutionRepository",
+        _ExecutionRepository,
+    )
+    monkeypatch.setattr(
+        "app.modules.function.application.function_dispatcher.FunctionRunRepository",
+        _RunRepository,
+    )
+    calls = 0
+
+    class _RuntimeClient:
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *_args):
+            return None
+
+        async def post(self, url, **_kwargs):
+            nonlocal calls
+            calls += 1
+            if calls == 1:
+                raise httpx.ReadError(
+                    "request lost",
+                    request=httpx.Request("POST", url),
+                )
+            return httpx.Response(
+                202,
+                request=httpx.Request("POST", url),
+                headers={"Preference-Applied": "respond-async"},
+                json={"accepted": True, "run_id": str(dispatch.run_id)},
+            )
+
+    monkeypatch.setattr(
+        "app.modules.function.application.function_dispatcher.httpx.AsyncClient",
+        lambda **_kwargs: _RuntimeClient(),
+    )
+    result = await _dispatcher(
+        tracker,
+        FunctionCallbackCredentialSigner("l" * 32),
+        _sandbox_client(tracker, dispatch),
+    ).execute(dispatch.run_id, mode=FunctionDispatchMode.ASYNCHRONOUS)
+
+    assert result.status == FunctionRunStatus.RUNNING
+    assert calls == 2
+
+
+@pytest.mark.asyncio
+async def test_retryable_runtime_proxy_failure_retries_same_job_once(
+    monkeypatch,
+) -> None:
+    tracker = _UowTracker()
+    dispatch = _dispatch(mode=FunctionDispatchMode.ASYNCHRONOUS)
+    pending = _run(dispatch, FunctionRunStatus.PENDING)
+    running = _run(dispatch, FunctionRunStatus.RUNNING)
+    loads = iter((pending, running))
+
+    class _ExecutionRepository:
+        def __init__(self, _uow, _signer):
+            pass
+
+        async def resolve_dispatch(self, *_args, **_kwargs):
+            return dispatch
+
+        async def fail_dispatch(self, *_args, **_kwargs):
+            raise AssertionError("retryable proxy failure must not fail the run")
+
+    class _RunRepository:
+        def __init__(self, _uow):
+            pass
+
+        async def get_run(self, _run_id):
+            return next(loads)
+
+    monkeypatch.setattr(
+        "app.modules.function.application.function_dispatcher."
+        "FunctionExecutionRepository",
+        _ExecutionRepository,
+    )
+    monkeypatch.setattr(
+        "app.modules.function.application.function_dispatcher.FunctionRunRepository",
+        _RunRepository,
+    )
+    calls = 0
+
+    class _RuntimeClient:
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *_args):
+            return None
+
+        async def post(self, url, **_kwargs):
+            nonlocal calls
+            calls += 1
+            if calls == 1:
+                return httpx.Response(
+                    502,
+                    request=httpx.Request("POST", url),
+                    json={
+                        "error": {
+                            "code": "PROVIDER_UNAVAILABLE",
+                            "retry": "wait",
+                            "retry_after_ms": 50,
+                        }
+                    },
+                )
+            return httpx.Response(
+                202,
+                request=httpx.Request("POST", url),
+                headers={"Preference-Applied": "respond-async"},
+                json={"accepted": True, "run_id": str(dispatch.run_id)},
+            )
+
+    monkeypatch.setattr(
+        "app.modules.function.application.function_dispatcher.httpx.AsyncClient",
+        lambda **_kwargs: _RuntimeClient(),
+    )
+    result = await _dispatcher(
+        tracker,
+        FunctionCallbackCredentialSigner("m" * 32),
+        _sandbox_client(tracker, dispatch),
+    ).execute(dispatch.run_id, mode=FunctionDispatchMode.ASYNCHRONOUS)
+
+    assert result.status == FunctionRunStatus.RUNNING
+    assert calls == 2
+
+
+@pytest.mark.asyncio
+async def test_repeated_lost_response_fails_and_cancels_exact_run(
     monkeypatch,
 ) -> None:
     tracker = _UowTracker()
@@ -438,7 +684,7 @@ async def test_lost_response_fails_once_and_cancels_exact_run(
     ).execute(dispatch.run_id, mode=FunctionDispatchMode.ASYNCHRONOUS)
 
     assert result.status == FunctionRunStatus.FAILED
-    assert calls == {"invoke": 1, "cancel": 1}
+    assert calls == {"invoke": 2, "cancel": 1}
     assert fail_errors == [
         "Function execution failed because the runtime response was not confirmed"
     ]

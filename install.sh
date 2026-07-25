@@ -3,12 +3,12 @@
 #
 #   curl -fsSL https://raw.githubusercontent.com/lemma-work/lemma-platform/main/install.sh | bash
 #
-# Installs uv (if missing), installs lemma-stack as a uv tool, and hands off
-# to `lemma-stack install`, which detects/installs a container runtime
-# (podman recommended), pulls the released images, and starts the stack at
-# ~/.lemma/local. Pass arguments through:
+# Installs uv (if missing) and installs lemma-stack as a uv tool. By default it
+# then starts the external Docker/Podman compatibility installer. Managed
+# macOS/Windows users should install Lemma Desktop and use --cli-only:
 #
-#   ./install.sh --runtime podman -y
+#   ./install.sh --cli-only
+#   ./install.sh --runtime podman -y  # external compatibility path
 set -Eeuo pipefail
 
 say() { printf '%s\n' "$*"; }
@@ -18,6 +18,12 @@ fail() {
 }
 
 export PATH="$HOME/.local/bin:$HOME/.cargo/bin:$PATH"
+
+CLI_ONLY=0
+if [[ "${1:-}" == "--cli-only" ]]; then
+  CLI_ONLY=1
+  shift
+fi
 
 if ! command -v uv >/dev/null 2>&1; then
   say "Installing uv (https://astral.sh/uv)…"
@@ -36,5 +42,11 @@ say "Installing lemma-stack…"
 uv tool install --force "$LEMMA_STACK_SPEC" >/dev/null
 command -v lemma-stack >/dev/null 2>&1 || export PATH="$(uv tool dir --bin 2>/dev/null || echo "$HOME/.local/bin"):$PATH"
 command -v lemma-stack >/dev/null 2>&1 || fail "lemma-stack installed but not on PATH; run: uv tool update-shell"
+
+if [[ "$CLI_ONLY" == "1" ]]; then
+  lemma-stack self register-cli --use
+  say "Installed lemma-stack. It will discover Lemma Desktop after Local setup has run once."
+  exit 0
+fi
 
 exec lemma-stack install "$@"

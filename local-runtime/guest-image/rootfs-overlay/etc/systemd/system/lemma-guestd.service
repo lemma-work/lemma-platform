@@ -1,0 +1,16 @@
+[Unit]
+Description=Lemma private guest control service
+After=containerd.service network-online.target lemma-data.service lemma-host-clock.service mnt-lemma\x2dcontrol.mount
+Requires=containerd.service lemma-data.service lemma-host-clock.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+ExecStart=/usr/local/bin/lemma-runtime-guest-service
+StandardOutput=journal+console
+StandardError=journal+console
+Restart=always
+RestartSec=2
+
+[Install]
+WantedBy=lemma-runtime.target

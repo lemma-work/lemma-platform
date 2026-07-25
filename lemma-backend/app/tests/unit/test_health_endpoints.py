@@ -70,6 +70,48 @@ def test_ready_returns_200_when_dependencies_ok(client, monkeypatch):
     assert body["components"] == {"db": "ok", "redis": "ok"}
 
 
+def test_ready_echoes_runtime_instance_id(client, monkeypatch):
+    monkeypatch.setattr(appmod, "get_engine", lambda: _FakeEngineOk())
+    monkeypatch.setattr(appmod.channel_service, "ping", AsyncMock(return_value=True))
+    monkeypatch.setattr(appmod.settings, "lemma_runtime_instance_id", "launch-123")
+
+    r = client.get("/health/ready")
+
+    assert r.status_code == 200
+    assert r.json()["instance_id"] == "launch-123"
+
+
+def test_capability_health_reports_embeddings_separately(client, monkeypatch):
+    from app.modules.datastore import module as datastore_module
+
+    monkeypatch.setattr(datastore_module._embedding_capability, "status", "preparing")
+    monkeypatch.setattr(
+        datastore_module._embedding_capability,
+        "detail",
+        "Preparing the local search model",
+    )
+
+    r = client.get("/health/capabilities")
+
+    assert r.status_code == 200
+    assert r.json()["capabilities"]["embeddings"] == {
+        "status": "preparing",
+        "detail": "Preparing the local search model",
+    }
+
+
+def test_capability_health_exposes_safe_local_ai_readiness(client, monkeypatch):
+    monkeypatch.setattr(appmod.settings, "lemma_local_ai_ready", False)
+
+    r = client.get("/health/capabilities")
+
+    assert r.status_code == 200
+    assert r.json()["capabilities"]["ai_profile"] == {
+        "status": "needs_setup",
+        "detail": "Configure an AI provider in Lemma Control Center",
+    }
+
+
 def test_ready_returns_503_when_db_down(client, monkeypatch):
     monkeypatch.setattr(appmod, "get_engine", lambda: _FakeEngineDown())
     monkeypatch.setattr(appmod.channel_service, "ping", AsyncMock(return_value=True))

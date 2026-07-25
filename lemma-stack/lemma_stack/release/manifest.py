@@ -21,13 +21,15 @@ from lemma_stack import __version__
 from lemma_stack.output import AdminError
 from lemma_stack.paths import LocalPaths
 
+# Host packs are an additive field in schema 1. Keeping the public schema
+# stable lets already-installed lemma-stack clients continue consuming new
+# releases while new Desktop builds opt into and verify the native artifact.
 SCHEMA_VERSION = 1
 DEFAULT_REPO = "lemma-work/lemma-platform"
 MANIFEST_ASSET = "lemma-local.json"
 APP_IMAGE_KEYS = (
     "backend",
     "frontend",
-    "agentbox",
     "agentbox_workspace",
     "agentbox_function",
 )
@@ -35,9 +37,10 @@ APP_IMAGE_KEYS = (
 # Fresh installs get pg16; the dev stack stays on pg15 for volume compat.
 DEFAULT_INFRA_IMAGES = {
     "postgres": "docker.io/pgvector/pgvector:0.8.3-pg16",
-    "redis": "docker.io/redis/redis-stack:7.2.0-v19",
+    # Server-only retains RedisJSON/Search/etc. without bundling RedisInsight,
+    # which Desktop does not expose and should not make every user download.
+    "redis": "docker.io/redis/redis-stack-server:7.2.0-v19",
     "supertokens": "docker.io/supertokens/supertokens-postgresql:11.4.5",
-    "kreuzberg": "ghcr.io/kreuzberg-dev/kreuzberg:4.9.9",
 }
 
 
@@ -52,11 +55,21 @@ class ImageRef:
 
 
 @dataclass(frozen=True)
+class ArtifactRef:
+    url: str
+    sha256: str
+    size: int
+    format: str = "zip"
+
+
+@dataclass(frozen=True)
 class ReleaseManifest:
     version: str
     min_admin_version: str
     images: dict[str, ImageRef]
-    infra: dict[str, str] = field(default_factory=dict)
+    infra: dict[str, ImageRef] = field(default_factory=dict)
+    host_packs: dict[str, ArtifactRef] = field(default_factory=dict)
+    guest_runtimes: dict[str, ArtifactRef] = field(default_factory=dict)
     raw: dict[str, Any] = field(default_factory=dict)
 
     def image(self, key: str) -> ImageRef:
@@ -66,14 +79,39 @@ class ReleaseManifest:
             raise AdminError(f"release manifest is missing image {key!r}") from exc
 
     def infra_image(self, key: str) -> str:
-        return self.infra.get(key) or DEFAULT_INFRA_IMAGES[key]
+        image = self.infra.get(key)
+        return image.pull_ref if image else DEFAULT_INFRA_IMAGES[key]
 
-    def all_pull_refs(self, *, kreuzberg: bool) -> list[str]:
+    def all_pull_refs(self) -> list[str]:
         refs = [self.image(key).pull_ref for key in APP_IMAGE_KEYS]
-        refs.extend(self.infra_image(key) for key in ("postgres", "redis", "supertokens"))
-        if kreuzberg:
-            refs.append(self.infra_image("kreuzberg"))
+        refs.extend(self.infra_pull_refs())
         return refs
+
+    def infra_pull_refs(self) -> list[str]:
+        """Images needed before native backend/frontend processes can start.
+
+        The sandbox runtime is intentionally absent: the selected AgentBox
+        provider fetches it on first sandbox creation instead of making every
+        desktop install pay that download cost.
+        """
+
+        return [self.infra_image(key) for key in ("postgres", "redis", "supertokens")]
+
+    def host_pack(self, target: str) -> ArtifactRef:
+        try:
+            return self.host_packs[target]
+        except KeyError as exc:
+            raise AdminError(
+                f"release {self.version} has no native host pack for {target}"
+            ) from exc
+
+    def guest_runtime(self, target: str) -> ArtifactRef:
+        try:
+            return self.guest_runtimes[target]
+        except KeyError as exc:
+            raise AdminError(
+                f"release {self.version} has no managed guest runtime for {target}"
+            ) from exc
 
 
 def parse(data: dict[str, Any]) -> ReleaseManifest:
@@ -96,15 +134,54 @@ def parse(data: dict[str, Any]) -> ReleaseManifest:
     missing = [key for key in APP_IMAGE_KEYS if key not in images]
     if missing:
         raise AdminError(f"release manifest is missing images: {', '.join(missing)}")
+    host_packs = _parse_artifacts(data.get("host_packs"), "host pack")
+    guest_runtimes = _parse_artifacts(data.get("guest_runtimes"), "managed guest runtime")
+    infra: dict[str, ImageRef] = {}
+    for key, value in (data.get("infra") or {}).items():
+        if isinstance(value, str):
+            infra[str(key)] = ImageRef(ref=value)
+        elif isinstance(value, dict) and value.get("ref"):
+            infra[str(key)] = ImageRef(ref=str(value["ref"]), digest=value.get("digest"))
+        else:
+            raise AdminError(f"invalid infra image entry for {key!r}")
     manifest = ReleaseManifest(
         version=version,
         min_admin_version=str(data.get("min_admin_version") or "0"),
         images=images,
-        infra={str(k): str(v) for k, v in (data.get("infra") or {}).items()},
+        infra=infra,
+        host_packs=host_packs,
+        guest_runtimes=guest_runtimes,
         raw=data,
     )
     check_admin_version(manifest)
     return manifest
+
+
+def _parse_artifacts(value: Any, label: str) -> dict[str, ArtifactRef]:
+    artifacts: dict[str, ArtifactRef] = {}
+    for target, entry in (value or {}).items():
+        if not isinstance(entry, dict):
+            raise AdminError(f"invalid {label} entry for {target!r}")
+        url = str(entry.get("url") or "")
+        sha256 = str(entry.get("sha256") or "")
+        size = entry.get("size")
+        archive_format = str(entry.get("format") or "zip")
+        if (
+            not url.startswith("https://")
+            or len(sha256) != 64
+            or any(character not in "0123456789abcdef" for character in sha256)
+            or not isinstance(size, int)
+            or size <= 0
+            or archive_format != "zip"
+        ):
+            raise AdminError(f"invalid {label} entry for {target!r}")
+        artifacts[str(target)] = ArtifactRef(
+            url=url,
+            sha256=sha256,
+            size=size,
+            format=archive_format,
+        )
+    return artifacts
 
 
 def check_admin_version(manifest: ReleaseManifest) -> None:

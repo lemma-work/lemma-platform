@@ -1,7 +1,7 @@
 """Host-based routing for public app builds.
 
 An app is served at ``<public_slug>.<app_base_domain>`` (e.g.
-``my-app.127-0-0-1.sslip.io:8711`` locally, ``my-app.apps.lemma.work`` in
+``my-app.apps.lemma.localhost:8711`` locally, ``my-app.apps.lemma.work`` in
 cloud). This middleware inspects the request ``Host`` header and, when it
 matches an app subdomain, rewrites the request onto the public app asset
 endpoint (``/public/apps``) and surfaces the slug via the

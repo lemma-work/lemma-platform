@@ -47,7 +47,16 @@ def override_emailpassword_apis(original_implementation: APIInterface) -> APIInt
         SignInPostNotAllowedResponse,
         GeneralErrorResponse,
     ]:
-        email = _normalize_form_email(form_fields)
+        try:
+            email = _normalize_form_email(form_fields)
+        except ValueError:
+            # SuperTokens normally validates the field before this override, but
+            # identity normalization is intentionally stricter for reserved and
+            # malformed domains. Keep an invalid login indistinguishable from
+            # wrong credentials instead of leaking it as an internal error.
+            return SignInPostNotAllowedResponse(
+                "Unable to sign in with these credentials"
+            )
         async with async_session_maker() as db_session:
             local_user = await db_session.scalar(
                 select(User).where(func.lower(User.email) == email)
@@ -93,7 +102,12 @@ def override_emailpassword_apis(original_implementation: APIInterface) -> APIInt
         SignUpPostNotAllowedResponse,
         GeneralErrorResponse,
     ]:
-        email = _normalize_form_email(form_fields)
+        try:
+            email = _normalize_form_email(form_fields)
+        except ValueError:
+            return SignUpPostNotAllowedResponse(
+                "Please use a valid email address"
+            )
         try:
             email = await validate_auth_email(email)
         except EmailPolicyError:

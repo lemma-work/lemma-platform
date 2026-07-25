@@ -236,6 +236,13 @@ class Settings(BaseSettings):
         ge=1,
         description="Desktop auth handoff creation rate-limit window in seconds.",
     )
+    lemma_local_ai_ready: Optional[bool] = Field(
+        default=None,
+        description=(
+            "Safe local Desktop readiness flag. None outside managed-local installs; "
+            "never contains provider credentials."
+        ),
+    )
     lemma_default_model_type: Literal["openai_compat", "anthropic_compat"] = Field(
         default="openai_compat",
         description="Server-provided Lemma system model profile provider type.",
@@ -542,6 +549,13 @@ class Settings(BaseSettings):
         default=True,
         description="Emit structured JSON logs instead of console-formatted logs",
     )
+    local_http_access_logs_enabled: bool = Field(
+        default=False,
+        description=(
+            "Emit safe HTTP request summaries at INFO for local diagnostics. "
+            "Records only method, route template, status, and duration."
+        ),
+    )
     release_sha: Optional[str] = Field(
         default=None,
         validation_alias=AliasChoices("LEMMA_RELEASE_SHA", "RELEASE_SHA"),
@@ -704,9 +718,9 @@ class Settings(BaseSettings):
         return self
 
     # App serving: apps are served by host, at `<public_slug>.<app_base_domain>`.
-    # Locally the stack sets this to a sslip.io wildcard (e.g.
-    # 127-0-0-1.sslip.io:8711) that resolves to loopback; in cloud it is the real
-    # apps domain behind the ingress. There is intentionally NO cloud default: an
+    # Locally the stack sets this to a reserved loopback domain (e.g.
+    # apps.lemma.localhost:8711); in cloud it is the real apps domain behind the
+    # ingress. There is intentionally NO cloud default: an
     # empty value disables host-based app routing, and it is REQUIRED outside
     # local/testing (see _require_app_base_domain_outside_local).
     app_base_domain: str = Field(
@@ -714,7 +728,7 @@ class Settings(BaseSettings):
         description=(
             "Base domain under which public apps are served, as "
             "`<public_slug>.<app_base_domain>`. The local stack sets this to the "
-            "sslip.io wildcard host (e.g. 127-0-0-1.sslip.io:8711); in cloud it is "
+            "loopback apps domain (e.g. apps.lemma.localhost:8711); in cloud it is "
             "the real apps domain behind the ingress. Empty disables host-based "
             "app routing and is rejected at startup in development/production."
         ),
@@ -847,8 +861,22 @@ class Settings(BaseSettings):
         default=None,
         description=(
             "URL workspace sandboxes use to reach this API (e.g. http://backend:8000 "
-            "when sandboxes share a container network); overrides the "
-            "localhost->host.docker.internal rewrite"
+            "when sandboxes share a container network). No hostname inference "
+            "or rewriting is performed when absent."
+        ),
+    )
+    workspace_callback_auth_url: Optional[str] = Field(
+        default=None,
+        description=(
+            "Explicit auth frontend URL reachable from workspace sandboxes; "
+            "no hostname rewriting is performed when absent."
+        ),
+    )
+    workspace_callback_frontend_url: Optional[str] = Field(
+        default=None,
+        description=(
+            "Explicit frontend origin reachable from workspace sandboxes; "
+            "no hostname rewriting is performed when absent."
         ),
     )
     # Composio + connector runtime config moved to app/modules/connectors/config.py
@@ -1011,8 +1039,17 @@ class Settings(BaseSettings):
     local_embedding_preload: bool = Field(
         default=True,
         description=(
-            "Initialize local embeddings during worker startup so model/cache "
-            "failures surface before document jobs are accepted."
+            "Compatibility switch for local embedding startup. False forces lazy "
+            "initialization; true uses LOCAL_EMBEDDING_STARTUP_MODE."
+        ),
+    )
+    local_embedding_startup_mode: Literal["blocking", "background", "lazy"] = Field(
+        default="blocking",
+        description=(
+            "How local embeddings initialize. 'blocking' preserves server "
+            "readiness semantics for hosted/developer deployments, 'background' "
+            "warms the model without blocking core API readiness, and 'lazy' "
+            "waits for the first embedding operation."
         ),
     )
     local_embedding_preload_timeout_seconds: float = Field(
@@ -1020,6 +1057,13 @@ class Settings(BaseSettings):
         description=(
             "Maximum worker-startup time allowed for local model preload, including "
             "a first-run model download."
+        ),
+    )
+    lemma_runtime_instance_id: str = Field(
+        default="",
+        description=(
+            "Opaque launch identity echoed by local health endpoints so the "
+            "Desktop supervisor cannot accept a stale process on the same port."
         ),
     )
     openai_compat_embedding_model: str = Field(

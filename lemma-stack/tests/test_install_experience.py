@@ -289,6 +289,8 @@ def test_install_ps1_structure():
     assert "ErrorActionPreference" in content, "install.ps1 must set error handling"
     assert "Get-Command uv" in content, "install.ps1 must check for uv"
     assert "LEMMA_STACK_SOURCE" in content, "install.ps1 must support local checkout override"
+    assert "LEMMA_STACK_CLI_ONLY" in content, "install.ps1 must support managed CLI-only setup"
+    assert "self register-cli --use" in content, "CLI-only setup must register managed Desktop"
 
 
 def test_install_sh_structure():
@@ -300,6 +302,8 @@ def test_install_sh_structure():
     assert "lemma-stack" in content, "install.sh must install lemma-stack"
     assert "lemma-stack install" in content, "install.sh must hand off to lemma-stack install"
     assert "LEMMA_STACK_SOURCE" in content, "install.sh must support local checkout override"
+    assert "--cli-only" in content, "install.sh must support managed CLI-only setup"
+    assert "self register-cli --use" in content, "CLI-only setup must register managed Desktop"
     assert "curl" in content, "install.sh must use curl to install uv"
 
 

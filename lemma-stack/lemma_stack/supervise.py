@@ -6,7 +6,7 @@ the orchestration (and its child processes) writes to fd 1/2 is captured and
 re-emitted as ``log`` events so stdout stays pure JSONL.
 
 Protocol (v1) — byte-compatible with the previous installer-based supervisor:
-  -> {"cmd": "start", "setup": false, "rebuild": false, "id": "..."}
+  -> {"cmd": "start", "setup": false, "rebuild": false, "infra_only": false, "id": "..."}
   -> {"cmd": "stop", "infra": false, "id": "..."}
   -> {"cmd": "restart", "id": "..."}
   -> {"cmd": "status", "id": "..."}
@@ -19,7 +19,7 @@ Protocol (v1) — byte-compatible with the previous installer-based supervisor:
   <- {"v":1,"event":"log","line":"..."}
   <- {"v":1,"event":"state","status":"starting|running|stopping|stopped|error","running":bool}
   <- {"v":1,"event":"provider","provider":"docker"}
-  <- {"v":1,"event":"ready","url":"http://127-0-0-1.sslip.io:3711","api_url":"http://127-0-0-1.sslip.io:8711"}
+  <- {"v":1,"event":"ready","url":"http://app.lemma.localhost:3711","api_url":"http://app.lemma.localhost:8711"}
   <- {"v":1,"event":"done","cmd":"start","id":"...","ok":true}
   <- {"v":1,"event":"error","message":"...","id":"..."}
   <- {"v":1,"event":"status","running":bool,"ready":bool,...}
@@ -68,8 +68,6 @@ _SERVICE_PHASE = {
     "db": "infra",
     "redis": "infra",
     "supertokens": "infra",
-    "kreuzberg": "infra",
-    "agentbox": "workspace",
     "backend": "backend",
     "frontend": "frontend",
 }
@@ -143,23 +141,20 @@ class Supervisor:
 
     # -- operations ----------------------------------------------------------
 
-    def _op_start(self, *, setup: bool, rebuild: bool) -> None:
+    def _op_start(self, *, setup: bool, rebuild: bool, infra_only: bool = False) -> None:
         self._set_state("starting", ready=False)
         if self.dry_run:
-            for key in (
-                "check",
-                "pull",
-                "infra",
-                "migrations",
-                "workspace",
-                "backend",
-                "frontend",
-                "verify",
-            ):
+            phases = ["check", "pull", "infra", "migrations"]
+            if not infra_only:
+                phases.extend(("workspace", "backend", "frontend", "verify"))
+            for key in phases:
                 self._set_phase(key, "dry run")
                 time.sleep(0.4)
             self.emit("provider", provider="docker")
-            self._finish_ready(self._config())
+            if infra_only:
+                self._finish_infra_ready()
+            else:
+                self._finish_ready(self._config())
             return
 
         from lemma_stack import orchestrate
@@ -171,7 +166,17 @@ class Supervisor:
         provider = self._resolve_provider(config)
         self.emit("provider", provider=provider)
 
-        manifest = orchestrate.resolve_manifest(config, self.paths, prefer_pinned=True)
+        if infra_only and self.paths.release_file.is_file():
+            # The bundled host pack pins its matching manifest before locald
+            # starts the compatibility supervisor. Keep infra and sandbox
+            # runtime identity coupled to that pack, including while offline.
+            from lemma_stack.release import manifest as release_manifest
+
+            manifest = release_manifest.load_pinned(self.paths)
+        else:
+            manifest = orchestrate.resolve_manifest(
+                config, self.paths, prefer_pinned=True
+            )
 
         def progress(stage: str, detail: str) -> None:
             if stage == "pull":
@@ -184,19 +189,33 @@ class Supervisor:
             elif stage == "ready":
                 self._set_phase("verify", "verifying services")
 
+        if infra_only:
+            # A durable daemon may be upgrading an installation that still has
+            # the old backend/frontend containers running. Stop only those
+            # stateless app containers before native processes claim the same
+            # loopback ports; PostgreSQL, Redis, and auth stay online.
+            orchestrate.bring_down(self.paths, config, infra=False)
+
         orchestrate.bring_up(
             self.paths,
             config,
             provider=provider,
             manifest=manifest,
-            do_register=True,
+            do_register=not infra_only,
+            service_names={"db", "redis", "supertokens"} if infra_only else None,
+            host_apps=infra_only,
+            pull_infra_only=infra_only,
+            migrate=not infra_only,
             progress=progress,
         )
-        self._set_phase("workspace", "installing terminal and skills")
-        from lemma_stack.register import install_lemma_cli_and_skills
+        if infra_only:
+            self._finish_infra_ready()
+        else:
+            self._set_phase("workspace", "installing terminal and skills")
+            from lemma_stack.register import install_lemma_cli_and_skills
 
-        install_lemma_cli_and_skills(version=manifest.version)
-        self._finish_ready(config)
+            install_lemma_cli_and_skills(version=manifest.version)
+            self._finish_ready(config)
 
     def _resolve_provider(self, config) -> str:
         """Honor an explicit AGENTBOX_PROVIDER from the desktop, else config,
@@ -222,6 +241,12 @@ class Supervisor:
         self._set_phase("ready")
         self._set_state("running", ready=True)
         self.emit("ready", url=self._frontend_url(config), api_url=self._backend_url(config))
+
+    def _finish_infra_ready(self) -> None:
+        self._status = "infra-running"
+        self._ready = False
+        self.emit("state", status=self._status, running=True, ready=False)
+        self.emit("infra-ready")
 
     def _op_stop(self, *, infra: bool) -> None:
         self._set_state("stopping")
@@ -249,12 +274,12 @@ class Supervisor:
             try:
                 provider = store.provider(config)
                 runtime = detect.ensure_ready(provider)
-                for name in ("backend", "frontend", "agentbox"):
+                for name in ("backend", "frontend"):
                     ports[name] = runtime.container_running(f"{CONTAINER_PREFIX}-{name}")
             except Exception:
-                ports = {"backend": False, "frontend": False, "agentbox": False}
+                ports = {"backend": False, "frontend": False}
         else:
-            ports = {"backend": self._ready, "frontend": self._ready, "agentbox": self._ready}
+            ports = {"backend": self._ready, "frontend": self._ready}
         self.emit(
             "status",
             id=request_id,
@@ -316,6 +341,7 @@ class Supervisor:
                 self._op_start,
                 setup=bool(message.get("setup")),
                 rebuild=bool(message.get("rebuild")),
+                infra_only=bool(message.get("infra_only")),
             )
         elif cmd == "stop":
             self._run_op("stop", request_id, self._op_stop, infra=bool(message.get("infra")))

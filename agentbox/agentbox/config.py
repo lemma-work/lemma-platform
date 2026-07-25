@@ -143,7 +143,19 @@ class Settings(BaseSettings):
     )
     agentbox_reconcile_claim_seconds: float = Field(default=30, ge=5, le=300)
     agentbox_workspace_retention_seconds: float = Field(default=604800, ge=1)
-    agentbox_add_host_gateway: bool = True
+    agentbox_add_host_gateway: bool = False
+    agentbox_host_alias: str | None = None
+    agentbox_local_runtime_cli: str = ""
+    agentbox_local_scope: str = "lemma-local:managed"
+    agentbox_local_runtime_timeout_seconds: float = Field(default=600, ge=1, le=3600)
+    agentbox_local_workspace_memory: str = "2g"
+    agentbox_local_workspace_cpus: str = "2"
+    agentbox_local_function_memory: str = "2g"
+    agentbox_local_function_cpus: str = "4"
+    agentbox_local_callback_required: bool = False
+    agentbox_local_callback_url: str | None = None
+    agentbox_local_callback_health_path: str = "/health"
+    agentbox_local_callback_timeout_seconds: float = Field(default=30, ge=1, le=300)
 
     @property
     def agentbox_e2b_function_allow_out_hosts(self) -> tuple[str, ...]:

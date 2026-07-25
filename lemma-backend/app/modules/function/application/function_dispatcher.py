@@ -5,7 +5,7 @@ from __future__ import annotations
 import asyncio
 from collections.abc import Awaitable, Callable
 from datetime import datetime, timedelta, timezone
-from urllib.parse import urljoin, urlparse
+from urllib.parse import urljoin
 from uuid import UUID
 
 import httpx
@@ -114,12 +114,14 @@ class FunctionDispatcher:
         try:
             endpoint = await self._runtime_endpoint(dispatch)
             function_token = await function_token_task
-            runtime_response = await self._invoke_runtime(
+            runtime_response = await self._invoke_runtime_with_recovery(
                 dispatch,
                 endpoint=endpoint,
                 function_token=function_token,
             )
-            if isinstance(runtime_response, RuntimeAcceptedResponse):
+            if isinstance(runtime_response, FunctionRunEntity):
+                result = runtime_response
+            elif isinstance(runtime_response, RuntimeAcceptedResponse):
                 # The resident runtime returns 202 only after its backend claim
                 # committed PENDING -> RUNNING. Long JOB/deferred execution then
                 # belongs to the runtime callback, not to a backend worker poll.
@@ -144,7 +146,7 @@ class FunctionDispatcher:
                 raise
             if isinstance(exc, InvocationOutcomeUnconfirmed):
                 current = await self._load_run(run_id)
-                if current.status in _TERMINAL_RUN_STATES:
+                if self._durably_confirms_invocation(dispatch, current):
                     return current
                 await self._best_effort_cancel(dispatch)
             message = self._execution_error(exc)
@@ -261,6 +263,40 @@ class FunctionDispatcher:
             await self._wait_retry(handle.retry_after_ms, deadline_at)
         raise TimeoutError("function sandbox was not ready before the deadline")
 
+    async def _invoke_runtime_with_recovery(
+        self,
+        dispatch: FunctionExecutionDispatch,
+        *,
+        endpoint: FunctionRuntimeEndpoint,
+        function_token: str,
+    ) -> RuntimeTerminalRequest | RuntimeAcceptedResponse | FunctionRunEntity:
+        current_endpoint = endpoint
+        for attempt in range(2):
+            try:
+                return await self._invoke_runtime(
+                    dispatch,
+                    endpoint=current_endpoint,
+                    function_token=function_token,
+                )
+            except InvocationOutcomeUnconfirmed as exc:
+                current = await self._load_run(dispatch.run_id)
+                if self._durably_confirms_invocation(dispatch, current):
+                    return current
+                if attempt == 0 and exc.safe_same_operation:
+                    # A transport may discard a stale keep-alive connection
+                    # before the request reaches the resident runtime. Reusing
+                    # the exact immutable run identity is safe: the runtime
+                    # deduplicates run IDs and the backend claim is an atomic
+                    # PENDING -> RUNNING transition.
+                    await self._wait_retry(
+                        exc.retry_after_ms,
+                        dispatch.deadline_at,
+                    )
+                    current_endpoint = await self._runtime_endpoint(dispatch)
+                    continue
+                raise
+        raise AssertionError("unreachable function invocation retry state")
+
     async def _invoke_runtime(
         self,
         dispatch: FunctionExecutionDispatch,
@@ -303,7 +339,9 @@ class FunctionDispatcher:
                 endpoint=endpoint,
             )
             raise InvocationOutcomeUnconfirmed(
-                "function invocation response was lost"
+                "function invocation response was lost",
+                safe_same_operation=True,
+                retry_after_ms=100,
             ) from exc
         if response.status_code >= 500:
             await self._endpoint_cache.invalidate(
@@ -311,7 +349,9 @@ class FunctionDispatcher:
                 endpoint=endpoint,
             )
             raise InvocationOutcomeUnconfirmed(
-                f"function runtime returned {response.status_code}"
+                f"function runtime returned {response.status_code}",
+                safe_same_operation=True,
+                retry_after_ms=self._runtime_retry_after_ms(response),
             )
         if response.status_code in {401, 403, 404, 410}:
             await self._endpoint_cache.invalidate(
@@ -441,13 +481,7 @@ class FunctionDispatcher:
     @staticmethod
     def _runtime_gateway_url() -> str:
         configured = settings.function_runtime_gateway_url or settings.api_url
-        parsed = urlparse(configured)
-        if parsed.hostname not in {"localhost", "127.0.0.1", "::1"}:
-            return configured.rstrip("/")
-        host = "host.docker.internal"
-        if parsed.port:
-            host = f"{host}:{parsed.port}"
-        return f"{parsed.scheme or 'http'}://{host}"
+        return configured.rstrip("/")
 
     @staticmethod
     def _control_deadline(execution_deadline: datetime) -> datetime:
@@ -468,15 +502,55 @@ class FunctionDispatcher:
         return f"Bearer {self._signer.derive(run_id)}"
 
     @staticmethod
+    def _durably_confirms_invocation(
+        dispatch: FunctionExecutionDispatch,
+        run: FunctionRunEntity,
+    ) -> bool:
+        return run.status in _TERMINAL_RUN_STATES or (
+            dispatch.mode == FunctionDispatchMode.ASYNCHRONOUS
+            and run.status == FunctionRunStatus.RUNNING
+        )
+
+    @staticmethod
     def _execution_error(exc: BaseException) -> str:
         if isinstance(exc, InvocationOutcomeUnconfirmed):
             return "Function execution failed because the runtime response was not confirmed"
         if isinstance(exc, TimeoutError):
-            return "Function execution deadline exceeded"
+            return "Function execution timed out (deadline exceeded)"
         if isinstance(exc, AgentBoxApiError):
             code = str(getattr(exc, "code", "PROVIDER_UNAVAILABLE"))
+            if code.upper() == "DEADLINE_EXCEEDED":
+                return "Function execution timed out (deadline exceeded)"
             return f"Function sandbox error ({redact_text(code)})"
         return "Function execution failed"
 
+    @staticmethod
+    def _runtime_retry_after_ms(response: httpx.Response) -> int:
+        """Read AgentBox's bounded retry hint without trusting response detail."""
+
+        try:
+            payload = response.json()
+            error = payload.get("error") if isinstance(payload, dict) else None
+            configured = (
+                error.get("retry_after_ms") if isinstance(error, dict) else None
+            )
+            if isinstance(configured, int) and not isinstance(configured, bool):
+                return max(50, min(configured, 1_000))
+        except TypeError, ValueError:
+            pass
+        return 100
+
+
 class InvocationOutcomeUnconfirmed(RuntimeError):
     """The runtime response was not confirmed; the run still terminates FAILED."""
+
+    def __init__(
+        self,
+        message: str,
+        *,
+        safe_same_operation: bool = False,
+        retry_after_ms: int | None = None,
+    ) -> None:
+        super().__init__(message)
+        self.safe_same_operation = safe_same_operation
+        self.retry_after_ms = retry_after_ms

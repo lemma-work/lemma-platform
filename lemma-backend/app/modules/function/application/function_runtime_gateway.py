@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import hashlib
 from typing import Awaitable, Callable
-from urllib.parse import urlparse
 from uuid import UUID
 
 from app.core.infrastructure.db.uow_factory import UnitOfWorkFactory
@@ -16,6 +15,7 @@ from app.modules.function.contracts.runtime import (
     RuntimeClaimRequest,
     RuntimeClaimResponse,
     RuntimeEventResponse,
+    RuntimeFailure,
     RuntimeIdentity,
     RuntimeTerminalRequest,
 )
@@ -61,7 +61,7 @@ class FunctionRuntimeGateway:
         self._storage_factory = storage_factory
         self._signer = credential_signer
         self._organization_resolver = organization_resolver
-        self._lemma_base_url = self._docker_reachable_url(lemma_base_url)
+        self._lemma_base_url = lemma_base_url.rstrip("/")
         self._delegated_tokens_enabled = delegated_tokens_enabled
 
     async def claim(
@@ -128,11 +128,11 @@ class FunctionRuntimeGateway:
     ) -> RuntimeEventResponse:
         context = await self._authorized_context(run_id, callback_token)
         logs = self._logs(request)
-        error = None
-        if request.error is not None:
-            error = redact_text(
-                f"{request.error.name}: {request.error.message}"
-            )[:16_384]
+        error = (
+            _runtime_failure_message(request.error)
+            if request.error is not None
+            else None
+        )
         async with self._uow_factory() as uow:
             _run, accepted, duplicate = await FunctionExecutionRepository(
                 uow, self._signer
@@ -182,13 +182,11 @@ class FunctionRuntimeGateway:
             return None
         return redact_text("\n".join(sections))[: 4 * 1024 * 1024]
 
-    @staticmethod
-    def _docker_reachable_url(url: str) -> str:
-        parsed = urlparse(url)
-        if parsed.hostname not in {"localhost", "127.0.0.1", "::1"}:
-            return url.rstrip("/")
-        scheme = parsed.scheme or "http"
-        host = "host.docker.internal"
-        if parsed.port:
-            host = f"{host}:{parsed.port}"
-        return f"{scheme}://{host}"
+
+def _runtime_failure_message(error: RuntimeFailure) -> str:
+    # asyncio.wait_for raises the built-in TimeoutError without a message. The
+    # runtime preserves the exception type, so normalize that empty detail into
+    # the stable timeout semantic expected by API and job function clients.
+    if error.name == "TimeoutError":
+        return "Function execution timed out (deadline exceeded)"
+    return redact_text(f"{error.name}: {error.message}")[:16_384]

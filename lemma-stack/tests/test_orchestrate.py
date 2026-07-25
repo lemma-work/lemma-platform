@@ -17,7 +17,6 @@ def _manifest(version: str):
                 for name in (
                     "backend",
                     "frontend",
-                    "agentbox",
                     "agentbox_workspace",
                     "agentbox_function",
                 )

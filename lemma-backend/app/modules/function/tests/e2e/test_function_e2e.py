@@ -111,7 +111,11 @@ async def _run_function(
         function_name,
         run_id,
     )
-    assert final_run["status"] == expected_status, final_run
+    assert final_run["status"] == expected_status, {
+        "status": final_run["status"],
+        "error": final_run.get("error"),
+        "run_id": final_run["id"],
+    }
     return final_run
 
 
@@ -624,7 +628,7 @@ async def {function_name}(ctx: FunctionContext, data: SaveExpenseInput) -> SaveE
     )
     row = record
 
-    path = Path("/workspace/function-note-{suffix}.txt")
+    path = Path("/tmp/function-note-{suffix}.txt")
     path.write_text(data.note, encoding="utf-8")
     uploaded = pod.files.upload(
         path,

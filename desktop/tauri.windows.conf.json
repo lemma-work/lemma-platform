@@ -1,0 +1,8 @@
+{
+  "bundle": {
+    "externalBin": [
+      "binaries/lemma-locald",
+      "binaries/lemma-runtime"
+    ]
+  }
+}

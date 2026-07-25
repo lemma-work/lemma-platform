@@ -39,13 +39,19 @@ class AdminContext:
     def manifest(self) -> ReleaseManifest:
         return release_manifest.load_pinned(self.paths)
 
-    def specs(self, manifest: ReleaseManifest | None = None) -> list[ServiceSpec]:
+    def specs(
+        self,
+        manifest: ReleaseManifest | None = None,
+        *,
+        host_apps: bool = False,
+    ) -> list[ServiceSpec]:
         return specs_mod.build_specs(
             self.config,
             self.paths,
             manifest or self.manifest,
             provider=self.provider,
             host_socket=self.runtime.socket_path(),
+            host_apps=host_apps,
         )
 
     def save_config(self) -> None:

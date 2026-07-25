@@ -5,7 +5,6 @@ from __future__ import annotations
 import asyncio
 from datetime import datetime, timedelta, timezone
 from typing import Optional
-from urllib.parse import urlparse
 from uuid import UUID, uuid4
 
 from app.core.config import settings
@@ -121,40 +120,10 @@ class WorkspaceSandboxService:
 
     @staticmethod
     def resolve_workspace_api_url_for_runtime(runtime: str) -> str:
+        del runtime
         if settings.workspace_callback_api_url:
             return settings.workspace_callback_api_url
-        return WorkspaceSandboxService.resolve_workspace_host_url_for_runtime(
-            runtime,
-            settings.cli_api_url or settings.api_url,
-        )
-
-    @staticmethod
-    def _is_loopback_host(hostname: str | None) -> bool:
-        if not hostname:
-            return False
-        if hostname in {"localhost", "127.0.0.1", "0.0.0.0"}:
-            return True
-        # The local dev stack addresses the host via the sslip.io dashed-IP
-        # loopback alias (e.g. 127-0-0-1.sslip.io -> 127.0.0.1). From inside a
-        # container that still points at the container itself, so it must be
-        # rewritten to host.docker.internal like any other loopback host.
-        if hostname.endswith(".sslip.io"):
-            candidate = hostname.split(".", 1)[0].replace("-", ".")
-            return candidate.startswith("127.") or candidate == "0.0.0.0"
-        return False
-
-    @staticmethod
-    def resolve_workspace_host_url_for_runtime(runtime: str, url: str) -> str:
-        if runtime not in {"docker", "agentbox"}:
-            return url
-        parsed = urlparse(url)
-        if not WorkspaceSandboxService._is_loopback_host(parsed.hostname):
-            return url
-        scheme = parsed.scheme or "http"
-        netloc = "host.docker.internal"
-        if parsed.port:
-            netloc = f"{netloc}:{parsed.port}"
-        return f"{scheme}://{netloc}"
+        return settings.cli_api_url or settings.api_url
 
     async def _delete_sandbox(
         self, user_id: UUID, sandbox_info: SandboxInfo | None
@@ -261,10 +230,14 @@ class WorkspaceSandboxService:
             delegated_tokens_enabled=settings.authz_delegated_tokens_enabled,
         )
         api_url = self._resolve_workspace_api_url()
-        auth_url = self._resolve_workspace_host_url(
-            settings.cli_auth_frontend_url or settings.auth_frontend_url
+        auth_url = (
+            settings.workspace_callback_auth_url
+            or settings.cli_auth_frontend_url
+            or settings.auth_frontend_url
         )
-        host_origin = self._resolve_workspace_host_url(settings.frontend_url)
+        host_origin = (
+            settings.workspace_callback_frontend_url or settings.frontend_url
+        )
 
         resolved_org_id = (
             str(organization_id)
@@ -291,9 +264,6 @@ class WorkspaceSandboxService:
         )
 
         return await resolve_workspace_organization_id(pod_id)
-
-    def _resolve_workspace_host_url(self, url: str) -> str:
-        return self.resolve_workspace_host_url_for_runtime(self.runtime, url)
 
     async def get_session(
         self,
