@@ -26,7 +26,6 @@ class Settings(BaseSettings):
     otel_service_namespace: str | None = None
     otel_exporter_otlp_protocol: str = "grpc"
     otel_exporter_otlp_endpoint: str | None = None
-    containerapp_otel_tracing_grpc_endpoint: str | None = None
     otel_exporter_otlp_headers: str | None = None
     otel_exporter_otlp_traces_endpoint: str | None = None
     otel_exporter_otlp_metrics_endpoint: str | None = None

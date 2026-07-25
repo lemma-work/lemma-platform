@@ -376,24 +376,17 @@ def _signal_protocol(signal: str) -> str:
 
 
 def _otlp_signal_endpoint(signal: str) -> str | None:
-    """Resolve standard signal endpoints, then the ACA managed trace endpoint."""
+    """Resolve standard signal endpoints without adding HTTP paths to gRPC."""
     settings = _get_settings()
     specific = getattr(settings, f"otel_exporter_otlp_{signal}_endpoint")
     if specific:
         return specific
     base = settings.otel_exporter_otlp_endpoint
-    protocol = _signal_protocol(signal)
-    if base:
-        if protocol == "grpc":
-            return base
-        return f"{base.rstrip('/')}/v1/{signal}"
-    if (
-        signal == "traces"
-        and protocol == "grpc"
-        and settings.containerapp_otel_tracing_grpc_endpoint
-    ):
-        return settings.containerapp_otel_tracing_grpc_endpoint
-    return None
+    if not base:
+        return None
+    if _signal_protocol(signal) == "grpc":
+        return base
+    return f"{base.rstrip('/')}/v1/{signal}"
 
 
 def _otlp_signal_headers(signal: str) -> dict[str, str] | None:

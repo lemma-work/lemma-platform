@@ -11,7 +11,7 @@ from opentelemetry.sdk.trace.export.in_memory_span_exporter import (
 import pytest
 
 from agentbox.api.app import RequestContextMiddleware
-from agentbox.config import Settings, settings
+from agentbox.config import settings
 import agentbox.telemetry as telemetry
 
 
@@ -62,70 +62,10 @@ def test_enabled_exporter_requires_managed_endpoint(monkeypatch) -> None:
     monkeypatch.setattr(settings, "otel_traces_exporter", "otlp")
     monkeypatch.setattr(settings, "otel_exporter_otlp_endpoint", None)
     monkeypatch.setattr(settings, "otel_exporter_otlp_traces_endpoint", None)
-    monkeypatch.setattr(settings, "containerapp_otel_tracing_grpc_endpoint", None)
     monkeypatch.setattr(telemetry, "_trace_provider", None)
 
     with pytest.raises(RuntimeError, match="managed OTLP endpoint is missing"):
         telemetry.setup_telemetry()
-
-
-def test_trace_endpoint_prefers_standard_config_over_aca_fallback(monkeypatch) -> None:
-    monkeypatch.setattr(
-        settings,
-        "containerapp_otel_tracing_grpc_endpoint",
-        "http://aca-agent:4317/v1/traces",
-    )
-    monkeypatch.setattr(
-        settings, "otel_exporter_otlp_traces_endpoint", "http://standard-traces:4317"
-    )
-    monkeypatch.setattr(settings, "otel_exporter_otlp_endpoint", "http://base:4317")
-    monkeypatch.setattr(settings, "otel_exporter_otlp_protocol", "grpc")
-    monkeypatch.setattr(settings, "otel_exporter_otlp_traces_protocol", None)
-
-    assert telemetry._trace_endpoint() == "http://standard-traces:4317"
-    monkeypatch.setattr(settings, "otel_exporter_otlp_traces_endpoint", None)
-    assert telemetry._trace_endpoint() == "http://base:4317"
-
-
-def test_trace_endpoint_uses_aca_fallback_only_for_grpc(monkeypatch) -> None:
-    endpoint = "http://aca-agent:4317/v1/traces"
-    monkeypatch.setattr(settings, "containerapp_otel_tracing_grpc_endpoint", endpoint)
-    monkeypatch.setattr(settings, "otel_exporter_otlp_traces_endpoint", None)
-    monkeypatch.setattr(settings, "otel_exporter_otlp_endpoint", None)
-    monkeypatch.setattr(settings, "otel_exporter_otlp_protocol", "grpc")
-    monkeypatch.setattr(settings, "otel_exporter_otlp_traces_protocol", None)
-
-    assert telemetry._trace_endpoint() == endpoint
-
-    monkeypatch.setattr(settings, "otel_exporter_otlp_protocol", "http/protobuf")
-    assert telemetry._trace_endpoint() is None
-
-
-def test_aca_managed_trace_endpoint_loads_from_environment(monkeypatch) -> None:
-    endpoint = "http://k8se-otel.k8se-apps.svc.cluster.local:4317/v1/traces"
-    monkeypatch.setenv("CONTAINERAPP_OTEL_TRACING_GRPC_ENDPOINT", endpoint)
-
-    configured = Settings(
-        _env_file=None,
-        agentbox_api_key="test-key",
-        agentbox_api_url="http://agentbox.test",
-    )
-
-    assert configured.containerapp_otel_tracing_grpc_endpoint == endpoint
-
-
-def test_aca_trace_url_is_accepted_by_python_grpc_exporter(monkeypatch) -> None:
-    endpoint = "http://k8se-otel.k8se-apps.svc.cluster.local:4317/v1/traces"
-    monkeypatch.setattr(settings, "otel_exporter_otlp_protocol", "grpc")
-    monkeypatch.setattr(settings, "otel_exporter_otlp_traces_protocol", None)
-    monkeypatch.setattr(settings, "otel_exporter_otlp_headers", None)
-    monkeypatch.setattr(settings, "otel_exporter_otlp_traces_headers", None)
-
-    exporter = telemetry._span_exporter(endpoint)
-    try:
-        assert exporter._endpoint == "k8se-otel.k8se-apps.svc.cluster.local:4317"
-    finally:
-        exporter.shutdown()
 
 
 def test_fastapi_owns_w3c_extraction_and_exports_only_safe_route(

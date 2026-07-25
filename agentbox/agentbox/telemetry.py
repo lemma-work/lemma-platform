@@ -47,7 +47,6 @@ from opentelemetry.trace.propagation.tracecontext import (
 )
 
 from agentbox.config import settings
-
 _SHA_RE = re.compile(r"^[0-9a-f]{40}$")
 _SAFE_NAME_RE = re.compile(r"^[a-z][a-z0-9_]*(?:\.[a-z][a-z0-9_]*)+$")
 _SAFE_IDENTITY_RE = re.compile(r"^[A-Za-z0-9_.-]{1,128}$")
@@ -109,14 +108,11 @@ def _trace_endpoint() -> str | None:
     if settings.otel_exporter_otlp_traces_endpoint:
         return settings.otel_exporter_otlp_traces_endpoint
     endpoint = settings.otel_exporter_otlp_endpoint
-    protocol = _trace_protocol()
-    if endpoint:
-        if protocol == "grpc":
-            return endpoint
-        return f"{endpoint.rstrip('/')}/v1/traces"
-    if protocol == "grpc":
-        return settings.containerapp_otel_tracing_grpc_endpoint
-    return None
+    if not endpoint:
+        return None
+    if _trace_protocol() == "grpc":
+        return endpoint
+    return f"{endpoint.rstrip('/')}/v1/traces"
 
 
 def _parse_headers(raw: str | None) -> dict[str, str] | None:
