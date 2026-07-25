@@ -25,8 +25,8 @@ from app.core.infrastructure.db.uow_factory import UnitOfWorkFactory
 from app.core.log.log import get_logger
 from app.core.redaction import redact_text
 from app.core.request_context import create_inherited_task
-from app.modules.function.application.function_callback_credentials import (
-    FunctionCallbackCredentialSigner,
+from app.modules.function.application.function_runtime_credentials import (
+    FunctionRuntimeCapabilitySigner,
 )
 from app.modules.function.application.function_session_token_cache import (
     FunctionSessionTokenCache,
@@ -78,7 +78,7 @@ class FunctionDispatcher:
         self,
         *,
         uow_factory: UnitOfWorkFactory,
-        credential_signer: FunctionCallbackCredentialSigner,
+        credential_signer: FunctionRuntimeCapabilitySigner,
         agentbox_client_factory: AgentBoxClientFactory,
         token_minter: TokenMinter,
         token_cache: FunctionSessionTokenCache,

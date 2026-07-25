@@ -40,6 +40,18 @@ def _credential(
     return credentials.credentials
 
 
+def _revision_hash(request: Request) -> str:
+    value = request.headers.get("if-match", "").strip()
+    if len(value) >= 2 and value[0] == value[-1] == '"':
+        value = value[1:-1]
+    if not value.startswith("sha256:") or len(value) != 71:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="If-Match must contain an exact sha256 revision hash",
+        )
+    return value
+
+
 @router.post("/runs/{run_id}:claim", response_model=RuntimeClaimResponse)
 async def claim_run(
     run_id: UUID,
@@ -82,6 +94,28 @@ async def download_artifact(
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED) from exc
     except RuntimeArtifactCorrupt as exc:
         raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE) from exc
+    return Response(content=data, media_type="application/zip")
+
+
+@router.get("/functions/{function_id}/artifact", response_class=Response)
+async def download_definition_artifact(
+    function_id: UUID,
+    request: Request,
+    gateway: FunctionRuntimeGatewayDep,
+    credential: str = Depends(_credential),
+) -> Response:
+    try:
+        data = await gateway.definition_artifact(
+            function_id,
+            _revision_hash(request),
+            credential,
+        )
+    except RuntimeCredentialRejected as exc:
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED) from exc
+    except (FileNotFoundError, RuntimeArtifactCorrupt) as exc:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE
+        ) from exc
     return Response(content=data, media_type="application/zip")
 
 

@@ -7,8 +7,8 @@ from uuid import uuid4
 
 import pytest
 
-from app.modules.function.application.function_callback_credentials import (
-    FunctionCallbackCredentialSigner,
+from app.modules.function.application.function_runtime_credentials import (
+    FunctionRuntimeCapabilitySigner,
 )
 from app.modules.function.application.function_runtime_gateway import (
     FunctionRuntimeGateway,
@@ -68,7 +68,7 @@ async def test_gateway_releases_database_before_identity_and_storage_io(
 ) -> None:
     artifact = b"immutable artifact"
     context = _context(artifact)
-    signer = FunctionCallbackCredentialSigner("g" * 32)
+    signer = FunctionRuntimeCapabilitySigner("g" * 32)
     state = _UowState()
     terminal_calls = []
 
@@ -140,6 +140,24 @@ async def test_gateway_releases_database_before_identity_and_storage_io(
     assert claim.lemma_token == function_token
     assert claim.lemma_base_url == "http://127.0.0.1:8711"
     assert await gateway.artifact(context.run_id, claim.callback_token) == artifact
+    compilation_token = signer.derive_compilation(
+        context.function_id,
+        context.revision_hash,
+    )
+    assert (
+        await gateway.definition_artifact(
+            context.function_id,
+            context.revision_hash,
+            compilation_token,
+        )
+        == artifact
+    )
+    with pytest.raises(RuntimeCredentialRejected):
+        await gateway.definition_artifact(
+            context.function_id,
+            context.revision_hash,
+            "wrong-compilation-token",
+        )
 
     terminal_request = RuntimeTerminalRequest(
         status="completed",

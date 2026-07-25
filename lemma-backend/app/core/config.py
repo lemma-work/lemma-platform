@@ -824,7 +824,7 @@ class Settings(BaseSettings):
     )
     function_runtime_secret: Optional[SecretStr] = Field(
         default=None,
-        description="HMAC key deriving restart-stable run callback credentials",
+        description="HMAC key deriving restart-stable function runtime capabilities",
     )
     function_session_token_cache_ttl_seconds: int = Field(
         default=300,

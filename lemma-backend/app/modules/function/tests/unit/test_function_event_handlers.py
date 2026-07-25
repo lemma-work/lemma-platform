@@ -141,7 +141,7 @@ async def test_worker_error_fallback_terminalizes_the_same_run(monkeypatch) -> N
     monkeypatch.setattr(handlers, "FunctionExecutionRepository", _Repository)
     monkeypatch.setattr(
         "app.modules.function.api.dependencies."
-        "build_function_callback_credential_signer",
+        "build_function_runtime_capability_signer",
         lambda: signer,
     )
 

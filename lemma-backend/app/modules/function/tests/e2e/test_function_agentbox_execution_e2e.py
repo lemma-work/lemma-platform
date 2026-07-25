@@ -17,8 +17,8 @@ from app.modules.function.api.dependencies import get_function_storage_factory
 from app.modules.function.application.function_artifact_builder import (
     FunctionArtifactBuilder,
 )
-from app.modules.function.application.function_callback_credentials import (
-    FunctionCallbackCredentialSigner,
+from app.modules.function.application.function_runtime_credentials import (
+    FunctionRuntimeCapabilitySigner,
 )
 from app.modules.function.application.function_dispatcher import FunctionDispatcher
 from app.modules.function.application.function_runtime_endpoint_cache import (
@@ -189,7 +189,7 @@ async def test_api_and_job_execute_through_one_per_pod_docker_sandbox(
         runtime_http_clients = FunctionRuntimeHttpClientPool()
         dispatcher = FunctionDispatcher(
             uow_factory=SessionUnitOfWorkFactory(db_manager.session_factory),
-            credential_signer=FunctionCallbackCredentialSigner(secret),
+            credential_signer=FunctionRuntimeCapabilitySigner(secret),
             agentbox_client_factory=client_factory,
             token_minter=mint_workspace_token,
             token_cache=FunctionSessionTokenCache(),

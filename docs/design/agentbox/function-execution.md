@@ -111,6 +111,12 @@ Dependencies are resolved with `uv` before the function becomes `READY`.
 Invocation never runs `pip install`, `uv pip install`, or arbitrary package-manager
 commands.
 
+The builder writes the immutable artifact before schema extraction. The backend
+then ensures `(FUNCTION, pod_id)` and asks the resident function runtime to inspect
+that exact artifact in a disposable revision worker. Definition compilation never
+creates a user workspace session, mounts `/workspace`, or acquires persistent
+workspace storage.
+
 ## 5. Invocation protocol
 
 AgentBox creates short-lived authenticated access to the private runtime port. The

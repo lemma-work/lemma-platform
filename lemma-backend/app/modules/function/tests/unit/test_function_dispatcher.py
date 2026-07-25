@@ -22,8 +22,8 @@ from agentbox_client.models import (
     WorkloadKind,
 )
 
-from app.modules.function.application.function_callback_credentials import (
-    FunctionCallbackCredentialSigner,
+from app.modules.function.application.function_runtime_credentials import (
+    FunctionRuntimeCapabilitySigner,
 )
 from app.modules.function.application.function_dispatcher import FunctionDispatcher
 from app.modules.function.application.function_runtime_endpoint_cache import (
@@ -133,7 +133,7 @@ def _sandbox_client(
 
 def _dispatcher(
     tracker: _UowTracker,
-    signer: FunctionCallbackCredentialSigner,
+    signer: FunctionRuntimeCapabilitySigner,
     client_factory,
 ) -> FunctionDispatcher:
     return FunctionDispatcher(
@@ -264,7 +264,7 @@ async def test_dispatcher_invokes_run_once_and_holds_no_db_during_io(
         "app.modules.function.application.function_dispatcher.httpx.AsyncClient",
         lambda **_kwargs: _RuntimeClient(),
     )
-    signer = FunctionCallbackCredentialSigner("d" * 32)
+    signer = FunctionRuntimeCapabilitySigner("d" * 32)
     result = await _dispatcher(
         tracker,
         signer,
@@ -344,7 +344,7 @@ async def test_job_returns_after_runtime_claim_without_polling_terminal(
         "app.modules.function.application.function_dispatcher.httpx.AsyncClient",
         lambda **_kwargs: _RuntimeClient(),
     )
-    signer = FunctionCallbackCredentialSigner("j" * 32)
+    signer = FunctionRuntimeCapabilitySigner("j" * 32)
     result = await _dispatcher(
         tracker,
         signer,
@@ -411,7 +411,7 @@ async def test_lost_response_reconciles_terminal_callback_without_failing(
     )
     result = await _dispatcher(
         tracker,
-        FunctionCallbackCredentialSigner("e" * 32),
+        FunctionRuntimeCapabilitySigner("e" * 32),
         _sandbox_client(tracker, dispatch),
     ).execute(dispatch.run_id, mode=FunctionDispatchMode.SYNCHRONOUS)
 
@@ -469,7 +469,7 @@ async def test_lost_job_ack_reconciles_durable_runtime_claim_without_failing(
     )
     result = await _dispatcher(
         tracker,
-        FunctionCallbackCredentialSigner("k" * 32),
+        FunctionRuntimeCapabilitySigner("k" * 32),
         _sandbox_client(tracker, dispatch),
     ).execute(dispatch.run_id, mode=FunctionDispatchMode.ASYNCHRONOUS)
 
@@ -542,7 +542,7 @@ async def test_lost_job_request_retries_same_operation_once(
     )
     result = await _dispatcher(
         tracker,
-        FunctionCallbackCredentialSigner("l" * 32),
+        FunctionRuntimeCapabilitySigner("l" * 32),
         _sandbox_client(tracker, dispatch),
     ).execute(dispatch.run_id, mode=FunctionDispatchMode.ASYNCHRONOUS)
 
@@ -623,7 +623,7 @@ async def test_retryable_runtime_proxy_failure_retries_same_job_once(
     )
     result = await _dispatcher(
         tracker,
-        FunctionCallbackCredentialSigner("m" * 32),
+        FunctionRuntimeCapabilitySigner("m" * 32),
         _sandbox_client(tracker, dispatch),
     ).execute(dispatch.run_id, mode=FunctionDispatchMode.ASYNCHRONOUS)
 
@@ -641,7 +641,7 @@ async def test_repeated_lost_response_fails_and_cancels_exact_run(
     failed = _run(dispatch, FunctionRunStatus.FAILED)
     fail_errors: list[str] = []
     calls = {"invoke": 0, "cancel": 0}
-    signer = FunctionCallbackCredentialSigner("f" * 32)
+    signer = FunctionRuntimeCapabilitySigner("f" * 32)
 
     class _ExecutionRepository:
         def __init__(self, _uow, _signer):
@@ -717,7 +717,7 @@ async def test_cancel_targets_exact_run_then_persists_cancelled(monkeypatch) -> 
     tracker = _UowTracker()
     dispatch = _dispatch()
     cancelled = _run(dispatch, FunctionRunStatus.CANCELLED)
-    signer = FunctionCallbackCredentialSigner("g" * 32)
+    signer = FunctionRuntimeCapabilitySigner("g" * 32)
     persisted = False
 
     class _ExecutionRepository:
