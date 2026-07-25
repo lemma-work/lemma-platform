@@ -647,7 +647,7 @@ async def test_custom_bot_scope_and_system_bot_threads_do_not_cross(
         receiver_surface_ids=[custom_surface_id],
     )
     assert isinstance(non_member_ctx, SurfaceReplyContext)
-    assert f"/pods/{pod_id}" in (non_member_ctx.reply_message or "")
+    assert f"/pod/{pod_id}" in (non_member_ctx.reply_message or "")
 
     unknown_external = _external_id(platform, 703)
     unresolved_ctx = await _prepare_platform_dm(

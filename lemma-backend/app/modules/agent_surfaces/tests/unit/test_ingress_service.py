@@ -374,9 +374,19 @@ async def test_prepare_webhook_avoids_pod_access_link_for_system_non_member():
     service.conversation_service.create_conversation.assert_not_called()
 
 
-async def test_prepare_webhook_returns_pod_access_link_for_custom_non_member():
+async def test_prepare_webhook_returns_pod_access_link_for_custom_non_member(
+    monkeypatch,
+):
     """A custom/bound bot maps to one configured surface, so the pod target is
     explicit and the access link is safe to show."""
+    from app.core.config import settings as app_settings
+
+    monkeypatch.setattr(app_settings, "frontend_url", "https://app.example.test/")
+    monkeypatch.setattr(
+        app_settings,
+        "auth_frontend_url",
+        "https://auth.example.test/auth/",
+    )
     surface = _telegram_surface()
     surface.credential_mode = SurfaceCredentialMode.CUSTOM
     event = ParsedInboundSurfaceEvent(
@@ -419,7 +429,10 @@ async def test_prepare_webhook_returns_pod_access_link_for_custom_non_member():
     assert isinstance(context, SurfaceReplyContext)
     assert context.reply_kind == "pod_access"
     assert "Request access" in (context.reply_message or "")
-    assert str(surface.pod_id) in (context.reply_message or "")
+    assert context.reply_message.endswith(
+        f"https://app.example.test/pod/{surface.pod_id}"
+    )
+    assert "auth.example.test" not in context.reply_message
     service.conversation_service.create_conversation.assert_not_called()
 
 

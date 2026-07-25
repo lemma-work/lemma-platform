@@ -12,7 +12,7 @@ from uuid import uuid4
 import pytest
 from pydantic_ai import Agent
 from pydantic_ai.capabilities import ToolSearch
-from pydantic_ai.messages import ModelResponse, TextPart
+from pydantic_ai.messages import ModelResponse, SystemPromptPart, TextPart
 from pydantic_ai.models.function import AgentInfo, FunctionModel
 from pydantic_ai.toolsets import FunctionToolset
 
@@ -308,6 +308,7 @@ async def test_current_time_and_deferral_in_real_run():
         captured["settings"] = dict(info.model_settings or {})
         parts = messages[-1].parts
         captured["last_text"] = " ".join(getattr(part, "content", "") for part in parts)
+        captured["last_part"] = parts[-1]
         return ModelResponse(parts=[TextPart("done")])
 
     conversation_id = uuid4()
@@ -328,6 +329,10 @@ async def test_current_time_and_deferral_in_real_run():
     assert captured["defer"]["hidden_tool"] is True
     # Current time rides as the trailing (system) message, not the system prompt.
     assert "Current date and time:" in captured["last_text"]
+    last_part = captured["last_part"]
+    assert isinstance(last_part, SystemPromptPart)
+    assert last_part.content.startswith("<notes>")
+    assert last_part.content.endswith("</notes>")
     # Prompt-cache session affinity is applied to the request settings.
     assert captured["settings"].get("openai_user") == str(conversation_id)
 
