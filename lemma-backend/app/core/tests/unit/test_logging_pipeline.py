@@ -433,3 +433,35 @@ def test_release_and_trace_identity_are_top_level(monkeypatch, captured_stdout) 
     assert record["release.sha"] == sha
     assert record["trace_id"] == format(1, "032x")
     assert record["span_id"] == format(2, "016x")
+
+
+def test_sqlalchemy_mapper_info_noise_is_suppressed_at_info(
+    captured_stdout,
+) -> None:
+    setup_logging(
+        "development",
+        service_name="lemma-api",
+        json_logs=True,
+        log_level="INFO",
+    )
+    mapper_logger = logging.getLogger("sqlalchemy.orm.mapper.Mapper")
+
+    mapper_logger.info("mapper construction detail")
+    mapper_logger.warning("mapper warning")
+
+    records = captured_stdout()
+    assert [record["event"] for record in records] == ["mapper warning"]
+
+
+def test_sqlalchemy_mapper_debug_remains_available_when_requested(
+    captured_stdout,
+) -> None:
+    setup_logging(
+        "development",
+        service_name="lemma-api",
+        json_logs=True,
+        log_level="DEBUG",
+    )
+    logging.getLogger("sqlalchemy.orm.mapper.Mapper").debug("mapper debug detail")
+
+    assert captured_stdout()[-1]["event"] == "mapper debug detail"
