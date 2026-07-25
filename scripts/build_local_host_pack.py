@@ -150,6 +150,8 @@ def install_python(
         "--no-dev",
         "--extra",
         "local",
+        "--extra",
+        "keychain",
         "--no-emit-project",
         *(
             argument
@@ -206,7 +208,7 @@ def install_python(
         (
             "from fastmcp import FastMCP; "
             "from agentbox.adapters.lemma_local import LemmaLocalSandboxAdapter; "
-            "import local_app, markitdown, uvicorn; "
+            "import keyring, local_app, markitdown, uvicorn; "
             "assert LemmaLocalSandboxAdapter.name == 'lemma_local'; "
             "print('backend pack: import ok')"
         ),

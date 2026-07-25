@@ -208,6 +208,10 @@ fn build(
         ("TLDEXTRACT_CACHE", path_text(&tldextract_cache)?),
         ("SUPERTOKENS_TLDEXTRACT_DISABLE_HTTP", "1".to_owned()),
         ("LOCAL_EMBEDDING_CACHE_DIR", path_text(&embedding_cache)?),
+        // Desktop stores backend encryption material in the signed-in user's
+        // OS vault. Never fall back to the deterministic local-development key
+        // for a packaged installation.
+        ("SECRET_KEY_PROVIDER", "keychain".to_owned()),
         (
             "DATABASE_URL",
             format!(
@@ -708,6 +712,10 @@ mod tests {
         assert_eq!(
             manifest["services"][0]["env"]["LOCAL_EMBEDDING_CACHE_DIR"],
             path_text(&paths.root.join("state/cache/fastembed")).unwrap()
+        );
+        assert_eq!(
+            manifest["services"][0]["env"]["SECRET_KEY_PROVIDER"],
+            "keychain"
         );
         assert!(paths.root.join("state/cache/tldextract").is_dir());
         assert!(paths.root.join("state/cache/fastembed").is_dir());

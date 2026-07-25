@@ -496,9 +496,7 @@ impl Daemon {
                 let snapshot = daemon.operator_config.apply(apply)?;
                 let activate: io::Result<Value> = (|| {
                     if let Some(manager) = daemon.host_processes.as_ref() {
-                        manager.set_backend_environment(
-                            daemon.operator_config.backend_environment()?,
-                        );
+                        manager.set_backend_environment(daemon.backend_environment()?);
                         if was_running {
                             manager.restart_backend()?;
                         }
@@ -510,11 +508,9 @@ impl Daemon {
                     Err(error) => {
                         let rollback = daemon.operator_config.restore_state(previous).and_then(|_| {
                             if let Some(manager) = daemon.host_processes.as_ref() {
-                                manager.set_backend_environment(
-                                    daemon.operator_config.backend_environment()?,
-                                );
+                                manager.set_backend_environment(daemon.backend_environment()?);
                                 if was_running {
-                                    manager.start_all()?;
+                                    manager.restart_backend()?;
                                 }
                             }
                             Ok(())
@@ -796,11 +792,7 @@ impl Daemon {
         let runtime_generation = manager.prepare_runtime_generation()?;
         self.prepare_private_infra(operation_id, &runtime_generation)?;
         manager.mark_dependency_ready();
-        let mut backend_environment = self.operator_config.backend_environment()?;
-        if let Some(runtime) = self.managed_runtime.as_ref() {
-            backend_environment.extend(runtime.backend_environment()?);
-        }
-        manager.set_backend_environment(backend_environment);
+        manager.set_backend_environment(self.backend_environment()?);
         manager.start_all_with_progress(|component| {
             let (label, progress, detail, log_source) = match component {
                 "migrations" => (
@@ -875,9 +867,7 @@ impl Daemon {
             .as_ref()
             .ok_or_else(|| io::Error::other("host process manager is unavailable"))?;
         runtime.start()?;
-        let mut backend_environment = self.operator_config.backend_environment()?;
-        backend_environment.extend(runtime.backend_environment()?);
-        manager.set_backend_environment(backend_environment);
+        manager.set_backend_environment(self.backend_environment()?);
         manager.restart_all()?;
         manager.mark_dependency_ready();
 
@@ -898,6 +888,16 @@ impl Daemon {
             "release": manager.release(),
         }));
         Ok(())
+    }
+
+    fn backend_environment(&self) -> io::Result<HashMap<String, String>> {
+        let operator = self.operator_config.backend_environment()?;
+        let infrastructure = self
+            .managed_runtime
+            .as_ref()
+            .map(|runtime| runtime.backend_environment())
+            .transpose()?;
+        Ok(compose_backend_environment(operator, infrastructure))
     }
 
     fn prepare_private_infra(
@@ -1182,6 +1182,20 @@ impl Daemon {
     }
 }
 
+fn compose_backend_environment(
+    mut operator: HashMap<String, String>,
+    infrastructure: Option<HashMap<String, String>>,
+) -> HashMap<String, String> {
+    if let Some(infrastructure) = infrastructure {
+        // Infrastructure endpoints describe the currently running private
+        // runtime and must win over the static loopback defaults rendered into
+        // the host pack. Reapplying operator configuration must never discard
+        // these addresses.
+        operator.extend(infrastructure);
+    }
+    operator
+}
+
 fn runtime_operation_error_code(message: &str, fallback: &'static str) -> &'static str {
     if message.contains("restart to finish enabling WSL 2") {
         "wsl-reboot-required"
@@ -1355,7 +1369,46 @@ fn create_listener(paths: &LocalPaths) -> io::Result<LocalSocketListener> {
 
 #[cfg(test)]
 mod tests {
-    use super::{error_diagnostic_source, runtime_operation_error_code};
+    use std::collections::HashMap;
+
+    use super::{
+        compose_backend_environment, error_diagnostic_source, runtime_operation_error_code,
+    };
+
+    #[test]
+    fn operator_updates_preserve_private_runtime_endpoints() {
+        let environment = compose_backend_environment(
+            HashMap::from([
+                ("LEMMA_OPENAI_API_KEY".into(), "vault-secret".into()),
+                (
+                    "DATABASE_URL".into(),
+                    "postgresql://127.0.0.1:55432/lemma".into(),
+                ),
+            ]),
+            Some(HashMap::from([
+                (
+                    "DATABASE_URL".into(),
+                    "postgresql://192.168.64.37:5432/lemma".into(),
+                ),
+                ("REDIS_URL".into(), "redis://192.168.64.37:6379".into()),
+                (
+                    "SUPERTOKENS_CORE_URL".into(),
+                    "http://192.168.64.37:3567".into(),
+                ),
+            ])),
+        );
+
+        assert_eq!(environment["LEMMA_OPENAI_API_KEY"], "vault-secret");
+        assert_eq!(
+            environment["DATABASE_URL"],
+            "postgresql://192.168.64.37:5432/lemma"
+        );
+        assert_eq!(environment["REDIS_URL"], "redis://192.168.64.37:6379");
+        assert_eq!(
+            environment["SUPERTOKENS_CORE_URL"],
+            "http://192.168.64.37:3567"
+        );
+    }
 
     #[test]
     fn windows_runtime_errors_have_stable_user_action_codes() {
