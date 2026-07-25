@@ -28,10 +28,17 @@ def test_shared_surface_fallback_urls_use_their_matching_frontends(monkeypatch):
     )
     pod_id = uuid4()
 
-    assert signup_message().endswith("https://auth.example.test/auth")
-    assert surface_setup_message().endswith("https://app.example.test")
-    assert _pod_access_message(pod_id).endswith(
-        f"https://app.example.test/pod/{pod_id}"
+    assert signup_message() == (
+        "Please sign up before chatting with this agent. "
+        "You can get started here: https://auth.example.test/auth"
+    )
+    assert surface_setup_message() == (
+        "You're signed in, but no agent surface is configured for you yet. "
+        "Open Lemma to set up or select a surface: https://app.example.test"
+    )
+    assert _pod_access_message(pod_id) == (
+        "You're signed up, but don't have access to this workspace yet. "
+        f"Request access here: https://app.example.test/pod/{pod_id}"
     )
 
 
@@ -75,6 +82,7 @@ def test_pod_access_url_is_shared_across_every_surface_platform(
     assert context is not None
     assert context.platform is platform
     assert context.reply_kind == "pod_access"
-    assert context.reply_message.endswith(
-        f"https://app.example.test/pod/{pod_id}"
+    assert context.reply_message == (
+        "You're signed up, but don't have access to this workspace yet. "
+        f"Request access here: https://app.example.test/pod/{pod_id}"
     )
