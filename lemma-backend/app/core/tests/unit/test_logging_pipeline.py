@@ -435,8 +435,13 @@ def test_release_and_trace_identity_are_top_level(monkeypatch, captured_stdout) 
     assert record["span_id"] == format(2, "016x")
 
 
-def test_sqlalchemy_mapper_info_noise_is_suppressed_at_info(
+@pytest.mark.parametrize(
+    "logger_name",
+    ("sqlalchemy.engine.Engine", "sqlalchemy.orm.mapper.Mapper"),
+)
+def test_sqlalchemy_info_noise_is_suppressed_at_info(
     captured_stdout,
+    logger_name,
 ) -> None:
     setup_logging(
         "development",
@@ -444,17 +449,22 @@ def test_sqlalchemy_mapper_info_noise_is_suppressed_at_info(
         json_logs=True,
         log_level="INFO",
     )
-    mapper_logger = logging.getLogger("sqlalchemy.orm.mapper.Mapper")
+    sqlalchemy_logger = logging.getLogger(logger_name)
 
-    mapper_logger.info("mapper construction detail")
-    mapper_logger.warning("mapper warning")
+    sqlalchemy_logger.info("routine SQLAlchemy detail")
+    sqlalchemy_logger.warning("SQLAlchemy warning")
 
     records = captured_stdout()
-    assert [record["event"] for record in records] == ["mapper warning"]
+    assert [record["event"] for record in records] == ["SQLAlchemy warning"]
 
 
-def test_sqlalchemy_mapper_debug_remains_available_when_requested(
+@pytest.mark.parametrize(
+    "logger_name",
+    ("sqlalchemy.engine.Engine", "sqlalchemy.orm.mapper.Mapper"),
+)
+def test_sqlalchemy_debug_remains_available_when_requested(
     captured_stdout,
+    logger_name,
 ) -> None:
     setup_logging(
         "development",
@@ -462,6 +472,6 @@ def test_sqlalchemy_mapper_debug_remains_available_when_requested(
         json_logs=True,
         log_level="DEBUG",
     )
-    logging.getLogger("sqlalchemy.orm.mapper.Mapper").debug("mapper debug detail")
+    logging.getLogger(logger_name).debug("SQLAlchemy debug detail")
 
-    assert captured_stdout()[-1]["event"] == "mapper debug detail"
+    assert captured_stdout()[-1]["event"] == "SQLAlchemy debug detail"
