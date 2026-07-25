@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import asyncio
 from collections import OrderedDict
-from contextlib import asynccontextmanager
+from contextlib import asynccontextmanager, suppress
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 import hashlib
@@ -358,14 +358,11 @@ class FunctionRuntimeService:
                 process.communicate(),
                 timeout=max(0.01, remaining),
             )
-        except BaseException:
+        finally:
             if process.returncode is None:
-                try:
+                with suppress(ProcessLookupError):
                     os.killpg(process.pid, signal.SIGKILL)
-                except ProcessLookupError:
-                    pass
                 await process.wait()
-            raise
         if len(stdout) > _MAX_SCHEMA_BYTES:
             raise ValueError("function schemas exceed the runtime limit")
         try:

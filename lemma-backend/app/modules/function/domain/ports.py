@@ -90,7 +90,8 @@ class FunctionSchemaExecutionPort(Protocol):
         function_id: UUID,
         pod_id: UUID,
         artifact: FunctionArtifact,
-    ) -> FunctionSchemaSet: ...
+    ) -> FunctionSchemaSet:
+        raise NotImplementedError
 
 
 class FunctionRunQueuePort(Protocol):

@@ -256,7 +256,7 @@ def inspect_schemas(root: Path) -> int:
             ),
         )
         response = SchemaInspection(ok=True, schemas=schemas)
-    except BaseException as exc:
+    except (Exception, SystemExit) as exc:
         response = SchemaInspection(ok=False, error=_failure(exc))
     _write_protocol(protocol_out, response)
     return 0 if response.ok else 1

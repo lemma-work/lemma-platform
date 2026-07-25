@@ -60,6 +60,60 @@ async def test_schema_inspection_runs_in_disposable_function_worker(tmp_path) ->
     ]
 
 
+async def test_schema_inspection_reports_system_exit_from_user_import(tmp_path) -> None:
+    root = tmp_path / "revision"
+    root.mkdir()
+    (root / "manifest.json").write_text(
+        FunctionArtifactManifest(
+            runtime_abi="lemma-function-python-3.14-linux-x86_64-1",
+            builder_digest="test",
+            input_model="Input",
+            output_model="Output",
+            entrypoint="run",
+        ).model_dump_json(),
+        encoding="utf-8",
+    )
+    (root / "function.py").write_text(
+        "raise SystemExit('stop during import')\n",
+        encoding="utf-8",
+    )
+
+    result = await FunctionRuntimeService._inspect_artifact_schemas(
+        root,
+        deadline_at=datetime.now(timezone.utc) + timedelta(seconds=10),
+    )
+
+    assert result.ok is False
+    assert result.error is not None
+    assert result.error.name == "SystemExit"
+
+
+async def test_schema_inspection_kills_worker_at_deadline(tmp_path) -> None:
+    root = tmp_path / "revision"
+    root.mkdir()
+    (root / "manifest.json").write_text(
+        FunctionArtifactManifest(
+            runtime_abi="lemma-function-python-3.14-linux-x86_64-1",
+            builder_digest="test",
+            input_model="Input",
+            output_model="Output",
+            entrypoint="run",
+        ).model_dump_json(),
+        encoding="utf-8",
+    )
+    (root / "function.py").write_text(
+        "import time\n"
+        "time.sleep(5)\n",
+        encoding="utf-8",
+    )
+
+    with pytest.raises(TimeoutError):
+        await FunctionRuntimeService._inspect_artifact_schemas(
+            root,
+            deadline_at=datetime.now(timezone.utc) + timedelta(milliseconds=50),
+        )
+
+
 async def test_schema_route_uses_runtime_compilation_capability() -> None:
     app = create_app(max_workers=1, max_cached_revisions=1)
     function_id = uuid4()
