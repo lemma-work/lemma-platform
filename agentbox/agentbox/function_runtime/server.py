@@ -4,11 +4,14 @@ import asyncio
 from collections import OrderedDict
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
+from datetime import datetime, timedelta, timezone
 import hashlib
 import hmac
 import json
 import os
 from pathlib import Path
+import signal
+import sys
 from urllib.parse import urlparse
 from uuid import UUID
 
@@ -21,12 +24,20 @@ from starlette.routing import Route
 
 from agentbox.observability import create_inherited_task
 
-from .runner import GatewayClient, _resolve_artifact_root
+from .runner import (
+    GatewayClient,
+    _artifact_cache_lock,
+    _artifact_root,
+    _cached_artifact_root,
+    _resolve_artifact_root,
+    _verify_artifact,
+)
 from .runtime_models import (
     FunctionArtifactManifest,
     RunAccepted,
     RunClaim,
     RuntimeFailure,
+    SchemaInspection,
     TerminalReport,
     WorkerRequest,
 )
@@ -36,6 +47,7 @@ from .worker_pool import RevisionWorkerRegistry, RuntimeOverloaded
 
 
 _MAX_INPUT_BYTES = 1024 * 1024
+_MAX_SCHEMA_BYTES = 4 * 1024 * 1024
 _MAX_RUN_RECORDS = 4096
 
 
@@ -88,6 +100,36 @@ class FunctionRuntimeService:
             input_data=input_data,
         )
         return await asyncio.shield(run.task)
+
+    async def inspect_schemas(
+        self,
+        *,
+        compilation_token: str,
+        function_id: UUID,
+        revision_hash: str,
+        gateway_url: str,
+    ) -> SchemaInspection:
+        """Inspect an immutable artifact in a disposable function worker."""
+
+        deadline_at = datetime.now(timezone.utc) + timedelta(seconds=60)
+        gateway = await self._gateway(gateway_url)
+        digest = revision_hash.removeprefix("sha256:")
+        artifact = await gateway.definition_artifact(
+            compilation_token,
+            function_id=function_id,
+            revision_hash=revision_hash,
+        )
+        verified_digest = _verify_artifact(artifact, revision_hash)
+        root = _cached_artifact_root(digest)
+        if root is None:
+            async with _artifact_cache_lock(digest, deadline_at=deadline_at):
+                root = _cached_artifact_root(digest)
+                if root is None:
+                    root = _artifact_root(
+                        artifact,
+                        verified_digest,
+                    )
+        return await self._inspect_artifact_schemas(root, deadline_at=deadline_at)
 
     async def accept(
         self,
@@ -292,6 +334,47 @@ class FunctionRuntimeService:
                 await self._mark_rejected(run_id, exc)
             raise
 
+    @staticmethod
+    async def _inspect_artifact_schemas(
+        root: Path,
+        *,
+        deadline_at: datetime,
+    ) -> SchemaInspection:
+        process = await asyncio.create_subprocess_exec(
+            sys.executable,
+            "-m",
+            "agentbox.function_runtime.worker",
+            "--inspect-schemas",
+            "--artifact-root",
+            str(root),
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.DEVNULL,
+            start_new_session=True,
+            limit=_MAX_SCHEMA_BYTES,
+        )
+        try:
+            remaining = (deadline_at - datetime.now(timezone.utc)).total_seconds()
+            stdout, _stderr = await asyncio.wait_for(
+                process.communicate(),
+                timeout=max(0.01, remaining),
+            )
+        except BaseException:
+            if process.returncode is None:
+                try:
+                    os.killpg(process.pid, signal.SIGKILL)
+                except ProcessLookupError:
+                    pass
+                await process.wait()
+            raise
+        if len(stdout) > _MAX_SCHEMA_BYTES:
+            raise ValueError("function schemas exceed the runtime limit")
+        try:
+            return SchemaInspection.model_validate_json(stdout)
+        except ValueError as exc:
+            raise ValueError(
+                "function schema worker returned an invalid response"
+            ) from exc
+
     async def _mark_accepted(self, run_id: UUID, callback_token: str) -> None:
         async with self._lock:
             run = self._runs.get(run_id)
@@ -487,6 +570,41 @@ async def _invoke(request: Request) -> JSONResponse:
         return JSONResponse({"error": "function runtime failed"}, status_code=500)
 
 
+async def inspect_schemas(request: Request) -> JSONResponse:
+    with bind_trace_context(request.headers):
+        try:
+            function_id = UUID(request.path_params["function_id"])
+            service: FunctionRuntimeService = request.app.state.runtime
+            result = await service.inspect_schemas(
+                compilation_token=_bearer(request),
+                function_id=function_id,
+                revision_hash=_quoted_digest(request),
+                gateway_url=_gateway_url(request),
+            )
+            return JSONResponse(
+                result.model_dump(mode="json"),
+                status_code=200 if result.ok else 422,
+            )
+        except ValueError as exc:
+            return JSONResponse({"error": str(exc)}, status_code=422)
+        except httpx.HTTPStatusError as exc:
+            status = 401 if exc.response.status_code in {401, 403} else 502
+            return JSONResponse(
+                {"error": "runtime gateway rejected schema inspection"},
+                status_code=status,
+            )
+        except TimeoutError:
+            return JSONResponse(
+                {"error": "function schema inspection timed out"},
+                status_code=504,
+            )
+        except Exception:
+            return JSONResponse(
+                {"error": "function schema inspection failed"},
+                status_code=500,
+            )
+
+
 async def cancel(request: Request) -> JSONResponse:
     try:
         run_id = UUID(request.path_params["run_id"])
@@ -526,6 +644,11 @@ def create_app(
             Route(
                 "/functions/{function_id}/runs/{run_id}",
                 invoke,
+                methods=["POST"],
+            ),
+            Route(
+                "/functions/{function_id}/schemas",
+                inspect_schemas,
                 methods=["POST"],
             ),
             Route(

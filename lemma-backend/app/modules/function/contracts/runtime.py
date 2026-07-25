@@ -53,6 +53,26 @@ class RuntimeFailure(RuntimeContract):
     traceback: tuple[str, ...] = Field(default=(), max_length=256)
 
 
+class RuntimeFunctionSchemaSet(RuntimeContract):
+    input: JsonObject
+    output: JsonObject
+    config: JsonObject | None = None
+
+
+class RuntimeSchemaInspection(RuntimeContract):
+    ok: bool
+    schemas: RuntimeFunctionSchemaSet | None = None
+    error: RuntimeFailure | None = None
+
+    @model_validator(mode="after")
+    def validate_inspection_shape(self) -> RuntimeSchemaInspection:
+        if self.ok != (self.schemas is not None) or self.ok == (
+            self.error is not None
+        ):
+            raise ValueError("schema inspection result is inconsistent")
+        return self
+
+
 class RuntimeTerminalRequest(RuntimeContract):
     status: Literal["completed", "failed"]
     output_data: JsonObject | None = None

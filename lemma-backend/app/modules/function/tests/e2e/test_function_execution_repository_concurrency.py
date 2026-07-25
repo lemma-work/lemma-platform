@@ -7,8 +7,8 @@ from uuid import UUID, uuid7
 import pytest
 
 from app.core.infrastructure.db.uow_factory import SessionUnitOfWorkFactory
-from app.modules.function.application.function_callback_credentials import (
-    FunctionCallbackCredentialSigner,
+from app.modules.function.application.function_runtime_credentials import (
+    FunctionRuntimeCapabilitySigner,
 )
 from app.modules.function.application.function_session_token_cache import (
     FunctionSessionTokenKey,
@@ -112,7 +112,7 @@ async def test_concurrent_runtime_claim_executes_one_public_run_once(
     async with db_manager.session_factory() as session:
         run_id = await _seed_run(session, pod_id=pod_id, user_id=user_id)
 
-    signer = FunctionCallbackCredentialSigner("claim-race-secret-32-bytes-long!!")
+    signer = FunctionRuntimeCapabilitySigner("claim-race-secret-32-bytes-long!!")
     factory = SessionUnitOfWorkFactory(db_manager.session_factory)
     dispatch = await _dispatch(factory, signer, run_id)
     principal = _principal(dispatch)
@@ -158,7 +158,7 @@ async def test_claim_requires_exact_delegated_session_and_terminal_is_idempotent
     async with db_manager.session_factory() as session:
         run_id = await _seed_run(session, pod_id=pod_id, user_id=user_id)
 
-    signer = FunctionCallbackCredentialSigner("run-claim-secret-32-bytes-long!!!!")
+    signer = FunctionRuntimeCapabilitySigner("run-claim-secret-32-bytes-long!!!!")
     factory = SessionUnitOfWorkFactory(db_manager.session_factory)
     dispatch = await _dispatch(factory, signer, run_id)
     wrong = _principal(dispatch).model_copy(
@@ -235,7 +235,7 @@ async def test_expired_run_cannot_be_claimed(
             deadline_at=datetime.now(timezone.utc) - timedelta(seconds=1),
         )
 
-    signer = FunctionCallbackCredentialSigner("expired-run-secret-32-bytes-long!!")
+    signer = FunctionRuntimeCapabilitySigner("expired-run-secret-32-bytes-long!!")
     factory = SessionUnitOfWorkFactory(db_manager.session_factory)
     dispatch = await _dispatch(factory, signer, run_id)
     async with factory() as uow:
@@ -259,7 +259,7 @@ async def test_artifact_capability_expires_with_the_running_run(
     async with db_manager.session_factory() as session:
         run_id = await _seed_run(session, pod_id=pod_id, user_id=user_id)
 
-    signer = FunctionCallbackCredentialSigner("artifact-secret-32-bytes-long!!!!!")
+    signer = FunctionRuntimeCapabilitySigner("artifact-secret-32-bytes-long!!!!!")
     factory = SessionUnitOfWorkFactory(db_manager.session_factory)
     dispatch = await _dispatch(factory, signer, run_id)
     async with factory() as uow:
