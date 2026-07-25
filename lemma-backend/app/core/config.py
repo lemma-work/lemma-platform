@@ -916,6 +916,13 @@ class Settings(BaseSettings):
             "observability is enabled), all signals in `otel_signals` are exported here."
         ),
     )
+    containerapp_otel_tracing_grpc_endpoint: Optional[str] = Field(
+        default=None,
+        description=(
+            "Azure Container Apps managed-agent trace endpoint. Used only as a "
+            "gRPC trace fallback when standard OTLP endpoint variables are absent."
+        ),
+    )
     otel_exporter_otlp_headers: Optional[str] = Field(
         default=None,
         description="Comma-separated OTLP headers applied to all signals (e.g. authorization=<key>)",

@@ -18,6 +18,7 @@ from opentelemetry.trace import (
     TraceFlags,
 )
 
+from app.core.config import Settings
 from app.core.observability import telemetry
 from app.core.observability.span_sanitizer import SanitizingSpanExporter
 
@@ -42,6 +43,7 @@ def _settings(**overrides):
         "otel_metrics_exporter": "none",
         "otel_logs_exporter": "none",
         "otel_exporter_otlp_endpoint": "http://collector:4317",
+        "containerapp_otel_tracing_grpc_endpoint": None,
         "otel_exporter_otlp_protocol": "grpc",
         "otel_exporter_otlp_headers": None,
         "otel_exporter_otlp_traces_endpoint": None,
@@ -99,6 +101,69 @@ def test_signal_endpoint_resolution_obeys_otlp_protocol_rules(monkeypatch) -> No
     )
     configured.otel_exporter_otlp_traces_endpoint = "https://traces.test/custom"
     assert telemetry._otlp_signal_endpoint("traces") == ("https://traces.test/custom")
+
+
+def test_aca_managed_trace_endpoint_is_grpc_only_fallback(monkeypatch) -> None:
+    configured = _settings(
+        otel_exporter_otlp_endpoint=None,
+        containerapp_otel_tracing_grpc_endpoint=(
+            "http://k8se-otel.k8se-apps.svc.cluster.local:4317/v1/traces"
+        ),
+    )
+    monkeypatch.setattr(telemetry, "_get_settings", lambda: configured)
+
+    assert telemetry._otlp_signal_endpoint("traces") == (
+        "http://k8se-otel.k8se-apps.svc.cluster.local:4317/v1/traces"
+    )
+    assert telemetry._otlp_signal_endpoint("metrics") is None
+
+    configured.otel_exporter_otlp_protocol = "http/protobuf"
+    assert telemetry._otlp_signal_endpoint("traces") is None
+
+
+def test_aca_managed_trace_endpoint_loads_from_environment(monkeypatch) -> None:
+    endpoint = "http://k8se-otel.k8se-apps.svc.cluster.local:4317/v1/traces"
+    monkeypatch.setenv("CONTAINERAPP_OTEL_TRACING_GRPC_ENDPOINT", endpoint)
+
+    configured = Settings(_env_file=None)
+
+    assert configured.containerapp_otel_tracing_grpc_endpoint == endpoint
+
+
+def test_aca_trace_url_is_accepted_by_python_grpc_exporter() -> None:
+    exporter = telemetry._build_span_exporter(
+        "http://k8se-otel.k8se-apps.svc.cluster.local:4317/v1/traces",
+        protocol="grpc",
+    )
+    try:
+        assert exporter._endpoint == "k8se-otel.k8se-apps.svc.cluster.local:4317"
+    finally:
+        exporter.shutdown()
+
+
+def test_standard_trace_endpoint_precedes_aca_fallback(monkeypatch) -> None:
+    configured = _settings(
+        containerapp_otel_tracing_grpc_endpoint="http://aca-agent:4317/v1/traces",
+        otel_exporter_otlp_endpoint="http://standard-base:4317",
+        otel_exporter_otlp_traces_endpoint="http://standard-traces:4317",
+    )
+    monkeypatch.setattr(telemetry, "_get_settings", lambda: configured)
+
+    assert telemetry._otlp_signal_endpoint("traces") == "http://standard-traces:4317"
+    configured.otel_exporter_otlp_traces_endpoint = None
+    assert telemetry._otlp_signal_endpoint("traces") == "http://standard-base:4317"
+
+
+def test_trace_export_still_requires_a_resolved_endpoint(monkeypatch) -> None:
+    configured = _settings(
+        otel_exporter_otlp_endpoint=None,
+        containerapp_otel_tracing_grpc_endpoint=None,
+        observability_enabled=True,
+    )
+    monkeypatch.setattr(telemetry, "_get_settings", lambda: configured)
+
+    with pytest.raises(ValueError, match="traces exporter selected without"):
+        telemetry._validate_telemetry_config()
 
 
 def _adversarial_span() -> ReadableSpan:
