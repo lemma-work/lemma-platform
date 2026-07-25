@@ -225,8 +225,7 @@ async def test_ensure_requested_during_stop_waits_then_recreates() -> None:
     assert sandbox.ensure_calls == []
 
     allow_stop.set()
-    await stop
-    recreated = await ensure
+    recreated, _ = await asyncio.gather(ensure, stop)
 
     assert recreated.status == "RUNNING"
     assert len(sandbox.ensure_calls) == 1

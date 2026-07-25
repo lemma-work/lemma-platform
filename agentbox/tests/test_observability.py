@@ -7,7 +7,6 @@ from uuid import UUID
 import pytest
 
 import agentbox.api.app as app_module
-from agentbox.api.app import RequestContextMiddleware
 from agentbox.config import settings
 from agentbox.observability import current_context
 
@@ -27,7 +26,7 @@ async def _run(headers: list[tuple[bytes, bytes]]) -> tuple[dict[str, str], byte
     async def send(message):
         sent.append(message)
 
-    await RequestContextMiddleware(app)(
+    await app_module.RequestContextMiddleware(app)(
         {"type": "http", "headers": headers}, receive, send
     )
     response = next(item for item in sent if item["type"] == "http.response.start")
@@ -114,7 +113,7 @@ async def test_unhandled_request_emits_one_safe_failure_and_response_id(
         sent.append(message)
 
     with caplog.at_level(logging.ERROR):
-        await RequestContextMiddleware(failing_app)(
+        await app_module.RequestContextMiddleware(failing_app)(
             {
                 "type": "http",
                 "method": "POST",
@@ -152,7 +151,7 @@ async def test_repeated_429s_emit_one_degraded_and_one_recovered(caplog) -> None
     async def send(_message):
         return None
 
-    middleware = RequestContextMiddleware(downstream)
+    middleware = app_module.RequestContextMiddleware(downstream)
     scope = {
         "type": "http",
         "method": "PUT",
