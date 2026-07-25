@@ -309,34 +309,17 @@ async def test_display_resource_returns_browser_access_url(
     user_id = uuid4()
     calls: list[tuple[str, object]] = []
 
-    class FakeAgentBoxClient:
-        def __init__(
+    class FakeWorkspaceSandboxService:
+        async def create_browser_access(
             self,
-            *,
-            base_url: str,
-            api_key: str,
-            timeout_seconds: float,
-            context_headers_provider=None,
-        ):
-            assert callable(context_headers_provider)
-            calls.append(("init", (base_url, api_key, timeout_seconds)))
-
-        async def ensure_sandbox(self, sandbox_id: str, *, env: dict[str, str]):
-            calls.append(("ensure_sandbox", (sandbox_id, env)))
-            return SimpleNamespace(id=sandbox_id)
-
-        async def get_app_access_url(
-            self,
-            sandbox_id: str,
-            app_name: str,
+            requested_user_id: UUID,
             *,
             ttl_seconds: int,
         ):
-            calls.append(("get_app_access_url", (sandbox_id, app_name, ttl_seconds)))
+            calls.append(("create_browser_access", (requested_user_id, ttl_seconds)))
             return SimpleNamespace(
-                app="browser",
                 url="https://browser.example/access-token",
-                expires_at=1893456000,
+                expires_at=datetime(2030, 1, 1, tzinfo=timezone.utc),
             )
 
         async def close(self):
@@ -344,27 +327,8 @@ async def test_display_resource_returns_browser_access_url(
 
     monkeypatch.setattr(
         user_interaction_adapter,
-        "AgentBoxClient",
-        FakeAgentBoxClient,
-    )
-    monkeypatch.setattr(
-        user_interaction_adapter.WorkspaceSandboxService,
-        "_resolve_runtime",
-        lambda: "docker",
-    )
-    monkeypatch.setattr(
-        user_interaction_adapter.settings,
-        "workspace_callback_api_url",
-        "http://host.lemma.internal:8711",
-    )
-    monkeypatch.setattr(
-        user_interaction_adapter.settings, "agentbox_api_url", "https://agentbox.test"
-    )
-    monkeypatch.setattr(
-        user_interaction_adapter.settings, "agentbox_api_key", "agentbox-key"
-    )
-    monkeypatch.setattr(
-        user_interaction_adapter.settings, "api_url", "https://api.test"
+        "WorkspaceSandboxService",
+        FakeWorkspaceSandboxService,
     )
 
     ctx = SimpleNamespace(deps=SimpleNamespace(user_id=user_id))
@@ -380,15 +344,7 @@ async def test_display_resource_returns_browser_access_url(
     assert response.url == "https://browser.example/access-token"
     assert response.expires_at == datetime(2030, 1, 1, tzinfo=timezone.utc)
     assert calls == [
-        ("init", ("https://agentbox.test", "agentbox-key", 300.0)),
-        (
-            "ensure_sandbox",
-            (
-                user_id,
-                {"LEMMA_BASE_URL": "http://host.lemma.internal:8711"},
-            ),
-        ),
-        ("get_app_access_url", (user_id, "browser", 1800)),
+        ("create_browser_access", (user_id, 1800)),
         ("close", None),
     ]
 
