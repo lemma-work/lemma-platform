@@ -529,6 +529,87 @@ async def test_lost_job_request_retries_same_operation_once(
 
 
 @pytest.mark.asyncio
+async def test_retryable_runtime_proxy_failure_retries_same_job_once(
+    monkeypatch,
+) -> None:
+    tracker = _UowTracker()
+    dispatch = _dispatch(mode=FunctionDispatchMode.ASYNCHRONOUS)
+    pending = _run(dispatch, FunctionRunStatus.PENDING)
+    running = _run(dispatch, FunctionRunStatus.RUNNING)
+    loads = iter((pending, running))
+
+    class _ExecutionRepository:
+        def __init__(self, _uow, _signer):
+            pass
+
+        async def resolve_dispatch(self, *_args, **_kwargs):
+            return dispatch
+
+        async def fail_dispatch(self, *_args, **_kwargs):
+            raise AssertionError("retryable proxy failure must not fail the run")
+
+    class _RunRepository:
+        def __init__(self, _uow):
+            pass
+
+        async def get_run(self, _run_id):
+            return next(loads)
+
+    monkeypatch.setattr(
+        "app.modules.function.application.function_dispatcher."
+        "FunctionExecutionRepository",
+        _ExecutionRepository,
+    )
+    monkeypatch.setattr(
+        "app.modules.function.application.function_dispatcher.FunctionRunRepository",
+        _RunRepository,
+    )
+    calls = 0
+
+    class _RuntimeClient:
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *_args):
+            return None
+
+        async def post(self, url, **_kwargs):
+            nonlocal calls
+            calls += 1
+            if calls == 1:
+                return httpx.Response(
+                    502,
+                    request=httpx.Request("POST", url),
+                    json={
+                        "error": {
+                            "code": "PROVIDER_UNAVAILABLE",
+                            "retry": "wait",
+                            "retry_after_ms": 50,
+                        }
+                    },
+                )
+            return httpx.Response(
+                202,
+                request=httpx.Request("POST", url),
+                headers={"Preference-Applied": "respond-async"},
+                json={"accepted": True, "run_id": str(dispatch.run_id)},
+            )
+
+    monkeypatch.setattr(
+        "app.modules.function.application.function_dispatcher.httpx.AsyncClient",
+        lambda **_kwargs: _RuntimeClient(),
+    )
+    result = await _dispatcher(
+        tracker,
+        FunctionCallbackCredentialSigner("m" * 32),
+        _sandbox_client(tracker, dispatch),
+    ).execute(dispatch.run_id, mode=FunctionDispatchMode.ASYNCHRONOUS)
+
+    assert result.status == FunctionRunStatus.RUNNING
+    assert calls == 2
+
+
+@pytest.mark.asyncio
 async def test_repeated_lost_response_fails_and_cancels_exact_run(
     monkeypatch,
 ) -> None:

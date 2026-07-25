@@ -149,29 +149,32 @@ class FunctionRuntimeService:
                     raise ValueError(
                         "run ID was reused for a different invocation or session"
                     )
-                self._runs.move_to_end(run_id)
-                run = existing
-            else:
-                task = create_inherited_task(
-                    self._execute(
-                        function_token=function_token,
-                        function_id=function_id,
-                        revision_hash=revision_hash,
-                        run_id=run_id,
-                        gateway_url=gateway_url,
-                        input_data=input_data,
-                    )
+                if existing.acceptance_error is None:
+                    self._runs.move_to_end(run_id)
+                    return existing
+                # The previous task failed before its durable backend claim was
+                # accepted. An exact duplicate may safely retry the same run
+                # identity; accepted or active runs remain deduplicated above.
+            task = create_inherited_task(
+                self._execute(
+                    function_token=function_token,
+                    function_id=function_id,
+                    revision_hash=revision_hash,
+                    run_id=run_id,
+                    gateway_url=gateway_url,
+                    input_data=input_data,
                 )
-                task.add_done_callback(self._consume_task_result)
-                run = _Run(
-                    signature=signature,
-                    invocation_token_digest=token_digest,
-                    run_token_digest=run_token_digest,
-                    task=task,
-                    accepted=asyncio.Event(),
-                )
-                self._runs[run_id] = run
-                self._evict_completed()
+            )
+            task.add_done_callback(self._consume_task_result)
+            run = _Run(
+                signature=signature,
+                invocation_token_digest=token_digest,
+                run_token_digest=run_token_digest,
+                task=task,
+                accepted=asyncio.Event(),
+            )
+            self._runs[run_id] = run
+            self._evict_completed()
         return run
 
     async def cancel(self, run_id: UUID, callback_token: str) -> bool:

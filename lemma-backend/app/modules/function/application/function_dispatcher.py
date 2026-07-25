@@ -288,6 +288,10 @@ class FunctionDispatcher:
                     # the exact immutable run identity is safe: the runtime
                     # deduplicates run IDs and the backend claim is an atomic
                     # PENDING -> RUNNING transition.
+                    await self._wait_retry(
+                        exc.retry_after_ms,
+                        dispatch.deadline_at,
+                    )
                     current_endpoint = await self._runtime_endpoint(dispatch)
                     continue
                 raise
@@ -337,6 +341,7 @@ class FunctionDispatcher:
             raise InvocationOutcomeUnconfirmed(
                 "function invocation response was lost",
                 safe_same_operation=True,
+                retry_after_ms=100,
             ) from exc
         if response.status_code >= 500:
             await self._endpoint_cache.invalidate(
@@ -344,7 +349,9 @@ class FunctionDispatcher:
                 endpoint=endpoint,
             )
             raise InvocationOutcomeUnconfirmed(
-                f"function runtime returned {response.status_code}"
+                f"function runtime returned {response.status_code}",
+                safe_same_operation=True,
+                retry_after_ms=self._runtime_retry_after_ms(response),
             )
         if response.status_code in {401, 403, 404, 410}:
             await self._endpoint_cache.invalidate(
@@ -517,6 +524,22 @@ class FunctionDispatcher:
             return f"Function sandbox error ({redact_text(code)})"
         return "Function execution failed"
 
+    @staticmethod
+    def _runtime_retry_after_ms(response: httpx.Response) -> int:
+        """Read AgentBox's bounded retry hint without trusting response detail."""
+
+        try:
+            payload = response.json()
+            error = payload.get("error") if isinstance(payload, dict) else None
+            configured = (
+                error.get("retry_after_ms") if isinstance(error, dict) else None
+            )
+            if isinstance(configured, int) and not isinstance(configured, bool):
+                return max(50, min(configured, 1_000))
+        except TypeError, ValueError:
+            pass
+        return 100
+
 
 class InvocationOutcomeUnconfirmed(RuntimeError):
     """The runtime response was not confirmed; the run still terminates FAILED."""
@@ -526,6 +549,8 @@ class InvocationOutcomeUnconfirmed(RuntimeError):
         message: str,
         *,
         safe_same_operation: bool = False,
+        retry_after_ms: int | None = None,
     ) -> None:
         super().__init__(message)
         self.safe_same_operation = safe_same_operation
+        self.retry_after_ms = retry_after_ms
