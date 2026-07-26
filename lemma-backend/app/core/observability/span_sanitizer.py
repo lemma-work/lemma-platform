@@ -18,12 +18,37 @@ from opentelemetry.sdk.trace.export import (
     SpanExportResult,
 )
 from opentelemetry.sdk.util.instrumentation import InstrumentationScope
-from opentelemetry.trace import Link, SpanContext, Status, StatusCode, TraceState
+from opentelemetry.trace import (
+    Link,
+    SpanContext,
+    SpanKind,
+    Status,
+    StatusCode,
+    TraceState,
+)
 
 
 _SAFE_NAME_RE = re.compile(r"^[a-z][a-z0-9_]*(?:\.[a-z][a-z0-9_]*)+$")
+_SAFE_ROUTE_SEGMENT_RE = re.compile(r"^[A-Za-z][A-Za-z0-9_.-]{0,63}$")
+_SAFE_ROUTE_PARAMETER_RE = re.compile(
+    r"^\{[A-Za-z_][A-Za-z0-9_]*(?::[A-Za-z_][A-Za-z0-9_]*)?\}$"
+)
+_UUID_ROUTE_SEGMENT_RE = re.compile(
+    r"^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-5][0-9a-fA-F]{3}-"
+    r"[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}$"
+)
+_ULID_ROUTE_SEGMENT_RE = re.compile(r"^[0-9A-HJKMNP-TV-Z]{26}$")
+_HEX_ROUTE_SEGMENT_RE = re.compile(r"^[0-9a-fA-F]{8,}$")
+_TOKEN_ROUTE_SEGMENT_RE = re.compile(r"^[A-Za-z0-9_-]{16,}$")
 _MAX_STRING = 256
 _MAX_SEQUENCE = 16
+_MAX_ROUTE_SEGMENTS = 32
+_REDUNDANT_INTERNAL_SCOPE_NAMES = frozenset(
+    {
+        "opentelemetry.instrumentation.asgi",
+        "opentelemetry.instrumentation.fastapi",
+    }
+)
 
 RESOURCE_ATTRIBUTE_KEYS = frozenset(
     {
@@ -167,6 +192,44 @@ def _safe_value(value: Any) -> Any | None:
     return None
 
 
+def sanitize_http_route(value: Any) -> str | None:
+    """Keep bounded routes while rejecting common concrete identifier forms.
+
+    Instrumentation normally supplies the declared framework route (for example
+    ``/pods/{pod_id}``), but compatibility fallbacks have returned request paths
+    containing UUIDs and other high-cardinality identifiers. Route attributes
+    are labels, so UUID, ULID, numeric, digest, token-like, URL, and malformed
+    segments are omitted at the final export boundary.
+    """
+    if not isinstance(value, str) or not value.startswith("/"):
+        return None
+    if len(value) > _MAX_STRING or any(
+        marker in value for marker in ("?", "#", "%", "\\", "@", "://")
+    ):
+        return None
+    segments = [segment for segment in value.split("/") if segment]
+    if len(segments) > _MAX_ROUTE_SEGMENTS:
+        return None
+    for segment in segments:
+        if _SAFE_ROUTE_PARAMETER_RE.fullmatch(segment):
+            continue
+        if (
+            segment.isdecimal()
+            or _UUID_ROUTE_SEGMENT_RE.fullmatch(segment)
+            or _ULID_ROUTE_SEGMENT_RE.fullmatch(segment)
+            or _HEX_ROUTE_SEGMENT_RE.fullmatch(segment)
+            or (
+                _TOKEN_ROUTE_SEGMENT_RE.fullmatch(segment)
+                and any(character.isalpha() for character in segment)
+                and any(character.isdigit() for character in segment)
+            )
+        ):
+            return None
+        if not _SAFE_ROUTE_SEGMENT_RE.fullmatch(segment):
+            return None
+    return value
+
+
 def sanitize_attributes(
     attributes: Mapping[str, Any] | None,
     *,
@@ -177,7 +240,9 @@ def sanitize_attributes(
     for key, value in (attributes or {}).items():
         if key not in allowed:
             continue
-        sanitized = _safe_value(value)
+        sanitized = (
+            sanitize_http_route(value) if key == "http.route" else _safe_value(value)
+        )
         if sanitized is not None:
             safe[key] = sanitized
     return safe
@@ -284,6 +349,14 @@ class SanitizingSpanExporter(SpanExporter):
     def export(self, spans: Sequence[ReadableSpan]) -> SpanExportResult:
         safe_spans: list[ReadableSpan] = []
         for span in spans:
+            scope_name = (
+                getattr(span.instrumentation_scope, "name", None) or ""
+            ).lower()
+            if (
+                span.kind is SpanKind.INTERNAL
+                and scope_name in _REDUNDANT_INTERNAL_SCOPE_NAMES
+            ):
+                continue
             try:
                 safe_spans.append(sanitize_span(span, llm=self._llm))
             except Exception:

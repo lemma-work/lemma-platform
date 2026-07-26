@@ -66,6 +66,7 @@ from app.core.redaction import redact_text
 from app.core.observability.span_sanitizer import (
     METRIC_ATTRIBUTE_KEYS,
     SanitizingSpanExporter,
+    sanitize_http_route,
 )
 
 logger = get_logger(__name__)
@@ -780,7 +781,7 @@ def _patch_fastapi_route_details() -> None:
 
     def _safe_get_route_details(scope: Any):
         try:
-            return original(scope)
+            return sanitize_http_route(original(scope))
         except AttributeError:
             return None
 

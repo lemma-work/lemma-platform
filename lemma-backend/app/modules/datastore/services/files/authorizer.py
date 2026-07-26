@@ -254,14 +254,19 @@ class FileAuthorizer:
                 ActorType.FUNCTION,
                 ActorType.DELEGATED_USER_WORKLOAD,
             )
-            log = logger.warning if is_workload else logger.info
-            log(
-                "datastore.access.files_withheld",
-                pod_id=str(pod_id),
-                actor_type=getattr(actor_type, "value", actor_type),
-                actor_user_id=str(getattr(ctx, "user_id", None) or ""),
-                withheld_count=withheld_count,
-                total_candidates=len(items),
-            )
+            if is_workload:
+                logger.warning(
+                    "datastore.access.files_withheld",
+                    actor_type=getattr(actor_type, "value", actor_type),
+                    withheld_count=withheld_count,
+                    total_candidates=len(items),
+                )
+            else:
+                logger.info(
+                    "datastore.access.files_withheld.expected",
+                    actor_type=getattr(actor_type, "value", actor_type),
+                    withheld_count=withheld_count,
+                    total_candidates=len(items),
+                )
 
         return visible_ids
