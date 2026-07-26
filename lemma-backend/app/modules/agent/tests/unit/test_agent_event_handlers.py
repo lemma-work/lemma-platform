@@ -10,6 +10,7 @@ from app.modules.agent.domain.events import AgentRunCompletedEvent, AgentRunStop
 from app.modules.agent.events.handlers import conversation_title_job_id
 from app.modules.agent.domain.value_objects import AgentRunStatus
 from app.modules.agent.events import handlers
+from app.modules.agent.infrastructure.run_projections import StaleAgentRunRef
 from app.modules.test_support.fakes import PassthroughEventInbox
 
 
@@ -196,8 +197,8 @@ async def test_reconcile_orphaned_agent_runs_finalizes_and_publishes(
     conv1, run1 = uuid4(), uuid4()
     conv2, run2 = uuid4(), uuid4()
     stale = [
-        SimpleNamespace(id=run1, conversation_id=conv1),
-        SimpleNamespace(id=run2, conversation_id=conv2),
+        StaleAgentRunRef(id=run1, conversation_id=conv1),
+        StaleAgentRunRef(id=run2, conversation_id=conv2),
     ]
     finished: list[object] = []
     realtime: list[tuple[object, dict]] = []
