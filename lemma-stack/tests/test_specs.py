@@ -132,8 +132,7 @@ def test_embedded_agentbox_podman_wiring(config, paths, manifest):
         "postgresql+asyncpg://"
     )
     assert spec.env["AGENTBOX_STATE_DATABASE_URL"].endswith("/agentbox")
-    assert len(spec.env["FUNCTION_RUNTIME_SECRET"]) >= 32
-    assert spec.env["FUNCTION_RUNTIME_SECRET"] != spec.env["AGENTBOX_RUNTIME_CREDENTIAL_KEY"]
+    assert "FUNCTION_RUNTIME_SECRET" not in spec.env
     assert len(spec.env["AGENTBOX_RUNTIME_CREDENTIAL_KEY"]) == 44
     assert spec.env["AGENTBOX_ADD_HOST_GATEWAY"] == "false"
     assert spec.env["AGENTBOX_LOCAL_RUNTIME_TIMEOUT_SECONDS"] == "600"

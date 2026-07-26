@@ -48,13 +48,20 @@ async def test_schema_extraction_uses_stateless_function_executor() -> None:
     )
     function = _function()
     artifact = FunctionArtifact(revision_hash=f"sha256:{'a' * 64}")
+    acting_user_id = uuid4()
 
-    result = await compiler.extract_schemas(function, artifact)
+    result = await compiler.extract_schemas(
+        function,
+        artifact,
+        user_id=acting_user_id,
+    )
 
     assert result == schemas
     schema_executor.extract_schemas.assert_awaited_once_with(
         function_id=function.id,
         pod_id=function.pod_id,
+        user_id=acting_user_id,
+        function_name=function.name,
         artifact=artifact,
     )
 
@@ -71,6 +78,7 @@ async def test_schema_extraction_rejects_unpersisted_function() -> None:
         await compiler.extract_schemas(
             function,
             FunctionArtifact(revision_hash=f"sha256:{'b' * 64}"),
+            user_id=uuid4(),
         )
 
     schema_executor.extract_schemas.assert_not_awaited()

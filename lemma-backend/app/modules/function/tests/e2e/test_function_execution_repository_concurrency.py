@@ -7,9 +7,6 @@ from uuid import UUID, uuid7
 import pytest
 
 from app.core.infrastructure.db.uow_factory import SessionUnitOfWorkFactory
-from app.modules.function.application.function_runtime_credentials import (
-    FunctionRuntimeCapabilitySigner,
-)
 from app.modules.function.application.function_session_token_cache import (
     FunctionSessionTokenKey,
 )
@@ -39,6 +36,7 @@ async def _seed_run(
     pod_id: UUID,
     user_id: UUID,
     deadline_at: datetime | None = None,
+    job: bool = False,
 ) -> UUID:
     function_id = uuid7()
     run_id = uuid7()
@@ -47,10 +45,10 @@ async def _seed_run(
             id=function_id,
             pod_id=pod_id,
             user_id=user_id,
-            name=f"claim-race-{function_id.hex}",
+            name=f"execution-race-{function_id.hex}",
             input_schema={},
             output_schema={},
-            type=FunctionType.API,
+            type=FunctionType.JOB if job else FunctionType.API,
             status=FunctionStatus.READY,
             visibility="POD",
             revision_hash=_REVISION_HASH,
@@ -64,6 +62,7 @@ async def _seed_run(
             user_id=user_id,
             input_data={"value": 1},
             status=FunctionRunStatus.PENDING,
+            job_id=f"function-run:{run_id}" if job else None,
             deadline_at=deadline_at
             or datetime.now(timezone.utc) + timedelta(minutes=1),
         )
@@ -87,14 +86,13 @@ def _principal(dispatch: FunctionExecutionDispatch) -> FunctionSessionPrincipal:
         pod_id=dispatch.pod_id,
         function_id=dispatch.function_id,
         session_id=key.session_id,
+        actor_name=dispatch.function_name,
     )
 
 
-async def _dispatch(factory, signer, run_id: UUID) -> FunctionExecutionDispatch:
+async def _dispatch(factory, run_id: UUID) -> FunctionExecutionDispatch:
     async with factory() as uow:
-        resolved = await FunctionExecutionRepository(
-            uow, signer
-        ).resolve_dispatch(
+        resolved = await FunctionExecutionRepository(uow).resolve_dispatch(
             run_id,
             mode=FunctionDispatchMode.SYNCHRONOUS,
         )
@@ -102,7 +100,7 @@ async def _dispatch(factory, signer, run_id: UUID) -> FunctionExecutionDispatch:
     return resolved
 
 
-async def test_concurrent_runtime_claim_executes_one_public_run_once(
+async def test_concurrent_backend_start_executes_one_public_run_once(
     db_manager,
     test_pod,
     fixed_test_user,
@@ -112,24 +110,15 @@ async def test_concurrent_runtime_claim_executes_one_public_run_once(
     async with db_manager.session_factory() as session:
         run_id = await _seed_run(session, pod_id=pod_id, user_id=user_id)
 
-    signer = FunctionRuntimeCapabilitySigner("claim-race-secret-32-bytes-long!!")
     factory = SessionUnitOfWorkFactory(db_manager.session_factory)
-    dispatch = await _dispatch(factory, signer, run_id)
-    principal = _principal(dispatch)
+    dispatch = await _dispatch(factory, run_id)
 
-    async def claim():
+    async def start():
         async with factory() as uow:
-            return await FunctionExecutionRepository(uow, signer).claim_execution(
-                run_id,
-                principal,
-                revision_hash=dispatch.revision_hash,
-                input_data=dispatch.input_data,
-                delegated_tokens_enabled=True,
-            )
+            return await FunctionExecutionRepository(uow).start_execution(dispatch)
 
-    claims = await asyncio.gather(claim(), claim())
-    accepted = [claim for claim in claims if claim is not None]
-    assert len(accepted) == 1
+    starts = await asyncio.gather(start(), start())
+    assert len([context for context in starts if context is not None]) == 1
 
     async with db_manager.session_factory() as session:
         run = await session.get(FunctionRunModel, run_id)
@@ -139,7 +128,7 @@ async def test_concurrent_runtime_claim_executes_one_public_run_once(
 
     async with factory() as restarted_uow:
         restarted = await FunctionExecutionRepository(
-            restarted_uow, signer
+            restarted_uow
         ).resolve_dispatch(
             run_id,
             mode=FunctionDispatchMode.ASYNCHRONOUS,
@@ -148,7 +137,7 @@ async def test_concurrent_runtime_claim_executes_one_public_run_once(
     assert restarted.status == FunctionRunStatus.RUNNING
 
 
-async def test_claim_requires_exact_delegated_session_and_terminal_is_idempotent(
+async def test_terminal_requires_exact_standard_session_and_is_idempotent(
     db_manager,
     test_pod,
     fixed_test_user,
@@ -156,39 +145,45 @@ async def test_claim_requires_exact_delegated_session_and_terminal_is_idempotent
     pod_id = UUID(test_pod["id"])
     user_id = UUID(fixed_test_user["id"])
     async with db_manager.session_factory() as session:
-        run_id = await _seed_run(session, pod_id=pod_id, user_id=user_id)
+        run_id = await _seed_run(
+            session,
+            pod_id=pod_id,
+            user_id=user_id,
+            job=True,
+        )
 
-    signer = FunctionRuntimeCapabilitySigner("run-claim-secret-32-bytes-long!!!!")
     factory = SessionUnitOfWorkFactory(db_manager.session_factory)
-    dispatch = await _dispatch(factory, signer, run_id)
+    dispatch = await _dispatch(factory, run_id)
+    async with factory() as uow:
+        started = await FunctionExecutionRepository(uow).start_execution(dispatch)
+    assert started is not None
+
     wrong = _principal(dispatch).model_copy(
         update={"session_id": "function-session:wrong"}
     )
-    claim_arguments = {
-        "revision_hash": dispatch.revision_hash,
-        "input_data": dispatch.input_data,
-        "delegated_tokens_enabled": True,
-    }
-
     async with factory() as uow:
         rejected = await FunctionExecutionRepository(
-            uow, signer
-        ).claim_execution(run_id, wrong, **claim_arguments)
+            uow
+        ).authorized_runtime_context(
+            run_id,
+            wrong,
+            delegated_tokens_enabled=True,
+        )
     assert rejected is None
 
     async with factory() as uow:
         context = await FunctionExecutionRepository(
-            uow, signer
-        ).claim_execution(
+            uow
+        ).authorized_runtime_context(
             run_id,
             _principal(dispatch),
-            **claim_arguments,
+            delegated_tokens_enabled=True,
         )
     assert context is not None
 
     async with factory() as uow:
         completed, accepted, duplicate = await FunctionExecutionRepository(
-            uow, signer
+            uow
         ).complete(
             context,
             completed=True,
@@ -198,16 +193,19 @@ async def test_claim_requires_exact_delegated_session_and_terminal_is_idempotent
         )
     assert completed is not None
     assert completed.status == FunctionRunStatus.COMPLETED
-    assert accepted is True
-    assert duplicate is False
+    assert accepted and not duplicate
 
     async with factory() as uow:
         duplicate_context = await FunctionExecutionRepository(
-            uow, signer
-        ).runtime_context(run_id, signer.derive(run_id))
+            uow
+        ).authorized_runtime_context(
+            run_id,
+            _principal(dispatch),
+            delegated_tokens_enabled=True,
+        )
         assert duplicate_context is not None
         duplicate_run, accepted, duplicate = await FunctionExecutionRepository(
-            uow, signer
+            uow
         ).complete(
             duplicate_context,
             completed=True,
@@ -216,11 +214,37 @@ async def test_claim_requires_exact_delegated_session_and_terminal_is_idempotent
             logs=None,
         )
     assert duplicate_run is not None
-    assert accepted is True
-    assert duplicate is True
+    assert accepted and duplicate
 
 
-async def test_expired_run_cannot_be_claimed(
+async def test_api_run_cannot_complete_through_job_callback_authorization(
+    db_manager,
+    test_pod,
+    fixed_test_user,
+) -> None:
+    pod_id = UUID(test_pod["id"])
+    user_id = UUID(fixed_test_user["id"])
+    async with db_manager.session_factory() as session:
+        run_id = await _seed_run(session, pod_id=pod_id, user_id=user_id)
+
+    factory = SessionUnitOfWorkFactory(db_manager.session_factory)
+    dispatch = await _dispatch(factory, run_id)
+    async with factory() as uow:
+        started = await FunctionExecutionRepository(uow).start_execution(dispatch)
+    assert started is not None
+
+    async with factory() as uow:
+        context = await FunctionExecutionRepository(
+            uow
+        ).authorized_runtime_context(
+            run_id,
+            _principal(dispatch),
+            delegated_tokens_enabled=True,
+        )
+    assert context is None
+
+
+async def test_expired_run_cannot_be_started(
     db_manager,
     test_pod,
     fixed_test_user,
@@ -235,21 +259,14 @@ async def test_expired_run_cannot_be_claimed(
             deadline_at=datetime.now(timezone.utc) - timedelta(seconds=1),
         )
 
-    signer = FunctionRuntimeCapabilitySigner("expired-run-secret-32-bytes-long!!")
     factory = SessionUnitOfWorkFactory(db_manager.session_factory)
-    dispatch = await _dispatch(factory, signer, run_id)
+    dispatch = await _dispatch(factory, run_id)
     async with factory() as uow:
-        context = await FunctionExecutionRepository(uow, signer).claim_execution(
-            run_id,
-            _principal(dispatch),
-            revision_hash=dispatch.revision_hash,
-            input_data=dispatch.input_data,
-            delegated_tokens_enabled=True,
-        )
+        context = await FunctionExecutionRepository(uow).start_execution(dispatch)
     assert context is None
 
 
-async def test_artifact_capability_expires_with_the_running_run(
+async def test_artifact_authorization_is_exact_function_revision_session(
     db_manager,
     test_pod,
     fixed_test_user,
@@ -259,44 +276,60 @@ async def test_artifact_capability_expires_with_the_running_run(
     async with db_manager.session_factory() as session:
         run_id = await _seed_run(session, pod_id=pod_id, user_id=user_id)
 
-    signer = FunctionRuntimeCapabilitySigner("artifact-secret-32-bytes-long!!!!!")
     factory = SessionUnitOfWorkFactory(db_manager.session_factory)
-    dispatch = await _dispatch(factory, signer, run_id)
+    dispatch = await _dispatch(factory, run_id)
+    principal = _principal(dispatch)
     async with factory() as uow:
-        repository = FunctionExecutionRepository(uow, signer)
-        claimed = await repository.claim_execution(
-            run_id,
-            _principal(dispatch),
-            revision_hash=dispatch.revision_hash,
-            input_data=dispatch.input_data,
+        repository = FunctionExecutionRepository(uow)
+        assert await repository.authorize_definition_artifact(
+            dispatch.function_id,
+            dispatch.revision_hash,
+            principal,
             delegated_tokens_enabled=True,
         )
-    assert claimed is not None
-
-    callback_token = signer.derive(run_id)
-    async with factory() as uow:
-        repository = FunctionExecutionRepository(uow, signer)
-        active = await repository.active_runtime_context(
-            run_id,
-            callback_token,
-            now=dispatch.deadline_at - timedelta(microseconds=1),
-        )
-        expired = await repository.active_runtime_context(
-            run_id,
-            callback_token,
-            now=dispatch.deadline_at,
+        assert not await repository.authorize_definition_artifact(
+            dispatch.function_id,
+            f"sha256:{'3' * 64}",
+            principal,
+            delegated_tokens_enabled=True,
         )
 
-    assert active is not None
-    assert expired is None
 
-    async with factory() as uow:
-        count = await FunctionRunRepository(uow).fail_expired(
-            now=dispatch.deadline_at
-        )
-    assert count == 1
+async def test_running_job_receives_callback_grace_before_reconciliation(
+    db_manager,
+    test_pod,
+    fixed_test_user,
+) -> None:
+    pod_id = UUID(test_pod["id"])
+    user_id = UUID(fixed_test_user["id"])
+    deadline = datetime.now(timezone.utc) - timedelta(seconds=1)
     async with db_manager.session_factory() as session:
+        run_id = await _seed_run(
+            session,
+            pod_id=pod_id,
+            user_id=user_id,
+            deadline_at=deadline,
+            job=True,
+        )
         run = await session.get(FunctionRunModel, run_id)
-    assert run is not None
-    assert run.status == FunctionRunStatus.FAILED
-    assert run.error == "Function execution deadline exceeded"
+        assert run is not None
+        run.status = FunctionRunStatus.RUNNING
+        await session.commit()
+
+    factory = SessionUnitOfWorkFactory(db_manager.session_factory)
+    async with factory() as uow:
+        assert (
+            await FunctionRunRepository(uow).fail_expired(
+                now=deadline + timedelta(seconds=30),
+                job_callback_grace_seconds=60,
+            )
+            == 0
+        )
+    async with factory() as uow:
+        assert (
+            await FunctionRunRepository(uow).fail_expired(
+                now=deadline + timedelta(seconds=61),
+                job_callback_grace_seconds=60,
+            )
+            == 1
+        )

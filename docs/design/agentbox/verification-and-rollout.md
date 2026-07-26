@@ -289,8 +289,8 @@ It becomes a Kubernetes gate only when that deferred adapter is enabled.
 - API returns terminal result synchronously within deadline.
 - JOB returns pending and completes through callback/outbox.
 - API commits its run and dispatches directly; it never enters the worker queue.
-- JOB uses the durable backend queue. Both modes use the same run claim, runtime
-  endpoint, and per-pod sandbox.
+- JOB uses the durable backend queue. Both modes use the same atomic backend run
+  start, protocol-v2 runtime endpoint, and per-pod sandbox.
 - Five API invocations overlap through isolated warm revision workers without a
   four-slot or execution-unit admission model. Higher worker counts are exercised
   by runtime stress tests rather than treated as a public admission promise.
@@ -299,30 +299,35 @@ It becomes a Kubernetes gate only when that deferred adapter is enabled.
 - Under JOB saturation, API dispatch begins without waiting for the backend JOB
   worker because the paths are independent.
 - Queue time counts against run deadline.
-- A backend restart before JOB claim permits queue redelivery. After claim, neither
-  API nor JOB is automatically invoked again; callback or deadline reconciliation
-  finishes the same durable run.
+- A backend restart before JOB start permits queue redelivery. After start, a
+  redelivery observes `RUNNING`; the same attempt is not re-created. A single
+  ambiguous HTTP response may be retried through the exact same AgentBox grant and
+  is deduplicated by `function_run_id`.
 
 ### 6.3 Identity and permissions
 
 - One delegated function-session bearer is cached for five minutes by
   user/pod/function/revision/workload/scope inputs and used for both invocation
-  authentication and the SDK context. Grants remain live backend authorization data.
-- The bearer alone cannot create arbitrary work: it must match a backend-created
-  run and its authoritative user/pod/function/revision/input.
-- The post-claim callback/artifact capability is derived for exactly one run and
-  cannot authorize another run. Artifact reads require an active, unexpired run;
-  terminal callback replay can only acknowledge the already-durable terminal state.
+  authentication, exact-revision artifact download, the SDK context, and JOB
+  terminal reporting. Grants remain live backend authorization data.
+- The bearer is function and revision scoped. It cannot select another function,
+  another revision, or a workspace path; the backend alone constructs and starts
+  durable runs before invoking the exact pod sandbox.
+- API terminal data returns on the invocation response. JOB terminal callback
+  replay can only acknowledge the already-durable terminal state.
 - Sandbox argv/env/files contain no user/provider/cloud/object-store credential.
-- Runtime capability is limited to exact run, pod, revision, principal, and grants.
+- The delegated function session is limited to pod, function, revision, principal,
+  scope, and live grants. Exact run identity is carried separately in the
+  backend-constructed envelope and callback path.
 - Function-principal grants and invoking-user audit/RLS attribution remain correct.
-- Replayed/stolen/expired/revoked capabilities fail closed.
+- Replayed/stolen/expired/revoked delegated sessions fail closed at backend
+  artifact, SDK, and callback boundaries.
 - Cross-pod artifact/input/result/callback access is denied.
 
 ### 6.4 Results and events
 
 - Input/output schemas validate exact active revision.
-- Duplicate started/log/terminal callbacks are idempotent.
+- Duplicate JOB terminal callbacks are idempotent.
 - A late callback cannot update an already-terminal run.
 - Terminal transaction emits one completion outbox event.
 - Missing outbox event is repaired without repeating execution.
@@ -332,7 +337,7 @@ It becomes a Kubernetes gate only when that deferred adapter is enabled.
 
 - API 120-second and JOB 600-second defaults flow as absolute deadlines.
 - Runtime kills child and grandchildren at timeout.
-- Cancel before run claim makes the run terminal and starts no code.
+- Cancel before backend run start makes the run terminal and starts no code.
 - Cancel after start targets the exact run's revision-worker process group.
 - Failed termination reports `termination_confirmed=false` and remains reconciled.
 - Late success after cancel/timeout cannot alter public terminal state.
@@ -343,8 +348,7 @@ Fault inject at every boundary:
 
 - provider create accepted, response lost;
 - invocation accepted, response lost;
-- operation claimed, started callback lost;
-- external side effect completed, terminal callback lost;
+- external side effect completed, JOB terminal callback lost;
 - sandbox disappears during artifact download or execution;
 - backend/gateway database connection fails during callback.
 
@@ -352,9 +356,10 @@ Assertions:
 
 - one provider create per allocation token and at most one user-code execution per
   `function_run_id`;
-- neither AgentBox nor the backend automatically replays a claimed or possibly
-  claimed run;
-- callback or deadline reconciliation makes the same run terminal;
+- the only automatic invocation retry is one exact-grant retry after an ambiguous
+  HTTP outcome, deduplicated by the runtime's `function_run_id` registry;
+- direct API response, JOB callback, or deadline reconciliation makes the same run
+  terminal;
 - a client retry creates a new run and may repeat external side effects, just as a
   retry after an ordinary mid-function failure can;
 - zero duplicate side effects caused by platform replay of one run.
@@ -375,7 +380,7 @@ Execute malicious workspace/function fixtures that attempt:
 - terminal ANSI/OSC/control-sequence injection;
 - native-wheel and import-time malicious code;
 - runtime-control API access from user code;
-- delegated-session misuse, operation/callback capability replay, and callback
+- delegated-session misuse, cross-function/revision replay, and JOB callback
   forgery.
 
 Launch requires:
@@ -398,11 +403,11 @@ provider readiness
 resident invocation acknowledgment
 Python context creation/execution
 first output
-run claim
+backend run start
 artifact fetch/verify/cache
 revision worker acquisition
 user duration
-terminal callback persistence
+terminal persistence (direct API response or JOB callback)
 end-to-end API/JOB completion
 ```
 

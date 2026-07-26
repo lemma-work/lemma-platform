@@ -2,7 +2,10 @@
 
 from uuid import UUID
 
-from app.modules.identity.infrastructure.supertokens_auth.helpers import get_user_token
+from app.modules.identity.infrastructure.supertokens_auth.helpers import (
+    get_user_token,
+    get_user_token_with_expiry,
+)
 from app.modules.identity.infrastructure.supertokens_auth.token_factory import (
     build_delegation_claims,
 )
@@ -37,6 +40,43 @@ async def mint_workspace_token(
             scope=scope,
         )
     return await get_user_token(user_id, delegation_claims=claims)
+
+
+async def mint_function_session_token(
+    *,
+    user_id: UUID,
+    workload_type: str | None,
+    workload_id: UUID | None,
+    pod_id: UUID | None,
+    session_id: str,
+    workload_name: str | None,
+    scope: list[str] | None,
+    delegated_tokens_enabled: bool,
+):
+    """Mint the same workspace token while retaining its issuer expiry."""
+
+    from app.modules.function.application.function_session_token_cache import (
+        FunctionSessionToken,
+    )
+
+    claims = None
+    if (
+        delegated_tokens_enabled
+        and workload_type
+        and workload_id is not None
+        and pod_id is not None
+    ):
+        claims = build_delegation_claims(
+            workload_type=workload_type,
+            workload_id=workload_id,
+            pod_id=pod_id,
+            session_id=session_id,
+            invoked_by_user_id=user_id,
+            workload_name=workload_name,
+            scope=scope,
+        )
+    issued = await get_user_token_with_expiry(user_id, delegation_claims=claims)
+    return FunctionSessionToken(value=issued.value, expires_at=issued.expires_at)
 
 
 async def resolve_workspace_organization_id(pod_id: UUID | None) -> str | None:

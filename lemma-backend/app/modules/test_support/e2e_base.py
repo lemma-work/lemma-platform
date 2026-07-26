@@ -300,7 +300,6 @@ def test_redis_url(redis_container) -> str:
 @pytest.fixture(scope="session")
 def e2e_settings(test_database_url, test_redis_url, supertokens_container):
     from app.core.config import settings
-    from pydantic import SecretStr
 
     os.environ["SUPERTOKENS_ENV"] = "testing"
     settings.database_url = test_database_url
@@ -347,10 +346,8 @@ def e2e_settings(test_database_url, test_redis_url, supertokens_container):
     agentbox_key = settings.agentbox_api_key or "e2e-agentbox-key"
     settings.agentbox_api_url = agentbox_url
     settings.agentbox_api_key = agentbox_key
-    settings.function_runtime_secret = SecretStr("e2e-function-runtime-secret-32-bytes")
     os.environ["AGENTBOX_API_URL"] = agentbox_url
     os.environ["AGENTBOX_API_KEY"] = agentbox_key
-    os.environ["FUNCTION_RUNTIME_SECRET"] = "e2e-function-runtime-secret-32-bytes"
 
     # Pin the callback server to one session-wide port for the same reason as
     # AgentBox above. Queued functions are dispatched by the session-scoped

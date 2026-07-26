@@ -7,16 +7,12 @@ from uuid import uuid4
 
 import pytest
 
-from app.modules.function.application.function_runtime_credentials import (
-    FunctionRuntimeCapabilitySigner,
-)
 from app.modules.function.application.function_runtime_gateway import (
     FunctionRuntimeGateway,
     RuntimeCredentialRejected,
     _runtime_failure_message,
 )
 from app.modules.function.contracts.runtime import (
-    RuntimeClaimRequest,
     RuntimeFailure,
     RuntimeTerminalRequest,
 )
@@ -63,32 +59,47 @@ def test_runtime_timeout_without_detail_has_stable_user_facing_error() -> None:
 
 
 @pytest.mark.asyncio
-async def test_gateway_releases_database_before_identity_and_storage_io(
+async def test_gateway_uses_standard_principal_and_releases_uow_before_storage(
     monkeypatch,
 ) -> None:
     artifact = b"immutable artifact"
     context = _context(artifact)
-    signer = FunctionRuntimeCapabilitySigner("g" * 32)
     state = _UowState()
     terminal_calls = []
+    principal = FunctionSessionPrincipal(
+        user_id=context.user_id,
+        pod_id=context.pod_id,
+        function_id=context.function_id,
+        session_id="function-session:test",
+        actor_name=context.function_name,
+    )
 
     class _Repository:
-        def __init__(self, _uow, _signer):
+        def __init__(self, _uow):
             pass
 
-        async def claim_execution(self, *_args, **_kwargs):
-            return context
+        async def authorize_definition_artifact(
+            self,
+            function_id,
+            revision_hash,
+            received_principal,
+            **_kwargs,
+        ):
+            return (
+                function_id == context.function_id
+                and revision_hash == context.revision_hash
+                and received_principal == principal
+            )
 
-        async def runtime_context(self, run_id, callback_token):
-            if (
-                run_id == context.run_id
-                and callback_token == signer.derive(context.run_id)
-            ):
+        async def authorized_runtime_context(
+            self,
+            run_id,
+            received_principal,
+            **_kwargs,
+        ):
+            if run_id == context.run_id and received_principal == principal:
                 return context
             return None
-
-        async def active_runtime_context(self, run_id, callback_token):
-            return await self.runtime_context(run_id, callback_token)
 
         async def complete(self, received, **kwargs):
             duplicate = bool(terminal_calls)
@@ -107,48 +118,16 @@ async def test_gateway_releases_database_before_identity_and_storage_io(
             assert path == context.artifact_path
             return artifact
 
-    async def organization_resolver(_pod_id):
-        assert state.active == 0
-        return str(uuid4())
-
     gateway = FunctionRuntimeGateway(
         uow_factory=state.factory,
         storage_factory=lambda _function_id: _Storage(),
-        credential_signer=signer,
-        organization_resolver=organization_resolver,
-        lemma_base_url="http://127.0.0.1:8711/",
         delegated_tokens_enabled=True,
-    )
-    function_token = "delegated-function-token"
-    principal = FunctionSessionPrincipal(
-        user_id=context.user_id,
-        pod_id=context.pod_id,
-        function_id=context.function_id,
-        session_id="function-session:test",
-    )
-    claim = await gateway.claim(
-        function_token,
-        principal,
-        context.run_id,
-        RuntimeClaimRequest(
-            revision_hash=context.revision_hash,
-            input_data=context.input_data,
-        ),
-    )
-    assert claim.run_id == context.run_id
-    assert claim.callback_token == signer.derive(context.run_id)
-    assert claim.lemma_token == function_token
-    assert claim.lemma_base_url == "http://127.0.0.1:8711"
-    assert await gateway.artifact(context.run_id, claim.callback_token) == artifact
-    compilation_token = signer.derive_compilation(
-        context.function_id,
-        context.revision_hash,
     )
     assert (
         await gateway.definition_artifact(
             context.function_id,
             context.revision_hash,
-            compilation_token,
+            principal,
         )
         == artifact
     )
@@ -156,30 +135,20 @@ async def test_gateway_releases_database_before_identity_and_storage_io(
         await gateway.definition_artifact(
             context.function_id,
             context.revision_hash,
-            "wrong-compilation-token",
+            principal.model_copy(update={"function_id": uuid4()}),
         )
 
-    terminal_request = RuntimeTerminalRequest(
+    request = RuntimeTerminalRequest(
         status="completed",
         output_data={"answer": 42},
         stdout="ok",
         stderr="",
     )
-    terminal = await gateway.terminal(
-        context.run_id,
-        claim.callback_token,
-        terminal_request,
-    )
-    duplicate = await gateway.terminal(
-        context.run_id,
-        claim.callback_token,
-        terminal_request,
-    )
+    first = await gateway.terminal(context.run_id, principal, request)
+    duplicate = await gateway.terminal(context.run_id, principal, request)
 
-    assert terminal.accepted and not terminal.duplicate
+    assert first.accepted and not first.duplicate
     assert duplicate.accepted and duplicate.duplicate
     assert terminal_calls[0][1]["output_data"] == {"answer": 42}
     assert len(terminal_calls) == 2
-    with pytest.raises(RuntimeCredentialRejected):
-        await gateway.artifact(context.run_id, "wrong-callback-token")
     assert state.active == 0

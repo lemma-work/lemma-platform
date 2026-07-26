@@ -2,122 +2,257 @@ from __future__ import annotations
 
 import asyncio
 from datetime import datetime, timedelta, timezone
+from pathlib import Path
+from unittest.mock import AsyncMock
 from uuid import uuid4
 
 import httpx
 import pytest
 
 from agentbox.function_runtime.runtime_models import (
-    FunctionArtifactManifest,
     FunctionSchemaSet,
     RunAccepted,
+    RuntimeIdentity,
+    RuntimeInvocation,
     SchemaInspection,
     TerminalReport,
 )
 from agentbox.function_runtime.server import FunctionRuntimeService, create_app
-from agentbox.function_runtime.trace_context import inject_trace_context
 
 
 pytestmark = pytest.mark.asyncio
 
 
-async def test_schema_inspection_runs_in_disposable_function_worker(tmp_path) -> None:
-    root = tmp_path / "revision"
-    root.mkdir()
-    (root / "manifest.json").write_text(
-        FunctionArtifactManifest(
-            runtime_abi="lemma-function-python-3.14-linux-x86_64-1",
-            builder_digest="test",
-            input_model="Input",
-            output_model="Output",
-            entrypoint="run",
-        ).model_dump_json(),
-        encoding="utf-8",
-    )
-    (root / "function.py").write_text(
-        "from typing import Optional\n"
-        "from pydantic import BaseModel\n"
-        "class Input(BaseModel):\n"
-        "    value: int\n"
-        "class Output(BaseModel):\n"
-        "    note: Optional[str] = None\n"
-        "async def run(ctx, data):\n"
-        "    return Output()\n",
-        encoding="utf-8",
-    )
+def _invocation(function_id=None, **updates) -> RuntimeInvocation:
+    function_id = function_id or uuid4()
+    payload = {
+        "input": {"value": 7},
+        "config": {"mode": "test"},
+        "identity": RuntimeIdentity(
+            user_id=uuid4(),
+            pod_id=uuid4(),
+            function_id=function_id,
+            function_name="probe",
+        ),
+        "lemma_base_url": "https://api.lemma.test",
+        "deadline_at": datetime.now(timezone.utc) + timedelta(seconds=30),
+    }
+    payload.update(updates)
+    return RuntimeInvocation(**payload)
 
-    result = await FunctionRuntimeService._inspect_artifact_schemas(
-        root,
-        deadline_at=datetime.now(timezone.utc) + timedelta(seconds=10),
+
+def _report() -> TerminalReport:
+    return TerminalReport(
+        status="completed",
+        output_data={"answer": 42},
+        stdout="",
+        stderr="",
     )
 
-    assert result.ok is True
-    assert result.schemas is not None
-    assert result.schemas.input["properties"]["value"]["type"] == "integer"
-    assert result.schemas.output["properties"]["note"]["anyOf"] == [
-        {"type": "string"},
-        {"type": "null"},
-    ]
+
+async def test_exact_run_duplicate_reuses_task_across_token_rotation(
+    monkeypatch,
+) -> None:
+    service = FunctionRuntimeService(max_workers=1, max_cached_revisions=1)
+    function_id = uuid4()
+    run_id = uuid4()
+    invocation = _invocation(function_id)
+    execute = AsyncMock(return_value=_report())
+    monkeypatch.setattr(service, "_execute", execute)
+    parameters = {
+        "function_id": function_id,
+        "revision_hash": f"sha256:{'a' * 64}",
+        "run_id": run_id,
+        "gateway_url": "https://gateway.lemma.test",
+        "invocation": invocation,
+    }
+    try:
+        first = await service.invoke(
+            function_token="first-function-token",
+            **parameters,
+        )
+        duplicate = await service.invoke(
+            function_token="rotated-equivalent-token",
+            **parameters,
+        )
+    finally:
+        await service.close()
+
+    assert first == duplicate
+    execute.assert_awaited_once()
 
 
-async def test_schema_inspection_reports_system_exit_from_user_import(tmp_path) -> None:
-    root = tmp_path / "revision"
-    root.mkdir()
-    (root / "manifest.json").write_text(
-        FunctionArtifactManifest(
-            runtime_abi="lemma-function-python-3.14-linux-x86_64-1",
-            builder_digest="test",
-            input_model="Input",
-            output_model="Output",
-            entrypoint="run",
-        ).model_dump_json(),
-        encoding="utf-8",
+async def test_reusing_run_id_for_different_envelope_is_rejected(
+    monkeypatch,
+) -> None:
+    service = FunctionRuntimeService(max_workers=1, max_cached_revisions=1)
+    function_id = uuid4()
+    run_id = uuid4()
+    execute = AsyncMock(return_value=_report())
+    monkeypatch.setattr(service, "_execute", execute)
+    parameters = {
+        "function_token": "function-token",
+        "function_id": function_id,
+        "revision_hash": f"sha256:{'a' * 64}",
+        "run_id": run_id,
+        "gateway_url": "https://gateway.lemma.test",
+    }
+    try:
+        await service.invoke(
+            invocation=_invocation(function_id, input={"value": 1}),
+            **parameters,
+        )
+        with pytest.raises(ValueError, match="different invocation"):
+            await service.invoke(
+                invocation=_invocation(function_id, input={"value": 2}),
+                **parameters,
+            )
+    finally:
+        await service.close()
+
+
+async def test_async_accept_returns_after_local_registration(
+    monkeypatch,
+) -> None:
+    service = FunctionRuntimeService(max_workers=1, max_cached_revisions=1)
+    function_id = uuid4()
+    run_id = uuid4()
+    release = asyncio.Event()
+
+    async def execute(**_kwargs):
+        await release.wait()
+        return _report()
+
+    monkeypatch.setattr(service, "_execute", execute)
+    try:
+        accepted = await asyncio.wait_for(
+            service.accept(
+                function_token="function-token",
+                function_id=function_id,
+                revision_hash=f"sha256:{'a' * 64}",
+                run_id=run_id,
+                gateway_url="https://gateway.lemma.test",
+                invocation=_invocation(function_id),
+            ),
+            timeout=0.2,
+        )
+        assert accepted == RunAccepted(run_id=run_id)
+        assert not service._runs[run_id].task.done()
+        release.set()
+        await service._runs[run_id].task
+    finally:
+        release.set()
+        await service.close()
+
+
+async def test_cancel_matches_function_and_run_without_credential(
+    monkeypatch,
+) -> None:
+    service = FunctionRuntimeService(max_workers=1, max_cached_revisions=1)
+    function_id = uuid4()
+    run_id = uuid4()
+    started = asyncio.Event()
+
+    async def execute(**_kwargs):
+        started.set()
+        await asyncio.Future()
+
+    monkeypatch.setattr(service, "_execute", execute)
+    await service.accept(
+        function_token="function-token",
+        function_id=function_id,
+        revision_hash=f"sha256:{'a' * 64}",
+        run_id=run_id,
+        gateway_url="https://gateway.lemma.test",
+        invocation=_invocation(function_id),
     )
-    (root / "function.py").write_text(
-        "raise SystemExit('stop during import')\n",
-        encoding="utf-8",
+    await started.wait()
+    try:
+        assert not await service.cancel(uuid4(), run_id)
+        assert await service.cancel(function_id, run_id)
+        await asyncio.sleep(0)
+        assert service._runs[run_id].task.cancelled()
+    finally:
+        await service.close()
+
+
+async def test_schema_inspection_uses_function_token_and_prewarms_worker(
+    monkeypatch,
+) -> None:
+    service = FunctionRuntimeService(max_workers=1, max_cached_revisions=1)
+    function_id = uuid4()
+    revision_hash = f"sha256:{'a' * 64}"
+    root = Path("/tmp/exact-revision")
+    artifact_root = AsyncMock(return_value=root)
+    inspect = AsyncMock(
+        return_value=FunctionSchemaSet(
+            input={"type": "object"},
+            output={"type": "object"},
+            config=None,
+        )
     )
+    monkeypatch.setattr(service, "_artifact_root", artifact_root)
+    monkeypatch.setattr(service._workers, "inspect_schemas", inspect)
+    try:
+        result = await service.inspect_schemas(
+            function_token="delegated-function-token",
+            function_id=function_id,
+            revision_hash=revision_hash,
+            gateway_url="https://gateway.lemma.test",
+        )
+    finally:
+        await service.close()
 
-    result = await FunctionRuntimeService._inspect_artifact_schemas(
-        root,
-        deadline_at=datetime.now(timezone.utc) + timedelta(seconds=10),
+    assert result.ok
+    artifact_root.assert_awaited_once()
+    assert artifact_root.await_args.kwargs["function_token"] == (
+        "delegated-function-token"
     )
-
-    assert result.ok is False
-    assert result.error is not None
-    assert result.error.name == "SystemExit"
+    inspect.assert_awaited_once()
+    assert inspect.await_args.kwargs["artifact_root"] == root
 
 
-async def test_schema_inspection_kills_worker_at_deadline(tmp_path) -> None:
-    root = tmp_path / "revision"
-    root.mkdir()
-    (root / "manifest.json").write_text(
-        FunctionArtifactManifest(
-            runtime_abi="lemma-function-python-3.14-linux-x86_64-1",
-            builder_digest="test",
-            input_model="Input",
-            output_model="Output",
-            entrypoint="run",
-        ).model_dump_json(),
-        encoding="utf-8",
-    )
-    (root / "function.py").write_text(
-        "import time\n"
-        "time.sleep(5)\n",
-        encoding="utf-8",
-    )
+async def test_v2_route_forwards_complete_envelope_and_no_run_token() -> None:
+    function_id = uuid4()
+    run_id = uuid4()
+    invocation = _invocation(function_id)
+    observed = {}
 
-    with pytest.raises(TimeoutError):
-        await FunctionRuntimeService._inspect_artifact_schemas(
-            root,
-            deadline_at=datetime.now(timezone.utc) + timedelta(milliseconds=50),
+    class _Runtime:
+        async def invoke(self, **kwargs):
+            observed.update(kwargs)
+            return _report()
+
+        async def close(self):
+            return None
+
+    app = create_app(max_workers=1, max_cached_revisions=1)
+    app.state.runtime = _Runtime()
+    transport = httpx.ASGITransport(app=app)
+    async with httpx.AsyncClient(
+        transport=transport,
+        base_url="http://runtime.test",
+    ) as client:
+        response = await client.post(
+            f"/functions/{function_id}/runs/{run_id}",
+            headers={
+                "Authorization": "Bearer delegated-function-token",
+                "If-Match": f'"sha256:{"a" * 64}"',
+                "X-Lemma-Gateway-Url": "https://gateway.lemma.test",
+            },
+            json=invocation.model_dump(mode="json"),
         )
 
+    assert response.status_code == 200
+    assert observed["function_token"] == "delegated-function-token"
+    assert observed["invocation"] == invocation
+    assert "run_token" not in observed
 
-async def test_schema_route_uses_runtime_compilation_capability() -> None:
-    app = create_app(max_workers=1, max_cached_revisions=1)
+
+async def test_schema_route_forwards_same_function_token() -> None:
     function_id = uuid4()
-    observed: dict[str, object] = {}
+    revision_hash = f"sha256:{'b' * 64}"
+    observed = {}
 
     class _Runtime:
         async def inspect_schemas(self, **kwargs):
@@ -130,322 +265,25 @@ async def test_schema_route_uses_runtime_compilation_capability() -> None:
                 ),
             )
 
+        async def close(self):
+            return None
+
+    app = create_app(max_workers=1, max_cached_revisions=1)
     app.state.runtime = _Runtime()
-    revision_hash = f"sha256:{'a' * 64}"
+    transport = httpx.ASGITransport(app=app)
     async with httpx.AsyncClient(
-        transport=httpx.ASGITransport(app=app),
+        transport=transport,
         base_url="http://runtime.test",
     ) as client:
         response = await client.post(
             f"/functions/{function_id}/schemas",
             headers={
-                "Authorization": "Bearer compilation-capability",
+                "Authorization": "Bearer delegated-function-token",
                 "If-Match": f'"{revision_hash}"',
                 "X-Lemma-Gateway-Url": "https://gateway.lemma.test",
             },
         )
 
     assert response.status_code == 200
-    assert response.json()["schemas"]["input"] == {"type": "object"}
-    assert observed == {
-        "compilation_token": "compilation-capability",
-        "function_id": function_id,
-        "revision_hash": revision_hash,
-        "gateway_url": "https://gateway.lemma.test",
-    }
-
-
-async def test_run_dedup_requires_same_delegated_function_session(
-    monkeypatch,
-) -> None:
-    service = FunctionRuntimeService(max_workers=2, max_cached_revisions=1)
-    function_id = uuid4()
-    run_id = uuid4()
-    calls: list[str] = []
-
-    async def execute(**kwargs) -> TerminalReport:
-        calls.append(kwargs["function_token"])
-        return TerminalReport(
-            status="completed",
-            output_data={"ok": True},
-            stdout="",
-            stderr="",
-        )
-
-    monkeypatch.setattr(service, "_execute", execute)
-    arguments = {
-        "function_id": function_id,
-        "revision_hash": f"sha256:{'a' * 64}",
-        "run_id": run_id,
-        "run_token": "run-control-" + "a" * 32,
-        "gateway_url": "https://gateway.lemma.test",
-        "input_data": {"value": 1},
-    }
-    try:
-        first = await service.invoke(
-            function_token="delegated-session-a",
-            **arguments,
-        )
-        same = await service.invoke(
-            function_token="delegated-session-a",
-            **arguments,
-        )
-        with pytest.raises(ValueError, match="different invocation or session"):
-            await service.invoke(
-                function_token="delegated-session-b",
-                **arguments,
-            )
-        with pytest.raises(ValueError, match="different invocation or session"):
-            await service.invoke(
-                function_token="delegated-session-a",
-                **(arguments | {"run_token": "run-control-" + "z" * 32}),
-            )
-    finally:
-        await service.close()
-
-    assert first == same
-    assert calls == ["delegated-session-a"]
-
-
-async def test_gateway_claim_receives_exact_invocation_identity(monkeypatch) -> None:
-    from agentbox.function_runtime import server as server_module
-
-    function_id = uuid4()
-    run_id = uuid4()
-    input_data = {"value": 9}
-    observed: dict[str, object] = {}
-
-    class _Gateway:
-        def __init__(self, base_url: str) -> None:
-            observed["base_url"] = base_url
-
-        async def claim(self, token: str, **kwargs):
-            observed["token"] = token
-            observed.update(kwargs)
-            raise RuntimeError("stop after claim framing")
-
-        async def close(self) -> None:
-            return None
-
-    monkeypatch.setattr(server_module, "GatewayClient", _Gateway)
-    service = FunctionRuntimeService(max_workers=1, max_cached_revisions=1)
-    with pytest.raises(RuntimeError, match="stop after claim framing"):
-        await service.invoke(
-            function_token="delegated-function-session",
-            function_id=function_id,
-            revision_hash=f"sha256:{'b' * 64}",
-            run_id=run_id,
-            run_token="run-control-" + "b" * 32,
-            gateway_url="https://gateway.lemma.test",
-            input_data=input_data,
-        )
-    await service.close()
-
-    assert observed == {
-        "base_url": "https://gateway.lemma.test",
-        "token": "delegated-function-session",
-        "run_id": run_id,
-        "revision_hash": f"sha256:{'b' * 64}",
-        "input_data": input_data,
-    }
-
-
-async def test_gateway_client_is_reused_until_service_closes(monkeypatch) -> None:
-    from agentbox.function_runtime import server as server_module
-
-    created: list[str] = []
-    closed: list[str] = []
-
-    class _Gateway:
-        def __init__(self, base_url: str) -> None:
-            self.base_url = base_url
-            created.append(base_url)
-
-        async def close(self) -> None:
-            closed.append(self.base_url)
-
-    monkeypatch.setattr(server_module, "GatewayClient", _Gateway)
-    service = FunctionRuntimeService(max_workers=1, max_cached_revisions=1)
-
-    first = await service._gateway("https://gateway.lemma.test")
-    second = await service._gateway("https://gateway.lemma.test")
-    other = await service._gateway("https://other-gateway.lemma.test")
-
-    assert first is second
-    assert other is not first
-    assert created == [
-        "https://gateway.lemma.test",
-        "https://other-gateway.lemma.test",
-    ]
-    assert closed == []
-
-    await service.close()
-
-    assert closed == created
-
-
-async def test_async_accept_returns_after_claim_without_waiting_for_terminal(
-    monkeypatch,
-) -> None:
-    service = FunctionRuntimeService(max_workers=2, max_cached_revisions=1)
-    function_id = uuid4()
-    run_id = uuid4()
-    finish = asyncio.Event()
-    executions = 0
-
-    async def execute(**kwargs) -> TerminalReport:
-        nonlocal executions
-        executions += 1
-        await service._mark_accepted(kwargs["run_id"], "c" * 32)
-        await finish.wait()
-        return TerminalReport(
-            status="completed",
-            output_data={"ok": True},
-            stdout="",
-            stderr="",
-        )
-
-    monkeypatch.setattr(service, "_execute", execute)
-    arguments = {
-        "function_token": "delegated-session",
-        "function_id": function_id,
-        "revision_hash": f"sha256:{'c' * 64}",
-        "run_id": run_id,
-        "run_token": "c" * 32,
-        "gateway_url": "https://gateway.lemma.test",
-        "input_data": {"value": 2},
-    }
-    try:
-        accepted = await service.accept(**arguments)
-        duplicate = await service.accept(**arguments)
-        assert accepted == duplicate
-        assert accepted.run_id == run_id
-        assert executions == 1
-        async with service._lock:
-            assert not service._runs[run_id].task.done()
-        finish.set()
-        result = await service.invoke(**arguments)
-    finally:
-        await service.close()
-
-    assert result.status == "completed"
-
-
-async def test_exact_duplicate_retries_after_pre_acceptance_failure(
-    monkeypatch,
-) -> None:
-    service = FunctionRuntimeService(max_workers=2, max_cached_revisions=1)
-    function_id = uuid4()
-    run_id = uuid4()
-    run_token = "retry-control-" + "r" * 32
-    attempts = 0
-
-    async def execute(**kwargs) -> TerminalReport:
-        nonlocal attempts
-        attempts += 1
-        if attempts == 1:
-            error = RuntimeError("transient claim failure")
-            await service._mark_rejected(kwargs["run_id"], error)
-            raise error
-        await service._mark_accepted(kwargs["run_id"], run_token)
-        return TerminalReport(
-            status="completed",
-            output_data={"ok": True},
-            stdout="",
-            stderr="",
-        )
-
-    monkeypatch.setattr(service, "_execute", execute)
-    arguments = {
-        "function_token": "delegated-session",
-        "function_id": function_id,
-        "revision_hash": f"sha256:{'e' * 64}",
-        "run_id": run_id,
-        "run_token": run_token,
-        "gateway_url": "https://gateway.lemma.test",
-        "input_data": {"value": 4},
-    }
-    try:
-        with pytest.raises(RuntimeError, match="transient claim failure"):
-            await service.accept(**arguments)
-        accepted = await service.accept(**arguments)
-        result = await service.invoke(**arguments)
-    finally:
-        await service.close()
-
-    assert accepted.run_id == run_id
-    assert result.status == "completed"
-    assert attempts == 2
-
-
-async def test_cancel_can_win_before_runtime_claim_finishes(monkeypatch) -> None:
-    service = FunctionRuntimeService(max_workers=2, max_cached_revisions=1)
-    function_id = uuid4()
-    run_id = uuid4()
-    run_token = "run-control-" + "d" * 32
-    started = asyncio.Event()
-    blocked = asyncio.Event()
-
-    async def execute(**_kwargs) -> TerminalReport:
-        started.set()
-        await blocked.wait()
-        raise AssertionError("cancelled execution must not continue")
-
-    monkeypatch.setattr(service, "_execute", execute)
-    invocation = asyncio.create_task(
-        service.invoke(
-            function_token="delegated-session",
-            function_id=function_id,
-            revision_hash=f"sha256:{'d' * 64}",
-            run_id=run_id,
-            run_token=run_token,
-            gateway_url="https://gateway.lemma.test",
-            input_data={"value": 3},
-        )
-    )
-    try:
-        await started.wait()
-        assert await service.cancel(run_id, "wrong-run-token") is False
-        assert await service.cancel(run_id, run_token) is True
-        with pytest.raises(asyncio.CancelledError):
-            await invocation
-    finally:
-        blocked.set()
-        await service.close()
-
-
-async def test_invocation_extracts_w3c_context_before_starting_runtime_task() -> None:
-    app = create_app(max_workers=1, max_cached_revisions=1)
-    observed: dict[str, str] = {}
-
-    class _Runtime:
-        async def accept(self, **_kwargs):
-            inject_trace_context(observed)
-            return RunAccepted(run_id=run_id)
-
-    run_id = uuid4()
-    function_id = uuid4()
-    app.state.runtime = _Runtime()
-    async with httpx.AsyncClient(
-        transport=httpx.ASGITransport(app=app),
-        base_url="http://runtime.test",
-    ) as client:
-        response = await client.post(
-            f"/functions/{function_id}/runs/{run_id}",
-            headers={
-                "Authorization": "Bearer delegated-function-token",
-                "If-Match": f'"sha256:{"a" * 64}"',
-                "X-Lemma-Gateway-Url": "https://gateway.lemma.test",
-                "X-Lemma-Run-Token": "r" * 32,
-                "Prefer": "respond-async",
-                "traceparent": (
-                    "00-1234567890abcdef1234567890abcdef-1234567890abcdef-01"
-                ),
-            },
-            json={"input": {"value": 1}},
-        )
-
-    assert response.status_code == 202, response.text
-    assert observed == {
-        "traceparent": ("00-1234567890abcdef1234567890abcdef-1234567890abcdef-01"),
-    }
+    assert observed["function_token"] == "delegated-function-token"
+    assert observed["revision_hash"] == revision_hash

@@ -189,6 +189,46 @@ async def test_revision_worker_is_reused_for_same_hash(tmp_path: Path) -> None:
 
 
 @pytest.mark.asyncio
+async def test_schema_inspection_prewarms_the_first_execution_worker(
+    tmp_path: Path,
+) -> None:
+    artifact, manifest = _artifact(tmp_path)
+    registry = RevisionWorkerRegistry(max_workers=1)
+    function_id = uuid4()
+    digest = f"sha256:{'a' * 64}"
+    deadline = datetime.now(timezone.utc) + timedelta(seconds=10)
+    key = (function_id, digest)
+    try:
+        schemas = await registry.inspect_schemas(
+            function_id=function_id,
+            revision_hash=digest,
+            artifact_root=artifact,
+            deadline_at=deadline,
+        )
+        pool = registry._pools[key]
+        schema_worker = next(iter(pool._workers))
+        result = await registry.execute(
+            function_id=function_id,
+            revision_hash=digest,
+            artifact_root=artifact,
+            run_id=uuid4(),
+            request=_request(
+                artifact,
+                manifest,
+                function_id=function_id,
+                value=1,
+            ),
+            deadline_at=deadline,
+        )
+        assert next(iter(pool._workers)) is schema_worker
+    finally:
+        await registry.close()
+
+    assert schemas.input["title"] == "Input"
+    assert result.output_data == {"value": 1, "counter": 1}
+
+
+@pytest.mark.asyncio
 async def test_reused_worker_preserves_legacy_function_environment(
     tmp_path: Path,
 ) -> None:

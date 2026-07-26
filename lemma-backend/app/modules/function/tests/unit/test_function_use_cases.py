@@ -97,10 +97,11 @@ async def test_create_extracts_schemas_with_no_connection_held(monkeypatch):
     captured = {}
     operations: list[str] = []
 
-    async def _fake_extract(function, artifact):
+    async def _fake_extract(function, artifact, *, user_id):
         captured["open"] = factory.state["open"]
         assert function is created
         assert artifact.revision_hash == f"sha256:{'b' * 64}"
+        assert user_id == created.user_id
         operations.append("schemas")
         return FunctionSchemaSet(input={"a": 1}, output={"b": 2})
 

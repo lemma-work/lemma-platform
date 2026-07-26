@@ -11,7 +11,12 @@ from uuid import UUID
 
 from agentbox.observability import create_background_task, create_inherited_task
 
-from .runtime_models import WorkerReady, WorkerRequest, WorkerResponse
+from .runtime_models import (
+    FunctionSchemaSet,
+    WorkerReady,
+    WorkerRequest,
+    WorkerResponse,
+)
 
 
 class RuntimeOverloaded(RuntimeError):
@@ -50,10 +55,12 @@ class RevisionWorker:
         *,
         stderr_task: asyncio.Task[None],
         budget: WorkerBudget,
+        schemas: FunctionSchemaSet | None,
     ) -> None:
         self._process = process
         self._stderr_task = stderr_task
         self._budget = budget
+        self._schemas = schemas
         self._closed = False
 
     @classmethod
@@ -96,7 +103,12 @@ class RevisionWorker:
             if not ready.ready:
                 message = ready.error.message if ready.error is not None else "unknown"
                 raise WorkerProtocolError(f"revision worker failed to load: {message}")
-            return cls(process, stderr_task=stderr_task, budget=budget)
+            return cls(
+                process,
+                stderr_task=stderr_task,
+                budget=budget,
+                schemas=ready.schemas,
+            )
         except BaseException:
             if process is not None:
                 await cls._stop_process(process)
@@ -132,6 +144,12 @@ class RevisionWorker:
     @property
     def healthy(self) -> bool:
         return not self._closed and self._process.returncode is None
+
+    @property
+    def schemas(self) -> FunctionSchemaSet:
+        if self._schemas is None:
+            raise WorkerProtocolError("revision worker did not return schemas")
+        return self._schemas
 
     async def close(self) -> None:
         if self._closed:
@@ -349,6 +367,45 @@ class RevisionWorkerRegistry:
                     await pool.release(worker)
                 else:
                     await pool.discard(worker)
+            await self._release_pool_lease(key)
+
+    async def inspect_schemas(
+        self,
+        *,
+        function_id: UUID,
+        revision_hash: str,
+        artifact_root: Path,
+        deadline_at: datetime,
+    ) -> FunctionSchemaSet:
+        """Load and retain one revision worker, returning its ready schemas."""
+
+        key = (function_id, revision_hash)
+        evicted: tuple[RevisionWorkerPool, ...] = ()
+        async with self._lock:
+            pool = self._pools.get(key)
+            if pool is None:
+                evicted = self._evict_idle_pools_locked(
+                    target_size=self._max_cached_revisions - 1
+                )
+                pool = RevisionWorkerPool(
+                    artifact_root,
+                    budget=self._budget,
+                )
+                self._pools[key] = pool
+            self._pools.move_to_end(key)
+            self._pool_leases[key] = self._pool_leases.get(key, 0) + 1
+        await asyncio.gather(*(item.close() for item in evicted))
+
+        worker: RevisionWorker | None = None
+        try:
+            worker = await self._acquire_worker(pool, deadline_at=deadline_at)
+            schemas = worker.schemas
+            await pool.release(worker)
+            worker = None
+            return schemas
+        finally:
+            if worker is not None:
+                await pool.discard(worker)
             await self._release_pool_lease(key)
 
     async def _acquire_worker(

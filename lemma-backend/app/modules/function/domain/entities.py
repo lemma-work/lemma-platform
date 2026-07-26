@@ -84,6 +84,8 @@ class FunctionExecutionDispatch(BaseModel):
     function_id: UUID
     function_name: str
     user_id: UUID
+    user_email: str | None
+    config: JsonObject | None
     mode: FunctionDispatchMode
     deadline_at: datetime
     revision_hash: str = Field(pattern=r"^sha256:[0-9a-f]{64}$")
@@ -93,12 +95,14 @@ class FunctionExecutionDispatch(BaseModel):
 
 
 class FunctionSessionPrincipal(BaseModel):
-    """Authenticated delegated function identity on a runtime claim."""
+    """Authenticated delegated function identity on a runtime request."""
 
     user_id: UUID
     pod_id: UUID
     function_id: UUID
     session_id: str
+    actor_name: str | None = None
+    scope: tuple[str, ...] = ()
 
     model_config = {"frozen": True}
 

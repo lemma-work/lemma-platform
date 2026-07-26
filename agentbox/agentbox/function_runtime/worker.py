@@ -20,7 +20,6 @@ from .runtime_models import (
     FunctionArtifactManifest,
     FunctionSchemaSet,
     RuntimeFailure,
-    SchemaInspection,
     WorkerReady,
     WorkerRequest,
     WorkerResponse,
@@ -225,7 +224,10 @@ def serve(root: Path) -> int:
     except BaseException as exc:
         _write_protocol(protocol_out, WorkerReady(ready=False, error=_failure(exc)))
         return 1
-    _write_protocol(protocol_out, WorkerReady(ready=True))
+    _write_protocol(
+        protocol_out,
+        WorkerReady(ready=True, schemas=_revision_schemas(revision)),
+    )
     for line in sys.stdin.buffer:
         if not line.strip():
             continue
@@ -238,41 +240,25 @@ def serve(root: Path) -> int:
     return 0
 
 
-def inspect_schemas(root: Path) -> int:
-    """Load one immutable revision and emit its Pydantic schemas once."""
-
-    protocol_out = sys.stdout.buffer
-    # Imports may print. Keep the single stdout line reserved for the protocol.
-    sys.stdout = sys.stderr
-    try:
-        revision = LoadedRevision(root)
-        schemas = FunctionSchemaSet(
-            input=revision.input_model.model_json_schema(),
-            output=revision.output_model.model_json_schema(),
-            config=(
-                revision.config_model.model_json_schema()
-                if revision.config_model is not None
-                else None
-            ),
-        )
-        response = SchemaInspection(ok=True, schemas=schemas)
-    except (Exception, SystemExit) as exc:
-        response = SchemaInspection(ok=False, error=_failure(exc))
-    _write_protocol(protocol_out, response)
-    return 0 if response.ok else 1
+def _revision_schemas(revision: LoadedRevision) -> FunctionSchemaSet:
+    return FunctionSchemaSet(
+        input=revision.input_model.model_json_schema(),
+        output=revision.output_model.model_json_schema(),
+        config=(
+            revision.config_model.model_json_schema()
+            if revision.config_model is not None
+            else None
+        ),
+    )
 
 
 def main() -> None:
     parser = argparse.ArgumentParser()
-    mode = parser.add_mutually_exclusive_group(required=True)
-    mode.add_argument("--serve", action="store_true")
-    mode.add_argument("--inspect-schemas", action="store_true")
+    parser.add_argument("--serve", action="store_true", required=True)
     parser.add_argument("--artifact-root", type=Path)
     args = parser.parse_args()
     if args.artifact_root is None:
         parser.error("--artifact-root is required")
-    if args.inspect_schemas:
-        raise SystemExit(inspect_schemas(args.artifact_root))
     raise SystemExit(serve(args.artifact_root))
 
 

@@ -1,9 +1,11 @@
 from __future__ import annotations
 
 import asyncio
+from datetime import datetime, timedelta, timezone
 from uuid import uuid7
 
 from app.modules.function.application.function_session_token_cache import (
+    FunctionSessionToken,
     FunctionSessionTokenCache,
     FunctionSessionTokenKey,
 )
@@ -27,35 +29,46 @@ async def test_concurrent_cache_miss_mints_one_function_session() -> None:
     calls = 0
     session_ids: list[str] = []
 
-    async def mint(**kwargs) -> str:
+    async def mint(**kwargs) -> FunctionSessionToken:
         nonlocal calls
         calls += 1
         session_ids.append(kwargs["session_id"])
         await asyncio.sleep(0.01)
-        return "cached-function-token"
+        return FunctionSessionToken(
+            value="cached-function-token",
+            expires_at=datetime.now(timezone.utc) + timedelta(hours=1),
+        )
 
     results = await asyncio.gather(
         *(cache.get(key, minter=mint) for _ in range(20))
     )
 
-    assert results == ["cached-function-token"] * 20
+    assert [result.value for result in results] == ["cached-function-token"] * 20
     assert calls == 1
     assert session_ids == [key.session_id]
 
 
 async def test_cache_expiry_and_revision_hash_mint_new_sessions() -> None:
-    now = 100.0
-    cache = FunctionSessionTokenCache(ttl_seconds=300, clock=lambda: now)
+    monotonic_now = 100.0
+    wall_now = datetime(2026, 1, 1, tzinfo=timezone.utc)
+    cache = FunctionSessionTokenCache(
+        ttl_seconds=300,
+        clock=lambda: monotonic_now,
+        wall_clock=lambda: wall_now,
+    )
     key = _key()
     calls = 0
 
-    async def mint(**_kwargs) -> str:
+    async def mint(**_kwargs) -> FunctionSessionToken:
         nonlocal calls
         calls += 1
-        return f"token-{calls}"
+        return FunctionSessionToken(
+            value=f"token-{calls}",
+            expires_at=wall_now + timedelta(hours=1),
+        )
 
-    assert await cache.get(key, minter=mint) == "token-1"
-    assert await cache.get(key, minter=mint) == "token-1"
+    assert (await cache.get(key, minter=mint)).value == "token-1"
+    assert (await cache.get(key, minter=mint)).value == "token-1"
 
     changed_revision = FunctionSessionTokenKey(
         user_id=key.user_id,
@@ -66,8 +79,33 @@ async def test_cache_expiry_and_revision_hash_mint_new_sessions() -> None:
         scope=key.scope,
         delegated_tokens_enabled=key.delegated_tokens_enabled,
     )
-    assert await cache.get(changed_revision, minter=mint) == "token-2"
+    assert (await cache.get(changed_revision, minter=mint)).value == "token-2"
 
-    now += 301
-    assert await cache.get(key, minter=mint) == "token-3"
+    monotonic_now += 301
+    assert (await cache.get(key, minter=mint)).value == "token-3"
     assert calls == 3
+
+
+async def test_cache_mints_fresh_token_for_required_validity_window() -> None:
+    wall_now = datetime(2026, 1, 1, tzinfo=timezone.utc)
+    cache = FunctionSessionTokenCache(wall_clock=lambda: wall_now)
+    calls = 0
+    key = _key()
+
+    async def mint(**_kwargs) -> FunctionSessionToken:
+        nonlocal calls
+        calls += 1
+        lifetime = 10 if calls == 1 else 120
+        return FunctionSessionToken(
+            value=f"token-{calls}",
+            expires_at=wall_now + timedelta(seconds=lifetime),
+        )
+
+    assert (await cache.get(key, minter=mint)).value == "token-1"
+    assert (
+        await cache.get(
+            key,
+            minter=mint,
+            min_validity_until=wall_now + timedelta(seconds=60),
+        )
+    ).value == "token-2"

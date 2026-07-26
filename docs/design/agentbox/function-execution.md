@@ -1,44 +1,52 @@
 # Function Execution
 
-**Status:** Implemented and verified for Docker and E2B; Kubernetes deferred
+**Status:** Protocol v2 implemented for Docker and E2B; Kubernetes deferred
 
 ## 1. Decision
 
-One public `function_run_id` represents one user-requested execution. Lemma does
-not create attempts, fences, tickets, execution units, a separate idempotency key,
-or an indeterminate public status.
+One public `function_run_id` represents one user-requested execution. The
+backend owns authorization, the durable run, immutable artifacts, deadlines,
+cancellation and terminal events. AgentBox owns the provider-neutral sandbox,
+allocation lifecycle and signed access to its private runtime port.
 
-The backend owns function definitions, authorization, immutable executable
-artifacts, public runs, durable JOB submission, deadlines, cancellation, callbacks,
-and domain events. AgentBox owns the provider-neutral sandbox and its lifecycle.
+Each pod has at most one active `FUNCTION` sandbox. It runs a resident
+`lemma-function-runtime` service that caches immutable artifacts and imported
+revision workers.
 
-Each pod receives at most one active `FUNCTION` sandbox. That sandbox runs a
-resident private `lemma-function-runtime` HTTP service. The service keeps immutable
-function revisions and Python workers warm so an invocation does not start a new
-runtime or re-import the function on every call.
+The executor is deliberately mostly stateless:
 
-Functions belonging to one pod mutually trust one another. Different pods never
-share a sandbox, artifact cache, worker, token, or process.
+- it accepts an invocation envelope plus the existing delegated function token;
+- API execution returns its terminal report directly;
+- JOB execution reports its terminal result with the same function token;
+- cold artifact and schema access use that same function token;
+- cancellation is admitted by the AgentBox pod/allocation grant;
+- there is no separate callback or compilation capability.
 
-## 2. Boundaries
+Functions inside one pod mutually trust one another. Different pods never share
+a sandbox, artifact cache, worker, token or process. This trust boundary is
+intentional: the runtime supervisor and user workers currently share UID
+`10001`, so a fixed secret inside the sandbox would not create a security
+boundary.
+
+## 2. Ownership
 
 | Component | Owns |
 | --- | --- |
-| Function domain | definitions, grants, schemas, current revision, runs and events |
-| Artifact builder | dependency resolution and immutable executable archive |
-| API path | synchronous dispatch and terminal response |
-| Durable worker | asynchronous JOB/deferred dispatch until runtime acceptance |
-| Runtime gateway | claim validation, artifact download, terminal callback |
+| Function domain | definitions, grants, schemas, active revision, runs and events |
+| Artifact builder | deterministic dependency resolution and immutable archives |
+| Backend dispatcher | run start, runtime invocation and direct API completion |
+| Durable worker | asynchronous JOB dispatch until runtime acceptance |
+| Runtime gateway | authenticated artifact reads and JOB terminal reports |
 | AgentBox | allocation, lifecycle, signed port access and provider reconciliation |
-| Resident runtime | run deduplication, artifact cache, revision-worker pools |
-| Revision worker | one loaded Python revision and isolated per-call SDK context |
+| Resident runtime | run deduplication, artifact cache and revision-worker pools |
+| Revision worker | one imported revision and isolated per-call SDK context |
 
-AgentBox does not understand functions, JOBs, artifacts, run statuses, tokens, or
-callbacks. The backend does not import Docker or E2B SDKs.
+AgentBox does not understand functions, JOBs, artifacts, run statuses or
+delegated tokens. The backend does not import Docker or E2B provider SDKs.
 
-## 3. Persistent model
+## 3. Durable state
 
-The function execution plane adds only these fields:
+The execution plane uses the existing function and run rows:
 
 ```text
 functions
@@ -47,16 +55,13 @@ functions
 function_runs
   revision_hash nullable
   deadline_at nullable
+  job_id nullable
 ```
 
-Existing run fields retain the input, output, status, logs, error, timestamps and
-optional background `job_id`.
+There is no attempts table, execution ticket, callback digest, result registry
+or sandbox-local durable queue.
 
-There is no `function_revisions`, `function_execution_requests`,
-`function_run_attempts`, ticket, fence, lease, capacity, callback-digest or result
-registry table.
-
-The public run state machine is:
+The public state machine is:
 
 ```text
 PENDING -> RUNNING -> COMPLETED
@@ -67,195 +72,175 @@ PENDING ----------> FAILED
         ----------> CANCELLED
 ```
 
-`function_runs` is the authoritative execution record:
+The backend conditionally changes `PENDING` to `RUNNING` immediately before
+dispatch. API results and JOB callbacks conditionally change only `RUNNING` to a
+terminal state. Repeated terminal reports are acknowledged as duplicates and do
+not emit another transition. A terminal state is never overwritten.
 
-- runtime claim atomically changes only `PENDING` to `RUNNING`;
-- terminal callback changes only `RUNNING` to a terminal state;
-- a terminal callback repeated with the same `function_run_id` is acknowledged as a
-  duplicate and does not emit another transition;
-- a sandbox recreated after a crash cannot claim a run already marked `RUNNING` or
-  terminal.
+## 4. Immutable revisions and schema extraction
 
-## 4. Revision identity and activation
+`revision_hash` is the SHA-256 of a deterministic archive containing the exact
+source, prebuilt locked dependencies, entrypoint and Pydantic model names,
+runtime ABI, artifact format and builder identity.
 
-`revision_hash` is the sole executable revision identifier. It is the SHA-256 of a
-deterministic immutable artifact containing:
-
-- exact source;
-- locked prebuilt dependencies;
-- entrypoint and Pydantic model names;
-- runtime ABI and artifact format;
-- builder identity.
-
-Builder and runtime metadata live in the artifact manifest, not in database
-columns. Grants and general `updated_at` metadata are not executable identity and
-are not included in the revision hash.
-
-The current function row holds the active hash. Creating a run copies that hash
-onto the run, so a later function update cannot alter an existing execution.
-
-Activation is content-addressed:
+Creating a run copies the active hash onto the run, so later updates cannot alter
+an existing execution:
 
 ```text
 artifacts/<sha256>.zip
 revisions/<sha256>/function.py
 ```
 
-Schema extraction and artifact construction complete outside a database
-transaction. Only after the artifact and immutable source exist does a short
-transaction update schemas, source path, revision hash and `READY` status. A failed
-update may leave unreferenced immutable files for later cleanup, but it cannot
-overwrite the source of the still-active revision.
+The builder writes the artifact before schema extraction. After the DRAFT
+function ID and revision are known, the backend mints a normal delegated function
+token for the acting user and asks the pod's resident function runtime to inspect
+that exact artifact.
 
-Dependencies are resolved with `uv` before the function becomes `READY`.
-Invocation never runs `pip install`, `uv pip install`, or arbitrary package-manager
-commands.
+The runtime checks its artifact cache before downloading. On a miss it calls:
 
-The builder writes the immutable artifact before schema extraction. The backend
-then ensures `(FUNCTION, pod_id)` and asks the resident function runtime to inspect
-that exact artifact in a disposable revision worker. Definition compilation never
-creates a user workspace session, mounts `/workspace`, or acquires persistent
-workspace storage.
+```http
+GET /internal/function-runtime/functions/{function_id}/artifacts/{revision_hash}
+Authorization: Bearer <delegated function token>
+```
 
-## 5. Invocation protocol
+The backend uses canonical delegated authentication and requires:
 
-AgentBox creates short-lived authenticated access to the private runtime port. The
-backend invokes:
+- FUNCTION actor ID equals the path function ID;
+- authenticated pod owns the function;
+- the deterministic session ID matches the acting user, function and requested
+  revision;
+- the returned artifact has the requested digest.
+
+The runtime verifies the digest again. It imports the revision in a serving
+worker whose readiness response includes the Pydantic schemas, then leaves that
+worker idle in the revision pool. The first function execution can reuse the
+already-imported worker. Schema inspection never creates or mounts a user
+workspace and never passes the delegated token into user import code.
+
+## 5. Invocation protocol v2
+
+AgentBox grants short-lived authenticated access to the exact pod allocation,
+allocation epoch, port `8090` and HTTP protocol. The backend invokes:
 
 ```http
 POST /functions/{function_id}/runs/{function_run_id}
 Authorization: Bearer <delegated function token>
 If-Match: "sha256:<revision_hash>"
-X-Lemma-Gateway-Url: <trusted runtime gateway URL>
-X-Lemma-Run-Token: <run-scoped control capability>
+X-Lemma-Gateway-Url: <allow-listed backend URL>
 Content-Type: application/json
 
-{"input": {...}}
+{
+  "protocol_version": 2,
+  "input": {},
+  "config": null,
+  "identity": {
+    "user_id": "...",
+    "user_email": "...",
+    "pod_id": "...",
+    "function_id": "...",
+    "function_name": "...",
+    "organization_id": "..."
+  },
+  "lemma_base_url": "...",
+  "deadline_at": "..."
+}
 ```
 
-Asynchronous JOB or deferred execution additionally sends:
+JOB execution additionally sends:
 
 ```http
 Prefer: respond-async
 ```
 
-The authorization bearer is the only credential that can authorize execution.
-The run token cannot authorize execution; it is a deterministic backend control
-capability that lets cancellation win even before claim returns. The runtime
-requires the claim response to contain the same token before it accepts the run.
+The backend has already authorized and persisted the run before this request.
+The AgentBox grant admits the external caller. The runtime treats the bearer as
+the function's delegated SDK credential and uses it for cold artifact retrieval
+or JOB completion; it does not claim or introspect the run before warm execution.
 
-The runtime forwards the bearer and exact run data to:
-
-```http
-POST /internal/function-runtime/runs/{function_run_id}:claim
-```
-
-The gateway authenticates the delegated function session and verifies:
-
-- user, pod and function identity;
-- deterministic session identity;
-- exact revision hash and input;
-- `PENDING` run state;
-- absolute deadline.
-
-Claim atomically persists `RUNNING` and returns:
-
-- immutable artifact URL and hash;
-- deterministic run callback capability;
-- exact input and configuration;
-- user, pod and function identity;
-- delegated SDK token and Lemma base URL;
-- absolute deadline.
-
-Dynamic invocation state is installed through Python `ContextVar` bindings. Tokens,
-inputs, configuration and identity are not written to process-global environment
-variables.
+The gateway URL is routing metadata, not an execution credential. Its host is
+allow-listed so local ngrok/E2B development can use the same runtime source as
+production.
 
 ## 6. API execution
 
-1. Authorize and validate the call.
-2. Create a `PENDING` run with its revision snapshot and deadline in a short
-   transaction.
-3. Close the transaction.
-4. Ensure `(FUNCTION, pod_id)` through AgentBox.
-5. Resolve the cached delegated function token.
-6. POST directly to the resident runtime without publishing a worker event.
-7. Runtime claims, executes and commits the terminal callback.
-8. Runtime returns the terminal report.
-9. Backend reads and returns the durable terminal run.
+1. Authorize, validate and persist a `PENDING` run with its revision and deadline.
+2. Resolve the AgentBox endpoint, delegated token and organization concurrently.
+3. In a short transaction, conditionally persist `PENDING -> RUNNING` and capture
+   the complete immutable runtime context.
+4. POST the v2 envelope directly to the resident runtime.
+5. Runtime resolves the warm artifact and worker, executes and returns a terminal
+   report.
+6. Backend conditionally persists `RUNNING -> COMPLETED/FAILED` and returns that
+   entity directly.
 
-The API request never enters Redis or the backend worker queue.
+There is no Redis hop, runtime claim, runtime terminal callback or final database
+reread on the synchronous API path.
 
-If the runtime response is lost, the backend first reconciles the durable run. A
-terminal callback, or a committed asynchronous `RUNNING` claim, wins. When the
-run is still unconfirmed after a transport failure, the backend may retry the
-same immutable operation exactly once with the same run ID, revision, input and
-session capability. Runtime run-ID deduplication and the atomic
-`PENDING -> RUNNING` claim prevent duplicate execution. A second unconfirmed
-response is best-effort cancelled and marked failed; HTTP error responses are
-never retried.
+If the invocation response is ambiguous, the backend retries the identical POST
+once through the same AgentBox allocation grant. Runtime run-ID deduplication
+joins the active task or returns its cached report. The backend never resolves a
+different allocation after an ambiguous response. A second unconfirmed API
+response is best-effort cancelled and marked failed.
 
-## 7. JOB and deferred execution
+## 7. JOB execution
 
-1. Create the `PENDING` run and transactional execution-requested domain event.
+1. Persist the immutable `PENDING` run and deterministic queue `job_id`.
 2. Return `PENDING` to the caller.
-3. The outbox publishes and the durable worker receives `function_run_id`.
-4. The worker ensures the pod sandbox and invokes the same runtime endpoint with
-   `Prefer: respond-async`.
-5. The runtime returns `202 Accepted` only after claim committed
-   `PENDING -> RUNNING`.
-6. The backend worker ends immediately after authenticated acceptance.
-7. The resident runtime continues execution and its terminal callback completes the
-   run.
+3. The durable worker resolves the endpoint, identity and a function token whose
+   real issuer expiry covers `deadline_at + 60 seconds`.
+4. The backend conditionally persists `PENDING -> RUNNING`.
+5. POST the same v2 envelope with `Prefer: respond-async`.
+6. Runtime registers the deduplicated task and immediately returns `202`.
+7. Runtime executes and reports:
 
-The backend worker does not hold a task, database connection, AgentBox connection,
-or polling loop for the duration of a long JOB.
-
-Delivery may be duplicated by the durable queue. Runtime run-ID deduplication and
-the atomic `PENDING -> RUNNING` claim still permit only one execution. No delivery
-after a committed claim can create a replacement execution.
-
-## 8. Resident runtime and caching
-
-The function profile starts:
-
-```text
-lemma-function-runtime serve --host 0.0.0.0 --port 8090
+```http
+POST /internal/function-runtime/runs/{function_run_id}:terminal
+Authorization: Bearer <same delegated function token>
 ```
 
-The runtime holds:
+The terminal route uses canonical authentication. It checks user, pod, function,
+standard session ID and persisted revision before completing the run.
 
-- a bounded run-ID deduplication registry;
+Terminal delivery retries only transport errors, throttling and 5xx responses,
+bounded by the fixed 60-second callback grace. Authentication or state rejection
+is not refreshed. The periodic reconciler handles callback loss and sandbox
+death.
+
+The configured JOB deadline defaults to 600 seconds and has a hard maximum of
+3,000 seconds. Dispatch fails before `RUNNING` if a freshly minted token cannot
+cover the deadline and callback grace. Longer jobs require a future isolated
+runtime service identity or backend polling; refresh tokens and global sandbox
+keys are not supported.
+
+## 8. Runtime state and deduplication
+
+The resident runtime holds only opportunistic, bounded state:
+
+- a run-ID task/result registry;
 - a content-addressed artifact cache;
 - an LRU of revision-worker pools keyed by `(function_id, revision_hash)`;
-- a map from active `function_run_id` to its exact worker.
+- active run-to-worker mappings.
 
-Each Python worker:
+The deduplication signature covers function ID, run ID, exact revision, gateway,
+the complete invocation envelope and synchronous/asynchronous mode. It does not
+depend on token bytes, so an equivalent rotated token can recover the same
+operation.
 
-- imports one immutable revision once;
-- processes one invocation at a time;
-- receives a fresh typed request over a private framed pipe;
-- binds a fresh SDK `ContextVar`;
-- captures bounded stdout and stderr;
-- returns a typed terminal result;
-- remains warm for another invocation of the same revision.
+- An exact active API duplicate joins the task.
+- An exact active JOB duplicate returns `202`.
+- An exact completed duplicate returns its cached report or acknowledgement.
+- Reusing a run ID with a different envelope is rejected.
+- Active entries are never evicted; completed entries are bounded to 4,096.
 
-Concurrent invocations use separate worker processes. The pool grows on demand up
-to a high runtime process-safety ceiling. The initial ceiling is 32 live workers
-per pod sandbox and is validated by benchmark rather than exposed as user-visible
-capacity.
+Each revision worker imports one immutable revision, executes one call at a time,
+binds fresh SDK `ContextVar` state, captures bounded output and stays warm.
+Concurrent calls use separate workers up to the sandbox-wide safety ceiling.
 
-The revision cache bound controls how many distinct revision pools stay warm; it is
-not an invocation concurrency limit. The initial name is
-`max_cached_revisions`, default 16.
+Sandbox-local state is never authoritative and disappears with the allocation.
 
-There is no durable sandbox-local queue or result registry. Backend JOB durability
-ends at runtime acceptance; after that, the backend run row and terminal callback
-are authoritative.
+## 9. Delegated-token policy
 
-## 9. Tokens and authorization
-
-The backend caches delegated function tokens for five minutes with asynchronous
+The backend caches delegated function sessions for five minutes with
 single-flight, keyed by:
 
 ```text
@@ -268,65 +253,57 @@ scope
 delegated-token mode
 ```
 
-The cache is in-process and never stores a human refresh token. Multiple backend
-replicas may each mint one token. No database transaction remains open during
-minting.
+Five minutes is cache retention, not token validity. Each cached entry also stores
+the issuer's actual access-token expiry. A caller may require
+`min_validity_until`; an insufficient cached token is discarded and freshly
+minted. Token plaintext is held only in process memory.
 
-The same warm revision worker may serve different users. The delegated token and
-identity are per request and live only in the invocation context. They are never
-cached as worker globals.
+The token cannot create a public run: only the authenticated backend API creates
+and starts durable run rows. Artifact and terminal routes reject other users,
+pods, functions and revisions.
 
-After claim, the runtime receives a callback capability derived as an HMAC of
-`function_run_id`. It is not persisted. It authorizes only artifact download,
-terminal callback and cancellation for that run. Artifact access requires the run
-to remain `RUNNING` and before its deadline. Terminal authentication remains
-restart-stable so an already-committed callback can be acknowledged idempotently;
-durable run-state conditions prevent it from mutating a cancelled, failed or
-completed run.
+The same token is intentionally shared by concurrent runs for one
+user/function/revision. Code that learns a sibling `run_id` could report its
+terminal result. This is accepted under the documented same-pod mutual-trust
+model. Preventing it requires a real supervisor/user-code isolation boundary,
+not a fixed key in the current sandbox.
 
-## 10. Cancellation and deadlines
+## 10. Cancellation and reconciliation
 
-Cancellation targets `/runs/{function_run_id}:cancel` with the run callback
-capability. The runtime cancels the exact task and kills/discards its worker process
-group, preventing descendants from surviving cancellation. The backend then marks
-the public run `CANCELLED`. A late callback cannot change terminal state.
+The backend first conditionally marks the public run `CANCELLED`, then calls:
 
-Every run snapshots an absolute `deadline_at`. Runtime and worker timeouts use that
-same deadline.
+```http
+POST /functions/{function_id}/runs/{function_run_id}:cancel
+```
 
-A periodic database reconciler marks expired `PENDING` or `RUNNING` runs `FAILED`.
-This covers backend termination, sandbox death and callback loss without replaying
-user code.
+The call carries no bearer or fixed key. External admission is the AgentBox
+allocation-bound port grant; localhost access follows same-pod trust. The runtime
+matches both function and run IDs, cancels the task and kills/discards its worker
+process group.
 
-## 11. Failure and retry policy
+Cancellation obtains port access to an existing logical allocation without
+calling `ensure_sandbox`, so it never creates a sandbox. If the allocation is
+gone, its work is already gone. A late callback is acknowledged as a terminal
+duplicate and cannot overwrite `CANCELLED`.
 
-There is no automatic function execution retry.
+Every run snapshots `deadline_at`. The reconciler:
 
-- AgentBox may wait or repeat an intrinsically idempotent logical `ensure`; AgentBox
-  itself guarantees one provider create per allocation token.
-- The runtime may retry an identical terminal callback for a short bounded period
-  because terminal transition is idempotent.
-- The backend never repeats an invocation POST after an ambiguous response.
-- The durable worker may be redelivered before claim; the run claim prevents a
-  second execution.
-- A client retry creates a new `function_run_id` and therefore a new execution.
+- fails expired `PENDING` runs;
+- fails expired synchronous `RUNNING` runs;
+- gives asynchronous `RUNNING` runs the 60-second callback grace before failure.
 
-Functions that need business-level exactly-once effects must use an idempotency key
-understood by the external system they mutate.
+## 11. I/O and failure rules
 
-## 12. Database and I/O rule
+No SQLAlchemy session or pooled PostgreSQL connection remains open during:
 
-No SQLAlchemy session or pooled PostgreSQL connection may remain open during:
-
-- AgentBox calls;
-- provider readiness waits;
+- AgentBox calls or readiness waits;
 - delegated-token minting;
 - runtime HTTP;
 - artifact/object-store I/O;
 - organization lookup;
 - sleeps or callback waits.
 
-Every orchestration path follows:
+All orchestration uses:
 
 ```text
 short database transaction
@@ -335,45 +312,24 @@ short database transaction
 -> short database transaction
 ```
 
-Tests instrument unit-of-work lifetime and real PostgreSQL concurrency to enforce
-this rule.
+There is no automatic business-level retry. AgentBox may repeat idempotent ensure
+operations, the backend may retry one identical ambiguous invocation, and the
+runtime may retry an idempotent terminal callback. Functions that mutate external
+systems must use `function_run_id` or another application-level idempotency key.
 
-## 13. Provider behavior
+## 12. Providers and verification
 
-Docker and E2B use the same invocation protocol and runtime source.
+Docker and E2B run the same runtime source and protocol:
 
-- Docker starts the resident runtime as the function container command.
-- E2B starts the same command as the template start command and waits for port 8090.
-- Function sandboxes have no persistent volume and no auto-resume contract.
-- Artifact and worker caches are opportunistic and disappear with the allocation.
-- AgentBox destroys an idle function allocation; correctness never depends on its
-  filesystem after destruction.
+- Docker uses the function container command.
+- E2B uses the template start command and waits for port `8090`.
+- Function sandboxes have no persistent volume or auto-resume contract.
+- Caches are opportunistic and disappear with the allocation.
 
-Kubernetes remains a later adapter. It must run the same function profile and
-protocol on an approved sandbox `RuntimeClass`, without PVC, Service, ingress or
-service-account token.
+Kubernetes must eventually run the same profile on an approved sandbox
+`RuntimeClass`, without PVC, ingress or a user-visible service-account token.
 
-## 14. Verification evidence
-
-The implementation is accepted for Docker and E2B only after the same source
-passes:
-
-- typed unit and repository state tests;
-- no-database-over-external-I/O tests;
-- real Docker workspace and function conformance;
-- real E2B workspace and function conformance;
-- API and JOB execution with the same pod allocation;
-- warm revision reuse and revision replacement;
-- two-user context isolation;
-- compiled dependency execution;
-- concurrency one and five through the full stack, plus runtime stress tests at
-  higher worker counts;
-- cancellation, timeout, duplicate callback, lost response and sandbox death;
-- warm no-op and 1,000-row read/write performance gates;
-- exact provider-resource cleanup.
-
-The current implementation branch passed this matrix on 2026-07-23. Docker and
-E2B each passed real workspace/function conformance and the API/JOB benchmark with
-1,000-row reads and writes at concurrency five. The E2B run used a temporary ngrok
-tunnel solely to expose the local synthetic backend; it did not change an E2B
-template, alias, account setting, or deployed build.
+Required verification covers typed unit tests, PostgreSQL transition races,
+Docker and E2B API/JOB execution, exact token boundaries, schema prewarming,
+revision reuse, cancellation, timeout, callback retry/loss, sandbox death,
+dependency-heavy functions and production-shaped latency benchmarks.

@@ -78,17 +78,6 @@ def _agentbox_runtime_key(doc: TOMLDocument) -> str:
     return base64.urlsafe_b64encode(digest).decode("ascii")
 
 
-def _function_runtime_secret(doc: TOMLDocument) -> str:
-    """Derive a stable, domain-separated function callback secret."""
-
-    digest = hmac.digest(
-        store.agentbox_api_key(doc).encode("utf-8"),
-        b"lemma-function-runtime-secret-v1",
-        "sha256",
-    )
-    return base64.urlsafe_b64encode(digest).decode("ascii")
-
-
 def backend_env(
     doc: TOMLDocument,
     paths: LocalPaths,
@@ -122,7 +111,6 @@ def backend_env(
         "AGENTBOX_API_KEY": store.agentbox_api_key(doc),
         "AGENTBOX_PROVIDER": adapter_provider,
         "AGENTBOX_RUNTIME_CREDENTIAL_KEY": _agentbox_runtime_key(doc),
-        "FUNCTION_RUNTIME_SECRET": _function_runtime_secret(doc),
         "AGENTBOX_WORKSPACE_IMAGE": workspace_image,
         "AGENTBOX_FUNCTION_IMAGE": function_image,
         "AGENTBOX_STATE_DATABASE_URL": (

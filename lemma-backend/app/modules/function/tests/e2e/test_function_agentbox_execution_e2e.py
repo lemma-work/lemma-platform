@@ -10,15 +10,15 @@ import pytest
 
 from agentbox_client import AgentBoxClient, WorkloadKind
 
-from app.core.config import reveal_secret, settings
+from app.core.config import settings
 from app.core.infrastructure.db.uow_factory import SessionUnitOfWorkFactory
-from app.composition.workspace_identity import mint_workspace_token
+from app.composition.workspace_identity import (
+    mint_function_session_token,
+    resolve_workspace_organization_id,
+)
 from app.modules.function.api.dependencies import get_function_storage_factory
 from app.modules.function.application.function_artifact_builder import (
     FunctionArtifactBuilder,
-)
-from app.modules.function.application.function_runtime_credentials import (
-    FunctionRuntimeCapabilitySigner,
 )
 from app.modules.function.application.function_dispatcher import FunctionDispatcher
 from app.modules.function.application.function_runtime_endpoint_cache import (
@@ -124,6 +124,7 @@ async def _create_run(
             user_id=user_id,
             input_data={"value": value},
             status=FunctionRunStatus.PENDING,
+            job_id=f"function-run:{run_id}" if kind == FunctionType.JOB else None,
             deadline_at=deadline,
         )
     )
@@ -176,9 +177,6 @@ async def test_api_and_job_execute_through_one_per_pod_docker_sandbox(
             kind=FunctionType.JOB,
             value=21,
         )
-        secret = reveal_secret(settings.function_runtime_secret)
-        assert secret is not None
-
         def client_factory() -> AgentBoxClient:
             return AgentBoxClient(
                 base_url=local_agentbox_server["manager_base_url"],
@@ -189,12 +187,12 @@ async def test_api_and_job_execute_through_one_per_pod_docker_sandbox(
         runtime_http_clients = FunctionRuntimeHttpClientPool()
         dispatcher = FunctionDispatcher(
             uow_factory=SessionUnitOfWorkFactory(db_manager.session_factory),
-            credential_signer=FunctionRuntimeCapabilitySigner(secret),
             agentbox_client_factory=client_factory,
-            token_minter=mint_workspace_token,
+            token_minter=mint_function_session_token,
             token_cache=FunctionSessionTokenCache(),
             endpoint_cache=FunctionRuntimeEndpointCache(),
             runtime_http_client_factory=runtime_http_clients.get,
+            organization_resolver=resolve_workspace_organization_id,
             delegated_tokens_enabled=settings.authz_delegated_tokens_enabled,
         )
 

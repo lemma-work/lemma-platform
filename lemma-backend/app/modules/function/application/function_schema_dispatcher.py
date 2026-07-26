@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import asyncio
-from collections.abc import Callable
+from collections.abc import Awaitable, Callable
 from datetime import datetime, timedelta, timezone
 from urllib.parse import urljoin
 from uuid import UUID
@@ -20,8 +20,10 @@ from agentbox_client import (
 )
 
 from app.core.config import settings
-from app.modules.function.application.function_runtime_credentials import (
-    FunctionRuntimeCapabilitySigner,
+from app.modules.function.application.function_session_token_cache import (
+    FunctionSessionToken,
+    FunctionSessionTokenCache,
+    FunctionSessionTokenKey,
 )
 from app.modules.function.application.function_runtime_endpoint_cache import (
     FunctionRuntimeEndpoint,
@@ -40,6 +42,7 @@ _FUNCTION_RUNTIME_PORT = 8090
 
 AgentBoxClientFactory = Callable[[], AgentBoxClient]
 RuntimeHttpClientFactory = Callable[[], httpx.AsyncClient]
+TokenMinter = Callable[..., Awaitable[FunctionSessionToken]]
 
 
 class FunctionSchemaDispatcher:
@@ -48,15 +51,19 @@ class FunctionSchemaDispatcher:
     def __init__(
         self,
         *,
-        credential_signer: FunctionRuntimeCapabilitySigner,
         agentbox_client_factory: AgentBoxClientFactory,
+        token_minter: TokenMinter,
+        token_cache: FunctionSessionTokenCache,
         endpoint_cache: FunctionRuntimeEndpointCache,
         runtime_http_client_factory: RuntimeHttpClientFactory,
+        delegated_tokens_enabled: bool,
     ) -> None:
-        self._signer = credential_signer
         self._agentbox_client_factory = agentbox_client_factory
+        self._token_minter = token_minter
+        self._token_cache = token_cache
         self._endpoint_cache = endpoint_cache
         self._runtime_http_client_factory = runtime_http_client_factory
+        self._delegated_tokens_enabled = delegated_tokens_enabled
         self._profile = ProfileRef(
             name=settings.agentbox_function_profile_name,
             digest=settings.agentbox_function_profile_digest,
@@ -67,12 +74,27 @@ class FunctionSchemaDispatcher:
         *,
         function_id: UUID,
         pod_id: UUID,
+        user_id: UUID,
+        function_name: str,
         artifact: FunctionArtifact,
     ) -> FunctionSchemaSet:
         deadline_at = self._now() + timedelta(
             seconds=settings.function_api_deadline_seconds
         )
         runtime = self._runtime_http_client_factory()
+        function_token = await self._token_cache.get(
+            FunctionSessionTokenKey(
+                user_id=user_id,
+                pod_id=pod_id,
+                function_id=function_id,
+                revision_hash=artifact.revision_hash,
+                workload_name=function_name,
+                scope=(),
+                delegated_tokens_enabled=self._delegated_tokens_enabled,
+            ),
+            minter=self._token_minter,
+            min_validity_until=deadline_at,
+        )
         response: httpx.Response | None = None
         last_transport_error: httpx.TransportError | None = None
         for attempt in range(2):
@@ -85,13 +107,7 @@ class FunctionSchemaDispatcher:
                 response = await runtime.post(
                     urljoin(endpoint.url, f"functions/{function_id}/schemas"),
                     headers={
-                        "Authorization": (
-                            "Bearer "
-                            + self._signer.derive_compilation(
-                                function_id,
-                                artifact.revision_hash,
-                            )
-                        ),
+                        "Authorization": f"Bearer {function_token.value}",
                         "If-Match": f'"{artifact.revision_hash}"',
                         "X-Lemma-Gateway-Url": self._runtime_gateway_url(),
                     },

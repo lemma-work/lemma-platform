@@ -9,9 +9,6 @@ from uuid import UUID
 from sqlalchemy import select
 
 from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
-from app.modules.function.application.function_runtime_credentials import (
-    FunctionRuntimeCapabilitySigner,
-)
 from app.modules.function.application.function_session_token_cache import (
     FunctionSessionTokenKey,
 )
@@ -42,14 +39,9 @@ TERMINAL_RUN_STATES = {
 class FunctionExecutionRepository:
     """Own the durable state transitions carried by ``function_runs`` itself."""
 
-    def __init__(
-        self,
-        uow: SqlAlchemyUnitOfWork,
-        credential_signer: FunctionRuntimeCapabilitySigner,
-    ) -> None:
+    def __init__(self, uow: SqlAlchemyUnitOfWork) -> None:
         self.uow = uow
         self.session = uow.session
-        self._credential_signer = credential_signer
 
     async def resolve_dispatch(
         self,
@@ -79,18 +71,19 @@ class FunctionExecutionRepository:
             return None
         return self._dispatch(run, function, mode=mode)
 
-    async def claim_execution(
+    async def start_execution(
         self,
-        run_id: UUID,
-        principal: FunctionSessionPrincipal,
-        *,
-        revision_hash: str,
-        input_data: JsonObject,
-        delegated_tokens_enabled: bool,
+        dispatch: FunctionExecutionDispatch,
         now: datetime | None = None,
     ) -> FunctionRunRuntimeContext | None:
+        """Atomically move the backend-authorized run into RUNNING.
+
+        The runtime is admitted through AgentBox and receives the complete
+        immutable context after this transition; it never claims the run back.
+        """
+
         timestamp = now or datetime.now(timezone.utc)
-        rows = await self._run_and_function(run_id, for_update=True)
+        rows = await self._run_and_function(dispatch.run_id, for_update=True)
         if rows is None:
             return None
         run, function = rows
@@ -98,23 +91,12 @@ class FunctionExecutionRepository:
             run.status != FunctionRunStatus.PENDING
             or run.deadline_at is None
             or run.deadline_at <= timestamp
-            or run.revision_hash != revision_hash
-            or (run.input_data or {}) != input_data
-            or run.user_id != principal.user_id
-            or function.pod_id != principal.pod_id
-            or run.function_id != principal.function_id
+            or run.revision_hash != dispatch.revision_hash
+            or (run.input_data or {}) != dispatch.input_data
+            or run.user_id != dispatch.user_id
+            or function.pod_id != dispatch.pod_id
+            or run.function_id != dispatch.function_id
         ):
-            return None
-        expected_session_id = FunctionSessionTokenKey(
-            user_id=run.user_id,
-            pod_id=function.pod_id,
-            function_id=run.function_id,
-            revision_hash=revision_hash,
-            workload_name=function.name,
-            scope=(),
-            delegated_tokens_enabled=delegated_tokens_enabled,
-        ).session_id
-        if not hmac.compare_digest(expected_session_id, principal.session_id):
             return None
 
         run.status = FunctionRunStatus.RUNNING
@@ -132,54 +114,61 @@ class FunctionExecutionRepository:
         await self.session.flush()
         return self._runtime_context(run, function)
 
-    async def runtime_context(
+    async def authorized_runtime_context(
         self,
         run_id: UUID,
-        callback_token: str,
+        principal: FunctionSessionPrincipal,
+        *,
+        delegated_tokens_enabled: bool,
     ) -> FunctionRunRuntimeContext | None:
-        expected = self._credential_signer.derive(run_id)
-        if not hmac.compare_digest(expected, callback_token):
-            return None
         rows = await self._run_and_function(run_id)
         if rows is None:
             return None
         run, function = rows
+        # Synchronous API runs return their terminal report on the invocation
+        # response. Only durable JOB runs may complete through this callback
+        # authorization path.
+        if run.job_id is None:
+            return None
         if (
             run.status != FunctionRunStatus.RUNNING
             and run.status not in TERMINAL_RUN_STATES
+        ) or run.revision_hash is None:
+            return None
+        if not self._principal_matches(
+            principal,
+            user_id=run.user_id,
+            pod_id=function.pod_id,
+            function_id=run.function_id,
+            function_name=function.name,
+            revision_hash=run.revision_hash,
+            delegated_tokens_enabled=delegated_tokens_enabled,
         ):
             return None
         return self._runtime_context(run, function)
 
-    async def active_runtime_context(
+    async def authorize_definition_artifact(
         self,
-        run_id: UUID,
-        callback_token: str,
+        function_id: UUID,
+        revision_hash: str,
+        principal: FunctionSessionPrincipal,
         *,
-        now: datetime | None = None,
-    ) -> FunctionRunRuntimeContext | None:
-        """Authorize reads that are useful only while the exact run is active.
-
-        Callback credentials are restart-stable so a terminal report can be
-        acknowledged idempotently. That property must not turn the artifact
-        endpoint into an indefinitely valid download capability.
-        """
-
-        expected = self._credential_signer.derive(run_id)
-        if not hmac.compare_digest(expected, callback_token):
-            return None
-        rows = await self._run_and_function(run_id)
-        if rows is None:
-            return None
-        run, function = rows
-        timestamp = now or datetime.now(timezone.utc)
-        if (
-            run.status != FunctionRunStatus.RUNNING
-            or run.deadline_at is None
-            or run.deadline_at <= timestamp
-        ):
-            return None
-        return self._runtime_context(run, function)
+        delegated_tokens_enabled: bool,
+    ) -> bool:
+        function = await self.session.scalar(
+            select(FunctionModel).where(FunctionModel.id == function_id)
+        )
+        if function is None:
+            return False
+        return self._principal_matches(
+            principal,
+            user_id=principal.user_id,
+            pod_id=function.pod_id,
+            function_id=function.id,
+            function_name=function.name,
+            revision_hash=revision_hash,
+            delegated_tokens_enabled=delegated_tokens_enabled,
+        )
 
     async def complete(
         self,
@@ -339,6 +328,8 @@ class FunctionExecutionRepository:
             function_id=function.id,
             function_name=function.name,
             user_id=run.user_id,
+            user_email=run.user_email,
+            config=function.config,
             mode=mode,
             deadline_at=run.deadline_at,
             revision_hash=run.revision_hash,
@@ -367,3 +358,33 @@ class FunctionExecutionRepository:
             function_id=function.id,
             function_name=function.name,
         )
+
+    @staticmethod
+    def _principal_matches(
+        principal: FunctionSessionPrincipal,
+        *,
+        user_id: UUID,
+        pod_id: UUID,
+        function_id: UUID,
+        function_name: str,
+        revision_hash: str,
+        delegated_tokens_enabled: bool,
+    ) -> bool:
+        if (
+            principal.user_id != user_id
+            or principal.pod_id != pod_id
+            or principal.function_id != function_id
+        ):
+            return False
+        expected_session_id = FunctionSessionTokenKey(
+            user_id=user_id,
+            pod_id=pod_id,
+            function_id=function_id,
+            revision_hash=revision_hash,
+            # Use the signed actor name when present so an in-flight token
+            # remains valid if the mutable function name changes.
+            workload_name=principal.actor_name or function_name,
+            scope=principal.scope,
+            delegated_tokens_enabled=delegated_tokens_enabled,
+        ).session_id
+        return hmac.compare_digest(expected_session_id, principal.session_id)

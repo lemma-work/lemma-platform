@@ -335,8 +335,9 @@ allocation is destroyed on every provider.
    retry permission.
 7. **No heartbeat protocol.** Active AgentBox operations and provider timeouts cover
    liveness. Long operations set their timeout once from the absolute deadline.
-8. **No function polling in healthy execution.** Runtime callbacks complete durable
-   runs. Inspection exists for reconciliation and cancellation only.
+8. **No function polling in healthy execution.** API responses and JOB callbacks
+   complete durable runs. Inspection exists for reconciliation and cancellation
+   only.
 
 ## 9. Security invariants
 
@@ -350,10 +351,11 @@ allocation is destroyed on every provider.
 - Function invocation and the Lemma SDK use one delegated function-session bearer,
   cached for up to five minutes by `(user, pod, function, revision hash)`. Grants
   remain live backend data and are checked when the token is used rather than
-  embedded in the token or revision identity. The bearer is the only credential
-  that authorizes execution. Exact `function_run_id` and the atomic run claim
-  provide per-call deduplication. A separate run-scoped callback capability is
-  returned only after claim and is not exposed to function code.
+  embedded in the token or revision identity. The bearer authorizes invocation,
+  exact-revision artifact download, the Lemma SDK, and JOB terminal reporting.
+  The backend atomically starts each run before invocation; the exact
+  `function_run_id` and runtime registry provide per-call deduplication. No
+  separate callback or compilation capability exists.
 - Function public ingress is disabled.
 - Private, link-local, metadata, cluster-control, Docker socket, and provider-control
   networks are unavailable to user/function code.
@@ -361,8 +363,9 @@ allocation is destroyed on every provider.
 - Docker is development/conformance only for untrusted multi-tenant execution.
 - Kubernetes production uses an approved sandbox `RuntimeClass`, initially gVisor
   or Kata.
-- Every callback and terminal transition is authenticated for the exact
-  `function_run_id` and conditional on its current durable state.
+- Every JOB callback and terminal transition is authenticated for the exact
+  function principal and `function_run_id`, then conditioned on its current
+  durable state.
 
 ## 10. Source-of-truth rule
 
@@ -390,5 +393,5 @@ invariants, and the acceptance gates together.
 | Destroy | Permanently remove a physical allocation; for workspace delete, storage too |
 | Function run ID | Durable identity and idempotency key for one requested execution |
 | Unknown allocation outcome | Provider allocation creation may have succeeded but cannot yet be conclusively observed |
-| Runtime gateway | Trusted backend API for function-session validation, run claim, artifact access, callbacks, and SDK operations |
+| Runtime gateway | Trusted backend API for exact-revision artifact access, JOB terminal callbacks, and SDK operations authenticated by the delegated function session |
 | Egress gateway | Trusted proxy for the explicitly allowed function network path |
