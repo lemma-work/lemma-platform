@@ -8,38 +8,27 @@ import httpx
 import pytest
 
 from agentbox.function_runtime.runner import GatewayClient
-from agentbox.function_runtime.runtime_models import (
-    RunClaim,
-    RuntimeIdentity,
-    TerminalReport,
-)
+from agentbox.function_runtime.runtime_models import TerminalReport
 from agentbox.function_runtime.trace_context import bind_trace_context
 
 
 pytestmark = pytest.mark.asyncio
 
 
-def _claim() -> RunClaim:
-    return RunClaim(
-        run_id=uuid4(),
-        callback_token="callback-token-" + "x" * 32,
-        artifact_url="/artifact",
-        revision_hash=f"sha256:{'a' * 64}",
-        input_data={},
-        config=None,
-        identity=RuntimeIdentity(
-            user_id=uuid4(),
-            pod_id=uuid4(),
-            function_id=uuid4(),
-            function_name="probe",
-        ),
-        lemma_token="lemma-token",
-        lemma_base_url="https://api.lemma.test",
-        deadline_at=datetime.now(timezone.utc) + timedelta(seconds=30),
+def _deadline() -> datetime:
+    return datetime.now(timezone.utc) + timedelta(seconds=30)
+
+
+def _report() -> TerminalReport:
+    return TerminalReport(
+        status="completed",
+        output_data={"answer": 42},
+        stdout="done",
+        stderr="",
     )
 
 
-async def test_definition_artifact_uses_revision_scoped_compilation_token():
+async def test_artifact_uses_same_revision_scoped_function_token():
     observed: httpx.Request | None = None
 
     async def handler(request: httpx.Request) -> httpx.Response:
@@ -54,8 +43,8 @@ async def test_definition_artifact_uses_revision_scoped_compilation_token():
         transport=httpx.MockTransport(handler),
     )
     try:
-        artifact = await gateway.definition_artifact(
-            "compilation-token",
+        artifact = await gateway.artifact(
+            "delegated-function-token",
             function_id=function_id,
             revision_hash=revision_hash,
         )
@@ -65,10 +54,10 @@ async def test_definition_artifact_uses_revision_scoped_compilation_token():
     assert artifact == b"artifact"
     assert observed is not None
     assert observed.url.path == (
-        f"/internal/function-runtime/functions/{function_id}/artifact"
+        f"/internal/function-runtime/functions/{function_id}/artifacts/{revision_hash}"
     )
-    assert observed.headers["Authorization"] == "Bearer compilation-token"
-    assert observed.headers["If-Match"] == f'"{revision_hash}"'
+    assert observed.headers["Authorization"] == "Bearer delegated-function-token"
+    assert "If-Match" not in observed.headers
 
 
 async def test_terminal_callback_retries_identical_payload_after_lost_response():
@@ -84,25 +73,26 @@ async def test_terminal_callback_retries_identical_payload_after_lost_response()
             request=request,
         )
 
-    claim = _claim()
-    report = TerminalReport(
-        status="completed",
-        output_data={"answer": 42},
-        stdout="done",
-        stderr="",
-    )
+    run_id = uuid4()
     gateway = GatewayClient(
         "https://gateway.lemma.test",
         transport=httpx.MockTransport(handler),
     )
     try:
-        await gateway.terminal(claim, report)
+        await gateway.terminal(
+            "delegated-function-token",
+            run_id=run_id,
+            deadline_at=_deadline(),
+            report=_report(),
+        )
     finally:
         await gateway.close()
 
     assert len(requests) == 2
     assert requests[0].url == requests[1].url
-    assert requests[0].headers["Authorization"] == requests[1].headers["Authorization"]
+    assert requests[0].headers["Authorization"] == (
+        "Bearer delegated-function-token"
+    )
     assert json.loads(requests[0].content) == json.loads(requests[1].content)
 
 
@@ -120,20 +110,16 @@ async def test_terminal_callback_retries_transient_status_and_honors_retry_after
             )
         return httpx.Response(200, json={"accepted": True}, request=request)
 
-    claim = _claim()
     gateway = GatewayClient(
         "https://gateway.lemma.test",
         transport=httpx.MockTransport(handler),
     )
     try:
         await gateway.terminal(
-            claim,
-            TerminalReport(
-                status="completed",
-                output_data={},
-                stdout="",
-                stderr="",
-            ),
+            "delegated-function-token",
+            run_id=uuid4(),
+            deadline_at=_deadline(),
+            report=_report(),
         )
     finally:
         await gateway.close()
@@ -149,7 +135,6 @@ async def test_terminal_callback_does_not_retry_state_or_credential_rejection():
         attempts += 1
         return httpx.Response(409, json={"detail": "terminal run"}, request=request)
 
-    claim = _claim()
     gateway = GatewayClient(
         "https://gateway.lemma.test",
         transport=httpx.MockTransport(handler),
@@ -157,18 +142,44 @@ async def test_terminal_callback_does_not_retry_state_or_credential_rejection():
     try:
         with pytest.raises(httpx.HTTPStatusError):
             await gateway.terminal(
-                claim,
-                TerminalReport(
-                    status="completed",
-                    output_data={},
-                    stdout="",
-                    stderr="",
-                ),
+                "delegated-function-token",
+                run_id=uuid4(),
+                deadline_at=_deadline(),
+                report=_report(),
             )
     finally:
         await gateway.close()
 
     assert attempts == 1
+
+
+async def test_terminal_callback_does_not_attempt_after_retry_deadline():
+    attempts = 0
+
+    async def handler(request: httpx.Request) -> httpx.Response:
+        nonlocal attempts
+        attempts += 1
+        return httpx.Response(200, json={"accepted": True}, request=request)
+
+    gateway = GatewayClient(
+        "https://gateway.lemma.test",
+        transport=httpx.MockTransport(handler),
+    )
+    try:
+        with pytest.raises(
+            TimeoutError,
+            match="terminal callback retry deadline elapsed",
+        ):
+            await gateway.terminal(
+                "delegated-function-token",
+                run_id=uuid4(),
+                deadline_at=datetime.now(timezone.utc) - timedelta(seconds=61),
+                report=_report(),
+            )
+    finally:
+        await gateway.close()
+
+    assert attempts == 0
 
 
 async def test_gateway_callbacks_forward_current_w3c_trace_context():
@@ -178,7 +189,6 @@ async def test_gateway_callbacks_forward_current_w3c_trace_context():
         requests.append(request)
         return httpx.Response(200, json={"accepted": True}, request=request)
 
-    claim = _claim()
     gateway = GatewayClient(
         "https://gateway.lemma.test",
         transport=httpx.MockTransport(handler),
@@ -188,13 +198,10 @@ async def test_gateway_callbacks_forward_current_w3c_trace_context():
             {"traceparent": ("00-1234567890abcdef1234567890abcdef-1234567890abcdef-01")}
         ):
             await gateway.terminal(
-                claim,
-                TerminalReport(
-                    status="completed",
-                    output_data={},
-                    stdout="",
-                    stderr="",
-                ),
+                "delegated-function-token",
+                run_id=uuid4(),
+                deadline_at=_deadline(),
+                report=_report(),
             )
     finally:
         await gateway.close()

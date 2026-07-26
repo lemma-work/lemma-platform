@@ -2,10 +2,10 @@
 
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import datetime, timedelta
 from uuid import UUID
 
-from sqlalchemy import delete, select, update
+from sqlalchemy import and_, delete, or_, select, update
 from sqlalchemy.orm import load_only
 
 from app.core.authorization.context import Context, ResourceType, ResourceVisibility
@@ -326,17 +326,31 @@ class FunctionRunRepository(FunctionRunRepositoryPort):
         *,
         now: datetime,
         limit: int = 100,
+        job_callback_grace_seconds: int = 0,
     ) -> int:
         """Terminalize runs whose one allowed execution window has elapsed."""
 
         statement = (
             select(FunctionRunModel)
             .where(
-                FunctionRunModel.status.in_(
-                    (FunctionRunStatus.PENDING, FunctionRunStatus.RUNNING)
+                or_(
+                    and_(
+                        FunctionRunModel.status == FunctionRunStatus.PENDING,
+                        FunctionRunModel.deadline_at <= now,
+                    ),
+                    and_(
+                        FunctionRunModel.status == FunctionRunStatus.RUNNING,
+                        FunctionRunModel.job_id.is_(None),
+                        FunctionRunModel.deadline_at <= now,
+                    ),
+                    and_(
+                        FunctionRunModel.status == FunctionRunStatus.RUNNING,
+                        FunctionRunModel.job_id.is_not(None),
+                        FunctionRunModel.deadline_at
+                        <= now - timedelta(seconds=job_callback_grace_seconds),
+                    ),
                 ),
                 FunctionRunModel.deadline_at.is_not(None),
-                FunctionRunModel.deadline_at <= now,
             )
             .order_by(FunctionRunModel.deadline_at, FunctionRunModel.id)
             .limit(limit)

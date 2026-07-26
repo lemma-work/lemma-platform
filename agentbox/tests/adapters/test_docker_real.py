@@ -994,6 +994,7 @@ async def test_real_docker_function_runtime_port_and_exact_destroy(
         assert response.json() == {
             "ready": True,
             "runtime_abi": "lemma-function-python-3.14-linux-x86_64-1",
+            "protocol_version": 2,
         }
 
         assert await lifecycle.destroy(key, deadline_at=deadline)

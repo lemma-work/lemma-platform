@@ -4,6 +4,7 @@ import asyncio
 from collections import OrderedDict
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
+from datetime import datetime, timezone
 import hashlib
 import time
 from uuid import UUID
@@ -11,7 +12,13 @@ from uuid import UUID
 from app.core.request_context import create_inherited_task
 
 
-FunctionTokenMinter = Callable[..., Awaitable[str]]
+@dataclass(frozen=True, slots=True)
+class FunctionSessionToken:
+    value: str
+    expires_at: datetime
+
+
+FunctionTokenMinter = Callable[..., Awaitable[FunctionSessionToken]]
 
 
 @dataclass(frozen=True, slots=True)
@@ -43,8 +50,8 @@ class FunctionSessionTokenKey:
 
 @dataclass(frozen=True, slots=True)
 class _CachedToken:
-    value: str
-    expires_at: float
+    token: FunctionSessionToken
+    cache_expires_at: float
 
 
 class FunctionSessionTokenCache:
@@ -56,6 +63,7 @@ class FunctionSessionTokenCache:
         ttl_seconds: float = 300,
         max_entries: int = 4096,
         clock: Callable[[], float] = time.monotonic,
+        wall_clock: Callable[[], datetime] = lambda: datetime.now(timezone.utc),
     ) -> None:
         if ttl_seconds <= 0:
             raise ValueError("function session token TTL must be positive")
@@ -64,10 +72,13 @@ class FunctionSessionTokenCache:
         self._ttl_seconds = ttl_seconds
         self._max_entries = max_entries
         self._clock = clock
+        self._wall_clock = wall_clock
         self._entries: OrderedDict[FunctionSessionTokenKey, _CachedToken] = (
             OrderedDict()
         )
-        self._inflight: dict[FunctionSessionTokenKey, asyncio.Task[str]] = {}
+        self._inflight: dict[
+            FunctionSessionTokenKey, asyncio.Task[FunctionSessionToken]
+        ] = {}
         self._lock = asyncio.Lock()
 
     async def get(
@@ -75,13 +86,19 @@ class FunctionSessionTokenCache:
         key: FunctionSessionTokenKey,
         *,
         minter: FunctionTokenMinter,
-    ) -> str:
+        min_validity_until: datetime | None = None,
+    ) -> FunctionSessionToken:
         now = self._clock()
+        required_until = min_validity_until or self._wall_clock()
         async with self._lock:
             cached = self._entries.get(key)
-            if cached is not None and cached.expires_at > now:
+            if (
+                cached is not None
+                and cached.cache_expires_at > now
+                and cached.token.expires_at > required_until
+            ):
                 self._entries.move_to_end(key)
-                return cached.value
+                return cached.token
             if cached is not None:
                 self._entries.pop(key, None)
             task = self._inflight.get(key)
@@ -90,7 +107,12 @@ class FunctionSessionTokenCache:
                 self._inflight[key] = task
 
         try:
-            return await asyncio.shield(task)
+            token = await asyncio.shield(task)
+            if token.expires_at <= required_until:
+                raise ValueError(
+                    "fresh function token expires before the required execution window"
+                )
+            return token
         finally:
             if task.done():
                 async with self._lock:
@@ -102,8 +124,8 @@ class FunctionSessionTokenCache:
         key: FunctionSessionTokenKey,
         *,
         minter: FunctionTokenMinter,
-    ) -> str:
-        value = await minter(
+    ) -> FunctionSessionToken:
+        token = await minter(
             user_id=key.user_id,
             workload_type="function",
             workload_id=key.function_id,
@@ -115,10 +137,10 @@ class FunctionSessionTokenCache:
         )
         async with self._lock:
             self._entries[key] = _CachedToken(
-                value=value,
-                expires_at=self._clock() + self._ttl_seconds,
+                token=token,
+                cache_expires_at=self._clock() + self._ttl_seconds,
             )
             self._entries.move_to_end(key)
             while len(self._entries) > self._max_entries:
                 self._entries.popitem(last=False)
-        return value
+        return token

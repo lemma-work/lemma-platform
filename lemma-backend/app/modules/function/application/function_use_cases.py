@@ -78,6 +78,8 @@ class FunctionUseCases:
         self,
         function: FunctionEntity,
         code: str,
+        *,
+        user_id: UUID,
     ) -> None:
         """Build and stage one immutable executable revision with no DB connection."""
         if function.id is None:
@@ -92,6 +94,7 @@ class FunctionUseCases:
         schemas = await self._compiler.extract_schemas(
             function,
             function.pending_artifact,
+            user_id=user_id,
         )
         function.input_schema = schemas.input
         function.output_schema = schemas.output
@@ -181,6 +184,7 @@ class FunctionUseCases:
         await self._apply_code(
             created,
             code,
+            user_id=user_id,
         )
 
         async with pod_context_scope(
@@ -219,6 +223,7 @@ class FunctionUseCases:
             await self._apply_code(
                 plan.function,
                 plan.code,
+                user_id=user_id,
             )
 
         async with pod_context_scope(
@@ -286,6 +291,7 @@ class FunctionUseCases:
             await self._apply_code(
                 created,
                 code,
+                user_id=user_id,
             )
         else:
             assert plan is not None
@@ -293,6 +299,7 @@ class FunctionUseCases:
                 await self._apply_code(
                     plan.function,
                     plan.code,
+                    user_id=user_id,
                 )
 
         async with uow_scope(self._uow_factory) as uow:
@@ -500,7 +507,8 @@ class FunctionUseCases:
         The run and its deterministic ``job_id`` dispatch intent are already
         committed when this method is called. If publication has an ambiguous
         outcome, the reconciler safely republishes the same task identity and
-        the run claim prevents a second execution.
+        the atomic ``PENDING`` to ``RUNNING`` transition prevents a second
+        execution attempt.
         """
 
         if run.id is None:

@@ -509,18 +509,21 @@ For each invocation:
    application port;
 3. AgentBox extends the sandbox timeout once, coalesced across a burst, to at least
    `run deadline + idle grace`;
-4. the backend sends its cached delegated function-session bearer, exact revision
-   hash, run ID, gateway URL, run control capability, and typed input through the
-   signed AgentBox port proxy;
-5. the resident runtime claims the run, uses/downloads the verified artifact,
-   leases an exact revision worker, and reports started/terminal callbacks;
-6. cancellation authenticates the run control capability and kills
-   only the leased worker process group;
+4. the backend atomically starts the run, then sends the complete protocol-v2
+   envelope and its cached delegated function-session bearer through the signed
+   AgentBox port proxy;
+5. the resident runtime uses that bearer to download the exact verified artifact
+   on a cache miss and leases an exact revision worker. API invocations return
+   their terminal report directly; JOB invocations post the terminal report with
+   the same bearer;
+6. cancellation is routed through the already-authenticated AgentBox manager to
+   the exact pod sandbox and kills only the matching function/run worker group;
 7. AgentBox kills the exact sandbox after five idle minutes.
 
-No heartbeat or provider process polling is used. The invocation response and
-durable callbacks are guarded by the backend run state. Neither AgentBox nor the
-backend replays an invocation after an ambiguous response.
+No runtime claim, callback capability, heartbeat, or provider process polling is
+used. The invocation response and durable JOB callback are guarded by the backend
+run state. After an ambiguous invocation response, the backend may retry once
+through the exact same AgentBox grant; the runtime's run registry deduplicates it.
 
 ### 7.6 Network and ports
 
@@ -531,7 +534,7 @@ memory for the upstream request, and never persisted or returned to backend call
 Function sandboxes set `allow_public_traffic=false`; E2B's authenticated TLS traffic
 gateway remains reachable with the per-sandbox traffic token. For the initial
 release their outbound network allowlist contains only the exact Lemma runtime
-gateway host needed for claim, artifact, SDK, and callback traffic. DNS needed to
+gateway host needed for artifact, SDK, and JOB callback traffic. DNS needed to
 resolve that host is provider-controlled. If the selected E2B template/account
 cannot enforce this restriction, the function profile is rejected rather than
 weakened. Revision-declared third-party egress is a later gateway feature, not an

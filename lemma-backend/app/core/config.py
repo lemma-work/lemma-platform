@@ -822,10 +822,6 @@ class Settings(BaseSettings):
         default="local-uv-builder-1",
         description="Immutable builder identity included in function revision hashes",
     )
-    function_runtime_secret: Optional[SecretStr] = Field(
-        default=None,
-        description="HMAC key deriving restart-stable function runtime capabilities",
-    )
     function_session_token_cache_ttl_seconds: int = Field(
         default=300,
         ge=30,
@@ -852,7 +848,7 @@ class Settings(BaseSettings):
         le=100_000,
     )
     function_api_deadline_seconds: int = Field(default=120, ge=1, le=3600)
-    function_job_deadline_seconds: int = Field(default=600, ge=1, le=82_800)
+    function_job_deadline_seconds: int = Field(default=600, ge=1, le=3_000)
     function_runtime_gateway_url: Optional[str] = Field(
         default=None,
         description="Backend URL reachable from function sandboxes",

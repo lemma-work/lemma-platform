@@ -1545,7 +1545,6 @@ async def test_api_function_timeout_marks_run_failed_and_stops_execution(
     table_name = f"timeout_records_{suffix}"
 
     await _create_table(authenticated_client, pod_id, table_name)
-    monkeypatch.setattr(backend_settings, "function_api_deadline_seconds", 2)
 
     code = f"""#input_type_name: TimeoutInput
 #output_type_name: TimeoutResult
@@ -1583,6 +1582,9 @@ async def {function_name}(ctx: FunctionContext, data: TimeoutInput) -> TimeoutRe
         },
     )
 
+    # Function creation performs schema extraction and prewarms the revision
+    # worker. Restrict only the execution whose timeout behavior this test owns.
+    monkeypatch.setattr(backend_settings, "function_api_deadline_seconds", 2)
     response = await authenticated_client.post(
         f"/pods/{pod_id}/functions/{function_name}/runs",
         json={"input_data": {"title": "should-not-write"}},

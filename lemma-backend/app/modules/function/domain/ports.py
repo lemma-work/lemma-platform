@@ -89,6 +89,8 @@ class FunctionSchemaExecutionPort(Protocol):
         *,
         function_id: UUID,
         pod_id: UUID,
+        user_id: UUID,
+        function_name: str,
         artifact: FunctionArtifact,
     ) -> FunctionSchemaSet:
         raise NotImplementedError

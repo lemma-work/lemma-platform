@@ -65,6 +65,8 @@ class FunctionDefinitionCompiler:
         self,
         function: FunctionEntity,
         artifact: FunctionArtifact,
+        *,
+        user_id: UUID,
     ) -> FunctionSchemaSet:
         if function.id is None:
             raise FunctionValidationError(
@@ -73,5 +75,7 @@ class FunctionDefinitionCompiler:
         return await self._schema_executor.extract_schemas(
             function_id=function.id,
             pod_id=function.pod_id,
+            user_id=user_id,
+            function_name=function.name,
             artifact=artifact,
         )

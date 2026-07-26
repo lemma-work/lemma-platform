@@ -28,15 +28,12 @@ from app.modules.function.application.function_definition_compiler import (
 from app.modules.function.application.function_use_cases import FunctionUseCases
 from app.modules.function.services.function_file_manager import FunctionFileManager
 from app.modules.function.services.function_service import FunctionService
-from app.core.config import reveal_secret, settings
+from app.core.config import settings
 from app.core.object_storage import build_object_store, local_file_storage_path
 from app.core.request_context import correlation_headers
 from app.composition.workspace_identity import (
-    mint_workspace_token,
+    mint_function_session_token,
     resolve_workspace_organization_id,
-)
-from app.modules.function.application.function_runtime_credentials import (
-    FunctionRuntimeCapabilitySigner,
 )
 from app.modules.function.application.function_runtime_gateway import (
     FunctionRuntimeGateway,
@@ -92,22 +89,12 @@ def get_function_storage_factory():
     return build
 
 
-def build_function_runtime_capability_signer() -> FunctionRuntimeCapabilitySigner:
-    secret = reveal_secret(settings.function_runtime_secret)
-    if not secret:
-        raise RuntimeError("FUNCTION_RUNTIME_SECRET must be configured")
-    return FunctionRuntimeCapabilitySigner(secret)
-
-
 def get_function_runtime_gateway(
     uow_factory: UnitOfWorkFactory = Depends(get_uow_factory),
 ) -> FunctionRuntimeGateway:
     return FunctionRuntimeGateway(
         uow_factory=uow_factory,
         storage_factory=get_function_storage_factory(),
-        credential_signer=build_function_runtime_capability_signer(),
-        organization_resolver=resolve_workspace_organization_id,
-        lemma_base_url=settings.function_runtime_gateway_url or settings.api_url,
         delegated_tokens_enabled=settings.authz_delegated_tokens_enabled,
     )
 
@@ -159,22 +146,24 @@ def _function_agentbox_client() -> AgentBoxClient:
 def build_function_dispatcher(uow_factory: UnitOfWorkFactory) -> FunctionDispatcher:
     return FunctionDispatcher(
         uow_factory=uow_factory,
-        credential_signer=build_function_runtime_capability_signer(),
         agentbox_client_factory=_function_agentbox_client,
-        token_minter=mint_workspace_token,
+        token_minter=mint_function_session_token,
         token_cache=_function_session_token_cache,
         endpoint_cache=_function_runtime_endpoint_cache,
         runtime_http_client_factory=_function_runtime_http_clients.get,
+        organization_resolver=resolve_workspace_organization_id,
         delegated_tokens_enabled=settings.authz_delegated_tokens_enabled,
     )
 
 
 def build_function_schema_dispatcher() -> FunctionSchemaDispatcher:
     return FunctionSchemaDispatcher(
-        credential_signer=build_function_runtime_capability_signer(),
         agentbox_client_factory=_function_agentbox_client,
+        token_minter=mint_function_session_token,
+        token_cache=_function_session_token_cache,
         endpoint_cache=_function_runtime_endpoint_cache,
         runtime_http_client_factory=_function_runtime_http_clients.get,
+        delegated_tokens_enabled=settings.authz_delegated_tokens_enabled,
     )
 
 
