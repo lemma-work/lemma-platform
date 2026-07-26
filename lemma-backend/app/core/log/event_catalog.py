@@ -263,6 +263,8 @@ EVENT_CATALOG: dict[str, EventSpec] = {
     'connectors.schema_compiler.rejected_connector_schema_snippet.diagnostic': EventSpec('debug', frozenset({'error_type'})),
     'crypto.keys.ignoring_unparsable_secret_encryption_keyset.diagnostic': EventSpec('debug', frozenset()),
     'crypto.rotation.reencrypt_s_scanned_d_migrated.observed': EventSpec('debug', frozenset()),
+    'datastore.access.files_withheld': EventSpec('warning', frozenset({'actor_type', 'total_candidates', 'withheld_count'})),
+    'datastore.access.files_withheld.expected': EventSpec('info', frozenset({'actor_type', 'total_candidates', 'withheld_count'})),
     'datastore.authorization.authorization_check_document_admin_user.diagnostic': EventSpec('debug', frozenset({'pod_id', 'user_id'})),
     'datastore.changes_controller.rejected_datastore_changes_websocket.diagnostic': EventSpec('debug', frozenset({'pod_id', 'user_id'})),
     'datastore.changes_controller.session_resolution_datastore_changes_websocket.diagnostic': EventSpec('debug', frozenset()),
