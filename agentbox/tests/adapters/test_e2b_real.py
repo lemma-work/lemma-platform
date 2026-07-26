@@ -487,6 +487,7 @@ async def test_real_e2b_function_runtime_port_and_exact_destroy(
         assert response.json() == {
             "ready": True,
             "runtime_abi": "lemma-function-python-3.14-linux-x86_64-1",
+            "protocol_version": 2,
         }
 
         grant = await port_access.create(
