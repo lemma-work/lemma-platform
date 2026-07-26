@@ -85,7 +85,13 @@ _INFO_NOISE_LOGGER_PREFIXES = (
     "httpcore",
     "httpx",
     "sqlalchemy.engine",
-    "sqlalchemy.orm.mapper",
+    # SQLAlchemy's mapper configuration narrates every relationship, column
+    # property, and loader strategy through class-specific descendants such as
+    # ``sqlalchemy.orm.relationships.RelationshipProperty`` and
+    # ``sqlalchemy.orm.strategies.LazyLoader``. Keep the ORM at its documented
+    # WARNING default during normal INFO operation; warnings/errors still
+    # propagate through the redacted JSON pipeline.
+    "sqlalchemy.orm",
     "sqlalchemy.pool",
     "streaq",
     "uvicorn.access",

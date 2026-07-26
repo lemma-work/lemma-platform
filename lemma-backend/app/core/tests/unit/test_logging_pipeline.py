@@ -438,7 +438,13 @@ def test_release_and_trace_identity_are_top_level(monkeypatch, captured_stdout) 
 
 @pytest.mark.parametrize(
     "logger_name",
-    ("sqlalchemy.engine.Engine", "sqlalchemy.orm.mapper.Mapper"),
+    (
+        "sqlalchemy.engine.Engine",
+        "sqlalchemy.orm.mapper.Mapper",
+        "sqlalchemy.orm.properties.ColumnProperty",
+        "sqlalchemy.orm.relationships.RelationshipProperty",
+        "sqlalchemy.orm.strategies.LazyLoader",
+    ),
 )
 def test_sqlalchemy_info_noise_is_suppressed_at_info(
     captured_stdout,
@@ -452,16 +458,27 @@ def test_sqlalchemy_info_noise_is_suppressed_at_info(
     )
     sqlalchemy_logger = logging.getLogger(logger_name)
 
-    sqlalchemy_logger.info("routine SQLAlchemy detail")
-    sqlalchemy_logger.warning("SQLAlchemy warning")
+    sqlalchemy_logger.info("routine SQLAlchemy detail token=CANARY")
+    sqlalchemy_logger.warning("SQLAlchemy warning token=CANARY")
+    get_logger("app.demo").info("service.started")
 
     records = captured_stdout()
-    assert [record["event"] for record in records] == ["SQLAlchemy warning"]
+    assert [record["event"] for record in records] == [
+        "SQLAlchemy warning token=[REDACTED]",
+        "service.started",
+    ]
+    assert "CANARY" not in json.dumps(records)
 
 
 @pytest.mark.parametrize(
     "logger_name",
-    ("sqlalchemy.engine.Engine", "sqlalchemy.orm.mapper.Mapper"),
+    (
+        "sqlalchemy.engine.Engine",
+        "sqlalchemy.orm.mapper.Mapper",
+        "sqlalchemy.orm.properties.ColumnProperty",
+        "sqlalchemy.orm.relationships.RelationshipProperty",
+        "sqlalchemy.orm.strategies.LazyLoader",
+    ),
 )
 def test_sqlalchemy_debug_remains_available_when_requested(
     captured_stdout,
