@@ -2,9 +2,10 @@
 
 import Image from "next/image";
 import Link from "next/link";
-import { GithubLogo, Minus, Plus } from "@/components/ui/icons";
+import { ArrowRight, GithubLogo } from "@/components/ui/icons";
 import { useEffect, useRef, useState } from "react";
 import { Logo } from "@/components/brand/logo";
+import { ProductIcon } from "@/components/pod/product-icon";
 import type { SurfaceMode } from "./landing-data";
 import {
   githubUrl,
@@ -13,11 +14,10 @@ import {
   surfaceModes,
 } from "./landing-data";
 import {
-  HeroTicker,
-  MachineAtWork,
-  PodBlockGlyph,
   TypingTerminal,
+  WorkSurfaceStrip,
 } from "./landing-animations";
+import { HeroPodDemo } from "./hero-pod-demo";
 import { StackComparison, SurfacePreview } from "./landing-surfaces";
 
 export default function LandingPage() {
@@ -27,7 +27,7 @@ export default function LandingPage() {
     () => new Set(),
   );
   const [stackCompare, setStackCompare] = useState(50);
-  const [openPodBlock, setOpenPodBlock] = useState<string>("data");
+  const [openPodBlock, setOpenPodBlock] = useState<string>("apps");
   const podIframeRef = useRef<HTMLIFrameElement>(null);
   const rootRef = useRef<HTMLDivElement>(null);
 
@@ -53,8 +53,9 @@ export default function LandingPage() {
 
   const openPodSection = (key: string) => {
     setOpenPodBlock(key);
+    const visualKey = key === "connectors" ? "integrations" : key;
     podIframeRef.current?.contentWindow?.postMessage(
-      { type: "pod-drill", section: key },
+      { type: "pod-drill", section: visualKey },
       "*",
     );
   };
@@ -66,7 +67,7 @@ export default function LandingPage() {
   return (
     <div className="lp-react" ref={rootRef}>
       <header className="lp-header" aria-label="Site header">
-        <Link className="lp-brand" href="/">
+        <Link className="lp-brand" href="/" aria-label="Lemma home">
           <Logo
             className="lp-brand-logo"
             size="sm"
@@ -74,11 +75,11 @@ export default function LandingPage() {
           />
         </Link>
         <nav className="lp-nav" aria-label="Primary navigation">
-          <a href="#inside">Product</a>
+          <a href="#inside">How it works</a>
+          <a href="#showcase">Examples</a>
           <a href="/docs" target="_blank" rel="noreferrer">
             Docs
           </a>
-          <a href="#showcase">Showcase</a>
           <a
             className="lp-gh-link"
             href={githubUrl}
@@ -90,16 +91,9 @@ export default function LandingPage() {
           </a>
         </nav>
         <div className="lp-header-actions">
-          <Link href="/auth">Log in</Link>
-          <a
-            className="lp-button primary"
-            href={githubUrl}
-            target="_blank"
-            rel="noreferrer"
-          >
-            <GithubLogo aria-hidden className="lp-gh-icon" />
-            Star on GitHub
-          </a>
+          <Link className="lp-button primary" href="/auth">
+            Get started
+          </Link>
         </div>
       </header>
 
@@ -111,18 +105,17 @@ export default function LandingPage() {
                 <GithubLogo aria-hidden className="lp-gh-icon" />
                 Open source
               </span>
-              AI-native workspace
+              Purpose-built AI apps
             </p>
             <h1 className="lp-hero-headline" id="hero-title">
-              <span className="lp-hl-line">How humans and AI do</span>
+              The software you need
               <span className="lp-hl-line">
-                <span className="lp-hl-accent">real work</span>, together.
+                <span className="lp-hl-accent">doesn&apos;t exist yet.</span>
               </span>
             </h1>
             <p className="lp-subhead">
-              Teammates work from apps, Slack, WhatsApp, and email. Agents work
-              from the CLI. Lemma holds the shared state that keeps it all
-              moving.
+              Lemma gives any job its own AI app. Add your teammates, and let
+              agents keep the work moving in the background.
             </p>
 
             <div className="lp-actions">
@@ -140,16 +133,13 @@ export default function LandingPage() {
               </a>
             </div>
 
-            <HeroTicker />
+            <WorkSurfaceStrip />
           </div>
 
           <section className="lp-hero-theater" aria-label="Inside a Lemma pod">
             <div className="lp-theater-stage">
               <div className="lp-product-frame">
-                <iframe
-                  title="Inside a Lemma pod"
-                  src="/landing-page/pod-workspace.html?embed=1&section=agents"
-                />
+                <HeroPodDemo />
               </div>
             </div>
           </section>
@@ -159,50 +149,45 @@ export default function LandingPage() {
           <div className="lp-section-inner lp-reveal">
             <p className="lp-section-kicker">Inside a pod</p>
             <h2 className="lp-section-title">
-              A pod is where AI and humans <span>work together.</span>
+              Everything the work needs, <span>in one place.</span>
             </h2>
             <p className="lp-section-subhead">
-              Tables, agents, workflows, and approval gates - six building
-              blocks, one coherent system.
+              A pod holds the app people use and the agents, workflows, data,
+              docs, and connections behind it.
             </p>
 
             <div className="lp-pod-explorer">
-              <div className="lp-pod-acc" aria-label="Pod building blocks">
+              <nav className="lp-pod-resource-nav" aria-label="Pod resources">
                 {podBlocks.map((block) => {
                   const isOpen = openPodBlock === block.key;
                   return (
-                    <div
-                      className={`lp-pod-acc-item${isOpen ? " is-open" : ""}`}
+                    <button
+                      type="button"
+                      className={isOpen ? "is-active" : ""}
+                      aria-pressed={isOpen}
+                      onClick={() => openPodSection(block.key)}
                       key={block.key}
                     >
-                      <button
-                        type="button"
-                        className="lp-pod-acc-head"
-                        aria-expanded={isOpen}
-                        onClick={() => openPodSection(block.key)}
-                      >
-                        <span className="lp-pod-acc-glyph" aria-hidden="true">
-                          <PodBlockGlyph kind={block.key} />
-                        </span>
-                        <span className="lp-pod-acc-titles">
-                          <strong>{block.title}</strong>
-                          <span>{block.summary}</span>
-                        </span>
-                        <span className="lp-pod-acc-toggle" aria-hidden="true">
-                          {isOpen ? <Minus aria-hidden="true" /> : <Plus aria-hidden="true" />}
-                        </span>
-                      </button>
-                      <div className="lp-pod-acc-detail">
-                        <div>
-                          <p>{block.detail}</p>
-                        </div>
-                      </div>
-                    </div>
+                      <ProductIcon
+                        kind={block.iconKind}
+                        size="md"
+                        state={isOpen ? "selected" : "default"}
+                      />
+                      <span>
+                        <strong>{block.title}</strong>
+                        <small>{block.summary}</small>
+                      </span>
+                      <em>{block.count}</em>
+                      <ArrowRight aria-hidden="true" />
+                    </button>
                   );
                 })}
-              </div>
+              </nav>
 
-              <aside className="lp-pod-visual" aria-label="Inside a pod interactive component">
+              <aside
+                className="lp-pod-visual"
+                aria-label="Inside a pod interactive component"
+              >
                 <iframe
                   ref={podIframeRef}
                   title="Inside a pod"
@@ -336,8 +321,6 @@ export default function LandingPage() {
             <StackComparison value={stackCompare} onChange={setStackCompare} />
           </div>
         </section>
-
-        <MachineAtWork />
 
         <section className="lp-section lp-quickstart-section" id="quickstart">
           <div className="lp-section-inner lp-quickstart-grid lp-reveal">
