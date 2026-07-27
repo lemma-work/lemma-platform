@@ -2,7 +2,9 @@
 
 <img src="docs/Assets/Banner/lemma-brand-loop.gif" alt="Apps, agents, and data connected through Lemma to WhatsApp, Telegram, Slack, and Microsoft Teams" width="100%">
 
-**Give every recurring job its own agentic app.**
+**Build AI around the way your team works.**
+
+Create a custom harness with its own state, agents, workflows, permissions, and screens. Add your teammates and use it wherever the work already happens.
 
 ![License](https://img.shields.io/github/license/lemma-work/lemma-platform)
 ![Release](https://img.shields.io/github/v/release/lemma-work/lemma-platform)
@@ -10,7 +12,7 @@
 
 <a href="https://github.com/lemma-work/lemma-platform/releases/latest"><img src="https://img.shields.io/badge/Download_for_macOS-141414?style=for-the-badge&logo=apple&logoColor=white" alt="Download Lemma for macOS"></a>
 
-[Quickstart](#quickstart) · [Why an app](#why-an-app-not-another-chat) · [Inside a pod](#inside-a-pod) · [Surfaces](#one-app-many-surfaces) · [Coding agents](#build-and-operate-with-the-coding-agent-you-already-have) · [Docs](https://lemma.work/docs)
+[Quickstart](#quickstart) · [Why a harness](#one-harness-built-around-the-job) · [Inside a pod](#inside-a-pod) · [Surfaces](#one-app-many-surfaces) · [Coding agents](#build-with-the-coding-agent-you-already-use) · [Docs](https://lemma.work/docs)
 
 Website → **[lemma.work](https://lemma.work)**
 
@@ -18,35 +20,20 @@ Website → **[lemma.work](https://lemma.work)**
 
 ---
 
-A **Telegram bot** that tracks your expenses. A **research room** where agents gather sources, compare findings, and challenge each other's claims. A **support desk** where agents triage requests in the background and people step in for decisions.
+A Lemma harness is a working system built around one job—not a prompt wrapped in a chatbox. Your team works through purpose-built screens and the tools they already use. Agents work against the same state, follow the same workflows and permissions, and keep the job moving in the background.
 
-Each job carries its own state, actions, and ways for people to see the work. Lemma gives each job its own app: a place for people to see and direct the work, and for agents to remember, act, and keep it moving.
-
-**Open source. Runs locally. Use Claude Code or Codex through your existing subscription, Lemma-managed models, or any OpenAI-compatible or Anthropic-compatible provider. Run it on your laptop, your server, or Lemma Cloud.**
-
-<div align="center">
-
-**Build and operate Lemma apps with the coding agent you already use.**
-
-<table>
-  <tr>
-    <td align="center" width="112"><img src="docs/Assets/Logos/claude.svg" height="36" alt="Claude Code"><br><sub>Claude Code</sub></td>
-    <td align="center" width="112"><img src="docs/Assets/Logos/codex.svg" height="36" alt="Codex"><br><sub>Codex</sub></td>
-    <td align="center" width="112"><img src="docs/Assets/Logos/opencode-logo-light.svg" height="36" alt="OpenCode"><br><sub>OpenCode</sub></td>
-    <td align="center" width="112"><img src="docs/Assets/Logos/cursor.svg" height="36" alt="Cursor"><br><sub>Cursor</sub></td>
-    <td align="center" width="112"><img src="lemma-frontend/public/harnesslogos/antigravity.png" height="36" alt="Antigravity"><br><sub>Antigravity</sub></td>
-  </tr>
-</table>
-
-<em>The same agent authors the app, data, agents, workflows, and permissions — then verifies the result.</em>
-
-</div>
+**Open source. Run it on your laptop, your server, or Lemma Cloud. Use Claude Code or Codex through your existing subscription, Lemma-managed models, or any OpenAI- or Anthropic-compatible provider.**
 
 ## Quickstart
 
 ### Install Lemma Desktop
 
 <a href="https://github.com/lemma-work/lemma-platform/releases/latest"><img src="https://img.shields.io/badge/Download_for_macOS-141414?style=for-the-badge&logo=apple&logoColor=white" alt="Download Lemma for macOS"></a>
+
+Download Lemma Desktop, choose **Local**, and select **Install local services**. Lemma owns the local runtime, and the CLI discovers it automatically.
+
+<details>
+<summary>Desktop installation and local runtime details</summary>
 
 Download the signed **online** package from the latest release for macOS 14+
 on Apple silicon or Windows 11 23H2+ on x86-64. On macOS, drag Lemma to
@@ -66,7 +53,9 @@ workspace, API, built-app, and OAuth callback URLs. The CLI discovers the same
 endpoints from Desktop automatically. See the complete [local installation and
 operations guide](docs/installation.md).
 
-Install the CLI, point it at the local stack, and give your coding agent Lemma's skills:
+</details>
+
+Install the CLI, connect it to the local stack, and give your coding agent Lemma's skills:
 
 ```bash
 uv tool install lemma-terminal
@@ -118,9 +107,9 @@ lemma pod create my-team --with-starter   # scaffolds a working starter (table +
 lemma chat "what can you do in this pod?"
 ```
 
-## Why an app, not another chat
+## One harness, built around the job
 
-The shape of an agentic app follows the job. Picture three of them:
+The shape of a Lemma harness follows the job. The app is how people use it:
 
 **Personal expenses.** Send a receipt or voice note through Telegram. An agent extracts the purchase, asks when something is unclear, and keeps the ledger current. The app is where you review transactions, correct categories, and see where the money went.
 
@@ -128,7 +117,7 @@ The shape of an agentic app follows the job. Picture three of them:
 
 **Customer support.** Agents read new requests, gather the relevant context, draft replies, and flag decisions. The app brings together the conversation, proposed response, customer history, and the controls to edit, approve, or direct what happens next.
 
-Each app gives its job a purpose-built interface, shared state, and agents that keep working between visits. People work with what the agents produce and direct what happens next; the agents carry that direction back into the work.
+Each harness gives its job a purpose-built interface, shared state, and agents that keep working between visits. People work with what the agents produce and direct what happens next; the agents carry that direction back into the work.
 
 ## Work compounds inside the app
 
@@ -183,11 +172,27 @@ Supported today: **Slack, Microsoft Teams, Gmail, Outlook, Telegram, WhatsApp** 
 
 A pod also works for one person. One human and a few agents — with WhatsApp as the front door and tables as the memory — make a personal assistant that keeps state, asks before it acts, and picks up tomorrow where it left off today.
 
-## Build and operate with the coding agent you already have
+## Build with the coding agent you already use
 
 A pod can be exported as plain files, so building one is a job a coding agent is already good at: describe the system, let the agent author the bundle, and import it. The agent that builds it also tests it by creating records, running workflows, and chatting with the agents it defined. Building and operating use the same CLI.
 
-**Install Lemma's skills into the agent you already use** — Claude Code, Codex, OpenCode, or Cursor:
+<div align="center">
+
+<table>
+  <tr>
+    <td align="center" width="112"><img src="docs/Assets/Logos/claude.svg" height="36" alt="Claude Code"><br><sub>Claude Code</sub></td>
+    <td align="center" width="112"><img src="docs/Assets/Logos/codex.svg" height="36" alt="Codex"><br><sub>Codex</sub></td>
+    <td align="center" width="112"><img src="docs/Assets/Logos/opencode-logo-light.svg" height="36" alt="OpenCode"><br><sub>OpenCode</sub></td>
+    <td align="center" width="112"><img src="docs/Assets/Logos/cursor.svg" height="36" alt="Cursor"><br><sub>Cursor</sub></td>
+    <td align="center" width="112"><img src="lemma-frontend/public/harnesslogos/antigravity.png" height="36" alt="Antigravity"><br><sub>Antigravity</sub></td>
+  </tr>
+</table>
+
+<em>The same agent authors the app, data, agents, workflows, and permissions—then verifies the result.</em>
+
+</div>
+
+**Install Lemma's skills into the agent you already use** — Claude Code, Codex, OpenCode, Cursor, or Antigravity:
 
 ```bash
 lemma skills install             # auto-detects Claude Code / Codex / OpenCode / Cursor
