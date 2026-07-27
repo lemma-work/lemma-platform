@@ -60,6 +60,28 @@ class _RateLimitedResponseError(RuntimeError):
     """Stable type used by the transition-based 429 incident log."""
 
 
+async def _reconcile_before_serving(
+    reconciler: AgentBoxReconciler,
+    *,
+    operation_timeout_seconds: float,
+) -> None:
+    try:
+        await reconciler.reconcile_once(
+            deadline_at=datetime.now(timezone.utc)
+            + timedelta(seconds=operation_timeout_seconds)
+        )
+    except asyncio.CancelledError:
+        raise
+    except Exception as exc:
+        # Reconciliation is durable and retried by the bounded background loop.
+        # Provider/state repair must not make the request plane unavailable.
+        logger.warning(
+            "agentbox.reconcile.failed",
+            error_type=type(exc).__name__,
+            exc_info=True,
+        )
+
+
 class RequestContextMiddleware:
     """Bind trusted request lineage and emit one redacted request outcome."""
 
@@ -464,9 +486,11 @@ async def lifespan(app: FastAPI):
         retry_seconds=max(0.1, settings.agentbox_reconcile_interval_seconds),
     )
     app.state.reconciler = reconciler
-    await reconciler.reconcile_once(
-        deadline_at=datetime.now(timezone.utc)
-        + timedelta(seconds=settings.agentbox_reconcile_operation_timeout_seconds)
+    await _reconcile_before_serving(
+        reconciler,
+        operation_timeout_seconds=(
+            settings.agentbox_reconcile_operation_timeout_seconds
+        ),
     )
     app.state.reconciliation_task = create_background_task(
         reconciliation_loop(
