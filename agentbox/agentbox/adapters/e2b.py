@@ -454,6 +454,8 @@ class E2BSandboxAdapter:
                     if response.status_code == 200 and response.json().get("ready"):
                         return
                 except (httpx.TransportError, ValueError):
+                    # The gateway can race runtime startup; retry under the shared
+                    # deadline instead of treating a transient response as fatal.
                     pass
                 await asyncio.sleep(0.1)
         raise ProviderNotReady(

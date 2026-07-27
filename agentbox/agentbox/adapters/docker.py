@@ -431,6 +431,8 @@ class DockerSandboxAdapter:
                     deadline_at=deadline_at,
                 )
             except WorkspaceRuntimeError:
+                # Cleanup is best-effort: it must not replace the readiness result
+                # with a secondary error after the shared deadline has expired.
                 pass
             await client.close()
 
