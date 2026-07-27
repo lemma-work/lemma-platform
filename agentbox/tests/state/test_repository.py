@@ -303,12 +303,40 @@ async def test_lost_create_response_is_not_replayed(database: StateDatabase):
     assert len(provider.create_calls) == 1
 
 
-async def test_cancelled_create_becomes_durably_reconcilable(
+async def test_repeatedly_cancelled_create_becomes_durably_reconcilable(
     database: StateDatabase,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     provider = CancelledCreateProvider(database)
     service = SandboxLifecycleService(database, provider)
     key = SandboxKey(WorkloadKind.FUNCTION, uuid4())
+    durable_write_started = asyncio.Event()
+    allow_durable_write = asyncio.Event()
+    original = AgentBoxRepository.mark_create_unknown
+
+    async def delay_durable_write(
+        repository: AgentBoxRepository,
+        allocation_token,
+        *,
+        reconcile_after,
+        error_code,
+        now=None,
+    ) -> None:
+        durable_write_started.set()
+        await allow_durable_write.wait()
+        await original(
+            repository,
+            allocation_token,
+            reconcile_after=reconcile_after,
+            error_code=error_code,
+            now=now,
+        )
+
+    monkeypatch.setattr(
+        AgentBoxRepository,
+        "mark_create_unknown",
+        delay_durable_write,
+    )
     task = asyncio.create_task(
         service.ensure(
             key,
@@ -320,8 +348,14 @@ async def test_cancelled_create_becomes_durably_reconcilable(
 
     await provider.started.wait()
     task.cancel()
+    await durable_write_started.wait()
+    task.cancel()
+    await asyncio.sleep(0)
+    assert not task.done()
+    allow_durable_write.set()
     with pytest.raises(asyncio.CancelledError):
-        await task
+        unexpected = await task
+        pytest.fail(f"cancelled ensure unexpectedly returned {unexpected!r}")
 
     pending = await service.inspect(key)
     assert pending is not None

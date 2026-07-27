@@ -135,7 +135,8 @@ async def test_runtime_endpoint_cache_joiner_reloads_after_leader_deadline() -> 
     fail_first.set()
 
     with pytest.raises(TimeoutError, match="first caller deadline elapsed"):
-        await leader
+        unexpected = await leader
+        pytest.fail(f"leader unexpectedly returned {unexpected!r}")
     assert await joiner == endpoint
     assert first_calls == 1
     assert second_calls == 1

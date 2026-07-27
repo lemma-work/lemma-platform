@@ -704,11 +704,7 @@ class SandboxLifecycleService:
             persist(),
             name=f"agentbox-create-cancel:{allocation_token}",
         )
-        try:
-            await asyncio.shield(task)
-        except asyncio.CancelledError:
-            # A second cancellation must not cancel the durable repair write.
-            await task
+        return await self._await_durable_write(task)
 
     async def _mark_create_failed_durably(
         self,
@@ -728,10 +724,18 @@ class SandboxLifecycleService:
             persist(),
             name=f"agentbox-create-failed:{allocation_token}",
         )
-        try:
-            await asyncio.shield(task)
-        except asyncio.CancelledError:
-            await task
+        return await self._await_durable_write(task)
+
+    @staticmethod
+    async def _await_durable_write(task: asyncio.Task[None]) -> None:
+        while True:
+            try:
+                return await asyncio.shield(task)
+            except asyncio.CancelledError:
+                # Repeated caller cancellation must not interrupt the state
+                # transition that makes the provider outcome reconcilable.
+                if task.done():
+                    return task.result()
 
     @staticmethod
     def _create_request_hash(
