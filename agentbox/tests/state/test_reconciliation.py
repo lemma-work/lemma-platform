@@ -6,11 +6,15 @@ from uuid import uuid4
 
 import pytest
 import pytest_asyncio
+from sqlalchemy import select, update
 
 from agentbox.domain import (
     AdmissionClass,
+    AdmissionState,
     AgentBoxError,
     AllocationState,
+    DispatchState,
+    ProviderAdmissionPolicy,
     SandboxKey,
     SandboxProfileRef,
     StorageKind,
@@ -18,6 +22,11 @@ from agentbox.domain import (
 )
 from agentbox.lifecycle import SandboxLifecycleService
 from agentbox.persistence.uow import StateDatabase
+from agentbox.persistence.models import (
+    AllocationRow,
+    CreateAttemptRow,
+    ProviderAdmissionRow,
+)
 from agentbox.ports import (
     ProviderAllocationRef,
     ProviderCreateAmbiguous,
@@ -74,9 +83,10 @@ class LostCreateResponseProvider:
         assert self.database.active_units_of_work == 0
         self.inventory_calls += 1
         expected = {item.name: item.value for item in metadata}
-        assert expected["allocation-token"] == str(
-            self.create_calls[0].allocation_token
-        )
+        if self.create_calls:
+            assert expected["allocation-token"] == str(
+                self.create_calls[0].allocation_token
+            )
         return tuple(
             ProviderInventoryAllocation(
                 provider_id=f"accepted-{index}",
@@ -198,3 +208,170 @@ async def test_multiple_inventory_matches_remain_indeterminate(
     assert handle.allocation_state == AllocationState.UNKNOWN
     assert len(provider.create_calls) == 1
     assert provider.destroyed == []
+
+
+async def make_stale_dispatch(
+    database: StateDatabase,
+    provider: LostCreateResponseProvider,
+    *,
+    workload_kind: WorkloadKind,
+) -> tuple[SandboxLifecycleService, SandboxKey, datetime]:
+    key = SandboxKey(workload_kind, uuid4())
+    selected_profile = profile()
+    admission_class = AdmissionClass.INTERACTIVE
+    if workload_kind == WorkloadKind.FUNCTION:
+        selected_profile = SandboxProfileRef("function-python-v1", f"sha256:{'b' * 64}")
+        admission_class = AdmissionClass.BATCH
+    stale_at = datetime.now(timezone.utc) - timedelta(hours=1)
+    async with database.uow() as uow:
+        await uow.repository.ensure_logical(key, selected_profile)
+        if workload_kind == WorkloadKind.WORKSPACE:
+            await uow.repository.ensure_workspace_storage(
+                key,
+                provider_name=provider.name,
+                storage_kind=provider.workspace_storage_kind,
+            )
+        intent = await uow.repository.begin_allocation(
+            key,
+            selected_profile,
+            provider_name=provider.name,
+            provider_scope=provider.scope,
+            admission_class=admission_class.value,
+            request_hash="f" * 64,
+        )
+        decision = await uow.repository.reserve_provider_capacity(
+            intent.allocation.allocation_id,
+            admission_class=admission_class,
+            policy=ProviderAdmissionPolicy.permissive_for_tests(),
+        )
+        assert decision.accepted is True
+        assert await uow.repository.mark_create_dispatched(
+            intent.allocation.allocation_token,
+            now=stale_at,
+        )
+        await uow.commit()
+    return (
+        SandboxLifecycleService(database, provider),
+        key,
+        datetime.now(timezone.utc) + timedelta(seconds=30),
+    )
+
+
+async def test_stale_dispatched_create_without_inventory_match_releases_capacity(
+    database: StateDatabase,
+) -> None:
+    provider = LostCreateResponseProvider(database)
+    provider.inventory_matches = 0
+    lifecycle, key, deadline = await make_stale_dispatch(
+        database,
+        provider,
+        workload_kind=WorkloadKind.FUNCTION,
+    )
+
+    reconciled = await AgentBoxReconciler(
+        database,
+        provider,
+        create_absence_grace_seconds=1,
+        dispatched_create_stale_seconds=30,
+    ).reconcile_once(deadline_at=deadline)
+    handle = await lifecycle.inspect(key)
+
+    assert reconciled == 1
+    assert handle is not None
+    assert handle.allocation_state == AllocationState.ERROR
+    async with database.engine.connect() as connection:
+        allocation_token = await connection.scalar(
+            select(AllocationRow.allocation_token).where(
+                AllocationRow.logical_id == key.logical_id
+            )
+        )
+        admission_state = await connection.scalar(
+            select(AllocationRow.admission_state).where(
+                AllocationRow.logical_id == key.logical_id
+            )
+        )
+        attempt_state = await connection.scalar(
+            select(CreateAttemptRow.dispatch_state).where(
+                CreateAttemptRow.allocation_token == allocation_token
+            )
+        )
+        reserved_count = await connection.scalar(
+            select(ProviderAdmissionRow.reserved_count).where(
+                ProviderAdmissionRow.provider_scope == provider.scope
+            )
+        )
+    assert admission_state == AdmissionState.RELEASED.value
+    assert attempt_state == DispatchState.RESOLVED.value
+    assert reserved_count == 0
+
+
+async def test_stale_dispatched_workspace_with_exact_match_is_adopted(
+    database: StateDatabase,
+) -> None:
+    provider = LostCreateResponseProvider(database)
+    lifecycle, key, deadline = await make_stale_dispatch(
+        database,
+        provider,
+        workload_kind=WorkloadKind.WORKSPACE,
+    )
+
+    reconciled = await AgentBoxReconciler(
+        database,
+        provider,
+        dispatched_create_stale_seconds=30,
+    ).reconcile_once(deadline_at=deadline)
+    handle = await lifecycle.inspect(key)
+
+    assert reconciled == 1
+    assert handle is not None
+    assert handle.ready is True
+    assert handle.allocation_state == AllocationState.ACTIVE
+
+
+async def test_reconciliation_repairs_terminal_allocation_reservation(
+    database: StateDatabase,
+) -> None:
+    provider = LostCreateResponseProvider(database)
+    provider.inventory_matches = 0
+    lifecycle, key, deadline = await make_stale_dispatch(
+        database,
+        provider,
+        workload_kind=WorkloadKind.FUNCTION,
+    )
+    reconciler = AgentBoxReconciler(
+        database,
+        provider,
+        create_absence_grace_seconds=1,
+        dispatched_create_stale_seconds=30,
+    )
+    await reconciler.reconcile_once(deadline_at=deadline)
+
+    async with database.engine.begin() as connection:
+        await connection.execute(
+            update(AllocationRow)
+            .where(AllocationRow.logical_id == key.logical_id)
+            .values(admission_state=AdmissionState.RESERVED.value)
+        )
+        await connection.execute(
+            update(ProviderAdmissionRow)
+            .where(ProviderAdmissionRow.provider_scope == provider.scope)
+            .values(reserved_count=1)
+        )
+
+    assert await reconciler.reconcile_once(deadline_at=deadline) == 0
+    handle = await lifecycle.inspect(key)
+    assert handle is not None
+    assert handle.allocation_state == AllocationState.ERROR
+    async with database.engine.connect() as connection:
+        admission_state = await connection.scalar(
+            select(AllocationRow.admission_state).where(
+                AllocationRow.logical_id == key.logical_id
+            )
+        )
+        reserved_count = await connection.scalar(
+            select(ProviderAdmissionRow.reserved_count).where(
+                ProviderAdmissionRow.provider_scope == provider.scope
+            )
+        )
+    assert admission_state == AdmissionState.RELEASED.value
+    assert reserved_count == 0

@@ -14,7 +14,9 @@ from app.modules.function.application.function_runtime_endpoint_cache import (
 
 
 @pytest.mark.asyncio
-async def test_runtime_endpoint_cache_single_flights_and_invalidates_exact_value() -> None:
+async def test_runtime_endpoint_cache_single_flights_and_invalidates_exact_value() -> (
+    None
+):
     now = datetime.now(timezone.utc)
     monotonic = 10.0
     cache = FunctionRuntimeEndpointCache(
@@ -43,10 +45,7 @@ async def test_runtime_endpoint_cache_single_flights_and_invalidates_exact_value
         await release.wait()
         return first
 
-    tasks = [
-        asyncio.create_task(cache.get(key, loader=load_first))
-        for _ in range(10)
-    ]
+    tasks = [asyncio.create_task(cache.get(key, loader=load_first)) for _ in range(10)]
     await asyncio.sleep(0)
     release.set()
     assert await asyncio.gather(*tasks) == [first] * 10
@@ -98,3 +97,45 @@ async def test_runtime_endpoint_cache_expires_before_port_grant() -> None:
 
     assert refreshed != first
     assert calls == 2
+
+
+@pytest.mark.asyncio
+async def test_runtime_endpoint_cache_joiner_reloads_after_leader_deadline() -> None:
+    now = datetime.now(timezone.utc)
+    cache = FunctionRuntimeEndpointCache(wall_clock=lambda: now)
+    key = FunctionRuntimeEndpointKey(
+        pod_id=uuid4(),
+        profile_digest=f"sha256:{'c' * 64}",
+    )
+    first_started = asyncio.Event()
+    fail_first = asyncio.Event()
+    endpoint = FunctionRuntimeEndpoint(
+        url="https://runtime.example/recovered/",
+        expires_at=now + timedelta(minutes=5),
+    )
+    first_calls = 0
+    second_calls = 0
+
+    async def expired_loader() -> FunctionRuntimeEndpoint:
+        nonlocal first_calls
+        first_calls += 1
+        first_started.set()
+        await fail_first.wait()
+        raise TimeoutError("first caller deadline elapsed")
+
+    async def later_loader() -> FunctionRuntimeEndpoint:
+        nonlocal second_calls
+        second_calls += 1
+        return endpoint
+
+    leader = asyncio.create_task(cache.get(key, loader=expired_loader))
+    await first_started.wait()
+    joiner = asyncio.create_task(cache.get(key, loader=later_loader))
+    await asyncio.sleep(0)
+    fail_first.set()
+
+    with pytest.raises(TimeoutError, match="first caller deadline elapsed"):
+        await leader
+    assert await joiner == endpoint
+    assert first_calls == 1
+    assert second_calls == 1

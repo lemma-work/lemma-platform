@@ -203,9 +203,7 @@ class RequestContextMiddleware:
                             exc_info=exc_info,
                         )
                     elif status_code == 429:
-                        incident_key = (
-                            f"{scope.get('method', 'UNKNOWN')}:{route}"
-                        )
+                        incident_key = f"{scope.get('method', 'UNKNOWN')}:{route}"
                         _rate_limit_incidents.setdefault(
                             incident_key,
                             DependencyIncident(
@@ -214,9 +212,7 @@ class RequestContextMiddleware:
                             ),
                         ).record_failure(_RateLimitedResponseError())
                     else:
-                        incident_key = (
-                            f"{scope.get('method', 'UNKNOWN')}:{route}"
-                        )
+                        incident_key = f"{scope.get('method', 'UNKNOWN')}:{route}"
                         incident = _rate_limit_incidents.get(incident_key)
                         if incident is not None:
                             incident.record_success()
@@ -460,6 +456,9 @@ async def lifespan(app: FastAPI):
         provider,
         create_absence_grace_seconds=(
             settings.agentbox_ambiguous_create_absence_grace_seconds
+        ),
+        dispatched_create_stale_seconds=(
+            settings.agentbox_dispatched_create_stale_seconds
         ),
         claim_seconds=settings.agentbox_reconcile_claim_seconds,
         retry_seconds=max(0.1, settings.agentbox_reconcile_interval_seconds),

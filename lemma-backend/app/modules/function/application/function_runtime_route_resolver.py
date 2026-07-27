@@ -137,6 +137,7 @@ class FunctionRuntimeRouteResolver:
         deadline_at: datetime,
     ) -> None:
         attempt = 0
+        capacity_error: AgentBoxApiError | None = None
         while self._now() < deadline_at:
             try:
                 handle = await client.ensure_sandbox(
@@ -151,6 +152,10 @@ class FunctionRuntimeRouteResolver:
                     deadline_at=deadline_at,
                 )
             except AgentBoxApiError as exc:
+                if str(getattr(exc, "code", "")).upper() == "CAPACITY_EXHAUSTED":
+                    capacity_error = exc
+                else:
+                    capacity_error = None
                 if exc.retry not in {
                     RetryDisposition.WAIT,
                     RetryDisposition.SAFE_SAME_OPERATION,
@@ -175,6 +180,8 @@ class FunctionRuntimeRouteResolver:
                 attempt=attempt,
             )
             attempt += 1
+        if capacity_error is not None:
+            raise capacity_error
         raise TimeoutError("function sandbox was not ready before the deadline")
 
     def _key(

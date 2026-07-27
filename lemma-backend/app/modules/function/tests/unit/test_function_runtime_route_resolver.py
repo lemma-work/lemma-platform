@@ -7,7 +7,13 @@ from uuid import uuid4
 
 import pytest
 
-from agentbox_client import AdmissionClass, WorkloadKind
+import httpx
+from agentbox_client import AdmissionClass, AgentBoxApiError, WorkloadKind
+from agentbox_client.models import (
+    AgentBoxErrorBody,
+    AgentBoxErrorResponse,
+    RetryDisposition,
+)
 
 from app.modules.function.application.function_runtime_endpoint_cache import (
     FunctionRuntimeEndpointCache,
@@ -96,3 +102,36 @@ async def test_control_endpoint_never_creates_or_ensures_a_sandbox() -> None:
     client.ensure_sandbox.assert_not_awaited()
     client.create_port_access.assert_awaited_once()
     client.close.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_capacity_exhaustion_survives_ensure_deadline() -> None:
+    dispatch = _dispatch(FunctionDispatchMode.ASYNCHRONOUS)
+    error = AgentBoxApiError(
+        httpx.Response(429),
+        AgentBoxErrorResponse(
+            error=AgentBoxErrorBody(
+                code="CAPACITY_EXHAUSTED",
+                message="provider active sandbox capacity is exhausted",
+                retry=RetryDisposition.WAIT,
+                retry_after_ms=1,
+            )
+        ),
+    )
+    client = SimpleNamespace(
+        ensure_sandbox=AsyncMock(side_effect=error),
+        close=AsyncMock(),
+    )
+    resolver = FunctionRuntimeRouteResolver(
+        agentbox_client_factory=lambda: client,
+        endpoint_cache=FunctionRuntimeEndpointCache(),
+    )
+
+    with pytest.raises(AgentBoxApiError) as raised:
+        await resolver._ensure_sandbox(
+            client,
+            dispatch,
+            deadline_at=datetime.now(timezone.utc) + timedelta(milliseconds=5),
+        )
+
+    assert raised.value.code == "CAPACITY_EXHAUSTED"

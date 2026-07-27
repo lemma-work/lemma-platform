@@ -141,6 +141,15 @@ class Settings(BaseSettings):
     agentbox_ambiguous_create_absence_grace_seconds: float = Field(
         default=30, ge=1, le=600
     )
+    agentbox_dispatched_create_stale_seconds: float = Field(
+        default=15 * 60,
+        ge=30,
+        le=24 * 60 * 60,
+        description=(
+            "Age after which an unfinalized provider create dispatch is treated "
+            "as ambiguous and reconciled by exact allocation metadata."
+        ),
+    )
     agentbox_reconcile_claim_seconds: float = Field(default=30, ge=5, le=300)
     agentbox_workspace_retention_seconds: float = Field(default=604800, ge=1)
     agentbox_add_host_gateway: bool = False

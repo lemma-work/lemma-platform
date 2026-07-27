@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from uuid import uuid4
@@ -32,6 +33,7 @@ from agentbox.ports import (
     ProviderReadyResult,
     ProviderStorageResult,
 )
+from agentbox.persistence.repository import AgentBoxRepository
 from agentbox.persistence.uow import StateDatabase
 from agentbox.reconciliation import AgentBoxReconciler
 
@@ -108,6 +110,19 @@ class AmbiguousProvider(FakeProvider):
         assert self.database.active_units_of_work == 0
         self.create_calls.append(request)
         raise ProviderCreateAmbiguous("response lost after provider acceptance")
+
+
+class CancelledCreateProvider(FakeProvider):
+    def __init__(self, database: StateDatabase) -> None:
+        super().__init__(database)
+        self.started = asyncio.Event()
+
+    async def create(self, request: ProviderCreateRequest) -> ProviderCreateResult:
+        assert self.database.active_units_of_work == 0
+        self.create_calls.append(request)
+        self.started.set()
+        await asyncio.Future()
+        raise AssertionError("unreachable")
 
 
 class InitiallyNotReadyProvider(FakeProvider):
@@ -286,6 +301,129 @@ async def test_lost_create_response_is_not_replayed(database: StateDatabase):
     assert pending.ready is False
     assert pending.allocation_state == AllocationState.UNKNOWN
     assert len(provider.create_calls) == 1
+
+
+async def test_cancelled_create_becomes_durably_reconcilable(
+    database: StateDatabase,
+) -> None:
+    provider = CancelledCreateProvider(database)
+    service = SandboxLifecycleService(database, provider)
+    key = SandboxKey(WorkloadKind.FUNCTION, uuid4())
+    task = asyncio.create_task(
+        service.ensure(
+            key,
+            profile("function-python-v1", "b"),
+            admission_class=AdmissionClass.BATCH,
+            deadline_at=datetime.now(timezone.utc) + timedelta(seconds=30),
+        )
+    )
+
+    await provider.started.wait()
+    task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await task
+
+    pending = await service.inspect(key)
+    assert pending is not None
+    assert pending.allocation_state == AllocationState.UNKNOWN
+    assert len(provider.create_calls) == 1
+    assert database.active_units_of_work == 0
+
+
+async def test_cancelled_dispatch_transaction_releases_capacity(
+    database: StateDatabase,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    provider = FakeProvider(database)
+    service = SandboxLifecycleService(database, provider)
+    key = SandboxKey(WorkloadKind.FUNCTION, uuid4())
+    original = AgentBoxRepository.mark_create_dispatched
+
+    async def cancel_after_dispatch(
+        repository: AgentBoxRepository,
+        allocation_token,
+        *,
+        now=None,
+    ) -> bool:
+        dispatched = await original(repository, allocation_token, now=now)
+        current_task = asyncio.current_task()
+        assert current_task is not None
+        current_task.cancel()
+        return dispatched
+
+    monkeypatch.setattr(
+        AgentBoxRepository,
+        "mark_create_dispatched",
+        cancel_after_dispatch,
+    )
+
+    with pytest.raises(asyncio.CancelledError):
+        await service.ensure(
+            key,
+            profile("function-python-v1", "b"),
+            admission_class=AdmissionClass.BATCH,
+            deadline_at=datetime.now(timezone.utc) + timedelta(seconds=30),
+        )
+
+    failed = await service.inspect(key)
+    assert failed is not None
+    assert failed.allocation_state == AllocationState.ERROR
+    assert provider.create_calls == []
+    assert database.active_units_of_work == 0
+
+
+async def test_cancelled_admission_transaction_does_not_leak_capacity(
+    database: StateDatabase,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    provider = FakeProvider(database)
+    service = SandboxLifecycleService(database, provider)
+    key = SandboxKey(WorkloadKind.FUNCTION, uuid4())
+    original = AgentBoxRepository.reserve_provider_capacity
+
+    async def cancel_after_reservation(
+        repository: AgentBoxRepository,
+        allocation_id,
+        *,
+        admission_class,
+        policy,
+        now=None,
+    ):
+        decision = await original(
+            repository,
+            allocation_id,
+            admission_class=admission_class,
+            policy=policy,
+            now=now,
+        )
+        current_task = asyncio.current_task()
+        assert current_task is not None
+        current_task.cancel()
+        return decision
+
+    monkeypatch.setattr(
+        AgentBoxRepository,
+        "reserve_provider_capacity",
+        cancel_after_reservation,
+    )
+
+    with pytest.raises(asyncio.CancelledError):
+        await service.ensure(
+            key,
+            profile("function-python-v1", "b"),
+            admission_class=AdmissionClass.BATCH,
+            deadline_at=datetime.now(timezone.utc) + timedelta(seconds=30),
+        )
+
+    allocation = await service.inspect(key)
+    if allocation is not None:
+        assert allocation.allocation_state == AllocationState.ERROR
+    async with database.uow() as uow:
+        active, reserved = await uow.repository._admission_counts(provider.scope)
+        await uow.commit()
+    assert (active, reserved) == (0, 0)
+    assert provider.create_calls == []
+    assert database.active_units_of_work == 0
 
 
 async def test_acknowledged_create_resumes_readiness_without_recreate(

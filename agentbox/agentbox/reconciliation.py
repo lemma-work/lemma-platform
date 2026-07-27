@@ -35,6 +35,7 @@ class AgentBoxReconciler:
         provider: SandboxProviderPort,
         *,
         create_absence_grace_seconds: float = 30,
+        dispatched_create_stale_seconds: float = 15 * 60,
         claim_seconds: float = 30,
         retry_seconds: float = 1,
         batch_size: int = 100,
@@ -42,6 +43,9 @@ class AgentBoxReconciler:
         self._database = database
         self._provider = provider
         self._absence_grace = timedelta(seconds=create_absence_grace_seconds)
+        self._dispatched_create_stale = timedelta(
+            seconds=dispatched_create_stale_seconds
+        )
         self._claim_seconds = claim_seconds
         self._retry_seconds = retry_seconds
         self._batch_size = batch_size
@@ -49,12 +53,23 @@ class AgentBoxReconciler:
     async def reconcile_once(self, *, deadline_at: datetime) -> int:
         now = datetime.now(timezone.utc)
         async with self._database.uow() as uow:
+            repaired = await uow.repository.repair_terminal_admission_invariants(
+                self._provider.scope,
+                now=now,
+            )
             candidates = await uow.repository.list_due_create_reconciliation(
                 self._provider.scope,
+                stale_dispatched_before=now - self._dispatched_create_stale,
                 now=now,
                 limit=self._batch_size,
             )
             await uow.commit()
+        if repaired:
+            logger.warning(
+                "agentbox.admission.invariant_repaired",
+                provider_scope=self._provider.scope,
+                allocation_count=repaired,
+            )
         reconciled = 0
         for candidate in candidates:
             if datetime.now(timezone.utc) >= deadline_at:
@@ -67,6 +82,9 @@ class AgentBoxReconciler:
                 claimed = await uow.repository.claim_create_reconciliation(
                     candidate.allocation.allocation_token,
                     claimed_until=claimed_until,
+                    stale_dispatched_before=(
+                        datetime.now(timezone.utc) - self._dispatched_create_stale
+                    ),
                 )
                 await uow.commit()
             if not claimed:
@@ -82,7 +100,10 @@ class AgentBoxReconciler:
         deadline_at: datetime,
     ) -> None:
         allocation = candidate.allocation
-        if candidate.dispatch_state == DispatchState.UNKNOWN:
+        if candidate.dispatch_state in {
+            DispatchState.DISPATCHED,
+            DispatchState.UNKNOWN,
+        }:
             try:
                 matches = await self._provider.find_allocations(
                     allocation_metadata(
