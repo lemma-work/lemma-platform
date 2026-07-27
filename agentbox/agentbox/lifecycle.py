@@ -23,6 +23,7 @@ from agentbox.domain import (
     SandboxProfileRef,
     WorkloadKind,
 )
+from agentbox.observability import create_inherited_task
 from agentbox.ports import (
     ProviderAllocationFailed,
     ProviderAllocationRef,
@@ -699,7 +700,7 @@ class SandboxLifecycleService:
                 )
                 await uow.commit()
 
-        task = asyncio.create_task(
+        task = create_inherited_task(
             persist(),
             name=f"agentbox-create-cancel:{allocation_token}",
         )
@@ -723,7 +724,7 @@ class SandboxLifecycleService:
                 )
                 await uow.commit()
 
-        task = asyncio.create_task(
+        task = create_inherited_task(
             persist(),
             name=f"agentbox-create-failed:{allocation_token}",
         )
