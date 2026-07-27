@@ -8,6 +8,7 @@ from uuid import uuid4
 
 from e2b import RateLimitException
 from e2b.sandbox.filesystem.filesystem import EntryInfo, FileType
+import httpx
 import pytest
 import pytest_asyncio
 
@@ -18,6 +19,7 @@ from agentbox.adapters.e2b import (
 )
 from agentbox.domain import (
     AdmissionClass,
+    AgentBoxError,
     ByteRange,
     CreatePythonSessionRequest,
     EnvironmentVariable,
@@ -31,6 +33,7 @@ from agentbox.domain import (
     SandboxProfileRef,
     StartProcessRequest,
     StorageKind,
+    RetryDisposition,
     WorkloadKind,
 )
 from agentbox.filesystem import FilesystemService
@@ -184,6 +187,7 @@ class FakeFiles:
         self.data: dict[str, bytes] = {}
         self.directories: set[str] = set()
         self.stream_read_calls = 0
+        self.fail_writes = False
 
     async def make_dir(self, path: str, **_kwargs) -> bool:
         self.directories.add(path)
@@ -201,6 +205,8 @@ class FakeFiles:
         return bytearray(value) if format == "bytes" else value.decode()
 
     async def write(self, path: str, data, **_kwargs):
+        if self.fail_writes:
+            raise RuntimeError("injected filesystem failure")
         payload = data.read() if hasattr(data, "read") else data
         self.data[path] = bytes(payload)
         return self._info(path)
@@ -272,6 +278,7 @@ class FakeSandbox:
     connect_calls = 0
     kill_calls: list[str] = []
     fail_rate_limit = False
+    fail_workspace_filesystem = False
     last_create_kwargs: dict[str, object] = {}
 
     def __init__(self, sandbox_id: str) -> None:
@@ -284,6 +291,7 @@ class FakeSandbox:
         self.next_pid = 100
         self.contexts: dict[str, FakeContext] = {}
         self.paused = False
+        self.pause_keep_memory: bool | None = None
         self.timeout = 300
         self.timeout_calls = 0
         self.last_python_env: dict[str, str] = {}
@@ -296,6 +304,7 @@ class FakeSandbox:
         cls.connect_calls = 0
         cls.kill_calls = []
         cls.fail_rate_limit = False
+        cls.fail_workspace_filesystem = False
         cls.last_create_kwargs = {}
 
     @classmethod
@@ -306,6 +315,7 @@ class FakeSandbox:
             raise RateLimitException("429")
         sandbox_id = f"e2b-{cls.create_calls}"
         sandbox = cls(sandbox_id)
+        sandbox.files.fail_writes = cls.fail_workspace_filesystem
         cls.instances[sandbox_id] = sandbox
         cls.infos[sandbox_id] = FakeInfo(
             sandbox_id, template.split(":", 1)[0], dict(metadata)
@@ -346,7 +356,8 @@ class FakeSandbox:
         self.timeout = timeout
         self.timeout_calls += 1
 
-    async def pause(self, **_kwargs):
+    async def pause(self, keep_memory: bool = True, **_kwargs):
+        self.pause_keep_memory = keep_memory
         self.paused = True
         return True
 
@@ -417,6 +428,16 @@ def function_profile() -> SandboxProfile:
     )
 
 
+def function_health_transport() -> httpx.MockTransport:
+    return httpx.MockTransport(
+        lambda request: httpx.Response(
+            200,
+            json={"ready": True},
+            request=request,
+        )
+    )
+
+
 async def test_function_egress_is_restricted_to_configured_gateway(
     database: StateDatabase,
 ) -> None:
@@ -429,6 +450,7 @@ async def test_function_egress_is_restricted_to_configured_gateway(
             function_allow_out=("benchmark.trycloudflare.com",),
         ),
         sandbox_class=FakeSandbox,
+        http_transport=function_health_transport(),
     )
     lifecycle = SandboxLifecycleService(database, provider)
     key = SandboxKey(WorkloadKind.FUNCTION, uuid4())
@@ -488,6 +510,7 @@ async def test_function_port_access_extends_timeout_once_across_a_burst(
             scope="e2b:function-timeout-test",
         ),
         sandbox_class=FakeSandbox,
+        http_transport=function_health_transport(),
     )
     lifecycle = SandboxLifecycleService(database, provider)
     key = SandboxKey(WorkloadKind.FUNCTION, uuid4())
@@ -596,12 +619,34 @@ async def test_workspace_uses_exact_pause_resume_identity_and_native_storage(
     assert FakeSandbox.connect_calls == 1
     assert provider_id in FakeSandbox.instances
     assert data == b"persistent"
+    assert sandbox.pause_keep_memory is False
 
     await lifecycle.destroy(key, deadline_at=deadline)
     assert provider_id not in FakeSandbox.instances
     assert FakeSandbox.kill_calls == [provider_id]
     assert stat.sha256 is None
     assert sandbox.files.stream_read_calls == 1
+
+
+async def test_workspace_readiness_fences_failed_filesystem(
+    database: StateDatabase,
+) -> None:
+    FakeSandbox.fail_workspace_filesystem = True
+    provider = adapter()
+    lifecycle = SandboxLifecycleService(database, provider)
+    key = SandboxKey(WorkloadKind.WORKSPACE, uuid4())
+
+    with pytest.raises(AgentBoxError) as raised:
+        await lifecycle.ensure(
+            key,
+            profile().ref,
+            admission_class=AdmissionClass.INTERACTIVE,
+            deadline_at=datetime.now(timezone.utc) + timedelta(seconds=30),
+        )
+
+    assert raised.value.retry == RetryDisposition.SAFE_SAME_OPERATION
+    assert FakeSandbox.create_calls == 1
+    assert FakeSandbox.kill_calls == ["e2b-1"]
 
 
 async def test_rate_limit_reuses_same_allocation_token_without_hot_loop(

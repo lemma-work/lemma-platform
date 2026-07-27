@@ -61,12 +61,15 @@ async def test_client_uses_typed_workload_route_and_absolute_deadline() -> None:
         profile=ProfileRef(name="workspace-python-v1", digest=f"sha256:{'a' * 64}"),
         admission_class=AdmissionClass.INTERACTIVE,
         deadline_at=deadline(),
+        verify_ready=True,
     )
 
     assert result.ready is True
     assert captured[0].url.path == f"/sandboxes/workspace/{logical_id}"
+    assert captured[0].url.params["verify_ready"] == "true"
     assert captured[0].headers["X-API-Key"] == "secret"
     assert b'"deadline_at"' in captured[0].content
+    assert b'"verify_ready"' not in captured[0].content
     await http.aclose()
 
 

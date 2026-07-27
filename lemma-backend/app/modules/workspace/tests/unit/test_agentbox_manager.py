@@ -59,9 +59,11 @@ async def test_workspace_retries_safe_same_operation(monkeypatch):
 
     class _Client:
         calls = 0
+        verify_ready_values = []
 
         async def ensure_sandbox(self, *_args, **_kwargs):
             self.calls += 1
+            self.verify_ready_values.append(_kwargs.get("verify_ready"))
             if self.calls == 1:
                 raise _api_error(RetryDisposition.SAFE_SAME_OPERATION)
             return _ready_sandbox(user_id)
@@ -77,6 +79,7 @@ async def test_workspace_retries_safe_same_operation(monkeypatch):
 
     assert result.status == "RUNNING"
     assert sandbox.client.calls == 2
+    assert sandbox.client.verify_ready_values == [True, True]
 
 
 @pytest.mark.asyncio

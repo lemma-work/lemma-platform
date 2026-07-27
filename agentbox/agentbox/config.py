@@ -1,4 +1,4 @@
-from pydantic import AliasChoices, Field
+from pydantic import AliasChoices, Field, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -151,7 +151,14 @@ class Settings(BaseSettings):
         ),
     )
     agentbox_reconcile_claim_seconds: float = Field(default=30, ge=5, le=300)
-    agentbox_workspace_retention_seconds: float = Field(default=604800, ge=1)
+    agentbox_workspace_retention_seconds: float = Field(
+        default=7 * 24 * 60 * 60,
+        ge=1,
+        description=(
+            "Total workspace inactivity before physical sandbox and storage "
+            "are destroyed. The logical workspace remains recreatable."
+        ),
+    )
     agentbox_add_host_gateway: bool = False
     agentbox_host_alias: str | None = None
     agentbox_local_runtime_cli: str = ""
@@ -165,6 +172,18 @@ class Settings(BaseSettings):
     agentbox_local_callback_url: str | None = None
     agentbox_local_callback_health_path: str = "/health"
     agentbox_local_callback_timeout_seconds: float = Field(default=30, ge=1, le=300)
+
+    @model_validator(mode="after")
+    def validate_workspace_lifecycle(self) -> Settings:
+        if (
+            self.agentbox_workspace_retention_seconds
+            <= self.agentbox_workspace_idle_seconds
+        ):
+            raise ValueError(
+                "AGENTBOX_WORKSPACE_RETENTION_SECONDS must exceed "
+                "AGENTBOX_WORKSPACE_IDLE_SECONDS"
+            )
+        return self
 
     @property
     def agentbox_e2b_function_allow_out_hosts(self) -> tuple[str, ...]:

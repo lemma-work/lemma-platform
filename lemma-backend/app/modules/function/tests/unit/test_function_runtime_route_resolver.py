@@ -72,6 +72,7 @@ async def test_execution_endpoint_ensures_once_and_caches_exact_grant() -> None:
     ensure = client.ensure_sandbox.await_args
     assert ensure.args[:2] == (WorkloadKind.FUNCTION, dispatch.pod_id)
     assert ensure.kwargs["admission_class"] == AdmissionClass.LATENCY
+    assert ensure.kwargs["verify_ready"] is True
     client.create_port_access.assert_awaited_once()
     client.close.assert_awaited_once()
 

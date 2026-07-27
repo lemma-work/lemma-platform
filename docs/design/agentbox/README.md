@@ -283,8 +283,10 @@ stateDiagram-v2
     Active --> Draining: profile replacement
     Draining --> Provisioning: old allocation destroyed
     Active --> Destroying: permanent delete
-    Suspended --> Destroying: retention or permanent delete
-    Destroying --> Absent: compute and storage absent
+    Suspended --> Destroying: retention expiry or permanent delete
+    Destroying --> Expired: retention cleanup
+    Expired --> Provisioning: next operation, fresh disk
+    Destroying --> Absent: permanent delete
 ```
 
 - Running idle timeout: five minutes.
@@ -293,8 +295,11 @@ stateDiagram-v2
   the provider release primitive.
 - `/workspace` files survive release.
 - Session and process continuity is not portable across release.
-- Suspended retention is seven days; activity during that period resumes the
-  logical workspace.
+- Suspended retention is configurable (currently seven days by default) and is
+  measured from the last accepted activity; activity before that deadline resumes
+  the exact physical sandbox and disk.
+- Retention expiry removes compute and storage but keeps the logical workspace
+  recreatable. Its next operation receives a fresh storage generation.
 - Permanent delete removes every exact physical allocation and the durable storage.
 
 ### 7.2 Function lifecycle

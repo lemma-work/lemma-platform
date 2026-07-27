@@ -420,42 +420,30 @@ and pauses it again before normal ensure may return it. This keeps provider time
 from bypassing the portable release contract.
 
 Thus the E2B snapshot contains the static clean template/runtime state plus workspace
-files, not live delegated credentials. Although E2B can preserve process memory,
-portable callers are promised files only.
+files, not live delegated credentials. AgentBox pauses with `keep_memory=False`:
+E2B drops the memory snapshot and cold-boots the same sandbox from its persisted
+filesystem on reconnect.
 
 With auto-resume enabled, native commands, file operations, and authenticated tunnel
 traffic can resume a paused sandbox. An adapter operation may use its cached handle;
 otherwise it connects by exact provider ID. It does not call list/status first.
-E2B documents that normal pause preserves filesystem and memory, connection resumes
-the same sandbox, and auto-resume is valid only for full-memory pause. See
-[persistence](https://e2b.dev/docs/sandbox/persistence) and
-[auto-resume](https://e2b.dev/docs/sandbox/auto-resume).
+E2B documents that filesystem-only pause preserves disk while dropping running
+processes and open connections. AgentBox reconnects by exact sandbox ID and proves
+the filesystem data plane with a temporary write/read/delete marker before
+publication. See [persistence](https://e2b.dev/docs/sandbox/persistence).
 
 Paused E2B sandboxes are retained indefinitely by the provider, so AgentBox's
-seven-day logical retention worker must explicitly kill them.
+configured retention worker must explicitly kill them.
 
 ### 7.3 Workspace profile replacement
 
 An E2B sandbox filesystem is native to that physical sandbox, unlike a Docker
-volume or Kubernetes PVC. Replacing a workspace profile therefore uses an explicit
-two-allocation migration:
-
-1. quiesce the old allocation and keep it as the current fenced allocation;
-2. reserve temporary replacement capacity and create the new template allocation
-   with a new allocation token;
-3. enumerate `/workspace` through native file APIs and build a manifest containing
-   path, type, mode, size, and content digest;
-4. stream allowed regular files and directories into the new allocation without
-   passing whole files through shell/base64 commands;
-5. reject path or symlink escapes and verify the destination manifest and digests;
-6. run the new profile readiness checks;
-7. transactionally bind the storage row and logical sandbox to the new allocation,
-   increment the allocation epoch, and only then destroy the old sandbox.
-
-If copy or verification fails, the old allocation remains current and recoverable;
-the incomplete replacement is destroyed. New operations cannot observe the new
-allocation before the atomic bind. This is the only E2B path that migrates files
-between sandbox IDs; ordinary pause/auto-resume reconnects the same exact sandbox.
+volume or Kubernetes PVC. A profile replacement therefore fences and quiesces the
+old allocation, destroys its exact sandbox ID, increments the storage generation,
+and creates a fresh sandbox from the new immutable template. Availability and
+profile correctness take precedence over attempting an implicit cross-sandbox
+file migration. Ordinary pause/resume still reconnects the same exact sandbox and
+preserves its filesystem.
 
 ### 7.4 Workspace execution
 

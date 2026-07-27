@@ -64,6 +64,7 @@ async def ensure_sandbox(
     workload_kind: WorkloadKind,
     logical_id: UUID,
     request: EnsureSandboxRequest,
+    verify_ready: bool = Query(default=False),
     service: SandboxLifecycleService = Depends(sandbox_lifecycle),
 ) -> Response | SandboxHandleResponse:
     handle = await service.ensure(
@@ -71,6 +72,7 @@ async def ensure_sandbox(
         request.profile.to_domain(),
         admission_class=request.admission_class,
         deadline_at=request.deadline_at,
+        verify_ready=verify_ready,
     )
     response = SandboxHandleResponse.from_domain(handle)
     if handle.ready:

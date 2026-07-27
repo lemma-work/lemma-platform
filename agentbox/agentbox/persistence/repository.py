@@ -539,6 +539,14 @@ class AgentBoxRepository:
                 retry=RetryDisposition.DO_NOT_RETRY,
                 status_code=409,
             )
+        if row.state == StorageState.DELETED.value:
+            row.state = StorageState.PROVISIONING.value
+            row.provider_storage_id = None
+            row.bound_allocation_id = None
+            row.delete_token = uuid4()
+            row.deleted_at = None
+            row.content_generation += 1
+            row.updated_at = timestamp
         return self._storage(row)
 
     async def bind_workspace_storage(
@@ -590,8 +598,15 @@ class AgentBoxRepository:
                     retry=RetryDisposition.DO_NOT_RETRY,
                     status_code=409,
                 )
+        provider_storage_changed = (
+            row.storage_kind == StorageKind.SANDBOX_NATIVE.value
+            and row.provider_storage_id is not None
+            and row.provider_storage_id != provider_storage_id
+        )
         row.provider_storage_id = provider_storage_id
         row.bound_allocation_id = allocation_id
+        if provider_storage_changed:
+            row.content_generation += 1
         row.state = StorageState.READY.value
         row.updated_at = timestamp
         await self._session.flush()
@@ -998,6 +1013,27 @@ class AgentBoxRepository:
         await self._session.flush()
         return self._allocation(row)
 
+    async def mark_allocation_draining(
+        self,
+        allocation_id: UUID,
+        *,
+        now: datetime | None = None,
+    ) -> PhysicalAllocation:
+        timestamp = now or utc_now()
+        row = await self._session.get(AllocationRow, allocation_id)
+        if row is None:
+            raise AgentBoxError(
+                ErrorCode.SANDBOX_NOT_FOUND,
+                "allocation does not exist",
+                retry=RetryDisposition.DO_NOT_RETRY,
+                status_code=404,
+            )
+        if row.state == AllocationState.ACTIVE.value:
+            row.state = AllocationState.DRAINING.value
+            row.updated_at = timestamp
+            await self._session.flush()
+        return self._allocation(row)
+
     async def acknowledge_create(
         self,
         allocation_token: UUID,
@@ -1322,8 +1358,9 @@ class AgentBoxRepository:
         )
         logical.desired_state = SandboxDesiredState.RELEASED.value
         logical.released_at = timestamp
+        idle_since = _aware(logical.last_used_at) or timestamp
         logical.delete_after = (
-            timestamp + timedelta(seconds=retention_seconds)
+            idle_since + timedelta(seconds=retention_seconds)
             if key.workload_kind == WorkloadKind.WORKSPACE
             else None
         )
@@ -1434,6 +1471,7 @@ class AgentBoxRepository:
         *,
         claimed_until: datetime,
         claim: SandboxMaintenanceClaim | None = None,
+        recreate_on_ensure: bool = False,
         now: datetime | None = None,
     ) -> tuple[
         SandboxMaintenanceClaim,
@@ -1457,7 +1495,11 @@ class AgentBoxRepository:
             claim=claim,
             now=timestamp,
         )
-        logical.desired_state = SandboxDesiredState.DELETED.value
+        logical.desired_state = (
+            SandboxDesiredState.RELEASED.value
+            if recreate_on_ensure
+            else SandboxDesiredState.DELETED.value
+        )
         logical.delete_after = None
         logical.updated_at = timestamp
         allocation: AllocationRow | None = None
@@ -1502,6 +1544,7 @@ class AgentBoxRepository:
         *,
         allocation_id: UUID | None,
         claim_token: UUID,
+        recreate_on_ensure: bool = False,
         now: datetime | None = None,
     ) -> None:
         timestamp = now or utc_now()
@@ -1537,8 +1580,17 @@ class AgentBoxRepository:
             storage_row.state = StorageState.DELETED.value
             storage_row.deleted_at = timestamp
             storage_row.provider_storage_id = None
+            storage_row.bound_allocation_id = None
             storage_row.updated_at = timestamp
         logical.current_allocation_id = None
+        logical.desired_state = (
+            SandboxDesiredState.RELEASED.value
+            if recreate_on_ensure
+            else SandboxDesiredState.DELETED.value
+        )
+        if recreate_on_ensure:
+            logical.released_at = timestamp
+            logical.delete_after = None
         logical.maintenance_action = None
         logical.maintenance_token = None
         logical.maintenance_claimed_until = None

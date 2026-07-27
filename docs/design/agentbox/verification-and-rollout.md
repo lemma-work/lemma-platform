@@ -187,11 +187,13 @@ case IDs become mandatory for Kubernetes before that adapter is enabled.
 - Release terminates sessions/processes and revokes port grants.
 - Resume preserves `/workspace` but callers recreate nonportable session state.
 - Repeated release/resume does not create duplicate resources.
-- Profile replacement preserves files while changing allocation epoch.
-- E2B profile replacement verifies a streamed file manifest before the atomic bind;
-  an injected copy failure leaves the old sandbox current.
-- Seven-day retention activity resumes the workspace.
-- Retention expiry permanently removes compute and storage.
+- Docker-volume profile replacement preserves files while changing allocation epoch.
+- E2B-native profile replacement fences and removes the old exact sandbox, then
+  publishes a fresh storage generation.
+- Activity before the configured total-inactivity deadline resumes the exact paused
+  workspace.
+- Retention expiry removes compute and storage but the next operation recreates
+  the logical workspace with a fresh disk.
 - Explicit delete prevents a late event/inventory item from resurrecting state.
 
 ### 4.5 Port access

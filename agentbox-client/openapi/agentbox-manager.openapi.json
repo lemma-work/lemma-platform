@@ -1136,6 +1136,16 @@
             }
           },
           {
+            "in": "query",
+            "name": "verify_ready",
+            "required": false,
+            "schema": {
+              "default": false,
+              "title": "Verify Ready",
+              "type": "boolean"
+            }
+          },
+          {
             "in": "header",
             "name": "x-api-key",
             "required": false,

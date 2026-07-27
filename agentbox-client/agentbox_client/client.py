@@ -91,6 +91,7 @@ class AgentBoxClient:
         profile: ProfileRef,
         admission_class: AdmissionClass,
         deadline_at: datetime,
+        verify_ready: bool = False,
     ) -> SandboxHandle:
         return await self._model_request(
             "PUT",
@@ -101,6 +102,7 @@ class AgentBoxClient:
                 "admission_class": admission_class.value,
                 "deadline_at": deadline_at.isoformat(),
             },
+            params={"verify_ready": "true"} if verify_ready else None,
         )
 
     async def inspect_sandbox(
