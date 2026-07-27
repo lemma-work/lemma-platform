@@ -4,6 +4,7 @@ import asyncio
 from datetime import datetime, timedelta, timezone
 
 from agentbox.domain import (
+    AgentBoxError,
     CreateReconcileCandidate,
     DispatchState,
     ErrorCode,
@@ -164,6 +165,7 @@ class AgentBoxReconciler:
                     deadline_at=deadline_at,
                 )
                 return
+            discard_conflicting_native_workspace = False
             async with self._database.uow() as uow:
                 allocation = await uow.repository.acknowledge_create(
                     allocation.allocation_token,
@@ -171,18 +173,41 @@ class AgentBoxReconciler:
                     provider_instance_id=match.provider_instance_id,
                 )
                 if match.workspace_storage is not None:
-                    await uow.repository.bind_workspace_storage(
-                        allocation.key,
-                        provider_storage_id=(
-                            match.workspace_storage.provider_storage_id
-                        ),
-                        allocation_id=(
-                            allocation.allocation_id
-                            if match.workspace_storage.bound_to_allocation
-                            else None
-                        ),
-                    )
-                await uow.commit()
+                    try:
+                        await uow.repository.bind_workspace_storage(
+                            allocation.key,
+                            provider_storage_id=(
+                                match.workspace_storage.provider_storage_id
+                            ),
+                            allocation_id=(
+                                allocation.allocation_id
+                                if match.workspace_storage.bound_to_allocation
+                                else None
+                            ),
+                        )
+                    except AgentBoxError as exc:
+                        if (
+                            exc.code == ErrorCode.OPERATION_CONFLICT
+                            and match.workspace_storage.bound_to_allocation
+                            and allocation.key.workload_kind == WorkloadKind.WORKSPACE
+                        ):
+                            # A newer sandbox-native workspace already owns the
+                            # logical workspace. Preserve it and discard only
+                            # this stale exact provider match.
+                            discard_conflicting_native_workspace = True
+                            await uow.rollback()
+                        else:
+                            raise
+                if not discard_conflicting_native_workspace:
+                    await uow.commit()
+            if discard_conflicting_native_workspace:
+                await self._destroy_failed_allocation(
+                    candidate.allocation,
+                    provider_id=match.provider_id,
+                    provider_instance_id=match.provider_instance_id,
+                    deadline_at=deadline_at,
+                )
+                return
 
         if allocation.provider_id is None:
             await self._defer(allocation)

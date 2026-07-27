@@ -87,17 +87,26 @@ class LostCreateResponseProvider:
             assert expected["allocation-token"] == str(
                 self.create_calls[0].allocation_token
             )
-        return tuple(
-            ProviderInventoryAllocation(
-                provider_id=f"accepted-{index}",
-                provider_instance_id=f"accepted-{index}",
-                workspace_storage=ProviderStorageResult(
-                    provider_storage_id="workspace-volume",
-                    bound_to_allocation=False,
-                ),
+        matches: list[ProviderInventoryAllocation] = []
+        for index in range(self.inventory_matches):
+            provider_id = f"accepted-{index}"
+            matches.append(
+                ProviderInventoryAllocation(
+                    provider_id=provider_id,
+                    provider_instance_id=provider_id,
+                    workspace_storage=ProviderStorageResult(
+                        provider_storage_id=(
+                            provider_id
+                            if self.workspace_storage_kind == StorageKind.SANDBOX_NATIVE
+                            else "workspace-volume"
+                        ),
+                        bound_to_allocation=(
+                            self.workspace_storage_kind == StorageKind.SANDBOX_NATIVE
+                        ),
+                    ),
+                )
             )
-            for index in range(self.inventory_matches)
-        )
+        return tuple(matches)
 
     async def wait_ready(
         self,
@@ -122,6 +131,10 @@ class LostCreateResponseProvider:
 
     async def close(self) -> None:
         return None
+
+
+class SandboxNativeLostCreateResponseProvider(LostCreateResponseProvider):
+    workspace_storage_kind = StorageKind.SANDBOX_NATIVE
 
 
 async def make_ambiguous(
@@ -326,6 +339,92 @@ async def test_stale_dispatched_workspace_with_exact_match_is_adopted(
     assert handle is not None
     assert handle.ready is True
     assert handle.allocation_state == AllocationState.ACTIVE
+
+
+async def test_stale_native_workspace_match_never_rebinds_active_workspace(
+    database: StateDatabase,
+) -> None:
+    provider = SandboxNativeLostCreateResponseProvider(database)
+    lifecycle, key, deadline = await make_stale_dispatch(
+        database,
+        provider,
+        workload_kind=WorkloadKind.WORKSPACE,
+    )
+    current_profile = SandboxProfileRef(
+        "workspace-python-v2",
+        f"sha256:{'b' * 64}",
+    )
+    async with database.uow() as uow:
+        await uow.repository.ensure_logical(key, current_profile)
+        intent = await uow.repository.begin_allocation(
+            key,
+            current_profile,
+            provider_name=provider.name,
+            provider_scope=provider.scope,
+            admission_class=AdmissionClass.INTERACTIVE.value,
+            request_hash="c" * 64,
+        )
+        decision = await uow.repository.reserve_provider_capacity(
+            intent.allocation.allocation_id,
+            admission_class=AdmissionClass.INTERACTIVE,
+            policy=ProviderAdmissionPolicy.permissive_for_tests(),
+        )
+        assert decision.accepted is True
+        assert await uow.repository.mark_create_dispatched(
+            intent.allocation.allocation_token
+        )
+        current = await uow.repository.acknowledge_create(
+            intent.allocation.allocation_token,
+            provider_id="current-sandbox",
+            provider_instance_id="current-sandbox",
+        )
+        await uow.repository.bind_workspace_storage(
+            key,
+            provider_storage_id="current-sandbox",
+            allocation_id=current.allocation_id,
+        )
+        current = await uow.repository.publish_allocation(
+            intent.allocation.allocation_token
+        )
+        await uow.commit()
+
+    reconciled = await AgentBoxReconciler(
+        database,
+        provider,
+        dispatched_create_stale_seconds=30,
+    ).reconcile_once(deadline_at=deadline)
+    handle = await lifecycle.inspect(key)
+    async with database.uow() as uow:
+        storage = await uow.repository.get_workspace_storage(key)
+        allocations = await uow.repository.list_allocations(key)
+        await uow.commit()
+    async with database.engine.connect() as connection:
+        reserved_count = await connection.scalar(
+            select(ProviderAdmissionRow.reserved_count).where(
+                ProviderAdmissionRow.provider_scope == provider.scope
+            )
+        )
+        active_count = await connection.scalar(
+            select(ProviderAdmissionRow.active_count).where(
+                ProviderAdmissionRow.provider_scope == provider.scope
+            )
+        )
+
+    assert reconciled == 1
+    assert provider.destroyed == ["accepted-0"]
+    assert handle is not None
+    assert handle.ready is True
+    assert handle.allocation_id == current.allocation_id
+    assert handle.allocation_state == AllocationState.ACTIVE
+    assert storage is not None
+    assert storage.provider_storage_id == "current-sandbox"
+    assert storage.bound_allocation_id == current.allocation_id
+    assert [item.state for item in allocations] == [
+        AllocationState.ERROR,
+        AllocationState.ACTIVE,
+    ]
+    assert reserved_count == 0
+    assert active_count == 1
 
 
 async def test_reconciliation_repairs_terminal_allocation_reservation(
