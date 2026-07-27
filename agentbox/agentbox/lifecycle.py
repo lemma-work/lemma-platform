@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import hashlib
 from datetime import datetime, timedelta, timezone
 from uuid import UUID
@@ -22,6 +23,7 @@ from agentbox.domain import (
     SandboxProfileRef,
     WorkloadKind,
 )
+from agentbox.observability import create_inherited_task
 from agentbox.ports import (
     ProviderAllocationFailed,
     ProviderAllocationRef,
@@ -95,51 +97,60 @@ class SandboxLifecycleService:
         # Transaction 1: durable logical resource and one allocation intent.
         decision: ProviderAdmissionDecision
         pending_retry = False
-        async with self._database.uow() as uow:
-            logical = await uow.repository.ensure_logical(key, profile)
-            storage = None
-            if key.workload_kind == WorkloadKind.WORKSPACE:
-                storage = await uow.repository.ensure_workspace_storage(
-                    key,
-                    provider_name=self._provider.name,
-                    storage_kind=self._provider.workspace_storage_kind,
+        intent = None
+        resumed = None
+        storage = None
+        try:
+            async with self._database.uow() as uow:
+                logical = await uow.repository.ensure_logical(key, profile)
+                if key.workload_kind == WorkloadKind.WORKSPACE:
+                    storage = await uow.repository.ensure_workspace_storage(
+                        key,
+                        provider_name=self._provider.name,
+                        storage_kind=self._provider.workspace_storage_kind,
+                    )
+                resumed = await uow.repository.resume_released_allocation(key, profile)
+                if resumed is None:
+                    intent = await uow.repository.begin_allocation(
+                        key,
+                        profile,
+                        provider_name=self._provider.name,
+                        provider_scope=self._provider.scope,
+                        admission_class=admission_class.value,
+                        request_hash=request_hash,
+                    )
+                allocation_for_admission = resumed or (
+                    intent.allocation if intent is not None else None
                 )
-            resumed = await uow.repository.resume_released_allocation(key, profile)
-            intent = None
-            if resumed is None:
-                intent = await uow.repository.begin_allocation(
-                    key,
-                    profile,
-                    provider_name=self._provider.name,
-                    provider_scope=self._provider.scope,
-                    admission_class=admission_class.value,
-                    request_hash=request_hash,
+                if allocation_for_admission is None:  # pragma: no cover
+                    raise RuntimeError("ensure produced no allocation for admission")
+                pending_retry = (
+                    intent is not None
+                    and intent.allocation.state == AllocationState.RESERVED
+                    and intent.allocation.retry_after is not None
+                    and intent.allocation.retry_after > datetime.now(timezone.utc)
                 )
-            allocation_for_admission = resumed or (
-                intent.allocation if intent is not None else None
-            )
-            if allocation_for_admission is None:  # pragma: no cover
-                raise RuntimeError("ensure produced no allocation for admission")
-            pending_retry = (
-                intent is not None
-                and intent.allocation.state == AllocationState.RESERVED
-                and intent.allocation.retry_after is not None
-                and intent.allocation.retry_after > datetime.now(timezone.utc)
-            )
-            if pending_retry:
-                decision = ProviderAdmissionDecision(
-                    accepted=True,
-                    active=0,
-                    reserved=0,
-                    limit=self._admission_policy.max_active,
+                if pending_retry:
+                    decision = ProviderAdmissionDecision(
+                        accepted=True,
+                        active=0,
+                        reserved=0,
+                        limit=self._admission_policy.max_active,
+                    )
+                else:
+                    decision = await uow.repository.reserve_provider_capacity(
+                        allocation_for_admission.allocation_id,
+                        admission_class=admission_class,
+                        policy=self._admission_policy,
+                    )
+                await uow.commit()
+        except asyncio.CancelledError:
+            if intent is not None and intent.should_dispatch_create:
+                await self._mark_create_failed_durably(
+                    intent.allocation.allocation_token,
+                    error_code=ErrorCode.DEADLINE_EXCEEDED,
                 )
-            else:
-                decision = await uow.repository.reserve_provider_capacity(
-                    allocation_for_admission.allocation_id,
-                    admission_class=admission_class,
-                    policy=self._admission_policy,
-                )
-            await uow.commit()
+            raise
 
         if not decision.accepted:
             raise self._admission_error(decision)
@@ -161,11 +172,30 @@ class SandboxLifecycleService:
 
         # Transaction 2: transition RESERVED -> DISPATCHED exactly once. The
         # provider has not been called yet and this transaction is closed before it is.
-        async with self._database.uow() as uow:
-            dispatch = await uow.repository.mark_create_dispatched(
-                intent.allocation.allocation_token
+        try:
+            self._check_deadline(deadline_at)
+            async with self._database.uow() as uow:
+                dispatch = await uow.repository.mark_create_dispatched(
+                    intent.allocation.allocation_token
+                )
+                await uow.commit()
+        except AgentBoxError as exc:
+            if exc.code != ErrorCode.DEADLINE_EXCEEDED:
+                raise
+            await self._mark_create_failed_durably(
+                intent.allocation.allocation_token,
+                error_code=ErrorCode.DEADLINE_EXCEEDED,
             )
-            await uow.commit()
+            raise
+        except asyncio.CancelledError:
+            # The provider has not been called yet. Regardless of whether the
+            # dispatch transaction committed before cancellation arrived, this
+            # create is definitively unaccepted and can release its reservation.
+            await self._mark_create_failed_durably(
+                intent.allocation.allocation_token,
+                error_code=ErrorCode.DEADLINE_EXCEEDED,
+            )
+            raise
 
         if not dispatch:
             allocation = await self._get_allocation(intent.allocation.allocation_token)
@@ -181,7 +211,6 @@ class SandboxLifecycleService:
                 )
             return self._handle(intent.logical, allocation)
 
-        self._check_deadline(deadline_at)
         create_request = ProviderCreateRequest(
             allocation_id=intent.allocation.allocation_id,
             allocation_token=intent.allocation.allocation_token,
@@ -208,7 +237,26 @@ class SandboxLifecycleService:
 
         # External create I/O: no SQLAlchemy unit of work/session exists here.
         try:
+            self._check_deadline(deadline_at)
             created = await self._provider.create(create_request)
+        except AgentBoxError as exc:
+            if exc.code != ErrorCode.DEADLINE_EXCEEDED:
+                raise
+            async with self._database.uow() as uow:
+                await uow.repository.mark_create_failed(
+                    intent.allocation.allocation_token,
+                    error_code=ErrorCode.DEADLINE_EXCEEDED.value,
+                )
+                await uow.commit()
+            raise
+        except asyncio.CancelledError:
+            # Cancellation may race a provider accepting the create. Preserve
+            # that ambiguity durably so exact metadata reconciliation can
+            # adopt or remove the allocation without replaying the create.
+            await self._mark_create_unknown_durably(
+                intent.allocation.allocation_token
+            )
+            raise
         except ProviderCreateAmbiguous as exc:
             async with self._database.uow() as uow:
                 await uow.repository.mark_create_unknown(
@@ -638,6 +686,56 @@ class SandboxLifecycleService:
         if allocation is None:  # pragma: no cover - state corruption
             raise RuntimeError("allocation disappeared after dispatch claim")
         return allocation
+
+    async def _mark_create_unknown_durably(
+        self,
+        allocation_token: UUID,
+    ) -> None:
+        async def persist() -> None:
+            async with self._database.uow() as uow:
+                await uow.repository.mark_create_unknown(
+                    allocation_token,
+                    reconcile_after=datetime.now(timezone.utc) + timedelta(seconds=1),
+                    error_code=ErrorCode.AMBIGUOUS_CREATE.value,
+                )
+                await uow.commit()
+
+        task = create_inherited_task(
+            persist(),
+            name=f"agentbox-create-cancel:{allocation_token}",
+        )
+        return await self._await_durable_write(task)
+
+    async def _mark_create_failed_durably(
+        self,
+        allocation_token: UUID,
+        *,
+        error_code: ErrorCode,
+    ) -> None:
+        async def persist() -> None:
+            async with self._database.uow() as uow:
+                await uow.repository.mark_create_failed(
+                    allocation_token,
+                    error_code=error_code.value,
+                )
+                await uow.commit()
+
+        task = create_inherited_task(
+            persist(),
+            name=f"agentbox-create-failed:{allocation_token}",
+        )
+        return await self._await_durable_write(task)
+
+    @staticmethod
+    async def _await_durable_write(task: asyncio.Task[None]) -> None:
+        while True:
+            try:
+                return await asyncio.shield(task)
+            except asyncio.CancelledError:
+                # Repeated caller cancellation must not interrupt the state
+                # transition that makes the provider outcome reconcilable.
+                if task.done():
+                    return task.result()
 
     @staticmethod
     def _create_request_hash(

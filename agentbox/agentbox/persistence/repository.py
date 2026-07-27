@@ -3,7 +3,7 @@ from __future__ import annotations
 from datetime import datetime, timedelta, timezone
 from uuid import UUID, uuid4
 
-from sqlalchemy import Select, and_, exists, func, or_, select, update
+from sqlalchemy import Select, and_, case, exists, func, or_, select, update
 from sqlalchemy.dialects.postgresql import insert as postgresql_insert
 from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -61,6 +61,12 @@ NONTERMINAL_ALLOCATION_STATES = (
     AllocationState.ACTIVE.value,
     AllocationState.QUIESCING.value,
     AllocationState.DRAINING.value,
+)
+
+TERMINAL_ALLOCATION_STATES = (
+    AllocationState.RELEASED.value,
+    AllocationState.DESTROYED.value,
+    AllocationState.ERROR.value,
 )
 
 NONTERMINAL_PROCESS_STATES = (
@@ -637,7 +643,7 @@ class AgentBoxRepository:
         now: datetime | None = None,
     ) -> None:
         timestamp = now or utc_now()
-        await self._session.execute(
+        result = await self._session.execute(
             update(CreateAttemptRow)
             .where(
                 CreateAttemptRow.allocation_token == allocation_token,
@@ -651,9 +657,19 @@ class AgentBoxRepository:
                 updated_at=timestamp,
             )
         )
+        if result.rowcount != 1:
+            return
         await self._session.execute(
             update(AllocationRow)
-            .where(AllocationRow.allocation_token == allocation_token)
+            .where(
+                AllocationRow.allocation_token == allocation_token,
+                AllocationRow.state.in_(
+                    (
+                        AllocationState.PROVISIONING.value,
+                        AllocationState.UNKNOWN.value,
+                    )
+                ),
+            )
             .values(
                 state=AllocationState.UNKNOWN.value,
                 last_error_code=error_code,
@@ -665,10 +681,32 @@ class AgentBoxRepository:
         self,
         provider_scope: str,
         *,
+        stale_dispatched_before: datetime,
         now: datetime | None = None,
         limit: int = 100,
     ) -> tuple[CreateReconcileCandidate, ...]:
         timestamp = now or utc_now()
+        due_reconciliation = or_(
+            and_(
+                CreateAttemptRow.dispatch_state.in_(
+                    (
+                        DispatchState.UNKNOWN.value,
+                        DispatchState.ACKNOWLEDGED.value,
+                    )
+                ),
+                CreateAttemptRow.reconcile_after.is_not(None),
+                CreateAttemptRow.reconcile_after <= timestamp,
+            ),
+            and_(
+                CreateAttemptRow.dispatch_state == DispatchState.DISPATCHED.value,
+                CreateAttemptRow.dispatch_started_at.is_not(None),
+                CreateAttemptRow.dispatch_started_at <= stale_dispatched_before,
+                or_(
+                    CreateAttemptRow.reconcile_after.is_(None),
+                    CreateAttemptRow.reconcile_after <= timestamp,
+                ),
+            ),
+        )
         rows = (
             await self._session.execute(
                 select(AllocationRow, CreateAttemptRow)
@@ -678,16 +716,15 @@ class AgentBoxRepository:
                 )
                 .where(
                     AllocationRow.provider_scope == provider_scope,
-                    CreateAttemptRow.dispatch_state.in_(
-                        (
-                            DispatchState.UNKNOWN.value,
-                            DispatchState.ACKNOWLEDGED.value,
-                        )
-                    ),
-                    CreateAttemptRow.reconcile_after.is_not(None),
-                    CreateAttemptRow.reconcile_after <= timestamp,
+                    due_reconciliation,
                 )
-                .order_by(CreateAttemptRow.reconcile_after)
+                .order_by(
+                    func.coalesce(
+                        CreateAttemptRow.reconcile_after,
+                        CreateAttemptRow.dispatch_started_at,
+                        CreateAttemptRow.created_at,
+                    )
+                )
                 .limit(limit)
             )
         ).all()
@@ -710,13 +747,12 @@ class AgentBoxRepository:
         allocation_token: UUID,
         *,
         claimed_until: datetime,
+        stale_dispatched_before: datetime,
         now: datetime | None = None,
     ) -> bool:
         timestamp = now or utc_now()
-        result = await self._session.execute(
-            update(CreateAttemptRow)
-            .where(
-                CreateAttemptRow.allocation_token == allocation_token,
+        due_reconciliation = or_(
+            and_(
                 CreateAttemptRow.dispatch_state.in_(
                     (
                         DispatchState.UNKNOWN.value,
@@ -725,14 +761,86 @@ class AgentBoxRepository:
                 ),
                 CreateAttemptRow.reconcile_after.is_not(None),
                 CreateAttemptRow.reconcile_after <= timestamp,
+            ),
+            and_(
+                CreateAttemptRow.dispatch_state == DispatchState.DISPATCHED.value,
+                CreateAttemptRow.dispatch_started_at.is_not(None),
+                CreateAttemptRow.dispatch_started_at <= stale_dispatched_before,
+                or_(
+                    CreateAttemptRow.reconcile_after.is_(None),
+                    CreateAttemptRow.reconcile_after <= timestamp,
+                ),
+            ),
+        )
+        result = await self._session.execute(
+            update(CreateAttemptRow)
+            .where(
+                CreateAttemptRow.allocation_token == allocation_token,
+                due_reconciliation,
             )
             .values(
+                dispatch_state=case(
+                    (
+                        CreateAttemptRow.dispatch_state
+                        == DispatchState.DISPATCHED.value,
+                        DispatchState.UNKNOWN.value,
+                    ),
+                    else_=CreateAttemptRow.dispatch_state,
+                ),
                 last_reconcile_at=timestamp,
                 reconcile_after=claimed_until,
                 updated_at=timestamp,
             )
         )
-        return result.rowcount == 1
+        if result.rowcount != 1:
+            return False
+        await self._session.execute(
+            update(AllocationRow)
+            .where(
+                AllocationRow.allocation_token == allocation_token,
+                AllocationRow.state == AllocationState.PROVISIONING.value,
+            )
+            .values(
+                state=AllocationState.UNKNOWN.value,
+                last_error_code=ErrorCode.AMBIGUOUS_CREATE.value,
+                updated_at=timestamp,
+            )
+        )
+        return True
+
+    async def repair_terminal_admission_invariants(
+        self,
+        provider_scope: str,
+        *,
+        now: datetime | None = None,
+    ) -> int:
+        """Release capacity retained by allocations already known to be terminal."""
+
+        timestamp = now or utc_now()
+        admission_query = select(ProviderAdmissionRow).where(
+            ProviderAdmissionRow.provider_scope == provider_scope
+        )
+        if self._dialect_name == "postgresql":
+            admission_query = admission_query.with_for_update()
+        admission = await self._session.scalar(admission_query)
+        result = await self._session.execute(
+            update(AllocationRow)
+            .where(
+                AllocationRow.provider_scope == provider_scope,
+                AllocationRow.state.in_(TERMINAL_ALLOCATION_STATES),
+                AllocationRow.admission_state != AdmissionState.RELEASED.value,
+            )
+            .values(
+                admission_state=AdmissionState.RELEASED.value,
+                updated_at=timestamp,
+            )
+        )
+        active, reserved = await self._admission_counts(provider_scope)
+        if admission is not None:
+            admission.active_count = active
+            admission.reserved_count = reserved
+            admission.updated_at = timestamp
+        return int(result.rowcount or 0)
 
     async def defer_create_reconciliation(
         self,
@@ -783,7 +891,7 @@ class AgentBoxRepository:
         """Return a definitively unaccepted create to the same durable token."""
 
         timestamp = now or utc_now()
-        await self._session.execute(
+        result = await self._session.execute(
             update(CreateAttemptRow)
             .where(
                 CreateAttemptRow.allocation_token == allocation_token,
@@ -796,6 +904,8 @@ class AgentBoxRepository:
                 updated_at=timestamp,
             )
         )
+        if result.rowcount != 1:
+            return
         await self._session.execute(
             update(AllocationRow)
             .where(AllocationRow.allocation_token == allocation_token)
@@ -824,7 +934,7 @@ class AgentBoxRepository:
         now: datetime | None = None,
     ) -> None:
         timestamp = now or utc_now()
-        await self._session.execute(
+        result = await self._session.execute(
             update(CreateAttemptRow)
             .where(
                 CreateAttemptRow.allocation_token == allocation_token,
@@ -832,7 +942,9 @@ class AgentBoxRepository:
                     (
                         DispatchState.RESERVED.value,
                         DispatchState.DISPATCHED.value,
+                        DispatchState.ACKNOWLEDGED.value,
                         DispatchState.UNKNOWN.value,
+                        DispatchState.RESOLVED.value,
                     )
                 ),
             )
@@ -842,6 +954,8 @@ class AgentBoxRepository:
                 updated_at=timestamp,
             )
         )
+        if result.rowcount != 1:
+            return
         allocation = await self._session.scalar(
             select(AllocationRow).where(
                 AllocationRow.allocation_token == allocation_token

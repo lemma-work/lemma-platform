@@ -51,6 +51,10 @@ EVENT_CATALOG: dict[str, EventSpec] = {
         "warning",
         frozenset({"error_type"}),
     ),
+    "agentbox.admission.invariant_repaired": EventSpec(
+        "warning",
+        frozenset({"allocation_count", "provider_scope"}),
+    ),
     "port.proxy.upstream_failed": EventSpec(
         "error",
         frozenset({"method", "protocol", "provider"}),

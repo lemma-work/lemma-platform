@@ -469,6 +469,8 @@ class FunctionDispatcher:
             code = str(getattr(exc, "code", "PROVIDER_UNAVAILABLE"))
             if code.upper() == "DEADLINE_EXCEEDED":
                 return "Function execution timed out (deadline exceeded)"
+            if code.upper() == "CAPACITY_EXHAUSTED":
+                return "Function sandbox capacity exhausted before execution"
             return f"Function sandbox error ({redact_text(code)})"
         if isinstance(exc, ValueError) and "token expires" in str(exc):
             return "Function execution exceeds delegated token lifetime"

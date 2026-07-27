@@ -8,6 +8,13 @@ from uuid import uuid4
 import httpx
 import pytest
 
+from agentbox_client import AgentBoxApiError
+from agentbox_client.models import (
+    AgentBoxErrorBody,
+    AgentBoxErrorResponse,
+    RetryDisposition,
+)
+
 from app.modules.function.application.function_dispatcher import FunctionDispatcher
 from app.modules.function.application.function_runtime_endpoint_cache import (
     FunctionRuntimeEndpoint,
@@ -296,4 +303,22 @@ async def test_runtime_cancel_uses_allocation_channel_without_bearer() -> None:
 def test_timeout_keeps_stable_user_facing_error() -> None:
     assert FunctionDispatcher._execution_error(TimeoutError()) == (
         "Function execution timed out (deadline exceeded)"
+    )
+
+
+def test_capacity_exhaustion_reports_pre_execution_failure() -> None:
+    error = AgentBoxApiError(
+        httpx.Response(429),
+        AgentBoxErrorResponse(
+            error=AgentBoxErrorBody(
+                code="CAPACITY_EXHAUSTED",
+                message="provider active sandbox capacity is exhausted",
+                retry=RetryDisposition.WAIT,
+                retry_after_ms=1_000,
+            )
+        ),
+    )
+
+    assert FunctionDispatcher._execution_error(error) == (
+        "Function sandbox capacity exhausted before execution"
     )

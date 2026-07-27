@@ -57,9 +57,9 @@ class FunctionRuntimeEndpointCache:
         self._max_entries = max_entries
         self._clock = clock
         self._wall_clock = wall_clock
-        self._entries: OrderedDict[
-            FunctionRuntimeEndpointKey, _CachedEndpoint
-        ] = OrderedDict()
+        self._entries: OrderedDict[FunctionRuntimeEndpointKey, _CachedEndpoint] = (
+            OrderedDict()
+        )
         self._inflight: dict[
             FunctionRuntimeEndpointKey,
             asyncio.Task[FunctionRuntimeEndpoint],
@@ -72,29 +72,34 @@ class FunctionRuntimeEndpointCache:
         *,
         loader: RuntimeEndpointLoader,
     ) -> FunctionRuntimeEndpoint:
-        now = self._clock()
-        async with self._lock:
-            cached = self._entries.get(key)
-            if cached is not None and cached.valid_until > now:
-                self._entries.move_to_end(key)
-                return cached.endpoint
-            if cached is not None:
-                self._entries.pop(key, None)
-            task = self._inflight.get(key)
-            if task is None:
-                task = create_inherited_task(
-                    self._load(key, loader=loader),
-                    name=f"function-runtime-endpoint:{key.pod_id}",
-                )
-                self._inflight[key] = task
+        for attempt in range(2):
+            now = self._clock()
+            async with self._lock:
+                cached = self._entries.get(key)
+                if cached is not None and cached.valid_until > now:
+                    self._entries.move_to_end(key)
+                    return cached.endpoint
+                if cached is not None:
+                    self._entries.pop(key, None)
+                task = self._inflight.get(key)
+                joined = task is not None
+                if task is None:
+                    task = create_inherited_task(
+                        self._load(key, loader=loader),
+                        name=f"function-runtime-endpoint:{key.pod_id}",
+                    )
+                    self._inflight[key] = task
 
-        try:
-            return await asyncio.shield(task)
-        finally:
-            if task.done():
-                async with self._lock:
-                    if self._inflight.get(key) is task:
-                        self._inflight.pop(key, None)
+            await asyncio.wait((task,))
+            if task.cancelled():
+                raise asyncio.CancelledError
+            failure = task.exception()
+            if failure is None:
+                return task.result()
+            if joined and attempt == 0:
+                continue
+            raise failure
+        raise AssertionError("unreachable runtime endpoint cache retry state")
 
     async def invalidate(
         self,
@@ -115,21 +120,27 @@ class FunctionRuntimeEndpointCache:
         *,
         loader: RuntimeEndpointLoader,
     ) -> FunctionRuntimeEndpoint:
-        endpoint = await loader()
-        grant_remaining = (
-            endpoint.expires_at - self._wall_clock()
-        ).total_seconds()
-        # Never serve a grant at its expiry boundary. Very short grants still
-        # satisfy the caller but are deliberately not cached.
-        cache_seconds = min(self._ttl_seconds, max(0.0, grant_remaining - 2))
-        if cache_seconds <= 0:
+        task = asyncio.current_task()
+        try:
+            endpoint = await loader()
+            grant_remaining = (
+                endpoint.expires_at - self._wall_clock()
+            ).total_seconds()
+            # Never serve a grant at its expiry boundary. Very short grants still
+            # satisfy the caller but are deliberately not cached.
+            cache_seconds = min(self._ttl_seconds, max(0.0, grant_remaining - 2))
+            if cache_seconds <= 0:
+                return endpoint
+            async with self._lock:
+                self._entries[key] = _CachedEndpoint(
+                    endpoint=endpoint,
+                    valid_until=self._clock() + cache_seconds,
+                )
+                self._entries.move_to_end(key)
+                while len(self._entries) > self._max_entries:
+                    self._entries.popitem(last=False)
             return endpoint
-        async with self._lock:
-            self._entries[key] = _CachedEndpoint(
-                endpoint=endpoint,
-                valid_until=self._clock() + cache_seconds,
-            )
-            self._entries.move_to_end(key)
-            while len(self._entries) > self._max_entries:
-                self._entries.popitem(last=False)
-        return endpoint
+        finally:
+            async with self._lock:
+                if self._inflight.get(key) is task:
+                    self._inflight.pop(key, None)
