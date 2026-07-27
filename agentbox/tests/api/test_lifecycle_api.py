@@ -177,12 +177,11 @@ async def test_ensure_can_revalidate_an_active_provider_allocation(api):
         headers=headers,
         json=ensure_body(),
     )
-    verify_body = ensure_body()
-    verify_body["verify_ready"] = True
     verified = await client.put(
         f"/sandboxes/workspace/{logical_id}",
         headers=headers,
-        json=verify_body,
+        params={"verify_ready": "true"},
+        json=ensure_body(),
     )
 
     assert created.status_code == 200

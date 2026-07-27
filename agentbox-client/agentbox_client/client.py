@@ -101,8 +101,8 @@ class AgentBoxClient:
                 "profile": profile.model_dump(mode="json"),
                 "admission_class": admission_class.value,
                 "deadline_at": deadline_at.isoformat(),
-                "verify_ready": verify_ready,
             },
+            params={"verify_ready": "true"} if verify_ready else None,
         )
 
     async def inspect_sandbox(
